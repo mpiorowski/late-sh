@@ -2133,9 +2133,13 @@ impl DailyService {
     }
 
     async fn publish(&self, client: &tokio_postgres::Client) -> Result<()> {
-        let open = DailyMatch::list_open(client).await?;
-        let active = DailyMatch::list_active(client).await?;
-        let finished = DailyMatch::list_finished_unseen(client).await?;
+        let (open, claimed): (Vec<_>, Vec<_>) = DailyMatch::list_lobby(client)
+            .await?
+            .into_iter()
+            .partition(|row| row.status == DailyMatch::STATUS_OPEN);
+        let (active, finished): (Vec<_>, Vec<_>) = claimed
+            .into_iter()
+            .partition(|row| row.status == DailyMatch::STATUS_ACTIVE);
         let mut user_ids: Vec<Uuid> = open
             .iter()
             .map(|row| row.challenger_id)

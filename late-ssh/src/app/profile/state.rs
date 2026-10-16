@@ -18,8 +18,6 @@ pub struct ProfileState {
     profile_service: ProfileService,
     user_id: Uuid,
     pub(crate) profile: Profile,
-    /// A dismissal before the initial profile arrives must not save a blank draft.
-    pending_artboard_disclaimer_dismissal: bool,
     snapshot_rx: watch::Receiver<ProfileSnapshot>,
     event_rx: broadcast::Receiver<ProfileEvent>,
 }
@@ -44,7 +42,6 @@ impl ProfileState {
             profile_service,
             user_id,
             profile,
-            pending_artboard_disclaimer_dismissal: false,
             snapshot_rx,
             event_rx,
         }
@@ -90,15 +87,6 @@ impl ProfileState {
         self.profile.show_watch_chat
     }
 
-    pub(crate) fn dismiss_artboard_disclaimer(&mut self) {
-        self.profile.artboard_disclaimer = false;
-        if self.profile.username.is_empty() {
-            self.pending_artboard_disclaimer_dismissal = true;
-        } else {
-            self.save_profile();
-        }
-    }
-
     pub fn move_favorite_room(&mut self, room_id: Uuid, delta: isize) -> bool {
         let Some(index) = self
             .profile
@@ -126,6 +114,14 @@ impl ProfileState {
             .set_key_layout(self.user_id, fingerprint, layout);
     }
 
+    /// Store whether this device shows the Artboard content disclaimer. Fire
+    /// and forget, and per device for the same reason the rails are: it does
+    /// not touch the account profile.
+    pub fn set_device_artboard_disclaimer(&self, fingerprint: String, enabled: bool) {
+        self.profile_service
+            .set_key_artboard_disclaimer(self.user_id, fingerprint, enabled);
+    }
+
     /// Persist when this device's session went quiet before ending, fire and
     /// forget like every other profile write. Per device for the same reason
     /// the rails are: it is a fact about this terminal.
@@ -145,10 +141,6 @@ impl ProfileState {
         // state, so it counts as changed.
         let changed = self.snapshot_rx.has_changed().unwrap_or(false) || !self.event_rx.is_empty();
         self.drain_snapshot();
-        if self.pending_artboard_disclaimer_dismissal && !self.profile.username.is_empty() {
-            self.pending_artboard_disclaimer_dismissal = false;
-            self.dismiss_artboard_disclaimer();
-        }
         ProfileTick {
             banner: self.drain_events(),
             changed,

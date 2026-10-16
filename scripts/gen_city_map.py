@@ -136,14 +136,17 @@ def layout_tiles():
         put(x, y, ch, block=block)
         solid[y][x] = block
 
-    def room(x0, y0, x1, y1, color, doors=(), windows=(), sign=None, shutter=None, closed=False):
+    def room(x0, y0, x1, y1, color, doors=(), windows=(), sign=None, shutter=None, closed=False,
+             shop=None):
         """Walls of `#`, a floor inside, doors (`+`, open) and windows (`╬`)
         let into the walls, the name spelled in the street-facing wall. A
         `closed` shop (the flag is its landmark's name) does nothing yet:
         its name is spelled but not lit, its walls and doorway take no
         color, and its reach is its doors in the sign's wall, so Enter
-        there says it is shut. Opening one is dropping the flag and giving
-        it a reach of its own."""
+        there says it is shut. A `shop` (its landmark's name) is in reach
+        on its whole floor, inside the walls and nowhere else: behind the
+        counter, at the back, never from the street. Opening a closed one
+        is dropping the flag and naming it a `shop`."""
         for y in range(y0, y1 + 1):
             for x in range(x0, x1 + 1):
                 edge = x in (x0, x1) or y in (y0, y1)
@@ -165,6 +168,9 @@ def layout_tiles():
                 neon_signs.append((zone(sx, sy, sx + len(text) - 1, sy), color))
         if shutter:
             tile(shutter[0], shutter[1], '▓')
+        if shop:
+            reach[shop] = zone(x0 + 1, y0 + 1, x1 - 1, y1 - 1)
+            dist[shop] = 0
         buildings.append((zone(x0, y0, x1, y1), None if closed else color))
 
     def wall(x0, y0, x1, y1, doors=()):
@@ -291,7 +297,7 @@ def layout_tiles():
     carve(37, 12, 37, 16); grate(37, 13)
 
     room(38, 8, 52, 16, MAGENTA, doors=[(49, 16)], windows=[(47, 16), (43, 8)],
-         sign=(40, 16, 'TAILOR'))
+         sign=(40, 16, 'TAILOR'), shop='Tailor')
     wall(39, 10, 51, 10, doors=[(45, 10)])
     tile(40, 9, '['); tile(42, 9, '['); tile(50, 9, '▪'); tile(49, 9, '▪')
     for gx, g in ((40, '['), (42, '['), (44, '['), (47, '"'), (49, '"')):
@@ -300,7 +306,6 @@ def layout_tiles():
     tile(45, 12, '@')
     tile(51, 12, '▌')
     tile(40, 15, '&'); tile(50, 15, '&')
-    reach['Tailor'] = zone(40, 14, 50, 14); dist['Tailor'] = 0
 
     alley(53, 54, 6, 16)
 
@@ -323,9 +328,10 @@ def layout_tiles():
     tenement(72, 7, 90, 16, door_y=16, windows_y=16, sleepers=2)
     carve(91, 13, 91, 16); grate(91, 14)
 
-    # the ink parlor: chairs, bottles, someone on duty. Not open yet.
+    # the ink parlor: chairs, bottles, the needle on duty. INK: a draft
+    # inked for crystals. Enter anywhere inside opens the panel.
     room(92, 10, 108, 16, WHITE, doors=[(105, 16)], windows=[(94, 16), (100, 10)],
-         sign=(95, 16, 'INK'), closed='Ink')
+         sign=(95, 16, 'INK'), shop='Ink')
     for bx in (94, 97, 100):
         tile(bx, 12, '▬')
     for gx in (103, 105, 107):
@@ -371,19 +377,18 @@ def layout_tiles():
     # =========================================================== leg two
     # ---- north side (south walls at row 18)
     room(131, 11, 146, 18, GREEN, doors=[(142, 18)], windows=[(133, 18), (144, 18), (138, 11)],
-         sign=(134, 18, 'BANDS'), closed='Bands')
+         sign=(134, 18, 'BANDS'), closed='Bands', shop='Bands')
     for gx in (134, 138, 142):
         tile(gx, 12, 'o')
     for gx in (133, 136, 139, 142, 145):
         tile(gx, 13, 'Y')
     put(133, 15, '=' * 12)
     tile(138, 14, '@')
-    reach['Bands'] = zone(133, 16, 144, 16); dist['Bands'] = 0
 
     carve(147, 13, 147, 18); grate(147, 15)
 
     room(148, 12, 168, 18, AMBER, doors=[(163, 18)],
-         windows=[(150, 18), (166, 18), (154, 12), (162, 12)], sign=(151, 18, 'DEAD AIR'))
+         windows=[(150, 18), (166, 18), (154, 12), (162, 12)], sign=(151, 18, 'DEAD AIR'), shop='Bar')
     for gx in (152, 154, 156, 160, 162, 164):
         tile(gx, 13, '!')
     tile(158, 13, '@')
@@ -391,17 +396,15 @@ def layout_tiles():
     for gx in (152, 155, 158, 161, 164):
         tile(gx, 15, 'o')
     tile(150, 16, '♪')
-    reach['Bar'] = zone(151, 15, 165, 16); dist['Bar'] = 0
 
     alley(169, 170, 9, 18)
 
     room(171, 13, 181, 18, WHITE, doors=[(179, 18)], windows=[(172, 18)],
-         sign=(173, 18, 'PATCH'))
+         sign=(173, 18, 'PATCH'), shop='Repairs')
     for gx, g in ((173, '/'), (175, '\\'), (177, 'x'), (179, '/')):
         tile(gx, 14, g)
     tile(176, 15, '@')
     put(173, 16, '=' * 7)
-    reach['Repairs'] = zone(173, 17, 179, 17); dist['Repairs'] = 0
 
     carve(182, 15, 182, 18); tile(182, 16, 'r')
 
@@ -435,24 +438,22 @@ def layout_tiles():
     # blades: the next tier up, for crystals. The rack on the back wall,
     # the counter, and the one who runs it.
     room(219, 9, 237, 18, CYAN, doors=[(228, 18)], windows=[(221, 18), (235, 18)],
-         sign=(222, 18, 'BLADES'))
+         sign=(222, 18, 'BLADES'), shop='Blades')
     for gx, g in ((223, ')'), (225, ')'), (227, '/'), (231, '['), (233, '[')):
         tile(gx, 11, g)
     put(223, 13, '=' * 11)
     tile(228, 12, '@')
-    reach['Blades'] = zone(221, 14, 235, 14); dist['Blades'] = 0
 
     alley(238, 239, 7, 18, back=False)
 
     # the armorer: the biggest room on the street, in the middle of it.
     # Blades and plate on the back wall, one long counter, two doors.
     room(240, 9, 259, 18, RED, doors=[(244, 18), (255, 18), (250, 9)],
-         sign=(246, 18, 'ARMORER'))
+         sign=(246, 18, 'ARMORER'), shop='Armorer')
     for gx, g in ((242, ')'), (244, ')'), (246, '/'), (248, ')'), (252, '['), (254, '['), (256, '[')):
         tile(gx, 11, g)
     put(243, 13, '=' * 14)
     tile(249, 12, '@')
-    reach['Armorer'] = zone(242, 14, 257, 14); dist['Armorer'] = 0
 
     alley(260, 262, 7, 18, back=False)
     tenement(263, 10, 269, 18, door_y=18, windows_y=18, sleepers=0)
@@ -516,10 +517,9 @@ def layout_tiles():
     # the lockers: by the stairs up to the wire, the last stop before
     # the static and the first after it
     room(292, 9, 310, 15, CYAN, doors=[(306, 15)], windows=[(294, 15), (300, 9)],
-         sign=(295, 15, 'LOCKERS'))
+         sign=(295, 15, 'LOCKERS'), shop='Lockers')
     for lx in range(293, 310):
         tile(lx, 10, '∩'); tile(lx, 12, '∩')
-    reach['Lockers'] = zone(293, 13, 309, 14); dist['Lockers'] = 0
     L['DEAD_LETTER'] = (299, 15)   # the E
 
     alley(311, 313, 6, 15)
@@ -538,13 +538,12 @@ def layout_tiles():
 
     # loans: masts on the roof, the bits machine humming in the corner,
     # nobody behind the counter
-    room(360, 8, 380, 15, GREEN, doors=[(370, 15)], sign=(363, 15, 'LOANS'))
+    room(360, 8, 380, 15, GREEN, doors=[(370, 15)], sign=(363, 15, 'LOANS'), shop='Bits')
     for gx in range(362, 376, 4):
         tile(gx, 10, 'Y')
     put(362, 12, '=' * 7)
     tile(378, 10, '$')
     L['BITS'] = (378, 10)
-    reach['Bits'] = zone(361, 13, 379, 14); dist['Bits'] = 0
     grate(370, 9)
 
     carve(381, 12, 381, 15); tile(381, 13, 'r')
@@ -1019,9 +1018,10 @@ pub enum Landmark {
     Wire,
     /// The railing over the drop: look over the ledge.
     Ledge,
+    /// INK: the needle. A draft inked for crystals, kept through a mark.
+    Ink,
     // The shops that are not open yet (`DARK_SIGNS`): Enter at the door
     // says so. Opening one gives it a panel in `city/state.rs`.
-    Ink,
     Baths,
     Sleep,
     Shrine,
@@ -1060,7 +1060,7 @@ impl Landmark {
         Landmark::Pawn,
     ];
 
-    /// The cells that put the player within reach: in front of a counter,
+    /// The cells that put the player within reach: a shop's whole floor,
     /// around a stall, on the stairs.
     #[rustfmt::skip]
     pub fn reach(self) -> Zone {

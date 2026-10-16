@@ -13,8 +13,12 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
 };
+/// The page's background is the terminal's (`Reset`): "Sync terminal
+/// background" paints it to the theme's canvas through OSC 11, and with the
+/// setting off it stays the user's own. Painting `BG_CANVAS()` here would
+/// override that choice.
 pub(super) fn base() -> Style {
-    Style::default().fg(theme::TEXT()).bg(theme::BG_CANVAS())
+    Style::default().fg(theme::TEXT()).bg(Color::Reset)
 }
 pub(super) fn dim() -> Style {
     base().fg(theme::TEXT_DIM())
@@ -87,11 +91,12 @@ fn patch_line(mut line: Line<'static>, style: Style) -> Line<'static> {
 fn today_background() -> Color {
     theme::blend_toward(theme::BG_CANVAS(), theme::BORDER_ACTIVE(), 0.16)
 }
-/// Tint the day's canvas after its contents are drawn, preserving the
-/// stronger selection fill. Terminal-owned backgrounds remain untouched.
+/// Tint the day's unfilled cells after its contents are drawn, preserving
+/// the stronger selection fill. The tint is blended from the theme's canvas,
+/// so a palette whose canvas is the terminal's own (`Reset`) has nothing to
+/// blend and leaves the day untouched.
 fn shade_today(frame: &mut Frame, area: Rect, date: NaiveDate, s: &CalendarState) {
-    let canvas = theme::BG_CANVAS();
-    if date != s.today() || canvas == Color::Reset {
+    if date != s.today() || theme::BG_CANVAS() == Color::Reset {
         return;
     }
     let fill = today_background();
@@ -99,7 +104,7 @@ fn shade_today(frame: &mut Frame, area: Rect, date: NaiveDate, s: &CalendarState
     for y in area.y..area.bottom() {
         for x in area.x..area.right() {
             let cell = &mut buffer[(x, y)];
-            if cell.bg == canvas {
+            if cell.bg == Color::Reset {
                 cell.set_bg(fill);
             }
         }
@@ -634,7 +639,7 @@ fn draw_agenda(frame: &mut Frame, area: Rect, s: &CalendarState) {
                 .bg(if s.selected == s.today() {
                     today_background()
                 } else {
-                    theme::BG_CANVAS()
+                    Color::Reset
                 }),
         ),
         separator(),
@@ -704,7 +709,7 @@ fn list_lines<'a>(
                     accent().bg(if date == s.today() {
                         today_background()
                     } else {
-                        theme::BG_CANVAS()
+                        Color::Reset
                     }),
                 ),
                 None,

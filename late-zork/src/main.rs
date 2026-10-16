@@ -10,6 +10,7 @@ mod identity_test;
 mod protocol;
 mod server;
 mod slots;
+mod watch;
 
 use std::sync::Arc;
 use std::time::Duration;

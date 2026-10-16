@@ -7,7 +7,30 @@ use uuid::Uuid;
 
 use super::arcade_handle::handle_shape_valid;
 use super::game_room::GameKind;
-use super::leaderboard::DoorGame;
+
+/// The doors whose players have a watch-chat room: the ones a game can be
+/// spectated on. Its own roster rather than the leaderboard's `DoorGame`,
+/// which is the doors with ingested runs (Zork is watchable and has none).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum WatchDoor {
+    Dcss,
+    Nethack,
+    Brogue,
+    Zork,
+}
+
+impl WatchDoor {
+    /// The door's key: the watch room slug's prefix and the watch metrics'
+    /// `game` label.
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::Dcss => "dcss",
+            Self::Nethack => "nethack",
+            Self::Brogue => "brogue",
+            Self::Zork => "zork",
+        }
+    }
+}
 
 crate::model! {
     table = "chat_rooms";
@@ -44,6 +67,55 @@ pub struct UserRoomState {
     pub rooms: Vec<ChatRoom>,
     pub last_message_at: HashMap<Uuid, Option<DateTime<Utc>>>,
     pub unread_counts: HashMap<Uuid, i64>,
+}
+
+/// The rooms viewer `$1` sees as IRC channels, over the alias `r`: the
+/// lounge, language rooms, public topic rooms, and private topic rooms the
+/// viewer belongs to. Every IRC room query (LIST, JOIN, history) filters on
+/// this one predicate; `ircd::proj::is_irc_channel_kind` is its Rust twin.
+const IRC_CHANNEL_FOR_VIEWER: &str = "
+    r.slug IS NOT NULL
+    AND (r.kind IN ('lounge', 'language')
+         OR (r.kind = 'topic' AND r.visibility = 'public')
+         OR (r.kind = 'topic' AND r.visibility = 'private' AND EXISTS (
+               SELECT 1 FROM chat_room_members m
+               WHERE m.room_id = r.id AND m.user_id = $1)))";
+
+/// Which room wins an IRC channel name when several share a slug.
+const IRC_CHANNEL_RANK: &str = "CASE
+    WHEN r.kind = 'lounge' THEN 0
+    WHEN r.kind = 'language' THEN 1
+    WHEN r.kind = 'topic' AND r.visibility = 'public' THEN 2
+    WHEN r.kind = 'topic' AND r.visibility = 'private' THEN 3
+    ELSE 4
+END";
+
+/// Rooms whose IRC history viewer `$1` may read: channels among `$2` (the IDs
+/// joined on this connection) that are still IRC channels for the viewer,
+/// plus DMs the viewer is a member of; never a room the viewer is banned
+/// from. Membership is checked here on every read, so neither cached
+/// authorization nor an arbitrary room ID grants access.
+pub(crate) fn irc_history_rooms_sql() -> String {
+    format!(
+        "SELECT r.* FROM chat_rooms r
+         WHERE ((r.id = ANY($2::uuid[]) AND {IRC_CHANNEL_FOR_VIEWER})
+                OR (r.kind = 'dm' AND $1 IN (r.dm_user_a, r.dm_user_b)
+                    AND EXISTS (SELECT 1 FROM chat_room_members mem
+                                WHERE mem.room_id = r.id AND mem.user_id = $1)))
+           AND NOT EXISTS (
+               SELECT 1 FROM room_bans ban
+               WHERE ban.room_id = r.id AND ban.target_user_id = $1
+                 AND (ban.expires_at IS NULL OR ban.expires_at > current_timestamp))"
+    )
+}
+
+/// An IRC history buffer found by `ChatRoom::irc_history_targets`.
+pub struct IrcHistoryTarget {
+    pub room: ChatRoom,
+    /// The other participant's username for a DM; `None` for channels.
+    pub peer_username: Option<String>,
+    /// When the buffer's latest visible message was sent.
+    pub latest: DateTime<Utc>,
 }
 
 impl ChatRoom {
@@ -150,27 +222,17 @@ impl ChatRoom {
         slug: &str,
         user_id: Uuid,
     ) -> Result<Option<Self>> {
+        let sql = format!(
+            "SELECT r.*
+             FROM chat_rooms r
+             WHERE r.slug = $2
+               AND r.visibility = $3
+               AND {IRC_CHANNEL_FOR_VIEWER}
+             ORDER BY {IRC_CHANNEL_RANK}
+             LIMIT 1"
+        );
         let row = client
-            .query_opt(
-                "SELECT r.*
-                 FROM chat_rooms r
-                 WHERE r.slug = $1
-                   AND r.visibility = $3
-                   AND (r.kind IN ('lounge', 'language')
-                        OR (r.kind = 'topic' AND r.visibility = 'public')
-                        OR (r.kind = 'topic' AND r.visibility = 'private' AND EXISTS (
-                              SELECT 1 FROM chat_room_members m
-                              WHERE m.room_id = r.id AND m.user_id = $2)))
-                 ORDER BY CASE
-                    WHEN r.kind = 'lounge' THEN 0
-                    WHEN r.kind = 'language' THEN 1
-                    WHEN r.kind = 'topic' AND r.visibility = 'public' THEN 2
-                    WHEN r.kind = 'topic' AND r.visibility = 'private' THEN 3
-                    ELSE 4
-                 END
-                 LIMIT 1",
-                &[&slug, &user_id, &visibility],
-            )
+            .query_opt(&sql, &[&user_id, &slug, &visibility])
             .await?;
         Ok(row.map(Self::from))
     }
@@ -355,7 +417,7 @@ impl ChatRoom {
     /// runs.
     pub async fn get_or_create_watch_room(
         client: &Client,
-        door: DoorGame,
+        door: WatchDoor,
         playname: &str,
     ) -> Result<Self> {
         if !handle_shape_valid(playname) {
@@ -737,35 +799,22 @@ impl ChatRoom {
     /// Same-slug public/private rooms are distinct IRC channel names.
     /// See devdocs/FRD-IRCD.md §6.
     pub async fn list_irc_channels(client: &Client, user_id: Uuid) -> Result<Vec<Self>> {
-        let rows = client
-            .query(
-                "WITH visible AS (
-                    SELECT r.*,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY r.visibility, r.slug
-                               ORDER BY CASE
-                                   WHEN r.kind = 'lounge' THEN 0
-                                   WHEN r.kind = 'language' THEN 1
-                                   WHEN r.kind = 'topic' AND r.visibility = 'public' THEN 2
-                                   WHEN r.kind = 'topic' AND r.visibility = 'private' THEN 3
-                                   ELSE 4
-                               END
-                           ) AS irc_rank
-                    FROM chat_rooms r
-                    WHERE r.slug IS NOT NULL
-                      AND (r.kind IN ('lounge', 'language')
-                           OR (r.kind = 'topic' AND r.visibility = 'public')
-                           OR (r.kind = 'topic' AND r.visibility = 'private' AND EXISTS (
-                                 SELECT 1 FROM chat_room_members m
-                                 WHERE m.room_id = r.id AND m.user_id = $1)))
-                 )
-                 SELECT *
-                 FROM visible
-                 WHERE irc_rank = 1
-                 ORDER BY (kind = 'lounge') DESC, slug",
-                &[&user_id],
-            )
-            .await?;
+        let sql = format!(
+            "WITH visible AS (
+                SELECT r.*,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY r.visibility, r.slug
+                           ORDER BY {IRC_CHANNEL_RANK}
+                       ) AS irc_rank
+                FROM chat_rooms r
+                WHERE {IRC_CHANNEL_FOR_VIEWER}
+             )
+             SELECT *
+             FROM visible
+             WHERE irc_rank = 1
+             ORDER BY (kind = 'lounge') DESC, slug"
+        );
+        let rows = client.query(&sql, &[&user_id]).await?;
         Ok(rows.into_iter().map(Self::from).collect())
     }
 
@@ -773,45 +822,107 @@ impl ChatRoom {
         client: &Client,
         user_id: Uuid,
     ) -> Result<Vec<(Self, i64)>> {
-        let rows = client
-            .query(
-                "WITH visible AS (
-                    SELECT r.*,
-                           ROW_NUMBER() OVER (
-                               PARTITION BY r.visibility, r.slug
-                               ORDER BY CASE
-                                   WHEN r.kind = 'lounge' THEN 0
-                                   WHEN r.kind = 'language' THEN 1
-                                   WHEN r.kind = 'topic' AND r.visibility = 'public' THEN 2
-                                   WHEN r.kind = 'topic' AND r.visibility = 'private' THEN 3
-                                   ELSE 4
-                               END
-                           ) AS irc_rank
-                    FROM chat_rooms r
-                    WHERE r.slug IS NOT NULL
-                      AND (r.kind IN ('lounge', 'language')
-                           OR (r.kind = 'topic' AND r.visibility = 'public')
-                           OR (r.kind = 'topic' AND r.visibility = 'private' AND EXISTS (
-                                 SELECT 1 FROM chat_room_members m
-                                 WHERE m.room_id = r.id AND m.user_id = $1)))
-                 )
-                 SELECT r.*, COALESCE(m.member_count, 0)::bigint AS member_count
-                 FROM visible r
-                 LEFT JOIN LATERAL (
-                    SELECT COUNT(*)::bigint AS member_count
-                    FROM chat_room_members m
-                    WHERE m.room_id = r.id
-                 ) m ON true
-                 WHERE r.irc_rank = 1
-                 ORDER BY (r.kind = 'lounge') DESC, r.slug",
-                &[&user_id],
-            )
-            .await?;
+        let sql = format!(
+            "WITH visible AS (
+                SELECT r.*,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY r.visibility, r.slug
+                           ORDER BY {IRC_CHANNEL_RANK}
+                       ) AS irc_rank
+                FROM chat_rooms r
+                WHERE {IRC_CHANNEL_FOR_VIEWER}
+             )
+             SELECT r.*, COALESCE(m.member_count, 0)::bigint AS member_count
+             FROM visible r
+             LEFT JOIN LATERAL (
+                SELECT COUNT(*)::bigint AS member_count
+                FROM chat_room_members m
+                WHERE m.room_id = r.id
+             ) m ON true
+             WHERE r.irc_rank = 1
+             ORDER BY (r.kind = 'lounge') DESC, r.slug"
+        );
+        let rows = client.query(&sql, &[&user_id]).await?;
         Ok(rows
             .into_iter()
             .map(|row| {
                 let member_count = row.get("member_count");
                 (Self::from(row), member_count)
+            })
+            .collect())
+    }
+
+    /// Whether the viewer may read `room_id`'s IRC history right now: a
+    /// channel joined on this connection, or an existing DM of theirs, with
+    /// membership and bans rechecked (`IRC_HISTORY_ROOMS`).
+    pub async fn irc_history_accessible(
+        client: &Client,
+        viewer: Uuid,
+        joined_channels: &[Uuid],
+        room_id: Uuid,
+    ) -> Result<bool> {
+        let sql = format!(
+            "WITH accessible AS ({}) SELECT id FROM accessible WHERE id = $3",
+            irc_history_rooms_sql()
+        );
+        let row = client
+            .query_opt(&sql, &[&viewer, &joined_channels, &room_id])
+            .await?;
+        Ok(row.is_some())
+    }
+
+    /// IRC history buffers whose latest visible message lands in
+    /// `[lower, upper)`, by that message's time in the requested direction,
+    /// `limit` at most. A lateral index lookup avoids scanning each room's
+    /// history; DMs carry the peer's username.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn irc_history_targets(
+        client: &Client,
+        viewer: Uuid,
+        joined_channels: &[Uuid],
+        ignored_authors: &[Uuid],
+        lower: DateTime<Utc>,
+        upper: DateTime<Utc>,
+        descending: bool,
+        limit: i64,
+    ) -> Result<Vec<IrcHistoryTarget>> {
+        let order = if descending { "DESC" } else { "ASC" };
+        // $3 is the lower timestamp here; $4 remains the ignored-author array.
+        let sql = format!(
+            "WITH accessible AS ({})
+             SELECT room.*, latest.created AS latest_message_at, peer.username AS peer_username
+             FROM accessible room
+             JOIN LATERAL (
+                 SELECT msg.created FROM chat_messages msg
+                 WHERE msg.room_id = room.id AND {}
+                 ORDER BY msg.created DESC, msg.id DESC LIMIT 1
+             ) latest ON true
+             LEFT JOIN users peer ON peer.id = CASE WHEN room.dm_user_a = $1
+                                                    THEN room.dm_user_b ELSE room.dm_user_a END
+             WHERE latest.created >= $3 AND latest.created < $5
+             ORDER BY latest.created {order}, room.id {order} LIMIT $6",
+            irc_history_rooms_sql(),
+            super::chat_message::IRC_VISIBLE_MESSAGE,
+        );
+        let rows = client
+            .query(
+                &sql,
+                &[
+                    &viewer,
+                    &joined_channels,
+                    &lower,
+                    &ignored_authors,
+                    &upper,
+                    &limit,
+                ],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| IrcHistoryTarget {
+                latest: row.get("latest_message_at"),
+                peer_username: row.get("peer_username"),
+                room: Self::from(row),
             })
             .collect())
     }

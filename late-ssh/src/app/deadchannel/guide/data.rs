@@ -128,7 +128,7 @@ pub const SECTIONS: &[Section] = &[
                 },
             ]),
             Block::Rule(
-                "`f` opens *the road*: ten steps, three lanes, the same road for every runner today. each step goes to your lane or the one beside it. half the steps are glyphs; the rest are a *rest* or a *cache*.",
+                "`f` opens *the road*: ten steps, three lanes, the same road for every runner today. each step goes to your lane or the one beside it. half the steps are glyphs; the rest are a *rest* or a *cache*, and one of them has a *crossing* on one lane.",
             ),
             Block::Rule(
                 "a fight is a *hand of cards*: five drawn, three energy a turn, and the glyph shows its next move before you play. `a` plays the obvious turn for you, every turn if you like. at levels *3*, *6*, *9*, and *12* you pick a *new card* for the deck.",
@@ -140,16 +140,16 @@ pub const SECTIONS: &[Section] = &[
                 "the road shows you the fight before you take it. *grim* means your gear is behind: `g` fights the glyph a level below, for half the pay.",
             ),
             Block::Rule(
-                "`p` heals to full from anywhere for a bit a point, times your level. patch before a fight, not after a drop.",
+                "`p` heals to full from anywhere for a bit a point, times your level, *once a day*. spend it before the fight that needs it, not after a drop: the roll is the next one.",
             ),
             Block::Rule(
-                "two nodes of every road are *bright* glyphs. they are harder, pay double bits, and always leave a *crystal*. a crystal buys a glass at dead air, and three buy the next piece up at the blade shop, no bits asked.",
+                "two nodes of every road are *bright* glyphs. they are harder, pay double bits, and always leave a *crystal*. a crystal buys a glass or a pour at dead air, three buy the next piece up at the blade shop, no bits asked, two more a tier past your level, and ten ink a draft at ink for good.",
             ),
             Block::Rule(
-                "at *level 15* with the exp to leave it, the next glyph on the road is *the Old Signal* instead: *290* signal, *39* attack, *22* defense, and no bits.",
+                "at *level 15* with the exp to leave it, the next glyph on the road is *the Old Signal* instead: *300* signal, *35* attack, *22* defense, and no bits.",
             ),
             Block::Rule(
-                "put it down and you wake at level 1 with bare hands, fifty bits, an empty locker, and no crystals. the *mark* is your paragon level (▚3╬2 on the wire): a point of attack and defense each, up to five, and every level costs a little more.",
+                "put it down and you wake at level 1 with bare hands, fifty bits, an empty locker, and no crystals. the *mark* is your paragon level (▚3╬2 on the wire): a point of attack and defense each, up to five, and the same ladder to climb again.",
             ),
         ],
     },
@@ -242,7 +242,7 @@ pub const SECTIONS: &[Section] = &[
                 },
                 Key {
                     key: "enter",
-                    does: "step: fight the glyph, clear the deck at a rest, take a cache",
+                    does: "step: fight the glyph, clear the deck at a rest, take a cache, cross a sleeper",
                 },
                 Key {
                     key: "g",
@@ -263,10 +263,10 @@ pub const SECTIONS: &[Section] = &[
                 "*five steps* of every road are glyphs in every lane, the first and the last always. every road is five fights, whichever way you walk it.",
             ),
             Block::Rule(
-                "a *rest* shakes every static card out of your deck. it never mends your signal: that is patch's.",
+                "a *rest* shakes every static card out of your deck. it never mends your signal: that is patch's, once a day, and the siphon's in the fight.",
             ),
             Block::Rule(
-                "a *cache* is bits for the taking: *half* of what the glyph of your level pays, and no fight.",
+                "a *cache* is bits for the taking: *three fifths* of what the glyph of your level pays, and no fight.",
             ),
             Block::Rule(
                 "under the map is what waits on the lane you picked. for a glyph: its signal, what it hits for, its moves in the order they come, its pay, and how the fight reads on the `a` key from where you stand, *easy*, *even*, *risky*, or *grim*. play the hand yourself and you beat the word.",
@@ -275,7 +275,7 @@ pub const SECTIONS: &[Section] = &[
                 "exp levels you whether your gear is ready or not. when the glyph of your level reads grim, the one below still pays: half, but a kill is a kill. it never leaves a crystal.",
             ),
             Block::Rule(
-                "*the bright glyph* sits on two nodes of every road, one lane each, so you walk to it or around it: the glyph of your level with *a third more signal*, hitting and holding harder. it pays *double bits*, the same exp, and always *a crystal*. it costs most of a signal to put down.",
+                "*the bright glyph* sits on two nodes of every road, one lane each, so you walk to it or around it: the glyph of your level with *half as much signal again*, and half your level more attack. its defense is the plain glyph's. it pays *double bits*, the same exp, and always *a crystal*. it costs most of a signal to put down, and the day only has the one patch.",
             ),
             Block::Rule(
                 "with your signal down or the road walked, the panel is the day's card: the lane you took, lit by how each step went. `s` copies it to paste anywhere.",
@@ -285,6 +285,54 @@ pub const SECTIONS: &[Section] = &[
             ),
             Block::Rule(
                 "a dropped signal ends your day where you stand: the street takes the bits on you, you keep most of the exp, and the road is shut until the roll.",
+            ),
+        ],
+    },
+    Section {
+        title: "the crossing",
+        neon: Neon::Magenta,
+        blocks: &[
+            Block::Rule(
+                "one quiet step of every road has a *crossing* on one lane, beside a rest and a cache: another runner, asleep on their feet. the road says who, their level, their numbers, and what they carry. walk past it or take it.",
+            ),
+            Block::Keys(&[
+                Key {
+                    key: "enter",
+                    does: "on the crossing: fight them for what they carry",
+                },
+                Key {
+                    key: "r",
+                    does: "on the road: answer the one who crossed you, no ration",
+                },
+            ]),
+            Block::Rule(
+                "a crossing costs a *ration*, like any step. the sleeper fights at *full signal* with your numbers against theirs and one mind: hit, hit, wind up, heavy. their cards stay in their pocket; yours do not.",
+            ),
+            Block::Rule(
+                "put them down and you take every bit they were carrying. *no exp*, no kill on the sheet: the road is the way up, the crossing is the money and the story. go down and it is the road's full fall: your signal is down for the day, every bit on you goes to them, and you keep most of the exp.",
+            ),
+            Block::Rule(
+                "a sleeper risks only what they carry. their signal, their exp, and their day are untouched. the locker is for nights you would rather not be carrying.",
+            ),
+            Block::Rule(
+                "whoever was crossed and lost is owed an *answer*: within a day, `r` on the road fights the one who did it for what they carry now, no ration. win and it is back; lose and it is the full fall again. one answer per crossing.",
+            ),
+            Block::Figures(&[
+                Figure {
+                    value: "2",
+                    means: "levels either way: the crossing meets only runners within the band",
+                },
+                Figure {
+                    value: "1",
+                    means: "crossing on a sleeper a day, and one between any two runners a day",
+                },
+                Figure {
+                    value: "24h",
+                    means: "to answer, from the moment it ended",
+                },
+            ]),
+            Block::Rule(
+                "nobody who never joined can be crossed. a runner with their signal down, or a glyph waiting on their row, is off the road that night. the wire hears every crossing: who, which step, and what changed hands.",
             ),
         ],
     },
@@ -315,16 +363,16 @@ pub const SECTIONS: &[Section] = &[
                 },
             ]),
             Block::Rule(
-                "everyone starts with the same ten cards: five *strikes*, three *blocks*, a *surge*, a *wipe*. five are drawn a turn, you have *three energy* to play them, and what you do not play is discarded.",
+                "everyone starts with the same ten cards: four *strikes*, a *siphon*, three *blocks*, a *surge*, a *wipe*. five are drawn a turn, you have *three energy* to play them, and what you do not play is discarded.",
             ),
             Block::Rule(
-                "a *strike* hits for your attack less half the glyph's defense. a *surge* is two and a half strikes for two energy. the number is on the card, and a better weapon makes it bigger.",
+                "a *strike* hits for your attack less half the glyph's defense. a *surge* is two and a half strikes for two energy. a *siphon* is a strike that mends you for three quarters of what it hits: the one heal in a fight. the number is on the card, and a better weapon makes it bigger.",
             ),
             Block::Rule(
                 "a *block* holds a bit over half your defense and *stays up until a hit eats it*. put it up while the glyph gathers and it is still there when the heavy lands.",
             ),
             Block::Rule(
-                "the glyph shows its next move before you play: it *hits*; it *gathers*, which is nothing this turn and a *heavy* for double on the next; or it throws *noise*, two static cards and no damage. every glyph has its own order of moves and keeps to it.",
+                "the glyph shows its next move before you play: it *hits*; it *gathers*, which is nothing this turn and a *heavy* for double on the next; or it throws *noise*, static cards and no damage: one, and one more every five levels. every glyph has its own order of moves and keeps to it.",
             ),
             Block::Rule(
                 "a hit that gets through leaves a *static* card in your deck for the rest of the day. it does nothing but take a place in your hand. one energy throws it out for good, a *wipe* clears every one in your hand and blocks too, and a rest clears the deck. five is the most a deck holds.",
@@ -348,13 +396,13 @@ pub const SECTIONS: &[Section] = &[
                 "at levels *3*, *6*, *9*, and *12* a new card is waiting for you on the road: one of two, the same two for everybody. `1` or `2` takes it, and the road waits until you do.",
             ),
             Block::Rule(
-                "the card goes in *in place of* a strike or a block, so the deck is always ten cards. it stays until the mark; the next climb you pick again.",
+                "the card goes in *in place of* a strike or a block, so a draft never grows the deck past ten: only an inked draft's other card and a pour at dead air add one. it stays until the mark; the next climb you pick again.",
             ),
             Block::Rule(
-                "*level 3*, for a strike. *jab*: free, hits for three quarters of a strike. or *siphon*: a strike that mends you for half of what it hits.",
+                "*level 3*, for a strike. *jab*: free, hits for three quarters of a strike. or *brace*: free, holds a block until a hit eats it.",
             ),
             Block::Rule(
-                "*level 6*, for a block. *riposte*: hits for a block's worth plus all the block you have up, and the block stays. or *bulwark*: two energy, holds two blocks and a half.",
+                "*level 6*, for a block. *riposte*: hits for a block and a half plus all the block you have up, and the block stays. or *bulwark*: two energy, holds two blocks and a half.",
             ),
             Block::Rule(
                 "*level 9*, for a strike, and both put static to work. *burn*: free, two more energy this turn, and one more again for every static card in your hand, burned up. or *ground*: a strike, plus one more for every static card in your hand, thrown out with it.",
@@ -404,7 +452,7 @@ pub const SECTIONS: &[Section] = &[
                 "bits only, and only a tier above the one you carry. the piece you hand back comes off the price at *three quarters* of what it cost.",
             ),
             Block::Rule(
-                "the whole wall is for sale from day one, if you have the bits. *a tier behind your level is a fight; two behind is a drop.* a tier ahead buys very little.",
+                "the whole wall is for sale from day one, if you have the bits, and every tier past your level costs *half as much again*. *a tier behind your level is a fight; two behind is a drop.*",
             ),
         ],
     },
@@ -413,10 +461,10 @@ pub const SECTIONS: &[Section] = &[
         neon: Neon::White,
         blocks: &[
             Block::Rule(
-                "`p` opens patch from anywhere on the street. `p` again buys the signal back to full. *a bit a point, times your level.* it does not touch the static in your deck.",
+                "`p` opens patch from anywhere on the street. `p` again buys the signal back to full. *a bit a point, times your level, once a day*: the roll is the next heal. it does not touch the static in your deck.",
             ),
             Block::Rule(
-                "not while the signal is down, not with a glyph waiting on you, not once you are spent for the day (the roll brings it back for nothing), and not when there is nothing to fix.",
+                "not while the signal is down, not with a glyph waiting on you, not once you are spent for the day (the roll brings it back for nothing), not when there is nothing to fix, and not twice in a day.",
             ),
         ],
     },
@@ -457,7 +505,7 @@ pub const SECTIONS: &[Section] = &[
                 },
             ]),
             Block::Rule(
-                "it lends *fifty bits a level*, less what you already owe. enough at level 2 for a first weapon and a first coat.",
+                "it lends *the price of a piece at your level*, less what you already owe. the blade now, the kills later.",
             ),
             Block::Rule(
                 "it adds *a tenth* of every loan to the debt, rounded up, once. the debt never grows after that, and *half* of every glyph's and every cache's bits goes to it until you are square.",
@@ -482,9 +530,24 @@ pub const SECTIONS: &[Section] = &[
                     key: "t",
                     does: "test pattern: more signal, and filled",
                 },
+                Key {
+                    key: "f",
+                    does: "feedback: a surge in tonight's deck",
+                },
+                Key {
+                    key: "u",
+                    does: "squelch: a burn in tonight's deck",
+                },
+                Key {
+                    key: "o",
+                    does: "sign-off: a mute in tonight's deck",
+                },
             ]),
             Block::Rule(
                 "the bar pours for *a crystal a glass*, *one glass a day*, and it wears off at the roll. the first two add a point and one more every four levels; the test pattern adds two signal a level and fills you.",
+            ),
+            Block::Rule(
+                "a *pour* is a card instead: it rides every deck dealt today. look at the road before you order: a surge for the bright glyph, a burn for a day of noise, a mute for a heavy hitter.",
             ),
             Block::Rule(
                 "not while the signal is down, not with a glyph waiting on you, and not once you are spent for the day.",
@@ -506,7 +569,29 @@ pub const SECTIONS: &[Section] = &[
                 },
             ]),
             Block::Rule(
-                "the next tier up from what you carry, for *three crystals* and no bits. the armorer sells the same piece for bits, and the panel shows you what the wall asks. nothing is made past the top of the wall.",
+                "the next tier up from what you carry, for *three crystals* and no bits up to your level, and *two more for every tier past it*. the armorer sells the same piece for bits, and the panel shows you what the wall asks. nothing is made past the top of the wall.",
+            ),
+        ],
+    },
+    Section {
+        title: "ink",
+        neon: Neon::White,
+        blocks: &[
+            Block::Keys(&[
+                Key {
+                    key: "↑↓",
+                    does: "walk the drafts, level 3 to 12",
+                },
+                Key {
+                    key: "i",
+                    does: "ink the picked draft",
+                },
+            ]),
+            Block::Rule(
+                "a draft inked is *both its cards*: the one you pick and the one you did not, from the draft's level on, in this climb and every one after. *ten crystals*, and nothing takes it back: not a mark, not the ledge.",
+            ),
+            Block::Rule(
+                "the needle takes *one draft for every mark you hold, and one more*. a draft you have not reached yet can be inked ahead; its cards come when its level does.",
             ),
         ],
     },
@@ -528,7 +613,7 @@ pub const SECTIONS: &[Section] = &[
                 "a step off starts you over: *level 1*, bare hands, nothing on you, no crystals, and nothing in the locker. any other key leans you back in.",
             ),
             Block::Rule(
-                "your marks, your peak, your kills, your face, today's rations and the static in your deck, and the debt come down with you. not while your signal is down, not with nothing to lose, and the wire hears it.",
+                "your marks, your inks, your peak, your kills, your face, today's rations and the static in your deck, and the debt come down with you. not while your signal is down, not with nothing to lose, and the wire hears it.",
             ),
         ],
     },
@@ -584,11 +669,45 @@ pub const SECTIONS: &[Section] = &[
         ],
     },
     Section {
+        title: "the lounge",
+        neon: Neon::Amber,
+        blocks: &[
+            Block::Rule(
+                "now and then a glyph leaks into *#lounge*. only runners see it: it stands in the composer, where you type, and nobody upstairs sees a thing.",
+            ),
+            Block::Keys(&[Key {
+                key: "/hit",
+                does: "hit it (typed in the composer; never posts)",
+            }]),
+            Block::Rule(
+                "a *flicker* dies to one hit and leaves a cache's worth of bits for whoever landed it. a *howler* takes *three hits from three different runners* and leaves a crystal for each. one hit per runner per glyph: a howler needs the room.",
+            ),
+            Block::Figures(&[
+                Figure {
+                    value: "3",
+                    means: "flickers a day, one in each eight hours of the UTC day, at a moment the dice pick",
+                },
+                Figure {
+                    value: "1",
+                    means: "howler a day, at a moment the dice pick, once two runners are in the lounge",
+                },
+                Figure {
+                    value: "90s / 3m",
+                    means: "a flicker and a howler stay that long, then slip away",
+                },
+            ]),
+            Block::Rule(
+                "a glyph lands only while a runner is looking at #lounge, and one that nobody puts down in time slips away: the wire says so, and nobody is paid. no exp, ever: the climb's pace stays the road's.",
+            ),
+            Block::Rule("a dropped signal cannot hit. nothing in the lounge hits back."),
+        ],
+    },
+    Section {
         title: "the wire",
         neon: Neon::Green,
         blocks: &[
             Block::Rule(
-                "*#deadchannel* is the game's own log. what happens to runners posts there as news: a signal dropped, a level gained, the Old Signal put down, a step off the ledge, a first kill, a bright glyph put down, a near miss, the day's road walked.",
+                "*#deadchannel* is the game's own log. what happens to runners posts there as news: a signal dropped, a level gained, the Old Signal put down, a step off the ledge, a first kill, a bright glyph put down, a near miss, the day's road walked, a lounge glyph put down or slipped past, a crossing and what it moved.",
             ),
             Block::Rule(
                 "your name there wears your mark and your level in the newest tint it opened: grey to 3, phosphor to 6, cyan to 9, magenta to 12, red to 14, white at 15. marks ride behind the Signal's glyph: ▚3╬2.",

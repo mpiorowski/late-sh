@@ -20,9 +20,9 @@ async fn artboard_disclaimer_hides_content_and_only_allows_the_current_visit() {
     assert!(!frame.contains("GALLERY"));
     assert!(!frame.contains("Mode       view"));
     assert!(!frame.contains("rail j/k"));
-    app.handle_input(b"i\r \t5?");
+    app.handle_input(b"i\r \t?");
     app.handle_input(b"\x1b[200~private drawing\x1b[201~");
-    app.handle_input(b"\x1b[<0;15;1M");
+    app.handle_input(b"\x1b[<0;3;6M");
     assert_eq!(app.screen, Screen::Artboard);
     assert!(!app.artboard_interacting);
     assert!(app.artboard_disclaimer_visible());
@@ -32,6 +32,8 @@ async fn artboard_disclaimer_hides_content_and_only_allows_the_current_visit() {
     app.handle_input(b"q");
     assert!(app.show_quit_confirm);
     assert!(!app.artboard_content_accepted);
+    app.handle_input(b"5");
+    assert_eq!(app.screen, Screen::Artboard, "quit dialog keeps priority");
     app.handle_input(b"\x1b");
     wait_for_esc_effect(&mut app, |app| !app.show_quit_confirm, "quit confirm").await;
     assert!(app.artboard_disclaimer_visible());
@@ -77,7 +79,46 @@ async fn artboard_disclaimer_hides_content_and_only_allows_the_current_visit() {
 }
 
 #[tokio::test]
-async fn artboard_disclaimer_dont_remind_persists_and_settings_can_reenable_it() {
+async fn artboard_disclaimer_allows_numbered_page_shortcuts_without_consent() {
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "art-pages-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "art-pages-flow-it");
+    app.handle_input(b"4");
+    wait_for_render_contains(&mut app, "Artboard may contain NSFW content").await;
+
+    app.handle_input(b"4");
+    assert!(app.artboard_disclaimer_visible());
+    assert!(!app.artboard_content_accepted);
+    assert!(app.dartboard_state.is_none());
+
+    for (key, screen) in [
+        (b'1', Screen::Dashboard),
+        (b'2', Screen::Arcade),
+        (b'3', Screen::Games),
+        (b'5', Screen::Profiles),
+        (b'6', Screen::Leaderboard),
+        (b'7', Screen::Calendars),
+    ] {
+        app.handle_input(&[key]);
+        assert_eq!(app.screen, screen, "shortcut {}", key as char);
+        assert!(!app.artboard_content_accepted);
+        assert!(app.dartboard_state.is_none());
+        assert!(app.artboard_disclaimer_enabled());
+
+        app.handle_input(b"4");
+        assert!(app.artboard_disclaimer_visible());
+        assert!(app.dartboard_state.is_none());
+    }
+
+    let client = test_db.db.get().await.unwrap();
+    let stored = User::get(&client, user.id).await.unwrap().unwrap();
+    assert_eq!(stored.settings, user.settings);
+}
+
+#[tokio::test]
+async fn artboard_disclaimer_is_per_device_and_settings_can_reenable_it() {
     use crate::app::{
         common::primitives::Screen,
         settings_modal::{
@@ -86,71 +127,97 @@ async fn artboard_disclaimer_dont_remind_persists_and_settings_can_reenable_it()
         },
     };
     use late_core::models::user::extract_artboard_disclaimer;
+    use late_core::models::user_ssh_key::extract_key_artboard_disclaimer;
 
     let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "art-dismiss-it").await;
-    let mut app = make_app(test_db.db.clone(), user.id, "art-dismiss-flow-it");
-    // No tick yet: A must wait for the profile rather than save blank account fields.
-    app.handle_input(b"4A");
-    assert!(!app.artboard_disclaimer_visible());
-    wait_for_render_contains(&mut app, "Mode       view").await;
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    loop {
-        app.tick();
-        let client = test_db.db.get().await.unwrap();
-        let stored = User::get(&client, user.id).await.unwrap().unwrap();
-        assert_eq!(stored.username, user.username);
-        if !extract_artboard_disclaimer(&stored.settings) {
-            break;
+    let user = create_test_user(&test_db.db, "art-device-it").await;
+    let client = test_db.db.get().await.unwrap();
+    // One account on two machines, as `auth_publickey` would have recorded them.
+    UserSshKey::ensure(&client, user.id, "SHA256:home")
+        .await
+        .unwrap();
+    UserSshKey::ensure(&client, user.id, "SHA256:work")
+        .await
+        .unwrap();
+    let user_id = user.id;
+    let stored_key = |fingerprint: &'static str| {
+        let db = test_db.db.clone();
+        async move {
+            let client = db.get().await.unwrap();
+            let key = UserSshKey::find_by_fingerprint(&client, user_id, fingerprint)
+                .await
+                .unwrap()
+                .unwrap();
+            extract_key_artboard_disclaimer(&key.settings)
         }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "Always View was not persisted"
-        );
-        tokio::time::sleep(Duration::from_millis(10)).await;
-    }
+    };
 
-    // A visit before the profile lands reads as prompted and takes no seat;
-    // once the saved tweak arrives, the seat follows on its own.
-    let mut landing = make_app(test_db.db.clone(), user.id, "art-dismiss-landing-it");
-    landing.handle_input(b"4");
-    assert!(landing.artboard_disclaimer_visible());
-    assert!(landing.dartboard_state.is_none());
-    wait_for_render_contains(&mut landing, "Mode       view").await;
-    assert!(!landing.artboard_disclaimer_visible());
-    assert!(landing.dartboard_state.is_some());
+    // Always View at home, before the profile has even arrived: it lands on
+    // the home key and nowhere else.
+    let mut home = with_session_key(
+        make_app(test_db.db.clone(), user.id, "art-device-home-it"),
+        "SHA256:home",
+    );
+    home.handle_input(b"4A");
+    assert!(!home.artboard_disclaimer_visible());
+    wait_for_render_contains(&mut home, "Mode       view").await;
+    wait_until(
+        || {
+            let stored = stored_key("SHA256:home");
+            async move { stored.await == Some(false) }
+        },
+        "Always View to reach the home key",
+    )
+    .await;
+    assert_eq!(stored_key("SHA256:work").await, None);
+    let stored = User::get(&client, user.id).await.unwrap().unwrap();
+    assert_eq!(stored.username, user.username);
+    assert!(
+        extract_artboard_disclaimer(&stored.settings),
+        "the account default stays on for every other device"
+    );
 
-    let mut reloaded = make_app(test_db.db.clone(), user.id, "art-dismiss-reload-it");
-    reloaded.handle_input(b"\x0f");
-    wait_for_render_contains(&mut reloaded, &user.username).await;
-    reloaded.settings_modal_state.select_tab(Tab::Tweaks);
-    reloaded
-        .settings_modal_state
+    // Work inherits the account default and still asks.
+    let mut work = with_session_key(
+        make_app(test_db.db.clone(), user.id, "art-device-work-it"),
+        "SHA256:work",
+    );
+    work.handle_input(b"4");
+    assert!(work.artboard_disclaimer_visible());
+    assert!(work.dartboard_state.is_none());
+    work.handle_input(b"B");
+    assert_eq!(work.screen, Screen::Dashboard);
+
+    // The home Tweaks row shows this device's choice, not the account's, and
+    // re-enabling it hides the current visit again.
+    home.handle_input(b"\x0f");
+    wait_for_render_contains(&mut home, &user.username).await;
+    home.settings_modal_state.select_tab(Tab::Tweaks);
+    home.settings_modal_state
         .select_mouse_target(Target::Tweak(TweakRow::ArtboardDisclaimer));
     assert_eq!(
-        reloaded.settings_modal_state.selected_tweak_row(),
+        home.settings_modal_state.selected_tweak_row(),
         TweakRow::ArtboardDisclaimer
     );
-    assert!(!reloaded.settings_modal_state.draft().artboard_disclaimer);
-    reloaded.handle_input(b"\x1b");
-    wait_for_esc_effect(&mut reloaded, |app| !app.show_settings, "settings").await;
-    reloaded.handle_input(b"4");
-    assert!(!reloaded.artboard_disclaimer_visible());
-
-    reloaded.handle_input(b"\x0f");
-    reloaded.settings_modal_state.select_tab(Tab::Tweaks);
-    reloaded
-        .settings_modal_state
-        .select_mouse_target(Target::Tweak(TweakRow::ArtboardDisclaimer));
-    wait_for_render_contains(&mut reloaded, "Artboard content disclaimer").await;
-    reloaded.handle_input(b"\r");
-    assert!(reloaded.settings_modal_state.draft().artboard_disclaimer);
-    assert!(reloaded.artboard_disclaimer_visible());
-    reloaded.handle_input(b"\x1b");
-    wait_for_esc_effect(&mut reloaded, |app| !app.show_settings, "settings").await;
-    assert!(!render_plain(&mut reloaded).contains("GALLERY"));
-    reloaded.handle_input(b"B");
-    assert_eq!(reloaded.screen, Screen::Dashboard);
+    assert!(!home.settings_modal_state.device_artboard_disclaimer());
+    assert!(home.settings_modal_state.draft().artboard_disclaimer);
+    wait_for_render_contains(&mut home, "Artboard content disclaimer").await;
+    home.handle_input(b"\r");
+    assert!(home.settings_modal_state.device_artboard_disclaimer());
+    assert!(home.artboard_disclaimer_visible());
+    home.handle_input(b"\x1b");
+    wait_for_esc_effect(&mut home, |app| !app.show_settings, "settings").await;
+    assert!(!render_plain(&mut home).contains("GALLERY"));
+    wait_until(
+        || {
+            let stored = stored_key("SHA256:home");
+            async move { stored.await == Some(true) }
+        },
+        "the re-enabled disclaimer to reach the home key",
+    )
+    .await;
+    home.handle_input(b"B");
+    assert_eq!(home.screen, Screen::Dashboard);
 }
 
 #[tokio::test]
@@ -204,6 +271,42 @@ async fn artboard_disclaimer_tour_choice_keeps_account_settings() {
 }
 
 #[tokio::test]
+async fn artboard_disclaimer_allows_clicking_topbar_page_numbers_without_consent() {
+    use crate::app::common::primitives::Screen;
+    use late_core::models::user::InteractionMode;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "art-topbar-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "art-topbar-flow-it");
+    // Topbar digits sit at 0-based columns 14, 16, ... on row 0; SGR is 1-based.
+    for (column, screen) in [
+        (12, Screen::Clubhouse),
+        (14, Screen::Dashboard),
+        (16, Screen::Arcade),
+        (18, Screen::Games),
+        (22, Screen::Profiles),
+        (24, Screen::Leaderboard),
+        (26, Screen::Calendars),
+    ] {
+        app.set_screen(Screen::Artboard);
+        render_plain(&mut app);
+        assert!(app.artboard_disclaimer_visible());
+        let click = format!("\x1b[<0;{};1M", column + 1);
+
+        app.interaction_mode = InteractionMode::Keyboard;
+        app.handle_input(click.as_bytes());
+        assert_eq!(app.screen, Screen::Artboard, "keyboard-only ignores clicks");
+
+        app.interaction_mode = InteractionMode::Hybrid;
+        app.handle_input(click.as_bytes());
+        assert_eq!(app.screen, screen, "column {column}");
+        assert!(!app.artboard_content_accepted);
+        assert!(app.dartboard_state.is_none());
+        assert!(app.artboard_disclaimer_enabled());
+    }
+}
+
+#[tokio::test]
 async fn artboard_disclaimer_mouse_choices_respect_keyboard_only_mode() {
     use crate::app::common::primitives::Screen;
     use late_core::models::user::InteractionMode;
@@ -233,7 +336,11 @@ async fn artboard_disclaimer_mouse_choices_respect_keyboard_only_mode() {
             }
         );
         if index == 1 {
-            assert!(!app.profile_state.profile().artboard_disclaimer);
+            assert!(!app.artboard_disclaimer_enabled());
+            assert!(
+                app.profile_state.profile().artboard_disclaimer,
+                "Always View is per device: the account default stays on"
+            );
         }
         app.set_screen(Screen::Dashboard);
     }
@@ -4703,15 +4810,15 @@ async fn f2_or_a_click_on_the_pane_lets_a_player_write_to_their_watchers() {
     use crate::app::common::primitives::Screen;
     use crate::app::door::spectate::state::SpectateGame;
     use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room::WatchDoor;
     use late_core::models::chat_room_member::ChatRoomMember;
-    use late_core::models::leaderboard::DoorGame;
 
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "own-chat-f2").await;
     // The player's watch-chat room, joined ahead of the session the way a
     // returning player's is, so the room list the app loads carries it.
     let client = test_db.db.get().await.expect("db client");
-    let room = ChatRoom::get_or_create_watch_room(&client, DoorGame::Nethack, "tester")
+    let room = ChatRoom::get_or_create_watch_room(&client, WatchDoor::Nethack, "tester")
         .await
         .expect("the player's watch room");
     ChatRoomMember::join(&client, room.id, user.id)
@@ -4814,6 +4921,73 @@ async fn f2_or_a_click_on_the_pane_lets_a_player_write_to_their_watchers() {
         !app.chat.is_composing(),
         "F2 stays with the game without a pane"
     );
+}
+
+/// Zork's player writes to their watchers the same way: F2 opens the
+/// composer in their own room, typing and Enter are the composer's, and Esc
+/// hands the keys back to the story.
+#[tokio::test]
+async fn a_zork_player_writes_to_their_watchers_with_f2() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::door::spectate::state::SpectateGame;
+    use late_core::models::chat_room::{ChatRoom, WatchDoor};
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "zork-own-chat-f2").await;
+    let client = test_db.db.get().await.expect("db client");
+    let room = ChatRoom::get_or_create_watch_room(&client, WatchDoor::Zork, "tester")
+        .await
+        .expect("the player's watch room");
+    ChatRoomMember::join(&client, room.id, user.id)
+        .await
+        .expect("join the watch room");
+    let mut app = make_app(test_db.db.clone(), user.id, "zork-own-chat-f2-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_app(&mut app, "the room list", |app| {
+        app.chat.room_by_id(room.id).is_some()
+    })
+    .await;
+    app.live_games
+        .publish_chat_room_for_tests(SpectateGame::Zork, "tester", room.id);
+
+    // A running game under a claimed handle. Nothing awaits from here on, as
+    // in the roguelike flow above: the fabricated proxy would end the game.
+    app.zork_enabled = true;
+    app.set_screen(Screen::Zork);
+    app.zork_state
+        .as_mut()
+        .expect("zork state")
+        .force_running_for_test();
+    app.tick();
+    let room_id = app
+        .own_watch_chat_room_id(SpectateGame::Zork)
+        .expect("the player's own room");
+    let plain = render_plain(&mut app);
+    assert!(plain.contains("Compose (F2 or click)"), "{plain}");
+
+    app.handle_input(b"\x1bOQ");
+    assert!(app.chat.is_composing(), "F2 opens the composer");
+    assert_eq!(app.chat.composer_room_id(), Some(room_id));
+    app.handle_input(b"hi all");
+    assert_eq!(
+        app.chat.composer().lines().join("\n"),
+        "hi all",
+        "typed keys are the composer's, not the story's"
+    );
+    app.handle_input(b"\r");
+    assert!(
+        !app.chat.is_composing(),
+        "Enter sends and hands the keys back"
+    );
+
+    app.handle_input(b"\x1bOQ");
+    app.handle_input(b"draft");
+    app.handle_input(b"\x1b");
+    app.pending_escape_started_at = Some(std::time::Instant::now() - Duration::from_secs(1));
+    crate::app::input::flush_pending_escape(&mut app);
+    assert!(!app.chat.is_composing(), "Esc closes the composer");
+    assert_eq!(app.screen, Screen::Zork);
 }
 
 #[tokio::test]
@@ -6345,7 +6519,8 @@ async fn enter_on_a_spent_runners_road_lands_back_on_the_street() {
 /// each slot key buys onto the row. A letter the open panel does not own
 /// stays with it instead of reaching a global: `w` (the cart's key, Bonsai
 /// Care everywhere else) at the bar, `m` (the paired client's mute) at
-/// both, as over the picker and the scene.
+/// both, as over the picker and the scene. `q` and the page digits are
+/// the globals' over both.
 #[tokio::test]
 async fn the_bar_and_the_cart_take_their_keys_and_keep_the_rest() {
     use crate::app::deadchannel::city::map::Landmark;
@@ -6375,6 +6550,12 @@ async fn the_bar_and_the_cart_take_their_keys_and_keep_the_rest() {
     assert!(!app.show_bonsai_modal, "`w` at the bar is not Bonsai Care");
     assert!(app.banner.is_none(), "`m` at the bar is not the mute");
     assert_eq!(app.city.panel(), Some(Landmark::Bar), "the bar stays open");
+
+    // `q` asks to quit, and pours nothing: the glass below is the day's one.
+    app.handle_input(b"q");
+    assert!(app.show_quit_confirm, "`q` at the bar is the quit");
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(&mut app, |app| !app.show_quit_confirm, "quit confirm").await;
 
     app.handle_input(b"s");
     wait_for_render_contains(&mut app, "static on ice. it goes down like a short circuit").await;
@@ -6416,6 +6597,72 @@ async fn the_bar_and_the_cart_take_their_keys_and_keep_the_rest() {
     // The page digits still reach the globals from over a panel.
     app.handle_input(b"1");
     wait_for_render_contains(&mut app, " Home ").await;
+}
+
+/// At INK a page digit is the page switch, as over every panel: `2` goes
+/// to the Arcade, and no draft is inked for it.
+#[tokio::test]
+async fn the_needle_leaves_the_page_digits_to_the_globals() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::deadchannel::city::map::Landmark;
+    use late_core::models::deadchannel_runner::DeadchannelRunner;
+
+    let (test_db, mut app, user_id) =
+        runner_on_the_street("undercity-needle-digits-it", 100, 30, |sheet| {
+            sheet.crystals = 20
+        })
+        .await;
+
+    app.city.open_panel(Landmark::Ink);
+    app.fight.clear_till();
+    wait_for_render_contains(&mut app, " Esc closes ").await;
+    app.handle_input(b"2");
+    assert_eq!(
+        app.screen,
+        Screen::Arcade,
+        "`2` at the needle is the Arcade"
+    );
+
+    let client = test_db.db.get().await.expect("db client");
+    let row = DeadchannelRunner::find_by_user(&client, user_id)
+        .await
+        .expect("find")
+        .expect("row");
+    assert_eq!(row.inks, None, "nothing inked");
+    assert_eq!(row.crystals, 20, "no crystals spent");
+}
+
+/// At INK the down key walks the cursor to the next draft and `i` inks
+/// that one onto the row, for its crystals.
+#[tokio::test]
+async fn the_needle_inks_the_picked_draft() {
+    use crate::app::deadchannel::city::map::Landmark;
+    use late_core::models::deadchannel_runner::DeadchannelRunner;
+
+    let (test_db, mut app, user_id) =
+        runner_on_the_street("undercity-needle-ink-it", 100, 30, |sheet| {
+            sheet.crystals = 20
+        })
+        .await;
+
+    app.city.open_panel(Landmark::Ink);
+    app.fight.clear_till();
+    wait_for_render_contains(&mut app, " Esc closes ").await;
+    app.handle_input(b"j");
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "the needle goes in.").await;
+
+    let client = test_db.db.get().await.expect("db client");
+    let row = DeadchannelRunner::find_by_user(&client, user_id)
+        .await
+        .expect("find")
+        .expect("row");
+    assert_eq!(
+        row.inks,
+        Some(serde_json::json!([6])),
+        "the level 6 draft, under the cursor"
+    );
+    assert_eq!(row.crystals, 10, "ten crystals for the needle");
 }
 
 /// The road and the scene both fit a classic 80 by 24 terminal under the

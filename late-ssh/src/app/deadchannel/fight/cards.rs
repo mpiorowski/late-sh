@@ -1,15 +1,20 @@
 //! The deck and the hand (GAME.md, "The round: ten cards, three energy").
-//! Everyone starts with the same ten cards; the weapon and the armor are
-//! what the cards hit and hold for, so the armorer's wall is still the
-//! power curve and the deck is a spreadsheet with two columns.
+//! Everyone starts with the same ten cards, a siphon among them (the one
+//! heal between the day's patch and the roll); the weapon and the armor
+//! are what the cards hit and hold for, so the armorer's wall is still
+//! the power curve and the deck is a spreadsheet with two columns.
 //!
-//! The deck never grows. At the levels in [`DRAFTS`] a runner is owed a
-//! new card: one of two, the same two for everybody at that level, and
-//! the one taken goes in over a strike or a block ([`deck`]). Four drafts,
-//! sixteen decks, every one of them small enough for the arena to fight
-//! (`fight/BALANCE.md`). Every new card's number is a share of the strike
-//! or the block the basic cards already print (`data::Rules`,
-//! [`Card::effect`]), so the wall still prices all of it.
+//! The deck grows only by what is paid for. At the levels in [`DRAFTS`] a
+//! runner is owed a new card: one of two, the same two for everybody at
+//! that level, and the one taken goes in over a strike or a block
+//! ([`deck`]). Four drafts, sixteen decks, every one of them small enough
+//! for the arena to fight (`fight/BALANCE.md`). A draft inked at INK
+//! (GAME.md, "INK: the needle") puts its other option in beside the pick,
+//! from the draft's level on, in this climb and every one after; a pour at
+//! Dead Air puts one card in until the roll (`state::Drink::pour`). Every
+//! new card's number is a share of the strike or the block the basic
+//! cards already print (`data::Rules`, [`Card::effect`]), so the wall
+//! still prices all of it.
 //!
 //! Static is the one card nobody chose: a hit that lands puts one in the
 //! discard pile, and it rides the deck for the rest of the day's road.
@@ -47,9 +52,12 @@ pub enum Card {
     Wipe,
     /// Most of a strike, for nothing.
     Jab,
-    /// A strike that mends you for half of itself.
+    /// A block, for nothing.
+    Brace,
+    /// A strike that mends you for three quarters of itself. In every
+    /// deck from the first step.
     Siphon,
-    /// Hits for a block's worth and for every point of block standing;
+    /// Hits for a block and a half, and for every point of block standing;
     /// the block stays.
     Riposte,
     /// Two blocks and a half in one card, for two energy.
@@ -79,13 +87,14 @@ pub struct Draft {
 }
 
 /// The drafts, in the order they are owed. Each is a question with no
-/// right answer: tempo or sustain, armor as a weapon or as a wall, static
-/// burned for energy or thrown for damage, the finisher or the cut-out.
+/// right answer: a free hit or a free guard, armor as a weapon or as a
+/// wall, static burned for energy or thrown for damage, the finisher or
+/// the cut-out.
 pub const DRAFTS: [Draft; 4] = [
     Draft {
         level: 3,
         replaces: Card::Strike,
-        options: [Card::Jab, Card::Siphon],
+        options: [Card::Jab, Card::Brace],
     },
     Draft {
         level: 6,
@@ -104,17 +113,36 @@ pub const DRAFTS: [Draft; 4] = [
     },
 ];
 
+impl Draft {
+    /// The option that is not `pick`. The caller holds that `pick` is one
+    /// of the two.
+    pub fn other(&self, pick: Card) -> Card {
+        match self.options[0] == pick {
+            true => self.options[1],
+            false => self.options[0],
+        }
+    }
+}
+
 /// The draft a runner of `level` holding `drafted` cards is owed: the
 /// next one in [`DRAFTS`], once the level reaches it.
 pub fn draft_owed(level: i32, drafted: usize) -> Option<&'static Draft> {
     DRAFTS.get(drafted).filter(|draft| level >= draft.level)
 }
 
-/// The deck of a runner who drafted `drafted`, in order: [`DECK`] with
-/// each pick over one of the cards its draft replaces. The caller holds
-/// that `drafted[i]` is an option of `DRAFTS[i]` (`Sheet::from_row` checks
-/// the row, `Command::Draft` the pick).
-pub fn deck(drafted: &[Card]) -> Vec<Card> {
+/// The draft at `level`, if one is owed there.
+pub fn draft_at(level: i32) -> Option<&'static Draft> {
+    DRAFTS.iter().find(|draft| draft.level == level)
+}
+
+/// The deck of a runner who drafted `drafted` and inked the drafts at
+/// `inked` (their levels), in order: [`DECK`] with each pick over one of
+/// the cards its draft replaces, then the other option of every inked
+/// draft the runner has picked at. The caller holds that `drafted[i]` is
+/// an option of `DRAFTS[i]` and every level in `inked` is a draft's
+/// (`Sheet::from_row` checks the row, `Command::Draft` the pick,
+/// `Command::Ink` the level).
+pub fn deck(drafted: &[Card], inked: &[i32]) -> Vec<Card> {
     let mut deck = DECK.to_vec();
     for (draft, pick) in DRAFTS.iter().zip(drafted) {
         let slot = deck
@@ -122,6 +150,11 @@ pub fn deck(drafted: &[Card]) -> Vec<Card> {
             .position(|card| *card == draft.replaces)
             .expect("the deck holds a card for every draft to replace");
         deck[slot] = *pick;
+    }
+    for (draft, pick) in DRAFTS.iter().zip(drafted) {
+        if inked.contains(&draft.level) {
+            deck.push(draft.other(*pick));
+        }
     }
     deck
 }
@@ -157,13 +190,14 @@ pub struct Effect {
     pub mutes: bool,
 }
 
-/// The deck every runner carries, before the day puts static in it.
+/// The deck every runner carries, before the day puts static in it: four
+/// strikes, a siphon, three blocks, a surge, a wipe.
 pub const DECK: [Card; 10] = [
     Card::Strike,
     Card::Strike,
     Card::Strike,
     Card::Strike,
-    Card::Strike,
+    Card::Siphon,
     Card::Block,
     Card::Block,
     Card::Block,
@@ -174,7 +208,7 @@ pub const DECK: [Card; 10] = [
 impl Card {
     pub fn cost(self) -> u8 {
         match self {
-            Card::Jab | Card::Burn => 0,
+            Card::Jab | Card::Brace | Card::Burn => 0,
             Card::Strike
             | Card::Block
             | Card::Wipe
@@ -194,6 +228,7 @@ impl Card {
             Card::Surge => "surge",
             Card::Wipe => "wipe",
             Card::Jab => "jab",
+            Card::Brace => "brace",
             Card::Siphon => "siphon",
             Card::Riposte => "riposte",
             Card::Bulwark => "bulwark",
@@ -214,8 +249,9 @@ impl Card {
             Card::Surge => "two energy. hits for two strikes and a half",
             Card::Wipe => "a block, and every static card in your hand thrown out",
             Card::Jab => "free. hits for three quarters of a strike",
-            Card::Siphon => "a strike that mends you for half of what it hits",
-            Card::Riposte => "hits for a block's worth plus all the block you have up",
+            Card::Brace => "free. holds a block until a hit eats it",
+            Card::Siphon => "a strike that mends you for three quarters of what it hits",
+            Card::Riposte => "hits for a block and a half plus all the block you have up",
             Card::Bulwark => "two energy. holds two blocks and a half",
             Card::Burn => "free. +2 energy, and +1 per static card in hand, burned",
             Card::Ground => "a strike, plus one per static card in hand. they go too",
@@ -251,13 +287,17 @@ impl Card {
                 damage: powers.jab,
                 ..none
             },
+            Card::Brace => Effect {
+                block: powers.brace,
+                ..none
+            },
             Card::Siphon => Effect {
                 damage: powers.strike,
                 mend: powers.mend,
                 ..none
             },
             Card::Riposte => Effect {
-                damage: powers.block + board.block,
+                damage: powers.riposte + board.block,
                 ..none
             },
             Card::Bulwark => Effect {
@@ -351,6 +391,7 @@ impl Piles {
             | Card::Surge
             | Card::Wipe
             | Card::Jab
+            | Card::Brace
             | Card::Siphon
             | Card::Riposte
             | Card::Bulwark

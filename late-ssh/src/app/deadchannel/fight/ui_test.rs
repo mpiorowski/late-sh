@@ -5,13 +5,15 @@ use uuid::Uuid;
 
 use rand::{SeedableRng, rngs::StdRng};
 
-use super::{PickerView, SceneView, corrupt, draw_picker, draw_scene};
+use late_core::models::deadchannel_ambush::{Ambush, AmbushOutcome};
+
+use super::{PickerView, SceneView, corrupt, draw_picker, draw_scene, news_line};
 use crate::app::deadchannel::fight::cards::Card;
 use crate::app::deadchannel::fight::data::{MAX_LEVEL, RATIONS_PER_DAY, RULES, exp_to_seek};
 use crate::app::deadchannel::fight::road::{Mark, Node, Trace};
 use crate::app::deadchannel::fight::session::{Picker, Scene};
 use crate::app::deadchannel::fight::sim::Threat;
-use crate::app::deadchannel::fight::state::{Pick, Quarry, Sheet};
+use crate::app::deadchannel::fight::state::{Lookout, Pick, Prey, Quarry, Rival, Sheet, Token};
 
 fn september(day: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(2026, 9, day).unwrap()
@@ -242,11 +244,11 @@ fn a_short_terminal_gets_the_hand_as_chips() {
 fn at_the_bottom() -> (Sheet, Scene) {
     let mut sheet = Sheet::fresh(Uuid::nil(), september(24));
     sheet.level = MAX_LEVEL;
-    sheet.exp = exp_to_seek(0);
+    sheet.exp = exp_to_seek();
     sheet.signal = 150;
     sheet.engage(&RULES, Pick::Fair, &mut StdRng::seed_from_u64(5));
     assert_eq!(
-        sheet.fight.as_ref().map(|fight| fight.quarry),
+        sheet.fight.as_ref().map(|fight| fight.quarry.clone()),
         Some(Quarry::OldSignal)
     );
     let scene = Scene {
@@ -357,6 +359,7 @@ fn render_road(sheet: &Sheet, picker: &Picker, height: u16, word: Option<&str>) 
                 PickerView {
                     sheet: Some(sheet),
                     picker,
+                    lookout: &Lookout::default(),
                     look: None,
                     own_username: "mira",
                     tick: 0,
@@ -396,6 +399,8 @@ fn the_road_shows_the_map_and_the_glyph_under_the_cursor_with_its_threat() {
         fair: Some(Threat::Grim),
         lower: Some(Threat::Easy),
         bright: Some(Threat::Risky),
+        crossing: None,
+        answer: None,
     };
     let (_, _, hiss) = RULES.foe(2);
 
@@ -412,11 +417,11 @@ fn the_road_shows_the_map_and_the_glyph_under_the_cursor_with_its_threat() {
         "{text}"
     );
     assert!(
-        text.contains("▸ [▚]·····+"),
+        text.contains("▸ [▚]·····$"),
         "the way in, and the rail\n{text}"
     );
     assert!(
-        text.contains("── ▚ glyph  ▓ bright  + rest  $ cache  ─"),
+        text.contains("── ▚ glyph  ▓ bright  + rest  $ cache  @ crossing  ─"),
         "{text}"
     );
     // Under it, the glyph on that lane, with no key of its own: Enter
@@ -490,6 +495,8 @@ fn the_road_shows_a_bright_glyph_a_rest_and_a_cache_under_the_cursor() {
                 fair: Some(Threat::Even),
                 lower: Some(Threat::Easy),
                 bright: Some(Threat::Risky),
+                crossing: None,
+                answer: None,
             },
         )
     };
@@ -565,6 +572,8 @@ fn a_road_that_is_over_is_the_days_card() {
         fair: None,
         lower: None,
         bright: None,
+        crossing: None,
+        answer: None,
     };
 
     let down = render_road(&sheet, &picker, 30, None);
@@ -637,8 +646,8 @@ fn the_drafted_cards_print_what_they_would_do_now() {
     assert!(screen.contains("╰ free ─────╯"), "{screen}");
     for text in [
         format!("hit {}", powers.jab),
-        // A block's worth and the five standing.
-        format!("hit {}", powers.block + 5),
+        // A block and a half, and the five standing.
+        format!("hit {}", powers.riposte + 5),
         // A strike, and one more for the static card beside it.
         format!("hit {}", powers.strike + powers.ground),
         "+block up".to_string(),
@@ -670,22 +679,24 @@ fn a_draft_owed_takes_the_road_panel() {
     let mut sheet = Sheet::fresh(Uuid::nil(), september(24));
     sheet.level = 6;
     sheet.signal = 60;
-    sheet.cards = vec![Card::Siphon];
+    sheet.cards = vec![Card::Brace];
     let picker = Picker {
         lane: 1,
         fair: Some(Threat::Easy),
         lower: Some(Threat::Easy),
         bright: Some(Threat::Even),
+        crossing: None,
+        answer: None,
     };
     for height in [24, 40] {
         let screen = render_road(&sheet, &picker, height, None);
         for text in [
             "a new card",
             "level 6. it takes the place of a block, until the mark",
-            "[1] riposte hits for a block's worth plus all the block you have up",
+            "[1] riposte hits for a block and a half plus all the block you have up",
             "[2] bulwark two energy. holds two blocks and a half",
             "[1] [2] take one",
-            "drafted: siphon",
+            "drafted: brace",
         ] {
             assert!(screen.contains(text), "{text} at {height} rows\n{screen}");
         }
@@ -699,5 +710,256 @@ fn a_draft_owed_takes_the_road_panel() {
     sheet.cards.push(Card::Bulwark);
     let screen = render_road(&sheet, &picker, 24, None);
     assert!(screen.contains("[Enter] fight"), "{screen}");
-    assert!(screen.contains("drafted: siphon · bulwark"), "{screen}");
+    assert!(screen.contains("drafted: brace · bulwark"), "{screen}");
+}
+
+/// A runner stood one step short of the crossing on `sheet`'s road, down
+/// its lane, and a picker on it.
+fn before_the_crossing(sheet: &Sheet) -> (Sheet, Picker) {
+    let (step, lane) = (1..=RATIONS_PER_DAY as usize)
+        .find_map(|step| lane_of(sheet, step, Node::Crossing).map(|lane| (step, lane)))
+        .expect("every road has a crossing");
+    let mut at = sheet.clone();
+    at.rations_left = RATIONS_PER_DAY - (step as i32 - 1);
+    at.road.path = (1..step)
+        .map(|_| Trace {
+            lane,
+            mark: Mark::Won,
+        })
+        .collect();
+    (
+        at,
+        Picker {
+            lane,
+            fair: None,
+            lower: None,
+            bright: None,
+            crossing: Some(Threat::Risky),
+            answer: Some(Threat::Even),
+        },
+    )
+}
+
+fn tom(stake: i64) -> Prey {
+    Prey {
+        rival: Rival {
+            user_id: Uuid::from_u128(7),
+            username: "tom".to_string(),
+            level: 3,
+            ambush_id: Uuid::nil(),
+            answer: false,
+            portrait: [
+                "  ▘  ".to_string(),
+                " ▗▖▝ ".to_string(),
+                "  ▖  ".to_string(),
+            ],
+        },
+        signal: 30,
+        attack: 5,
+        defense: 2,
+        stake,
+    }
+}
+
+fn render_road_with(sheet: &Sheet, picker: &Picker, lookout: &Lookout) -> String {
+    let backend = TestBackend::new(90, 34);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            draw_picker(
+                frame,
+                frame.area(),
+                PickerView {
+                    sheet: Some(sheet),
+                    picker,
+                    lookout,
+                    look: None,
+                    own_username: "mira",
+                    tick: 0,
+                    word: None,
+                },
+            )
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
+                .collect::<String>()
+                + "\n"
+        })
+        .collect()
+}
+
+#[test]
+fn the_road_shows_the_sleeper_at_the_crossing_and_the_answer_owed() {
+    let mut sheet = Sheet::fresh(Uuid::nil(), september(24));
+    sheet.level = 3;
+    sheet.draft_up();
+    sheet.signal = 30;
+    let (at, picker) = before_the_crossing(&sheet);
+
+    let crossing = render_road_with(
+        &at,
+        &picker,
+        &Lookout {
+            crossing: Some(tom(340)),
+            token: None,
+            news: None,
+        },
+    );
+    assert!(crossing.contains("[@]"), "{crossing}");
+    assert!(crossing.contains("@ crossing"), "the legend\n{crossing}");
+    assert!(
+        crossing.contains("tom  lv 3   asleep on their feet"),
+        "{crossing}"
+    );
+    assert!(crossing.contains("risky"), "{crossing}");
+    assert!(crossing.contains("signal 30 · hits for"), "{crossing}");
+    assert!(
+        crossing.contains("it hits > hits > gathers > heavy"),
+        "{crossing}"
+    );
+    assert!(
+        crossing.contains("carrying 340 bits · a ration · fall, lose all you carry"),
+        "{crossing}"
+    );
+    assert!(crossing.contains("[Enter] cross tom"), "{crossing}");
+    assert!(!crossing.contains("[r]"), "{crossing}");
+
+    let empty = render_road_with(&at, &picker, &Lookout::default());
+    assert!(
+        empty.contains("the crossing   nobody is here tonight"),
+        "{empty}"
+    );
+    assert!(
+        !empty.contains("[Enter]"),
+        "no key spends a ration on nobody\n{empty}"
+    );
+
+    let now = chrono::Utc::now();
+    let crossed = Ambush {
+        id: Uuid::from_u128(1),
+        day: september(24),
+        attacker_user_id: Uuid::from_u128(7),
+        defender_user_id: Uuid::nil(),
+        attacker_username: "tom".to_string(),
+        defender_username: "mira".to_string(),
+        step: Some(6),
+        stake: 340,
+        answer_to: None,
+        started_at: now,
+        ended_at: Some(now),
+        outcome: Some(AmbushOutcome::Won),
+        bits_moved: 340,
+    };
+    let owed = render_road_with(
+        &at,
+        &picker,
+        &Lookout {
+            crossing: None,
+            token: Some(Token {
+                ambush: crossed.clone(),
+                prey: Some(tom(90)),
+            }),
+            news: Some(crossed.clone()),
+        },
+    );
+    assert!(
+        owed.contains("tom crossed you while you were gone. 340 bits gone."),
+        "{owed}"
+    );
+    assert!(
+        owed.contains("you are owed an answer. tom is on the wire, carrying 90. no ration. even"),
+        "{owed}"
+    );
+    assert!(owed.contains("[r] answer tom"), "{owed}");
+
+    let off = render_road_with(
+        &at,
+        &picker,
+        &Lookout {
+            crossing: None,
+            token: Some(Token {
+                ambush: crossed,
+                prey: None,
+            }),
+            news: None,
+        },
+    );
+    assert!(
+        off.contains("tom is off the wire. it keeps for a day."),
+        "{off}"
+    );
+    assert!(!off.contains("[r]"), "{off}");
+}
+
+#[test]
+fn the_news_line_tells_the_sleeper_what_happened() {
+    let now = chrono::Utc::now();
+    let row = |answer: bool, outcome: AmbushOutcome, moved: i64| Ambush {
+        id: Uuid::from_u128(1),
+        day: september(24),
+        attacker_user_id: Uuid::from_u128(7),
+        defender_user_id: Uuid::nil(),
+        attacker_username: "tom".to_string(),
+        defender_username: "mira".to_string(),
+        step: (!answer).then_some(6),
+        stake: 340,
+        answer_to: answer.then_some(Uuid::from_u128(2)),
+        started_at: now,
+        ended_at: Some(now),
+        outcome: Some(outcome),
+        bits_moved: moved,
+    };
+    assert_eq!(
+        news_line(&row(false, AmbushOutcome::Won, 340)),
+        "tom crossed you while you were gone. 340 bits gone."
+    );
+    assert_eq!(
+        news_line(&row(false, AmbushOutcome::Won, 0)),
+        "tom crossed you while you were gone. you were carrying nothing."
+    );
+    assert_eq!(
+        news_line(&row(false, AmbushOutcome::Lost, -120)),
+        "tom crossed you while you were gone and went down. 120 bits off them are yours."
+    );
+    assert_eq!(
+        news_line(&row(false, AmbushOutcome::Ran, 0)),
+        "tom crossed you while you were gone and ran."
+    );
+    assert_eq!(
+        news_line(&row(true, AmbushOutcome::Won, 200)),
+        "tom answered you. 200 bits gone."
+    );
+    assert_eq!(
+        news_line(&row(true, AmbushOutcome::Lost, -90)),
+        "tom answered you and went down again. 90 bits more."
+    );
+    assert_eq!(
+        news_line(&row(false, AmbushOutcome::Dropped, 0)),
+        "tom crossed you while you were gone. the day rolled over it."
+    );
+}
+
+#[test]
+fn a_rival_on_the_scene_wears_their_own_face_and_name() {
+    let mut sheet = Sheet::fresh(Uuid::nil(), september(24));
+    sheet.answer(
+        crate::app::deadchannel::fight::state::Answer::Prey(tom(90)),
+        &mut StdRng::seed_from_u64(5),
+    );
+    let scene = Scene {
+        lines: vec!["tom. awake this time, carrying 90 bits.".to_string()],
+        latest: 1,
+        over: false,
+        waiting: false,
+        failed: false,
+        old_signal: false,
+    };
+    let text = render(&sheet, &scene, 0).join("\n");
+    assert!(text.contains(" the crossing "), "{text}");
+    assert!(text.contains("lv 3  tom"), "{text}");
+    assert!(text.contains("▗▖▝"), "tom's own face\n{text}");
 }

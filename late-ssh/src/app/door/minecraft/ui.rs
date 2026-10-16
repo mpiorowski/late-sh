@@ -17,7 +17,7 @@ use crate::app::door::landing;
 /// running the pod; the client's default port 25565 is the hostPort.
 pub const ADDRESS: &str = "mc.late.sh";
 /// `local.minecraft_version` in `infra/defaults.tf`: the client must match.
-pub const VERSION: &str = "26.2";
+pub const VERSION: &str = "26.3";
 /// The `DIFFICULTY` env in `infra/minecraft.tf`.
 pub const DIFFICULTY: &str = "normal";
 /// `worldborder set` in `RCON_CMDS_STARTUP`, in blocks.
@@ -36,6 +36,8 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, scroll: u16) -> u16 {
     let client = format!("Minecraft: Java Edition {VERSION} (Bedrock can't join)");
     let border = format!("{WORLD_BORDER} blocks wide, centred on 0, 0");
     let add_server = format!("Multiplayer > Add Server > {ADDRESS} > Join");
+    let voice_mod =
+        format!("Simple Voice Chat for {VERSION}, on a Fabric, NeoForge, Forge, or Quilt client");
 
     let lines = vec![
         Line::raw(""),
@@ -56,7 +58,7 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, scroll: u16) -> u16 {
             Span::styled("Whitelist only.", Style::default().fg(theme::AMBER_DIM())),
         ]),
         Line::from(Span::styled(
-            "Paper with GriefPrevention land claims. Not played in the terminal: join from the game.",
+            "Paper with GriefPrevention land claims and proximity voice. Not played in the terminal: join from the game.",
             Style::default().fg(theme::TEXT_DIM()),
         )),
         Line::from(""),
@@ -133,7 +135,7 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, scroll: u16) -> u16 {
         ),
         landing::stat(
             "outside",
-            "anything goes; the Nether and End cannot be claimed at all",
+            "anything goes; the End cannot be claimed at all",
             12,
         ),
         landing::stat(
@@ -167,6 +169,13 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, scroll: u16) -> u16 {
             "you drop everything, anyone can pick it up; items despawn after 5 minutes",
             12,
         ),
+        Line::from(""),
+        // Optional, so last: a vanilla client joins and plays without it.
+        landing::heading("Voice Chat"),
+        landing::stat("mod", &voice_mod, 10),
+        landing::stat("setup", "press V in game to pick your microphone", 10),
+        landing::stat("range", "players near you hear you; nobody else does", 10),
+        landing::stat("vanilla", "joins and plays fine, just without voice", 10),
     ];
 
     crate::app::door::landing::render_scrolled(

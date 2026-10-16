@@ -150,6 +150,164 @@ where
     clues
 }
 
+/// A cell as line logic sees it: the solver's working grid, or a player's
+/// marks mapped at the call site.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Cell {
+    Unknown,
+    Filled,
+    Empty,
+}
+
+/// Solves a puzzle by line logic alone: each row and column on its own is
+/// checked against every placement of its clue that fits the cells known so
+/// far, and a cell all those placements agree on is fixed. Passes repeat
+/// until nothing moves. Returns the grid when that fixes every cell; since
+/// each cell was forced, it is then also the only answer. `None` when the
+/// clues contradict themselves, or the logic stalls with cells still open,
+/// so that finishing would take a guess.
+pub fn solve_by_lines(row_clues: &[Vec<u8>], col_clues: &[Vec<u8>]) -> Option<Vec<Vec<u8>>> {
+    let width = col_clues.len();
+    let mut grid = vec![vec![Cell::Unknown; width]; row_clues.len()];
+    loop {
+        let mut moved = false;
+        for (row, clues) in row_clues.iter().enumerate() {
+            let line = grid[row].clone();
+            let solved = solve_line(clues, &line)?;
+            if solved != line {
+                grid[row] = solved;
+                moved = true;
+            }
+        }
+        for (col, clues) in col_clues.iter().enumerate() {
+            let line: Vec<Cell> = grid.iter().map(|row| row[col]).collect();
+            let solved = solve_line(clues, &line)?;
+            if solved != line {
+                for (row, cell) in solved.into_iter().enumerate() {
+                    grid[row][col] = cell;
+                }
+                moved = true;
+            }
+        }
+        if !moved {
+            break;
+        }
+    }
+    grid.into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(|cell| match cell {
+                    Cell::Filled => Some(1),
+                    Cell::Empty => Some(0),
+                    Cell::Unknown => None,
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Whether some placement of `clues` fits the known cells of `line`, so the
+/// line can still be finished from here.
+pub fn line_fits(clues: &[u8], line: &[Cell]) -> bool {
+    solve_line(clues, line).is_some()
+}
+
+/// Every placement of `clues` that fits the known cells of `line`, folded
+/// into what they all agree on: a cell filled in every placement is filled,
+/// empty in every placement is empty, anything else stays unknown. `None`
+/// when no placement fits.
+fn solve_line(clues: &[u8], line: &[Cell]) -> Option<Vec<Cell>> {
+    let n = line.len();
+    let k = clues.len();
+    let blocks: Vec<usize> = clues.iter().map(|&clue| usize::from(clue)).collect();
+    let can_empty = |i: usize| line[i] != Cell::Filled;
+    let mut empties_before = vec![0usize; n + 1];
+    for i in 0..n {
+        empties_before[i + 1] = empties_before[i] + usize::from(line[i] == Cell::Empty);
+    }
+    // Block `j` can sit on cells `start..start + len` when none is known empty.
+    let block_fits = |start: usize, len: usize| {
+        start + len <= n && empties_before[start + len] == empties_before[start]
+    };
+
+    // head[i][j]: cells `..i` hold exactly blocks `..j`.
+    let mut head = vec![vec![false; k + 1]; n + 1];
+    head[0][0] = true;
+    for i in 1..=n {
+        for j in 0..=k {
+            let gap = can_empty(i - 1) && head[i - 1][j];
+            let block_ends_here = j > 0 && {
+                let len = blocks[j - 1];
+                i >= len && block_fits(i - len, len) && {
+                    let start = i - len;
+                    match start {
+                        0 => j == 1,
+                        _ => can_empty(start - 1) && head[start - 1][j - 1],
+                    }
+                }
+            };
+            head[i][j] = gap || block_ends_here;
+        }
+    }
+    if !head[n][k] {
+        return None;
+    }
+
+    // tail[i][j]: cells `i..` hold exactly blocks `j..`.
+    let mut tail = vec![vec![false; k + 1]; n + 1];
+    tail[n][k] = true;
+    for i in (0..n).rev() {
+        for j in 0..=k {
+            let gap = can_empty(i) && tail[i + 1][j];
+            let block_starts_here = j < k && {
+                let end = i + blocks[j];
+                block_fits(i, blocks[j])
+                    && match end == n {
+                        true => j + 1 == k,
+                        false => can_empty(end) && tail[end + 1][j + 1],
+                    }
+            };
+            tail[i][j] = gap || block_starts_here;
+        }
+    }
+
+    let mut can_fill = vec![false; n];
+    let mut may_be_empty = vec![false; n];
+    for i in 0..n {
+        may_be_empty[i] = can_empty(i) && (0..=k).any(|j| head[i][j] && tail[i + 1][j]);
+    }
+    for (j, &len) in blocks.iter().enumerate() {
+        for start in 0..n {
+            if !block_fits(start, len) {
+                continue;
+            }
+            let before = match start {
+                0 => j == 0,
+                _ => can_empty(start - 1) && head[start - 1][j],
+            };
+            let end = start + len;
+            let after = match end == n {
+                true => j + 1 == k,
+                false => can_empty(end) && tail[end + 1][j + 1],
+            };
+            if before && after {
+                can_fill[start..end].fill(true);
+            }
+        }
+    }
+
+    Some(
+        (0..n)
+            .map(|i| match (can_fill[i], may_be_empty[i]) {
+                (true, true) => Cell::Unknown,
+                (true, false) => Cell::Filled,
+                (false, true) => Cell::Empty,
+                (false, false) => unreachable!("a line with a placement gives every cell a value"),
+            })
+            .collect(),
+    )
+}
+
 #[cfg(test)]
 #[path = "nonogram_test.rs"]
 mod nonogram_test;

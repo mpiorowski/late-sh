@@ -21,6 +21,7 @@ fn other(n: u128, spot: Spot, since_ms: i64) -> PresenceRecord {
         },
         nightcap: None,
         street: None,
+        lounge: false,
     }
 }
 

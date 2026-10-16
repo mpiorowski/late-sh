@@ -28,7 +28,7 @@ The protocol layer (parsing/serialization, command and numeric types, modes, CTC
 - No server linking / federation (no S2S protocol, no netsplit semantics).
 - No nick registration, NickServ/ChanServ, or services framework. Identity comes from the token; there is nothing to register.
 - No IRC-originated account creation. A late.sh account (via SSH) is a prerequisite.
-- No full IRCv3 capability suite. We negotiate CAP only enough to not break clients (see §7.2); individual caps may be added later (see §13 Phasing).
+- No full IRCv3 capability suite. Supported capabilities are `message-tags`, `server-time`, `echo-message`, `away-notify`, `batch`, and `draft/chathistory`; unknown CAP requests are NAKed atomically.
 - No channel creation/deletion from IRC in v1. Rooms are created in the TUI.
 - No exposure of non-chat surfaces (Arcade, Rooms games, Lateania, Artboard, voice, audio) beyond whatever already flows into chat rooms as messages.
 - No per-channel keys (+k), limits (+l), or user-settable channel modes.
@@ -127,13 +127,13 @@ The protocol layer (parsing/serialization, command and numeric types, modes, CTC
 This is the bar for "client-satisfying": the following must work with irssi, WeeChat, HexChat, mIRC, Quassel (client+core), Igloo, Textual, and Halloy without hangs or protocol errors:
 
 1. **Registration:** `PASS`/`NICK`/`USER` in any standard order; `CAP LS [302]` answered (even with an empty/minimal cap list) and `CAP END` honored — clients that open with CAP must not hang.
-2. **Welcome burst:** `001 002 003 004` then `005 RPL_ISUPPORT` (see 7.3), optional minimal LUSERS (`251`), then MOTD (`375`, `372`×n, `376`).
+2. **Welcome burst:** `001 002 003 004` then `005 RPL_ISUPPORT` (see 7.3), optional minimal LUSERS (`251`), `900 RPL_LOGGEDIN` for the token-authenticated account, then MOTD (`375`, `372`×n, `376`). The login reply follows ISUPPORT so clients such as Halloy can start DM history discovery with the advertised limits; it carries `time` when `server-time` was negotiated.
 3. **Keepalive:** answer client `PING` with `PONG`; send server `PING` and reap connections that miss PONG (suggest 90–180 s window).
 4. **Join burst:** `JOIN` echo, `332`/`333` topic, `353`/`366` names.
 5. **Queries:** `LIST` (321/322/323), `NAMES`, `TOPIC` (read; write per §9.4), `WHO` (352/315), `WHOIS` (311, 313 for ircops, 317 idle optional, 318), `MODE` query for channels (324, 329) and self (221), `USERHOST`, `ISON`, `MOTD`, `VERSION`, `TIME`, `LUSERS` — all answered, even minimally.
 6. **Messaging:** `PRIVMSG`/`NOTICE` to channels and nicks; CTCP `ACTION` (`/me`); CTCP `VERSION`/`PING`/`TIME` answered with NOTICE; CTCP `DCC` refused/ignored.
 7. **Errors:** correct use of standard numerics (401 no-such-nick, 403 no-such-channel, 404 cannot-send, 442 not-on-channel, 461 need-more-params, 464 passwd-mismatch, 473 invite-only, 482 chanop-needed) — clients render these natively.
-8. **Line discipline:** 512-byte lines (incl. CRLF), UTF-8 in/out (advertise `UTF8ONLY`), server-side splitting of long outbound messages into multiple PRIVMSGs, tag-free messages in v1.
+8. **Line discipline:** 512-byte commands/prefixes (incl. CRLF), with the separate IRCv3 tag allowance; UTF-8 in/out (advertise `UTF8ONLY`), server-side splitting of long outbound messages into multiple PRIVMSGs. Tags follow negotiated capabilities.
 
 ### 7.2 Command disposition table
 
@@ -141,6 +141,7 @@ This is the bar for "client-satisfying": the following must work with irssi, Wee
 |---|---|
 | **Implemented (full semantics)** | PASS, NICK (registration only), USER, CAP (LS/REQ→ACK-or-NAK/END), PING, PONG, JOIN, PART, PRIVMSG, NOTICE, TOPIC, NAMES, LIST, WHO, WHOIS, MODE (subset per §9), KICK, QUIT, MOTD, VERSION, TIME, LUSERS, USERHOST, ISON, ADMIN, INFO |
 | **Implemented, privileged** | KILL (ircop ⇒ late.sh server kick), MODE ±b/±o per §9 |
+| **Implemented, capability-gated** | CHATHISTORY (requires `draft/chathistory`; §8.1) |
 | **Accepted as no-op (silent or polite numeric, never an error spam)** | MODE +i/-i and other user self-modes (per requirement: user `+i` does nothing), AWAY (ack with 305/306, not surfaced in v1), WHOWAS (406) |
 | **Rejected with proper numeric** | NICK after registration, OPER (491 — ircop comes from admin tier, not OPER), PART #lounge, MODE grants we don't allow (482), INVITE (v1, polite notice) |
 | **Unknown/unsupported** | 421 ERR_UNKNOWNCOMMAND (catch-all; never close the connection for an unknown command) |
@@ -148,6 +149,8 @@ This is the bar for "client-satisfying": the following must work with irssi, Wee
 ### 7.3 ISUPPORT (005) tokens (initial set)
 
 `NETWORK=late.sh`, `CASEMAPPING=ascii`, `CHANTYPES=#`, `PREFIX=(o)@`, `CHANMODES=b,,,imnst` (advertise conservatively; only what MODE query can return), `NICKLEN`/`USERLEN` per late.sh username limits, `CHANNELLEN`, `TOPICLEN`, `UTF8ONLY`, `ELIST=` (none) or omit, `MODES=1`, `STATUSMSG=@` omitted in v1.
+
+History advertises `CHATHISTORY=300` and `MSGREFTYPES=msgid,timestamp`.
 
 ### 7.4 MOTD
 
@@ -163,9 +166,36 @@ This is the bar for "client-satisfying": the following must work with irssi, Wee
 - S5: Long/multiline late.sh messages are split into multiple ≤512-byte PRIVMSGs, hard-wrapping on UTF-8 boundaries.
 - S6: **Edits**: re-sent to IRC as a new PRIVMSG prefixed `[edit]` (v1 policy; IRCv3 caps later). **Deletes**: silently not projected (v1 default); never crash the projection.
 - S7: **Reactions, pins, polls, rich embeds**: not delivered to IRC in v1, except polls may render as plain text lines if cheap. Inbound IRC text cannot react/pin/reply-thread; replies arrive as ordinary messages.
-- S8: **No history replay on join** in v1 (clients don't expect it without `chathistory`). IRC connections see messages from connect-time forward.
+- S8: **History replay:** clients with `batch` + `server-time` receive 25 recent messages after a fresh channel JOIN unless they negotiated `draft/chathistory`, which enables client-driven retrieval (§8.1).
 - S9: Inbound message rate limiting mirrors TUI chat limits; flood beyond limits gets messages dropped with a NOTICE warning, then disconnect for sustained abuse.
 - S10: mIRC color/formatting codes in inbound text: strip or pass through to TUI rendering — TBD at implementation (irc-proto's `colors`/`FormattedStringExt` can strip). Outbound TUI styling is not translated to IRC formatting in v1.
+
+### 8.1 IRCv3 history
+
+Follow the [CHATHISTORY](https://ircv3.net/specs/extensions/chathistory) and
+[chathistory batch](https://ircv3.net/specs/batches/chathistory) specifications.
+`LATEST`, `BEFORE`, `AFTER`, `AROUND`, and `BETWEEN` accept UUID `msgid=` or
+UTC millisecond `timestamp=` references; `TARGETS` accepts timestamps only.
+Positive request limits are capped at 300. Message pages are chronological,
+with `(created, id)` providing stable ordering for equal timestamps. Limits
+count stored messages, which may each span multiple IRC lines.
+
+Only channels joined on this connection and existing DMs involving this
+account are readable. Private membership, DM membership, and room bans are
+checked on every read. `TARGETS` discovers these buffers by their latest
+visible message in the requested interval. Replay includes outgoing DMs,
+original timestamps/IDs, reply tags, current stored bodies, and system-feed
+messages; channel ignores match live IRC. Deleted messages and historical
+reaction/presence/moderation events are excluded. Reads do not create rooms,
+change membership, or mark messages read.
+
+Requests require `draft/chathistory`; `batch`, `server-time`, and
+`message-tags` independently control framing and tags. Batch-aware clients
+receive balanced history/target batches, including empty results. Failures
+use `FAIL CHATHISTORY`; expensive-command throttling applies. Automatic JOIN
+replay follows topic/NAMES and suppresses overlapping queued creation events
+by ID, while edits remain live. Duplicate JOINs and refused lounge PARTs do
+not trigger another replay.
 
 ## 9. Moderation Mapping
 
@@ -232,4 +262,4 @@ Remaining (non-blocking, handle during implementation/testing):
 
 **v1 (this FRD's requirement set):** token mint/revoke UI, PASS auth over TLS, nick lock, forced `#lounge`, public/built-in/private channel projection, DMs, full §7.1 compatibility contract, moderation round-trip (ops, kicks, ±b, KILL, server-ban enforcement), MOTD with lounge banner, fast-shutdown lifecycle.
 
-**Later candidates (explicitly out of v1):** SASL PLAIN; IRCv3 caps (`server-time`, `echo-message`, `message-tags`, `chathistory` for backlog, `away-notify`); reactions/replies projection via tags; game-room channels; `INVITE`-driven private-room membership; AWAY surfaced to TUI presence; WEBIRC/ident niceties.
+**Later candidates (explicitly out of v1):** SASL PLAIN; historical reaction/state-event playback; game-room channels; `INVITE`-driven private-room membership; WEBIRC/ident niceties.

@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use late_core::models::arcade_handle::{HANDLE_MAX_LEN, handle_shape_valid};
-use late_core::models::leaderboard::DoorGame;
+use late_core::models::chat_room::WatchDoor;
 use uuid::Uuid;
 
 use super::proxy::{LiveGame, SpectateProcess, WatchStatus, WatchTarget};
@@ -33,18 +33,21 @@ pub enum SpectateGame {
     Dcss,
     Nethack,
     Brogue,
+    Zork,
 }
 
 impl SpectateGame {
     /// In the Games hub's card order, which is the order its rail lists
     /// their live games in.
-    pub const ALL: [Self; 3] = [Self::Dcss, Self::Nethack, Self::Brogue];
+    pub const ALL: [Self; 4] = [Self::Dcss, Self::Nethack, Self::Brogue, Self::Zork];
 
-    pub const fn door_game(self) -> DoorGame {
+    /// The door's watch-chat room and watch-metric key.
+    pub const fn watch_door(self) -> WatchDoor {
         match self {
-            Self::Dcss => DoorGame::Dcss,
-            Self::Nethack => DoorGame::Nethack,
-            Self::Brogue => DoorGame::Brogue,
+            Self::Dcss => WatchDoor::Dcss,
+            Self::Nethack => WatchDoor::Nethack,
+            Self::Brogue => WatchDoor::Brogue,
+            Self::Zork => WatchDoor::Zork,
         }
     }
 
@@ -53,17 +56,14 @@ impl SpectateGame {
             Self::Dcss => "DCSS",
             Self::Nethack => "NetHack",
             Self::Brogue => "Brogue",
+            Self::Zork => "Zork",
         }
     }
 
     /// The game's name in lowercase, the Live panel's first column: it
     /// sits where a handle sits on the other rows, and reads like one.
     pub const fn slug(self) -> &'static str {
-        match self {
-            Self::Dcss => "dcss",
-            Self::Nethack => "nethack",
-            Self::Brogue => "brogue",
-        }
+        self.watch_door().key()
     }
 
     /// The door's own screen, where its player runs the game.
@@ -72,6 +72,7 @@ impl SpectateGame {
             Self::Dcss => Screen::Dcss,
             Self::Nethack => Screen::Nethack,
             Self::Brogue => Screen::Brogue,
+            Self::Zork => Screen::Zork,
         }
     }
 
@@ -85,7 +86,9 @@ impl SpectateGame {
     /// watched one, where the game keeps at least this much.
     pub const fn screen_min(self) -> (u16, u16) {
         match self {
-            Self::Dcss | Self::Nethack => (80, 24),
+            // Frotz reflows the story to any width; 80x24 keeps its status
+            // bar and a readable column.
+            Self::Dcss | Self::Nethack | Self::Zork => (80, 24),
             // Brogue's fixed grid.
             Self::Brogue => (100, 34),
         }
@@ -233,7 +236,7 @@ pub struct State {
 impl State {
     pub fn new(key: LiveGameKey, target: WatchTarget, repaint: Option<Arc<RenderSignal>>) -> Self {
         let process = SpectateProcess::spawn(
-            key.game().door_game(),
+            key.game().watch_door(),
             target,
             key.playname().to_string(),
             repaint,

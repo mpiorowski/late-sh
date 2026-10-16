@@ -31,27 +31,35 @@ ground, sever). The last two rows of the table hold every other deck.
 |---|---|---|
 | The Old Signal is reached (level 15 with the exp to leave it) | day 14 to 17, read sharp and on the key | the boss is on the screen after about two weeks of days played, whoever plays the cards (decided 2026-10-06: day 16 is right) |
 | Careful runner's first mark (reads the hand) | day 14 to 18 | GAME.md's two to three weeks, the near end |
-| Ambient runner's first mark (the key) | day 16 to 21, never ahead of careful, 3 drops at most | the floor finishes inside three weeks |
+| Ambient runner's first mark (the key) | day 16 to 22, never ahead of careful, 3 drops at most | the floor finishes in about three weeks; one patch a day costs the key a day or two and a drop over the climb, and that is the price of the day being a budget |
 | Reckless runner's first mark (the key, careless) | day 18 to 28, never ahead of ambient, with 1 to 8 drops | carelessness costs, and does not lock |
-| Keen runner (plays the crystal pass) | 0 to 5 days ahead of careful | crystals are an edge, not a skip |
-| Kit lead over the level fought at | -0.5 to +1.0 tiers, levels 3 to 15 | the kit tracks the climb: never the level 15 kit at level 8, never a tier short of a fair fight |
-| Top kit first worn | level 14 or 15 | the armorer is a stop on every level, to the end |
+| Keen runner (plays the crystal pass) | within 4 days of careful, either way | crystals are a side game, not a pace: the bright glyph pays the plain exp and its kit is priced like everyone's, so two real fights a day are paid for in signal and bought back in crystals |
+| Inker (keen, the crystals to the needle first) | within 4 days of careful, either way | an ink is bought for the climbs after this one, and this one is not the price |
+| The second climb on the key (one mark on the row) | 0 to 4 days sooner than the first | a mark is quicker on the way back up, and pays in the days a drop costs: the pace is set by the road (five fights a day pay a fixed exp), so only the runner who drops can be quicker, and that is the key |
+| The sixth climb on the key (five marks, the bonus capped) | no slower than the second, at most 6 days sooner than the first | a veteran never outgrows the room, and the marks keep paying until the cap |
+| The second climb on the key with every draft inked | 0 to 4 days sooner than the plain second | the needle pays on the climbs after, on the key, and never a tax; four inks are worth about as much as four more marks |
+| A pour against the bright glyph on the key | never more than 8 points under dry, any pour, levels 4 to 15 | a card poured into the deck is never a trap for the floor; 8 points is what two 400-fight odds differ by on their own |
+| Old Signal on the key with every draft inked | at most 25 points over dry | the needle helps at the gate without handing it over |
+| Kit lead over the level fought at | -0.5 to +1.0 tiers, levels 3 to 15; the keen runner +2.5 at most | the kit tracks the climb: never the level 15 kit at level 8, never a tier short of a fair fight; the bright glyph's double bits and the crystals buy a tier or two, never the wall |
+| Top kit first worn | level 14 or 15; the keen runner 13 or later | the armorer is a stop on every level, to the end |
 | Gear's share of bits earned | 45% or more | the armorer is the main sink |
 | Patch's share of the ambient runner's bits | 5 to 30%, and no more for the careful one | a cost that is felt by the runner who gets hit, not a second landlord; reading the hand is what makes it small |
+| Days the careful runner spends its one patch | 40 to 90% of the days played | the patch is a decision most days and a formality on none (GAME.md, "One patch a day") |
 | Lost to drops (careful) | 15% or less | a careful climb is not a lottery |
 | Idle (earned, never spent or lost) | 30% or less | bits always have somewhere to go |
 | Fair fight on the key, kit level with the runner | 85% or better at every level | the fair fight is the bread, not the gamble |
 | Turns in a fair fight on the key | 2 to 5 | a fight is short: about three turns |
+| Signal a fair fight leaves | 75 to 90% read sharp, 60% or more on the key | a day of five costs half a bar to a bar and a quarter read sharp, and two bars cover the key: the day is the unit of attrition, not the fight |
 | Signal a fair fight leaves, read sharp over the key | 8 points or more | the hand is worth playing |
-| Bright glyph on the key, same kit | 40% or better at every level | a risk, never a wall |
+| Bright glyph on the key, same kit | 30% or better at every level | a risk, never a wall: risky at worst, never grim at a full bar |
 | Signal a bright glyph leaves the key | 45% or less | it costs most of a signal |
-| Bright glyph read sharp | 85% or better, and 10 points over the key's worst | reading it is what makes it safe |
+| Bright glyph read sharp | 60 to 90% at its worst, and 10 points over the key's | reading it is what makes it takeable; what it costs is the signal, and the day has one patch |
 | Old Signal on the key, no marks | 35 to 60% | the gate is a boss, and the floor can pass it |
-| Old Signal read sharp | 15 points over the key, 95% at most | the one fight to read |
+| Old Signal read sharp | 15 points over the key, 65 to 90% | the one fight to read, and one a reader can lose |
 | Old Signal on the key with static on ice | 10 points over dry | a glass is worth saving |
 | Crystals a day (keen) | 0.8 to 2.3 | a glass a day, a cart piece every few |
-| Every build, on its own | careful day 14 to 18; ambient day 15 to 22 with 3 drops at most; fair fight on the key 85% or better; bright glyph on the key 40% or better; Old Signal on the key 30 to 80%, and no worse read sharp | no deck is a trap, and none is the answer |
-| Every draft's two options | within 1.5 days of each other to the mark on the key (the mean, over the builds that carry each), and within 25 points on the Old Signal | a draft is a choice only while neither card is the right one |
+| Every build, on its own | careful day 14 to 18; ambient day 15 to 25 with 3 drops at most; fair fight on the key 85% or better; bright glyph on the key 30% or better; Old Signal on the key 30 to 80%, and no worse read sharp | no deck is a trap, and none is the answer |
+| Every draft's two options | within 2.5 days of each other to the mark on the key (the mean, over the builds that carry each; a drop on the key is a day and a half, so the mean moves in those steps), and within 25 points on the Old Signal | a draft is a choice only while neither card is the right one |
 
 A reading plays all sixteen builds (`BuildReading`, 40 seeds each for
 the careful and the ambient runner) beside the named players, so the
@@ -77,20 +85,25 @@ a value (`Sheet::apply_under`), so a candidate is tried by building a
 | `pay_bits_percent` | 400 | bits per kill, over LoGD's creature table |
 | `pay_exp_percent` | 540 | exp per kill: the pace of the levels |
 | `price_percent` | 225 | the armorer's wall, over `COST_LADDER` |
+| `price_lead_percent` | 50 | what every tier above the level adds to a piece's price on the wall |
 | `trade_in_percent` | 75 | what the handed-back piece takes off |
 | `patch_percent` | 100 | patch: missing signal times level times this, rounded up |
 | `exp_keep_on_death` | 0.65 | what a drop costs in days |
 | `foe_signal_percent` | 100 | a glyph's signal over the table's: how many turns a fight lasts |
-| `hit_percent` | 185 | a glyph's hit: its attack less a quarter of your defense, times this |
+| `hit_percent`, `hit_ramp_percent` | 175, 3 | a glyph's hit: its attack less a quarter of your defense, times the first at level 1 and the second more for every level past it |
 | `block_percent` | 60 | a block card, as a share of your defense |
-| `cache_percent` | 50 | a cache, as a share of the fair glyph's bits |
-| `old_signal` | 290 / 39 / 22 | the Old Signal's signal, attack, defense |
+| `cache_percent` | 60 | a cache, as a share of the fair glyph's bits; the crossing takes one quiet node a day off the sim's road, and this pays it back |
+| `old_signal` | 300 / 35 / 22 | the Old Signal's signal, attack, defense |
 | `crystal_drop_one_in` | 12 | crystals from plain kills |
-| `bright_signal_percent`, `bright_edge_percent` | 150, 115 | how hard the bright glyph is |
+| `bright_signal_percent`, `bright_edge_level_percent`, `bright_guard_level_percent` | 150, 50, 0 | how hard the bright glyph is: its signal over the plain one's, and the shares of the level added to its attack and to its defense |
+| `noise_level_step` | 5 | a noise turn throws one static card, and one more every this many levels |
 | `bright_bits_times` | 2 | what it pays |
-| `cart_crystals` | 3 | the blade shop's price |
+| `cart_crystals`, `cart_lead_crystals` | 3, 2 | the blade shop's price at or under the level, and what every tier above it adds |
+| `ink_crystals` | 10 | what INK asks to ink a draft: about half of what a careful climb finds |
 | `jab_percent` | 75 | a jab, as a share of a strike |
-| `siphon_mend_percent` | 50 | what a siphon mends, as a share of a strike |
+| `brace_percent` | 100 | a brace, as a share of a block |
+| `siphon_mend_percent` | 75 | what a siphon mends, as a share of a strike |
+| `riposte_percent` | 150 | a riposte's own hit, as a share of a block, before the block standing |
 | `bulwark_percent` | 250 | a bulwark, as a share of a block |
 | `burn_energy` | 2 | the energy a burn gives before any static feeds it |
 | `ground_percent` | 100 | what a ground adds for each static card in hand, as a share of a strike |
@@ -115,20 +128,22 @@ constant was read, and set it in `RULES`.
 playing: who plays the cards (`Hand::Auto` or `Hand::Sharp`), the card
 it takes at each draft (`build`), when it runs, when it patches, when it
 steps down, when it starts heeding (`Heeds`), whether it routes to the
-bright glyph, drinks, when it shops for blades (`Carts`), whether it
-borrows, and how it holds its purse (`Purse::SpendAll`, or
-`Purse::KeepAPatch`: never buy gear with the bits the next patch needs).
-`climb(player, seed, max_days, &mut Bench, &mut Journal)` plays it from
-a fresh row through the real machine, a road a day, and returns a
-`Climb`: the day of every level, every day played (`days`: the level,
+bright glyph, drinks, whether it inks (`Inks`), when it shops for blades
+(`Carts`), whether it borrows, and how it holds its purse
+(`Purse::SpendAll`, or `Purse::KeepAPatch`: never buy gear with the bits
+the next patch needs). `climb(player, start, seed, max_days, &mut Bench,
+&mut Journal)` plays it from `start` (`Start::FRESH`, or a row that has
+marked before: the marks on it and the first `inked` drafts inked, the
+second climb's bench) through the real machine, a road a day, and
+returns a `Climb`: the day of every level, every day played (`days`: the level,
 the kit, the bits, the crystals, the cards at dusk, and the day's kills,
 runs, drop, earnings, and spending), the kit each level was fought in
 (`kit_on`), the gate, the mark, the drops, the turns and fights, and a
 `Ledger` of bits and crystals.
 
 Between two steps the runner shops in the order a person would
-(`Run::shop`): the card owed, patch, the loan, the armorer, the blade
-shop, the bar. `route` is how it picks a lane: a few steps read ahead, a
+(`Run::shop`): the card owed, patch, the loan, the armorer, INK, the
+blade shop, the bar. `route` is how it picks a lane: a few steps read ahead, a
 rest worth the static in the deck, a cache worth a
 cache, a bright glyph a detour for the player who takes them and a berth
 for the one who does not. A runner under its run line stays in the fight
@@ -145,13 +160,14 @@ nothing about the climb (`sim_test.rs` holds that).
 
 | Player | Plays like |
 |---|---|
-| `CAREFUL` | reads the hand, runs under 30%, patches under 75%, keeps a patch in the purse |
+| `CAREFUL` | reads the hand, runs under 30%, spends the day's patch under 60%, keeps a patch in the purse until it is spent |
 | `AMBIENT` | the same, on the `Auto` key |
-| `RECKLESS` | the key, runs under 10%, patches under 35%, spends it all |
+| `RECKLESS` | the key, runs under 10%, the patch under 35%, spends it all |
 | `NEGLECTFUL` | the key, no armorer and no warning heeded until the first drop, careful after |
-| `KEEN` | careful, plus the bright glyph when it reads even, static on ice, the blade shop |
+| `KEEN` | careful, plus the bright glyph when it reads even and the signal is over 60%, static on ice, the blade shop |
 | `HOARDER` | keen, but no glass and no blade under tier 11: every crystal for the top of the wall |
 | `BORROWER` | ambient, plus the machine's loan whenever it puts the next piece in reach |
+| `INKER` | keen, but the crystals go to the needle first: the first draft not inked, whenever the needle would take it |
 
 `sim::builds()` is all sixteen builds. A named player on another deck is
 `Player { build, ..sim::AMBIENT }`.
@@ -165,11 +181,15 @@ nothing about the climb (`sim_test.rs` holds that).
   `Recipe::level_kit(level, &build)` is the usual one: the kit level
   with the runner and the build's picks for the drafts that level has
   reached.
-- `old_signal(rules, marks, drink, hand, &build)`: the same from the top
-  of the wall with the gate open.
+- `old_signal(rules, marks, drink, inks, hand, &build)`: the same from
+  the top of the wall with the gate open, with the drafts at `inks`
+  inked.
 - `level_economy(rules, level)`: one level as arithmetic: the kills it
   takes, what they pay, what the next pair of pieces costs.
-- `climbs(player, rules, seeds, max_days)`: `sim::climb` over the seeds.
+- `climbs(player, start, rules, seeds, max_days)`: `sim::climb` over the
+  seeds. `Reading::take` plays the ambient runner from `SECOND` (one
+  mark), `VETERAN` (five), and `INKED` (one mark, every draft inked)
+  beside the fresh starts.
 - `BuildReading::take(rules, build)`: one build's numbers, and
   `draft_spreads`, each draft's two options side by side.
 - `Reading::take(rules)`: every number the targets are stated in, 80
@@ -259,122 +279,117 @@ where both stood.
 
 ## 6. Measured
 
-The live reading (house build):
+The live reading (house build), under one patch a day:
 
-| boss reached, careful / ambient | careful | ambient (drops) | reckless (drops) | keen | lv after day 1 / 7 | kit lead | top kit at | gear | patch, careful / ambient | dropped | idle | fair low | turns | signal left, key / sharp | bright on the key (signal left) | bright sharp | boss key / sharp / key with a glass | crystals a day | builds: ambient day, boss on the key |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| day 16 / 16 | day 16 | day 17 (0) | day 20 (1) | day 16 | 3 / 10 | -0.5 to +1.0 | lv 14 | 75% | 3% / 11% | 0% | 22% | 100% | 2.6 to 3.8 | 77% / 91% | 64 to 100% (34%) | 93 to 100% | 50% / 90% / 94% | 1.9 | day 16 to 20, 50 to 65% |
+| boss reached, careful / ambient | careful | ambient (drops) | reckless (drops) | keen | inker | second climb on the key: mark 1 / mark 5 / mark 1 inked | lv after day 1 / 7 | kit lead | top kit at | keen lead, top kit | gear | patch, careful / ambient | careful patch days | dropped | idle | fair low | turns | signal left, key / sharp | bright on the key (signal left) | bright sharp | pour low | boss key / sharp / key with a glass / key inked | crystals a day | builds: ambient day, boss on the key |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| day 16 / 17 | day 16 | day 22 (2) | day 23 (3) | day 17 | day 17 | day 20 / 16 / 16 | 3 / 10 | +0.0 to +0.5 | lv 15 | +0.5, lv 15 | 79% | 4% / 6% | 56% | 0% | 17% | 100% | 2.6 to 3.8 | 79% / 88% | 48 to 100% (38%) | 90 to 100% | -5 | 57% / 90% / 90% / 64% | 1.1 | day 20 to 24, 43 to 70% |
 
 The curve (median level at the end of the day):
 
-| day | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 10 | 12 | 14 | 16 | 17 | 20 |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| careful | 3 | 4 | 5 | 7 | 8 | 9 | 10 | 10 | 12 | 14 | 15 | marked | | |
-| ambient | 3 | 4 | 5 | 7 | 8 | 9 | 10 | 10 | 12 | 14 | 15 | 15 | marked | |
-| reckless | 3 | 4 | 5 | 7 | 8 | 9 | 10 | 10 | 12 | 14 | 15 | 15 | 15 | marked |
+| day | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 10 | 12 | 14 | 15 | 16 | 22 | 23 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| careful | 3 | 4 | 5 | 7 | 8 | 9 | 10 | 10 | 12 | 14 | 15 | 15 | marked | | |
+| ambient | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 13 | 14 | 15 | 15 | marked | |
+| reckless | 3 | 4 | 5 | 7 | 7 | 8 | 9 | 10 | 12 | 13 | 14 | 15 | 15 | 15 | marked |
 
-The first two days, on the key (medians over the seeds; every seed is at
+The first two days, read sharp (medians over the seeds; every seed is at
 the same level):
 
-| day | level | kit at dusk | cards | glyphs down | earned | gear | patch | bits at dusk | crystals |
-|---|---|---|---|---|---|---|---|---|---|
-| 1 | 3 | weapon 2, armor 1 | 1 | 5 | 1,656 | 641 | 52 | 1,016 | 0 |
-| 2 | 4 | weapon 4, armor 3 | 1 | 5 | 3,720 | 3,539 | 166 | 1,257 | 1 |
+| day | level | kit at dusk | cards | glyphs down | dropped | earned | gear | patch | bits at dusk | crystals |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | 3 | weapon 2, armor 2 | 1 | 5 | 0% | 1,974 | 1,066 | 30 | 916 | 0 |
+| 2 | 4 | weapon 4, armor 4 | 1 | 5 | 0% | 4,236 | 4,354 | 54 | 1,150 | 1 |
 
 Every draft's two options on the key, each over the eight builds that
 carry it:
 
 | draft | card | mean day of the mark | Old Signal |
 |---|---|---|---|
-| lv 3 | jab / siphon | 19.8 / 19.7 | 55% / 57% |
-| lv 6 | riposte / bulwark | 20.1 / 19.5 | 55% / 57% |
-| lv 9 | burn / ground | 20.2 / 19.4 | 56% / 56% |
-| lv 12 | sever / mute | 20.1 / 19.5 | 55% / 56% |
+| lv 3 | jab / brace | 23.0 / 22.5 | 54% / 53% |
+| lv 6 | riposte / bulwark | 23.1 / 22.4 | 55% / 52% |
+| lv 9 | burn / ground | 23.3 / 22.1 | 49% / 58% |
+| lv 12 | sever / mute | 23.2 / 22.3 | 56% / 51% |
 
 What the tables say:
 
-- **The boss is on the screen on day 16, whoever plays the cards.** A
-  level a day for the first week, then a level every day and a half;
-  level 15 on day 14 and two days earning the exp that opens the gate.
-  The hand and the build decide what happens at the gate, never when it
-  opens: the road has five fights a day for everybody.
-- **Day one ends at level 3 with the first card in the deck**, tier 2 and
-  tier 1 on the wall bought, and about a thousand bits on hand; day two
-  ends at level 4 in a tier 4 weapon. Nobody drops on either day who
-  visits the armorer; the neglectful runner drops on day one.
-- **The hand is worth about a third of the damage.** A fair fight on the
-  key takes three turns and leaves 64 to 83% of the signal (77% on
-  average); read sharp it leaves 91%. The key got better in this pass:
-  it now puts energy it has left over on a block when something is
-  landing, which is also what makes a burn and a bulwark worth drafting
-  for a runner who never reads a hand.
-- **No card is the answer and none is a trap.** Every draft's two
-  options land within a day of each other on the key and within two
-  points on the Old Signal. All sixteen builds mark on day 16 read sharp
-  and on day 16 to 20 on the key, with the Old Signal at 50 to 65%.
-- **Gear is still the fight.** Every card's number is a share of the
-  strike or the block: the kit sits within a tier of the level all the
-  way up and the top kit waits for level 14.
-- **Patch is the key's bill.** 11% of what the ambient runner earns and
-  3% for the careful one, measured while rests still mended for free.
-  Rests only clear the deck now, so patch is the one heal between
-  rolls and this bill is due a fresh `make deadchannel-arena`.
-- **The bright glyph is safe to read and a risk on the key.** Read sharp
-  it goes down 93% of the time or better from level 4; on the key it is
-  64% at its worst (level 9) and leaves about a third of the signal. The
-  keen runner takes about two a day and marks with the careful one: the
-  crystals buy tiers early, not days. The hoarder, who saves every
-  crystal for the top third of the wall, marks two days later than the
-  keen runner: spending them is right.
-- **The Old Signal is the one fight to read.** On the key it is a coin
-  toss (50%), read sharp nine in ten, and a glass of static on ice makes
-  the key near sure (94%). A failed try is a dropped signal and three
-  or four days of exp, which is the whole of the day between the
-  careful runner's mark and the ambient one's median, and of the three
-  days more for the reckless one.
-- **The loan is small change.** The borrower takes about 5,500 bits over
-  a climb for 555 in fees and marks with the ambient runner.
-- **The neglectful runner** drops on day one, heeds the armorer from
-  then on, reaches the gate on day 21, and marks about day 25.
-
-How the draft was tuned. The first cut of the eight cards went in over
-the round as it stood, and the first reading named the problems:
-
-- **The game got easier by a deck.** The Old Signal read 82% on the key
-  and 100% read sharp, and nothing dropped the reckless runner. Glyph
-  hits went from 170% to 185%, the Old Signal from 245 signal to 290,
-  and the bright glyph from 135% of the plain one's signal to 150%.
-- **The burn was a trap.** It gave two energy and put a static card in
-  the deck; the key played it every turn and choked. Builds with it
-  marked on day 20 to 25 on the key against day 16 for the ground. It
-  now only gives: two energy, and one more for each static card in
-  hand, burned up.
-- **The key could not use a card that was not a hit.** It only ever
-  blocked on a heavy, so a bulwark and a burn bought it nothing, and the
-  gap to a runner reading the hand at the Old Signal was 49% against
-  98%. The key now spends leftover energy on a guard against whatever
-  is landing. That one rule brought every draft's options together.
-- **The jab and the sever were a shade light**: 50% of a strike and
-  double. 75% and two and a half put them level with the siphon and the
-  mute.
-- **Two measures were wrong, not the game.** Patch was read off the
-  careful runner, who is barely hit; it is the key's bill, so the band
-  moved to the ambient runner. And a draft's options were compared by
-  the median day of the mark, which moves a failed try (four days) at a
-  time; the mean over the seeds is what is compared now.
-
-The cliffs, all of them the same cause:
-
-- **No dice means cliffs.** With only the shuffle random, a fight's
-  odds move in steps: one more hit needed to put a glyph down is one
-  more of its moves landing. The neighbours of the live numbers, each
-  moved alone: the Old Signal at 280 signal reads 64% on the key and at
-  300 reads 42% (290 is 50%); hits at 175% leave the reckless runner
-  nothing to drop to, and at 195% the bright glyph falls to 38% on the
-  key and two dozen bands go with it; blocks at 55% put four builds out
-  of the pace. Every number near one of these is held by the contract,
-  and a retune of strike, the creature table, the wall, or a card must
-  re-read the boss, the bright glyph, and every build first.
+- **The day is the unit of attrition now, not the fight.** A fair fight
+  read sharp leaves 88% of the signal and 79% on the key, so five of
+  them cost half a bar read sharp and a whole one on the key, before
+  any bright glyph. With one patch a day that is a budget: the careful
+  runner spends its patch on three days in five, and the fight it opens
+  at 40% signal is the one it reads twice. Before this pass the careful
+  runner patched before every fight for 3% of its bits and never ran,
+  dropped, or stepped down in fifteen days.
+- **The fight scales up.** The glyph's hit is 175% at level 1 and 217%
+  at 15 (`HIT_RAMP_PERCENT`), and its noise throws one static card at
+  level 4 and four at 15. The fair fight on the key is still 100% at
+  every level with a kit level with the runner: the key is the floor,
+  and what it pays now is signal.
+- **The bright glyph is a fight all the way up.** On the key it goes
+  down 48% of the time at its worst (level 9) and 60 to 84% at levels 7,
+  11, 13 and 14, and it leaves about a third of the signal, which is
+  the cost that matters under one patch. Read sharp it is 90 to 100% at
+  a full bar; the sim's keen runner opens one on a full bar only, and
+  at level 15 one read sharp still costs 72% of a bar. (At 60% signal
+  it was a drop: the seeded keen climb dropped twelve times before that
+  rule.) At level 1 to 2 it is 100% on the key, where the old rounding
+  made it 1%; the first bright is not a wall any more.
+- **Nobody holds the wall early.** The kit sits within half a tier of
+  the level for the careful runner and the keen one alike, and both
+  wear the top kit at level 15, because a piece above the level costs
+  half as much again a tier (`PRICE_LEAD_PERCENT`) and the blade shop
+  asks two crystals more a tier past the level. Before this pass the
+  keen runner was four tiers over the level at level 9 and wore the top
+  kit at 11, and at four tiers over nothing on the road was a fight.
+- **The key pays a few days for the budget.** The ambient runner marks
+  on day 21 with two drops (day 17 with none before), the reckless one
+  on day 24 with three. The ambient band moved to day 16 to 22 and the
+  builds' to 15 to 25 by decision: that is the price of the day being a
+  budget, and the floor still finishes in about three weeks. The siphon
+  at three quarters of a strike is what holds it there (half a strike
+  put the key on day 24; `SIPHON_MEND_PERCENT`).
+- **Crystals are a side game.** The keen runner marks with the careful
+  one. Its kit is held to the level like everyone's and the bright glyph
+  pays the plain exp, so two real fights a day are paid for in signal
+  and bought back in a glass and the odd piece. The band is within four
+  days of careful either way.
+- **No card is the answer and none is a trap.** All sixteen builds mark
+  on day 20 to 24 on the key with the Old Signal at 43 to 70%. The brace
+  is a whole block for nothing (at half a block the brace builds were
+  three days behind the jab ones on the key) and the riposte hits for a
+  block and a half (at a block's worth its builds were three days behind
+  the bulwark's).
+- **The Old Signal is the one fight to read.** 300 signal and 35 attack:
+  57% on the key, 90% read sharp, near sure with any glass. The ramp
+  reaches it too, which is why its attack came down from 39 and why ten
+  signal was the finer knob to finish on.
+- **The second climb is a day quicker, and quicker again where drops
+  are.** The pace is the road's: five fights a day pay a fixed exp, so
+  the careful reader marks on day 17 fresh and on day 16 at one mark, at
+  five, and with every draft inked alike: one mark is worth a day to the
+  reader, and the cap and the needle add nothing past it. The ladder is
+  the same on every climb: LoGD's per-mark exp scaling was dropped here,
+  since with the pace fixed it took that day back, and more at five
+  marks, for nothing. On the key the marks pay in the dropped days: day
+  21 fresh, 20 at one mark, 16 at five. That is the paragon promise as
+  measured: a veteran on the key climbs like a first-timer reading the
+  hand.
+- **The needle pays on the key, and costs nothing this climb.** The
+  inker marks with the keen runner (day 17): the ten crystals come out
+  of a side game. With every draft inked the second climb on the key
+  marks on day 16, four days under the plain second and five under the
+  first, the same day as the sixth climb: four inks are worth about what
+  four more marks are. At the gate the inks are
+  worth seven points on the key (57% to 64%) and nothing read sharp
+  (already near sure).
+- **A pour is never a trap.** Feedback (a surge) and sign-off (a mute)
+  help the key against the bright glyph at nearly every level; a wipe
+  poured into a clean deck hurt it (lv 9: 48% dry, 36% poured; lv 14: 69%
+  to 45%), so squelch is a burn, which is free and never dead. The band
+  holds every pour within the dice of dry. Read sharp, a pour moves
+  the Old Signal from 90% to 88 to 95%: the pours are road cards, the
+  glasses are the gate's.
 
 ## 7. Soft spots and the tests worth adding
 
@@ -383,11 +398,12 @@ Known, measured, and left for a pass of their own:
 - **The first week runs fast.** A level a day to level 10. The exp
   ladder's first rungs are LoGD's; a `Rules` field for the early rungs
   would let a sweep slow them without touching the back half.
-- **A bright glyph before the first draft is a wall.** At level 1 it
-  reads 1% on the key and 15% read sharp (the reading holds it from
-  level 4, where the first card is in the deck). The road never opens on
-  one and says grim, but a new runner's first bright node is one to walk
-  around, and nothing teaches that but the word.
+- **The bright glyph read sharp is near sure at a full bar.** 90% at
+  its worst. What makes it a decision is the signal it takes and the one
+  patch; a band of 60 to 90 read sharp says so. A pass that wants the
+  reader to lose brights at a full bar has to move the attack edge, and
+  the rounding at levels 3 to 4 (`BRIGHT_EDGE_LEVEL_PERCENT`, where 65
+  put a cliff at the bottom) is the thing to read first.
 - **The threat word is a cliff too.** It is the fight on the key from
   the sheet as it stands, so most fair fights read easy and a bright
   one reads easy or grim with little between.
@@ -400,10 +416,9 @@ Known, measured, and left for a pass of their own:
   them at half the seeds. A pass that moves a card should read the
   builds table, not only the misses.
 - **The Old Signal with marks.** The report prints the odds by marks,
-  but no climb runs a second season: `exp_to_advance` scaling and the
-  mark bonus are untested as a pace, and with marks the boss is near
-  sure on the key. By decision (2026-10-06) nothing past the first mark
-  is tuned yet.
+  and the second-climb benches run from one and five marks, but no
+  climb runs a second season in one sitting: a veteran's purse, locker
+  habits, and the days between marks are not played.
 - **The step down** is in no player's rule except the neglectful one's
   recovery.
 - **The road's route is read three steps ahead** by the sim. A player

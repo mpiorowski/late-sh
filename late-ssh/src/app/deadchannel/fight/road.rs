@@ -8,7 +8,11 @@
 //! ([`FIGHT_STEPS`] steps are fights in all three lanes), so the pace of
 //! the climb belongs to the rations and never to the route. What a route
 //! chooses is which fights are the bright ones, and what the steps between
-//! them give: a rest (the static out of the deck) or a cache (bits).
+//! them give: a rest (the static out of the deck) or a cache (bits). One
+//! quiet step of every road has a crossing on one lane: another runner,
+//! met where they sleep (GAME.md, "The crossing pass"). The lane is the
+//! road's; who waits there is the day's and the rows' (`svc.rs`), never
+//! the map's.
 //!
 //! And the run on it: where one runner stands on today's road and how
 //! each step went (`RoadRun`, the `road` column of the runner row), wiped
@@ -41,13 +45,19 @@ pub enum Node {
     Rest,
     /// Bits somebody left.
     Cache,
+    /// Another runner, asleep on their feet: a fight for what they carry,
+    /// at the cost of a ration and everything you carry.
+    Crossing,
 }
 
 impl Node {
+    /// A fight the step cannot avoid: the glyph's node and the bright
+    /// one's. A crossing is a fight too, but one on a quiet step, beside
+    /// a rest and a cache, to take or walk past.
     pub fn is_fight(self) -> bool {
         match self {
             Node::Glyph | Node::Bright => true,
-            Node::Rest | Node::Cache => false,
+            Node::Rest | Node::Cache | Node::Crossing => false,
         }
     }
 }
@@ -145,11 +155,25 @@ pub fn road_for(day: NaiveDate) -> Road {
         if lanes[0] == lanes[1] && lanes[1] == lanes[2] {
             lanes[1] = match lanes[1] {
                 Node::Rest => Node::Cache,
-                Node::Cache | Node::Glyph | Node::Bright => Node::Rest,
+                Node::Cache | Node::Glyph | Node::Bright | Node::Crossing => Node::Rest,
             };
         }
         steps[step] = lanes;
     }
+    // The crossing: one quiet step, one lane, the other two lanes a rest
+    // and a cache, so both are still on offer there.
+    let quiet: Vec<usize> = (0..STEPS).filter(|step| !fights[*step]).collect();
+    let at = quiet[dice.below(quiet.len())];
+    let lane = dice.below(LANES);
+    let mut rest_first = dice.below(2) == 0;
+    for other in (0..LANES).filter(|other| *other != lane) {
+        steps[at][other] = match rest_first {
+            true => Node::Rest,
+            false => Node::Cache,
+        };
+        rest_first = !rest_first;
+    }
+    steps[at][lane] = Node::Crossing;
     // The bright ones: each on a fight step of its own, after the first.
     let later: Vec<usize> = (1..STEPS).filter(|step| fights[*step]).collect();
     let first = dice.below(later.len());
@@ -196,6 +220,10 @@ pub struct RoadRun {
     pub path: Vec<Trace>,
     /// Static riding the deck between fights.
     pub static_cards: u8,
+    /// The day's one patch, spent (`Command::Patch`). A road stored
+    /// before the flag existed reads as not patched.
+    #[serde(default)]
+    pub patched: bool,
 }
 
 impl RoadRun {

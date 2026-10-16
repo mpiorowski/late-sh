@@ -720,6 +720,30 @@ impl ProfileService {
         );
     }
 
+    /// Fire-and-forget: persist this device's Artboard content disclaimer onto
+    /// the SSH key the session authenticated with. Logged on failure only, like
+    /// the rail layout: the choice already applies for the rest of the session.
+    pub fn set_key_artboard_disclaimer(&self, user_id: Uuid, fingerprint: String, enabled: bool) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    UserSshKey::set_artboard_disclaimer(&client, user_id, &fingerprint, enabled)
+                        .await
+                }
+                .await;
+                if let Err(e) = result {
+                    tracing::warn!(error = ?e, "failed to persist device artboard disclaimer");
+                }
+            }
+            .instrument(info_span!(
+                "profile.device_artboard_disclaimer_task",
+                user_id = %user_id
+            )),
+        );
+    }
+
     /// Fire-and-forget: persist when this device's session went quiet before
     /// it ended, the mark the next session's bare `/summary` reads from. A
     /// failure is only logged: the next session falls back to the default

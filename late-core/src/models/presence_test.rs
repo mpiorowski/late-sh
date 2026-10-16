@@ -29,6 +29,7 @@ fn record(n: u16) -> PresenceRecord {
             present: false,
             moved_at_ms: 1_790_000_000_999,
         }),
+        lounge: true,
     }
 }
 

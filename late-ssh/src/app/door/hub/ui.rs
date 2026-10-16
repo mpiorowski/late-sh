@@ -89,6 +89,7 @@ impl HubView<'_> {
             HubGame::GreenDragon => self.greendragon_live,
             HubGame::NightCity
             | HubGame::Minecraft
+            | HubGame::VintageStory
             | HubGame::Rebels
             | HubGame::Usurper
             | HubGame::Dopewars
@@ -319,6 +320,9 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
             scroll,
         ),
         HubGame::Minecraft => crate::app::door::minecraft::ui::draw_landing(frame, body[1], scroll),
+        HubGame::VintageStory => {
+            crate::app::door::vintagestory::ui::draw_landing(frame, body[1], scroll)
+        }
         HubGame::Rebels => crate::app::door::rebels::render::draw_landing(
             frame,
             body[1],
@@ -379,9 +383,13 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
             view.delete_confirm,
             scroll,
         ),
-        HubGame::Zork => {
-            crate::app::door::zork::render::draw_landing(frame, body[1], view.zork_enabled, scroll)
-        }
+        HubGame::Zork => crate::app::door::zork::render::draw_landing(
+            frame,
+            body[1],
+            view.zork_enabled,
+            view.show_watch_chat,
+            scroll,
+        ),
         HubGame::Codekeep => crate::app::door::codekeep::render::draw_landing(
             frame,
             body[1],
@@ -658,15 +666,15 @@ fn draw_watch_footer(frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(hint_line(hints)), area);
 }
 
-/// The hub footer. Minecraft has nothing to launch, so its card drops the
-/// Enter hint rather than advertising a key that does nothing; Night City's
+/// The hub footer. Minecraft and Vintage Story have nothing to launch, so
+/// their cards drop the Enter hint rather than advertising a key that does nothing; Night City's
 /// Enter goes down, not into a game.
 fn draw_footer(frame: &mut Frame, area: Rect, selected: HubGame) {
     let switch = ("\u{2191} \u{2193}  or  j k", "switch game");
     let scroll = ("ctrl j k", "scroll");
     let hints: &[(&str, &str)] = match selected {
         HubGame::NightCity => &[switch, scroll, ("Enter", "descend")],
-        HubGame::Minecraft => &[switch, scroll],
+        HubGame::Minecraft | HubGame::VintageStory => &[switch, scroll],
         HubGame::Dcss
         | HubGame::Nethack
         | HubGame::Brogue

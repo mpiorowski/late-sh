@@ -132,16 +132,17 @@ kubectl cp -n default ./music/. "$POD":/music/ -c liquidsoap
 
 ## Architecture
 
-| Component  | Service                                                                         | Ports                                                  | Description                                       |
-| ---------- | ------------------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------- |
-| late-ssh   | `service-ssh-sv`                                                                | 2222 (SSH), 4000 (API), 6697 (IRC TLS when enabled)    | SSH TUI server + HTTP API + embedded IRC          |
-| late-web   | `service-web-sv`                                                                | 3000                                                   | Web landing page + pairing                        |
-| Icecast    | `icecast-sv`                                                                    | 8000                                                   | Audio streaming server                            |
-| Liquidsoap | none (dials out to `icecast-sv`)                                                | -                                                      | Playlist encoder                                  |
-| LiveKit    | `livekit-sv`                                                                    | 7880 (WSS/API), 7881 TCP, 7882 UDP, 3478 UDP, 5349 TCP | Voice-room SFU, ICE/TURN media                    |
-| Minecraft  | none (hostPort)                                                                 | 25565 TCP on `agent-1`                                 | Paper server with GriefPrevention, whitelist-only |
-| PostgreSQL | `postgres-rw`                                                                   | 5432                                                   | CloudNativePG cluster                             |
-| Monitoring | OpenTelemetry Collector, VictoriaMetrics, VictoriaLogs, VictoriaTraces, Grafana | various                                                | Full observability stack                          |
+| Component     | Service                                                                         | Ports                                                  | Description                                       |
+| ------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------ | ------------------------------------------------- |
+| late-ssh      | `service-ssh-sv`                                                                | 2222 (SSH), 4000 (API), 6697 (IRC TLS when enabled)    | SSH TUI server + HTTP API + embedded IRC          |
+| late-web      | `service-web-sv`                                                                | 3000                                                   | Web landing page + pairing                        |
+| Icecast       | `icecast-sv`                                                                    | 8000                                                   | Audio streaming server                            |
+| Liquidsoap    | none (dials out to `icecast-sv`)                                                | -                                                      | Playlist encoder                                  |
+| LiveKit       | `livekit-sv`                                                                    | 7880 (WSS/API), 7881 TCP, 7882 UDP, 3478 UDP, 5349 TCP | Voice-room SFU, ICE/TURN media                    |
+| Minecraft     | none (hostPort)                                                                 | 25565 TCP, 24454 UDP (voice) on `agent-1`              | Paper server with GriefPrevention, whitelist-only |
+| Vintage Story | none (hostPort)                                                                 | 42420 TCP+UDP on `agent-2`                             | Official server (arm64), whitelist-only           |
+| PostgreSQL    | `postgres-rw`                                                                   | 5432                                                   | CloudNativePG cluster                             |
+| Monitoring    | OpenTelemetry Collector, VictoriaMetrics, VictoriaLogs, VictoriaTraces, Grafana | various                                                | Full observability stack                          |
 
 SSH on port 22 and IRC on port 6697, IPv4 and IPv6, reach the late-ssh pod
 through `ssh-edge`, a host-network HAProxy DaemonSet (`ssh-tcp.tf`), never
@@ -162,10 +163,16 @@ treating the rollout as failed.
 | ---------- | ---------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `server-1` | server (control plane, etcd) | untainted                                   | service-ssh, redis, doors, ingress-nginx, ipv6-proxy, ssh-edge, LiveKit, Postgres                                                                      |
 | `agent-1`  | agent                        | label and `NoSchedule` taint `role=support` | service-web, Icecast, Liquidsoap, otel-collector, vmagent, kube-state-metrics, VictoriaMetrics/Logs/Traces, Grafana, Minecraft, second CoreDNS replica |
+| `agent-2`  | agent (arm64)                | label and `NoSchedule` taint `role=games`   | Vintage Story                                                                                                                                          |
 
 A workload lands on `agent-1` only when it carries both the `role=support` node
-selector and toleration (`support_node_*` locals in `defaults.tf`). The taint
-keeps everything else, service-ssh included, on `server-1`. Workloads with a
+selector and toleration (`support_node_*` locals in `defaults.tf`), and on
+`agent-2` only with `role=games` (`games_node_*`). The taints keep everything
+else, service-ssh included, on `server-1`. `agent-2` is a Hetzner CAX21, arm64,
+while every image we build for the other nodes is amd64 only, so a workload
+headed there also selects `kubernetes.io/arch=arm64` and needs an arm64 image.
+Of the cluster's DaemonSets only Canal (multi-arch, tolerates every taint) and
+kube-proxy run there. Workloads with a
 `local-path` volume stay pinned to the node that holds the data, so moving one
 needs a fresh volume on the new node, not just the selector.
 
@@ -194,19 +201,21 @@ mkdir -p /etc/rancher/rke2
 tee /etc/rancher/rke2/config.yaml >/dev/null <<'CONFIG'
 server: https://<server-1-ip>:9345
 token: <token>
-node-name: agent-1
+node-name: <agent-N>
 node-label:
-  - role=support
+  - role=<support|games>
 node-taint:
-  - role=support:NoSchedule
+  - role=<support|games>:NoSchedule
 CONFIG
+chmod 600 /etc/rancher/rke2/config.yaml
 curl -sfL https://get.rke2.io | INSTALL_RKE2_TYPE=agent INSTALL_RKE2_VERSION=v1.34.4+rke2r1 sh -
 systemctl enable rke2-agent.service
 systemctl start rke2-agent.service
 ```
 
 Pin `INSTALL_RKE2_VERSION` to whatever `kubectl get nodes` shows for `server-1`:
-an agent newer than its server is unsupported. Nodes talk on TCP 9345 and 6443
+an agent newer than its server is unsupported. The installer picks the host's
+architecture itself, arm64 included. Nodes talk on TCP 9345 and 6443
 (agent to server), UDP 8472 (Canal VXLAN) and TCP 10250 (kubelet) both ways;
 open those in any Hetzner Cloud Firewall attached to either host.
 
@@ -225,7 +234,9 @@ _minecraft._tcp.late.sh   SRV  0 5 25565 mc.late.sh.
 
 The explicit A record overrides the wildcard, and the SRV record lets the client
 accept plain `late.sh`. Both must be DNS-only, never proxied: the traffic is raw
-TCP. The world lives on the `minecraft-data` PVC (`local-path`,
+TCP. Simple Voice Chat adds a second hostPort, 24454 UDP, reached at the same
+address, so it needs no DNS of its own; open it in any Hetzner Cloud Firewall
+on `agent-1`. The world lives on the `minecraft-data` PVC (`local-path`,
 `prevent_destroy`) on `agent-1`'s disk; `worldborder set 6000` at startup caps
 its disk growth there.
 
@@ -243,9 +254,36 @@ kubectl logs -n default deploy/minecraft --tail=200
 
 Bumping the game version (`minecraft_version` in `defaults.tf`) is a one-way
 world upgrade and changes the client version every player needs; back up the PVC
-first. GriefPrevention resolves from Modrinth at boot for the pinned version, so
-a version bump can fail startup if the plugin has no matching release yet; the
-pod log says so.
+first. GriefPrevention and Simple Voice Chat resolve from Modrinth at boot for
+the pinned version, so a version bump can fail startup if either plugin has no
+matching release yet; the pod log says so.
+
+### Vintage Story
+
+`infra/vintagestory.tf` runs the official Vintage Story server on `agent-2`'s
+port 42420, TCP and UDP, as pod hostPorts for the same reason as Minecraft.
+The image is ours, `docker/vintagestory/Dockerfile`: Anego's linux-x64 server
+tarball with Anego's arm64 launcher and native libraries swapped in, built and
+published for arm64 by `.github/workflows/vintagestory.yml` at the tag
+`vintagestory_image` in `defaults.tf` names. One DNS record, by hand and
+DNS-only like the rest:
+
+```
+vs.late.sh                A    <agent-2-ip>
+```
+
+The world lives on the `vintagestory-data` PVC (`local-path`,
+`prevent_destroy`, reclaim policy Delete) on `agent-2`'s disk. Access is
+account verification plus the server's whitelist. The server reads console
+commands on stdin, so whitelisting is an attach, not an exec:
+
+```bash
+echo '/player <name> whitelist on' | kubectl attach -i -n default deploy/vintagestory
+kubectl logs -n default deploy/vintagestory --tail=20    # the command's answer
+```
+
+`late-ssh/src/app/door/vintagestory/CONTEXT.md` has the rest: settings,
+operations, and the upgrade checklist.
 
 ## Configuration Parameters
 
@@ -318,7 +356,9 @@ accepts PROXY headers, so the old accept-side toggle is gone.
 | `MINECRAFT_OPS`       | Comma-separated usernames granted operator, seeded on every boot                                            |
 
 Image, game version, heap, and port are locals in `defaults.tf`, not variables:
-a version bump is a reviewed diff.
+a version bump is a reviewed diff. Vintage Story has no variables at all: its
+image and port are `defaults.tf` locals too, and its whitelist lives on its
+volume.
 
 ### S3 Storage
 

@@ -10,7 +10,7 @@ use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::svc::ChatService;
 use crate::app::deadchannel::fight::data::{FOES, RATIONS_PER_DAY, RULES};
 use crate::app::deadchannel::fight::road::{Mark, Node};
-use crate::app::deadchannel::fight::state::{Applied, Call, Outcome, Refusal};
+use crate::app::deadchannel::fight::state::{Applied, Call, Lookout, Outcome, Refusal};
 use crate::app::deadchannel::fight::state::{Command, Pick, Sheet};
 use crate::app::deadchannel::fight::svc::{FightOutcome, FightService};
 use crate::app::deadchannel::runner::state::Look;
@@ -233,6 +233,7 @@ async fn a_card_refused_keeps_the_scene_and_a_step_refused_ends_it() {
             applied: Applied::Refused(refusal),
             lines: vec![line.to_string()],
         },
+        lookout: Lookout::default(),
     };
 
     session
@@ -434,7 +435,7 @@ async fn a_draft_is_taken_on_the_road_and_kept_on_the_row() {
     assert_eq!(session.draft(), None);
     assert_eq!(
         session.till.as_deref(),
-        Some("siphon is in your deck now, in place of a strike."),
+        Some("brace is in your deck now, in place of a strike."),
         "the pick is the road's word"
     );
     assert!(!session.take_card(0), "nothing is owed: the key is free");
@@ -444,7 +445,7 @@ async fn a_draft_is_taken_on_the_road_and_kept_on_the_row() {
         .await
         .expect("the row")
         .expect("a standing runner");
-    assert_eq!(row.cards, Some(serde_json::json!(["siphon"])));
+    assert_eq!(row.cards, Some(serde_json::json!(["brace"])));
     session.enter();
     assert!(session.scene_open());
     answered(&mut session).await;

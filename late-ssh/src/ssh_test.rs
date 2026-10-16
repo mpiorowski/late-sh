@@ -7,8 +7,8 @@ use russh::{
     keys::{HashAlg, PrivateKey, PrivateKeyWithHashAlg},
 };
 use std::sync::Arc;
-use tokio::io::AsyncReadExt;
-use tokio::net::{TcpListener, TcpSocket, TcpStream};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::time::{Duration, timeout};
 
 #[tokio::test]
@@ -372,7 +372,12 @@ async fn rate_limited_peer_does_not_consume_a_global_permit() {
     config.max_conns_global = 2;
     config.max_conns_per_ip = 100;
     config.ssh_max_attempts_per_ip = 1;
+    // Report distinct client IPs through the real PROXY protocol path. All
+    // sockets use localhost, so no loopback aliases or IPv6 support are needed.
+    config.ssh_proxy_protocol = true;
+    config.ssh_proxy_trusted_cidrs = vec!["127.0.0.1/32".parse().expect("trusted localhost")];
     let state = test_app_state(test_db.db.clone(), config);
+    let conn_limit = state.conn_limit.clone();
 
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("local addr");
@@ -380,27 +385,29 @@ async fn rate_limited_peer_does_not_consume_a_global_permit() {
         let _ = run_with_listener(listener, state, None).await;
     });
 
-    // 127.0.0.1 takes permit 1 and its only allowed attempt.
-    let mut c1 = client::connect(Arc::new(client::Config::default()), addr, TestClient)
+    // The first peer takes permit 1 and its only allowed attempt.
+    let stream = connect_proxied_peer(addr, "192.0.2.1").await;
+    let mut c1 = client::connect_stream(Arc::new(client::Config::default()), stream, TestClient)
         .await
         .expect("connect client 1");
     assert!(authenticate(&mut c1, "permit-user-1", new_client_key()).await);
 
-    // 127.0.0.1 again: rate-limited, closed, and must not hold permit 2.
-    let mut rejected = TcpStream::connect(addr).await.expect("tcp connect 2");
+    // The same peer again: rate-limited, closed, and must not hold permit 2.
+    let mut rejected = connect_proxied_peer(addr, "192.0.2.1").await;
     let mut buf = [0u8; 64];
     let n = timeout(Duration::from_secs(2), rejected.read(&mut buf))
         .await
         .expect("read timeout")
         .expect("read");
     assert_eq!(n, 0, "rate-limited connection must be closed");
+    assert_eq!(
+        conn_limit.available_permits(),
+        1,
+        "the first session must hold one permit and the refused peer none"
+    );
 
     // A different address still gets the second permit.
-    let socket = TcpSocket::new_v4().expect("socket");
-    socket
-        .bind("127.0.0.2:0".parse().expect("loopback alias"))
-        .expect("bind 127.0.0.2");
-    let stream = socket.connect(addr).await.expect("connect from 127.0.0.2");
+    let stream = connect_proxied_peer(addr, "192.0.2.2").await;
     let mut c3 = client::connect_stream(Arc::new(client::Config::default()), stream, TestClient)
         .await
         .expect("connect client 3");
@@ -408,8 +415,28 @@ async fn rate_limited_peer_does_not_consume_a_global_permit() {
         authenticate(&mut c3, "permit-user-3", new_client_key()).await,
         "second permit must still be available to another address"
     );
+    assert_eq!(
+        conn_limit.available_permits(),
+        0,
+        "both admitted sessions must hold their permits"
+    );
 
     handle.abort();
+}
+
+async fn connect_proxied_peer(addr: std::net::SocketAddr, peer_ip: &str) -> TcpStream {
+    let mut stream = TcpStream::connect(addr).await.expect("tcp connect");
+    let source_port = stream.local_addr().expect("local addr").port();
+    let header = format!(
+        "PROXY TCP4 {peer_ip} {} {source_port} {}\r\n",
+        addr.ip(),
+        addr.port()
+    );
+    stream
+        .write_all(header.as_bytes())
+        .await
+        .expect("write proxy header");
+    stream
 }
 
 /// The global cap closes the socket outright and frees the slot when the

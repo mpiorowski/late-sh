@@ -4,7 +4,11 @@
 //! press becomes a command, and the bars move when the service's answer
 //! arrives. The road's threat words are the sim's odds over the mirror
 //! (`sim::odds`), read once when it opens and again when the mirror moves,
-//! never per frame.
+//! never per frame. Beside the sheet the service hands back a `Lookout`:
+//! who the crossing ahead would meet, the answer owed, the latest fight
+//! on this runner; the road draws it, and the step and the answer are
+//! the two requests that leave the machine's commands for the service
+//! to fill in (`FightService::cross_task`, `answer_task`).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,8 +18,8 @@ use uuid::Uuid;
 
 use super::cards::Draft;
 use super::road::Node;
-use super::sim::{ODDS_FIGHTS, Threat, odds};
-use super::state::{Applied, Call, Command, Pick, Quarry, Refusal, Sheet};
+use super::sim::{ODDS_FIGHTS, Threat, odds, odds_rival};
+use super::state::{Applied, Call, Command, Lookout, Pick, Quarry, Refusal, Sheet};
 use super::svc::{FightOutcome, FightService};
 
 /// What every command answers on a process draining for a deploy.
@@ -63,12 +67,18 @@ pub struct Picker {
     pub fair: Option<Threat>,
     pub lower: Option<Threat>,
     pub bright: Option<Threat>,
+    /// The threat of the sleeper at the crossing ahead, and of the one
+    /// owed an answer; `None` with nobody there, or none owed.
+    pub crossing: Option<Threat>,
+    pub answer: Option<Threat>,
 }
 
 pub(crate) struct FightSession {
     /// The mirror: `None` until the first reload answers, or when there is
     /// no standing runner.
     pub sheet: Option<Sheet>,
+    /// What the service read beside the sheet, with the last answer.
+    pub lookout: Lookout,
     pub picker: Option<Picker>,
     pub scene: Option<Scene>,
     /// The counter's last word: the answer to a command sent with no
@@ -98,6 +108,7 @@ impl FightSession {
         let (outcome_tx, outcome_rx) = mpsc::unbounded_channel();
         Self {
             sheet: None,
+            lookout: Lookout::default(),
             picker: None,
             scene: None,
             till: None,
@@ -120,6 +131,7 @@ impl FightSession {
     /// The runner left the row: nothing to mirror until they are back.
     pub(crate) fn drop_sheet(&mut self) {
         self.sheet = None;
+        self.lookout = Lookout::default();
     }
 
     /// Walk up to the static (`f`, or Enter at the screen). A fight the
@@ -154,6 +166,8 @@ impl FightSession {
             fair: None,
             lower: None,
             bright: None,
+            crossing: None,
+            answer: None,
         });
         self.read_odds();
     }
@@ -209,7 +223,10 @@ impl FightSession {
             (Some(Node::Bright), Call::Fight(Pick::Bright)) => true,
             (Some(Node::Rest), Call::Clear) => true,
             (Some(Node::Cache), Call::Take) => true,
-            (Some(Node::Glyph | Node::Bright | Node::Rest | Node::Cache), _) => false,
+            // The crossing is `cross`, never a call.
+            (Some(Node::Glyph | Node::Bright | Node::Rest | Node::Cache | Node::Crossing), _) => {
+                false
+            }
             // No mirror yet: the row decides.
             (None, _) => true,
         };
@@ -248,15 +265,67 @@ impl FightSession {
 
     /// Enter on the road: the one thing the node under the cursor is
     /// for. A glyph or a bright one is fought, a rest clears the deck, a
-    /// cache is taken.
+    /// cache is taken, a crossing is stepped onto.
     pub(crate) fn enter(&mut self) {
         let call = match self.node_ahead() {
             Some(Node::Glyph) | None => Call::Fight(Pick::Fair),
             Some(Node::Bright) => Call::Fight(Pick::Bright),
             Some(Node::Rest) => Call::Clear,
             Some(Node::Cache) => Call::Take,
+            Some(Node::Crossing) => {
+                self.cross();
+                return;
+            }
         };
         self.call(call);
+    }
+
+    /// Enter on the crossing: the sleeper the lookout shows is fought,
+    /// the row finding them again under the lock. With nobody shown there
+    /// the key does nothing, so it never spends a ration on a refusal;
+    /// with the road over for the day it closes, like any step.
+    fn cross(&mut self) {
+        if self.sheet.as_ref().is_some_and(Sheet::road_over) {
+            self.close();
+            return;
+        }
+        if self.draft().is_some() || self.lookout.crossing.is_none() {
+            return;
+        }
+        let Some(lane) = self.picker.as_ref().map(|picker| picker.lane) else {
+            return;
+        };
+        if !self.ready() {
+            return;
+        }
+        self.open_scene();
+        self.svc.cross_task(
+            self.user_id,
+            self.username.clone(),
+            lane,
+            self.outcome_tx.clone(),
+        );
+    }
+
+    /// `r` on the road: the answer to the crossing this runner is owed.
+    /// Only with one owed and the one who did it on the wire, as the
+    /// lookout stands; the row decides again. Returns whether it was sent.
+    pub(crate) fn answer(&mut self) -> bool {
+        let reachable = self
+            .lookout
+            .token
+            .as_ref()
+            .is_some_and(|token| token.prey.is_some());
+        if !reachable || self.sheet.as_ref().is_none_or(Sheet::is_down) {
+            return false;
+        }
+        if !self.ready() {
+            return false;
+        }
+        self.open_scene();
+        self.svc
+            .answer_task(self.user_id, self.username.clone(), self.outcome_tx.clone());
+        true
     }
 
     /// `g` on the road: the glyph a level down, on a glyph's node only.
@@ -347,6 +416,24 @@ impl FightSession {
         picker.fair = threat(Node::Glyph, Pick::Fair);
         picker.lower = threat(Node::Glyph, Pick::Lower);
         picker.bright = threat(Node::Bright, Pick::Bright);
+        let rival = |prey: Option<&super::state::Prey>| {
+            prey.and_then(|prey| {
+                self.sheet
+                    .as_ref()
+                    .and_then(|sheet| odds_rival(sheet, prey, ODDS_FIGHTS))
+                    .map(Threat::of)
+            })
+        };
+        picker.crossing = match ahead.contains(&Node::Crossing) {
+            true => rival(self.lookout.crossing.as_ref()),
+            false => None,
+        };
+        picker.answer = rival(
+            self.lookout
+                .token
+                .as_ref()
+                .and_then(|token| token.prey.as_ref()),
+        );
     }
 
     /// Stepping up to the counter again: the last word is not repeated.
@@ -361,6 +448,21 @@ impl FightSession {
     /// nothing is sent at all: every command in the undercity (a step, a
     /// card, a counter) answers with the word to reconnect.
     pub(crate) fn request(&mut self, command: Command) -> bool {
+        if !self.ready() {
+            return false;
+        }
+        self.svc.act_task(
+            self.user_id,
+            self.username.clone(),
+            command,
+            self.outcome_tx.clone(),
+        );
+        true
+    }
+
+    /// Whether a request can go out now, and the scene marked waiting if
+    /// so: the one gate every request passes.
+    fn ready(&mut self) -> bool {
         if self.action_in_flight {
             return false;
         }
@@ -373,12 +475,6 @@ impl FightSession {
             scene.waiting = true;
             scene.failed = false;
         }
-        self.svc.act_task(
-            self.user_id,
-            self.username.clone(),
-            command,
-            self.outcome_tx.clone(),
-        );
         true
     }
 
@@ -389,19 +485,26 @@ impl FightSession {
         while let Ok(outcome) = self.outcome_rx.try_recv() {
             changed = true;
             match outcome {
-                FightOutcome::Acted { sheet, outcome } => {
+                FightOutcome::Acted {
+                    sheet,
+                    outcome,
+                    lookout,
+                } => {
                     self.action_in_flight = false;
                     self.sheet = Some(sheet);
+                    self.lookout = lookout;
                     self.show(outcome.applied, outcome.lines);
                     self.read_odds();
                 }
-                FightOutcome::Reloaded { sheet } => {
+                FightOutcome::Reloaded { sheet, lookout } => {
                     self.sheet = Some(sheet);
+                    self.lookout = lookout;
                     self.read_odds();
                 }
                 FightOutcome::NoRunner => {
                     self.action_in_flight = false;
                     self.sheet = None;
+                    self.lookout = Lookout::default();
                     self.close();
                 }
                 FightOutcome::ActionFailed => {
@@ -454,6 +557,10 @@ impl FightSession {
                 scene.lines = lines;
                 scene.old_signal = fight.is_some_and(|fight| fight.quarry == Quarry::OldSignal);
             }
+            Applied::Crossed { .. } => {
+                scene.lines = lines;
+                scene.old_signal = false;
+            }
             Applied::Resumed => {
                 scene.lines = fight.map(|fight| fight.log.clone()).unwrap_or_default();
                 scene.latest = scene.lines.len();
@@ -472,6 +579,8 @@ impl FightSession {
             Applied::Won { .. }
             | Applied::Slain { .. }
             | Applied::Lost { .. }
+            | Applied::Ambushed { .. }
+            | Applied::Downed { .. }
             | Applied::Escaped => {
                 scene.lines.extend(lines);
                 scene.over = true;
@@ -487,6 +596,8 @@ impl FightSession {
             | Applied::Reset
             | Applied::Drank { .. }
             | Applied::Carted { .. }
+            | Applied::Inked { .. }
+            | Applied::Pocketed { .. }
             | Applied::Cleared { .. }
             | Applied::Cached { .. } => scene.lines.extend(lines),
         }

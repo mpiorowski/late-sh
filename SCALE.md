@@ -12,6 +12,7 @@ Cluster shape:
 - Node usage 2026-08-18 at 38 sessions: 23% CPU, 53% memory. Scheduler requests are at 56% CPU / 56% memory; limits are overcommitted to 295% CPU / 206% memory. The overcommit is normal for this shape but means a synchronized spike across pods has no referee
 - Node disk: 52% used as of 2026-08-18, down from the 75% recorded 2026-07-24 (something reclaimed, most likely containerd image GC). `DiskPressure`, `MemoryPressure`, and `PIDPressure` all `False`
 - Support workloads run on `agent-1` since 2026-09-13 (applied and verified): service-web, Icecast, Liquidsoap, otel-collector, vmagent, kube-state-metrics, VictoriaMetrics/Logs/Traces, Grafana, Minecraft. `server-1` keeps service-ssh, redis, the doors, ingress-nginx, ipv6-proxy, ssh-edge, LiveKit, and both Postgres instances, the last two by decision. See Immediate Next Work 3
+- Game servers run on `agent-2` (Hetzner CAX21, arm64, 4 vCPU, about 7.6 GiB allocatable), tainted `role=games`: Vintage Story only, about 1.2 GiB idle. Minecraft stays on `agent-1`
 - Node usage 2026-09-13, minutes after the move (not a settled baseline): `server-1` 13% CPU, 41% memory, 16.6 GB disk free, down from 18% CPU, 52% memory, 7.5 GB free earlier that day. `agent-1` 4% CPU, 52% memory (about 4 GiB, Minecraft's JVM included), 29.2 GB disk free
 - Storage: every PVC uses the `local-path` (hostPath) provisioner, so any pod with a volume is pinned to the node that holds its data. This matters for any node move (door-game saves, music data, Postgres).
 

@@ -63,8 +63,10 @@ pub mod darkroom_save;
 pub mod darkroom_veteran;
 #[cfg(test)]
 mod darkroom_veteran_test;
+pub mod deadchannel_ambush;
 pub mod deadchannel_name_hit;
 pub mod deadchannel_runner;
+pub mod deadchannel_spawn;
 pub mod door_log_cursor;
 pub mod door_milestone;
 pub mod door_rc;
@@ -87,6 +89,9 @@ pub mod greendragon_clan;
 pub mod greendragon_commentary;
 pub mod greendragon_news;
 pub mod greendragon_setting;
+pub mod irc_history;
+#[cfg(test)]
+mod irc_history_test;
 pub mod irc_token;
 pub mod job_posting;
 #[cfg(test)]

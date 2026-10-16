@@ -10,7 +10,6 @@ node_modules
 result
 result-*
 .direnv
-late-ssh/assets/nonograms/.number-loom-validation/
 server_key
 server_key.pub
 

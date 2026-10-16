@@ -28,6 +28,26 @@ pub enum HistoryDirection {
     Newer,
 }
 
+/// Messages viewer `$1` sees over IRC, over the aliases `msg` and `room`:
+/// IRC ignores `$4` (the viewer's ignored authors) in channels only, never
+/// the viewer's own lines, and includes the persisted system feed.
+pub(crate) const IRC_VISIBLE_MESSAGE: &str =
+    "(room.kind = 'dm' OR msg.user_id = $1 OR msg.user_id <> ALL($4::uuid[]))";
+
+/// One end of an IRC history range in `(created, id)` order.
+#[derive(Clone, Copy, Debug)]
+pub struct IrcHistoryBound {
+    pub created: DateTime<Utc>,
+    pub id: Uuid,
+    pub inclusive: bool,
+}
+
+/// A stored message with its author's current username, for IRC replay.
+pub struct IrcHistoryMessage {
+    pub message: ChatMessage,
+    pub author_username: String,
+}
+
 impl ChatMessage {
     pub async fn list_recent_for_rooms(
         client: &Client,
@@ -665,6 +685,103 @@ impl ChatMessage {
             .execute("DELETE FROM chat_messages WHERE id = $1", &[&message_id])
             .await?;
         Ok(count)
+    }
+
+    /// When a message the viewer may see over IRC was sent, scoped to the
+    /// visible conversation so an anchor cannot name another room's message
+    /// or an ignored author's. `None` when there is no such visible message.
+    pub async fn irc_history_anchor(
+        client: &Client,
+        viewer: Uuid,
+        joined_channels: &[Uuid],
+        ignored_authors: &[Uuid],
+        room_id: Uuid,
+        message_id: Uuid,
+    ) -> Result<Option<DateTime<Utc>>> {
+        let sql = format!(
+            "WITH accessible AS ({})
+             SELECT msg.created FROM chat_messages msg
+             JOIN accessible room ON room.id = msg.room_id
+             WHERE msg.room_id = $3 AND {IRC_VISIBLE_MESSAGE} AND msg.id = $5",
+            super::chat_room::irc_history_rooms_sql()
+        );
+        let row = client
+            .query_opt(
+                &sql,
+                &[
+                    &viewer,
+                    &joined_channels,
+                    &room_id,
+                    &ignored_authors,
+                    &message_id,
+                ],
+            )
+            .await?;
+        Ok(row.map(|row| row.get("created")))
+    }
+
+    /// Up to `limit` visible messages of one IRC buffer between two optional
+    /// `(created, id)` bounds, walked from the newer end when `descending`.
+    /// The row comparison matches `idx_chat_messages_room_created`, so ties
+    /// on `created` never skip or repeat across pages.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn irc_history_range(
+        client: &Client,
+        viewer: Uuid,
+        joined_channels: &[Uuid],
+        ignored_authors: &[Uuid],
+        room_id: Uuid,
+        lower: Option<IrcHistoryBound>,
+        upper: Option<IrcHistoryBound>,
+        descending: bool,
+        limit: i64,
+    ) -> Result<Vec<IrcHistoryMessage>> {
+        let lower_op = if lower.is_some_and(|b| b.inclusive) {
+            ">="
+        } else {
+            ">"
+        };
+        let upper_op = if upper.is_some_and(|b| b.inclusive) {
+            "<="
+        } else {
+            "<"
+        };
+        let order = if descending { "DESC" } else { "ASC" };
+        // Only trusted SQL fragments are interpolated; every input is bound.
+        let sql = format!(
+            "WITH accessible AS ({})
+             SELECT msg.*, author.username AS author_username FROM chat_messages msg
+             JOIN accessible room ON room.id = msg.room_id
+             JOIN users author ON author.id = msg.user_id
+             WHERE msg.room_id = $3 AND {IRC_VISIBLE_MESSAGE}
+               AND ($5::timestamptz IS NULL OR (msg.created, msg.id) {lower_op} ($5, $6::uuid))
+               AND ($7::timestamptz IS NULL OR (msg.created, msg.id) {upper_op} ($7, $8::uuid))
+             ORDER BY msg.created {order}, msg.id {order} LIMIT $9",
+            super::chat_room::irc_history_rooms_sql()
+        );
+        let rows = client
+            .query(
+                &sql,
+                &[
+                    &viewer,
+                    &joined_channels,
+                    &room_id,
+                    &ignored_authors,
+                    &lower.map(|b| b.created),
+                    &lower.map(|b| b.id),
+                    &upper.map(|b| b.created),
+                    &upper.map(|b| b.id),
+                    &limit,
+                ],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| IrcHistoryMessage {
+                author_username: row.get("author_username"),
+                message: Self::from(row),
+            })
+            .collect())
     }
 }
 

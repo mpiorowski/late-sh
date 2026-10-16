@@ -1,5 +1,7 @@
 //! Pure room↔channel projection helpers (no I/O).
 
+use std::collections::HashMap;
+
 use irc_proto::message::Tag;
 use late_core::models::chat_room::ChatRoom;
 use uuid::Uuid;
@@ -280,6 +282,19 @@ pub fn body_for_irc(body: &str, author: &str) -> String {
     crate::app::chat::action::parse_action_body(body)
         .map(|action| format!("* {author} {action}"))
         .unwrap_or_else(|| body.to_string())
+}
+
+/// A stored channel message body as IRC delivers it, live or replayed: the
+/// `/me` and CTCP shape from `body_for_irc`, then a leading `@username`
+/// mention rewritten to the matching IRC nick when the username is known.
+pub fn channel_body_for_irc(body: &str, author: &str, directory: &HashMap<Uuid, String>) -> String {
+    let body = body_for_irc(body, author);
+    rewrite_leading_mention_for_irc(&body, |username| {
+        directory
+            .values()
+            .find(|candidate| candidate.eq_ignore_ascii_case(username))
+            .cloned()
+    })
 }
 
 /// Extract CTCP ACTION text from a PRIVMSG body, if present.

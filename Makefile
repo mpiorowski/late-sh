@@ -65,6 +65,11 @@ PAPER_PARAGRAPHS ?= 100
 seed-paper:
 	scripts/seed_paper_test_data.sh "$(PAPER_PARAGRAPHS)"
 
+# IRC history fixtures for an existing local account.
+.PHONY: seed-irc-history
+seed-irc-history:
+	scripts/seed_irc_history.sh "$(USERNAME)"
+
 # Artboard gallery fixtures: accounts, pieces, applause, and the on-connect splash.
 ART_SPLASH_PIECE ?= 1
 .PHONY: seed-artboard

@@ -10,9 +10,10 @@
 //! over the lanes the next step reaches, and Enter takes what waits
 //! there, the one thing each node is for: a glyph or a bright one is
 //! fought, a rest clears the deck, a cache is taken. `g` on a glyph's
-//! node is the one other call, the glyph a level down for less pay. With
-//! a draft owed the panel shows the two cards instead of a step, and `1`
-//! and `2` take one. With the road over for the day Enter or `g` closes
+//! node is the one other call, the glyph a level down for less pay. `r`
+//! is the answer to a crossing the runner is owed, when the panel shows
+//! one to give. With a draft owed the panel shows the two cards instead
+//! of a step, and `1` and `2` take one. With the road over for the day Enter or `g` closes
 //! it, and `s` copies the day's card. Esc closes it from the root, the
 //! same way.
 
@@ -48,6 +49,10 @@ pub fn handle_picker(app: &mut App, event: &ParsedInput) -> bool {
         }
         ParsedInput::Byte(b'g') | ParsedInput::Char('g') => {
             app.fight.step_down();
+            true
+        }
+        ParsedInput::Byte(b'r') | ParsedInput::Char('r') => {
+            app.fight.answer();
             true
         }
         ParsedInput::Arrow(b'A') | ParsedInput::Byte(b'k') | ParsedInput::Char('k') => {

@@ -243,6 +243,8 @@ struct DrawContext<'a> {
     /// of it.
     show_watch_chat: bool,
     own_watch_line: Option<crate::app::door::spectate::chat::WatchLine>,
+    /// The watcher suggestion waiting beside this player's own Zork game.
+    own_suggestion: Option<String>,
     greendragon_state: Option<&'a crate::app::door::greendragon::state::State>,
     darkroom_state: Option<&'a crate::app::door::darkroom::state::State>,
     rebels_state: Option<&'a mut crate::app::door::rebels::state::State>,
@@ -308,6 +310,7 @@ struct DrawContext<'a> {
     city_sheet: Option<&'a crate::app::deadchannel::fight::state::Sheet>,
     city_scene: Option<&'a crate::app::deadchannel::fight::session::Scene>,
     city_picker: Option<&'a crate::app::deadchannel::fight::session::Picker>,
+    city_lookout: &'a crate::app::deadchannel::fight::state::Lookout,
     city_till: Option<&'a str>,
     city_tailor: crate::app::deadchannel::tailor::ui::MirrorView<'a>,
     city_guide: &'a crate::app::deadchannel::guide::state::State,
@@ -709,6 +712,19 @@ impl App {
                     chrono::Utc::now(),
                 )
             });
+        // The command a watcher suggested for this player's own Zork game,
+        // which F3 types (`door/zork/suggest.rs`).
+        let own_suggestion = match own_screen_game {
+            Some(crate::app::door::spectate::state::SpectateGame::Zork) => {
+                crate::app::door::zork::suggest::waiting(self).map(|suggestion| suggestion.command)
+            }
+            Some(
+                crate::app::door::spectate::state::SpectateGame::Dcss
+                | crate::app::door::spectate::state::SpectateGame::Nethack
+                | crate::app::door::spectate::state::SpectateGame::Brogue,
+            )
+            | None => None,
+        };
         let chat_countries = self.chat.countries();
         let bonsai_glyphs = self.chat.bonsai_glyphs();
         let chat_badges = self.chat.chat_badges();
@@ -850,6 +866,22 @@ impl App {
             late_core::models::user::AudioSource::Radio => radio_now_playing.as_deref(),
             late_core::models::user::AudioSource::Youtube => status_youtube_track.as_deref(),
         };
+        // The lounge's spawn (`deadchannel/lounge`) as the scene above the
+        // #lounge card's composer, for a runner only.
+        let dashboard_lounge = if home_selected && self.is_runner() {
+            let now_ms = crate::app::presence::svc::now_ms();
+            self.lounge.showing(now_ms).map(|spawn| {
+                crate::app::deadchannel::lounge::ui::scene(
+                    spawn,
+                    self.lounge.word(),
+                    self.user_id,
+                    &self.runner_looks,
+                    now_ms,
+                )
+            })
+        } else {
+            None
+        };
         let dashboard_view = chat::ui::DashboardChatView {
             activity_ticker: self.chat.activity_ticker(),
             room: dashboard_room,
@@ -888,6 +920,7 @@ impl App {
             reaction_picker_active: self.chat.is_reaction_leader_active(),
             composer: self.chat.composer(),
             composing: self.chat.composing,
+            lounge: dashboard_lounge,
             mention_matches: &self.chat.mention_ac.matches,
             mention_selected: self.chat.mention_ac.selected,
             mention_active: self.chat.mention_ac.active,
@@ -1619,6 +1652,7 @@ impl App {
                         watch_chat_view,
                         show_watch_chat: self.profile_state.profile().show_watch_chat,
                         own_watch_line,
+                        own_suggestion,
                         greendragon_state: self.greendragon_state.as_ref(),
                         darkroom_state: self.darkroom_state.as_ref(),
                         rebels_state: rebels_state_taken.as_mut(),
@@ -1667,6 +1701,7 @@ impl App {
                         city_sheet: self.fight.sheet.as_ref(),
                         city_scene: self.fight.scene.as_ref(),
                         city_picker: self.fight.picker.as_ref(),
+                        city_lookout: &self.fight.lookout,
                         city_till: self.fight.till.as_deref(),
                         city_tailor: crate::app::deadchannel::tailor::ui::MirrorView {
                             draft: self.tailor.draft.as_ref(),
@@ -2273,9 +2308,11 @@ impl App {
                     ctx.own_chat_hit.set(own_chat.pane());
                     crate::app::door::spectate::ui::draw_own_chat(
                         frame,
+                        crate::app::door::spectate::state::SpectateGame::Nethack,
                         own_chat,
                         ctx.watch_chat_view.take(),
                         ctx.own_watch_line.as_ref(),
+                        None,
                         ctx.own_watchers,
                         terminal_images,
                     );
@@ -2294,9 +2331,11 @@ impl App {
                     ctx.own_chat_hit.set(own_chat.pane());
                     crate::app::door::spectate::ui::draw_own_chat(
                         frame,
+                        crate::app::door::spectate::state::SpectateGame::Dcss,
                         own_chat,
                         ctx.watch_chat_view.take(),
                         ctx.own_watch_line.as_ref(),
+                        None,
                         ctx.own_watchers,
                         terminal_images,
                     );
@@ -2315,9 +2354,11 @@ impl App {
                     ctx.own_chat_hit.set(own_chat.pane());
                     crate::app::door::spectate::ui::draw_own_chat(
                         frame,
+                        crate::app::door::spectate::state::SpectateGame::Brogue,
                         own_chat,
                         ctx.watch_chat_view.take(),
                         ctx.own_watch_line.as_ref(),
+                        None,
                         ctx.own_watchers,
                         terminal_images,
                     );
@@ -2345,9 +2386,27 @@ impl App {
                 }
             }
             Screen::Zork => {
-                if let Some(state) = ctx.zork_state {
-                    state.set_viewport(content_area);
-                    crate::app::door::zork::render::draw_page(frame, content_area, state);
+                if let Some(state) = ctx.zork_state.as_deref_mut() {
+                    // The game on screen makes room for its watchers; the
+                    // menus keep the whole area.
+                    let (game_area, own_chat) = own_chat_split(
+                        crate::app::door::spectate::state::SpectateGame::Zork,
+                        ctx.show_watch_chat && state.game_visible(),
+                        content_area,
+                    );
+                    state.set_viewport(game_area);
+                    crate::app::door::zork::render::draw_page(frame, game_area, state);
+                    ctx.own_chat_hit.set(own_chat.pane());
+                    crate::app::door::spectate::ui::draw_own_chat(
+                        frame,
+                        crate::app::door::spectate::state::SpectateGame::Zork,
+                        own_chat,
+                        ctx.watch_chat_view.take(),
+                        ctx.own_watch_line.as_ref(),
+                        ctx.own_suggestion.as_deref(),
+                        ctx.own_watchers,
+                        terminal_images,
+                    );
                 }
             }
             Screen::Codekeep => {
@@ -2431,6 +2490,7 @@ impl App {
                     sheet: ctx.city_sheet,
                     scene: ctx.city_scene,
                     picker: ctx.city_picker,
+                    lookout: ctx.city_lookout,
                     till: ctx.city_till,
                     tailor: ctx.city_tailor,
                     guide: ctx.city_guide,
@@ -2770,6 +2830,17 @@ impl App {
         }
         if screen == Screen::Bashquest
             && let Some(state) = ctx.bashquest_state.as_deref()
+            && state.name_modal_visible()
+        {
+            crate::app::door::landing::draw_name_modal(
+                frame,
+                inner,
+                state.handle_status(),
+                state.entry_input(),
+            );
+        }
+        if screen == Screen::Zork
+            && let Some(state) = ctx.zork_state.as_deref()
             && state.name_modal_visible()
         {
             crate::app::door::landing::draw_name_modal(

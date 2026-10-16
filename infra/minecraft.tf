@@ -1,5 +1,5 @@
 # =============================================================================
-# Minecraft: Paper server with GriefPrevention
+# Minecraft: Paper server with GriefPrevention and Simple Voice Chat
 # =============================================================================
 # A friends server on agent-1's public port 25565, the client default. It is
 # pinned to agent-1 (defaults.tf, node placement) so the Java heap and a
@@ -13,6 +13,13 @@
 # old workers after 240s and drops long-lived TCP sessions, which for a game
 # server means kicking every player. hostPort follows the same RKE2/Canal
 # path as livekit's media ports and is IPv4 only, which Minecraft is fine with.
+#
+# Proximity voice: the Simple Voice Chat plugin sends audio over its own UDP
+# port, 24454 (the plugin default), as a second hostPort on this pod. Its
+# config stays at the plugin defaults: with `voice_host` empty the client
+# sends voice to the IP its game connection already reached, so the SRV
+# record needs no voice twin. Voice is opt-in per player: it takes the
+# client mod on a modded launcher; vanilla clients join and play without it.
 #
 # Access model: online-mode (Mojang account verification) plus an enforced
 # whitelist. MINECRAFT_WHITELIST / MINECRAFT_OPS seed the lists on every boot;
@@ -158,6 +165,13 @@ resource "kubernetes_deployment_v1" "minecraft" {
             protocol       = "TCP"
           }
 
+          port {
+            container_port = local.minecraft_voice_port
+            host_port      = local.minecraft_voice_port
+            name           = "voice"
+            protocol       = "UDP"
+          }
+
           env {
             name  = "EULA"
             value = "TRUE"
@@ -223,10 +237,11 @@ resource "kubernetes_deployment_v1" "minecraft" {
             name  = "EXISTING_OPS_FILE"
             value = "MERGE"
           }
-          # Resolved against Modrinth at boot for the pinned VERSION.
+          # Resolved against Modrinth at boot for the pinned VERSION. A
+          # project with no build for VERSION fails the boot on purpose.
           env {
             name  = "MODRINTH_PROJECTS"
-            value = "griefprevention"
+            value = "griefprevention,simple-voice-chat"
           }
           env {
             name  = "PATCH_DEFINITIONS"

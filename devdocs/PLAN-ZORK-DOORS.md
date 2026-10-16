@@ -561,10 +561,10 @@ the actual host/client boundary.
 - Compose startup, workflow `actionlint`, shell `shellcheck`, Terraform formatting
   and validation, affected Rust checks, formatting, and clippy pass. The full
   `make check` runs formatting and workspace clippy successfully; 5,026 of 5,027
-  tests pass (14 skipped). Its sole test failure on this Mac is the existing
-  `ssh_test::rate_limited_peer_does_not_consume_a_global_permit`, whose bind to
-  `127.0.0.2` fails with `AddrNotAvailable`. This platform failure is outside the
-  Zork implementation; the gate must still pass in CI before merging.
+  tests pass (14 skipped). The one failure was outside the Zork implementation:
+  `ssh_test::rate_limited_peer_does_not_consume_a_global_permit` could not bind
+  the `127.0.0.2` loopback alias on macOS. That test now reports distinct client
+  IPs through PROXY v1 headers over localhost and needs no alias.
 
 The live late.sh SSH TTY review covers Games/edition/save menus, confirmation
 defaults, gameplay, SAVE descriptions, RESTORE cancellation/return, game-owned

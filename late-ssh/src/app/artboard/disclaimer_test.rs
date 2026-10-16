@@ -39,7 +39,7 @@ fn artboard_disclaimer_matches_requested_layout_and_colors() {
         assert_eq!(buffer[aside].fg, theme::TEXT_FAINT());
         let expected_choices = [
             ("View          (will ask next time too)", Color::Yellow),
-            ("Always View       (will not ask again)", Color::Red),
+            ("Always View      (off for this device)", Color::Red),
             ("Back to Chat    (asks again next time)", Color::Green),
         ];
         let mut positions = Vec::new();

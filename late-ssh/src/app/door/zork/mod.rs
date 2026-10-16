@@ -11,3 +11,4 @@ pub mod proxy;
 mod proxy_test;
 pub mod render;
 pub mod state;
+pub mod suggest;

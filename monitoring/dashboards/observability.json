@@ -2205,8 +2205,8 @@
     },
     {
       "type": "bargauge",
-      "title": "Zork Switches & Save Reads",
-      "description": "switch: leaving a live game for another edition, a manual load, or a new game. switched means the old game checkpointed and the next one started; save_failed means it closed without a checkpoint exit; timed_out means no exit within 8s, so the old game stays open. saves: the menus' read of the account's six slots; a failure shows 'Unable to read saves'.",
+      "title": "Zork Switches, Save Reads & Suggestions",
+      "description": "switch: leaving a live game for another edition, a manual load, or a new game. switched means the old game checkpointed and the next one started; save_failed means it closed without a checkpoint exit; timed_out means no exit within 8s, so the old game stays open. saves: the menus' read of the account's six slots; a failure shows 'Unable to read saves'. suggestion: F3 on a player's own game, typing a watcher's '>' command (typed), refused off an empty prompt (not_at_prompt), or with none waiting (none_waiting).",
       "datasource": {
         "uid": "victoriametrics",
         "type": "victoriametrics-metrics-datasource"
@@ -2222,6 +2222,12 @@
           "refId": "B",
           "expr": "sum by (result) (increase(late_ssh_zork_catalogue_reads_total[$__range]))",
           "legendFormat": "saves {{result}}",
+          "instant": true
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (result) (increase(late_ssh_zork_suggestions_total[$__range]))",
+          "legendFormat": "suggestion {{result}}",
           "instant": true
         }
       ],
@@ -3379,7 +3385,7 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
+        "w": 6,
         "x": 0,
         "y": 276
       }
@@ -3442,8 +3448,8 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 8,
+        "w": 6,
+        "x": 6,
         "y": 276
       }
     },
@@ -3499,8 +3505,65 @@
       },
       "gridPos": {
         "h": 8,
-        "w": 8,
-        "x": 16,
+        "w": 6,
+        "x": 12,
+        "y": 276
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Lounge Spawns",
+      "description": "The lounge spawns (deadchannel/lounge) over the range: spawned, hit, slain, slipped; hitters paid, left (no standing runner), or failed; hits refused or failed.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (beat) (increase(late_ssh_deadchannel_lounge_total[$__range]))",
+          "legendFormat": "{{beat}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 6,
+        "x": 18,
         "y": 276
       }
     }

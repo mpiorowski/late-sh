@@ -278,6 +278,9 @@ pub struct SessionConfig {
     pub tailor_service: crate::app::deadchannel::tailor::svc::TailorService,
     /// The first descent's claim (`app/deadchannel/guide`).
     pub guide_service: crate::app::deadchannel::guide::svc::GuideService,
+    /// The lounge spawns (`app/deadchannel/lounge`): the live spawn and
+    /// the hit path.
+    pub lounge_service: crate::app::deadchannel::lounge::svc::LoungeService,
     pub initial_bonsai_tree: Option<late_core::models::bonsai::Tree>,
     pub initial_bonsai_decay_protection:
         Option<late_core::models::bonsai_decay_protection::BonsaiDecayProtection>,
@@ -412,6 +415,9 @@ pub struct SessionConfig {
     /// This device's stored home rail layout, or `None` when the key has never
     /// been configured and should follow the account default.
     pub key_layout: Option<late_core::models::user_ssh_key::KeyLayout>,
+    /// This device's Artboard content disclaimer, or `None` when the key has
+    /// never set one and should follow the account's `artboard_disclaimer`.
+    pub key_artboard_disclaimer: Option<bool>,
     /// When you last left the app on this device (the moment the keyboard
     /// went quiet before the previous session on this key ended), or `None`
     /// for a keyless session or a device with no mark yet. The bare
@@ -763,7 +769,11 @@ pub struct App {
     /// desktop on one linked account stop overwriting each other. Read through
     /// [`App::rail_modes`]; render resolves `Auto` against terminal width.
     pub(crate) device_rails: Option<late_core::models::user_ssh_key::KeyLayout>,
-    /// The key `device_rails` persists to; `None` for keyless sessions.
+    /// Artboard content disclaimer for *this device*, stored on the same key
+    /// as `device_rails`, or `None` to follow the account's
+    /// `artboard_disclaimer`. Read through [`App::artboard_disclaimer_enabled`].
+    pub(crate) device_artboard_disclaimer: Option<bool>,
+    /// The key the device settings persist to; `None` for keyless sessions.
     pub(crate) key_fingerprint: Option<String>,
     pub(crate) profile_modal_state: profile_modal::state::ProfileModalState,
     pub(crate) settings_modal_state: settings_modal::state::SettingsModalState,
@@ -784,6 +794,9 @@ pub struct App {
     /// The tailor's mirror (`app/deadchannel/tailor`): the draft while
     /// the panel is open, and the write that puts it on the row.
     pub(crate) tailor: crate::app::deadchannel::tailor::session::TailorSession,
+    /// The lounge spawns (`app/deadchannel/lounge`): this session's copy of
+    /// the spawn, its own `/hit` and the word it came back with.
+    pub(crate) lounge: crate::app::deadchannel::lounge::session::LoungeSession,
     /// The undercity guide (`app/deadchannel/guide`): the box over the
     /// street, opened by `?` and by itself on the first descent.
     pub(crate) guide: crate::app::deadchannel::guide::session::GuideSession,
@@ -1068,6 +1081,18 @@ impl App {
         self.runner_looks.contains_key(&self.user_id)
     }
 
+    /// Whether this session is looking at #lounge: Home with the lounge
+    /// card selected. What presence carries for the lounge spawns
+    /// (`deadchannel/lounge`), and where the spawn's line is drawn.
+    pub(crate) fn looking_at_lounge(&self) -> bool {
+        self.screen == Screen::Dashboard
+            && crate::app::render::dashboard_home_selected(
+                self.chat.lounge_room_id(),
+                self.chat.selected_room_id,
+                self.chat.synthetic_entry_selected(),
+            )
+    }
+
     pub fn is_running(&self) -> bool {
         self.running
     }
@@ -1212,6 +1237,9 @@ impl App {
                 .own_watch_chat_room_id(crate::app::door::spectate::state::SpectateGame::Nethack),
             Screen::Brogue => {
                 self.own_watch_chat_room_id(crate::app::door::spectate::state::SpectateGame::Brogue)
+            }
+            Screen::Zork => {
+                self.own_watch_chat_room_id(crate::app::door::spectate::state::SpectateGame::Zork)
             }
             // The Zen pages show the selected room, else #lounge.
             Screen::Zen => self.zen_chat_room_id(),
@@ -1438,6 +1466,11 @@ impl App {
             config.user_id,
             config.guide_service.clone(),
         );
+        let lounge = crate::app::deadchannel::lounge::session::LoungeSession::new(
+            config.user_id,
+            config.username.clone(),
+            config.lounge_service.clone(),
+        );
 
         let pet_state = if let Some(companion) = config.initial_pet {
             crate::app::pet::state::PetState::new(
@@ -1523,9 +1556,11 @@ impl App {
             config.user_id,
         );
         let device_rails = config.key_layout;
+        let device_artboard_disclaimer = config.key_artboard_disclaimer;
         settings_modal_state.open_from_profile(
             &initial_profile,
             device_rails_or_profile(device_rails, &initial_profile),
+            device_artboard_disclaimer.unwrap_or(initial_profile.artboard_disclaimer),
         );
         // Everyone lands in the clubhouse by default: the tavern is the front
         // door of late.sh (and the first-visit tutorial starts there). The
@@ -1649,6 +1684,7 @@ impl App {
             fight,
             tailor,
             guide,
+            lounge,
             chip_service: config.chip_service,
             clubhouse_bartender_id: None,
             clubhouse_graybeard_id: None,
@@ -1777,6 +1813,7 @@ impl App {
                 config.initial_theme_id,
             ),
             device_rails,
+            device_artboard_disclaimer,
             key_fingerprint: config.key_fingerprint,
             profile_modal_state: profile_modal::state::ProfileModalState::new(
                 config.profile_service.clone(),
@@ -2177,6 +2214,11 @@ impl App {
                 port: self.brogue_port,
                 key: crate::app::door::brogue::identity::derive_client_key(&self.brogue_secret),
             },
+            SpectateGame::Zork => WatchTarget {
+                host: self.zork_host.clone(),
+                port: self.zork_port,
+                key: crate::app::door::zork::identity::derive_client_key(&self.zork_secret),
+            },
         };
         self.spectate_state = Some(State::new(key, target, self.repaint_signal.clone()));
     }
@@ -2388,6 +2430,7 @@ impl App {
                     term: self.zork_term.clone(),
                     enabled: self.zork_enabled,
                     repaint: self.repaint_signal.clone(),
+                    handle_svc: Some(self.arcade_handle_service.clone()),
                 },
             ));
         }
@@ -3290,6 +3333,7 @@ impl App {
             clubhouse: self.clubhouse.stand(),
             nightcap: self.nightcap.stand(),
             street: self.street.stand(),
+            lounge: self.looking_at_lounge(),
         };
         self.presence.publish(record);
         changed

@@ -222,6 +222,27 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
     }
 }
 
+/// A lounge with no spawner behind it: nothing lands unless a test
+/// lands it, and the hit path runs against the test database.
+fn test_lounge_service(
+    db: Db,
+    chat_service: ChatService,
+    chip_service: ChipService,
+) -> crate::app::deadchannel::lounge::svc::LoungeService {
+    crate::app::deadchannel::lounge::svc::LoungeService::new(
+        db.clone(),
+        crate::app::deadchannel::fight::svc::FightService::new(
+            db.clone(),
+            chat_service.clone(),
+            chip_service,
+        ),
+        chat_service,
+        crate::app::presence::svc::PresenceService::detached(Vec::new()),
+        crate::app::deadchannel::runner::svc::fixed_looks_rx(std::collections::HashMap::new()),
+        Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )
+}
+
 pub fn test_app_state(db: Db, config: Config) -> State {
     let active_users = Arc::new(Mutex::new(HashMap::new()));
     let username_directory = Arc::new(Mutex::new(Arc::new(HashMap::new())));
@@ -307,6 +328,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         scratchpad_registry: crate::app::scratchpad::registry::SharedScratchpadRegistry::new(),
         runner_looks: crate::app::deadchannel::runner::svc::RunnerLookService::new(db.clone()),
         presence: crate::app::presence::svc::PresenceService::detached(Vec::new()),
+        lounge_service: test_lounge_service(db.clone(), chat_service.clone(), chip_service.clone()),
         username_directory,
         flair_directory: crate::app::common::username_effect::new_directory(),
         crown_service: crate::app::crown::svc::CrownService::new(db.clone()),
@@ -615,6 +637,7 @@ fn make_app_with_chat_service_and_permissions(
         ),
         tailor_service: crate::app::deadchannel::tailor::svc::TailorService::new(db.clone()),
         guide_service: crate::app::deadchannel::guide::svc::GuideService::new(db.clone()),
+        lounge_service: test_lounge_service(db.clone(), chat_service.clone(), chip_service.clone()),
         initial_bonsai_tree: None,
         initial_bonsai_decay_protection: None,
         pet_service: PetService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
@@ -708,6 +731,7 @@ fn make_app_with_chat_service_and_permissions(
         // per-device layout, which is also what ghost bot sessions do.
         key_fingerprint: None,
         key_layout: None,
+        key_artboard_disclaimer: None,
         key_left_at: None,
         username_directory: None,
         flair_directory: None,
@@ -885,6 +909,11 @@ pub fn make_app_with_paired_client(
         ),
         tailor_service: crate::app::deadchannel::tailor::svc::TailorService::new(db.clone()),
         guide_service: crate::app::deadchannel::guide::svc::GuideService::new(db.clone()),
+        lounge_service: test_lounge_service(
+            db.clone(),
+            ChatService::new(db.clone(), notification_service.clone()),
+            chip_service.clone(),
+        ),
         initial_bonsai_tree: None,
         initial_bonsai_decay_protection: None,
         pet_service: PetService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
@@ -978,6 +1007,7 @@ pub fn make_app_with_paired_client(
         // per-device layout, which is also what ghost bot sessions do.
         key_fingerprint: None,
         key_layout: None,
+        key_artboard_disclaimer: None,
         key_left_at: None,
         username_directory: None,
         flair_directory: None,

@@ -97,14 +97,15 @@ fn screen_composes_chat(screen: Screen) -> bool {
             screen,
             Screen::Clubhouse
                 | Screen::Nightcap
-                // A roguelike's player composes into their own watch-chat
-                // room, opened by F2 or a click on its pane ahead of the
-                // game's passthrough (`App::handle_input`). The composer
-                // only opens from a running game, so with none open these
-                // screens behave as before.
+                // A watchable door's player composes into their own
+                // watch-chat room, opened by F2 or a click on its pane ahead
+                // of the game's passthrough (`App::handle_input`). The
+                // composer only opens from a running game, so with none open
+                // these screens behave as before.
                 | Screen::Nethack
                 | Screen::Dcss
                 | Screen::Brogue
+                | Screen::Zork
         )
 }
 
@@ -712,6 +713,17 @@ fn handle_news_modal_input(app: &mut App, event: &ParsedInput) {
             app.chat.jump_to_news_modal_article();
             app.set_screen(Screen::Dashboard);
         }
+        // Reply in #lounge quoting the article, as `r` on the live strip or
+        // in the News feed does, and take the user there to write it.
+        ParsedInput::Byte(b'r' | b'R') | ParsedInput::Char('r' | 'R') => {
+            let Some(article_id) = app.chat.news_modal().map(|modal| modal.article_id) else {
+                return;
+            };
+            app.chat.close_news_modal();
+            if chat::news::input::reply_in_lounge(app, article_id) {
+                app.set_screen(Screen::Dashboard);
+            }
+        }
         ParsedInput::Byte(0x1B) => app.chat.close_news_modal(),
         _ => {}
     }
@@ -986,6 +998,24 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
     }
 
     if app.artboard_disclaimer_visible() {
+        // Page shortcuts leave without granting consent or entering the board.
+        let byte = match event {
+            ParsedInput::Byte(byte) => Some(byte),
+            ParsedInput::Char(ch) if ch.is_ascii() => Some(ch as u8),
+            _ => None,
+        };
+        if byte.is_some_and(|byte| handle_numbered_page_switch(app, byte)) {
+            app.chat.clear_message_selection();
+            return;
+        }
+        // So do the clickable page numbers in the top bar, which leave the
+        // same way (keyboard-only mode ignores them, as everywhere else).
+        if let ParsedInput::Mouse(mouse) = &event
+            && app.interaction_mode.mouse_enabled()
+            && handle_topbar_screen_click(app, app.screen, *mouse)
+        {
+            return;
+        }
         // Quit stays global on the prompt, as it is on the page behind it.
         if matches!(
             event,
@@ -1425,6 +1455,7 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
                     HubGame::NightCity
                     | HubGame::Lateania
                     | HubGame::Minecraft
+                    | HubGame::VintageStory
                     | HubGame::Rebels
                     | HubGame::Nethack
                     | HubGame::Dcss
@@ -1562,9 +1593,9 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
             // characters to play is no longer a foregone conclusion.
             app.set_screen(Screen::Lateania);
         }
-        // Played from the Minecraft client, not the terminal: the landing
-        // says how to connect and there is nothing to launch.
-        HubGame::Minecraft => {}
+        // Played from the game client, not the terminal: the landing says
+        // how to connect and there is nothing to launch.
+        HubGame::Minecraft | HubGame::VintageStory => {}
         HubGame::Rebels => {
             if !app.rebels_enabled {
                 app.banner = Some(crate::app::common::primitives::Banner::error(
@@ -3523,6 +3554,17 @@ fn handle_modal_input(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         return true;
     }
+    if ctx.screen == Screen::Zork
+        && let Some(state) = app.zork_state.as_mut()
+        && state.name_modal_visible()
+    {
+        if byte == 0x1B {
+            state.dismiss_name_modal();
+        } else {
+            state.name_key(byte);
+        }
+        return true;
+    }
 
     if is_chat_composer_context(ctx) {
         chat::input::handle_compose_input(
@@ -3657,8 +3699,12 @@ fn open_settings_modal_globally(app: &mut App) {
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
     let device_rails = app.rail_modes();
-    app.settings_modal_state
-        .open_from_profile(app.profile_state.profile(), device_rails);
+    let device_artboard_disclaimer = app.artboard_disclaimer_enabled();
+    app.settings_modal_state.open_from_profile(
+        app.profile_state.profile(),
+        device_rails,
+        device_artboard_disclaimer,
+    );
     app.settings_modal_state
         .set_interaction_mode_display(app.interaction_mode);
     app.show_settings = true;
@@ -4232,6 +4278,22 @@ fn handle_voice_global_chord(app: &mut App, ctx: InputContext, event: &ParsedInp
     true
 }
 
+fn handle_numbered_page_switch(app: &mut App, byte: u8) -> bool {
+    let screen = match byte {
+        b'1' => Screen::Dashboard,
+        b'2' => Screen::Arcade,
+        b'3' => Screen::Games,
+        b'4' => Screen::Artboard,
+        b'5' => Screen::Profiles,
+        b'6' => Screen::Leaderboard,
+        b'7' => Screen::Calendars,
+        _ => return false,
+    };
+    reset_composers_for_page_change(app);
+    app.set_screen(screen);
+    true
+}
+
 fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     let artboard_blocks_page_switch = artboard_blocks_global_page_switch(app, ctx.screen);
 
@@ -4455,41 +4517,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         {
             crate::app::live::input::reply_from_key(app)
         }
-        b'1' if !artboard_blocks_page_switch => {
-            reset_composers_for_page_change(app);
-            app.set_screen(Screen::Dashboard);
-            true
-        }
-        b'2' if !artboard_blocks_page_switch => {
-            reset_composers_for_page_change(app);
-            app.set_screen(Screen::Arcade);
-            true
-        }
-        b'3' if !artboard_blocks_page_switch => {
-            reset_composers_for_page_change(app);
-            app.set_screen(Screen::Games);
-            true
-        }
-        b'4' if !artboard_blocks_page_switch => {
-            reset_composers_for_page_change(app);
-            app.set_screen(Screen::Artboard);
-            true
-        }
-        b'5' if !artboard_blocks_page_switch => {
-            reset_composers_for_page_change(app);
-            app.set_screen(Screen::Profiles);
-            true
-        }
-        b'6' if !artboard_blocks_page_switch => {
-            reset_composers_for_page_change(app);
-            app.set_screen(Screen::Leaderboard);
-            true
-        }
-        b'7' if !artboard_blocks_page_switch => {
-            reset_composers_for_page_change(app);
-            app.set_screen(Screen::Calendars);
-            true
-        }
+        b'1'..=b'7' if !artboard_blocks_page_switch => handle_numbered_page_switch(app, byte),
         // `0` is the clubhouse. Pressed again on the clubhouse it goes
         // down to the undercity (deadchannel's street), runners only;
         // from the undercity it comes back up.

@@ -6,7 +6,7 @@ use russh::keys::ssh_key::private::{Ed25519Keypair, KeypairData};
 const KEY_DOMAIN: &[u8] = b"late.sh/zork/v1\0zork\0";
 
 /// Derive the single Ed25519 client key from `LATE_ZORK_SECRET`.
-pub(crate) fn derive_client_key(secret: &str) -> PrivateKey {
+pub fn derive_client_key(secret: &str) -> PrivateKey {
     let master = blake3::hash(secret.as_bytes());
     let seed = blake3::Hasher::new_keyed(master.as_bytes())
         .update(KEY_DOMAIN)

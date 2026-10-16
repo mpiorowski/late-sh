@@ -901,15 +901,6 @@ impl russh::server::Handler for ClientHandler {
                 None
             }
         };
-        // The door: the day's wall piece for those who chose Always View on
-        // the Artboard content disclaimer, else the cup.
-        let splash_piece = self
-            .state
-            .gallery_service
-            .splash_piece_for_login(late_core::models::user::extract_artboard_disclaimer(
-                &user.settings,
-            ))
-            .await;
         let key_fingerprint = self.auth_fingerprint.clone();
         let device = crate::session_bootstrap::load_device_state(
             &self.state,
@@ -917,6 +908,13 @@ impl russh::server::Handler for ClientHandler {
             key_fingerprint.as_deref(),
         )
         .await;
+        // The door: the day's wall piece for those who chose Always View on
+        // the Artboard content disclaimer (on this device), else the cup.
+        let splash_piece = self
+            .state
+            .gallery_service
+            .splash_piece_for_login(device.shows_artboard_disclaimer(user))
+            .await;
         let initial_door_rcs = match self.state.door_rc_service.list(user_id).await {
             Ok(rcs) => rcs,
             Err(e) => {
@@ -1011,6 +1009,7 @@ impl russh::server::Handler for ClientHandler {
             guide_service: crate::app::deadchannel::guide::svc::GuideService::new(
                 self.state.db.clone(),
             ),
+            lounge_service: self.state.lounge_service.clone(),
             initial_bonsai_tree,
             initial_bonsai_decay_protection,
             pet_service: self.state.pet_service.clone(),
@@ -1100,6 +1099,7 @@ impl russh::server::Handler for ClientHandler {
             zen_layout: late_core::models::user::extract_zen_layout(&user.settings),
             key_fingerprint,
             key_layout: device.layout,
+            key_artboard_disclaimer: device.artboard_disclaimer,
             key_left_at: device.left_at,
             username_directory: Some(self.state.username_directory.clone()),
             flair_directory: Some(self.state.flair_directory.clone()),

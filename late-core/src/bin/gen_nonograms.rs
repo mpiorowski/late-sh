@@ -1,19 +1,15 @@
 use anyhow::{Context, Result};
 use late_core::nonogram::{
     NonogramPack, NonogramPackIndex, NonogramPackIndexEntry, NonogramPuzzle, derive_clues,
+    solve_by_lines,
 };
-use std::collections::BTreeMap;
-use std::{
-    env, fs,
-    path::{Path, PathBuf},
-    process::Command,
-};
+use sha2::{Digest, Sha256};
+use std::{env, fs, path::PathBuf};
 
 fn main() -> Result<()> {
     let args = Args::parse(env::args().skip(1).collect())?;
     fs::create_dir_all(&args.output_dir)
         .with_context(|| format!("failed to create {}", args.output_dir.display()))?;
-    cleanup_validation_dir(&args.output_dir)?;
 
     let mut index = NonogramPackIndex {
         version: 1,
@@ -21,18 +17,7 @@ fn main() -> Result<()> {
     };
 
     for (width, height) in &args.sizes {
-        let pack = build_pack(
-            *width,
-            *height,
-            args.count_per_size,
-            args.seed_base,
-            if args.skip_number_loom {
-                None
-            } else {
-                Some(args.number_loom_bin.as_str())
-            },
-            &args.output_dir,
-        )?;
+        let pack = build_pack(*width, *height, args.count_per_size, args.seed_base)?;
         pack.validate()?;
 
         let file_name = format!("{width}x{height}.json");
@@ -58,7 +43,6 @@ fn main() -> Result<()> {
         index.packs.len(),
         args.output_dir.display()
     );
-    cleanup_validation_dir(&args.output_dir)?;
     Ok(())
 }
 
@@ -67,8 +51,6 @@ struct Args {
     output_dir: PathBuf,
     sizes: Vec<(u16, u16)>,
     count_per_size: usize,
-    number_loom_bin: String,
-    skip_number_loom: bool,
     seed_base: u64,
 }
 
@@ -77,8 +59,6 @@ impl Args {
         let mut output_dir = PathBuf::from("late-ssh/assets/nonograms");
         let mut sizes = Vec::new();
         let mut count_per_size = 100usize;
-        let mut number_loom_bin = "number-loom".to_string();
-        let mut skip_number_loom = false;
         let mut seed_base = 42u64;
 
         let mut idx = 0;
@@ -98,11 +78,6 @@ impl Args {
                         .parse()
                         .context("invalid --count-per-size")?;
                 }
-                "--number-loom-bin" => {
-                    idx += 1;
-                    number_loom_bin = require_value(&args, idx, "--number-loom-bin")?.to_string();
-                }
-                "--skip-number-loom" => skip_number_loom = true,
                 "--seed-base" => {
                     idx += 1;
                     seed_base = require_value(&args, idx, "--seed-base")?
@@ -126,8 +101,6 @@ impl Args {
             output_dir,
             sizes,
             count_per_size,
-            number_loom_bin,
-            skip_number_loom,
             seed_base,
         })
     }
@@ -151,69 +124,56 @@ fn parse_size(value: &str) -> Result<(u16, u16)> {
 
 fn print_help() {
     println!(
-        "Usage: gen_nonograms [--size WxH] [--count-per-size N] [--output-dir DIR] [--number-loom-bin BIN] [--skip-number-loom]"
+        "Usage: gen_nonograms [--size WxH] [--count-per-size N] [--output-dir DIR] [--seed-base N]"
     );
 }
 
-fn build_pack(
-    width: u16,
-    height: u16,
-    count: usize,
-    seed_base: u64,
-    number_loom_bin: Option<&str>,
-    output_dir: &Path,
-) -> Result<NonogramPack> {
+/// Draws candidates until the pack is full. A candidate is kept only when
+/// line logic alone finishes it (`solve_by_lines`): that is a puzzle a
+/// player can solve without guessing, and its answer is the only one.
+fn build_pack(width: u16, height: u16, count: usize, seed_base: u64) -> Result<NonogramPack> {
     let size_key = format!("{width}x{height}");
     let profile = difficulty_profile(width, height);
-    let mut puzzles = Vec::with_capacity(count);
+    let mut puzzles: Vec<NonogramPuzzle> = Vec::with_capacity(count);
     let mut attempt = 0usize;
-    let mut rejected = 0usize;
-    let mut warning_counts = BTreeMap::new();
+    let mut off_profile = 0usize;
+    let mut needs_a_guess = 0usize;
+    let mut duplicates = 0usize;
     let max_attempts = count.saturating_mul(500).max(count);
 
     while puzzles.len() < count && attempt < max_attempts {
         let seed = seed_base
             .wrapping_add((u64::from(width) << 32) ^ (u64::from(height) << 16))
             .wrapping_add(attempt as u64);
-        let Some(puzzle) =
-            build_puzzle_with_profile(width, height, seed, &size_key, attempt, &profile)
+        attempt = attempt.saturating_add(1);
+        let Some(puzzle) = build_puzzle_with_profile(width, height, seed, &size_key, &profile)
         else {
-            rejected = rejected.saturating_add(1);
-            attempt = attempt.saturating_add(1);
+            off_profile += 1;
             continue;
         };
-
-        let accepted = if let Some(bin) = number_loom_bin {
-            validate_puzzle_with_number_loom(bin, &puzzle, output_dir, &mut warning_counts)?
-        } else {
-            true
-        };
-
-        if accepted {
-            puzzles.push(NonogramPuzzle {
-                id: format!("{size_key}-{:06}", puzzles.len()),
-                ..puzzle
-            });
-        } else {
-            rejected = rejected.saturating_add(1);
+        if solve_by_lines(&puzzle.row_clues, &puzzle.col_clues).as_ref() != Some(&puzzle.solution) {
+            needs_a_guess += 1;
+            continue;
         }
-
-        attempt = attempt.saturating_add(1);
+        if puzzles.iter().any(|kept| kept.id == puzzle.id) {
+            duplicates += 1;
+            continue;
+        }
+        puzzles.push(puzzle);
     }
 
     if puzzles.len() < count {
         anyhow::bail!(
-            "only accepted {} of {count} requested puzzles for {size_key} after {attempt} attempts",
+            "only accepted {} of {count} requested puzzles for {size_key} after {attempt} attempts \
+             ({off_profile} off profile, {needs_a_guess} needing a guess, {duplicates} duplicates)",
             puzzles.len()
         );
     }
 
     println!(
-        "Built pack {size_key}: accepted {}, rejected {}",
-        puzzles.len(),
-        rejected
+        "Built pack {size_key}: accepted {}, rejected {off_profile} off profile, {needs_a_guess} needing a guess, {duplicates} duplicates",
+        puzzles.len()
     );
-    print_warning_summary(&size_key, &warning_counts);
 
     Ok(NonogramPack {
         size_key,
@@ -223,12 +183,23 @@ fn build_pack(
     })
 }
 
+/// A puzzle's id names its picture: the size and a digest of the solution.
+/// Saved games find their puzzle by id, so a regenerated pack must never
+/// hand an old id to a different picture; a picture kept across a
+/// regeneration keeps its id, and its saves still load.
+fn puzzle_id(size_key: &str, solution: &[Vec<u8>]) -> String {
+    let mut hasher = Sha256::new();
+    for row in solution {
+        hasher.update(row);
+    }
+    format!("{size_key}-{}", hex::encode(&hasher.finalize()[..6]))
+}
+
 fn build_puzzle_with_profile(
     width: u16,
     height: u16,
     seed: u64,
     size_key: &str,
-    attempt: usize,
     profile: &DifficultyProfile,
 ) -> Option<NonogramPuzzle> {
     let solution = generate_solution(width as usize, height as usize, seed, profile);
@@ -239,7 +210,7 @@ fn build_puzzle_with_profile(
     let (row_clues, col_clues) = derive_clues(&solution);
 
     Some(NonogramPuzzle {
-        id: format!("{size_key}-candidate-{attempt:06}"),
+        id: puzzle_id(size_key, &solution),
         width,
         height,
         row_clues,
@@ -439,95 +410,21 @@ fn filled_density(solution: &[Vec<u8>]) -> f32 {
     filled / total
 }
 
-fn validate_puzzle_with_number_loom(
-    bin: &str,
-    puzzle: &NonogramPuzzle,
-    output_dir: &Path,
-    warning_counts: &mut BTreeMap<String, usize>,
-) -> Result<bool> {
-    let validation_dir = validation_dir(output_dir);
-    fs::create_dir_all(&validation_dir)
-        .with_context(|| format!("failed to create {}", validation_dir.display()))?;
-
-    let char_grid_path = validation_dir.join(format!("{}.txt", puzzle.id));
-    let html_path = validation_dir.join(format!("{}.html", puzzle.id));
-    fs::write(&char_grid_path, render_char_grid(&puzzle.solution))
-        .with_context(|| format!("failed to write {}", char_grid_path.display()))?;
-
-    let output = Command::new(bin)
-        .arg(&char_grid_path)
-        .arg(&html_path)
-        .arg("--input-format")
-        .arg("char-grid")
-        .arg("--output-format")
-        .arg("html")
-        .output()
-        .with_context(|| format!("failed to execute `{bin}`"))?;
-
-    collect_warnings(&String::from_utf8_lossy(&output.stdout), warning_counts);
-    collect_warnings(&String::from_utf8_lossy(&output.stderr), warning_counts);
-
-    Ok(output.status.success())
-}
-
-fn validation_dir(output_dir: &Path) -> PathBuf {
-    output_dir.join(".number-loom-validation")
-}
-
-fn cleanup_validation_dir(output_dir: &Path) -> Result<()> {
-    let validation_dir = validation_dir(output_dir);
-    if validation_dir.exists() {
-        fs::remove_dir_all(&validation_dir)
-            .with_context(|| format!("failed to remove {}", validation_dir.display()))?;
-    }
-    Ok(())
-}
-
-fn collect_warnings(output: &str, warning_counts: &mut BTreeMap<String, usize>) {
-    for line in output.lines() {
-        let line = line.trim();
-        if !line.starts_with("Warning:") {
-            continue;
-        }
-
-        let warning = line.trim_start_matches("Warning:").trim();
-        if warning.eq_ignore_ascii_case("missing author") {
-            continue;
-        }
-
-        *warning_counts.entry(warning.to_string()).or_default() += 1;
-    }
-}
-
-fn print_warning_summary(size_key: &str, warning_counts: &BTreeMap<String, usize>) {
-    if warning_counts.is_empty() {
-        return;
-    }
-
-    println!("Warnings for {size_key}:");
-    for (warning, count) in warning_counts {
-        println!("  {count}x {warning}");
-    }
-}
-
-fn render_char_grid(solution: &[Vec<u8>]) -> String {
-    let mut out = String::new();
-    for row in solution {
-        for cell in row {
-            out.push(if *cell == 1 { '#' } else { '.' });
-        }
-        out.push('\n');
-    }
-    out
-}
-
 struct XorShift64 {
     state: u64,
 }
 
 impl XorShift64 {
+    /// Candidate seeds are consecutive integers, and xorshift's first draws
+    /// from seeds that differ only in their low bits are nearly identical:
+    /// every candidate of a pack drew the same target density. One
+    /// splitmix64 round spreads each seed over the whole state first.
     fn new(seed: u64) -> Self {
-        Self { state: seed.max(1) }
+        let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^= z >> 31;
+        Self { state: z.max(1) }
     }
 
     fn next_u64(&mut self) -> u64 {

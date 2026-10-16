@@ -31,40 +31,34 @@ pub const TRADE_IN_PERCENT: i64 = 75;
 pub const NEAR_MISS_SIGNAL: i32 = 3;
 
 /// Exp needed to advance from level `i + 1` (`lib/experience.php`, the
-/// base curve; `scaled` adds the marks, GAME.md "The stat block"). The
-/// last entry is not a level: it is the exp at the top that makes the Old
-/// Signal hear you ([`exp_to_seek`]).
+/// base curve). The last entry is not a level: it is the exp at the top
+/// that makes the Old Signal hear you ([`exp_to_seek`]). LoGD scaled every
+/// threshold by the dragon kills; the climb here does not (GAME.md "Marks:
+/// the reset"): five fights a day pay a fixed exp, so a stronger runner
+/// climbs no faster, and a tax on the marks was a slower climb for the
+/// reader with nothing to pay it back.
 pub const EXP_TO_ADVANCE: [i64; 15] = [
     100, 400, 1002, 1912, 3140, 4707, 6641, 8985, 11795, 15143, 19121, 23840, 29437, 36071, 43930,
 ];
 
-/// The attack and defense a mark adds, capped: the second climb is a bit
-/// faster, and a veteran never outgrows the room (GAME.md, "Marks: the
+/// The attack and defense a mark adds, capped: the second climb drops
+/// less, and a veteran never outgrows the room (GAME.md, "Marks: the
 /// reset").
 pub const MARK_BONUS_CAP: i32 = 5;
 
-/// Exp needed to leave `level` with `marks`. Past the top there is no next
-/// level; the Old Signal is the way up.
-pub fn exp_to_advance(level: i32, marks: i32) -> Option<i64> {
+/// Exp needed to leave `level`. Past the top there is no next level; the
+/// Old Signal is the way up.
+pub fn exp_to_advance(level: i32) -> Option<i64> {
     if !(1..MAX_LEVEL).contains(&level) {
         return None;
     }
-    Some(scaled(level, marks))
+    Some(EXP_TO_ADVANCE[(level - 1) as usize])
 }
 
 /// Exp at the top of the ladder that brings the Old Signal to the screen
-/// instead of a glyph, with `marks`.
-pub fn exp_to_seek(marks: i32) -> i64 {
-    scaled(MAX_LEVEL, marks)
-}
-
-/// LoGD's dragon-kill scaling, transcribed (`lib/experience.php`, the same
-/// formula as the door's `exp_to_advance`): every threshold climbs by a
-/// quarter of the level times a hundred per mark, rounded.
-fn scaled(level: i32, marks: i32) -> i64 {
-    let base = EXP_TO_ADVANCE[(level - 1) as usize] as f64;
-    let scale = (f64::from(marks) / 4.0) * f64::from(level) * 100.0;
-    (base + scale).round() as i64
+/// instead of a glyph.
+pub fn exp_to_seek() -> i64 {
+    EXP_TO_ADVANCE[(MAX_LEVEL - 1) as usize]
 }
 
 /// A glyph's stat block: LoGD's per-level creature seeds, every creature
@@ -333,6 +327,63 @@ pub const FOES: [FoeKind; 15] = [
     },
 ];
 
+/// What a sleeping runner does with its turns when another runner crosses
+/// it (GAME.md, "The crossing pass"): it swings, swings again, winds up,
+/// and lands the heavy. The sleeper's deck does not play; its numbers do
+/// (the signal, the attack, and the defense of its sheet, with the glass
+/// and the marks in them), and this is the one mind every sleeper has.
+pub const RUNNER_PATTERN: &[Intent] = &[Intent::Hit, Intent::Hit, Intent::Charge, Intent::Heavy];
+
+/// How far up or down the ladder a crossing reaches: a runner meets only
+/// runners within this many levels, no punching down.
+pub const CROSSING_LEVEL_BAND: i32 = 2;
+
+/// How long a crossing can be answered for, from the moment it ended.
+pub const ANSWER_HOURS: i64 = 24;
+
+/// What the scene says when a crossing starts: the sleeper, and what they
+/// carry.
+pub fn crossing_arrives(username: &str, stake: i64) -> String {
+    match stake {
+        0 => format!("{username}. asleep on their feet, and carrying nothing."),
+        n => format!("{username}. asleep on their feet, carrying {n} bits."),
+    }
+}
+
+/// What the scene says when an answer starts.
+pub fn answer_arrives(username: &str, stake: i64) -> String {
+    match stake {
+        0 => format!("{username}. awake this time, and carrying nothing."),
+        n => format!("{username}. awake this time, carrying {n} bits."),
+    }
+}
+
+/// The scene's line for a sleeper put down.
+pub fn rival_down_line(username: &str, answer: bool) -> String {
+    match answer {
+        true => format!("{username} goes down. that is the answer."),
+        false => format!("{username} goes down without waking."),
+    }
+}
+
+/// The scene's line for what the win took off them, once the service
+/// has moved it.
+pub fn took_line(username: &str, taken: i64) -> String {
+    match taken {
+        0 => format!("there is nothing on {username} to take."),
+        n => format!("you take {n} bits off {username}."),
+    }
+}
+
+/// The scene's line for what a lost crossing cost, in place of the
+/// street's.
+pub fn rival_took_line(username: &str, bits_lost: i64) -> String {
+    match bits_lost {
+        0 => format!("{username} finds nothing on you. back tomorrow."),
+        n => format!("{username} takes {n} bits off you. back tomorrow."),
+    }
+}
+
 /// The Old Signal: the thing broadcasting under the static, the one fight
 /// that is not a glyph of your level. It carries no bits and no exp:
 /// putting it down resets the runner, so a purse would be gone before it
@@ -355,15 +406,15 @@ pub const OLD_SIGNAL: FoeKind = FoeKind {
 /// LoGD's dragon is 45 attack, 25 defense, 300 hit points (`dragon.php`,
 /// the door's `DRAGON_*`), numbers for its exchange loop. In the round the
 /// Old Signal is tuned on its own (`fight/BALANCE.md`): from the top of the
-/// wall a first kill lands about one try in two on the `Auto` key and nine
-/// in ten for a runner reading the hand, whatever was drafted, and a glass
-/// makes the key's try near sure. No dice but the shuffle means the odds
+/// wall a first kill lands about one try in two on the `Auto` key and
+/// about nine in ten for a runner reading the hand, whatever was
+/// drafted, and a glass makes the key's try near sure. No dice but the shuffle means the odds
 /// move in steps: ten more signal is one more hit to land, and takes ten
 /// points or more off the key's chances. The arena's contract holds the
 /// band for every build; move these with it.
 pub const OLD_SIGNAL_TIER: FoeTier = FoeTier {
-    signal: 290,
-    attack: 39,
+    signal: 300,
+    attack: 35,
     defense: 22,
     bits: 0,
     exp: 0,
@@ -411,8 +462,13 @@ pub const PAY_EXP_PERCENT: i64 = 540;
 
 /// The armorer's prices as a percentage of the city's ladder
 /// (`city/data.rs::COST_LADDER`, LoGD's). The knob that decides how the kit
-/// tracks the level: `fight/BALANCE.md`, "The kit follows the level".
+/// tracks the level: `fight/BALANCE.md`, "The kit follows the level". And
+/// what every tier a piece would put the slot above the level adds to
+/// its price, as a percentage ([`Rules::price`]): the wall sells ahead,
+/// at a premium that keeps a rich runner's kit near the level, where the
+/// bright glyph is still a fight.
 pub const PRICE_PERCENT: i64 = 225;
+pub const PRICE_LEAD_PERCENT: i64 = 50;
 
 /// What patch charges per missing point of signal, per level, as a
 /// percentage of a bit. A bit a point: the road mends nothing, so patch
@@ -438,22 +494,39 @@ pub struct Rules {
     pub pay_bits_percent: i64,
     pub pay_exp_percent: i64,
     pub price_percent: i64,
+    pub price_lead_percent: i64,
     pub trade_in_percent: i64,
     pub patch_percent: i64,
     pub exp_keep_on_death: f64,
     pub crystal_drop_one_in: u32,
     pub bright_signal_percent: i32,
-    pub bright_edge_percent: u32,
+    /// What a bright glyph adds to its attack, and to its defense, each
+    /// as a percentage of the level rounded up: the same edge at every
+    /// level. Two knobs because a point of defense is worth more than a
+    /// point of attack at the bottom of the ladder, where a strike is
+    /// only a few points to begin with.
+    pub bright_edge_level_percent: u32,
+    pub bright_guard_level_percent: u32,
     pub bright_bits_times: i64,
+    /// The blade shop's price for a piece at or under the level, and what
+    /// each tier above the level adds to it.
     pub cart_crystals: i32,
+    pub cart_lead_crystals: i32,
+    /// What INK asks to ink a draft.
+    pub ink_crystals: i32,
     /// A glyph's signal as a percentage of the creature table's: how many
     /// turns a fight lasts.
     pub foe_signal_percent: i32,
     /// What a glyph's hit lands for, as a percentage of its attack less a
-    /// quarter of your defense.
+    /// quarter of your defense, at level 1; and what every level past the
+    /// first adds to that percentage.
     pub hit_percent: u32,
+    pub hit_ramp_percent: u32,
     /// What a block card holds, as a percentage of your defense.
     pub block_percent: u32,
+    /// A noise turn puts one static card in the deck, and one more for
+    /// every this many levels.
+    pub noise_level_step: i32,
     /// What a cache on the road holds, as a percentage of what the glyph
     /// of your level pays.
     pub cache_percent: i64,
@@ -462,7 +535,9 @@ pub struct Rules {
     /// The drafted cards' numbers, each a share of a strike or a block
     /// (`cards.rs`; a card's rule line says the same number in words).
     pub jab_percent: i32,
+    pub brace_percent: i32,
     pub siphon_mend_percent: i32,
+    pub riposte_percent: i32,
     pub bulwark_percent: i32,
     pub burn_energy: u8,
     pub ground_percent: i32,
@@ -474,21 +549,29 @@ pub const RULES: Rules = Rules {
     pay_bits_percent: PAY_BITS_PERCENT,
     pay_exp_percent: PAY_EXP_PERCENT,
     price_percent: PRICE_PERCENT,
+    price_lead_percent: PRICE_LEAD_PERCENT,
     trade_in_percent: TRADE_IN_PERCENT,
     patch_percent: PATCH_PERCENT,
     exp_keep_on_death: EXP_KEEP_ON_DEATH,
     crystal_drop_one_in: CRYSTAL_DROP_ONE_IN,
     bright_signal_percent: BRIGHT_SIGNAL_PERCENT,
-    bright_edge_percent: BRIGHT_EDGE_PERCENT,
+    bright_edge_level_percent: BRIGHT_EDGE_LEVEL_PERCENT,
+    bright_guard_level_percent: BRIGHT_GUARD_LEVEL_PERCENT,
     bright_bits_times: BRIGHT_BITS_TIMES,
     cart_crystals: CART_CRYSTALS,
+    cart_lead_crystals: CART_LEAD_CRYSTALS,
+    ink_crystals: INK_CRYSTALS,
     foe_signal_percent: FOE_SIGNAL_PERCENT,
     hit_percent: HIT_PERCENT,
+    hit_ramp_percent: HIT_RAMP_PERCENT,
     block_percent: BLOCK_PERCENT,
+    noise_level_step: NOISE_LEVEL_STEP,
     cache_percent: CACHE_PERCENT,
     old_signal: OLD_SIGNAL_TIER,
     jab_percent: JAB_PERCENT,
+    brace_percent: BRACE_PERCENT,
     siphon_mend_percent: SIPHON_MEND_PERCENT,
+    riposte_percent: RIPOSTE_PERCENT,
     bulwark_percent: BULWARK_PERCENT,
     burn_energy: BURN_ENERGY,
     ground_percent: GROUND_PERCENT,
@@ -533,10 +616,33 @@ impl Rules {
     }
 
     /// What a glyph's hit lands for before your block: its attack less a
-    /// quarter of your defense, scaled, never under one. A heavy lands for
-    /// twice this.
-    pub fn hit(&self, foe_attack: u32, defense: u32) -> i32 {
-        ((foe_attack.saturating_sub(defense / 4) * self.hit_percent / 100) as i32).max(1)
+    /// quarter of your defense, scaled by [`Rules::hit_percent_at`] for
+    /// the runner's `level`, never under one. A heavy lands for twice
+    /// this.
+    pub fn hit(&self, foe_attack: u32, defense: u32, level: i32) -> i32 {
+        ((foe_attack.saturating_sub(defense / 4) * self.hit_percent_at(level) / 100) as i32).max(1)
+    }
+
+    /// The hit's percentage at `level`: the base, and the ramp for every
+    /// level past the first. The runner's numbers and the table's are
+    /// both linear in the level; this is what makes a fight at the top
+    /// cost more of a signal than one at the bottom.
+    pub fn hit_percent_at(&self, level: i32) -> u32 {
+        self.hit_percent + self.hit_ramp_percent * (level.clamp(1, MAX_LEVEL) - 1) as u32
+    }
+
+    /// Static cards a noise turn puts into the deck for a runner of
+    /// `level`: one, and one more for every [`Rules::noise_level_step`]
+    /// levels. The glyphs grow a deck as the runner does.
+    pub fn noise_cards(&self, level: i32) -> usize {
+        (1 + level.clamp(1, MAX_LEVEL) / self.noise_level_step) as usize
+    }
+
+    /// What the blade shop asks for `tier` from a runner of `level`, in
+    /// crystals: the base price, and more for every tier the piece would
+    /// put the slot above the level.
+    pub fn cart_price(&self, tier: i32, level: i32) -> i32 {
+        self.cart_crystals + (tier - level).max(0) * self.cart_lead_crystals
     }
 
     /// `percent` of `n`, rounded up: how a drafted card's number comes
@@ -572,34 +678,70 @@ impl Rules {
     }
 
     /// The bright glyph that answers a runner of `level`: the kind of the
-    /// level, its tier lifted, its bits multiplied, its exp plain.
+    /// level, its signal lifted, its attack and its defense each up by a
+    /// share of the level ([`Rules::bright_edge`]), its bits multiplied,
+    /// its exp plain.
     pub fn bright_foe(&self, level: i32) -> (usize, &'static FoeKind, FoeTier) {
         let (index, kind, tier) = self.foe(level);
+        let (edge, guard) = self.bright_edge(level);
         (
             index,
             kind,
             FoeTier {
                 signal: tier.signal * self.bright_signal_percent / 100,
-                attack: (tier.attack * self.bright_edge_percent).div_ceil(100),
-                defense: (tier.defense * self.bright_edge_percent).div_ceil(100),
+                attack: tier.attack + edge,
+                defense: tier.defense + guard,
                 bits: tier.bits * self.bright_bits_times,
                 exp: tier.exp,
             },
         )
     }
 
-    /// The price on the armorer's wall for `tier` (1 to 15).
-    pub fn price(&self, tier: i32) -> i64 {
+    /// What a bright glyph has over the plain one: in attack, then in
+    /// defense, each a share of the level rounded up, so a bright glyph
+    /// is the same step up at level 2 and at level 14. (A share of the
+    /// glyph's own numbers was a wall at level 1 and a speed bump at the
+    /// top: the rounding.)
+    pub fn bright_edge(&self, level: i32) -> (u32, u32) {
+        let level = level.clamp(1, MAX_LEVEL) as u32;
+        (
+            (level * self.bright_edge_level_percent).div_ceil(100),
+            (level * self.bright_guard_level_percent).div_ceil(100),
+        )
+    }
+
+    /// The price on the armorer's wall for `tier` (1 to 15) to a runner of
+    /// `level`: the ladder, and [`Rules::price_lead_percent`] more for
+    /// every tier the piece would sit above the level.
+    pub fn price(&self, tier: i32, level: i32) -> i64 {
+        let lead = i64::from((tier - level).max(0));
+        self.ladder(tier) * (100 + lead * self.price_lead_percent) / 100
+    }
+
+    /// What the bits machine lends a runner of `level` at most: the wall
+    /// price of one piece at that level. The cap the debt fills up to, so
+    /// the machine buys the blade now and takes half the kills until it
+    /// is square. Read off the wall, never set apart from it: a loan that
+    /// cannot reach a piece bridges nothing one more glyph would not.
+    pub fn loan_cap(&self, level: i32) -> i64 {
+        self.price(level, level)
+    }
+
+    /// The ladder's price for `tier`, with no lead on it: what a piece at
+    /// the level costs, and what the trade-in is read off.
+    fn ladder(&self, tier: i32) -> i64 {
         i64::from(crate::app::deadchannel::city::data::COST_LADDER[(tier - 1) as usize])
             * self.price_percent
             / 100
     }
 
     /// What the armorer pays for a carried `tier`; nothing for bare hands.
+    /// Read off the ladder, never the lead: the premium paid for buying
+    /// ahead does not come back.
     pub fn trade_in(&self, tier: i32) -> i64 {
         match tier {
             0 => 0,
-            tier => self.price(tier) * self.trade_in_percent / 100,
+            tier => self.ladder(tier) * self.trade_in_percent / 100,
         }
     }
 }
@@ -626,13 +768,17 @@ pub fn lower_foe_for_level(level: i32) -> Option<(usize, &'static FoeKind, FoeTi
 pub const CRYSTAL_DROP_ONE_IN: u32 = 12;
 
 /// What a bright glyph has over the glyph of its level: half as much
-/// signal again, 15% more attack and defense (rounded up), and twice the
-/// bits. The exp is the plain glyph's: the bright one is for the crystal
-/// and the purse, and the climb's pace stays the rations' (GAME.md, "The
-/// daily ration loop"). `arena_test.rs` holds how it reads from a kit
-/// level with the runner.
+/// signal again, attack up by half the level (rounded up:
+/// [`Rules::bright_edge`]), its defense the plain glyph's, and twice the
+/// bits. No defense edge on purpose: a strike is attack less half the
+/// glyph's defense, so a point of defense at level 4 was a quarter of a
+/// strike, and the bright one read 2% on the key there. The exp is the plain
+/// glyph's: the bright one is for the crystal and the purse, and the
+/// climb's pace stays the rations' (GAME.md, "The daily ration loop").
+/// `arena_test.rs` holds how it reads from a kit level with the runner.
 pub const BRIGHT_SIGNAL_PERCENT: i32 = 150;
-pub const BRIGHT_EDGE_PERCENT: u32 = 115;
+pub const BRIGHT_EDGE_LEVEL_PERCENT: u32 = 50;
+pub const BRIGHT_GUARD_LEVEL_PERCENT: u32 = 0;
 pub const BRIGHT_BITS_TIMES: i64 = 2;
 
 /// The live bright glyph ([`Rules::bright_foe`] under [`RULES`]).
@@ -646,8 +792,13 @@ pub fn bright_foe_for_level(level: i32) -> (usize, &'static FoeKind, FoeTier) {
 pub const FOE_SIGNAL_PERCENT: i32 = 100;
 
 /// A glyph's hit, as a percentage of its attack less a quarter of your
-/// defense.
-pub const HIT_PERCENT: u32 = 185;
+/// defense, at level 1; and what each level past the first adds to that
+/// percentage ([`Rules::hit_percent_at`]). Everything in the fight is
+/// linear in the level, so without the ramp a fight at the top is the
+/// fight at the bottom; with it, the top costs a signal and the bottom
+/// is still a first day (`fight/BALANCE.md`).
+pub const HIT_PERCENT: u32 = 175;
+pub const HIT_RAMP_PERCENT: u32 = 3;
 
 /// A block card, as a percentage of your defense. Under a hit on purpose:
 /// one block never stops one hit whole, so blocking is a choice and not a
@@ -660,8 +811,19 @@ pub const BLOCK_PERCENT: u32 = 60;
 ///
 /// A jab, of a strike.
 pub const JAB_PERCENT: i32 = 75;
-/// What a siphon mends, of a strike.
-pub const SIPHON_MEND_PERCENT: i32 = 50;
+/// A brace, of a block: a whole one, for nothing. At half a block the
+/// brace builds marked days behind the jab ones on the key.
+pub const BRACE_PERCENT: i32 = 100;
+/// What a siphon mends, of a strike. The siphon is in every deck from
+/// the first step: the one heal between the day's patch and the roll,
+/// and the number that sets the key player's pace under one patch a day
+/// (`fight/BALANCE.md`, the sweep: at half a strike the key marked on
+/// day 24, at three quarters on day 22).
+pub const SIPHON_MEND_PERCENT: i32 = 75;
+/// A riposte's own hit, of a block; the block standing comes on top. A
+/// block and a half: at a block's worth the riposte builds marked three
+/// days behind the bulwark ones on the key.
+pub const RIPOSTE_PERCENT: i32 = 150;
 /// A bulwark, of a block.
 pub const BULWARK_PERCENT: i32 = 250;
 /// Energy a burn hands back before any static feeds it; each static card
@@ -672,12 +834,20 @@ pub const GROUND_PERCENT: i32 = 100;
 /// A sever once the glyph is at half its signal or less, of a strike.
 pub const SEVER_PERCENT: i32 = 250;
 
-/// Static cards a `Noise` turn puts into the deck.
-pub const NOISE_CARDS: usize = 2;
+/// A `Noise` turn puts one static card into the deck, and one more for
+/// every this many levels ([`Rules::noise_cards`]): the runner's deck
+/// gains four cards on the way up, and the glyphs' noise keeps pace.
+pub const NOISE_LEVEL_STEP: i32 = 5;
+
+/// Static cards a noise turn puts into the deck for a runner of `level`,
+/// under the live rules.
+pub fn noise_cards_for_level(level: i32) -> usize {
+    RULES.noise_cards(level)
+}
 
 /// What a cache on the road holds, as a percentage of what the glyph of
 /// your level pays.
-pub const CACHE_PERCENT: i64 = 50;
+pub const CACHE_PERCENT: i64 = 60;
 
 /// What a glass at Dead Air costs, in crystals. One glass a day.
 pub const DRINK_CRYSTALS: i32 = 1;
@@ -693,17 +863,25 @@ pub fn drink_edge(level: i32) -> i32 {
 pub const DRINK_SIGNAL_PER_LEVEL: i32 = 2;
 
 /// What the blade shop asks for the next tier up from the one a slot
-/// carries, in crystals and nothing else.
+/// carries, in crystals and nothing else: this for a piece at or under
+/// the level, and [`CART_LEAD_CRYSTALS`] more for every tier it would
+/// put the slot above the level ([`Rules::cart_price`]). Priced so the
+/// crystals keep the kit with the level, not four tiers past it.
 pub const CART_CRYSTALS: i32 = 3;
+pub const CART_LEAD_CRYSTALS: i32 = 2;
+
+/// What INK asks to ink a draft, in crystals and nothing else: both of the
+/// draft's cards from its level on, this climb and every one after
+/// ([`Rules::ink_crystals`]; GAME.md, "INK: the needle"). About half of
+/// what a careful climb finds, so an ink is this climb's crystals spent on
+/// every climb after. The needle takes one draft for every mark a runner
+/// holds, and one more.
+pub const INK_CRYSTALS: i32 = 10;
 
 /// The locker's cut of every deposit, a percentage of what goes in,
 /// rounded up so no deposit is free. LoGD's bank takes nothing and pays
 /// interest; the locker pays none and takes this. Withdrawals are free.
 pub const LOCKER_FEE_PERCENT: i64 = 10;
-
-/// What the bits machine lends a runner, per level: the cap a loan fills
-/// the debt up to. A level-2 runner can borrow the two tier-1 pieces.
-pub const LOAN_PER_LEVEL: i64 = 50;
 
 /// The machine's fee on every loan, a percentage of what it hands over,
 /// rounded up, added to the debt once when it lends. The debt never grows
@@ -746,6 +924,10 @@ pub const CRYSTAL_LINE: &str = "something is left in the static where it stood. 
 /// card came from and what to do about it every time: a dead card nobody
 /// can account for reads as a bug.
 pub const STATIC_LINE: &str = "that hit left a static card in your deck. play it to throw it out.";
+
+/// Patch, asked twice in one day.
+pub const PATCHED_TODAY_LINE: &str =
+    "patched once today already. the roll is the next one. make the signal last.";
 
 /// A draft owed, under the kill that reached its level and under a pick
 /// that leaves another owed.

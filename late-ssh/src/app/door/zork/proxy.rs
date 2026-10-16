@@ -1,5 +1,5 @@
 use super::identity::derive_client_key;
-use super::protocol::{Action, Catalogue, Edition};
+use super::protocol::{Action, Catalogue, Edition, play_request};
 use crate::render_signal::RenderSignal;
 use anyhow::{Context, Result};
 use russh::client::{self, Handler};
@@ -131,10 +131,12 @@ impl Process {
         cfg: Connection,
         edition: Edition,
         action: Action,
+        playname: &str,
         cols: u16,
         rows: u16,
         term: String,
     ) -> Self {
+        let request = play_request(edition, action, playname);
         let (cmd_tx, cmd_rx) = mpsc::channel(256);
         let parser = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0)));
         let status = Arc::new(Mutex::new(ProxyStatus::Connecting));
@@ -145,8 +147,7 @@ impl Process {
         let task = tokio::spawn(async move {
             if let Err(error) = run(
                 cfg.clone(),
-                edition,
-                action,
+                request,
                 (cols, rows),
                 term,
                 cmd_rx,
@@ -202,8 +203,7 @@ impl Process {
 }
 async fn run(
     cfg: Connection,
-    edition: Edition,
-    action: Action,
+    request: String,
     (cols, rows): (u16, u16),
     term: String,
     mut commands: mpsc::Receiver<Command>,
@@ -215,9 +215,7 @@ async fn run(
         channel
             .request_pty(true, &term, cols.into(), rows.into(), 0, 0, &[])
             .await?;
-        channel
-            .exec(true, format!("play {} {}", edition.key(), action.mode()))
-            .await?;
+        channel.exec(true, request).await?;
         Ok::<_, anyhow::Error>((session, channel))
     })
     .await

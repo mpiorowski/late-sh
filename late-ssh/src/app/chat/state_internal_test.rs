@@ -1843,6 +1843,16 @@ fn parse_cup_command_rejects_arguments_and_typos() {
 }
 
 #[test]
+fn parse_shrug_command_matches_case_insensitively_without_arguments() {
+    assert!(parse_shrug_command("/shrug"));
+    assert!(parse_shrug_command("/SHRUG"));
+    assert!(parse_shrug_command("  /shrug  "));
+    assert!(!parse_shrug_command("/shrug please"));
+    assert!(!parse_shrug_command("/shrugs"));
+    assert!(!parse_shrug_command("shrug"));
+}
+
+#[test]
 fn cup_art_uses_kind_specific_silhouette() {
     let coffee = cup_art(CupKind::Coffee, 0);
     assert!(
@@ -2912,15 +2922,62 @@ async fn submit_brb_in_room(username: &str, command: &str) -> (ChatState, String
     (state, body)
 }
 
-/// `/brb` announces the break in the composer's room and sends this session
-/// away immediately.
+/// `/hit` is the lounge's only while the lounge tick says so (a runner
+/// looking at #lounge): swallowed, never posted, and asked for once.
 #[tokio::test]
-async fn brb_posts_to_the_room_and_requests_going_away() {
-    let (mut state, body) = submit_brb_in_room("brb_bare", "/brb").await;
+async fn hit_is_swallowed_and_requested_only_while_hits_are_on() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "hit_on").await;
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+    state.set_hits_on(true);
 
-    assert_eq!(body, "🌙 brb");
+    state.composer.insert_str("/hit");
+    assert!(
+        state
+            .submit_composer(false, ComposerCommands::Enabled)
+            .is_none()
+    );
+    assert!(state.take_requested_hit());
+    assert!(!state.take_requested_hit(), "the request is taken once");
+    assert!(state.pending_send_notices.is_empty(), "no send was queued");
+}
+
+/// From any other room, or for anyone who is not a runner, `/hit` is an
+/// unknown command like any other slash word: nothing posted, nothing
+/// asked of the lounge.
+#[tokio::test]
+async fn hit_is_an_unknown_command_while_hits_are_off() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "hit_off").await;
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+
+    state.composer.insert_str("/hit");
+    let banner = state
+        .submit_composer(false, ComposerCommands::Enabled)
+        .expect("banner");
+    assert_eq!(banner.message, "Unknown command: /hit");
+    assert!(!state.take_requested_hit());
+    assert!(state.pending_send_notices.is_empty(), "no send was queued");
+}
+
+/// Bare `/brb` only sends this session away: nothing is posted, so it needs
+/// no composer room.
+#[tokio::test]
+async fn bare_brb_goes_away_without_posting() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "brb_bare").await;
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+
+    state.composer.insert_str("/brb");
+    assert!(
+        state
+            .submit_composer(false, ComposerCommands::Enabled)
+            .is_none()
+    );
+
     assert!(state.take_requested_brb());
     assert!(!state.take_requested_brb(), "the request is taken once");
+    assert!(state.pending_send_notices.is_empty(), "no send was queued");
 }
 
 /// `/brb <reason>` carries the reason into the announcement and still marks
@@ -2931,23 +2988,24 @@ async fn brb_with_a_reason_posts_it_and_requests_going_away() {
 
     assert_eq!(body, "🌙 brb: back in 5");
     assert!(state.take_requested_brb());
+    assert!(!state.take_requested_brb(), "the request is taken once");
 }
 
-/// Without a composer room `/brb` refuses instead of posting into a stale
-/// visible or selected room, and does not go away.
+/// Without a composer room `/brb <reason>` refuses instead of posting into a
+/// stale visible or selected room, and does not go away.
 #[tokio::test]
-async fn brb_without_a_composer_room_is_refused() {
+async fn brb_with_a_reason_without_a_composer_room_is_refused() {
     let test_db = crate::test_helpers::new_test_db().await;
     let user = late_core::test_utils::create_test_user(&test_db.db, "brb_roomless").await;
     let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
     state.set_visible_room_id(Some(Uuid::new_v4()));
 
-    state.composer.insert_str("/brb");
+    state.composer.insert_str("/brb back in 5");
     let banner = state
         .submit_composer(false, ComposerCommands::Enabled)
         .expect("banner");
 
-    assert_eq!(banner.message, "Use /brb from inside a room");
+    assert_eq!(banner.message, "Use /brb <reason> from inside a room");
     assert!(!state.take_requested_brb(), "nothing is requested");
 }
 

@@ -36,13 +36,14 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
+use crate::app::deadchannel::fight::cards::DRAFTS;
 use crate::app::deadchannel::fight::data::{
-    CART_CRYSTALS, DRINK_CRYSTALS, DRINK_SIGNAL_PER_LEVEL, GARNISH_PERCENT, LOAN_FEE_PERCENT,
-    LOCKER_FEE_PERCENT, TRADE_IN_PERCENT, drink_edge, patch_rate,
+    CART_CRYSTALS, CART_LEAD_CRYSTALS, DRINK_CRYSTALS, DRINK_SIGNAL_PER_LEVEL, GARNISH_PERCENT,
+    LOAN_FEE_PERCENT, LOCKER_FEE_PERCENT, RULES, TRADE_IN_PERCENT, drink_edge, patch_rate,
 };
 use crate::app::deadchannel::fight::session::{Picker as FightPicker, Scene as FightScene};
 use crate::app::deadchannel::fight::state::{
-    Drink, Sheet, Slot as GearSlot, gear_name, wall_price,
+    Drink, Refusal, Sheet, Slot as GearSlot, gear_name, wall_price,
 };
 use crate::app::deadchannel::fight::ui as fight_ui;
 use crate::app::deadchannel::glyphs::GLYPH_ALPHABET;
@@ -162,6 +163,9 @@ pub(crate) struct CityView<'a> {
     pub scene: Option<&'a FightScene>,
     /// The road before a step, when it is open over the street.
     pub picker: Option<&'a FightPicker>,
+    /// What the service read beside the sheet (`fight/session.rs`), for
+    /// the road: the sleeper at the crossing, the answer owed, the news.
+    pub lookout: &'a crate::app::deadchannel::fight::state::Lookout,
     /// The counter's last word (`fight/session.rs`): the armorer's, patch's,
     /// the locker's, the machine's, or the ledge's, for whichever is open.
     pub till: Option<&'a str>,
@@ -267,6 +271,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: CityView<'_>) {
             fight_ui::PickerView {
                 sheet: view.sheet,
                 picker,
+                lookout: view.lookout,
                 look: view.look,
                 own_username: view.own_username,
                 tick: t,
@@ -1802,6 +1807,7 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>, short_by: usize) -> Vec<
             lines.push(Line::from(Span::styled("(not open yet)", muted_text)));
         }
         Landmark::Bar => lines.extend(bar_lines(view)),
+        Landmark::Ink => lines.extend(ink_lines(view)),
         Landmark::Repairs => lines.extend(patch_lines(view)),
         Landmark::Board => {
             lines.push(Line::from(Span::styled("standing orders", head)));
@@ -1827,7 +1833,6 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>, short_by: usize) -> Vec<
         | Landmark::Stairs
         | Landmark::Wire
         | Landmark::Ledge
-        | Landmark::Ink
         | Landmark::Baths
         | Landmark::Sleep
         | Landmark::Shrine
@@ -1888,8 +1893,9 @@ pub(crate) fn mix(mut v: u64) -> u64 {
 }
 
 /// Patch: the signal, what bringing it back costs, and the one key. The
-/// price is `Sheet::patch_price`; the refusals the row would give are
-/// spelled out ahead of the key so nobody pays to read them.
+/// price is `Sheet::patch_price`; the refusals the row would give
+/// (`Sheet::patch_refused`, the order and the words `Command::Patch` uses)
+/// are spelled out in the key's row so nobody pays to read them.
 fn patch_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     let text = ink(INK);
     let dim_text = ink(INK_DIM);
@@ -1919,41 +1925,24 @@ fn patch_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
         Span::styled(format!("{} bits", sheet.bits), number),
     ]));
     lines.push(Line::default());
-    let price = sheet.patch_price();
-    if sheet.is_down() {
-        lines.push(Line::from(Span::styled(
-            "your signal is down. nothing here brings it back before the roll.",
-            text,
-        )));
-    } else if sheet.fight.is_some() {
-        lines.push(Line::from(Span::styled(
-            "not with a glyph waiting on you. finish it first.",
-            text,
-        )));
-    } else if sheet.rations_left <= 0 {
-        lines.push(Line::from(Span::styled(
-            "you are spent for today. the roll brings the signal back for nothing.",
-            text,
-        )));
-    } else if price == 0 {
-        lines.push(Line::from(Span::styled(
-            "nothing on you needs patching.",
-            text,
-        )));
-    } else {
-        let style = match price > sheet.bits {
-            true => short,
-            false => number,
-        };
-        lines.push(Line::from(vec![
-            Span::styled("[p] ", key),
-            Span::styled("patch to full for ", text),
-            Span::styled(format!("{price} bits"), style),
-        ]));
+    match sheet.patch_refused() {
+        Some((_, line)) => lines.push(Line::from(Span::styled(line, text))),
+        None => {
+            let price = sheet.patch_price();
+            let style = match price > sheet.bits {
+                true => short,
+                false => number,
+            };
+            lines.push(Line::from(vec![
+                Span::styled("[p] ", key),
+                Span::styled("patch to full for ", text),
+                Span::styled(format!("{price} bits"), style),
+            ]));
+        }
     }
     lines.push(Line::from(Span::styled(
         format!(
-            "{} a point, times your level. a dropped signal is the roll's to fix, not patch's.",
+            "{} a point, times your level, once a day. a dropped signal is the roll's to fix, not patch's.",
             patch_rate()
         ),
         dim_text,
@@ -2112,7 +2101,7 @@ fn machine_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     lines.push(Line::default());
     lines.push(Line::from(Span::styled(
         format!(
-            "{LOAN_FEE_PERCENT}% on top of every loan, once. {GARNISH_PERCENT}% of every glyph's bits is its own until you are square."
+            "the price of a piece at your level, {LOAN_FEE_PERCENT}% on top of every loan, once. {GARNISH_PERCENT}% of every glyph's bits is its own until you are square."
         ),
         dim_text,
     )));
@@ -2169,7 +2158,7 @@ fn armorer_lines(view: &CityView<'_>, short_by: usize) -> Vec<Line<'static>> {
         .min(tiers - shown);
     for index in first..first + shown {
         let tier = index as i32 + 1;
-        let price = wall_price(tier);
+        let price = wall_price(tier, sheet.level);
         let cell = |slot: GearSlot, name: &'static str| {
             let style = match tier.cmp(&sheet.tier_of(slot)) {
                 std::cmp::Ordering::Less => dim_text,
@@ -2282,6 +2271,9 @@ fn bar_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
                     sheet.level * DRINK_SIGNAL_PER_LEVEL
                 ),
             ),
+            Drink::Feedback => ("[f] ", "a surge in tonight's deck".to_string()),
+            Drink::Squelch => ("[u] ", "a burn in tonight's deck".to_string()),
+            Drink::SignOff => ("[o] ", "a mute in tonight's deck".to_string()),
         };
         let lit_row = refusal.is_none();
         lines.push(Line::from(vec![
@@ -2315,7 +2307,133 @@ fn bar_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
         None => Line::default(),
     });
     lines.push(Line::from(Span::styled(
-        format!("a glass is {DRINK_CRYSTALS} crystal. one a day, and it wears off at the roll."),
+        format!("a glass is {DRINK_CRYSTALS} crystal. one a day, and it wears off at the roll. a pour is a card in every deck dealt today."),
+        dim_text,
+    )));
+    lines
+}
+
+/// INK: the crystals on hand, the marks, and the room the needle has
+/// left; a row per draft with its level, its two cards, and whether it
+/// is inked, priced, or short, the cursor on the picked one; then the key
+/// that inks the picked draft, or the needle's refusal in its row
+/// (`Sheet::needle_refused`, the order and the words `Command::Ink` uses).
+fn ink_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
+    let text = ink(INK);
+    let dim_text = ink(INK_DIM);
+    let muted_text = ink(INK_MUTED);
+    let number = lit(Neon::Cyan);
+    let key = lit(Neon::Amber);
+    let short = dim(Neon::Red);
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    let Some(sheet) = view.sheet else {
+        lines.push(Line::from(Span::styled(
+            "the sheet has not come down the wire yet.",
+            muted_text,
+        )));
+        return lines;
+    };
+    let picked = view.state.picked_draft();
+    let price = sheet.ink_price();
+    lines.push(Line::from(vec![
+        Span::styled("crystals ", dim_text),
+        Span::styled(sheet.crystals.to_string(), number),
+        Span::styled("      marks ", dim_text),
+        Span::styled(sheet.marks.to_string(), number),
+        Span::styled("      the needle holds ", dim_text),
+        Span::styled(
+            match sheet.ink_room() {
+                0 => "no more".to_string(),
+                1 => "1 more".to_string(),
+                n => format!("{n} more"),
+            },
+            text,
+        ),
+    ]));
+    lines.push(Line::default());
+    for draft in &DRAFTS {
+        let [first, second] = draft.options.map(|card| card.name());
+        let (status, style, lit_row) = match sheet.needle_refused(&RULES, draft.level) {
+            None => (format!("for {price} crystals"), dim_text, true),
+            Some((Refusal::AlreadyInked, _)) => ("inked".to_string(), lit(Neon::Amber), false),
+            Some((Refusal::ShortCrystals { by }, _)) => {
+                (format!("for {price} crystals, {by} short"), short, false)
+            }
+            Some((Refusal::FightWaiting | Refusal::NeedleWaits, _)) => {
+                (format!("for {price} crystals"), muted_text, false)
+            }
+            Some((
+                Refusal::NoDraftThere
+                | Refusal::NoRations
+                | Refusal::SignalDown
+                | Refusal::NoFight
+                | Refusal::NotThatWay
+                | Refusal::WrongCall
+                | Refusal::NoEnergy
+                | Refusal::NoCard
+                | Refusal::CardWaiting
+                | Refusal::NoDraft
+                | Refusal::NotOffered
+                | Refusal::NotAnUpgrade
+                | Refusal::Short { .. }
+                | Refusal::NothingToPatch
+                | Refusal::PatchedToday
+                | Refusal::NoLowerGlyph
+                | Refusal::NothingOnHand
+                | Refusal::DepositAllCut
+                | Refusal::LockerEmpty
+                | Refusal::LoanCapped
+                | Refusal::NoDebt
+                | Refusal::NothingToLose
+                | Refusal::GlassPoured
+                | Refusal::PastTheWall
+                | Refusal::NobodyThere
+                | Refusal::NoAnswerOwed
+                | Refusal::NotOnTheWire,
+                line,
+            )) => unreachable!("the needle refused a draft on the menu: {line}"),
+        };
+        let marker = match draft.level == picked.level {
+            true => Span::styled("▸ ", key),
+            false => Span::styled("  ", text),
+        };
+        lines.push(Line::from(vec![
+            marker,
+            Span::styled(
+                format!("{:<10}", format!("level {}", draft.level)),
+                dim_text,
+            ),
+            Span::styled(
+                format!("{:<19}", format!("{first} · {second}")),
+                match lit_row {
+                    true => text,
+                    false => dim_text,
+                },
+            ),
+            Span::styled(status, style),
+        ]));
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(vec![
+        Span::styled("[↑↓] ", key),
+        Span::styled("pick a draft", text),
+    ]));
+    // The key's row, or the refusal standing in for it, so the panel
+    // keeps its rows whatever the needle says.
+    lines.push(match sheet.needle_refused(&RULES, picked.level) {
+        None => {
+            let [first, second] = picked.options.map(|card| card.name());
+            Line::from(vec![
+                Span::styled("[i] ", key),
+                Span::styled(format!("ink {first} and {second} for "), text),
+                Span::styled(format!("{price} crystals"), number),
+            ])
+        }
+        Some((_, line)) => Line::from(Span::styled(line, text)),
+    });
+    lines.push(Line::from(Span::styled(
+        "a draft inked is both its cards from its level on, this climb and every one after. one draft a mark, and one more.",
         dim_text,
     )));
     lines
@@ -2349,8 +2467,8 @@ fn cart_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     ]));
     lines.push(Line::default());
     for (label, slot) in [("[w] ", GearSlot::Weapon), ("[a] ", GearSlot::Armor)] {
-        match sheet.cart_tier(slot) {
-            Some(tier) => lines.push(Line::from(vec![
+        match sheet.cart_tier(slot).zip(sheet.cart_price(slot)) {
+            Some((tier, crystals)) => lines.push(Line::from(vec![
                 Span::styled(label, key),
                 Span::styled(
                     format!(
@@ -2360,8 +2478,8 @@ fn cart_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
                     text,
                 ),
                 Span::styled(
-                    format!("{CART_CRYSTALS} crystals"),
-                    match CART_CRYSTALS > sheet.crystals {
+                    format!("{crystals} crystals"),
+                    match crystals > sheet.crystals {
                         true => short,
                         false => crystal,
                     },
@@ -2379,7 +2497,9 @@ fn cart_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     }
     lines.push(Line::default());
     lines.push(Line::from(Span::styled(
-        "the next tier up from what you carry, for crystals and no bits. no receipts, no names.",
+        format!(
+            "the next tier up from what you carry, for crystals and no bits: {CART_CRYSTALS} up to your level, {CART_LEAD_CRYSTALS} more a tier past it. no receipts, no names."
+        ),
         dim_text,
     )));
     lines

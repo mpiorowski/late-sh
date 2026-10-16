@@ -915,7 +915,7 @@ async fn an_open_watch_counts_its_watcher_until_it_closes() {
         "opening the watch counts you"
     );
     assert!(
-        render_plain(&mut app).contains("watcher chat \u{b7} 2 watching"),
+        render_plain(&mut app).contains(" 2 watching"),
         "the open watch's chat header counts everyone with it open, you included"
     );
 

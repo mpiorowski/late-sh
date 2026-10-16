@@ -1,0 +1,100 @@
+name: vintagestory
+
+# Builds the Vintage Story server image (docker/vintagestory/Dockerfile) for
+# linux/arm64, the architecture of agent-2, where the pod runs. The published
+# tag is `vintagestory_image` in infra/defaults.tf, the single source of
+# truth: `<game version>-<recipe revision>`, and its game version must match
+# the Dockerfile's VS_VERSION (also asserted by the hub card's drift test).
+#
+# One job on a native arm64 runner: build, smoke-test (boot, console command
+# over stdin, SIGTERM save), and on main push the pinned tag. A published tag
+# is never overwritten, because the pod would never re-pull it: a push that
+# changes the recipe under an existing tag fails and asks for a revision bump.
+# Nothing here deploys; the pod picks the tag up from a Terraform apply
+# (deploy_infra.yml).
+
+on:
+  pull_request:
+    paths:
+      - docker/vintagestory/**
+      - .github/workflows/vintagestory.yml
+  push:
+    branches: [main]
+    paths:
+      - docker/vintagestory/**
+      - .github/workflows/vintagestory.yml
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: build_smoke_push
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: resolve_image_tag
+        id: pin
+        run: |
+          image=$(sed -nE 's|^[[:space:]]*vintagestory_image[[:space:]]*=[[:space:]]*"([^"]+)".*|\1|p' infra/defaults.tf)
+          if [ -z "$image" ]; then
+            echo "::error::no vintagestory_image in infra/defaults.tf"
+            exit 1
+          fi
+          tag="${image##*:}"
+          dockerfile_version=$(sed -nE 's|^ARG VS_VERSION=(.+)$|\1|p' docker/vintagestory/Dockerfile)
+          if [ "${tag%-*}" != "$dockerfile_version" ]; then
+            echo "::error::image tag $tag does not carry the Dockerfile's VS_VERSION $dockerfile_version"
+            exit 1
+          fi
+          echo "image $image"
+          echo "image=$image" >> "$GITHUB_OUTPUT"
+
+      - name: build_image
+        run: docker build --platform linux/arm64 -t vintagestory:ci docker/vintagestory
+
+      - name: smoke_test
+        run: bash docker/vintagestory/smoke.sh vintagestory:ci
+
+      - name: login_to_ghcr
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: push_image
+        if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
+        env:
+          IMAGE: ${{ steps.pin.outputs.image }}
+          EVENT: ${{ github.event_name }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          if docker manifest inspect "$IMAGE" >/dev/null 2>&1; then
+            recipe_changed=""
+            if [ "$EVENT" = "push" ] && git cat-file -e "$PUSH_BEFORE" 2>/dev/null; then
+              recipe_changed=$(git diff --name-only "$PUSH_BEFORE" HEAD -- docker/vintagestory/Dockerfile)
+            fi
+            if [ -n "$recipe_changed" ]; then
+              echo "::error::$IMAGE is already published and the recipe changed; bump the revision in infra/defaults.tf"
+              exit 1
+            fi
+            echo "$IMAGE is already published, nothing to push"
+            exit 0
+          fi
+          docker tag vintagestory:ci "$IMAGE"
+          docker push "$IMAGE"

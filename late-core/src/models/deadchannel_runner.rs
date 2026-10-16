@@ -34,8 +34,10 @@ pub const DEADCHANNEL_RUNNER_CHANGED_CHANNEL: &str = "deadchannel_runner_changed
 // the day's run on the road, JSON the app parses, `None` before the first
 // step and after the day roll. `cards` (migration 226) is the cards drafted
 // on the way up, a JSON list of card names the app parses, `None` before
-// the first draft and after a mark or the ledge. A stored `fight` always
-// has `piles` (the check of migration 228).
+// the first draft and after a mark or the ledge. `inks` (migration 238)
+// is the drafts inked at INK, a JSON list of draft levels the app parses,
+// `None` with none bought; a mark and the ledge leave it, the nuke clears
+// it. A stored `fight` always has `piles` (the check of migration 228).
 crate::model! {
     table = "deadchannel_runners";
     params = DeadchannelRunnerParams;
@@ -64,7 +66,8 @@ crate::model! {
         pub drink: Option<String>,
         pub reset_generation: i32,
         pub road: Option<serde_json::Value>,
-        pub cards: Option<serde_json::Value>;
+        pub cards: Option<serde_json::Value>,
+        pub inks: Option<serde_json::Value>;
 
         @data
         pub user_id: Uuid,
@@ -99,6 +102,7 @@ pub struct SheetWrite {
     pub drink: Option<String>,
     pub road: Option<serde_json::Value>,
     pub cards: Option<serde_json::Value>,
+    pub inks: Option<serde_json::Value>,
 }
 
 /// What the directory serves per standing runner: the look as stored, the
@@ -269,7 +273,7 @@ impl DeadchannelRunner {
                      fight = $10, kills = $11, kills_today = $12, runs_today = $13,
                      peak_level = $14, marks = $15, unpaid_mark = $16,
                      stash = $17, debt = $18, crystals = $19, drink = $20,
-                     road = $21, cards = $22, updated = current_timestamp
+                     road = $21, cards = $22, inks = $23, updated = current_timestamp
                  WHERE user_id = $1
                  RETURNING *",
                 &[
@@ -295,6 +299,7 @@ impl DeadchannelRunner {
                     &write.drink,
                     &write.road,
                     &write.cards,
+                    &write.inks,
                 ],
             )
             .await
@@ -320,6 +325,25 @@ impl DeadchannelRunner {
         Ok(row.is_some())
     }
 
+    /// The standing runner's row, unlocked: a read for a preview (who the
+    /// crossing ahead would meet, whether an answer can be given), the
+    /// lock deciding again when the runner acts on it. `None` when there
+    /// is no runner, or the runner has left.
+    pub async fn find_by_user_standing(
+        client: &impl GenericClient,
+        user_id: Uuid,
+    ) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "SELECT * FROM deadchannel_runners
+                 WHERE user_id = $1 AND left_at IS NULL",
+                &[&user_id],
+            )
+            .await
+            .context("finding standing deadchannel runner")?;
+        Ok(row.map(Self::from))
+    }
+
     /// The row as it stands, whether or not the runner has left; read
     /// `left_at` to tell. Storage layer: who counts as a runner is the
     /// directory's question, and it asks `list_standing`.
@@ -332,6 +356,27 @@ impl DeadchannelRunner {
             .await
             .context("finding deadchannel runner")?;
         Ok(row.map(Self::from))
+    }
+
+    /// Every standing runner from `low` to `high` levels inclusive, whole
+    /// rows: who a crossing on the road could meet (`fight/svc.rs`), before
+    /// the day's caps and the sheet's own state narrow it. Runners are
+    /// few by construction, so the band is one read.
+    pub async fn list_standing_in_band(
+        client: &impl GenericClient,
+        low: i32,
+        high: i32,
+    ) -> Result<Vec<Self>> {
+        let rows = client
+            .query(
+                "SELECT * FROM deadchannel_runners
+                 WHERE left_at IS NULL AND level BETWEEN $1 AND $2
+                 ORDER BY user_id",
+                &[&low, &high],
+            )
+            .await
+            .context("listing standing deadchannel runners in a level band")?;
+        Ok(rows.into_iter().map(Self::from).collect())
     }
 
     /// Every standing runner's look and level, for the process-shared

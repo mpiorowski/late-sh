@@ -387,45 +387,29 @@ impl DailyMatch {
         Ok(rows.into_iter().map(Self::from).collect())
     }
 
-    /// Every open challenge, newest first: the lobby lists what just went up
-    /// at the top.
-    pub async fn list_open(client: &Client) -> Result<Vec<Self>> {
+    /// Open challenges, active matches, and finished matches at least one
+    /// player hasn't acknowledged yet, read in one statement so a concurrent
+    /// claim or finish cannot put a match in two lists or make it disappear
+    /// between status reads. Each status retains its own list's ordering:
+    /// open newest first, active by nearest deadline, finished newest first.
+    /// The 30-day window bounds the finished list when a player never comes
+    /// back; `updated` is the finish time (`mark_result_seen` deliberately
+    /// doesn't touch it), so old rows age out instead of pinning the list.
+    pub async fn list_lobby(client: &Client) -> Result<Vec<Self>> {
         let rows = client
             .query(
                 "SELECT * FROM daily_matches
-                 WHERE status = 'open'
-                 ORDER BY created DESC, id DESC",
-                &[],
-            )
-            .await?;
-        Ok(rows.into_iter().map(Self::from).collect())
-    }
-
-    pub async fn list_active(client: &Client) -> Result<Vec<Self>> {
-        let rows = client
-            .query(
-                "SELECT * FROM daily_matches
-                 WHERE status = 'active'
-                 ORDER BY turn_deadline_at ASC NULLS LAST, id ASC",
-                &[],
-            )
-            .await?;
-        Ok(rows.into_iter().map(Self::from).collect())
-    }
-
-    /// Finished matches at least one player hasn't acknowledged yet. The
-    /// 30-day window bounds the snapshot when a player never comes back;
-    /// `updated` is the finish time (`mark_result_seen` deliberately doesn't
-    /// touch it), so old rows age out instead of pinning the list forever.
-    pub async fn list_finished_unseen(client: &Client) -> Result<Vec<Self>> {
-        let rows = client
-            .query(
-                "SELECT * FROM daily_matches
-                 WHERE status = 'finished'
-                   AND (challenger_result_seen_at IS NULL
-                        OR (opponent_id IS NOT NULL AND opponent_result_seen_at IS NULL))
-                   AND updated > current_timestamp - INTERVAL '30 days'
-                 ORDER BY updated DESC, id ASC",
+                 WHERE status IN ('open', 'active')
+                    OR (status = 'finished'
+                        AND (challenger_result_seen_at IS NULL
+                             OR (opponent_id IS NOT NULL AND opponent_result_seen_at IS NULL))
+                        AND updated > current_timestamp - INTERVAL '30 days')
+                 ORDER BY status,
+                          CASE WHEN status = 'open' THEN created END DESC,
+                          CASE WHEN status = 'active' THEN turn_deadline_at END ASC NULLS LAST,
+                          CASE WHEN status = 'finished' THEN updated END DESC,
+                          CASE WHEN status = 'open' THEN id END DESC,
+                          id ASC",
                 &[],
             )
             .await?;
@@ -435,7 +419,7 @@ impl DailyMatch {
     /// One player acknowledges a finished match's result. Touches only the
     /// caller's own seen column, and only while it is still NULL, so a repeat
     /// ack updates 0 rows and the caller can skip republishing. `updated`
-    /// stays the finish timestamp (see `list_finished_unseen`).
+    /// stays the finish timestamp (see `list_lobby`).
     pub async fn mark_result_seen(client: &Client, match_id: Uuid, user_id: Uuid) -> Result<u64> {
         let updated = client
             .execute(
