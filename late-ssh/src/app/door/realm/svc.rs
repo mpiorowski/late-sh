@@ -375,6 +375,10 @@ pub struct RealmGameItem {
     /// The service has the final say per player.
     pub can_withdraw: bool,
     pub winner_user_id: Option<Uuid>,
+    /// The world's chat room; `None` on a world from before rooms were born
+    /// with it, until the sweeper attaches one. Part of the diff, so a board
+    /// open on such a world reloads and finds its room without a reopen.
+    pub chat_room_id: Option<Uuid>,
     pub players: Vec<RealmPlayerItem>,
 }
 
@@ -1022,20 +1026,26 @@ impl RealmService {
             // A world opened before rooms were born with it gets one here.
             // Idempotent, so two replicas doing it at once land on one room.
             Some(game) if game.chat_room_id.is_none() => {
-                match RealmGame::attach_chat_room(&client, game.id).await {
+                let outcome = match RealmGame::attach_chat_room(&client, game.id).await {
                     Ok(room_id) => {
                         tracing::info!(game_id = %game.id, %room_id, "realm chat room attached");
+                        RealmChatRoomAttach::Attached
                     }
                     Err(e) => {
                         tracing::error!(error = ?e, game_id = %game.id, "failed to attach realm chat room");
+                        RealmChatRoomAttach::Failed
                     }
-                }
+                };
+                crate::metrics::record_realm_chat_room_attach(outcome);
             }
             Some(_) => {}
         }
         match RealmGame::delete_stale_chat_rooms(&client).await {
             Ok(0) => {}
-            Ok(deleted) => tracing::info!(deleted, "reaped stale realm chat rooms"),
+            Ok(deleted) => {
+                tracing::info!(deleted, "reaped stale realm chat rooms");
+                crate::metrics::record_realm_chat_rooms_reaped(deleted);
+            }
             Err(e) => tracing::error!(error = ?e, "failed to reap stale realm chat rooms"),
         }
         let games =
@@ -1929,6 +1939,15 @@ pub enum RealmSeasonOpen {
     Failed,
 }
 
+/// What the sweeper did about a standing world without a chat room, as the
+/// dashboard counts it. A world opened since rooms were born with it never
+/// gets here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RealmChatRoomAttach {
+    Attached,
+    Failed,
+}
+
 /// Why a `realm_games` row was left out of the snapshot.
 #[derive(Debug)]
 pub enum RealmSnapshotRowError {
@@ -1994,7 +2013,8 @@ fn derive_events(
                 let moved = old.revision != game.revision
                     || old.status != game.status
                     || old.last_resolved_day != game.last_resolved_day
-                    || old.payout != game.payout;
+                    || old.payout != game.payout
+                    || old.chat_room_id != game.chat_room_id;
                 if moved {
                     events.push(RealmEvent::GameChanged { game_id });
                 }
@@ -2078,6 +2098,7 @@ fn game_item(game: &RealmGame) -> Result<RealmGameItem, RealmSnapshotRowError> {
         claimed,
         can_withdraw,
         winner_user_id: game.winner_user_id,
+        chat_room_id: game.chat_room_id,
         players,
     })
 }
@@ -2116,6 +2137,7 @@ mod tests {
             claimed: 0.0,
             can_withdraw: false,
             winner_user_id: winner,
+            chat_room_id: None,
             players: Vec::new(),
         }
     }
@@ -2138,10 +2160,13 @@ mod tests {
                 listed(3, "active", 9, 20_000, long_ago, None), // its day rolled
                 listed(4, "active", 2, 20_000, long_ago, None), // conquered
                 listed(5, "active", 2, 20_000, long_ago, None), // cancelled: gone
+                listed(9, "active", 1, 20_000, long_ago, None), // the sweeper gave it a room
             ],
             finished_games: Vec::new(),
             seeded: true,
         };
+        let mut given_a_room = listed(9, "active", 1, 20_000, long_ago, None);
+        given_a_room.chat_room_id = Some(Uuid::from_u128(999));
         let mut paid_out = listed(8, "finished", 6, 19_990, long_ago, Some(winner));
         paid_out.payout = Some("paid".to_string());
         let next = RealmSnapshot {
@@ -2152,6 +2177,7 @@ mod tests {
                 listed(3, "active", 10, 20_001, long_ago, None),
                 listed(6, "active", 1, 20_000, just_now, None), // raised, mustering
                 listed(7, "active", 3, 20_000, long_ago, None), // first seen underway
+                given_a_room,
             ],
             finished_games: vec![
                 listed(4, "finished", 3, 20_000, long_ago, Some(winner)),
@@ -2189,6 +2215,7 @@ mod tests {
                 RealmEvent::GameChanged { game_id: id(6) },
                 RealmEvent::GameChanged { game_id: id(7) },
                 RealmEvent::GameChanged { game_id: id(8) },
+                RealmEvent::GameChanged { game_id: id(9) },
                 RealmEvent::GameChanged { game_id: id(5) },
             ]
         );

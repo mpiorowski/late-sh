@@ -2444,12 +2444,24 @@ fn dispatch_escape(app: &mut App) {
     // nothing to confirm on the way out: closing the board is not leaving
     // the game, because a running realm cannot be left at all.
     if ctx.screen == Screen::Realm {
-        // The colour picker peels first, then the results card: Esc puts
-        // away what is on top before it puts the whole board away.
+        // The colour picker peels first, then the results card, then a
+        // picked chat message: Esc puts away what is on top before it puts
+        // the whole board away. The selection has to go here, since a lone
+        // Esc never reaches the board's own keys, and one left standing
+        // would take `j`/`k` the moment the board is reopened.
         if app.realm.join_cancel() {
             return;
         }
         if app.realm.close_results() {
+            return;
+        }
+        if let Some(chat_room_id) = app.realm.shown_chat_room_id()
+            && app
+                .chat
+                .selected_message_body_in_room(chat_room_id)
+                .is_some()
+        {
+            app.chat.clear_message_selection();
             return;
         }
         crate::app::door::realm::input::close_board(app);
