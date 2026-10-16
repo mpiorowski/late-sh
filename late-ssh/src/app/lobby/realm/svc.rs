@@ -5,25 +5,34 @@
 //! territory are settled first-come-first-served by that CAS.
 //!
 //! Actions resolve the instant they are taken (see `resolver::apply_action`).
-//! The 60s sweeper is no longer a resolver: it rolls each game's day over at
-//! that game's own `reset_hour_utc` (archiving the day's log) and kicks
-//! players who have gone quiet.
+//! The 60s sweeper is not a resolver: it rolls each game's day over at that
+//! game's own `reset_hour_utc` (archiving the day's log), dissolves realms
+//! everyone has gone quiet in, and settles the pot of any finished game whose
+//! chips have not moved yet.
+//!
+//! Fan-out is derived, not sent. A trigger on `realm_games` notifies every
+//! replica of every write; each one re-reads the Lobby snapshot and
+//! `derive_events` turns the difference into `GameChanged` / `DayRolled` /
+//! `GameFinished` / `GameCreated`, so a session learns the same thing about a
+//! write whichever replica made it. Only the actor's own result and their
+//! error are sent by the write, since that session is on this replica.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::{sync::Arc, time::Duration};
 
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Duration as ChronoDuration, Timelike, Utc};
-use late_core::{db::Db, models::realm_game::RealmGame};
+use late_core::{MutexRecover, db::Db, models::realm_game::RealmGame};
 use serde_json::Value;
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 use uuid::Uuid;
 
 use crate::app::activity::publisher::ActivityPublisher;
 use crate::app::ai::svc::{AI_MODEL, AiService};
 use crate::app::games::chips::svc::ChipService;
+use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 
-use super::map::{GENERATED_MAP_ID, TerritoryId, WorldMap, map_handle};
+use super::map::{GENERATED_MAP_ID, TerritoryId, WorldMap, map_handle, territory_total};
 use super::mapgen::{self, GeneratedMapSpec};
 use super::resolver::{
     self, ActionRejected, DayBoard, DayResult, PALETTE_SLOTS, PlayerPhase, RealmAction,
@@ -36,7 +45,7 @@ use super::rulesets::{RealmRulesetSnapshot, pace_by_id, ruleset_by_id};
 /// the announcement can be in it before the first point is spent.
 ///
 /// The whole realm is visible in this window — map, spawn, roster — and
-/// nothing can be done to it. Two minutes is short on purpose: it levels the
+/// nothing can be done to it. Five minutes is short on purpose: it levels the
 /// people who are looking right now, which is who a freshly announced realm
 /// is for, without turning creation into an appointment.
 pub const REALM_MUSTER: chrono::Duration = chrono::Duration::minutes(5);
@@ -54,7 +63,7 @@ pub fn countdown_label(left: chrono::Duration) -> String {
     format!("{}:{:02}", secs / 60, secs % 60)
 }
 
-/// The muster written for a sentence ("2 minutes"), derived rather than
+/// The muster written for a sentence ("5 minutes"), derived rather than
 /// spelled out, so the copy cannot drift from the constant.
 pub fn muster_label() -> String {
     let secs = REALM_MUSTER.num_seconds();
@@ -204,20 +213,32 @@ pub struct RealmService {
     /// Only used to name generated worlds, and only ever as an improvement on
     /// the built-in pool: a realm is fully playable with the AI switched off.
     ai: AiService,
-    /// The one thing realm publishes to activity: a single #lounge line when
-    /// a game is conquered (never on create/join/start/resolve).
+    /// What realm tells the rest of the house: the #lounge line when a game
+    /// is conquered, the ticker line when one is raised, and the daily call.
+    /// All three go out from the write that won the CAS, so once.
     activity: ActivityPublisher,
     snapshot_tx: watch::Sender<Arc<RealmSnapshot>>,
     snapshot_rx: watch::Receiver<Arc<RealmSnapshot>>,
     event_tx: broadcast::Sender<RealmEvent>,
+    /// Publishes are serialised so the diff each one derives its events from
+    /// is against the snapshot the previous one wrote. Two publishes racing
+    /// from the same old snapshot would announce the same change twice.
+    publish_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Rows this replica has already reported as unreadable, so a corrupt
+    /// row is logged and counted once rather than every minute.
+    rejected_rows: Arc<std::sync::Mutex<HashSet<Uuid>>>,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct RealmSnapshot {
     pub open_games: Vec<RealmGameItem>,
     pub active_games: Vec<RealmGameItem>,
-    /// Finished within the last 30 days (window enforced in SQL).
+    /// Finished within the last `REALM_RESULTS_HOURS` (window enforced in SQL).
     pub finished_games: Vec<RealmGameItem>,
+    /// False only for the empty snapshot a service starts with. The first
+    /// read seeds it; events are derived only from a seeded snapshot, so a
+    /// resync after a reconnect does not announce every game as new.
+    pub seeded: bool,
 }
 
 /// Public per-game info: enough for the Lobby row and the board header,
@@ -227,6 +248,13 @@ pub struct RealmGameItem {
     pub id: Uuid,
     pub created: DateTime<Utc>,
     pub creator_id: Uuid,
+    /// The row's status: what list it is in, and what the diff keys on.
+    pub status: String,
+    /// The state's revision: any write moves it, which is how a replica
+    /// that did not make the write knows the world moved.
+    pub revision: u64,
+    /// What the pot did once settled; `None` until the sweeper has.
+    pub payout: Option<String>,
     /// What the creator called it, already filled in when they left it blank.
     pub name: String,
     pub ruleset_id: String,
@@ -269,26 +297,18 @@ impl RealmGameItem {
     }
 }
 
-#[derive(Clone, Debug)]
+/// What a session is told. Everything but `ActionResolved` and `Error` is
+/// derived from the snapshot diff in `publish` (see `derive_events`), never
+/// sent by a mutation, so it reads the same on every replica.
+#[derive(Clone, Debug, PartialEq)]
 pub enum RealmEvent {
+    /// A realm appeared and is still mustering: an invitation, which every
+    /// session raises as a banner while the realm is frozen.
     GameCreated {
         game_id: Uuid,
         creator_id: Uuid,
-        /// Named and timed, because this event is an invitation now: every
-        /// session raises it as a banner while the realm is still frozen.
         name: String,
         opens_at: DateTime<Utc>,
-    },
-    PlayerJoined {
-        game_id: Uuid,
-        user_id: Uuid,
-    },
-    PlayerLeft {
-        game_id: Uuid,
-        user_id: Uuid,
-    },
-    GameStarted {
-        game_id: Uuid,
     },
     /// Targeted result of the actor's own action — the banner they see. Other
     /// sessions learn about it through `GameChanged`.
@@ -301,7 +321,8 @@ pub enum RealmEvent {
         attack: bool,
         points_left: u8,
     },
-    /// The world moved: anyone with this board open should reload it.
+    /// The world moved (a write, or the row leaving the listing): anyone with
+    /// this board open should reload it.
     GameChanged {
         game_id: Uuid,
     },
@@ -336,6 +357,8 @@ impl RealmService {
             snapshot_tx,
             snapshot_rx,
             event_tx,
+            publish_lock: Arc::new(tokio::sync::Mutex::new(())),
+            rejected_rows: Arc::new(std::sync::Mutex::new(HashSet::new())),
         }
     }
 
@@ -347,18 +370,42 @@ impl RealmService {
         self.event_tx.subscribe()
     }
 
-    pub fn refresh_task(&self) {
+    /// What the notify worker subscribes to.
+    pub const CHANNELS: &'static [Channel] = &[Channel::RealmGameChanged];
+
+    /// Keep every replica's snapshot in step with `realm_game_changed`, which
+    /// a trigger fires on every write to `realm_games` on whichever replica
+    /// made it. The resync is the seed and the reconnect catch-up, retried
+    /// until it lands; a notify is one re-read, and a burst that queued while
+    /// one ran collapses into the next. The re-read is also where this
+    /// replica's sessions learn what changed (`derive_events`). A failed
+    /// re-read after a notify leaves this replica on its last snapshot until
+    /// the next notify or the sweeper's minute, so it is logged and the
+    /// worker keeps going.
+    pub fn start_notify_worker(
+        &self,
+        mut signals: mpsc::UnboundedReceiver<Signal>,
+    ) -> tokio::task::JoinHandle<()> {
         let svc = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = svc.refresh().await {
-                tracing::error!(error = ?e, "failed to refresh realm games");
+            while let Some(signal) = signals.recv().await {
+                let mut resync = signal == Signal::Resync;
+                while let Ok(queued) = signals.try_recv() {
+                    resync |= queued == Signal::Resync;
+                }
+                if resync {
+                    read_until_ok(Refresh::RealmGames, || svc.refresh()).await;
+                } else if let Err(error) = svc.refresh().await {
+                    tracing::error!(error = ?error, "failed to refresh realm games after a notify");
+                }
             }
-        });
+        })
     }
 
     /// The one background loop: roll days over at each game's own reset hour
-    /// (archiving the finished day, kicking the quiet), then republish the
-    /// snapshot (which doubles as the slow-poll backstop).
+    /// (archiving the finished day, dissolving the abandoned), settle any pot
+    /// still owed, then republish the snapshot (which doubles as the
+    /// slow-poll backstop).
     pub fn start_sweeper_task(&self) {
         let svc = self.clone();
         tokio::spawn(async move {
@@ -557,14 +604,10 @@ impl RealmService {
             .await?
             .context("realm game vanished after creation")?;
         let name = display_name(&game, &state);
-        let _ = self.event_tx.send(RealmEvent::GameCreated {
-            game_id: game.id,
-            creator_id: user_id,
-            name: name.clone(),
-            opens_at: game.created + REALM_MUSTER,
-        });
-        // And the lounge, so the announcement outlives the moment for
-        // anyone reading the ticker.
+        // The banner every session gets is derived from the snapshot (so it
+        // is raised on every replica); the lounge line goes out from here,
+        // once, so the announcement outlives the moment for anyone reading
+        // the ticker.
         self.activity.realm_forming_task(user_id, game.id, &name);
         self.publish(&client).await?;
         Ok(game)
@@ -626,10 +669,6 @@ impl RealmService {
             )
             .await?;
             if updated > 0 {
-                let _ = self
-                    .event_tx
-                    .send(RealmEvent::PlayerJoined { game_id, user_id });
-                let _ = self.event_tx.send(RealmEvent::GameChanged { game_id });
                 self.publish(&client).await?;
                 return Ok(());
             }
@@ -666,9 +705,6 @@ impl RealmService {
             if alone {
                 let cancelled = RealmGame::cancel(&client, game_id).await?;
                 if cancelled > 0 {
-                    let _ = self
-                        .event_tx
-                        .send(RealmEvent::PlayerLeft { game_id, user_id });
                     self.publish(&client).await?;
                 }
                 return Ok(());
@@ -699,10 +735,6 @@ impl RealmService {
             )
             .await?;
             if updated > 0 {
-                let _ = self
-                    .event_tx
-                    .send(RealmEvent::PlayerLeft { game_id, user_id });
-                let _ = self.event_tx.send(RealmEvent::GameChanged { game_id });
                 self.publish(&client).await?;
                 return Ok(());
             }
@@ -790,13 +822,7 @@ impl RealmService {
                     )
                     .await?;
                     if updated > 0 {
-                        self.finish_events(
-                            &state,
-                            game_id,
-                            &name,
-                            game.reset_hour_utc,
-                            Some(winner),
-                        );
+                        self.on_finished(&state, game_id, &name, Some(winner));
                     }
                     updated
                 }
@@ -805,7 +831,7 @@ impl RealmService {
                         RealmGame::finish_cas(&client, game_id, day, None, &state_value, expected)
                             .await?;
                     if updated > 0 {
-                        self.finish_events(&state, game_id, &name, game.reset_hour_utc, None);
+                        self.on_finished(&state, game_id, &name, None);
                     }
                     updated
                 }
@@ -822,7 +848,7 @@ impl RealmService {
             if let Some(finished) = rolled {
                 self.archive_with_board(&client, game_id, &finished, closing_board.as_ref())
                     .await;
-                self.day_rolled_events(game_id, &name, finished.day + 1, &state);
+                self.announce_day_rolled(game_id, &name, finished.day + 1, &state);
             }
             if let Some(current) = state.last_day.as_ref() {
                 // A game that just ended has no tomorrow to snapshot, so the
@@ -832,6 +858,10 @@ impl RealmService {
                 self.archive_with_board(&client, game_id, current, final_board.as_ref())
                     .await;
             }
+            // The actor's own banner is the one thing the write sends
+            // itself: their session is on this replica. Everyone else, here
+            // and on every other replica, learns the world moved from the
+            // snapshot diff.
             let _ = self.event_tx.send(RealmEvent::ActionResolved {
                 game_id,
                 user_id,
@@ -841,7 +871,6 @@ impl RealmService {
                 attack: matches!(action, RealmAction::Attack { .. }),
                 points_left: outcome.points_left,
             });
-            let _ = self.event_tx.send(RealmEvent::GameChanged { game_id });
             self.publish(&client).await?;
             return Ok(());
         }
@@ -851,23 +880,31 @@ impl RealmService {
     // ----- sweeping
 
     /// Per-game housekeeping, run every 60s: roll the day over at the game's
-    /// own reset hour (archiving the log it closes) and dissolve a realm that
-    /// every living player has been quiet in for `REALM_ABANDON_DAYS`.
+    /// own reset hour (archiving the log it closes), dissolve a realm that
+    /// every living player has been quiet in for `REALM_ABANDON_DAYS`, and
+    /// settle the pot of any finished game whose chips have not moved.
     /// Nothing here decides a move — moves resolved when they were taken.
+    /// Both work lists are bounded per tick and filtered in SQL, so a tick
+    /// only ever picks up games with something to do and the next tick
+    /// continues where this one stopped.
     pub async fn sweep(&self, now: DateTime<Utc>) -> Result<()> {
         let client = self.db.get().await?;
-        let games = RealmGame::list_active_for_sweep(&client, MAX_GAMES_PER_SWEEP as i64).await?;
+        let games =
+            RealmGame::list_active_for_sweep(&client, now, MAX_GAMES_PER_SWEEP as i64).await?;
         let mut changed = false;
         for game in games {
             let day = realm_day(now, game.reset_hour_utc);
-            if game.last_resolved_day >= day {
-                continue;
-            }
             match self.sweep_game(&client, &game, day).await {
                 Ok(touched) => changed |= touched,
                 Err(e) => {
                     tracing::error!(error = ?e, game_id = %game.id, "failed to sweep realm game");
                 }
+            }
+        }
+        let owed = RealmGame::list_finished_unpaid(&client, MAX_GAMES_PER_SWEEP as i64).await?;
+        for game in owed {
+            if let Err(e) = self.settle_payouts(&client, &game).await {
+                tracing::error!(error = ?e, game_id = %game.id, "failed to settle realm payout, retrying next sweep");
             }
         }
         if changed {
@@ -889,7 +926,9 @@ impl RealmService {
         // frees anybody's land: what the map looked like as the day ended.
         let closing_board = DayBoard::of(&state);
         let finished_day = state.roll_day(day, day_seed(game.id, day));
-        let (kicked, end) = resolver::sweep_idle(&mut state, &map, day);
+        // The kicks, like the rollover itself, reach every board through the
+        // snapshot diff that follows this write.
+        let (_kicked, end) = resolver::sweep_idle(&mut state, &map, day);
         // `roll_day` alone is a state change worth persisting (the new day's
         // empty log), so this always writes once per game per day.
         state.revision += 1;
@@ -911,7 +950,7 @@ impl RealmService {
                 )
                 .await?;
                 if updated > 0 {
-                    self.finish_events(&state, game.id, &name, game.reset_hour_utc, Some(winner));
+                    self.on_finished(&state, game.id, &name, Some(winner));
                 }
                 updated
             }
@@ -920,7 +959,7 @@ impl RealmService {
                     RealmGame::finish_cas(client, game.id, day, None, &state_value, expected)
                         .await?;
                 if updated > 0 {
-                    self.finish_events(&state, game.id, &name, game.reset_hour_utc, None);
+                    self.on_finished(&state, game.id, &name, None);
                 }
                 updated
             }
@@ -941,12 +980,7 @@ impl RealmService {
             self.archive_with_board(client, game.id, current, final_board.as_ref())
                 .await;
         }
-        self.day_rolled_events(game.id, &name, day, &state);
-        if !kicked.is_empty() {
-            let _ = self
-                .event_tx
-                .send(RealmEvent::GameChanged { game_id: game.id });
-        }
+        self.announce_day_rolled(game.id, &name, day, &state);
         Ok(true)
     }
 
@@ -981,22 +1015,12 @@ impl RealmService {
         }
     }
 
-    /// Everything a finished game emits: the event plus ranked chip payouts.
-    /// Payouts go only to players who saw the game through (alive at finish or
-    /// eliminated fighting); leavers and kicked players are skipped and the
-    /// next eligible player moves up. Idempotent per (template, game, user)
-    /// via the per_event claim policy.
-    /// The daily summons. Every player gets a nudge wherever they are (the
-    /// session turns it into a banner), and the lounge gets one line so the
-    /// rest of the place can see a war is running — but only for a realm
-    /// with more than one person in it, since a realm sat in alone calling
-    /// for players every day is noise, not news.
-    fn day_rolled_events(&self, game_id: Uuid, name: &str, day: i32, state: &RealmGameState) {
-        let _ = self.event_tx.send(RealmEvent::DayRolled {
-            game_id,
-            day,
-            name: name.to_string(),
-        });
+    /// The daily summons to the lounge: one ticker line so the rest of the
+    /// place can see a war is running — but only for a realm with more than
+    /// one person in it, since a realm sat in alone calling for players
+    /// every day is noise, not news. The players' own nudge (`DayRolled`)
+    /// is derived from the snapshot on every replica, not sent from here.
+    fn announce_day_rolled(&self, game_id: Uuid, name: &str, day: i32, state: &RealmGameState) {
         let playing = state
             .players
             .iter()
@@ -1007,78 +1031,124 @@ impl RealmService {
         }
     }
 
-    fn finish_events(
-        &self,
-        state: &RealmGameState,
-        game_id: Uuid,
-        name: &str,
-        reset_hour_utc: i16,
-        winner: Option<Uuid>,
-    ) {
-        let _ = self.event_tx.send(RealmEvent::GameFinished {
-            game_id,
-            winner_user_id: winner,
+    /// What the write that finished a game does, once: the #lounge line for
+    /// a conquest, and the pot. The finish is durable before this runs, so
+    /// the chips are settled from the stored row in a task of their own, and
+    /// anything that stops them is picked up by the sweeper
+    /// (`list_finished_unpaid`) rather than lost.
+    fn on_finished(&self, state: &RealmGameState, game_id: Uuid, name: &str, winner: Option<Uuid>) {
+        if let Some(winner) = winner {
+            self.activity.game_won_task(
+                winner,
+                crate::app::activity::event::ActivityGame::Realm,
+                Some(format!(
+                    "{}: a {}-player war for {}",
+                    name,
+                    state.start_player_count,
+                    map_handle(&state.ruleset.map_id, state.ruleset.map_spec.as_ref())
+                        .map(|m| m.display_name.clone())
+                        .unwrap_or_else(|| "the world".to_string())
+                )),
+                None,
+            );
+        }
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(error) = svc.settle_finished(game_id).await {
+                tracing::error!(error = ?error, %game_id, "failed to settle realm payout, the sweeper retries");
+            }
         });
-        let Some(winner) = winner else {
-            return;
+    }
+
+    async fn settle_finished(&self, game_id: Uuid) -> Result<()> {
+        let client = self.db.get().await?;
+        let game = RealmGame::get(&client, game_id)
+            .await?
+            .context("realm game not found")?;
+        self.settle_payouts(&client, &game).await
+    }
+
+    /// Settle a finished game's pot and record what it did on the row.
+    ///
+    /// Ranked chip payouts go only to players who saw the game through
+    /// (alive at finish or eliminated fighting) and played enough to place;
+    /// leavers and kicked players are skipped and the next eligible player
+    /// moves up. Each credit is idempotent per (template, game, user)
+    /// through the per_event claim, so running this twice, or on two
+    /// replicas at once, pays nothing twice. `payout` is written only once
+    /// every place in the plan has been credited; a failed credit leaves it
+    /// NULL and the error with the caller, and the sweeper comes back for it.
+    pub async fn settle_payouts(
+        &self,
+        client: &tokio_postgres::Client,
+        game: &RealmGame,
+    ) -> Result<()> {
+        let state = parse_state(&game.state)?;
+        let Some(winner) = game.winner_user_id else {
+            // A dissolved game pays nobody, however long they played.
+            RealmGame::set_payout(client, game.id, RealmGame::PAYOUT_DISSOLVED).await?;
+            crate::metrics::record_realm_payout(RealmPayout::Dissolved);
+            return Ok(());
         };
-        self.activity.game_won_task(
-            winner,
-            crate::app::activity::event::ActivityGame::Realm,
-            Some(format!(
-                "{}: a {}-player war for {}",
-                name,
-                state.start_player_count,
-                map_handle(&state.ruleset.map_id, state.ruleset.map_spec.as_ref())
-                    .map(|m| m.display_name.clone())
-                    .unwrap_or_else(|| "the world".to_string())
-            )),
-            None,
-        );
         // A game nobody really played pays nothing; the win still stands and
-        // still gets its line in #lounge.
-        let today = realm_day(Utc::now(), reset_hour_utc);
-        if !payout_earned(state, today, winner) {
+        // still had its line in #lounge.
+        let today = realm_day(Utc::now(), game.reset_hour_utc);
+        if !payout_earned(&state, today, winner) {
             tracing::info!(
-                %game_id, %winner,
+                game_id = %game.id, %winner,
                 active_days = state.player(winner).map(|p| p.active_days).unwrap_or(0),
                 held = state.territory_count(winner),
                 "realm finished too early or too small to pay out"
             );
-            return;
+            RealmGame::set_payout(client, game.id, RealmGame::PAYOUT_UNEARNED).await?;
+            crate::metrics::record_realm_payout(RealmPayout::Unearned);
+            return Ok(());
         }
-        let plan = payout_plan(paying_players(state), state.ruleset.pot_scale);
-        for place in final_table(state, game_id, Some(winner)) {
+        let plan = payout_plan(paying_players(&state), state.ruleset.pot_scale);
+        let event_key = game.id.to_string();
+        let mut failed: Option<anyhow::Error> = None;
+        let mut failures = 0usize;
+        for place in final_table(&state, game.id, Some(winner)) {
             let Some(rank) = place.place else {
                 continue;
             };
             let Some((reward_key, amount)) = plan.get(rank - 1).copied() else {
                 break;
             };
-            let user_id = place.user_id;
-            let chip_svc = self.chip_svc.clone();
-            tokio::spawn(async move {
-                match chip_svc
-                    .credit_per_event_reward_template_amount(
-                        user_id,
-                        reward_key,
-                        &game_id.to_string(),
-                        amount,
-                        late_core::models::chips::ChipMove::RealmConquest,
-                    )
-                    .await
-                {
-                    Ok(payout) => {
-                        if !payout.credited {
-                            tracing::info!(%user_id, %game_id, reward_key, "realm payout already granted");
-                        }
-                    }
-                    Err(error) => {
-                        tracing::error!(?error, %user_id, %game_id, reward_key, "failed to credit realm payout");
+            let credit = self
+                .chip_svc
+                .credit_per_event_reward_template_amount(
+                    place.user_id,
+                    reward_key,
+                    &event_key,
+                    amount,
+                    late_core::models::chips::ChipMove::RealmConquest,
+                )
+                .await;
+            match credit {
+                Ok(grant) if grant.credited => {
+                    crate::metrics::record_realm_payout(RealmPayout::Paid);
+                }
+                Ok(_) => {
+                    crate::metrics::record_realm_payout(RealmPayout::AlreadyPaid);
+                }
+                Err(error) => {
+                    crate::metrics::record_realm_payout(RealmPayout::Failed);
+                    failures += 1;
+                    if failed.is_none() {
+                        failed = Some(error.context(format!(
+                            "crediting {reward_key} ({amount} chips) to {}",
+                            place.user_id
+                        )));
                     }
                 }
-            });
+            }
         }
+        if let Some(error) = failed {
+            return Err(error.context(format!("{failures} realm payout credit(s) failed")));
+        }
+        RealmGame::set_payout(client, game.id, RealmGame::PAYOUT_PAID).await?;
+        Ok(())
     }
 
     // ----- snapshot
@@ -1088,17 +1158,57 @@ impl RealmService {
         self.publish(&client).await
     }
 
+    /// Re-read the listing, hand it to every session, and tell them what
+    /// moved. This is the one place realm fan-out comes from: whoever made
+    /// the write (this replica, another, the sweeper), every replica reads
+    /// the same rows and derives the same events from how they differ from
+    /// what it had.
     async fn publish(&self, client: &tokio_postgres::Client) -> Result<()> {
+        let _serial = self.publish_lock.lock().await;
         let open = RealmGame::list_open(client).await?;
         let active = RealmGame::list_active(client).await?;
         let finished = RealmGame::list_finished_recent(client, REALM_RESULTS_HOURS).await?;
         let snapshot = RealmSnapshot {
-            open_games: open.iter().filter_map(game_item).collect(),
-            active_games: active.iter().filter_map(game_item).collect(),
-            finished_games: finished.iter().filter_map(game_item).collect(),
+            open_games: open.iter().filter_map(|g| self.admit_row(g)).collect(),
+            active_games: active.iter().filter_map(|g| self.admit_row(g)).collect(),
+            finished_games: finished.iter().filter_map(|g| self.admit_row(g)).collect(),
+            seeded: true,
         };
+        let previous = self.snapshot_rx.borrow().clone();
+        let events = derive_events(&previous, &snapshot, Utc::now());
+        // The truth first, then the news about it: a session that ticks in
+        // between sees a newer snapshot and no event yet, never an event
+        // about a world it cannot see.
         let _ = self.snapshot_tx.send(Arc::new(snapshot));
+        for event in events {
+            let _ = self.event_tx.send(event);
+        }
         Ok(())
+    }
+
+    /// One row into the listing, or out of it with a reason. A row that does
+    /// not parse is a corrupt row or a build that cannot read what another
+    /// wrote; it is logged and counted the first time this replica drops
+    /// it, and forgotten again once it reads.
+    fn admit_row(&self, game: &RealmGame) -> Option<RealmGameItem> {
+        match game_item(game) {
+            Ok(item) => {
+                self.rejected_rows.lock_recover().remove(&game.id);
+                Some(item)
+            }
+            Err(error) => {
+                let first_time = self.rejected_rows.lock_recover().insert(game.id);
+                if first_time {
+                    crate::metrics::record_realm_snapshot_row_rejected(&error);
+                    tracing::error!(
+                        game_id = %game.id,
+                        error = %error,
+                        "realm game row left out of the lobby snapshot"
+                    );
+                }
+                None
+            }
+        }
     }
 
     /// Names for a generated world: invented by the model when it is
@@ -1583,8 +1693,119 @@ fn reject(rejected: ActionRejected) -> anyhow::Error {
     anyhow::anyhow!(rejected.message())
 }
 
-fn game_item(game: &RealmGame) -> Option<RealmGameItem> {
-    let state = parse_state(&game.state).ok()?;
+/// What a finished game's chips did, as the dashboard counts it: one per
+/// place settled, one per game with nothing to pay, one per credit that
+/// failed and was left for the sweeper.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RealmPayout {
+    Paid,
+    /// A retry found the claim already banked: nothing moved, nothing owed.
+    AlreadyPaid,
+    Unearned,
+    Dissolved,
+    Failed,
+}
+
+/// Why a `realm_games` row was left out of the Lobby snapshot.
+#[derive(Debug)]
+pub enum RealmSnapshotRowError {
+    /// The state JSONB did not parse into `RealmGameState`.
+    UnreadableState(String),
+}
+
+impl std::fmt::Display for RealmSnapshotRowError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::UnreadableState(error) => write!(f, "unreadable state: {error}"),
+        }
+    }
+}
+
+/// The events a re-read implies, from the listing this replica had to the
+/// one it just read. Pure, so every replica derives the same thing from the
+/// same rows, and so it can be tested without a database.
+///
+/// Nothing is derived from an unseeded snapshot: the first read after a
+/// start or a reconnect is a seed, not news. Ordered by game id, so what a
+/// session drains is the same whatever the lists came back in.
+fn derive_events(previous: &RealmSnapshot, next: &RealmSnapshot, now: DateTime<Utc>) -> Vec<RealmEvent> {
+    if !previous.seeded {
+        return Vec::new();
+    }
+    let index = |snapshot: &RealmSnapshot| -> BTreeMap<Uuid, RealmGameItem> {
+        snapshot
+            .open_games
+            .iter()
+            .chain(snapshot.active_games.iter())
+            .chain(snapshot.finished_games.iter())
+            .map(|game| (game.id, game.clone()))
+            .collect()
+    };
+    let before = index(previous);
+    let after = index(next);
+    let mut events = Vec::new();
+    for (game_id, game) in &after {
+        let game_id = *game_id;
+        match before.get(&game_id) {
+            None => {
+                // New to this replica. Still mustering, it is the invitation
+                // every session raises; either way anything open on it (a
+                // board that outlived a reconnect) should re-read.
+                if game.status == RealmGame::STATUS_ACTIVE
+                    && muster_left(game.created, now).is_some()
+                {
+                    events.push(RealmEvent::GameCreated {
+                        game_id,
+                        creator_id: game.creator_id,
+                        name: game.name.clone(),
+                        opens_at: game.created + REALM_MUSTER,
+                    });
+                }
+                events.push(RealmEvent::GameChanged { game_id });
+            }
+            Some(old) => {
+                let moved = old.revision != game.revision
+                    || old.status != game.status
+                    || old.last_resolved_day != game.last_resolved_day
+                    || old.payout != game.payout;
+                if moved {
+                    events.push(RealmEvent::GameChanged { game_id });
+                }
+                if game.status == RealmGame::STATUS_ACTIVE
+                    && game.last_resolved_day > old.last_resolved_day
+                {
+                    events.push(RealmEvent::DayRolled {
+                        game_id,
+                        day: game.last_resolved_day,
+                        name: game.name.clone(),
+                    });
+                }
+                if old.status != RealmGame::STATUS_FINISHED
+                    && game.status == RealmGame::STATUS_FINISHED
+                {
+                    events.push(RealmEvent::GameFinished {
+                        game_id,
+                        winner_user_id: game.winner_user_id,
+                    });
+                }
+            }
+        }
+    }
+    // Gone from the listing: cancelled, or a finished game past its window.
+    // A board still open on it reloads and reads the row as it is.
+    for game_id in before.keys() {
+        if !after.contains_key(game_id) {
+            events.push(RealmEvent::GameChanged { game_id: *game_id });
+        }
+    }
+    events
+}
+
+fn game_item(game: &RealmGame) -> Result<RealmGameItem, RealmSnapshotRowError> {
+    let state = match parse_state(&game.state) {
+        Ok(state) => state,
+        Err(error) => return Err(RealmSnapshotRowError::UnreadableState(error.to_string())),
+    };
     let players = state
         .players
         .iter()
@@ -1603,22 +1824,24 @@ fn game_item(game: &RealmGame) -> Option<RealmGameItem> {
         .find(|p| p.user_id == game.creator_id)
         .map(|p| p.username.as_str())
         .unwrap_or("someone");
-    let map = map_handle(&state.ruleset.map_id, state.ruleset.map_spec.as_ref());
+    // The world's size, not the world: a listing redrawn after every action
+    // must never be what builds a generated map.
+    let total = territory_total(&state.ruleset.map_id, state.ruleset.map_spec.as_ref());
     let today = realm_day(Utc::now(), game.reset_hour_utc);
-    let joinable = map.as_ref().is_some_and(|m| state.joinable(m)) && game.winner_user_id.is_none();
-    let claimed = map
-        .as_ref()
-        .map(|m| state.claimed_fraction(m))
-        .unwrap_or(1.0);
+    let joinable = total.is_some_and(|t| state.joinable_of(t)) && game.winner_user_id.is_none();
+    let claimed = total.map(|t| state.claimed_fraction_of(t)).unwrap_or(1.0);
     let can_withdraw = state.players.len() == 1
         || state
             .players
             .iter()
             .any(|p| state.phase(p.user_id, today) == PlayerPhase::New);
-    Some(RealmGameItem {
+    Ok(RealmGameItem {
         id: game.id,
         created: game.created,
         creator_id: game.creator_id,
+        status: game.status.clone(),
+        revision: state.revision,
+        payout: game.payout.clone(),
         name: game_name(&game.name, creator),
         ruleset_id: state.ruleset.id.clone(),
         ruleset_name: state.ruleset.display_name.clone(),
@@ -1639,6 +1862,116 @@ fn game_item(game: &RealmGame) -> Option<RealmGameItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn listed(
+        id: u128,
+        status: &str,
+        revision: u64,
+        last_resolved_day: i32,
+        created: DateTime<Utc>,
+        winner: Option<Uuid>,
+    ) -> RealmGameItem {
+        RealmGameItem {
+            id: Uuid::from_u128(id),
+            created,
+            creator_id: Uuid::from_u128(900 + id),
+            status: status.to_string(),
+            revision,
+            payout: None,
+            name: format!("war {id}"),
+            ruleset_id: "standard".to_string(),
+            ruleset_name: "Standard".to_string(),
+            pace_name: "Normal".to_string(),
+            map_id: "earth".to_string(),
+            min_players: 2,
+            max_players: 10,
+            last_resolved_day,
+            reset_hour_utc: 0,
+            joinable: true,
+            claimed: 0.0,
+            can_withdraw: false,
+            winner_user_id: winner,
+            players: Vec::new(),
+        }
+    }
+
+    /// Every replica tells its sessions the same thing about a write, because
+    /// what it tells them is read off the rows rather than sent by the writer.
+    /// One re-read, every kind of change at once, the whole list of events.
+    #[test]
+    fn a_re_read_derives_the_same_events_on_every_replica() {
+        let now = DateTime::<Utc>::from_timestamp(86_400 * 20_000, 0).unwrap();
+        let long_ago = now - ChronoDuration::hours(3);
+        let just_now = now - ChronoDuration::seconds(30);
+        let winner = Uuid::from_u128(77);
+
+        let previous = RealmSnapshot {
+            open_games: Vec::new(),
+            active_games: vec![
+                listed(1, "active", 4, 20_000, long_ago, None), // untouched
+                listed(2, "active", 4, 20_000, long_ago, None), // somebody acted
+                listed(3, "active", 9, 20_000, long_ago, None), // its day rolled
+                listed(4, "active", 2, 20_000, long_ago, None), // conquered
+                listed(5, "active", 2, 20_000, long_ago, None), // cancelled: gone
+            ],
+            finished_games: Vec::new(),
+            seeded: true,
+        };
+        let mut paid_out = listed(8, "finished", 6, 19_990, long_ago, Some(winner));
+        paid_out.payout = Some("paid".to_string());
+        let next = RealmSnapshot {
+            open_games: Vec::new(),
+            active_games: vec![
+                listed(1, "active", 4, 20_000, long_ago, None),
+                listed(2, "active", 5, 20_000, long_ago, None),
+                listed(3, "active", 10, 20_001, long_ago, None),
+                listed(6, "active", 1, 20_000, just_now, None), // raised, mustering
+                listed(7, "active", 3, 20_000, long_ago, None), // first seen underway
+            ],
+            finished_games: vec![
+                listed(4, "finished", 3, 20_000, long_ago, Some(winner)),
+                paid_out,
+            ],
+            seeded: true,
+        };
+        let mut previous = previous;
+        previous
+            .finished_games
+            .push(listed(8, "finished", 6, 19_990, long_ago, Some(winner)));
+
+        let id = Uuid::from_u128;
+        assert_eq!(
+            derive_events(&previous, &next, now),
+            vec![
+                RealmEvent::GameChanged { game_id: id(2) },
+                RealmEvent::GameChanged { game_id: id(3) },
+                RealmEvent::DayRolled {
+                    game_id: id(3),
+                    day: 20_001,
+                    name: "war 3".to_string(),
+                },
+                RealmEvent::GameChanged { game_id: id(4) },
+                RealmEvent::GameFinished {
+                    game_id: id(4),
+                    winner_user_id: Some(winner),
+                },
+                RealmEvent::GameCreated {
+                    game_id: id(6),
+                    creator_id: id(906),
+                    name: "war 6".to_string(),
+                    opens_at: just_now + REALM_MUSTER,
+                },
+                RealmEvent::GameChanged { game_id: id(6) },
+                RealmEvent::GameChanged { game_id: id(7) },
+                RealmEvent::GameChanged { game_id: id(8) },
+                RealmEvent::GameChanged { game_id: id(5) },
+            ]
+        );
+
+        // The first read after a start or a reconnect seeds; it is not news.
+        let unseeded = RealmSnapshot::default();
+        assert!(derive_events(&unseeded, &next, now).is_empty());
+    }
 
     #[test]
     fn utc_day_is_epoch_days() {

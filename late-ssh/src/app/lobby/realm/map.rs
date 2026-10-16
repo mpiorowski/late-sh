@@ -59,3 +59,15 @@ pub fn map_handle(id: &str, spec: Option<&GeneratedMapSpec>) -> Option<Arc<World
     }
     map_by_id(id)
 }
+
+/// How many territories a game's world has, without building it. A
+/// generated world honours its spec's count exactly (`mapgen_test`), so the
+/// Lobby can size the join door and the claimed share from the spec alone;
+/// building a world belongs to a board being opened on it, not to a listing
+/// that is redrawn after every action in every game.
+pub fn territory_total(id: &str, spec: Option<&GeneratedMapSpec>) -> Option<usize> {
+    if id == GENERATED_MAP_ID {
+        return spec.map(|spec| usize::from(spec.normalized().territories));
+    }
+    map_by_id(id).map(|map| map.territories.len())
+}

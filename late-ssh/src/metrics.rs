@@ -24,6 +24,7 @@ use crate::app::games::chips::svc::{GiftDrinkRefusal, RoundRefusal};
 use crate::app::leaderboard::svc::AwardAnnouncementOutcome;
 use crate::app::live::input::Origin as LiveOrigin;
 use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome, SnapshotRowError};
+use crate::app::lobby::realm::svc::{RealmPayout, RealmSnapshotRowError};
 use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
 use crate::app::referral::svc::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement};
 use crate::ircd::conn::{IrcHistoryOutcome, IrcHistoryRequest};
@@ -588,6 +589,7 @@ mod inner {
         JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, LoungeBeat,
         NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
         OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome,
+        RealmPayout, RealmSnapshotRowError,
         PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, Refresh,
         RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SessionStartStage,
         SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
@@ -1339,6 +1341,30 @@ mod inner {
         })
     }
 
+    fn realm_payouts_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_realm_payouts_total")
+                .with_description(
+                    "Realm pot settlements by outcome: one per place paid (or found already paid, on a retry), one per game that had nothing to pay, one per credit that failed and is left for the sweeper",
+                )
+                .build()
+        })
+    }
+
+    fn realm_snapshot_rows_rejected_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_realm_snapshot_rows_rejected_total")
+                .with_description(
+                    "Realm game rows left out of the Lobby snapshot, by reason, counted once per replica when a row first goes missing: a corrupt row or a build that cannot read what another wrote",
+                )
+                .build()
+        })
+    }
+
     fn irc_history_requests_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -1952,6 +1978,7 @@ mod inner {
             Refresh::ActiveQuestBoards => "active_quest_boards",
             Refresh::ShopFlairDirectory => "shop_flair_directory",
             Refresh::CalendarNotices => "calendar_notices",
+            Refresh::RealmGames => "realm_games",
         }
     }
 
@@ -2262,6 +2289,36 @@ mod inner {
             &[KeyValue::new(
                 "reason",
                 daily_snapshot_row_rejected_label(error),
+            )],
+        );
+    }
+
+    fn realm_payout_label(payout: RealmPayout) -> &'static str {
+        match payout {
+            RealmPayout::Paid => "paid",
+            RealmPayout::AlreadyPaid => "already_paid",
+            RealmPayout::Unearned => "unearned",
+            RealmPayout::Dissolved => "dissolved",
+            RealmPayout::Failed => "failed",
+        }
+    }
+
+    pub fn record_realm_payout(payout: RealmPayout) {
+        realm_payouts_total().add(1, &[KeyValue::new("outcome", realm_payout_label(payout))]);
+    }
+
+    fn realm_snapshot_row_rejected_label(error: &RealmSnapshotRowError) -> &'static str {
+        match error {
+            RealmSnapshotRowError::UnreadableState(_) => "unreadable_state",
+        }
+    }
+
+    pub fn record_realm_snapshot_row_rejected(error: &RealmSnapshotRowError) {
+        realm_snapshot_rows_rejected_total().add(
+            1,
+            &[KeyValue::new(
+                "reason",
+                realm_snapshot_row_rejected_label(error),
             )],
         );
     }
@@ -3184,6 +3241,7 @@ mod inner {
         JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, LoungeBeat,
         NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
         OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome,
+        RealmPayout, RealmSnapshotRowError,
         PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, Refresh,
         RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SessionStartStage,
         SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
@@ -3252,6 +3310,8 @@ mod inner {
     pub fn record_daily_win_payout(_payout: DailyWinPayout) {}
     pub fn record_pool_shot(_outcome: PoolShotOutcome) {}
     pub fn record_daily_snapshot_row_rejected(_error: &SnapshotRowError) {}
+    pub fn record_realm_payout(_payout: RealmPayout) {}
+    pub fn record_realm_snapshot_row_rejected(_error: &RealmSnapshotRowError) {}
     pub fn record_irc_history(_request: IrcHistoryRequest, _outcome: IrcHistoryOutcome) {}
     pub fn record_news_shared(_reward: NewsShareReward) {}
     pub fn record_news_x_media_lookup(_lookup: XMediaLookup) {}

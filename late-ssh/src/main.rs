@@ -262,7 +262,9 @@ async fn main() -> anyhow::Result<()> {
         activity_publisher.clone(),
         ai_service.clone(),
     );
-    realm_service.refresh_task();
+    let _realm_notify_task = realm_service.start_notify_worker(
+        pg_listener.subscribe(late_ssh::app::lobby::realm::svc::RealmService::CHANNELS),
+    );
     realm_service.start_sweeper_task();
     let lateania_service = late_ssh::app::door::lateania::svc::LateaniaService::new(
         activity_publisher.clone(),

@@ -84,7 +84,7 @@ async fn started_game(svc: &RealmService, test_db: &TestDb, names: &[&str]) -> (
 }
 
 /// Wind a realm's opening muster into the past, so a test that is not about
-/// the muster can act right away. The freeze is two wall-clock minutes long
+/// the muster can act right away. The freeze is five wall-clock minutes long
 /// and nobody should wait them out to assert something else.
 async fn open_the_doors(test_db: &TestDb, game_id: Uuid) {
     let client = test_db.db.get().await.expect("db");
@@ -1819,4 +1819,298 @@ async fn the_history_view_pages_the_whole_archive_in() {
     let (index, total) = session.history_position().expect("a run to walk");
     assert_eq!(index, 0, "the history opens at the beginning");
     assert_eq!(total, seen);
+}
+
+/// The sweeper's work list is bounded per tick, and the bound has to be
+/// applied *after* the "already rolled today" check. Applied before it, twenty
+/// up-to-date games at the front of the list hide every game behind them: the
+/// twenty-first never has its day rolled by anyone but its own players, never
+/// calls them, and never dissolves when they stop coming.
+#[tokio::test]
+async fn the_sweeper_reaches_every_game_behind_the_clock() {
+    let test_db = new_test_db().await;
+    let svc = realm_service(&test_db);
+    let mut games = Vec::new();
+    // One past the per-tick bound, spread over three creators so the per-user
+    // cap is not what this test runs into.
+    for owner in 0..3 {
+        let user = create_test_user(&test_db.db, &format!("realm_many_{owner}")).await;
+        for n in 0..7 {
+            let game = svc
+                .create_game(
+                    user.id,
+                    &user.username,
+                    &spec(&format!("War {owner}-{n}"), RESET_HOUR),
+                )
+                .await
+                .expect("create");
+            games.push(game.id);
+        }
+    }
+    assert_eq!(games.len(), 21);
+
+    // Two ticks: the bound still means one tick does at most twenty games,
+    // but the second tick must pick up where the first stopped.
+    let tomorrow = Utc::now() + Duration::days(1);
+    svc.sweep(tomorrow).await.expect("first sweep");
+    svc.sweep(tomorrow).await.expect("second sweep");
+
+    let day = realm_day(tomorrow, RESET_HOUR);
+    for game_id in &games {
+        let row = svc.load_game(*game_id).await.expect("load").expect("row");
+        assert_eq!(
+            row.last_resolved_day, day,
+            "game {game_id} was left behind by the sweep"
+        );
+    }
+}
+
+/// A worker fed by hand: what another replica's write looks like from here is
+/// a notify arriving on the channel and the worker re-reading. Returns once
+/// that re-read has published a snapshot.
+async fn notified(
+    worker: &tokio::sync::mpsc::UnboundedSender<crate::pg_listener::Signal>,
+    snapshot: &mut tokio::sync::watch::Receiver<
+        std::sync::Arc<crate::app::lobby::realm::svc::RealmSnapshot>,
+    >,
+) {
+    worker
+        .send(crate::pg_listener::Signal::Notify {
+            channel: crate::pg_listener::Channel::RealmGameChanged,
+            payload: String::new(),
+        })
+        .expect("worker alive");
+    tokio::time::timeout(std::time::Duration::from_secs(5), snapshot.changed())
+        .await
+        .expect("the re-read published in time")
+        .expect("service alive");
+}
+
+/// Drain the events a session would see, up to a short deadline.
+async fn drained(
+    events: &mut broadcast::Receiver<crate::app::lobby::realm::svc::RealmEvent>,
+) -> Vec<crate::app::lobby::realm::svc::RealmEvent> {
+    let mut seen = Vec::new();
+    while let Ok(Ok(event)) =
+        tokio::time::timeout(std::time::Duration::from_millis(300), events.recv()).await
+    {
+        seen.push(event);
+    }
+    seen
+}
+
+/// Nothing this replica tells a session about a write comes from the process
+/// that wrote it. A row written behind this service's back (another replica,
+/// here plain SQL) reaches its sessions through the notify and the re-read:
+/// the reload, the daily call by name, and the finish.
+#[tokio::test]
+async fn a_write_from_another_replica_reaches_this_one_on_the_re_read() {
+    use crate::app::lobby::realm::svc::RealmEvent;
+
+    let test_db = new_test_db().await;
+    let svc = realm_service(&test_db);
+    let (game_id, ids) = started_game(&svc, &test_db, &["realm_rep_a", "realm_rep_b"]).await;
+    let client = test_db.db.get().await.expect("client");
+    let (worker, signals) = tokio::sync::mpsc::unbounded_channel();
+    let _worker = svc.start_notify_worker(signals);
+    let mut snapshot = svc.subscribe_snapshot();
+    snapshot.borrow_and_update();
+    let mut events = svc.subscribe_events();
+
+    // Somebody acted on another replica: the revision moved, nothing else.
+    let mut state = load_state(&svc, game_id).await;
+    let expected = state.revision as i64;
+    state.revision += 1;
+    RealmGame::update_state_cas(
+        &client,
+        game_id,
+        &serde_json::to_value(&state).expect("state"),
+        expected,
+    )
+    .await
+    .expect("write from elsewhere");
+    notified(&worker, &mut snapshot).await;
+    assert_eq!(
+        drained(&mut events).await,
+        vec![RealmEvent::GameChanged { game_id }],
+        "a moved revision is a reload and nothing more"
+    );
+
+    // Its day rolled over there: the players here are called, by name.
+    client
+        .execute(
+            "UPDATE realm_games SET last_resolved_day = last_resolved_day + 1 WHERE id = $1",
+            &[&game_id],
+        )
+        .await
+        .expect("roll the day from elsewhere");
+    notified(&worker, &mut snapshot).await;
+    let row = svc.load_game(game_id).await.expect("load").expect("row");
+    assert_eq!(
+        drained(&mut events).await,
+        vec![
+            RealmEvent::GameChanged { game_id },
+            RealmEvent::DayRolled {
+                game_id,
+                day: row.last_resolved_day,
+                name: "The Long War".to_string(),
+            },
+        ]
+    );
+
+    // And it finished there.
+    client
+        .execute(
+            "UPDATE realm_games SET status = 'finished', winner_user_id = $2, updated = current_timestamp WHERE id = $1",
+            &[&game_id, &ids[0]],
+        )
+        .await
+        .expect("finish from elsewhere");
+    notified(&worker, &mut snapshot).await;
+    assert_eq!(
+        drained(&mut events).await,
+        vec![
+            RealmEvent::GameChanged { game_id },
+            RealmEvent::GameFinished {
+                game_id,
+                winner_user_id: Some(ids[0]),
+            },
+        ]
+    );
+}
+
+/// The finish is durable before the chips move, so a credit that fails must
+/// not lose the pot: the row stays unsettled, the sweeper comes back for it,
+/// and when it lands it lands once.
+#[tokio::test]
+async fn a_pot_that_could_not_be_paid_is_settled_by_the_sweeper() {
+    let test_db = new_test_db().await;
+    let svc = realm_service(&test_db);
+    let (game_id, ids) =
+        started_game(&svc, &test_db, &["realm_owe_a", "realm_owe_b", "realm_owe_c"]).await;
+    let alice = ids[0];
+    let client = test_db.db.get().await.expect("client");
+
+    // A played-out war, one territory short of the whole map.
+    let mut state = load_state(&svc, game_id).await;
+    let expected = state.revision as i64;
+    let bar = state.ruleset.min_active_days_to_win;
+    for player in &mut state.players {
+        if player.user_id == alice {
+            player.active_days = bar;
+        } else {
+            player.status = RealmPlayerStatus::Eliminated;
+            player.exit_day = Some(realm_day(Utc::now(), RESET_HOUR));
+            player.active_days = state.ruleset.min_payout_active_days;
+        }
+    }
+    let map =
+        crate::app::lobby::realm::map::map_handle(&state.ruleset.map_id, None).expect("the map");
+    let last = map.territories.len() as u16 - 1;
+    state.ownership.clear();
+    for territory in 0..last {
+        state.ownership.insert(territory, alice);
+    }
+    state.revision += 1;
+    RealmGame::update_state_cas(
+        &client,
+        game_id,
+        &serde_json::to_value(&state).expect("state"),
+        expected,
+    )
+    .await
+    .expect("write state");
+
+    // The template the pot pays through is gone when the game ends.
+    client
+        .execute(
+            "UPDATE reward_templates SET active = false WHERE key = 'realm_win_small'",
+            &[],
+        )
+        .await
+        .expect("retire the template");
+    svc.act(alice, game_id, RealmAction::Claim { target: last })
+        .await
+        .expect("act");
+    let row = svc.load_game(game_id).await.expect("load").expect("row");
+    assert_eq!(row.status, RealmGame::STATUS_FINISHED);
+
+    let ledger_rows = || async {
+        client
+            .query(
+                "SELECT delta FROM chip_ledger WHERE user_id = $1 AND reason = 'realm_conquest'",
+                &[&alice],
+            )
+            .await
+            .expect("ledger")
+            .len()
+    };
+
+    // The sweeper tries and cannot: nothing paid, nothing recorded.
+    svc.sweep(Utc::now()).await.expect("sweep");
+    let row = svc.load_game(game_id).await.expect("load").expect("row");
+    assert_eq!(row.payout, None, "an unpaid pot is not recorded as anything");
+    assert_eq!(ledger_rows().await, 0);
+
+    // The template is back: the next tick settles it.
+    client
+        .execute(
+            "UPDATE reward_templates SET active = true WHERE key = 'realm_win_small'",
+            &[],
+        )
+        .await
+        .expect("restore the template");
+    svc.sweep(Utc::now()).await.expect("sweep");
+    let row = svc.load_game(game_id).await.expect("load").expect("row");
+    assert_eq!(row.payout.as_deref(), Some(RealmGame::PAYOUT_PAID));
+    let pot: i64 = crate::app::lobby::realm::svc::payout_plan(3, state.ruleset.pot_scale)
+        .iter()
+        .map(|(_, chips)| chips)
+        .sum();
+    assert_eq!(wait_for_payout(&test_db, alice).await, Some(pot));
+
+    // Settled is settled: another tick pays nothing twice.
+    svc.sweep(Utc::now()).await.expect("sweep");
+    assert_eq!(ledger_rows().await, 1);
+}
+
+/// A row this build cannot read leaves the listing and takes nothing with
+/// it: the other games stay listed and the service keeps publishing.
+#[tokio::test]
+async fn a_corrupt_row_leaves_the_listing_without_taking_it_down() {
+    let test_db = new_test_db().await;
+    let svc = realm_service(&test_db);
+    let (sound, _) = started_game(&svc, &test_db, &["realm_rot_a", "realm_rot_b"]).await;
+    let carol = create_test_user(&test_db.db, "realm_rot_c").await;
+    let rotten = svc
+        .create_game(carol.id, &carol.username, &spec("Rotten", RESET_HOUR))
+        .await
+        .expect("create")
+        .id;
+    let client = test_db.db.get().await.expect("client");
+    let (worker, signals) = tokio::sync::mpsc::unbounded_channel();
+    let _worker = svc.start_notify_worker(signals);
+    let mut snapshot = svc.subscribe_snapshot();
+    snapshot.borrow_and_update();
+
+    client
+        .execute(
+            "UPDATE realm_games SET state = '{\"nope\": true}'::jsonb WHERE id = $1",
+            &[&rotten],
+        )
+        .await
+        .expect("corrupt the row");
+    notified(&worker, &mut snapshot).await;
+
+    let listed: Vec<Uuid> = snapshot
+        .borrow()
+        .active_games
+        .iter()
+        .map(|g| g.id)
+        .collect();
+    assert!(listed.contains(&sound), "the readable game is still listed");
+    assert!(
+        !listed.contains(&rotten),
+        "the unreadable one is left out rather than guessed at"
+    );
 }

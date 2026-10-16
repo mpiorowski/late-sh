@@ -1,13 +1,21 @@
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use serde_json::Value;
 use tokio_postgres::Client;
 use uuid::Uuid;
+
+/// The notify channel a row-level trigger (migration 241) fires on every
+/// write to `realm_games`. Every replica re-reads its Lobby snapshot on it;
+/// the payload is empty and never trusted.
+pub const REALM_GAME_CHANGED_CHANNEL: &str = "realm_game_changed";
 
 // One realm game. `name` is the creator's label for it (empty means the
 // service fills in "<creator>'s realm"); `reset_hour_utc` (0-23) is when this game's action points
 // refill, picked at creation so a game can run on its players' clock rather
 // than a global midnight; `last_resolved_day` is the last realm day the
-// sweeper closed out (log archived, idle clocks checked).
+// sweeper closed out (log archived, idle clocks checked); `payout` is what
+// the pot did once a finished game was settled (`paid`, `unearned`,
+// `dissolved`), NULL until it has been.
 crate::model! {
     table = "realm_games";
     params = RealmGameParams;
@@ -21,6 +29,7 @@ crate::model! {
         pub reset_hour_utc: i16,
         pub last_resolved_day: i32,
         pub winner_user_id: Option<Uuid>,
+        pub payout: Option<String>,
         pub state: Value,
     }
 }
@@ -54,6 +63,11 @@ impl RealmGame {
     pub const STATUS_ACTIVE: &'static str = "active";
     pub const STATUS_FINISHED: &'static str = "finished";
     pub const STATUS_CANCELLED: &'static str = "cancelled";
+
+    /// `payout` spellings; the column's CHECK is the closed set.
+    pub const PAYOUT_PAID: &'static str = "paid";
+    pub const PAYOUT_UNEARNED: &'static str = "unearned";
+    pub const PAYOUT_DISSOLVED: &'static str = "dissolved";
 
     pub async fn create_game(
         client: &Client,
@@ -144,20 +158,65 @@ impl RealmGame {
         Ok(rows.into_iter().map(Self::from).collect())
     }
 
-    /// Every active game, oldest first — the sweeper's work list. The day
-    /// cursor is compared in Rust rather than SQL because each game keeps its
-    /// own `reset_hour_utc`, so "which day is it" is per row.
-    pub async fn list_active_for_sweep(client: &Client, limit: i64) -> Result<Vec<Self>> {
+    /// Active games whose day cursor trails their own clock at `now`, oldest
+    /// first — the sweeper's work list. Each game keeps its own
+    /// `reset_hour_utc`, so "which realm day is it" is computed per row, and
+    /// it is computed here rather than after the fetch: the per-tick `limit`
+    /// has to land on games with work to do, or twenty up-to-date games at
+    /// the front of the list would hide every game behind them for good.
+    /// The day arithmetic is the SQL spelling of the service's `realm_day`.
+    pub async fn list_active_for_sweep(
+        client: &Client,
+        now: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<Self>> {
         let rows = client
             .query(
                 "SELECT * FROM realm_games
                  WHERE status = 'active'
+                   AND last_resolved_day <
+                       floor((extract(epoch FROM $1::timestamptz) - reset_hour_utc * 3600) / 86400)::int
                  ORDER BY created ASC, id ASC
+                 LIMIT $2",
+                &[&now, &limit],
+            )
+            .await?;
+        Ok(rows.into_iter().map(Self::from).collect())
+    }
+
+    /// Finished games whose pot has not been settled, oldest first — the
+    /// sweeper's other work list. A finish is durable before its chips move,
+    /// so anything that stopped the credits (a crash, a failed write) leaves
+    /// a row here until a later tick settles it.
+    pub async fn list_finished_unpaid(client: &Client, limit: i64) -> Result<Vec<Self>> {
+        let rows = client
+            .query(
+                "SELECT * FROM realm_games
+                 WHERE status = 'finished'
+                   AND payout IS NULL
+                 ORDER BY updated ASC, id ASC
                  LIMIT $1",
                 &[&limit],
             )
             .await?;
         Ok(rows.into_iter().map(Self::from).collect())
+    }
+
+    /// Record what the pot did, once. Only a finished game that has not been
+    /// settled takes the write, so two replicas settling the same game both
+    /// credit (idempotently, through the payout claims) and one records.
+    pub async fn set_payout(client: &Client, game_id: Uuid, payout: &str) -> Result<u64> {
+        let updated = client
+            .execute(
+                "UPDATE realm_games
+                 SET payout = $2
+                 WHERE id = $1
+                   AND status = 'finished'
+                   AND payout IS NULL",
+                &[&game_id, &payout],
+            )
+            .await?;
+        Ok(updated)
     }
 
     /// Replace the state JSONB while the game is open or active. Guarded by

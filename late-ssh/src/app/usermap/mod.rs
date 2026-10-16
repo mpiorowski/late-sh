@@ -6,6 +6,7 @@
 //! claimed on their profile is simply not shaded: this is a map of people who
 //! said where they are.
 
+pub mod input;
 pub mod state;
 pub mod ui;
 

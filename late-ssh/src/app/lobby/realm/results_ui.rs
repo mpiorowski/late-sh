@@ -14,6 +14,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
+use late_core::models::realm_game::RealmGame;
+
 use crate::app::common::theme;
 
 use super::map_ui::compact;
@@ -129,13 +131,21 @@ pub fn results_lines(realm: &RealmState, text_width: usize) -> Option<Vec<Line<'
     }
 
     lines.push(Line::raw(""));
+    // The pot line reads the row, not the table: the table is what the pot
+    // *would* pay, and it stays honest about whether it has.
     let paid: i64 = table.iter().map(|p| p.chips).sum();
-    lines.push(Line::from(Span::styled(
-        if paid > 0 {
-            format!("  pot paid: {} chips", compact(paid as u64))
-        } else {
+    let pot_line = match (paid > 0, detail.payout.as_deref()) {
+        (false, _) | (_, Some(RealmGame::PAYOUT_DISSOLVED)) => {
             "  no pot: a realm has to be played to pay".to_string()
-        },
+        }
+        (true, Some(RealmGame::PAYOUT_UNEARNED)) => {
+            "  no pot: the realm was over before it was really played".to_string()
+        }
+        (true, Some(_)) => format!("  pot paid: {} chips", compact(paid as u64)),
+        (true, None) => format!("  pot: {} chips, on their way", compact(paid as u64)),
+    };
+    lines.push(Line::from(Span::styled(
+        pot_line,
         Style::default().fg(theme::AMBER_DIM()),
     )));
     lines.push(Line::raw(""));

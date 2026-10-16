@@ -72,6 +72,11 @@ lightness, so "more people" reads without the legend.
 
 ## 4. Keys and mouse
 
+The key map is `input.rs` here (`handle_input`), reached from `app/input.rs`
+while the modal is open; the opener (`open_usermap_globally`) stays with the
+other `open_*_globally` entry points at the root, since closing the rest of
+the modal stack is the root's business.
+
 `tab` walks the three slices. All four arrows pan; `j`/`k` walk the country list, and picking a country
 frames it on the map (finding Luxembourg by hand on a world view is not a
 thing to ask of anyone). `+`/`-` zoom, `f` refits, `r` re-counts, `esc`/`q`

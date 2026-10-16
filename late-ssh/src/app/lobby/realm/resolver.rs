@@ -789,17 +789,28 @@ impl RealmGameState {
 
     /// How much of the map is spoken for, 0.0 to 1.0.
     pub fn claimed_fraction(&self, map: &WorldMap) -> f64 {
-        if map.territories.is_empty() {
+        self.claimed_fraction_of(map.territories.len())
+    }
+
+    /// `claimed_fraction` from the territory count alone, for the Lobby
+    /// listing, which knows how big a world is without having built it.
+    pub fn claimed_fraction_of(&self, territory_total: usize) -> f64 {
+        if territory_total == 0 {
             return 1.0;
         }
-        self.ownership.len() as f64 / map.territories.len() as f64
+        self.ownership.len() as f64 / territory_total as f64
     }
 
     /// Can someone still join? Only while there is a world left to join
     /// into: past `join_max_claimed` a newcomer would be food, not a player.
     pub fn joinable(&self, map: &WorldMap) -> bool {
+        self.joinable_of(map.territories.len())
+    }
+
+    /// `joinable` from the territory count alone (see `claimed_fraction_of`).
+    pub fn joinable_of(&self, territory_total: usize) -> bool {
         self.players.len() < self.ruleset.max_players as usize
-            && self.claimed_fraction(map) < self.ruleset.join_max_claimed
+            && self.claimed_fraction_of(territory_total) < self.ruleset.join_max_claimed
     }
 
     /// What a missed day banks, as a fraction of the daily base, given how

@@ -206,6 +206,9 @@ pub struct RealmDetail {
     /// The game's own refill hour (UTC).
     pub reset_hour_utc: i16,
     pub winner_user_id: Option<Uuid>,
+    /// What the pot did (`realm_games.payout`); `None` while the sweeper
+    /// still owes it, which the results card says instead of "paid".
+    pub payout: Option<String>,
     pub state: RealmGameState,
 }
 
@@ -846,19 +849,9 @@ impl RealmState {
                     None => Banner::info("Realm: the realm dissolved — nobody held it"),
                 })
             }
-            RealmEvent::GameStarted { game_id }
-            | RealmEvent::PlayerJoined { game_id, .. }
-            | RealmEvent::PlayerLeft { game_id, .. } => {
-                if let Some(board) = self.board.as_mut()
-                    && board.game_id == game_id
-                {
-                    board.reload_pending = true;
-                }
-                None
-            }
-            // A realm stands frozen for its first couple of minutes, and
-            // this is the only window in which everyone can start level — so
-            // it interrupts whatever anyone is doing, wherever they are.
+            // A realm stands frozen for its first minutes, and this is the
+            // only window in which everyone can start level — so it
+            // interrupts whatever anyone is doing, wherever they are.
             RealmEvent::GameCreated { name, opens_at, .. } => {
                 let left = (opens_at - Utc::now()).max(chrono::Duration::zero());
                 Some(Banner::info(&format!(
@@ -954,6 +947,7 @@ impl RealmState {
                             last_resolved_day: row.last_resolved_day,
                             reset_hour_utc: row.reset_hour_utc,
                             winner_user_id: row.winner_user_id,
+                            payout: row.payout,
                             state,
                         });
                         board.load_error = None;
