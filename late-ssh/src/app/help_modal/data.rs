@@ -613,6 +613,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /brb [reason]      away until your next key, a reason is posted here (the screensaver covers the screen; Settings, Tweaks, Screensaver)",
         "  /coffee            post a coffee cup",
         "  /tea               post a tea cup",
+        "  /shrug             post ¯\\_(ツ)_/¯",
         "  /ultimate          open owned Ultimate Spells",
         "  /profile [@user]   open your profile, or another user's profile",
         "  /chips [@user]     the same profile, scrolled to the chip ledger",

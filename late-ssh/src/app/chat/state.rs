@@ -4272,18 +4272,7 @@ impl ChatState {
                 return Some(Banner::error("Use /brb <reason> from inside a room"));
             };
             let chat_body = format!("🌙 brb: {reason}");
-            let request_id = Uuid::now_v7();
-            self.service
-                .send_message_with_reply_task(super::svc::SendMessageTask {
-                    user_id: self.user_id,
-                    room_id,
-                    room_slug: self.room_slug(room_id),
-                    body: chat_body,
-                    reply_to_message_id: None,
-                    request_id,
-                    is_admin: self.is_admin,
-                });
-            self.pending_send_notices.push_back(request_id);
+            self.send_command_message(room_id, chat_body);
             // `/brb` goes away now instead of after the idle threshold, and
             // the next key comes back.
             self.requested_brb = true;
@@ -4674,18 +4663,7 @@ impl ChatState {
                 return Some(Banner::error("Roll from inside a room"));
             };
             let rolls = roll_dice(&specs, &mut OsRng);
-            let request_id = Uuid::now_v7();
-            self.service
-                .send_message_with_reply_task(super::svc::SendMessageTask {
-                    user_id: self.user_id,
-                    room_id,
-                    room_slug: self.room_slug(room_id),
-                    body: format_roll_result(&specs, &rolls),
-                    reply_to_message_id: None,
-                    request_id,
-                    is_admin: self.is_admin,
-                });
-            self.pending_send_notices.push_back(request_id);
+            self.send_command_message(room_id, format_roll_result(&specs, &rolls));
             return None;
         }
 
@@ -4699,18 +4677,17 @@ impl ChatState {
             let variant = self.next_cup_variant;
             self.next_cup_variant = (variant + 1) % CUP_VARIANT_COUNT;
             let art = cup_art(kind, variant);
-            let request_id = Uuid::now_v7();
-            self.service
-                .send_message_with_reply_task(super::svc::SendMessageTask {
-                    user_id: self.user_id,
-                    room_id,
-                    room_slug: self.room_slug(room_id),
-                    body: art,
-                    reply_to_message_id: None,
-                    request_id,
-                    is_admin: self.is_admin,
-                });
-            self.pending_send_notices.push_back(request_id);
+            self.send_command_message(room_id, art);
+            return None;
+        }
+
+        if parse_shrug_command(&body) {
+            let room_id = self.composer_room_id;
+            self.clear_composer_after_submit();
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("Send /shrug from inside a room"));
+            };
+            self.send_command_message(room_id, SHRUG.to_string());
             return None;
         }
 
@@ -4724,18 +4701,7 @@ impl ChatState {
             let Some(room_id) = room_id else {
                 return Some(Banner::error("Send actions from inside a room"));
             };
-            let request_id = Uuid::now_v7();
-            self.service
-                .send_message_with_reply_task(super::svc::SendMessageTask {
-                    user_id: self.user_id,
-                    room_id,
-                    room_slug: self.room_slug(room_id),
-                    body: action_body,
-                    reply_to_message_id: None,
-                    request_id,
-                    is_admin: self.is_admin,
-                });
-            self.pending_send_notices.push_back(request_id);
+            self.send_command_message(room_id, action_body);
             return None;
         }
 
@@ -4803,6 +4769,23 @@ impl ChatState {
             self.clear_composer_after_submit();
         }
         cooldown_banner
+    }
+
+    /// Posts a command's generated body to `room_id` as a plain message
+    /// and tracks it like any other send.
+    fn send_command_message(&mut self, room_id: Uuid, body: String) {
+        let request_id = Uuid::now_v7();
+        self.service
+            .send_message_with_reply_task(super::svc::SendMessageTask {
+                user_id: self.user_id,
+                room_id,
+                room_slug: self.room_slug(room_id),
+                body,
+                reply_to_message_id: None,
+                request_id,
+                is_admin: self.is_admin,
+            });
+        self.pending_send_notices.push_back(request_id);
     }
 
     /// A submit-time heads-up that a mentioned ghost bot is still cooling
@@ -8200,6 +8183,14 @@ pub(crate) fn parse_cup_command(input: &str) -> Option<CupKind> {
         "/tea" => Some(CupKind::Tea),
         _ => None,
     }
+}
+
+const SHRUG: &str = "¯\\_(ツ)_/¯";
+
+/// Parse `/shrug` (case-insensitive, no arguments). Arguments fall through
+/// to the unknown-command handler, like `/coffee`.
+pub(crate) fn parse_shrug_command(input: &str) -> bool {
+    input.trim().eq_ignore_ascii_case("/shrug")
 }
 
 /// Build the multi-line ASCII body for `/coffee` or `/tea`. `variant`

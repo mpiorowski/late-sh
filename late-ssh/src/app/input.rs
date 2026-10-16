@@ -1003,6 +1003,14 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
             app.chat.clear_message_selection();
             return;
         }
+        // So do the clickable page numbers in the top bar, which leave the
+        // same way (keyboard-only mode ignores them, as everywhere else).
+        if let ParsedInput::Mouse(mouse) = &event
+            && app.interaction_mode.mouse_enabled()
+            && handle_topbar_screen_click(app, app.screen, *mouse)
+        {
+            return;
+        }
         // Quit stays global on the prompt, as it is on the page behind it.
         if matches!(
             event,

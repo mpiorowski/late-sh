@@ -147,6 +147,7 @@ const COMMANDS: &[Command] = &[
     global("search", "search messages (?query in Ctrl+/)"),
     global("settings", "open settings"),
     global("shop", "open the shop (badges, effects, companions)"),
+    global("shrug", "post ¯\\_(ツ)_/¯"),
     global("suggest", "send an idea to #suggestions (/suggest <idea>)"),
     global("summary", "AI catch-up of this room, or /summary 6h"),
     global("tea", "post tea cup"),

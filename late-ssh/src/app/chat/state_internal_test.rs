@@ -1843,6 +1843,16 @@ fn parse_cup_command_rejects_arguments_and_typos() {
 }
 
 #[test]
+fn parse_shrug_command_matches_case_insensitively_without_arguments() {
+    assert!(parse_shrug_command("/shrug"));
+    assert!(parse_shrug_command("/SHRUG"));
+    assert!(parse_shrug_command("  /shrug  "));
+    assert!(!parse_shrug_command("/shrug please"));
+    assert!(!parse_shrug_command("/shrugs"));
+    assert!(!parse_shrug_command("shrug"));
+}
+
+#[test]
 fn cup_art_uses_kind_specific_silhouette() {
     let coffee = cup_art(CupKind::Coffee, 0);
     assert!(

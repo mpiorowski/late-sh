@@ -22,7 +22,7 @@ async fn artboard_disclaimer_hides_content_and_only_allows_the_current_visit() {
     assert!(!frame.contains("rail j/k"));
     app.handle_input(b"i\r \t?");
     app.handle_input(b"\x1b[200~private drawing\x1b[201~");
-    app.handle_input(b"\x1b[<0;15;1M");
+    app.handle_input(b"\x1b[<0;3;6M");
     assert_eq!(app.screen, Screen::Artboard);
     assert!(!app.artboard_interacting);
     assert!(app.artboard_disclaimer_visible());
@@ -268,6 +268,42 @@ async fn artboard_disclaimer_tour_choice_keeps_account_settings() {
     app.handle_input(b"4");
     assert!(app.artboard_disclaimer_visible());
     assert!(render_plain(&mut app).contains("Always View"));
+}
+
+#[tokio::test]
+async fn artboard_disclaimer_allows_clicking_topbar_page_numbers_without_consent() {
+    use crate::app::common::primitives::Screen;
+    use late_core::models::user::InteractionMode;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "art-topbar-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "art-topbar-flow-it");
+    // Topbar digits sit at 0-based columns 14, 16, ... on row 0; SGR is 1-based.
+    for (column, screen) in [
+        (12, Screen::Clubhouse),
+        (14, Screen::Dashboard),
+        (16, Screen::Arcade),
+        (18, Screen::Games),
+        (22, Screen::Profiles),
+        (24, Screen::Leaderboard),
+        (26, Screen::Calendars),
+    ] {
+        app.set_screen(Screen::Artboard);
+        render_plain(&mut app);
+        assert!(app.artboard_disclaimer_visible());
+        let click = format!("\x1b[<0;{};1M", column + 1);
+
+        app.interaction_mode = InteractionMode::Keyboard;
+        app.handle_input(click.as_bytes());
+        assert_eq!(app.screen, Screen::Artboard, "keyboard-only ignores clicks");
+
+        app.interaction_mode = InteractionMode::Hybrid;
+        app.handle_input(click.as_bytes());
+        assert_eq!(app.screen, screen, "column {column}");
+        assert!(!app.artboard_content_accepted);
+        assert!(app.dartboard_state.is_none());
+        assert!(app.artboard_disclaimer_enabled());
+    }
 }
 
 #[tokio::test]
