@@ -1,23 +1,25 @@
 //! The Realm card on the Games hub: the standing world as this session sees
 //! it (which season, on what world, how far along, whether the gates are
 //! open, the muster clock while it runs), the last world's end while it is
-//! still listed, and what Enter does. Drawn from the snapshot every session
-//! already holds, so a frame never queries.
+//! still listed, what the pot pays, and the keys before and after Enter.
+//! Drawn from the snapshot every session already holds, so a frame never
+//! queries. Laid out like the other door landings (DCSS is the reference):
+//! logo, pitch, a scrap of the game, then headed sections.
 
 use chrono::Utc;
 use ratatui::{
     Frame,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::Paragraph,
+    widgets::{Paragraph, Wrap},
 };
 
 use crate::app::common::theme;
 use crate::app::door::landing;
 
 use super::resolver::RealmPlayerStatus;
-use super::state::RealmState;
+use super::state::{PLAYER_PALETTES, RealmState};
 use super::svc::{RealmGameItem, countdown_label, muster_left, reset_hour_label};
 use super::ui::truncate;
 
@@ -35,51 +37,59 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, realm: &RealmState, scroll: u
         ])
         .split(area)[1];
     let lines = landing_lines(realm, usize::from(inner.width));
-    let max_scroll = (lines.len() as u16).saturating_sub(inner.height);
-    let scroll = scroll.min(max_scroll);
-    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), inner);
-    max_scroll
+    landing::render_scrolled(
+        frame,
+        inner,
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        scroll,
+    )
 }
 
 /// The card's lines, top to bottom. Pure, so the card can be tested without
 /// a frame.
 pub(crate) fn landing_lines(realm: &RealmState, width: usize) -> Vec<Line<'static>> {
     let mut lines = vec![Line::raw("")];
-    lines.extend(title_art());
-    lines.push(Line::raw(""));
-    lines.push(Line::from(Span::styled(
-        "one world, and everyone in the house is on it.",
-        Style::default().fg(theme::TEXT()),
-    )));
-    lines.push(Line::raw(""));
-    for text in [
-        "Claim land, take it from your neighbours, dig in. A few points a",
-        "day, each one resolved the moment you spend it. The world is won",
-        "when one player has conquered every rival, and the next one rises",
-        "the day it falls.",
-    ] {
-        lines.push(Line::from(Span::styled(
-            text,
+    lines.extend(logo());
+    lines.extend([
+        Line::raw(""),
+        Line::from(vec![
+            Span::styled(
+                "The house's standing world war ",
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "one map, everyone on it",
+                Style::default().fg(theme::AMBER_DIM()),
+            ),
+        ]),
+        Line::from(Span::styled(
+            "Claim land, take it from your neighbours, dig in. Conquer every rival and the world is yours.",
             Style::default().fg(theme::TEXT_DIM()),
-        )));
-    }
-    lines.push(Line::raw(""));
+        )),
+        Line::from(Span::styled(
+            "2-10 players \u{b7} a few moves a day \u{b7} a new world rises the day one falls",
+            Style::default().fg(theme::AMBER_DIM()),
+        )),
+        Line::raw(""),
+        land_strip(),
+        land_legend(),
+        Line::raw(""),
+    ]);
 
     match realm.live() {
         Some(game) => lines.extend(world_lines(realm, game, width)),
         None => {
             lines.push(landing::heading("The world"));
-            lines.push(landing::hint(
+            lines.push(landing::stat(
                 "rising",
                 "the next world is being raised, a minute at most",
                 LABEL_PAD,
             ));
         }
     }
-    lines.push(Line::raw(""));
-
     if let Some(last) = realm.snapshot.last_finished() {
-        lines.push(landing::heading("The last world"));
         let ended = match last
             .winner_user_id
             .and_then(|w| last.players.iter().find(|p| p.user_id == w))
@@ -87,49 +97,73 @@ pub(crate) fn landing_lines(realm: &RealmState, width: usize) -> Vec<Line<'stati
             Some(winner) => format!("season {} · conquered by {}", last.season, winner.username),
             None => format!("season {} · dissolved, nobody held it", last.season),
         };
-        lines.push(landing::hint("ended", &ended, LABEL_PAD));
-        lines.push(Line::raw(""));
+        lines.push(landing::stat("last", &ended, LABEL_PAD));
     }
-
-    lines.push(landing::heading("How it runs here"));
-    lines.push(landing::hint(
-        "days",
-        "your points come back once a day; miss one and most of it banks",
-        LABEL_PAD,
-    ));
-    lines.push(landing::hint(
-        "odds",
-        "a border is a fair fight, a strike across the map is a long shot",
-        LABEL_PAD,
-    ));
-    lines.push(landing::hint(
-        "new",
-        "nobody can touch you on your first day, only neighbours for a while after",
-        LABEL_PAD,
-    ));
-    lines.push(landing::hint(
-        "quiet",
-        "go quiet and your empire crumbles; nobody is kicked, it just gets taken",
-        LABEL_PAD,
-    ));
-    lines.push(landing::hint(
-        "pot",
-        "the conqueror takes a chip pot, shared with second and third in big wars",
-        LABEL_PAD,
-    ));
     lines.push(Line::raw(""));
 
-    lines.push(Line::from(Span::styled(
-        "  ` hops in and out with the board kept open",
-        Style::default().fg(theme::TEXT_FAINT()),
-    )));
-    lines.push(Line::raw(""));
-    lines.push(landing::action(
-        "\u{25b6}",
-        "Enter",
-        enter_label(realm),
-        theme::SUCCESS(),
-    ));
+    lines.extend([
+        landing::heading("How it runs"),
+        landing::stat(
+            "days",
+            "your points come back once a day; miss one and most of it banks",
+            LABEL_PAD,
+        ),
+        landing::stat(
+            "odds",
+            "a border is a fair fight, a strike across the map is a long shot",
+            LABEL_PAD,
+        ),
+        landing::stat(
+            "new",
+            "nobody can touch you on your first day, only neighbours for a while after",
+            LABEL_PAD,
+        ),
+        landing::stat(
+            "quiet",
+            "go quiet and your empire crumbles; nobody is kicked, it just gets taken",
+            LABEL_PAD,
+        ),
+        Line::raw(""),
+        landing::heading("Rewards"),
+        landing::stat(
+            "pot",
+            "chips for the conqueror, growing with every rival who plays the war out",
+            LABEL_PAD,
+        ),
+        landing::stat(
+            "split",
+            "up to 3 players the winner takes all \u{b7} 4-6: 70/30 \u{b7} 7+: 60/25/15",
+            LABEL_PAD,
+        ),
+        Line::from(Span::styled(
+            "  A win takes a week of play against real rivals. Leavers and the unplayed are not paid.",
+            Style::default().fg(theme::TEXT_FAINT()),
+        )),
+        Line::raw(""),
+        landing::heading("Launch"),
+        landing::action(">", "Enter", enter_label(realm), theme::SUCCESS()),
+    ]);
+    if realm.can_join() {
+        lines.push(landing::hint(
+            "j",
+            "on the map, pick a colour and march in",
+            LABEL_PAD,
+        ));
+    }
+    lines.extend([
+        Line::raw(""),
+        landing::heading("Once Inside"),
+        landing::hint("a", "claim or attack the selected land", LABEL_PAD),
+        landing::hint("f", "dig in: raise the walls on land you hold", LABEL_PAD),
+        landing::hint(
+            "tab",
+            "map \u{b7} targets \u{b7} overview \u{b7} log \u{b7} history",
+            LABEL_PAD,
+        ),
+        landing::hint("c", "the world's chat, beside the map", LABEL_PAD),
+        landing::hint("`", "step out to chat; the board stays open", LABEL_PAD),
+        landing::hint("q", "back to the hub; your land stays yours", LABEL_PAD),
+    ]);
     lines
 }
 
@@ -140,8 +174,8 @@ fn enter_label(realm: &RealmState) -> &'static str {
             Some(_) => "see how the last world ended",
             None => "enter the realm",
         },
-        Some(game) if game.is_member(realm.user_id) => "enter the realm",
-        Some(game) if game.joinable => "enter the realm, then j to take your spot",
+        Some(game) if game.is_member(realm.user_id) => "back to your war",
+        Some(game) if game.joinable => "look over the world, then take your spot",
         Some(_) => "watch the realm",
     }
 }
@@ -200,7 +234,10 @@ fn world_lines(realm: &RealmState, game: &RealmGameItem, width: usize) -> Vec<Li
     lines.push(landing::stat("roster", &roster, LABEL_PAD));
     if let Some(me) = game.players.iter().find(|p| p.user_id == realm.user_id) {
         let mine = match me.status {
-            RealmPlayerStatus::Alive => format!("you hold {} territories", me.territories),
+            RealmPlayerStatus::Alive => match me.territories {
+                1 => "you hold 1 territory".to_string(),
+                n => format!("you hold {n} territories"),
+            },
             RealmPlayerStatus::Eliminated => "you fell; the world is yours to watch".to_string(),
             RealmPlayerStatus::Left => "you withdrew".to_string(),
             RealmPlayerStatus::Kicked => "the world went quiet around you".to_string(),
@@ -210,19 +247,72 @@ fn world_lines(realm: &RealmState, game: &RealmGameItem, width: usize) -> Vec<Li
     lines
 }
 
-fn title_art() -> Vec<Line<'static>> {
-    let style = Style::default()
-        .fg(theme::AMBER())
-        .add_modifier(Modifier::BOLD);
+fn logo() -> Vec<Line<'static>> {
     [
-        "██▀███  ▓█████ ▄▄▄       ██▓     ███▄ ▄███▓",
-        "▓██ ▒ ██▒▓█   ▀▒████▄    ▓██▒    ▓██▒▀█▀ ██▒",
-        "▓██ ░▄█ ▒▒███  ▒██  ▀█▄  ▒██░    ▓██    ▓██░",
-        "▒██▀▀█▄  ▒▓█  ▄░██▄▄▄▄██ ▒██░    ▒██    ▒██ ",
-        "░██▓ ▒██▒░▒████▒▓█   ▓██▒░██████▒▒██▒   ░██▒",
-        "░ ▒▓ ░▒▓░░░ ▒░ ░▒▒   ▓▒█░░ ▒░▓  ░░ ▒░   ░  ░",
+        "██████╗ ███████╗ █████╗ ██╗     ███╗   ███╗",
+        "██╔══██╗██╔════╝██╔══██╗██║     ████╗ ████║",
+        "██████╔╝█████╗  ███████║██║     ██╔████╔██║",
+        "██╔══██╗██╔══╝  ██╔══██║██║     ██║╚██╔╝██║",
+        "██║  ██║███████╗██║  ██║███████╗██║ ╚═╝ ██║",
+        "╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚══════╝╚═╝     ╚═╝",
     ]
     .into_iter()
-    .map(|row| Line::from(Span::styled(row, style)))
+    .map(|line| {
+        Line::from(Span::styled(
+            line,
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        ))
+    })
     .collect()
+}
+
+/// A shade of a player colour, the way the map paints it: pale is open
+/// ground, dark is walled up.
+fn shade(palette: usize, level: usize) -> Color {
+    let (r, g, b) = PLAYER_PALETTES[palette].shades[level];
+    Color::Rgb(r, g, b)
+}
+
+/// The two empires the strip and its legend are painted in.
+const YOU: usize = 7;
+const RIVAL: usize = 0;
+
+/// A scrap of frontier: two empires, their walls, and the free ground between
+/// them, in the colours the board uses. Says "territory game" before a word
+/// of the card is read.
+fn land_strip() -> Line<'static> {
+    let land = |cells: &'static str, color: Color| Span::styled(cells, Style::default().fg(color));
+    let free = |cells: &'static str| Span::styled(cells, Style::default().fg(theme::TEXT_FAINT()));
+    Line::from(vec![
+        free("  ░░░"),
+        land("█████", shade(YOU, 2)),
+        land("██", shade(YOU, 4)),
+        land("███", shade(YOU, 2)),
+        free("░░░░"),
+        land("████", shade(RIVAL, 2)),
+        land("███", shade(RIVAL, 4)),
+        land("██████", shade(RIVAL, 2)),
+        free("░░"),
+        land("██", shade(YOU, 2)),
+        free("░░░"),
+    ])
+}
+
+/// Decodes the strip above.
+fn land_legend() -> Line<'static> {
+    let word = |w: &'static str| Span::styled(w, Style::default().fg(theme::TEXT_DIM()));
+    let swatch = |color: Color| Span::styled("█", Style::default().fg(color));
+    Line::from(vec![
+        word("  "),
+        swatch(shade(YOU, 2)),
+        word(" your land   "),
+        swatch(shade(RIVAL, 2)),
+        word(" a rival   "),
+        swatch(shade(YOU, 4)),
+        word(" walled up   "),
+        Span::styled("░", Style::default().fg(theme::TEXT_FAINT())),
+        word(" free ground"),
+    ])
 }

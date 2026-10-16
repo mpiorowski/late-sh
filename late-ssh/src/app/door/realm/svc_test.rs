@@ -2414,3 +2414,96 @@ async fn withdrawing_takes_your_walls_with_you() {
         state.forts
     );
 }
+
+/// Every world talks in its own room, open to anyone who opens the board
+/// (players and watchers alike): a new season starts on an empty room rather
+/// than on the last war's talk. A world from before rooms were born with it
+/// gets one from the sweeper, and asking twice lands on the same room.
+#[tokio::test]
+async fn each_world_talks_in_its_own_public_room() {
+    use late_core::models::chat_room::ChatRoom;
+
+    let test_db = new_test_db().await;
+    let svc = realm_service(&test_db);
+    let client = test_db.db.get().await.expect("client");
+
+    let first = open(&svc, &test_db, &spec(RESET_HOUR)).await;
+    let first_room = first.chat_room_id.expect("a world opens with its room");
+    let room = ChatRoom::get(&client, first_room)
+        .await
+        .expect("load room")
+        .expect("the room exists");
+    assert_eq!(
+        room.kind, "game",
+        "hidden from the rail like every game room"
+    );
+    assert_eq!(
+        room.visibility, "public",
+        "anyone who opens the board talks"
+    );
+    assert_eq!(room.slug, Some(format!("realm-{}", first.id)));
+
+    RealmGame::cancel(&client, first.id).await.expect("cancel");
+    let second = open(&svc, &test_db, &spec(RESET_HOUR)).await;
+    let second_room = second.chat_room_id.expect("the next world has its own");
+    assert_ne!(second_room, first_room, "a new season starts on a new room");
+
+    // A world opened before rooms were: the sweeper gives it the room its id
+    // names, which is the one it already had.
+    client
+        .execute(
+            "UPDATE realm_games SET chat_room_id = NULL WHERE id = $1",
+            &[&second.id],
+        )
+        .await
+        .expect("strip the room");
+    svc.sweep(Utc::now()).await.expect("sweep");
+    let row = svc.load_game(second.id).await.expect("load").expect("row");
+    assert_eq!(row.chat_room_id, Some(second_room));
+}
+
+/// A finished world's room outlives its day on the hub by a month, then goes;
+/// the world's row stays, and a recent or standing world keeps its room.
+#[tokio::test]
+async fn a_finished_worlds_room_is_cleared_after_a_month() {
+    use late_core::models::chat_room::ChatRoom;
+
+    let test_db = new_test_db().await;
+    let svc = realm_service(&test_db);
+    let client = test_db.db.get().await.expect("client");
+
+    let stale = open(&svc, &test_db, &spec(RESET_HOUR)).await;
+    RealmGame::cancel(&client, stale.id).await.expect("cancel");
+    client
+        .execute(
+            "UPDATE realm_games SET updated = current_timestamp - INTERVAL '31 days' WHERE id = $1",
+            &[&stale.id],
+        )
+        .await
+        .expect("backdate");
+    let recent = open(&svc, &test_db, &spec(RESET_HOUR)).await;
+    RealmGame::cancel(&client, recent.id).await.expect("cancel");
+    let standing = open(&svc, &test_db, &spec(RESET_HOUR)).await;
+
+    svc.sweep(Utc::now()).await.expect("sweep");
+
+    let stale_room = stale.chat_room_id.expect("room");
+    assert!(
+        ChatRoom::get(&client, stale_room)
+            .await
+            .expect("load room")
+            .is_none(),
+        "the month-old world's room is gone"
+    );
+    let row = svc
+        .load_game(stale.id)
+        .await
+        .expect("load")
+        .expect("the world's row stays");
+    assert_eq!(row.chat_room_id, None);
+    for game in [&recent, &standing] {
+        let row = svc.load_game(game.id).await.expect("load").expect("row");
+        assert_eq!(row.chat_room_id, game.chat_room_id, "kept its room");
+        assert!(row.chat_room_id.is_some());
+    }
+}

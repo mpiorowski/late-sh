@@ -721,6 +721,8 @@ pub struct App {
     pub(crate) daily_chat_rows_cache: chat::ui::ChatRowsCache,
     /// House table embedded chat, same reasoning as the daily cache.
     pub(crate) house_chat_rows_cache: chat::ui::ChatRowsCache,
+    /// Row cache for the realm board's chat pane.
+    pub(crate) realm_chat_rows_cache: chat::ui::ChatRowsCache,
     /// Row cache for the door watch chat: the pane beside a watched screen,
     /// or beside this player's own running game. One screen draws it at a
     /// time, and the cache is keyed by room and width.
@@ -1227,6 +1229,9 @@ impl App {
             Screen::DailyMatch => self.daily.board_chat_room_id(),
             // The open house table's permanent chat room.
             Screen::HouseTable => self.house.chat_room_id(),
+            // The world's chat, only while it is shown: hidden, it counts
+            // what is said as unread.
+            Screen::Realm => self.realm.shown_chat_room_id(),
             // The watched player's chat, while this session watches one.
             Screen::Games => self.spectate_chat_room_id(),
             // The watchers' chat beside this player's own running game.
@@ -1786,6 +1791,7 @@ impl App {
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
             daily_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             house_chat_rows_cache: chat::ui::ChatRowsCache::default(),
+            realm_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             watch_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             zen_chat_rows_caches: Vec::new(),
             poll_modal_state: chat::polls::state::PollModalState::new(),

@@ -53,7 +53,14 @@ pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
             return true;
         }
     }
+    if handle_chat_key(app, byte) {
+        return true;
+    }
     match byte {
+        b'c' | b'C' => {
+            toggle_chat(app);
+            true
+        }
         b'\t' => {
             if let Some(b) = app.realm.board.as_mut() {
                 b.view = b.view.next();
@@ -223,7 +230,55 @@ fn handle_map_key(app: &mut App, byte: u8) -> bool {
     true
 }
 
+/// The world's chat, while it is shown: `i` types, and a message picked
+/// with the mouse takes the message keys (and `j`/`k` to walk) until Esc
+/// lets it go. Everything else stays the board's, which is why the chat
+/// never claims `j`/`k` on its own the way a house table's does.
+fn handle_chat_key(app: &mut App, byte: u8) -> bool {
+    let Some(room_id) = app.realm.shown_chat_room_id() else {
+        return false;
+    };
+    let selected = app.chat.selected_message_body_in_room(room_id).is_some();
+    if byte == 0x1B && selected {
+        app.chat.clear_message_selection();
+        return true;
+    }
+    let to_chat = match byte {
+        b'i' | b'I' => true,
+        b'j' | b'J' | b'k' | b'K' => selected,
+        _ => {
+            app.chat.is_reaction_leader_active()
+                || crate::app::chat::input::selected_chat_key(app, room_id, byte)
+        }
+    };
+    to_chat && crate::app::chat::input::handle_message_action_in_room(app, room_id, byte)
+}
+
+/// `c`: put the chat up in place of the rail, or away again.
+fn toggle_chat(app: &mut App) {
+    if app.realm.chat_room_id().is_none() {
+        app.banner = Some(crate::app::common::primitives::Banner::info(
+            "Realm: this world has no chat room yet",
+        ));
+        return;
+    }
+    if !app.realm.toggle_chat()
+        && let Some(room_id) = app.realm.chat_room_id()
+        && app.chat.selected_message_body_in_room(room_id).is_some()
+    {
+        // A selection in a pane that is gone would keep the message keys.
+        app.chat.clear_message_selection();
+    }
+}
+
 pub(crate) fn handle_arrow(app: &mut App, key: u8) {
+    // A picked chat message walks with the arrows, as it does everywhere.
+    if let Some(room_id) = app.realm.shown_chat_room_id()
+        && app.chat.selected_message_body_in_room(room_id).is_some()
+    {
+        let _ = crate::app::chat::input::handle_message_arrow_in_room(app, room_id, key);
+        return;
+    }
     let Some(board) = app.realm.board.as_ref() else {
         return;
     };

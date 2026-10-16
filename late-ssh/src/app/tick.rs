@@ -594,6 +594,15 @@ impl App {
                 self.chat.join_game_room_chat(chat_room_id);
             }
         }
+        // The world's room is known once the board's row loads, the daily
+        // board's shape: join once per board, whether the chat is shown or
+        // not, so the hidden pane can still count what is said.
+        if self.screen == crate::app::common::primitives::Screen::Realm {
+            if let Some(chat_room_id) = self.realm.take_chat_join() {
+                self.chat.join_game_room_chat(chat_room_id);
+            }
+            self.sync_visible_chat_room();
+        }
         if let Some(state) = self.dartboard_state.as_mut() {
             // The shared canvas drains remote ops, snapshot swaps, and
             // archive loads here; it only exists while the Artboard screen

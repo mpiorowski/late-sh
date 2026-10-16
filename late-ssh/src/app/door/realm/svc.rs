@@ -692,6 +692,16 @@ impl RealmService {
         else {
             return Ok(None);
         };
+        // The world's own room is born with it, in the same transaction: a
+        // world never stands without somewhere to talk, and a rolled-back
+        // opening leaves no room behind either.
+        let chat_room_id = RealmGame::attach_chat_room(&tx, game.id)
+            .await
+            .context("attaching realm chat room")?;
+        let game = RealmGame {
+            chat_room_id: Some(chat_room_id),
+            ..game
+        };
         tx.commit().await?;
         // The banner every session gets is derived from the snapshot (so it
         // is raised on every replica); the headline goes out from here, once,
@@ -992,21 +1002,41 @@ impl RealmService {
     /// continues where this one stopped.
     pub async fn sweep(&self, now: DateTime<Utc>) -> Result<()> {
         let client = self.db.get().await?;
-        // No world standing: the next season rises. Every replica's sweeper
-        // tries; the unique index lets exactly one in.
-        if RealmGame::live(&client).await?.is_none() {
-            let outcome = match self.open_season().await {
-                Ok(Some(game)) => {
-                    tracing::info!(game_id = %game.id, season = game.season, "realm season opened");
-                    RealmSeasonOpen::Opened
+        match RealmGame::live(&client).await? {
+            // No world standing: the next season rises. Every replica's
+            // sweeper tries; the unique index lets exactly one in.
+            None => {
+                let outcome = match self.open_season().await {
+                    Ok(Some(game)) => {
+                        tracing::info!(game_id = %game.id, season = game.season, "realm season opened");
+                        RealmSeasonOpen::Opened
+                    }
+                    Ok(None) => RealmSeasonOpen::Standing,
+                    Err(e) => {
+                        tracing::error!(error = ?e, "failed to open the next realm season");
+                        RealmSeasonOpen::Failed
+                    }
+                };
+                crate::metrics::record_realm_season_open(outcome);
+            }
+            // A world opened before rooms were born with it gets one here.
+            // Idempotent, so two replicas doing it at once land on one room.
+            Some(game) if game.chat_room_id.is_none() => {
+                match RealmGame::attach_chat_room(&client, game.id).await {
+                    Ok(room_id) => {
+                        tracing::info!(game_id = %game.id, %room_id, "realm chat room attached");
+                    }
+                    Err(e) => {
+                        tracing::error!(error = ?e, game_id = %game.id, "failed to attach realm chat room");
+                    }
                 }
-                Ok(None) => RealmSeasonOpen::Standing,
-                Err(e) => {
-                    tracing::error!(error = ?e, "failed to open the next realm season");
-                    RealmSeasonOpen::Failed
-                }
-            };
-            crate::metrics::record_realm_season_open(outcome);
+            }
+            Some(_) => {}
+        }
+        match RealmGame::delete_stale_chat_rooms(&client).await {
+            Ok(0) => {}
+            Ok(deleted) => tracing::info!(deleted, "reaped stale realm chat rooms"),
+            Err(e) => tracing::error!(error = ?e, "failed to reap stale realm chat rooms"),
         }
         let games =
             RealmGame::list_active_for_sweep(&client, now, MAX_GAMES_PER_SWEEP as i64).await?;

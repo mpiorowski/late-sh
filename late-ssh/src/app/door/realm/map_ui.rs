@@ -70,7 +70,9 @@ pub fn cell_at(board: &RealmBoardState, map: &WorldMap, col: u16, row: u16) -> O
     sample(level, level_scale, bx, by)
 }
 
-pub fn draw_map_view(frame: &mut Frame, area: Rect, realm: &RealmState) {
+/// The map, with the info rail beside it when `rail` is set; without it
+/// (the chat stands there instead) the map has the whole area.
+pub fn draw_map_view(frame: &mut Frame, area: Rect, realm: &RealmState, rail: bool) {
     let Some(board) = realm.board.as_ref() else {
         return;
     };
@@ -81,7 +83,7 @@ pub fn draw_map_view(frame: &mut Frame, area: Rect, realm: &RealmState) {
         return;
     };
 
-    let (map_area, rail_area) = if area.width > RAIL_WIDTH + 40 {
+    let (map_area, rail_area) = if rail && area.width > RAIL_WIDTH + 40 {
         (
             Rect::new(area.x, area.y, area.width - RAIL_WIDTH - 1, area.height),
             Some(Rect::new(

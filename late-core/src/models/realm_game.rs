@@ -368,6 +368,15 @@ impl RealmGame {
         Ok(updated)
     }
 
+    /// Give a world its chat room (`ChatRoom::get_or_create_realm_room`, one
+    /// per world, so a new season starts on an empty room) and record it on
+    /// the row. Idempotent: a second call lands on the same room.
+    pub async fn attach_chat_room(client: &impl GenericClient, game_id: Uuid) -> Result<Uuid> {
+        let room = super::chat_room::ChatRoom::get_or_create_realm_room(client, game_id).await?;
+        Self::set_chat_room(client, game_id, room.id).await?;
+        Ok(room.id)
+    }
+
     pub async fn set_chat_room(
         client: &impl deadpool_postgres::GenericClient,
         game_id: Uuid,
@@ -382,6 +391,45 @@ impl RealmGame {
             )
             .await?;
         Ok(updated)
+    }
+
+    /// Hard-delete the chat rooms (and their voice channels) of worlds that
+    /// finished or were cancelled over 30 days ago, long after the 24h the
+    /// board stays listed, so the talk outlives every surface that could
+    /// show it. Chat FK cascades remove memberships and messages;
+    /// `realm_games.chat_room_id` goes NULL via ON DELETE SET NULL, so the
+    /// world keeps its row. Voice channels have no FK to their polymorphic
+    /// target and go alongside, the `DailyMatch::delete_stale_chat_rooms`
+    /// shape.
+    pub async fn delete_stale_chat_rooms(client: &impl GenericClient) -> Result<u64> {
+        let row = client
+            .query_one(
+                "WITH stale AS (
+                     SELECT chat_room_id AS id
+                     FROM realm_games
+                     WHERE chat_room_id IS NOT NULL
+                       AND status IN ('finished', 'cancelled')
+                       AND updated < current_timestamp - INTERVAL '30 days'
+                 ),
+                 deleted_voice AS (
+                     DELETE FROM voice_channels v
+                     USING stale s
+                     WHERE v.target_kind = 'chat_room'
+                       AND v.target_id = s.id
+                     RETURNING v.id
+                 ),
+                 deleted_chats AS (
+                     DELETE FROM chat_rooms c
+                     USING stale s
+                     WHERE c.id = s.id
+                     RETURNING c.id
+                 )
+                 SELECT COUNT(*)::bigint AS count FROM deleted_chats",
+                &[],
+            )
+            .await?;
+        let count: i64 = row.get("count");
+        Ok(count as u64)
     }
 
     /// Archive one day's log. Re-archiving the same day overwrites it: a day

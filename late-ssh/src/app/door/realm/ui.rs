@@ -1,6 +1,7 @@
 //! `Screen::Realm` renderer: one-line header (game, points, next refill),
-//! the active view (map/targets/overview/log), and the pinned key-hint
-//! footer.
+//! the active view (map/targets/overview/log), the world's chat in a right
+//! column while it is up (in place of the map's rail), and the pinned
+//! key-hint footer.
 
 use chrono::Utc;
 use ratatui::{
@@ -11,10 +12,12 @@ use ratatui::{
     widgets::{Paragraph, Wrap},
 };
 
+use crate::app::chat::ui::{EmbeddedRoomChatView, draw_embedded_room_chat};
 use crate::app::common::theme;
+use crate::app::files::terminal_image::TerminalImageFrame;
 
 use super::log_ui::draw_log_view;
-use super::map_ui::draw_map_view;
+use super::map_ui::{RAIL_WIDTH, draw_map_view};
 use super::overview_ui::draw_overview_view;
 use super::results_ui::draw_results;
 use super::state::{RealmState, RealmView, points_left};
@@ -70,7 +73,32 @@ fn fit_line(spans: Vec<Span<'static>>, width: usize) -> Line<'static> {
     Line::from(out)
 }
 
-pub fn draw(frame: &mut Frame, area: Rect, realm: &RealmState) {
+/// The world's chat as the board gets it from the app, which owns the chat
+/// state the pane is drawn from.
+pub(crate) enum RealmChatPane<'a> {
+    /// Nothing to talk in yet: the board is loading, or the world was opened
+    /// before rooms were born with it and the sweeper has not caught up.
+    Absent,
+    /// The room is there and put away; what was said since is counted.
+    Hidden {
+        unread: i64,
+    },
+    Shown(EmbeddedRoomChatView<'a>),
+}
+
+/// The chat column's width: a third of the screen, never narrower than the
+/// rail it stands in for, never so wide the map turns into a strip.
+fn chat_width(body_width: u16) -> u16 {
+    (body_width / 3).clamp(RAIL_WIDTH, 64)
+}
+
+pub(crate) fn draw(
+    frame: &mut Frame,
+    area: Rect,
+    realm: &RealmState,
+    chat: RealmChatPane<'_>,
+    terminal_images: &mut TerminalImageFrame,
+) {
     let Some(board) = realm.board.as_ref() else {
         return;
     };
@@ -78,8 +106,43 @@ pub fn draw(frame: &mut Frame, area: Rect, realm: &RealmState) {
         return;
     }
     let header = Rect::new(area.x, area.y, area.width, 1);
-    let body = Rect::new(area.x, area.y + 1, area.width, area.height - 2);
+    let full_body = Rect::new(area.x, area.y + 1, area.width, area.height - 2);
     let footer = Rect::new(area.x, area.y + area.height - 1, area.width, 1);
+    // The chat takes the right column on every view; on the map it stands
+    // where the rail was. Too narrow for both, and the chat has the body:
+    // it was asked for, the map was not.
+    let unread = match &chat {
+        RealmChatPane::Hidden { unread } => Some(*unread),
+        RealmChatPane::Absent | RealmChatPane::Shown(_) => None,
+    };
+    let (body, chat_area, chat_view) = match chat {
+        RealmChatPane::Shown(view) => {
+            let width = chat_width(full_body.width);
+            match full_body.width > width + 40 {
+                true => (
+                    Rect::new(
+                        full_body.x,
+                        full_body.y,
+                        full_body.width - width - 1,
+                        full_body.height,
+                    ),
+                    Some(Rect::new(
+                        full_body.x + full_body.width - width,
+                        full_body.y,
+                        width,
+                        full_body.height,
+                    )),
+                    Some(view),
+                ),
+                false => (Rect::default(), Some(full_body), Some(view)),
+            }
+        }
+        RealmChatPane::Absent | RealmChatPane::Hidden { .. } => (full_body, None, None),
+    };
+    let rail = chat_area.is_none();
+    // The map sets it again if it is drawn; a frame where the chat has the
+    // whole body must not leave the last map rect taking the clicks.
+    board.map_geometry.set(None);
 
     // Header.
     let dim = Style::default().fg(theme::TEXT_DIM());
@@ -189,14 +252,33 @@ pub fn draw(frame: &mut Frame, area: Rect, realm: &RealmState) {
             .wrap(Wrap { trim: false }),
             body,
         );
-    } else if board.detail.is_some() {
+    } else if board.detail.is_some() && !body.is_empty() {
         match board.view {
-            RealmView::Map => draw_map_view(frame, body, realm),
+            RealmView::Map => draw_map_view(frame, body, realm, rail),
             RealmView::Targets => draw_targets_view(frame, body, realm),
             RealmView::Overview => draw_overview_view(frame, body, realm),
             RealmView::Log => draw_log_view(frame, body, realm),
             RealmView::History => super::history_ui::draw(frame, body, realm),
         }
+    }
+
+    if let (Some(chat_area), Some(view)) = (chat_area, chat_view) {
+        // The column between the view and the chat gets a rule, so the
+        // talk does not read as part of the map it sits against.
+        if chat_area.x > full_body.x {
+            let rule = Rect::new(chat_area.x - 1, chat_area.y, 1, chat_area.height);
+            frame.render_widget(
+                Paragraph::new(
+                    (0..rule.height)
+                        .map(|_| {
+                            Line::from(Span::styled("│", Style::default().fg(theme::BORDER())))
+                        })
+                        .collect::<Vec<_>>(),
+                ),
+                rule,
+            );
+        }
+        draw_embedded_room_chat(frame, chat_area, view, terminal_images);
     }
 
     // The result goes over the top of everything: it is the one thing on
@@ -254,14 +336,24 @@ pub fn draw(frame: &mut Frame, area: Rect, realm: &RealmState) {
             }
         }
     };
+    let faint = Style::default().fg(theme::TEXT_FAINT());
+    // The chat's key leads, so a narrow footer cuts the view's keys rather
+    // than the one way to find out somebody said something.
+    let mut footer_spans = Vec::new();
+    match unread {
+        Some(0) => footer_spans.push(Span::styled("c chat · ", faint)),
+        Some(unread) => {
+            footer_spans.push(Span::styled(format!("c chat ({unread} new)"), bright));
+            footer_spans.push(Span::styled(" · ", faint));
+        }
+        None if realm.shown_chat_room_id().is_some() => {
+            footer_spans.push(Span::styled("c hide chat · i type · ", faint));
+        }
+        None => {}
+    }
+    footer_spans.push(Span::styled(hints, faint));
     frame.render_widget(
-        Paragraph::new(fit_line(
-            vec![Span::styled(
-                hints,
-                Style::default().fg(theme::TEXT_FAINT()),
-            )],
-            footer.width as usize,
-        )),
+        Paragraph::new(fit_line(footer_spans, footer.width as usize)),
         footer,
     );
 }

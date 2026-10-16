@@ -374,6 +374,9 @@ struct DrawContext<'a> {
     lobby: &'a crate::app::lobby::state::LobbyState,
     daily: &'a crate::app::lobby::daily::state::DailyState,
     realm: &'a crate::app::door::realm::state::RealmState,
+    /// The realm board's chat: shown in place of the rail, hidden with an
+    /// unread count, or absent while the board has no room.
+    realm_chat: Option<crate::app::door::realm::ui::RealmChatPane<'a>>,
     paper_modal: Option<&'a crate::app::paper::state::PaperModal>,
     stream_modal: Option<&'a crate::app::state::StreamModal>,
     show_help: bool,
@@ -1253,6 +1256,78 @@ impl App {
                     chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
                     selection_scroll: Some(&self.chat.selection_scroll),
                 });
+        // The world's chat on the realm board, while it is up; hidden, the
+        // board only needs to know how much has been said since.
+        let realm_chat = match (self.realm.chat_room_id(), self.realm.shown_chat_room_id()) {
+            (None, _) => crate::app::door::realm::ui::RealmChatPane::Absent,
+            (Some(room_id), None) => crate::app::door::realm::ui::RealmChatPane::Hidden {
+                unread: self.chat.unread_counts.get(&room_id).copied().unwrap_or(0),
+            },
+            (Some(_), Some(chat_room_id)) => {
+                crate::app::door::realm::ui::RealmChatPane::Shown(chat::ui::EmbeddedRoomChatView {
+                    messages_inset: 1,
+                    title: "Realm Chat",
+                    messages: self.chat.messages_for_room(chat_room_id),
+                    overlay: self.chat.overlay(),
+                    image_modal,
+                    rows_cache: &mut self.realm_chat_rows_cache,
+                    rows_versions: chat::ui::ChatRowsVersions {
+                        room_id: Some(chat_room_id),
+                        room_version: self.chat.room_version(chat_room_id),
+                        chat_ctx_epoch: self.chat.context_epoch(),
+                        app_ctx_epoch: self.chat_ctx_epoch,
+                    },
+                    usernames: chat_usernames,
+                    countries: chat_countries,
+                    friend_user_ids: self.chat.friend_user_ids(),
+                    live_user_ids: &self.chat.live_user_ids,
+                    message_reactions,
+                    message_gilds,
+                    inline_images: &self.chat.inline_image_cache,
+                    dividers: crate::app::chat::ui::ChatDividers {
+                        afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
+                        left_app: self.chat.device_left_at(),
+                    },
+                    current_user_id: self.user_id,
+                    voice_channel_id: self
+                        .chat
+                        .voice_channels_by_room_id
+                        .get(&chat_room_id)
+                        .map(|channel| channel.id),
+                    voice_snapshot,
+                    voice_paired_cli_supports_voice: paired_cli_supports_voice,
+                    show_flag_fallback: self.profile_state.profile().show_flag_fallback,
+                    selected_message_id: self.chat.selected_message_id,
+                    selected_image_message: self
+                        .chat
+                        .selected_message_has_inline_image_in_room(chat_room_id),
+                    highlighted_message_id: self.chat.highlighted_message_id,
+                    reaction_picker_active: self.chat.is_reaction_leader_active(),
+                    composer: self.chat.composer(),
+                    composer_inert: chat::ui::ComposerInert::No,
+                    composing: self.chat.composing,
+                    mention_matches: &self.chat.mention_ac.matches,
+                    mention_selected: self.chat.mention_ac.selected,
+                    mention_active: self.chat.mention_ac.active,
+                    reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
+                    is_editing: self.chat.edited_message_id.is_some(),
+                    bonsai_glyphs,
+                    chat_badges,
+                    profile_award_badges,
+                    drunk_levels: &self.drunk_levels,
+                    name_flair: &self.name_flair,
+                    away_user_ids: &self.away_user_ids,
+                    name_flicker,
+                    translations: &self.chat.translations,
+                    translation_hidden: &self.chat.translation_hidden,
+                    keep_composer_focused: self.profile_state.profile().keep_composer_focused,
+                    composer_rect_slot: Some(&self.chat.last_composer_rect),
+                    composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
+                    chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
+                    selection_scroll: Some(&self.chat.selection_scroll),
+                })
+            }
+        };
         // The watch chat: docked beside the watched screen for a watcher,
         // read-only beside their own game for the player.
         let watch_chat_view =
@@ -1764,6 +1839,7 @@ impl App {
                         lobby: &self.lobby,
                         daily: &self.daily,
                         realm: &self.realm,
+                        realm_chat: Some(realm_chat),
                         paper_modal: self.paper.modal.as_ref(),
                         stream_modal: self.stream_modal.as_ref(),
                         show_help: self.show_help,
@@ -2601,7 +2677,15 @@ impl App {
                 terminal_images,
                 ctx.daily_chat_view.take(),
             ),
-            Screen::Realm => crate::app::door::realm::ui::draw(frame, content_area, ctx.realm),
+            Screen::Realm => crate::app::door::realm::ui::draw(
+                frame,
+                content_area,
+                ctx.realm,
+                ctx.realm_chat
+                    .take()
+                    .unwrap_or(crate::app::door::realm::ui::RealmChatPane::Absent),
+                terminal_images,
+            ),
             Screen::HouseTable => crate::app::lobby::house::ui::draw(
                 frame,
                 content_area,

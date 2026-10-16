@@ -84,7 +84,13 @@ fn screen_has_chat_pane(screen: Screen) -> bool {
         screen,
         // Games draws a pane only while this session has a watch open (the
         // watch chat); the hub proper and a preview resolve to no room.
-        Screen::Dashboard | Screen::DailyMatch | Screen::HouseTable | Screen::Zen | Screen::Games
+        // Realm draws one only while its chat is shown in place of the rail.
+        Screen::Dashboard
+            | Screen::DailyMatch
+            | Screen::HouseTable
+            | Screen::Zen
+            | Screen::Games
+            | Screen::Realm
     )
 }
 
@@ -3185,6 +3191,7 @@ fn embedded_chat_room_id(app: &App, screen: Screen) -> Option<Uuid> {
         Screen::HouseTable => app.house.chat_room_id(),
         Screen::Zen => app.zen_chat_room_id(),
         Screen::Games => crate::app::door::spectate::input::chat_room_id(app),
+        Screen::Realm => app.realm.shown_chat_room_id(),
         _ => None,
     }
 }

@@ -1673,6 +1673,64 @@ async fn the_realm_board_is_a_backtick_stop() {
     );
 }
 
+/// The world's chat is put away when the board opens, so the map has the
+/// screen; `c` puts it up in the rail's place and `i` types into the
+/// world's own room, and `c` again hides it.
+#[tokio::test]
+async fn the_realm_chat_is_hidden_until_asked_for() {
+    use crate::app::activity::lounge::{SYSTEM_FINGERPRINT, SYSTEM_USERNAME};
+    use crate::app::common::primitives::Screen;
+    use late_core::models::user::{User, UserParams};
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "realm-chat").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "realm-chat-it");
+    {
+        let client = test_db.db.get().await.expect("db");
+        User::create(
+            &client,
+            UserParams {
+                fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                username: SYSTEM_USERNAME.to_string(),
+                settings: serde_json::json!({ "bot": true, "system": true }),
+            },
+        )
+        .await
+        .expect("create system user");
+    }
+    let game = app
+        .realm
+        .service()
+        .open_season()
+        .await
+        .expect("open season")
+        .expect("a world rises");
+    let room_id = game.chat_room_id.expect("the world has its room");
+
+    app.set_screen(Screen::Games);
+    app.realm.open_board(game.id, Screen::Games);
+    app.set_screen(Screen::Realm);
+    wait_for_render_contains(&mut app, "c chat").await;
+    assert_eq!(app.realm.shown_chat_room_id(), None, "hidden by default");
+
+    app.handle_input(b"c");
+    wait_for_render_contains(&mut app, "No messages yet").await;
+    wait_for_render_contains(&mut app, "c hide chat").await;
+    assert_eq!(app.realm.shown_chat_room_id(), Some(room_id));
+
+    app.handle_input(b"i");
+    assert!(app.chat.composing, "i opens the composer");
+    assert_eq!(app.chat.composer_room_id(), Some(room_id));
+
+    app.handle_input(b"\x1b");
+    app.pending_escape_started_at = Some(std::time::Instant::now() - Duration::from_secs(1));
+    crate::app::input::flush_pending_escape(&mut app);
+    assert!(!app.chat.composing, "Esc puts the composer away");
+    app.handle_input(b"c");
+    wait_for_render_not_contains(&mut app, "No messages yet").await;
+    assert_eq!(app.screen, Screen::Realm, "and the board stays up");
+}
+
 /// A lone Esc never reaches the realm board's own keys: it is held as a
 /// pending escape and flushed later. It still has to put the colour picker
 /// away before it puts the board away, and a picker left open when the board

@@ -85,6 +85,10 @@ pub struct RealmState {
     /// the one thing here that changes without anything arriving, so it is
     /// the one thing that has to ask for its own frames.
     countdown_second: Option<i64>,
+    /// The world's chat is up in place of the map's rail. Hidden by default,
+    /// so the board opens on the whole map; `c` flips it, and it stays as
+    /// left for the rest of the session, across boards.
+    pub chat_open: bool,
 }
 
 pub struct RealmBoardState {
@@ -116,6 +120,9 @@ pub struct RealmBoardState {
     pub targets_cursor: usize,
     /// Cursor into the overview's holdings list.
     pub holdings_cursor: usize,
+    /// The join for this world's chat room has been asked for, once per
+    /// board: membership is what the pane's messages hang on.
+    pub chat_join_requested: bool,
     /// The results card is up. Raised by itself when a finished game loads
     /// and lowered by any key, so the news is unmissable but not in the way.
     pub results_open: bool,
@@ -158,6 +165,9 @@ pub struct RealmDetail {
     /// What the pot did (`realm_games.payout`); `None` while the sweeper
     /// still owes it, which the results card says instead of "paid".
     pub payout: Option<String>,
+    /// This world's own chat room; `None` only on a world opened before
+    /// rooms were born with it, until the sweeper gives it one.
+    pub chat_room_id: Option<Uuid>,
     pub state: RealmGameState,
 }
 
@@ -273,6 +283,7 @@ impl RealmState {
             event_rx,
             board: None,
             join_draft: None,
+            chat_open: false,
         }
     }
 
@@ -289,6 +300,40 @@ impl RealmState {
     /// The standing world, as the hub card and the board's join key read it.
     pub fn live(&self) -> Option<&super::svc::RealmGameItem> {
         self.snapshot.live()
+    }
+
+    /// The open board's chat room, shown or not.
+    pub fn chat_room_id(&self) -> Option<Uuid> {
+        self.board.as_ref()?.detail.as_ref()?.chat_room_id
+    }
+
+    /// The chat room the board is drawing a pane for: the board's room while
+    /// the chat is up, `None` while it is hidden or the board has no room.
+    pub fn shown_chat_room_id(&self) -> Option<Uuid> {
+        match self.chat_open {
+            true => self.chat_room_id(),
+            false => None,
+        }
+    }
+
+    /// Show or hide the chat in place of the rail. Returns the new value.
+    pub fn toggle_chat(&mut self) -> bool {
+        self.chat_open ^= true;
+        self.chat_open
+    }
+
+    /// The chat room to join for the open board, once per board. `None`
+    /// once asked for, or while there is no room to join yet.
+    pub fn take_chat_join(&mut self) -> Option<Uuid> {
+        let room_id = self.chat_room_id()?;
+        let board = self.board.as_mut()?;
+        match board.chat_join_requested {
+            true => None,
+            false => {
+                board.chat_join_requested = true;
+                Some(room_id)
+            }
+        }
     }
 
     /// Whether the viewer can march into the standing world right now:
@@ -544,6 +589,7 @@ impl RealmState {
             load_rx: None,
             reload_pending: false,
             act_in_flight: false,
+            chat_join_requested: false,
             targets_cursor: 0,
             holdings_cursor: 0,
             results_open: false,
@@ -607,6 +653,7 @@ impl RealmState {
                             reset_hour_utc: row.reset_hour_utc,
                             winner_user_id: row.winner_user_id,
                             payout: row.payout,
+                            chat_room_id: row.chat_room_id,
                             state,
                         });
                         board.load_error = None;
