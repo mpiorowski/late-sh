@@ -75,7 +75,12 @@ async fn open(svc: &RealmService, test_db: &TestDb, spec: &NewRealm) -> RealmGam
 /// Open a world and march `user` straight in, which is what "creating a
 /// game" amounts to now: the row is the house's, and the first player is a
 /// joiner like every player after them.
-async fn create_game(svc: &RealmService, test_db: &TestDb, user: &User, spec: &NewRealm) -> RealmGame {
+async fn create_game(
+    svc: &RealmService,
+    test_db: &TestDb,
+    user: &User,
+    spec: &NewRealm,
+) -> RealmGame {
     let game = open(svc, test_db, spec).await;
     svc.join_game(user.id, &user.username, game.id, None)
         .await
@@ -352,7 +357,10 @@ async fn the_house_raises_the_next_world_when_none_stands() {
     assert_eq!(first.status, RealmGame::STATUS_ACTIVE);
     assert_eq!(first.reset_hour_utc, HOUSE_RESET_HOUR_UTC);
     let state = parse_state(&first.state).expect("state");
-    assert_eq!(state.ruleset.map_id, "earth", "odd seasons are played on Earth");
+    assert_eq!(
+        state.ruleset.map_id, "earth",
+        "odd seasons are played on Earth"
+    );
     assert_eq!(state.ruleset.pace_name, "Fast");
     assert!(state.players.is_empty());
     assert!(
@@ -393,7 +401,10 @@ async fn the_house_raises_the_next_world_when_none_stands() {
         .expect("the second world stands");
     assert_eq!(second.season, 2);
     let state = parse_state(&second.state).expect("state");
-    assert_eq!(state.ruleset.map_id, GENERATED_MAP_ID, "even seasons are drawn");
+    assert_eq!(
+        state.ruleset.map_id, GENERATED_MAP_ID,
+        "even seasons are drawn"
+    );
     assert!(state.ruleset.map_spec.is_some());
 
     for (game_id, season) in [(first.id, 1), (second.id, 2)] {
@@ -401,7 +412,10 @@ async fn the_house_raises_the_next_world_when_none_stands() {
             matches!(event.kind, ActivityKind::RealmSeasonOpened { game_id: g, .. } if g == game_id)
         })
         .await;
-        assert_eq!(opened.kind, ActivityKind::RealmSeasonOpened { game_id, season });
+        assert_eq!(
+            opened.kind,
+            ActivityKind::RealmSeasonOpened { game_id, season }
+        );
     }
 }
 
@@ -698,12 +712,10 @@ async fn a_finished_realm_lingers_a_day_and_then_leaves_the_lobby() {
         )
         .await
         .expect("finish it");
-    let listed = RealmGame::list_finished_recent(
-        &client,
-        crate::app::door::realm::svc::REALM_RESULTS_HOURS,
-    )
-    .await
-    .expect("list");
+    let listed =
+        RealmGame::list_finished_recent(&client, crate::app::door::realm::svc::REALM_RESULTS_HOURS)
+            .await
+            .expect("list");
     assert!(
         listed.iter().any(|g| g.id == game_id),
         "a result you can still read"
@@ -722,12 +734,10 @@ async fn a_finished_realm_lingers_a_day_and_then_leaves_the_lobby() {
         )
         .await
         .expect("age it");
-    let listed = RealmGame::list_finished_recent(
-        &client,
-        crate::app::door::realm::svc::REALM_RESULTS_HOURS,
-    )
-    .await
-    .expect("list");
+    let listed =
+        RealmGame::list_finished_recent(&client, crate::app::door::realm::svc::REALM_RESULTS_HOURS)
+            .await
+            .expect("list");
     assert!(!listed.iter().any(|g| g.id == game_id));
     // The row itself is still there: the history and its logs outlive the
     // listing.
@@ -1337,21 +1347,26 @@ async fn a_generated_world_is_frozen_as_the_recipe_that_draws_it() {
     let svc = realm_service(&test_db);
     let alice = create_test_user(&test_db.db, "alice").await;
 
-    let game = create_game(&svc, &test_db, &alice, &crate::app::door::realm::svc::NewRealm {
-                map_id: GENERATED_MAP_ID.to_string(),
-                map_spec: Some(GeneratedMapSpec {
-                    // A seed the creator would like: it must not be the one
-                    // used, or a creator could shop for a favourable world by
-                    // making games until they liked their own corner.
-                    seed: 1,
-                    continents: 3,
-                    islands: 4,
-                    territories: 60,
-                    names: Vec::new(),
-                }),
-                ..spec("Uncharted", RESET_HOUR)
-            },
-        ).await;
+    let game = create_game(
+        &svc,
+        &test_db,
+        &alice,
+        &crate::app::door::realm::svc::NewRealm {
+            map_id: GENERATED_MAP_ID.to_string(),
+            map_spec: Some(GeneratedMapSpec {
+                // A seed the creator would like: it must not be the one
+                // used, or a creator could shop for a favourable world by
+                // making games until they liked their own corner.
+                seed: 1,
+                continents: 3,
+                islands: 4,
+                territories: 60,
+                names: Vec::new(),
+            }),
+            ..spec("Uncharted", RESET_HOUR)
+        },
+    )
+    .await;
 
     let state = load_state(&svc, game.id).await;
     assert_eq!(state.ruleset.map_id, GENERATED_MAP_ID);
@@ -1392,18 +1407,23 @@ async fn a_generated_world_clamps_the_shape_it_was_asked_for() {
     let test_db = new_test_db().await;
     let svc = realm_service(&test_db);
     let alice = create_test_user(&test_db.db, "alice").await;
-    let game = create_game(&svc, &test_db, &alice, &crate::app::door::realm::svc::NewRealm {
-                map_id: GENERATED_MAP_ID.to_string(),
-                map_spec: Some(GeneratedMapSpec {
-                    seed: 0,
-                    continents: 250,
-                    islands: 0,
-                    territories: 9_000,
-                    names: Vec::new(),
-                }),
-                ..spec("Too much world", RESET_HOUR)
-            },
-        ).await;
+    let game = create_game(
+        &svc,
+        &test_db,
+        &alice,
+        &crate::app::door::realm::svc::NewRealm {
+            map_id: GENERATED_MAP_ID.to_string(),
+            map_spec: Some(GeneratedMapSpec {
+                seed: 0,
+                continents: 250,
+                islands: 0,
+                territories: 9_000,
+                names: Vec::new(),
+            }),
+            ..spec("Too much world", RESET_HOUR)
+        },
+    )
+    .await;
     let stored = load_state(&svc, game.id)
         .await
         .ruleset
