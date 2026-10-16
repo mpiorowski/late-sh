@@ -1,7 +1,7 @@
 # The job feed (`app/jobs`) Context
 
 ## Metadata
-- Domain: the Jobs shelf of the Profiles page (`5`, `Space` from People, `/jobs` from anywhere), the post form on it (`n`, `/jobs post`), the FOR YOU lines under a person's own card, and the NEW WORK section of The Late Edition. Remote postings pulled once a night from feeds published to be read, read into a card by the model, plus postings people write on the shelf themselves, matched to work cards by tag.
+- Domain: the Jobs section of the People page (`5`, `]` from Profiles, `/jobs` from anywhere), the post form on it (`n`, `/jobs post`), the FOR YOU lines under a person's own card, and the NEW WORK section of The Late Edition. Remote postings pulled once a night from feeds published to be read, read into a card by the model, plus postings people write on the shelf themselves, matched to work cards by tag.
 - Status: Active.
 
 ## What it is
@@ -22,7 +22,7 @@ A shelf the feeds keep full, that people can also write on. Three sources (Ask H
 | `late-core/src/models/job_posting.rs` | Every read and write of `job_postings` and `job_press_runs` (migrations 193 and 194): the press's upsert/settle/release/expire, and `post`, `retract`, `count_active_by` for the shelf's own writes. |
 | `late-core/src/vocab.rs` | The tag vocabulary: canonical tags in groups (languages, frameworks, data, infra, practices, tools) with aliases, and `TAG_LIMIT` = 12. The read's prompt, the matcher, the tag picker, a card's `skills`/`skills_tags`, and a profile's `langs` hold nothing outside it. |
 
-The directory page (`app/directory`) owns the shelf strip and the `Space`/`w`/`i` keys and delegates the Jobs shelf's draw and keys here; `app/paper` reads `JobPosting::list_released_on` for NEW WORK and scores with `matches`.
+The directory page (`app/directory`) owns the section row (with the Jobs filters `all` / `for me` on its right), the `[`/`]`/`w`/`i` keys and the footer's page actions, and delegates the Jobs section's draw and keys (`ui::hints`) here; `app/paper` reads `JobPosting::list_released_on` for NEW WORK and scores with `matches`.
 
 ## The press (multi-replica rule as applied)
 

@@ -438,7 +438,7 @@ async fn attention_follows_the_profiles_shelf() {
         "the page opens on the map"
     );
 
-    app.directory_state.set_shelf(Shelf::People);
+    app.directory_state.set_shelf(Shelf::Profiles);
     app.last_one_hz_index = None;
     app.tick();
     assert_eq!(

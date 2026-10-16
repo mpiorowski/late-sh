@@ -224,7 +224,7 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::Darkroom => crate::app::door::darkroom::data::TITLE,
         Screen::Arcade => "Arcade",
         Screen::Artboard => "Artboard",
-        Screen::Profiles => "Profiles",
+        Screen::Profiles => "People",
         Screen::Leaderboard => "Leaderboards",
         Screen::Calendars => "Calendars",
         Screen::Clubhouse => "Clubhouse",

@@ -1673,7 +1673,7 @@ impl App {
             },
             Screen::Profiles => match self.directory_state.shelf() {
                 Shelf::Map => Place::MapShelf,
-                Shelf::People => Place::PeopleShelf,
+                Shelf::Profiles => Place::PeopleShelf,
                 Shelf::Jobs => Place::JobsShelf,
             },
             Screen::Artboard => match &self.dartboard_state {

@@ -30,7 +30,7 @@ pub(crate) fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
             match shelf {
                 Shelf::Map => crate::app::usermap::input::handle_mouse(app, mouse),
                 Shelf::Jobs => app.jobs.mouse.scroll(x, y, delta, size),
-                Shelf::People => app.directory_state.mouse.scroll(x, y, delta, size),
+                Shelf::Profiles => app.directory_state.mouse.scroll(x, y, delta, size),
             }
         }
         // A drag pans the map and the release after it is not a pick; the
@@ -51,11 +51,11 @@ pub(crate) fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
                 .target(x, y, size)
                 .or_else(|| on_jobs.then(|| app.jobs.mouse.target(x, y, size)).flatten());
             let Some(target) = target else {
-                // The page's own targets come first (the strip, the buttons);
+                // The page's own targets come first (the section row, the footer);
                 // the rest of the map shelf is the map's.
                 return match shelf {
                     Shelf::Map => crate::app::usermap::input::handle_mouse(app, mouse),
-                    Shelf::People | Shelf::Jobs => false,
+                    Shelf::Profiles | Shelf::Jobs => false,
                 };
             };
             match target {
@@ -282,7 +282,7 @@ fn submit_search(app: &mut App) {
     app.directory_state.select_and_open(index);
 }
 
-/// The presence tick hands over who is connected. The People shelf groups
+/// The presence tick hands over who is connected. The Profiles section groups
 /// the connected first, so a login or logout moves rows; the cursor follows
 /// its person rather than its index. True when anything moved.
 pub(crate) fn presence_changed(app: &mut App, online: HashSet<uuid::Uuid>) -> bool {
@@ -307,11 +307,16 @@ pub(crate) fn presence_changed(app: &mut App, online: HashSet<uuid::Uuid>) -> bo
     true
 }
 
-/// Keys that work on either shelf.
+/// Keys that work on every section: `[`/`]` step between them (the title
+/// bar advertises these), `w` and `i` open the editor.
 fn handle_shelf_byte(app: &mut App, byte: u8) -> bool {
     match byte {
-        b' ' => {
-            app.directory_state.cycle_shelf();
+        b']' => {
+            app.directory_state.next_shelf();
+            true
+        }
+        b'[' => {
+            app.directory_state.prev_shelf();
             true
         }
         b'w' | b'W' => {
@@ -334,7 +339,7 @@ pub(crate) fn handle_idle_byte(app: &mut App, byte: u8) -> bool {
     match app.directory_state.shelf() {
         Shelf::Map => crate::app::usermap::input::handle_byte(app, byte),
         Shelf::Jobs => handle_jobs_byte(app, byte),
-        Shelf::People => handle_people_byte(app, byte),
+        Shelf::Profiles => handle_people_byte(app, byte),
     }
 }
 
@@ -456,7 +461,7 @@ pub(crate) fn move_idle_selection(app: &mut App, delta: isize) {
     match app.directory_state.shelf() {
         Shelf::Map => app.usermap.move_cursor(delta),
         Shelf::Jobs => crate::app::jobs::input::move_selection(app, delta),
-        Shelf::People => {
+        Shelf::Profiles => {
             let len = entry_len(app);
             app.directory_state.move_selection(delta, len);
         }
@@ -470,7 +475,7 @@ pub(crate) fn handle_idle_arrow(app: &mut App, key: u8) -> bool {
     match app.directory_state.shelf() {
         Shelf::Map => return crate::app::usermap::input::handle_arrow(app, key),
         Shelf::Jobs => return crate::app::jobs::input::handle_arrow(app, key),
-        Shelf::People => {}
+        Shelf::Profiles => {}
     }
     match key {
         b'A' => handle_people_byte(app, b'k'),

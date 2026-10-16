@@ -3111,7 +3111,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::GreenDragon => "Green Dragon",
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
-        Screen::Profiles => "Profiles",
+        Screen::Profiles => "People",
         Screen::Leaderboard => "Leaderboards",
         Screen::Calendars => "Calendars",
         Screen::Clubhouse => "Clubhouse",
@@ -3420,12 +3420,10 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         ));
     }
 
+    // People's title bar is only how to move between its sections; what
+    // can be done in the current section is the page's footer.
     if screen == Screen::Profiles {
-        let hints: &[(&str, &str)] = &[
-            ("i", "new project"),
-            ("w", "work card"),
-            ("Enter", "copy link"),
-        ];
+        let hints: &[(&str, &str)] = &[("[ ]", "section")];
         for (key, desc) in hints {
             spans.push(Span::styled("· ", Style::default().fg(theme::BORDER_DIM())));
             spans.push(Span::styled(

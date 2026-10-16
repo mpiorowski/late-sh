@@ -1,8 +1,8 @@
-# usermap — the Map shelf of Profiles (`/map`)
+# usermap — the Map section of People (`/map`)
 
 ## Metadata
-- Owner surface: the first shelf of the Profiles page (screen `5`, hosted by
-  `app/directory`), which the page opens on; `Space` walks on to People and
+- Owner surface: the first section of the People page (screen `5`, hosted by
+  `app/directory`), which the page opens on; `]` steps on to Profiles and
   Jobs, and `/map` typed into a composer lands here from anywhere.
 - Depends on: `common::worldmap` (the atlas and the painter),
   `profile::svc::ProfileService` (who is online, and where they said they are).
@@ -75,9 +75,9 @@ lightness, so "more people" reads without the legend.
 ## 4. Keys and mouse
 
 The key map is `input.rs` here (`handle_byte`, `handle_arrow`,
-`handle_mouse`), called by the Profiles page's own input (`app/directory`)
-while its map shelf is up; the page keeps what is the page's (`Space` to the
-next shelf, the shelf strip, the page keys) and hands the rest here. The
+`handle_mouse`), called by the People page's own input (`app/directory`)
+while its Map section is up; the page keeps what is the page's (`[`/`]`
+between sections, the section row, the page keys) and hands the rest here. The
 page's tick glue (`app/tick.rs`) calls `show` when the shelf comes on screen
 and `hide` when it leaves, so counts are asked for on arrival and nothing
 runs for a shelf nobody is looking at. `/map` typed into a composer goes
@@ -85,14 +85,15 @@ through `open_usermap_globally` at the root, which closes the modal stack and
 lands on the shelf.
 
 The draw (`ui::draw`) takes the body and paints the title line, the map and
-the list; the page's footer row is built from `ui::footer` (the slice tabs
-and the keys that do something right now).
+the list; the page's footer row prints `ui::hints` (the keys that do
+something right now). The three slices are drawn by the page, as the
+section's filters on the right of its section row.
 
 `m` walks the three slices. All four arrows pan; `j`/`k` walk the country
 list, and picking a country frames it on the map (finding Luxembourg by hand
 on a world view is not a thing to ask of anyone). `+`/`-` zoom, `f` refits,
-`r` re-counts. The `[Online]`, `[This month]`, `[Everyone]` and `[Refresh]`
-buttons under the strip are the same for the mouse.
+`r` re-counts. Clicking `online`, `month` or `all` on the section row picks
+that slice.
 
 Mouse: wheel zooms over the map and scrolls over the list, left-drag pans
 (the map follows the hand), a press that does not move picks the country
@@ -120,6 +121,7 @@ One thing that was wrong on the first cut, worth not repeating:
   picker and the map have not drifted apart.
 - `ui_test`: draws at several sizes — while still counting, with tallies (the
   rung colours have to actually reach the screen), and with nothing to show.
-- The host side: `directory/ui_test` draws the page opening on the map shelf
-  (strip, buttons, title, world, footer), and `input_flow_test` walks `/map`
-  onto the shelf, sees the tick turn the counts on, and Space turn them off.
+- The host side: `directory/ui_test` draws the page opening on the Map
+  section (section row with the slices, title, world, footer) and checks the
+  slices are click targets, and `input_flow_test` walks `/map` onto the
+  section, sees the tick turn the counts on, and `]` turn them off.

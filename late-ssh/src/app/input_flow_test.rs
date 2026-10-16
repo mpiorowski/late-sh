@@ -233,7 +233,7 @@ async fn artboard_disclaimer_tour_choice_keeps_account_settings() {
     app.set_screen(Screen::Artboard);
     let frame = render_plain(&mut app);
     assert!(
-        frame.contains("[S] show · [Enter] skip: the profiles"),
+        frame.contains("[S] show · [Enter] skip: the people"),
         "frame={frame:?}"
     );
     assert!(!frame.contains("Artboard may contain NSFW content"));
@@ -254,7 +254,7 @@ async fn artboard_disclaimer_tour_choice_keeps_account_settings() {
     wait_for_render_contains(&mut app, "Mode       view").await;
     let frame = render_plain(&mut app);
     assert!(
-        frame.contains("[Enter] next: the profiles"),
+        frame.contains("[Enter] next: the people"),
         "frame={frame:?}"
     );
     assert!(!frame.contains("Artboard may contain NSFW content"));
@@ -1052,7 +1052,7 @@ async fn screen_number_keys_switch_between_pages_including_profiles() {
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"5");
-    wait_for_render_contains(&mut app, " Profiles ").await;
+    wait_for_render_contains(&mut app, " People ").await;
 
     app.handle_input(b"1");
     wait_for_render_contains(&mut app, " Home ").await;
@@ -1091,9 +1091,9 @@ async fn profiles_page_keys_drive_the_merged_feed() {
     let mut app = make_app(test_db.db.clone(), user.id, "profiles-feed-flow-it");
 
     app.handle_input(b"5");
-    wait_for_render_contains(&mut app, " Profiles ").await;
-    // The page opens on the map; the feed keys live one shelf on.
-    app.handle_input(b" ");
+    wait_for_render_contains(&mut app, " People ").await;
+    // The page opens on the map; the feed keys live one section on.
+    app.handle_input(b"]");
 
     // `i` opens the profile editor on a blank project form. The form's first
     // row is already being typed into, so one Esc stops typing and a second
@@ -1230,7 +1230,7 @@ async fn shift_tab_cycles_screens_backwards() {
     wait_for_render_contains(&mut app, " Leaderboards ").await;
 
     app.handle_input(b"\x1b[Z");
-    wait_for_render_contains(&mut app, "Profiles").await;
+    wait_for_render_contains(&mut app, " People ").await;
 
     app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, "Artboard may contain NSFW content").await;
@@ -1272,7 +1272,7 @@ async fn tab_cycles_screens_forward_through_all_including_profiles() {
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"\t");
-    wait_for_render_contains(&mut app, " Profiles ").await;
+    wait_for_render_contains(&mut app, " People ").await;
 
     app.handle_input(b"\t");
     wait_for_render_contains(&mut app, " Leaderboards ").await;
@@ -3782,7 +3782,7 @@ async fn forced_tour_can_skip_artboard_without_viewing_it() {
         "frame={frame:?}"
     );
     assert!(
-        frame.contains("[S] show · [Enter] skip: the profiles"),
+        frame.contains("[S] show · [Enter] skip: the people"),
         "frame={frame:?}"
     );
     assert!(!frame.contains("Mode       view"));
@@ -6950,7 +6950,7 @@ async fn profiles_mouse_search_selects_person_and_profile_popup_owns_input() {
     app.resize(80, 24).unwrap();
     app.set_screen(Screen::Profiles);
     app.directory_state
-        .set_shelf(crate::app::directory::state::Shelf::People);
+        .set_shelf(crate::app::directory::state::Shelf::Profiles);
     wait_for_render_contains(&mut app, "@profiles-mouse-author").await;
     app.interaction_mode = InteractionMode::Hybrid;
     app.render().unwrap();
@@ -7052,9 +7052,9 @@ async fn zen_swallows_the_key_after_the_live_prefix_from_a_focused_inbox() {
     );
 }
 
-/// `/map` typed into a composer lands on the Profiles page, on its map
-/// shelf, and the tick turns the counts on for exactly as long as the shelf
-/// is on screen. Space walks on to the people and the map goes quiet.
+/// `/map` typed into a composer lands on the People page, on its Map
+/// section, and the tick turns the counts on for exactly as long as the
+/// section is on screen. `]` steps on to Profiles and the map goes quiet.
 #[tokio::test]
 async fn the_map_command_lands_on_the_profiles_map_shelf() {
     use crate::app::common::primitives::Screen;
@@ -7083,8 +7083,8 @@ async fn the_map_command_lands_on_the_profiles_map_shelf() {
     assert!(app.usermap.is_shown(), "the tick asks for the counts");
     wait_for_render_contains(&mut app, "where everyone is").await;
 
-    app.handle_input(b" ");
-    assert_eq!(app.directory_state.shelf(), Shelf::People);
+    app.handle_input(b"]");
+    assert_eq!(app.directory_state.shelf(), Shelf::Profiles);
     app.tick();
     assert!(
         !app.usermap.is_shown(),

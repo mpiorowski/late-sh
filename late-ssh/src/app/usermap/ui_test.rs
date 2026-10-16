@@ -1,15 +1,15 @@
 use ratatui::layout::Rect;
 use ratatui::style::Color;
-use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 use ratatui::{Terminal, backend::TestBackend};
 
 use super::state::{HEAT, UserMapState, heat_floors, heat_index_for, territory_for_code};
-use super::ui::{draw, footer};
+use super::ui::{draw, hints};
+use crate::app::common::primitives::hint_line;
 
 /// Render into a terminal and hand back every colour that reached the buffer.
 /// Laid out as the page lays it out: the map gets every row but the last,
-/// which the page fills from the map's footer spans.
+/// which the page fills from the map's footer hints.
 fn render(state: &mut UserMapState, w: u16, h: u16) -> (String, Vec<Color>) {
     let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("terminal");
     terminal
@@ -18,7 +18,7 @@ fn render(state: &mut UserMapState, w: u16, h: u16) -> (String, Vec<Color>) {
             let body = Rect::new(area.x, area.y, area.width, area.height - 1);
             draw(frame, body, state);
             frame.render_widget(
-                Paragraph::new(Line::from(footer(state))),
+                Paragraph::new(hint_line(hints(state))),
                 Rect::new(area.x, area.bottom() - 1, area.width, 1),
             );
         })

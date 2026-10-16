@@ -128,8 +128,8 @@ impl MapMode {
         }
     }
 
-    /// The tab strip, which is also how somebody finds out the other two
-    /// exist.
+    /// The slice's filter label on the People page's section row, which is
+    /// also how somebody finds out the other two exist.
     pub fn tab_label(self) -> &'static str {
         match self {
             MapMode::Online => "online",

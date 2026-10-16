@@ -1,5 +1,5 @@
-//! The Jobs shelf on the Profiles page: a list of postings beside a
-//! detail pane, the same frame the People shelf uses, the "for you"
+//! The Jobs section of the People page: a list of postings beside a
+//! detail pane, the same frame the Profiles section uses, the "for you"
 //! lines a person's own card prints, and the post form over the page.
 
 use crate::app::common::mouse_ui::{self, Surface};
@@ -27,23 +27,15 @@ pub(crate) const JOBS_HINTS: &[(&str, &str)] = &[
     ("/", "for me"),
     ("n", "post a job"),
     ("d", "take down"),
-    ("w", "your profile"),
-    ("Space", "people"),
 ];
 pub(crate) const JOBS_NARROW_HINTS: &[(&str, &str)] = &[
     ("j/k", "jobs"),
     ("l", "open"),
     ("/", "for me"),
     ("n", "post"),
-    ("w", "your profile"),
-    ("Space", "people"),
 ];
-pub(crate) const JOBS_DETAIL_NARROW_HINTS: &[(&str, &str)] = &[
-    ("h", "back"),
-    ("Enter", "copy link"),
-    ("d", "take down"),
-    ("Space", "people"),
-];
+pub(crate) const JOBS_DETAIL_NARROW_HINTS: &[(&str, &str)] =
+    &[("h", "back"), ("Enter", "copy link"), ("d", "take down")];
 
 /// Tags on a list row.
 const ROW_TAGS: usize = 4;
@@ -432,7 +424,7 @@ pub(crate) fn for_you_lines(matches: &[&JobPosting], width: usize) -> Vec<Line<'
         ]));
     }
     lines.push(Line::from(Span::styled(
-        "  Space opens the Jobs shelf; / there keeps only your matches.",
+        "  ] opens the Jobs section; / there keeps only your matches.",
         faint,
     )));
     lines
@@ -492,19 +484,6 @@ pub(crate) fn shelf_count(jobs: &JobsState, viewer_tags: &[String]) -> Option<us
 }
 
 /// The page footer's right side while the for-me filter is on.
-pub(crate) fn footer_note(jobs: &JobsState) -> Vec<Span<'static>> {
-    if jobs.for_me {
-        vec![Span::styled(
-            "for me ",
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        )]
-    } else {
-        Vec::new()
-    }
-}
-
 // The post form
 
 /// Label column, then a space, then the value.

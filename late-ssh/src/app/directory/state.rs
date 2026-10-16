@@ -7,32 +7,41 @@ use super::super::chat::{showcase::svc::ShowcaseFeedItem, work::svc::WorkFeedIte
 use crate::app::common::primitives::format_relative_time_short;
 use late_core::models::{profile::Profile, work_profile::WorkStatus};
 
-/// The three shelves of the people page: the map of where everyone is
-/// (`app/usermap`), the people, and the remote job feed (`app/jobs`). Space
-/// walks them in that order, and the page opens on the map.
+/// The three sections of the People page: the map of where everyone is
+/// (`app/usermap`), the profiles, and the remote job feed (`app/jobs`).
+/// `]` steps right through them and `[` steps left, both wrapping, and the
+/// page opens on the map.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Shelf {
     Map,
-    People,
+    Profiles,
     Jobs,
 }
 
 impl Shelf {
-    pub(crate) const ALL: [Shelf; 3] = [Shelf::Map, Shelf::People, Shelf::Jobs];
+    pub(crate) const ALL: [Shelf; 3] = [Shelf::Map, Shelf::Profiles, Shelf::Jobs];
 
     pub(crate) const fn title(self) -> &'static str {
         match self {
-            Self::Map => "map",
-            Self::People => "people",
-            Self::Jobs => "jobs",
+            Self::Map => "Map",
+            Self::Profiles => "Profiles",
+            Self::Jobs => "Jobs",
         }
     }
 
     pub(crate) const fn next(self) -> Self {
         match self {
-            Self::Map => Self::People,
-            Self::People => Self::Jobs,
+            Self::Map => Self::Profiles,
+            Self::Profiles => Self::Jobs,
             Self::Jobs => Self::Map,
+        }
+    }
+
+    pub(crate) const fn prev(self) -> Self {
+        match self {
+            Self::Map => Self::Jobs,
+            Self::Profiles => Self::Map,
+            Self::Jobs => Self::Profiles,
         }
     }
 }
@@ -185,7 +194,7 @@ pub(crate) struct DirectoryState {
     search_mode: bool,
     search_query: String,
     /// Who is connected, as the presence tick last handed it over. The
-    /// People shelf lists them first.
+    /// Profiles section lists them first.
     online: HashSet<Uuid>,
 }
 
@@ -225,8 +234,12 @@ impl DirectoryState {
         self.shelf
     }
 
-    pub(crate) fn cycle_shelf(&mut self) {
+    pub(crate) fn next_shelf(&mut self) {
         self.set_shelf(self.shelf.next());
+    }
+
+    pub(crate) fn prev_shelf(&mut self) {
+        self.set_shelf(self.shelf.prev());
     }
 
     pub(crate) fn set_shelf(&mut self, shelf: Shelf) {

@@ -1,7 +1,7 @@
-//! Keys on the map shelf: pick a country (which frames it), pan, zoom, walk
-//! the slices, or ask for fresh numbers. The host page (`app/directory`)
-//! calls these for its map shelf and keeps what is the page's: Space to the
-//! next shelf, the page keys, the shelf strip.
+//! Keys on the Map section: pick a country (which frames it), pan, zoom,
+//! walk the slices, or ask for fresh numbers. The host page (`app/directory`)
+//! calls these for its Map section and keeps what is the page's: `[`/`]`
+//! between sections, the page keys, the section row.
 
 use crate::app::input::{MouseButton, MouseEvent, MouseEventKind};
 use crate::app::state::App;

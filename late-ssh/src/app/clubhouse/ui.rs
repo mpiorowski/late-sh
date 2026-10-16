@@ -1523,7 +1523,7 @@ pub fn draw_tour_overlay(
                     text,
                 )),
             ],
-            "the profiles",
+            "the people",
         ),
         Tutorial::VisitArtboard => (
             Screen::Artboard,
@@ -1556,11 +1556,11 @@ pub fn draw_tour_overlay(
                     Span::styled("the local guide, here and everywhere", text),
                 ]),
             ],
-            "the profiles",
+            "the people",
         ),
         Tutorial::VisitDirectory => (
             Screen::Profiles,
-            " ✦ the tour · [5] the profiles ",
+            " ✦ the tour · [5] the people ",
             vec![
                 Line::from(Span::styled(
                     "the people: everyone who ships a project or posts a work card.",

@@ -1,5 +1,5 @@
 //! Drawing the map shelf: a title line, the world on the left, who is on it
-//! down the right. The footer is the host page's row, built from [`footer`].
+//! down the right. The footer is the host page's row, its keys from [`hints`].
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -88,10 +88,9 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &mut UserMapState) {
     }
 }
 
-/// The host's footer row: the three slices as tabs, on the same line as the
-/// keys because the tabs are how anybody finds out the other two slices
-/// exist and a row of their own is more than that is worth.
-pub fn footer(state: &UserMapState) -> Vec<Span<'static>> {
+/// The keys for the host's footer row. The three slices are not here: the
+/// host draws them as filters on its section row, where they can be clicked.
+pub fn hints(state: &UserMapState) -> &'static [(&'static str, &'static str)] {
     // When the whole world is on screen the arrows are correctly a no-op, and
     // a footer that still advertises them is how "panning is broken" gets
     // reported. Say what is actually true instead.
@@ -101,28 +100,23 @@ pub fn footer(state: &UserMapState) -> Vec<Span<'static>> {
         }
         _ => false,
     };
-    let hints = if fits {
-        "m mode · + zoom in · j/k country · r refresh"
+    if fits {
+        &[
+            ("m", "online/month/all"),
+            ("+", "zoom in"),
+            ("j/k", "country"),
+            ("r", "refresh"),
+        ]
     } else {
-        "m mode · arrows pan · +/- zoom · j/k country · f fit"
-    };
-    let mut spans: Vec<Span<'static>> = Vec::new();
-    for mode in MapMode::ALL {
-        let current = mode == state.mode();
-        spans.push(Span::styled(
-            format!("{} ", mode.tab_label()),
-            Style::default().fg(if current {
-                theme::AMBER_GLOW()
-            } else {
-                theme::TEXT_FAINT()
-            }),
-        ));
+        &[
+            ("m", "online/month/all"),
+            ("arrows", "pan"),
+            ("+/-", "zoom"),
+            ("f", "fit"),
+            ("j/k", "country"),
+            ("r", "refresh"),
+        ]
     }
-    spans.push(Span::styled(
-        format!("· {hints}"),
-        Style::default().fg(theme::TEXT_FAINT()),
-    ));
-    spans
 }
 
 fn draw_list(frame: &mut Frame, area: Rect, state: &UserMapState) {

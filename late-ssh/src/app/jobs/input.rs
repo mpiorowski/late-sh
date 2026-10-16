@@ -1,5 +1,5 @@
-//! Keys on the Jobs shelf, and on the post form over it. The page-level
-//! keys (`Space`, `w`, `i`) are the directory's; these are the shelf's own.
+//! Keys on the Jobs section, and on the post form over it. The page-level
+//! keys (`[`, `]`, `w`, `i`) are the directory's; these are the section's own.
 
 use late_core::models::job_posting::JobSource;
 

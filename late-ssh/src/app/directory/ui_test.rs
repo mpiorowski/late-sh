@@ -169,36 +169,37 @@ fn a_wide_frame_draws_the_list_beside_the_sectioned_detail() {
     let lines = render(&fixture, &state, 120, 30);
     let text = lines.join("\n");
 
-    assert_eq!(
-        lines[0], " map 0  ·  people 2  ·  jobs",
-        "the shelf strip with its count:\n{text}"
+    assert!(
+        lines[0].starts_with(" Map 0   Profiles 2   Jobs")
+            && lines[0].ends_with("everyone · mine · search"),
+        "the section row, counts on the left, filters on the right:\n{text}"
     );
 
     // Row one: the person with a card, three lines with fixed roles.
     assert!(
-        lines[2].starts_with("▎@meythewitch  ● open")
-            && cells(&lines[2], 0, 50).trim_end().ends_with("1d"),
+        lines[1].starts_with("▎@meythewitch  ● open")
+            && cells(&lines[1], 0, 50).trim_end().ends_with("1d"),
         "line 1 is name, status, age:\n{text}"
     );
     assert!(
-        lines[3].starts_with(" Full Stack Developer"),
+        lines[2].starts_with(" Full Stack Developer"),
         "line 2 is the headline:\n{text}"
     );
     assert!(
-        lines[4].starts_with(" rust · kotlin · typescript")
-            && cells(&lines[4], 0, 50).trim_end().ends_with("1 project"),
+        lines[3].starts_with(" rust · kotlin · typescript")
+            && cells(&lines[3], 0, 50).trim_end().ends_with("1 project"),
         "line 3 is the tags, giving way to the project count:\n{text}"
     );
-    assert!(!lines[4].contains("sql"), "a sixth tag is dropped:\n{text}");
+    assert!(!lines[3].contains("sql"), "a sixth tag is dropped:\n{text}");
 
     // Row two: projects only, so the count sits on line 1 and the newest
     // title on line 2.
-    assert!(lines[6].starts_with(" @Renu  2 projects"), "{text}");
-    assert!(lines[7].starts_with(" ↳ SalaTUI"), "{text}");
-    assert!(lines[8].starts_with(" rust · tui"), "{text}");
+    assert!(lines[5].starts_with(" @Renu  2 projects"), "{text}");
+    assert!(lines[6].starts_with(" ↳ SalaTUI"), "{text}");
+    assert!(lines[7].starts_with(" rust · tui"), "{text}");
 
     // The detail pane, right of the rule: header, then the sections in order.
-    let header = cells(&lines[3], 50, 120);
+    let header = cells(&lines[2], 50, 120);
     assert!(
         header.contains("@meythewitch · ● open · contract · Antalya, Turkey"),
         "header names status, type, and place:\n{text}"
@@ -232,9 +233,10 @@ fn a_wide_frame_draws_the_list_beside_the_sectioned_detail() {
         langs == fetch + 2 && lines[langs].contains("os       nixos"),
         "langs pairs with os on the second row:\n{text}"
     );
+    let footer = &lines[lines.len() - 1];
     assert!(
-        lines[lines.len() - 1].contains("Space jobs"),
-        "the footer teaches the shelf key:\n{text}"
+        footer.starts_with(" j/k people") && footer.ends_with("w your profile · i add project"),
+        "the footer is the section's keys, then the page's actions:\n{text}"
     );
 }
 
@@ -245,13 +247,13 @@ fn a_narrow_frame_stacks_and_l_opens_the_detail_over_the_list() {
     let lines = render(&fixture, &state, 80, 20);
     let text = lines.join("\n");
     assert!(state.narrow(), "the draw records the stacked layout");
-    assert!(lines[2].starts_with("▎@meythewitch  ● open"), "{text}");
+    assert!(lines[1].starts_with("▎@meythewitch  ● open"), "{text}");
     assert!(
         row_of(&lines, "▸ CARD").is_none(),
         "no detail beside the list:\n{text}"
     );
     assert!(
-        lines[3].starts_with(" Full Stack Developer") && !lines[4].starts_with(" rust"),
+        lines[2].starts_with(" Full Stack Developer") && !lines[3].starts_with(" rust"),
         "under 24 rows the tag line goes:\n{text}"
     );
     assert!(lines[lines.len() - 1].contains("l open"), "{text}");
@@ -276,12 +278,16 @@ fn the_jobs_shelf_lists_postings_and_the_for_me_filter_keeps_the_viewers_tags() 
 
     let fixture = fixture();
     let mut state = people_state();
-    state.cycle_shelf();
+    state.next_shelf();
 
     // Before the replica has read the shelf, and once it has read nothing.
     let mut jobs = jobs_state_for_tests();
     let lines = render_with_jobs(&fixture, &state, &jobs, 120, 30);
-    assert_eq!(lines[0], " map 0  ·  people 2  ·  jobs");
+    assert!(
+        lines[0].starts_with(" Map 0   Profiles 2   Jobs ") && lines[0].ends_with("all · for me"),
+        "no count until the shelf is read:\n{}",
+        lines[0]
+    );
     assert!(
         row_of(&lines, "Reading the shelf…").is_some(),
         "{}",
@@ -289,7 +295,11 @@ fn the_jobs_shelf_lists_postings_and_the_for_me_filter_keeps_the_viewers_tags() 
     );
     jobs.loaded = true;
     let lines = render_with_jobs(&fixture, &state, &jobs, 120, 30);
-    assert_eq!(lines[0], " map 0  ·  people 2  ·  jobs 0");
+    assert!(
+        lines[0].starts_with(" Map 0   Profiles 2   Jobs 0 "),
+        "{}",
+        lines[0]
+    );
     assert!(
         row_of(&lines, "No postings on the shelf yet.").is_some(),
         "{}",
@@ -303,7 +313,10 @@ fn the_jobs_shelf_lists_postings_and_the_for_me_filter_keeps_the_viewers_tags() 
     ];
     let lines = render_with_jobs(&fixture, &state, &jobs, 120, 30);
     let text = lines.join("\n");
-    assert_eq!(lines[0], " map 0  ·  people 2  ·  jobs 2");
+    assert!(
+        lines[0].starts_with(" Map 0   Profiles 2   Jobs 2 "),
+        "{text}"
+    );
     let acme = row_of(&lines, "Acme · Backend Engineer").expect("acme row");
     let gopher = row_of(&lines, "Gopher · Backend Engineer").expect("gopher row");
     assert!(acme < gopher, "{text}");
@@ -321,13 +334,20 @@ fn the_jobs_shelf_lists_postings_and_the_for_me_filter_keeps_the_viewers_tags() 
         "{text}"
     );
     assert!(row_of(&lines, "Builds the backend.").is_some(), "{text}");
-    assert!(lines[lines.len() - 1].contains("Space people"), "{text}");
+    let footer = &lines[lines.len() - 1];
+    assert!(
+        footer.starts_with(" j/k jobs") && footer.ends_with("w your profile · i add project"),
+        "{text}"
+    );
 
     // `/`: the viewer's langs say rust, so only Acme stays.
     jobs.toggle_for_me();
     let lines = render_with_jobs(&fixture, &state, &jobs, 120, 30);
     let text = lines.join("\n");
-    assert_eq!(lines[0], " map 0  ·  people 2  ·  jobs 1");
+    assert!(
+        lines[0].starts_with(" Map 0   Profiles 2   Jobs 1 "),
+        "{text}"
+    );
     assert!(
         row_of(&lines, "Acme · Backend Engineer").is_some(),
         "{text}"
@@ -336,7 +356,6 @@ fn the_jobs_shelf_lists_postings_and_the_for_me_filter_keeps_the_viewers_tags() 
         row_of(&lines, "Gopher · Backend Engineer").is_none(),
         "{text}"
     );
-    assert!(lines[lines.len() - 1].contains("for me"), "{text}");
 }
 
 #[test]
@@ -525,36 +544,32 @@ fn the_connected_lead_the_people_list_under_their_own_rule() {
     );
 }
 
-/// Most of the page's tests look at the People shelf, which is one Space in
-/// from where the page opens.
+/// Most of the page's tests look at the Profiles section, which is one `]`
+/// in from where the page opens.
 fn people_state() -> DirectoryState {
     let mut state = DirectoryState::new();
-    state.set_shelf(Shelf::People);
+    state.set_shelf(Shelf::Profiles);
     state
 }
 
-/// The page opens on the map: the strip leads with it and its count, the
-/// world is drawn under the buttons, and the footer is the map's keys plus
-/// the way on to the people.
+/// The page opens on the map: the section row leads with it and its count
+/// and carries the map's slices on its right, the world is drawn under the
+/// map's title, and the footer is the map's keys then the page's actions.
 #[test]
 fn the_page_opens_on_the_map_shelf() {
     let fixture = fixture();
     let state = DirectoryState::new();
     let lines = render(&fixture, &state, 140, 40);
     assert!(
-        lines[0].contains("map 0  ·  people 2  ·  jobs"),
+        lines[0].starts_with(" Map 0   Profiles 2   Jobs")
+            && lines[0].ends_with("online · month · all"),
         "{:?}",
         lines[0]
     );
     assert!(
-        lines
-            .iter()
-            .any(|line| line.contains("[Online]") && line.contains("[Refresh]")),
-        "the slice buttons"
-    );
-    assert!(
-        lines.iter().any(|line| line.contains("where everyone is")),
-        "the map's title"
+        lines[1].contains("where everyone is"),
+        "the map's title right under the section row:\n{}",
+        lines.join("\n")
     );
     assert!(
         lines.iter().any(|line| line.contains('\u{2580}')),
@@ -562,7 +577,51 @@ fn the_page_opens_on_the_map_shelf() {
     );
     let footer = lines.last().expect("a footer");
     assert!(
-        footer.contains("m mode") && footer.contains("Space people"),
+        footer.starts_with(" m online/month/all")
+            && footer.ends_with("w your profile · i add project"),
         "{lines:#?}"
+    );
+}
+
+/// The mouse reaches everything the row and the footer print: every
+/// section name, every filter that is not already on, and the page's
+/// actions. The lit filter is no target: clicking it would toggle it off.
+#[test]
+fn the_section_row_and_the_footer_are_click_targets() {
+    use crate::app::directory::mouse::Target;
+    use crate::app::usermap::state::MapMode;
+
+    let fixture = fixture();
+    let state = DirectoryState::new();
+    let lines = render(&fixture, &state, 140, 40);
+    let targets: Vec<(String, Target)> = state
+        .mouse
+        .hits()
+        .into_iter()
+        .map(|(rect, target)| {
+            let label = cells(
+                &lines[usize::from(rect.y)],
+                usize::from(rect.x),
+                usize::from(rect.right()),
+            );
+            (label.trim().to_string(), target)
+        })
+        .collect();
+    for expected in [
+        ("Map 0".to_string(), Target::Shelf(Shelf::Map)),
+        ("Profiles 2".to_string(), Target::Shelf(Shelf::Profiles)),
+        ("Jobs".to_string(), Target::Shelf(Shelf::Jobs)),
+        ("month".to_string(), Target::MapMode(MapMode::Recent)),
+        ("all".to_string(), Target::MapMode(MapMode::Everyone)),
+        ("w your profile".to_string(), Target::Key(b'w')),
+        ("i add project".to_string(), Target::Key(b'i')),
+    ] {
+        assert!(targets.contains(&expected), "{expected:?} in {targets:#?}");
+    }
+    assert!(
+        !targets
+            .iter()
+            .any(|(_, target)| *target == Target::MapMode(MapMode::Online)),
+        "the slice already on is not a target"
     );
 }
