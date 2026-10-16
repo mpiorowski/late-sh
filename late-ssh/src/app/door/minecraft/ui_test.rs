@@ -77,11 +77,26 @@ fn landing_explains_claims_and_griefing() {
         "{text}"
     );
     assert!(
-        text.contains("the Nether and End cannot be claimed at all"),
+        text.contains("anything goes; the End cannot be claimed at all"),
         "{text}"
     );
     assert!(
         text.contains("mob griefing is on so villager and piglin farms work"),
+        "{text}"
+    );
+}
+
+/// Voice needs a client mod, so the card has to name it and say a vanilla
+/// client still gets in.
+#[test]
+fn landing_explains_voice_chat() {
+    let text = landing_text();
+    assert!(
+        text.contains("mod       Simple Voice Chat for 26.3"),
+        "{text}"
+    );
+    assert!(
+        text.contains("vanilla   joins and plays fine, just without voice"),
         "{text}"
     );
 }
@@ -118,7 +133,16 @@ fn quoted_settings_match_the_terraform() {
     assert_eq!(env_value(&minecraft, "ENABLE_WHITELIST"), "TRUE");
     assert_eq!(
         env_value(&minecraft, "MODRINTH_PROJECTS"),
-        "griefprevention"
+        "griefprevention,simple-voice-chat"
+    );
+
+    let voice_port_line = defaults
+        .lines()
+        .find(|line| line.trim_start().starts_with("minecraft_voice_port"))
+        .expect("minecraft_voice_port in infra/defaults.tf");
+    assert!(
+        voice_port_line.ends_with("24454"),
+        "the voice chat plugin config is not patched, so it listens on its default 24454: {voice_port_line}"
     );
 
     let startup = env_value(&minecraft, "RCON_CMDS_STARTUP");

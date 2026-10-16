@@ -163,6 +163,9 @@ pub(crate) struct CityView<'a> {
     pub scene: Option<&'a FightScene>,
     /// The road before a step, when it is open over the street.
     pub picker: Option<&'a FightPicker>,
+    /// What the service read beside the sheet (`fight/session.rs`), for
+    /// the road: the sleeper at the crossing, the answer owed, the news.
+    pub lookout: &'a crate::app::deadchannel::fight::state::Lookout,
     /// The counter's last word (`fight/session.rs`): the armorer's, patch's,
     /// the locker's, the machine's, or the ledge's, for whichever is open.
     pub till: Option<&'a str>,
@@ -268,6 +271,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: CityView<'_>) {
             fight_ui::PickerView {
                 sheet: view.sheet,
                 picker,
+                lookout: view.lookout,
                 look: view.look,
                 own_username: view.own_username,
                 tick: t,
@@ -2097,7 +2101,7 @@ fn machine_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     lines.push(Line::default());
     lines.push(Line::from(Span::styled(
         format!(
-            "{LOAN_FEE_PERCENT}% on top of every loan, once. {GARNISH_PERCENT}% of every glyph's bits is its own until you are square."
+            "the price of a piece at your level, {LOAN_FEE_PERCENT}% on top of every loan, once. {GARNISH_PERCENT}% of every glyph's bits is its own until you are square."
         ),
         dim_text,
     )));
@@ -2383,7 +2387,10 @@ fn ink_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
                 | Refusal::NoDebt
                 | Refusal::NothingToLose
                 | Refusal::GlassPoured
-                | Refusal::PastTheWall,
+                | Refusal::PastTheWall
+                | Refusal::NobodyThere
+                | Refusal::NoAnswerOwed
+                | Refusal::NotOnTheWire,
                 line,
             )) => unreachable!("the needle refused a draft on the menu: {line}"),
         };

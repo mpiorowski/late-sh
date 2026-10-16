@@ -35,6 +35,7 @@ fn sitter(n: u128, stool: u8, sat_at_ms: i64) -> PresenceRecord {
             drinks: 0,
         }),
         street: None,
+        lounge: false,
     }
 }
 

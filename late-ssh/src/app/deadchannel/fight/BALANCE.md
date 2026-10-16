@@ -92,7 +92,7 @@ a value (`Sheet::apply_under`), so a candidate is tried by building a
 | `foe_signal_percent` | 100 | a glyph's signal over the table's: how many turns a fight lasts |
 | `hit_percent`, `hit_ramp_percent` | 175, 3 | a glyph's hit: its attack less a quarter of your defense, times the first at level 1 and the second more for every level past it |
 | `block_percent` | 60 | a block card, as a share of your defense |
-| `cache_percent` | 50 | a cache, as a share of the fair glyph's bits |
+| `cache_percent` | 60 | a cache, as a share of the fair glyph's bits; the crossing takes one quiet node a day off the sim's road, and this pays it back |
 | `old_signal` | 300 / 35 / 22 | the Old Signal's signal, attack, defense |
 | `crystal_drop_one_in` | 12 | crystals from plain kills |
 | `bright_signal_percent`, `bright_edge_level_percent`, `bright_guard_level_percent` | 150, 50, 0 | how hard the bright glyph is: its signal over the plain one's, and the shares of the level added to its attack and to its defense |
@@ -283,33 +283,33 @@ The live reading (house build), under one patch a day:
 
 | boss reached, careful / ambient | careful | ambient (drops) | reckless (drops) | keen | inker | second climb on the key: mark 1 / mark 5 / mark 1 inked | lv after day 1 / 7 | kit lead | top kit at | keen lead, top kit | gear | patch, careful / ambient | careful patch days | dropped | idle | fair low | turns | signal left, key / sharp | bright on the key (signal left) | bright sharp | pour low | boss key / sharp / key with a glass / key inked | crystals a day | builds: ambient day, boss on the key |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| day 16 / 17 | day 17 | day 21 (2) | day 24 (3) | day 17 | day 17 | day 20 / 16 / 16 | 3 / 9 | -0.5 to +0.5 | lv 15 | +0.5, lv 15 | 77% | 5% / 6% | 59% | 0% | 18% | 100% | 2.6 to 3.8 | 79% / 88% | 48 to 100% (38%) | 90 to 100% | -5 | 57% / 90% / 90% / 64% | 1.1 | day 20 to 24, 43 to 70% |
+| day 16 / 17 | day 16 | day 22 (2) | day 23 (3) | day 17 | day 17 | day 20 / 16 / 16 | 3 / 10 | +0.0 to +0.5 | lv 15 | +0.5, lv 15 | 79% | 4% / 6% | 56% | 0% | 17% | 100% | 2.6 to 3.8 | 79% / 88% | 48 to 100% (38%) | 90 to 100% | -5 | 57% / 90% / 90% / 64% | 1.1 | day 20 to 24, 43 to 70% |
 
 The curve (median level at the end of the day):
 
-| day | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 10 | 12 | 14 | 16 | 17 | 21 | 24 |
+| day | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 10 | 12 | 14 | 15 | 16 | 22 | 23 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| careful | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 12 | 13 | 15 | 15 | marked | | |
+| careful | 3 | 4 | 5 | 7 | 8 | 9 | 10 | 10 | 12 | 14 | 15 | 15 | marked | | |
 | ambient | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 13 | 14 | 15 | 15 | marked | |
-| reckless | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 13 | 14 | 15 | 15 | 15 | marked |
+| reckless | 3 | 4 | 5 | 7 | 7 | 8 | 9 | 10 | 12 | 13 | 14 | 15 | 15 | 15 | marked |
 
 The first two days, read sharp (medians over the seeds; every seed is at
 the same level):
 
 | day | level | kit at dusk | cards | glyphs down | dropped | earned | gear | patch | bits at dusk | crystals |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 | 3 | weapon 2, armor 2 | 1 | 5 | 0% | 1,728 | 1,066 | 30 | 673 | 0 |
-| 2 | 4 | weapon 4, armor 3 | 1 | 5 | 4% | 4,044 | 3,114 | 57 | 1,169 | 1 |
+| 1 | 3 | weapon 2, armor 2 | 1 | 5 | 0% | 1,974 | 1,066 | 30 | 916 | 0 |
+| 2 | 4 | weapon 4, armor 4 | 1 | 5 | 0% | 4,236 | 4,354 | 54 | 1,150 | 1 |
 
 Every draft's two options on the key, each over the eight builds that
 carry it:
 
 | draft | card | mean day of the mark | Old Signal |
 |---|---|---|---|
-| lv 3 | jab / brace | 24.1 / 23.0 | 54% / 53% |
-| lv 6 | riposte / bulwark | 23.9 / 23.2 | 55% / 52% |
-| lv 9 | burn / ground | 24.3 / 22.8 | 49% / 58% |
-| lv 12 | sever / mute | 23.7 / 23.4 | 56% / 51% |
+| lv 3 | jab / brace | 23.0 / 22.5 | 54% / 53% |
+| lv 6 | riposte / bulwark | 23.1 / 22.4 | 55% / 52% |
+| lv 9 | burn / ground | 23.3 / 22.1 | 49% / 58% |
+| lv 12 | sever / mute | 23.2 / 22.3 | 56% / 51% |
 
 What the tables say:
 

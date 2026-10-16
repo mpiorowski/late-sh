@@ -45,6 +45,7 @@ async fn a_session_on_one_replica_moves_and_leaves_on_the_other() {
         },
         nightcap: None,
         street: None,
+        lounge: false,
     };
 
     on_a.publish(ann.clone());

@@ -139,7 +139,7 @@ kubectl cp -n default ./music/. "$POD":/music/ -c liquidsoap
 | Icecast       | `icecast-sv`                                                                    | 8000                                                   | Audio streaming server                            |
 | Liquidsoap    | none (dials out to `icecast-sv`)                                                | -                                                      | Playlist encoder                                  |
 | LiveKit       | `livekit-sv`                                                                    | 7880 (WSS/API), 7881 TCP, 7882 UDP, 3478 UDP, 5349 TCP | Voice-room SFU, ICE/TURN media                    |
-| Minecraft     | none (hostPort)                                                                 | 25565 TCP on `agent-1`                                 | Paper server with GriefPrevention, whitelist-only |
+| Minecraft     | none (hostPort)                                                                 | 25565 TCP, 24454 UDP (voice) on `agent-1`              | Paper server with GriefPrevention, whitelist-only |
 | Vintage Story | none (hostPort)                                                                 | 42420 TCP+UDP on `agent-2`                             | Official server (arm64), whitelist-only           |
 | PostgreSQL    | `postgres-rw`                                                                   | 5432                                                   | CloudNativePG cluster                             |
 | Monitoring    | OpenTelemetry Collector, VictoriaMetrics, VictoriaLogs, VictoriaTraces, Grafana | various                                                | Full observability stack                          |
@@ -234,7 +234,9 @@ _minecraft._tcp.late.sh   SRV  0 5 25565 mc.late.sh.
 
 The explicit A record overrides the wildcard, and the SRV record lets the client
 accept plain `late.sh`. Both must be DNS-only, never proxied: the traffic is raw
-TCP. The world lives on the `minecraft-data` PVC (`local-path`,
+TCP. Simple Voice Chat adds a second hostPort, 24454 UDP, reached at the same
+address, so it needs no DNS of its own; open it in any Hetzner Cloud Firewall
+on `agent-1`. The world lives on the `minecraft-data` PVC (`local-path`,
 `prevent_destroy`) on `agent-1`'s disk; `worldborder set 6000` at startup caps
 its disk growth there.
 
@@ -252,9 +254,9 @@ kubectl logs -n default deploy/minecraft --tail=200
 
 Bumping the game version (`minecraft_version` in `defaults.tf`) is a one-way
 world upgrade and changes the client version every player needs; back up the PVC
-first. GriefPrevention resolves from Modrinth at boot for the pinned version, so
-a version bump can fail startup if the plugin has no matching release yet; the
-pod log says so.
+first. GriefPrevention and Simple Voice Chat resolve from Modrinth at boot for
+the pinned version, so a version bump can fail startup if either plugin has no
+matching release yet; the pod log says so.
 
 ### Vintage Story
 

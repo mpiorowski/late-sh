@@ -1108,6 +1108,14 @@ pub struct ChatState {
     /// Set by an admin's /haunt; consumed by `deadchannel::haunt::svc`
     /// (which owns the whisper).
     requested_haunt: Option<crate::app::deadchannel::haunt::state::HauntCommand>,
+    /// Set by `/hit` while `hits_on`; consumed by `deadchannel::lounge::svc`
+    /// every tick. Swallowed then, never posted; otherwise the line is
+    /// words.
+    requested_hit: bool,
+    /// Whether `/hit` is the lounge's here: a standing runner looking at
+    /// #lounge, where the spawn and every answer to a hit are drawn.
+    /// Written by the lounge tick (`set_hits_on`).
+    hits_on: bool,
     /// Set by `/paper`; consumed by `paper::svc::tick` every tick.
     requested_paper: Option<crate::app::paper::state::PaperCommand>,
     requested_jobs: Option<crate::app::jobs::state::JobsCommand>,
@@ -1456,6 +1464,8 @@ impl ChatState {
             requested_crown: None,
             requested_pot: None,
             requested_haunt: None,
+            requested_hit: false,
+            hits_on: false,
             requested_paper: None,
             requested_jobs: None,
             own_message_landed: None,
@@ -2242,6 +2252,14 @@ impl ChatState {
         &mut self,
     ) -> Option<crate::app::deadchannel::haunt::state::HauntCommand> {
         self.requested_haunt.take()
+    }
+
+    pub(crate) fn take_requested_hit(&mut self) -> bool {
+        std::mem::take(&mut self.requested_hit)
+    }
+
+    pub(crate) fn set_hits_on(&mut self, hits_on: bool) {
+        self.hits_on = hits_on;
     }
 
     pub(crate) fn take_own_message_landed(&mut self) -> Option<(Uuid, Uuid)> {
@@ -4000,9 +4018,21 @@ impl ChatState {
             return None;
         }
 
-        // Admin-only on purpose, and not an error for anyone else: for a
-        // non-admin the line falls through and posts as plain text, exactly
-        // as if the command did not exist. First contact stays a mystery.
+        // `/hit` is the lounge's (`deadchannel/lounge`) for a runner looking
+        // at #lounge: swallowed and never posted, whatever is or is not
+        // there to hit. Anywhere else, and for anyone else, it falls
+        // through to the unknown-command banner like any slash word.
+        if self.hits_on
+            && crate::app::deadchannel::lounge::state::parse_lounge_command(&body).is_some()
+        {
+            self.clear_composer_after_submit();
+            self.requested_hit = true;
+            return None;
+        }
+
+        // Admin-only on purpose: for a non-admin the line falls through to
+        // the unknown-command banner, exactly as if the command did not
+        // exist. First contact stays a mystery.
         if self.is_admin
             && let Some(parsed) = crate::app::deadchannel::haunt::state::parse_haunt_command(&body)
         {
@@ -4223,9 +4253,15 @@ impl ChatState {
         if let Some(rest) = body.trim().strip_prefix("/brb")
             && (rest.is_empty() || rest.starts_with(char::is_whitespace))
         {
-            let chat_body = match rest.trim() {
-                "" => "🌙 brb".to_string(),
-                reason => format!("🌙 brb: {reason}"),
+            // Bare `/brb` only goes away; the room hears about it only when
+            // there is a reason to tell.
+            let reason = match rest.trim() {
+                "" => {
+                    self.clear_composer_after_submit();
+                    self.requested_brb = true;
+                    return None;
+                }
+                reason => reason.to_string(),
             };
             // Snapshot the composer's room before `clear_composer_after_submit`
             // wipes it. Only the composer's room, like `/me`: a stale visible
@@ -4233,8 +4269,9 @@ impl ChatState {
             let room_id = self.composer_room_id;
             self.clear_composer_after_submit();
             let Some(room_id) = room_id else {
-                return Some(Banner::error("Use /brb from inside a room"));
+                return Some(Banner::error("Use /brb <reason> from inside a room"));
             };
+            let chat_body = format!("🌙 brb: {reason}");
             let request_id = Uuid::now_v7();
             self.service
                 .send_message_with_reply_task(super::svc::SendMessageTask {

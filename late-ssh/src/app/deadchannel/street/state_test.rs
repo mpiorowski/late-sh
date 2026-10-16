@@ -17,6 +17,7 @@ fn record(user_id: Uuid, street: Option<StreetStand>) -> PresenceRecord {
         },
         nightcap: None,
         street,
+        lounge: false,
     }
 }
 
@@ -93,6 +94,7 @@ fn one_user_with_two_sessions_is_one_runner_where_they_last_moved() {
     phone.sync(30, 5, false, 4_000);
     let phone_record = PresenceRecord {
         street: phone.stand(),
+        lounge: false,
         ..phone_record
     };
     assert_eq!(
@@ -104,6 +106,7 @@ fn one_user_with_two_sessions_is_one_runner_where_they_last_moved() {
     laptop.sync(11, 5, true, 5_000);
     let laptop_record = PresenceRecord {
         street: laptop.stand(),
+        lounge: false,
         ..laptop_record
     };
     assert_eq!(

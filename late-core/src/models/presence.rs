@@ -10,7 +10,8 @@
 //!
 //! One record per session carries every room: the clubhouse (always: a
 //! logged-in session is in the tavern), the Nightcap stool it holds, and
-//! its runner on the night city street. The payload is JSON; a batch too
+//! its runner on the night city street, and whether it is looking at
+//! #lounge. The payload is JSON; a batch too
 //! big for one notify goes out as several ([`PresenceBatch::into_notifies`]),
 //! each under [`MAX_PAYLOAD_BYTES`], well below Postgres' 8000-byte cap.
 
@@ -87,6 +88,12 @@ pub struct PresenceRecord {
     pub clubhouse: ClubhouseStand,
     pub nightcap: Option<NightcapStand>,
     pub street: Option<StreetStand>,
+    /// Whether the session is looking at #lounge right now: the lounge
+    /// spawns (`deadchannel/lounge`) land only where a runner is looking.
+    /// Defaulted on the wire so a replica a deploy behind still reads the
+    /// record.
+    #[serde(default)]
+    pub lounge: bool,
 }
 
 /// What one replica says in one breath: the records that changed (or all

@@ -315,6 +315,7 @@ struct DrawContext<'a> {
     city_sheet: Option<&'a crate::app::deadchannel::fight::state::Sheet>,
     city_scene: Option<&'a crate::app::deadchannel::fight::session::Scene>,
     city_picker: Option<&'a crate::app::deadchannel::fight::session::Picker>,
+    city_lookout: &'a crate::app::deadchannel::fight::state::Lookout,
     city_till: Option<&'a str>,
     city_tailor: crate::app::deadchannel::tailor::ui::MirrorView<'a>,
     city_guide: &'a crate::app::deadchannel::guide::state::State,
@@ -869,6 +870,22 @@ impl App {
             late_core::models::user::AudioSource::Radio => radio_now_playing.as_deref(),
             late_core::models::user::AudioSource::Youtube => status_youtube_track.as_deref(),
         };
+        // The lounge's spawn (`deadchannel/lounge`) as the scene above the
+        // #lounge card's composer, for a runner only.
+        let dashboard_lounge = if home_selected && self.is_runner() {
+            let now_ms = crate::app::presence::svc::now_ms();
+            self.lounge.showing(now_ms).map(|spawn| {
+                crate::app::deadchannel::lounge::ui::scene(
+                    spawn,
+                    self.lounge.word(),
+                    self.user_id,
+                    &self.runner_looks,
+                    now_ms,
+                )
+            })
+        } else {
+            None
+        };
         let dashboard_view = chat::ui::DashboardChatView {
             activity_ticker: self.chat.activity_ticker(),
             room: dashboard_room,
@@ -907,6 +924,7 @@ impl App {
             reaction_picker_active: self.chat.is_reaction_leader_active(),
             composer: self.chat.composer(),
             composing: self.chat.composing,
+            lounge: dashboard_lounge,
             mention_matches: &self.chat.mention_ac.matches,
             mention_selected: self.chat.mention_ac.selected,
             mention_active: self.chat.mention_ac.active,
@@ -1686,6 +1704,7 @@ impl App {
                         city_sheet: self.fight.sheet.as_ref(),
                         city_scene: self.fight.scene.as_ref(),
                         city_picker: self.fight.picker.as_ref(),
+                        city_lookout: &self.fight.lookout,
                         city_till: self.fight.till.as_deref(),
                         city_tailor: crate::app::deadchannel::tailor::ui::MirrorView {
                             draft: self.tailor.draft.as_ref(),
@@ -2484,6 +2503,7 @@ impl App {
                     sheet: ctx.city_sheet,
                     scene: ctx.city_scene,
                     picker: ctx.city_picker,
+                    lookout: ctx.city_lookout,
                     till: ctx.city_till,
                     tailor: ctx.city_tailor,
                     guide: ctx.city_guide,

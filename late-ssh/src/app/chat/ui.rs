@@ -139,6 +139,9 @@ pub struct DashboardChatView<'a> {
     pub reaction_picker_active: bool,
     pub composer: &'a TextArea<'static>,
     pub composing: bool,
+    /// A lounge spawn as a scene above the composer (`deadchannel/lounge`),
+    /// for a runner looking at #lounge while one shows.
+    pub lounge: Option<crate::app::deadchannel::lounge::ui::LoungeScene>,
     pub mention_matches: &'a [MentionMatch],
     pub mention_selected: usize,
     pub mention_active: bool,
@@ -670,15 +673,35 @@ fn split_chat_and_composer(area: Rect, composer_height: u16) -> (Rect, Rect) {
 /// Vertical layout for a chat surface: messages fill, then a blank breather,
 /// then the one-row activity ticker hugging the composer. Returns
 /// `(messages, ticker, composer)`.
-fn split_chat_ticker_and_composer(area: Rect, composer_height: u16) -> (Rect, Rect, Rect) {
+/// Messages, the ticker row, the lounge scene (`scene_height` rows, zero
+/// when nothing is in the channel), and the composer, top to bottom.
+fn split_chat_ticker_and_composer(
+    area: Rect,
+    scene_height: u16,
+    composer_height: u16,
+) -> (Rect, Rect, Rect, Rect) {
     let layout = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(CHAT_COMPOSER_GAP_HEIGHT.saturating_sub(1)),
         Constraint::Length(1),
+        Constraint::Length(scene_height),
         Constraint::Length(composer_height),
     ])
     .split(area);
-    (layout[0], layout[2], layout[3])
+    (layout[0], layout[2], layout[3], layout[4])
+}
+
+/// The lounge's scene (`deadchannel/lounge`) in its rows above the
+/// composer: the hitters against the spawn, and the words beside them.
+fn draw_lounge_scene(
+    frame: &mut Frame,
+    area: Rect,
+    scene: &crate::app::deadchannel::lounge::ui::LoungeScene,
+) {
+    if area.is_empty() {
+        return;
+    }
+    frame.render_widget(Paragraph::new(scene.rows.to_vec()), area);
 }
 
 /// The one-row #lounge activity ticker rendered in the composer gap. The
@@ -1212,9 +1235,16 @@ pub fn draw_dashboard_chat_card(
         ));
     let visible_composer_lines = total_composer_lines.min(5);
     let composer_height = visible_composer_lines as u16 + 2;
-    let (mut messages_area, ticker_area, composer_area) =
-        split_chat_ticker_and_composer(area, composer_height);
+    let scene_height = match view.lounge {
+        Some(_) => crate::app::deadchannel::lounge::ui::SCENE_HEIGHT,
+        None => 0,
+    };
+    let (mut messages_area, ticker_area, scene_area, composer_area) =
+        split_chat_ticker_and_composer(area, scene_height, composer_height);
     draw_activity_ticker(frame, ticker_area, view.activity_ticker);
+    if let Some(scene) = &view.lounge {
+        draw_lounge_scene(frame, scene_area, scene);
+    }
     // The Lounge gets the same header block as every other room: voice state
     // and the topic in one place, rather than a bare voice strip.
     let room_stream = view.room.and_then(|room| {
@@ -5382,8 +5412,8 @@ pub fn draw_chat_center(
     }
 
     let selection_mode = chat_selection_mode(&view, area);
-    let (messages_area, ticker_area, composer_area) =
-        split_chat_ticker_and_composer(area, selection_mode.composer_height());
+    let (messages_area, ticker_area, _, composer_area) =
+        split_chat_ticker_and_composer(area, 0, selection_mode.composer_height());
     draw_activity_ticker(frame, ticker_area, view.activity_ticker);
 
     draw_selected_content(frame, messages_area, composer_area, view, terminal_images);

@@ -22,6 +22,7 @@ fn record(n: u128, stool: Option<(u8, i64)>) -> PresenceRecord {
             drinks: 1,
         }),
         street: None,
+        lounge: false,
     }
 }
 

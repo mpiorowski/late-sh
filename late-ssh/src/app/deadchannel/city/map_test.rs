@@ -109,3 +109,41 @@ fn a_closed_shop_is_spelled_but_never_lit() {
         assert!(building.color.is_some(), "{landmark:?} is in a lit shop");
     }
 }
+
+/// A shop is in reach anywhere on its floor, and nowhere off it: behind
+/// the counter, in the back of the room, by the door inside, never from
+/// the street outside its walls.
+#[test]
+fn a_shop_is_in_reach_on_its_whole_floor_and_only_there() {
+    for landmark in [
+        Landmark::Armorer,
+        Landmark::Tailor,
+        Landmark::Lockers,
+        Landmark::Bands,
+        Landmark::Bar,
+        Landmark::Repairs,
+        Landmark::Bits,
+        Landmark::Blades,
+        Landmark::Ink,
+    ] {
+        let reach = landmark.reach();
+        let shop = BUILDINGS
+            .iter()
+            .map(|building| building.zone)
+            .find(|zone| zone.contains(reach.x0, reach.y0))
+            .expect("a shop's reach is inside its building");
+        for y in 0..MAP_H {
+            for x in 0..MAP_W {
+                if !walkable(x, y) {
+                    continue;
+                }
+                let inside = x > shop.x0 && x < shop.x1 && y > shop.y0 && y < shop.y1;
+                let here = nearest_landmark(x, y) == Some(landmark);
+                assert_eq!(
+                    here, inside,
+                    "{landmark:?} at ({x}, {y}): in reach {here}, on its floor {inside}"
+                );
+            }
+        }
+    }
+}

@@ -28,6 +28,7 @@ use late_core::models::{
     daily_match::DAILY_MATCH_CHANGED_CHANNEL,
     deadchannel_name_hit::DEADCHANNEL_NAME_HIT_CHANNEL,
     deadchannel_runner::DEADCHANNEL_RUNNER_CHANGED_CHANNEL,
+    deadchannel_spawn::DEADCHANNEL_SPAWN_CHANNEL,
     marketplace::{SHOP_CATALOG_CHANGED_CHANNEL, SHOP_USER_CHANGED_CHANNEL},
     pot::POT_CHANGED_CHANNEL,
     presence::PRESENCE_CHANNEL,
@@ -48,6 +49,7 @@ const RETRY_DELAY: Duration = Duration::from_secs(5);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refresh {
     RunnerLooks,
+    LoungeSpawn,
     CrownHolder,
     DailyMatches,
     Pot,
@@ -62,6 +64,7 @@ impl Refresh {
     fn what(self) -> &'static str {
         match self {
             Refresh::RunnerLooks => "runner looks",
+            Refresh::LoungeSpawn => "lounge spawn",
             Refresh::CrownHolder => "crown holder",
             Refresh::DailyMatches => "daily matches",
             Refresh::Pot => "pot",
@@ -117,6 +120,7 @@ pub enum Channel {
     DailyMatchChanged,
     DeadchannelNameHit,
     DeadchannelRunnerChanged,
+    DeadchannelSpawn,
     PotChanged,
     Presence,
     QuestAssignmentsChanged,
@@ -126,7 +130,7 @@ pub enum Channel {
 }
 
 impl Channel {
-    pub const ALL: [Channel; 15] = [
+    pub const ALL: [Channel; 16] = [
         Channel::CalendarChanged,
         Channel::ArticlesChanged,
         Channel::BonsaiChanged,
@@ -136,6 +140,7 @@ impl Channel {
         Channel::DailyMatchChanged,
         Channel::DeadchannelNameHit,
         Channel::DeadchannelRunnerChanged,
+        Channel::DeadchannelSpawn,
         Channel::PotChanged,
         Channel::Presence,
         Channel::QuestAssignmentsChanged,
@@ -156,6 +161,7 @@ impl Channel {
             Channel::DailyMatchChanged => DAILY_MATCH_CHANGED_CHANNEL,
             Channel::DeadchannelNameHit => DEADCHANNEL_NAME_HIT_CHANNEL,
             Channel::DeadchannelRunnerChanged => DEADCHANNEL_RUNNER_CHANGED_CHANNEL,
+            Channel::DeadchannelSpawn => DEADCHANNEL_SPAWN_CHANNEL,
             Channel::PotChanged => POT_CHANGED_CHANNEL,
             Channel::Presence => PRESENCE_CHANNEL,
             Channel::QuestAssignmentsChanged => QUEST_ASSIGNMENTS_CHANGED_CHANNEL,

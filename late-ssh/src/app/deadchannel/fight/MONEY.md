@@ -82,9 +82,14 @@ takes nothing and pays interest, the locker pays none).
 
 ## The bits machine
 
-`Command::Borrow` lends everything up to the cap, `LOAN_PER_LEVEL` (50)
-times the level less what is owed (`loan_cap`, `loan_room`); a level-2
-runner can borrow both tier-1 pieces.
+`Command::Borrow` lends everything up to the cap, the wall price of one
+piece at the runner's level (`Rules::loan_cap`, `Sheet::loan_cap`), less
+what is owed (`loan_room`). The cap moves with the wall: 108 at level 1,
+506 at level 2, 11340 at level 10. The machine buys the piece now and the
+garnish takes about two levels of kills to square it, so a loan is one
+piece ahead of the level for a tenth of its price. A loan that could
+not reach a piece would bridge nothing one more glyph would not
+(`arena.rs`, the borrower against the ambient runner, is the reading).
 
 - The fee is flat: `LOAN_FEE_PERCENT` (10, rounded up) of what is handed
   over goes on the debt with the loan (`loan_fee`,
