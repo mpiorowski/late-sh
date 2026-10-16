@@ -216,7 +216,12 @@ fn open(app: &mut App, source: LiveSource, origin: Origin) -> bool {
                 (true, _) => false,
                 (false, true) => {
                     let return_screen = return_screen_for_opening(app);
-                    if !app.realm.board.as_ref().is_some_and(|b| b.game_id == game_id) {
+                    if !app
+                        .realm
+                        .board
+                        .as_ref()
+                        .is_some_and(|b| b.game_id == game_id)
+                    {
                         app.realm.open_board(game_id, return_screen);
                     }
                     app.set_screen(Screen::Realm);

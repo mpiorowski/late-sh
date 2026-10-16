@@ -88,7 +88,7 @@ pub fn heat_label_for(floors: &[usize], rung: usize) -> String {
     }
 }
 
-/// Which slice of people the map is showing. Tab walks them in this order:
+/// Which slice of people the map is showing. `m` walks them in this order:
 /// the narrowest first, because "who is here right now" is the question that
 /// brought most people to the map.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -183,9 +183,11 @@ pub struct CountryTally {
 
 #[derive(Default)]
 pub struct UserMapState {
-    open: bool,
+    /// On screen right now (the Profiles page, on its map shelf), as the
+    /// tick last decided. Counts are asked for on the way in.
+    shown: bool,
     mode: MapMode,
-    /// One cache slot per mode, so Tab is instant after the first look at
+    /// One cache slot per mode, so `m` is instant after the first look at
     /// each. A refresh clears the slot it refills.
     cached: [Option<Vec<CountryTally>>; 3],
     /// The last counts loaded. Kept across a close so reopening is instant;
@@ -213,8 +215,8 @@ pub struct UserMapState {
 }
 
 impl UserMapState {
-    pub fn is_open(&self) -> bool {
-        self.open
+    pub fn is_shown(&self) -> bool {
+        self.shown
     }
 
     pub fn map(&self) -> Option<Arc<WorldMap>> {
@@ -240,10 +242,14 @@ impl UserMapState {
         heat_index_for(&self.floors(), count)
     }
 
-    /// Tab: the next slice of people. Cached results show at once; anything
+    /// `m`: the next slice of people. Cached results show at once; anything
     /// not looked at yet is asked for.
     pub fn cycle_mode(&mut self, profile: &ProfileService) {
-        self.mode = self.mode.next();
+        self.set_mode(self.mode.next(), profile);
+    }
+
+    pub fn set_mode(&mut self, mode: MapMode, profile: &ProfileService) {
+        self.mode = mode;
         self.cursor = 0;
         self.error = None;
         match self.cached[self.mode.index()].clone() {
@@ -310,19 +316,21 @@ impl UserMapState {
             .collect()
     }
 
-    pub fn open(&mut self, profile: &ProfileService) {
-        self.open = true;
+    /// The shelf came on screen: start on the online slice, fitted, with
+    /// fresh numbers on the way.
+    pub fn show(&mut self, profile: &ProfileService) {
+        self.shown = true;
         self.needs_fit = true;
         self.cursor = 0;
         self.mode = MapMode::default();
         self.refresh(profile);
     }
 
-    /// Open with nothing in flight. Only for tests and for the draw-path
-    /// checks: the real opener always asks for fresh numbers.
+    /// Show with nothing in flight. Only for tests and for the draw-path
+    /// checks: the real entry always asks for fresh numbers.
     #[cfg(test)]
-    pub fn open_without_loading(&mut self) {
-        self.open = true;
+    pub fn show_without_loading(&mut self) {
+        self.shown = true;
         self.needs_fit = true;
         self.loading = true;
     }
@@ -347,8 +355,10 @@ impl UserMapState {
         self.cursor = 0;
     }
 
-    pub fn close(&mut self) {
-        self.open = false;
+    /// The shelf left the screen. The counts stay, so coming back draws at
+    /// once while the next load runs behind.
+    pub fn hide(&mut self) {
+        self.shown = false;
     }
 
     /// Ask for the counts again. Safe to call while one is in flight — the

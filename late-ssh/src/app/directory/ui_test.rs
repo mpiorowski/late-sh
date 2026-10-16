@@ -10,11 +10,13 @@ use late_core::models::{
     work_profile::{WorkProfile, WorkStatus, WorkType},
 };
 use ratatui::{Terminal, backend::TestBackend};
+use std::collections::HashSet;
 use uuid::Uuid;
 
 use super::{DirectoryPageView, draw_directory_page};
 use crate::app::chat::{showcase::svc::ShowcaseFeedItem, work::svc::WorkFeedItem};
-use crate::app::directory::state::DirectoryState;
+use crate::app::directory::state::{DirectoryState, Shelf};
+use crate::app::usermap::state::UserMapState;
 
 fn author(username: &str) -> Profile {
     Profile {
@@ -116,6 +118,7 @@ fn render_with_jobs(
 ) -> Vec<String> {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("terminal");
+    let mut usermap = UserMapState::default();
     terminal
         .draw(|frame| {
             draw_directory_page(
@@ -124,6 +127,7 @@ fn render_with_jobs(
                 DirectoryPageView {
                     directory: state,
                     jobs,
+                    usermap: &mut usermap,
                     viewer_langs: &["rust".to_string()],
                     projects: &fixture.projects,
                     people: &fixture.people,
@@ -161,12 +165,12 @@ fn row_of(lines: &[String], needle: &str) -> Option<usize> {
 #[test]
 fn a_wide_frame_draws_the_list_beside_the_sectioned_detail() {
     let fixture = fixture();
-    let state = DirectoryState::new();
+    let state = people_state();
     let lines = render(&fixture, &state, 120, 30);
     let text = lines.join("\n");
 
     assert_eq!(
-        lines[0], " people 2  ·  jobs",
+        lines[0], " map 0  ·  people 2  ·  jobs",
         "the shelf strip with its count:\n{text}"
     );
 
@@ -237,7 +241,7 @@ fn a_wide_frame_draws_the_list_beside_the_sectioned_detail() {
 #[test]
 fn a_narrow_frame_stacks_and_l_opens_the_detail_over_the_list() {
     let fixture = fixture();
-    let mut state = DirectoryState::new();
+    let mut state = people_state();
     let lines = render(&fixture, &state, 80, 20);
     let text = lines.join("\n");
     assert!(state.narrow(), "the draw records the stacked layout");
@@ -271,13 +275,13 @@ fn the_jobs_shelf_lists_postings_and_the_for_me_filter_keeps_the_viewers_tags() 
     use crate::app::jobs::state_test::posting;
 
     let fixture = fixture();
-    let mut state = DirectoryState::new();
-    state.toggle_shelf();
+    let mut state = people_state();
+    state.cycle_shelf();
 
     // Before the replica has read the shelf, and once it has read nothing.
     let mut jobs = jobs_state_for_tests();
     let lines = render_with_jobs(&fixture, &state, &jobs, 120, 30);
-    assert_eq!(lines[0], " people 2  ·  jobs");
+    assert_eq!(lines[0], " map 0  ·  people 2  ·  jobs");
     assert!(
         row_of(&lines, "Reading the shelf…").is_some(),
         "{}",
@@ -285,7 +289,7 @@ fn the_jobs_shelf_lists_postings_and_the_for_me_filter_keeps_the_viewers_tags() 
     );
     jobs.loaded = true;
     let lines = render_with_jobs(&fixture, &state, &jobs, 120, 30);
-    assert_eq!(lines[0], " people 2  ·  jobs 0");
+    assert_eq!(lines[0], " map 0  ·  people 2  ·  jobs 0");
     assert!(
         row_of(&lines, "No postings on the shelf yet.").is_some(),
         "{}",
@@ -299,7 +303,7 @@ fn the_jobs_shelf_lists_postings_and_the_for_me_filter_keeps_the_viewers_tags() 
     ];
     let lines = render_with_jobs(&fixture, &state, &jobs, 120, 30);
     let text = lines.join("\n");
-    assert_eq!(lines[0], " people 2  ·  jobs 2");
+    assert_eq!(lines[0], " map 0  ·  people 2  ·  jobs 2");
     let acme = row_of(&lines, "Acme · Backend Engineer").expect("acme row");
     let gopher = row_of(&lines, "Gopher · Backend Engineer").expect("gopher row");
     assert!(acme < gopher, "{text}");
@@ -323,7 +327,7 @@ fn the_jobs_shelf_lists_postings_and_the_for_me_filter_keeps_the_viewers_tags() 
     jobs.toggle_for_me();
     let lines = render_with_jobs(&fixture, &state, &jobs, 120, 30);
     let text = lines.join("\n");
-    assert_eq!(lines[0], " people 2  ·  jobs 1");
+    assert_eq!(lines[0], " map 0  ·  people 2  ·  jobs 1");
     assert!(
         row_of(&lines, "Acme · Backend Engineer").is_some(),
         "{text}"
@@ -343,7 +347,7 @@ fn people_wheel_scrolls_viewport_and_repaints_hits_without_moving_selection() {
         .map(|index| card(Uuid::now_v7(), &format!("person{index}"), index))
         .collect();
     fixture.projects.clear();
-    let mut state = DirectoryState::new();
+    let mut state = people_state();
     render(&fixture, &state, 120, 20);
     let first = state
         .mouse
@@ -393,7 +397,7 @@ fn narrow_detail_copy_targets_keep_full_urls_after_wrapping_and_scroll() {
     let mut fixture = fixture();
     let url = "https://example.com/a/very/long/project/link/with/a/query?name=full-value";
     fixture.people[0].profile.links = vec![url.to_string()];
-    let mut state = DirectoryState::new();
+    let mut state = people_state();
     state.open_detail();
     render(&fixture, &state, 45, 24);
     let mut found = false;
@@ -435,7 +439,7 @@ fn jobs_wheel_keeps_selection_and_targets_the_visible_posting() {
         state::Shelf,
     };
     let fixture = fixture();
-    let mut state = DirectoryState::new();
+    let mut state = people_state();
     state.set_shelf(Shelf::Jobs);
     let mut jobs = jobs_state_for_tests();
     jobs.loaded = true;
@@ -476,7 +480,7 @@ fn opening_a_person_past_the_first_page_reveals_their_row() {
         .map(|index| card(Uuid::now_v7(), &format!("person{index}"), index))
         .collect();
     fixture.projects.clear();
-    let mut state = DirectoryState::new();
+    let mut state = people_state();
     render(&fixture, &state, 120, 20);
     state.enter_search();
     render(&fixture, &state, 120, 20);
@@ -491,5 +495,68 @@ fn opening_a_person_past_the_first_page_reveals_their_row() {
         lines.iter().any(|line| line.starts_with("▎@person")),
         "the selected row is on screen:\n{}",
         lines.join("\n")
+    );
+}
+
+#[test]
+fn the_connected_lead_the_people_list_under_their_own_rule() {
+    let fixture = fixture();
+    let renu = fixture.projects[0].showcase.user_id;
+    let mut state = people_state();
+
+    let quiet = render(&fixture, &state, 140, 40);
+    assert!(
+        row_of(&quiet, "\u{2500}\u{2500} online").is_none(),
+        "no rule while nobody is connected"
+    );
+    let mey = row_of(&quiet, "@meythewitch").expect("mey listed");
+    let renu_row = row_of(&quiet, "@Renu").expect("renu listed");
+    assert!(mey < renu_row, "newest first while nobody is connected");
+
+    state.set_online(HashSet::from([renu]));
+    let lines = render(&fixture, &state, 140, 40);
+    let online = row_of(&lines, "\u{2500}\u{2500} online").expect("online rule");
+    let renu_row = row_of(&lines, "@Renu").expect("renu listed");
+    let offline = row_of(&lines, "\u{2500}\u{2500} offline").expect("offline rule");
+    let mey = row_of(&lines, "@meythewitch").expect("mey listed");
+    assert!(
+        online < renu_row && renu_row < offline && offline < mey,
+        "{lines:#?}"
+    );
+}
+
+/// Most of the page's tests look at the People shelf, which is one Space in
+/// from where the page opens.
+fn people_state() -> DirectoryState {
+    let mut state = DirectoryState::new();
+    state.set_shelf(Shelf::People);
+    state
+}
+
+/// The page opens on the map: the strip leads with it and its count, the
+/// world is drawn under the buttons, and the footer is the map's keys plus
+/// the way on to the people.
+#[test]
+fn the_page_opens_on_the_map_shelf() {
+    let fixture = fixture();
+    let state = DirectoryState::new();
+    let lines = render(&fixture, &state, 140, 40);
+    assert!(lines[0].contains("map 0  ·  people 2  ·  jobs"), "{:?}", lines[0]);
+    assert!(
+        lines.iter().any(|line| line.contains("[Online]") && line.contains("[Refresh]")),
+        "the slice buttons"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains("where everyone is")),
+        "the map's title"
+    );
+    assert!(
+        lines.iter().any(|line| line.contains('\u{2580}')),
+        "the world is drawn"
+    );
+    let footer = lines.last().expect("a footer");
+    assert!(
+        footer.contains("m mode") && footer.contains("Space people"),
+        "{lines:#?}"
     );
 }

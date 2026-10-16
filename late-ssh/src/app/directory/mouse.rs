@@ -11,6 +11,8 @@ pub(crate) enum Pane {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Target {
     Shelf(Shelf),
+    /// One slice of the map shelf.
+    MapMode(crate::app::usermap::state::MapMode),
     Key(u8),
     Person(Uuid),
     Job(Uuid),

@@ -377,9 +377,9 @@ struct DrawContext<'a> {
     paper_modal: Option<&'a crate::app::paper::state::PaperModal>,
     stream_modal: Option<&'a crate::app::state::StreamModal>,
     show_help: bool,
-    /// `/map`, when it is open. Mutable because drawing is what tells
+    /// The Profiles page's map shelf. Mutable because drawing is what tells
     /// the view how big the map area is.
-    usermap: Option<&'a mut crate::app::usermap::state::UserMapState>,
+    usermap: &'a mut crate::app::usermap::state::UserMapState,
     help_modal_state: &'a help_modal::state::HelpModalState,
     show_ultimate_modal: bool,
     ultimate_state: &'a crate::app::ultimates::UltimateState,
@@ -1540,7 +1540,6 @@ impl App {
             || screensaver.is_some()
             || news_modal.is_some()
             || self.icon_picker_open
-            || self.usermap.is_open()
             || self.room_search_modal_state.is_open()
             || self.booth_modal_state.is_open()
             || self.stations_modal_state.is_open()
@@ -1768,7 +1767,7 @@ impl App {
                         paper_modal: self.paper.modal.as_ref(),
                         stream_modal: self.stream_modal.as_ref(),
                         show_help: self.show_help,
-                        usermap: self.usermap.is_open().then_some(&mut self.usermap),
+                        usermap: &mut self.usermap,
                         help_modal_state: &self.help_modal_state,
                         show_ultimate_modal: self.show_ultimate_modal,
                         ultimate_state: &self.ultimate_state,
@@ -2429,6 +2428,7 @@ impl App {
                     crate::app::directory::ui::DirectoryPageView {
                         directory: ctx.directory_state,
                         jobs: ctx.jobs_state,
+                        usermap: &mut *ctx.usermap,
                         viewer_langs: ctx.viewer_langs,
                         projects: ctx.chat_view.showcase_view.items,
                         people: ctx.chat_view.work_view.items,
@@ -2859,10 +2859,6 @@ impl App {
 
         if ctx.show_help {
             help_modal::ui::draw(frame, inner, ctx.help_modal_state, ctx.listen_url);
-        }
-
-        if let Some(usermap) = ctx.usermap {
-            crate::app::usermap::ui::draw(frame, inner, usermap);
         }
 
         if ctx.show_ultimate_modal {

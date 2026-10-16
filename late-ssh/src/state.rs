@@ -38,7 +38,7 @@ use late_core::{
     rate_limit::IpRateLimiter,
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     net::IpAddr,
     sync::{Arc, Mutex},
     time::Instant,
@@ -77,6 +77,16 @@ pub fn online_human_count(active_users: &HashMap<Uuid, ActiveUser>) -> usize {
         .values()
         .filter(|user| user.fingerprint.is_some())
         .count()
+}
+
+/// The same roster as [`online_human_count`], by id: who the Profiles page
+/// lists first.
+pub fn online_human_ids(active_users: &HashMap<Uuid, ActiveUser>) -> HashSet<Uuid> {
+    active_users
+        .iter()
+        .filter(|(_, user)| user.fingerprint.is_some())
+        .map(|(user_id, _)| *user_id)
+        .collect()
 }
 
 /// Everyone at the bar right now except `buyer`: the roster a round pays for.

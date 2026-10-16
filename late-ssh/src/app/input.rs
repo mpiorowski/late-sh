@@ -913,11 +913,6 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
     }
     // Reserved global chords have already had first claim. Otherwise the
     // existing modal stack owns input.
-    if app.usermap.is_open() {
-        crate::app::usermap::input::handle_input(app, event);
-        return;
-    }
-
     if app.show_help {
         help_modal::input::handle_input(app, event);
         return;
@@ -2216,15 +2211,6 @@ fn input_dismisses_key_modal(event: &ParsedInput) -> bool {
 }
 
 fn dispatch_escape(app: &mut App) {
-    // The active map owns input while it is up, so it owns Esc too. This arm
-    // is not optional decoration: a lone Esc never reaches the modal stack in
-    // `handle_parsed_input` — it arrives here through the pending-escape
-    // flush — so a modal that only handles `Byte(0x1B)` there cannot be
-    // closed with the key everybody reaches for.
-    if app.usermap.is_open() {
-        app.usermap.close();
-        return;
-    }
     // A lone Esc never reaches the swallow-everything gate in
     // `handle_parsed_input` (it dispatches here via the pending-escape flush
     // instead), so this arm is the stream URL modal's only way out and comes
@@ -3715,10 +3701,9 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_settings = true;
 }
 
-/// Open the active map from anywhere. It has no chord — it is
-/// `/map` typed into a composer — so this is its one entry point, and
-/// it closes the rest of the modal stack the same way every other opener
-/// does.
+/// `/map` typed into a composer: land on the Profiles page, on its map
+/// shelf. It closes the modal stack the same way every other opener does,
+/// since a modal left up would cover the page it just went to.
 pub(crate) fn open_usermap_globally(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
@@ -3738,8 +3723,9 @@ pub(crate) fn open_usermap_globally(app: &mut App) {
     app.chat.close_overlay();
     app.chat.close_news_modal();
     app.chat.cancel_room_jump();
-    let profile = app.profile_state.service().clone();
-    app.usermap.open(&profile);
+    app.set_screen(Screen::Profiles);
+    app.directory_state
+        .set_shelf(crate::app::directory::state::Shelf::Map);
 }
 
 /// Shared Shop entry point for Ctrl+S, `/shop`, and locked-feature nudges.

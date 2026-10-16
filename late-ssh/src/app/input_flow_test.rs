@@ -1092,6 +1092,8 @@ async fn profiles_page_keys_drive_the_merged_feed() {
 
     app.handle_input(b"5");
     wait_for_render_contains(&mut app, " Profiles ").await;
+    // The page opens on the map; the feed keys live one shelf on.
+    app.handle_input(b" ");
 
     // `i` opens the profile editor on a blank project form. The form's first
     // row is already being typed into, so one Esc stops typing and a second
@@ -1664,7 +1666,11 @@ async fn the_realm_board_is_a_backtick_stop() {
     assert!(app.realm.board.is_some(), "with the board kept open");
 
     app.handle_input(b"`");
-    assert_eq!(app.screen, Screen::Realm, "and the next hop comes back to it");
+    assert_eq!(
+        app.screen,
+        Screen::Realm,
+        "and the next hop comes back to it"
+    );
 }
 
 #[tokio::test]
@@ -6902,6 +6908,8 @@ async fn profiles_mouse_search_selects_person_and_profile_popup_owns_input() {
     let mut app = make_app(db.db.clone(), user.id, "profiles-mouse-search");
     app.resize(80, 24).unwrap();
     app.set_screen(Screen::Profiles);
+    app.directory_state
+        .set_shelf(crate::app::directory::state::Shelf::People);
     wait_for_render_contains(&mut app, "@profiles-mouse-author").await;
     app.interaction_mode = InteractionMode::Hybrid;
     app.render().unwrap();
@@ -7003,13 +7011,14 @@ async fn zen_swallows_the_key_after_the_live_prefix_from_a_focused_inbox() {
     );
 }
 
-/// `/map` opens a modal that owns the keyboard, and Esc has to be the
-/// way out. A lone Esc never reaches the modal stack where the other keys are
-/// handled — it arrives later through `flush_pending_escape` — so a modal
-/// that only answers `Byte(0x1B)` there cannot be closed with the key
-/// everybody presses. That is exactly how this shipped.
+/// `/map` typed into a composer lands on the Profiles page, on its map
+/// shelf, and the tick turns the counts on for exactly as long as the shelf
+/// is on screen. Space walks on to the people and the map goes quiet.
 #[tokio::test]
-async fn the_usermap_opens_from_its_command_and_closes_on_escape() {
+async fn the_map_command_lands_on_the_profiles_map_shelf() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::directory::state::Shelf;
+
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "usermap-it").await;
     let client = test_db.db.get().await.expect("db client");
@@ -7023,11 +7032,16 @@ async fn the_usermap_opens_from_its_command_and_closes_on_escape() {
     wait_for_render_contains(&mut app, "lounge").await;
 
     app.handle_input(b"/map\r");
-    assert!(app.usermap.is_open(), "the command has to open it");
+    assert_eq!(app.screen, Screen::Profiles, "the command lands on the page");
+    assert_eq!(app.directory_state.shelf(), Shelf::Map, "on its map shelf");
+    app.tick();
+    assert!(app.usermap.is_shown(), "the tick asks for the counts");
     wait_for_render_contains(&mut app, "where everyone is").await;
 
-    app.handle_input(b"\x1b");
-    wait_for_esc_effect(&mut app, |app| !app.usermap.is_open(), "active map").await;
+    app.handle_input(b" ");
+    assert_eq!(app.directory_state.shelf(), Shelf::People);
+    app.tick();
+    assert!(!app.usermap.is_shown(), "a shelf nobody looks at counts nothing");
     wait_for_render_not_contains(&mut app, "where everyone is").await;
 }
 

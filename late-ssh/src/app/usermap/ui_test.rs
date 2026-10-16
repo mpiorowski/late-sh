@@ -1,16 +1,26 @@
+use ratatui::layout::Rect;
 use ratatui::style::Color;
+use ratatui::text::Line;
+use ratatui::widgets::Paragraph;
 use ratatui::{Terminal, backend::TestBackend};
 
 use super::state::{HEAT, UserMapState, heat_floors, heat_index_for, territory_for_code};
-use super::ui::draw;
+use super::ui::{draw, footer};
 
 /// Render into a terminal and hand back every colour that reached the buffer.
+/// Laid out as the page lays it out: the map gets every row but the last,
+/// which the page fills from the map's footer spans.
 fn render(state: &mut UserMapState, w: u16, h: u16) -> (String, Vec<Color>) {
     let mut terminal = Terminal::new(TestBackend::new(w, h)).expect("terminal");
     terminal
         .draw(|frame| {
             let area = frame.area();
-            draw(frame, area, state);
+            let body = Rect::new(area.x, area.y, area.width, area.height - 1);
+            draw(frame, body, state);
+            frame.render_widget(
+                Paragraph::new(Line::from(footer(state))),
+                Rect::new(area.x, area.bottom() - 1, area.width, 1),
+            );
         })
         .expect("draw");
     let buffer = terminal.backend().buffer().clone();
@@ -19,12 +29,12 @@ fn render(state: &mut UserMapState, w: u16, h: u16) -> (String, Vec<Color>) {
     (text, colors)
 }
 
-/// The map draws before the numbers arrive — a modal that shows nothing until
+/// The map draws before the numbers arrive — a shelf that shows nothing until
 /// a round trip finishes reads as broken.
 #[test]
 fn it_draws_while_it_is_still_counting() {
     let mut state = UserMapState::default();
-    state.open_without_loading();
+    state.show_without_loading();
     let (text, colors) = render(&mut state, 120, 40);
     assert!(text.contains("where everyone is"), "{text:.200}");
     assert!(text.contains("counting"), "it should say what it is doing");
@@ -39,7 +49,7 @@ fn it_draws_while_it_is_still_counting() {
 #[test]
 fn a_country_with_people_in_it_is_shaded() {
     let mut state = UserMapState::default();
-    state.open_without_loading();
+    state.show_without_loading();
     state.set_tallies_for_test(&[("PL", 3), ("NZ", 1)]);
     let (_, colors) = render(&mut state, 160, 48);
     let floors = heat_floors(3);
@@ -68,7 +78,7 @@ fn a_country_with_people_in_it_is_shaded() {
 #[test]
 fn an_empty_tally_explains_itself() {
     let mut state = UserMapState::default();
-    state.open_without_loading();
+    state.show_without_loading();
     state.set_tallies_for_test(&[]);
     let (text, _) = render(&mut state, 120, 40);
     assert!(text.contains("nobody online has said"), "{text:.400}");
@@ -79,7 +89,7 @@ fn an_empty_tally_explains_itself() {
 #[test]
 fn it_survives_a_small_terminal() {
     let mut state = UserMapState::default();
-    state.open_without_loading();
+    state.show_without_loading();
     state.set_tallies_for_test(&[("PL", 2)]);
     for (w, h) in [(40u16, 12u16), (80, 24), (200, 60)] {
         let (text, _) = render(&mut state, w, h);
@@ -95,7 +105,7 @@ fn the_mouse_zooms_drags_and_picks() {
     use super::state::MousePress;
 
     let mut state = UserMapState::default();
-    state.open_without_loading();
+    state.show_without_loading();
     state.set_tallies_for_test(&[("PL", 3), ("NZ", 1)]);
     render(&mut state, 160, 48);
 
@@ -134,14 +144,14 @@ fn a_click_in_the_list_picks_that_country() {
     use super::state::MousePress;
 
     let mut state = UserMapState::default();
-    state.open_without_loading();
+    state.show_without_loading();
     state.set_tallies_for_test(&[("PL", 3), ("NZ", 1), ("JP", 1)]);
     render(&mut state, 160, 48);
     assert_eq!(state.cursor(), 0);
 
     // Ask the draw where the list ended up rather than recomputing the
-    // modal's insets here — that arithmetic belongs in one place, and a test
-    // that duplicates it tests itself.
+    // layout here: that arithmetic belongs in one place, and a test that
+    // duplicates it tests itself.
     let list = state.list_area_for_test().expect("a list was drawn");
     // Mouse coordinates are 1-based, which is what the handler undoes.
     let second_row_y = list.y + 1 + 1;
@@ -160,7 +170,7 @@ fn a_press_outside_the_boxes_is_not_taken() {
     use super::state::MousePress;
 
     let mut state = UserMapState::default();
-    state.open_without_loading();
+    state.show_without_loading();
     state.set_tallies_for_test(&[("PL", 1)]);
     render(&mut state, 160, 48);
     assert!(!state.handle_mouse(MousePress::Down, 1, 1));
@@ -175,7 +185,7 @@ fn every_mode_names_itself_and_shows_the_others() {
 
     for mode in MapMode::ALL {
         let mut state = UserMapState::default();
-        state.open_without_loading();
+        state.show_without_loading();
         state.set_mode_for_test(mode);
         state.set_tallies_for_test(&[("PL", 3), ("NZ", 1)]);
         let (text, _) = render(&mut state, 160, 48);
@@ -198,7 +208,7 @@ fn every_mode_names_itself_and_shows_the_others() {
 #[test]
 fn the_legend_follows_the_numbers() {
     let mut small = UserMapState::default();
-    small.open_without_loading();
+    small.show_without_loading();
     small.set_tallies_for_test(&[("PL", 2), ("NZ", 1)]);
     let (text, _) = render(&mut small, 160, 48);
     assert!(
@@ -211,7 +221,7 @@ fn the_legend_follows_the_numbers() {
     );
 
     let mut big = UserMapState::default();
-    big.open_without_loading();
+    big.show_without_loading();
     big.set_tallies_for_test(&[("PL", 900), ("NZ", 40), ("JP", 3)]);
     let (text, _) = render(&mut big, 160, 48);
     assert!(

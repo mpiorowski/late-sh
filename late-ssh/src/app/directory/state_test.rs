@@ -1,4 +1,5 @@
 use chrono::{Duration, Utc};
+use std::collections::HashSet;
 use uuid::Uuid;
 
 use super::state::{DirectoryState, PersonFocus, Shelf, person_entries, person_row};
@@ -62,7 +63,7 @@ fn one_row_per_person_regardless_of_what_they_brought() {
     ];
     let people = vec![person(both, "both card", 10), person(card_only, "card", 5)];
 
-    let entries = person_entries(&projects, &people, false, both, "");
+    let entries = person_entries(&projects, &people, false, both, "", &HashSet::new());
     assert_eq!(entries.len(), 3);
 
     let both_entry = entries
@@ -89,7 +90,7 @@ fn people_sort_by_latest_activity() {
     let projects = vec![project(fresh_project, "fresh", 5)];
     let people = vec![person(stale_card, "stale", 60)];
 
-    let entries = person_entries(&projects, &people, false, stale_card, "");
+    let entries = person_entries(&projects, &people, false, stale_card, "", &HashSet::new());
     assert_eq!(entries[0].user_id, fresh_project);
     assert_eq!(entries[1].user_id, stale_card);
 }
@@ -104,7 +105,7 @@ fn a_fresh_project_bumps_a_person_with_an_old_card() {
         person(other, "newer card", 30),
     ];
 
-    let entries = person_entries(&projects, &people, false, user, "");
+    let entries = person_entries(&projects, &people, false, user, "", &HashSet::new());
     assert_eq!(
         entries[0].user_id, user,
         "latest project counts as activity"
@@ -118,7 +119,7 @@ fn mine_only_keeps_the_viewer_row() {
     let projects = vec![project(viewer, "mine", 10), project(other, "theirs", 5)];
     let people = vec![person(other, "their card", 1)];
 
-    let entries = person_entries(&projects, &people, true, viewer, "");
+    let entries = person_entries(&projects, &people, true, viewer, "", &HashSet::new());
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].user_id, viewer);
 }
@@ -134,7 +135,14 @@ fn query_matches_username_card_and_projects() {
     ];
     let people = vec![person(by_card, "late nights welcome", 1)];
 
-    let entries = person_entries(&projects, &people, false, by_project, "late");
+    let entries = person_entries(
+        &projects,
+        &people,
+        false,
+        by_project,
+        "late",
+        &HashSet::new(),
+    );
     let ids: Vec<Uuid> = entries.iter().map(|entry| entry.user_id).collect();
     assert!(ids.contains(&by_project));
     assert!(ids.contains(&by_card));
@@ -146,7 +154,7 @@ fn focus_targets_card_first_then_projects() {
     let user = Uuid::now_v7();
     let projects = vec![project(user, "proj", 10)];
     let people = vec![person(user, "card", 5)];
-    let entries = person_entries(&projects, &people, false, user, "");
+    let entries = person_entries(&projects, &people, false, user, "", &HashSet::new());
     let entry = &entries[0];
 
     assert!(matches!(entry.focus_target(0), Some(PersonFocus::Card(_))));
@@ -161,7 +169,7 @@ fn focus_targets_card_first_then_projects() {
 fn focus_targets_projects_directly_without_a_card() {
     let user = Uuid::now_v7();
     let projects = vec![project(user, "only-proj", 10)];
-    let entries = person_entries(&projects, &[], false, user, "");
+    let entries = person_entries(&projects, &[], false, user, "", &HashSet::new());
     let Some(PersonFocus::Project(item)) = entries[0].focus_target(0) else {
         panic!("focus 0 should be the project when there is no card");
     };
@@ -173,7 +181,7 @@ fn unread_when_any_row_moved_past_its_marker() {
     let user = Uuid::now_v7();
     let projects = vec![project(user, "proj", 10)];
     let people = vec![person(user, "card", 60)];
-    let entries = person_entries(&projects, &people, false, user, "");
+    let entries = person_entries(&projects, &people, false, user, "", &HashSet::new());
     let entry = &entries[0];
 
     let before_everything = Some(Utc::now() - Duration::minutes(120));
@@ -234,18 +242,20 @@ fn search_query_is_active_only_in_search_mode() {
 }
 
 #[test]
-fn space_switches_shelves_and_drops_the_stacked_detail() {
+fn space_walks_the_shelves_from_the_map_and_drops_the_stacked_detail() {
     let mut state = DirectoryState::new();
+    assert_eq!(state.shelf(), Shelf::Map, "the page opens on the map");
+    state.cycle_shelf();
     assert_eq!(state.shelf(), Shelf::People);
     state.open_detail();
-    state.toggle_shelf();
+    state.cycle_shelf();
     assert_eq!(state.shelf(), Shelf::Jobs);
     assert!(
         !state.detail_open(),
         "the detail belongs to the people shelf"
     );
-    state.toggle_shelf();
-    assert_eq!(state.shelf(), Shelf::People);
+    state.cycle_shelf();
+    assert_eq!(state.shelf(), Shelf::Map);
 }
 
 #[test]
@@ -263,7 +273,7 @@ fn row_model_for_card_only_projects_only_and_both() {
         person(with_both, "Both", 2),
     ];
     people[1].profile.skills = ["a", "b", "c", "d", "e", "f"].map(str::to_string).to_vec();
-    let entries = person_entries(&projects, &people, false, with_card, "");
+    let entries = person_entries(&projects, &people, false, with_card, "", &HashSet::new());
     let after = Some(Utc::now());
     let row_for = |user: Uuid| {
         let entry = entries.iter().find(|entry| entry.user_id == user).unwrap();
@@ -296,4 +306,24 @@ fn row_model_for_card_only_projects_only_and_both() {
         vec!["a", "b", "c", "d", "e"],
         "five tags at most"
     );
+}
+
+#[test]
+fn the_connected_lead_the_list_and_each_group_keeps_newest_first() {
+    let fresh_offline = Uuid::now_v7();
+    let stale_online = Uuid::now_v7();
+    let fresh_online = Uuid::now_v7();
+    let people = vec![
+        person(fresh_offline, "fresh offline", 5),
+        person(stale_online, "stale online", 60),
+        person(fresh_online, "fresh online", 30),
+    ];
+    let online = HashSet::from([stale_online, fresh_online]);
+
+    let entries = person_entries(&[], &people, false, fresh_offline, "", &online);
+
+    let order: Vec<Uuid> = entries.iter().map(|entry| entry.user_id).collect();
+    assert_eq!(order, vec![fresh_online, stale_online, fresh_offline]);
+    let flags: Vec<bool> = entries.iter().map(|entry| entry.online).collect();
+    assert_eq!(flags, vec![true, true, false]);
 }

@@ -1,26 +1,16 @@
-//! Drawing `/map`: the world on the left, who is on it down the right.
+//! Drawing the map shelf: a title line, the world on the left, who is on it
+//! down the right. The footer is the host page's row, built from [`footer`].
 
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Flex, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use crate::app::common::theme;
 use crate::app::common::worldmap::view::{self, Paint};
 
 use super::state::{HEAT, MapMode, UserMapState, heat_label_for};
-
-/// The modal, centred in the area it is given.
-fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
-    let vertical = Layout::vertical([Constraint::Length(height.min(area.height))])
-        .flex(Flex::Center)
-        .split(area);
-    let horizontal = Layout::horizontal([Constraint::Length(width.min(area.width))])
-        .flex(Flex::Center)
-        .split(vertical[0]);
-    horizontal[0]
-}
 
 /// How many country rows fit in the list column, once the legend and its
 /// heading have taken their share. Shared with the click handling, which has
@@ -34,39 +24,28 @@ fn list_rows(area: Rect) -> usize {
 const LIST_WIDTH: u16 = 30;
 
 pub fn draw(frame: &mut Frame, area: Rect, state: &mut UserMapState) {
-    // Nearly the whole screen: a world map in a small box is a smudge.
-    let width = area.width.saturating_sub(4).max(20);
-    let height = area.height.saturating_sub(2).max(10);
-    let rect = centered_rect(width, height, area);
-    frame.render_widget(Clear, rect);
-
-    let total = state.total();
-    let title = if total == 0 {
-        format!(" where everyone is · {} ", state.mode().title())
-    } else {
-        format!(
-            " where everyone is · {} · {} ",
+    if area.width == 0 || area.height < 2 {
+        return;
+    }
+    let title = match state.total() {
+        0 => format!(" where everyone is · {}", state.mode().title()),
+        total => format!(
+            " where everyone is · {} · {}",
             state.mode().title(),
             state.mode().noun(total)
-        )
+        ),
     };
-    let block = Block::default()
-        .title(title)
-        .title_style(
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            title,
             Style::default()
                 .fg(theme::AMBER_GLOW())
                 .add_modifier(Modifier::BOLD),
-        )
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-    let inner = block.inner(rect);
-    frame.render_widget(block, rect);
-    if inner.width == 0 || inner.height < 2 {
-        return;
-    }
+        ))),
+        Rect::new(area.x, area.y, area.width, 1),
+    );
 
-    let footer = Rect::new(inner.x, inner.y + inner.height - 1, inner.width, 1);
-    let body = Rect::new(inner.x, inner.y, inner.width, inner.height - 1);
+    let body = Rect::new(area.x, area.y + 1, area.width, area.height - 1);
     let (map_area, list_area) = if body.width > LIST_WIDTH + 30 {
         (
             Rect::new(body.x, body.y, body.width - LIST_WIDTH - 1, body.height),
@@ -107,7 +86,12 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &mut UserMapState) {
     if let Some(list_area) = list_area {
         draw_list(frame, list_area, state);
     }
+}
 
+/// The host's footer row: the three slices as tabs, on the same line as the
+/// keys because the tabs are how anybody finds out the other two slices
+/// exist and a row of their own is more than that is worth.
+pub fn footer(state: &UserMapState) -> Vec<Span<'static>> {
     // When the whole world is on screen the arrows are correctly a no-op, and
     // a footer that still advertises them is how "panning is broken" gets
     // reported. Say what is actually true instead.
@@ -118,17 +102,14 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &mut UserMapState) {
         _ => false,
     };
     let hints = if fits {
-        "tab mode · + zoom in · j/k country · r refresh · esc close"
+        "m mode · + zoom in · j/k country · r refresh"
     } else {
-        "tab mode · arrows pan · +/- zoom · j/k country · f fit · esc close"
+        "m mode · arrows pan · +/- zoom · j/k country · f fit"
     };
-    // The tab strip goes on the same line as the hints: it is how anybody
-    // finds out the other two slices exist, and a modal this size has no
-    // room to spend a whole row saying so.
-    let mut footer_spans: Vec<Span<'static>> = Vec::new();
+    let mut spans: Vec<Span<'static>> = Vec::new();
     for mode in MapMode::ALL {
         let current = mode == state.mode();
-        footer_spans.push(Span::styled(
+        spans.push(Span::styled(
             format!("{} ", mode.tab_label()),
             Style::default().fg(if current {
                 theme::AMBER_GLOW()
@@ -137,11 +118,11 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &mut UserMapState) {
             }),
         ));
     }
-    footer_spans.push(Span::styled(
+    spans.push(Span::styled(
         format!("· {hints}"),
         Style::default().fg(theme::TEXT_FAINT()),
     ));
-    frame.render_widget(Paragraph::new(Line::from(footer_spans)), footer);
+    spans
 }
 
 fn draw_list(frame: &mut Frame, area: Rect, state: &UserMapState) {

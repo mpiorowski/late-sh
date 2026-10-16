@@ -19,12 +19,12 @@ use crate::app::clubhouse::nightcap::svc::{NightcapHouseFailure, NightcapOrderRe
 use crate::app::common::primitives::Screen;
 use crate::app::crown::svc::CrownRefusal;
 use crate::app::deadchannel::haunt::state::GateVerdict;
+use crate::app::door::realm::svc::{RealmPayout, RealmSeasonOpen, RealmSnapshotRowError};
 use crate::app::door::zork::protocol::{Action as ZorkAction, Edition as ZorkEdition};
 use crate::app::games::chips::svc::{GiftDrinkRefusal, RoundRefusal};
 use crate::app::leaderboard::svc::AwardAnnouncementOutcome;
 use crate::app::live::input::Origin as LiveOrigin;
 use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome, SnapshotRowError};
-use crate::app::door::realm::svc::{RealmPayout, RealmSeasonOpen, RealmSnapshotRowError};
 use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
 use crate::app::referral::svc::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement};
 use crate::ircd::conn::{IrcHistoryOutcome, IrcHistoryRequest};
@@ -400,6 +400,7 @@ pub enum Place {
     Home(HomeRoom),
     /// The open Arcade board or House Table game.
     Game(ActivityGame),
+    MapShelf,
     PeopleShelf,
     JobsShelf,
     ArtboardCanvas,
@@ -591,9 +592,9 @@ mod inner {
         OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome,
         PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, RealmPayout,
         RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
-        RoundRefusal, RunnerDoor,
-        Screen, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason,
-        SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
+        RoundRefusal, RunnerDoor, Screen, SessionStartStage, SessionUser, SnapshotRowError,
+        SongQueueReward, SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch,
+        TranslationResult, VizWireBands, WatchDoor,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
@@ -2134,6 +2135,7 @@ mod inner {
             Place::Whole => "none",
             Place::Home(room) => home_room_label(room),
             Place::Game(game) => game_label(game),
+            Place::MapShelf => "map",
             Place::PeopleShelf => "people",
             Place::JobsShelf => "jobs",
             Place::ArtboardCanvas => "canvas",
@@ -3270,9 +3272,9 @@ mod inner {
         OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome,
         PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, RealmPayout,
         RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
-        RoundRefusal, RunnerDoor,
-        Screen, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason,
-        SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
+        RoundRefusal, RunnerDoor, Screen, SessionStartStage, SessionUser, SnapshotRowError,
+        SongQueueReward, SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch,
+        TranslationResult, VizWireBands, WatchDoor,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
