@@ -28,7 +28,8 @@ use late_ssh::{
     moderation::service::ModerationInfra,
     session::SessionRegistry,
     ssh,
-    state::State,
+    state::{State, TunnelSessions},
+    tunnel,
 };
 use tokio::{sync::Semaphore, task::JoinSet};
 
@@ -60,6 +61,12 @@ async fn finish_ssh_drain(
             *fatal_error = Some(anyhow::Error::new(err).context("ssh task panicked"));
         }
     }
+}
+
+async fn finish_tunnel_drain(tunnel_sessions: &TunnelSessions) {
+    tracing::info!("waiting for active tunnel sessions to drain...");
+    tunnel_sessions.wait_empty().await;
+    tracing::info!("tunnel sessions finished draining");
 }
 
 async fn flush_dartboard_snapshot(state: &State, fatal_error: &mut Option<anyhow::Error>) {
@@ -535,6 +542,7 @@ async fn main() -> anyhow::Result<()> {
         ssh_attempt_limiter,
         ws_pair_limiter,
         is_draining,
+        tunnel_sessions: TunnelSessions::default(),
         runner_looks: runner_look_service.clone(),
         presence: presence_service,
         lounge_service,
@@ -656,6 +664,18 @@ async fn main() -> anyhow::Result<()> {
         api::run_api_server(api_state.config.api_port, api_state, Some(api_shutdown))
             .await
             .context("api server failed")
+    });
+
+    let tunnel_state = state.clone();
+    let tunnel_shutdown = session_shutdown.clone();
+    tasks.spawn(async move {
+        tunnel::run_tunnel_server(
+            tunnel_state.config.tunnel_port,
+            tunnel_state,
+            Some(tunnel_shutdown),
+        )
+        .await
+        .context("tunnel server failed")
     });
 
     tasks.spawn(async move {
@@ -844,6 +864,7 @@ async fn main() -> anyhow::Result<()> {
     if should_finish_ssh_drain {
         finish_ssh_drain(&mut ssh_task, &mut fatal_error).await;
     }
+    finish_tunnel_drain(&state.tunnel_sessions).await;
     flush_dartboard_snapshot(&state, &mut fatal_error).await;
     flush_lateania_characters(&state, &mut fatal_error).await;
     flush_online_time(&state, &mut fatal_error).await;

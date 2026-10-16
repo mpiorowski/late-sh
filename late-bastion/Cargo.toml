@@ -1,0 +1,45 @@
+[package]
+name = "late-bastion"
+version = "0.1.0"
+edition = "2024"
+
+[features]
+default = []
+otel = ["late-core/otel", "opentelemetry", "tracing-opentelemetry", "opentelemetry-http"]
+
+[dependencies]
+late-core.workspace = true
+
+# Core Utils
+anyhow = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+uuid = { workspace = true }
+ipnet.workspace = true
+
+# Async Runtime
+tokio = { workspace = true }
+futures-util = { workspace = true }
+
+# Memory allocator (matches late-ssh; bastion is long-lived)
+tikv-jemallocator = "0.6"
+
+# SSH server (user-facing)
+russh.workspace = true
+getrandom.workspace = true
+rand_core = { workspace = true, features = ["std"] }
+pkcs5.workspace = true
+
+# WS client (bastion → late-ssh /tunnel; not exercised by the scaffold yet)
+tokio-tungstenite.workspace = true
+
+# Telemetry (optional — gated behind "otel" feature)
+opentelemetry = { workspace = true, optional = true }
+tracing-opentelemetry = { workspace = true, optional = true }
+opentelemetry-http = { workspace = true, optional = true }
+
+[dev-dependencies]
+late-core = { workspace = true }
+ipnet = { workspace = true }

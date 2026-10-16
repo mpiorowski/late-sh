@@ -175,6 +175,9 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         ssh_proxy_trusted_cidrs: vec![],
         ws_pair_max_attempts_per_ip: 30,
         ws_pair_rate_limit_window_secs: 60,
+        tunnel_port: 0,
+        tunnel_shared_secret: "test-secret".to_string(),
+        tunnel_trusted_cidrs: vec![],
         ai: AiConfig {
             enabled: false,
             api_key: None,
@@ -417,6 +420,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         ssh_attempt_limiter,
         ws_pair_limiter,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        tunnel_sessions: crate::state::TunnelSessions::default(),
     }
 }
 
@@ -735,6 +739,8 @@ fn make_app_with_chat_service_and_permissions(
         },
         paper_at_login: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        supports_reconnect_on_drain: false,
+        reconnect_reason: None,
         initial_theme_id: "contrast".to_string(),
         initial_interaction_mode: None,
         initial_audio_source: late_core::models::user::AudioSource::default(),
@@ -1002,6 +1008,8 @@ pub fn make_app_with_paired_client(
         landing_page: late_core::models::user::LandingPage::Clubhouse,
         paper_at_login: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        supports_reconnect_on_drain: false,
+        reconnect_reason: None,
         initial_radio_station: late_core::models::user::RadioStation::default(),
         initial_radio_slots: late_core::models::user::RadioSlots::default(),
         initial_theme_id: "contrast".to_string(),

@@ -41,12 +41,12 @@ pub(crate) fn sayonara_scene_area(modal_area: Rect) -> Option<Rect> {
     ))
 }
 
-pub(crate) fn draw(frame: &mut Frame, area: Rect) {
+pub(crate) fn draw(frame: &mut Frame, area: Rect, is_draining: bool) {
     let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
-        .title(" Quit? ")
+        .title(if is_draining { " Update? " } else { " Quit? " })
         .title_style(
             Style::default()
                 .fg(theme::AMBER_GLOW())
@@ -58,17 +58,32 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect) {
     frame.render_widget(block, popup);
 
     let layout = Layout::vertical([
-        Constraint::Length(1), // breathing room
+        Constraint::Length(2), // breathing room
         Constraint::Length(1), // prompt
         Constraint::Min(1),    // spacer
         Constraint::Length(1), // footer
     ])
     .split(inner);
 
-    let prompt = Line::from(Span::styled(
-        "Clicked by mistake, right?",
-        Style::default().fg(theme::TEXT_BRIGHT()),
-    ));
+    let prompt = if is_draining {
+        Line::from(vec![
+            Span::styled(
+                "r",
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                " to reconnect to the updated late.sh!",
+                Style::default().fg(theme::TEXT_BRIGHT()),
+            ),
+        ])
+    } else {
+        Line::from(Span::styled(
+            "Clicked by mistake, right?",
+            Style::default().fg(theme::TEXT_BRIGHT()),
+        ))
+    };
     frame.render_widget(Paragraph::new(prompt).centered(), layout[1]);
 
     let footer_cols = Layout::horizontal([

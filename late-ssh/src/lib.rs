@@ -7,6 +7,7 @@ pub mod config;
 #[cfg(test)]
 mod config_test;
 pub mod dartboard;
+pub mod exec;
 pub mod ircd;
 pub mod metrics;
 pub mod moderation;
@@ -18,6 +19,7 @@ pub(crate) mod proxy_protocol;
 pub(crate) mod render_signal;
 pub mod session;
 pub mod session_bootstrap;
+pub mod session_io;
 pub mod ssh;
 #[cfg(test)]
 mod ssh_ban_test;
@@ -27,4 +29,7 @@ pub mod state;
 pub(crate) mod terminal_size;
 #[cfg(test)]
 pub mod test_helpers;
+pub mod tunnel;
+#[cfg(test)]
+mod tunnel_test;
 pub mod usernames;

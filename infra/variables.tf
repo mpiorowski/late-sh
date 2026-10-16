@@ -68,6 +68,57 @@ variable "IPV6_PROXY_IMAGE" {
   default     = "haproxy:2.9-alpine"
 }
 
+# Bastion (late-bastion)
+# =============================================================================
+
+variable "BASTION_ENABLED" {
+  description = "\"1\" to deploy the late-bastion pod and the :5222 NGINX TCP entry alongside direct SSH."
+  type        = string
+  default     = "0"
+}
+
+variable "BASTION_HOST_KEY" {
+  description = "Ed25519 private key for the bastion's russh host key. Always populates the secret so a future enable doesn't require re-applying secrets."
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = var.BASTION_ENABLED != "1" || length(trimspace(var.BASTION_HOST_KEY)) > 0
+    error_message = "BASTION_HOST_KEY must be non-empty when BASTION_ENABLED=1."
+  }
+}
+
+variable "BASTION_SHARED_SECRET" {
+  description = "Pre-shared secret sent on the /tunnel WS upgrade. Mounted into both late-bastion and late-ssh."
+  type        = string
+  sensitive   = true
+  default     = ""
+
+  validation {
+    condition     = length(trimspace(var.BASTION_SHARED_SECRET)) > 0
+    error_message = "BASTION_SHARED_SECRET must be non-empty for the late-ssh tunnel listener."
+  }
+}
+
+variable "BASTION_SSH_PORT" {
+  description = "Port the bastion russh server listens on inside the cluster."
+  type        = string
+  default     = "5222"
+}
+
+variable "BASTION_MAX_CONNS_GLOBAL" {
+  description = "Bastion: max simultaneous SSH connections (global cap)."
+  type        = string
+  default     = "10000"
+}
+
+variable "BASTION_SSH_IDLE_TIMEOUT" {
+  description = "Bastion: russh inactivity timeout in seconds."
+  type        = string
+  default     = "3600"
+}
+
 # =============================================================================
 # Secrets injected into late-ssh
 # =============================================================================

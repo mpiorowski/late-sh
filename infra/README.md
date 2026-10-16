@@ -300,7 +300,17 @@ secrets/variables for CI/CD).
 | -------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `LOG_LEVEL`    | Rust log level (`RUST_LOG`)                                                                                                                                                          |
 | `SSH_HOST_KEY` | Ed25519 private key for SSH server                                                                                                                                                   |
-| `IMAGE_TAGS`   | Component name -> image ref map (ssh, web, and each door). Only read when a deployment is created; deploys go through `kubectl set image` and every deployment ignores image changes |
+| `IMAGE_TAGS`   | Component name -> image ref map (ssh, web, bastion, and each door). Only read when a deployment is created; deploys go through `kubectl set image` and every deployment ignores image changes |
+
+### Bastion
+
+`BASTION_ENABLED=1` provisions the SSH frontend and an IPv4/IPv6 listener on
+port `5222` in `ssh-edge`, forwarding PROXY v1 metadata to the bastion; port `22`
+continues to reach `late-ssh` directly. Set `BASTION_HOST_KEY` when enabled and
+`BASTION_SHARED_SECRET` for the backend tunnel in every deployment. The shared
+secret is injected into both services. Backend listener ports and trusted
+CIDRs live in the `late-ssh` profiles. A `-bastion` release rolls only the
+bastion image through `deploy_service.yml`.
 
 ### IRC
 

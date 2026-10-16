@@ -45,10 +45,11 @@ Private membership and room bans apply to history as well as live chat.
 
 ## Workspace
 
-The Rust workspace contains the main apps and standalone door hosts:
+This is a Rust workspace with shared services, client tooling, and door-game hosts:
 
 | Crate | Role |
 |-------|------|
+| `late-bastion` | Long-lived SSH frontend that reconnects terminal sessions across backend updates |
 | `late-cli` | Companion CLI for local audio playback, paired controls, and visualizer sync |
 | `late-core` | Shared domain code, database layer, migrations, and infrastructure helpers |
 | `late-ssh` | SSH server and terminal UI application |

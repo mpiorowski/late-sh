@@ -18,6 +18,10 @@
 # maxconn: late-ssh admits at most 1000 SSH and 200 IRC sessions and closes
 # refused sockets on the spot, so 4096 is headroom that also keeps a flood
 # inside the memory limit below.
+#
+# During the bastion rollout, BASTION_ENABLED=1 adds a parallel dogfood
+# listener on :5222 to service-bastion-sv; public :22 stays on late-ssh.
+# Cutover changes the :22 default_backend to service_bastion.
 # =============================================================================
 
 locals {
@@ -41,6 +45,15 @@ locals {
 
     backend service_ssh
       server service_ssh service-ssh-sv.default.svc.cluster.local:2222 send-proxy
+    %{if var.BASTION_ENABLED == "1"}
+    frontend bastion
+      bind :5222
+      bind [::]:5222 v6only
+      default_backend service_bastion
+
+    backend service_bastion
+      server service_bastion service-bastion-sv.default.svc.cluster.local:${var.BASTION_SSH_PORT} send-proxy
+    %{endif}
     %{if local.irc_enabled_bool}
     frontend irc
       bind :${local.irc_port}

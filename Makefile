@@ -22,7 +22,7 @@ ENV_TEMPLATE = .env.dev
 #   make start-instance2          # bring up the stack (foreground)
 #   make .env-instance2           # just (re)generate .env without starting
 
-CHECK_PACKAGES = -p late-cli -p late-core -p late-ssh -p late-web -p late-webview -p late-zork
+CHECK_PACKAGES = -p late-bastion -p late-cli -p late-core -p late-ssh -p late-web -p late-webview -p late-zork
 # `env -u MAKEFLAGS -u MFLAGS`: make exports command-line variables (the
 # `ARGS="..."` in `make test-llm ARGS=...`) through MAKEFLAGS, cargo forwards
 # it to build scripts, and tikv-jemalloc-sys's nested make then parses ARGS'
@@ -160,6 +160,7 @@ start-amd64: .env keys
 
 startm: .env keys
 	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up --build
+
 down:
 	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml down
 stop:
