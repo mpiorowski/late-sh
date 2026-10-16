@@ -1805,7 +1805,11 @@ async fn a_lone_esc_lets_go_of_a_picked_realm_chat_message_before_closing_the_bo
     app.handle_input(b"\x1b");
     app.pending_escape_started_at = Some(std::time::Instant::now() - Duration::from_secs(1));
     crate::app::input::flush_pending_escape(&mut app);
-    assert_eq!(app.screen, Screen::Games, "the next Esc puts the board away");
+    assert_eq!(
+        app.screen,
+        Screen::Games,
+        "the next Esc puts the board away"
+    );
     assert!(app.realm.board.is_none());
 }
 

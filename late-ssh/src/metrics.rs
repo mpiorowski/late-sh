@@ -592,8 +592,8 @@ mod inner {
         JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, LoungeBeat,
         NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
         OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome,
-        PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, RealmPayout,
-        RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
+        PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, RealmChatRoomAttach,
+        RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
         RoundRefusal, RunnerDoor, Screen, SessionStartStage, SessionUser, SnapshotRowError,
         SongQueueReward, SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch,
         TranslationResult, VizWireBands, WatchDoor,
@@ -2372,7 +2372,10 @@ mod inner {
     pub fn record_realm_chat_room_attach(outcome: RealmChatRoomAttach) {
         realm_chat_room_attachments_total().add(
             1,
-            &[KeyValue::new("outcome", realm_chat_room_attach_label(outcome))],
+            &[KeyValue::new(
+                "outcome",
+                realm_chat_room_attach_label(outcome),
+            )],
         );
     }
 
@@ -3314,8 +3317,8 @@ mod inner {
         JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, LoungeBeat,
         NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
         OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome,
-        PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, RealmPayout,
-        RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
+        PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, RealmChatRoomAttach,
+        RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
         RoundRefusal, RunnerDoor, Screen, SessionStartStage, SessionUser, SnapshotRowError,
         SongQueueReward, SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch,
         TranslationResult, VizWireBands, WatchDoor,
