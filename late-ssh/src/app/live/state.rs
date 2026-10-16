@@ -50,7 +50,7 @@ pub enum LiveStripView<'a> {
     Stream(StreamStripView),
     DoorGame(DoorGameStripView),
     Event(EventStripView),
-    Realm(RealmStripView),
+    Realm(Box<RealmStripView>),
 }
 
 impl LiveStripView<'_> {
@@ -294,9 +294,8 @@ impl LiveState {
                 event_live::view(&calendar.live_at(now), id, calendar.tz, now)
                     .map(LiveStripView::Event)
             }
-            LiveSource::Realm(game_id) => {
-                realm_live::view(&realm.snapshot, game_id, Utc::now()).map(LiveStripView::Realm)
-            }
+            LiveSource::Realm(game_id) => realm_live::view(&realm.snapshot, game_id, Utc::now())
+                .map(|view| LiveStripView::Realm(Box::new(view))),
         }
     }
 

@@ -483,7 +483,6 @@ pub(crate) fn shelf_count(jobs: &JobsState, viewer_tags: &[String]) -> Option<us
     Some(jobs.visible(viewer_tags).len())
 }
 
-/// The page footer's right side while the for-me filter is on.
 // The post form
 
 /// Label column, then a space, then the value.
