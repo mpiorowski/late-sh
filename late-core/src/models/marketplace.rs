@@ -6,6 +6,7 @@ use uuid::Uuid;
 
 use super::{
     chips::{ChipMove, UserChips},
+    drinks::UserDrinks,
     rental::{
         BADGE_RENTAL_ITEM_KIND, BadgeRental, CustomTitle, RENTAL_DAY_SECS, TITLE_EFFECT_KIND,
         TITLE_RENTAL_ITEM_KIND, is_custom_title, title_from_payload,
@@ -101,6 +102,7 @@ pub const WONDERLAND_ULTIMATE_SKU: &str = "ultimate_wonderland";
 pub const THEMATRIX_ULTIMATE_SKU: &str = "ultimate_thematrix";
 pub const SHOP_USER_CHANGED_CHANNEL: &str = "shop_user_changed";
 pub const SHOP_CATALOG_CHANGED_CHANNEL: &str = "shop_catalog_changed";
+pub const HANGOVER_CURE_EFFECT_KIND: &str = "hangover_cure";
 
 #[derive(Debug, Clone)]
 pub struct MarketplaceItem {
@@ -234,6 +236,8 @@ pub enum PurchaseStatus {
     /// A fish or plant the user already owns the cap of
     /// (`TankStockKind::cap`), in the water and parked together.
     OwnedCapReached,
+    /// User is already sober, so Hangover Cure cannot be purchased.
+    AlreadySober,
 }
 
 #[derive(Debug, Clone)]
@@ -363,13 +367,54 @@ async fn purchase_item_by_sku_inner(
             title_rental: None,
         });
     };
-    let item = MarketplaceItem::from(item_row);
+    let mut item = MarketplaceItem::from(item_row);
     if is_listed_only(&item.payload) {
         bail!("{} is shown in the shop but not for sale", item.sku);
     }
+    let is_hangover_cure = item.item_kind == CHAT_CONSUMABLE_ITEM_KIND
+        && item.payload.get("effect_kind").and_then(|v| v.as_str())
+            == Some(HANGOVER_CURE_EFFECT_KIND);
+    if is_hangover_cure {
+        let drinks = UserDrinks::find_in_tx(&tx, user_id).await?;
+        let effective_points = drinks
+            .as_ref()
+            .map(|d| d.effective_points(Utc::now()))
+            .unwrap_or(0);
+        if effective_points <= 0 {
+            let balance = lock_user_chips_in_tx(&tx, user_id).await?;
+            tx.commit().await?;
+            return Ok(PurchaseWithEffectResult {
+                purchase: Some(PurchaseResult {
+                    status: PurchaseStatus::AlreadySober,
+                    item,
+                    balance,
+                    quantity: 0,
+                    active_quantity: 0,
+                }),
+                refresh_all_active_users: false,
+                username_effect: None,
+                bonsai_decay_protection: None,
+                aquarium_shield: None,
+                badge_rental: None,
+                title_rental: None,
+            });
+        }
+        let prior_cure_purchases: i64 = tx
+            .query_opt(
+                "SELECT COALESCE(quantity, 0)::BIGINT
+                 FROM user_purchases
+                 WHERE user_id = $1 AND item_id = $2",
+                &[&user_id, &item.id],
+            )
+            .await?
+            .map(|row| row.get(0))
+            .unwrap_or(0);
+        let seed = super::drinks::hangover_cure_seed();
+        item.price_chips =
+            super::drinks::hangover_cure_price(effective_points, prior_cure_purchases, seed);
+    }
     let is_repeatable = is_repeatable_purchase_item(&item);
     let balance = lock_user_chips_in_tx(&tx, user_id).await?;
-
     let existing = tx
         .query_opt(
             "SELECT quantity, active_quantity
@@ -907,16 +952,16 @@ fn is_repeatable_purchase_item(item: &MarketplaceItem) -> bool {
 /// Every chat consumable has to be room-targeted. `shop_consumable_effects` can
 /// physically hold user-scoped rows, but nothing projects them into a snapshot,
 /// so a user-scoped item would take the chips and do nothing anyone could see.
-/// Fail the purchase transaction rather than charge for a no-op.
+/// If the consumable is room-targeted, activates it in `shop_consumable_effects`
+/// and returns `true` (requiring snapshot refresh for all active users).
+/// If the consumable is user-targeted (like Hangover Cure), applies the user effect
+/// (purging drunk points) and returns `false`.
 async fn activate_chat_consumable_in_tx(
     tx: &tokio_postgres::Transaction<'_>,
     user_id: Uuid,
     item: &MarketplaceItem,
     chat_effect_room_id: Option<Option<Uuid>>,
 ) -> Result<bool> {
-    let Some(room_id) = chat_effect_room_id else {
-        return Ok(false);
-    };
     if item.item_kind != CHAT_CONSUMABLE_ITEM_KIND {
         return Ok(false);
     }
@@ -929,18 +974,30 @@ async fn activate_chat_consumable_in_tx(
     else {
         bail!("chat consumable {} is missing effect_kind", item.sku);
     };
+
+    let target = item.payload.get("target").and_then(|value| value.as_str());
+    if target == Some("user") {
+        if effect_kind == HANGOVER_CURE_EFFECT_KIND {
+            UserDrinks::purge_in_tx(tx, user_id).await?;
+        }
+        return Ok(false);
+    }
+
+    let Some(room_id) = chat_effect_room_id else {
+        return Ok(false);
+    };
+
     let duration_secs = item
         .payload
         .get("duration_secs")
         .and_then(|value| value.as_i64())
         .unwrap_or(1);
-    if item.payload.get("target").and_then(|value| value.as_str()) != Some("room") {
-        bail!("chat consumable {} must target a room", item.sku);
+    if target != Some("room") {
+        bail!("chat consumable {} must target a room or user", item.sku);
     }
     let Some(room_id) = room_id else {
         bail!("room-targeted consumable {} requires a room", item.sku);
     };
-
     ShopConsumableEffect::activate_room_effect_in_tx(
         tx,
         user_id,

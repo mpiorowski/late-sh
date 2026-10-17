@@ -101,6 +101,7 @@ fn make_state_with_bonsai_protection(protection: Option<BonsaiDecayProtection>) 
         chat_label_badge: None,
         chat_label_flag: None,
         custom_titles_available: true,
+        effective_drunk_points: 0,
     };
     ShopState::for_test_snapshot(snapshot)
 }
@@ -307,4 +308,53 @@ fn title_rows_tell_the_two_tiers_apart_with_the_duration_tag() {
         text.contains("Your Own Title  30d"),
         "title row must carry its tier tag: {text:?}"
     );
+}
+
+#[test]
+fn hangover_cure_row_shows_sober_status_when_not_drunk() {
+    use late_core::models::marketplace::CHAT_CONSUMABLE_ITEM_KIND;
+
+    let cure = ShopCatalogItem {
+        name: "Hangover Cure".to_string(),
+        effect_kind: Some("hangover_cure".to_string()),
+        requires_room: false,
+        ..chat_item("hangover_cure", CHAT_CONSUMABLE_ITEM_KIND)
+    };
+    // When sober (effective_drunk_points = 0)
+    let sober_state = ShopState::for_test_snapshot(ShopSnapshot {
+        effective_drunk_points: 0,
+        ..Default::default()
+    });
+    let line = item_row(
+        ShopCategory::Chat,
+        false,
+        &cure,
+        &sober_state,
+        SproutStatus::Bare { days_to_next: None },
+    );
+    let text: String = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert!(text.contains("sober"), "sober row must display sober status: {text:?}");
+
+    // When drunk (effective_drunk_points > 0)
+    let drunk_state = ShopState::for_test_snapshot(ShopSnapshot {
+        effective_drunk_points: 1000,
+        ..Default::default()
+    });
+    let line = item_row(
+        ShopCategory::Chat,
+        false,
+        &cure,
+        &drunk_state,
+        SproutStatus::Bare { days_to_next: None },
+    );
+    let text: String = line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert!(text.contains("activate"), "drunk row must display activate status: {text:?}");
 }

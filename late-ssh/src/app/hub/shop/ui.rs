@@ -297,6 +297,12 @@ fn draw_item_detail(
         } else {
             "rent"
         }
+    } else if item.is_hangover_cure() {
+        if state.effective_drunk_points() <= 0 {
+            "already sober"
+        } else {
+            "purge buzz"
+        }
     } else if item.is_consumable() {
         consumable_action_label(item, Some(chat_consumable_active(item, state)))
     } else if item.is_sprout() {
@@ -336,6 +342,7 @@ fn draw_item_detail(
         || item.is_sprout()
         || (item.is_tank_stock() && !has_aquarium)
         || (item.is_custom_title() && !state.custom_titles_available())
+        || (item.is_hangover_cure() && state.effective_drunk_points() <= 0)
     {
         Style::default()
             .fg(theme::TEXT_DIM())
@@ -367,6 +374,8 @@ fn draw_item_detail(
                 Span::styled("grows on its own", Style::default().fg(theme::TEXT_DIM()))
             } else if item.is_welcome_fish() {
                 Span::styled("free with the tank", Style::default().fg(theme::TEXT_DIM()))
+            } else if item.is_hangover_cure() && state.effective_drunk_points() <= 0 {
+                Span::styled("sober", Style::default().fg(theme::TEXT_DIM()))
             } else {
                 Span::styled(
                     format!("{} chips", item.price_chips),
@@ -1144,6 +1153,12 @@ fn item_row(
         } else {
             "rent"
         }
+    } else if item.is_hangover_cure() {
+        if state.effective_drunk_points() <= 0 {
+            "sober"
+        } else {
+            "activate"
+        }
     } else if item.is_consumable() {
         consumable_row_status(item, state)
     } else if item.is_sprout() {
@@ -1180,6 +1195,8 @@ fn item_row(
                 Style::default().fg(theme::TEXT_FAINT())
             }
         }
+    } else if item.is_hangover_cure() && state.effective_drunk_points() <= 0 {
+        Style::default().fg(theme::TEXT_FAINT())
     } else if item.is_consumable() || item.is_rental() {
         Style::default().fg(theme::AMBER())
     } else if item.owned || (item.is_tank_stock() && item.quantity > 0) {

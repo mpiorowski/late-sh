@@ -14,17 +14,18 @@ use late_core::{
         bonsai_decay_protection::BonsaiDecayProtection,
         chat_room::ChatRoom,
         chips::UserChips,
+        drinks::{UserDrinks, hangover_cure_price, hangover_cure_seed},
         marketplace::{
             AQUARIUM_CONSUMABLE_ITEM_KIND, AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH,
             AQUARIUM_MAX_PLANTS, AQUARIUM_PLANT_ITEM_KIND, AQUARIUM_SHIELD_SKU, AQUARIUM_SKU,
             BONSAI_CONSUMABLE_ITEM_KIND, BONSAI_DECAY_SHIELD_SKU, CHAT_BADGE_SLOT,
             CHAT_CONSUMABLE_ITEM_KIND, CHAT_FLAG_SLOT, COMPANION_CONSUMABLE_ITEM_KIND,
-            MarketplaceItem, PET_COMPANION_SKU, PurchaseResult, PurchaseStatus,
-            PurchaseWithEffectResult, TankActiveStatus, TankStockKind, ULTIMATE_SPELL_KIND,
-            USERNAME_EFFECT_ITEM_KIND, UserPurchase, adjust_aquarium_active_by_sku, is_sprout_row,
-            is_welcome_fish, purchase_item_by_sku_with_chat_effect,
-            purchase_item_by_sku_with_custom_title, purchase_item_by_sku_with_username_effect,
-            rental_duration_secs,
+            HANGOVER_CURE_EFFECT_KIND, MarketplaceItem, PET_COMPANION_SKU, PurchaseResult,
+			PurchaseStatus, PurchaseWithEffectResult, TankActiveStatus, TankStockKind,
+			ULTIMATE_SPELL_KIND, USERNAME_EFFECT_ITEM_KIND, UserPurchase,
+			adjust_aquarium_active_by_sku, is_sprout_row, is_welcome_fish,
+			purchase_item_by_sku_with_chat_effect, purchase_item_by_sku_with_custom_title,
+			purchase_item_by_sku_with_username_effect, rental_duration_secs,
         },
         milestone::{MILESTONE_BADGE_ITEM_KIND, MilestoneBadge},
         rental::{
@@ -78,6 +79,9 @@ pub struct ShopSnapshot {
     /// configured the custom SKUs render as unavailable rather than shipping
     /// unscreened.
     pub custom_titles_available: bool,
+    /// The user's current effective drunk points, if any. Used to price
+    /// and gate the Hangover Cure item (unavailable when 0/sober).
+    pub effective_drunk_points: i64,
 }
 
 /// One live user-scoped rental as the Shop shows it: what it is, which SKU
@@ -163,6 +167,11 @@ impl ShopCatalogItem {
     pub fn is_aquarium_shield(&self) -> bool {
         self.sku == AQUARIUM_SHIELD_SKU
     }
+    pub fn is_hangover_cure(&self) -> bool {
+        self.item_kind == CHAT_CONSUMABLE_ITEM_KIND
+            && self.effect_kind.as_deref() == Some(HANGOVER_CURE_EFFECT_KIND)
+    }
+
 
     pub fn is_aquarium(&self) -> bool {
         self.sku == AQUARIUM_SKU
@@ -292,7 +301,8 @@ fn purchase_story(
         | PurchaseStatus::InsufficientFunds
         | PurchaseStatus::RequiresAquarium
         | PurchaseStatus::DailyLimitReached
-        | PurchaseStatus::OwnedCapReached => return None,
+        | PurchaseStatus::OwnedCapReached
+        | PurchaseStatus::AlreadySober => return None,
     }
     let duration = rental_duration_secs(&result.item);
     match result.item.item_kind.as_str() {
@@ -360,7 +370,8 @@ fn custom_title_outcome(settled: SettledPurchase) -> CustomTitleOutcome {
             | PurchaseStatus::InsufficientFunds
             | PurchaseStatus::RequiresAquarium
             | PurchaseStatus::DailyLimitReached
-            | PurchaseStatus::OwnedCapReached,
+            | PurchaseStatus::OwnedCapReached
+            | PurchaseStatus::AlreadySober,
         )
         | None => CustomTitleOutcome::Refused(settled.message),
     }
@@ -938,6 +949,7 @@ impl ShopService {
                 PurchaseStatus::DailyLimitReached => {
                     format!("{} is limited to once per day", result.item.name)
                 }
+                PurchaseStatus::AlreadySober => "You are already sober".to_string(),
             },
         };
 
@@ -1092,6 +1104,11 @@ impl ShopService {
         let active_bonsai_decay_protection =
             BonsaiDecayProtection::for_user(&client, user_id).await?;
         let active_aquarium_shield = AquariumShield::for_user(&client, user_id).await?;
+        let drinks = UserDrinks::find(&client, user_id).await?;
+        let effective_drunk_points = drinks
+            .as_ref()
+            .map(|d| d.effective_points(Utc::now()))
+            .unwrap_or(0);
 
         let mut purchases_by_item = HashMap::with_capacity(purchases.len());
         for purchase in purchases {
@@ -1190,7 +1207,19 @@ impl ShopService {
                     slot: item.slot,
                     name: item.name,
                     description: item.description,
-                    price_chips: item.price_chips,
+                    price_chips: if item.item_kind == CHAT_CONSUMABLE_ITEM_KIND
+                        && item.payload.get("effect_kind").and_then(|v| v.as_str())
+                            == Some(HANGOVER_CURE_EFFECT_KIND)
+                    {
+                        let prior_purchases = purchase.map(|p| p.quantity as i64).unwrap_or(0);
+                        hangover_cure_price(
+                            effective_drunk_points,
+                            prior_purchases,
+                            hangover_cure_seed(),
+                        )
+                    } else {
+                        item.price_chips
+                    },
                     owned,
                     quantity: purchase.map(|purchase| purchase.quantity).unwrap_or(0),
                     active_quantity: purchase
@@ -1231,6 +1260,7 @@ impl ShopService {
             chat_label_badge,
             chat_label_flag,
             custom_titles_available: self.custom_titles_enabled(),
+            effective_drunk_points,
         })
     }
 

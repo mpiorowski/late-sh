@@ -3,6 +3,7 @@
 ## Metadata
 - Domain: late.sh - Command-Line Clubhouse for Computer People
 - Primary audience: LLM agents working on this codebase, human contributors
+- Last updated: 2026-09-28 (Hangover Cure: priced dynamically based on current effective drunk points with prior purchase multiplier and jitter; unavailable and rejected when sober.)
 - Status: Active
 - Stability note: Sections marked `[STABLE]` should change rarely. Sections marked `[VOLATILE]` are expected to change often.
 

@@ -19,6 +19,7 @@ fn make_state() -> ShopState {
         chat_label_badge: None,
         chat_label_flag: None,
         custom_titles_available: true,
+        effective_drunk_points: 0,
     };
     ShopState::for_test_snapshot(snapshot)
 }
@@ -145,6 +146,7 @@ fn make_state_with_glow_item() -> ShopState {
         chat_label_badge: None,
         chat_label_flag: None,
         custom_titles_available: true,
+        effective_drunk_points: 0,
     };
     ShopState::for_test_snapshot(snapshot)
 }
@@ -207,6 +209,7 @@ fn visible_items_lead_with_username_effects() {
         chat_label_badge: None,
         chat_label_flag: None,
         custom_titles_available: true,
+        effective_drunk_points: 0,
     };
     let state = ShopState::for_test_snapshot(snapshot);
     let skus: Vec<&str> = state
@@ -252,6 +255,7 @@ fn snapshot_with(items: Vec<ShopCatalogItem>) -> ShopSnapshot {
         chat_label_badge: None,
         chat_label_flag: None,
         custom_titles_available: true,
+        effective_drunk_points: 0,
     }
 }
 
@@ -354,6 +358,7 @@ fn username_effect_picker_carries_the_bought_tier_duration() {
         chat_label_badge: None,
         chat_label_flag: None,
         custom_titles_available: true,
+        effective_drunk_points: 0,
     };
     let mut state = ShopState::for_test_snapshot(snapshot);
     state.activate_selected(None);
@@ -462,4 +467,28 @@ fn the_custom_title_prompt_clears_on_cancel_and_category_switch() {
     assert!(state.pending_custom_title().is_some());
     state.select_next_category();
     assert!(state.pending_custom_title().is_none());
+}
+
+#[tokio::test]
+async fn hangover_cure_refused_when_sober_in_shop_state() {
+    let hangover_cure = ShopCatalogItem {
+        sku: "hangover_cure".to_string(),
+        item_kind: late_core::models::marketplace::CHAT_CONSUMABLE_ITEM_KIND.to_string(),
+        effect_kind: Some("hangover_cure".to_string()),
+        requires_room: false,
+        ..glow_item()
+    };
+    let mut snapshot = snapshot_with(vec![hangover_cure]);
+    snapshot.effective_drunk_points = 0;
+    let mut state = ShopState::for_test_snapshot(snapshot.clone());
+
+    let banner = state.activate_selected(None).expect("refusal banner");
+    assert!(matches!(banner.kind, BannerKind::Error), "{banner:?}");
+    assert_eq!(banner.message, "You are already sober");
+
+    // If drunk (points > 0), activation succeeds
+    snapshot.effective_drunk_points = 1000;
+    let mut drunk_state = ShopState::for_test_snapshot(snapshot);
+    let banner = drunk_state.activate_selected(None).expect("success banner");
+    assert!(matches!(banner.kind, BannerKind::Success), "{banner:?}");
 }

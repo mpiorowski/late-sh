@@ -1192,6 +1192,7 @@ A patron deep enough into the tavern's drinks types like it. `ChatService::slurr
 - **The hiccup belongs to the top of the ladder.** A single `*hic*` is dropped into an existing gap in 33% of a wasted patron's messages and 10% of a sloshed one's; tipsy and buzzed never hiccup, so the stammer marks the top of the ladder rather than drinking as such. One roll per message at every level: two hiccups in one line is the joke repeating itself. `only_the_top_of_the_ladder_hiccups` pins the bands.
 - **Protected tokens are never touched:** `@mentions` (they drive notifications and the mention wash), `#slugs`, URLs, backtick code spans, `---BUG---`-family markers, the leading `> ` reply quote line (someone else's words), and anything non-ASCII (so CJK and emoji pass through whole). The `*hic*` only widens an existing gap and respects the same exclusions.
 - `slur(body, level, seed)` is pure with a caller-supplied seed; `svc.rs::slur_seed` supplies a fresh one per message. Tests live in `slur_test.rs`.
+- **Hangover Cure purges it:** buying the Hangover Cure item from the Shop (dynamically priced by current effective drunk points and prior purchase count with jitter, unavailable when sober) immediately resets `user_drinks.drunk_points` to 0, returning the user's typing and public-room messages to normal instantly.
 
 ### Translation
 

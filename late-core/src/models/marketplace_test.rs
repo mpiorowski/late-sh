@@ -197,12 +197,12 @@ async fn hack_room_is_retired_and_room_bump_leads_the_chat_consumables() {
         chat_consumables,
         vec![
             "chat_room_bump",
+            "hangover_cure",
             "chat_room_spark",
             "chat_room_glow",
             "chat_room_pulse"
         ]
     );
-
     // Retired, not deleted: the row stays for purchase history, inactive.
     let active: bool = client
         .query_one(
@@ -2116,4 +2116,99 @@ async fn bonsai_decay_shield_expired_rows_are_excluded_from_active_queries() {
             .len(),
         0
     );
+}
+
+#[tokio::test]
+async fn hangover_cure_refused_when_sober_without_charging() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "hangover-sober-test").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let starting_balance = UserChips::admin_grant(&**client, user.id, 5_000)
+        .await
+        .expect("fund chips")
+        .balance;
+
+    // User is sober (no user_drinks row, or points = 0)
+    let result = purchase_durable_item_by_sku(&mut client, user.id, "hangover_cure")
+        .await
+        .expect("purchase result")
+        .expect("item available");
+    assert_eq!(result.status, PurchaseStatus::AlreadySober);
+    assert_eq!(result.balance, starting_balance, "no chips deducted when sober");
+}
+
+#[tokio::test]
+async fn hangover_cure_purchase_purges_drunk_points_and_deducts_dynamic_price() {
+    use crate::models::drinks::UserDrinks;
+
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "hangover-cure-test").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let starting_balance = UserChips::admin_grant(&**client, user.id, 20_000)
+        .await
+        .expect("fund chips")
+        .balance;
+
+    // Get drunk first (2000 points)
+    UserDrinks::record_purchase(
+        &client,
+        user.id,
+        crate::models::drink_round::Bar::Tavern,
+        2_000,
+        true,
+    )
+    .await
+    .expect("record drink");
+    let drinks_before = UserDrinks::find(&client, user.id)
+        .await
+        .expect("find")
+        .expect("drinks row exists");
+    assert_eq!(drinks_before.drunk_points, 2_000);
+
+    // Buy Hangover Cure (1st time: 0 prior purchases -> 1.0x multiplier)
+    let result = purchase_durable_item_by_sku(&mut client, user.id, "hangover_cure")
+        .await
+        .expect("purchase result")
+        .expect("item available");
+    assert_eq!(result.status, PurchaseStatus::Purchased);
+    // 2000 points * 1.0 multiplier * 0.85..=1.15 => 1700..=2300 chips
+    let price_paid_1 = starting_balance - result.balance;
+    assert!(
+        (1700..=2300).contains(&price_paid_1),
+        "first price paid ({price_paid_1}) should reflect 1.0x multiplier with jitter"
+    );
+
+    // Get drunk again (2000 points)
+    UserDrinks::record_purchase(
+        &client,
+        user.id,
+        crate::models::drink_round::Bar::Tavern,
+        2_000,
+        true,
+    )
+    .await
+    .expect("record drink second time");
+
+    // Buy Hangover Cure (2nd time: 1 prior purchase -> 1.50x multiplier)
+    let balance_before_2 = result.balance;
+    let result_2 = purchase_durable_item_by_sku(&mut client, user.id, "hangover_cure")
+        .await
+        .expect("purchase result")
+        .expect("item available");
+    assert_eq!(result_2.status, PurchaseStatus::QuantityAdded);
+    // 2000 points * 1.50 multiplier * 0.85..=1.15 => 2550..=3450 chips
+    let price_paid_2 = balance_before_2 - result_2.balance;
+    assert!(
+        (2550..=3450).contains(&price_paid_2),
+        "second price paid ({price_paid_2}) should reflect 1.50x multiplier with jitter"
+    );
+    // Verify drunk points purged
+    let drinks_after = UserDrinks::find(&client, user.id)
+        .await
+        .expect("find")
+        .expect("drinks row exists");
+    assert_eq!(drinks_after.drunk_points, 0);
+    assert_eq!(drinks_after.level(chrono::Utc::now()), 0);
+    assert_eq!(drinks_after.lifetime_spent, 4_000);
+    assert_eq!(drinks_after.drink_count, 2);
 }

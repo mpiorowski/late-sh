@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use deadpool_postgres::GenericClient;
-use tokio_postgres::Client;
+use tokio_postgres::{Client, GenericClient as TokioGenericClient};
 use uuid::Uuid;
 
 use super::drink_round::Bar;
@@ -92,6 +92,31 @@ pub fn drunk_level(effective_points: i64) -> u8 {
         .iter()
         .filter(|threshold| effective_points >= **threshold)
         .count() as u8
+}
+/// Minimum price in chips for the Hangover Cure item.
+pub const HANGOVER_CURE_MIN_PRICE: i64 = 250;
+
+/// Calculate the dynamic price for Hangover Cure from current effective drunk points,
+/// prior cure purchase count (progressive multiplier), and random jitter (0.85 to 1.15).
+/// If sober (0 points), returns 0.
+pub fn hangover_cure_price(effective_points: i64, prior_cure_purchases: i64, seed: u64) -> i64 {
+    if effective_points <= 0 {
+        return 0;
+    }
+    let count = prior_cure_purchases.max(0) as f64;
+    let multiplier = 1.0 + 0.35 * count + 0.15 * count.powf(1.5);
+    // Jitter: 85% to 115% (85..=115 / 100)
+    let jitter_pct = 85 + (seed % 31) as i64;
+    let base_with_mult = (effective_points as f64 * multiplier).round() as i64;
+    let raw_price = (base_with_mult * jitter_pct + 50) / 100;
+    raw_price.max(HANGOVER_CURE_MIN_PRICE)
+}
+
+/// Generate a pseudo-random seed for pricing jitter using system entropy.
+pub fn hangover_cure_seed() -> u64 {
+    let mut bytes = [0u8; 8];
+    let _ = getrandom::fill(&mut bytes);
+    u64::from_le_bytes(bytes)
 }
 
 /// One line of a bar's tab board, from [`UserDrinks::top_regulars`].
@@ -262,6 +287,22 @@ impl UserDrinks {
             .await?;
         Ok(row.map(Self::from))
     }
+    /// Purge all drunk points for the user immediately (Hangover Cure).
+    /// Resets `drunk_points` to 0 and updates `last_drink_at` to current_timestamp
+    /// while preserving lifetime stats (`lifetime_spent` and `drink_count`).
+    pub async fn purge_in_tx(client: &impl TokioGenericClient, user_id: Uuid) -> Result<()> {
+        client
+            .execute(
+                "UPDATE user_drinks
+                 SET drunk_points = 0,
+                     last_drink_at = current_timestamp,
+                     updated = current_timestamp
+                 WHERE user_id = $1",
+                &[&user_id],
+            )
+            .await?;
+        Ok(())
+    }
 
     /// The patrons who took the most drinks at one bar, all time: the tab
     /// board out back. Every drink counts one whatever it cost; the buzz it
@@ -295,6 +336,13 @@ impl UserDrinks {
             .await?;
         Ok(row.map(Self::from))
     }
+    pub async fn find_in_tx(client: &impl TokioGenericClient, user_id: Uuid) -> Result<Option<Self>> {
+        let row = client
+            .query_opt("SELECT * FROM user_drinks WHERE user_id = $1", &[&user_id])
+            .await?;
+        Ok(row.map(Self::from))
+    }
+
 
     /// Rows that can still be drunk right now: anything that drank recently
     /// enough that the cap hasn't fully decayed (the window sits above

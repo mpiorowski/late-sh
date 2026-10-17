@@ -277,7 +277,9 @@ impl ShopState {
     pub(crate) fn custom_titles_available(&self) -> bool {
         self.snapshot.custom_titles_available
     }
-
+    pub(crate) fn effective_drunk_points(&self) -> i64 {
+        self.snapshot.effective_drunk_points
+    }
     pub(crate) fn active_username_effect(&self) -> Option<ActiveUsernameEffect> {
         self.snapshot.active_username_effect
     }
@@ -484,6 +486,9 @@ impl ShopState {
         // mind nothing.
         if item.is_aquarium_shield() && !self.snapshot.entitlements.has_aquarium() {
             return Some(Banner::error("Unlock Aquarium before buying a shield"));
+        }
+        if item.is_hangover_cure() && self.snapshot.effective_drunk_points <= 0 {
+            return Some(Banner::error("You are already sober"));
         }
         if item.is_consumable() {
             if item.requires_room {
