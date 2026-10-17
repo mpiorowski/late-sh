@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
@@ -457,13 +457,14 @@ fn draw_people_list(
         focus..row_top(selected) + usize::from(item_height),
         |frame, content, window| {
             let offline_rule = (online * usize::from(item_height) + 1) as u16;
-            for (y, label) in [(0, "online"), (offline_rule, "offline")]
-                .into_iter()
-                .take(rules)
-            {
+            let groups = [
+                (0, "online", online, theme::SUCCESS()),
+                (offline_rule, "offline", entries.len() - online, theme::TEXT()),
+            ];
+            for (y, label, count, color) in groups.into_iter().take(rules) {
                 if y >= window.y && y < window.bottom() {
                     frame.render_widget(
-                        Paragraph::new(group_rule(label, usize::from(content.width))),
+                        Paragraph::new(group_rule(label, count, color, usize::from(content.width))),
                         Rect::new(0, y, content.width, 1),
                     );
                 }
@@ -507,18 +508,20 @@ fn draw_people_list(
 }
 
 /// `── online ────────`: the rule over a group of the people list.
-fn group_rule(label: &str, width: usize) -> Line<'static> {
-    let rule = Style::default().fg(theme::BORDER_DIM());
+fn group_rule(label: &str, count: usize, color: Color, width: usize) -> Line<'static> {
+    let rule = Style::default().fg(theme::BORDER());
     let lead = "\u{2500}\u{2500} ";
-    let tail = width.saturating_sub(lead.chars().count() + label.chars().count() + 1);
+    let count = format!(" {count}");
+    let tail = width.saturating_sub(
+        lead.chars().count() + label.chars().count() + count.chars().count() + 1,
+    );
     Line::from(vec![
         Span::styled(lead, rule),
         Span::styled(
             label.to_string(),
-            Style::default()
-                .fg(theme::TEXT_DIM())
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
         ),
+        Span::styled(count, Style::default().fg(theme::TEXT_DIM())),
         Span::styled(format!(" {}", "\u{2500}".repeat(tail)), rule),
     ])
 }

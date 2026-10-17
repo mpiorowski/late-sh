@@ -34,7 +34,19 @@ in flight must not paint one slice's numbers under another slice's title.
 
 **Anybody who has not set a country is absent.** Not "unknown", not guessed
 from a timezone — absent. The map is of people who said where they are, and
-the empty state says so rather than showing a blank world.
+the empty state says so rather than showing a blank world. The `Online`
+headline says it too: "15 of 17 have set a country". The 17 is
+`CountryCounts.online`, everyone connected, read under the same lock as the
+counts and cached with them, so the pair is always one moment. Pairing the
+cached 15 with the live online count would drift while the map sits open.
+
+**Only `Online` names anybody.** `OnlineCounts.names` comes from the same
+walk of `ActiveUsers` that counts, so the list writes each country's people
+under its row (`CountryTally.people`, alphabetical). `Recent` and `Everyone`
+stay counts: they are whole-table questions, and a hundred names under one
+country is not a list. Rows are therefore not one per country, so the list is
+laid out once as `ListLine`s (`state::list_lines`), and the draw, the scroll
+(`first_visible_line`) and a click all read that one layout.
 
 ## 2. The map is not ours
 

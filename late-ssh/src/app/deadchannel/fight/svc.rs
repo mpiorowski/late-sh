@@ -346,7 +346,7 @@ impl FightService {
                     attacker_username: username.to_string(),
                     defender_username: their_name.clone(),
                     step: Some(sheet.step()),
-                    stake: theirs.bits,
+                    stake: theirs.crossing_stake(),
                     answer_to: None,
                     started_at: now,
                 },
@@ -469,7 +469,7 @@ impl FightService {
                 attacker_username: username.to_string(),
                 defender_username: owed.attacker_username.clone(),
                 step: None,
-                stake: theirs.bits,
+                stake: theirs.crossing_stake(),
                 answer_to: Some(owed.id),
                 started_at: now,
             },
@@ -760,7 +760,7 @@ impl FightService {
                 } => {
                     let them = format!("@{}", rival.username);
                     let lost = match taken {
-                        0 => "lost nothing: no bits on hand".to_string(),
+                        0 => "lost nothing".to_string(),
                         n => format!("lost {n} bits to {me}"),
                     };
                     format!(
@@ -770,7 +770,7 @@ impl FightService {
                 News::Ambushed { rival, step: None } => {
                     let them = format!("@{}", rival.username);
                     let lost = match taken {
-                        0 => "lost nothing: no bits on hand".to_string(),
+                        0 => "lost nothing".to_string(),
                         n => format!("lost {n} bits to {me}"),
                     };
                     format!("{me} answered {them} and won. {them} {lost}.")

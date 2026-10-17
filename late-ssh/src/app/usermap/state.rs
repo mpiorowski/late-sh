@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
 use tokio::sync::oneshot;
@@ -9,7 +9,7 @@ use ratatui::layout::Rect;
 use crate::app::common::worldmap::view::{
     BLANK_LAND_COLOR, MIN_SCALE, Viewport, ZOOM_STEP, level_for, sample,
 };
-use crate::app::profile::svc::ProfileService;
+use crate::app::profile::svc::{CountryCounts, ProfileService};
 
 /// The shading ladder, sparsest to busiest. Warm on purpose: the sea is dark
 /// blue and unclaimed land is olive, so a country with people in it should
@@ -168,7 +168,27 @@ pub enum MousePress {
 }
 
 /// What a count load comes back as: the tally, or why it could not be read.
-type CountLoad = (MapMode, Result<Vec<(String, usize)>, String>);
+type CountLoad = (MapMode, Result<CountryCounts, String>);
+
+/// One line of the country list, by the index of the country it belongs to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListLine {
+    Country(usize),
+    /// A country the map has no shape for still counts, and says so.
+    NotOnMap(usize),
+    /// One of the people in a country, by their place in its `people`.
+    Person(usize, usize),
+}
+
+impl ListLine {
+    pub fn tally(self) -> usize {
+        match self {
+            ListLine::Country(tally) | ListLine::NotOnMap(tally) | ListLine::Person(tally, _) => {
+                tally
+            }
+        }
+    }
+}
 
 /// One country on the list beside the map.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -176,6 +196,9 @@ pub struct CountryTally {
     pub code: String,
     pub name: String,
     pub count: usize,
+    /// Who they are, alphabetical. Only the online slice names anybody: the
+    /// other two are counts over the whole table.
+    pub people: Vec<String>,
     /// None when the code is one the map has no country for (a territory
     /// Natural Earth does not carry, or a code that has since changed).
     pub territory: Option<TerritoryId>,
@@ -188,11 +211,15 @@ pub struct UserMapState {
     shown: bool,
     mode: MapMode,
     /// One cache slot per mode, so `m` is instant after the first look at
-    /// each. A refresh clears the slot it refills.
-    cached: [Option<Vec<CountryTally>>; 3],
+    /// each. A refresh clears the slot it refills. Each slot keeps its own
+    /// online total, so a cached slice never pairs with another moment's.
+    cached: [Option<(Vec<CountryTally>, Option<usize>)>; 3],
     /// The last counts loaded. Kept across a close so reopening is instant;
     /// a reopen refreshes them behind the shown map.
     tallies: Vec<CountryTally>,
+    /// Who was connected when `tallies` was counted, country or not. Only
+    /// the online slice has one.
+    online: Option<usize>,
     loading: bool,
     error: Option<String>,
     rx: Option<oneshot::Receiver<CountLoad>>,
@@ -253,8 +280,9 @@ impl UserMapState {
         self.cursor = 0;
         self.error = None;
         match self.cached[self.mode.index()].clone() {
-            Some(tallies) => {
+            Some((tallies, online)) => {
                 self.tallies = tallies;
+                self.online = online;
                 self.loading = false;
                 // A cached slice is still worth re-asking for in the
                 // background: the answer moves, especially for "online now".
@@ -262,6 +290,7 @@ impl UserMapState {
             }
             None => {
                 self.tallies = Vec::new();
+                self.online = None;
                 self.refresh(profile);
             }
         }
@@ -300,6 +329,13 @@ impl UserMapState {
     /// this says how many people those shades add up to.
     pub fn total(&self) -> usize {
         self.tallies.iter().map(|t| t.count).sum()
+    }
+
+    /// Who was connected when the online slice was counted, country or not:
+    /// the "of 17" beside `total`'s 15. `None` on the other slices and
+    /// before the first load.
+    pub fn online(&self) -> Option<usize> {
+        self.online
     }
 
     /// The country the cursor is on, ringed on the map.
@@ -350,9 +386,32 @@ impl UserMapState {
                 territory: territory_for_code(code),
                 code: code.to_string(),
                 count: *count,
+                people: Vec::new(),
             })
             .collect();
         self.cursor = 0;
+    }
+
+    /// The online slice as it arrives: each country with who is in it.
+    #[cfg(test)]
+    pub fn set_people_for_test(&mut self, people: &[(&str, &[&str])]) {
+        self.loading = false;
+        self.tallies = people
+            .iter()
+            .map(|(code, names)| CountryTally {
+                name: country_name(code),
+                territory: territory_for_code(code),
+                code: code.to_string(),
+                count: names.len(),
+                people: names.iter().map(|name| name.to_string()).collect(),
+            })
+            .collect();
+        self.cursor = 0;
+    }
+
+    #[cfg(test)]
+    pub fn set_online_for_test(&mut self, online: Option<usize>) {
+        self.online = online;
     }
 
     /// The shelf left the screen. The counts stay, so coming back draws at
@@ -389,23 +448,29 @@ impl UserMapState {
             return false;
         };
         match rx.try_recv() {
-            Ok((mode, Ok(counts))) => {
+            Ok((mode, Ok(CountryCounts { counts, online }))) => {
                 self.rx = None;
+                let (total, mut names) = match online {
+                    Some(online) => (Some(online.total), online.names),
+                    None => (None, HashMap::new()),
+                };
                 let tallies: Vec<CountryTally> = counts
                     .into_iter()
                     .map(|(code, count)| CountryTally {
                         name: country_name(&code),
                         territory: territory_for_code(&code),
+                        people: names.remove(&code).unwrap_or_default(),
                         code,
                         count,
                     })
                     .collect();
-                self.cached[mode.index()] = Some(tallies.clone());
+                self.cached[mode.index()] = Some((tallies.clone(), total));
                 // An answer for a mode nobody is looking at any more is
                 // banked, not shown.
                 if mode == self.mode {
                     self.loading = false;
                     self.tallies = tallies;
+                    self.online = total;
                     self.cursor = self.cursor.min(self.tallies.len().saturating_sub(1));
                 }
                 true
@@ -607,30 +672,58 @@ impl UserMapState {
         true
     }
 
-    /// A click in the list picks the row under the pointer.
+    /// A click in the list picks the country whose line is under the
+    /// pointer, its people and its "not on the map" note included.
     fn select_list_row(&mut self, y: u16) -> bool {
         let Some(rect) = self.list_area else {
             return false;
         };
         let row = y.saturating_sub(rect.y) as usize;
-        let Some(index) = self.first_visible_row().checked_add(row) else {
+        let Some(index) = self.first_visible_line().checked_add(row) else {
             return false;
         };
-        if index >= self.tallies.len() {
+        let Some(line) = self.list_lines().get(index).copied() else {
             return false;
-        }
+        };
         // Go through the cursor move so the map frames it, exactly as the
         // keyboard would.
-        let delta = index as isize - self.cursor as isize;
+        let delta = line.tally() as isize - self.cursor as isize;
         self.move_cursor(delta);
         true
     }
 
-    /// The first tally the list is showing, which both the draw and a click
-    /// have to agree on.
-    pub fn first_visible_row(&self) -> usize {
+    /// The country list as lines: each country's row, then its note when the
+    /// map has no shape for it, then who is in it. The draw, the scroll and
+    /// a click all read this one layout, so they cannot disagree about
+    /// which line is whose.
+    pub fn list_lines(&self) -> Vec<ListLine> {
+        let mut lines = Vec::new();
+        for (tally, entry) in self.tallies.iter().enumerate() {
+            lines.push(ListLine::Country(tally));
+            if entry.territory.is_none() {
+                lines.push(ListLine::NotOnMap(tally));
+            }
+            for person in 0..entry.people.len() {
+                lines.push(ListLine::Person(tally, person));
+            }
+        }
+        lines
+    }
+
+    /// The first line the list is showing: scrolled just far enough that the
+    /// cursor's country and everything under it are in view, or, when that
+    /// block is taller than the list, its own row at the top.
+    pub fn first_visible_line(&self) -> usize {
         let rows = self.visible_rows.max(1);
-        self.cursor.saturating_sub(rows.saturating_sub(1))
+        let lines = self.list_lines();
+        let Some(start) = lines.iter().position(|line| line.tally() == self.cursor) else {
+            return 0;
+        };
+        let end = lines
+            .iter()
+            .rposition(|line| line.tally() == self.cursor)
+            .unwrap_or(start);
+        (end + 1).saturating_sub(rows).min(start)
     }
 
     /// The colour a legend swatch draws in, including the "nobody here" one.

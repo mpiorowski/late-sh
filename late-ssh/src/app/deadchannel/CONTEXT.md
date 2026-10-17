@@ -994,7 +994,8 @@ roles are in §2.
   `late-core/src/models/deadchannel_ambush.rs`): one row per fight
   between two runners (§3c, "The crossing"): `day`, the attacker and the
   defender (ids and usernames as they were), `step` (null for an
-  answer), `stake` (the defender's bits on hand at the start),
+  answer), `stake` (the most a win takes: `CROSSING_TAKE_PERCENT`,
+  half, of the defender's bits on hand at the start),
   `answer_to` (the crossing an answer settles), `started_at`,
   `ended_at` with `outcome` won, lost, ran, or dropped, and
   `bits_moved` from the attacker's side. The three unique partial

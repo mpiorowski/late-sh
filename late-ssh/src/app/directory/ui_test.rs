@@ -534,7 +534,7 @@ fn the_connected_lead_the_people_list_under_their_own_rule() {
 
     state.set_online(HashSet::from([renu]));
     let lines = render(&fixture, &state, 140, 40);
-    let online = row_of(&lines, "\u{2500}\u{2500} online").expect("online rule");
+    let online = row_of(&lines, "\u{2500}\u{2500} online 1").expect("online rule, with its count");
     let renu_row = row_of(&lines, "@Renu").expect("renu listed");
     let offline = row_of(&lines, "\u{2500}\u{2500} offline").expect("offline rule");
     let mey = row_of(&lines, "@meythewitch").expect("mey listed");

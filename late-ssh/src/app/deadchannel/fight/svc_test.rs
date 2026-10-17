@@ -766,7 +766,7 @@ async fn a_crossing_takes_the_sleepers_bits_and_the_sleeper_answers_for_them() {
     };
     let shown = lookout.crossing.expect("tom is at the crossing");
     assert_eq!(shown.rival.username, tom_name);
-    assert_eq!(shown.stake, 340);
+    assert_eq!((shown.carrying, shown.stake), (340, 170));
     assert_eq!(shown.rival.level, 1);
     assert!(lookout.token.is_none());
     assert!(lookout.news.is_none());
@@ -782,7 +782,7 @@ async fn a_crossing_takes_the_sleepers_bits_and_the_sleeper_answers_for_them() {
     };
     assert_eq!(rival.username, tom_name);
     assert!(!rival.answer);
-    assert_eq!(sheet.fight.as_ref().map(|fight| fight.foe_bits), Some(340));
+    assert_eq!(sheet.fight.as_ref().map(|fight| fight.foe_bits), Some(170));
     let crossings = Ambush::crossings_of_day(&**client, FightService::today())
         .await
         .expect("read");
@@ -791,10 +791,11 @@ async fn a_crossing_takes_the_sleepers_bits_and_the_sleeper_answers_for_them() {
         .find(|row| row.id == rival.ambush_id)
         .expect("the ambush row");
     assert_eq!(crossing.defender_user_id, tom);
-    assert_eq!(crossing.stake, 340);
+    assert_eq!(crossing.stake, 170);
     assert!(crossing.outcome.is_none());
 
-    // Tom is down in one: the bits move, the row closes, the news lands.
+    // Tom is down in one: half of what he carried moves, the row closes,
+    // the news lands.
     one_hit_from_down(&test_db, mira).await;
     let (tx, mut rx) = mpsc::unbounded_channel();
     svc.act_task(mira, "mira".to_string(), Command::Auto, tx);
@@ -807,34 +808,34 @@ async fn a_crossing_takes_the_sleepers_bits_and_the_sleeper_answers_for_them() {
         panic!("a turn answers with the sheet");
     };
     assert!(
-        matches!(outcome.applied, Applied::Ambushed { stake: 340, .. }),
+        matches!(outcome.applied, Applied::Ambushed { stake: 170, .. }),
         "{:?}",
         outcome.applied
     );
     assert_eq!(
         outcome.lines.last(),
-        Some(&format!("you take 340 bits off {tom_name}."))
+        Some(&format!("you take 170 bits off {tom_name}."))
     );
-    assert_eq!(sheet.bits, 390);
+    assert_eq!(sheet.bits, 220);
     assert_eq!(sheet.exp, 0);
     assert_eq!(sheet.kills, 0);
     assert!(sheet.fight.is_none());
     assert!(lookout.crossing.is_none(), "the step is taken");
     let toms = sheet_of(&test_db, tom).await;
-    assert_eq!(toms.bits, 0);
+    assert_eq!(toms.bits, 170);
     assert_eq!(toms.signal, 10, "a sleeper loses only what they carry");
     let closed = Ambush::get(&**client, rival.ambush_id)
         .await
         .expect("read")
         .expect("the row");
     assert_eq!(closed.outcome, Some(AmbushOutcome::Won));
-    assert_eq!(closed.bits_moved, 340);
+    assert_eq!(closed.bits_moved, 170);
     // The wire names who lost what to whom, tom by mention.
     let line = wire_line(&test_db, "@mira crossed").await;
     assert_eq!(
         line.body,
         format!(
-            "@mira crossed @{tom_name} at step {} and won. @{tom_name} never woke and lost 340 bits to @mira.",
+            "@mira crossed @{tom_name} at step {} and won. @{tom_name} never woke and lost 170 bits to @mira.",
             sheet.road.path.len()
         )
     );
@@ -863,9 +864,9 @@ async fn a_crossing_takes_the_sleepers_bits_and_the_sleeper_answers_for_them() {
     let crosser = token.prey.expect("mira is on the wire");
     // The name the crossing row kept: the one mira's session went by.
     assert_eq!(crosser.rival.username, "mira");
-    assert_eq!(crosser.stake, 390);
+    assert_eq!((crosser.carrying, crosser.stake), (390, 195));
 
-    // The answer: no ration, mira on tom's row, and mira's whole hand back.
+    // The answer: no ration, mira on tom's row, and half of mira's hand.
     let (tx, mut rx) = mpsc::unbounded_channel();
     svc.answer_task(tom, tom_name.clone(), tx);
     let FightOutcome::Acted { sheet, outcome, .. } = answer(&mut rx).await else {
@@ -890,12 +891,12 @@ async fn a_crossing_takes_the_sleepers_bits_and_the_sleeper_answers_for_them() {
         panic!("a turn answers");
     };
     assert!(
-        matches!(outcome.applied, Applied::Ambushed { stake: 390, .. }),
+        matches!(outcome.applied, Applied::Ambushed { stake: 195, .. }),
         "{:?}",
         outcome.applied
     );
-    assert_eq!(sheet.bits, 390);
-    assert_eq!(sheet_of(&test_db, mira).await.bits, 0);
+    assert_eq!(sheet.bits, 365);
+    assert_eq!(sheet_of(&test_db, mira).await.bits, 195);
     assert!(lookout.token.is_none(), "the answer is given");
     let answered = Ambush::get(&**client, back.ambush_id)
         .await
@@ -903,11 +904,11 @@ async fn a_crossing_takes_the_sleepers_bits_and_the_sleeper_answers_for_them() {
         .expect("the answer row");
     assert_eq!(answered.answer_to, Some(rival.ambush_id));
     assert_eq!(answered.outcome, Some(AmbushOutcome::Won));
-    assert_eq!(answered.bits_moved, 390);
+    assert_eq!(answered.bits_moved, 195);
     let line = wire_line(&test_db, &format!("@{tom_name} answered")).await;
     assert_eq!(
         line.body,
-        format!("@{tom_name} answered @mira and won. @mira lost 390 bits to @{tom_name}.")
+        format!("@{tom_name} answered @mira and won. @mira lost 195 bits to @{tom_name}.")
     );
 
     // A second answer: nothing owed.

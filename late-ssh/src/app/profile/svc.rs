@@ -165,11 +165,18 @@ impl From<&IrcToken> for IrcTokenStatus {
 #[derive(Clone, Debug)]
 pub struct CountryCounts {
     pub counts: Vec<(String, usize)>,
-    /// How many humans were connected when the online slice was counted,
-    /// country or not, read under the same lock as the counts so the map's
-    /// "15 of 17" is one moment. `None` for the slices read from the
-    /// database, which have no such total.
-    pub online: Option<usize>,
+    /// What only the online slice knows, read under the same lock as the
+    /// counts so it is one moment. `None` for the slices read from the
+    /// database.
+    pub online: Option<OnlineCounts>,
+}
+
+#[derive(Clone, Debug)]
+pub struct OnlineCounts {
+    /// Every human connected, country or not: the map's "15 of 17".
+    pub total: usize,
+    /// Who is in each country, by code, alphabetical.
+    pub names: HashMap<String, Vec<String>>,
 }
 
 /// Parse an account's timezone tweak into a `chrono_tz::Tz`. `None` (unset,
@@ -264,36 +271,45 @@ impl ProfileService {
     /// Bots are excluded the same way the headcount excludes them (no
     /// fingerprint means no human at a keyboard).
     pub async fn active_country_counts(&self) -> Result<CountryCounts> {
-        let online: Vec<Uuid> = {
+        let online: Vec<(Uuid, String)> = {
             let guard = self.active_users.lock_recover();
             guard
                 .iter()
                 .filter(|(_, user)| user.fingerprint.is_some())
-                .map(|(id, _)| *id)
+                .map(|(id, user)| (*id, user.username.clone()))
                 .collect()
         };
-        let online_total = online.len();
+        let total = online.len();
         if online.is_empty() {
             return Ok(CountryCounts {
                 counts: Vec::new(),
-                online: Some(0),
+                online: Some(OnlineCounts {
+                    total,
+                    names: HashMap::new(),
+                }),
             });
         }
         let client = self.db.get().await?;
         let countries = User::list_all_country_map(&client).await?;
-        let mut counts: HashMap<String, usize> = HashMap::new();
-        for user_id in online {
+        let mut names: HashMap<String, Vec<String>> = HashMap::new();
+        for (user_id, username) in online {
             if let Some(code) = countries.get(&user_id) {
-                *counts.entry(code.clone()).or_default() += 1;
+                names.entry(code.clone()).or_default().push(username);
             }
         }
-        let mut counts: Vec<(String, usize)> = counts.into_iter().collect();
+        for people in names.values_mut() {
+            people.sort_by_key(|name| name.to_lowercase());
+        }
+        let mut counts: Vec<(String, usize)> = names
+            .iter()
+            .map(|(code, people)| (code.clone(), people.len()))
+            .collect();
         // Busiest first, then alphabetical, so the list beside the map has a
         // stable order rather than a hash map's.
         counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         Ok(CountryCounts {
             counts,
-            online: Some(online_total),
+            online: Some(OnlineCounts { total, names }),
         })
     }
 

@@ -84,6 +84,29 @@ fn an_empty_tally_explains_itself() {
     assert!(text.contains("nobody online has said"), "{text:.400}");
 }
 
+/// The online slice is everyone connected minus those with no country, so
+/// its headline says how many of the connected it shows; otherwise it reads
+/// as a different "online" number from the sidebar's.
+#[test]
+fn the_online_headline_says_how_many_set_a_country() {
+    let mut state = UserMapState::default();
+    state.show_without_loading();
+    state.set_tallies_for_test(&[("PL", 14), ("NZ", 1)]);
+    state.set_online_for_test(Some(17));
+    let (text, _) = render(&mut state, 160, 48);
+    assert!(
+        text.contains("online now · 15 of 17 have set a country"),
+        "{text:.300}"
+    );
+
+    state.set_tallies_for_test(&[("PL", 1)]);
+    let (text, _) = render(&mut state, 160, 48);
+    assert!(
+        text.contains("online now · 1 of 17 has set a country"),
+        "{text:.300}"
+    );
+}
+
 /// A narrow terminal drops the list rather than the map, and neither draws
 /// past its box.
 #[test]
@@ -161,6 +184,53 @@ fn a_click_in_the_list_picks_that_country() {
         state.selected(),
         territory_for_code("NZ"),
         "and the map rings it"
+    );
+}
+
+/// Online, each country lists who is in it, right under its row.
+#[test]
+fn online_countries_name_their_people() {
+    let mut state = UserMapState::default();
+    state.show_without_loading();
+    state.set_people_for_test(&[("US", &["cws", "Renu"]), ("PL", &["mat"])]);
+    let (text, _) = render(&mut state, 160, 48);
+    let list = state.list_area_for_test().expect("a list was drawn");
+    let row = |y: u16| -> String {
+        (list.x..list.x + list.width)
+            .map(|x| text.chars().nth((y * 160 + x) as usize).unwrap_or(' '))
+            .collect()
+    };
+    let rows: Vec<String> = (list.y..list.y + 5).map(row).collect();
+    assert!(rows[0].contains("United States"), "{rows:?}");
+    assert!(rows[1].contains("@cws"), "{rows:?}");
+    assert!(rows[2].contains("@Renu"), "{rows:?}");
+    assert!(rows[3].contains("Poland"), "{rows:?}");
+    assert!(rows[4].contains("@mat"), "{rows:?}");
+}
+
+/// A click on a person, or on the country after them, lands on the right
+/// country: the names push every country below them down the list.
+#[test]
+fn a_click_below_named_people_picks_the_right_country() {
+    use super::state::MousePress;
+
+    let mut state = UserMapState::default();
+    state.show_without_loading();
+    state.set_people_for_test(&[("US", &["cws", "Renu"]), ("PL", &["mat"])]);
+    render(&mut state, 160, 48);
+    let list = state.list_area_for_test().expect("a list was drawn");
+    // Mouse coordinates are 1-based, which is what the handler undoes.
+    let line_y = |line: u16| list.y + line + 1;
+
+    assert!(state.handle_mouse(MousePress::Down, list.x + 2, line_y(3)));
+    assert_eq!(state.selected(), territory_for_code("PL"), "the fourth line is Poland");
+
+    render(&mut state, 160, 48);
+    assert!(state.handle_mouse(MousePress::Down, list.x + 2, line_y(2)));
+    assert_eq!(
+        state.selected(),
+        territory_for_code("US"),
+        "a name belongs to the country above it"
     );
 }
 

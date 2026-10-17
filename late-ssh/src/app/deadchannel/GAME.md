@@ -1867,8 +1867,8 @@ decisions are mostly about who pays what.
   runner within two levels either way, not crossed today, not paired
   with you today, signal up, no fight on their row. The road says who,
   their level, their numbers, their threat word, and what they carry:
-  "carrying 340 bits" is the lure and "carrying nothing" is the locker
-  doing its job. Nobody left is a quiet crossing and a free walk past.
+  "carrying 340 bits, 170 to take" is the lure and "carrying nothing"
+  is the locker doing its job. Nobody left is a quiet crossing and a free walk past.
 - **The sleeper fights as a glyph wearing their numbers.** Full signal,
   their attack and defense with the kit, the marks, and today's glass,
   and one mind for every sleeper: hit, hit, wind up, heavy. Their cards
@@ -1878,7 +1878,7 @@ decisions are mostly about who pays what.
   crossing tests. Logging off hurt is not a free kill: a sleeper is
   never fought at the signal they left at.
 - **The attacker chose the fight, so the attacker takes the road's full
-  bet.** Win: every bit the sleeper carried, no exp, no kill on the
+  bet.** Win: half of what the sleeper carried, no exp, no kill on the
   sheet. Lose: the fall the road already has, signal down for the day,
   every bit on hand to the sleeper, the exp cut. No exp on a win on
   purpose: with exp on the table the optimal road is hunting runners
@@ -1888,8 +1888,10 @@ decisions are mostly about who pays what.
   budget of whoever is actually playing; taking it from someone asleep
   spends their next day before it starts, and an exp cut for a fight
   they never saw is the thing that empties a room of thirty. The worst
-  login is "tom crossed you while you were gone. 340 bits gone." on the
-  road, which stings and makes a story and costs no day.
+  login is "tom crossed you while you were gone. 170 bits gone." on the
+  road, which stings and makes a story and costs no day. Half, not
+  every bit: taking it all made the locker a chore every night, and half
+  against the locker's tenth makes carrying a bet.
 - **The answer is the revenge token.** Whoever was crossed and lost is
   owed one answer within a day: `r` on the road fights the one who did
   it for what they carry now, no ration, the same stakes, one per

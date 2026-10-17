@@ -10,7 +10,7 @@ use ratatui::widgets::Paragraph;
 use crate::app::common::theme;
 use crate::app::common::worldmap::view::{self, Paint};
 
-use super::state::{HEAT, MapMode, UserMapState, heat_label_for};
+use super::state::{CountryTally, HEAT, ListLine, MapMode, UserMapState, heat_label_for};
 
 /// How many country rows fit in the list column, once the legend and its
 /// heading have taken their share. Shared with the click handling, which has
@@ -27,9 +27,20 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &mut UserMapState) {
     if area.width == 0 || area.height < 2 {
         return;
     }
-    let title = match state.total() {
-        0 => format!(" where everyone is · {}", state.mode().title()),
-        total => format!(
+    let title = match (state.online(), state.total()) {
+        // The online slice says how many of the connected it shows: the rest
+        // never set a country, and without the "of" the gap to every other
+        // online count reads as a bug.
+        (Some(online), total) if online > 0 => format!(
+            " where everyone is · {} · {total} of {online} {} set a country",
+            state.mode().title(),
+            match total {
+                1 => "has",
+                _ => "have",
+            }
+        ),
+        (_, 0) => format!(" where everyone is · {}", state.mode().title()),
+        (_, total) => format!(
             " where everyone is · {} · {}",
             state.mode().title(),
             state.mode().noun(total)
@@ -119,6 +130,45 @@ pub fn hints(state: &UserMapState) -> &'static [(&'static str, &'static str)] {
     }
 }
 
+/// A country's row: the cursor, its shade, its name and how many are there.
+fn country_row(tally: &CountryTally, selected: bool, state: &UserMapState) -> Line<'static> {
+    let (r, g, b) = HEAT[state.heat_index(tally.count)];
+    let name = ellipsize(&tally.name, 18);
+    Line::from(vec![
+        Span::styled(
+            if selected { " ▸" } else { "  " },
+            Style::default().fg(theme::AMBER()),
+        ),
+        Span::styled(
+            "█ ",
+            Style::default().fg(ratatui::style::Color::Rgb(r, g, b)),
+        ),
+        Span::styled(
+            format!("{name:<19}"),
+            Style::default().fg(if selected {
+                theme::TEXT_BRIGHT()
+            } else {
+                theme::TEXT()
+            }),
+        ),
+        Span::styled(
+            format!("{:>3}", tally.count),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+    ])
+}
+
+/// Cut to `max` characters, the last of them an ellipsis.
+fn ellipsize(text: &str, max: usize) -> String {
+    match text.chars().count() > max {
+        true => {
+            let short: String = text.chars().take(max - 1).collect();
+            format!("{short}…")
+        }
+        false => text.to_string(),
+    }
+}
+
 fn draw_list(frame: &mut Frame, area: Rect, state: &UserMapState) {
     let mut lines: Vec<Line<'static>> = Vec::new();
 
@@ -164,47 +214,23 @@ fn draw_list(frame: &mut Frame, area: Rect, state: &UserMapState) {
     // when it does not have to.
     let rows = list_rows(area);
     let tallies = state.tallies();
-    let start = state.first_visible_row();
+    let start = state.first_visible_line();
     let floors = state.floors();
-    for (index, tally) in tallies.iter().enumerate().skip(start).take(rows) {
-        let selected = index == state.cursor();
-        let (r, g, b) = HEAT[state.heat_index(tally.count)];
-        let name = if tally.name.chars().count() > 18 {
-            let short: String = tally.name.chars().take(17).collect();
-            format!("{short}…")
-        } else {
-            tally.name.clone()
-        };
-        lines.push(Line::from(vec![
-            Span::styled(
-                if selected { " ▸" } else { "  " },
-                Style::default().fg(theme::AMBER()),
-            ),
-            Span::styled(
-                "█ ",
-                Style::default().fg(ratatui::style::Color::Rgb(r, g, b)),
-            ),
-            Span::styled(
-                format!("{name:<19}"),
-                Style::default().fg(if selected {
-                    theme::TEXT_BRIGHT()
-                } else {
-                    theme::TEXT()
-                }),
-            ),
-            Span::styled(
-                format!("{:>3}", tally.count),
-                Style::default().fg(theme::TEXT_DIM()),
-            ),
-        ]));
-        // A country the map has no shape for still counts, and says so, so
-        // the numbers beside the map add up to the numbers on it.
-        if tally.territory.is_none() {
-            lines.push(Line::from(Span::styled(
+    for line in state.list_lines().into_iter().skip(start).take(rows) {
+        let tally = &tallies[line.tally()];
+        lines.push(match line {
+            ListLine::Country(index) => country_row(tally, index == state.cursor(), state),
+            // A country the map has no shape for still counts, and says so,
+            // so the numbers beside the map add up to the numbers on it.
+            ListLine::NotOnMap(_) => Line::from(Span::styled(
                 "     (not on the map)",
                 Style::default().fg(theme::TEXT_FAINT()),
-            )));
-        }
+            )),
+            ListLine::Person(_, person) => Line::from(Span::styled(
+                format!("     {}", ellipsize(&format!("@{}", tally.people[person]), 24)),
+                Style::default().fg(theme::TEXT_DIM()),
+            )),
+        });
     }
 
     lines.push(Line::raw(""));

@@ -24,7 +24,8 @@ The session's Enter there is `FightService::cross_task`, not a
 - locks the first whose row still stands (`find_prey`), rolls their day
   under the lock (`settle_day`: a rival fight the roll wipes closes its
   ambush row as dropped) and stores it if it turned, claims the ambush
-  row (`stake` their bits on hand; a cap the preview missed is the
+  row (`stake`, `Sheet::crossing_stake`: `CROSSING_TAKE_PERCENT`, half,
+  of their bits on hand, rounded down; a cap the preview missed is the
   insert's `ON CONFLICT DO NOTHING`, and the next in order is tried),
   and hands the sheet a `Prey` (`Sheet::cross(lane, Option<Prey>, rng)`:
   the ration, the step marked, `Quarry::Runner(Rival)` on the row with
@@ -35,6 +36,12 @@ Nobody left is `Refusal::NobodyThere`, nothing spent. The fight is the
 normal round.
 
 ## The settle
+
+A win takes half of what the sleeper carries, not all of it, so a
+night carrying is a bet and the locker (`MONEY.md`, a tenth on the way
+in) a choice: it is the cheaper one only for a runner crossed more often
+than one night in five. The road and the scene say both numbers
+(`data::carrying_line`: "carrying 340 bits, 170 to take").
 
 `Applied::Ambushed { rival, stake }` moves nothing on the sheet: the same
 transaction locks the sleeper's row (`settle_won`), takes up to the
@@ -88,7 +95,7 @@ on hand only; a fall also drops the signal):
 @<a>.", "@<a> crossed @<d> at step S and went down. @<d> never woke. @<a>
 lost their signal and N bits to @<d>.", "@<a> answered @<d> and won. @<d>
 lost N bits to @<a>.", "@<a> answered @<d> and went down again. @<a> lost
-their signal and N bits to @<d>."; with nothing on hand, the loser "lost
-nothing: no bits on hand" (a win) or "lost their signal, with no bits on
-hand for @<d>" (a fall). Beats on the fight counter: `crossed`,
+their signal and N bits to @<d>."; with nothing taken, the loser "lost
+nothing" (a win) or "lost their signal, with no bits on hand for @<d>"
+(a fall). Beats on the fight counter: `crossed`,
 `answered`, `ambushed`, `downed`.

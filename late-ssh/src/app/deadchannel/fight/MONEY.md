@@ -66,7 +66,10 @@ the road itself: a cache pays bits with no fight in it.
 `Command::Deposit` puts everything on hand in the locker (`stash`) less
 `LOCKER_FEE_PERCENT` (10, rounded up, so no deposit is free; LoGD's bank
 takes nothing and pays interest, the locker pays none).
-`Command::Withdraw` takes it all out for free.
+`Command::Withdraw` takes it all out for free. Against a crossing,
+which takes half of what a sleeper carries (`CROSSING.md`), the cut is
+the cheaper bet only for a runner crossed more than one night in five:
+the locker is a choice, not a chore.
 
 - A drop never reaches it; an Old Signal mark and a step off the ledge
   empty it.
