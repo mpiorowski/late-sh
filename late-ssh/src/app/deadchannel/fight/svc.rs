@@ -603,6 +603,7 @@ impl FightService {
         let since = now - chrono::Duration::hours(ANSWER_HOURS);
         let token = match Ambush::answerable(client, sheet.user_id, since).await? {
             Some(ambush) => {
+                let crosser = current_username(client, ambush.attacker_user_id).await?;
                 let prey =
                     match DeadchannelRunner::find_by_user_standing(client, ambush.attacker_user_id)
                         .await?
@@ -612,7 +613,7 @@ impl FightService {
                             match on_the_wire(&theirs) {
                                 true => Some(Prey::of(
                                     &theirs,
-                                    &current_username(client, ambush.attacker_user_id).await?,
+                                    &crosser,
                                     Self::portrait_of(&row),
                                     Uuid::nil(),
                                     true,
@@ -622,7 +623,11 @@ impl FightService {
                         }
                         None => None,
                     };
-                Some(Token { ambush, prey })
+                Some(Token {
+                    ambush,
+                    crosser,
+                    prey,
+                })
             }
             None => None,
         };
@@ -744,6 +749,8 @@ impl FightService {
     /// one moment worth a picture. Every runner named is an `@` mention,
     /// so the line lands in their mentions too. A crossing names who lost
     /// what to whom; `taken` is what a rival put down lost to this runner.
+    /// The rival is named as they go by now (`wire_name`), not as the
+    /// fight kept them.
     async fn post_news(&self, username: &str, sheet: &Sheet, applied: &Applied, taken: i64) {
         let me = format!("@{username}");
         for news in sheet.news(applied) {
@@ -759,7 +766,7 @@ impl FightService {
                     rival,
                     step: Some(step),
                 } => {
-                    let them = format!("@{}", rival.username);
+                    let them = format!("@{}", self.wire_name(&rival).await);
                     let lost = match taken {
                         0 => "lost nothing".to_string(),
                         n => format!("lost {n} bits to {me}"),
@@ -769,7 +776,7 @@ impl FightService {
                     )
                 }
                 News::Ambushed { rival, step: None } => {
-                    let them = format!("@{}", rival.username);
+                    let them = format!("@{}", self.wire_name(&rival).await);
                     let lost = match taken {
                         0 => "lost nothing".to_string(),
                         n => format!("lost {n} bits to {me}"),
@@ -781,7 +788,7 @@ impl FightService {
                     step,
                     bits_lost,
                 } => {
-                    let them = format!("@{}", rival.username);
+                    let them = format!("@{}", self.wire_name(&rival).await);
                     let lost = match bits_lost {
                         0 => format!("lost their signal, with no bits on hand for {them}"),
                         n => format!("lost their signal and {n} bits to {them}"),
@@ -861,6 +868,26 @@ impl FightService {
             Ok(false) => {}
             Err(error) => {
                 tracing::error!(error = ?error, marks, "failed to grant the old signal badge");
+            }
+        }
+    }
+
+    /// The name a rival goes by now, for a wire line. The fight kept the
+    /// name they had when it began, and it can sit on the row until the
+    /// next roll; a mention finds its runner by the current handle. A read
+    /// that fails costs the line its mention, not the line: logged here,
+    /// the kept name goes out.
+    async fn wire_name(&self, rival: &Rival) -> String {
+        let read: Result<String> = async {
+            let client = self.db.get().await?;
+            current_username(&client, rival.user_id).await
+        }
+        .await;
+        match read {
+            Ok(name) => name,
+            Err(error) => {
+                tracing::error!(error = ?error, user_id = %rival.user_id, "failed to read a rival's name for the wire");
+                rival.username.clone()
             }
         }
     }

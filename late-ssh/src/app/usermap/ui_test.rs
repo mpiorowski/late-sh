@@ -271,6 +271,31 @@ fn a_country_taller_than_the_list_can_be_read_to_the_end() {
     assert!(text.starts_with("     @p00"), "{text:.60}");
 }
 
+/// A pane too narrow for the list has nothing to reveal: `j` is the next
+/// country, however many names the current one hides.
+#[test]
+fn a_pane_without_a_list_walks_a_country_per_press() {
+    let names: Vec<String> = (0..20).map(|n| format!("p{n:02}")).collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut state = UserMapState::default();
+    state.show_without_loading();
+    state.set_people_for_test(&[("US", &names), ("PL", &["mat"]), ("DE", &["kai"])]);
+    render(&mut state, 60, 24);
+    assert!(
+        state.list_area_for_test().is_none(),
+        "no list at this width"
+    );
+    state.walk(1);
+    assert_eq!(state.cursor(), 1);
+    state.walk(1);
+    assert_eq!(state.cursor(), 2);
+    // The pane widens: the list comes back with the cursor's country on it.
+    let (text, _) = render(&mut state, 160, 24);
+    assert!(state.list_area_for_test().is_some());
+    assert!(text.contains("Germany"), "{text}");
+    assert!(text.contains("@kai"), "{text}");
+}
+
 /// A click on a person, or on the country after them, lands on the right
 /// country: the names push every country below them down the list.
 #[test]

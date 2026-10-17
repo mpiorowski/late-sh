@@ -327,7 +327,11 @@ impl UserMapState {
     pub fn record_geometry(&mut self, map_area: Rect, list_area: Option<Rect>, rows: usize) {
         self.map_area = Some(map_area);
         self.list_area = list_area;
-        self.visible_rows = rows;
+        if self.visible_rows != rows {
+            // A resize, or the list coming back: the cursor stays on screen.
+            self.visible_rows = rows;
+            self.keep_cursor_in_view();
+        }
     }
 
     /// Everyone counted, which is the headline: the map shades countries, and
@@ -730,9 +734,15 @@ impl UserMapState {
     /// `j`/`k`: the next country, unless the cursor's own block runs past
     /// the list, in which case the list scrolls a line first. So every name
     /// in a country taller than the list can be reached from the keyboard,
-    /// and the step after the last of them is the next country.
+    /// and the step after the last of them is the next country. With no
+    /// list on screen (a narrow or short pane) there is nothing to reveal,
+    /// and every press is the next country.
     pub fn walk(&mut self, delta: isize) {
-        let rows = self.visible_rows.max(1);
+        if self.visible_rows == 0 {
+            self.move_cursor(delta);
+            return;
+        }
+        let rows = self.visible_rows;
         let Some((start, end)) = self.cursor_block() else {
             return;
         };

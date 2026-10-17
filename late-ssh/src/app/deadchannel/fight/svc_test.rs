@@ -795,6 +795,14 @@ async fn a_crossing_takes_the_sleepers_bits_and_the_sleeper_answers_for_them() {
     assert_eq!(crossing.stake, 170);
     assert!(crossing.outcome.is_none());
 
+    // Tom renames while the fight sits on mira's row: the wire names and
+    // mentions him as he is now, the scene keeps the name the fight took.
+    let tom_now = User::rename(&client, tom, &format!("{tom_name}now"))
+        .await
+        .expect("rename")
+        .username;
+    assert_ne!(tom_now, tom_name);
+
     // Tom is down in one: half of what he carried moves, the row closes,
     // the news lands.
     one_hit_from_down(&test_db, mira).await;
@@ -831,12 +839,12 @@ async fn a_crossing_takes_the_sleepers_bits_and_the_sleeper_answers_for_them() {
         .expect("the row");
     assert_eq!(closed.outcome, Some(AmbushOutcome::Won));
     assert_eq!(closed.bits_moved, 170);
-    // The wire names who lost what to whom, tom by mention.
+    // The wire names who lost what to whom, tom by mention, as he is now.
     let line = wire_line(&test_db, "@mira crossed").await;
     assert_eq!(
         line.body,
         format!(
-            "@mira crossed @{tom_name} at step {} and won. @{tom_name} never woke and lost 170 bits to @mira.",
+            "@mira crossed @{tom_now} at step {} and won. @{tom_now} never woke and lost 170 bits to @mira.",
             sheet.road.path.len()
         )
     );
@@ -876,6 +884,7 @@ async fn a_crossing_takes_the_sleepers_bits_and_the_sleeper_answers_for_them() {
     assert_eq!((crosser.carrying, crosser.stake), (390, 195));
 
     // The answer: no ration, mira on tom's row, and half of mira's hand.
+    let tom_name = tom_now;
     let (tx, mut rx) = mpsc::unbounded_channel();
     svc.answer_task(tom, tom_name.clone(), tx);
     let FightOutcome::Acted { sheet, outcome, .. } = answer(&mut rx).await else {

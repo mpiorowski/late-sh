@@ -1163,7 +1163,7 @@ fn lookout_lines(lookout: &Lookout, picker: &Picker) -> (Vec<Line<'static>>, Vec
         ]));
     }
     if let Some(token) = &lookout.token {
-        let them = &token.ambush.attacker_username;
+        let them = &token.crosser;
         match &token.prey {
             Some(prey) => {
                 lines.push(Line::from(vec![

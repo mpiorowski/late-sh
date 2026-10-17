@@ -863,6 +863,9 @@ fn the_road_shows_the_sleeper_at_the_crossing_and_the_answer_owed() {
             crossing: None,
             token: Some(Token {
                 ambush: crossed.clone(),
+                // Renamed since: the news keeps the night's name, the
+                // answer offered is to the one he goes by now.
+                crosser: "tomas".to_string(),
                 prey: Some(tom(90)),
             }),
             news: Some(crossed.clone()),
@@ -873,10 +876,10 @@ fn the_road_shows_the_sleeper_at_the_crossing_and_the_answer_owed() {
         "{owed}"
     );
     assert!(
-        owed.contains("owed an answer: tom is on the wire, 45 bits to take. no ration. even"),
+        owed.contains("owed an answer: tomas is on the wire, 45 bits to take. no ration. even"),
         "{owed}"
     );
-    assert!(owed.contains("[r] answer tom"), "{owed}");
+    assert!(owed.contains("[r] answer tomas"), "{owed}");
 
     let off = render_road_with(
         &at,
@@ -885,13 +888,14 @@ fn the_road_shows_the_sleeper_at_the_crossing_and_the_answer_owed() {
             crossing: None,
             token: Some(Token {
                 ambush: crossed,
+                crosser: "tomas".to_string(),
                 prey: None,
             }),
             news: None,
         },
     );
     assert!(
-        off.contains("tom is off the wire. it keeps for a day."),
+        off.contains("tomas is off the wire. it keeps for a day."),
         "{off}"
     );
     assert!(!off.contains("[r]"), "{off}");

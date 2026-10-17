@@ -487,6 +487,8 @@ enum SendPath {
     Lounge {
         what: &'static str,
     },
+    /// A game line on the wire, from the voice.
+    Wire,
 }
 
 impl SendPath {
@@ -496,6 +498,7 @@ impl SendPath {
             Self::Report => "chat_report_send_failed",
             Self::BotReply => "chat_bot_send_failed",
             Self::Lounge { .. } => "chat_lounge_send_failed",
+            Self::Wire => "deadchannel_wire_line_failed",
         }
     }
 
@@ -506,6 +509,7 @@ impl SendPath {
             Self::Report => "a report",
             Self::BotReply => "a bot reply",
             Self::Lounge { what } => what,
+            Self::Wire => "a wire line",
         }
     }
 }
@@ -3188,24 +3192,26 @@ impl ChatService {
     /// The wire (GAME.md, "The three surfaces"): the game's log posts into
     /// #deadchannel as real messages, from the voice for now (the
     /// announcer's own name is a design-review question). Fire-and-forget:
-    /// nobody upstream waits on a line, so the failure is logged here. The
-    /// voice joins the room on first use; the room seeds itself the same
-    /// way the invited join seeds it.
+    /// nobody upstream waits on a line, so the outcome is accounted here,
+    /// the room rules included (the voice is no admin, so slow mode holds
+    /// it too). The voice joins the room on first use; the room seeds
+    /// itself the same way the invited join seeds it.
     pub fn post_wire_line_task(&self, body: String) {
         let service = self.clone();
         tokio::spawn(
             async move {
-                let posted: anyhow::Result<()> = async {
-                    let voice = service.ensure_first_contact_voice().await?;
-                    let room_id = {
+                let posted: Result<(), SendError> = async {
+                    let (voice_id, room_id) = async {
+                        let voice = service.ensure_first_contact_voice().await?;
                         let client = service.db.get().await?;
                         let room = ChatRoom::get_or_create_deadchannel_room(&client).await?;
                         ChatRoomMember::join(&client, room.id, voice.id).await?;
-                        room.id
-                    };
+                        anyhow::Ok((voice.id, room.id))
+                    }
+                    .await?;
                     service
                         .send_message(SendMessageParams {
-                            user_id: voice.id,
+                            user_id: voice_id,
                             room_id,
                             room_slug: None,
                             body,
@@ -3213,16 +3219,11 @@ impl ChatService {
                             reply_to_user_id: None,
                             is_admin: false,
                         })
-                        .await?;
-                    Ok(())
+                        .await
                 }
                 .await;
                 if let Err(error) = posted {
-                    late_core::error_span!(
-                        "deadchannel_wire_line_failed",
-                        error = ?error,
-                        "failed to post a line on the wire"
-                    );
+                    account_send_error(SendPath::Wire, &error);
                 }
             }
             .instrument(info_span!("chat.post_wire_line_task")),

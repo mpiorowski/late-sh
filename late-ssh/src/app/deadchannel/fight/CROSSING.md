@@ -72,17 +72,19 @@ through `Sheet::answer(Answer, rng)` with no ration and no step, the
 same stakes. The rival carries the name the crosser goes by now
 (`current_username`), not the one the crossing row kept: the wire
 mentions it, and a mention finds its runner by the current handle; the
-lookout's preview of the answer reads the same name. Refused with nothing owed (`NoAnswerOwed`), with them gone
-dark, down, or in a fight (`NotOnTheWire`: the answer keeps), down, or
-with a fight waiting.
+lookout's token (`Token::crosser`, the label and key under the road)
+reads the same name. Refused with nothing owed (`NoAnswerOwed`), with
+them gone dark, down, or in a fight (`NotOnTheWire`: the answer keeps),
+down, or with a fight waiting.
 
 ## The lookout
 
 After every answer and reload the task reads a `Lookout` for the session
 (`lookout_for`, off the rows as they stand, outside the transaction):
 `crossing` (the preview, `Prey` with a nil ambush id), `token` (the
-crossing owed an answer, and the crosser as prey when on the wire),
-`news` (the latest fight on this runner in the window), all `None` while
+crossing owed an answer, the crosser's current name, and the crosser as
+prey when on the wire), `news` (the latest fight on this runner in the
+window, worded with the names the row kept that night), all `None` while
 a fight is on the row. A lookout that fails to read is logged and
 counted (`lookout_failed`) and the session gets the empty one: the
 answer that landed is never reported failed for it. The road draws the
@@ -93,7 +95,10 @@ lookout under the legend and the threat words come from
 
 Every runner on a line is an `@` mention, so it lands in their mentions
 too, and every line says who lost what to whom (a crossing moves bits
-on hand only; a fall also drops the signal):
+on hand only; a fall also drops the signal). A fight can sit on the row
+until the next roll, so the rival is named as they go by when the line
+is posted (`wire_name`), not as the fight kept them; the scene's own
+lines keep the fight's name. The wording:
 "@<a> crossed @<d> at step S and won. @<d> never woke and lost N bits to
 @<a>.", "@<a> crossed @<d> at step S and went down. @<d> never woke. @<a>
 lost their signal and N bits to @<d>.", "@<a> answered @<d> and won. @<d>

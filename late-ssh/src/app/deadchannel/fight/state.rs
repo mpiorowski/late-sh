@@ -220,6 +220,9 @@ pub struct Lookout {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token {
     pub ambush: late_core::models::deadchannel_ambush::Ambush,
+    /// The name the crosser goes by now, which the road shows; the ambush
+    /// row keeps the one they had that night.
+    pub crosser: String,
     pub prey: Option<Prey>,
 }
 
