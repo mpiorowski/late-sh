@@ -607,11 +607,6 @@ impl State {
         map::nearest_interactive(self.player_x, self.player_y, dog)
     }
 
-    /// Everyone in the room, this session's user included.
-    pub fn headcount(&self) -> usize {
-        self.crowd.headcount().max(1)
-    }
-
     pub fn own_user_id(&self) -> Uuid {
         self.user_id
     }

@@ -10,8 +10,8 @@ use super::state::MousePress;
 
 pub(crate) fn handle_byte(app: &mut App, byte: u8) -> bool {
     match byte {
-        b'j' => app.usermap.move_cursor(1),
-        b'k' => app.usermap.move_cursor(-1),
+        b'j' => app.usermap.walk(1),
+        b'k' => app.usermap.walk(-1),
         b'+' | b'=' => app.usermap.zoom_in(),
         b'-' | b'_' => app.usermap.zoom_out(),
         b'f' => app.usermap.fit(),

@@ -96,8 +96,9 @@ impl SpectateGame {
 }
 
 /// How long an open watch stays up off screen. A watch is passive, so time
-/// away from it, not time without a key, is what ends it.
-pub const AWAY_WINDOW: Duration = Duration::from_secs(10 * 60);
+/// away from it, not time without a key, is what ends it. The shared door
+/// window (`door::game::IDLE_WINDOW`).
+pub const AWAY_WINDOW: Duration = crate::app::door::game::IDLE_WINDOW;
 
 /// One live game by its door and its player's handle, held inline so it is
 /// `Copy`: the live strip's key for it (`LiveSource::DoorGame`). Built only

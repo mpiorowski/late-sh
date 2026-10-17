@@ -9,8 +9,8 @@
 //! domains, the Arcade dailies, and the door games: inside a running
 //! roguelike the same backtick detaches (the game keeps running) and hops
 //! onward; inside an active Lateania world it leaves (autosave) and keeps
-//! the door on the cycle for a few minutes so hopping back re-joins the
-//! character; inside Dark Room or Green Dragon it hops with the door still
+//! the door on the cycle for the shared door window
+//! (`door::game::IDLE_WINDOW`) so hopping back re-joins the character; inside Dark Room or Green Dragon it hops with the door still
 //! loaded, and an idle deadline in `App::tick` ends the visit for a player
 //! who never comes back.
 

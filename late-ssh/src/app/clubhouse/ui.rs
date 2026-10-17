@@ -92,9 +92,9 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: ClubhouseView<'_>) {
 
 fn draw_tavern(frame: &mut Frame, area: Rect, view: &ClubhouseView<'_>) {
     let state = view.state;
-    // No widget border: the room's own walls are the frame. The headcount
-    // and keybinds live in the app frame title (`app_frame_title` in
-    // `render.rs`), so the tavern gets every cell.
+    // No widget border: the room's own walls are the frame. The keybinds
+    // live in the app frame title (`app_frame_title` in `render.rs`), so
+    // the tavern gets every cell.
     let inner = area;
     if inner.width < 4 || inner.height < 4 {
         return;

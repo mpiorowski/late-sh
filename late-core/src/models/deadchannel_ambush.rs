@@ -58,7 +58,8 @@ pub struct Ambush {
     pub defender_username: String,
     /// The step of the road the crossing was on; `None` for an answer.
     pub step: Option<i32>,
-    /// The defender's bits on hand when it started.
+    /// The most a win takes: the crossing's half of the defender's bits
+    /// on hand when it started.
     pub stake: i64,
     /// The crossing this answers; `None` for a crossing.
     pub answer_to: Option<Uuid>,

@@ -202,10 +202,11 @@ impl HubGame {
     /// sidebar's in-progress pips both read it, so they cannot drift. Three
     /// models. Lateania has no detached session, so its test is the recency
     /// window a backtick detach arms (`App::lateania_recently_active`): hop
-    /// out and the door stays live for a few minutes, hopping in re-joins the
+    /// out and the door stays live for the shared door window
+    /// ([`crate::app::door::game::IDLE_WINDOW`]), hopping in re-joins the
     /// saved character. The roguelikes and the Zork Trilogy count a running
     /// (attached or detached) game: a door sitting on its launcher or menus
-    /// is not live, and Zork's own `tick` drops a game after twenty minutes
+    /// is not live, and their own `tick` drops a game after the same window
     /// without input. Dark Room and Green Dragon keep their loaded state
     /// across a hop, so being loaded is the test; `App::tick` saves and drops
     /// them once the player has been away past
@@ -214,7 +215,8 @@ impl HubGame {
     /// their session on leaving the screen, so they are never live. Minecraft
     /// and Vintage Story have no session here at all, and Night City is not a door: the street
     /// keeps a runner standing on its own (`deadchannel/street`). The Realm
-    /// board stays open across a hop, so an open board is the test.
+    /// board stays open across a hop, so an open board is the test;
+    /// `App::tick` closes it after the same window off screen.
     pub(crate) fn live_screen(self, app: &App) -> Option<Screen> {
         match self {
             HubGame::Lateania => app.lateania_recently_active().then_some(Screen::Lateania),

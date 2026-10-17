@@ -1673,6 +1673,52 @@ async fn the_realm_board_is_a_backtick_stop() {
     );
 }
 
+/// A realm board hopped away from and forgotten closes after the shared door
+/// window, the same deadline the native remakes keep: never while it is the
+/// open screen, and on-screen time does not count toward it.
+#[tokio::test]
+async fn the_idle_deadline_closes_a_forgotten_realm_board() {
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "realm-idle").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "realm-idle-it");
+
+    app.set_screen(Screen::Dashboard);
+    app.realm.open_board(uuid::Uuid::new_v4(), Screen::Games);
+    app.set_screen(Screen::Realm);
+
+    app.realm.force_board_idle_for_test();
+    app.tick();
+    assert!(
+        app.realm.board.is_some(),
+        "expected the open screen to shield the board from the close"
+    );
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Dashboard);
+    app.tick();
+    assert!(
+        app.realm.board.is_some(),
+        "expected on-screen time not to count toward the idle deadline"
+    );
+
+    app.realm.force_board_idle_for_test();
+    assert!(
+        app.tick(),
+        "expected the closing tick to dirty the frame so the hub row clears"
+    );
+    assert!(
+        app.realm.board.is_none(),
+        "expected the idle deadline to close the board"
+    );
+    app.handle_input(b"`");
+    assert_eq!(
+        app.screen,
+        Screen::Dashboard,
+        "expected no hop once the board has idled out"
+    );
+}
+
 /// The world's chat is put away when the board opens, so the map has the
 /// screen; `c` puts it up in the rail's place and `i` types into the
 /// world's own room, and `c` again hides it.

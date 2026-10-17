@@ -567,6 +567,7 @@ fn a_rival_put_down_by_a_card_reads_as_a_sure_crossing() {
         signal: 1,
         attack: 0,
         defense: 0,
+        carrying: 100,
         stake: 50,
     };
     assert_eq!(odds_rival(&sheet, &prey, 20), Some(1.0));

@@ -740,7 +740,8 @@ fn before_the_crossing(sheet: &Sheet) -> (Sheet, Picker) {
     )
 }
 
-fn tom(stake: i64) -> Prey {
+/// Tom carrying `carrying` bits, the crossing's half of them at stake.
+fn tom(carrying: i64) -> Prey {
     Prey {
         rival: Rival {
             user_id: Uuid::from_u128(7),
@@ -757,7 +758,8 @@ fn tom(stake: i64) -> Prey {
         signal: 30,
         attack: 5,
         defense: 2,
-        stake,
+        carrying,
+        stake: carrying / 2,
     }
 }
 
@@ -822,7 +824,7 @@ fn the_road_shows_the_sleeper_at_the_crossing_and_the_answer_owed() {
         "{crossing}"
     );
     assert!(
-        crossing.contains("carrying 340 bits · a ration · fall, lose all you carry"),
+        crossing.contains("carrying 340 bits, 170 to take · a ration · fall, lose all"),
         "{crossing}"
     );
     assert!(crossing.contains("[Enter] cross tom"), "{crossing}");
@@ -861,6 +863,9 @@ fn the_road_shows_the_sleeper_at_the_crossing_and_the_answer_owed() {
             crossing: None,
             token: Some(Token {
                 ambush: crossed.clone(),
+                // Renamed since: the news keeps the night's name, the
+                // answer offered is to the one he goes by now.
+                crosser: "tomas".to_string(),
                 prey: Some(tom(90)),
             }),
             news: Some(crossed.clone()),
@@ -871,10 +876,10 @@ fn the_road_shows_the_sleeper_at_the_crossing_and_the_answer_owed() {
         "{owed}"
     );
     assert!(
-        owed.contains("you are owed an answer. tom is on the wire, carrying 90. no ration. even"),
+        owed.contains("owed an answer: tomas is on the wire, 45 bits to take. no ration. even"),
         "{owed}"
     );
-    assert!(owed.contains("[r] answer tom"), "{owed}");
+    assert!(owed.contains("[r] answer tomas"), "{owed}");
 
     let off = render_road_with(
         &at,
@@ -883,13 +888,14 @@ fn the_road_shows_the_sleeper_at_the_crossing_and_the_answer_owed() {
             crossing: None,
             token: Some(Token {
                 ambush: crossed,
+                crosser: "tomas".to_string(),
                 prey: None,
             }),
             news: None,
         },
     );
     assert!(
-        off.contains("tom is off the wire. it keeps for a day."),
+        off.contains("tomas is off the wire. it keeps for a day."),
         "{off}"
     );
     assert!(!off.contains("[r]"), "{off}");
@@ -919,7 +925,7 @@ fn the_news_line_tells_the_sleeper_what_happened() {
     );
     assert_eq!(
         news_line(&row(false, AmbushOutcome::Won, 0)),
-        "tom crossed you while you were gone. you were carrying nothing."
+        "tom crossed you while you were gone. they took nothing."
     );
     assert_eq!(
         news_line(&row(false, AmbushOutcome::Lost, -120)),
@@ -951,7 +957,7 @@ fn a_rival_on_the_scene_wears_their_own_face_and_name() {
         &mut StdRng::seed_from_u64(5),
     );
     let scene = Scene {
-        lines: vec!["tom. awake this time, carrying 90 bits.".to_string()],
+        lines: vec!["tom. awake this time, carrying 90 bits, 45 to take.".to_string()],
         latest: 1,
         over: false,
         waiting: false,

@@ -9,6 +9,7 @@
 use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 use chrono::{DateTime, Utc};
 use late_core::models::realm_game::RealmGame;
@@ -151,6 +152,13 @@ pub struct RealmBoardState {
     pub drag_anchor: Cell<Option<(u16, u16)>>,
     /// The pointer moved while held, so the release pans instead of selects.
     pub dragged: Cell<bool>,
+    /// The last tick with the board as the open screen. The board outlives a
+    /// hop to another screen (it stays on the backtick cycle), so this is
+    /// what closes a forgotten one; see [`RealmState::board_idle_expired`].
+    last_seen: Instant,
+    /// See [`RealmState::force_board_idle_for_test`].
+    #[cfg(test)]
+    idle_forced: bool,
 }
 
 pub struct RealmDetail {
@@ -604,8 +612,50 @@ impl RealmState {
             map_geometry: Cell::new(None),
             drag_anchor: Cell::new(None),
             dragged: Cell::new(false),
+            last_seen: Instant::now(),
+            #[cfg(test)]
+            idle_forced: false,
         });
         self.start_board_load();
+    }
+
+    /// Mark the open board as still looked at. `App::tick` calls this while
+    /// the board is the open screen; every key lands there too, so the clock
+    /// measures time away from the board.
+    pub fn touch_board(&mut self) {
+        if let Some(board) = self.board.as_mut() {
+            board.last_seen = Instant::now();
+            #[cfg(test)]
+            {
+                board.idle_forced = false;
+            }
+        }
+    }
+
+    /// An open board nobody has looked at for the shared door window
+    /// (`door::game::IDLE_WINDOW`): the visit is over, and the caller closes
+    /// it, which takes it off the backtick cycle and the hub's live list.
+    pub fn board_idle_expired(&self) -> bool {
+        let Some(board) = self.board.as_ref() else {
+            return false;
+        };
+        #[cfg(test)]
+        if board.idle_forced {
+            return true;
+        }
+        board.last_seen.elapsed() >= crate::app::door::game::IDLE_WINDOW
+    }
+
+    /// Test-only: force the idle deadline, so the close in `App::tick` can be
+    /// exercised without waiting half an hour. A flag rather than an aged
+    /// `last_seen`, because winding an `Instant` back half an hour panics on a
+    /// machine booted more recently than that. Cleared by
+    /// [`RealmState::touch_board`].
+    #[cfg(test)]
+    pub fn force_board_idle_for_test(&mut self) {
+        if let Some(board) = self.board.as_mut() {
+            board.idle_forced = true;
+        }
     }
 
     pub fn close_board(&mut self) -> Option<Screen> {
