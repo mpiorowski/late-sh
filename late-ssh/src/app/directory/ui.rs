@@ -459,7 +459,12 @@ fn draw_people_list(
             let offline_rule = (online * usize::from(item_height) + 1) as u16;
             let groups = [
                 (0, "online", online, theme::SUCCESS()),
-                (offline_rule, "offline", entries.len() - online, theme::TEXT()),
+                (
+                    offline_rule,
+                    "offline",
+                    entries.len() - online,
+                    theme::TEXT(),
+                ),
             ];
             for (y, label, count, color) in groups.into_iter().take(rules) {
                 if y >= window.y && y < window.bottom() {
@@ -512,9 +517,8 @@ fn group_rule(label: &str, count: usize, color: Color, width: usize) -> Line<'st
     let rule = Style::default().fg(theme::BORDER());
     let lead = "\u{2500}\u{2500} ";
     let count = format!(" {count}");
-    let tail = width.saturating_sub(
-        lead.chars().count() + label.chars().count() + count.chars().count() + 1,
-    );
+    let tail = width
+        .saturating_sub(lead.chars().count() + label.chars().count() + count.chars().count() + 1);
     Line::from(vec![
         Span::styled(lead, rule),
         Span::styled(

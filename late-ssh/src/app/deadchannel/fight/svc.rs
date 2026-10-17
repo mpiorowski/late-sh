@@ -458,6 +458,7 @@ impl FightService {
         if !on_the_wire(&theirs) {
             return Ok(sheet.answer(Answer::OffTheWire, &mut rand::thread_rng()));
         }
+        let their_name = current_username(tx.client(), owed.attacker_user_id).await?;
         let ambush_id = Uuid::now_v7();
         let claimed = Ambush::insert(
             tx,
@@ -467,7 +468,7 @@ impl FightService {
                 attacker_user_id: sheet.user_id,
                 defender_user_id: owed.attacker_user_id,
                 attacker_username: username.to_string(),
-                defender_username: owed.attacker_username.clone(),
+                defender_username: their_name.clone(),
                 step: None,
                 stake: theirs.crossing_stake(),
                 answer_to: Some(owed.id),
@@ -480,7 +481,7 @@ impl FightService {
         }
         let prey = Prey::of(
             &theirs,
-            &owed.attacker_username,
+            &their_name,
             Self::portrait_of(&row),
             ambush_id,
             true,
@@ -611,7 +612,7 @@ impl FightService {
                             match on_the_wire(&theirs) {
                                 true => Some(Prey::of(
                                     &theirs,
-                                    &ambush.attacker_username,
+                                    &current_username(client, ambush.attacker_user_id).await?,
                                     Self::portrait_of(&row),
                                     Uuid::nil(),
                                     true,
@@ -1024,6 +1025,16 @@ fn settled(row: &DeadchannelRunner, today: NaiveDate) -> Result<Sheet> {
     let mut theirs = Sheet::from_row(row).context("reading another runner's sheet")?;
     theirs.settle(today);
     Ok(theirs)
+}
+
+/// The name a runner goes by now, not the one an ambush row kept up to a
+/// day ago: the scene shows it and the wire mentions it, and a mention
+/// finds its runner by the current handle.
+async fn current_username(client: &Client, user_id: Uuid) -> Result<String> {
+    User::list_usernames_by_ids(client, &[user_id])
+        .await?
+        .remove(&user_id)
+        .with_context(|| format!("runner {user_id} has no user row"))
 }
 
 /// Whether a settled sheet is on the wire for the crossing: signal up

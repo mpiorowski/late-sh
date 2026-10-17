@@ -227,7 +227,10 @@ fn draw_list(frame: &mut Frame, area: Rect, state: &UserMapState) {
                 Style::default().fg(theme::TEXT_FAINT()),
             )),
             ListLine::Person(_, person) => Line::from(Span::styled(
-                format!("     {}", ellipsize(&format!("@{}", tally.people[person]), 24)),
+                format!(
+                    "     {}",
+                    ellipsize(&format!("@{}", tally.people[person]), 24)
+                ),
                 Style::default().fg(theme::TEXT_DIM()),
             )),
         });

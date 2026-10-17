@@ -69,7 +69,10 @@ crossing won against this runner inside `ANSWER_HOURS` (24) and not yet
 answered (`Ambush::answerable`), the one who did it locked and claimed as
 an answer row (`answer_to`, one per crossing), on the row as a rival
 through `Sheet::answer(Answer, rng)` with no ration and no step, the
-same stakes. Refused with nothing owed (`NoAnswerOwed`), with them gone
+same stakes. The rival carries the name the crosser goes by now
+(`current_username`), not the one the crossing row kept: the wire
+mentions it, and a mention finds its runner by the current handle; the
+lookout's preview of the answer reads the same name. Refused with nothing owed (`NoAnswerOwed`), with them gone
 dark, down, or in a fight (`NotOnTheWire`: the answer keeps), down, or
 with a fight waiting.
 

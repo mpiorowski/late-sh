@@ -183,6 +183,7 @@ Membership:
 - Unread counts exclude messages authored by the current user.
 - `join` is idempotent and preserves original `joined_at` on conflict.
 - Membership is the authorization check for reading tails, syncing deltas, marking read, sending, reacting, listing members, and inviting.
+- A send that did not land is a `SendError`: `Refused(SendRefusal)` for the room rules (membership, ban, `#announcements`, report-only, slow mode, link cooldown), a closed enum worded once in `SendRefusal::message` and counted by reason in `record_chat_send_refused`, or `Failed` for anything else. `account_send_error` is the one place both are logged (a refusal at info, a failure as a marked span) for the message, report, bot-reply and lounge paths; each path only decides whom to banner.
 
 Messages:
 - `chat_messages.body` must be trimmed non-empty and length <= 2000.

@@ -382,61 +382,158 @@ pub struct RoomMemberListItem {
     pub username: Option<String>,
 }
 
-/// What a send refused by the room's rules tells the sender: membership,
-/// bans, #announcements, report-only rooms, slow mode, the link cooldown.
-/// Those are expected and the sender's to fix, so callers do not log them as
-/// errors. `None` is any other failure.
-fn send_rejection(error: &anyhow::Error) -> Option<String> {
-    let error = error.to_string();
-    let message = if error.contains("not a member") {
-        "You are not a member of this room.".to_string()
-    } else if error.contains("banned from this room") {
-        "You are banned from this room.".to_string()
-    } else if error.contains("admin-only") {
-        "Only admins can post in #announcements.".to_string()
-    } else if let Some(slug) = error.strip_prefix("report-only:") {
-        let command = if slug == "suggestions" {
-            "/suggest"
-        } else {
-            "/bug"
-        };
-        format!(
-            "#{slug} takes reports only: post with {command} <text>, or react to an existing one."
-        )
-    } else if let Some(rest) = error.strip_prefix("slow-mode:") {
-        let mut parts = rest.splitn(2, ':');
-        let secs = parts
-            .next()
-            .and_then(|secs| secs.parse::<u64>().ok())
-            .unwrap_or(1);
-        let room = parts
-            .next()
-            .filter(|room| !room.is_empty())
-            .map(|room| {
-                if room == "server" {
-                    "server".to_string()
-                } else {
-                    format!("#{room}")
-                }
-            })
-            .unwrap_or_else(|| "this room".to_string());
-        format!(
-            "Slow mode in {room}: wait {} before sending again.",
-            format_cooldown(secs)
-        )
-    } else if let Some(secs) = error.strip_prefix("link-cooldown:") {
-        let secs = secs.parse::<u64>().unwrap_or(0);
-        format!(
-            "🔗 New accounts can only post a link occasionally — next link in {}.",
-            format_cooldown(secs)
-        )
-    } else {
-        return None;
-    };
-    Some(message)
+/// Why a send did not land: a rule of the room's that the sender can act
+/// on. Every arm words its own banner, so a new guard has to say what the
+/// sender should do rather than fall into "could not send", and the metric
+/// label is the same closed list. Kept apart from a failure because only a
+/// refusal is the sender's business.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum SendRefusal {
+    NotAMember,
+    Banned,
+    /// `#announcements` is read-only for everyone but admins.
+    AnnouncementsAdminOnly,
+    /// Free text from a non-moderator in `#bugs` or `#suggestions`.
+    ReportOnly(ReportKind),
+    SlowMode {
+        remaining: Duration,
+        scope: SlowModeScope,
+        /// The room's slug as the sender's session knows it, for the banner.
+        /// `None` when the send named no slug.
+        room_slug: Option<String>,
+    },
+    /// A young account posting a link inside its cooldown.
+    LinkCooldown {
+        remaining: Duration,
+    },
+}
+
+/// Which slow mode is holding a send: the room's own, or the server-wide one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SlowModeScope {
+    Room,
+    Server,
+}
+
+impl SendRefusal {
+    /// Sentence-case banner copy, the one place a refusal is worded.
+    pub(crate) fn message(&self) -> String {
+        match self {
+            Self::NotAMember => "You are not a member of this room.".to_string(),
+            Self::Banned => "You are banned from this room.".to_string(),
+            Self::AnnouncementsAdminOnly => "Only admins can post in #announcements.".to_string(),
+            Self::ReportOnly(kind) => format!(
+                "#{} takes reports only: post with {} <text>, or react to an existing one.",
+                kind.slug(),
+                kind.command()
+            ),
+            Self::SlowMode {
+                remaining,
+                scope,
+                room_slug,
+            } => {
+                let room = match (scope, room_slug) {
+                    (SlowModeScope::Server, _) => "server".to_string(),
+                    (SlowModeScope::Room, Some(slug)) => format!("#{slug}"),
+                    (SlowModeScope::Room, None) => "this room".to_string(),
+                };
+                format!(
+                    "Slow mode in {room}: wait {} before sending again.",
+                    format_cooldown(remaining.as_secs())
+                )
+            }
+            Self::LinkCooldown { remaining } => format!(
+                "🔗 New accounts can only post a link occasionally — next link in {}.",
+                format_cooldown(remaining.as_secs())
+            ),
+        }
+    }
+}
+
+/// A send that did not land: a room rule said no, or something broke. The
+/// two are separated because only the first is the sender's to fix; the
+/// second is ours, and marks its span.
+#[derive(Debug)]
+pub(crate) enum SendError {
+    Refused(SendRefusal),
+    Failed(anyhow::Error),
+}
+
+impl From<anyhow::Error> for SendError {
+    fn from(error: anyhow::Error) -> Self {
+        Self::Failed(error)
+    }
+}
+
+impl std::fmt::Display for SendError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Refused(refusal) => write!(f, "send refused: {}", refusal.message()),
+            Self::Failed(error) => write!(f, "{error:#}"),
+        }
+    }
+}
+
+impl std::error::Error for SendError {}
+
+/// Which send path a refusal or failure came through: the span it marks and
+/// the line it logs name it, so the four paths read as one story.
+#[derive(Clone, Copy, Debug)]
+enum SendPath {
+    Message,
+    Report,
+    BotReply,
+    /// A custom `#lounge` line, with the caller's word for what it was.
+    Lounge {
+        what: &'static str,
+    },
+}
+
+impl SendPath {
+    fn error_type(self) -> &'static str {
+        match self {
+            Self::Message => "chat_send_failed",
+            Self::Report => "chat_report_send_failed",
+            Self::BotReply => "chat_bot_send_failed",
+            Self::Lounge { .. } => "chat_lounge_send_failed",
+        }
+    }
+
+    /// What did not land, for the log line.
+    fn what(self) -> &'static str {
+        match self {
+            Self::Message => "a message",
+            Self::Report => "a report",
+            Self::BotReply => "a bot reply",
+            Self::Lounge { what } => what,
+        }
+    }
 }
 
 const SEND_FAILED_MESSAGE: &str = "Could not send message. Please try again.";
+
+/// The one place a send that did not land is accounted for: a refusal is
+/// counted and noted at info, since the sender can act on it; a failure
+/// marks the span. Hands back the banner, which each path acknowledges its
+/// own way (a bot reply has nobody to tell).
+fn account_send_error(path: SendPath, error: &SendError) -> String {
+    match error {
+        SendError::Refused(refusal) => {
+            metrics::record_chat_send_refused(refusal);
+            tracing::info!(what = path.what(), refusal = ?refusal, "send refused by room rules");
+            refusal.message()
+        }
+        SendError::Failed(error) => {
+            late_core::error_span!(
+                path.error_type(),
+                error = ?error,
+                what = path.what(),
+                "send failed"
+            );
+            SEND_FAILED_MESSAGE.to_string()
+        }
+    }
+}
 
 /// Render a remaining cooldown as a compact human string, e.g. `29m 30s`, `45s`.
 fn format_cooldown(secs: u64) -> String {
@@ -497,13 +594,13 @@ async fn slow_mode_remaining(
     client: &tokio_postgres::Client,
     room: &ChatRoom,
     user_id: Uuid,
-) -> Result<Option<(Duration, &'static str)>> {
+) -> Result<Option<(Duration, SlowModeScope)>> {
     if let Some(slow_mode) =
         ChatSlowMode::find_active_for_room_and_user(client, room.id, user_id).await?
         && let Some(remaining) =
             slow_mode_remaining_for_mode(client, room.id, user_id, slow_mode).await?
     {
-        return Ok(Some((remaining, "room")));
+        return Ok(Some((remaining, SlowModeScope::Room)));
     }
 
     if room.kind != "dm"
@@ -511,7 +608,7 @@ async fn slow_mode_remaining(
         && let Some(remaining) =
             server_slow_mode_remaining_for_mode(client, user_id, slow_mode).await?
     {
-        return Ok(Some((remaining, "server")));
+        return Ok(Some((remaining, SlowModeScope::Server)));
     }
 
     Ok(None)
@@ -2810,28 +2907,14 @@ impl ChatService {
                             request_id,
                         });
                     }
-                    Err(e) => match send_rejection(&e) {
-                        Some(message) => {
-                            let _ = service.evt_tx.send(ChatEvent::SendFailed {
-                                user_id,
-                                request_id,
-                                message,
-                            });
-                            tracing::info!(error = %e, "report rejected by room rules");
-                        }
-                        None => {
-                            let _ = service.evt_tx.send(ChatEvent::SendFailed {
-                                user_id,
-                                request_id,
-                                message: SEND_FAILED_MESSAGE.to_string(),
-                            });
-                            late_core::error_span!(
-                                "chat_report_send_failed",
-                                error = ?e,
-                                "failed to send report"
-                            );
-                        }
-                    },
+                    Err(e) => {
+                        let message = account_send_error(SendPath::Report, &e);
+                        let _ = service.evt_tx.send(ChatEvent::SendFailed {
+                            user_id,
+                            request_id,
+                            message,
+                        });
+                    }
                 }
             }
             .instrument(info_span!(
@@ -2843,7 +2926,12 @@ impl ChatService {
         );
     }
 
-    async fn send_report(&self, user_id: Uuid, kind: ReportKind, text: String) -> Result<()> {
+    async fn send_report(
+        &self,
+        user_id: Uuid,
+        kind: ReportKind,
+        text: String,
+    ) -> Result<(), SendError> {
         let client = self.db.get().await?;
         // Resolve only the public report room. Slugs are not globally unique
         // (a private topic room or a game room may share one), so a loose
@@ -2893,19 +2981,9 @@ impl ChatService {
                     .await
                 {
                     // A bot is a regular user to the room rules, so a mention
-                    // in a report-only room gets its reply refused there.
-                    match send_rejection(&e) {
-                        Some(_) => {
-                            tracing::info!(error = %e, "bot reply rejected by room rules");
-                        }
-                        None => {
-                            late_core::error_span!(
-                                "chat_bot_send_failed",
-                                error = ?e,
-                                "failed to send bot reply"
-                            );
-                        }
-                    }
+                    // in a report-only room gets its reply refused there. The
+                    // banner has nobody to go to: a bot is not at a keyboard.
+                    account_send_error(SendPath::BotReply, &e);
                 }
             }
             .instrument(info_span!(
@@ -3135,7 +3213,8 @@ impl ChatService {
                             reply_to_user_id: None,
                             is_admin: false,
                         })
-                        .await
+                        .await?;
+                    Ok(())
                 }
                 .await;
                 if let Err(error) = posted {
@@ -3175,28 +3254,14 @@ impl ChatService {
                     })
                     .await
                 {
-                    Err(e) => match send_rejection(&e) {
-                        Some(message) => {
-                            let _ = service.evt_tx.send(ChatEvent::SendFailed {
-                                user_id,
-                                request_id,
-                                message,
-                            });
-                            tracing::info!(error = %e, "message rejected by room rules");
-                        }
-                        None => {
-                            let _ = service.evt_tx.send(ChatEvent::SendFailed {
-                                user_id,
-                                request_id,
-                                message: SEND_FAILED_MESSAGE.to_string(),
-                            });
-                            late_core::error_span!(
-                                "chat_send_failed",
-                                error = ?e,
-                                "failed to send message"
-                            );
-                        }
-                    },
+                    Err(e) => {
+                        let message = account_send_error(SendPath::Message, &e);
+                        let _ = service.evt_tx.send(ChatEvent::SendFailed {
+                            user_id,
+                            request_id,
+                            message,
+                        });
+                    }
                     Ok(()) => {
                         let _ = service.evt_tx.send(ChatEvent::SendSucceeded {
                             user_id,
@@ -3238,16 +3303,16 @@ impl ChatService {
                         }
                     }
                     Err(e) => {
+                        let message =
+                            account_send_error(SendPath::Lounge { what: failure_log }, &e);
+                        // Only a session's own line has a composer to banner.
                         if let Some(request_id) = request_id {
-                            let message = send_rejection(&e)
-                                .unwrap_or_else(|| SEND_FAILED_MESSAGE.to_string());
                             let _ = service.evt_tx.send(ChatEvent::SendFailed {
                                 user_id,
                                 request_id,
                                 message,
                             });
                         }
-                        tracing::warn!(error = ?e, %user_id, failure_log);
                     }
                 }
             }
@@ -3258,12 +3323,12 @@ impl ChatService {
     /// Post to #lounge and wait for the result. For callers that already
     /// run in their own task and own the outcome's telemetry; everyone else
     /// goes through `send_lounge_message_task`.
-    pub async fn send_lounge_message(
+    pub(crate) async fn send_lounge_message(
         &self,
         user_id: Uuid,
         body: String,
         join_if_needed: bool,
-    ) -> Result<()> {
+    ) -> Result<(), SendError> {
         let client = self.db.get().await?;
         let room = ChatRoom::find_lounge(&client)
             .await?
@@ -3312,7 +3377,7 @@ impl ChatService {
     }
 
     #[tracing::instrument(skip(self, params), fields(user_id = %params.user_id, room_id = %params.room_id, body_len = params.body.len()))]
-    async fn send_message(&self, params: SendMessageParams) -> Result<()> {
+    async fn send_message(&self, params: SendMessageParams) -> Result<(), SendError> {
         let SendMessageParams {
             user_id,
             room_id,
@@ -3328,16 +3393,16 @@ impl ChatService {
         }
 
         if room_slug.as_deref() == Some("announcements") && !is_admin {
-            anyhow::bail!("announcements is admin-only");
+            return Err(SendError::Refused(SendRefusal::AnnouncementsAdminOnly));
         }
 
         let client = self.db.get().await?;
         let is_member = ChatRoomMember::is_member(&client, room_id, user_id).await?;
         if !is_member {
-            anyhow::bail!("user is not a member of room");
+            return Err(SendError::Refused(SendRefusal::NotAMember));
         }
         if RoomBan::is_active_for_room_and_user(&client, room_id, user_id).await? {
-            anyhow::bail!("user is banned from this room");
+            return Err(SendError::Refused(SendRefusal::Banned));
         }
         let room = ChatRoom::get(&client, room_id)
             .await?
@@ -3355,18 +3420,17 @@ impl ChatService {
                 .get(&user_id)
                 .is_some_and(|(_, is_moderator)| *is_moderator);
             if !is_moderator {
-                anyhow::bail!("report-only:{}", kind.slug());
+                return Err(SendError::Refused(SendRefusal::ReportOnly(kind)));
             }
         }
         if !is_admin
             && let Some((remaining, scope)) = slow_mode_remaining(&client, &room, user_id).await?
         {
-            let label = if scope == "server" {
-                "server".to_string()
-            } else {
-                room_slug.clone().unwrap_or_default()
-            };
-            anyhow::bail!("slow-mode:{}:{}", remaining.as_secs(), label);
+            return Err(SendError::Refused(SendRefusal::SlowMode {
+                remaining,
+                scope,
+                room_slug: room_slug.clone(),
+            }));
         }
 
         // Account-age link rate limit: younger accounts can only post a link
@@ -3377,7 +3441,7 @@ impl ChatService {
             && contains_link(body)
             && let Some(remaining) = self.link_cooldown_remaining(&client, user_id).await?
         {
-            anyhow::bail!("link-cooldown:{}", remaining.as_secs());
+            return Err(SendError::Refused(SendRefusal::LinkCooldown { remaining }));
         }
 
         if let Some(reply_to_message_id) = reply_to_message_id {
@@ -3385,7 +3449,9 @@ impl ChatService {
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("reply target not found"))?;
             if reply_target.room_id != room_id {
-                anyhow::bail!("reply target is not in this room");
+                return Err(SendError::Failed(anyhow::anyhow!(
+                    "reply target is not in this room"
+                )));
             }
         }
         if room.kind == "dm" {
@@ -5092,7 +5158,8 @@ impl ChatService {
             reply_to_user_id: None,
             is_admin: false,
         })
-        .await
+        .await?;
+        Ok(())
     }
 
     pub fn create_private_room_task(&self, user_id: Uuid, slug: String) {

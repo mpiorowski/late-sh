@@ -208,6 +208,69 @@ fn online_countries_name_their_people() {
     assert!(rows[4].contains("@mat"), "{rows:?}");
 }
 
+/// A country with more people than the list has rows is still read to the
+/// end: `j` reveals the block a line at a time before it moves on to the
+/// next country, and the wheel scrolls lines without moving the cursor.
+#[test]
+fn a_country_taller_than_the_list_can_be_read_to_the_end() {
+    use super::state::MousePress;
+
+    let names: Vec<String> = (0..60).map(|n| format!("p{n:02}")).collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut state = UserMapState::default();
+    state.show_without_loading();
+    state.set_people_for_test(&[("US", &names), ("PL", &["mat"])]);
+    let list_text = |state: &mut UserMapState| -> String {
+        let (text, _) = render(state, 160, 48);
+        let list = state.list_area_for_test().expect("a list was drawn");
+        (list.y..list.y + list.height)
+            .map(|y| -> String {
+                (list.x..list.x + list.width)
+                    .map(|x| text.chars().nth((y * 160 + x) as usize).unwrap_or(' '))
+                    .collect()
+            })
+            .collect::<Vec<String>>()
+            .join("\n")
+    };
+    assert!(
+        !list_text(&mut state).contains("@p59"),
+        "the list is shorter than the block"
+    );
+
+    // `j` walks the block to its last name before it leaves the country.
+    let mut steps = 0;
+    while !list_text(&mut state).contains("@p59") {
+        state.walk(1);
+        steps += 1;
+        assert_eq!(
+            state.cursor(),
+            0,
+            "still on the United States after {steps} steps"
+        );
+        assert!(steps < 100, "the block never scrolled to its end");
+    }
+    assert!(steps > 0);
+    state.walk(1);
+    assert_eq!(
+        state.cursor(),
+        1,
+        "the step after the last name is the next country"
+    );
+    assert!(list_text(&mut state).contains("Poland"));
+
+    // The wheel over the list scrolls a line and leaves the cursor alone.
+    let mut state = UserMapState::default();
+    state.show_without_loading();
+    state.set_people_for_test(&[("US", &names), ("PL", &["mat"])]);
+    render(&mut state, 160, 48);
+    let list = state.list_area_for_test().expect("a list was drawn");
+    assert!(state.handle_mouse(MousePress::ScrollDown, list.x + 2, list.y + 2));
+    assert_eq!(state.first_visible_line(), 1);
+    assert_eq!(state.cursor(), 0);
+    let text = list_text(&mut state);
+    assert!(text.starts_with("     @p00"), "{text:.60}");
+}
+
 /// A click on a person, or on the country after them, lands on the right
 /// country: the names push every country below them down the list.
 #[test]
@@ -223,7 +286,11 @@ fn a_click_below_named_people_picks_the_right_country() {
     let line_y = |line: u16| list.y + line + 1;
 
     assert!(state.handle_mouse(MousePress::Down, list.x + 2, line_y(3)));
-    assert_eq!(state.selected(), territory_for_code("PL"), "the fourth line is Poland");
+    assert_eq!(
+        state.selected(),
+        territory_for_code("PL"),
+        "the fourth line is Poland"
+    );
 
     render(&mut state, 160, 48);
     assert!(state.handle_mouse(MousePress::Down, list.x + 2, line_y(2)));

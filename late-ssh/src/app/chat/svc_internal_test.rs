@@ -41,31 +41,51 @@ fn link_cooldown_tiers_by_account_age() {
 }
 
 #[test]
-fn send_rejection_explains_report_only_rooms() {
-    let bugs = send_rejection(&anyhow::anyhow!("report-only:bugs")).unwrap();
+fn send_refusal_explains_report_only_rooms() {
+    let bugs = SendRefusal::ReportOnly(ReportKind::Bug).message();
     assert!(bugs.contains("#bugs"), "{bugs}");
     assert!(bugs.contains("/bug"), "{bugs}");
-    let suggestions = send_rejection(&anyhow::anyhow!("report-only:suggestions")).unwrap();
+    let suggestions = SendRefusal::ReportOnly(ReportKind::Suggestion).message();
     assert!(suggestions.contains("#suggestions"), "{suggestions}");
     assert!(suggestions.contains("/suggest"), "{suggestions}");
 }
 
-/// A send the room's rules refused is the sender's to fix, not a server
-/// failure; anything else is a real failure and is not dressed up as one.
+/// The refusals that carry a wait say where it holds and for how long; a
+/// send that named no room still gets a sentence.
 #[test]
-fn send_rejection_tells_room_rules_from_failures() {
-    for rule in [
-        "user is not a member of room",
-        "user is banned from this room",
-        "admin-only",
-        "report-only:suggestions",
-        "slow-mode:30:lounge",
-        "link-cooldown:120",
-    ] {
-        assert!(send_rejection(&anyhow::anyhow!(rule)).is_some(), "{rule}");
-    }
-    let failure = anyhow::anyhow!("connection reset").context("inserting chat message");
-    assert_eq!(send_rejection(&failure), None);
+fn send_refusal_words_the_wait() {
+    let in_room = SendRefusal::SlowMode {
+        remaining: Duration::from_secs(90),
+        scope: SlowModeScope::Room,
+        room_slug: Some("lounge".to_string()),
+    };
+    assert_eq!(
+        in_room.message(),
+        "Slow mode in #lounge: wait 1m 30s before sending again."
+    );
+    let unnamed = SendRefusal::SlowMode {
+        remaining: Duration::from_secs(5),
+        scope: SlowModeScope::Room,
+        room_slug: None,
+    };
+    assert_eq!(
+        unnamed.message(),
+        "Slow mode in this room: wait 5s before sending again."
+    );
+    let server = SendRefusal::SlowMode {
+        remaining: Duration::from_secs(5),
+        scope: SlowModeScope::Server,
+        room_slug: Some("lounge".to_string()),
+    };
+    assert!(server.message().starts_with("Slow mode in server: "));
+    let link = SendRefusal::LinkCooldown {
+        remaining: Duration::from_secs(120),
+    };
+    assert!(
+        link.message().ends_with("next link in 2m 00s."),
+        "{}",
+        link.message()
+    );
 }
 
 #[test]

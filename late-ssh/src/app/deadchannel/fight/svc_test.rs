@@ -4,6 +4,7 @@ use late_core::models::chat_room::ChatRoom;
 use late_core::models::deadchannel_ambush::{Ambush, AmbushOutcome, NewAmbush};
 use late_core::models::deadchannel_runner::DeadchannelRunner;
 use late_core::models::notification::Notification;
+use late_core::models::user::User;
 use late_core::test_utils::create_test_user;
 use tokio::sync::mpsc;
 use tokio::time::{Duration, timeout};
@@ -862,8 +863,16 @@ async fn a_crossing_takes_the_sleepers_bits_and_the_sleeper_answers_for_them() {
     let token = lookout.token.expect("an answer owed");
     assert_eq!(token.ambush.id, rival.ambush_id);
     let crosser = token.prey.expect("mira is on the wire");
-    // The name the crossing row kept: the one mira's session went by.
-    assert_eq!(crosser.rival.username, "mira");
+    // The name mira goes by now, not the "mira" the crossing row kept: the
+    // answer's wire line mentions it, and a mention finds its runner by the
+    // current handle.
+    let mira_name = User::list_usernames_by_ids(&**client, &[mira])
+        .await
+        .expect("read")
+        .remove(&mira)
+        .expect("mira's user row");
+    assert_ne!(mira_name, "mira");
+    assert_eq!(crosser.rival.username, mira_name);
     assert_eq!((crosser.carrying, crosser.stake), (390, 195));
 
     // The answer: no ration, mira on tom's row, and half of mira's hand.
@@ -908,8 +917,11 @@ async fn a_crossing_takes_the_sleepers_bits_and_the_sleeper_answers_for_them() {
     let line = wire_line(&test_db, &format!("@{tom_name} answered")).await;
     assert_eq!(
         line.body,
-        format!("@{tom_name} answered @mira and won. @mira lost 195 bits to @{tom_name}.")
+        format!(
+            "@{tom_name} answered @{mira_name} and won. @{mira_name} lost 195 bits to @{tom_name}."
+        )
     );
+    mentioned(&test_db, mira, &line).await;
 
     // A second answer: nothing owed.
     let (tx, mut rx) = mpsc::unbounded_channel();

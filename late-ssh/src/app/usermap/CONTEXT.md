@@ -46,7 +46,11 @@ under its row (`CountryTally.people`, alphabetical). `Recent` and `Everyone`
 stay counts: they are whole-table questions, and a hundred names under one
 country is not a list. Rows are therefore not one per country, so the list is
 laid out once as `ListLine`s (`state::list_lines`), and the draw, the scroll
-(`first_visible_line`) and a click all read that one layout.
+(`first_visible_line`) and a click all read that one layout. The scroll is a
+line offset: the wheel moves it a line at a time with the cursor where it
+was, and `j`/`k` (`state::walk`) reveal the cursor's own block a line at a
+time when it is taller than the list, then move to the next country. So a
+country with more people than the list has rows is still read to the end.
 
 ## 2. The map is not ours
 

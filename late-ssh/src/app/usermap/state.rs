@@ -228,6 +228,10 @@ pub struct UserMapState {
     view: Option<Viewport>,
     /// Cursor into `tallies`, which is also what is ringed on the map.
     cursor: usize,
+    /// The first line of the list on screen. The wheel moves it a line at
+    /// a time; a cursor move pulls it along only as far as keeping the
+    /// cursor's country in view needs.
+    scroll: usize,
     /// How many country rows the list had room for last time it drew. Set by
     /// the draw; a click needs the same number to work out which row it hit.
     visible_rows: usize,
@@ -278,6 +282,7 @@ impl UserMapState {
     pub fn set_mode(&mut self, mode: MapMode, profile: &ProfileService) {
         self.mode = mode;
         self.cursor = 0;
+        self.scroll = 0;
         self.error = None;
         match self.cached[self.mode.index()].clone() {
             Some((tallies, online)) => {
@@ -358,6 +363,7 @@ impl UserMapState {
         self.shown = true;
         self.needs_fit = true;
         self.cursor = 0;
+        self.scroll = 0;
         self.mode = MapMode::default();
         self.refresh(profile);
     }
@@ -390,6 +396,7 @@ impl UserMapState {
             })
             .collect();
         self.cursor = 0;
+        self.scroll = 0;
     }
 
     /// The online slice as it arrives: each country with who is in it.
@@ -407,6 +414,7 @@ impl UserMapState {
             })
             .collect();
         self.cursor = 0;
+        self.scroll = 0;
     }
 
     #[cfg(test)]
@@ -472,6 +480,7 @@ impl UserMapState {
                     self.tallies = tallies;
                     self.online = total;
                     self.cursor = self.cursor.min(self.tallies.len().saturating_sub(1));
+                    self.keep_cursor_in_view();
                 }
                 true
             }
@@ -554,6 +563,7 @@ impl UserMapState {
         }
         let len = self.tallies.len() as isize;
         self.cursor = (self.cursor as isize + delta).rem_euclid(len) as usize;
+        self.keep_cursor_in_view();
         let (Some(map), Some(view)) = (self.map(), self.view) else {
             return;
         };
@@ -589,13 +599,14 @@ impl UserMapState {
                 true
             }
             // The list scrolls with the wheel too, since that is what a list
-            // under a pointer is expected to do.
+            // under a pointer is expected to do: a line at a time, the
+            // cursor where it was.
             MousePress::ScrollUp if in_list => {
-                self.move_cursor(-1);
+                self.scroll_lines(-1);
                 true
             }
             MousePress::ScrollDown if in_list => {
-                self.move_cursor(1);
+                self.scroll_lines(1);
                 true
             }
             MousePress::Down if in_map => {
@@ -710,20 +721,63 @@ impl UserMapState {
         lines
     }
 
-    /// The first line the list is showing: scrolled just far enough that the
-    /// cursor's country and everything under it are in view, or, when that
-    /// block is taller than the list, its own row at the top.
+    /// The first line the list is showing, which the draw and a click have
+    /// to agree on.
     pub fn first_visible_line(&self) -> usize {
+        self.scroll
+    }
+
+    /// `j`/`k`: the next country, unless the cursor's own block runs past
+    /// the list, in which case the list scrolls a line first. So every name
+    /// in a country taller than the list can be reached from the keyboard,
+    /// and the step after the last of them is the next country.
+    pub fn walk(&mut self, delta: isize) {
         let rows = self.visible_rows.max(1);
-        let lines = self.list_lines();
-        let Some(start) = lines.iter().position(|line| line.tally() == self.cursor) else {
-            return 0;
+        let Some((start, end)) = self.cursor_block() else {
+            return;
         };
+        if delta > 0 && end >= self.scroll + rows {
+            self.scroll += 1;
+        } else if delta < 0 && start < self.scroll {
+            self.scroll -= 1;
+        } else {
+            self.move_cursor(delta);
+        }
+    }
+
+    /// The wheel over the list: `delta` lines, clamped to the list.
+    fn scroll_lines(&mut self, delta: isize) {
+        let rows = self.visible_rows.max(1);
+        let last = self.list_lines().len().saturating_sub(rows) as isize;
+        self.scroll = (self.scroll as isize + delta).clamp(0, last) as usize;
+    }
+
+    /// Scrolled just far enough that the cursor's country and everything
+    /// under it are in view, or, when that block is taller than the list,
+    /// its own row at the top. A block already in view moves nothing.
+    fn keep_cursor_in_view(&mut self) {
+        let rows = self.visible_rows.max(1);
+        let Some((start, end)) = self.cursor_block() else {
+            self.scroll = 0;
+            return;
+        };
+        if start < self.scroll {
+            self.scroll = start;
+        } else if end >= self.scroll + rows {
+            self.scroll = (end + 1).saturating_sub(rows).min(start);
+        }
+    }
+
+    /// The first and last line of the cursor's country: its row, its note
+    /// and its people.
+    fn cursor_block(&self) -> Option<(usize, usize)> {
+        let lines = self.list_lines();
+        let start = lines.iter().position(|line| line.tally() == self.cursor)?;
         let end = lines
             .iter()
             .rposition(|line| line.tally() == self.cursor)
             .unwrap_or(start);
-        (end + 1).saturating_sub(rows).min(start)
+        Some((start, end))
     }
 
     /// The colour a legend swatch draws in, including the "nobody here" one.
