@@ -148,7 +148,7 @@ The first feature built under the rule is the first-contact haunting (`late-ssh/
 What each remaining item needs is not the same, which is why "make it a row" is the wrong instinct for most of them (the per-row plan lives in root CONTEXT.md §7 "Multi-replica readiness"):
 
 - session registry, paired client registry: stay pod-local by design under sticky ownership (the transport half, item 8 below)
-- active user presence, clubhouse lobby, scratchpad pairings, stream registry: a shared presence store (Redis) or an explicit "pod-local, dies with the pod" decision per structure; the round's buyer roster and the clubhouse headcount are the two places a wrong answer is user-visible
+- active user presence, clubhouse lobby, scratchpad pairings, stream registry: a shared presence store (Redis) or an explicit "pod-local, dies with the pod" decision per structure; the round's buyer roster is where a wrong answer is user-visible (the clubhouse frame no longer shows a headcount)
 - ghost bots (@bot, @graybeard, @bartender, the door announcers): single-leader election so two replicas never answer the same mention
 - translation daily call cap and single-flight set: a shared counter
 - leaderboard refresh loops: already DB-backed, duplicate work only
@@ -868,7 +868,7 @@ Minimum viable design:
 
 Do not scale `service-ssh` randomly before this exists. The proxy half already pays for itself at one replica: it closes Pain Point 10.
 
-The app half runs in parallel and is the longer job: work the root CONTEXT.md §7 "Multi-replica readiness" table row by row, in the order the transport design needs them (presence first, since sticky sessions alone do not make the headcount or a round's roster right; ghost single-leader second, since duplicate bot replies are the first thing users would notice; the translation cap last). New features never add rows to that table (CONTEXT.md §0 rule); a switch still held in process memory becomes a row as it is touched (Pain Point 2).
+The app half runs in parallel and is the longer job: work the root CONTEXT.md §7 "Multi-replica readiness" table row by row, in the order the transport design needs them (presence first, since sticky sessions alone do not make a round's roster right; ghost single-leader second, since duplicate bot replies are the first thing users would notice; the translation cap last). New features never add rows to that table (CONTEXT.md §0 rule); a switch still held in process memory becomes a row as it is touched (Pain Point 2).
 
 ### 9. Add PgBouncer
 

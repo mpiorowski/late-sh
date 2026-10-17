@@ -271,6 +271,43 @@ fn a_country_taller_than_the_list_can_be_read_to_the_end() {
     assert!(text.starts_with("     @p00"), "{text:.60}");
 }
 
+/// A click on the map picks a country the list has scrolled past, and the
+/// list follows: its row is on screen after the click.
+#[test]
+fn a_map_click_brings_the_country_onto_the_list() {
+    use super::state::MousePress;
+
+    let names: Vec<String> = (0..60).map(|n| format!("p{n:02}")).collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut state = UserMapState::default();
+    state.show_without_loading();
+    state.set_people_for_test(&[("US", &names), ("PL", &["mat"])]);
+    let (text, _) = render(&mut state, 160, 48);
+    assert!(
+        !text.contains("Poland"),
+        "the names push Poland off the list"
+    );
+
+    // Nothing in the test knows where Poland is drawn; a click is tried
+    // across the map until one picks it.
+    let map = state.map_area_for_test().expect("a map was drawn");
+    let mut picked = false;
+    'cells: for y in map.y..map.y + map.height {
+        for x in map.x..map.x + map.width {
+            state.handle_mouse(MousePress::Down, x, y);
+            state.handle_mouse(MousePress::Up, x, y);
+            if state.cursor() == 1 {
+                picked = true;
+                break 'cells;
+            }
+        }
+    }
+    assert!(picked, "no cell of the map picked Poland");
+    let (text, _) = render(&mut state, 160, 48);
+    assert!(text.contains("Poland"), "{text}");
+    assert!(text.contains("@mat"), "{text}");
+}
+
 /// A pane too narrow for the list has nothing to reveal: `j` is the next
 /// country, however many names the current one hides.
 #[test]

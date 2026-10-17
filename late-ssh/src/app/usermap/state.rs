@@ -324,6 +324,11 @@ impl UserMapState {
         self.list_area
     }
 
+    #[cfg(test)]
+    pub fn map_area_for_test(&self) -> Option<Rect> {
+        self.map_area
+    }
+
     pub fn record_geometry(&mut self, map_area: Rect, list_area: Option<Rect>, rows: usize) {
         self.map_area = Some(map_area);
         self.list_area = list_area;
@@ -684,6 +689,7 @@ impl UserMapState {
             return false;
         };
         self.cursor = index;
+        self.keep_cursor_in_view();
         true
     }
 
