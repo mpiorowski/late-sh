@@ -556,6 +556,18 @@ impl App {
             self.banner = Some(b);
             changed = true;
         }
+        // The realm board stays open across a hop (it is a stop on the
+        // backtick cycle and a live row on the hub), so like the native
+        // remakes below it can be forgotten. Once it has gone the shared door
+        // window off screen, close it as `q` would; never while it is the open
+        // screen, which is what stamps the clock.
+        if self.screen != Screen::Realm && self.realm.board_idle_expired() {
+            self.realm.close_board();
+            changed = true;
+        }
+        if self.screen == Screen::Realm {
+            self.realm.touch_board();
+        }
         // Modal cursor, pending claim, and glow follow the daily snapshot.
         self.lobby.sync(&self.daily);
         // The match chat room id only becomes known once the board's row
