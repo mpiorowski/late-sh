@@ -81,8 +81,14 @@ lookout under the legend and the threat words come from
 
 ## The wire and the beats
 
-"<a> crossed <d> at step S. <d> never woke. N bits changed hands.",
-"... and went down. <d> never woke. N bits off <a> are <d>'s.", "<a>
-answered <d>. N bits back.", "<a> answered <d> and went down again. N
-bits more to <d>."; the carrying-nothing wordings beside each. Beats on
-the fight counter: `crossed`, `answered`, `ambushed`, `downed`.
+Every runner on a line is an `@` mention, so it lands in their mentions
+too, and every line says who lost what to whom (a crossing moves bits
+on hand only; a fall also drops the signal):
+"@<a> crossed @<d> at step S and won. @<d> never woke and lost N bits to
+@<a>.", "@<a> crossed @<d> at step S and went down. @<d> never woke. @<a>
+lost their signal and N bits to @<d>.", "@<a> answered @<d> and won. @<d>
+lost N bits to @<a>.", "@<a> answered @<d> and went down again. @<a> lost
+their signal and N bits to @<d>."; with nothing on hand, the loser "lost
+nothing: no bits on hand" (a win) or "lost their signal, with no bits on
+hand for @<d>" (a fall). Beats on the fight counter: `crossed`,
+`answered`, `ambushed`, `downed`.

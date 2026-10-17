@@ -382,9 +382,13 @@ pub struct RoomMemberListItem {
     pub username: Option<String>,
 }
 
-fn send_error_message(error: &anyhow::Error) -> String {
+/// What a send refused by the room's rules tells the sender: membership,
+/// bans, #announcements, report-only rooms, slow mode, the link cooldown.
+/// Those are expected and the sender's to fix, so callers do not log them as
+/// errors. `None` is any other failure.
+fn send_rejection(error: &anyhow::Error) -> Option<String> {
     let error = error.to_string();
-    if error.contains("not a member") {
+    let message = if error.contains("not a member") {
         "You are not a member of this room.".to_string()
     } else if error.contains("banned from this room") {
         "You are banned from this room.".to_string()
@@ -427,9 +431,12 @@ fn send_error_message(error: &anyhow::Error) -> String {
             format_cooldown(secs)
         )
     } else {
-        "Could not send message. Please try again.".to_string()
-    }
+        return None;
+    };
+    Some(message)
 }
+
+const SEND_FAILED_MESSAGE: &str = "Could not send message. Please try again.";
 
 /// Render a remaining cooldown as a compact human string, e.g. `29m 30s`, `45s`.
 fn format_cooldown(secs: u64) -> String {
@@ -2803,19 +2810,28 @@ impl ChatService {
                             request_id,
                         });
                     }
-                    Err(e) => {
-                        let message = send_error_message(&e);
-                        let _ = service.evt_tx.send(ChatEvent::SendFailed {
-                            user_id,
-                            request_id,
-                            message,
-                        });
-                        late_core::error_span!(
-                            "chat_report_send_failed",
-                            error = ?e,
-                            "failed to send report"
-                        );
-                    }
+                    Err(e) => match send_rejection(&e) {
+                        Some(message) => {
+                            let _ = service.evt_tx.send(ChatEvent::SendFailed {
+                                user_id,
+                                request_id,
+                                message,
+                            });
+                            tracing::info!(error = %e, "report rejected by room rules");
+                        }
+                        None => {
+                            let _ = service.evt_tx.send(ChatEvent::SendFailed {
+                                user_id,
+                                request_id,
+                                message: SEND_FAILED_MESSAGE.to_string(),
+                            });
+                            late_core::error_span!(
+                                "chat_report_send_failed",
+                                error = ?e,
+                                "failed to send report"
+                            );
+                        }
+                    },
                 }
             }
             .instrument(info_span!(
@@ -2876,11 +2892,20 @@ impl ChatService {
                     })
                     .await
                 {
-                    late_core::error_span!(
-                        "chat_bot_send_failed",
-                        error = ?e,
-                        "failed to send bot reply"
-                    );
+                    // A bot is a regular user to the room rules, so a mention
+                    // in a report-only room gets its reply refused there.
+                    match send_rejection(&e) {
+                        Some(_) => {
+                            tracing::info!(error = %e, "bot reply rejected by room rules");
+                        }
+                        None => {
+                            late_core::error_span!(
+                                "chat_bot_send_failed",
+                                error = ?e,
+                                "failed to send bot reply"
+                            );
+                        }
+                    }
                 }
             }
             .instrument(info_span!(
@@ -3150,19 +3175,28 @@ impl ChatService {
                     })
                     .await
                 {
-                    Err(e) => {
-                        let message = send_error_message(&e);
-                        let _ = service.evt_tx.send(ChatEvent::SendFailed {
-                            user_id,
-                            request_id,
-                            message: message.to_string(),
-                        });
-                        late_core::error_span!(
-                            "chat_send_failed",
-                            error = ?e,
-                            "failed to send message"
-                        );
-                    }
+                    Err(e) => match send_rejection(&e) {
+                        Some(message) => {
+                            let _ = service.evt_tx.send(ChatEvent::SendFailed {
+                                user_id,
+                                request_id,
+                                message,
+                            });
+                            tracing::info!(error = %e, "message rejected by room rules");
+                        }
+                        None => {
+                            let _ = service.evt_tx.send(ChatEvent::SendFailed {
+                                user_id,
+                                request_id,
+                                message: SEND_FAILED_MESSAGE.to_string(),
+                            });
+                            late_core::error_span!(
+                                "chat_send_failed",
+                                error = ?e,
+                                "failed to send message"
+                            );
+                        }
+                    },
                     Ok(()) => {
                         let _ = service.evt_tx.send(ChatEvent::SendSucceeded {
                             user_id,
@@ -3205,11 +3239,12 @@ impl ChatService {
                     }
                     Err(e) => {
                         if let Some(request_id) = request_id {
-                            let message = send_error_message(&e);
+                            let message = send_rejection(&e)
+                                .unwrap_or_else(|| SEND_FAILED_MESSAGE.to_string());
                             let _ = service.evt_tx.send(ChatEvent::SendFailed {
                                 user_id,
                                 request_id,
-                                message: message.to_string(),
+                                message,
                             });
                         }
                         tracing::warn!(error = ?e, %user_id, failure_log);
@@ -4953,7 +4988,7 @@ impl ChatService {
                 crate::metrics::record_runner_door(crate::metrics::RunnerDoor::Returned);
                 // The wire hears who is around: the same conditional clear
                 // that reopened the door says this was the one join that did.
-                self.post_wire_line_task(format!("{} is back on the wire.", user.username));
+                self.post_wire_line_task(format!("@{} is back on the wire.", user.username));
             }
             late_core::models::deadchannel_runner::RunnerOrigin::Existing => {}
         }
@@ -5272,7 +5307,8 @@ impl ChatService {
                 tracing::info!(user_id = %user_id, username = %username, "runner left the deadchannel");
                 crate::metrics::record_runner_door(crate::metrics::RunnerDoor::Left);
                 // Going dark is news, once: the conditional stamp says this
-                // was the leave that shut the door.
+                // was the leave that shut the door. The name is said, not
+                // mentioned: the leaver asked the wire to go quiet.
                 self.post_wire_line_task(format!("{username} went dark."));
             }
         }

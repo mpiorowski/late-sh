@@ -35,6 +35,15 @@ fn extract_stops_at_punctuation() {
     assert_eq!(result, vec!["alice"]);
 }
 
+/// A handle never ends in a dot (`sanitize_username_input`), so a dot
+/// after a mention is the sentence's full stop. Dots inside stay.
+#[test]
+fn extract_leaves_a_full_stop_out_of_the_handle() {
+    assert_eq!(extract_mentions("thanks @alice."), vec!["alice"]);
+    assert_eq!(extract_mentions("@mat... you got through"), vec!["mat"]);
+    assert_eq!(extract_mentions("ask @j.doe."), vec!["j.doe"]);
+}
+
 #[test]
 fn extract_handles_mention_with_special_chars() {
     let result = extract_mentions("hi @night-owl_123");
@@ -74,6 +83,14 @@ fn mention_spans_stop_before_trailing_punctuation() {
     assert_eq!(spans.len(), 2);
     assert_eq!(spans[0].content.as_ref(), "@alice");
     assert_eq!(spans[1].content.as_ref(), ", nice one");
+}
+
+#[test]
+fn mention_spans_leave_a_full_stop_out_of_the_handle() {
+    let spans = mention_spans("@mat. you got through", Style::default());
+    assert_eq!(spans.len(), 2);
+    assert_eq!(spans[0].content.as_ref(), "@mat");
+    assert_eq!(spans[1].content.as_ref(), ". you got through");
 }
 
 #[test]

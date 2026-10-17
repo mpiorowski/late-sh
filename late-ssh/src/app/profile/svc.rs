@@ -161,6 +161,17 @@ impl From<&IrcToken> for IrcTokenStatus {
     }
 }
 
+/// People per country for one slice of the map, busiest first.
+#[derive(Clone, Debug)]
+pub struct CountryCounts {
+    pub counts: Vec<(String, usize)>,
+    /// How many humans were connected when the online slice was counted,
+    /// country or not, read under the same lock as the counts so the map's
+    /// "15 of 17" is one moment. `None` for the slices read from the
+    /// database, which have no such total.
+    pub online: Option<usize>,
+}
+
 /// Parse an account's timezone tweak into a `chrono_tz::Tz`. `None` (unset,
 /// blank, or unparseable) means "no local zone" — callers fall back to UTC.
 pub fn parse_account_tz(timezone: Option<&str>) -> Option<chrono_tz::Tz> {
@@ -213,24 +224,31 @@ impl ProfileService {
     pub async fn country_counts(
         &self,
         mode: crate::app::usermap::state::MapMode,
-    ) -> Result<Vec<(String, usize)>> {
+    ) -> Result<CountryCounts> {
         use crate::app::usermap::state::{MapMode, RECENT_DAYS};
-        let counts = match mode {
+        let mut counts = match mode {
             MapMode::Online => self.active_country_counts().await?,
             MapMode::Recent => {
                 let client = self.db.get().await?;
                 let cutoff = Utc::now() - chrono::Duration::days(RECENT_DAYS);
-                User::country_counts_since(&client, Some(cutoff)).await?
+                CountryCounts {
+                    counts: User::country_counts_since(&client, Some(cutoff)).await?,
+                    online: None,
+                }
             }
             MapMode::Everyone => {
                 let client = self.db.get().await?;
-                User::country_counts_since(&client, None).await?
+                CountryCounts {
+                    counts: User::country_counts_since(&client, None).await?,
+                    online: None,
+                }
             }
         };
-        let mut counts = counts;
         // Busiest first, then alphabetical, so the list beside the map has a
         // stable order rather than a query plan's.
-        counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        counts
+            .counts
+            .sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         Ok(counts)
     }
 
@@ -245,7 +263,7 @@ impl ProfileService {
     ///
     /// Bots are excluded the same way the headcount excludes them (no
     /// fingerprint means no human at a keyboard).
-    pub async fn active_country_counts(&self) -> Result<Vec<(String, usize)>> {
+    pub async fn active_country_counts(&self) -> Result<CountryCounts> {
         let online: Vec<Uuid> = {
             let guard = self.active_users.lock_recover();
             guard
@@ -254,8 +272,12 @@ impl ProfileService {
                 .map(|(id, _)| *id)
                 .collect()
         };
+        let online_total = online.len();
         if online.is_empty() {
-            return Ok(Vec::new());
+            return Ok(CountryCounts {
+                counts: Vec::new(),
+                online: Some(0),
+            });
         }
         let client = self.db.get().await?;
         let countries = User::list_all_country_map(&client).await?;
@@ -269,7 +291,10 @@ impl ProfileService {
         // Busiest first, then alphabetical, so the list beside the map has a
         // stable order rather than a hash map's.
         counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-        Ok(counts)
+        Ok(CountryCounts {
+            counts,
+            online: Some(online_total),
+        })
     }
 
     pub fn subscribe_snapshot(&self, user_id: Uuid) -> watch::Receiver<ProfileSnapshot> {

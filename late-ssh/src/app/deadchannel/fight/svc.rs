@@ -740,9 +740,11 @@ impl FightService {
 
     /// The news the wire carries, worded. Fire-and-forget through chat,
     /// which logs its own failure; a level gained carries the face, the
-    /// one moment worth a picture. `taken` is what a rival put down lost
-    /// to this runner.
+    /// one moment worth a picture. Every runner named is an `@` mention,
+    /// so the line lands in their mentions too. A crossing names who lost
+    /// what to whom; `taken` is what a rival put down lost to this runner.
     async fn post_news(&self, username: &str, sheet: &Sheet, applied: &Applied, taken: i64) {
+        let me = format!("@{username}");
         for news in sheet.news(applied) {
             let body = match news {
                 News::Dropped { bits_lost, step } => {
@@ -750,61 +752,48 @@ impl FightService {
                         0 => "the street found nothing on them.".to_string(),
                         n => format!("the street took {n} bits."),
                     };
-                    format!("{username}'s signal dropped at step {step} of the road. {took}")
+                    format!("{me}'s signal dropped at step {step} of the road. {took}")
                 }
                 News::Ambushed {
                     rival,
                     step: Some(step),
                 } => {
-                    let them = rival.username;
-                    match taken {
-                        0 => format!(
-                            "{username} crossed {them} at step {step}. {them} never woke, and was carrying nothing."
-                        ),
-                        n => format!(
-                            "{username} crossed {them} at step {step}. {them} never woke. {n} bits changed hands."
-                        ),
-                    }
+                    let them = format!("@{}", rival.username);
+                    let lost = match taken {
+                        0 => "lost nothing: no bits on hand".to_string(),
+                        n => format!("lost {n} bits to {me}"),
+                    };
+                    format!(
+                        "{me} crossed {them} at step {step} and won. {them} never woke and {lost}."
+                    )
                 }
                 News::Ambushed { rival, step: None } => {
-                    let them = rival.username;
-                    match taken {
-                        0 => format!("{username} answered {them}. {them} was carrying nothing."),
-                        n => format!("{username} answered {them}. {n} bits back."),
-                    }
+                    let them = format!("@{}", rival.username);
+                    let lost = match taken {
+                        0 => "lost nothing: no bits on hand".to_string(),
+                        n => format!("lost {n} bits to {me}"),
+                    };
+                    format!("{me} answered {them} and won. {them} {lost}.")
                 }
                 News::Downed {
                     rival,
-                    step: Some(step),
+                    step,
                     bits_lost,
                 } => {
-                    let them = rival.username;
-                    match bits_lost {
-                        0 => format!(
-                            "{username} crossed {them} at step {step} and went down. {them} never woke. there was nothing on {username} to take."
+                    let them = format!("@{}", rival.username);
+                    let lost = match bits_lost {
+                        0 => format!("lost their signal, with no bits on hand for {them}"),
+                        n => format!("lost their signal and {n} bits to {them}"),
+                    };
+                    match step {
+                        Some(step) => format!(
+                            "{me} crossed {them} at step {step} and went down. {them} never woke. {me} {lost}."
                         ),
-                        n => format!(
-                            "{username} crossed {them} at step {step} and went down. {them} never woke. {n} bits off {username} are {them}'s."
-                        ),
-                    }
-                }
-                News::Downed {
-                    rival,
-                    step: None,
-                    bits_lost,
-                } => {
-                    let them = rival.username;
-                    match bits_lost {
-                        0 => format!(
-                            "{username} answered {them} and went down again. nothing on {username} to take."
-                        ),
-                        n => format!(
-                            "{username} answered {them} and went down again. {n} bits more to {them}."
-                        ),
+                        None => format!("{me} answered {them} and went down again. {me} {lost}."),
                     }
                 }
                 News::Leveled { level } => {
-                    self.with_face(sheet.user_id, format!("{username} is level {level}."))
+                    self.with_face(sheet.user_id, format!("{me} is level {level}."))
                         .await
                 }
                 News::Slain { marks } => {
@@ -812,22 +801,22 @@ impl FightService {
                     self.with_face(
                         sheet.user_id,
                         format!(
-                            "{username} put down the Old Signal. mark {marks}, {title}. back to level 1."
+                            "{me} put down the Old Signal. mark {marks}, {title}. back to level 1."
                         ),
                     )
                     .await
                 }
                 News::SteppedOff => {
-                    format!("{username} stepped off the ledge. level 1, bare hands, starting over.")
+                    format!("{me} stepped off the ledge. level 1, bare hands, starting over.")
                 }
                 News::FirstBlood { foe } => {
-                    format!("{username} put down their first {foe}. the static will remember.")
+                    format!("{me} put down their first {foe}. the static will remember.")
                 }
                 News::BrightDown { foe } => {
-                    format!("{username} put down a bright {foe}. it left a crystal.")
+                    format!("{me} put down a bright {foe}. it left a crystal.")
                 }
                 News::NearMiss { foe, signal } => {
-                    format!("{username} put down the {foe} with {signal} signal left.")
+                    format!("{me} put down the {foe} with {signal} signal left.")
                 }
                 News::RoadWalked {
                     kills,
@@ -844,9 +833,7 @@ impl FightService {
                         1 => ", 1 run".to_string(),
                         n => format!(", {n} runs"),
                     };
-                    format!(
-                        "{username} walked the road. {glyphs}{runs}, signal {signal}/{max_signal}."
-                    )
+                    format!("{me} walked the road. {glyphs}{runs}, signal {signal}/{max_signal}.")
                 }
             };
             self.chat.post_wire_line_task(body);

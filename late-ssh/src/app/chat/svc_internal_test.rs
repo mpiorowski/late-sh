@@ -41,13 +41,31 @@ fn link_cooldown_tiers_by_account_age() {
 }
 
 #[test]
-fn send_error_message_explains_report_only_rooms() {
-    let bugs = send_error_message(&anyhow::anyhow!("report-only:bugs"));
+fn send_rejection_explains_report_only_rooms() {
+    let bugs = send_rejection(&anyhow::anyhow!("report-only:bugs")).unwrap();
     assert!(bugs.contains("#bugs"), "{bugs}");
     assert!(bugs.contains("/bug"), "{bugs}");
-    let suggestions = send_error_message(&anyhow::anyhow!("report-only:suggestions"));
+    let suggestions = send_rejection(&anyhow::anyhow!("report-only:suggestions")).unwrap();
     assert!(suggestions.contains("#suggestions"), "{suggestions}");
     assert!(suggestions.contains("/suggest"), "{suggestions}");
+}
+
+/// A send the room's rules refused is the sender's to fix, not a server
+/// failure; anything else is a real failure and is not dressed up as one.
+#[test]
+fn send_rejection_tells_room_rules_from_failures() {
+    for rule in [
+        "user is not a member of room",
+        "user is banned from this room",
+        "admin-only",
+        "report-only:suggestions",
+        "slow-mode:30:lounge",
+        "link-cooldown:120",
+    ] {
+        assert!(send_rejection(&anyhow::anyhow!(rule)).is_some(), "{rule}");
+    }
+    let failure = anyhow::anyhow!("connection reset").context("inserting chat message");
+    assert_eq!(send_rejection(&failure), None);
 }
 
 #[test]

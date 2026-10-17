@@ -1,6 +1,9 @@
 use chrono::Utc;
+use late_core::models::chat_message::ChatMessage;
+use late_core::models::chat_room::ChatRoom;
 use late_core::models::deadchannel_ambush::{Ambush, AmbushOutcome, NewAmbush};
 use late_core::models::deadchannel_runner::DeadchannelRunner;
+use late_core::models::notification::Notification;
 use late_core::test_utils::create_test_user;
 use tokio::sync::mpsc;
 use tokio::time::{Duration, timeout};
@@ -15,7 +18,7 @@ use crate::app::deadchannel::fight::state::{
 };
 use crate::app::deadchannel::runner::state::Look;
 use crate::app::games::chips::svc::ChipService;
-use crate::test_helpers::{age_payout_claims, new_test_db};
+use crate::test_helpers::{age_payout_claims, new_test_db, wait_until};
 
 async fn runner_and_service(
     name: &str,
@@ -709,6 +712,44 @@ async fn one_hit_from_down(test_db: &late_core::test_utils::TestDb, user_id: uui
     store(test_db, &sheet).await;
 }
 
+/// The wire's message in #deadchannel that starts with `opening`, once
+/// the fire-and-forget post lands.
+async fn wire_line(test_db: &late_core::test_utils::TestDb, opening: &str) -> ChatMessage {
+    let read = || async {
+        let client = test_db.db.get().await.expect("db client");
+        let room = ChatRoom::get_or_create_deadchannel_room(&client)
+            .await
+            .expect("the wire");
+        ChatMessage::list_recent(&client, room.id, 20)
+            .await
+            .expect("list the wire")
+            .into_iter()
+            .find(|message| message.body.starts_with(opening))
+    };
+    wait_until(|| async { read().await.is_some() }, opening).await;
+    read().await.expect("the line landed")
+}
+
+/// Waits for `user_id`'s mention of the wire's `message`.
+async fn mentioned(
+    test_db: &late_core::test_utils::TestDb,
+    user_id: uuid::Uuid,
+    message: &ChatMessage,
+) {
+    wait_until(
+        || async {
+            let client = test_db.db.get().await.expect("db client");
+            Notification::list_for_user(&client, user_id, 20)
+                .await
+                .expect("list mentions")
+                .iter()
+                .any(|mention| mention.message_id == message.id)
+        },
+        "the wire's mention",
+    )
+    .await;
+}
+
 #[tokio::test]
 async fn a_crossing_takes_the_sleepers_bits_and_the_sleeper_answers_for_them() {
     let (test_db, mira, svc) = runner_and_service("fight-cross-mira").await;
@@ -788,6 +829,16 @@ async fn a_crossing_takes_the_sleepers_bits_and_the_sleeper_answers_for_them() {
         .expect("the row");
     assert_eq!(closed.outcome, Some(AmbushOutcome::Won));
     assert_eq!(closed.bits_moved, 340);
+    // The wire names who lost what to whom, tom by mention.
+    let line = wire_line(&test_db, "@mira crossed").await;
+    assert_eq!(
+        line.body,
+        format!(
+            "@mira crossed @{tom_name} at step {} and won. @{tom_name} never woke and lost 340 bits to @mira.",
+            sheet.road.path.len()
+        )
+    );
+    mentioned(&test_db, tom, &line).await;
 
     // Mira cannot cross tom again today, nor anyone: the day's caps.
     let lane_again = at_the_crossing(&test_db, mira, 390).await;
@@ -853,6 +904,11 @@ async fn a_crossing_takes_the_sleepers_bits_and_the_sleeper_answers_for_them() {
     assert_eq!(answered.answer_to, Some(rival.ambush_id));
     assert_eq!(answered.outcome, Some(AmbushOutcome::Won));
     assert_eq!(answered.bits_moved, 390);
+    let line = wire_line(&test_db, &format!("@{tom_name} answered")).await;
+    assert_eq!(
+        line.body,
+        format!("@{tom_name} answered @mira and won. @mira lost 390 bits to @{tom_name}.")
+    );
 
     // A second answer: nothing owed.
     let (tx, mut rx) = mpsc::unbounded_channel();
@@ -866,7 +922,7 @@ async fn a_crossing_takes_the_sleepers_bits_and_the_sleeper_answers_for_them() {
 #[tokio::test]
 async fn going_down_at_a_crossing_pays_the_sleeper_and_owes_no_answer() {
     let (test_db, mira, svc) = runner_and_service("fight-fall-mira").await;
-    let (tom, _) = another_runner(&test_db, "fight-fall-tom").await;
+    let (tom, tom_name) = another_runner(&test_db, "fight-fall-tom").await;
     let lane = at_the_crossing(&test_db, mira, 120).await;
     asleep(&test_db, tom, 0).await;
     let client = test_db.db.get().await.expect("db client");
@@ -906,6 +962,15 @@ async fn going_down_at_a_crossing_pays_the_sleeper_and_owes_no_answer() {
         .expect("the row");
     assert_eq!(closed.outcome, Some(AmbushOutcome::Lost));
     assert_eq!(closed.bits_moved, -120);
+    let line = wire_line(&test_db, "@mira crossed").await;
+    assert_eq!(
+        line.body,
+        format!(
+            "@mira crossed @{tom_name} at step {} and went down. @{tom_name} never woke. @mira lost their signal and 120 bits to @{tom_name}.",
+            sheet.road.path.len()
+        )
+    );
+    mentioned(&test_db, tom, &line).await;
 
     // Tom's row reads the news; nothing to answer.
     let (tx, mut rx) = mpsc::unbounded_channel();

@@ -3396,13 +3396,10 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     }
 
     // The clubhouse tavern draws no widget chrome of its own, so the
-    // headcount and keybinds live up here.
+    // keybinds live up here.
     if screen == Screen::Clubhouse {
         spans.push(Span::styled(
-            format!(
-                "· {} inside · Tab/0-7 pages · arrows/hjkl walk · Enter interact · i say · s sit · w wave · x dance · n out back ",
-                ctx.clubhouse_state.headcount()
-            ),
+            "· Tab/0-7 pages · arrows/hjkl walk · Enter interact · i say · s sit · w wave · x dance · n out back ",
             Style::default().fg(theme::TEXT_DIM()),
         ));
     }
