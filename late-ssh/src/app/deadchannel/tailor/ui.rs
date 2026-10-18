@@ -15,7 +15,7 @@ use ratatui::{
 use super::state::{Draft, Row};
 use crate::app::deadchannel::city::map::Neon;
 use crate::app::deadchannel::city::ui::{
-    INK, INK_BRIGHT, INK_DIM, INK_MUTED, glow, ink, lit, tint_rgb,
+    INK, INK_BRIGHT, INK_DIM, INK_MUTED, action, ink, lit, tint_rgb,
 };
 use crate::app::deadchannel::glyphs::MARK_ALPHABET;
 use crate::app::deadchannel::runner::state::{PIECES, Piece, TINTS, next_unlock, unlocked_pieces};
@@ -132,19 +132,24 @@ pub(crate) fn mirror_lines(view: &MirrorView<'_>) -> Vec<Line<'static>> {
     lines.push(Line::default());
     let mut keys = vec![
         Span::styled("[↑↓] ", key),
-        Span::styled("row   ", text),
+        Span::styled("row", action()),
+        Span::styled("   ", text),
         Span::styled("[←→] ", key),
-        Span::styled("pick   ", text),
+        Span::styled("pick", action()),
+        Span::styled("   ", text),
         Span::styled("[t] ", key),
-        Span::styled("tint   ", text),
+        Span::styled("tint", action()),
+        Span::styled("   ", text),
         Span::styled("[r] ", key),
-        Span::styled("shuffle   ", text),
+        Span::styled("shuffle", action()),
+        Span::styled("   ", text),
     ];
     match (view.saving, view.changed) {
         (true, _) => keys.push(Span::styled("wearing it...   ", muted_text)),
         (false, true) => {
             keys.push(Span::styled("[s] ", key));
-            keys.push(Span::styled("wear it   ", glow(Neon::Cyan)));
+            keys.push(Span::styled("wear it", action()));
+            keys.push(Span::styled("   ", text));
         }
         (false, false) => {
             keys.push(Span::styled("[s] ", dim_text));
@@ -152,7 +157,8 @@ pub(crate) fn mirror_lines(view: &MirrorView<'_>) -> Vec<Line<'static>> {
         }
     }
     keys.push(Span::styled("[Enter] ", key));
-    keys.push(Span::styled("back to the street", text));
+    keys.push(Span::styled("back", action()));
+    keys.push(Span::styled(" to the street", text));
     lines.push(Line::from(keys));
     lines.push(Line::from(Span::styled(
         next_unlock_line(draft.level),

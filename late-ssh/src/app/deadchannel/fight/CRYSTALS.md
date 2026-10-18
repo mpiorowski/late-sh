@@ -90,8 +90,9 @@ cursor on it.
   fight is left to use it in), a glass already poured (`GlassPoured`),
   no crystal (`ShortCrystals`).
 - The panel (`city/ui.rs::bar_lines`) shows what each glass does at this
-  level and spells the refusal ahead of the keys; the answer is the
-  `till` line; no news.
+  level, names each pour's card in its neon with the card's rule, and
+  spells the refusal ahead of the keys; the answer is the `till` line;
+  no news.
 
 ## The blade shop
 
@@ -136,8 +137,10 @@ only the nuke clears it (GAME.md, "INK: the needle").
 - A stored level no draft is owed at, or one stored twice, is
   `SheetError::Inks`, never a blank.
 - The panel (`city/ui.rs::ink_lines`) lists every draft with its two
-  cards, says which are inked, and prices the rest; up/down walk the
-  cursor over the drafts and `i` inks the picked one, its refusal in the
+  cards, says which are inked, and prices the rest; under the list, in
+  rows that are always there, the picked draft's two cards with their
+  rules and the card the pick replaces; up/down walk the cursor over the
+  drafts and `i` inks the picked one, its refusal in the
   key's row when the needle would not. Never a digit or `q`: those stay
   the globals' over every panel, and a misfired page switch must not buy
   something a mark cannot take back. The answer is the `till` line; no

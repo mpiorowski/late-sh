@@ -80,8 +80,9 @@ room is the chat surface, and the full history lives in #lounge on Home.
   drives the walker's wobble and the passed-out figure here, and the printed
   `(word)` beside the name on chat author labels. `GhostService` seeds the
   map from DB every 60s on every replica (`run_drunk_glow_task`) and a pour
-  bumps it at once on the replica that poured; another replica catches up on
-  its next seed. The same map feeds chat author label tinting everywhere via
+  bumps it at once on the replica that poured; a pour that lands while a
+  seed is mid-read outranks the seed's older row, and another replica
+  catches up on its next seed. The same map feeds chat author label tinting everywhere via
   `App.drunk_levels` (copied ~1/s in `App::tick`). It is not pruned by
   presence, so recent drinkers who logged out keep tinting their chat
   history until they decay.

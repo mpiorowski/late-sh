@@ -7,7 +7,9 @@ use rand::{SeedableRng, rngs::StdRng};
 
 use late_core::models::deadchannel_ambush::{Ambush, AmbushOutcome};
 
-use super::{PickerView, SceneView, corrupt, draw_picker, draw_scene, news_line};
+use super::{
+    PickerView, SceneView, card_marked, card_style, corrupt, draw_picker, draw_scene, news_line,
+};
 use crate::app::deadchannel::fight::cards::Card;
 use crate::app::deadchannel::fight::data::{MAX_LEVEL, RATIONS_PER_DAY, RULES, exp_to_seek};
 use crate::app::deadchannel::fight::road::{Mark, Node, Trace};
@@ -442,7 +444,7 @@ fn the_road_shows_the_map_and_the_glyph_under_the_cursor_with_its_threat() {
         "{text}"
     );
     assert!(text.contains("[Enter] fight"), "{text}");
-    assert!(text.contains("[g] flicker, half pay easy"), "{text}");
+    assert!(text.contains("[g] step down, half pay easy"), "{text}");
     assert!(text.contains("esc back"), "{text}");
 
     // The same panel fits a terminal with no rows to spare: the lanes
@@ -525,7 +527,7 @@ fn the_road_shows_a_bright_glyph_a_rest_and_a_cache_under_the_cursor() {
         rest.contains("clear   3 static cards out of your deck"),
         "{rest}"
     );
-    assert!(rest.contains("[Enter] clear the deck"), "{rest}");
+    assert!(rest.contains("[Enter] rest: clear the deck"), "{rest}");
     assert!(!rest.contains("mend"), "a rest no longer mends\n{rest}");
     assert!(rest.contains("[+]"), "{rest}");
     assert!(
@@ -692,11 +694,11 @@ fn a_draft_owed_takes_the_road_panel() {
         let screen = render_road(&sheet, &picker, height, None);
         for text in [
             "a new card",
-            "level 6. it takes the place of a block, until the mark",
-            "[1] riposte hits for a block and a half plus all the block you have up",
-            "[2] bulwark two energy. holds two blocks and a half",
+            "level 6. it takes the place of a ‹block›, until the mark",
+            "[1] ‹riposte› hits for a block and a half plus all the block you have up",
+            "[2] ‹bulwark› two energy. holds two blocks and a half",
             "[1] [2] take one",
-            "drafted: brace",
+            "drafted: ‹brace›",
         ] {
             assert!(screen.contains(text), "{text} at {height} rows\n{screen}");
         }
@@ -710,7 +712,7 @@ fn a_draft_owed_takes_the_road_panel() {
     sheet.cards.push(Card::Bulwark);
     let screen = render_road(&sheet, &picker, 24, None);
     assert!(screen.contains("[Enter] fight"), "{screen}");
-    assert!(screen.contains("drafted: brace · bulwark"), "{screen}");
+    assert!(screen.contains("drafted: ‹brace› · ‹bulwark›"), "{screen}");
 }
 
 /// A runner stood one step short of the crossing on `sheet`'s road, down
@@ -962,4 +964,28 @@ fn a_rival_on_the_scene_wears_their_own_face_and_name() {
     assert!(text.contains(" the crossing "), "{text}");
     assert!(text.contains("lv 3  tom"), "{text}");
     assert!(text.contains("▗▖▝"), "tom's own face\n{text}");
+}
+
+/// A line the machine wrote reads back as spans: every `‹name›` naming a
+/// card in that card's style, marks kept, and a mark naming no card left
+/// plain, so a typo prints as text instead of as a card.
+#[test]
+fn a_line_names_its_cards_in_their_own_neon() {
+    let plain = ratatui::style::Style::default();
+    let spans: Vec<(String, ratatui::style::Style)> = card_marked(
+        "‹brace› is in your deck now, in place of a ‹strike›. ‹haymaker›",
+        plain,
+    )
+    .into_iter()
+    .map(|span| (span.content.to_string(), span.style))
+    .collect();
+    assert_eq!(
+        spans,
+        vec![
+            ("‹brace›".to_string(), card_style(Card::Brace)),
+            (" is in your deck now, in place of a ".to_string(), plain),
+            ("‹strike›".to_string(), card_style(Card::Strike)),
+            (". ‹haymaker›".to_string(), plain),
+        ]
+    );
 }

@@ -15,7 +15,9 @@ use super::data::{self, Figure, Key, SECTIONS};
 use super::state::State;
 use crate::app::common::markdown::wrap_spans;
 use crate::app::deadchannel::city::map::Neon;
-use crate::app::deadchannel::city::ui::{INK, INK_BRIGHT, INK_DIM, glow, ink, lit};
+use crate::app::deadchannel::city::ui::{INK, INK_BRIGHT, INK_DIM, action, glow, ink, lit};
+use crate::app::deadchannel::fight::cards::Card;
+use crate::app::deadchannel::fight::ui::{card_mark, intent_named, intent_style};
 
 /// The box: as wide as the frame allows up to this, and as tall.
 const MAX_WIDTH: u16 = 84;
@@ -173,7 +175,7 @@ fn key_lines(keys: &[Key], width: usize) -> Vec<Line<'static>> {
                 " ".repeat(key_width - (k.key.chars().count() + 2) + 1),
                 text,
             ));
-            (head, vec![Span::styled(k.does, text)])
+            (head, marked(k.does, text, ink(INK_BRIGHT)))
         })
         .collect();
     grid(cells, key_width + 1, width)
@@ -296,20 +298,28 @@ fn chip(key: &'static str) -> Vec<Span<'static>> {
     ]
 }
 
-/// The copy's two marks read into spans: `` `key` `` as a chip (inline,
-/// so no ground padding: a wrap must not split a chip at its own space),
-/// `*strong*` in `strong`, the rest in `plain`.
+/// The copy's marks read into spans: `` `key` `` as a chip (inline, so
+/// no ground padding: a wrap must not split a chip at its own space),
+/// `*strong*` in `strong`, `‹card›` as the card's mark in its neon (the
+/// marks stay, the way every screen names a card), `{word}` as a glyph's
+/// move in its color or else an action in the action green (the braces
+/// go), the rest in `plain`. A `‹name›` naming no card is a typo in the
+/// copy, and `ui_test` reads every line, so it panics here rather than
+/// print a card that does not exist.
 fn marked(text: &'static str, plain: Style, strong: Style) -> Vec<Span<'static>> {
     #[derive(Clone, Copy, PartialEq)]
     enum Mark {
         Plain,
         Key,
         Strong,
+        Card,
+        Term,
     }
     let style = |mark: Mark| match mark {
         Mark::Plain => plain,
         Mark::Key => lit(Neon::Amber).bg(CHIP_BG),
         Mark::Strong => strong,
+        Mark::Card | Mark::Term => plain,
     };
     let mut spans = Vec::new();
     let mut mark = Mark::Plain;
@@ -320,6 +330,29 @@ fn marked(text: &'static str, plain: Style, strong: Style) -> Vec<Span<'static>>
             ('`', Mark::Key) => Mark::Plain,
             ('*', Mark::Plain) => Mark::Strong,
             ('*', Mark::Strong) => Mark::Plain,
+            ('‹', Mark::Plain) => Mark::Card,
+            ('{', Mark::Plain) => Mark::Term,
+            ('›', Mark::Card) => {
+                let name = &text[start..i];
+                let card = Card::named(name).unwrap_or_else(|| {
+                    panic!("the guide names a card that does not exist: {name}")
+                });
+                spans.push(card_mark(card));
+                mark = Mark::Plain;
+                start = i + ch.len_utf8();
+                continue;
+            }
+            ('}', Mark::Term) => {
+                let word = &text[start..i];
+                let style = match intent_named(word) {
+                    Some(intent) => intent_style(intent),
+                    None => action(),
+                };
+                spans.push(Span::styled(word, style));
+                mark = Mark::Plain;
+                start = i + ch.len_utf8();
+                continue;
+            }
             _ => continue,
         };
         if i > start {

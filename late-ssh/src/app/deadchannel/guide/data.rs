@@ -8,9 +8,14 @@
 //! here in the same change (CONTEXT.md, §3b). Every noun passes the
 //! screenshot test (static, signal, glyph, ration, bit, wire), lowercase.
 //!
-//! Prose carries two marks the renderer reads: `` `f` `` is a key, drawn
-//! as a lit chip, and `*40,000 chips*` is a number or a name that matters,
-//! drawn bright. Nothing else in the copy uses a backtick or an asterisk.
+//! Prose carries four marks the renderer reads: `` `f` `` is a key, drawn
+//! as a lit chip; `*40,000 chips*` is a number or a name that matters,
+//! drawn bright; `‹jab›` is a card, drawn in its neon with the marks kept,
+//! the way every screen of the game names a card (a name that is no card
+//! fails `ui_test`); and `{patch}` is an action, drawn in the action green
+//! without the braces, or a glyph's move (`{hits}`, `{gathers}`,
+//! `{heavy}`, `{noise}`) in the color the scene warns with. Nothing else
+//! in the copy uses a backtick, an asterisk, an angle mark, or a brace.
 
 use crate::app::deadchannel::city::map::Neon;
 
@@ -74,43 +79,43 @@ pub const SECTIONS: &[Section] = &[
             Block::Keys(&[
                 Key {
                     key: "←↑↓→",
-                    does: "walk (hjkl too)",
+                    does: "{walk} (hjkl too)",
                 },
                 Key {
                     key: "enter",
-                    does: "go in a door",
+                    does: "{go in} a door",
                 },
                 Key {
                     key: "f",
-                    does: "the road",
+                    does: "{open} the road",
                 },
                 Key {
                     key: "1-5",
-                    does: "play a card",
+                    does: "{play} a card",
                 },
                 Key {
                     key: "e",
-                    does: "end your turn",
+                    does: "{end} your turn",
                 },
                 Key {
                     key: "a",
-                    does: "auto: play the turn for me",
+                    does: "{auto}: play the turn for me",
                 },
                 Key {
                     key: "r",
-                    does: "run",
+                    does: "{run}",
                 },
                 Key {
                     key: "p",
-                    does: "patch to full",
+                    does: "{patch} your signal to full",
                 },
                 Key {
                     key: "0",
-                    does: "back up",
+                    does: "{back up}",
                 },
                 Key {
                     key: "?",
-                    does: "this guide",
+                    does: "{open} this guide",
                 },
             ]),
             Block::Figures(&[
@@ -128,7 +133,7 @@ pub const SECTIONS: &[Section] = &[
                 },
             ]),
             Block::Rule(
-                "`f` opens *the road*: ten steps, three lanes, the same road for every runner today. each step goes to your lane or the one beside it. half the steps are glyphs; the rest are a *rest* or a *cache*, and one of them has a *crossing* on one lane.",
+                "`f` opens *the road*: ten steps, three lanes, the same road for every runner today. each step goes to your lane or the one beside it. half the steps are glyphs; the rest are a {rest} or a {cache}, and one of them has a *crossing* on one lane.",
             ),
             Block::Rule(
                 "a fight is a *hand of cards*: five drawn, three energy a turn, and the glyph shows its next move before you play. `a` plays the obvious turn for you, every turn if you like. at levels *3*, *6*, *9*, and *12* you pick a *new card* for the deck.",
@@ -137,10 +142,10 @@ pub const SECTIONS: &[Section] = &[
                 "*gear is the cards.* your weapon is what a strike hits for, your armor what a block holds. at the armorer `w` buys the weapon and `a` the armor, bits only. a level pays for about *one tier of each*: every level you gain, go back for the next piece.",
             ),
             Block::Rule(
-                "the road shows you the fight before you take it. *grim* means your gear is behind: `g` fights the glyph a level below, for half the pay.",
+                "the road shows you the fight before you take it. *grim* means your gear is behind: `g` {steps down} to the glyph a level below, for half the pay.",
             ),
             Block::Rule(
-                "`p` heals to full from anywhere for a bit a point, times your level, *once a day*. spend it before the fight that needs it, not after a drop: the roll is the next one.",
+                "`p` {patches} your signal to full from anywhere for a bit a point, times your level, *once a day*. spend it before the fight that needs it, not after a drop: the roll is the next one.",
             ),
             Block::Rule(
                 "two nodes of every road are *bright* glyphs. they are harder, pay double bits, and always leave a *crystal*. a crystal buys a glass or a pour at dead air, three buy the next piece up at the blade shop, no bits asked, two more a tier past your level, and ten ink a draft at ink for good.",
@@ -160,36 +165,77 @@ pub const SECTIONS: &[Section] = &[
             Block::Keys(&[
                 Key {
                     key: "←↑↓→",
-                    does: "walk (hjkl too)",
+                    does: "{walk} (hjkl too)",
                 },
                 Key {
                     key: "shift+walk",
-                    does: "run six steps, stopping at the first door",
+                    does: "{run} six steps, stopping at the first door",
                 },
                 Key {
                     key: "enter",
-                    does: "at a door: go in",
+                    does: "at a door: {go in}",
                 },
                 Key {
                     key: "enter/esc",
-                    does: "inside: back out to the street",
+                    does: "inside: {back out} to the street",
                 },
                 Key {
                     key: "0",
-                    does: "back up to the clubhouse",
+                    does: "{back up} to the clubhouse",
                 },
                 Key {
                     key: "esc",
-                    does: "with nothing open: up to the chat, #lounge open",
+                    does: "with nothing open: {up} to the chat, #lounge open",
                 },
                 Key {
                     key: "?",
-                    does: "this guide",
+                    does: "{open} this guide",
                 },
             ]),
             Block::Rule(
                 "`enter` at the wire, the cable by the stairs, also goes back up to the clubhouse.",
             ),
+            Block::Rule(
+                "the lit shops, and what each is for. every one has its own section further down.",
+            ),
+            Block::Figures(&[
+                Figure {
+                    value: "the armorer",
+                    means: "weapons and armor, fifteen tiers, for bits",
+                },
+                Figure {
+                    value: "patch",
+                    means: "your signal back to full, once a day, for bits",
+                },
+                Figure {
+                    value: "the lockers",
+                    means: "bits a dropped signal cannot reach, a tenth kept going in",
+                },
+                Figure {
+                    value: "the bits machine",
+                    means: "a loan the price of a piece, paid back out of your kills",
+                },
+                Figure {
+                    value: "dead air",
+                    means: "the bar: a glass or a pour for a crystal, one a day",
+                },
+                Figure {
+                    value: "the blade shop",
+                    means: "the next tier up for crystals, no bits",
+                },
+                Figure {
+                    value: "ink",
+                    means: "both cards of a draft, for good, for ten crystals",
+                },
+                Figure {
+                    value: "the tailor",
+                    means: "your face, the rack opening with your level",
+                },
+                Figure {
+                    value: "the ledge",
+                    means: "the railing: start over at level 1, by choice",
+                },
+            ]),
             Block::Rule(
                 "you are not alone down here. every runner who came down stands on the street until they log out: lit and carrying a light while they are looking, dim where they left off while they are somewhere else upstairs. so are you.",
             ),
@@ -230,7 +276,7 @@ pub const SECTIONS: &[Section] = &[
             Block::Keys(&[
                 Key {
                     key: "enter",
-                    does: "at the screen: open the road",
+                    does: "at the screen: {open} the road",
                 },
                 Key {
                     key: "f",
@@ -238,19 +284,19 @@ pub const SECTIONS: &[Section] = &[
                 },
                 Key {
                     key: "↑↓",
-                    does: "pick a lane the next step reaches",
+                    does: "{pick} a lane the next step reaches",
                 },
                 Key {
                     key: "enter",
-                    does: "step: fight the glyph, clear the deck at a rest, take a cache, cross a sleeper",
+                    does: "{step}: {fight} the glyph, {rest} and clear the deck, {take} a cache, {cross} a sleeper",
                 },
                 Key {
                     key: "g",
-                    does: "on a glyph: fight the one a level down, half pay",
+                    does: "on a glyph: {step down} to the one a level down, half pay",
                 },
                 Key {
                     key: "s",
-                    does: "once the road is over: copy the day's card",
+                    does: "once the road is over: {copy} the day's card",
                 },
             ]),
             Block::Rule(
@@ -263,13 +309,13 @@ pub const SECTIONS: &[Section] = &[
                 "*five steps* of every road are glyphs in every lane, the first and the last always. every road is five fights, whichever way you walk it.",
             ),
             Block::Rule(
-                "a *rest* shakes every static card out of your deck. it never mends your signal: that is patch's, once a day, and the siphon's in the fight.",
+                "a {rest} shakes every static card out of your deck. it never mends your signal: that is {patch}'s, once a day, and the ‹siphon›'s in the fight.",
             ),
             Block::Rule(
-                "a *cache* is bits for the taking: *three fifths* of what the glyph of your level pays, and no fight.",
+                "a {cache} is bits for the taking: *three fifths* of what the glyph of your level pays, and no fight.",
             ),
             Block::Rule(
-                "under the map is what waits on the lane you picked. for a glyph: its signal, what it hits for, its moves in the order they come, its pay, and how the fight reads on the `a` key from where you stand, *easy*, *even*, *risky*, or *grim*. play the hand yourself and you beat the word.",
+                "under the map is what waits on the lane you picked. for a glyph: its signal, what it hits for, its moves in the order they come in their colors, its pay, and how the fight reads on the `a` key from where you stand, *easy*, *even*, *risky*, or *grim*. play the hand yourself and you beat the word.",
             ),
             Block::Rule(
                 "exp levels you whether your gear is ready or not. when the glyph of your level reads grim, the one below still pays: half, but a kill is a kill. it never leaves a crystal.",
@@ -298,15 +344,15 @@ pub const SECTIONS: &[Section] = &[
             Block::Keys(&[
                 Key {
                     key: "enter",
-                    does: "on the crossing: fight them for what they carry",
+                    does: "on the crossing: {cross}, and fight them for what they carry",
                 },
                 Key {
                     key: "r",
-                    does: "on the road: answer the one who crossed you, no ration",
+                    does: "on the road: {answer} the one who crossed you, no ration",
                 },
             ]),
             Block::Rule(
-                "a crossing costs a *ration*, like any step. the sleeper fights at *full signal* with your numbers against theirs and one mind: hit, hit, wind up, heavy. their cards stay in their pocket; yours do not.",
+                "a crossing costs a *ration*, like any step. the sleeper fights at *full signal* with your numbers against theirs and one mind: {hits}, {hits}, {gathers}, {heavy}. their cards stay in their pocket; yours do not.",
             ),
             Block::Rule(
                 "put them down and you take every bit they were carrying. *no exp*, no kill on the sheet: the road is the way up, the crossing is the money and the story. go down and it is the road's full fall: your signal is down for the day, every bit on you goes to them, and you keep most of the exp.",
@@ -343,45 +389,45 @@ pub const SECTIONS: &[Section] = &[
             Block::Keys(&[
                 Key {
                     key: "1-5",
-                    does: "play the card in that slot",
+                    does: "{play} the card in that slot",
                 },
                 Key {
                     key: "e",
-                    does: "end your turn (space and enter too)",
+                    does: "{end} your turn (space and enter too)",
                 },
                 Key {
                     key: "a",
-                    does: "auto: play the obvious turn and end it",
+                    does: "{auto}: play the obvious turn and end it",
                 },
                 Key {
                     key: "r/esc",
-                    does: "run",
+                    does: "{run}",
                 },
                 Key {
                     key: "enter",
-                    does: "after the fight: back to the road",
+                    does: "after the fight: {back} to the road",
                 },
             ]),
             Block::Rule(
-                "everyone starts with the same ten cards: four *strikes*, a *siphon*, three *blocks*, a *surge*, a *wipe*. five are drawn a turn, you have *three energy* to play them, and what you do not play is discarded.",
+                "everyone starts with the same ten cards: four ‹strike›, a ‹siphon›, three ‹block›, a ‹surge›, and a ‹wipe›. five are drawn a turn, you have *three energy* to play them, and what you do not play is discarded.",
             ),
             Block::Rule(
-                "a *strike* hits for your attack less half the glyph's defense. a *surge* is two and a half strikes for two energy. a *siphon* is a strike that mends you for three quarters of what it hits: the one heal in a fight. the number is on the card, and a better weapon makes it bigger.",
+                "a ‹strike› hits for your attack less half the glyph's defense. a ‹surge› is two and a half strikes for two energy. a ‹siphon› is a strike that mends you for three quarters of what it hits: the one heal in a fight. the number is on the card, and a better weapon makes it bigger.",
             ),
             Block::Rule(
-                "a *block* holds a bit over half your defense and *stays up until a hit eats it*. put it up while the glyph gathers and it is still there when the heavy lands.",
+                "a ‹block› holds a bit over half your defense and *stays up until a hit eats it*. put it up while the glyph gathers and it is still there when the heavy lands.",
             ),
             Block::Rule(
-                "the glyph shows its next move before you play: it *hits*; it *gathers*, which is nothing this turn and a *heavy* for double on the next; or it throws *noise*, static cards and no damage: one, and one more every five levels. every glyph has its own order of moves and keeps to it.",
+                "the glyph shows its next move before you play: it {hits}; it {gathers}, which is nothing this turn and a {heavy} for double on the next; or it throws {noise}, static cards and no damage: one, and one more every five levels. every glyph has its own order of moves and keeps to it.",
             ),
             Block::Rule(
-                "a hit that gets through leaves a *static* card in your deck for the rest of the day. it does nothing but take a place in your hand. one energy throws it out for good, a *wipe* clears every one in your hand and blocks too, and a rest clears the deck. five is the most a deck holds.",
+                "a hit that gets through leaves a ‹static› card in your deck for the rest of the day. it does nothing but take a place in your hand. one energy throws it out for good, a ‹wipe› clears every one in your hand and blocks too, and a {rest} clears the deck. five is the most a deck holds.",
             ),
             Block::Rule(
-                "`r` runs, and there are no dice in it: what the glyph meant to do this turn lands on your way out, against whatever block is up. run while it gathers and it costs nothing. the step stays spent and pays nothing. there is no other way out of a fight.",
+                "`r` {runs}, and there are no dice in it: what the glyph meant to do this turn lands on your way out, against whatever block is up. run while it gathers and it costs nothing. the step stays spent and pays nothing. there is no other way out of a fight.",
             ),
             Block::Rule(
-                "`a` is a fine way to play, and it plays every card you can draft. when a heavy lands it mutes it or puts two blocks up, it hits with everything else, and energy left over goes on a block if something is landing. it never gives up a hit to block a plain one and never thinks a turn ahead. the hand played well takes about a third of the damage.",
+                "`a` is the {auto} key, a fine way to play, and it plays every card you can draft. when a {heavy} lands it mutes it or puts two blocks up, it hits with everything else, and energy left over goes on a block if something is landing. it never gives up a hit to block a plain one and never thinks a turn ahead. the hand played well takes about a third of the damage.",
             ),
             Block::Rule(
                 "a dropped connection finds the fight waiting on the row, the same hand in it, when you step back in.",
@@ -396,19 +442,19 @@ pub const SECTIONS: &[Section] = &[
                 "at levels *3*, *6*, *9*, and *12* a new card is waiting for you on the road: one of two, the same two for everybody. `1` or `2` takes it, and the road waits until you do.",
             ),
             Block::Rule(
-                "the card goes in *in place of* a strike or a block, so a draft never grows the deck past ten: only an inked draft's other card and a pour at dead air add one. it stays until the mark; the next climb you pick again.",
+                "the card goes in *in place of* a ‹strike› or a ‹block›, so a draft never grows the deck past ten: only an inked draft's other card and a {pour} at dead air add one. it stays until the mark; the next climb you pick again.",
             ),
             Block::Rule(
-                "*level 3*, for a strike. *jab*: free, hits for three quarters of a strike. or *brace*: free, holds a block until a hit eats it.",
+                "*level 3*, for a ‹strike›. ‹jab›: free, hits for three quarters of a strike. or ‹brace›: free, holds a block until a hit eats it.",
             ),
             Block::Rule(
-                "*level 6*, for a block. *riposte*: hits for a block and a half plus all the block you have up, and the block stays. or *bulwark*: two energy, holds two blocks and a half.",
+                "*level 6*, for a ‹block›. ‹riposte›: hits for a block and a half plus all the block you have up, and the block stays. or ‹bulwark›: two energy, holds two blocks and a half.",
             ),
             Block::Rule(
-                "*level 9*, for a strike, and both put static to work. *burn*: free, two more energy this turn, and one more again for every static card in your hand, burned up. or *ground*: a strike, plus one more for every static card in your hand, thrown out with it.",
+                "*level 9*, for a ‹strike›, and both put static to work. ‹burn›: free, two more energy this turn, and one more again for every static card in your hand, burned up. or ‹ground›: a strike, plus one more for every static card in your hand, thrown out with it.",
             ),
             Block::Rule(
-                "*level 12*, for a strike. *sever*: a strike that hits for two and a half once the glyph is at half its signal or less. or *mute*: two energy, and whatever the glyph meant to do this turn does nothing. a glyph that is only gathering has nothing to mute.",
+                "*level 12*, for a ‹strike›. ‹sever›: a strike that hits for two and a half once the glyph is at half its signal or less. or ‹mute›: two energy, and whatever the glyph meant to do this turn does nothing. a glyph that only {gathers} has nothing to mute.",
             ),
             Block::Rule(
                 "every number on a new card comes from your strike or your block, so the armorer makes them all bigger.",
@@ -420,7 +466,7 @@ pub const SECTIONS: &[Section] = &[
         neon: Neon::Red,
         blocks: &[
             Block::Rule(
-                "at *15*, once you have the exp to leave it, the next glyph you step onto is the Old Signal instead. it hits, floods you with noise, gathers, and comes down, and it has more signal than anything on the road: read the hand for this one.",
+                "at *15*, once you have the exp to leave it, the next glyph you step onto is the Old Signal instead. it {hits}, floods you with {noise}, {gathers}, and comes down {heavy}, and it has more signal than anything on the road: read the hand for this one.",
             ),
             Block::Rule(
                 "put it down and you wake at *level 1*: bare hands, fifty bits, an empty locker, no crystals, and a mark. the mark stays, adds a point of attack and defense (up to five), and makes every level cost a little more. the debt stays too.",
@@ -437,15 +483,15 @@ pub const SECTIONS: &[Section] = &[
             Block::Keys(&[
                 Key {
                     key: "↑↓",
-                    does: "walk the wall, tier 1 to 15",
+                    does: "{pick} on the wall, tier 1 to 15",
                 },
                 Key {
                     key: "w",
-                    does: "buy the picked weapon",
+                    does: "{buy} the picked weapon",
                 },
                 Key {
                     key: "a",
-                    does: "buy the picked armor",
+                    does: "{buy} the picked armor",
                 },
             ]),
             Block::Rule(
@@ -461,7 +507,7 @@ pub const SECTIONS: &[Section] = &[
         neon: Neon::White,
         blocks: &[
             Block::Rule(
-                "`p` opens patch from anywhere on the street. `p` again buys the signal back to full. *a bit a point, times your level, once a day*: the roll is the next heal. it does not touch the static in your deck.",
+                "`p` opens patch from anywhere on the street. `p` again {patches}: your signal back to full. *a bit a point, times your level, once a day*: the roll is the next heal. it does not touch the static in your deck.",
             ),
             Block::Rule(
                 "not while the signal is down, not with a glyph waiting on you, not once you are spent for the day (the roll brings it back for nothing), not when there is nothing to fix, and not twice in a day.",
@@ -475,11 +521,11 @@ pub const SECTIONS: &[Section] = &[
             Block::Keys(&[
                 Key {
                     key: "d",
-                    does: "lock up everything on you",
+                    does: "{lock up} everything on you",
                 },
                 Key {
                     key: "w",
-                    does: "take everything out",
+                    does: "{take out} everything",
                 },
             ]),
             Block::Rule(
@@ -497,11 +543,11 @@ pub const SECTIONS: &[Section] = &[
             Block::Keys(&[
                 Key {
                     key: "b",
-                    does: "borrow up to the cap",
+                    does: "{borrow} up to the cap",
                 },
                 Key {
                     key: "r",
-                    does: "feed it what you carry",
+                    does: "{repay} it from what you carry",
                 },
             ]),
             Block::Rule(
@@ -520,34 +566,34 @@ pub const SECTIONS: &[Section] = &[
             Block::Keys(&[
                 Key {
                     key: "s",
-                    does: "static on ice: attack",
+                    does: "{static on ice}: attack",
                 },
                 Key {
                     key: "d",
-                    does: "dead air, neat: defense",
+                    does: "{dead air, neat}: defense",
                 },
                 Key {
                     key: "t",
-                    does: "test pattern: more signal, and filled",
+                    does: "{test pattern}: more signal, and filled",
                 },
                 Key {
                     key: "f",
-                    does: "feedback: a surge in tonight's deck",
+                    does: "{feedback}: a ‹surge› in tonight's deck",
                 },
                 Key {
                     key: "u",
-                    does: "squelch: a burn in tonight's deck",
+                    does: "{squelch}: a ‹burn› in tonight's deck",
                 },
                 Key {
                     key: "o",
-                    does: "sign-off: a mute in tonight's deck",
+                    does: "{sign-off}: a ‹mute› in tonight's deck",
                 },
             ]),
             Block::Rule(
                 "the bar pours for *a crystal a glass*, *one glass a day*, and it wears off at the roll. the first two add a point and one more every four levels; the test pattern adds two signal a level and fills you.",
             ),
             Block::Rule(
-                "a *pour* is a card instead: it rides every deck dealt today. look at the road before you order: a surge for the bright glyph, a burn for a day of noise, a mute for a heavy hitter.",
+                "a {pour} is a card instead: it rides every deck dealt today. look at the road before you order: a ‹surge› for the bright glyph, a ‹burn› for a day of {noise}, a ‹mute› for a {heavy} hitter.",
             ),
             Block::Rule(
                 "not while the signal is down, not with a glyph waiting on you, and not once you are spent for the day.",
@@ -561,11 +607,11 @@ pub const SECTIONS: &[Section] = &[
             Block::Keys(&[
                 Key {
                     key: "w",
-                    does: "the next weapon up from yours",
+                    does: "{buy} the next weapon up from yours",
                 },
                 Key {
                     key: "a",
-                    does: "the next armor up from yours",
+                    does: "{buy} the next armor up from yours",
                 },
             ]),
             Block::Rule(
@@ -580,11 +626,11 @@ pub const SECTIONS: &[Section] = &[
             Block::Keys(&[
                 Key {
                     key: "↑↓",
-                    does: "walk the drafts, level 3 to 12",
+                    does: "{pick} a draft, level 3 to 12",
                 },
                 Key {
                     key: "i",
-                    does: "ink the picked draft",
+                    does: "{ink} the picked draft",
                 },
             ]),
             Block::Rule(
@@ -602,11 +648,11 @@ pub const SECTIONS: &[Section] = &[
             Block::Keys(&[
                 Key {
                     key: "r",
-                    does: "at the railing: lean out",
+                    does: "at the railing: {lean out}",
                 },
                 Key {
                     key: "r again",
-                    does: "step off",
+                    does: "{step off}",
                 },
             ]),
             Block::Rule(
@@ -624,27 +670,27 @@ pub const SECTIONS: &[Section] = &[
             Block::Keys(&[
                 Key {
                     key: "↑↓",
-                    does: "pick a row: hood, eyes, coat, mark",
+                    does: "{row}: hood, eyes, coat, mark",
                 },
                 Key {
                     key: "←→",
-                    does: "walk its rack",
+                    does: "{pick} from its rack",
                 },
                 Key {
                     key: "t",
-                    does: "turn the tint",
+                    does: "{tint}: turn it",
                 },
                 Key {
                     key: "r",
-                    does: "shuffle the lot",
+                    does: "{shuffle} the lot",
                 },
                 Key {
                     key: "s",
-                    does: "wear it",
+                    does: "{wear it}",
                 },
                 Key {
                     key: "enter/esc",
-                    does: "leave: a draft not worn is dropped",
+                    does: "{back}: a draft not worn is dropped",
                 },
             ]),
             Block::Rule(
@@ -677,7 +723,7 @@ pub const SECTIONS: &[Section] = &[
             ),
             Block::Keys(&[Key {
                 key: "/hit",
-                does: "hit it (typed in the composer; never posts)",
+                does: "{hit} it (typed in the composer; never posts)",
             }]),
             Block::Rule(
                 "a *flicker* dies to one hit and leaves a cache's worth of bits for whoever landed it. a *howler* takes *three hits from three different runners* and leaves a crystal for each. one hit per runner per glyph: a howler needs the room.",

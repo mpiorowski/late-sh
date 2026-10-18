@@ -48,7 +48,8 @@ use super::state::{Fight, Lookout, Powers, Prey, Quarry, Sheet, Shut, Slot};
 use crate::app::arcade::share::puzzle_number;
 use crate::app::deadchannel::city::map::Neon;
 use crate::app::deadchannel::city::ui::{
-    INK, INK_BRIGHT, INK_DIM, INK_MUTED, dim, glow, ink, lit, mix, neon_rgb, scale, tint_rgb,
+    INK, INK_BRIGHT, INK_DIM, INK_MUTED, action, dim, glow, ink, lit, mix, neon_rgb, scale,
+    tint_rgb,
 };
 use crate::app::deadchannel::runner::state::{Look, PORTRAIT_HEIGHT, PORTRAIT_WIDTH};
 use late_core::models::deadchannel_ambush::{Ambush, AmbushOutcome};
@@ -282,6 +283,38 @@ fn pad(mut spans: Vec<Span<'static>>, width: usize, left: bool) -> Vec<Span<'sta
     spans
 }
 
+/// `spans` cut to `width` columns, the last one an ellipsis when cut, the
+/// way [`truncate`] cuts a string.
+fn truncate_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
+    let total: usize = spans.iter().map(|span| span.content.chars().count()).sum();
+    if total <= width {
+        return spans;
+    }
+    let mut room = width.saturating_sub(1);
+    let mut out = Vec::new();
+    let mut cut_style = ink(INK);
+    for span in spans {
+        if room == 0 {
+            break;
+        }
+        let count = span.content.chars().count();
+        cut_style = span.style;
+        match count <= room {
+            true => {
+                room -= count;
+                out.push(span);
+            }
+            false => {
+                let kept: String = span.content.chars().take(room).collect();
+                out.push(Span::styled(kept, span.style));
+                room = 0;
+            }
+        }
+    }
+    out.push(Span::styled("…", cut_style));
+    out
+}
+
 /// The carried weapon's name, `bare hands` at tier 0.
 pub(crate) fn weapon_name(sheet: &Sheet) -> &'static str {
     sheet.gear_name(Slot::Weapon).unwrap_or("bare hands")
@@ -466,10 +499,20 @@ const HAND_ROWS: usize = 5;
 /// then the hand as one row of chips.
 const HAND_ROWS_COMPACT: usize = 2;
 
+// ----------------------------------------------------- the vocabulary
+//
+// Every named thing in the game is drawn one way wherever it is named,
+// so a word learned at one counter is recognised at every other: a card
+// is its name between angle marks in the card's own neon (`‹jab›`), an
+// action is its verb in the action green right after its amber key
+// (`[p] patch`, `city/ui.rs::action`), and a glyph's move is in the
+// color the scene warns with. The shop panels (`city/ui.rs`) and the
+// guide (`guide/ui.rs`) draw with these too.
+
 /// The neon a card burns in.
 /// By what it is for: red hits, amber is the big turn, cyan guards, green
 /// cleans and mends, magenta is static put to work, white is the cut-out.
-fn card_neon(card: Card) -> Option<Neon> {
+pub(crate) fn card_neon(card: Card) -> Option<Neon> {
     match card {
         Card::Strike | Card::Jab | Card::Sever => Some(Neon::Red),
         Card::Surge | Card::Burn => Some(Neon::Amber),
@@ -479,6 +522,76 @@ fn card_neon(card: Card) -> Option<Neon> {
         Card::Mute => Some(Neon::White),
         Card::Static => None,
     }
+}
+
+/// A card's name as every screen draws it: in its neon, static grey.
+pub(crate) fn card_style(card: Card) -> Style {
+    match card_neon(card) {
+        Some(neon) => lit(neon),
+        None => ink(INK_DIM),
+    }
+}
+
+/// A card as every screen names it: `‹jab›` in its neon.
+pub(crate) fn card_mark(card: Card) -> Span<'static> {
+    Span::styled(card.marked(), card_style(card))
+}
+
+/// `text` as spans: every `‹name›` naming a card (`Card::marked`, how the
+/// machine's lines write one) drawn as that card's mark, the rest in
+/// `plain`. A mark naming no card stays plain, marks and all.
+pub(crate) fn card_marked(text: &str, plain: Style) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut rest = text;
+    while let Some(open) = rest.find('‹') {
+        let inside = &rest[open + '‹'.len_utf8()..];
+        let Some(close) = inside.find('›') else {
+            break;
+        };
+        let end = open + '‹'.len_utf8() + close + '›'.len_utf8();
+        match Card::named(&inside[..close]) {
+            Some(card) => {
+                if open > 0 {
+                    spans.push(Span::styled(rest[..open].to_string(), plain));
+                }
+                spans.push(card_mark(card));
+            }
+            None => spans.push(Span::styled(rest[..end].to_string(), plain)),
+        }
+        rest = &rest[end..];
+    }
+    if !rest.is_empty() {
+        spans.push(Span::styled(rest.to_string(), plain));
+    }
+    spans
+}
+
+/// The color a glyph's move is named in, on the road, in the scene, and
+/// in the guide: a hit and a heavy red, gathering amber, noise magenta.
+pub(crate) fn intent_style(intent: Intent) -> Style {
+    match intent {
+        Intent::Hit => glow(Neon::Red),
+        Intent::Charge => glow(Neon::Amber),
+        Intent::Heavy => lit(Neon::Red),
+        Intent::Noise => glow(Neon::Magenta),
+    }
+}
+
+/// An intent as the word every screen uses for it.
+pub(crate) fn intent_word(intent: Intent) -> &'static str {
+    match intent {
+        Intent::Hit => "hits",
+        Intent::Charge => "gathers",
+        Intent::Heavy => "heavy",
+        Intent::Noise => "noise",
+    }
+}
+
+/// The intent `word` names: the inverse of [`intent_word`].
+pub(crate) fn intent_named(word: &str) -> Option<Intent> {
+    [Intent::Hit, Intent::Charge, Intent::Heavy, Intent::Noise]
+        .into_iter()
+        .find(|intent| intent_word(*intent) == word)
 }
 
 /// What a card does, in the two rows under its name: the number it would
@@ -663,16 +776,6 @@ fn hand_chips(sheet: &Sheet, fight: &Fight) -> Line<'static> {
     Line::from(spans)
 }
 
-/// An intent as the word the road's preview uses for it.
-fn intent_word(intent: Intent) -> &'static str {
-    match intent {
-        Intent::Hit => "hits",
-        Intent::Charge => "gathers",
-        Intent::Heavy => "heavy",
-        Intent::Noise => "noise",
-    }
-}
-
 /// What the glyph means to do at the end of this turn, in the foe's
 /// column: the number the hand is played against. A heavy pulses with the
 /// tick, the one thing on a glyph's scene that moves.
@@ -681,16 +784,19 @@ fn intent_spans(fight: &Fight, powers: &Powers, live: bool, tick: u64) -> Vec<Sp
         return vec![Span::styled("▸ muted. nothing lands", lit(Neon::White))];
     }
     let (line, style) = match fight.intent() {
-        Intent::Hit => (format!("▸ hits for {}", powers.hit), glow(Neon::Red)),
+        Intent::Hit => (
+            format!("▸ hits for {}", powers.hit),
+            intent_style(Intent::Hit),
+        ),
         Intent::Charge => (
             format!("▸ gathering. {} next turn", powers.hit * 2),
-            glow(Neon::Amber),
+            intent_style(Intent::Charge),
         ),
         Intent::Heavy => (
             format!("▸ comes down for {}", powers.hit * 2),
             match live && (tick / 3).is_multiple_of(2) {
                 true => glow(Neon::Red),
-                false => lit(Neon::Red),
+                false => intent_style(Intent::Heavy),
             },
         ),
         Intent::Noise => (
@@ -698,7 +804,7 @@ fn intent_spans(fight: &Fight, powers: &Powers, live: bool, tick: u64) -> Vec<Sp
                 1 => "▸ noise: 1 static card".to_string(),
                 n => format!("▸ noise: {n} static cards"),
             },
-            glow(Neon::Magenta),
+            intent_style(Intent::Noise),
         ),
     };
     vec![Span::styled(line, style)]
@@ -722,10 +828,12 @@ fn stance_row(sheet: &Sheet, fight: Option<&Fight>, inner: usize) -> Line<'stati
         left.push(Span::styled("   block ", dim_text));
         left.push(Span::styled(fight.block.to_string(), lit(Neon::Cyan)));
     }
-    let right = format!("then {}", intent_word(fight.intent_in(1)));
-    let used = spans_width(&left) + right.chars().count() + 2 + PORTRAIT_WIDTH + 3;
+    let then = fight.intent_in(1);
+    let word = intent_word(then);
+    let used = spans_width(&left) + "then ".len() + word.len() + 2 + PORTRAIT_WIDTH + 3;
     left.push(Span::styled(" ".repeat(inner.saturating_sub(used)), text));
-    left.push(Span::styled(right, ink(INK_MUTED)));
+    left.push(Span::styled("then ", ink(INK_MUTED)));
+    left.push(Span::styled(word, intent_style(then)));
     Line::from(left)
 }
 
@@ -844,11 +952,15 @@ pub(crate) fn draw_scene(frame: &mut Frame, area: Rect, view: SceneView<'_>) {
     for (i, line) in shown.into_iter().rev().enumerate() {
         let index = total - shown_count + i;
         let latest = index + view.scene.latest >= total;
-        let body = truncate(line, inner.saturating_sub(6));
-        let spans = match latest {
-            true => vec![Span::styled("  ▸ ", key), Span::styled(body, bright)],
-            false => vec![Span::styled("    ", text), Span::styled(body, dim_text)],
+        let (lead, style) = match latest {
+            true => (Span::styled("  ▸ ", key), bright),
+            false => (Span::styled("    ", text), dim_text),
         };
+        let mut spans = vec![lead];
+        spans.extend(truncate_spans(
+            card_marked(line, style),
+            inner.saturating_sub(6),
+        ));
         lines.push(Line::from(spans));
     }
     lines.push(Line::default());
@@ -874,18 +986,20 @@ pub(crate) fn draw_scene(frame: &mut Frame, area: Rect, view: SceneView<'_>) {
     let keys = match (view.scene.over, view.scene.waiting) {
         (true, _) => vec![
             Span::styled("    [Enter] ", key),
-            Span::styled("back to the road", text),
+            Span::styled("back", action()),
+            Span::styled(" to the road", text),
         ],
         (false, true) => vec![Span::styled("    the static is deciding.", muted)],
         (false, false) => vec![
             Span::styled("    [1-5] ", key),
-            Span::styled("play", text),
+            Span::styled("play", action()),
             Span::styled("   [e] ", key),
-            Span::styled("end turn", text),
+            Span::styled("end turn", action()),
             Span::styled("   [a] ", key),
-            Span::styled("auto turn", text),
+            Span::styled("auto", action()),
+            Span::styled(" turn", text),
             Span::styled("   [r] ", key),
-            Span::styled("run", text),
+            Span::styled("run", action()),
             Span::styled("  esc runs too", dim_text),
         ],
     };
@@ -966,14 +1080,17 @@ struct Offer {
     bright: bool,
 }
 
-/// A glyph's whole mind, as the road previews it: its pattern, once
-/// round, in the order it comes.
-fn pattern_words(kind: &FoeKind) -> String {
-    kind.pattern
-        .iter()
-        .map(|intent| intent_word(*intent))
-        .collect::<Vec<_>>()
-        .join(" > ")
+/// A mind as the road previews it, a glyph's or a sleeper's: the
+/// pattern once round, in the order it comes, each move in its color.
+fn pattern_spans(pattern: &[Intent]) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    for (i, intent) in pattern.iter().enumerate() {
+        if i > 0 {
+            spans.push(Span::styled(" > ", ink(INK_MUTED)));
+        }
+        spans.push(Span::styled(intent_word(*intent), intent_style(*intent)));
+    }
+    spans
 }
 
 fn offer_lines(offer: &Offer, sheet: &Sheet) -> Vec<Line<'static>> {
@@ -1018,16 +1135,13 @@ fn offer_lines(offer: &Offer, sheet: &Sheet) -> Vec<Line<'static>> {
     };
     let hit = data::RULES.hit(offer.tier.attack, sheet.defense(), sheet.level);
     let numbers = format!("signal {} · hits for {hit} · it ", offer.tier.signal);
-    let moves = truncate(
-        &pattern_words(offer.kind),
+    let moves = truncate_spans(
+        pattern_spans(offer.kind.pattern),
         width.saturating_sub(numbers.chars().count()),
     );
     let rows: [Vec<Span<'static>>; 3] = [
         head,
-        vec![
-            Span::styled(numbers, dim_text),
-            Span::styled(moves, ink(INK_MUTED)),
-        ],
+        [vec![Span::styled(numbers, dim_text)], moves].concat(),
         vec![Span::styled(pay, text)],
     ];
     rows.into_iter()
@@ -1073,22 +1187,17 @@ fn rival_lines(prey: &Prey, threat: Option<Threat>, sheet: &Sheet) -> Vec<Line<'
     };
     let hit = data::RULES.hit(prey.attack, sheet.defense(), sheet.level);
     let numbers = format!("signal {} · hits for {hit} · it ", prey.signal);
-    let moves = data::RUNNER_PATTERN
-        .iter()
-        .map(|intent| intent_word(*intent))
-        .collect::<Vec<_>>()
-        .join(" > ");
-    let moves = truncate(&moves, width.saturating_sub(numbers.chars().count()));
+    let moves = truncate_spans(
+        pattern_spans(data::RUNNER_PATTERN),
+        width.saturating_sub(numbers.chars().count()),
+    );
     let carrying = match prey.stake {
         0 => "carrying nothing".to_string(),
         n => format!("carrying {n} bits"),
     };
     let rows: [Vec<Span<'static>>; 3] = [
         head,
-        vec![
-            Span::styled(numbers, dim_text),
-            Span::styled(moves, ink(INK_MUTED)),
-        ],
+        [vec![Span::styled(numbers, dim_text)], moves].concat(),
         vec![Span::styled(
             truncate(
                 &format!("{carrying} · a ration · fall, lose all you carry"),
@@ -1182,7 +1291,8 @@ fn lookout_lines(lookout: &Lookout, picker: &Picker) -> (Vec<Line<'static>>, Vec
                 ]));
                 keys.extend([
                     Span::styled("   [r] ", key),
-                    Span::styled(format!("answer {them}"), text),
+                    Span::styled("answer", action()),
+                    Span::styled(format!(" {them}"), text),
                 ]);
             }
             None => {
@@ -1476,7 +1586,10 @@ fn node_lines(
     let dim_text = ink(INK_DIM);
     let muted = ink(INK_MUTED);
     let key = lit(Neon::Amber);
-    let mut keys = vec![Span::styled("    [↑↓] ", key), Span::styled("lane", text)];
+    let mut keys = vec![
+        Span::styled("    [↑↓] ", key),
+        Span::styled("lane", action()),
+    ];
     let lines = match node {
         Node::Glyph => {
             let offer = match sheet.signal_hears() {
@@ -1504,12 +1617,15 @@ fn node_lines(
             };
             keys.extend([
                 Span::styled("   [Enter] ", key),
-                Span::styled("fight", text),
+                Span::styled("fight", action()),
             ]);
-            if let Some((_, kind, _)) = data::lower_foe_for_level(sheet.level) {
+            // The key row has no room for the lower glyph's name beside
+            // the verb; its threat word says what the step down meets.
+            if data::lower_foe_for_level(sheet.level).is_some() {
                 keys.extend([
                     Span::styled("   [g] ", key),
-                    Span::styled(format!("{}, half pay ", kind.name), text),
+                    Span::styled("step down", action()),
+                    Span::styled(", half pay ", text),
                     threat_span(picker.lower),
                 ]);
             }
@@ -1519,7 +1635,7 @@ fn node_lines(
             let (index, kind, tier) = data::bright_foe_for_level(sheet.level);
             keys.extend([
                 Span::styled("   [Enter] ", key),
-                Span::styled("fight", text),
+                Span::styled("fight", action()),
             ]);
             offer_lines(
                 &Offer {
@@ -1537,7 +1653,8 @@ fn node_lines(
         Node::Rest => {
             keys.extend([
                 Span::styled("   [Enter] ", key),
-                Span::styled("clear the deck", text),
+                Span::styled("rest", action()),
+                Span::styled(": clear the deck", text),
             ]);
             vec![
                 Line::from(vec![
@@ -1559,7 +1676,8 @@ fn node_lines(
         Node::Cache => {
             keys.extend([
                 Span::styled("   [Enter] ", key),
-                Span::styled("take it", text),
+                Span::styled("take", action()),
+                Span::styled(" it", text),
             ]);
             vec![
                 Line::from(vec![
@@ -1582,7 +1700,8 @@ fn node_lines(
             Some(prey) => {
                 keys.extend([
                     Span::styled("   [Enter] ", key),
-                    Span::styled(format!("cross {}", prey.rival.username), text),
+                    Span::styled("cross", action()),
+                    Span::styled(format!(" {}", prey.rival.username), text),
                 ]);
                 rival_lines(prey, picker.crossing, sheet)
             }
@@ -1617,28 +1736,27 @@ fn draft_lines(draft: &Draft) -> (Vec<Line<'static>>, Vec<Span<'static>>) {
         Span::styled("  ▸ ", key),
         Span::styled("a new card", lit(Neon::Amber)),
         Span::styled(
-            format!(
-                "   level {}. it takes the place of a {}, until the mark",
-                draft.level,
-                draft.replaces.name()
-            ),
+            format!("   level {}. it takes the place of a ", draft.level),
             dim_text,
         ),
+        card_mark(draft.replaces),
+        Span::styled(", until the mark", dim_text),
     ])];
+    // The name column fits the longest mark (`‹riposte›`), so every rule
+    // starts in one column and the longest still fits the panel.
     for (option, card) in draft.options.iter().enumerate() {
-        let name = match card_neon(*card) {
-            Some(neon) => lit(neon),
-            None => text,
-        };
+        let mark = card.marked();
         lines.push(Line::from(vec![
-            Span::styled(format!("      [{}] ", option + 1), key),
-            Span::styled(format!("{:<8}", card.name()), name),
+            Span::styled(format!("    [{}] ", option + 1), key),
+            card_mark(*card),
+            Span::styled(" ".repeat(10 - mark.chars().count()), text),
             Span::styled(card.rule().to_string(), text),
         ]));
     }
     let keys = vec![
         Span::styled("    [1] [2] ", key),
-        Span::styled("take one", text),
+        Span::styled("take", action()),
+        Span::styled(" one", text),
         Span::styled("   the road waits on it", dim_text),
         Span::styled("  esc back", dim_text),
     ];
@@ -1665,7 +1783,7 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
     };
     let mut lines: Vec<Line<'static>> = vec![Line::default()];
     let mut title_right = String::new();
-    let mut drafted = String::new();
+    let mut drafted: Vec<Span<'static>> = Vec::new();
 
     match view.sheet {
         None => {
@@ -1676,7 +1794,7 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
             lines.push(Line::default());
             lines.push(Line::from(vec![
                 Span::styled("    [Enter] ", key),
-                Span::styled("step in", text),
+                Span::styled("step in", action()),
                 Span::styled("   esc back to the street", dim_text),
             ]));
         }
@@ -1687,8 +1805,14 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
                 puzzle_number(sheet.day)
             );
             if !sheet.cards.is_empty() {
-                let names: Vec<&str> = sheet.cards.iter().map(|card| card.name()).collect();
-                drafted = format!(" drafted: {} ", names.join(" · "));
+                drafted.push(Span::styled(" drafted: ", dim_text));
+                for (i, card) in sheet.cards.iter().enumerate() {
+                    if i > 0 {
+                        drafted.push(Span::styled(" · ", dim_text));
+                    }
+                    drafted.push(card_mark(*card));
+                }
+                drafted.push(Span::styled(" ", dim_text));
             }
             let face = runner_rows(sheet, view.look);
             let exp = match (sheet.signal_hears(), data::exp_to_advance(sheet.level)) {
@@ -1780,10 +1904,11 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
             lines.extend(notice);
 
             let word = Line::from(match view.word {
-                Some(word) => vec![
-                    Span::styled("    ", text),
-                    Span::styled(truncate(word, INNER.saturating_sub(6)), ink(INK_BRIGHT)),
-                ],
+                Some(word) => [
+                    vec![Span::styled("    ", text)],
+                    truncate_spans(card_marked(word, ink(INK_BRIGHT)), INNER.saturating_sub(6)),
+                ]
+                .concat(),
                 None => Vec::new(),
             });
             let reason = shut_reason(sheet);
@@ -1823,12 +1948,14 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
                     if !sheet.road.path.is_empty() {
                         keys.extend([
                             Span::styled("    [s] ", key),
-                            Span::styled("copy the day's card", text),
+                            Span::styled("copy", action()),
+                            Span::styled(" the day's card", text),
                         ]);
                     }
                     keys.extend([
                         Span::styled("    [Enter] ", key),
-                        Span::styled("back to the street", text),
+                        Span::styled("back", action()),
+                        Span::styled(" to the street", text),
                     ]);
                     keys.extend(answer_keys);
                     lines.push(Line::from(keys));
@@ -1861,7 +1988,7 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
                 .border_style(frame_style)
                 .title(Span::styled(" the road ", lit(Neon::Cyan)))
                 .title(Line::from(Span::styled(title_right, dim_text)).right_aligned())
-                .title_bottom(Span::styled(drafted, dim_text)),
+                .title_bottom(Line::from(drafted)),
         ),
         rect,
     );

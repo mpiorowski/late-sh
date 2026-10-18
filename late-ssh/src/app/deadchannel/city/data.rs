@@ -204,12 +204,14 @@ pub fn title(landmark: Landmark) -> &'static str {
 pub fn pitch(landmark: Landmark) -> &'static str {
     match landmark {
         Landmark::Armorer => "weapons and armor, fifteen tiers, bits only",
-        Landmark::Tailor => "hoods, eyes, coats, marks: the look. chips only",
+        Landmark::Tailor => {
+            "hoods, eyes, coats, marks: the look. free, the rack opening with your level"
+        }
         Landmark::Lockers => "the stash. a cut going in, and it survives a dropped signal",
         Landmark::Bands => "tuner, jammer, ghost. not open yet",
         Landmark::Bar => "the signal is warm in here. a glass for a crystal",
         Landmark::Screen => "tuned to a dead channel. the glyphs come out of it. a ration a step",
-        Landmark::Repairs => "repairs, when there is something to repair",
+        Landmark::Repairs => "your signal back to full, once a day, for bits",
         Landmark::Board => "standing orders. nothing posted yet",
         Landmark::Bits => "it hums. it lends now, and it remembers",
         Landmark::Noodles => "two bowls or none",

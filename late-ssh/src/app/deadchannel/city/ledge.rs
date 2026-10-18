@@ -18,7 +18,9 @@ use ratatui::{
 use crate::app::deadchannel::glyphs::GLYPH_ALPHABET;
 
 use super::map::Neon;
-use super::ui::{INK, INK_DIM, NIGHT, Rgb, draw_framed, ink, lit, mix, neon_rgb, rgb_color, scale};
+use super::ui::{
+    INK, INK_DIM, NIGHT, Rgb, action, draw_framed, ink, lit, mix, neon_rgb, rgb_color, scale,
+};
 
 /// The ledge box is this wide, border included, in either state.
 const LEDGE_WIDTH: u16 = 80;
@@ -358,7 +360,9 @@ fn ledge_lines(armed: bool) -> Vec<Line<'static>> {
             )),
             Line::from(vec![
                 Span::styled("[r] ", key),
-                Span::styled("step off", ink(INK)),
+                // The one verb not in the action green: it cannot be
+                // taken back, and it is drawn in the lean's red.
+                Span::styled("step off", lit(Neon::Red)),
                 Span::styled("   any other key leans back", ink(INK_DIM)),
             ]),
         ],
@@ -370,9 +374,9 @@ fn ledge_lines(armed: bool) -> Vec<Line<'static>> {
             Line::default(),
             Line::from(vec![
                 Span::styled("[r] ", key),
-                Span::styled("lean out", ink(INK)),
+                Span::styled("lean out", action()),
                 Span::styled("   [Enter] ", key),
-                Span::styled("step back", ink(INK)),
+                Span::styled("step back", action()),
             ]),
         ],
     }

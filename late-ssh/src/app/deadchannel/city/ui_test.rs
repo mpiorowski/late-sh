@@ -147,9 +147,12 @@ fn the_armorer_prices_the_picked_row_against_the_sheet() {
     assert!(screen.contains("163009"), "{screen}");
     // Tier 3 weapon, level with the runner: 1316 less 75% of 506 (379).
     // Tier 3 armor off street clothes: 1316.
-    assert!(screen.contains("[w] tire iron for 937 bits"), "{screen}");
     assert!(
-        screen.contains("[a] padded jacket for 1316 bits"),
+        screen.contains("[w] buy tire iron for 937 bits"),
+        "{screen}"
+    );
+    assert!(
+        screen.contains("[a] buy padded jacket for 1316 bits"),
         "{screen}"
     );
     assert!(
@@ -282,9 +285,9 @@ fn a_short_screen_keeps_the_armorers_keys_and_prices() {
         for needle in [
             "▸    3  tire iron",
             "[↑↓] pick a tier",
-            "[w] tire iron for 937 bits",
-            "[a] padded jacket for 1316 bits",
-            "power equals tier.",
+            "[w] buy tire iron for 937 bits",
+            "[a] buy padded jacket for 1316 bits",
+            "power equals tier, +50% a tier past your level.",
             word,
         ] {
             assert!(
@@ -300,7 +303,10 @@ fn a_short_screen_keeps_the_armorers_keys_and_prices() {
     }
     let screen = render_panel(120, 22, &state, &sheet, Some(word), None);
     assert!(screen.contains("▸   15  the last broadcast"), "{screen}");
-    assert!(screen.contains("[w] the last broadcast for"), "{screen}");
+    assert!(
+        screen.contains("[w] buy the last broadcast for"),
+        "{screen}"
+    );
 }
 
 /// The tailor's last word sits at the foot of the mirror's panel, where
@@ -353,19 +359,24 @@ fn dead_air_prices_the_menu_and_says_why_it_would_not_pour() {
         "{screen}"
     );
     assert!(
-        screen.contains("[t] test pattern      +16 signal, and filled"),
+        screen.contains("[t] test pattern      +16 max signal until the roll, and filled"),
         "{screen}"
     );
     assert!(
-        screen.contains("[f] feedback          a surge in tonight's deck"),
+        screen
+            .contains("[f] feedback          ‹surge›  two energy. hits for two strikes and a half"),
         "{screen}"
     );
     assert!(
-        screen.contains("[u] squelch           a burn in tonight's deck"),
+        screen.contains(
+            "[u] squelch           ‹burn›   free. +2 energy, and +1 per static card in hand, burned"
+        ),
         "{screen}"
     );
     assert!(
-        screen.contains("[o] sign-off          a mute in tonight's deck"),
+        screen.contains(
+            "[o] sign-off          ‹mute›   two energy. the glyph's move this turn does nothing"
+        ),
         "{screen}"
     );
     assert!(screen.contains(till), "the bartender's last word\n{screen}");
@@ -409,24 +420,46 @@ fn ink_lists_the_drafts_and_says_what_the_needle_will_take() {
         "{screen}"
     );
     assert!(
-        screen.contains("  level 3   jab · brace        for 10 crystals"),
+        screen.contains("  level 3   ‹jab› · ‹brace›         for 10 crystals"),
         "{screen}"
     );
     assert!(
-        screen.contains("▸ level 6   riposte · bulwark  for 10 crystals"),
+        screen.contains("▸ level 6   ‹riposte› · ‹bulwark›   for 10 crystals"),
         "the cursor on the level 6 draft\n{screen}"
     );
     assert!(screen.contains("[↑↓] pick a draft"), "{screen}");
     assert!(
-        screen.contains("[i] ink riposte and bulwark for 10 crystals"),
+        screen.contains("[i] ink ‹riposte› and ‹bulwark› for 10 crystals"),
         "{screen}"
     );
+    // What the picked draft's cards do, in rows that are always there.
+    for text in [
+        "  ‹riposte›  hits for a block and a half plus all the block you have up",
+        "  ‹bulwark›  two energy. holds two blocks and a half",
+        "the level 6 draft takes the place of a ‹block›. inked, the other comes in too.",
+    ] {
+        assert!(screen.contains(text), "{text}\n{screen}");
+    }
+    // The panel's foot, the row its bottom border is on.
+    let foot = |screen: &str| screen.lines().position(|row| row.contains(" Esc closes "));
+    state.pick_draft_down();
+    let moved = render_with_sheet(&state, &sheet, None);
+    assert!(
+        moved.contains("  ‹burn›     free. +2 energy, and +1 per static card in hand, burned"),
+        "the rows follow the cursor\n{moved}"
+    );
+    assert_eq!(
+        foot(&moved),
+        foot(&screen),
+        "the cursor never changes the panel's size\n{moved}"
+    );
+    state.pick_draft_up();
 
     sheet.inks = vec![6];
     sheet.crystals = 4;
     let inked = render_with_sheet(&state, &sheet, None);
     assert!(
-        inked.contains("▸ level 6   riposte · bulwark  inked"),
+        inked.contains("▸ level 6   ‹riposte› · ‹bulwark›   inked"),
         "{inked}"
     );
     assert!(inked.contains("the needle holds no more"), "{inked}");
@@ -446,11 +479,11 @@ fn ink_lists_the_drafts_and_says_what_the_needle_will_take() {
     sheet.marks = 1;
     let short = render_with_sheet(&state, &sheet, None);
     assert!(
-        short.contains("▸ level 3   jab · brace        for 10 crystals, 6 short"),
+        short.contains("▸ level 3   ‹jab› · ‹brace›         for 10 crystals, 6 short"),
         "{short}"
     );
     assert!(
-        short.contains("10 crystals to ink jab and brace. you are 6 short."),
+        short.contains("10 crystals to ink ‹jab› and ‹brace›. you are 6 short."),
         "{short}"
     );
     assert!(!short.contains("bring it a mark"), "{short}");
@@ -478,7 +511,7 @@ fn the_blade_cart_prices_the_next_tier_up_in_crystals() {
     // Tier 4 for a level 1 runner: three crystals, and two more a tier
     // past the level.
     assert!(
-        screen.contains("[w] rebar club for 9 crystals   the wall asks"),
+        screen.contains("[w] buy rebar club for 9 crystals   the wall asks"),
         "{screen}"
     );
     assert!(
@@ -555,7 +588,10 @@ fn patch_prices_the_gap_and_says_when_there_is_nothing_to_buy() {
         screen.contains("signal 12/30      on hand 100 bits"),
         "{screen}"
     );
-    assert!(screen.contains("[p] patch to full for 54 bits"), "{screen}");
+    assert!(
+        screen.contains("[p] patch your signal to full for 54 bits"),
+        "{screen}"
+    );
     assert!(
         screen.contains("patch works fast. +18 signal, back to full. 54 bits."),
         "{screen}"

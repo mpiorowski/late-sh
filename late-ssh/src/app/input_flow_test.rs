@@ -6895,7 +6895,7 @@ async fn the_road_and_the_hand_fit_an_80_by_24_terminal() {
         "[Enter] fight",
         "hiss  lv 2",
         "▸ [▚]",
-        "[g] flicker, half pay",
+        "[g] step down, half pay",
         "esc back",
     ] {
         assert!(

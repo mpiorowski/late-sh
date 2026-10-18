@@ -809,7 +809,9 @@ fn a_pour_puts_a_card_in_the_deck_until_the_roll() {
     );
     assert_eq!(
         poured.lines,
-        vec!["feedback. the glass hums before you touch it. a surge in your deck until the roll."]
+        vec![
+            "feedback. the glass hums before you touch it. a ‹surge› in your deck until the roll."
+        ]
     );
     assert_eq!((sheet.crystals, sheet.attack(), sheet.defense()), (1, 1, 1));
     let deck = sheet.deck();
@@ -862,7 +864,7 @@ fn ink_takes_a_draft_for_crystals_one_a_mark_and_one_more() {
     );
     assert_eq!(
         short.lines,
-        vec!["10 crystals to ink jab and brace. you are 1 short."]
+        vec!["10 crystals to ink ‹jab› and ‹brace›. you are 1 short."]
     );
 
     sheet.crystals = 25;
@@ -881,7 +883,7 @@ fn ink_takes_a_draft_for_crystals_one_a_mark_and_one_more() {
         inked.lines,
         vec![
             "the needle goes in. 10 crystals. it does not hurt the way you expected.",
-            "jab and brace are both yours from here, this climb and every one after."
+            "‹jab› and ‹brace› are both yours from here, this climb and every one after."
         ]
     );
     assert_eq!((sheet.crystals, sheet.inks.clone()), (15, vec![3]));
@@ -914,7 +916,7 @@ fn ink_takes_a_draft_for_crystals_one_a_mark_and_one_more() {
     );
     assert_eq!(
         ahead.lines[1],
-        "burn and ground are both yours from level 9 on, this climb and every one after."
+        "‹burn› and ‹ground› are both yours from level 9 on, this climb and every one after."
     );
     assert_eq!(sheet.deck().len(), DECK.len() + 1, "no pick at 9 yet");
     sheet.cards.push(Card::Ground);
@@ -2248,7 +2250,7 @@ fn a_level_that_owes_a_card_holds_the_road_until_one_is_taken() {
                 card: Card::Brace,
                 replaces: Card::Strike,
             },
-            lines: vec!["brace is in your deck now, in place of a strike.".to_string()],
+            lines: vec!["‹brace› is in your deck now, in place of a ‹strike›.".to_string()],
         }
     );
     assert_eq!(

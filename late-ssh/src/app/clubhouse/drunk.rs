@@ -4,7 +4,9 @@
 //! without a query. A cache of DB rows, not a source of truth: the ghost
 //! seed task (`run_drunk_glow_task`) replaces it from the table every 60s
 //! on every replica, and a pour on this replica bumps it at once
-//! (`record_drink`). A pour on another replica shows here on the next seed.
+//! (`record_drink`); a pour that lands while a seed is reading the table
+//! outranks the seed's older row. A pour on another replica shows here on
+//! the next seed.
 //!
 //! The effective level decays against wall clock at read time (see
 //! `late_core::models::drinks`), so a drinker sobers up while logged out.
@@ -56,10 +58,18 @@ impl DrunkMap {
         );
     }
 
-    /// Wholesale replace the map from a DB seed pass. Passing only
+    /// Replace the map from a DB seed pass read at `seeded_at`. Passing only
     /// still-active rows also prunes users who sobered up or were deleted.
-    pub fn set_drunk_states(&self, entries: Vec<(Uuid, i64, DateTime<Utc>)>) {
-        *self.inner.lock_recover() = entries
+    /// A pour recorded here after `seeded_at` (it landed while the seed was
+    /// reading the table) is newer than the snapshot and is kept, so a seed
+    /// never knocks a patron back below a line they just crossed.
+    pub fn set_drunk_states(
+        &self,
+        seeded_at: DateTime<Utc>,
+        entries: Vec<(Uuid, i64, DateTime<Utc>)>,
+    ) {
+        let mut inner = self.inner.lock_recover();
+        let mut seeded: HashMap<Uuid, DrunkEntry> = entries
             .into_iter()
             .map(|(user_id, points, last_drink_at)| {
                 (
@@ -71,6 +81,12 @@ impl DrunkMap {
                 )
             })
             .collect();
+        for (user_id, entry) in inner.iter() {
+            if entry.last_drink_at > seeded_at {
+                seeded.insert(*user_id, *entry);
+            }
+        }
+        *inner = seeded;
     }
 
     /// One drinker's level right now; 0 when the map has never seen them.

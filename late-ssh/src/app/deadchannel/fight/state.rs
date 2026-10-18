@@ -1361,8 +1361,8 @@ impl Sheet {
                 Refusal::ShortCrystals { by },
                 format!(
                     "{price} crystals to ink {} and {}. you are {by} short.",
-                    draft.options[0].name(),
-                    draft.options[1].name()
+                    draft.options[0].marked(),
+                    draft.options[1].marked()
                 ),
             ));
         }
@@ -2062,18 +2062,18 @@ impl Sheet {
                     self.max_signal()
                 )
             }
-            Drink::Feedback => {
-                "feedback. the glass hums before you touch it. a surge in your deck until the roll."
-                    .to_string()
-            }
-            Drink::Squelch => {
-                "squelch. it cuts the hiss off at the root. a burn in your deck until the roll."
-                    .to_string()
-            }
-            Drink::SignOff => {
-                "sign-off. the bars go to black and hold there. a mute in your deck until the roll."
-                    .to_string()
-            }
+            Drink::Feedback => format!(
+                "feedback. the glass hums before you touch it. a {} in your deck until the roll.",
+                Card::Surge.marked()
+            ),
+            Drink::Squelch => format!(
+                "squelch. it cuts the hiss off at the root. a {} in your deck until the roll.",
+                Card::Burn.marked()
+            ),
+            Drink::SignOff => format!(
+                "sign-off. the bars go to black and hold there. a {} in your deck until the roll.",
+                Card::Mute.marked()
+            ),
         };
         Outcome {
             applied: Applied::Drank { drink },
@@ -2098,7 +2098,7 @@ impl Sheet {
         let crystals = rules.ink_crystals;
         self.crystals -= crystals;
         self.inks.push(level);
-        let [first, second] = draft.options.map(Card::name);
+        let [first, second] = draft.options.map(Card::marked);
         let lines = vec![
             format!(
                 "the needle goes in. {crystals} crystals. it does not hurt the way you expected."
@@ -2285,8 +2285,8 @@ impl Sheet {
         self.cards.push(card);
         let mut lines = vec![format!(
             "{} is in your deck now, in place of a {}.",
-            card.name(),
-            draft.replaces.name()
+            card.marked(),
+            draft.replaces.marked()
         )];
         if self.draft().is_some() {
             lines.push(DRAFT_LINE.to_string());

@@ -176,9 +176,11 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
   refused too because it pours the buyer's own drink. Below the line the
   bar pours anything, so a patron can still drink their way up to it.
   `App::nightcap_order` reads the level fresh from the process's drunk map
-  (`DrunkMap::level`), not the 1 Hz `App.drunk_levels` copy, so the pour
-  that just landed already counts; a pour on another replica (the tavern's
-  bartender) reaches it on the next 60s seed. The open menu shows "cut
+  (`clubhouse::State::drunk_level`), not the 1 Hz `App.drunk_levels` copy,
+  so the pour that just landed already counts, and a seed pass that was
+  mid-read when it landed keeps it rather than the table's older row; a
+  pour on another replica (the tavern's bartender) reaches it on the next
+  60s seed. The open menu shows "cut
   off." in place of the prices (`ui.rs`, from `App.drunk_levels`). The
   buzz decays, so the cutoff lifts on its own once they come back down to
   sloshed. Client gate, like the seat: the bar is the only path to these
