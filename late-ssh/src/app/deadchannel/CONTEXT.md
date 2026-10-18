@@ -816,23 +816,27 @@ numbers are `Card::effect`'s):
   (pure) decides what one command was worth, `FightService::post_news`
   words it, and `ChatService::post_wire_line_task` posts it in
   #deadchannel from the `afterglow` voice (ensures the voice, joins it to
-  the room, sends; a failure is logged there). The lines: `Lost` posts
-  "<name>'s signal dropped at step S of the road. the street took N
-  bits." and nothing else; a win posts at most one story, the biggest of
-  a level gained ("<name> is level N." with the portrait's three rows
-  under it), the first kill ever ("<name> put down their first <foe>.",
-  exact through the row's `kills` count), a bright glyph ("<name> put
+  the room, sends; a failure is logged there). Every runner a line names
+  is an `@` mention, so the line lands in their mentions (a trailing full
+  stop is the sentence's: `common/mentions.rs`). The lines: `Lost` posts
+  "@<name>'s signal dropped at step S of the road. the street took N
+  bits." and nothing else; a crossing posts who lost what to whom
+  (`fight/CROSSING.md`); a win posts at most one story, the biggest of
+  a level gained ("@<name> is level N." with the portrait's three rows
+  under it), the first kill ever ("@<name> put down their first <foe>.",
+  exact through the row's `kills` count), a bright glyph ("@<name> put
   down a bright <foe>. it left a crystal."), or a near miss ("... with S
   signal left", signal at or under `NEAR_MISS_SIGNAL` (3)); and whatever
   the road's last step was (a fight won or run from, a rest, a cache),
-  finishing it adds the day's card ("<name> walked the road. K glyphs
+  finishing it adds the day's card ("@<name> walked the road. K glyphs
   down, R runs, signal S/M.", from `kills_today` and `runs_today`).
   Ordinary kills, cards, turns, runs, rests, caches, and purchases post
   nothing. Outside the fight, the join and the leave post too: the
-  welcome on a created runner, "<name> is back on the wire." on a
-  `Returned` one, and "<name> went dark." on the leave that stamps
-  `left_at` (each once by the same conditional statement that decides the
-  beat).
+  welcome on a created runner ("@<name>. you got through. ..."),
+  "@<name> is back on the wire." on a `Returned` one, and "<name> went
+  dark." on the leave that stamps `left_at`, said and not mentioned
+  because the leaver asked the wire to go quiet (each once by the same
+  conditional statement that decides the beat).
 - **Where the mirror comes from.** `App.fight` (`FightSession`) reloads
   at connect for a standing runner (`App::new`), on every descent (`0`
   on the clubhouse, or Enter on the hub card), on every walk up to the static, and on every
@@ -1041,7 +1045,8 @@ roles are in §2.
   `late-core/src/models/deadchannel_ambush.rs`): one row per fight
   between two runners (§3c, "The crossing"): `day`, the attacker and the
   defender (ids and usernames as they were), `step` (null for an
-  answer), `stake` (the defender's bits on hand at the start),
+  answer), `stake` (the most a win takes: `CROSSING_TAKE_PERCENT`,
+  half, of the defender's bits on hand at the start),
   `answer_to` (the crossing an answer settles), `started_at`,
   `ended_at` with `outcome` won, lost, ran, or dropped, and
   `bits_moved` from the attacker's side. The three unique partial

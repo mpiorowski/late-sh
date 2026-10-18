@@ -1191,18 +1191,12 @@ fn rival_lines(prey: &Prey, threat: Option<Threat>, sheet: &Sheet) -> Vec<Line<'
         pattern_spans(data::RUNNER_PATTERN),
         width.saturating_sub(numbers.chars().count()),
     );
-    let carrying = match prey.stake {
-        0 => "carrying nothing".to_string(),
-        n => format!("carrying {n} bits"),
-    };
+    let carrying = data::carrying_line(prey.carrying, prey.stake);
     let rows: [Vec<Span<'static>>; 3] = [
         head,
         [vec![Span::styled(numbers, dim_text)], moves].concat(),
         vec![Span::styled(
-            truncate(
-                &format!("{carrying} · a ration · fall, lose all you carry"),
-                width,
-            ),
+            truncate(&format!("{carrying} · a ration · fall, lose all"), width),
             text,
         )],
     ];
@@ -1233,7 +1227,7 @@ pub(crate) fn news_line(news: &Ambush) -> String {
     let moved = news.bits_moved.abs();
     match (news.is_answer(), news.outcome) {
         (false, Some(AmbushOutcome::Won)) => match moved {
-            0 => format!("{them} crossed you while you were gone. you were carrying nothing."),
+            0 => format!("{them} crossed you while you were gone. they took nothing."),
             n => format!("{them} crossed you while you were gone. {n} bits gone."),
         },
         (false, Some(AmbushOutcome::Lost)) => match moved {
@@ -1246,7 +1240,7 @@ pub(crate) fn news_line(news: &Ambush) -> String {
             format!("{them} crossed you while you were gone and ran.")
         }
         (true, Some(AmbushOutcome::Won)) => match moved {
-            0 => format!("{them} answered you. you were carrying nothing."),
+            0 => format!("{them} answered you. they took nothing."),
             n => format!("{them} answered you. {n} bits gone."),
         },
         (true, Some(AmbushOutcome::Lost)) => match moved {
@@ -1278,13 +1272,20 @@ fn lookout_lines(lookout: &Lookout, picker: &Picker) -> (Vec<Line<'static>>, Vec
         ]));
     }
     if let Some(token) = &lookout.token {
-        let them = &token.ambush.attacker_username;
+        let them = &token.crosser;
         match &token.prey {
             Some(prey) => {
                 lines.push(Line::from(vec![
                     Span::styled("    ", text),
                     Span::styled(
-                        format!("you are owed an answer. {them} is on the wire, carrying {}. no ration. ", prey.stake),
+                        match prey.stake {
+                            0 => format!(
+                                "owed an answer: {them} is on the wire, nothing to take. no ration. "
+                            ),
+                            n => format!(
+                                "owed an answer: {them} is on the wire, {n} bits to take. no ration. "
+                            ),
+                        },
                         dim_text,
                     ),
                     threat_span(picker.answer),

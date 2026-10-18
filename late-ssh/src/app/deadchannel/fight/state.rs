@@ -90,11 +90,11 @@ use uuid::Uuid;
 
 use super::cards::{self, Board, Card, Draft, ENERGY, Piles};
 use super::data::{
-    self, BRIGHT_LINE, CACHE_LINES, CLEAR_LINE, CRYSTAL_LINE, DRAFT_LINE, DRINK_CRYSTALS,
-    DRINK_SIGNAL_PER_LEVEL, DROP_LINES, FOES, FoeKind, FoeTier, GARNISH_PERCENT, HEARD_LINE,
-    Intent, KILL_LINES, LOAN_FEE_PERCENT, LOCKER_FEE_PERCENT, MARK_BONUS_CAP, MAX_LEVEL,
-    NEAR_MISS_SIGNAL, OLD_SIGNAL, PATCHED_TODAY_LINE, RATIONS_PER_DAY, RULES, RUN_LINES, Rules,
-    SIGNAL_PER_LEVEL, SLAIN_LINE, START_BITS, STATIC_LINE, STEPPED_DOWN_LINE, percent_up,
+    self, BRIGHT_LINE, CACHE_LINES, CLEAR_LINE, CROSSING_TAKE_PERCENT, CRYSTAL_LINE, DRAFT_LINE,
+    DRINK_CRYSTALS, DRINK_SIGNAL_PER_LEVEL, DROP_LINES, FOES, FoeKind, FoeTier, GARNISH_PERCENT,
+    HEARD_LINE, Intent, KILL_LINES, LOAN_FEE_PERCENT, LOCKER_FEE_PERCENT, MARK_BONUS_CAP,
+    MAX_LEVEL, NEAR_MISS_SIGNAL, OLD_SIGNAL, PATCHED_TODAY_LINE, RATIONS_PER_DAY, RULES, RUN_LINES,
+    Rules, SIGNAL_PER_LEVEL, SLAIN_LINE, START_BITS, STATIC_LINE, STEPPED_DOWN_LINE, percent_up,
 };
 use super::policy;
 use super::road::{self, Mark, Node, Road, RoadRun, Trace};
@@ -144,7 +144,9 @@ pub struct Prey {
     pub signal: i32,
     pub attack: u32,
     pub defense: u32,
-    /// Their bits on hand: the most a win can take.
+    /// Their bits on hand, as the road shows them.
+    pub carrying: i64,
+    /// The crossing's cut of what they carry: the most a win can take.
     pub stake: i64,
 }
 
@@ -169,7 +171,8 @@ impl Prey {
             signal: sheet.max_signal(),
             attack: sheet.attack(),
             defense: sheet.defense(),
-            stake: sheet.bits,
+            carrying: sheet.bits,
+            stake: sheet.crossing_stake(),
         }
     }
 
@@ -217,6 +220,9 @@ pub struct Lookout {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token {
     pub ambush: late_core::models::deadchannel_ambush::Ambush,
+    /// The name the crosser goes by now, which the road shows; the ambush
+    /// row keeps the one they had that night.
+    pub crosser: String,
     pub prey: Option<Prey>,
 }
 
@@ -1542,6 +1548,12 @@ impl Sheet {
         garnished
     }
 
+    /// What a crossing won against this runner takes, as they stand: the
+    /// crossing's cut of the bits on hand.
+    pub fn crossing_stake(&self) -> i64 {
+        self.bits * CROSSING_TAKE_PERCENT / 100
+    }
+
     /// Up to `stake` bits off the hand, as a crossing takes them from the
     /// sleeper. Returns what came off.
     pub fn robbed(&mut self, stake: i64) -> i64 {
@@ -1628,8 +1640,8 @@ impl Sheet {
         let tier = prey.tier();
         let answer = prey.rival.answer;
         let arrives = match answer {
-            true => data::answer_arrives(&prey.rival.username, prey.stake),
-            false => data::crossing_arrives(&prey.rival.username, prey.stake),
+            true => data::answer_arrives(&prey.rival.username, prey.carrying, prey.stake),
+            false => data::crossing_arrives(&prey.rival.username, prey.carrying, prey.stake),
         };
         let rival = prey.rival;
         let mut fight = Fight::new(Quarry::Runner(rival.clone()), tier, deck, static_cards, rng);

@@ -14,7 +14,7 @@ use crate::app::bonsai::state::BonsaiAction;
 use crate::app::bonsai::svc::BonsaiActionResult;
 use crate::app::calendar::svc::{CalendarAnnouncement, CalendarOp, CalendarWrite};
 use crate::app::chat::news::svc::XMediaLookup;
-use crate::app::chat::svc::GildRefusal;
+use crate::app::chat::svc::{GildRefusal, SendRefusal};
 use crate::app::clubhouse::nightcap::svc::{NightcapHouseFailure, NightcapOrderResult};
 use crate::app::common::primitives::Screen;
 use crate::app::crown::svc::CrownRefusal;
@@ -594,9 +594,9 @@ mod inner {
         OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome,
         PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, RealmChatRoomAttach,
         RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
-        RoundRefusal, RunnerDoor, Screen, SessionStartStage, SessionUser, SnapshotRowError,
-        SongQueueReward, SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch,
-        TranslationResult, VizWireBands, WatchDoor,
+        RoundRefusal, RunnerDoor, Screen, SendRefusal, SessionStartStage, SessionUser,
+        SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
+        ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
@@ -822,6 +822,17 @@ mod inner {
             GildRefusal::AlreadyGilded => "already_gilded",
             GildRefusal::HeldHigher => "held_higher",
             GildRefusal::InsufficientChips => "insufficient_chips",
+        }
+    }
+
+    fn send_refusal_label(refusal: &SendRefusal) -> &'static str {
+        match refusal {
+            SendRefusal::NotAMember => "not_a_member",
+            SendRefusal::Banned => "banned",
+            SendRefusal::AnnouncementsAdminOnly => "announcements_admin_only",
+            SendRefusal::ReportOnly(_) => "report_only",
+            SendRefusal::SlowMode { .. } => "slow_mode",
+            SendRefusal::LinkCooldown { .. } => "link_cooldown",
         }
     }
 
@@ -1316,6 +1327,16 @@ mod inner {
             meter()
                 .u64_counter("late_ssh_chat_gilds_refused_total")
                 .with_description("Chat message gilds refused, by reason (none were charged)")
+                .build()
+        })
+    }
+
+    fn chat_sends_refused_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_chat_sends_refused_total")
+                .with_description("Chat sends refused by a room rule, by reason")
                 .build()
         })
     }
@@ -2550,6 +2571,10 @@ mod inner {
         chat_gilds_refused_total().add(1, &[KeyValue::new("reason", gild_refusal_label(refusal))]);
     }
 
+    pub(crate) fn record_chat_send_refused(refusal: &SendRefusal) {
+        chat_sends_refused_total().add(1, &[KeyValue::new("reason", send_refusal_label(refusal))]);
+    }
+
     pub fn record_bonsai_action(action: BonsaiAction, result: BonsaiActionResult) {
         bonsai_actions_total().add(
             1,
@@ -3319,9 +3344,9 @@ mod inner {
         OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome,
         PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, RealmChatRoomAttach,
         RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
-        RoundRefusal, RunnerDoor, Screen, SessionStartStage, SessionUser, SnapshotRowError,
-        SongQueueReward, SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch,
-        TranslationResult, VizWireBands, WatchDoor,
+        RoundRefusal, RunnerDoor, Screen, SendRefusal, SessionStartStage, SessionUser,
+        SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
+        ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
@@ -3399,6 +3424,7 @@ mod inner {
     pub fn record_radio_meta_poll(_feed: PolledFeed, _outcome: PollOutcome) {}
     pub fn record_gild_bought(_tier: GildTier) {}
     pub fn record_gild_refused(_refusal: GildRefusal) {}
+    pub(crate) fn record_chat_send_refused(_refusal: &SendRefusal) {}
     pub fn record_bonsai_action(_action: BonsaiAction, _result: BonsaiActionResult) {}
     pub fn record_crown_taken(_price: i64) {}
     pub fn record_crown_take_refused(_refusal: CrownRefusal) {}

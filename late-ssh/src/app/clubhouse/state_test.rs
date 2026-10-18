@@ -49,7 +49,7 @@ fn placement(state: &State, n: u128) -> Option<Placement> {
 #[test]
 fn a_session_sits_down_the_moment_it_logs_in() {
     let state = session(vec![other(2, Spot::Walking { x: 30, y: 12 }, 0)], false);
-    assert_eq!(state.headcount(), 2);
+    assert_eq!(state.crowd.headcount(), 2);
     assert!(
         matches!(placement(&state, ME), Some(Placement::Seated(_))),
         "a returning user spawns seated, not at the door"

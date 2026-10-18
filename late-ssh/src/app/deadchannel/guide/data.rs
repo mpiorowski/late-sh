@@ -355,10 +355,10 @@ pub const SECTIONS: &[Section] = &[
                 "a crossing costs a *ration*, like any step. the sleeper fights at *full signal* with your numbers against theirs and one mind: {hits}, {hits}, {gathers}, {heavy}. their cards stay in their pocket; yours do not.",
             ),
             Block::Rule(
-                "put them down and you take every bit they were carrying. *no exp*, no kill on the sheet: the road is the way up, the crossing is the money and the story. go down and it is the road's full fall: your signal is down for the day, every bit on you goes to them, and you keep most of the exp.",
+                "put them down and you take half of what they were carrying. *no exp*, no kill on the sheet: the road is the way up, the crossing is the money and the story. go down and it is the road's full fall: your signal is down for the day, every bit on you goes to them, and you keep most of the exp.",
             ),
             Block::Rule(
-                "a sleeper risks only what they carry. their signal, their exp, and their day are untouched. the locker is for nights you would rather not be carrying.",
+                "a sleeper risks only what they carry. their signal, their exp, and their day are untouched. a crossing takes half of what is on them; the locker takes a tenth and keeps the rest safe. carrying is a bet.",
             ),
             Block::Rule(
                 "whoever was crossed and lost is owed an *answer*: within a day, `r` on the road fights the one who did it for what they carry now, no ration. win and it is back; lose and it is the full fall again. one answer per crossing.",

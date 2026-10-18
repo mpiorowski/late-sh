@@ -341,20 +341,30 @@ pub const CROSSING_LEVEL_BAND: i32 = 2;
 /// How long a crossing can be answered for, from the moment it ended.
 pub const ANSWER_HOURS: i64 = 24;
 
-/// What the scene says when a crossing starts: the sleeper, and what they
-/// carry.
-pub fn crossing_arrives(username: &str, stake: i64) -> String {
-    match stake {
-        0 => format!("{username}. asleep on their feet, and carrying nothing."),
-        n => format!("{username}. asleep on their feet, carrying {n} bits."),
-    }
+/// What the scene says when a crossing starts: the sleeper, what they
+/// carry, and the cut a win takes of it.
+pub fn crossing_arrives(username: &str, carrying: i64, stake: i64) -> String {
+    format!(
+        "{username}. asleep on their feet, {}.",
+        carrying_line(carrying, stake)
+    )
 }
 
 /// What the scene says when an answer starts.
-pub fn answer_arrives(username: &str, stake: i64) -> String {
-    match stake {
-        0 => format!("{username}. awake this time, and carrying nothing."),
-        n => format!("{username}. awake this time, carrying {n} bits."),
+pub fn answer_arrives(username: &str, carrying: i64, stake: i64) -> String {
+    format!(
+        "{username}. awake this time, {}.",
+        carrying_line(carrying, stake)
+    )
+}
+
+/// What a rival carries and the cut a win takes, the way the road and
+/// the scene say it, unpunctuated: "carrying 340 bits, 170 to take".
+pub fn carrying_line(carrying: i64, stake: i64) -> String {
+    match (carrying, stake) {
+        (0, _) => "carrying nothing".to_string(),
+        (n, 0) => format!("carrying {n} bits, too few to take any"),
+        (n, s) => format!("carrying {n} bits, {s} to take"),
     }
 }
 
@@ -882,6 +892,13 @@ pub const INK_CRYSTALS: i32 = 10;
 /// rounded up so no deposit is free. LoGD's bank takes nothing and pays
 /// interest; the locker pays none and takes this. Withdrawals are free.
 pub const LOCKER_FEE_PERCENT: i64 = 10;
+
+/// What a crossing won takes off the sleeper, a percentage of the bits
+/// they carry, rounded down; an answer takes the same. Half, so a night
+/// carrying is a bet and the locker a choice: its cut is cheaper only for
+/// a runner crossed more often than one night in five. The attacker who
+/// goes down still takes the road's full fall: they chose the fight.
+pub const CROSSING_TAKE_PERCENT: i64 = 50;
 
 /// The machine's fee on every loan, a percentage of what it hands over,
 /// rounded up, added to the debt once when it lends. The debt never grows

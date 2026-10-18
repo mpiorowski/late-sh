@@ -24,7 +24,8 @@ The session's Enter there is `FightService::cross_task`, not a
 - locks the first whose row still stands (`find_prey`), rolls their day
   under the lock (`settle_day`: a rival fight the roll wipes closes its
   ambush row as dropped) and stores it if it turned, claims the ambush
-  row (`stake` their bits on hand; a cap the preview missed is the
+  row (`stake`, `Sheet::crossing_stake`: `CROSSING_TAKE_PERCENT`, half,
+  of their bits on hand, rounded down; a cap the preview missed is the
   insert's `ON CONFLICT DO NOTHING`, and the next in order is tried),
   and hands the sheet a `Prey` (`Sheet::cross(lane, Option<Prey>, rng)`:
   the ration, the step marked, `Quarry::Runner(Rival)` on the row with
@@ -35,6 +36,12 @@ Nobody left is `Refusal::NobodyThere`, nothing spent. The fight is the
 normal round.
 
 ## The settle
+
+A win takes half of what the sleeper carries, not all of it, so a
+night carrying is a bet and the locker (`MONEY.md`, a tenth on the way
+in) a choice: it is the cheaper one only for a runner crossed more often
+than one night in five. The road and the scene say both numbers
+(`data::carrying_line`: "carrying 340 bits, 170 to take").
 
 `Applied::Ambushed { rival, stake }` moves nothing on the sheet: the same
 transaction locks the sleeper's row (`settle_won`), takes up to the
@@ -62,17 +69,22 @@ crossing won against this runner inside `ANSWER_HOURS` (24) and not yet
 answered (`Ambush::answerable`), the one who did it locked and claimed as
 an answer row (`answer_to`, one per crossing), on the row as a rival
 through `Sheet::answer(Answer, rng)` with no ration and no step, the
-same stakes. Refused with nothing owed (`NoAnswerOwed`), with them gone
-dark, down, or in a fight (`NotOnTheWire`: the answer keeps), down, or
-with a fight waiting.
+same stakes. The rival carries the name the crosser goes by now
+(`current_username`), not the one the crossing row kept: the wire
+mentions it, and a mention finds its runner by the current handle; the
+lookout's token (`Token::crosser`, the label and key under the road)
+reads the same name. Refused with nothing owed (`NoAnswerOwed`), with
+them gone dark, down, or in a fight (`NotOnTheWire`: the answer keeps),
+down, or with a fight waiting.
 
 ## The lookout
 
 After every answer and reload the task reads a `Lookout` for the session
 (`lookout_for`, off the rows as they stand, outside the transaction):
 `crossing` (the preview, `Prey` with a nil ambush id), `token` (the
-crossing owed an answer, and the crosser as prey when on the wire),
-`news` (the latest fight on this runner in the window), all `None` while
+crossing owed an answer, the crosser's current name, and the crosser as
+prey when on the wire), `news` (the latest fight on this runner in the
+window, worded with the names the row kept that night), all `None` while
 a fight is on the row. A lookout that fails to read is logged and
 counted (`lookout_failed`) and the session gets the empty one: the
 answer that landed is never reported failed for it. The road draws the
@@ -81,8 +93,17 @@ lookout under the legend and the threat words come from
 
 ## The wire and the beats
 
-"<a> crossed <d> at step S. <d> never woke. N bits changed hands.",
-"... and went down. <d> never woke. N bits off <a> are <d>'s.", "<a>
-answered <d>. N bits back.", "<a> answered <d> and went down again. N
-bits more to <d>."; the carrying-nothing wordings beside each. Beats on
-the fight counter: `crossed`, `answered`, `ambushed`, `downed`.
+Every runner on a line is an `@` mention, so it lands in their mentions
+too, and every line says who lost what to whom (a crossing moves bits
+on hand only; a fall also drops the signal). A fight can sit on the row
+until the next roll, so the rival is named as they go by when the line
+is posted (`wire_name`), not as the fight kept them; the scene's own
+lines keep the fight's name. The wording:
+"@<a> crossed @<d> at step S and won. @<d> never woke and lost N bits to
+@<a>.", "@<a> crossed @<d> at step S and went down. @<d> never woke. @<a>
+lost their signal and N bits to @<d>.", "@<a> answered @<d> and won. @<d>
+lost N bits to @<a>.", "@<a> answered @<d> and went down again. @<a> lost
+their signal and N bits to @<d>."; with nothing taken, the loser "lost
+nothing" (a win) or "lost their signal, with no bits on hand for @<d>"
+(a fall). Beats on the fight counter: `crossed`,
+`answered`, `ambushed`, `downed`.

@@ -2502,7 +2502,8 @@ fn before_the_crossing() -> (Sheet, u8) {
     (sheet, lane)
 }
 
-fn tom(stake: i64, answer: bool) -> Prey {
+/// Tom carrying `carrying` bits, the crossing's half of them at stake.
+fn tom(carrying: i64, answer: bool) -> Prey {
     Prey {
         rival: Rival {
             user_id: Uuid::from_u128(7),
@@ -2519,7 +2520,8 @@ fn tom(stake: i64, answer: bool) -> Prey {
         signal: 20,
         attack: 3,
         defense: 0,
-        stake,
+        carrying,
+        stake: carrying / 2,
     }
 }
 
@@ -2550,7 +2552,7 @@ fn a_crossing_spends_a_ration_and_puts_the_sleeper_on_the_row() {
     );
     assert_eq!(
         outcome.lines,
-        vec!["tom. asleep on their feet, carrying 340 bits.".to_string()]
+        vec!["tom. asleep on their feet, carrying 340 bits, 170 to take.".to_string()]
     );
     assert_eq!(sheet.rations_left, rations - 1);
     assert_eq!(
@@ -2566,7 +2568,10 @@ fn a_crossing_spends_a_ration_and_puts_the_sleeper_on_the_row() {
     assert_eq!(fight.foe_signal, 20);
     assert_eq!(fight.foe_max_signal, 20);
     assert_eq!(fight.foe_attack, 3);
-    assert_eq!(fight.foe_bits, 340);
+    assert_eq!(
+        fight.foe_bits, 170,
+        "the crossing's half of what tom carries"
+    );
     assert_eq!(fight.foe_exp, 0);
     assert_eq!(fight.pattern(), RUNNER_PATTERN);
     assert_eq!(fight.portrait(), ["  ▘  ", " ▗▖▝ ", "  ▖  "]);
@@ -2586,6 +2591,19 @@ fn a_crossing_spends_a_ration_and_puts_the_sleeper_on_the_row() {
     assert_eq!(Sheet::from_row(&row).expect("a readable sheet"), sheet);
 }
 
+/// A crossing takes half of what the sleeper carries, rounded down, so a
+/// night carrying is a bet and the locker a choice, not a chore.
+#[test]
+fn the_crossing_stakes_half_of_what_the_sleeper_carries() {
+    let mut sleeper = fresh();
+    let portrait = || [String::new(), String::new(), String::new()];
+    for (carrying, stake) in [(340, 170), (99, 49), (1, 0), (0, 0)] {
+        sleeper.bits = carrying;
+        let prey = Prey::of(&sleeper, "tom", portrait(), Uuid::nil(), false);
+        assert_eq!((prey.carrying, prey.stake), (carrying, stake));
+    }
+}
+
 #[test]
 fn putting_a_sleeper_down_reports_the_stake_and_moves_nothing_on_the_sheet() {
     let (mut sheet, lane) = before_the_crossing();
@@ -2602,7 +2620,7 @@ fn putting_a_sleeper_down_reports_the_stake_and_moves_nothing_on_the_sheet() {
         outcome.applied,
         Applied::Ambushed {
             rival: tom(340, false).rival,
-            stake: 340
+            stake: 170
         }
     );
     assert_eq!(
@@ -2696,7 +2714,7 @@ fn an_answer_spends_nothing_and_is_refused_down_waiting_or_with_nobody_to_answer
     );
     assert_eq!(
         outcome.lines,
-        vec!["tom. awake this time, carrying 90 bits.".to_string()]
+        vec!["tom. awake this time, carrying 90 bits, 45 to take.".to_string()]
     );
     assert_eq!(sheet.rations_left, 0);
     assert!(sheet.road.path.is_empty(), "an answer is no step");

@@ -69,9 +69,8 @@ pub struct ActiveUser {
 
 pub type ActiveUsers = Arc<Mutex<HashMap<Uuid, ActiveUser>>>;
 
-/// Connected humans only: the always-on bots (@bartender, @graybeard, @bot)
-/// register with no fingerprint and are excluded, matching the clubhouse
-/// headcount.
+/// Connected humans only, over SSH or IRC: the always-on bots (@bartender,
+/// @graybeard, @bot) register with no fingerprint and are excluded.
 pub fn online_human_count(active_users: &HashMap<Uuid, ActiveUser>) -> usize {
     active_users
         .values()

@@ -346,7 +346,7 @@ impl FightService {
                     attacker_username: username.to_string(),
                     defender_username: their_name.clone(),
                     step: Some(sheet.step()),
-                    stake: theirs.bits,
+                    stake: theirs.crossing_stake(),
                     answer_to: None,
                     started_at: now,
                 },
@@ -458,6 +458,7 @@ impl FightService {
         if !on_the_wire(&theirs) {
             return Ok(sheet.answer(Answer::OffTheWire, &mut rand::thread_rng()));
         }
+        let their_name = current_username(tx.client(), owed.attacker_user_id).await?;
         let ambush_id = Uuid::now_v7();
         let claimed = Ambush::insert(
             tx,
@@ -467,9 +468,9 @@ impl FightService {
                 attacker_user_id: sheet.user_id,
                 defender_user_id: owed.attacker_user_id,
                 attacker_username: username.to_string(),
-                defender_username: owed.attacker_username.clone(),
+                defender_username: their_name.clone(),
                 step: None,
-                stake: theirs.bits,
+                stake: theirs.crossing_stake(),
                 answer_to: Some(owed.id),
                 started_at: now,
             },
@@ -480,7 +481,7 @@ impl FightService {
         }
         let prey = Prey::of(
             &theirs,
-            &owed.attacker_username,
+            &their_name,
             Self::portrait_of(&row),
             ambush_id,
             true,
@@ -602,6 +603,7 @@ impl FightService {
         let since = now - chrono::Duration::hours(ANSWER_HOURS);
         let token = match Ambush::answerable(client, sheet.user_id, since).await? {
             Some(ambush) => {
+                let crosser = current_username(client, ambush.attacker_user_id).await?;
                 let prey =
                     match DeadchannelRunner::find_by_user_standing(client, ambush.attacker_user_id)
                         .await?
@@ -611,7 +613,7 @@ impl FightService {
                             match on_the_wire(&theirs) {
                                 true => Some(Prey::of(
                                     &theirs,
-                                    &ambush.attacker_username,
+                                    &crosser,
                                     Self::portrait_of(&row),
                                     Uuid::nil(),
                                     true,
@@ -621,7 +623,11 @@ impl FightService {
                         }
                         None => None,
                     };
-                Some(Token { ambush, prey })
+                Some(Token {
+                    ambush,
+                    crosser,
+                    prey,
+                })
             }
             None => None,
         };
@@ -740,9 +746,13 @@ impl FightService {
 
     /// The news the wire carries, worded. Fire-and-forget through chat,
     /// which logs its own failure; a level gained carries the face, the
-    /// one moment worth a picture. `taken` is what a rival put down lost
-    /// to this runner.
+    /// one moment worth a picture. Every runner named is an `@` mention,
+    /// so the line lands in their mentions too. A crossing names who lost
+    /// what to whom; `taken` is what a rival put down lost to this runner.
+    /// The rival is named as they go by now (`wire_name`), not as the
+    /// fight kept them.
     async fn post_news(&self, username: &str, sheet: &Sheet, applied: &Applied, taken: i64) {
+        let me = format!("@{username}");
         for news in sheet.news(applied) {
             let body = match news {
                 News::Dropped { bits_lost, step } => {
@@ -750,61 +760,48 @@ impl FightService {
                         0 => "the street found nothing on them.".to_string(),
                         n => format!("the street took {n} bits."),
                     };
-                    format!("{username}'s signal dropped at step {step} of the road. {took}")
+                    format!("{me}'s signal dropped at step {step} of the road. {took}")
                 }
                 News::Ambushed {
                     rival,
                     step: Some(step),
                 } => {
-                    let them = rival.username;
-                    match taken {
-                        0 => format!(
-                            "{username} crossed {them} at step {step}. {them} never woke, and was carrying nothing."
-                        ),
-                        n => format!(
-                            "{username} crossed {them} at step {step}. {them} never woke. {n} bits changed hands."
-                        ),
-                    }
+                    let them = format!("@{}", self.wire_name(&rival).await);
+                    let lost = match taken {
+                        0 => "lost nothing".to_string(),
+                        n => format!("lost {n} bits to {me}"),
+                    };
+                    format!(
+                        "{me} crossed {them} at step {step} and won. {them} never woke and {lost}."
+                    )
                 }
                 News::Ambushed { rival, step: None } => {
-                    let them = rival.username;
-                    match taken {
-                        0 => format!("{username} answered {them}. {them} was carrying nothing."),
-                        n => format!("{username} answered {them}. {n} bits back."),
-                    }
+                    let them = format!("@{}", self.wire_name(&rival).await);
+                    let lost = match taken {
+                        0 => "lost nothing".to_string(),
+                        n => format!("lost {n} bits to {me}"),
+                    };
+                    format!("{me} answered {them} and won. {them} {lost}.")
                 }
                 News::Downed {
                     rival,
-                    step: Some(step),
+                    step,
                     bits_lost,
                 } => {
-                    let them = rival.username;
-                    match bits_lost {
-                        0 => format!(
-                            "{username} crossed {them} at step {step} and went down. {them} never woke. there was nothing on {username} to take."
+                    let them = format!("@{}", self.wire_name(&rival).await);
+                    let lost = match bits_lost {
+                        0 => format!("lost their signal, with no bits on hand for {them}"),
+                        n => format!("lost their signal and {n} bits to {them}"),
+                    };
+                    match step {
+                        Some(step) => format!(
+                            "{me} crossed {them} at step {step} and went down. {them} never woke. {me} {lost}."
                         ),
-                        n => format!(
-                            "{username} crossed {them} at step {step} and went down. {them} never woke. {n} bits off {username} are {them}'s."
-                        ),
-                    }
-                }
-                News::Downed {
-                    rival,
-                    step: None,
-                    bits_lost,
-                } => {
-                    let them = rival.username;
-                    match bits_lost {
-                        0 => format!(
-                            "{username} answered {them} and went down again. nothing on {username} to take."
-                        ),
-                        n => format!(
-                            "{username} answered {them} and went down again. {n} bits more to {them}."
-                        ),
+                        None => format!("{me} answered {them} and went down again. {me} {lost}."),
                     }
                 }
                 News::Leveled { level } => {
-                    self.with_face(sheet.user_id, format!("{username} is level {level}."))
+                    self.with_face(sheet.user_id, format!("{me} is level {level}."))
                         .await
                 }
                 News::Slain { marks } => {
@@ -812,22 +809,22 @@ impl FightService {
                     self.with_face(
                         sheet.user_id,
                         format!(
-                            "{username} put down the Old Signal. mark {marks}, {title}. back to level 1."
+                            "{me} put down the Old Signal. mark {marks}, {title}. back to level 1."
                         ),
                     )
                     .await
                 }
                 News::SteppedOff => {
-                    format!("{username} stepped off the ledge. level 1, bare hands, starting over.")
+                    format!("{me} stepped off the ledge. level 1, bare hands, starting over.")
                 }
                 News::FirstBlood { foe } => {
-                    format!("{username} put down their first {foe}. the static will remember.")
+                    format!("{me} put down their first {foe}. the static will remember.")
                 }
                 News::BrightDown { foe } => {
-                    format!("{username} put down a bright {foe}. it left a crystal.")
+                    format!("{me} put down a bright {foe}. it left a crystal.")
                 }
                 News::NearMiss { foe, signal } => {
-                    format!("{username} put down the {foe} with {signal} signal left.")
+                    format!("{me} put down the {foe} with {signal} signal left.")
                 }
                 News::RoadWalked {
                     kills,
@@ -844,9 +841,7 @@ impl FightService {
                         1 => ", 1 run".to_string(),
                         n => format!(", {n} runs"),
                     };
-                    format!(
-                        "{username} walked the road. {glyphs}{runs}, signal {signal}/{max_signal}."
-                    )
+                    format!("{me} walked the road. {glyphs}{runs}, signal {signal}/{max_signal}.")
                 }
             };
             self.chat.post_wire_line_task(body);
@@ -873,6 +868,26 @@ impl FightService {
             Ok(false) => {}
             Err(error) => {
                 tracing::error!(error = ?error, marks, "failed to grant the old signal badge");
+            }
+        }
+    }
+
+    /// The name a rival goes by now, for a wire line. The fight kept the
+    /// name they had when it began, and it can sit on the row until the
+    /// next roll; a mention finds its runner by the current handle. A read
+    /// that fails costs the line its mention, not the line: logged here,
+    /// the kept name goes out.
+    async fn wire_name(&self, rival: &Rival) -> String {
+        let read: Result<String> = async {
+            let client = self.db.get().await?;
+            current_username(&client, rival.user_id).await
+        }
+        .await;
+        match read {
+            Ok(name) => name,
+            Err(error) => {
+                tracing::error!(error = ?error, user_id = %rival.user_id, "failed to read a rival's name for the wire");
+                rival.username.clone()
             }
         }
     }
@@ -1037,6 +1052,16 @@ fn settled(row: &DeadchannelRunner, today: NaiveDate) -> Result<Sheet> {
     let mut theirs = Sheet::from_row(row).context("reading another runner's sheet")?;
     theirs.settle(today);
     Ok(theirs)
+}
+
+/// The name a runner goes by now, not the one an ambush row kept up to a
+/// day ago: the scene shows it and the wire mentions it, and a mention
+/// finds its runner by the current handle.
+async fn current_username(client: &Client, user_id: Uuid) -> Result<String> {
+    User::list_usernames_by_ids(client, &[user_id])
+        .await?
+        .remove(&user_id)
+        .with_context(|| format!("runner {user_id} has no user row"))
 }
 
 /// Whether a settled sheet is on the wire for the crossing: signal up

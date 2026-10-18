@@ -12,7 +12,7 @@ use std::{
     collections::{HashMap, HashSet},
     io::{self, Write},
     sync::{Arc, Mutex},
-    time::{Duration, Instant},
+    time::Instant,
 };
 use tokio::sync::{broadcast, mpsc, watch};
 use uuid::Uuid;
@@ -2072,11 +2072,11 @@ impl App {
     }
 
     /// A backtick detach hopped out of the Lateania world recently enough
-    /// that the door still counts as a live stop on the workspace cycle.
+    /// that the door still counts as a live stop on the workspace cycle: the
+    /// shared door window (`door::game::IDLE_WINDOW`).
     pub(crate) fn lateania_recently_active(&self) -> bool {
-        const LATEANIA_DETACH_WINDOW: Duration = Duration::from_secs(5 * 60);
         self.lateania_detached_at
-            .is_some_and(|at| at.elapsed() < LATEANIA_DETACH_WINDOW)
+            .is_some_and(|at| at.elapsed() < crate::app::door::game::IDLE_WINDOW)
     }
 
     pub(crate) fn enter_greendragon(&mut self) {

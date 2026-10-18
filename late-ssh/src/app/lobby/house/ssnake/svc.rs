@@ -48,11 +48,9 @@ use crate::app::{
 
 const MAX_INPUT_QUEUE: usize = 2;
 
-/// Deliberately shorter than the other house tables' five minutes: the arena
-/// is small and always live, so a seat nobody is touching has to go back into
-/// circulation fast. A player who is genuinely steering resets this several
-/// times a second.
-const SEAT_IDLE_TIMEOUT_SECS: u64 = 2 * 60;
+/// The same five minutes as the other house tables. A player who is genuinely
+/// steering resets this several times a second.
+const SEAT_IDLE_TIMEOUT_SECS: u64 = 5 * 60;
 /// Original `MaxSnakePoints`; caps body length plus pending growth.
 const MAX_SNAKE_LEN: i32 = 500;
 /// How many free cells to sample when placing a joining or respawning snake.
@@ -648,7 +646,7 @@ impl SharedState {
     /// for free and sit straight back down on a clean spawn. Parked (never
     /// steered) and dying snakes pay nothing — the first was never at risk
     /// and the second has already been charged for the crash it is playing
-    /// out. The idle kick never charges: it is involuntary and two minutes
+    /// out. The idle kick never charges: it is involuntary and five minutes
     /// away, so it cannot be used to dodge anything.
     fn leave(&mut self, user_id: Uuid, voluntary: bool) -> Option<Settlement> {
         let index = self.seat_index(user_id)?;

@@ -84,6 +84,29 @@ fn an_empty_tally_explains_itself() {
     assert!(text.contains("nobody online has said"), "{text:.400}");
 }
 
+/// The online slice is everyone connected minus those with no country, so
+/// its headline says how many of the connected it shows; otherwise it reads
+/// as a different "online" number from the sidebar's.
+#[test]
+fn the_online_headline_says_how_many_set_a_country() {
+    let mut state = UserMapState::default();
+    state.show_without_loading();
+    state.set_tallies_for_test(&[("PL", 14), ("NZ", 1)]);
+    state.set_online_for_test(Some(17));
+    let (text, _) = render(&mut state, 160, 48);
+    assert!(
+        text.contains("online now · 15 of 17 have set a country"),
+        "{text:.300}"
+    );
+
+    state.set_tallies_for_test(&[("PL", 1)]);
+    let (text, _) = render(&mut state, 160, 48);
+    assert!(
+        text.contains("online now · 1 of 17 has set a country"),
+        "{text:.300}"
+    );
+}
+
 /// A narrow terminal drops the list rather than the map, and neither draws
 /// past its box.
 #[test]
@@ -161,6 +184,182 @@ fn a_click_in_the_list_picks_that_country() {
         state.selected(),
         territory_for_code("NZ"),
         "and the map rings it"
+    );
+}
+
+/// Online, each country lists who is in it, right under its row.
+#[test]
+fn online_countries_name_their_people() {
+    let mut state = UserMapState::default();
+    state.show_without_loading();
+    state.set_people_for_test(&[("US", &["cws", "Renu"]), ("PL", &["mat"])]);
+    let (text, _) = render(&mut state, 160, 48);
+    let list = state.list_area_for_test().expect("a list was drawn");
+    let row = |y: u16| -> String {
+        (list.x..list.x + list.width)
+            .map(|x| text.chars().nth((y * 160 + x) as usize).unwrap_or(' '))
+            .collect()
+    };
+    let rows: Vec<String> = (list.y..list.y + 5).map(row).collect();
+    assert!(rows[0].contains("United States"), "{rows:?}");
+    assert!(rows[1].contains("@cws"), "{rows:?}");
+    assert!(rows[2].contains("@Renu"), "{rows:?}");
+    assert!(rows[3].contains("Poland"), "{rows:?}");
+    assert!(rows[4].contains("@mat"), "{rows:?}");
+}
+
+/// A country with more people than the list has rows is still read to the
+/// end: `j` reveals the block a line at a time before it moves on to the
+/// next country, and the wheel scrolls lines without moving the cursor.
+#[test]
+fn a_country_taller_than_the_list_can_be_read_to_the_end() {
+    use super::state::MousePress;
+
+    let names: Vec<String> = (0..60).map(|n| format!("p{n:02}")).collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut state = UserMapState::default();
+    state.show_without_loading();
+    state.set_people_for_test(&[("US", &names), ("PL", &["mat"])]);
+    let list_text = |state: &mut UserMapState| -> String {
+        let (text, _) = render(state, 160, 48);
+        let list = state.list_area_for_test().expect("a list was drawn");
+        (list.y..list.y + list.height)
+            .map(|y| -> String {
+                (list.x..list.x + list.width)
+                    .map(|x| text.chars().nth((y * 160 + x) as usize).unwrap_or(' '))
+                    .collect()
+            })
+            .collect::<Vec<String>>()
+            .join("\n")
+    };
+    assert!(
+        !list_text(&mut state).contains("@p59"),
+        "the list is shorter than the block"
+    );
+
+    // `j` walks the block to its last name before it leaves the country.
+    let mut steps = 0;
+    while !list_text(&mut state).contains("@p59") {
+        state.walk(1);
+        steps += 1;
+        assert_eq!(
+            state.cursor(),
+            0,
+            "still on the United States after {steps} steps"
+        );
+        assert!(steps < 100, "the block never scrolled to its end");
+    }
+    assert!(steps > 0);
+    state.walk(1);
+    assert_eq!(
+        state.cursor(),
+        1,
+        "the step after the last name is the next country"
+    );
+    assert!(list_text(&mut state).contains("Poland"));
+
+    // The wheel over the list scrolls a line and leaves the cursor alone.
+    let mut state = UserMapState::default();
+    state.show_without_loading();
+    state.set_people_for_test(&[("US", &names), ("PL", &["mat"])]);
+    render(&mut state, 160, 48);
+    let list = state.list_area_for_test().expect("a list was drawn");
+    assert!(state.handle_mouse(MousePress::ScrollDown, list.x + 2, list.y + 2));
+    assert_eq!(state.first_visible_line(), 1);
+    assert_eq!(state.cursor(), 0);
+    let text = list_text(&mut state);
+    assert!(text.starts_with("     @p00"), "{text:.60}");
+}
+
+/// A click on the map picks a country the list has scrolled past, and the
+/// list follows: its row is on screen after the click.
+#[test]
+fn a_map_click_brings_the_country_onto_the_list() {
+    use super::state::MousePress;
+
+    let names: Vec<String> = (0..60).map(|n| format!("p{n:02}")).collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut state = UserMapState::default();
+    state.show_without_loading();
+    state.set_people_for_test(&[("US", &names), ("PL", &["mat"])]);
+    let (text, _) = render(&mut state, 160, 48);
+    assert!(
+        !text.contains("Poland"),
+        "the names push Poland off the list"
+    );
+
+    // Nothing in the test knows where Poland is drawn; a click is tried
+    // across the map until one picks it.
+    let map = state.map_area_for_test().expect("a map was drawn");
+    let mut picked = false;
+    'cells: for y in map.y..map.y + map.height {
+        for x in map.x..map.x + map.width {
+            state.handle_mouse(MousePress::Down, x, y);
+            state.handle_mouse(MousePress::Up, x, y);
+            if state.cursor() == 1 {
+                picked = true;
+                break 'cells;
+            }
+        }
+    }
+    assert!(picked, "no cell of the map picked Poland");
+    let (text, _) = render(&mut state, 160, 48);
+    assert!(text.contains("Poland"), "{text}");
+    assert!(text.contains("@mat"), "{text}");
+}
+
+/// A pane too narrow for the list has nothing to reveal: `j` is the next
+/// country, however many names the current one hides.
+#[test]
+fn a_pane_without_a_list_walks_a_country_per_press() {
+    let names: Vec<String> = (0..20).map(|n| format!("p{n:02}")).collect();
+    let names: Vec<&str> = names.iter().map(String::as_str).collect();
+    let mut state = UserMapState::default();
+    state.show_without_loading();
+    state.set_people_for_test(&[("US", &names), ("PL", &["mat"]), ("DE", &["kai"])]);
+    render(&mut state, 60, 24);
+    assert!(
+        state.list_area_for_test().is_none(),
+        "no list at this width"
+    );
+    state.walk(1);
+    assert_eq!(state.cursor(), 1);
+    state.walk(1);
+    assert_eq!(state.cursor(), 2);
+    // The pane widens: the list comes back with the cursor's country on it.
+    let (text, _) = render(&mut state, 160, 24);
+    assert!(state.list_area_for_test().is_some());
+    assert!(text.contains("Germany"), "{text}");
+    assert!(text.contains("@kai"), "{text}");
+}
+
+/// A click on a person, or on the country after them, lands on the right
+/// country: the names push every country below them down the list.
+#[test]
+fn a_click_below_named_people_picks_the_right_country() {
+    use super::state::MousePress;
+
+    let mut state = UserMapState::default();
+    state.show_without_loading();
+    state.set_people_for_test(&[("US", &["cws", "Renu"]), ("PL", &["mat"])]);
+    render(&mut state, 160, 48);
+    let list = state.list_area_for_test().expect("a list was drawn");
+    // Mouse coordinates are 1-based, which is what the handler undoes.
+    let line_y = |line: u16| list.y + line + 1;
+
+    assert!(state.handle_mouse(MousePress::Down, list.x + 2, line_y(3)));
+    assert_eq!(
+        state.selected(),
+        territory_for_code("PL"),
+        "the fourth line is Poland"
+    );
+
+    render(&mut state, 160, 48);
+    assert!(state.handle_mouse(MousePress::Down, list.x + 2, line_y(2)));
+    assert_eq!(
+        state.selected(),
+        territory_for_code("US"),
+        "a name belongs to the country above it"
     );
 }
 

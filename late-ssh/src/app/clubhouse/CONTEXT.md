@@ -39,7 +39,9 @@ room is the chat surface, and the full history lives in #lounge on Home.
   it: the session sits itself down at login (`State::new`, `first_stand`),
   from the records presence already has. Bots have no session, so no
   presence; they are found in `active_users` for the online flags only.
-  The headcount in the frame title is the crowd's.
+  The frame title shows no headcount: the crowd counts terminal sessions
+  only, so it read lower than the sidebar's online count (which takes IRC
+  too), and two "online" numbers that disagree confuse more than they say.
 - **Nobody hands out seats.** A session picks its own spot
   (`crowd::pick_spot`: a random free seat, drawn per session, else the first
   free standing spot, else the door stack, `map::DOOR_STACK` slots and
@@ -254,5 +256,5 @@ room is the chat surface, and the full history lives in #lounge on Home.
 - `walkable` allows standing ON the counter but never behind it; the flood
   fill tests in `map.rs` guard the bartender alley seal and seat
   reachability. `DOOR_STACK` slots must stay walkable.
-- The tavern draws no widget chrome; headcount and key hints live in
+- The tavern draws no widget chrome; its key hints live in
   `app_frame_title` (`render.rs`). Update that line when keys change.

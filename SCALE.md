@@ -148,7 +148,7 @@ The first feature built under the rule is the first-contact haunting (`late-ssh/
 What each remaining item needs is not the same, which is why "make it a row" is the wrong instinct for most of them (the per-row plan lives in root CONTEXT.md §7 "Multi-replica readiness"):
 
 - session registry, paired client registry: stay pod-local by design under sticky ownership (the transport half, item 8 below)
-- active user presence, clubhouse lobby, scratchpad pairings, stream registry: a shared presence store (Redis) or an explicit "pod-local, dies with the pod" decision per structure; the round's buyer roster and the clubhouse headcount are the two places a wrong answer is user-visible
+- active user presence, clubhouse lobby, scratchpad pairings, stream registry: a shared presence store (Redis) or an explicit "pod-local, dies with the pod" decision per structure; the round's buyer roster is where a wrong answer is user-visible (the clubhouse frame no longer shows a headcount)
 - ghost bots (@bot, @graybeard, @bartender, the door announcers): single-leader election so two replicas never answer the same mention
 - translation daily call cap and single-flight set: a shared counter
 - leaderboard refresh loops: already DB-backed, duplicate work only
@@ -404,6 +404,45 @@ If the re-pairs start to matter, raise `worker-shutdown-timeout` (for example
 `24h`) under `controller.config` in the HelmChartConfig. It is one line, but old
 workers and their memory stay around for up to a day after each reload, and the
 next controller rollout still drops every websocket.
+
+### 10. A pair websocket that drops during a drain cannot come back for up to 6 h
+
+This is already a one-replica problem: during every `service-ssh` rollout two
+pods run at once. The old pod keeps its SSH sessions for the 6 h
+`termination_grace_period_seconds`, but as soon as it is terminating it leaves
+the `service-ssh` Service endpoints. The pair websocket on `api.late.sh` goes
+through ingress-nginx to that Service, so if a paired CLI's websocket drops
+for any reason while its session drains (dirty close, network blip, a Pain
+Point 9 reload), every reconnect lands on the new pod. The new pod's
+`SessionRegistry` does not know the token and answers 404 (`api.rs`,
+`ws pair rejected: no live session for token`,
+`late_ssh_ws_pair_rejected_unknown_token_total`). The CLI's `PairRetryPolicy` keeps
+retrying, once a minute after the first ten, until the old pod is killed and
+the SSH session dies with it. For that whole time the user has no paired
+audio, no device sync, and no visualizer, while the SSH TUI looks fine.
+
+How to recognise it: one `token_hint` rejected about once a minute on the
+new pod, starting after a rollout, with a `registered paired client session`
+and then a `websocket dirty close or error` for the same token on the old pod,
+and the rejections stopping at the old pod's grace deadline. Measured over
+the 2026-10-15/17 window: about 1,600 rejections from 8 tokens across two
+rollouts, each run ending at exactly rollout time + 6 h.
+
+What would fix it, cheapest first:
+
+- **Tell the user.** When a draining pod loses a session's pair websocket,
+  show a banner in that session saying the server was updated and a
+  reconnect brings the audio back. It stays inside `service-ssh` and fixes
+  nothing, but it turns a silent 6 h loss into one keypress.
+- **Forward to the owner.** A headless peer Service over the `service-ssh`
+  pods with `publishNotReadyAddresses = true`, so terminating pods stay in
+  its DNS. A pod that gets an unknown token asks its peers which one holds the
+  session and proxies the websocket there. This is the "routes/proxies to the
+  owning pod" half of Immediate Next Work 8, at the size of two pods, so
+  building it here is a step toward sharding rather than a detour.
+
+Shortening the grace period is not a fix: it trades this for cutting every
+draining SSH session sooner.
 
 ## Render-Cost Program (shipped 2026-07-22/23)
 
@@ -827,9 +866,9 @@ Minimum viable design:
   - ingress uses a deterministic sticky key that guarantees same pod
 - On session end, remove token ownership
 
-Do not scale `service-ssh` randomly before this exists.
+Do not scale `service-ssh` randomly before this exists. The proxy half already pays for itself at one replica: it closes Pain Point 10.
 
-The app half runs in parallel and is the longer job: work the root CONTEXT.md §7 "Multi-replica readiness" table row by row, in the order the transport design needs them (presence first, since sticky sessions alone do not make the headcount or a round's roster right; ghost single-leader second, since duplicate bot replies are the first thing users would notice; the translation cap last). New features never add rows to that table (CONTEXT.md §0 rule); a switch still held in process memory becomes a row as it is touched (Pain Point 2).
+The app half runs in parallel and is the longer job: work the root CONTEXT.md §7 "Multi-replica readiness" table row by row, in the order the transport design needs them (presence first, since sticky sessions alone do not make a round's roster right; ghost single-leader second, since duplicate bot replies are the first thing users would notice; the translation cap last). New features never add rows to that table (CONTEXT.md §0 rule); a switch still held in process memory becomes a row as it is touched (Pain Point 2).
 
 ### 9. Add PgBouncer
 
