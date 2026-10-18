@@ -874,7 +874,7 @@ async fn a_crossing_takes_the_sleepers_bits_and_the_sleeper_answers_for_them() {
     // The name mira goes by now, not the "mira" the crossing row kept: the
     // answer's wire line mentions it, and a mention finds its runner by the
     // current handle.
-    let mira_name = User::list_usernames_by_ids(&**client, &[mira])
+    let mira_name = User::list_usernames_by_ids(&client, &[mira])
         .await
         .expect("read")
         .remove(&mira)
