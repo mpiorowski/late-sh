@@ -3346,11 +3346,12 @@ impl App {
     }
 
     /// A seated Nightcap patron orders from the house menu. `State::pick`
-    /// gates it (a stool, one order at a time); `nightcap::svc` moves the
+    /// gates it (a stool, one order at a time, not cut off); `nightcap::svc` moves the
     /// chips off-thread on the same rails as the tavern's bartender and
     /// reports back over the session's outcome channel.
     pub(crate) fn nightcap_order(&mut self, order: crate::app::clubhouse::nightcap::state::Order) {
-        let Some(order) = self.nightcap.pick(order) else {
+        let drunk_level = self.clubhouse.drunk_level(self.user_id, chrono::Utc::now());
+        let Some(order) = self.nightcap.pick(order, drunk_level) else {
             return;
         };
         crate::app::clubhouse::nightcap::svc::spawn_order(

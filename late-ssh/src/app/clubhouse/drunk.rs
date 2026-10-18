@@ -73,6 +73,14 @@ impl DrunkMap {
             .collect();
     }
 
+    /// One drinker's level right now; 0 when the map has never seen them.
+    pub fn level(&self, user_id: Uuid, now: DateTime<Utc>) -> u8 {
+        self.inner
+            .lock_recover()
+            .get(&user_id)
+            .map_or(0, |entry| entry.level(now))
+    }
+
     /// Current drunk levels, omitting the sober.
     pub fn levels(&self, now: DateTime<Utc>) -> HashMap<Uuid, u8> {
         self.inner

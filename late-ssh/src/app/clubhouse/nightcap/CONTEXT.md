@@ -24,7 +24,7 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
 | `state.rs` | Per-session state: this session's own stool (its part of its presence record), the derived row, the `Drink` menu, the one `Order` in flight, the outcome channel, the footer line, `round_patrons`. Pure; never touches chips. |
 | `wall.rs` | `SharedWall`, the process-global wall snapshot: the TV's headline and newest Artboard piece, the tab board, the carvings by stool. Read-only for sessions. |
 | `svc.rs` | Orchestration: `NightcapHouse` (the DB and the wall) runs the one wall refresh task per process and writes carvings; `spawn_order` places an order off-thread on the chip service, mirrors the buzz into the tavern's drunk map, says the drink out loud through `HouseVoice`, logs and counts; `spawn_credit_check` counts the drinks a patron is holding. All report an `Outcome` back. |
-| `input.rs` | `1`-`6` sit/stand, `i`/Enter compose (seated only), `d` menu (`1`-`4` pour, `r` a round), `c` the knife; while the knife is out every key goes to the one-line field. `compose_room` is the seat gate the icon picker also asks. |
+| `input.rs` | `1`-`6` sit/stand, `i`/Enter compose (seated only), `d` menu (`1`-`4` pour, `r` a round; refused once wasted), `c` the knife; while the knife is out every key goes to the one-line field. `compose_room` is the seat gate the icon picker also asks. |
 | `ui.rs` | Renderer: title, the TV line, stool rows (name, drunk word, pour marks, time on the stool, the carving), the tab board, the last lines, the notice row, then the key hints (or the menu, or the carving field), and the composer block while this session holds a stool. |
 
 ## 3. The room (chat contract)
@@ -167,6 +167,22 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
   who are sitting at the bar and will drink it. The credit itself is good
   at either bar; what it pours is set where it was bought, not where it is
   drunk.
+- **The house cuts off the wasted.** `State::pick` refuses every order,
+  a banked credit and a round included, once the patron is at the top of
+  the ladder (`state::cut_off`, `drunk_level >= DRUNK_MAX_LEVEL`, the same
+  line the tavern's bartender is told to cut at): the footer says "you're
+  cut off. the house slides you a water.", nothing is charged, nothing is
+  said in the room, and the in-flight slot is never taken. A round is
+  refused too because it pours the buyer's own drink. Below the line the
+  bar pours anything, so a patron can still drink their way up to it.
+  `App::nightcap_order` reads the level fresh from the process's drunk map
+  (`DrunkMap::level`), not the 1 Hz `App.drunk_levels` copy, so the pour
+  that just landed already counts; a pour on another replica (the tavern's
+  bartender) reaches it on the next 60s seed. The open menu shows "cut
+  off." in place of the prices (`ui.rs`, from `App.drunk_levels`). The
+  buzz decays, so the cutoff lifts on its own once they come back down to
+  sloshed. Client gate, like the seat: the bar is the only path to these
+  rails from this screen.
 - One order at a time per session: `State::pick` refuses while one is in
   flight ("the house is on it."), because the chips move off-thread and a
   second press would double-charge. The outcome returns over the session's
@@ -246,7 +262,8 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
   earlier sitter, one stool per user, this session's own stool laid over
   the records.
 - `state_test.rs`: the seat is given back on `leave_screen`, a taken stool
-  reports itself, seated-only compose and order, one order in flight until
+  reports itself, seated-only compose and order, the wasted cut off (every
+  pour and the round, without taking the in-flight slot), one order in flight until
   the channel answers, every `Outcome` footer line, the banked-drink count
   (never speaks, never frees a pour, follows a comped pour's `remaining`),
   the menu closing on stand/leave, the knife (needs a stool, trims, refuses

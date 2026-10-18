@@ -644,6 +644,13 @@ impl State {
         self.drunk.levels(now)
     }
 
+    /// One patron's drunk level, read fresh from the map rather than from
+    /// `App.drunk_levels` (copied at 1 Hz), so a pour that landed a moment
+    /// ago already counts.
+    pub fn drunk_level(&self, user_id: Uuid, now: chrono::DateTime<chrono::Utc>) -> u8 {
+        self.drunk.level(user_id, now)
+    }
+
     /// True when no tour stands between the newcomer and the rest of the
     /// app: none was ever due, or it has been walked. `Pending` (armed,
     /// not yet at the door) is not settled, unlike `tutorial_forced_step`,

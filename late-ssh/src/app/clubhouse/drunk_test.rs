@@ -29,3 +29,15 @@ fn drunk_levels_decay_and_prune() {
     drunk.set_drunk_states(Vec::new());
     assert!(drunk.levels(now).is_empty());
 }
+
+#[test]
+fn one_drinkers_level_reads_the_same_as_the_map() {
+    let drunk = DrunkMap::new();
+    let id = Uuid::from_u128(1);
+    let now = Utc::now();
+
+    assert_eq!(drunk.level(id, now), 0, "never seen reads sober");
+    drunk.record_drink(id, 2_000, now);
+    assert_eq!(drunk.level(id, now), 4);
+    assert_eq!(drunk.levels(now).get(&id), Some(&4));
+}
