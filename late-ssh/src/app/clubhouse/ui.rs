@@ -1898,17 +1898,14 @@ pub(crate) fn tour_header(
                     Span::styled(" jukebox.", text),
                 ]),
                 Line::from(vec![
-                    Span::styled("SSH has no sound. the ", text),
+                    Span::styled("SSH has no sound. install the ", text),
                     Span::styled("late", name),
-                    Span::styled(" CLI plays it right in your terminal.", text),
+                    Span::styled(" CLI and run it instead of ssh:", text),
                 ]),
-                Line::from(vec![
-                    Span::styled("install from ", text),
-                    Span::styled("cli.late.sh", name),
-                    Span::styled(", then run ", text),
-                    Span::styled("late", name),
-                    Span::styled(" instead of ssh.", text),
-                ]),
+                Line::from(Span::styled(
+                    "curl -fsSL https://cli.late.sh/install.sh | bash",
+                    name,
+                )),
                 Line::from(vec![
                     Span::styled("[v r] ", key),
                     Span::styled("opens this list · ", text),
