@@ -23,11 +23,13 @@ fn list_rows(area: Rect) -> usize {
 /// the gap between them.
 const LIST_WIDTH: u16 = 30;
 
-pub fn draw(frame: &mut Frame, area: Rect, state: &mut UserMapState) {
+/// `viewer_on_map`: whether the viewer set a country. When they did not,
+/// the title says so and names the key, since the map cannot show them.
+pub fn draw(frame: &mut Frame, area: Rect, state: &mut UserMapState, viewer_on_map: bool) {
     if area.width == 0 || area.height < 2 {
         return;
     }
-    let title = match (state.online(), state.total()) {
+    let mut title = match (state.online(), state.total()) {
         // The online slice says how many of the connected it shows: the rest
         // never set a country, and without the "of" the gap to every other
         // online count reads as a bug.
@@ -46,6 +48,9 @@ pub fn draw(frame: &mut Frame, area: Rect, state: &mut UserMapState) {
             state.mode().noun(total)
         ),
     };
+    if !viewer_on_map {
+        title.push_str(" · you're not on it yet: Ctrl+O sets your country");
+    }
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             title,

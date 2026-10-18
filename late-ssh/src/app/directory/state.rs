@@ -234,14 +234,6 @@ impl DirectoryState {
         self.shelf
     }
 
-    pub(crate) fn next_shelf(&mut self) {
-        self.set_shelf(self.shelf.next());
-    }
-
-    pub(crate) fn prev_shelf(&mut self) {
-        self.set_shelf(self.shelf.prev());
-    }
-
     pub(crate) fn set_shelf(&mut self, shelf: Shelf) {
         self.mouse.invalidate();
         self.shelf = shelf;

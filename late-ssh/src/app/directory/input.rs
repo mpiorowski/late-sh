@@ -60,7 +60,7 @@ pub(crate) fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
             };
             match target {
                 Target::Shelf(shelf) => {
-                    app.directory_state.set_shelf(shelf);
+                    switch_shelf(app, shelf);
                     app.jobs.mouse.invalidate();
                 }
                 Target::MapMode(mode) => {
@@ -89,6 +89,9 @@ pub(crate) fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
                     {
                         app.directory_state.set_shelf(Shelf::Jobs);
                         app.jobs.select_and_open(index);
+                        if app.jobs.search_mode() {
+                            crate::app::jobs::input::submit_search(app);
+                        }
                     }
                 }
                 Target::Key(key) => {
@@ -307,16 +310,25 @@ pub(crate) fn presence_changed(app: &mut App, online: HashSet<uuid::Uuid>) -> bo
     true
 }
 
+/// Land on a section. Leaving one drops its search box, so a section is
+/// never found with a stale query narrowing it.
+pub(crate) fn switch_shelf(app: &mut App, shelf: Shelf) {
+    app.directory_state.set_shelf(shelf);
+    app.jobs.exit_search();
+}
+
 /// Keys that work on every section: `[`/`]` step between them (the title
 /// bar advertises these), `w` and `i` open the editor.
 fn handle_shelf_byte(app: &mut App, byte: u8) -> bool {
     match byte {
         b']' => {
-            app.directory_state.next_shelf();
+            let next = app.directory_state.shelf().next();
+            switch_shelf(app, next);
             true
         }
         b'[' => {
-            app.directory_state.prev_shelf();
+            let prev = app.directory_state.shelf().prev();
+            switch_shelf(app, prev);
             true
         }
         b'w' | b'W' => {

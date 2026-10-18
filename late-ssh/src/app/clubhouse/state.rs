@@ -128,10 +128,17 @@ pub enum Tutorial {
     VisitDungeon,
     /// On the Artboard: the shared canvas.
     VisitArtboard,
-    /// On the Profiles page: people and their projects.
-    VisitDirectory,
-    /// On the Leaderboards: the last page.
+    /// On the People page, its Map section: where everyone is.
+    VisitMap,
+    /// Still on the People page, stepped on to Profiles: people and their
+    /// projects.
+    VisitProfiles,
+    /// Still on the People page, stepped on to Jobs: the job feed.
+    VisitJobs,
+    /// On the Leaderboards.
     VisitLeaderboard,
+    /// On the Calendars: the events board, the last page.
+    VisitCalendar,
     /// On Zen: the tiling page and its chord.
     VisitZen,
     /// Back in the tavern: the send-off box.
@@ -186,6 +193,10 @@ pub enum TourMove {
     /// The next stop is on the page already open.
     Stay,
     Page(Screen),
+    /// To the People page, opened on its Map section.
+    Map,
+    /// One section on along the People page (`]`).
+    NextSection,
     /// To the practice pool table.
     Table,
     /// Into Zen, through the same toggle `Ctrl+F` runs.
@@ -670,8 +681,11 @@ impl State {
             | Tutorial::VisitLobby
             | Tutorial::VisitGames
             | Tutorial::VisitArtboard
-            | Tutorial::VisitDirectory
+            | Tutorial::VisitMap
+            | Tutorial::VisitProfiles
+            | Tutorial::VisitJobs
             | Tutorial::VisitLeaderboard
+            | Tutorial::VisitCalendar
             | Tutorial::VisitZen
             | Tutorial::Homecoming => Some(TourStep::Enter),
         }
@@ -692,8 +706,11 @@ impl State {
             | Tutorial::VisitGames
             | Tutorial::VisitDungeon
             | Tutorial::VisitArtboard
-            | Tutorial::VisitDirectory
+            | Tutorial::VisitMap
+            | Tutorial::VisitProfiles
+            | Tutorial::VisitJobs
             | Tutorial::VisitLeaderboard
+            | Tutorial::VisitCalendar
             | Tutorial::VisitZen
             | Tutorial::Homecoming
             | Tutorial::Done => TourModal::None,
@@ -735,12 +752,17 @@ impl State {
             Tutorial::VisitTable => (Tutorial::VisitGames, TourMove::Page(Screen::Games)),
             Tutorial::VisitGames => (Tutorial::VisitDungeon, TourMove::Stay),
             Tutorial::VisitDungeon => (Tutorial::VisitArtboard, TourMove::Page(Screen::Artboard)),
-            Tutorial::VisitArtboard => (Tutorial::VisitDirectory, TourMove::Page(Screen::Profiles)),
-            Tutorial::VisitDirectory => (
+            Tutorial::VisitArtboard => (Tutorial::VisitMap, TourMove::Map),
+            Tutorial::VisitMap => (Tutorial::VisitProfiles, TourMove::NextSection),
+            Tutorial::VisitProfiles => (Tutorial::VisitJobs, TourMove::NextSection),
+            Tutorial::VisitJobs => (
                 Tutorial::VisitLeaderboard,
                 TourMove::Page(Screen::Leaderboard),
             ),
-            Tutorial::VisitLeaderboard => (Tutorial::VisitZen, TourMove::Zen),
+            Tutorial::VisitLeaderboard => {
+                (Tutorial::VisitCalendar, TourMove::Page(Screen::Calendars))
+            }
+            Tutorial::VisitCalendar => (Tutorial::VisitZen, TourMove::Zen),
             Tutorial::VisitZen => (Tutorial::Homecoming, TourMove::Page(Screen::Clubhouse)),
             Tutorial::Homecoming => (Tutorial::Done, TourMove::Finished),
         };

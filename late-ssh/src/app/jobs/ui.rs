@@ -24,6 +24,7 @@ use crate::app::common::theme;
 pub(crate) const JOBS_HINTS: &[(&str, &str)] = &[
     ("j/k", "jobs"),
     ("Enter", "copy link"),
+    ("s", "search"),
     ("/", "for me"),
     ("n", "post a job"),
     ("d", "take down"),
@@ -31,6 +32,7 @@ pub(crate) const JOBS_HINTS: &[(&str, &str)] = &[
 pub(crate) const JOBS_NARROW_HINTS: &[(&str, &str)] = &[
     ("j/k", "jobs"),
     ("l", "open"),
+    ("s", "search"),
     ("/", "for me"),
     ("n", "post"),
 ];
@@ -68,6 +70,7 @@ pub(crate) fn draw_jobs_shelf(frame: &mut Surface<'_>, area: Rect, view: &JobsSh
         draw_empty(frame, area, view);
         return;
     }
+    let area = draw_tags_nudge(frame, area, view);
     if !view.narrow {
         let cols =
             Layout::horizontal([Constraint::Percentage(42), Constraint::Fill(1)]).split(area);
@@ -80,9 +83,38 @@ pub(crate) fn draw_jobs_shelf(frame: &mut Surface<'_>, area: Rect, view: &JobsSh
     }
 }
 
+/// One dim row over the shelf for a viewer with nothing to match on, so
+/// `for me` is not discovered empty: the rest of the body is handed back.
+/// Nothing while the box is open, on a short frame, or once they have tags.
+fn draw_tags_nudge(frame: &mut Surface<'_>, area: Rect, view: &JobsShelfView<'_>) -> Rect {
+    if !view.viewer_tags.is_empty() || view.jobs.search_mode() || view.short || area.height < 6 {
+        return area;
+    }
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let key = Style::default().fg(theme::AMBER());
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("  no tags on your card yet · ", dim),
+            Span::styled("w", key),
+            Span::styled(" picks your skills, then ", dim),
+            Span::styled("/", key),
+            Span::styled(" keeps the postings that fit you", dim),
+        ])),
+        Rect::new(area.x, area.y, area.width, 1),
+    );
+    Rect::new(area.x, area.y + 1, area.width, area.height - 1)
+}
+
 fn draw_empty(frame: &mut Surface<'_>, area: Rect, view: &JobsShelfView<'_>) {
     if !view.jobs.loaded {
         draw_notice(frame, area, "Reading the shelf…", &[]);
+    } else if view.jobs.search_mode() {
+        draw_notice(
+            frame,
+            area,
+            "No posting matches.",
+            &["Company, role, stack, region, pay and excerpt are searched. Esc closes the box."],
+        );
     } else if view.jobs.for_me && view.viewer_tags.is_empty() {
         draw_notice(
             frame,

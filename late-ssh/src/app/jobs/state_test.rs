@@ -4,7 +4,8 @@ use late_core::models::work_profile::{WorkProfile, WorkStatus, WorkType};
 use uuid::Uuid;
 
 use super::state::{
-    JobsCommand, match_line, matches, parse_jobs_command, scope_label, viewer_tags, wants_matches,
+    JobsCommand, match_line, matches, parse_jobs_command, scope_label, search_matches, viewer_tags,
+    wants_matches,
 };
 
 pub(crate) fn posting(company: &str, tags: &[&str]) -> JobPosting {
@@ -90,6 +91,20 @@ fn matches_rank_by_overlap_then_keep_shelf_order_and_skip_strangers() {
         .collect();
     assert_eq!(top, vec!["Both"]);
     assert!(matches(&items, &[], 10).is_empty());
+}
+
+/// `s` on the shelf: every word of the query has to land somewhere on the
+/// card, whatever its case, and the field does not matter.
+#[test]
+fn a_search_needs_every_word_somewhere_on_the_card() {
+    let acme = posting("Acme", &["rust", "postgres"]);
+    assert!(search_matches(&acme, ""));
+    assert!(search_matches(&acme, "ACME"));
+    assert!(search_matches(&acme, "rust backend"));
+    assert!(search_matches(&acme, "eu €80k"));
+    assert!(search_matches(&acme, "builds"));
+    assert!(!search_matches(&acme, "rust go"));
+    assert!(!search_matches(&acme, "gopher"));
 }
 
 #[test]

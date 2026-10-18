@@ -239,14 +239,21 @@ fn tutorial_tours_every_page_then_comes_home() {
             Tutorial::VisitArtboard,
             TourModal::None,
         ),
+        (TourMove::Map, Tutorial::VisitMap, TourModal::None),
         (
-            TourMove::Page(Screen::Profiles),
-            Tutorial::VisitDirectory,
+            TourMove::NextSection,
+            Tutorial::VisitProfiles,
             TourModal::None,
         ),
+        (TourMove::NextSection, Tutorial::VisitJobs, TourModal::None),
         (
             TourMove::Page(Screen::Leaderboard),
             Tutorial::VisitLeaderboard,
+            TourModal::None,
+        ),
+        (
+            TourMove::Page(Screen::Calendars),
+            Tutorial::VisitCalendar,
             TourModal::None,
         ),
         (TourMove::Zen, Tutorial::VisitZen, TourModal::None),

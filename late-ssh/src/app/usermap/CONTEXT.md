@@ -34,7 +34,10 @@ in flight must not paint one slice's numbers under another slice's title.
 
 **Anybody who has not set a country is absent.** Not "unknown", not guessed
 from a timezone — absent. The map is of people who said where they are, and
-the empty state says so rather than showing a blank world. The `Online`
+the empty state says so rather than showing a blank world. The viewer is told
+when that is them: the host passes whether they set a country into `ui::draw`,
+and the title ends with "you're not on it yet: Ctrl+O sets your country" until
+they have (the country row is on the Settings tab). The `Online`
 headline says it too: "15 of 17 have set a country". The 17 is
 `CountryCounts.online`, everyone connected, read under the same lock as the
 counts and cached with them, so the pair is always one moment. Pairing the
@@ -100,8 +103,8 @@ runs for a shelf nobody is looking at. `/map` typed into a composer goes
 through `open_usermap_globally` at the root, which closes the modal stack and
 lands on the shelf.
 
-The draw (`ui::draw`) takes the body and paints the title line, the map and
-the list; the page's footer row prints `ui::hints` (the keys that do
+The draw (`ui::draw`) takes the body and whether the viewer set a country,
+and paints the title line, the map and the list; the page's footer row prints `ui::hints` (the keys that do
 something right now). The three slices are drawn by the page, as the
 section's filters on the right of its section row.
 

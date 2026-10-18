@@ -1827,7 +1827,7 @@ social thing a new runner meets is a pile-on, not a mugging.
   closes unspent loses it. The howler lands at a dice minute anywhere in
   the day once two runners are looking; two cannot finish it, so when it
   lands the pressure is real, and slipping is content. 45 minutes
-  between any two. A flicker lives 90 seconds, a howler three minutes:
+  between any two. A flicker lives five minutes, a howler ten:
   you had to be looking. The counts and the windows are fixed; only the
   moments are dice, so nobody sets an alarm and the lounge never becomes
   a queue. The dice are rolled once per day on the row, by whichever

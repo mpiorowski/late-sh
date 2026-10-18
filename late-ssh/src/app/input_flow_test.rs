@@ -270,6 +270,39 @@ async fn artboard_disclaimer_tour_choice_keeps_account_settings() {
     assert!(render_plain(&mut app).contains("Always View"));
 }
 
+/// Someone who turned the content disclaimer off already sees the art: the
+/// stop takes its plain shape over the live board, `s` is just another
+/// swallowed key, and Enter walks on.
+#[tokio::test]
+async fn artboard_tour_stop_shows_the_board_when_the_disclaimer_is_off() {
+    use crate::app::clubhouse::state::Tutorial;
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "tour-view-always-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "tour-view-always-flow-it");
+    app.resize(80, 24).unwrap();
+    app.set_device_artboard_disclaimer(false);
+    app.clubhouse.tutorial = Tutorial::VisitArtboard;
+    app.set_screen(Screen::Artboard);
+
+    assert!(!app.artboard_disclaimer_visible());
+    assert!(app.dartboard_state.is_some(), "seated on landing");
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("[Enter] next: the people"),
+        "frame={frame:?}"
+    );
+    assert!(!frame.contains("[S] show"), "frame={frame:?}");
+
+    app.handle_input(b"s");
+    assert_eq!(app.screen, Screen::Artboard);
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitArtboard);
+    app.handle_input(b"\r");
+    assert_eq!(app.screen, Screen::Profiles);
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitMap);
+}
+
 #[tokio::test]
 async fn artboard_disclaimer_allows_clicking_topbar_page_numbers_without_consent() {
     use crate::app::common::primitives::Screen;
@@ -3927,19 +3960,33 @@ async fn forced_tour_walks_the_house_on_enter_with_one_shot_of_pool() {
 
     // The rest of the route is Enter alone; at the Artboard stop `s` shows
     // the art first, so this walk sees it.
+    app.handle_input(b"\r");
+    assert_eq!(app.screen, Screen::Artboard);
+    app.handle_input(b"s");
+    assert!(app.artboard_content_accepted);
+
+    // The People page is three stops on one page: Enter lands on the map
+    // and then steps the page's own sections, no key of the page needed.
+    use crate::app::directory::state::Shelf;
+    for (stage, shelf) in [
+        (Tutorial::VisitMap, Shelf::Map),
+        (Tutorial::VisitProfiles, Shelf::Profiles),
+        (Tutorial::VisitJobs, Shelf::Jobs),
+    ] {
+        app.handle_input(b"\r");
+        assert_eq!(app.screen, Screen::Profiles);
+        assert_eq!(app.clubhouse.tutorial, stage);
+        assert_eq!(app.directory_state.shelf(), shelf);
+    }
+
     for screen in [
-        Screen::Artboard,
-        Screen::Profiles,
         Screen::Leaderboard,
+        Screen::Calendars,
         Screen::Zen,
         Screen::Clubhouse,
     ] {
         app.handle_input(b"\r");
         assert_eq!(app.screen, screen);
-        if screen == Screen::Artboard {
-            app.handle_input(b"s");
-            assert!(app.artboard_content_accepted);
-        }
     }
     assert_eq!(app.clubhouse.tutorial, Tutorial::Homecoming);
 
@@ -3991,7 +4038,10 @@ async fn forced_tour_can_skip_artboard_without_viewing_it() {
 
     for screen in [
         Screen::Profiles,
+        Screen::Profiles,
+        Screen::Profiles,
         Screen::Leaderboard,
+        Screen::Calendars,
         Screen::Zen,
         Screen::Clubhouse,
     ] {
@@ -4882,13 +4932,17 @@ async fn landing_page_tweak_picks_the_first_screen_except_for_new_users() {
     use late_core::models::user::LandingPage;
 
     let test_db = new_test_db().await;
-    for (idx, (page, is_new_user, expected)) in [
-        (LandingPage::Clubhouse, false, Screen::Clubhouse),
-        (LandingPage::Home, false, Screen::Dashboard),
-        (LandingPage::Zen, false, Screen::Zen),
+    for (idx, (page, is_new_user, tour_pending, expected)) in [
+        (LandingPage::Clubhouse, false, false, Screen::Clubhouse),
+        (LandingPage::Home, false, false, Screen::Dashboard),
+        (LandingPage::Zen, false, false, Screen::Zen),
         // A first session always starts in the tavern, where the tour runs.
-        (LandingPage::Zen, true, Screen::Clubhouse),
-        (LandingPage::Home, true, Screen::Clubhouse),
+        (LandingPage::Zen, true, false, Screen::Clubhouse),
+        (LandingPage::Home, true, false, Screen::Clubhouse),
+        // So does a regular whose tour flag was reset: the tour only fires
+        // in the tavern, and a Home or Zen landing would never show it.
+        (LandingPage::Home, false, true, Screen::Clubhouse),
+        (LandingPage::Zen, false, true, Screen::Clubhouse),
     ]
     .into_iter()
     .enumerate()
@@ -4901,13 +4955,21 @@ async fn landing_page_tweak_picks_the_first_screen_except_for_new_users() {
             SessionWorld {
                 landing_page: Some(page),
                 is_new_user,
+                tour_pending,
                 ..SessionWorld::default()
             },
         );
         assert_eq!(
             app.screen, expected,
-            "landing {page:?}, new user {is_new_user}"
+            "landing {page:?}, new user {is_new_user}, tour pending {tour_pending}"
         );
+        if tour_pending {
+            assert_eq!(
+                app.clubhouse.tutorial,
+                crate::app::clubhouse::state::Tutorial::Welcome,
+                "the reset tour opens at the door"
+            );
+        }
     }
 }
 

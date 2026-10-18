@@ -1569,9 +1569,11 @@ impl App {
         );
         // Everyone lands in the clubhouse by default: the tavern is the front
         // door of late.sh (and the first-visit tutorial starts there). The
-        // "Land on" tweak sends returning users to Home or Zen instead; new
-        // users always start in the clubhouse so the tutorial runs.
-        let landing = if config.is_new_user {
+        // "Land on" tweak sends returning users to Home or Zen instead; a
+        // session with the tour still to walk (a first-ever one, or any
+        // account after a house-wide reset of the flag) always starts in the
+        // clubhouse so the tutorial runs.
+        let landing = if config.is_new_user || !config.clubhouse_tutorial_done {
             LandingPage::Clubhouse
         } else {
             config.landing_page

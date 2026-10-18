@@ -14,15 +14,15 @@ A shelf the feeds keep full, that people can also write on. Three sources (Ask H
 |---|---|
 | `svc.rs` | `JobsService`: the nightly press (`check_press`, `press`: fetch, read, release, expire) under the day's `job_press_runs` claim, the replica's shelf snapshot (`JobsSnapshot` behind a `watch`), the admin's `/jobs pull|release` on demand; `tick(app)`: the session side (snapshot copy, `/jobs`, banners, flag writes). Every log line and metric of the press lives here. |
 | `sources.rs` | The three parsers, pure: HN Firebase items, the WWR RSS, a Jobicy page, into `FetchedPosting`s. HTML to text, entity decoding, the word-boundary recheck. |
-| `state.rs` | `JobsState` (per session: the copied rows, selection, the for-me filter, the stacked detail), `JobsCommand` + parser, `viewer_tags`, `matches`, `match_line`. No I/O. |
-| `ui.rs` | The shelf: list beside detail, stacked under 100 columns; `for_you_lines` for the People shelf's detail pane; `draw_post_form`, the modal over the page. |
-| `input.rs` | Keys on the shelf: `j/k`, `h/l` (stacked), `Enter`/`c` copy the link, `/` for me, `n` the post form, `d` take down; the post form's keys (`handle_post_input`). |
+| `state.rs` | `JobsState` (per session: the copied rows, selection, the for-me filter, the search box and its query, the stacked detail), `JobsCommand` + parser, `viewer_tags`, `matches`, `search_matches`, `match_line`. No I/O. |
+| `ui.rs` | The shelf: list beside detail, stacked under 100 columns, the one-row tags nudge over it; `for_you_lines` for the People shelf's detail pane; `draw_post_form`, the modal over the page. |
+| `input.rs` | Keys on the shelf: `j/k`, `h/l` (stacked), `Enter`/`c` copy the link, `s` search (`handle_search_input` while the box is open), `/` for me, `n` the post form, `d` take down; the post form's keys (`handle_post_input`). |
 | `post.rs` | `PostForm`: the post form's rows, typing, `validate_post` into a `NewPosting`. Pure. |
 | `fixtures/` | Trimmed real pulls for `sources_test.rs`. |
 | `late-core/src/models/job_posting.rs` | Every read and write of `job_postings` and `job_press_runs` (migrations 193 and 194): the press's upsert/settle/release/expire, and `post`, `retract`, `count_active_by` for the shelf's own writes. |
 | `late-core/src/vocab.rs` | The tag vocabulary: canonical tags in groups (languages, frameworks, data, infra, practices, tools) with aliases, and `TAG_LIMIT` = 12. The read's prompt, the matcher, the tag picker, a card's `skills`/`skills_tags`, and a profile's `langs` hold nothing outside it. |
 
-The directory page (`app/directory`) owns the section row (with the Jobs filters `all` / `for me` on its right), the `[`/`]`/`w`/`i` keys and the footer's page actions, and delegates the Jobs section's draw and keys (`ui::hints`) here; `app/paper` reads `JobPosting::list_released_on` for NEW WORK and scores with `matches`.
+The directory page (`app/directory`) owns the section row (with the Jobs filters `all` / `for me` / `search` on its right), the search box over the body (drawn from this state's query while the Jobs section is up; `directory::input::switch_shelf` closes it on leaving the section), the `[`/`]`/`w`/`i` keys and the footer's page actions, and delegates the Jobs section's draw and keys (`ui::hints`) here; `app/paper` reads `JobPosting::list_released_on` for NEW WORK and scores with `matches`.
 
 ## The press (multi-replica rule as applied)
 
@@ -39,7 +39,8 @@ The directory page (`app/directory`) owns the section row (with the Jobs filters
 
 - Mouse: the directory owns shelf/action targets; stable posting IDs resolve against the current visible rows. Each list/detail viewport has an independent wheel offset and clickable scrollbar. A posting click opens its details, URLs copy their full value, and authorized Late postings expose Take down. Keyboard-only interaction mode ignores mouse reports.
 - Sessions never query. `tick` copies the snapshot when it moved (`watch::has_changed`), so a render reads local memory.
-- The viewer's tags are their card's `skills_tags` plus their profile `langs` (`viewer_tags`), both picked from the vocabulary in the tag picker (`app/tag_picker`), so the two sides of a match share one closed list; a posting's score is how many of those it carries (`score`); `/` keeps score > 0, best first. The strip counts the visible rows.
+- The viewer's tags are their card's `skills_tags` plus their profile `langs` (`viewer_tags`), both picked from the vocabulary in the tag picker (`app/tag_picker`), so the two sides of a match share one closed list; a posting's score is how many of those it carries (`score`); `/` keeps score > 0, best first. A viewer with no tags sees one dim row over the shelf saying so and naming `w` and `/` (not while searching, not on a short frame); `/` with no tags still explains itself in the empty state and a banner. The strip counts the visible rows.
+- `s` opens a search box over the shelf (the page draws it, this state owns the query, 60 chars at most): `search_matches` keeps a posting when every word of the query lands case-insensitively somewhere in company, role, tags, regions, pay or excerpt, on top of `for_me`. Arrows walk the narrowed rows, Enter keeps the highlighted posting and closes the box (re-found by id in the unnarrowed rows), Esc closes it, and leaving the section closes it.
 - FOR YOU under the viewer's own card (People shelf) prints up to `FOR_YOU_LIMIT` = 5 matches when the card is open or casual; NEW WORK in the paper prints for every reader: up to `PAPER_MATCHES` = 3 from the covered day's releases, the one-line nudge for a reader with no card, or a faint hint for a not-looking card or a day with no release.
 
 ## Telemetry

@@ -16,7 +16,7 @@ fn render(state: &mut UserMapState, w: u16, h: u16) -> (String, Vec<Color>) {
         .draw(|frame| {
             let area = frame.area();
             let body = Rect::new(area.x, area.y, area.width, area.height - 1);
-            draw(frame, body, state);
+            draw(frame, body, state, true);
             frame.render_widget(
                 Paragraph::new(hint_line(hints(state))),
                 Rect::new(area.x, area.bottom() - 1, area.width, 1),
@@ -104,6 +104,36 @@ fn the_online_headline_says_how_many_set_a_country() {
     assert!(
         text.contains("online now · 1 of 17 has set a country"),
         "{text:.300}"
+    );
+}
+
+/// A viewer who never set a country is not on the map, and the only way to
+/// find out used to be noticing. The title says so and names the key.
+#[test]
+fn the_title_tells_a_viewer_without_a_country_how_to_get_on() {
+    let mut state = UserMapState::default();
+    state.show_without_loading();
+    state.set_tallies_for_test(&[("PL", 2)]);
+    state.set_online_for_test(Some(3));
+    let mut terminal = Terminal::new(TestBackend::new(160, 48)).expect("terminal");
+    terminal
+        .draw(|frame| draw(frame, frame.area(), &mut state, false))
+        .expect("draw");
+    let text: String = terminal
+        .backend()
+        .buffer()
+        .content()
+        .iter()
+        .map(|c| c.symbol())
+        .collect();
+    assert!(
+        text.contains("2 of 3 have set a country · you're not on it yet: Ctrl+O sets your country"),
+        "{text:.300}"
+    );
+    let (text, _) = render(&mut state, 160, 48);
+    assert!(
+        !text.contains("not on it yet"),
+        "a placed viewer gets no nudge"
     );
 }
 

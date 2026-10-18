@@ -479,6 +479,9 @@ pub struct SessionWorld {
     pub landing_page: Option<late_core::models::user::LandingPage>,
     /// A first-ever session, which always starts in the Clubhouse.
     pub is_new_user: bool,
+    /// The tour still to walk (the account's flag is unset), which also
+    /// starts the session in the Clubhouse. Unset means walked.
+    pub tour_pending: bool,
     /// One replica's chat service, shared the way production shares it:
     /// every session on it hears every other's `ChatEvent`s. Unset gives
     /// the session its own. Mention notifications ride the app's own
@@ -717,7 +720,7 @@ fn make_app_with_chat_service_and_permissions(
         mention_ladders: crate::app::ai::ladder::MentionLadders::new(),
         files: None,
         scratchpad_registry: world.scratchpad_registry,
-        clubhouse_tutorial_done: true,
+        clubhouse_tutorial_done: !world.tour_pending,
         // Everything already spent: no first-contact stage can fire inside
         // a test app unless a test arms one on purpose.
         first_contact: crate::app::deadchannel::haunt::state::FirstContactMarks::spent_for_tests(),
@@ -758,7 +761,7 @@ fn make_app_with_chat_service_and_permissions(
     app.skip_splash_for_tests();
     // The suite starts on Home, but a test that sets the landing inputs is
     // asserting where the session landed, so it keeps that screen.
-    if world.landing_page.is_some() || world.is_new_user {
+    if world.landing_page.is_some() || world.is_new_user || world.tour_pending {
         app.screen = landed;
         app.sync_visible_chat_room();
     }

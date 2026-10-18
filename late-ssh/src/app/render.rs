@@ -279,6 +279,8 @@ struct DrawContext<'a> {
     jobs_state: &'a crate::app::jobs::state::JobsState,
     /// The viewer's languages from their profile, for the job matcher.
     viewer_langs: &'a [String],
+    /// Whether the viewer set a country, for the map's title.
+    viewer_has_country: bool,
     clubhouse_state: &'a crate::app::clubhouse::state::State,
     clubhouse_own_username: &'a str,
     nightcap_state: &'a crate::app::clubhouse::nightcap::state::State,
@@ -1761,6 +1763,7 @@ impl App {
                         directory_state: &self.directory_state,
                         jobs_state: &self.jobs,
                         viewer_langs: &self.profile_state.profile().langs,
+                        viewer_has_country: self.profile_state.profile().country.is_some(),
                         clubhouse_state: &self.clubhouse,
                         clubhouse_own_username: self.profile_state.profile().username.as_str(),
                         nightcap_state: &self.nightcap,
@@ -2506,6 +2509,7 @@ impl App {
                         jobs: ctx.jobs_state,
                         usermap: &mut *ctx.usermap,
                         viewer_langs: ctx.viewer_langs,
+                        viewer_has_country: ctx.viewer_has_country,
                         projects: ctx.chat_view.showcase_view.items,
                         people: ctx.chat_view.work_view.items,
                         work_marker: ctx.chat_view.work_view.marker_read_at,

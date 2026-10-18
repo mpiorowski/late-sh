@@ -245,20 +245,20 @@ fn search_query_is_active_only_in_search_mode() {
 fn brackets_step_the_sections_both_ways_and_drop_the_stacked_detail() {
     let mut state = DirectoryState::new();
     assert_eq!(state.shelf(), Shelf::Map, "the page opens on the map");
-    state.next_shelf();
+    state.set_shelf(state.shelf().next());
     assert_eq!(state.shelf(), Shelf::Profiles);
     state.open_detail();
-    state.next_shelf();
+    state.set_shelf(state.shelf().next());
     assert_eq!(state.shelf(), Shelf::Jobs);
     assert!(
         !state.detail_open(),
         "the detail belongs to the profiles section"
     );
-    state.next_shelf();
+    state.set_shelf(state.shelf().next());
     assert_eq!(state.shelf(), Shelf::Map, "] wraps from the last section");
-    state.prev_shelf();
+    state.set_shelf(state.shelf().prev());
     assert_eq!(state.shelf(), Shelf::Jobs, "[ wraps from the first section");
-    state.prev_shelf();
+    state.set_shelf(state.shelf().prev());
     assert_eq!(state.shelf(), Shelf::Profiles);
 }
 

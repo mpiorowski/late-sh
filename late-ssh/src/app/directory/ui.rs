@@ -72,6 +72,9 @@ pub(crate) struct DirectoryPageView<'a> {
     pub(crate) usermap: &'a mut UserMapState,
     /// The viewer's languages from their profile, part of their match tags.
     pub(crate) viewer_langs: &'a [String],
+    /// Whether the viewer set a country, so the map can say when they are
+    /// not on it.
+    pub(crate) viewer_has_country: bool,
     pub(crate) projects: &'a [ShowcaseFeedItem],
     pub(crate) people: &'a [WorkFeedItem],
     pub(crate) work_marker: Option<DateTime<Utc>>,
@@ -96,7 +99,7 @@ pub(crate) fn draw_directory_page(frame: &mut Frame, area: Rect, view: Directory
         &view,
     );
     if let Some(body) = map_body {
-        crate::app::usermap::ui::draw(frame, body, view.usermap);
+        crate::app::usermap::ui::draw(frame, body, view.usermap, view.viewer_has_country);
     }
 }
 
@@ -109,7 +112,12 @@ fn draw_page(frame: &mut Surface<'_>, area: Rect, view: &DirectoryPageView<'_>) 
     let short = area.height < SHORT_BELOW_HEIGHT;
     let own_tags = own_viewer_tags(view);
 
-    let search_height = if view.directory.search_mode() { 3 } else { 0 };
+    let jobs_search = view.directory.shelf() == Shelf::Jobs && view.jobs.search_mode();
+    let search_height = if view.directory.search_mode() || jobs_search {
+        3
+    } else {
+        0
+    };
     let [section_row, search, body, footer] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(search_height),
@@ -133,7 +141,14 @@ fn draw_page(frame: &mut Surface<'_>, area: Rect, view: &DirectoryPageView<'_>) 
 
     draw_section_row(frame, section_row, view, entries.len(), &own_tags);
     if view.directory.search_mode() {
-        draw_search_box(frame, search, view.directory.search_query());
+        draw_search_box(
+            frame,
+            search,
+            " Search people and projects ",
+            view.directory.search_query(),
+        );
+    } else if jobs_search {
+        draw_search_box(frame, search, " Search jobs ", view.jobs.search_query());
     }
 
     let mut map_body = None;
@@ -233,6 +248,11 @@ fn section_filters(view: &DirectoryPageView<'_>) -> Vec<Filter> {
                 label: "for me",
                 active: view.jobs.for_me,
                 target: Target::Key(b'/'),
+            },
+            Filter {
+                label: "search",
+                active: view.jobs.search_mode(),
+                target: Target::Key(b's'),
             },
         ],
     }
@@ -376,12 +396,12 @@ fn draw_footer(
     }
 }
 
-fn draw_search_box(frame: &mut Surface<'_>, area: Rect, query: &str) {
+fn draw_search_box(frame: &mut Surface<'_>, area: Rect, title: &'static str, query: &str) {
     if area.is_empty() {
         return;
     }
     let block = Block::default()
-        .title(" Search people and projects ")
+        .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
     let inner = block.inner(area);

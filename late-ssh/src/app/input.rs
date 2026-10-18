@@ -2083,6 +2083,11 @@ fn handle_directory_catalog_input(app: &mut App, event: &ParsedInput) -> bool {
     if app.directory_state.search_mode() {
         return crate::app::directory::input::handle_search_input(app, event);
     }
+    if app.directory_state.shelf() == crate::app::directory::state::Shelf::Jobs
+        && app.jobs.search_mode()
+    {
+        return crate::app::jobs::input::handle_search_input(app, event);
+    }
 
     match event {
         ParsedInput::Arrow(key) => crate::app::directory::input::handle_idle_arrow(app, *key),
@@ -3945,6 +3950,19 @@ fn tour_advance(app: &mut App) {
         TourMove::Stay => {}
         // Through `leave_board` so a practice table left behind is dropped.
         TourMove::Page(screen) => crate::app::lobby::daily::board_input::leave_board(app, screen),
+        // The People page, on its map whatever section a rerun left it on.
+        TourMove::Map => {
+            crate::app::lobby::daily::board_input::leave_board(app, Screen::Profiles);
+            crate::app::directory::input::switch_shelf(
+                app,
+                crate::app::directory::state::Shelf::Map,
+            );
+        }
+        // `]`: the next section of the People page.
+        TourMove::NextSection => {
+            let next = app.directory_state.shelf().next();
+            crate::app::directory::input::switch_shelf(app, next);
+        }
         // A pool table nobody else sees, for one break.
         TourMove::Table => {
             let username = app.username.clone();

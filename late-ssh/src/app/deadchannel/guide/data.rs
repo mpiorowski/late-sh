@@ -738,7 +738,7 @@ pub const SECTIONS: &[Section] = &[
                     means: "howler a day, at a moment the dice pick, once two runners are in the lounge",
                 },
                 Figure {
-                    value: "90s / 3m",
+                    value: "5m / 10m",
                     means: "a flicker and a howler stay that long, then slip away",
                 },
             ]),

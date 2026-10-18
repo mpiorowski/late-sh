@@ -43,8 +43,8 @@ pub(crate) fn hits_needed(kind: SpawnKind) -> i32 {
 /// How long a spawn of `kind` stays before it slips away.
 pub(crate) fn lifetime_secs(kind: SpawnKind) -> i64 {
     match kind {
-        SpawnKind::Flicker => 90,
-        SpawnKind::Howler => 180,
+        SpawnKind::Flicker => 300,
+        SpawnKind::Howler => 600,
     }
 }
 

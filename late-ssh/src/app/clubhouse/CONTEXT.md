@@ -160,13 +160,24 @@ room is the chat surface, and the full history lives in #lounge on Home.
 ## 5. First-visit tour
 
 - Armed by `!extract_clubhouse_tutorial_done(user.settings)`
-  (`users.settings.clubhouse_tutorial_done`, late-core). Fires once on the
+  (`users.settings.clubhouse_tutorial_done`, late-core). While armed the
+  session lands in the Clubhouse whatever the "Land on" tweak says
+  (`app/state.rs`), since the tour only fires there. A house-wide rerun is
+  a forward migration that drops the key from every row (`245_reset_clubhouse_tour.sql`
+  is the shape); the welcome pour stays once-ever through its own DB claim,
+  so a regular gets the greeting line and no second drink. Fires once on the
   first clubhouse entry: a centered box at the door pitches what late.sh is
   (`Tutorial::Welcome`), then **Enter moves every stop on** and the tour
   walks the newcomer to the next page itself: `VisitChat` (Home) ->
   `VisitMusic` (still on Home) -> `VisitArcade` -> `VisitLobby` (still on
-  The Arcade) -> `VisitTable` -> `VisitGames` -> `VisitDungeon` (still on Games) -> `VisitArtboard` -> `VisitDirectory` ->
-  `VisitLeaderboard` -> `VisitZen` -> `Homecoming` (back in the tavern).
+  The Arcade) -> `VisitTable` -> `VisitGames` -> `VisitDungeon` (still on Games) -> `VisitArtboard` ->
+  `VisitMap` -> `VisitProfiles` -> `VisitJobs` (the three sections of the
+  People page: `TourMove::Map` lands on the page with its Map section up
+  whatever a rerun left it on, and each Enter then steps `]` itself through
+  `TourMove::NextSection`, so the newcomer learns no key mid-tour and each
+  box stays a few lines) -> `VisitLeaderboard` -> `VisitCalendar` -> `VisitZen` ->
+  `Homecoming` (back in the tavern). Every top-level page gets one stop, and
+  the copy is kept plain: short sentences, no flourish.
 - At `VisitArtboard`, the stop lands behind the content disclaimer: the page
   stays bare and the tour box offers `S` (show the art for this visit) or
   Enter (skip to Profiles). The standalone disclaimer dialog never draws in

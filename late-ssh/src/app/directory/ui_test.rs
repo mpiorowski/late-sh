@@ -129,6 +129,7 @@ fn render_with_jobs(
                     jobs,
                     usermap: &mut usermap,
                     viewer_langs: &["rust".to_string()],
+                    viewer_has_country: true,
                     projects: &fixture.projects,
                     people: &fixture.people,
                     work_marker: Some(Utc::now()),
@@ -278,13 +279,14 @@ fn the_jobs_shelf_lists_postings_and_the_for_me_filter_keeps_the_viewers_tags() 
 
     let fixture = fixture();
     let mut state = people_state();
-    state.next_shelf();
+    state.set_shelf(Shelf::Jobs);
 
     // Before the replica has read the shelf, and once it has read nothing.
     let mut jobs = jobs_state_for_tests();
     let lines = render_with_jobs(&fixture, &state, &jobs, 120, 30);
     assert!(
-        lines[0].starts_with(" Map 0   Profiles 2   Jobs ") && lines[0].ends_with("all · for me"),
+        lines[0].starts_with(" Map 0   Profiles 2   Jobs ")
+            && lines[0].ends_with("all · for me · search"),
         "no count until the shelf is read:\n{}",
         lines[0]
     );
@@ -356,6 +358,63 @@ fn the_jobs_shelf_lists_postings_and_the_for_me_filter_keeps_the_viewers_tags() 
         row_of(&lines, "Gopher · Backend Engineer").is_none(),
         "{text}"
     );
+}
+
+/// `s` on the Jobs section opens a search box over the shelf, lights its
+/// filter, and the count and the rows follow the query.
+#[test]
+fn the_jobs_shelf_searches_by_any_word_on_the_card() {
+    use crate::app::jobs::state_test::posting;
+
+    let fixture = fixture();
+    let mut state = people_state();
+    state.set_shelf(Shelf::Jobs);
+    let mut jobs = jobs_state_for_tests();
+    jobs.loaded = true;
+    jobs.items = vec![
+        posting("Acme", &["rust", "postgres"]),
+        posting("Gopher", &["go"]),
+    ];
+
+    jobs.enter_search();
+    for ch in "goph".chars() {
+        jobs.search_push(ch);
+    }
+    let lines = render_with_jobs(&fixture, &state, &jobs, 120, 30);
+    let text = lines.join("\n");
+    assert!(
+        lines[0].starts_with(" Map 0   Profiles 2   Jobs 1 ")
+            && lines[0].ends_with("all · for me · search"),
+        "{text}"
+    );
+    assert!(row_of(&lines, "Search jobs").is_some(), "{text}");
+    assert!(row_of(&lines, "goph▏").is_some(), "{text}");
+    assert!(
+        row_of(&lines, "Gopher · Backend Engineer").is_some(),
+        "{text}"
+    );
+    assert!(
+        row_of(&lines, "Acme · Backend Engineer").is_none(),
+        "{text}"
+    );
+    assert!(lines[lines.len() - 1].contains(" s search"), "{text}");
+
+    jobs.search_push('x');
+    let lines = render_with_jobs(&fixture, &state, &jobs, 120, 30);
+    assert!(
+        row_of(&lines, "No posting matches.").is_some(),
+        "{}",
+        lines.join("\n")
+    );
+
+    jobs.exit_search();
+    let lines = render_with_jobs(&fixture, &state, &jobs, 120, 30);
+    let text = lines.join("\n");
+    assert!(
+        lines[0].starts_with(" Map 0   Profiles 2   Jobs 2 "),
+        "{text}"
+    );
+    assert!(row_of(&lines, "Search jobs").is_none(), "{text}");
 }
 
 #[test]
