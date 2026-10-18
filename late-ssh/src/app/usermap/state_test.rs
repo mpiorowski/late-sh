@@ -76,6 +76,7 @@ fn the_shading_ladder_is_readable() {
 #[test]
 fn profile_country_codes_find_their_countries_on_the_map() {
     for (code, expected) in [
+        ("AU", "Australia"),
         ("PL", "Poland"),
         ("RO", "Romania"),
         ("US", "United States of America"),
@@ -89,6 +90,8 @@ fn profile_country_codes_find_their_countries_on_the_map() {
     }
     // Lowercase is what a sloppy setting would store; it still resolves.
     assert_eq!(territory_for_code("pl"), territory_for_code("PL"));
+    assert_eq!(territory_for_code(" au "), territory_for_code("AU"));
+    assert_eq!(country_name(" au "), "Australia");
 
     // A code the map has no country for is not an error — it is a country
     // without a shape here, and it still gets a name for the list.
@@ -98,6 +101,24 @@ fn profile_country_codes_find_their_countries_on_the_map() {
         !country_name("AQ").is_empty(),
         "every code the picker offers has to have a name to show"
     );
+}
+
+/// AU also labels small offshore territories in the atlas. An Australian
+/// profile must shade and select Australia, and use its name in the list.
+#[test]
+fn australian_profiles_shade_and_select_the_mainland() {
+    let map = crate::app::common::worldmap::data::map_by_id("earth").unwrap();
+    let australia = map
+        .territories
+        .iter()
+        .find(|territory| territory.name == "Australia")
+        .expect("Australia is in the atlas");
+    let mut state = UserMapState::default();
+    state.set_tallies_for_test(&[("AU", 1)]);
+
+    assert_eq!(state.tallies()[0].name, "Australia");
+    assert_eq!(state.selected(), Some(australia.id));
+    assert_eq!(state.colors().get(&australia.id), Some(&HEAT[0]));
 }
 
 /// The overwhelming majority of the picker's codes should exist on the map,

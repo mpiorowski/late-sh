@@ -46,6 +46,9 @@ screen-space borders, pan/zoom/clamp — is the shared code.
 Country codes need no translation: the profile picker
 (`settings_modal::data::COUNTRIES`) and the Earth asset both use ISO-3166
 alpha-2, which is pinned by `profile_country_codes_find_their_countries_on_the_map`.
+When several atlas territories share a code, the largest by area represents
+that country for shading, selection and the list name. `AU` resolves to
+Australia rather than its smaller offshore territories.
 A handful of picker codes have no shape on a 242-territory map (Natural Earth
 folds small dependencies into their parent); those countries still appear in
 the list, marked "not on the map", so the numbers beside the map add up to the
@@ -117,8 +120,9 @@ One thing that was wrong on the first cut, worth not repeating:
   country.
 - `state_test`: the ladder's readability, how the floors stretch to the data
   (from one person to a hundred thousand), the labels, mode cycling, the
-  code→territory lookup (including lowercase and unknown codes), and that the
-  picker and the map have not drifted apart.
+  code→territory lookup (including lowercase and unknown codes), that Australian
+  profiles shade and select mainland Australia, and that the picker and the map
+  have not drifted apart.
 - `ui_test`: draws at several sizes — while still counting, with tallies (the
   rung colours have to actually reach the screen), and with nothing to show.
 - The host side: `directory/ui_test` draws the page opening on the Map
