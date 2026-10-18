@@ -812,13 +812,15 @@ impl UserMapState {
 /// same codes the profile country picker offers, so this is a lookup rather
 /// than a translation — but not every code has a country on a 242-territory
 /// map (a few small territories are folded into their neighbours), and those
-/// simply do not shade.
+/// simply do not shade. If several territories share a code, use the largest
+/// by area so AU selects Australia rather than its smaller offshore islands.
 pub fn territory_for_code(code: &str) -> Option<TerritoryId> {
     let map = map_by_id("earth")?;
     let code = code.trim().to_ascii_uppercase();
     map.territories
         .iter()
-        .find(|t| t.iso.eq_ignore_ascii_case(&code))
+        .filter(|t| t.iso.eq_ignore_ascii_case(&code))
+        .max_by_key(|t| t.area_km2)
         .map(|t| t.id)
 }
 
@@ -827,10 +829,7 @@ pub fn territory_for_code(code: &str) -> Option<TerritoryId> {
 pub fn country_name(code: &str) -> String {
     let code_upper = code.trim().to_ascii_uppercase();
     if let Some(map) = map_by_id("earth")
-        && let Some(territory) = map
-            .territories
-            .iter()
-            .find(|t| t.iso.eq_ignore_ascii_case(&code_upper))
+        && let Some(territory) = territory_for_code(&code_upper).and_then(|id| map.territory(id))
     {
         return territory.name.clone();
     }
