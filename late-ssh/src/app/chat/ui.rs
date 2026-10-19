@@ -3907,8 +3907,86 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
     };
 
     push_row(section_divider("Core"), None, false);
+    // Lounge first, then what is new in the house (News, RSS when
+    // available), then the other permanent rooms and Mentions. Mirrors
+    // `state.rs::visual_order_for_rooms`.
     let core_order = ["lounge", "announcements", "suggestions", "bugs"];
-    for slug in &core_order {
+    let (lounge, core_rest) = core_order.split_at(1);
+    for slug in lounge {
+        if let Some((room, _)) = chat_rooms
+            .iter()
+            .find(|(r, _)| is_chat_list_room(r) && r.permanent && r.slug.as_deref() == Some(slug))
+        {
+            let is_selected = room_selected(room.id);
+            push_row(
+                room_line(
+                    room,
+                    room_display_label(
+                        room,
+                        view.usernames,
+                        view.current_user_id,
+                        view.away_user_ids,
+                    ),
+                    is_selected,
+                    view.room_jump_active.then(|| jump_keys.next()).flatten(),
+                ),
+                Some(RoomSlot::Room(room.id)),
+                is_selected,
+            );
+        }
+    }
+    let news_line = {
+        let prefix = room_jump_prefix(
+            view.room_jump_active.then(|| jump_keys.next()).flatten(),
+            view.room_jump_active,
+            view.news_selected,
+        );
+        let style = if view.news_selected {
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(theme::TEXT())
+        };
+        let label = if view.news_unread_count > 0 {
+            format!(
+                "{prefix}news ({})",
+                super::news::state::news_unread_label(view.news_unread_count)
+            )
+        } else {
+            format!("{prefix}news")
+        };
+        Line::from(Span::styled(label, style))
+    };
+    push_row(news_line, Some(RoomSlot::News), view.news_selected);
+
+    if view.feeds_available {
+        let feeds_line = {
+            let prefix = room_jump_prefix(
+                view.room_jump_active.then(|| jump_keys.next()).flatten(),
+                view.room_jump_active,
+                view.feeds_selected,
+            );
+            let style = if view.feeds_selected {
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme::TEXT())
+            };
+            let label = if view.feeds_unread_count > 0 {
+                format!(
+                    "{prefix}rss ({})",
+                    format_unread_badge(view.feeds_unread_count)
+                )
+            } else {
+                format!("{prefix}rss")
+            };
+            Line::from(Span::styled(label, style))
+        };
+        push_row(feeds_line, Some(RoomSlot::Feeds), view.feeds_selected);
+    }
+    for slug in core_rest {
         if let Some((room, _)) = chat_rooms
             .iter()
             .find(|(r, _)| is_chat_list_room(r) && r.permanent && r.slug.as_deref() == Some(slug))
@@ -3984,57 +4062,6 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         view.notifications_selected,
     );
 
-    let news_line = {
-        let prefix = room_jump_prefix(
-            view.room_jump_active.then(|| jump_keys.next()).flatten(),
-            view.room_jump_active,
-            view.news_selected,
-        );
-        let style = if view.news_selected {
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD)
-        } else {
-            Style::default().fg(theme::TEXT())
-        };
-        let label = if view.news_unread_count > 0 {
-            format!(
-                "{prefix}news ({})",
-                super::news::state::news_unread_label(view.news_unread_count)
-            )
-        } else {
-            format!("{prefix}news")
-        };
-        Line::from(Span::styled(label, style))
-    };
-    push_row(news_line, Some(RoomSlot::News), view.news_selected);
-
-    if view.feeds_available {
-        let feeds_line = {
-            let prefix = room_jump_prefix(
-                view.room_jump_active.then(|| jump_keys.next()).flatten(),
-                view.room_jump_active,
-                view.feeds_selected,
-            );
-            let style = if view.feeds_selected {
-                Style::default()
-                    .fg(theme::AMBER())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::TEXT())
-            };
-            let label = if view.feeds_unread_count > 0 {
-                format!(
-                    "{prefix}rss ({})",
-                    format_unread_badge(view.feeds_unread_count)
-                )
-            } else {
-                format!("{prefix}rss")
-            };
-            Line::from(Span::styled(label, style))
-        };
-        push_row(feeds_line, Some(RoomSlot::Feeds), view.feeds_selected);
-    }
     // The haunted channel, once invited in: the last row of Core.
     if let Some((room, _)) = chat_rooms.iter().find(|(r, _)| is_deadchannel_room(r)) {
         let is_selected = room_selected(room.id);
@@ -4753,28 +4780,43 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
         push_row(blank(), None, false);
     }
 
+    // Lounge first, then what is new in the house (News, RSS when
+    // available), then the other permanent rooms and Mentions. Mirrors
+    // `state.rs::visual_order_for_rooms`.
     let core_order = ["lounge", "announcements", "suggestions", "bugs"];
-    let core_collapsed = collapsed_set.contains(&RoomSection::Core);
-    push_row(section_header(RoomSection::Core), None, false);
-    if !core_collapsed {
-        for slug in &core_order {
-            if let Some((room, _)) = view.chat_rooms.iter().find(|(r, _)| {
+    let (lounge, core_rest) = core_order.split_at(1);
+    let core_room = |slug: &str| {
+        view.chat_rooms
+            .iter()
+            .find(|(r, _)| {
                 is_chat_list_room(r)
                     && r.permanent
                     && r.slug.as_deref() == Some(slug)
                     && !favorite_ids.contains(&r.id)
-            }) {
-                push_slot(RoomSlot::Room(room.id), &mut push_row);
+            })
+            .map(|(room, _)| room.id)
+    };
+    let core_collapsed = collapsed_set.contains(&RoomSection::Core);
+    push_row(section_header(RoomSection::Core), None, false);
+    if !core_collapsed {
+        for slug in lounge {
+            if let Some(room_id) = core_room(slug) {
+                push_slot(RoomSlot::Room(room_id), &mut push_row);
             }
-        }
-        if !favorited(RoomSlot::Notifications) {
-            push_slot(RoomSlot::Notifications, &mut push_row);
         }
         if !favorited(RoomSlot::News) {
             push_slot(RoomSlot::News, &mut push_row);
         }
         if view.feeds_available && !favorited(RoomSlot::Feeds) {
             push_slot(RoomSlot::Feeds, &mut push_row);
+        }
+        for slug in core_rest {
+            if let Some(room_id) = core_room(slug) {
+                push_slot(RoomSlot::Room(room_id), &mut push_row);
+            }
+        }
+        if !favorited(RoomSlot::Notifications) {
+            push_slot(RoomSlot::Notifications, &mut push_row);
         }
         // Voice sits directly above Discover ("+ browse rooms") at the bottom of Core.
         if let Some((room, _)) = view.chat_rooms.iter().find(|(r, _)| {

@@ -6210,8 +6210,9 @@ async fn f_favorites_the_bugs_room_from_the_rail() {
     app.resize(160, 32).expect("resize test terminal");
     wait_for_render_contains(&mut app, "bugs").await;
 
-    // Core order is lounge, then bugs: one step right lands on it.
-    app.handle_input(b"l");
+    // Core order is lounge, news, then bugs (no RSS without feeds): two
+    // steps right land on it.
+    app.handle_input(b"ll");
     assert_eq!(app.chat.selected_room_id, Some(bugs.id));
     wait_for_render_contains(&mut app, "a report to read").await;
 
@@ -6252,8 +6253,9 @@ async fn f_favorites_the_mentions_entry() {
     wait_for_render_contains(&mut app, "\u{258C}lounge").await;
     assert_eq!(app.chat.selected_room_id, Some(lounge.id));
 
-    // Core order here is lounge, then mentions: one step right lands on it.
-    app.handle_input(b"l");
+    // Core order here is lounge, news, then mentions: two steps right land
+    // on it.
+    app.handle_input(b"ll");
     assert!(app.chat.notifications_selected);
 
     app.handle_input(b"f");

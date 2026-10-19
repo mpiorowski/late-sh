@@ -7459,29 +7459,44 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         }
     }
 
-    // Core: permanent rooms, hardcoded order
+    // Core: permanent rooms, hardcoded order. Lounge first, then what is new
+    // in the house (News, RSS when available), then the other permanent
+    // rooms and Mentions. Mirrored by both rail builders in `ui.rs`.
     let core_collapsed = collapsed_sections.contains(&RoomSection::Core);
     let core_order = ["lounge", "announcements", "suggestions", "bugs"];
-    for slug in &core_order {
-        if let Some((room, _)) = rooms
+    let (lounge, core_rest) = core_order.split_at(1);
+    let core_room = |slug: &str| {
+        rooms
             .iter()
             .find(|(r, _)| is_chat_list_room(r) && r.permanent && r.slug.as_deref() == Some(slug))
-            && pushed_rooms.insert(room.id)
+            .map(|(room, _)| room.id)
+    };
+    for slug in lounge {
+        if let Some(room_id) = core_room(slug)
+            && pushed_rooms.insert(room_id)
             && !core_collapsed
         {
-            order.push(RoomSlot::Room(room.id));
+            order.push(RoomSlot::Room(room_id));
         }
     }
     if !core_collapsed {
-        if !pushed_rooms.contains(&FAVORITE_ID_NOTIFICATIONS) {
-            order.push(RoomSlot::Notifications);
-        }
         if !pushed_rooms.contains(&FAVORITE_ID_NEWS) {
             order.push(RoomSlot::News);
         }
         if feeds_available && !pushed_rooms.contains(&FAVORITE_ID_FEEDS) {
             order.push(RoomSlot::Feeds);
         }
+    }
+    for slug in core_rest {
+        if let Some(room_id) = core_room(slug)
+            && pushed_rooms.insert(room_id)
+            && !core_collapsed
+        {
+            order.push(RoomSlot::Room(room_id));
+        }
+    }
+    if !core_collapsed && !pushed_rooms.contains(&FAVORITE_ID_NOTIFICATIONS) {
+        order.push(RoomSlot::Notifications);
     }
 
     // Voice sits directly above Discover ("+ browse rooms") at the bottom of Core.

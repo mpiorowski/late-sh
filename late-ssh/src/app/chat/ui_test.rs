@@ -1908,12 +1908,12 @@ fn room_list_rows_keep_directory_surfaces_out_of_home() {
 
     assert_eq!(
         hit_slots,
-        vec![RoomSlot::Notifications, RoomSlot::News, RoomSlot::Discover,]
+        vec![RoomSlot::News, RoomSlot::Notifications, RoomSlot::Discover,]
     );
 }
 
 #[test]
-fn cozy_room_rail_places_voice_news_and_feeds_below_mentions_with_jump_keys() {
+fn cozy_room_rail_places_news_and_feeds_under_lounge_with_jump_keys() {
     let lounge = ChatRoom {
         id: Uuid::from_u128(1),
         created: Utc::now(),
@@ -1988,9 +1988,9 @@ fn cozy_room_rail_places_voice_news_and_feeds_below_mentions_with_jump_keys() {
         &keyed_slots[..6],
         &[
             (RoomSlot::Room(lounge.id), "a lounge".to_string()),
-            (RoomSlot::Notifications, "s mentions".to_string()),
-            (RoomSlot::News, "d news".to_string()),
-            (RoomSlot::Feeds, "f rss".to_string()),
+            (RoomSlot::News, "s news".to_string()),
+            (RoomSlot::Feeds, "d rss".to_string()),
+            (RoomSlot::Notifications, "f mentions".to_string()),
             // Discover ("+ browse rooms") is the last entry in Core, so the
             // topic rooms below it start one jump key later.
             (RoomSlot::Discover, "g + browse rooms".to_string()),
