@@ -30,12 +30,15 @@ use super::{
     audio::VizSample,
     clipboard,
     mpris::{DesktopCommand, DesktopMedia, IcecastTrack, MediaSource, RadioTrack, YoutubeTrack},
+    video::{self, VideoBlocker, VideoControl, VideoPlayer, VideoRect, VideoState, VideoUpdate},
     voice::VoiceRuntimeState,
 };
 
 pub(super) struct PairClientInfo {
     pub(super) ssh_mode: &'static str,
     pub(super) platform: &'static str,
+    /// Empty when this CLI can play video (`video` is advertised).
+    pub(super) video_blockers: Vec<VideoBlocker>,
 }
 
 pub(super) struct PlaybackState<'a> {
@@ -49,6 +52,9 @@ pub(super) struct PlaybackState<'a> {
     pub(super) stream_generation: &'a AtomicU64,
     pub(super) stream_flushed_generation: &'a AtomicU64,
     pub(super) icecast_stream_url: &'a str,
+    /// Native output held silent while a video plays, without touching the
+    /// user's `muted`, which `client_state` reports and the server persists.
+    pub(super) silenced_for_video: &'a AtomicBool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -111,6 +117,30 @@ enum PairControlMessage {
     OpenUrl {
         url: String,
     },
+    /// Play a News video in the TUI's reserved rectangle. Advertised via the
+    /// `video` capability; `play_id` ties every later message to this play.
+    VideoPlay {
+        play_id: u64,
+        url: String,
+        left: u16,
+        top: u16,
+        cols: u16,
+        rows: u16,
+    },
+    VideoPlace {
+        play_id: u64,
+        left: u16,
+        top: u16,
+        cols: u16,
+        rows: u16,
+    },
+    VideoControl {
+        play_id: u64,
+        control: VideoControl,
+    },
+    VideoStop {
+        play_id: u64,
+    },
 }
 
 #[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -132,10 +162,19 @@ impl From<PairAudioSource> for MediaSource {
 }
 
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-const CLIENT_CAPABILITIES: &[&str] = &["clipboard_image", "youtube", "voice", "open_url"];
+const BASE_CAPABILITIES: &[&str] = &["clipboard_image", "youtube", "voice", "open_url"];
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
-const CLIENT_CAPABILITIES: &[&str] = &[];
+const BASE_CAPABILITIES: &[&str] = &[];
+
+/// `video` joins the base list only when nothing blocks it.
+fn client_capabilities(video_blockers: &[VideoBlocker]) -> Vec<&'static str> {
+    let mut capabilities = BASE_CAPABILITIES.to_vec();
+    if video_blockers.is_empty() {
+        capabilities.push("video");
+    }
+    capabilities
+}
 
 const WEBVIEW_CRASH_WINDOW: Duration = Duration::from_secs(60);
 const WEBVIEW_CRASH_LIMIT: u8 = 3;
@@ -148,6 +187,9 @@ pub(super) struct WebviewPlaybackController {
     #[cfg(target_os = "linux")]
     analyzer_tx: broadcast::Sender<VizSample>,
     wants_youtube: bool,
+    /// A video is playing: the helper stays down and is not respawned, and
+    /// the heartbeat brings it back once the video ends.
+    suspended_for_video: bool,
     helper_log_path: Option<PathBuf>,
     crash_window_started: Option<Instant>,
     crash_count: u8,
@@ -178,6 +220,7 @@ impl WebviewPlaybackController {
             #[cfg(target_os = "linux")]
             analyzer_tx,
             wants_youtube: false,
+            suspended_for_video: false,
             helper_log_path: None,
             crash_window_started: None,
             crash_count: 0,
@@ -204,7 +247,7 @@ impl WebviewPlaybackController {
     /// (the server can miss the helper's disconnect entirely on a half-open
     /// TCP drop and then never replays the playback source).
     pub(super) fn maintain_helper(&mut self, muted: bool, volume_percent: u8) {
-        if !self.wants_youtube || self.helper_is_running() {
+        if !self.wants_youtube || self.suspended_for_video || self.helper_is_running() {
             return;
         }
         // Quiet backoff pre-check: enter_youtube's backoff probe warns on
@@ -221,7 +264,7 @@ impl WebviewPlaybackController {
 
     fn enter_youtube(&mut self, muted: bool, volume_percent: u8) -> Result<()> {
         self.wants_youtube = true;
-        if self.helper_is_running() {
+        if self.suspended_for_video || self.helper_is_running() {
             return Ok(());
         }
         if self.helper_backoff_active() {
@@ -440,6 +483,18 @@ impl WebviewPlaybackController {
         }
     }
 
+    /// Silence YouTube for a video. The helper has no command channel from
+    /// this process (its audio follows the server's fan-out on its own pair
+    /// socket), so it is stopped, and `maintain_helper` respawns it after.
+    fn suspend_for_video(&mut self) {
+        self.suspended_for_video = true;
+        self.stop_helper();
+    }
+
+    fn resume_after_video(&mut self) {
+        self.suspended_for_video = false;
+    }
+
     fn stop_helper(&mut self) {
         let Some(mut helper) = self.child.take() else {
             return;
@@ -507,8 +562,18 @@ fn webview_helper_stderr() -> Result<WebviewHelperStderr> {
         });
     }
 
-    let path = webview_helper_log_path();
-    ensure_webview_log_dir(&path)?;
+    let path = state_log_path("LATE_WEBVIEW_LOG", "webview.log");
+    let file = open_state_log(&path)?;
+    Ok(WebviewHelperStderr {
+        stdio: Stdio::from(file),
+        destination: WebviewHelperStderrDestination::LogFile(path),
+    })
+}
+
+/// Open a child's stderr log for append, private to this user, refusing a
+/// symlinked file or directory.
+pub(super) fn open_state_log(path: &Path) -> Result<fs::File> {
+    ensure_state_log_dir(path)?;
     let mut options = OpenOptions::new();
     options.create(true).append(true);
     #[cfg(unix)]
@@ -516,16 +581,13 @@ fn webview_helper_stderr() -> Result<WebviewHelperStderr> {
         options.mode(0o600).custom_flags(nix::libc::O_NOFOLLOW);
     }
     let file = options
-        .open(&path)
-        .with_context(|| format!("failed to open webview helper log at {}", path.display()))?;
+        .open(path)
+        .with_context(|| format!("failed to open log at {}", path.display()))?;
     #[cfg(unix)]
     {
         let _ = file.set_permissions(fs::Permissions::from_mode(0o600));
     }
-    Ok(WebviewHelperStderr {
-        stdio: Stdio::from(file),
-        destination: WebviewHelperStderrDestination::LogFile(path),
-    })
+    Ok(file)
 }
 
 fn write_helper_token(child: &mut Child, token: &str) -> Result<()> {
@@ -542,49 +604,51 @@ fn write_helper_token(child: &mut Child, token: &str) -> Result<()> {
     Ok(())
 }
 
-fn webview_helper_log_path() -> PathBuf {
-    if let Some(path) = nonempty_os_env("LATE_WEBVIEW_LOG") {
+/// A child's log file: the `override_key` env var, else `file_name` in the
+/// late state directory.
+pub(super) fn state_log_path(override_key: &str, file_name: &str) -> PathBuf {
+    if let Some(path) = nonempty_os_env(override_key) {
         return PathBuf::from(path);
     }
 
     #[cfg(unix)]
     {
         if let Some(base) = nonempty_os_env("XDG_STATE_HOME") {
-            return PathBuf::from(base).join("late").join("webview.log");
+            return PathBuf::from(base).join("late").join(file_name);
         }
         if let Some(home) = nonempty_os_env("HOME") {
             return PathBuf::from(home)
                 .join(".local")
                 .join("state")
                 .join("late")
-                .join("webview.log");
+                .join(file_name);
         }
         if let Some(base) = nonempty_os_env("XDG_RUNTIME_DIR") {
-            return PathBuf::from(base).join("late").join("webview.log");
+            return PathBuf::from(base).join("late").join(file_name);
         }
         env::temp_dir()
             .join(format!("late-{}", effective_user_id()))
-            .join("webview.log")
+            .join(file_name)
     }
 
     #[cfg(windows)]
     {
         if let Some(base) = nonempty_os_env("LOCALAPPDATA") {
-            return PathBuf::from(base).join("late").join("webview.log");
+            return PathBuf::from(base).join("late").join(file_name);
         }
         if let Some(profile) = nonempty_os_env("USERPROFILE") {
             return PathBuf::from(profile)
                 .join("AppData")
                 .join("Local")
                 .join("late")
-                .join("webview.log");
+                .join(file_name);
         }
-        return env::temp_dir().join("late").join("webview.log");
+        return env::temp_dir().join("late").join(file_name);
     }
 
     #[cfg(not(any(unix, windows)))]
     {
-        env::temp_dir().join("late").join("webview.log")
+        env::temp_dir().join("late").join(file_name)
     }
 }
 
@@ -627,27 +691,17 @@ fn exit_signal_name(_status: &std::process::ExitStatus) -> Option<&'static str> 
     None
 }
 
-fn ensure_webview_log_dir(path: &Path) -> Result<()> {
-    let parent = path
-        .parent()
-        .context("webview helper log path has no parent directory")?;
-    fs::create_dir_all(parent).with_context(|| {
-        format!(
-            "failed to create webview helper log directory at {}",
-            parent.display()
-        )
-    })?;
+fn ensure_state_log_dir(path: &Path) -> Result<()> {
+    let parent = path.parent().context("log path has no parent directory")?;
+    fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create log directory at {}", parent.display()))?;
     #[cfg(unix)]
     {
-        let metadata = fs::symlink_metadata(parent).with_context(|| {
-            format!(
-                "failed to inspect webview helper log directory at {}",
-                parent.display()
-            )
-        })?;
+        let metadata = fs::symlink_metadata(parent)
+            .with_context(|| format!("failed to inspect log directory at {}", parent.display()))?;
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
             anyhow::bail!(
-                "webview helper log directory is not a real directory: {}",
+                "log directory is not a real directory: {}",
                 parent.display()
             );
         }
@@ -669,10 +723,11 @@ impl Drop for WebviewPlaybackController {
 }
 
 /// Mutable client-side runtime driven by the pair websocket loop: the webview
-/// helper, voice state, the desktop media surface with its command feed, and
-/// the playback analyzer's spectrum frames.
+/// helper, the video player, voice state, the desktop media surface with its
+/// command feed, and the playback analyzer's spectrum frames.
 pub(super) struct PairRuntime<'a> {
     pub(super) webview: &'a mut WebviewPlaybackController,
+    pub(super) video: &'a mut VideoPlayer,
     pub(super) voice: &'a mut VoiceRuntimeState,
     pub(super) desktop_media: &'a mut DesktopMedia,
     pub(super) desktop_commands: &'a mut tokio::sync::mpsc::Receiver<DesktopCommand>,
@@ -868,6 +923,11 @@ async fn pair_session_loop(
                     "position_ms": playback_position_ms(playback.played_samples, playback.sample_rate),
                 });
                 ws.send(Message::Text(payload.to_string().into())).await?;
+                // Video position rides this tick; no second timer.
+                if let Some(update) = runtime.video.poll().await {
+                    report_video(ws, update).await?;
+                }
+                silence_for_video(runtime.video.is_active(), playback, runtime.webview);
                 runtime.webview.maintain_helper(
                     playback.muted.load(Ordering::Relaxed),
                     playback.volume_percent.load(Ordering::Relaxed),
@@ -922,6 +982,7 @@ async fn pair_session_loop(
                                 ws,
                                 playback,
                                 runtime.webview,
+                                runtime.video,
                                 runtime.voice,
                                 runtime.desktop_media,
                             )
@@ -947,17 +1008,42 @@ async fn send_client_state(
     client: &PairClientInfo,
     playback: &PlaybackState<'_>,
 ) -> Result<()> {
-    let payload = json!({
+    let payload = client_state_payload(
+        client,
+        playback.muted.load(Ordering::Relaxed),
+        playback.volume_percent.load(Ordering::Relaxed),
+    );
+    ws.send(Message::Text(payload.to_string().into())).await?;
+    Ok(())
+}
+
+/// `video_blockers` is present exactly when `video` is not in
+/// `capabilities`, so the server's setup box can say which rows fail.
+fn client_state_payload(
+    client: &PairClientInfo,
+    muted: bool,
+    volume_percent: u8,
+) -> serde_json::Value {
+    let mut payload = json!({
         "event": "client_state",
         "client_kind": "cli",
         "ssh_mode": client.ssh_mode,
         "platform": client.platform,
-        "capabilities": CLIENT_CAPABILITIES,
-        "muted": playback.muted.load(Ordering::Relaxed),
-        "volume_percent": playback.volume_percent.load(Ordering::Relaxed),
+        "capabilities": client_capabilities(&client.video_blockers),
+        "muted": muted,
+        "volume_percent": volume_percent,
     });
-    ws.send(Message::Text(payload.to_string().into())).await?;
-    Ok(())
+    match client.video_blockers.as_slice() {
+        [] => {}
+        blockers => {
+            payload["video_blockers"] = blockers
+                .iter()
+                .map(|blocker| blocker.wire_name())
+                .collect::<Vec<_>>()
+                .into();
+        }
+    }
+    payload
 }
 
 async fn handle_pair_control(
@@ -967,6 +1053,7 @@ async fn handle_pair_control(
     >,
     playback: &PlaybackState<'_>,
     webview: &mut WebviewPlaybackController,
+    video: &mut VideoPlayer,
     voice: &mut VoiceRuntimeState,
     desktop_media: &mut DesktopMedia,
 ) -> Result<bool> {
@@ -1125,7 +1212,139 @@ async fn handle_pair_control(
             open_url_in_browser(&url);
             Ok(false)
         }
+        PairControlMessage::VideoPlay {
+            play_id,
+            url,
+            left,
+            top,
+            cols,
+            rows,
+        } => {
+            let rect = VideoRect {
+                left,
+                top,
+                cols,
+                rows,
+            };
+            info!(play_id, url = %url, ?rect, "starting video");
+            let update = video.play(
+                play_id,
+                url,
+                rect,
+                playback.volume_percent.load(Ordering::Relaxed),
+            );
+            report_video(ws, update).await?;
+            silence_for_video(video.is_active(), playback, webview);
+            Ok(false)
+        }
+        PairControlMessage::VideoPlace {
+            play_id,
+            left,
+            top,
+            cols,
+            rows,
+        } => {
+            let rect = VideoRect {
+                left,
+                top,
+                cols,
+                rows,
+            };
+            if let Some(update) = video.place(play_id, rect).await {
+                info!(play_id, ?rect, "moved video");
+                report_video(ws, update).await?;
+            }
+            silence_for_video(video.is_active(), playback, webview);
+            Ok(false)
+        }
+        PairControlMessage::VideoControl { play_id, control } => {
+            if let Some(update) = video.control(play_id, control).await {
+                report_video(ws, update).await?;
+            }
+            silence_for_video(video.is_active(), playback, webview);
+            Ok(false)
+        }
+        PairControlMessage::VideoStop { play_id } => {
+            if let Some(update) = video.stop(play_id).await {
+                report_video(ws, update).await?;
+            }
+            silence_for_video(video.is_active(), playback, webview);
+            Ok(false)
+        }
     }
+}
+
+/// Send one `video_state`, clearing the frame a gone mpv left behind first.
+/// The one place a video's story is logged.
+async fn report_video(
+    ws: &mut tokio_tungstenite::WebSocketStream<
+        tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
+    >,
+    update: VideoUpdate,
+) -> Result<()> {
+    log_video_update(&update);
+    let payload = video::video_state_payload(update.play_id, &update.state);
+    ws.send(Message::Text(payload.to_string().into())).await?;
+    Ok(())
+}
+
+fn log_video_update(update: &VideoUpdate) {
+    let play_id = update.play_id;
+    match &update.state {
+        VideoState::Starting => info!(play_id, "video starting"),
+        VideoState::Playing { .. } | VideoState::Paused { .. } => {}
+        VideoState::Ended => info!(play_id, "video ended"),
+        VideoState::Stopped => info!(play_id, "video stopped"),
+        VideoState::Failed(failure) => {
+            warn!(play_id, error = %failure.message(), "video failed");
+        }
+    }
+    if let Some(rect) = update.residue
+        && let Err(err) = video::clear_frame(rect)
+    {
+        warn!(play_id, error = %err, "failed to clear the last video frame");
+    }
+}
+
+/// Hold the house audio silent while a video plays and bring it back after.
+/// Local and temporary: nothing goes to the server, so the user's stored
+/// mute and the sidebar stay as they were.
+fn silence_for_video(
+    video_active: bool,
+    playback: &PlaybackState<'_>,
+    webview: &mut WebviewPlaybackController,
+) {
+    let was_active = playback
+        .silenced_for_video
+        .swap(video_active, Ordering::Relaxed);
+    match (was_active, video_active) {
+        (false, true) => {
+            webview.suspend_for_video();
+            info!("silenced local audio for video");
+        }
+        (true, false) => {
+            webview.resume_after_video();
+            info!("restored local audio after video");
+        }
+        (false, false) | (true, true) => {}
+    }
+}
+
+/// The pair socket is gone, so nobody can drive the video: kill mpv and
+/// bring the house audio back. Called by the reconnect loop.
+pub(super) fn end_video_without_socket(
+    video: &mut VideoPlayer,
+    playback: &PlaybackState<'_>,
+    webview: &mut WebviewPlaybackController,
+) {
+    if let Some(update) = video.abandon() {
+        info!(
+            play_id = update.play_id,
+            "pair socket closed; stopping video"
+        );
+        log_video_update(&update);
+    }
+    silence_for_video(false, playback, webview);
 }
 
 /// Open a server-sent URL in the default browser. Only `https://`/`http://`
@@ -1272,7 +1491,11 @@ fn apply_audio_pair_control(
         | PairControlMessage::VoiceLeave
         | PairControlMessage::VoiceSetMuted { .. }
         | PairControlMessage::VoiceSetDeafened { .. }
-        | PairControlMessage::OpenUrl { .. } => {}
+        | PairControlMessage::OpenUrl { .. }
+        | PairControlMessage::VideoPlay { .. }
+        | PairControlMessage::VideoPlace { .. }
+        | PairControlMessage::VideoControl { .. }
+        | PairControlMessage::VideoStop { .. } => {}
     }
 }
 

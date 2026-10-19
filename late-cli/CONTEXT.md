@@ -36,6 +36,7 @@ Primary responsibilities:
 - Paired mute/volume controls received from the TUI
 - Linux MPRIS publication for the selected YouTube, Icecast, or radio track
 - LiveKit voice capture/playout for native desktop CLI users, controlled over the pair WebSocket
+- News watch: plays a shared YouTube link in the terminal through the user's own `mpv` and `yt-dlp`, in a rectangle the TUI reserves
 - Cross-platform installer targets for Linux, macOS, Windows, and Android/Termux
 
 Highest-risk areas:
@@ -89,6 +90,7 @@ OpenSSH mode differs slightly: it authenticates and fetches the token first thro
 - `src/pty.rs` - terminal size/PTY helpers
 - `src/raw_mode.rs` - local raw-mode guard for modes where CLI owns terminal forwarding, plus `SessionModesGuard`, which turns off mouse reporting and bracketed paste, resets the themed background (OSC 111), and shows the cursor when the session ends in any mode (the server's own teardown never arrives on an idle timeout or a dropped link). It never sends `?1049l`: after a clean exit that would restore a stale cursor over the goodbye line
 - `src/ws.rs` - paired-client WebSocket protocol, control handling, client state
+- `src/video.rs` - News watch: the `video` capability probe (`blockers`), the `mpv` child (`VideoPlayer`), its JSON IPC socket, and the kitty-placement cleanup. Pure work that returns `VideoUpdate`s; `ws.rs` sends, logs, and silences the house audio around a play. See §6 "Video watch"
 - `src/voice.rs` - LiveKit voice-room media runtime; see `../late-ssh/src/app/voice/CONTEXT.md` for full voice protocol and invariants
 - `../late-webview/` - embedded YouTube webview crate (wry/tao/WebKitGTK page host, JS bridge commands, pair-WS relay, `page.html`). Ships as the standalone `late-webview` binary on Linux; compiled into `late` as a library on Windows/macOS. `late-cli` must not depend on it on Linux — that dependency edge is what keeps WebKitGTK out of the `late` binary.
 - `src/audio/` - stream probing, decoding, playback queue, resampling, analyzer. `resolve_stream_url` supports Icecast-style base URLs, `/stream/...` paths, and direct `.mp3`/`.m4a`/`.aac` URLs. Pair-WS `set_playback_source` can retarget native audio to a server-provided `stream_url`; `src/ws.rs` keeps a hardcoded Chillsynth URL only as a legacy radio fallback when an old server omits `stream_url`.
@@ -123,6 +125,9 @@ Defaults in `src/config.rs`:
 - `LATE_WEBVIEW_LOG`: optional embedded YouTube helper stderr log path override. Default is `$XDG_STATE_HOME/late/webview.log`, `~/.local/state/late/webview.log`, or platform temp fallback.
 - `LATE_WEBVIEW_DEBUG_STDERR=1`: inherit the embedded YouTube helper's stderr instead of redirecting it to the helper log file. Useful with `late -v 2>late-debug.log` when diagnosing GTK/WebKit/GStreamer startup.
 - The parent starts the embedded YouTube helper with `NO_AT_BRIDGE=1` to opt the helper out of the AT-SPI accessibility bridge. This avoids host `libatk-bridge-2.0` crashes caused by stale `at-spi-bus-launcher`/dbus state while keeping the setting scoped to the helper process. On Linux it also sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` by default if the caller did not set that variable, matching the common Arch/Wayland workaround for WebKitGTK DMABUF renderer failures.
+- `LATE_MPV_BIN`: optional explicit `mpv` for News watch; default is `mpv` on `$PATH`.
+- `LATE_YTDLP_BIN`: optional explicit `yt-dlp`; passed to mpv as `--script-opts=ytdl_hook-ytdl_path=...`. Default lets mpv's ytdl hook find `yt-dlp` on `$PATH`.
+- `LATE_VIDEO_LOG`: optional mpv stderr log path override. Default is `$XDG_STATE_HOME/late/video.log`, `~/.local/state/late/video.log`, or platform temp fallback (same resolution as the webview log).
 - `-v`, `--verbose`: enables debug logging when `RUST_LOG` is not set
 - `LATE_NO_UPDATE_CHECK=1`: skips the pre-connect "update available" check (see §9 "Update check"). Any non-empty value other than `0` disables it.
 - `LATE_INSTALL_BASE_URL`: distribution host override shared with the installer; the update check fetches `{base}/VERSION` from it (default `https://cli.late.sh`).
@@ -243,10 +248,10 @@ Client to server:
   "client_kind": "cli",
   "ssh_mode": "native",
   "platform": "linux",
-  "capabilities": ["clipboard_image"],
+  "capabilities": ["clipboard_image", "youtube", "voice", "open_url"],
+  "video_blockers": ["not_kitty", "no_mpv"],
   "muted": false,
-  "volume_percent": 30,
-  "icecast_output_available": true
+  "volume_percent": 30
 }
 ```
 
@@ -310,14 +315,15 @@ Client to server for voice state:
 Client state labels:
 - `ssh_mode`: `native`, `openssh`, `old`
 - `platform`: `linux`, `macos`, `windows`, `android`, or `unknown`
-- `capabilities`: optional list; Linux, macOS, and Windows desktop CLI builds advertise `clipboard_image`, `youtube`, and `voice`; Android/Termux builds leave it empty.
+- `capabilities`: optional list; Linux, macOS, and Windows desktop CLI builds advertise `clipboard_image`, `youtube`, `voice`, and `open_url`; Android/Termux builds leave the base list empty. `video` is appended on any build whose startup probe finds no blocker (see "Video watch" below).
+- `video_blockers`: present exactly when `video` is not in `capabilities`; every failing precondition by wire name: `not_native`, `platform`, `multiplexer`, `not_kitty`, `no_pixel_size`, `no_mpv`, `mpv_too_old`, `no_ytdlp`.
 
 Pairing behavior:
 - The server stores one paired-client sender/state entry per token.
 - If the CLI and its webview helper both pair on the same token, latest registration owns control/state until it disconnects.
 - CLI WebSocket reconnects with a 2s delay for 10 consecutive failures, then keeps reconnecting every 60s. Pairing is never abandoned, so a server redeploy or a network change cannot leave a live SSH session permanently unpaired. A connection that held for 60s (`STABLE_CONNECTION`) clears the failure count, so one long session's worth of rare drops never accumulates into a give-up. Policy lives in `ws.rs`'s `PairRetryPolicy` (pure, tested in `ws_test.rs`); `main.rs`'s pair loop owns the sleeping, logging, and mute write.
 - The pair WebSocket loop is selected alongside SSH session completion in the root async task, not spawned with `tokio::spawn`. This is intentional because native LiveKit voice room state is not guaranteed to be `Send` across desktop platforms.
-- The first `client_state` is sent immediately after connect. It is resent after local mute/volume controls and when `icecast_output_available` changes; source changes and voice controls use their own handling/`voice_state`.
+- The first `client_state` is sent immediately after connect. It is resent after local mute/volume controls; source changes, voice, and video use their own handling (`voice_state`, `video_state`). The video probe runs once at startup, so a fixed setup is picked up on the next `late` launch.
 - `/paste-image` in SSH chat depends on the paired CLI control channel. The server only sends `request_clipboard_image` after seeing `clipboard_image` in the latest paired client's `client_state.capabilities`, so older CLIs and the webview helper do not receive unsupported control events.
 - Linux Wayland support for `/paste-image` depends on the workspace `arboard` dependency enabling `wayland-data-control`; Hyprland uses this path. Without it, the CLI may report that the clipboard does not contain an image even when Wayland has `image/png` content.
 - Clipboard images are converted to PNG in the CLI before upload. The CLI rejects zero-size images, very large decoded RGBA buffers, and PNG payloads above the upload cap before sending them over the pair socket.
@@ -337,6 +343,47 @@ Embedded YouTube helper window:
 - On initial helper open only, `webview-pair` uses the first `queue_update.current.started_at_ms` snapshot to apply one `startSeconds` value to the first matching `load_video`. If a `load_video` arrives before that first snapshot, the relay buffers it and flushes it when the snapshot decision is known. After that first load is dispatched, heartbeats and later track switches do not receive a seek offset and continue through the normal `loadVideoById({ videoId })` path.
 - The helper page suppresses transient YouTube IFrame `unstarted`/`cued` states and only reports `ended` after the current item has reached `playing`; the server still owns queue advancement through its playback timer.
 - If YouTube rejects the embedded iframe with `101`, `150`, or `153`, the helper logs the rejection and stays on its controlled bridge page. It does not navigate to the normal `youtube.com/watch` page because that would leave the local player bridge and make source switching/state harder to reason about.
+
+### Video watch
+
+A YouTube story in News plays in the user's own terminal through their `mpv` (kitty graphics output, shared-memory frames) and the `yt-dlp` mpv's ytdl hook calls. No media crosses SSH. The TUI decides the rectangle, paints it black, and keeps every key; `src/video.rs` owns the mpv child and its IPC socket.
+
+Server to client, only to a CLI that advertised `video` (`left`/`top` are 0-based cells, `cols`/`rows` the size; `control` is `toggle_pause`, `seek_back`, `seek_forward`, or `toggle_mute`):
+
+```json
+{ "event": "video_play",    "play_id": 7, "url": "https://www.youtube.com/watch?v=...", "left": 10, "top": 3, "cols": 100, "rows": 28 }
+{ "event": "video_place",   "play_id": 7, "left": 0, "top": 0, "cols": 180, "rows": 44 }
+{ "event": "video_control", "play_id": 7, "control": "toggle_pause" }
+{ "event": "video_stop",    "play_id": 7 }
+```
+
+Client to server, on every state change and once a second while playing or paused (riding the 1 s heartbeat tick). `duration_s` is `null` for a live stream:
+
+```json
+{ "event": "video_state", "play_id": 7, "state": "starting" }
+{ "event": "video_state", "play_id": 7, "state": "playing", "position_s": 83, "duration_s": 724 }
+{ "event": "video_state", "play_id": 7, "state": "paused",  "position_s": 83, "duration_s": 724 }
+{ "event": "video_state", "play_id": 7, "state": "ended" }
+{ "event": "video_state", "play_id": 7, "state": "failed", "message": "mpv exited with status 2" }
+{ "event": "video_state", "play_id": 7, "state": "stopped" }
+```
+
+`ended`, `failed`, and `stopped` are final: mpv is gone and whatever it left in the terminal is settled, so the server can re-assert its own terminal modes (see "Terminal residue"). `message` is for the server's log, never shown raw.
+
+Capability. `video::probe` runs once at startup and `video::blockers` (pure) returns every failing precondition: native SSH mode (`not_native`), Linux or macOS (`platform`), no `TMUX`/`STY` and a `TERM` not starting with `tmux`/`screen` (`multiplexer`), a Kitty-family env hint, the same ones the CLI forwards for images (`not_kitty`), nonzero `TIOCGWINSZ` pixel size on stdout (`no_pixel_size`), `mpv --version` parsing to 0.36 or newer (`no_mpv`, `mpv_too_old`; an unparseable version counts as too old), and `yt-dlp` on `PATH` or at `LATE_YTDLP_BIN` (`no_ytdlp`). Empty appends `video` to `capabilities`; otherwise `client_state.video_blockers` lists them. The probe result is logged once at `info`.
+
+Lifecycle invariants:
+- At most one mpv per CLI. `video_play` while one runs kills the old one first, unreported. Any message whose `play_id` is not the running play is dropped, as are controls before mpv's IPC socket is up.
+- Only `http://`/`https://` URLs reach mpv (`failed` otherwise), the same gate as `open_url`.
+- mpv args are built whole by `mpv_args` (pure, tested as a full vector): `--no-config --really-quiet --terminal=no --vo=kitty --vo-kitty-use-shm=yes --vo-kitty-alt-screen=no --vo-kitty-config-clear=no`, the six geometry numbers, `--ytdl=yes`, a 720p format cap, `--volume=<CLI volume_percent>`, `--keep-open=no`, `--input-ipc-server=<XDG_RUNTIME_DIR or temp>/late-video-<pid>.sock`. `--vo-kitty-left/top` are 1-based, so the CLI adds one to the TUI's cells; `--vo-kitty-width/height` come from the tty's pixel-per-cell ratio at spawn. Both kitty flags set to `no` are load-bearing: `config-clear=yes` writes `ESC[2J` on every reconfigure and wipes the TUI around the video, and `alt-screen=yes` switches screens and wipes the TUI on exit (checked against mpv 0.41's `vo_kitty`).
+- `video_place` respawns mpv: the kitty output options are startup options. The CLI reads `time-pos`, `pause`, and `mute` over IPC first and restarts with `--start`, `--pause`, `--mute=yes`, reporting `starting` again.
+- `video_stop` sends `quit` over IPC, waits up to 500 ms, then kills. A dropped pair socket kills mpv from the reconnect loop (`end_video_without_socket`); the SSH session ending drops the `VideoPlayer`, whose `Drop` kills it. No mpv outlives `late`.
+- mpv exiting 0 is `ended` (`--keep-open=no` quits at end of file). Any other exit, an IPC socket that never appears within 5 s, or a broken socket is `failed` with a `VideoFailure` (`UnsupportedUrl`, `NoPixelSize`, `Spawn`, `Inspect`, `IpcTimeout`, `Ipc`, `Exited`). The pair loop logs every outcome in one `match` (`log_video_update`); `video.rs` never logs.
+- stdin is null, stdout stays the tty (that is where the frames go), stderr goes to the video log.
+
+Terminal residue. With `alt-screen=no`, mpv leaves its last frame on screen when it exits. After every final state the CLI deletes it with a kitty `a=d,d=p` delete at the rectangle's center cell and `q=2` (no reply on stdin, which would be forwarded as keys); that touches only placements under that cell, so the TUI's own images elsewhere survive. mpv's `vo_kitty` also writes `ESC[?1003h` on start and `ESC[?1003l` and `ESC[?25h` on exit; the CLI cannot know the TUI's mouse and cursor modes, so restoring them after a final state is the server's job. mpv writes to the same tty as the SSH output forwarder with no shared lock across escape sequences, so a frame can in principle land inside a TUI sequence split across SSH packets.
+
+Audio while watching. `silence_for_video` in `ws.rs` sets `PlaybackState::silenced_for_video` while a play is active: the output callback emits silence and the decoder parks its stream, without touching `muted`, so nothing reaches the server and the stored mute stays as it was. The YouTube webview helper has no command channel from this process, so it is stopped (`suspend_for_video`) and not respawned until the video ends; then the heartbeat watchdog brings it back and it resyncs to the booth's current track.
 
 ---
 
@@ -363,7 +410,7 @@ Critical audio invariant:
 Platform notes:
 - Android/Termux currently disables local audio in the runtime and still allows the SSH/client path to proceed.
 - WSL uses a dedicated audio profile: fixed 2048-frame CPAL buffer where possible, a short prebuffer before `stream.play()`, and fail-open startup. If local WSL audio cannot start, the CLI continues into SSH with audio disabled and points users to late.sh/listen or Windows-native `late.exe`.
-- On all platforms, local audio startup failure now fails open: the CLI continues into SSH/pairing with audio disabled and reports `icecast_output_available=false` in `client_state`.
+- On all platforms, local audio startup failure now fails open: the CLI continues into SSH/pairing with audio disabled.
 - WSL startup failures include a targeted hint that checks `DISPLAY`, `WAYLAND_DISPLAY`, and `PULSE_SERVER`.
 - A working configured or default local audio output device is required for full desktop CLI audio, but not for SSH connection.
 - MP3 is the only enabled stream format.
@@ -382,7 +429,7 @@ Audio and stream resiliency:
 - WebSocket pairing retries every 2s for 10 consecutive failures, then every 60s for as long as the session lives; see §6 for the stable-connection reset and the mute rule.
 - Startup stream probing and the decoder thread's first stream open each retry 3 times with a short 750ms delay before aborting startup. This covers rare Icecast/network timing blips where the first CLI launch says "failed to create audio decoder" but immediately joining again works.
 - Decoder recovery re-probes `SymphoniaStreamDecoder` in place after stream failures, sleeps 2s between reconnects, and gives up after 10 consecutive failures.
-- CPAL output stream errors mark `icecast_output_available=false`; the pair WebSocket sends an updated `client_state` so the server knows this CLI is not producing audio.
+- CPAL output stream errors are printed to stderr by the stream's error callback; nothing is reported to the server.
 - `viz` frames drive the TUI equalizer's live spectrum for Icecast and radio, and on Linux for YouTube through the helper capture (see `late-ssh/src/app/audio/CONTEXT.md` §10 and §18). CLIs released between the analyzer's removal (2026-07-23) and its return send none and keep the ambient band.
 - The helper capture fails open. Missing `pw-dump` or `pw-record` logs one warning and YouTube keeps the ambient band; a failing graph read warns once per run of failures and retries every second; a recorder whose stream vanished is dropped and the next matching stream is picked up; a recorder that exits while its stream is still listed warns once with its exit status and respawns every second until one holds.
 
@@ -399,6 +446,8 @@ Resize behavior:
 - Default terminal size fallback is `80x24`.
 
 The CLI binary must forward local terminal resizes so side-by-side panes and split windows reflow after startup.
+
+News watch reads the tty's pixel size (`TIOCGWINSZ` `ws_xpixel`/`ws_ypixel` on stdout) at startup and again at every mpv spawn; a terminal that reports zero cannot host a video. The TUI, not the CLI, decides the video rectangle: a resize reaches the CLI as a `video_place` from the server, never from the CLI's own `SIGWINCH`.
 
 Raw mode:
 - Native and old modes enable CLI raw mode.
@@ -495,8 +544,8 @@ Inline unit tests in `late-cli/src/` should stay pure logic only:
 Do not put integration-flavored tests inside `#[cfg(test)]` modules if they require live SSH, WebSocket, audio devices, network, or async service orchestration.
 
 LLM command policy from root context applies here:
-- Agents must not run `cargo test`, `cargo nextest`, or `cargo clippy` in this repo.
-- If a change would normally merit verification, note the expected command for the human owner instead of running it.
+- Agents run the tests targeted at their change only through `make test-llm ARGS="-p late-cli -E 'test(<filter>)'"`, never raw `cargo test`/`cargo nextest`, and never `cargo clippy`.
+- Full suites and `make check` stay with the human owner.
 - `mix format` is irrelevant here; for Rust formatting, mention `cargo fmt --all -- --check` when handing off.
 
 ---
@@ -544,6 +593,8 @@ Relevant TUI controls:
 - Old mode remains as a compatibility path and still depends on system OpenSSH plus PTY behavior.
 - Native mode does not handle OpenSSH/FIDO/YubiKey auth flows; users must switch to OpenSSH mode for those.
 - `scripts/run_local_cli.sh` checks for `script` but does not use it.
+- News watch cannot run on Windows (no Kitty graphics in Windows Terminal, console path untested), inside tmux or screen, in OpenSSH or old mode, or in a non-Kitty terminal (Sixel is too slow for video, iTerm2's protocol has no shared memory). The probe runs only at startup, so installing `mpv`/`yt-dlp` takes a `late` restart.
+- News watch cannot tell a `yt-dlp` failure from any other mpv failure: both arrive as an mpv exit status, and the reason is only in `video.log`.
 
 ---
 
@@ -580,7 +631,7 @@ Embedded YouTube on Linux should need nothing installed, and must stay within Yo
   - A cease and desist. Precedent: the Groovy and Rythm Discord music bots were shut down by Google in 2021, and Invidious got a C&D in 2023. A shared community queue resembles those bots more than personal yt-dlp use.
   - Extraction breaking every few weeks as YouTube changes signature and PO-token checks.
   - A server-side proxy is worse still: redistribution plus copyright exposure, bandwidth cost, and datacenter IP blocks.
-  - If ever revisited: client-side only, opt-in, iframe stays the default, and prefer shelling out to the user's own `yt-dlp` over bundling extraction code (the mpv model).
+  - If ever revisited: client-side only, opt-in, iframe stays the default, and prefer shelling out to the user's own `yt-dlp` over bundling extraction code (the mpv model). News watch (§6 "Video watch") is that shape for one person watching one shared link: the user's own `mpv` and `yt-dlp`, gated by the `video` capability, so one CLI release can switch it off. The booth queue is untouched and stays on the IFrame player.
 - **Bundled GStreamer codec pack** (the 6 plugins above, statically linked against libvpx and libopus, built against an old GStreamer 1.x and old glibc, a few MB, shipped next to `late-webview`, loaded via `GST_PLUGIN_PATH_1_0` (additive, not `GST_PLUGIN_SYSTEM_PATH_1_0`, which replaces the system path), with `late-webview/src/lib.rs` sandbox path collection extended to that var). It would remove `gst-plugins-good` and `gst-libav` but not `webkit2gtk-4.1` (about 130 MB, a system engine that can't be vendored small). Still a valid improvement for the webview fallback later.
 - **AppImage of WebKitGTK plus GStreamer**: 150 to 250 MB; WebKit helper processes, the bubblewrap sandbox, and mesa/GPU ABI make it fragile.
 - **CEF or Electron**: self-contained Chromium and ToS-clean, but a 100 MB+ download, a rewrite, and Chromium's sandbox is blocked by AppArmor unprivileged-userns restrictions on Ubuntu 24.04+ without a shipped profile or disabling the sandbox.

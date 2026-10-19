@@ -17,6 +17,7 @@ mod pty;
 mod raw_mode;
 mod ssh;
 mod update;
+mod video;
 mod voice;
 mod ws;
 
@@ -28,7 +29,8 @@ use ssh::{SshProcess, flush_stdin_input_queue, forward_resize_events, spawn_ssh}
 use ws::{
     MAX_CONSECUTIVE_FAILURES, PAIR_RECONNECT_DELAY, PAIR_SLOW_RECONNECT_DELAY, PairAttempt,
     PairClientInfo, PairRetryPolicy, PairRuntime, PlaybackState, ReconnectPlan,
-    WebviewPlaybackController, client_platform_label, establish_pair_session, run_pair_session,
+    WebviewPlaybackController, client_platform_label, end_video_without_socket,
+    establish_pair_session, run_pair_session,
 };
 
 #[tokio::main]
@@ -282,10 +284,17 @@ async fn wait_for_ssh_with_ws_pairing(
 async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
     info!("received session token and starting websocket pairing");
     let api_base_url = config.api_base_url.clone();
+    let video_probe = video::probe(config.ssh_mode, client_platform_label());
+    match video_probe.blockers.as_slice() {
+        [] => info!("video watch available"),
+        blockers => info!(?blockers, "video watch unavailable"),
+    }
     let client = PairClientInfo {
         ssh_mode: config.ssh_mode.client_state_label(),
         platform: client_platform_label(),
+        video_blockers: video_probe.blockers,
     };
+    let mut video = video::VideoPlayer::new(video_probe.tools);
     let played_samples = Arc::clone(&audio.played_samples);
     let muted = Arc::clone(&audio.muted);
     let volume_percent = Arc::clone(&audio.volume_percent);
@@ -295,6 +304,7 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
     let stream_generation = Arc::clone(&audio.stream_generation);
     let stream_flushed_generation = Arc::clone(&audio.stream_flushed_generation);
     let icecast_stream_url = audio.icecast_stream_url.clone();
+    let silenced_for_video = Arc::clone(&audio.silenced_for_video);
     // Copy scalar state before entering the long-lived pair loop.
     let sample_rate = audio.sample_rate;
     let mut webview = WebviewPlaybackController::new(
@@ -322,6 +332,7 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
         stream_generation: &stream_generation,
         stream_flushed_generation: &stream_flushed_generation,
         icecast_stream_url: &icecast_stream_url,
+        silenced_for_video: &silenced_for_video,
     };
     let mut policy = PairRetryPolicy::new();
     loop {
@@ -342,6 +353,7 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
                     &playback,
                     PairRuntime {
                         webview: &mut webview,
+                        video: &mut video,
                         voice: &mut voice,
                         desktop_media: &mut desktop_media,
                         desktop_commands: &mut desktop_commands,
@@ -349,6 +361,7 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
                     },
                 )
                 .await;
+                end_video_without_socket(&mut video, &playback, &mut webview);
                 match &session.result {
                     Err(err) => error!(error = ?err, "pair websocket session failed"),
                     Ok(()) => info!("pair websocket closed by the server"),

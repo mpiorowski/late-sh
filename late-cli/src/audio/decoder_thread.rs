@@ -29,6 +29,7 @@ pub(super) fn spawn_decoder_thread(
     stream_flushed_generation: Arc<AtomicU64>,
     source_is_icecast: Arc<AtomicBool>,
     native_source_selected: Arc<AtomicBool>,
+    silenced_for_video: Arc<AtomicBool>,
     muted: Arc<AtomicBool>,
     mut queue: PlaybackQueue,
     source_spec: AudioSpec,
@@ -74,15 +75,16 @@ pub(super) fn spawn_decoder_thread(
         let mut parked = false;
 
         while !stop.load(Ordering::Relaxed) {
-            // A silenced CLI (muted, or a source it cannot play natively)
-            // holds no connection: an open stream downloads at full bitrate
+            // A silenced CLI (muted, a source it cannot play natively, or a
+            // video playing) holds no connection: an open stream downloads at full bitrate
             // whether or not anyone hears it. Startup is exempt until the
             // runtime has been told the decoder is ready and the boot grace
             // has run out.
             let silenced = ready_tx.is_none()
                 && Instant::now() >= park_allowed_at
                 && (muted.load(Ordering::Relaxed)
-                    || !native_source_selected.load(Ordering::Relaxed));
+                    || !native_source_selected.load(Ordering::Relaxed)
+                    || silenced_for_video.load(Ordering::Relaxed));
             let desired = desired_stream_url(&stream_url);
             if silenced {
                 if decoder_opt.take().is_some() {
