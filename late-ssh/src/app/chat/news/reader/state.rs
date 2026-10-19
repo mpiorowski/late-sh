@@ -5,6 +5,7 @@
 //! `ui.rs` turns inks into colours inside the draw, the way the paper does.
 
 use std::cell::Cell;
+use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use late_core::models::article::ArticleFeedItem;
@@ -147,8 +148,13 @@ impl ReaderModal {
         &self.body
     }
 
-    /// The body row as loaded: `None` is a fetch still pending.
-    pub(crate) fn apply_body(&mut self, body: Option<ArticleBody>) {
+    /// The body row as loaded: `None` is a fetch still pending. The row
+    /// arrives shared with every other session's drain of the same event;
+    /// by the time this one reads it the others have usually dropped
+    /// theirs, and the text moves out without a copy.
+    pub(crate) fn apply_body(&mut self, body: Option<Arc<ArticleBody>>) {
+        let body =
+            body.map(|body| Arc::try_unwrap(body).unwrap_or_else(|shared| (*shared).clone()));
         self.body = match body.map(|body| body.content) {
             Some(BodyContent::Ready { word_count, lines }) => {
                 self.reading_minutes =
@@ -162,6 +168,15 @@ impl ReaderModal {
             ReaderBody::Ready(lines) => numbered_links(lines),
             ReaderBody::Loading | ReaderBody::Pending | ReaderBody::Unavailable => Vec::new(),
         };
+        self.invalidate_viewport();
+        self.scroll_offset.set(0);
+    }
+
+    /// The body could not be loaded: show the summary and the link rather
+    /// than a loading line that will never resolve.
+    pub(crate) fn fail_load(&mut self) {
+        self.body = ReaderBody::Unavailable;
+        self.links = Vec::new();
         self.invalidate_viewport();
         self.scroll_offset.set(0);
     }

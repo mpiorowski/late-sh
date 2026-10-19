@@ -216,7 +216,7 @@ async fn main() -> anyhow::Result<()> {
     let _calendar_sweeper_task = calendar_service.start_sweeper_task();
     let _article_notify_task =
         article_service.start_notify_worker(pg_listener.subscribe(ArticleService::CHANNELS));
-    let _article_body_retention_task = article_service.start_body_retention_task();
+    let _article_body_sweep_task = article_service.start_body_sweep_task();
     let feed_service = FeedService::new(db.clone());
     feed_service.start_poll_task();
     let cyberspace_service = late_ssh::app::chat::cyberspace::svc::CyberspaceService::new(

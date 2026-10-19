@@ -169,3 +169,60 @@ async fn an_unknown_stored_status_fails_to_parse() {
     assert!(ArticleBody::find(&client, article.id).await.is_err());
     assert!(Article::list_feed(&client, 20).await.is_err());
 }
+
+/// A story past the share budget with no body row had its fetch cut short
+/// (a restart, an abort, a store that failed). The sweep settles it as
+/// `unavailable`, so the card reads `link` instead of fetching forever; a
+/// story inside the budget and a story with a body are left alone.
+#[tokio::test]
+async fn pending_bodies_past_the_share_budget_are_settled_unavailable() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let sharer = create_test_user(&test_db.db, "article-body-settle").await;
+    let stuck = share(&client, sharer.id, "https://www.example.com/body-stuck?x=1").await;
+    let fresh = share(&client, sharer.id, "https://example.com/body-fresh").await;
+    let read = share(&client, sharer.id, "https://example.com/body-read").await;
+    let lines = vec![ReaderLine::Paragraph {
+        spans: vec![ReaderSpan::Text("words".to_string())],
+    }];
+    ArticleBody::store_ready(&client, read.id, "example.com", 1, &lines)
+        .await
+        .expect("store ready");
+    for id in [stuck.id, read.id] {
+        client
+            .execute(
+                "UPDATE articles SET created = current_timestamp - interval '10 minutes'
+                 WHERE id = $1",
+                &[&id],
+            )
+            .await
+            .expect("age the article");
+    }
+
+    let settled = ArticleBody::settle_pending_before(&client, Utc::now() - Duration::minutes(6))
+        .await
+        .expect("settle");
+
+    assert_eq!(settled, 1);
+    let stuck_body = ArticleBody::find(&client, stuck.id)
+        .await
+        .expect("find stuck")
+        .expect("settled row");
+    assert_eq!(stuck_body.content, BodyContent::Unavailable);
+    assert_eq!(stuck_body.domain, "www.example.com");
+    assert_eq!(
+        ArticleBody::find(&client, fresh.id)
+            .await
+            .expect("find fresh"),
+        None,
+        "a story inside the budget is still pending"
+    );
+    assert_eq!(
+        ArticleBody::find(&client, read.id)
+            .await
+            .expect("find read")
+            .expect("ready row")
+            .status(),
+        BodyStatus::Ready
+    );
+}

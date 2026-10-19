@@ -594,6 +594,19 @@ impl State {
                             reader.apply_body(body);
                         }
                     }
+                    ArticleEvent::BodyLoadFailed {
+                        user_id,
+                        article_id,
+                    } if self.user_id == user_id => {
+                        if let Some(reader) = self
+                            .reader
+                            .as_mut()
+                            .filter(|reader| reader.article_id() == article_id)
+                        {
+                            reader.fail_load();
+                            banner = Some(Banner::error("Couldn't load the article text."));
+                        }
+                    }
                     _ => (),
                 },
                 Err(broadcast::error::TryRecvError::Empty) => break,

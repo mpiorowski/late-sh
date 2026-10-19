@@ -39,9 +39,15 @@ const TWEET_TITLE_MAX_CHARS: usize = 100;
 /// The post's own text gets two of the card's three bullets; the third is
 /// always the attribution line.
 const TWEET_TEXT_BULLETS: usize = 2;
-/// Bodies older than this lose their text unless someone saved the story.
+/// Ready bodies older than this lose their text.
 const ARTICLE_BODY_RETENTION: chrono::TimeDelta = chrono::TimeDelta::days(30);
-const ARTICLE_BODY_SWEEP_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
+/// A story this old with no body row had its fetch cut short: the body step
+/// ends inside [`PROCESS_URL_TIMEOUT`], and a minute covers the store.
+const ARTICLE_BODY_PENDING_GRACE: chrono::TimeDelta = chrono::TimeDelta::minutes(6);
+/// Both sweeps are one idempotent statement each, so running them hourly
+/// costs nothing and a cut-short fetch stops reading as pending within the
+/// hour.
+const ARTICLE_BODY_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Clone)]
 pub struct ArticleService {
@@ -314,9 +320,23 @@ impl ArticleService {
 
                 match processing {
                     // The share is up and its `Created` is out, so nothing
-                    // past here can fail it: the body step logs its own.
+                    // past here can fail it: the body step logs its own. It
+                    // runs as its own task, out of reach of the abort handle
+                    // this task hands the session, so cancelling the composer
+                    // never cuts a fetch short.
                     Ok(Ok(article)) => {
-                        service.store_body(article.id, &article.url, deadline).await;
+                        let body_service = service.clone();
+                        tokio::spawn(
+                            async move {
+                                body_service
+                                    .store_body(article.id, &article.url, deadline)
+                                    .await;
+                            }
+                            .instrument(info_span!(
+                                "article.store_body_task",
+                                article_id = %article.id
+                            )),
+                        );
                     }
                     Ok(Err(e)) => service.share_failed(user_id, &target_url, e),
                     Err(_) => service.share_failed(
@@ -547,7 +567,7 @@ impl ArticleService {
                         service.publish_event(ArticleEvent::BodyLoaded {
                             user_id,
                             article_id,
-                            body,
+                            body: body.map(std::sync::Arc::new),
                         });
                     }
                     Err(e) => {
@@ -558,10 +578,9 @@ impl ArticleService {
                             article_id = %article_id,
                             "failed to load article body"
                         );
-                        service.publish_event(ArticleEvent::Failed {
+                        service.publish_event(ArticleEvent::BodyLoadFailed {
                             user_id,
-                            error: "couldn't load the article text".to_string(),
-                            url: None,
+                            article_id,
                         });
                     }
                 }
@@ -574,34 +593,44 @@ impl ArticleService {
         );
     }
 
-    /// Retention, once a day on every replica: the sweep is one idempotent
-    /// `UPDATE`, so replicas racing it is harmless.
-    pub fn start_body_retention_task(&self) -> tokio::task::JoinHandle<()> {
+    /// The body sweep, hourly on every replica: settle the stories whose
+    /// fetch was cut short, retire the text of old bodies. Each is one
+    /// idempotent statement, so replicas racing it is harmless.
+    pub fn start_body_sweep_task(&self) -> tokio::task::JoinHandle<()> {
         let service = self.clone();
         tokio::spawn(async move {
             loop {
                 service
-                    .retire_stale_bodies()
-                    .instrument(info_span!("article.body_retention"))
+                    .sweep_bodies()
+                    .instrument(info_span!("article.body_sweep"))
                     .await;
                 tokio::time::sleep(ARTICLE_BODY_SWEEP_INTERVAL).await;
             }
         })
     }
 
-    async fn retire_stale_bodies(&self) {
-        let retired = async {
+    async fn sweep_bodies(&self) {
+        let swept = async {
             let client = self.db.get().await?;
-            ArticleBody::retire_fetched_before(&client, chrono::Utc::now() - ARTICLE_BODY_RETENTION)
+            let now = chrono::Utc::now();
+            let settled =
+                ArticleBody::settle_pending_before(&client, now - ARTICLE_BODY_PENDING_GRACE)
+                    .await
+                    .context("settling pending bodies")?;
+            let retired = ArticleBody::retire_fetched_before(&client, now - ARTICLE_BODY_RETENTION)
                 .await
+                .context("retiring stale bodies")?;
+            Ok::<_, anyhow::Error>((settled, retired))
         }
         .await;
-        match retired {
-            Ok(retired) => tracing::info!(retired, "retired stale article bodies"),
+        match swept {
+            Ok((settled, retired)) => {
+                tracing::info!(settled, retired, "swept article bodies");
+            }
             Err(e) => late_core::error_span!(
-                "article_body_retention_failed",
+                "article_body_sweep_failed",
                 error = ?e,
-                "failed to retire stale article bodies"
+                "failed to sweep article bodies"
             ),
         }
     }

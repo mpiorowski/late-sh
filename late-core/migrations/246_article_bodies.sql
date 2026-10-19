@@ -5,8 +5,9 @@
 --
 -- No row means the fetch is still pending. `status` is 'ready' (the text is
 -- in `lines`) or 'unavailable' (a video, an X post, a paywall, a page the
--- fetch could not read; `lines` is empty). Rows older than 30 days are
--- swept unless someone saved the story.
+-- fetch could not read; `lines` is empty). An hourly sweep settles a story
+-- past the share budget with no row as 'unavailable' (its fetch was cut
+-- short) and strips the text of ready rows older than 30 days.
 CREATE TABLE article_bodies (
     article_id UUID PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
     status TEXT NOT NULL,

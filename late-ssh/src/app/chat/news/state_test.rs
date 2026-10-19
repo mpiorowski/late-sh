@@ -233,3 +233,73 @@ fn move_index_returns_zero_for_empty_list() {
 fn clamp_index_passes_through_when_within_bounds() {
     assert_eq!(clamp_index(1, 5), 1);
 }
+
+/// The reader's body load failing is the reader's problem, not the
+/// composer's: a share in flight stays in flight, and the reader falls back
+/// to the summary.
+#[tokio::test]
+async fn a_body_load_failure_does_not_end_a_share_in_flight() {
+    use crate::app::chat::news::reader::state::ReaderBody;
+    use late_core::models::article_body::{ArticleBody, ReaderLine, ReaderSpan};
+
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let sharer = create_test_user(&test_db.db, "load-fail-sharer").await;
+    let reader = create_test_user(&test_db.db, "load-fail-reader").await;
+    let story = Article::create_by_user_id(
+        &client,
+        sharer.id,
+        ArticleParams {
+            user_id: sharer.id,
+            url: "https://example.com/load-fail".to_string(),
+            title: "Title".to_string(),
+            summary: "Summary".to_string(),
+            ascii_art: "...".to_string(),
+        },
+    )
+    .await
+    .expect("create story");
+    let lines = vec![ReaderLine::Paragraph {
+        spans: vec![ReaderSpan::Text("words".to_string())],
+    }];
+    ArticleBody::store_ready(&client, story.id, "example.com", 1, &lines)
+        .await
+        .expect("store ready");
+    let service = ArticleService::new(test_db.db.clone(), AiService::new(false, None));
+    let mut state = State::new(service.clone(), reader.id, false);
+    wait_until(
+        || {
+            state.tick();
+            std::future::ready(state.all_articles().len() == 1)
+        },
+        "the snapshot loads",
+    )
+    .await;
+
+    // No await from here on: the spawned tasks (the body load, the share)
+    // never run, so the only event the state sees is the one published.
+    assert!(state.open_reader(story.id));
+    state.start_composing();
+    for ch in "https://example.com/in-flight".chars() {
+        state.composer_push(ch);
+    }
+    state.submit_composer();
+    assert!(state.processing(), "the share is in flight");
+
+    service.publish_event(ArticleEvent::BodyLoadFailed {
+        user_id: reader.id,
+        article_id: story.id,
+    });
+    let tick = state.tick();
+
+    assert!(
+        state.processing(),
+        "a body load failure must not end the share"
+    );
+    assert_eq!(
+        state.reader().map(|modal| modal.body().clone()),
+        Some(ReaderBody::Unavailable),
+        "the reader falls back to the summary"
+    );
+    assert!(tick.banner.is_some(), "the reader's failure is a banner");
+}

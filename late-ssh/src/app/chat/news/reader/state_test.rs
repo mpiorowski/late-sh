@@ -4,6 +4,7 @@ use late_core::models::article_body::{
     ArticleBody, BodyContent, BodyStatus, ReaderLine, ReaderSpan,
 };
 use ratatui::layout::Rect;
+use std::sync::Arc;
 use uuid::Uuid;
 
 use super::{ReaderBody, ReaderModal, ReaderRow, ReaderViewport};
@@ -41,8 +42,8 @@ fn link(text: &str, href: &str) -> ReaderSpan {
     }
 }
 
-fn ready(lines: Vec<ReaderLine>) -> Option<ArticleBody> {
-    Some(ArticleBody {
+fn ready(lines: Vec<ReaderLine>) -> Option<Arc<ArticleBody>> {
+    Some(Arc::new(ArticleBody {
         article_id: Uuid::from_u128(7),
         domain: "example.com".to_string(),
         content: BodyContent::Ready {
@@ -50,7 +51,7 @@ fn ready(lines: Vec<ReaderLine>) -> Option<ArticleBody> {
             lines,
         },
         fetched_at: Utc::now(),
-    })
+    }))
 }
 
 fn plain(rows: &[ReaderRow]) -> Vec<String> {
@@ -152,12 +153,12 @@ fn a_pending_or_unavailable_body_shows_the_summary_and_one_status_line() {
     );
 
     let mut reader = ReaderModal::open(&story(BodyStatus::Ready));
-    reader.apply_body(Some(ArticleBody {
+    reader.apply_body(Some(Arc::new(ArticleBody {
         article_id: Uuid::from_u128(7),
         domain: "example.com".to_string(),
         content: BodyContent::Unavailable,
         fetched_at: Utc::now(),
-    }));
+    })));
     let rows = plain(&reader.lay_out(60));
     assert_eq!(
         rows.last().map(String::as_str),

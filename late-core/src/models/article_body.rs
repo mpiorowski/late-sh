@@ -161,6 +161,32 @@ impl ArticleBody {
         Ok(retired)
     }
 
+    /// Sweep: a story shared before `created_before` with no body row had
+    /// its fetch cut short (a restart mid-fetch, an aborted task, a store
+    /// that failed). Settle it as `unavailable`, so the card reads `link`
+    /// and the reader shows the summary instead of a fetch that will never
+    /// land. The first run also settles every story shared before bodies
+    /// existed. Returns how many were settled.
+    pub async fn settle_pending_before(
+        client: &Client,
+        created_before: DateTime<Utc>,
+    ) -> Result<u64> {
+        let settled = client
+            .execute(
+                "INSERT INTO article_bodies (article_id, status, domain, word_count, lines)
+                 SELECT a.id, 'unavailable',
+                        COALESCE(substring(a.url FROM '^[A-Za-z][A-Za-z0-9+.-]*://([^/?#:]+)'), ''),
+                        0, '[]'::jsonb
+                 FROM articles a
+                 WHERE a.created < $1
+                   AND NOT EXISTS (SELECT 1 FROM article_bodies b WHERE b.article_id = a.id)
+                 ON CONFLICT (article_id) DO NOTHING",
+                &[&created_before],
+            )
+            .await?;
+        Ok(settled)
+    }
+
     fn from_row(row: &Row) -> Result<Self> {
         let status: String = row.get("status");
         let content = match BodyStatus::from_column(Some(&status))? {
