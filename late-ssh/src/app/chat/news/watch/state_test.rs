@@ -268,15 +268,31 @@ fn a_failed_play_shows_the_web_line_and_stops_relaying_keys() {
     assert_eq!(player.control(VideoControl::SeekForward), None);
 }
 
-/// Ten seconds with no report loses the play, once; a report after that
-/// was only a quiet CLI and brings it back.
+/// A play that is still starting is never lost on silence: the CLI says
+/// nothing between its one `starting` and mpv's first position, and a
+/// yt-dlp resolve can take longer than the timeout. Once a position came
+/// in, ten seconds with no report loses the play, once; a report after
+/// that is late (the stop already went out) and changes nothing.
 #[test]
-fn a_silent_cli_is_lost_after_ten_seconds() {
+fn a_silent_cli_is_lost_after_ten_seconds_only_once_it_played() {
     let start = Instant::now();
     let mut player = drawn_player(start);
     assert_eq!(player.expire(start + Duration::from_secs(9)), None);
+    assert_eq!(player.expire(start + Duration::from_secs(60)), None);
+    assert_eq!(player.status_text(), "starting…");
+    assert!(player.wanted().is_some(), "a slow start is still wanted");
+
+    let played = start + Duration::from_secs(61);
+    player.apply(
+        &VideoReport::Playing {
+            position_s: 1,
+            duration_s: Some(10),
+        },
+        played,
+    );
+    assert_eq!(player.expire(played + Duration::from_secs(9)), None);
     assert_eq!(
-        player.expire(start + WATCH_LOST_AFTER),
+        player.expire(played + WATCH_LOST_AFTER),
         Some(WatchOutcome::Lost)
     );
     assert_eq!(player.status_text(), "lost the CLI");
@@ -284,19 +300,22 @@ fn a_silent_cli_is_lost_after_ten_seconds() {
         player.fallback_line(),
         Some(format!("Watch on the web: {URL}"))
     );
-    assert_eq!(player.expire(start + Duration::from_secs(60)), None);
+    assert_eq!(player.expire(played + Duration::from_secs(60)), None);
     assert_eq!(player.wanted(), None);
 
-    let later = start + Duration::from_secs(61);
-    player.apply(
-        &VideoReport::Paused {
-            position_s: 5,
-            duration_s: Some(10),
-        },
-        later,
+    let later = played + Duration::from_secs(61);
+    assert_eq!(
+        player.apply(
+            &VideoReport::Paused {
+                position_s: 5,
+                duration_s: Some(10),
+            },
+            later,
+        ),
+        None
     );
-    assert_eq!(player.status_text(), "⏸ 0:05 / 0:10");
-    assert_eq!(player.expire(later + Duration::from_secs(9)), None);
+    assert_eq!(player.status(), WatchStatus::Lost);
+    assert_eq!(player.wanted(), None, "a lost play never asks for a replay");
 }
 
 #[test]
