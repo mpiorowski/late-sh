@@ -222,15 +222,25 @@ impl GalleryService {
             return;
         };
         tokio::spawn(async move {
-            let result = async {
+            let result: Result<GalleryResult> = async {
                 let client = db.get().await?;
-                late_core::models::avatar::Avatar::save(&client, user_id, avatar.as_ref()).await
+                if late_core::models::artboard_ban::ArtboardBan::is_active_for_user(
+                    &client, user_id,
+                )
+                .await?
+                {
+                    return Ok(GalleryResult::AvatarFailed(
+                        "Artboard editing is disabled for this account.".to_string(),
+                    ));
+                }
+                late_core::models::avatar::Avatar::save(&client, user_id, avatar.as_ref()).await?;
+                Ok(GalleryResult::AvatarSaved {
+                    removed: avatar.is_none(),
+                })
             }
             .await;
             let message = match result {
-                Ok(()) => GalleryResult::AvatarSaved {
-                    removed: avatar.is_none(),
-                },
+                Ok(message) => message,
                 Err(error) => {
                     tracing::error!(%user_id, ?error, "failed to save avatar");
                     GalleryResult::AvatarFailed(

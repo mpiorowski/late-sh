@@ -248,17 +248,21 @@ The rail's `Set avatar` row starts `avatar.rs`'s local rectangular picker
 (16x8 cells by default, independently 1–32 cells on each axis). Arrows move;
 Shift+left/right resize width, Shift+up/down resize height, +/- resize both
 by one cell, and mouse dragging freely sizes the rectangle. Each drag axis
-stops at 32 cells from its anchor, including when dragging up or left. Both
-profile renderers use the crop's actual width and height. Previously saved
-crops retain their original dimensions and artwork until replaced.
+stops at 32 cells from its anchor, including when dragging up or left. The
+viewport stays fixed until release so mouse coordinates keep referring to
+the same board cells. Selection is rendered from the frame even when the
+editor cursor is clamped. Both profile renderers use the crop's actual width
+and height. Previously saved crops retain their original dimensions and
+artwork until replaced.
 Enter previews a frozen crop and Enter saves; Esc returns/cancels, x confirms
 removal. `GalleryState::avatar` participates in `captures_typing`, so page
 switches, global letters and reserved chords cannot steal the picker keys.
 Top-bar page clicks still leave the page. Archives and edit-banned accounts
-cannot start it. `GalleryService::save_avatar_task` persists through the core
-avatar model; a successful reply refreshes profile snapshots and reports on
-the board. The immutable crop keeps whole glyphs and RGB colours independently
-of board changes. No gallery award/ownership/cap rules apply. See
+cannot start it, and applying an edit ban cancels an active picker.
+`GalleryService::save_avatar_task` rechecks the database ban before persisting
+through the core avatar model; a successful reply refreshes profile snapshots
+and reports on the board. The immutable crop keeps whole glyphs and RGB
+colours independently of board changes. No gallery award/ownership/cap rules apply. See
 `devdocs/AVATARS.md` for storage, web rendering and test instructions.
 
 Artboard has two main interaction modes plus archive viewing:

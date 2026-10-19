@@ -115,6 +115,206 @@ fn text(buffer: &Buffer) -> String {
         .collect::<String>()
 }
 
+async fn avatar_fixture() -> (TestDb, App) {
+    use dartboard_core::{Canvas, Pos, RgbColor};
+    use late_core::models::avatar::Avatar;
+
+    let (db, mut app) = fixture().await;
+    let mut board = Canvas::with_size(4, 32);
+    board.put_glyph_colored(Pos { x: 0, y: 0 }, '@', RgbColor::new(255, 0, 80));
+    board.put_glyph(Pos { x: 0, y: 1 }, '界');
+    board.put_glyph(Pos { x: 0, y: 31 }, 'Z');
+    let avatar = Avatar::crop(&board, Pos { x: 0, y: 0 }, 4, 32).unwrap();
+    let client = db.db.get().await.unwrap();
+    Avatar::save(&client, app.user_id, Some(&avatar))
+        .await
+        .unwrap();
+    app.profile_state.service().find_profile(app.user_id);
+    settle(&mut app, |app| app.profile_state.profile().avatar.is_some()).await;
+    app.settings_modal_state.open_from_profile(
+        app.profile_state.profile(),
+        app.rail_modes(),
+        app.artboard_disclaimer_enabled(),
+    );
+    app.settings_modal_state.select_tab(Tab::Bio);
+    (db, app)
+}
+
+#[tokio::test]
+async fn settings_bio_avatar_preview_scrolls_and_removal_requires_confirmation() {
+    use late_core::models::avatar::Avatar;
+    use ratatui::style::Color;
+
+    let (db, mut app) = avatar_fixture().await;
+    let buffer = paint(&app);
+    assert!(
+        buffer
+            .content()
+            .iter()
+            .any(|cell| cell.symbol() == "@" && cell.fg == Color::Rgb(255, 0, 80))
+    );
+    assert!(buffer.content().iter().any(|cell| cell.symbol() == "界"));
+    assert!(!buffer.content().iter().any(|cell| cell.symbol() == "Z"));
+    for _ in 0..32 {
+        app.handle_input(b"\x1b[B");
+    }
+    assert!(
+        paint(&app)
+            .content()
+            .iter()
+            .any(|cell| cell.symbol() == "Z")
+    );
+    wheel(&mut app, Target::AvatarPreview, false);
+    assert!(app.settings_modal_state.avatar_scroll() < 24);
+
+    app.handle_input(b"x");
+    assert!(app.settings_modal_state.avatar_removal_open());
+    paint(&app);
+    assert!(hits(&app).iter().all(|(_, target)| matches!(
+        target,
+        Target::Close | Target::ConfirmRemoveAvatar | Target::CancelRemoveAvatar
+    )));
+    app.handle_input(b"\x1b");
+    settle(&mut app, |app| {
+        !app.settings_modal_state.avatar_removal_open()
+    })
+    .await;
+    let client = db.db.get().await.unwrap();
+    assert!(Avatar::load(&client, app.user_id).await.unwrap().is_some());
+
+    app.resize(48, 10).unwrap();
+    let small = text(&paint(&app));
+    assert!(small.contains("Change avatar"));
+    assert!(small.contains("Remove avatar"));
+    click(&mut app, Target::RemoveAvatar);
+    click(&mut app, Target::CancelRemoveAvatar);
+    assert!(Avatar::load(&client, app.user_id).await.unwrap().is_some());
+    click(&mut app, Target::RemoveAvatar);
+    click(&mut app, Target::ConfirmRemoveAvatar);
+    settle(&mut app, |app| {
+        !app.settings_modal_state.avatar_removal_open()
+            && app.settings_modal_state.draft().avatar.is_none()
+            && app.profile_state.profile().avatar.is_none()
+    })
+    .await;
+    assert!(Avatar::load(&client, app.user_id).await.unwrap().is_none());
+    let buffer = paint(&app);
+    assert!(text(&buffer).contains("Set avatar"));
+    assert!(
+        !hits(&app)
+            .iter()
+            .any(|(_, target)| *target == Target::RemoveAvatar)
+    );
+    app.handle_input(b"x");
+    assert!(!app.settings_modal_state.avatar_removal_open());
+}
+
+#[tokio::test]
+async fn settings_bio_set_avatar_preserves_the_draft_and_returns_after_cancel() {
+    use crate::app::common::primitives::Screen;
+
+    let (db, mut app) = fixture().await;
+    app.settings_modal_state.select_tab(Tab::Bio);
+    click(&mut app, Target::Bio);
+    app.handle_input(b"a new x bio");
+    assert!(app.settings_modal_state.editing_bio());
+    assert!(!app.settings_modal_state.avatar_removal_open());
+    click(&mut app, Target::SetAvatar);
+    assert!(!app.show_settings);
+    assert_eq!(app.screen, Screen::Artboard);
+    assert!(app.artboard_disclaimer_visible());
+    assert!(app.dartboard_state.is_none());
+    app.handle_input(b"v");
+    assert!(
+        app.dartboard_state
+            .as_ref()
+            .unwrap()
+            .gallery()
+            .avatar
+            .is_active()
+    );
+    app.handle_input(b"\x1b");
+    settle(&mut app, |app| app.show_settings).await;
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert_eq!(app.settings_modal_state.selected_tab(), Tab::Bio);
+    assert_eq!(app.settings_modal_state.draft().bio, "a new x bio");
+    let user_id = app.user_id;
+    wait_until(
+        || async {
+            let client = db.db.get().await.unwrap();
+            Profile::load(&client, user_id).await.unwrap().bio == "a new x bio"
+        },
+        "bio draft saved before choosing avatar",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn settings_bio_change_avatar_returns_with_the_saved_preview() {
+    use crate::app::common::primitives::Screen;
+    use dartboard_core::Pos;
+
+    let (_db, mut app) = avatar_fixture().await;
+    app.set_device_artboard_disclaimer(false);
+    app.handle_input(b"a");
+    assert!(!app.show_settings);
+    assert_eq!(app.screen, Screen::Artboard);
+    app.dartboard_state
+        .as_mut()
+        .unwrap()
+        .snapshot
+        .canvas
+        .put_glyph(Pos { x: 0, y: 0 }, '#');
+    app.handle_input(b"\r\r");
+    settle(&mut app, |app| {
+        app.show_settings
+            && app
+                .settings_modal_state
+                .draft()
+                .avatar
+                .as_ref()
+                .is_some_and(|avatar| avatar.width() == 16)
+    })
+    .await;
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert_eq!(app.settings_modal_state.selected_tab(), Tab::Bio);
+    let avatar = app.settings_modal_state.draft().avatar.as_ref().unwrap();
+    assert_eq!(
+        avatar.canvas().glyph_at(Pos { x: 0, y: 0 }).unwrap().ch,
+        '#'
+    );
+    assert!(text(&paint(&app)).contains("Change avatar"));
+}
+
+#[tokio::test]
+async fn settings_bio_avatar_removal_can_retry_after_a_ban_is_lifted() {
+    use late_core::models::{artboard_ban::ArtboardBan, avatar::Avatar};
+
+    let (db, mut app) = avatar_fixture().await;
+    let client = db.db.get().await.unwrap();
+    ArtboardBan::activate(&client, app.user_id, app.user_id, "test ban", None)
+        .await
+        .unwrap();
+    app.handle_input(b"x\r");
+    settle(&mut app, |app| {
+        app.settings_modal_state.avatar_removal_open()
+            && !app.settings_modal_state.avatar_removal_pending()
+    })
+    .await;
+    assert!(Avatar::load(&client, app.user_id).await.unwrap().is_some());
+    assert!(app.settings_modal_state.draft().avatar.is_some());
+    ArtboardBan::delete_for_user(&client, app.user_id)
+        .await
+        .unwrap();
+    app.handle_input(b"\r");
+    settle(&mut app, |app| {
+        !app.settings_modal_state.avatar_removal_open()
+            && app.settings_modal_state.draft().avatar.is_none()
+    })
+    .await;
+    assert!(Avatar::load(&client, app.user_id).await.unwrap().is_none());
+}
+
 #[tokio::test]
 async fn settings_cycle_values_share_arrows_color_and_weight() {
     use ratatui::{style::Modifier, text::Span};

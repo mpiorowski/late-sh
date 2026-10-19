@@ -2315,6 +2315,52 @@ async fn artboard_ban_locks_user_in_view_mode() {
 }
 
 #[tokio::test]
+async fn artboard_ban_cancels_avatar_framing_and_confirmation() {
+    use crate::app::artboard::{avatar::AvatarFlow, gallery::state::RailRow};
+
+    let test = new_test_db().await;
+    let user = create_test_user(&test.db, "avatar-ban-flow").await;
+    let mut app = make_app(test.db.clone(), user.id, "avatar-ban-flow-it");
+    app.handle_input(b"4v");
+    wait_for_render_contains(&mut app, "Set avatar").await;
+    for confirm in [false, true] {
+        app.set_artboard_banned_for_tests(false);
+        app.dartboard_state
+            .as_mut()
+            .unwrap()
+            .gallery_mut()
+            .rail_select(RailRow::Avatar);
+        app.begin_artboard_avatar();
+        assert!(matches!(
+            app.dartboard_state.as_ref().unwrap().gallery().avatar,
+            AvatarFlow::Framing(_)
+        ));
+        if confirm {
+            app.handle_input(b"x");
+            assert!(matches!(
+                app.dartboard_state.as_ref().unwrap().gallery().avatar,
+                AvatarFlow::Confirm { .. }
+            ));
+        }
+
+        app.set_artboard_banned_for_tests(true);
+        let state = app.dartboard_state.as_ref().unwrap();
+        assert!(!state.gallery().avatar.is_active());
+        assert!(state.selection_view().is_none());
+        assert!(!state.gallery().captures_typing());
+        app.handle_input(b"\r");
+        assert!(
+            !app.dartboard_state
+                .as_ref()
+                .unwrap()
+                .gallery()
+                .avatar
+                .is_active()
+        );
+    }
+}
+
+#[tokio::test]
 async fn chat_compose_preserves_screen_digits_and_non_ascii_text() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "dash-chat-compose-it").await;

@@ -323,6 +323,10 @@ impl App {
         // News state is ticked inside chat.tick()
         let profile_tick = self.profile_state.tick();
         changed |= profile_tick.changed;
+        if profile_tick.changed {
+            self.settings_modal_state
+                .sync_avatar(self.profile_state.profile().avatar.as_ref());
+        }
         if let Some(b) = profile_tick.banner {
             self.banner = Some(b);
             changed = true;
@@ -625,6 +629,7 @@ impl App {
                 self.profile_state.service().find_profile(self.user_id);
             }
         }
+        changed |= self.finish_settings_avatar();
         if let Some(state) = self.lateania_state.as_mut() {
             // Drain even off-screen so the snapshot stays current; only an
             // on-screen change pays a frame (the screen switch itself is

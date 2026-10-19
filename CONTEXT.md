@@ -1400,6 +1400,7 @@ Left clicks on the frame's `0`–`7` screen numbers run before page-specific inp
 | `Space` / `Enter` / `e` | Settings modal | Activate row: edit username/system fields/bio, cycle a setting, or open the country/timezone/translation-language/interaction-mode chooser |
 | `Shift+↑` / `Shift+↓` / `Space` / `Enter` | Settings modal Statusline tab | Move the selected segment along the bar (`[`/`]` alias), turn it on/off, or step into its options; Keyhints offers a Brief on/off option. `Left`/`Right` change the focused option. `Esc` backs out of the options, then closes |
 | `a` / `d` / `r` | Settings modal RSS tab | Add, delete, or refresh private RSS/Atom subscriptions |
+| `a` / `x`, `↑` / `↓` | Settings modal (Bio preview) | Set/change the avatar through the Artboard picker, confirm removal, or scroll a tall avatar; saving/cancelling the picker returns to Bio and preserves the draft |
 | `Alt+Enter` / `Ctrl+J` | Settings modal (bio editing) | Insert newline |
 | `?` | Settings modal | Open help modal on top |
 | `j` / `k` / `↑` / `↓` | Read-only profile modal | Scroll |

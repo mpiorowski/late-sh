@@ -84,6 +84,15 @@ impl App {
     pub(crate) fn sync_dartboard_connection(&mut self) {
         if self.screen == Screen::Artboard && !self.artboard_disclaimer_visible() {
             self.enter_dartboard();
+            if self.settings_avatar_pending {
+                self.settings_avatar_pending = false;
+                if let Some(state) = self.dartboard_state.as_mut()
+                    && state.is_archive_view_active()
+                {
+                    state.exit_archive_view();
+                }
+                self.begin_artboard_avatar();
+            }
         }
     }
 }

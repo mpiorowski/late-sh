@@ -262,6 +262,10 @@ fn draw_surface(
         state.mouse.clear_surface();
         draw_invites_dialog(frame, popup, state);
     }
+    if state.avatar_removal_open() {
+        state.mouse.clear_surface();
+        draw_avatar_removal(frame, popup, state);
+    }
 }
 
 fn tab_rows(width: u16, state: &SettingsModalState) -> u16 {
@@ -1731,7 +1735,78 @@ fn draw_text_field(
 }
 
 fn draw_bio_tab(frame: &mut Surface<'_>, area: Rect, state: &SettingsModalState) {
-    let [header, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(area);
+    let preview_rows = state.draft().avatar.as_ref().map_or(0, |avatar| {
+        if area.height < 8 {
+            0
+        } else {
+            (avatar.height() as u16)
+                .min(8)
+                .min(area.height.saturating_sub(6))
+                + 2
+        }
+    });
+    let [preview, actions, header, body] = Layout::vertical([
+        Constraint::Length(preview_rows),
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(1),
+    ])
+    .areas(area);
+    if let Some(avatar) = &state.draft().avatar {
+        let block = Block::default()
+            .title(format!(
+                " Avatar {}x{} · ↑↓ scroll ",
+                avatar.width(),
+                avatar.height()
+            ))
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(theme::BORDER_DIM()));
+        let inner = block.inner(preview);
+        state.avatar_visible_rows.set(inner.height as usize);
+        frame.render_widget(block, preview);
+        if !inner.is_empty() {
+            let art = Rect::new(
+                inner.x + inner.width.saturating_sub(avatar.width() as u16) / 2,
+                inner.y,
+                (avatar.width() as u16).min(inner.width),
+                inner.height,
+            );
+            crate::app::artboard::ui::render_piece_canvas_at(
+                frame.buffer,
+                art,
+                avatar.canvas(),
+                dartboard_core::Pos {
+                    x: 0,
+                    y: state
+                        .avatar_scroll()
+                        .min(avatar.height().saturating_sub(inner.height as usize)),
+                },
+            );
+            state.mouse.hit(preview, Target::AvatarPreview);
+        }
+    }
+    let actions = actions.inner(Margin::new(2, 0));
+    let label = if state.draft().avatar.is_some() {
+        "[a Change avatar]"
+    } else {
+        "[a Set avatar]"
+    };
+    button(frame, actions, state, label, Target::SetAvatar);
+    if state.draft().avatar.is_some() {
+        let offset = Span::raw(label).width() as u16 + 2;
+        button(
+            frame,
+            Rect::new(
+                actions.x + offset,
+                actions.y,
+                actions.width.saturating_sub(offset),
+                actions.height,
+            ),
+            state,
+            "[x Remove avatar]",
+            Target::RemoveAvatar,
+        );
+    }
     let text = state.bio_input().lines().join("\n");
     frame.render_widget(
         Paragraph::new(format!(
@@ -1773,6 +1848,51 @@ fn draw_bio_tab(frame: &mut Surface<'_>, area: Rect, state: &SettingsModalState)
     }
     // TextArea owns wrapping, its viewport and the caret while editing.
     frame.render_widget(state.bio_input(), body);
+}
+
+fn draw_avatar_removal(frame: &mut Surface<'_>, area: Rect, state: &SettingsModalState) {
+    let popup = centered_rect(52, 8, area);
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(" Remove your avatar? ")
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::AMBER_GLOW()));
+    let inner = block.inner(popup).inner(Margin::new(1, 0));
+    frame.render_widget(block, popup);
+    frame.render_widget(
+        Paragraph::new("Remove the avatar from your profiles?")
+            .wrap(Wrap { trim: false })
+            .style(Style::default().fg(theme::TEXT())),
+        inner,
+    );
+    if state.avatar_removal_pending() {
+        frame.render_widget(
+            Paragraph::new("Removing…"),
+            Rect::new(inner.x, inner.bottom().saturating_sub(1), inner.width, 1),
+        );
+        return;
+    }
+    close_button(frame, popup, state);
+    let buttons = Rect::new(inner.x, inner.bottom().saturating_sub(2), inner.width, 1);
+    button(
+        frame,
+        buttons,
+        state,
+        "[Enter Remove]",
+        Target::ConfirmRemoveAvatar,
+    );
+    button(
+        frame,
+        Rect::new(
+            buttons.x + 17,
+            buttons.y,
+            buttons.width.saturating_sub(17),
+            1,
+        ),
+        state,
+        "[Esc Cancel]",
+        Target::CancelRemoveAvatar,
+    );
 }
 
 fn draw_picker(frame: &mut Surface<'_>, area: Rect, state: &SettingsModalState) {

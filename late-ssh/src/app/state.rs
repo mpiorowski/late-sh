@@ -997,6 +997,8 @@ pub struct App {
     pub(crate) artboard_interacting: bool,
     /// Consent lasts until this Artboard visit ends.
     pub(crate) artboard_content_accepted: bool,
+    pub(crate) settings_avatar_return: Option<Screen>,
+    pub(crate) settings_avatar_pending: bool,
     pub(crate) artboard_disclaimer_choices: std::cell::Cell<[Rect; 3]>,
     /// Page-5 Profiles feed state (filter, selection, search). Work and
     /// Showcase data continue to live on `ChatState`; this stores only the
@@ -1960,6 +1962,8 @@ impl App {
             directory_state: crate::app::directory::state::DirectoryState::new(),
             artboard_interacting: false,
             artboard_content_accepted: false,
+            settings_avatar_return: None,
+            settings_avatar_pending: false,
             artboard_disclaimer_choices: std::cell::Cell::default(),
             dartboard_server,
             dartboard_provenance,
@@ -2517,6 +2521,44 @@ impl App {
         state.begin_framing();
     }
 
+    pub(crate) fn begin_settings_avatar(&mut self) {
+        self.expire_artboard_ban_if_needed();
+        if self.artboard_banned || !self.gallery_service.is_enabled() {
+            self.banner = Some(Banner::error(if self.artboard_banned {
+                "Artboard editing is disabled for this account."
+            } else {
+                "Avatar saving is unavailable."
+            }));
+            return;
+        }
+        self.settings_modal_state.submit_text_edit();
+        let return_to = self.screen;
+        self.show_settings = false;
+        self.set_screen(Screen::Artboard);
+        self.settings_avatar_return = Some(return_to);
+        self.settings_avatar_pending = true;
+        self.sync_dartboard_connection();
+    }
+
+    pub(crate) fn finish_settings_avatar(&mut self) -> bool {
+        if self.settings_avatar_pending
+            || self.settings_avatar_return.is_none()
+            || self.screen != Screen::Artboard
+            || self
+                .dartboard_state
+                .as_ref()
+                .is_some_and(|state| state.gallery().avatar.is_active())
+        {
+            return false;
+        }
+        let return_to = self.settings_avatar_return.take().unwrap();
+        self.set_screen(return_to);
+        self.settings_modal_state
+            .select_tab(super::settings_modal::state::Tab::Bio);
+        self.show_settings = true;
+        true
+    }
+
     pub(crate) fn begin_artboard_avatar(&mut self) {
         self.expire_artboard_ban_if_needed();
         if self.artboard_banned {
@@ -2549,11 +2591,15 @@ impl App {
 
     pub(crate) fn deactivate_artboard_interaction(&mut self) {
         self.artboard_interacting = false;
+        self.settings_avatar_pending = false;
         if let Some(state) = self.dartboard_state.as_mut() {
             state.clear_local_state();
             state.close_help();
             state.close_glyph_picker();
             state.gallery_mut().cancel_hang();
+            if state.gallery().avatar.is_active() {
+                state.gallery_mut().cancel_avatar();
+            }
         }
     }
 
@@ -2689,6 +2735,7 @@ impl App {
         }
 
         if self.screen == Screen::Artboard {
+            self.settings_avatar_return = None;
             self.artboard_content_accepted = false;
             self.deactivate_artboard_interaction();
             self.leave_dartboard();

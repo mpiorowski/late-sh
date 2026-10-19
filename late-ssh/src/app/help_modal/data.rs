@@ -1680,7 +1680,7 @@ fn settings_help_lines() -> Vec<String> {
         "Tabs".to_string(),
         "  Settings          username, late.fetch fields, country, timezone, notifications, layout toggles"
             .to_string(),
-        "  Bio               multiline markdown bio".to_string(),
+        "  Bio               multiline markdown bio and avatar preview; a set/change, x remove".to_string(),
         "  Themes            expanded theme browser; / searches it, f stars a theme into Favorites"
             .to_string(),
         "  Tweaks            power-user toggles for appearance, input, display, and startup"

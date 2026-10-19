@@ -62,6 +62,10 @@ impl AvatarFrame {
         self.clamp(board);
     }
 
+    pub(super) fn is_dragging(&self) -> bool {
+        self.drag.is_some()
+    }
+
     fn drag_to(&mut self, anchor: Pos, pos: Pos, board: &Canvas) {
         let dx = anchor.x.abs_diff(pos.x).min(AVATAR_MAX_DIMENSION - 1);
         let dy = anchor.y.abs_diff(pos.y).min(AVATAR_MAX_DIMENSION - 1);

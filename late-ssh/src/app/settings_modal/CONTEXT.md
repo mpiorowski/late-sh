@@ -4,6 +4,21 @@ Seven tabs share `state.rs`, `input.rs`, and `ui.rs`. Keyboard bindings and
 Enter/Esc timing remain unchanged; Bio saves on Enter/Esc and its mouse Done
 control. Username, system fields, and feed URL editors have Save and Cancel.
 
+Bio shows the saved Artboard avatar above the text with Set/Change avatar (`a`)
+and, when present, Remove avatar (`x`). Arrow keys and the wheel over the preview
+scroll tall crops; colours, wide glyphs, and cell proportions use the Artboard
+renderer. Avatar shortcuts apply only outside the bio text editor. Mouse actions
+use the same controls and commit any open bio edit first.
+
+Set/Change preserves the settings draft, opens the live Artboard crop picker
+after any content disclaimer, and returns to Bio after saving or cancelling.
+Leaving the Artboard by another route cancels that return. Removal is a foreground
+confirmation with Enter/Remove and Esc/Cancel; it stays pending during the write,
+keeps the avatar on failure, and permits retry. The profile service checks the
+current Artboard ban before deleting, publishes an avatar-specific result, and
+refreshes the profile snapshot. Settings mirrors only the snapshot's avatar so
+unrelated draft fields and bio text are preserved.
+
 Mouse input is dispatched before editor/keyboard routing and is swallowed by
 the foreground Settings surface. Only left-button presses activate controls;
 keyboard-only interaction mode disables clicks and scrolling. Nested dialogs

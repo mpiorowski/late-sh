@@ -187,6 +187,114 @@ fn avatar_mouse_drag_uses_board_coordinates_without_an_aspect_ratio_lock() {
 }
 
 #[test]
+fn avatar_drag_near_viewport_edges_keeps_board_coordinates_until_release() {
+    let mouse = |kind, x, y| {
+        ParsedInput::Mouse(MouseEvent {
+            kind,
+            button: Some(MouseButton::Left),
+            x,
+            y,
+            modifiers: MouseModifiers::default(),
+        })
+    };
+    for pan in [0, 10] {
+        for (start, end, dimensions) in [
+            ((5, 20), (8, 21), (4, 2)),
+            ((52, 5), (53, 8), (2, 4)),
+            ((52, 20), (49, 18), (4, 3)),
+        ] {
+            let mut state = state();
+            state.snapshot.canvas = Canvas::with_size(96, 96);
+            state.set_viewport_for_screen((80, 24));
+            begin(&mut state);
+            state.editor.viewport_origin = Pos { x: pan, y: pan };
+            let viewport_origin = state.viewport_origin();
+            let origin = Pos {
+                x: pan + start.0.min(end.0) as usize - 2,
+                y: pan + start.1.min(end.1) as usize - 2,
+            };
+            state.snapshot.canvas.put_glyph(origin, '@');
+
+            handle_event(
+                &mut state,
+                (80, 24),
+                &mouse(MouseEventKind::Down, start.0, start.1),
+            );
+            assert_eq!(state.viewport_origin(), viewport_origin);
+            handle_event(
+                &mut state,
+                (80, 24),
+                &mouse(MouseEventKind::Drag, end.0, end.1),
+            );
+            assert_eq!(state.viewport_origin(), viewport_origin);
+            handle_event(
+                &mut state,
+                (80, 24),
+                &mouse(MouseEventKind::Up, end.0, end.1),
+            );
+            let AvatarFlow::Framing(frame) = &state.gallery().avatar else {
+                panic!("framing")
+            };
+            assert_eq!(frame.origin, origin);
+            assert_eq!((frame.width, frame.height), dimensions);
+
+            handle_key(&mut state, b'\r');
+            let AvatarFlow::Confirm {
+                avatar: Some(avatar),
+                ..
+            } = &state.gallery().avatar
+            else {
+                panic!("preview")
+            };
+            assert_eq!((avatar.width(), avatar.height()), dimensions);
+            assert_eq!(
+                avatar.canvas().glyph_at(Pos { x: 0, y: 0 }).unwrap().ch,
+                '@'
+            );
+        }
+    }
+}
+
+#[test]
+fn tall_avatar_selection_survives_ignored_input_preview_and_terminal_resize() {
+    let mut state = state();
+    state.snapshot.canvas.put_glyph(Pos { x: 0, y: 0 }, '@');
+    state.set_viewport_for_screen((80, 24));
+    begin(&mut state);
+    for _ in 0..24 {
+        handle_event(&mut state, (80, 24), &ParsedInput::ShiftArrow(b'B'));
+    }
+    let assert_height = |state: &State| {
+        let selection = state.selection_view().unwrap();
+        assert_eq!(selection.cursor.y - selection.anchor.y + 1, 32);
+    };
+    assert_height(&state);
+    assert!(!handle_event(
+        &mut state,
+        (80, 24),
+        &ParsedInput::Byte(b'q')
+    ));
+    handle_key(&mut state, b'q');
+    assert_height(&state);
+
+    handle_event(&mut state, (80, 24), &ParsedInput::Byte(b'\r'));
+    handle_key(&mut state, b'\r');
+    let AvatarFlow::Confirm {
+        avatar: Some(avatar),
+        ..
+    } = &state.gallery().avatar
+    else {
+        panic!("preview")
+    };
+    assert_eq!(avatar.height(), 32);
+    handle_event(&mut state, (80, 24), &ParsedInput::Byte(0x1b));
+    handle_key(&mut state, 0x1b);
+    assert_height(&state);
+    state.set_viewport_for_screen((80, 50));
+    assert_height(&state);
+}
+
+#[test]
 fn empty_frames_stay_in_picker_and_remove_requires_confirmation() {
     let mut state = state();
     begin(&mut state);

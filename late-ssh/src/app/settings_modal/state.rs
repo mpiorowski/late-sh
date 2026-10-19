@@ -584,6 +584,14 @@ pub(crate) struct SettingsTick {
     pub changed: bool,
 }
 
+#[derive(Default, PartialEq, Eq)]
+enum AvatarRemoval {
+    #[default]
+    Idle,
+    Confirm,
+    Pending,
+}
+
 pub(crate) struct SettingsModalState {
     pub(crate) mouse: MouseState,
     profile_service: ProfileService,
@@ -630,6 +638,9 @@ pub(crate) struct SettingsModalState {
     system_input: TextArea<'static>,
     editing_bio: bool,
     bio_input: TextArea<'static>,
+    avatar_removal: AvatarRemoval,
+    avatar_scroll: usize,
+    pub(crate) avatar_visible_rows: Cell<usize>,
     picker: PickerState,
     link_account: LinkAccountDialogState,
     delete_account: DeleteAccountDialogState,
@@ -702,6 +713,9 @@ impl SettingsModalState {
             system_input: new_short_textarea(false),
             editing_bio: false,
             bio_input: new_bio_textarea(false),
+            avatar_removal: AvatarRemoval::Idle,
+            avatar_scroll: 0,
+            avatar_visible_rows: Cell::new(0),
             picker: PickerState::default(),
             link_account: LinkAccountDialogState::new(),
             delete_account: DeleteAccountDialogState::new(),
@@ -797,6 +811,8 @@ impl SettingsModalState {
         self.system_input = new_short_textarea(false);
         self.editing_bio = false;
         self.bio_input = bio_textarea_for_readonly_text(&self.draft.bio);
+        self.avatar_removal = AvatarRemoval::Idle;
+        self.avatar_scroll = 0;
         self.picker = PickerState::default();
         self.link_account = LinkAccountDialogState::new();
         self.delete_account = DeleteAccountDialogState::new();
@@ -2446,6 +2462,59 @@ impl SettingsModalState {
         set_bio_cursor_visible(&mut self.bio_input, true);
     }
 
+    pub(crate) fn sync_avatar(&mut self, avatar: Option<&late_core::models::avatar::Avatar>) {
+        if self.draft.avatar.as_ref() != avatar {
+            self.draft.avatar = avatar.cloned();
+            self.avatar_scroll = 0;
+            self.mouse.invalidate();
+        }
+    }
+
+    pub(crate) fn avatar_scroll(&self) -> usize {
+        self.avatar_scroll
+    }
+
+    pub(crate) fn scroll_avatar(&mut self, delta: isize) {
+        let height = self
+            .draft
+            .avatar
+            .as_ref()
+            .map_or(0, |avatar| avatar.height());
+        let max = height.saturating_sub(self.avatar_visible_rows.get());
+        self.avatar_scroll = self.avatar_scroll.saturating_add_signed(delta).min(max);
+        self.mouse.invalidate();
+    }
+
+    pub(crate) fn avatar_removal_open(&self) -> bool {
+        self.avatar_removal != AvatarRemoval::Idle
+    }
+
+    pub(crate) fn avatar_removal_pending(&self) -> bool {
+        self.avatar_removal == AvatarRemoval::Pending
+    }
+
+    pub(crate) fn ask_remove_avatar(&mut self) {
+        if self.draft.avatar.is_some() && !self.avatar_removal_pending() {
+            self.avatar_removal = AvatarRemoval::Confirm;
+            self.mouse.invalidate();
+        }
+    }
+
+    pub(crate) fn cancel_remove_avatar(&mut self) {
+        if !self.avatar_removal_pending() {
+            self.avatar_removal = AvatarRemoval::Idle;
+            self.mouse.invalidate();
+        }
+    }
+
+    pub(crate) fn confirm_remove_avatar(&mut self) {
+        if self.avatar_removal == AvatarRemoval::Confirm {
+            self.avatar_removal = AvatarRemoval::Pending;
+            self.profile_service.remove_avatar(self.user_id);
+            self.mouse.invalidate();
+        }
+    }
+
     pub(crate) fn stop_bio_edit(&mut self) {
         self.editing_bio = false;
         self.draft.bio = self.bio_text().trim_end().to_string();
@@ -2562,6 +2631,18 @@ impl SettingsModalState {
         let mut banner = None;
         loop {
             match self.profile_event_rx.try_recv() {
+                Ok(ProfileEvent::AvatarRemoved { user_id }) if user_id == self.user_id => {
+                    self.draft.avatar = None;
+                    self.avatar_removal = AvatarRemoval::Idle;
+                    self.avatar_scroll = 0;
+                    banner = Some(Banner::success("Avatar removed."));
+                }
+                Ok(ProfileEvent::AvatarRemovalFailed { user_id, message })
+                    if user_id == self.user_id && self.avatar_removal_pending() =>
+                {
+                    self.avatar_removal = AvatarRemoval::Confirm;
+                    banner = Some(Banner::error(&message));
+                }
                 Ok(ProfileEvent::AccountLinkCodeCreated {
                     user_id,
                     code,

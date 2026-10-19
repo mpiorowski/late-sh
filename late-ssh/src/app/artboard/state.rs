@@ -484,6 +484,20 @@ impl State {
     }
 
     pub fn selection_view(&self) -> Option<SelectionView> {
+        // Avatar dimensions belong to the frame. The editor cursor can be
+        // clamped to a shorter viewport by input handling or snapshot updates.
+        if let super::avatar::AvatarFlow::Framing(frame)
+        | super::avatar::AvatarFlow::Confirm { frame, .. } = &self.gallery.avatar
+        {
+            return Some(SelectionView {
+                anchor: frame.origin,
+                cursor: Pos {
+                    x: frame.origin.x + frame.width - 1,
+                    y: frame.origin.y + frame.height - 1,
+                },
+                shape: TuiSelectionShape::Rect,
+            });
+        }
         self.editor.selection().map(|selection| SelectionView {
             anchor: selection.anchor,
             cursor: selection.cursor,
@@ -1078,6 +1092,11 @@ impl State {
             x: frame.origin.x + frame.width - 1,
             y: frame.origin.y + frame.height - 1,
         };
+        // Mouse coordinates must keep referring to the same board cells
+        // throughout the drag. Reposition the viewport after release.
+        if frame.is_dragging() {
+            return;
+        }
         // Keep the frame in view where it fits. The preview can scroll when
         // the terminal is shorter than the crop.
         let viewport = self.editor.viewport;

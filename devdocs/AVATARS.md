@@ -18,6 +18,14 @@ painting over the source and the monthly board wipe do not affect it. Gallery
 ownership, glyph-count, daily-cap and applause rules do not apply to avatars.
 Artboard edit bans and the live-board requirement still apply.
 
+Settings → Bio also shows the saved avatar and its management controls.
+`a` (or Set/Change avatar) opens the Artboard picker, respecting the content
+disclaimer, and returns to Bio after saving or cancelling the frame. The bio
+draft is preserved. `x` (or Remove avatar) asks for confirmation; Enter removes
+the crop and Esc cancels. Tall previews scroll with arrows or the mouse wheel.
+While editing bio text, shortcut letters remain ordinary text. Removal refreshes
+the preview and profile snapshots, and follows the same Artboard ban check.
+
 Migration 246 creates `user_avatars`, with one crop per account and cascading
 deletion. Avatar writes are independent of profile/settings writes. The profile
 modal displays the crop above late.fetch, and a user's existing web profile

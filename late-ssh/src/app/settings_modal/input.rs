@@ -19,6 +19,18 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         return;
     }
     app.settings_modal_state.mouse.reveal_selection();
+    if app.settings_modal_state.avatar_removal_open() {
+        if !app.settings_modal_state.avatar_removal_pending() {
+            match event {
+                ParsedInput::Byte(b'\r') => app.settings_modal_state.confirm_remove_avatar(),
+                ParsedInput::Byte(0x1b | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
+                    app.settings_modal_state.cancel_remove_avatar();
+                }
+                _ => {}
+            }
+        }
+        return;
+    }
     if app.settings_modal_state.invites_dialog().open() {
         handle_invites_dialog_input(app, event);
         return;
@@ -259,13 +271,21 @@ fn handle_tweaks_tab_input(app: &mut App, event: ParsedInput) {
     }
 }
 
-/// Bio tab (not editing): Enter begins editing. Everything else ignored —
-/// close and tab-switch events were already handled above.
+/// Bio actions only run outside the text editor, so their letters remain
+/// ordinary bio text while typing.
 fn handle_bio_tab_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(b'\r') | ParsedInput::Char('e') | ParsedInput::Char('E') => {
             app.settings_modal_state.start_bio_edit();
         }
+        ParsedInput::Byte(b'a' | b'A') | ParsedInput::Char('a' | 'A') => {
+            app.begin_settings_avatar();
+        }
+        ParsedInput::Byte(b'x' | b'X') | ParsedInput::Char('x' | 'X') => {
+            app.settings_modal_state.ask_remove_avatar();
+        }
+        ParsedInput::Arrow(b'A') => app.settings_modal_state.scroll_avatar(-1),
+        ParsedInput::Arrow(b'B') => app.settings_modal_state.scroll_avatar(1),
         ParsedInput::Byte(b'?') | ParsedInput::Char('?') => open_help(app),
         _ => {}
     }
@@ -314,10 +334,18 @@ fn handle_mouse(app: &mut App, mouse: crate::app::input::MouseEvent) {
     let state = &mut app.settings_modal_state;
     match mouse.kind {
         MouseEventKind::ScrollUp => {
-            state.mouse.scroll(x, y, -3, app.size);
+            if state.mouse.target(x, y, app.size) == Some(Target::AvatarPreview) {
+                state.scroll_avatar(-3);
+            } else {
+                state.mouse.scroll(x, y, -3, app.size);
+            }
         }
         MouseEventKind::ScrollDown => {
-            state.mouse.scroll(x, y, 3, app.size);
+            if state.mouse.target(x, y, app.size) == Some(Target::AvatarPreview) {
+                state.scroll_avatar(3);
+            } else {
+                state.mouse.scroll(x, y, 3, app.size);
+            }
         }
         MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
             let Some(target) = state.mouse.target(x, y, app.size) else {
@@ -341,6 +369,16 @@ fn handle_mouse(app: &mut App, mouse: crate::app::input::MouseEvent) {
 
 fn activate_mouse_target(app: &mut App, target: Target) {
     let state = &mut app.settings_modal_state;
+    if state.avatar_removal_open() {
+        if !state.avatar_removal_pending() {
+            match target {
+                Target::ConfirmRemoveAvatar => state.confirm_remove_avatar(),
+                Target::CancelRemoveAvatar | Target::Close => state.cancel_remove_avatar(),
+                _ => {}
+            }
+        }
+        return;
+    }
     if state.link_account_dialog().pending() || state.irc_token_dialog().pending() {
         return;
     }
@@ -373,6 +411,10 @@ fn activate_mouse_target(app: &mut App, target: Target) {
             }
         }
         Target::Tab(tab) => state.select_tab(tab),
+        Target::AvatarPreview => {}
+        Target::SetAvatar => app.begin_settings_avatar(),
+        Target::RemoveAvatar => state.ask_remove_avatar(),
+        Target::ConfirmRemoveAvatar | Target::CancelRemoveAvatar => {}
         Target::Row(_) => activate_selected_row(app),
         Target::RowCycle(_, forward) => state.cycle_setting(forward),
         Target::Tweak(TweakRow::RightSidebar) => state.open_right_sidebar_components(),

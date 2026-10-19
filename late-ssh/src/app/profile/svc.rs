@@ -106,6 +106,13 @@ pub enum ProfileEvent {
     Saved {
         user_id: Uuid,
     },
+    AvatarRemoved {
+        user_id: Uuid,
+    },
+    AvatarRemovalFailed {
+        user_id: Uuid,
+        message: String,
+    },
     AccountLinkCodeCreated {
         user_id: Uuid,
         code: String,
@@ -471,6 +478,42 @@ impl ProfileService {
             },
         )?;
         Ok(())
+    }
+
+    pub(crate) fn remove_avatar(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            let result: Result<bool> = async {
+                let client = service.db.get().await?;
+                if late_core::models::artboard_ban::ArtboardBan::is_active_for_user(
+                    &client, user_id,
+                )
+                .await?
+                {
+                    return Ok(false);
+                }
+                late_core::models::avatar::Avatar::save(&client, user_id, None).await?;
+                Ok(true)
+            }
+            .await;
+            match result {
+                Ok(true) => {
+                    service.publish_event(ProfileEvent::AvatarRemoved { user_id });
+                    service.find_profile(user_id);
+                }
+                Ok(false) => service.publish_event(ProfileEvent::AvatarRemovalFailed {
+                    user_id,
+                    message: "Artboard editing is disabled for this account.".to_string(),
+                }),
+                Err(error) => {
+                    tracing::error!(%user_id, ?error, "failed to remove avatar");
+                    service.publish_event(ProfileEvent::AvatarRemovalFailed {
+                        user_id,
+                        message: "Could not remove your avatar. Please try again.".to_string(),
+                    });
+                }
+            }
+        });
     }
 
     /// Persist the latest profile draft with one background writer per user.

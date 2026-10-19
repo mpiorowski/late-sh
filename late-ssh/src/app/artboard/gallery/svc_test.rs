@@ -6,6 +6,59 @@ use uuid::Uuid;
 use super::{GalleryService, SplashRefresh};
 use crate::test_helpers::new_test_db;
 
+#[tokio::test]
+async fn avatar_writes_recheck_active_bans_and_allow_expired_bans() {
+    use super::GalleryResult;
+    use dartboard_core::{Canvas, Pos};
+    use late_core::models::{artboard_ban::ArtboardBan, avatar::Avatar};
+
+    let test = new_test_db().await;
+    let user = create_test_user(&test.db, "avatar-ban-owner").await;
+    let moderator = create_test_user(&test.db, "avatar-ban-moderator").await;
+    let client = test.db.get().await.unwrap();
+    let service = GalleryService::new(test.db.clone());
+    let mut board = Canvas::with_size(1, 1);
+    board.put_glyph(Pos { x: 0, y: 0 }, '@');
+    let original = Avatar::crop(&board, Pos { x: 0, y: 0 }, 1, 1).unwrap();
+    Avatar::save(&client, user.id, Some(&original))
+        .await
+        .unwrap();
+    board.put_glyph(Pos { x: 0, y: 0 }, '#');
+    let replacement = Avatar::crop(&board, Pos { x: 0, y: 0 }, 1, 1).unwrap();
+
+    for (expires_at, active) in [
+        (None, true),
+        (Some(chrono::Utc::now() + chrono::Duration::hours(1)), true),
+        (Some(chrono::Utc::now() - chrono::Duration::hours(1)), false),
+    ] {
+        ArtboardBan::activate(&client, user.id, moderator.id, "test ban", expires_at)
+            .await
+            .unwrap();
+        for avatar in [Some(replacement.clone()), None] {
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+            service.save_avatar_task(user.id, avatar.clone(), tx);
+            let result = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            if active {
+                assert!(
+                    matches!(result, GalleryResult::AvatarFailed(error) if error.contains("disabled"))
+                );
+                assert_eq!(
+                    Avatar::load(&client, user.id).await.unwrap(),
+                    Some(original.clone())
+                );
+            } else {
+                assert!(
+                    matches!(result, GalleryResult::AvatarSaved { removed } if removed == avatar.is_none())
+                );
+                assert_eq!(Avatar::load(&client, user.id).await.unwrap(), avatar);
+            }
+        }
+    }
+}
+
 pub(crate) fn hang_params(user_id: Uuid, title: &str) -> HangParams {
     HangParams {
         user_id,
