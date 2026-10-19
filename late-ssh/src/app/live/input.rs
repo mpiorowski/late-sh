@@ -145,10 +145,9 @@ fn open(app: &mut App, source: LiveSource, origin: Origin) -> bool {
             }
             false => false,
         },
-        // The article modal: Enter copies the link, `n` jumps to it in
-        // News. Gone between the frame and the key (deleted): nothing to
-        // open.
-        LiveSource::NewsArticle(article_id) => app.chat.open_news_modal_for_article(article_id),
+        // The News reader on the story. Gone between the frame and the key
+        // (deleted): nothing to open.
+        LiveSource::NewsArticle(article_id) => app.chat.open_reader_for_article(article_id),
         // The streamer's room on Home, as its rail row opens it: joined on
         // the first visit, and the visit counts as a named viewer. Its
         // header carries the watch link. Gone between the frame and the key

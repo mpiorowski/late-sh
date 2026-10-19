@@ -63,7 +63,7 @@ use super::{
         ChatEvent, ChatService, ChatSnapshot, GIFT_MAX_AMOUNT, GRANT_MAX_AMOUNT, GildRefusal,
         ProfileSection, ReportKind, RoomMemberListItem,
     },
-    ui_text::{NewsPayload, parse_report_payload},
+    ui_text::parse_report_payload,
     work,
 };
 
@@ -298,13 +298,6 @@ pub enum RoomInfoAuthority {
     None,
     /// The room has no topic or rules at all (DMs, game rooms).
     NotEditable,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct NewsModalState {
-    pub payload: NewsPayload,
-    pub meta: String,
-    pub article_id: Uuid,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -884,7 +877,6 @@ pub struct ChatState {
     /// takes the surface in `drain_summary_events` as soon as it frees,
     /// instead of clobbering what the user is reading.
     pending_summary_overlay: Option<Overlay>,
-    news_modal: Option<NewsModalState>,
     image_modal: Option<ImageModalState>,
     /// Cells the open image modal can devote to an image, reported back from
     /// the previous frame's draw. Sixel fetches encode to fit this.
@@ -1356,7 +1348,6 @@ impl ChatState {
             username_rx,
             overlay: None,
             pending_summary_overlay: None,
-            news_modal: None,
             image_modal: None,
             image_modal_capacity: None,
             pending_reaction_owners_message_id: None,
@@ -2077,16 +2068,18 @@ impl ChatState {
         self.overlay.is_some()
     }
 
-    pub(crate) fn news_modal(&self) -> Option<&NewsModalState> {
-        self.news_modal.as_ref()
+    /// The News reader, owned by `news::State`; `render.rs`, `app/input.rs`,
+    /// and `live/input.rs` reach it through here.
+    pub(crate) fn reader(&self) -> Option<&news::reader::state::ReaderModal> {
+        self.news.reader()
     }
 
-    pub(crate) fn has_news_modal(&self) -> bool {
-        self.news_modal.is_some()
+    pub(crate) fn has_reader(&self) -> bool {
+        self.news.reader().is_some()
     }
 
-    pub(crate) fn close_news_modal(&mut self) {
-        self.news_modal = None;
+    pub(crate) fn close_reader(&mut self) {
+        self.news.close_reader();
     }
 
     pub(crate) fn image_modal(&self) -> Option<&ImageModalState> {
@@ -2111,18 +2104,13 @@ impl ChatState {
         }
     }
 
-    pub(crate) fn news_modal_url(&self) -> Option<&str> {
-        self.news_modal
-            .as_ref()
-            .map(|modal| modal.payload.url.as_str())
-    }
-
-    pub(crate) fn jump_to_news_modal_article(&mut self) -> bool {
-        let Some(modal) = self.news_modal.take() else {
+    /// `N` in the reader: close it and select its story in the News room.
+    pub(crate) fn jump_to_reader_article(&mut self) -> bool {
+        let Some(reader) = self.news.close_reader() else {
             return false;
         };
         self.select_news();
-        self.news.select_article_by_id(modal.article_id);
+        self.news.select_article_by_id(reader.article_id());
         true
     }
 
@@ -2953,33 +2941,12 @@ impl ChatState {
         composer::set_themed_textarea_cursor_visible(&mut self.composer, composing);
     }
 
-    /// Open the article modal on a News article by id (the live strip, the
-    /// Live panel, a Zen Live tile), marking that article read. False when
-    /// it left the snapshot (deleted).
-    pub(crate) fn open_news_modal_for_article(&mut self, article_id: Uuid) -> bool {
+    /// Open the reader on a News article by id (a News card, the live
+    /// strip, the Live panel, a Zen Live tile), marking that article read.
+    /// False when it left the snapshot (deleted).
+    pub(crate) fn open_reader_for_article(&mut self, article_id: Uuid) -> bool {
         self.reaction_leader_active = false;
-        let Some(item) = self
-            .news
-            .all_articles()
-            .iter()
-            .find(|item| item.article.id == article_id)
-            .cloned()
-        else {
-            return false;
-        };
-        let author = modal_author_label(Some(&item.author_username), item.article.user_id);
-        self.news_modal = Some(NewsModalState {
-            payload: NewsPayload {
-                title: item.article.title.clone(),
-                summary: item.article.summary.clone(),
-                url: item.article.url.clone(),
-                ascii_art: item.article.ascii_art.clone(),
-            },
-            meta: news_modal_meta(&author, item.article.created),
-            article_id,
-        });
-        self.news.mark_article_read(&item);
-        true
+        self.news.open_reader(article_id)
     }
 
     pub fn open_selected_image_modal_in_room(&mut self, room_id: Uuid) -> bool {
@@ -8417,23 +8384,6 @@ fn adjacent_composer_room(
         .and_then(|room_id| rooms.iter().position(|candidate| *candidate == room_id))
         .unwrap_or(0) as isize;
     Some(rooms[wrapped_index(current, delta, rooms.len())])
-}
-
-/// `mat - 2m ago - Tue 2026-09-29 21:00 UTC`, under the article modal's title.
-fn news_modal_meta(author: &str, created: chrono::DateTime<chrono::Utc>) -> String {
-    let relative = crate::app::common::primitives::format_relative_time(created);
-    format!(
-        "{author} - {relative} - {}",
-        created.format("%a %Y-%m-%d %H:%M UTC")
-    )
-}
-
-fn modal_author_label(username: Option<&str>, user_id: Uuid) -> String {
-    username
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-        .map(|name| format!("@{name}"))
-        .unwrap_or_else(|| short_user_id(user_id))
 }
 
 /// Message-search state backing the Ctrl+/ modal's `?` mode. Owned by

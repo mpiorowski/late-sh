@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+use crate::models::article_body::{ArticleBody, BodyStatus, reading_minutes};
 use crate::models::chips::{ChipMove, UserChips};
 
 /// What publishing one article pays its author. Every share path funnels
@@ -63,6 +64,45 @@ impl Article {
             )
             .await?;
         Ok(rows.into_iter().map(Self::from).collect())
+    }
+
+    /// The shared news snapshot's rows: the newest `limit` articles, each
+    /// with where its body stands. Only the body's status and word count
+    /// ride along, never its lines: the snapshot is re-read on every notify
+    /// on every replica, and the reader loads the one body it opens
+    /// ([`ArticleBody::find`]).
+    pub async fn list_feed(client: &Client, limit: i64) -> Result<Vec<FeedArticle>> {
+        let rows = client
+            .query(
+                "SELECT a.*, b.status AS body_status, b.word_count AS body_word_count
+                 FROM articles a
+                 LEFT JOIN article_bodies b ON b.article_id = a.id
+                 ORDER BY a.created DESC
+                 LIMIT $1",
+                &[&limit],
+            )
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                let status: Option<String> = row.get("body_status");
+                let word_count: Option<i32> = row.get("body_word_count");
+                let body = BodyStatus::from_column(status.as_deref())?;
+                let reading_minutes = match (body, word_count) {
+                    (BodyStatus::Ready, Some(words)) => {
+                        Some(reading_minutes(u32::try_from(words)?))
+                    }
+                    (BodyStatus::Ready, None) => {
+                        anyhow::bail!("ready article body without a word count")
+                    }
+                    (BodyStatus::Pending | BodyStatus::Unavailable, _) => None,
+                };
+                Ok(FeedArticle {
+                    article: Self::from(row),
+                    body,
+                    reading_minutes,
+                })
+            })
+            .collect()
     }
 
     /// Articles shared inside `[floor, ceiling)` with the sharer's username,
@@ -201,10 +241,22 @@ pub struct ArticleSnapshot {
     pub articles: Vec<ArticleFeedItem>,
 }
 
+/// One row of [`Article::list_feed`], before the sharer's name is attached.
+pub struct FeedArticle {
+    pub article: Article,
+    pub body: BodyStatus,
+    pub reading_minutes: Option<u16>,
+}
+
 #[derive(Clone)]
 pub struct ArticleFeedItem {
     pub article: Article,
     pub author_username: String,
+    /// Where the story's body stands; the card's meta and the reader's
+    /// first frame read it.
+    pub body: BodyStatus,
+    /// `Some` exactly when `body` is ready.
+    pub reading_minutes: Option<u16>,
 }
 
 #[derive(Clone, Debug)]
@@ -231,5 +283,12 @@ pub enum ArticleEvent {
     ReadsLoaded {
         user_id: Uuid,
         read_article_ids: Vec<Uuid>,
+    },
+    /// The one body a reader opened, for the session that asked. `None` is
+    /// a story whose fetch has not landed.
+    BodyLoaded {
+        user_id: Uuid,
+        article_id: Uuid,
+        body: Option<ArticleBody>,
     },
 }

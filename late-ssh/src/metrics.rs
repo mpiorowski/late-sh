@@ -13,7 +13,7 @@ use crate::app::audio::svc::ThumbnailFetch;
 use crate::app::bonsai::state::BonsaiAction;
 use crate::app::bonsai::svc::BonsaiActionResult;
 use crate::app::calendar::svc::{CalendarAnnouncement, CalendarOp, CalendarWrite};
-use crate::app::chat::news::svc::XMediaLookup;
+use crate::app::chat::news::svc::{BodyFetchOutcome, XMediaLookup};
 use crate::app::chat::svc::{GildRefusal, SendRefusal};
 use crate::app::clubhouse::nightcap::svc::{NightcapHouseFailure, NightcapOrderResult};
 use crate::app::common::primitives::Screen;
@@ -31,6 +31,7 @@ use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
 use crate::app::referral::svc::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement};
 use crate::ircd::conn::{IrcHistoryOutcome, IrcHistoryRequest};
 use crate::pg_listener::Refresh;
+use late_core::models::article_body::BodyStatus;
 use late_core::models::calendar::CalendarRefusalKind;
 use late_core::models::referral::ReferralSource;
 
@@ -598,6 +599,7 @@ mod inner {
         SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
         ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
+    use super::{BodyFetchOutcome, BodyStatus};
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
@@ -608,6 +610,7 @@ mod inner {
         ZorkSwitchResult,
     };
     use crate::app::bonsai::state::BranchAction;
+    use crate::app::chat::news::body::BodyFetchFailure;
     use crate::app::referral::state::AttachRefusal;
 
     fn meter() -> opentelemetry::metrics::Meter {
@@ -1467,6 +1470,28 @@ mod inner {
                 .with_description(
                     "fxtwitter lookups behind X shares, the only NSFW gate on that path",
                 )
+                .build()
+        })
+    }
+
+    fn news_body_fetches_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_news_body_fetches_total")
+                .with_description(
+                    "News reader body steps by how they ended: ready, skipped (a video or an X post), store_failed, or why the page could not be read",
+                )
+                .build()
+        })
+    }
+
+    fn news_reader_opens_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_news_reader_opens_total")
+                .with_description("News reader opens by the body status they found")
                 .build()
         })
     }
@@ -2503,6 +2528,41 @@ mod inner {
         );
     }
 
+    /// A run of one failure label is what a site blocking the fetch, or a
+    /// readability regression, looks like.
+    fn news_body_fetch_label(outcome: BodyFetchOutcome) -> &'static str {
+        match outcome {
+            BodyFetchOutcome::Ready => "ready",
+            BodyFetchOutcome::Skipped => "skipped",
+            BodyFetchOutcome::StoreFailed => "store_failed",
+            BodyFetchOutcome::Failed(BodyFetchFailure::Fetch) => "fetch",
+            BodyFetchOutcome::Failed(BodyFetchFailure::NotHtml) => "not_html",
+            BodyFetchOutcome::Failed(BodyFetchFailure::TooLarge) => "too_large",
+            BodyFetchOutcome::Failed(BodyFetchFailure::Timeout) => "timeout",
+            BodyFetchOutcome::Failed(BodyFetchFailure::Extract) => "extract",
+            BodyFetchOutcome::Failed(BodyFetchFailure::Empty) => "empty",
+        }
+    }
+
+    pub fn record_news_body_fetch(outcome: BodyFetchOutcome) {
+        news_body_fetches_total().add(
+            1,
+            &[KeyValue::new("outcome", news_body_fetch_label(outcome))],
+        );
+    }
+
+    fn news_body_status_label(status: BodyStatus) -> &'static str {
+        match status {
+            BodyStatus::Pending => "pending",
+            BodyStatus::Ready => "ready",
+            BodyStatus::Unavailable => "unavailable",
+        }
+    }
+
+    pub fn record_news_reader_opened(status: BodyStatus) {
+        news_reader_opens_total().add(1, &[KeyValue::new("body", news_body_status_label(status))]);
+    }
+
     /// Same shape as the News share: one counter for the submissions and one
     /// for the chips they minted, so the tracks that came in past the day's
     /// cap are visible beside the paid ones.
@@ -3348,6 +3408,7 @@ mod inner {
         SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
         ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
+    use super::{BodyFetchOutcome, BodyStatus};
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
@@ -3419,6 +3480,8 @@ mod inner {
     pub fn record_irc_history(_request: IrcHistoryRequest, _outcome: IrcHistoryOutcome) {}
     pub fn record_news_shared(_reward: NewsShareReward) {}
     pub fn record_news_x_media_lookup(_lookup: XMediaLookup) {}
+    pub fn record_news_body_fetch(_outcome: BodyFetchOutcome) {}
+    pub fn record_news_reader_opened(_status: BodyStatus) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
     pub fn record_booth_thumbnail(_outcome: ThumbnailFetch) {}
     pub fn record_radio_meta_poll(_feed: PolledFeed, _outcome: PollOutcome) {}

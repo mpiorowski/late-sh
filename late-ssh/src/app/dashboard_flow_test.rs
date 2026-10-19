@@ -557,7 +557,7 @@ async fn o_on_a_booth_track_that_left_the_booth_changes_nothing() {
 /// A link somebody shared to News goes up on the live strip, and `o` opens
 /// the article modal.
 #[tokio::test]
-async fn o_on_a_shared_article_opens_the_article_modal() {
+async fn o_on_a_shared_article_opens_the_reader() {
     use late_core::models::article::{Article, ArticleParams};
 
     let test_db = new_test_db().await;
@@ -591,10 +591,79 @@ async fn o_on_a_shared_article_opens_the_article_modal() {
 
     app.handle_input(b"o");
     assert_eq!(
-        app.chat.news_modal_url(),
+        app.chat.reader().map(|reader| reader.url()),
         Some("https://example.com/terminal-renaissance"),
         "o opens the article"
     );
+}
+
+/// In the News room `Enter` opens the reader on the selected card and `c`
+/// copies its link, in the room and in the reader alike. A share whose body
+/// has not landed reads as pending.
+#[tokio::test]
+async fn enter_on_a_news_card_opens_the_reader_and_c_copies_the_link() {
+    use late_core::models::article::{Article, ArticleParams};
+
+    let url = "https://example.com/terminal-renaissance";
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "news-reader-me").await;
+    let them = create_test_user(&test_db.db, "news-reader-them").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+    Article::create_by_user_id(
+        &client,
+        them.id,
+        ArticleParams {
+            user_id: them.id,
+            url: url.to_string(),
+            title: "The terminal renaissance".to_string(),
+            summary: "• terminals are back".to_string(),
+            ascii_art: "####\n####".to_string(),
+        },
+    )
+    .await
+    .expect("share an article");
+    let mut app = make_app(test_db.db.clone(), me.id, "news-reader-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "lounge").await;
+    app.chat.select_news();
+    wait_for_render_contains(&mut app, "@news-reader-them").await;
+
+    app.handle_input(b"c");
+    assert_eq!(
+        app.pending_clipboard.as_deref(),
+        Some(url),
+        "c copies the link"
+    );
+    assert!(app.chat.reader().is_none(), "c opens nothing");
+    app.pending_clipboard = None;
+
+    app.handle_input(b"\r");
+    assert_eq!(
+        app.chat.reader().map(|reader| reader.url()),
+        Some(url),
+        "Enter opens the reader"
+    );
+    wait_for_render_contains(&mut app, " Reading ").await;
+    wait_for_render_contains(&mut app, "Fetching the article").await;
+
+    app.handle_input(b"c");
+    assert_eq!(
+        app.pending_clipboard.as_deref(),
+        Some(url),
+        "c in the reader copies the story's link"
+    );
+    // A lone Esc lands on the tick after it (`flush_pending_escape`).
+    app.handle_input(b"\x1b");
+    wait_for_app(&mut app, "Esc to close the reader", |app| {
+        app.chat.reader().is_none()
+    })
+    .await;
 }
 
 /// Shares no longer post into #lounge, so the strip is where a link is
@@ -1101,11 +1170,11 @@ async fn opening_a_shares_modal_marks_that_article_read() {
 
     app.handle_input(b"s1");
     assert_eq!(
-        app.chat.news_modal_url(),
+        app.chat.reader().map(|reader| reader.url()),
         Some("https://example.com/beta"),
         "s1 opens the newer share"
     );
-    app.chat.close_news_modal();
+    app.chat.close_reader();
     let frame = render_plain(&mut app);
     assert!(
         !news_row(&frame, "s1").contains('\u{25cf}'),

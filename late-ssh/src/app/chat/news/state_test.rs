@@ -41,6 +41,8 @@ fn article(id: u128, author: Uuid, created_minutes: i64) -> ArticleFeedItem {
             ascii_art: "...".to_string(),
         },
         author_username: "author".to_string(),
+        body: late_core::models::article_body::BodyStatus::Pending,
+        reading_minutes: None,
     }
 }
 

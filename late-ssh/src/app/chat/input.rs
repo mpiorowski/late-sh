@@ -140,7 +140,7 @@ fn open_poll_modal(app: &mut App, room_id: Uuid) {
     app.show_quit_confirm = false;
     crate::app::input::close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_news_modal();
+    app.chat.close_reader();
     app.pending_chat_profile_open = None;
     app.poll_modal_state.open(room_id);
     app.show_poll_modal = true;
@@ -160,7 +160,7 @@ fn open_gild_modal(app: &mut App, target: crate::app::chat::gild::state::GildTar
     app.show_quit_confirm = false;
     crate::app::input::close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_news_modal();
+    app.chat.close_reader();
     app.gild_modal_state.open(target);
     app.show_gild_modal = true;
 }

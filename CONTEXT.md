@@ -759,10 +759,11 @@ Artboard content disclaimer (last bullet). The rails set the shape.
 | MessageTranslation | `message_translations` | Shared chat-translation cache, PK `(message_id, target_lang)`, cascade from the message (migration 136). Written only by `TranslationService` after a successful model call, and only while the translated body is still current (`upsert_if_current`); deleted by message edits inside the edit transaction, so a cached translation can never outlive the text it translated, including one in flight during the edit. Cost scales with messages written, not readers. See `late-ssh/src/app/chat/CONTEXT.md` §14 Translation. |
 | ChatSlowMode | `chat_slow_modes` | Per-user send throttle. `room_id` nullable (`NULL` = server scope, non-null = room scope), `interval_secs` 1-86400, nullable `expires_at` (`NULL` = permanent), unique per target/scope. Enforced in `ChatService::send_message`; server scope applies to non-DM rooms only, and early sends get a private slow-mode banner, not a queued send. |
 | Article | `articles` | `url` UNIQUE, `user_id` FK |
+| ArticleBody | `article_bodies` | PK `article_id` FK cascade: the News reader's text for one story, `status` `ready` (`lines` JSONB, the closed `ReaderLine` enum, plus `word_count`) or `unavailable` (no text); no row is pending (`BodyStatus`). A statement trigger fires `articles_changed`. Ready bodies older than 30 days are retired to `unavailable` by a daily sweep |
 | JobPosting | `job_postings` | The job feed's rows (migrations 193, 194): `(source, external_id)` UNIQUE, `source` IN (hn, wwr, jobicy, late), `status` IN (pending, queued, active, expired, dead, dropped), `remote_kind` set on every shelf row, `released_on` set on every active or expired row, `raw` cleared on settle, `posted_by` set exactly on `late` rows (written on the shelf by a person, taken down by them or a moderator). `JobPressRun` (`job_press_runs`, `run_on` PK) is the nightly press's claim. See `late-ssh/src/app/jobs/CONTEXT.md`. |
 | PaperRoomEdition | `paper_room_editions` | PK `(room_id, edition)`; `status` IN (printing, ready, quiet), `text` set iff ready, `generated_at` null iff printing. The row is the print claim (migration 173). |
 | PaperSection | `paper_sections` | PK `(edition, section)`, `section` IN (reading, outside), same status contract. |
-| ArticleRead | `article_reads` | PK `(user_id, article_id)`, both FK cascade, indexed by `article_id` for the cascade: one News article one reader has read, the only record of a read (a News room visit inserts the snapshot's, the article modal one; migration 231 folded the old per-user checkpoint into these) |
+| ArticleRead | `article_reads` | PK `(user_id, article_id)`, both FK cascade, indexed by `article_id` for the cascade: one News article one reader has read, the only record of a read (a News room visit inserts the snapshot's, opening the reader one) |
 | Notification | `notifications` | `user_id`+`actor_id` FK to users, `message_id` FK to chat_messages, `room_id` FK to chat_rooms, `read_at` nullable, CHECK(user_id<>actor_id) |
 | SudokuDailyWin | `sudoku_daily_wins` | `UNIQUE(user_id, difficulty_key, puzzle_date)`, score tracked |
 | NonogramDailyWin | `nonogram_daily_wins` | `UNIQUE(user_id, difficulty_key, puzzle_date)`, binary completion |
@@ -895,6 +896,7 @@ The SSH app assumes a single process. These in-memory structures would need to b
 - @bot, @graybeard, @bartender, and @dealer bootstrap on app startup: ensure DB user with a fixed `username`, join public rooms, and insert into `active_users` (always online). All are dedicated users with fixed fingerprints (`bot-fp-000`, `graybeard-fp-000`, `bartender-fp-000`, `dealer-fp-000`). Ghost-bot entries in `active_users` have `fingerprint: None`; the Clubhouse roster uses that to keep bots out of the seat pool (and to capture the bartender/graybeard user ids for staff speech bubbles and the tutorial's scripted greeting).
 - Connection limits (global semaphore + per-IP counter) plus SSH attempt rate limit (sliding window) MUST be enforced before any auth (effective client IP is resolved from PROXY protocol when enabled)
 - Chat message deletes are hard deletes; any moderation/delete path must remove rows directly rather than relying on tombstones
+- The News reader's page fetch (`app/chat/news/body.rs`) connects only to public addresses: it goes out to any URL a user shares and its text is shown to everyone, so its client drops private/loopback/link-local DNS answers, rejects such literal IP hosts before the request and on every redirect, and uses no proxy. Any new server-side fetch of a user-supplied URL whose content is shown back must hold the same rule
 
 ### 8.2 Data integrity invariants
 
@@ -902,6 +904,7 @@ The SSH app assumes a single process. These in-memory structures would need to b
 - All foreign keys use `ON DELETE CASCADE` - deleting a user cascades to all their data
 - Chat room constraints: lounge must have `slug='lounge'`, language must have `language_code`, DM must have both user IDs with correct ordering
 - `auto_join` can only be `true` for public rooms
+- The shared News snapshot carries no article bodies: it is re-read on every `articles_changed` on every replica, so it holds only each body's status and reading time (a `LEFT JOIN` in `Article::list_feed`), and the reader loads the one body it opens by id (`ArticleBody::find`)
 
 ### 8.3 High-risk end-to-end flows
 

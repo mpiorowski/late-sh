@@ -5788,7 +5788,7 @@ fn draw_selected_content(
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme::BORDER()));
             let hint_text = Paragraph::new(Line::from(Span::styled(
-                " j/k navigate · Enter copy link · r reply in #lounge · i paste URL · / filter mine",
+                " j/k navigate · Enter read · c copy link · r reply in #lounge · i paste URL · / filter mine",
                 Style::default().fg(theme::TEXT_DIM()),
             )))
             .block(hint_block);

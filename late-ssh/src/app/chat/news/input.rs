@@ -48,6 +48,12 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             true
         }
         b'\r' | b'\n' => {
+            if let Some(article_id) = app.chat.news.selected_item().map(|item| item.article.id) {
+                app.chat.open_reader_for_article(article_id);
+            }
+            true
+        }
+        b'c' | b'C' => {
             if let Some(url) = app.chat.news.selected_url() {
                 let cleaned = crate::app::input::sanitize_paste_markers(url);
                 app.pending_clipboard = Some(cleaned.trim().to_owned());
@@ -91,8 +97,8 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
 }
 
 /// Reply in #lounge quoting the article, with #lounge selected so the
-/// composer is where the user lands. The News feed's `r` and the article
-/// modal's (`app/input.rs`) both come through here. Returns whether the
+/// composer is where the user lands. The News feed's `r` and the reader's
+/// (`reader/input.rs`) both come through here. Returns whether the
 /// reply started in #lounge.
 pub fn reply_in_lounge(app: &mut App, article_id: Uuid) -> bool {
     if !app.chat.begin_reply_to_article(article_id) {

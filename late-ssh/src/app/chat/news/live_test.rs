@@ -38,6 +38,8 @@ fn article(n: u128, title: &str, shared_secs: i64) -> ArticleFeedItem {
             ascii_art: "############\n#  late.sh #\n############".to_string(),
         },
         author_username: "mat".to_string(),
+        body: late_core::models::article_body::BodyStatus::Pending,
+        reading_minutes: None,
     }
 }
 

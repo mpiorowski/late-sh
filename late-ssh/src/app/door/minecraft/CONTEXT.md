@@ -26,7 +26,7 @@ Minecraft is not a door. Nothing runs inside `late-ssh` and there is no proxy, P
 - 120 s termination grace: the image traps SIGTERM, runs `stop`, and waits for the world save. SIGKILL mid-save corrupts chunks.
 - Startup probe allows 10 minutes (first boot downloads Paper and the plugin). Liveness and readiness use `mc-health`.
 - World, plugins, and configs live on the `minecraft-data` PVC: 8Gi `local-path`, `prevent_destroy`. **There is no backup.** The PVC is a directory on `agent-1`'s disk; losing the node or deleting the claim loses the world.
-- `RCON_CMDS_STARTUP` is re-applied on every boot: currently only `worldborder set 6000` (6000 wide, centred on 0,0). Anything an op changes at runtime that is also set there reverts on restart.
+- `RCON_CMDS_STARTUP` is re-applied on every boot: currently only `worldborder set 10400` (10400 wide, centred on 0,0). Anything an op changes at runtime that is also set there reverts on restart.
 - RCON runs inside the pod on 25575 (not exposed). Password: random, in the `minecraft` secret.
 - Simple Voice Chat listens on UDP 24454, a second hostPort (`local.minecraft_voice_port`). That is the plugin's default; its config (`/data/plugins/voicechat/voicechat-server.properties` on the PVC) is not patched, so changing the Terraform port alone breaks voice. `voice_host` stays empty: the client then sends voice to the IP its game connection reached, so `mc.late.sh` and the SRV record both work without a voice-specific DNS entry.
 
@@ -105,7 +105,7 @@ Steps:
 2. Bump every copy of the version: `minecraft_version` and `minecraft_image` in `infra/defaults.tf`, `VERSION` in `ui.rs`, the `Java Edition <version>` assertion in `ui_test.rs`, and the Server section here.
 3. Run the targeted tests (below); the drift test catches a missed copy.
 4. Ship as an `-infra` or `-full` release. First boot downloads Paper and converts the world, so expect minutes of downtime, not seconds.
-5. Verify: `kubectl logs deploy/minecraft | grep -E "Done \(|Incorrect|GriefPrevention"`, then `rcon-cli worldborder get` reports 6000.
+5. Verify: `kubectl logs deploy/minecraft | grep -E "Done \(|Incorrect|GriefPrevention"`, then `rcon-cli worldborder get` reports 10400.
 6. Announce it: clients on the old version can no longer join. New biomes and structures only generate in chunks never loaded before.
 
 ## Critical invariants
