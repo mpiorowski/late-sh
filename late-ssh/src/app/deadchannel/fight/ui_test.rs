@@ -897,7 +897,7 @@ fn the_road_shows_the_sleeper_at_the_crossing_and_the_answer_owed() {
         },
     );
     assert!(
-        off.contains("tomas is off the wire. it keeps for a day."),
+        off.contains("tomas is off the wire. it keeps two days."),
         "{off}"
     );
     assert!(!off.contains("[r]"), "{off}");

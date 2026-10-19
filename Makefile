@@ -111,7 +111,7 @@ arena:
 # rules change.
 .PHONY: deadchannel-arena
 deadchannel-arena:
-	$(MAKE) test-llm ARGS="-p late-ssh --run-ignored all --no-capture -E 'test(deadchannel::fight::arena) and not test(arena_sweep)'"
+	$(MAKE) test-llm ARGS="-p late-ssh --run-ignored all --no-capture -E 'test(deadchannel::fight::arena) and not test(arena_sweep) and not test(arena_crystals)'"
 
 # The balance sweep: one reading per candidate set of rules in
 # arena_test.rs::SWEEP, side by side, written to
@@ -119,6 +119,13 @@ deadchannel-arena:
 .PHONY: deadchannel-sweep
 deadchannel-sweep:
 	$(MAKE) test-llm ARGS="-p late-ssh --run-ignored all --no-capture -E 'test(arena_sweep)'"
+
+# The crystal question (fight/BALANCE.md, "What a crystal buys"): the crystal
+# players side by side under the live rules and with pours priced in bits,
+# written to late-ssh/target/deadchannel-crystals.md.
+.PHONY: deadchannel-crystals
+deadchannel-crystals:
+	$(MAKE) test-llm ARGS="-p late-ssh --run-ignored all --no-capture -E 'test(arena_crystals)'"
 
 # Whole simulated runs, start to finish: one seeded climb a player from a
 # fresh row to the first mark, every shop visit, step, and turn, written to

@@ -27,10 +27,12 @@ use rand::{SeedableRng, rngs::StdRng};
 use uuid::Uuid;
 
 use super::cards::{Card, DRAFTS};
-use super::data::{DRINK_CRYSTALS, Intent, MAX_LEVEL, RULES, Rules};
+use super::data::{Intent, MAX_LEVEL, RULES, Rules};
 use super::policy;
 use super::road::{Node, Road};
-use super::state::{Applied, Call, Command, Drink, MAX_TIER, Pick, Quarry, Sheet, Slot};
+use super::state::{
+    Applied, Call, Command, Drink, MAX_TIER, Meeting, Pick, Prey, Quarry, Sheet, Slot,
+};
 
 /// The card a simulated runner takes at each draft, in the order the
 /// drafts come.
@@ -88,9 +90,8 @@ pub struct Player {
     /// fight to open on a full one, and the second of the day waits on
     /// the patch.
     pub bright_over: f64,
-    /// The glass bought before a step whenever a crystal covers it and
-    /// none is poured yet; `None` never drinks.
-    pub drinks: Option<Drink>,
+    /// When the runner orders at Dead Air, and what.
+    pub drinks: Drinks,
     /// Whether the runner inks a draft at INK whenever the crystals cover
     /// it: the needle is visited before the blade shop and the bar, so an
     /// inker's crystals go to the needle first.
@@ -160,6 +161,22 @@ pub enum Carts {
     /// Only once that next piece is this tier or better: the hoarder,
     /// who saves every crystal for the top of the wall.
     From(i32),
+    /// Only when the bits on hand do not reach that piece at the wall:
+    /// crystals stand in for bits, never beside them.
+    WhenShort,
+}
+
+/// When a simulated runner orders at Dead Air, and what.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Drinks {
+    Never,
+    /// This, before a step, every day a crystal covers it and nothing is
+    /// poured yet.
+    Every(Drink),
+    /// This, only on a day with a hard fight in it: the gate open, or a
+    /// bright glyph on a lane the next step reaches while the runner
+    /// takes them. The crystal is saved for the fight that needs it.
+    ForTheHard(Drink),
 }
 
 /// When a simulated runner starts playing by its rule for gear and for
@@ -184,7 +201,7 @@ pub const CAREFUL: Player = Player {
     heeds: Heeds::Always,
     takes_bright: None,
     bright_over: 0.95,
-    drinks: None,
+    drinks: Drinks::Never,
     inks: Inks::Never,
     carts: Carts::Never,
     purse: Purse::KeepAPatch,
@@ -226,7 +243,7 @@ pub const NEGLECTFUL: Player = Player {
 /// are worth, measured against [`CAREFUL`].
 pub const KEEN: Player = Player {
     takes_bright: Some(Threat::Even),
-    drinks: Some(Drink::StaticOnIce),
+    drinks: Drinks::Every(Drink::StaticOnIce),
     carts: Carts::Always,
     ..CAREFUL
 };
@@ -236,7 +253,7 @@ pub const KEEN: Player = Player {
 /// worth the most bits. What hoarding is worth, measured against
 /// [`KEEN`].
 pub const HOARDER: Player = Player {
-    drinks: None,
+    drinks: Drinks::Never,
     carts: Carts::From(11),
     ..KEEN
 };
@@ -268,6 +285,77 @@ pub const PLAYERS: [(&str, Player); 8] = [
     ("borrower", BORROWER),
     ("inker", INKER),
 ];
+
+/// The ways to spend a crystal, each alone, with everything else held:
+/// what a crystal buys (`fight/BALANCE.md`, "What a crystal buys"). Read
+/// on both hands and under three bright rules (never, at easy, at
+/// even), because the bright glyph is where the crystals come from and
+/// where a glass is worth most, so a spend read under one rule alone
+/// measures the rule. Each row is the careful or ambient runner with one
+/// change.
+pub fn crystal_players() -> Vec<(String, Player)> {
+    let hands = [("key", Hand::Auto), ("sharp", Hand::Sharp)];
+    let brights = [
+        ("no brights", None),
+        ("brights at easy", Some(Threat::Easy)),
+        ("brights at even", Some(Threat::Even)),
+    ];
+    let spends = [
+        ("none", Drinks::Never, Carts::Never, Inks::Never),
+        (
+            "glass daily",
+            Drinks::Every(Drink::StaticOnIce),
+            Carts::Never,
+            Inks::Never,
+        ),
+        (
+            "glass for the hard",
+            Drinks::ForTheHard(Drink::StaticOnIce),
+            Carts::Never,
+            Inks::Never,
+        ),
+        (
+            "pour daily",
+            Drinks::Every(Drink::Feedback),
+            Carts::Never,
+            Inks::Never,
+        ),
+        ("blades", Drinks::Never, Carts::Always, Inks::Never),
+        ("blades when short", Drinks::Never, Carts::WhenShort, Inks::Never),
+        (
+            "glass daily + blades",
+            Drinks::Every(Drink::StaticOnIce),
+            Carts::Always,
+            Inks::Never,
+        ),
+        ("ink", Drinks::Never, Carts::Never, Inks::Always),
+        (
+            "ink, then a glass for the hard",
+            Drinks::ForTheHard(Drink::StaticOnIce),
+            Carts::Never,
+            Inks::Always,
+        ),
+    ];
+    let mut players = Vec::new();
+    for (hand_name, hand) in hands {
+        for (bright_name, takes_bright) in brights {
+            for (spend_name, drinks, carts, inks) in spends {
+                players.push((
+                    format!("{hand_name} · {bright_name} · {spend_name}"),
+                    Player {
+                        hand,
+                        takes_bright,
+                        drinks,
+                        carts,
+                        inks,
+                        ..CAREFUL
+                    },
+                ));
+            }
+        }
+    }
+    players
+}
 
 /// One climb from a fresh row, day 1 to the first mark or to `max_days`.
 /// Days count from 1; `None` is "not within `max_days`".
@@ -351,6 +439,12 @@ pub struct Ledger {
     pub loan_fees: i64,
     pub crystals_found: i32,
     pub crystals_spent: i32,
+    /// Glasses and pours ordered, and the bits the pours cost.
+    pub glasses: u32,
+    pub poured_bits: i64,
+    /// Pieces bought at the blade shop, and drafts inked.
+    pub carted: u32,
+    pub inked: u32,
     /// Steps in against a bright glyph, and how many put it down.
     pub bright_tries: u32,
     pub bright_kills: u32,
@@ -424,6 +518,8 @@ pub enum Event {
     },
     Drank {
         drink: Drink,
+        crystals: i32,
+        bits: i64,
     },
     Inked {
         level: i32,
@@ -637,7 +733,7 @@ pub fn climb(
         run.dawn(day);
         let road = run.sheet.todays_road();
         while run.sheet.shut().is_none() {
-            run.shop();
+            run.shop(bench);
             if run.step(&road, bench) {
                 run.dusk();
                 return run.report;
@@ -708,7 +804,7 @@ impl Run<'_> {
     /// would: the card owed, then patch (the heal is what the next fight
     /// is fought on, and the armorer only sees what the purse rule
     /// leaves), the loan, the armorer, INK, the blade shop, the bar.
-    fn shop(&mut self) {
+    fn shop(&mut self, bench: &mut Bench) {
         while let Some(draft) = self.sheet.draft() {
             let card = self.player.build[self.sheet.cards.len()];
             match self.act(Command::Draft { card }) {
@@ -748,6 +844,7 @@ impl Run<'_> {
                 self.act(Command::Ink { level: draft.level })
         {
             self.report.ledger.crystals_spent += crystals;
+            self.report.ledger.inked += 1;
             self.journal.note(|| Event::Inked { level, crystals });
         }
         let slot = match self.sheet.weapon_tier <= self.sheet.armor_tier {
@@ -758,6 +855,9 @@ impl Run<'_> {
             (Carts::Never, _) | (_, None) => false,
             (Carts::Always, Some(_)) => true,
             (Carts::From(from), Some(tier)) => tier >= from,
+            (Carts::WhenShort, Some(tier)) => {
+                self.sheet.bits < self.sheet.outfit_price_under(&self.rules, slot, tier)
+            }
         };
         if carts
             && let Applied::Carted {
@@ -767,18 +867,52 @@ impl Run<'_> {
             } = self.act(Command::Cart { slot })
         {
             self.report.ledger.crystals_spent += crystals;
+            self.report.ledger.carted += 1;
             self.journal.note(|| Event::Carted {
                 slot,
                 tier,
                 crystals,
             });
         }
-        if let Some(drink) = self.player.drinks
-            && let Applied::Drank { drink } = self.act(Command::Drink { drink })
+        let drink = match self.player.drinks {
+            Drinks::Never => None,
+            Drinks::Every(drink) => Some(drink),
+            Drinks::ForTheHard(drink) => self.hard_fight_ahead(bench).then_some(drink),
+        };
+        if let Some(drink) = drink
+            && let Applied::Drank {
+                drink,
+                crystals,
+                bits,
+            } = self.act(Command::Drink { drink })
         {
-            self.report.ledger.crystals_spent += DRINK_CRYSTALS;
-            self.journal.note(|| Event::Drank { drink });
+            self.report.ledger.crystals_spent += crystals;
+            self.report.ledger.poured_bits += bits;
+            self.report.ledger.glasses += 1;
+            self.journal.note(|| Event::Drank {
+                drink,
+                crystals,
+                bits,
+            });
         }
+    }
+
+    /// Whether the day holds a fight worth a glass: the gate is open, or
+    /// a bright glyph waits on a lane the next step reaches and the
+    /// runner would step in (the route's own rule, read before the
+    /// glass, so the glass goes on the bright fight it makes safer and
+    /// never on one the runner walks around).
+    fn hard_fight_ahead(&self, bench: &mut Bench) -> bool {
+        if self.sheet.signal_hears() {
+            return true;
+        }
+        wants_bright(&self.player, &self.sheet, bench)
+            && self
+                .sheet
+                .road
+                .open_lanes()
+                .into_iter()
+                .any(|lane| self.sheet.node_ahead(lane) == Some(Node::Bright))
     }
 
     /// The loan, when the runner owes nothing and the bits on hand do not
@@ -1079,12 +1213,19 @@ const ROUTE_FADE: f64 = 0.6;
 /// bright glyph is worth a detour to the player who takes them and is
 /// walked around by the one who does not; a rest is worth the static in
 /// the deck; a cache is a cache.
-fn route(player: &Player, sheet: &Sheet, road: &Road, bench: &mut Bench) -> (u8, Node) {
+/// Whether the runner would step in against a bright glyph now: one who
+/// takes them, with the signal standing over its line, and the bright
+/// fight reading at or under the player's threat line.
+fn wants_bright(player: &Player, sheet: &Sheet, bench: &mut Bench) -> bool {
     let standing = f64::from(sheet.signal) >= f64::from(sheet.max_signal()) * player.bright_over;
-    let wants_bright = match player.takes_bright {
+    match player.takes_bright {
         Some(line) => standing && bench.threat(Pick::Bright, sheet) <= line,
         None => false,
-    };
+    }
+}
+
+fn route(player: &Player, sheet: &Sheet, road: &Road, bench: &mut Bench) -> (u8, Node) {
+    let wants_bright = wants_bright(player, sheet, bench);
     let worth = |node: Node| match node {
         Node::Glyph => 0.0,
         Node::Bright => match wants_bright {
@@ -1265,6 +1406,34 @@ pub fn odds_rival(sheet: &Sheet, prey: &super::state::Prey, fights: u32) -> Opti
         }
     }
     Some(f64::from(wins) / f64::from(fights))
+}
+
+/// Whether `theirs` could answer `mine` back: their fight against this
+/// runner's numbers, read clean (full signal, no static in the deck,
+/// their own deck on the `Auto` key), reads risky or better. The
+/// crossing's gate (`data::CROSSING_LEVEL_BAND`): a sleeper this read
+/// calls grim is walked past, so nobody is crossed by a runner they
+/// could not beat back, and the gate follows the cards and the kit
+/// wherever a balance pass moves them.
+pub fn can_answer_back(theirs: &Sheet, mine: &Sheet) -> bool {
+    let mut awake = theirs.clone();
+    awake.fight = None;
+    awake.signal = awake.max_signal();
+    awake.road.static_cards = 0;
+    let me = Prey::of(
+        mine,
+        "",
+        [String::new(), String::new(), String::new()],
+        Uuid::nil(),
+        Meeting::Crossing,
+    );
+    match odds_rival(&awake, &me, ODDS_FIGHTS) {
+        Some(odds) => match Threat::of(odds) {
+            Threat::Easy | Threat::Even | Threat::Risky => true,
+            Threat::Grim => false,
+        },
+        None => false,
+    }
 }
 
 /// The median of `days`, a climb that never got there counting as one

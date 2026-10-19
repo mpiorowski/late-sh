@@ -1301,7 +1301,7 @@ fn lookout_lines(lookout: &Lookout, picker: &Picker) -> (Vec<Line<'static>>, Vec
                     Span::styled("    ", text),
                     Span::styled(
                         format!(
-                            "you are owed an answer. {them} is off the wire. it keeps for a day."
+                            "you are owed an answer. {them} is off the wire. it keeps two days."
                         ),
                         dim_text,
                     ),
@@ -1715,7 +1715,7 @@ fn node_lines(
                 Line::from(vec![
                     Span::styled("      ", text),
                     Span::styled(
-                        "every runner within two levels was crossed today, or is off the wire.",
+                        "every runner within two levels was crossed today, is off the wire, or could not answer you back.",
                         muted,
                     ),
                 ]),

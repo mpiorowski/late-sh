@@ -1,4 +1,4 @@
-use super::{Reading, publish, report, runs, sweep};
+use super::{Reading, crystals, publish, report, runs, sweep};
 use crate::app::deadchannel::fight::data::{FoeTier, RULES, Rules};
 
 /// The candidates `make deadchannel-sweep` reads side by side. Edit this
@@ -63,6 +63,34 @@ fn arena_report() {
 #[ignore = "the printed runs: run it with make deadchannel-run"]
 fn arena_run() {
     publish("deadchannel-run.md", &runs(RULES));
+}
+
+/// The crystal question: what a crystal buys, spent each way, under the
+/// live rules and with pours priced in bits. `make deadchannel-crystals`.
+const CRYSTAL_RULES: &[(&str, Rules)] = &[
+    ("live: a pour is a crystal", RULES),
+    (
+        "pours for bits: a cache's worth, no crystal",
+        Rules {
+            pour_crystals: 0,
+            pour_bits_percent: 100,
+            ..RULES
+        },
+    ),
+    (
+        "pours for bits: half a cache, no crystal",
+        Rules {
+            pour_crystals: 0,
+            pour_bits_percent: 50,
+            ..RULES
+        },
+    ),
+];
+
+#[test]
+#[ignore = "the crystal tables: run it with make deadchannel-crystals"]
+fn arena_crystals() {
+    publish("deadchannel-crystals.md", &crystals(CRYSTAL_RULES));
 }
 
 /// One reading per candidate in [`SWEEP`]. `make deadchannel-sweep`.

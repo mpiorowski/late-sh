@@ -361,19 +361,22 @@ pub const SECTIONS: &[Section] = &[
                 "a sleeper risks only what they carry. their signal, their exp, and their day are untouched. a crossing takes half of what is on them; the locker takes a tenth and keeps the rest safe. carrying is a bet.",
             ),
             Block::Rule(
-                "whoever was crossed and lost is owed an *answer*: within a day, `r` on the road fights the one who did it for what they carry now, no ration. win and it is back; lose and it is the full fall again. one answer per crossing.",
+                "whoever was crossed and lost is owed an *answer*: within two days, `r` on the road fights the one who did it, no ration, for what they took or half of what they hold, whichever is more, out of their locker too. win and it is back; lose and it is the full fall again. one answer per crossing.",
+            ),
+            Block::Rule(
+                "nobody is crossed by a runner they could not answer. the road reads the sleeper's answer back against you before it shows them: if it would read grim, you walk past. the crossing is between equals, or upward.",
             ),
             Block::Figures(&[
                 Figure {
                     value: "2",
-                    means: "levels either way: the crossing meets only runners within the band",
+                    means: "levels either way: the crossing looks only this far, and only at runners with an answer in them",
                 },
                 Figure {
                     value: "1",
                     means: "crossing on a sleeper a day, and one between any two runners a day",
                 },
                 Figure {
-                    value: "24h",
+                    value: "48h",
                     means: "to answer, from the moment it ended",
                 },
             ]),

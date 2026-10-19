@@ -76,6 +76,13 @@ cursor on it.
 | `u` | squelch | a burn in the deck |
 | `o` | sign-off | a mute in the deck |
 
+- A pour is priced by the rules (`Rules::pour_crystals`,
+  `Rules::pour_bits`): live, the glass's crystal and no bits. The
+  "pours for bits" candidate (`arena_test.rs::CRYSTAL_RULES`, `make
+  deadchannel-crystals`) prices one at a share of a cache and no
+  crystal; `BALANCE.md`, section 6, "What a crystal buys", is what it
+  measured: a daily pour buys no day on either hand at any price, so
+  the pours stay a crystal.
 - The last three are pours (GAME.md, "Dead Air pours a card"): a card
   in every deck dealt today (`Drink::pour`, added by `Sheet::deck`), not
   a point on the sheet. A fight already on the row keeps the deck it was

@@ -34,7 +34,7 @@ use rand::{SeedableRng, rngs::StdRng};
 use uuid::Uuid;
 
 use super::cards::{Card, DRAFTS};
-use super::data::{self, Intent, MAX_LEVEL, Rules};
+use super::data::{self, Intent, MAX_LEVEL, RULES, Rules};
 use super::road::{FIGHT_STEPS, LANES, Node, STEPS};
 use super::sim::{self, Bench, Build, Climb, Day, Event, Hand, Journal, Player, Snapshot, Start};
 use super::state::{Applied, Drink, MAX_TIER, Pick, Sheet, Slot, gear_name};
@@ -1381,6 +1381,46 @@ fn climb_table(name: &str, climbs: &[Climb], max_days: u32) -> String {
     out
 }
 
+/// What a crystal buys: the crystal players side by side, on the `Auto`
+/// key, each crystal spent one way. The day of the mark and the drops
+/// are what a crystal is worth in days; the gear and the patch bits are
+/// what it saved; the glasses, the pieces, and the idle crystals are
+/// where they went.
+fn crystals_table(batches: &[(String, Vec<Climb>)]) -> String {
+    let mut out = String::from(
+        "| player | marked on day | drops | boss tries | bright tries / kills | earned | gear | patch | crystals found / spent / idle | glasses (bits on pours) | blades bought | drafts inked |\n|---|---|---|---|---|---|---|---|---|---|---|---|\n",
+    );
+    for (name, climbs) in batches {
+        let read = |read: fn(&Climb) -> i64| median_of(climbs, read);
+        out.push_str(&format!(
+            "| {name} | {} | {} | {} | {} / {} | {} | {} | {} | {} / {} / {} | {} ({}) | {} | {} |\n",
+            sim::median(climbs.iter().map(|climb| climb.marked_on), MAX_DAYS),
+            read(|climb| i64::from(climb.deaths)),
+            read(|climb| i64::from(climb.boss_tries)),
+            read(|climb| i64::from(climb.ledger.bright_tries)),
+            read(|climb| i64::from(climb.ledger.bright_kills)),
+            read(|climb| climb.ledger.earned),
+            read(|climb| climb.ledger.gear),
+            read(|climb| climb.ledger.patched),
+            read(|climb| i64::from(climb.ledger.crystals_found)),
+            read(|climb| i64::from(climb.ledger.crystals_spent)),
+            read(|climb| i64::from(climb.ledger.crystals_found - climb.ledger.crystals_spent)),
+            read(|climb| i64::from(climb.ledger.glasses)),
+            read(|climb| climb.ledger.poured_bits),
+            read(|climb| i64::from(climb.ledger.carted)),
+            read(|climb| i64::from(climb.ledger.inked)),
+        ));
+    }
+    out
+}
+
+/// The crystal players under `rules`, for [`crystals_table`].
+fn crystal_batches(rules: Rules) -> Vec<(String, Vec<Climb>)> {
+    fan(sim::crystal_players(), |(name, player)| {
+        (name, climbs(player, Start::FRESH, rules, SEEDS, MAX_DAYS))
+    })
+}
+
 /// One player's climb a day at a time: where the runner stood at dusk
 /// and what the day held, the median over the seeds still climbing, the
 /// level also at its lowest and highest. Stops once most climbs have
@@ -1630,8 +1670,15 @@ fn run_words(events: &[Event]) -> String {
                     Slot::Armor => "armor",
                 }
             )),
-            Event::Drank { drink } => {
-                out.push_str(&format!("- dead air: a glass of {}\n", drink.name()));
+            Event::Drank {
+                drink,
+                crystals,
+                bits,
+            } => {
+                out.push_str(&format!(
+                    "- dead air: a glass of {}, for {crystals} crystals and {bits} bits\n",
+                    drink.name()
+                ));
             }
             Event::Inked { level, crystals } => {
                 out.push_str(&format!(
@@ -1866,10 +1913,29 @@ fn report(rules: Rules) -> String {
     out.push_str(&bright_table(&rules));
     out.push_str("\n## The Old Signal\n\n");
     out.push_str(&old_signal_table(&rules));
+    out.push_str("\n## What a crystal buys\n\n");
+    out.push_str(&crystals_table(&crystal_batches(rules)));
     out.push_str("\n## Climbs\n\n");
     for (name, climbs) in &batches {
         out.push_str(&climb_table(name, climbs, MAX_DAYS));
     }
+    out
+}
+
+/// The crystal question under each candidate: "What a crystal buys" for
+/// every set of rules in `candidates`, one table each, then the bright
+/// glyph and the Old Signal with each glass under the live rules.
+fn crystals(candidates: &[(&str, Rules)]) -> String {
+    let mut out = String::from("# deadchannel crystals: what a crystal buys\n\n");
+    for (name, rules) in candidates {
+        out.push_str(&format!("## {name}\n\n"));
+        out.push_str(&crystals_table(&crystal_batches(*rules)));
+        out.push('\n');
+    }
+    out.push_str("## The bright glyph and the step down, live\n\n");
+    out.push_str(&bright_table(&RULES));
+    out.push_str("\n## The Old Signal, live\n\n");
+    out.push_str(&old_signal_table(&RULES));
     out
 }
 

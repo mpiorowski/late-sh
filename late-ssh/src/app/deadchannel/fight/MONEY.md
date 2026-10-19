@@ -69,7 +69,8 @@ takes nothing and pays interest, the locker pays none).
 `Command::Withdraw` takes it all out for free. Against a crossing,
 which takes half of what a sleeper carries (`CROSSING.md`), the cut is
 the cheaper bet only for a runner crossed more than one night in five:
-the locker is a choice, not a chore.
+the locker is a choice, not a chore. It is no shelter from the answer:
+the runner you crossed fights for what you took out of the locker too.
 
 - A drop never reaches it; an Old Signal mark and a step off the ledge
   empty it.

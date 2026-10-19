@@ -2,12 +2,12 @@ use rand::{SeedableRng, rngs::StdRng};
 use uuid::Uuid;
 
 use super::{
-    AMBIENT, Bench, CAREFUL, Climb, Day, Event, Hand, Journal, KEEN, Ledger, NEGLECTFUL, Player,
-    RECKLESS, Start, builds, climb, date, odds_rival, play_turn, summary,
+    AMBIENT, Bench, CAREFUL, Climb, Day, Drinks, Event, Hand, Journal, KEEN, Ledger, NEGLECTFUL,
+    Player, RECKLESS, Start, Threat, builds, climb, date, odds_rival, play_turn, summary,
 };
 use crate::app::deadchannel::fight::cards::DRAFTS;
 use crate::app::deadchannel::fight::data::RULES;
-use crate::app::deadchannel::fight::state::{Applied, Command, Pick, Prey, Rival, Sheet};
+use crate::app::deadchannel::fight::state::{Applied, Command, Drink, Pick, Prey, Rival, Sheet};
 
 /// Seeded climbs per player: enough for a stable median, few enough to
 /// stay a unit test.
@@ -201,6 +201,10 @@ fn pinned_keen_climb() -> Climb {
             loan_fees: 0,
             crystals_found: 16,
             crystals_spent: 16,
+            glasses: 13,
+            poured_bits: 0,
+            carted: 1,
+            inked: 0,
             bright_tries: 16,
             bright_kills: 13,
         },
@@ -543,6 +547,34 @@ fn the_sims_auto_turn_is_the_auto_keys_turn() {
         }
     }
     panic!("a fight always ends");
+}
+
+/// The saver's glass goes only on a day with a hard fight in it: never
+/// more glasses than bright steps and gate steps, and at least one for
+/// the gate.
+#[test]
+fn the_saver_spends_a_glass_only_on_a_hard_day() {
+    let saver = Player {
+        hand: Hand::Auto,
+        takes_bright: Some(Threat::Even),
+        drinks: Drinks::ForTheHard(Drink::StaticOnIce),
+        ..CAREFUL
+    };
+    let climb = climb(
+        saver,
+        Start::FRESH,
+        3,
+        MAX_DAYS,
+        &mut Bench::live(),
+        &mut Journal::Off,
+    );
+    let hard_days = climb.ledger.bright_tries + climb.boss_tries;
+    assert!(
+        climb.ledger.glasses <= hard_days,
+        "{} glasses over {hard_days} hard fights",
+        climb.ledger.glasses
+    );
+    assert!(climb.ledger.glasses >= 1, "{climb:?}");
 }
 
 /// A crossing the cards end before the turn does: the sleeper goes down

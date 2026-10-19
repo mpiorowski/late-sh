@@ -17,10 +17,17 @@ The session's Enter there is `FightService::cross_task`, not a
   (`deadchannel_ambushes`, migration 240: a sleeper is crossed once a
   day, a pair crosses once a day, both unique partial indexes; the
   filter mirrors them, the indexes decide), drops the ones whose row as
-  it stands unlocked is not on the wire (`settled`, `can_be_crossed`:
-  signal up after the roll, no fight, in the band), and orders the rest
-  by `crossing_order` (seeded by the day and the attacker, so the road
-  previews the name the step meets);
+  it stands unlocked is not on the wire or has no answer in it
+  (`settled`, `can_be_crossed`: signal up after the roll, no fight, in
+  the band, and `sim::can_answer_back`: the sleeper's own fight against
+  the attacker's numbers, read clean at full signal with no static on
+  the `Auto` key over `ODDS_FIGHTS`, reads risky or better; a sleeper
+  the read calls grim is walked past, so nobody is crossed by a runner
+  they could not beat back, and the gate follows the cards and the kit
+  wherever a balance pass moves them: below level 6 that is the same
+  level or upward, from about level 8 two levels either way), and
+  orders the rest by `crossing_order` (seeded by the day and the
+  attacker, so the road previews the name the step meets);
 - locks the first whose row still stands (`find_prey`), rolls their day
   under the lock (`settle_day`: a rival fight the roll wipes closes its
   ambush row as dropped) and stores it if it turned, claims the ambush
@@ -45,8 +52,9 @@ than one night in five. The road and the scene say both numbers
 
 `Applied::Ambushed { rival, stake }` moves nothing on the sheet: the same
 transaction locks the sleeper's row (`settle_won`), takes up to the
-stake off their hand (`Sheet::robbed`; what they carry now, so a deposit
-mid-fight shrinks it), puts it on the attacker's with the garnish
+stake off their hand (`Sheet::robbed(stake, Reach::Hand)`; what they
+carry now, so a deposit mid-fight shrinks it; an answer reaches
+`Reach::HandAndLocker`, below), puts it on the attacker's with the garnish
 (`Sheet::earn`), closes the row as won with `bits_moved`, and the scene
 gets the took line. `Applied::Downed { rival, bits_lost }` is the
 attacker's full fall (signal down, every bit on hand, the exp cut) with
@@ -65,11 +73,19 @@ not answering.
 ## The answer
 
 `answer_task` (`r` on the road), `Ask::Answer { username }`: the latest
-crossing won against this runner inside `ANSWER_HOURS` (24) and not yet
-answered (`Ambush::answerable`), the one who did it locked and claimed as
-an answer row (`answer_to`, one per crossing), on the row as a rival
-through `Sheet::answer(Answer, rng)` with no ration and no step, the
-same stakes. The rival carries the name the crosser goes by now
+crossing won against this runner inside `ANSWER_HOURS` (48, two days,
+so a runner who connects once a day and finds the crosser mid-fight the
+first evening still has the second) and not yet answered
+(`Ambush::answerable`), the one who did it locked and claimed as an
+answer row (`answer_to`, one per crossing), on the row as a rival
+through `Sheet::answer(Answer, rng)` with no ration and no step. The
+stake is the answer's (`Prey::of` with `Meeting::Answer { owed }`,
+`Sheet::answer_stake`): what the crossing took (the crossing row's
+`bits_moved`) or half of what the crosser holds on hand, whichever is
+more, never more than hand and locker together, and a win takes it out
+of the locker too (`settle_won`, `Reach::HandAndLocker`), so banking the
+loot is no escape; the road and the scene show what they hold in all.
+The rival carries the name the crosser goes by now
 (`current_username`), not the one the crossing row kept: the wire
 mentions it, and a mention finds its runner by the current handle; the
 lookout's token (`Token::crosser`, the label and key under the road)
@@ -83,7 +99,7 @@ After every answer and reload the task reads a `Lookout` for the session
 (`lookout_for`, off the rows as they stand, outside the transaction):
 `crossing` (the preview, `Prey` with a nil ambush id), `token` (the
 crossing owed an answer, the crosser's current name, and the crosser as
-prey when on the wire), `news` (the latest fight on this runner in the
+prey when on the wire, at the answer's stake), `news` (the latest fight on this runner in the
 window, worded with the names the row kept that night), all `None` while
 a fight is on the row. A lookout that fails to read is logged and
 counted (`lookout_failed`) and the session gets the empty one: the

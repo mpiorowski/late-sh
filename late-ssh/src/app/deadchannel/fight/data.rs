@@ -334,12 +334,16 @@ pub const FOES: [FoeKind; 15] = [
 /// and the marks in them), and this is the one mind every sleeper has.
 pub const RUNNER_PATTERN: &[Intent] = &[Intent::Hit, Intent::Hit, Intent::Charge, Intent::Heavy];
 
-/// How far up or down the ladder a crossing reaches: a runner meets only
-/// runners within this many levels, no punching down.
+/// How far up or down the ladder a crossing looks: a runner meets only
+/// runners within this many levels. Inside the band the answer decides
+/// (`sim::can_answer_back`): a sleeper whose answer back would read grim
+/// is walked past, so nobody is crossed by someone they could not beat.
 pub const CROSSING_LEVEL_BAND: i32 = 2;
 
-/// How long a crossing can be answered for, from the moment it ended.
-pub const ANSWER_HOURS: i64 = 24;
+/// How long a crossing can be answered for, from the moment it ended:
+/// two days, so a runner who connects once a day and finds the crosser
+/// mid-fight the first evening still has the second.
+pub const ANSWER_HOURS: i64 = 48;
 
 /// What the scene says when a crossing starts: the sleeper, what they
 /// carry, and the cut a win takes of it.
@@ -522,6 +526,11 @@ pub struct Rules {
     /// each tier above the level adds to it.
     pub cart_crystals: i32,
     pub cart_lead_crystals: i32,
+    /// What a pour at Dead Air costs: crystals, and bits as a share of a
+    /// cache at the level. Live, a crystal and no bits, the glass's
+    /// price; the "pours for bits" candidate is `0` and `100`.
+    pub pour_crystals: i32,
+    pub pour_bits_percent: i64,
     /// What INK asks to ink a draft.
     pub ink_crystals: i32,
     /// A glyph's signal as a percentage of the creature table's: how many
@@ -570,6 +579,8 @@ pub const RULES: Rules = Rules {
     bright_bits_times: BRIGHT_BITS_TIMES,
     cart_crystals: CART_CRYSTALS,
     cart_lead_crystals: CART_LEAD_CRYSTALS,
+    pour_crystals: DRINK_CRYSTALS,
+    pour_bits_percent: POUR_BITS_PERCENT,
     ink_crystals: INK_CRYSTALS,
     foe_signal_percent: FOE_SIGNAL_PERCENT,
     hit_percent: HIT_PERCENT,
@@ -664,6 +675,12 @@ impl Rules {
     /// The bits in a cache on the road for a runner of `level`.
     pub fn cache(&self, level: i32) -> i64 {
         self.foe(level).2.bits * self.cache_percent / 100
+    }
+
+    /// What a pour at Dead Air asks in bits from a runner of `level`: a
+    /// share of a cache ([`Rules::pour_bits_percent`]); nothing live.
+    pub fn pour_bits(&self, level: i32) -> i64 {
+        self.cache(level) * self.pour_bits_percent / 100
     }
 
     /// The glyph a level below a runner of `level`, its pay cut to
@@ -859,8 +876,14 @@ pub fn noise_cards_for_level(level: i32) -> usize {
 /// your level pays.
 pub const CACHE_PERCENT: i64 = 60;
 
-/// What a glass at Dead Air costs, in crystals. One glass a day.
+/// What a glass at Dead Air costs, in crystals. One glass a day. A pour
+/// costs the same live ([`Rules::pour_crystals`]).
 pub const DRINK_CRYSTALS: i32 = 1;
+
+/// What a pour asks in bits, as a percentage of a cache at the level:
+/// nothing live. The knob the "pours for bits" candidate turns
+/// (`fight/BALANCE.md`, section 6, "What a crystal buys").
+pub const POUR_BITS_PERCENT: i64 = 0;
 
 /// What the day's glass adds to attack (static on ice) or defense (dead
 /// air, neat) at `level`: a point, and one more every four levels.

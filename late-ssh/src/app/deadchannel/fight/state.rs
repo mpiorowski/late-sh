@@ -150,15 +150,41 @@ pub struct Prey {
     pub stake: i64,
 }
 
+/// What a rival fight is for: a crossing on a sleeper, or the answer the
+/// sleeper gives back for what the crossing took.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Meeting {
+    /// A crossing: half of what the sleeper carries on hand.
+    Crossing,
+    /// The answer: what the crossing took (`owed`, the crossing row's
+    /// `bits_moved`) or half of what the crosser holds on hand, whichever
+    /// is more, out of hand and locker both.
+    Answer { owed: i64 },
+}
+
+/// How far a win reaches into the loser's bits: a crossing takes off the
+/// hand only (the locker is the sleeper's bet against it); the answer
+/// reaches the locker too, so banking the loot is no escape.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reach {
+    Hand,
+    HandAndLocker,
+}
+
 impl Prey {
-    /// `sheet`'s runner as prey, with `portrait` as the look paints it.
+    /// `sheet`'s runner as prey, with `portrait` as the look paints it,
+    /// for `meeting`: what they carry and the stake follow from it.
     pub fn of(
         sheet: &Sheet,
         username: &str,
         portrait: [String; 3],
         ambush_id: Uuid,
-        answer: bool,
+        meeting: Meeting,
     ) -> Self {
+        let (answer, carrying, stake) = match meeting {
+            Meeting::Crossing => (false, sheet.bits, sheet.crossing_stake()),
+            Meeting::Answer { owed } => (true, sheet.bits + sheet.stash, sheet.answer_stake(owed)),
+        };
         Self {
             rival: Rival {
                 user_id: sheet.user_id,
@@ -171,8 +197,8 @@ impl Prey {
             signal: sheet.max_signal(),
             attack: sheet.attack(),
             defense: sheet.defense(),
-            carrying: sheet.bits,
-            stake: sheet.crossing_stake(),
+            carrying,
+            stake,
         }
     }
 
@@ -860,6 +886,10 @@ pub enum Applied {
     /// A glass poured at Dead Air.
     Drank {
         drink: Drink,
+        /// What it cost: a glass's crystal, or a pour's crystals and bits
+        /// under the rules.
+        crystals: i32,
+        bits: i64,
     },
     /// A piece off the blade shop, for `crystals`.
     Carted {
@@ -1554,12 +1584,25 @@ impl Sheet {
         self.bits * CROSSING_TAKE_PERCENT / 100
     }
 
-    /// Up to `stake` bits off the hand, as a crossing takes them from the
-    /// sleeper. Returns what came off.
-    pub fn robbed(&mut self, stake: i64) -> i64 {
-        let taken = stake.min(self.bits).max(0);
-        self.bits -= taken;
-        taken
+    /// What an answer against this runner takes, as they stand: what the
+    /// crossing took (`owed`) or the crossing's cut of the hand, whichever
+    /// is more, and never more than hand and locker hold together.
+    pub fn answer_stake(&self, owed: i64) -> i64 {
+        owed.max(self.crossing_stake()).min(self.bits + self.stash).max(0)
+    }
+
+    /// Up to `stake` bits off this runner, as a win takes them: off the
+    /// hand, and then out of the locker when `reach` goes there. Returns
+    /// what came off.
+    pub fn robbed(&mut self, stake: i64, reach: Reach) -> i64 {
+        let from_hand = stake.min(self.bits).max(0);
+        self.bits -= from_hand;
+        let from_locker = match reach {
+            Reach::Hand => 0,
+            Reach::HandAndLocker => (stake - from_hand).min(self.stash).max(0),
+        };
+        self.stash -= from_locker;
+        from_hand + from_locker
     }
 
     /// Why a step onto the crossing on `lane` would start nothing, read
@@ -1684,7 +1727,7 @@ impl Sheet {
             Command::Borrow => self.borrow(rules),
             Command::Repay => self.repay(),
             Command::Reset => self.reset(),
-            Command::Drink { drink } => self.drink(drink),
+            Command::Drink { drink } => self.drink(rules, drink),
             Command::Cart { slot } => self.cart(rules, slot),
             Command::Ink { level } => self.ink(rules, level),
         }
@@ -2048,15 +2091,44 @@ impl Sheet {
 
     /// Dead Air. One glass a day for a crystal, and it is gone at the
     /// roll. Not with the signal down, not with a glyph waiting, and not
-    /// for a runner spent for the day: no fight is left to use it in.
-    fn drink(&mut self, drink: Drink) -> Outcome {
+    /// for a runner spent for the day: no fight is left to use it in. A
+    /// pour is priced by the rules ([`Rules::pour_crystals`],
+    /// [`Rules::pour_bits`]): the glass's crystal live, and the candidate
+    /// the arena reads charges bits instead.
+    fn drink(&mut self, rules: &Rules, drink: Drink) -> Outcome {
         if let Some((refusal, line)) = self.glass_refused() {
+            // The menu-wide refusals, and the glass's price; a pour's
+            // own price is checked below when the rules make it differ.
+            let priced_as_glass = drink.pour().is_none() || rules.pour_crystals == DRINK_CRYSTALS;
+            if priced_as_glass || !matches!(refusal, Refusal::ShortCrystals { .. }) {
+                return Outcome {
+                    applied: Applied::Refused(refusal),
+                    lines: vec![line],
+                };
+            }
+        }
+        let (crystals, bits) = match drink.pour() {
+            Some(_) => (rules.pour_crystals, rules.pour_bits(self.level)),
+            None => (DRINK_CRYSTALS, 0),
+        };
+        if crystals > self.crystals {
             return Outcome {
-                applied: Applied::Refused(refusal),
-                lines: vec![line],
+                applied: Applied::Refused(Refusal::ShortCrystals {
+                    by: crystals - self.crystals,
+                }),
+                lines: vec!["a pour is a crystal, and you have none.".to_string()],
             };
         }
-        self.crystals -= DRINK_CRYSTALS;
+        if bits > self.bits {
+            return Outcome {
+                applied: Applied::Refused(Refusal::Short {
+                    by: bits - self.bits,
+                }),
+                lines: vec![format!("a pour is {bits} bits. you are {} short.", bits - self.bits)],
+            };
+        }
+        self.crystals -= crystals;
+        self.bits -= bits;
         self.drink = Some(drink);
         let line = match drink {
             Drink::StaticOnIce => format!(
@@ -2088,7 +2160,11 @@ impl Sheet {
             ),
         };
         Outcome {
-            applied: Applied::Drank { drink },
+            applied: Applied::Drank {
+                drink,
+                crystals,
+                bits,
+            },
             lines: vec![line],
         }
     }

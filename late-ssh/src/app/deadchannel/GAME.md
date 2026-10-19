@@ -1865,7 +1865,14 @@ decisions are mostly about who pays what.
   never the only way. Who waits there is found the moment the road is
   looked at and again under the lock when the step is taken: a standing
   runner within two levels either way, not crossed today, not paired
-  with you today, signal up, no fight on their row. The road says who,
+  with you today, signal up, no fight on their row, and with an answer
+  in them: the sim plays their fight against your numbers first, and a
+  sleeper whose answer back would read grim is walked past. Nobody is
+  crossed by a runner they could not beat back; measured at matching
+  kits that is the same level or upward below level 6 (one draft in the
+  deck, every gap decisive) and two levels either way from about level
+  8, and the gate follows the cards wherever the balance moves them
+  instead of fixing a number that the drafts make wrong. The road says who,
   their level, their numbers, their threat word, and what they carry:
   "carrying 340 bits, 170 to take" is the lure and "carrying nothing"
   is the locker doing its job. Nobody left is a quiet crossing and a free walk past.
@@ -1893,11 +1900,15 @@ decisions are mostly about who pays what.
   every bit: taking it all made the locker a chore every night, and half
   against the locker's tenth makes carrying a bet.
 - **The answer is the revenge token.** Whoever was crossed and lost is
-  owed one answer within a day: `r` on the road fights the one who did
-  it for what they carry now, no ration, the same stakes, one per
-  crossing, and only while they are on the wire (standing, signal up,
-  no fight); otherwise it keeps. The answer is the renewable middle of
-  the retention model: a hit becomes a rivalry.
+  owed one answer within two days (one is a miss for the once-a-day
+  runner who finds the crosser mid-fight the first evening): `r` on the
+  road fights the one who did it, no ration, for what they took or half
+  of what they hold on hand, whichever is more, out of their locker too
+  (at half of the hand alone the crosser banked the loot for a tenth
+  and the answer was for nothing), one per crossing, and only while
+  they are on the wire (standing, signal up, no fight); otherwise it
+  keeps. The answer is the renewable middle of the retention model: a
+  hit becomes a rivalry.
 - **Caps as rows.** One crossing on a sleeper a day and one between any
   two runners a day are unique partial indexes on the ambush row, so
   any number of replicas enforce them, and the answer counts against

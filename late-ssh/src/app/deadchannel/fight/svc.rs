@@ -51,9 +51,10 @@ use uuid::Uuid;
 
 use super::data::{self, ANSWER_HOURS, CROSSING_LEVEL_BAND};
 use super::road::Node;
+use super::sim;
 use super::state::{
-    Answer, Applied, Command, Leavings, Lookout, News, Outcome, Pick, Prey, Rival, Sheet, Token,
-    crossing_order,
+    Answer, Applied, Command, Leavings, Lookout, Meeting, News, Outcome, Pick, Prey, Reach, Rival,
+    Sheet, Token, crossing_order,
 };
 use crate::app::chat::svc::ChatService;
 use crate::app::common::primitives::thousands;
@@ -332,7 +333,7 @@ impl FightService {
             if settle_day(tx, &mut theirs, today, now).await? {
                 DeadchannelRunner::store_sheet(tx, theirs.to_write()).await?;
             }
-            if !can_be_crossed(&theirs, sheet.level) {
+            if !can_be_crossed(&theirs, sheet) {
                 continue;
             }
             let ambush_id = Uuid::now_v7();
@@ -361,7 +362,7 @@ impl FightService {
                 &their_name,
                 Self::portrait_of(&row),
                 ambush_id,
-                false,
+                Meeting::Crossing,
             )));
         }
         Ok(None)
@@ -371,7 +372,8 @@ impl FightService {
     /// this attacker: standing, within the band, not this runner, not
     /// crossed today, not paired with this runner today, and, as their
     /// rows stand unlocked, on the wire (signal up after the roll, no
-    /// fight). The lock decides again.
+    /// fight) with an answer in them (`sim::can_answer_back`). The lock
+    /// decides again.
     async fn candidates(
         &self,
         client: &Client,
@@ -402,7 +404,7 @@ impl FightService {
             if counted {
                 continue;
             }
-            if can_be_crossed(&settled(row, today)?, sheet.level) {
+            if can_be_crossed(&settled(row, today)?, sheet) {
                 ids.push(row.user_id);
             }
         }
@@ -470,7 +472,7 @@ impl FightService {
                 attacker_username: username.to_string(),
                 defender_username: their_name.clone(),
                 step: None,
-                stake: theirs.crossing_stake(),
+                stake: theirs.answer_stake(owed.bits_moved),
                 answer_to: Some(owed.id),
                 started_at: now,
             },
@@ -484,14 +486,17 @@ impl FightService {
             &their_name,
             Self::portrait_of(&row),
             ambush_id,
-            true,
+            Meeting::Answer {
+                owed: owed.bits_moved,
+            },
         );
         Ok(sheet.answer(Answer::Prey(prey), &mut rand::thread_rng()))
     }
 
-    /// A rival put down: up to `stake` off their hand onto this sheet's
-    /// (the machine's garnish first), and the ambush row closed. A rival
-    /// who went dark mid-fight has nothing on the row to take.
+    /// A rival put down: up to `stake` off their hand (and, for an answer,
+    /// out of their locker) onto this sheet's (the machine's garnish
+    /// first), and the ambush row closed. A rival who went dark mid-fight
+    /// has nothing on the row to take.
     async fn settle_won(
         &self,
         client: &impl GenericClient,
@@ -505,7 +510,11 @@ impl FightService {
             Some(row) => {
                 let mut theirs = Sheet::from_row(&row).context("reading the rival's sheet")?;
                 settle_day(client, &mut theirs, today, now).await?;
-                let taken = theirs.robbed(stake);
+                let reach = match rival.answer {
+                    true => Reach::HandAndLocker,
+                    false => Reach::Hand,
+                };
+                let taken = theirs.robbed(stake, reach);
                 DeadchannelRunner::store_sheet(client, theirs.to_write()).await?;
                 taken
             }
@@ -616,7 +625,9 @@ impl FightService {
                                     &crosser,
                                     Self::portrait_of(&row),
                                     Uuid::nil(),
-                                    true,
+                                    Meeting::Answer {
+                                        owed: ambush.bits_moved,
+                                    },
                                 )),
                                 false => None,
                             }
@@ -651,7 +662,7 @@ impl FightService {
                 continue;
             };
             let theirs = settled(&row, today)?;
-            if !can_be_crossed(&theirs, sheet.level) {
+            if !can_be_crossed(&theirs, sheet) {
                 continue;
             }
             return Ok(Some(Prey::of(
@@ -659,7 +670,7 @@ impl FightService {
                 &their_name,
                 Self::portrait_of(&row),
                 Uuid::nil(),
-                false,
+                Meeting::Crossing,
             )));
         }
         Ok(None)
@@ -1070,10 +1081,15 @@ fn on_the_wire(theirs: &Sheet) -> bool {
     theirs.fight.is_none() && !theirs.is_down()
 }
 
-/// Whether a settled sheet is a sleeper a runner of `level` could cross:
-/// on the wire and within the band.
-fn can_be_crossed(theirs: &Sheet, level: i32) -> bool {
-    on_the_wire(theirs) && (theirs.level - level).abs() <= CROSSING_LEVEL_BAND
+/// Whether a settled sheet is a sleeper `mine` could cross: on the wire,
+/// within the band, and with an answer in them against this runner's
+/// numbers (`sim::can_answer_back`: two hundred fights on the `Auto`
+/// key, read here on the service's thread like the road's threat word
+/// is on the session's).
+fn can_be_crossed(theirs: &Sheet, mine: &Sheet) -> bool {
+    on_the_wire(theirs)
+        && (theirs.level - mine.level).abs() <= CROSSING_LEVEL_BAND
+        && sim::can_answer_back(theirs, mine)
 }
 
 fn beat_for(applied: &Applied) -> FightBeat {
