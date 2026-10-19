@@ -7,3 +7,4 @@ pub mod svc;
 #[cfg(test)]
 mod svc_test;
 pub mod ui;
+pub(crate) mod watch;

@@ -440,6 +440,7 @@ struct DrawContext<'a> {
     user_id: uuid::Uuid,
     pet_species: late_core::models::pet::PetSpecies,
     news_reader: Option<&'a chat::news::reader::state::ReaderModal>,
+    news_watch: Option<&'a chat::news::watch::state::WatchModal>,
     is_draining: bool,
     icon_picker_open: bool,
     icon_picker_state: &'a icon_picker::IconPickerState,
@@ -1012,6 +1013,7 @@ impl App {
         };
         let work_unread_count = self.chat.work.unread_count();
         let news_reader = self.chat.reader();
+        let news_watch = self.chat.watch();
         let selected_image_message = self
             .chat
             .selected_room_id
@@ -1610,6 +1612,7 @@ impl App {
             || self.show_splash
             || screensaver.is_some()
             || news_reader.is_some()
+            || news_watch.is_some()
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
             || self.booth_modal_state.is_open()
@@ -1632,6 +1635,7 @@ impl App {
             || self.show_splash
             || screensaver.is_some()
             || news_reader.is_some()
+            || news_watch.is_some()
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
             || self.booth_modal_state.is_open()
@@ -1887,6 +1891,7 @@ impl App {
                         user_id: self.user_id,
                         pet_species: self.pet_state.species,
                         news_reader,
+                        news_watch,
                         is_draining: self.is_draining.load(std::sync::atomic::Ordering::Relaxed),
                         icon_picker_open: self.icon_picker_open,
                         icon_picker_state: &self.icon_picker_state,
@@ -1946,6 +1951,9 @@ impl App {
         self.codekeep_state = codekeep_state_taken;
         self.zork_state = zork_state_taken;
         draw_result?;
+        // The draw recorded the watch player's body; the paired CLI hears
+        // about any play, move, or stop that implies.
+        chat::news::watch::svc::sync(self);
 
         // Feed the modal's image capacity (recorded during draw) back into
         // chat state so the next frame's Sixel fetch encodes to fit.
@@ -2960,6 +2968,11 @@ impl App {
             chat::news::reader::ui::draw(frame, inner, reader);
         }
 
+        // Over the whole terminal, not the app frame: Full is every cell.
+        if let Some(watch) = ctx.news_watch {
+            chat::news::watch::ui::draw(frame, area, watch);
+        }
+
         if ctx.room_search_modal_open {
             room_search_modal::ui::draw(
                 frame,
@@ -3100,6 +3113,7 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.show_help
         || ctx.show_ultimate_modal
         || ctx.news_reader.is_some()
+        || ctx.news_watch.is_some()
         || ctx.room_search_modal_open
         || ctx.chat_state.history_modal.is_open()
         || ctx.booth_modal_open

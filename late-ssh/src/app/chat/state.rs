@@ -2082,6 +2082,27 @@ impl ChatState {
         self.news.close_reader();
     }
 
+    /// The News watch modal, owned by `news::State` like the reader.
+    pub(crate) fn watch(&self) -> Option<&news::watch::state::WatchModal> {
+        self.news.watch()
+    }
+
+    pub(crate) fn has_watch(&self) -> bool {
+        self.news.watch().is_some()
+    }
+
+    /// Closing is state only: the next draw's sync sends the stop.
+    pub(crate) fn close_watch(&mut self) {
+        self.news.close_watch();
+    }
+
+    /// The reader and the watch modal, for the glue that clears modals on
+    /// a page change or before another modal opens.
+    pub(crate) fn close_news_modals(&mut self) {
+        self.news.close_reader();
+        self.news.close_watch();
+    }
+
     pub(crate) fn image_modal(&self) -> Option<&ImageModalState> {
         self.image_modal.as_ref()
     }
@@ -2947,6 +2968,23 @@ impl ChatState {
     pub(crate) fn open_reader_for_article(&mut self, article_id: Uuid) -> bool {
         self.reaction_leader_active = false;
         self.news.open_reader(article_id)
+    }
+
+    /// Open the watch player on a News video (`news/watch/svc.rs` decides
+    /// that this session can play it). False when it is gone or no video.
+    pub(crate) fn open_watch_player(&mut self, article_id: Uuid, now: std::time::Instant) -> bool {
+        self.reaction_leader_active = false;
+        self.news.open_watch_player(article_id, now)
+    }
+
+    /// Open the watch setup box on a News video this session cannot play.
+    pub(crate) fn open_watch_setup(
+        &mut self,
+        article_id: Uuid,
+        inputs: &news::watch::state::SetupInputs,
+    ) -> bool {
+        self.reaction_leader_active = false;
+        self.news.open_watch_setup(article_id, inputs)
     }
 
     pub fn open_selected_image_modal_in_room(&mut self, room_id: Uuid) -> bool {

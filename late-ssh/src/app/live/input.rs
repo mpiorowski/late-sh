@@ -145,9 +145,12 @@ fn open(app: &mut App, source: LiveSource, origin: Origin) -> bool {
             }
             false => false,
         },
-        // The News reader on the story. Gone between the frame and the key
+        // The News reader on the story, or the player straight away for a
+        // video this session can play. Gone between the frame and the key
         // (deleted): nothing to open.
-        LiveSource::NewsArticle(article_id) => app.chat.open_reader_for_article(article_id),
+        LiveSource::NewsArticle(article_id) => {
+            crate::app::chat::news::watch::svc::open_article(app, article_id)
+        }
         // The streamer's room on Home, as its rail row opens it: joined on
         // the first visit, and the visit counts as a named viewer. Its
         // header carries the watch link. Gone between the frame and the key

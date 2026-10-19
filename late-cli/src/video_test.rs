@@ -29,13 +29,22 @@ fn passing_blockers(vars: &HashMap<String, String>) -> Vec<VideoBlocker> {
 #[test]
 fn a_ready_setup_has_no_blockers() {
     assert_eq!(passing_blockers(&kitty_env()), vec![]);
-    for (key, value) in [
-        ("TERM_PROGRAM", "ghostty"),
-        ("TERM_PROGRAM", "WezTerm"),
-        ("TERM_PROGRAM", "rio"),
-        ("GHOSTTY_RESOURCES_DIR", "/usr/share/ghostty"),
-        ("WEZTERM_EXECUTABLE", "/usr/bin/wezterm-gui"),
-        ("KONSOLE_VERSION", "240202"),
+    assert_eq!(kitty_terminal(&kitty_env()), Some(KittyTerminal::Kitty));
+    for (key, value, terminal) in [
+        ("TERM_PROGRAM", "ghostty", KittyTerminal::Ghostty),
+        ("TERM_PROGRAM", "WezTerm", KittyTerminal::WezTerm),
+        ("TERM_PROGRAM", "rio", KittyTerminal::Rio),
+        (
+            "GHOSTTY_RESOURCES_DIR",
+            "/usr/share/ghostty",
+            KittyTerminal::Ghostty,
+        ),
+        (
+            "WEZTERM_EXECUTABLE",
+            "/usr/bin/wezterm-gui",
+            KittyTerminal::WezTerm,
+        ),
+        ("KONSOLE_VERSION", "240202", KittyTerminal::Konsole),
     ] {
         let vars = HashMap::from([(key.to_string(), value.to_string())]);
         assert_eq!(
@@ -43,6 +52,24 @@ fn a_ready_setup_has_no_blockers() {
             vec![],
             "{key}={value} is kitty family"
         );
+        assert_eq!(kitty_terminal(&vars), Some(terminal), "{key}={value}");
+    }
+}
+
+/// mpv does not fall back when a terminal lacks shared-memory transfer: the
+/// result is a black box that reports `playing`. Only the two terminals
+/// known to implement it get `use-shm`.
+#[test]
+fn shared_memory_frames_go_only_to_terminals_that_read_them() {
+    let cases = [
+        (KittyTerminal::Kitty, true),
+        (KittyTerminal::Ghostty, true),
+        (KittyTerminal::WezTerm, false),
+        (KittyTerminal::Konsole, false),
+        (KittyTerminal::Rio, false),
+    ];
+    for (terminal, shm) in cases {
+        assert_eq!(terminal.supports_shm(), shm, "{terminal:?}");
     }
 }
 
@@ -233,6 +260,7 @@ fn mpv_args_for_a_window() {
             rows: 28,
         },
         tty: tty(),
+        use_shm: true,
         volume_percent: 30,
         resume: None,
         ipc_path: Path::new("/run/user/1000/late-video-42.sock"),
@@ -266,8 +294,8 @@ fn mpv_args_for_a_window() {
 }
 
 /// Full screen after `f`: a respawn that keeps position, pause and mute,
-/// with a `LATE_YTDLP_BIN` override. Cells that are not whole pixels round
-/// down.
+/// with a `LATE_YTDLP_BIN` override, on a terminal without shared memory.
+/// Cells that are not whole pixels round down.
 #[test]
 fn mpv_args_for_full_screen_resume() {
     let args = mpv_args(&MpvLaunch {
@@ -279,6 +307,7 @@ fn mpv_args_for_full_screen_resume() {
             rows: 56,
         },
         tty: TtySize::new(213, 57, 1917, 1140).unwrap(),
+        use_shm: false,
         volume_percent: 70,
         resume: Some(Resume {
             position_s: 83.46,
@@ -295,7 +324,7 @@ fn mpv_args_for_full_screen_resume() {
             "--really-quiet",
             "--terminal=no",
             "--vo=kitty",
-            "--vo-kitty-use-shm=yes",
+            "--vo-kitty-use-shm=no",
             "--vo-kitty-alt-screen=no",
             "--vo-kitty-config-clear=no",
             "--vo-kitty-left=1",
@@ -407,10 +436,69 @@ fn mpv_properties_read_as_a_state() {
     );
 }
 
+/// What mpv 0.41's kitty output actually writes around its frames, captured
+/// with stdout on a pipe: hide cursor, any-motion mouse on, delete every
+/// image, then per frame a cursor move and a graphics command, then delete
+/// every image, show cursor, mouse off, a cursor move. The relay lets only
+/// the frames through, whole, however the reads split them.
+#[test]
+fn the_relay_strips_mpv_terminal_modes_and_passes_frames_whole() {
+    let start = b"\x1b[?25l\x1b[?1003h\x1b_Ga=d;\x1b\\";
+    let frame = b"\x1b[2;3f\x1b_Ga=T,t=s,f=24,s=266,v=200,C=1,q=2,m=1;bXB2LWtpdHR5\x1b\\";
+    let end = b"\x1b_Ga=d;\x1b\\\x1b[?25h\x1b[?1003l\x1b[40;0f";
+    let mut stream = Vec::new();
+    stream.extend_from_slice(start);
+    stream.extend_from_slice(frame);
+    stream.extend_from_slice(frame);
+    stream.extend_from_slice(end);
+
+    let mut expected = Vec::new();
+    expected.extend_from_slice(frame);
+    expected.extend_from_slice(frame);
+    expected.extend_from_slice(b"\x1b[40;0f");
+
+    // Every split point, including inside `ESC[?10`, inside `_Ga=d;` and
+    // between ESC and the backslash that closes a graphics command.
+    for split in 0..=stream.len() {
+        let mut filter = TtyFilter::default();
+        let mut out = filter.feed(&stream[..split]);
+        out.extend(filter.feed(&stream[split..]));
+        assert_eq!(out, expected, "split at {split}");
+    }
+
+    // A sequence the read cut in half is held, not written half.
+    let mut filter = TtyFilter::default();
+    let cut = frame.len() / 2;
+    assert_eq!(filter.feed(&frame[..cut]), b"\x1b[2;3f".to_vec());
+    assert_eq!(filter.feed(&frame[cut..]), frame[6..].to_vec());
+
+    // Modes the TUI itself uses are not mpv's and pass untouched.
+    let mut filter = TtyFilter::default();
+    assert_eq!(
+        filter.feed(b"\x1b[?1006h\x1b[?2004htext"),
+        b"\x1b[?1006h\x1b[?2004htext".to_vec()
+    );
+}
+
+/// mpv anchors the image at the rectangle's top-left cell, so one cell
+/// delete there removes every frame it placed and nothing else. `P` frees
+/// the image data too; `q=2` keeps the terminal from answering on stdin.
+#[test]
+fn settling_deletes_the_placements_at_the_rectangle_origin() {
+    let rect = VideoRect {
+        left: 10,
+        top: 3,
+        cols: 100,
+        rows: 28,
+    };
+    assert_eq!(settle_sequence(rect), "\x1b_Ga=d,d=P,x=11,y=4,q=2\x1b\\");
+}
+
 fn idle_player() -> VideoPlayer {
     VideoPlayer::new(VideoTools {
         mpv: PathBuf::from("/nonexistent/mpv"),
         ytdlp_override: None,
+        use_shm: true,
         startup_tty: Some(tty()),
         ipc_path: PathBuf::from("/nonexistent/late-video.sock"),
         log_path: PathBuf::from("/nonexistent/video.log"),

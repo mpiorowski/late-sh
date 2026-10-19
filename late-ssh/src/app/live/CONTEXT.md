@@ -24,7 +24,7 @@ A queue with two lanes, and one overlay. Every clock is a database stamp or the 
 
 | Source | Lane | Joins its lane | Minimum | Glows | `o` / click | `r` (card only) |
 |---|---|---|---|---|---|---|
-| `NewsArticle` | News | the share (`created`) | `LIVE_NEWS_MIN` (5 min, equal to the max, so exactly 5) | never | the News reader | reply in #lounge quoting the title |
+| `NewsArticle` | News | the share (`created`) | `LIVE_NEWS_MIN` (5 min, equal to the max, so exactly 5) | never | the News reader; the watch player instead for a YouTube story this session can play (`chat/news/watch/svc.rs::open_article`, never the setup box) | reply in #lounge quoting the title |
 | `DailyMatch` | Rest | the claim, and again on every move (`updated`) | `LIVE_MATCH_MIN` (1 min) | while aimed | the board | nothing |
 | `DailyResult` | Rest | the finish (`finished_at`) | `LIVE_MATCH_MIN` (1 min) | yes | nothing (the board left the lobby) | nothing |
 | `BoothTrack` | Rest | when it was queued, not when it starts playing | `LIVE_TRACK_MIN` (2 min) | while it is the one playing | tune in to YouTube, or the booth if already there | nothing |

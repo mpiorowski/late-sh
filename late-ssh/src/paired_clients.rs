@@ -1,7 +1,7 @@
 use late_core::MutexRecover;
 use late_core::models::user::{AudioSource, RadioStation};
 use late_core::models::user_ssh_key::KeyAudio;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     sync::{
@@ -84,6 +84,66 @@ pub enum PairControlMessage {
     OpenUrl {
         url: String,
     },
+    /// Play a News video in the rectangle the TUI reserved, in 0-based
+    /// terminal cells. Only CLIs advertising `video` get it. `play_id` is a
+    /// per-session counter tying every later message to this play, so a
+    /// stale one on either side is dropped.
+    VideoPlay {
+        play_id: u64,
+        url: String,
+        left: u16,
+        top: u16,
+        cols: u16,
+        rows: u16,
+    },
+    /// The play's rectangle moved (Window/Full, a resize).
+    VideoPlace {
+        play_id: u64,
+        left: u16,
+        top: u16,
+        cols: u16,
+        rows: u16,
+    },
+    VideoControl {
+        play_id: u64,
+        control: VideoControl,
+    },
+    VideoStop {
+        play_id: u64,
+    },
+}
+
+/// A key the watch modal relays to the CLI's mpv.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoControl {
+    TogglePause,
+    SeekBack,
+    SeekForward,
+    /// mpv's own mute, not the house mute.
+    ToggleMute,
+}
+
+/// One `video_state` a paired CLI reported, parsed from the wire's
+/// `state` tag. `Ended`, `Failed` and `Stopped` are final: mpv is gone.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum VideoReport {
+    Starting,
+    Playing {
+        position_s: u64,
+        /// `None` for a live stream.
+        duration_s: Option<u64>,
+    },
+    Paused {
+        position_s: u64,
+        duration_s: Option<u64>,
+    },
+    Ended,
+    /// The reason is for the log only, never shown to the user.
+    Failed { message: String },
+    /// Answers a `video_stop` once mpv is gone.
+    Stopped,
 }
 
 /// Capacity of each paired client's outbound control queue. Control messages
@@ -240,6 +300,13 @@ impl PairedClientRegistry {
     /// to a QR modal for raw SSH sessions.
     pub fn send_control_to_open_url_cli(&self, token: &str, msg: PairControlMessage) -> bool {
         self.send_control_filter(token, msg, ClientAudioState::supports_open_url) > 0
+    }
+
+    /// Deliver a video control to the paired CLIs on `token` advertising
+    /// `video`. The webview helper never gets one. Returns whether anyone
+    /// did, so the watch modal can tell a dead pairing at once.
+    pub fn send_control_to_video_cli(&self, token: &str, msg: PairControlMessage) -> bool {
+        self.send_control_filter(token, msg, ClientAudioState::supports_video) > 0
     }
 
     /// Re-send each paired entry's cached playback source for `token`.
@@ -447,6 +514,28 @@ impl PairedClientRegistry {
         clients
             .get(token)
             .is_some_and(|entries| entries.iter().any(|entry| entry.state.supports_voice()))
+    }
+
+    /// True when a paired CLI on `token` advertises `video`. Scans every
+    /// entry, like `has_voice_cli`, since `snapshot` prefers the webview.
+    pub fn has_video_cli(&self, token: &str) -> bool {
+        let clients = self.clients.lock_recover();
+        clients
+            .get(token)
+            .is_some_and(|entries| entries.iter().any(|entry| entry.state.supports_video()))
+    }
+
+    /// The most recently registered CLI's reported state on `token`, if a
+    /// CLI is paired: the watch setup box reads its mode, platform, and
+    /// `video_blockers` from it. `None` is a plain SSH session.
+    pub fn cli_state(&self, token: &str) -> Option<ClientAudioState> {
+        let clients = self.clients.lock_recover();
+        clients
+            .get(token)?
+            .iter()
+            .rev()
+            .find(|entry| entry.state.client_kind == ClientKind::Cli)
+            .map(|entry| entry.state.clone())
     }
 
     /// Send a clipboard-image request to a paired CLI on `token` that

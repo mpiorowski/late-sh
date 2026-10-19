@@ -1138,7 +1138,7 @@ fn is_ai_blocklisted_url(url: &str) -> bool {
     host == "cyberspace.online" || host.ends_with(".cyberspace.online")
 }
 
-fn is_youtube_url(url: &str) -> bool {
+pub(crate) fn is_youtube_url(url: &str) -> bool {
     let Ok(parsed) = reqwest::Url::parse(url) else {
         return false;
     };

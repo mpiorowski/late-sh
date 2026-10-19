@@ -74,6 +74,7 @@ fn ws_payload_client_state_parses() {
             ssh_mode,
             platform,
             capabilities,
+            video_blockers,
             muted,
             volume_percent,
         } => {
@@ -81,6 +82,7 @@ fn ws_payload_client_state_parses() {
             assert_eq!(ssh_mode, ClientSshMode::Native);
             assert_eq!(platform, ClientPlatform::Macos);
             assert!(capabilities.is_empty());
+            assert!(video_blockers.is_empty());
             assert!(muted);
             assert_eq!(volume_percent, 35);
         }
@@ -138,6 +140,7 @@ fn ws_payload_android_client_state_parses() {
             ssh_mode,
             platform,
             capabilities,
+            video_blockers: _,
             muted,
             volume_percent,
         } => {
@@ -169,6 +172,7 @@ fn ws_payload_openssh_client_state_parses() {
             ssh_mode,
             platform,
             capabilities,
+            video_blockers: _,
             muted,
             volume_percent,
         } => {
@@ -632,4 +636,86 @@ fn test_trusted_cidrs(cidr_strings: Vec<&str>) -> Vec<IpNet> {
         .into_iter()
         .map(|s| s.parse::<IpNet>().unwrap())
         .collect()
+}
+
+/// The CLI's `video_state` payloads (`late-cli/src/video.rs`,
+/// `video_state_payload`) parse into the report the watch modal reads.
+#[test]
+fn ws_payload_video_state_parses_every_state() {
+    let cases = [
+        (
+            r#"{"event":"video_state","play_id":7,"state":"starting"}"#,
+            VideoReport::Starting,
+        ),
+        (
+            r#"{"event":"video_state","play_id":7,"state":"playing","position_s":83,"duration_s":724}"#,
+            VideoReport::Playing {
+                position_s: 83,
+                duration_s: Some(724),
+            },
+        ),
+        (
+            r#"{"event":"video_state","play_id":7,"state":"paused","position_s":83,"duration_s":null}"#,
+            VideoReport::Paused {
+                position_s: 83,
+                duration_s: None,
+            },
+        ),
+        (
+            r#"{"event":"video_state","play_id":7,"state":"ended"}"#,
+            VideoReport::Ended,
+        ),
+        (
+            r#"{"event":"video_state","play_id":7,"state":"failed","message":"mpv exited with status 2"}"#,
+            VideoReport::Failed {
+                message: "mpv exited with status 2".to_string(),
+            },
+        ),
+        (
+            r#"{"event":"video_state","play_id":7,"state":"stopped"}"#,
+            VideoReport::Stopped,
+        ),
+    ];
+    for (json, expected) in cases {
+        match serde_json::from_str::<WsPayload>(json).unwrap() {
+            WsPayload::VideoState { play_id, report } => {
+                assert_eq!(play_id, 7);
+                assert_eq!(report, expected, "{json}");
+            }
+            _ => panic!("expected VideoState for {json}"),
+        }
+    }
+}
+
+#[test]
+fn ws_payload_video_state_rejects_an_unknown_state() {
+    let json = r#"{"event":"video_state","play_id":7,"state":"rewinding"}"#;
+    assert!(serde_json::from_str::<WsPayload>(json).is_err());
+}
+
+/// A blocker this server does not know (a newer CLI) is dropped and the
+/// rest of the report still lands.
+#[test]
+fn client_state_video_blockers_drop_unknown_names() {
+    let json = r#"{
+        "event": "client_state",
+        "client_kind": "cli",
+        "ssh_mode": "native",
+        "platform": "linux",
+        "capabilities": ["clipboard_image", "youtube", "voice", "open_url"],
+        "video_blockers": ["not_kitty", "no_gpu", "no_mpv", "no_ytdlp"],
+        "muted": false,
+        "volume_percent": 30
+    }"#;
+    match serde_json::from_str::<WsPayload>(json).unwrap() {
+        WsPayload::ClientState { video_blockers, .. } => assert_eq!(
+            parse_video_blockers(&video_blockers, "tok"),
+            vec![
+                VideoBlocker::NotKitty,
+                VideoBlocker::NoMpv,
+                VideoBlocker::NoYtDlp
+            ]
+        ),
+        _ => panic!("expected ClientState"),
+    }
 }

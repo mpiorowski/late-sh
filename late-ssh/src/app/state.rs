@@ -1025,6 +1025,9 @@ pub struct App {
     /// Terminal images tweak on top.
     pub(crate) detected_image_protocol: Option<TerminalImageProtocol>,
     pub(crate) terminal_images_disabled: bool,
+    /// The forwarded env said Windows Terminal (`WT_SESSION`): the watch
+    /// setup box offers the PowerShell installer.
+    pub(crate) windows_terminal: bool,
     pub(crate) inline_image_symbol_mode: InlineImageSymbolMode,
     pub(crate) terminal_image_render_state: TerminalImageRenderState,
 
@@ -1972,6 +1975,7 @@ impl App {
             pending_terminal_commands,
             detected_image_protocol,
             terminal_images_disabled,
+            windows_terminal: false,
             inline_image_symbol_mode,
             terminal_image_render_state: TerminalImageRenderState::default(),
             notifier,
@@ -2882,6 +2886,9 @@ impl App {
 
     pub(crate) fn apply_terminal_env_hint(&mut self, name: &str, value: &str) {
         self.apply_inline_image_symbol_mode(InlineImageSymbolMode::from_env_hint(name, value));
+        if matches!(name.trim(), "WT_SESSION" | "WT_PROFILE_ID") && !value.trim().is_empty() {
+            self.windows_terminal = true;
+        }
         if self.terminal_images_disabled {
             return;
         }
@@ -4439,6 +4446,8 @@ impl Drop for App {
         if self.session_token.is_empty() {
             return;
         }
+        // No mpv outlives the session that asked for it.
+        crate::app::chat::news::watch::svc::end_session(self);
         // The paired registry keeps token-scoped state that outlives the
         // sockets (the once-per-session boot mute claim), so the session end
         // has to retire it or it accumulates a row per session forever.

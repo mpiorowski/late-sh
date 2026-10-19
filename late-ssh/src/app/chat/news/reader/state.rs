@@ -16,6 +16,7 @@ use late_core::models::article_body::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use uuid::Uuid;
 
+use crate::app::chat::news::svc::is_youtube_url;
 use crate::app::chat::news::ui::split_summary_bullets;
 use crate::app::chat::ui_text::format_news_ascii_art_for_display;
 use crate::app::common::primitives::format_relative_time;
@@ -99,6 +100,9 @@ pub(crate) struct ReaderModal {
     ascii_art: String,
     author: String,
     shared_at: DateTime<Utc>,
+    /// A video the watch modal can play: the fallback names `Watch:`, and
+    /// `w` hands the story over to the watch modal.
+    watchable: bool,
     body: ReaderBody,
     view: ScrollView,
     /// Kept between draws: the draw asks for the rows every frame, and a
@@ -123,6 +127,7 @@ impl ReaderModal {
             ascii_art: item.article.ascii_art.clone(),
             author: item.author_username.clone(),
             shared_at: item.article.created,
+            watchable: is_youtube_url(&item.article.url),
             body,
             view: ScrollView::default(),
             layout: RefCell::new(None),
@@ -135,6 +140,10 @@ impl ReaderModal {
 
     pub(crate) fn url(&self) -> &str {
         &self.url
+    }
+
+    pub(crate) fn watchable(&self) -> bool {
+        self.watchable
     }
 
     pub(crate) fn body(&self) -> &ReaderBody {
@@ -225,6 +234,10 @@ impl ReaderModal {
             }
             ReaderBody::Loading { .. } => {
                 self.push_fallback(&mut rows, width, meta, "Loading the article…".to_string());
+            }
+            // A video never gets a body to fetch: it is watched, not read.
+            ReaderBody::Pending | ReaderBody::Unavailable if self.watchable => {
+                self.push_fallback(&mut rows, width, meta, format!("Watch: {}", self.url));
             }
             ReaderBody::Pending => {
                 self.push_fallback(&mut rows, width, meta, "Fetching the article…".to_string());
@@ -430,7 +443,7 @@ fn span_segments(spans: &[ReaderSpan], links: &[String], ink: ReaderInk) -> Vec<
 }
 
 /// `example.com` out of the story's URL, without a leading `www.`.
-fn domain_label(url: &str) -> String {
+pub(crate) fn domain_label(url: &str) -> String {
     match reqwest::Url::parse(url) {
         Ok(parsed) => {
             let host = parsed.host_str().unwrap_or_default();

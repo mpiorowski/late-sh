@@ -1,5 +1,6 @@
 use crate::app::chat::list_ui::{draw_mine_only_status, filtered_list_areas};
 use crate::app::chat::news::state::is_unread;
+use crate::app::chat::news::svc::is_youtube_url;
 use crate::app::chat::ui_text::format_news_ascii_art_for_display;
 use crate::app::common::primitives::format_relative_time;
 use crate::app::common::theme;
@@ -131,13 +132,18 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
                         format!(" - {}", article.created.format("%a %Y-%m-%d %H:%M UTC")),
                         Style::default().fg(theme::TEXT_FAINT()),
                     ),
-                    Span::styled(
-                        match reading_label(item) {
-                            Some(label) => format!(" - {label}"),
-                            None => String::new(),
-                        },
-                        Style::default().fg(theme::TEXT_DIM()),
-                    ),
+                    match reading_label(item) {
+                        Some(label) => Span::styled(
+                            format!(" - {}", label.text()),
+                            match label {
+                                ReadingLabel::Watch => Style::default().fg(theme::AMBER()),
+                                ReadingLabel::Minutes(_) | ReadingLabel::Link => {
+                                    Style::default().fg(theme::TEXT_DIM())
+                                }
+                            },
+                        ),
+                        None => Span::raw(""),
+                    },
                 ]),
             ];
 
@@ -165,14 +171,38 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
     }
 }
 
-/// The card meta's last segment: how long the story takes to read, `link`
-/// when there is no text to read here (a video, an X post, a page the fetch
-/// could not read), nothing while the fetch is pending.
-pub(crate) fn reading_label(item: &ArticleFeedItem) -> Option<String> {
+/// The card meta's last segment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReadingLabel {
+    /// How long the story's text takes to read.
+    Minutes(u16),
+    /// No text to read here: an X post, a page the fetch could not read.
+    Link,
+    /// A video, for everyone: watching is the user's intent, and `w` says
+    /// what their setup needs when it cannot play.
+    Watch,
+}
+
+impl ReadingLabel {
+    pub(crate) fn text(self) -> String {
+        match self {
+            Self::Minutes(minutes) => format!("{minutes} min read"),
+            Self::Link => "link".to_string(),
+            Self::Watch => "watch".to_string(),
+        }
+    }
+}
+
+/// The card's reading label; nothing while a page's fetch is pending. A
+/// video never gets text, so it reads `watch` whatever its body says.
+pub(crate) fn reading_label(item: &ArticleFeedItem) -> Option<ReadingLabel> {
+    if is_youtube_url(&item.article.url) {
+        return Some(ReadingLabel::Watch);
+    }
     match item.body {
-        BodyStatus::Ready { reading_minutes } => Some(format!("{reading_minutes} min read")),
+        BodyStatus::Ready { reading_minutes } => Some(ReadingLabel::Minutes(reading_minutes)),
         BodyStatus::Pending => None,
-        BodyStatus::Unavailable => Some("link".to_string()),
+        BodyStatus::Unavailable => Some(ReadingLabel::Link),
     }
 }
 

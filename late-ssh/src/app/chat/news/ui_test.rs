@@ -7,6 +7,10 @@ use std::collections::HashSet;
 use uuid::Uuid;
 
 fn card(body: BodyStatus) -> ArticleFeedItem {
+    card_at("https://example.com/listen-notify", body)
+}
+
+fn card_at(url: &str, body: BodyStatus) -> ArticleFeedItem {
     let now = Utc::now();
     ArticleFeedItem {
         article: Article {
@@ -14,7 +18,7 @@ fn card(body: BodyStatus) -> ArticleFeedItem {
             created: now,
             updated: now,
             user_id: Uuid::now_v7(),
-            url: "https://example.com/listen-notify".to_string(),
+            url: url.to_string(),
             title: "Why LISTEN/NOTIFY stops scaling".to_string(),
             summary: "• one\n• two\n• three".to_string(),
             ascii_art: String::new(),
@@ -63,6 +67,19 @@ fn card_meta_reads_the_body_status() {
     assert!(meta_row(card(BodyStatus::Ready { reading_minutes: 7 })).ends_with("UTC - 7 min read"));
     assert!(meta_row(card(BodyStatus::Unavailable)).ends_with("UTC - link"));
     assert!(meta_row(card(BodyStatus::Pending)).ends_with("UTC"));
+}
+
+/// A video reads `watch` for everyone, whatever its body row says; any
+/// other story with no text still reads `link`.
+#[test]
+fn card_meta_reads_watch_for_a_video() {
+    let video = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+    assert!(meta_row(card_at(video, BodyStatus::Unavailable)).ends_with("UTC - watch"));
+    assert!(meta_row(card_at(video, BodyStatus::Pending)).ends_with("UTC - watch"));
+    assert!(
+        meta_row(card_at("https://x.com/a/status/1", BodyStatus::Unavailable))
+            .ends_with("UTC - link")
+    );
 }
 
 #[test]

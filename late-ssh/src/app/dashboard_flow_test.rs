@@ -1354,3 +1354,169 @@ async fn a_slash_after_the_live_prefix_is_swallowed() {
     );
     assert!(!app.live_prefix_armed, "and the prefix is spent");
 }
+
+/// The video messages that reached the fake paired CLI, in order.
+fn video_messages(
+    rx: &mut tokio::sync::mpsc::Receiver<PairControlMessage>,
+) -> Vec<PairControlMessage> {
+    let mut messages = Vec::new();
+    while let Ok(message) = rx.try_recv() {
+        match message {
+            PairControlMessage::VideoPlay { .. }
+            | PairControlMessage::VideoPlace { .. }
+            | PairControlMessage::VideoControl { .. }
+            | PairControlMessage::VideoStop { .. } => messages.push(message),
+            _ => {}
+        }
+    }
+    messages
+}
+
+/// A paired CLI's report, as the pair socket would record it.
+fn report_paired_cli(app: &crate::app::state::App, token: &str, capabilities: &[&str], blockers: &[crate::app::audio::client_state::VideoBlocker]) {
+    use crate::app::audio::client_state::{
+        ClientAudioState, ClientKind, ClientPlatform, ClientSshMode,
+    };
+    app.paired_client_registry
+        .as_ref()
+        .expect("paired registry")
+        .update_state_and_enforce_mute_policy(
+            token,
+            1,
+            ClientAudioState {
+                client_kind: ClientKind::Cli,
+                ssh_mode: ClientSshMode::Native,
+                platform: ClientPlatform::Linux,
+                capabilities: capabilities.iter().map(|c| c.to_string()).collect(),
+                video_blockers: blockers.to_vec(),
+                muted: false,
+                volume_percent: 30,
+            },
+        )
+        .expect("paired entry");
+}
+
+/// A YouTube share in the News room, with this session's lounge joined.
+async fn news_room_with_a_video(
+    test_db: &late_core::test_utils::TestDb,
+    token: &str,
+) -> (
+    crate::app::state::App,
+    tokio::sync::mpsc::Receiver<PairControlMessage>,
+) {
+    use late_core::models::article::{Article, ArticleParams};
+
+    let me = create_test_user(&test_db.db, &format!("{token}-me")).await;
+    let them = create_test_user(&test_db.db, &format!("{token}-them")).await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+    Article::create_by_user_id(
+        &client,
+        them.id,
+        ArticleParams {
+            user_id: them.id,
+            url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ".to_string(),
+            title: "Never gonna give you up".to_string(),
+            summary: "• a song".to_string(),
+            ascii_art: String::new(),
+        },
+    )
+    .await
+    .expect("share a video");
+    let (mut app, rx) = make_app_with_paired_client(test_db.db.clone(), me.id, token);
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "lounge").await;
+    app.chat.select_news();
+    wait_for_render_contains(&mut app, "UTC - watch").await;
+    (app, rx)
+}
+
+/// With a paired CLI that advertises `video` on a Kitty terminal, `w` on a
+/// YouTube card opens the player, and the CLI hears a play with the
+/// window's body, a place with the full-screen body on `f`, and a stop on
+/// Esc.
+#[tokio::test]
+async fn w_on_a_video_plays_it_through_the_paired_cli() {
+    use crate::app::files::terminal_image::TerminalImageProtocol;
+
+    let token = "news-watch-play-flow-it";
+    let test_db = new_test_db().await;
+    let (mut app, mut rx) = news_room_with_a_video(&test_db, token).await;
+    report_paired_cli(&app, token, &["voice", "video"], &[]);
+    app.detected_image_protocol = Some(TerminalImageProtocol::Kitty);
+    video_messages(&mut rx);
+
+    app.handle_input(b"w");
+    wait_for_render_contains(&mut app, " Watching ").await;
+    let played = video_messages(&mut rx);
+    let play_id = match played.as_slice() {
+        [PairControlMessage::VideoPlay {
+            play_id,
+            url,
+            left,
+            top,
+            cols,
+            rows,
+        }] => {
+            assert_eq!(url, "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+            // 90 percent of 160x40 is 144x36, centered at (8, 2); the body
+            // sits inside the border below the two header rows.
+            assert_eq!((*left, *top, *cols, *rows), (9, 5, 142, 31));
+            *play_id
+        }
+        other => panic!("expected one video_play, got {other:?}"),
+    };
+
+    app.handle_input(b"f");
+    app.render().expect("render");
+    assert_eq!(
+        video_messages(&mut rx),
+        vec![PairControlMessage::VideoPlace {
+            play_id,
+            left: 0,
+            top: 0,
+            cols: 160,
+            rows: 39,
+        }]
+    );
+
+    app.handle_input(b"\x1b");
+    wait_for_app(&mut app, "Esc to close the player", |app| {
+        !app.chat.has_watch()
+    })
+    .await;
+    app.render().expect("render");
+    assert_eq!(
+        video_messages(&mut rx),
+        vec![PairControlMessage::VideoStop { play_id }]
+    );
+}
+
+/// A paired CLI that is missing mpv: the card still reads `watch`, `w`
+/// opens the setup box with the mpv row failing and yt-dlp holding, and
+/// nothing reaches the CLI.
+#[tokio::test]
+async fn w_without_mpv_opens_the_setup_box_and_sends_nothing() {
+    use crate::app::audio::client_state::VideoBlocker;
+    use crate::app::files::terminal_image::TerminalImageProtocol;
+
+    let token = "news-watch-setup-flow-it";
+    let test_db = new_test_db().await;
+    let (mut app, mut rx) = news_room_with_a_video(&test_db, token).await;
+    report_paired_cli(&app, token, &["voice"], &[VideoBlocker::NoMpv]);
+    app.detected_image_protocol = Some(TerminalImageProtocol::Kitty);
+    video_messages(&mut rx);
+
+    app.handle_input(b"w");
+    wait_for_render_contains(&mut app, " Watch in the terminal ").await;
+    let frame = render_plain(&mut app);
+    assert!(frame.contains("✗ mpv 0.36 or newer"), "{frame}");
+    assert!(frame.contains("✓ yt-dlp"), "{frame}");
+    assert!(frame.contains("✓ the late CLI"), "{frame}");
+    assert_eq!(video_messages(&mut rx), Vec::new());
+}

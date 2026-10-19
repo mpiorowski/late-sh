@@ -31,11 +31,14 @@ use uuid::Uuid;
 
 use crate::{
     app::audio::{
-        client_state::{ClientAudioState, ClientKind, ClientPlatform, ClientSshMode},
+        client_state::{
+            ClientAudioState, ClientKind, ClientPlatform, ClientSshMode, VideoBlocker,
+        },
         svc::{AudioMode, PlayerStateReport, QueueItemView},
     },
     app::voice::svc::VoiceClientState,
     metrics,
+    paired_clients::VideoReport,
     session::SessionMessage,
     state::{ActiveUsers, State},
 };
@@ -94,6 +97,10 @@ enum WsPayload {
         platform: ClientPlatform,
         #[serde(default)]
         capabilities: Vec<String>,
+        /// Wire strings, parsed by `parse_video_blockers` so one this
+        /// server does not know cannot fail the whole report.
+        #[serde(default)]
+        video_blockers: Vec<String>,
         muted: bool,
         volume_percent: u8,
     },
@@ -122,6 +129,13 @@ enum WsPayload {
     },
     #[serde(rename = "player_state")]
     PlayerState(PlayerStateReport),
+    /// The paired CLI's News video, routed to the session's watch modal.
+    #[serde(rename = "video_state")]
+    VideoState {
+        play_id: u64,
+        #[serde(flatten)]
+        report: VideoReport,
+    },
     #[serde(rename = "voice_state")]
     VoiceState {
         joined: bool,
@@ -881,6 +895,7 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State, clien
                                 ssh_mode,
                                 platform,
                                 capabilities,
+                                video_blockers,
                                 muted,
                                 volume_percent,
                             } => {
@@ -896,6 +911,10 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State, clien
                                         ssh_mode,
                                         platform,
                                         capabilities,
+                                        video_blockers: parse_video_blockers(
+                                            &video_blockers,
+                                            &token_hint,
+                                        ),
                                         muted,
                                         volume_percent,
                                     },
@@ -991,6 +1010,9 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State, clien
                             WsPayload::PlayerState(report) => {
                                 state.audio_service.report_player_state_task(report);
                                 continue;
+                            }
+                            WsPayload::VideoState { play_id, report } => {
+                                SessionMessage::VideoState { play_id, report }
                             }
                             WsPayload::VoiceState {
                                 joined,
@@ -1310,6 +1332,22 @@ async fn persist_device_audio(
 
 /// Drop a paired-client registration and refresh the remaining clients'
 /// playback-source view.
+/// The blockers this server knows. An unknown one comes from a CLI newer
+/// than the server and is dropped with a warn: the two binaries release on
+/// their own schedules, and the rest of the report must still land.
+fn parse_video_blockers(wire: &[String], token_hint: &str) -> Vec<VideoBlocker> {
+    let mut blockers = Vec::new();
+    for name in wire {
+        match VideoBlocker::parse(name) {
+            Some(blocker) => blockers.push(blocker),
+            None => {
+                tracing::warn!(token_hint = %token_hint, blocker = %name, "dropping unknown video blocker");
+            }
+        }
+    }
+    blockers
+}
+
 fn release_pair_registration(state: &State, token: &str, registration_id: u64) {
     state
         .paired_client_registry

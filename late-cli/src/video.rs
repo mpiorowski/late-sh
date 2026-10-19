@@ -1,10 +1,12 @@
 //! Watch: plays a video the TUI asks for inside the user's own terminal,
-//! through their `mpv` (kitty graphics output, shared-memory frames) and the
-//! `yt-dlp` mpv's ytdl hook calls. The server never touches media: the TUI
-//! reserves a black rectangle, sends `video_play` with it, and keeps every
-//! key. This module owns the mpv child and its IPC socket; it does the work
-//! and returns data, and the pair loop in `ws.rs` sends, logs, and silences
-//! the house audio around it.
+//! through their `mpv` (kitty graphics output, shared-memory frames where
+//! the terminal reads them) and the `yt-dlp` mpv's ytdl hook calls. The
+//! server never touches media: the TUI reserves a black rectangle, sends
+//! `video_play` with it, and keeps every key. This module owns the mpv
+//! child, its IPC socket, and the relay that carries mpv's frames to the
+//! tty with mpv's own terminal-mode writes filtered out; it does the work
+//! and returns data, and the pair loop in `ws.rs` sends, logs, and
+//! silences the house audio around it.
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -13,9 +15,10 @@ use std::{
     env,
     ffi::OsString,
     fs,
-    io::{self, Write},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
-    process::{Child, Command, Stdio},
+    process::{Child, ChildStdout, Command, Stdio},
+    thread::JoinHandle,
     time::{Duration, Instant},
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf};
@@ -35,6 +38,9 @@ const QUIT_GRACE: Duration = Duration::from_millis(500);
 const QUIT_POLL: Duration = Duration::from_millis(50);
 const SEEK_STEP_S: i64 = 10;
 const YTDL_FORMAT: &str = "bestvideo[height<=720]+bestaudio/best[height<=720]";
+/// A relay sequence held past this many bytes is written as it is: mpv's
+/// graphics commands are chunked at 4 KB, so nothing legitimate gets here.
+const RELAY_HOLD_CAP: usize = 8 * 1024 * 1024;
 
 /// One failing precondition for the `video` capability. Sent as
 /// `client_state.video_blockers` so the server's setup box can say which
@@ -68,6 +74,31 @@ impl VideoBlocker {
             Self::NoMpv => "no_mpv",
             Self::MpvTooOld => "mpv_too_old",
             Self::NoYtDlp => "no_ytdlp",
+        }
+    }
+}
+
+/// The Kitty-graphics terminals the CLI recognizes from its env, the same
+/// hints it forwards for images. The server's own detection is the second
+/// opinion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum KittyTerminal {
+    Kitty,
+    Ghostty,
+    WezTerm,
+    Konsole,
+    Rio,
+}
+
+impl KittyTerminal {
+    /// Whether the terminal reads kitty's shared-memory transfer (`t=s`).
+    /// mpv does not fall back when it does not: the frames go nowhere and
+    /// the video is a black box that reports `playing`. Only terminals
+    /// verified to implement it get `--vo-kitty-use-shm=yes`.
+    pub(super) fn supports_shm(self) -> bool {
+        match self {
+            Self::Kitty | Self::Ghostty => true,
+            Self::WezTerm | Self::Konsole | Self::Rio => false,
         }
     }
 }
@@ -151,13 +182,11 @@ pub(super) struct VideoRect {
 }
 
 impl VideoRect {
-    /// The middle cell, 1-based, which the video always covers whatever its
-    /// aspect (mpv centers it inside the rectangle).
-    fn center_cell(self) -> (u32, u32) {
-        (
-            u32::from(self.left) + u32::from(self.cols) / 2 + 1,
-            u32::from(self.top) + u32::from(self.rows) / 2 + 1,
-        )
+    /// The top-left cell, 1-based. mpv moves the cursor there and places
+    /// every frame at the cursor with no centering, so this cell is under
+    /// the image whatever its aspect.
+    fn origin_cell(self) -> (u32, u32) {
+        (u32::from(self.left) + 1, u32::from(self.top) + 1)
     }
 }
 
@@ -238,6 +267,8 @@ pub(super) struct VideoTools {
     mpv: PathBuf,
     /// `LATE_YTDLP_BIN`; otherwise mpv finds `yt-dlp` on `PATH` itself.
     ytdlp_override: Option<PathBuf>,
+    /// Shared-memory frames, when the terminal reads them.
+    use_shm: bool,
     /// Fallback when the tty cannot be read again at spawn.
     startup_tty: Option<TtySize>,
     ipc_path: PathBuf,
@@ -267,6 +298,7 @@ pub(super) fn probe(ssh_mode: SshMode, platform: &str) -> VideoProbe {
         tools: VideoTools {
             mpv,
             ytdlp_override,
+            use_shm: kitty_terminal(&vars).is_some_and(KittyTerminal::supports_shm),
             startup_tty: tty,
             ipc_path: ipc_socket_path(),
             log_path: state_log_path("LATE_VIDEO_LOG", "video.log"),
@@ -296,7 +328,7 @@ pub(super) fn blockers(
     if in_multiplexer(vars) {
         blockers.push(VideoBlocker::Multiplexer);
     }
-    if !is_kitty_family(vars) {
+    if kitty_terminal(vars).is_none() {
         blockers.push(VideoBlocker::NotKitty);
     }
     match tty {
@@ -327,18 +359,29 @@ fn in_multiplexer(vars: &HashMap<String, String>) -> bool {
             .is_some_and(|term| term.starts_with("tmux") || term.starts_with("screen"))
 }
 
-/// The same hints the CLI forwards for images. The server's own detection is
-/// the second opinion.
-fn is_kitty_family(vars: &HashMap<String, String>) -> bool {
-    env_value(vars, "TERM") == Some("xterm-kitty")
+/// Which Kitty-graphics terminal the env describes, if any.
+pub(super) fn kitty_terminal(vars: &HashMap<String, String>) -> Option<KittyTerminal> {
+    if env_value(vars, "TERM") == Some("xterm-kitty")
         || env_value(vars, "KITTY_WINDOW_ID").is_some()
-        || matches!(
-            env_value(vars, "TERM_PROGRAM"),
-            Some("ghostty" | "WezTerm" | "rio")
-        )
-        || env_value(vars, "GHOSTTY_RESOURCES_DIR").is_some()
-        || env_value(vars, "WEZTERM_EXECUTABLE").is_some()
-        || env_value(vars, "KONSOLE_VERSION").is_some()
+    {
+        return Some(KittyTerminal::Kitty);
+    }
+    match env_value(vars, "TERM_PROGRAM") {
+        Some("ghostty") => return Some(KittyTerminal::Ghostty),
+        Some("WezTerm") => return Some(KittyTerminal::WezTerm),
+        Some("rio") => return Some(KittyTerminal::Rio),
+        Some(_) | None => {}
+    }
+    if env_value(vars, "GHOSTTY_RESOURCES_DIR").is_some() {
+        return Some(KittyTerminal::Ghostty);
+    }
+    if env_value(vars, "WEZTERM_EXECUTABLE").is_some() {
+        return Some(KittyTerminal::WezTerm);
+    }
+    if env_value(vars, "KONSOLE_VERSION").is_some() {
+        return Some(KittyTerminal::Konsole);
+    }
+    None
 }
 
 /// Parse the first line of `mpv --version`: `mpv v0.41.0 Copyright ...`,
@@ -404,6 +447,7 @@ pub(super) struct MpvLaunch<'a> {
     pub(super) url: &'a str,
     pub(super) rect: VideoRect,
     pub(super) tty: TtySize,
+    pub(super) use_shm: bool,
     pub(super) volume_percent: u8,
     pub(super) resume: Option<Resume>,
     pub(super) ipc_path: &'a Path,
@@ -414,28 +458,34 @@ pub(super) struct MpvLaunch<'a> {
 /// with the TUI: mpv's `--vo-kitty-left/top` are 1-based where the TUI's
 /// cells are 0-based, and the pixel size comes from this tty's cell size.
 ///
-/// `--vo-kitty-config-clear=no` is mandatory: `yes` writes `ESC[2J` and
-/// wipes the TUI around the video on every reconfigure. `--vo-kitty-alt-screen=no`
-/// is mandatory too: `yes` switches to the alternate screen and wipes the
-/// TUI on exit. With it off mpv leaves its last frame on screen, which is
-/// what `clear_frame` is for.
+/// `--vo-kitty-alt-screen=no` is mandatory: `yes` switches to the alternate
+/// screen and wipes the TUI on exit. `--vo-kitty-config-clear=no` keeps mpv
+/// from clearing on every reconfigure. Neither stops mpv's own writes of
+/// cursor, mouse and delete-all-images commands around the frames; the
+/// relay (`TtyFilter`) strips those, and `settle_sequence` removes the
+/// frames it leaves behind.
 pub(super) fn mpv_args(launch: &MpvLaunch<'_>) -> Vec<OsString> {
     let MpvLaunch {
         url,
         rect,
         tty,
+        use_shm,
         volume_percent,
         resume,
         ipc_path,
         ytdlp_override,
     } = launch;
     let (width, height) = tty.pixels_for(*rect);
+    let shm = match use_shm {
+        true => "--vo-kitty-use-shm=yes",
+        false => "--vo-kitty-use-shm=no",
+    };
     let mut args: Vec<OsString> = [
         "--no-config",
         "--really-quiet",
         "--terminal=no",
         "--vo=kitty",
-        "--vo-kitty-use-shm=yes",
+        shm,
         "--vo-kitty-alt-screen=no",
         "--vo-kitty-config-clear=no",
     ]
@@ -557,15 +607,148 @@ pub(super) fn playback_state(
     }
 }
 
-/// Delete the placement mpv left at `rect`'s center. Kitty's `d=p` deletes
-/// only placements intersecting that cell, so the TUI's own images elsewhere
-/// survive. `q=2` keeps the terminal from answering on stdin, which the CLI
-/// would forward to the server as keys.
-pub(super) fn clear_frame(rect: VideoRect) -> io::Result<()> {
-    let (x, y) = rect.center_cell();
+/// The kitty command that removes every frame mpv placed in `rect`: a
+/// delete of the placements under the rectangle's top-left cell, where mpv
+/// anchors each frame. `P` frees the image data as well, so a long video
+/// does not leave its frames in the terminal's image store; `q=2` keeps
+/// the terminal from answering on stdin, which the CLI would forward to
+/// the server as keys. The TUI's own images elsewhere are untouched.
+pub(super) fn settle_sequence(rect: VideoRect) -> String {
+    let (x, y) = rect.origin_cell();
+    format!("\x1b_Ga=d,d=P,x={x},y={y},q=2\x1b\\")
+}
+
+/// Write [`settle_sequence`] to the tty, under the same stdout lock the SSH
+/// forwarder and the relay write under.
+pub(super) fn settle_terminal(rect: VideoRect) -> io::Result<()> {
     let mut out = io::stdout().lock();
-    write!(out, "\x1b_Ga=d,d=p,x={x},y={y},q=2\x1b\\")?;
+    out.write_all(settle_sequence(rect).as_bytes())?;
     out.flush()
+}
+
+/// Carries mpv's stdout to the tty with mpv's terminal-mode writes removed
+/// and every escape sequence delivered whole.
+///
+/// mpv's kitty output writes, besides the frames, a hide-cursor and an
+/// any-motion mouse enable on start, a show-cursor and mouse disable on
+/// exit, and a delete-all-images command at both ends. Each of those would
+/// change state the TUI owns (the mouse mode it chose, its hidden cursor,
+/// its own images), so they are dropped here instead of restored later.
+/// Everything else (cursor moves, the graphics commands that carry frames)
+/// passes through, but only once a sequence is complete: a graphics
+/// command split across two reads would otherwise let the SSH forwarder's
+/// bytes land inside its payload.
+#[derive(Default)]
+pub(super) struct TtyFilter {
+    /// The start of an escape sequence the input has not finished yet.
+    held: Vec<u8>,
+}
+
+/// DEC private modes mpv's kitty output sets and resets; the TUI owns all
+/// three (cursor visibility, any-motion mouse tracking, the alternate
+/// screen).
+const STRIPPED_PRIVATE_MODES: [&[u8]; 3] = [b"25", b"1003", b"1049"];
+
+impl TtyFilter {
+    pub(super) fn feed(&mut self, input: &[u8]) -> Vec<u8> {
+        let mut bytes = std::mem::take(&mut self.held);
+        bytes.extend_from_slice(input);
+        let mut out = Vec::with_capacity(bytes.len());
+        let mut at = 0;
+        while at < bytes.len() {
+            if bytes[at] != 0x1b {
+                out.push(bytes[at]);
+                at += 1;
+                continue;
+            }
+            match sequence_end(&bytes[at..]) {
+                SequenceEnd::Complete(len) => {
+                    let sequence = &bytes[at..at + len];
+                    if !is_mpv_mode_write(sequence) {
+                        out.extend_from_slice(sequence);
+                    }
+                    at += len;
+                }
+                SequenceEnd::Incomplete if bytes.len() - at > RELAY_HOLD_CAP => {
+                    out.extend_from_slice(&bytes[at..]);
+                    at = bytes.len();
+                }
+                SequenceEnd::Incomplete => {
+                    self.held = bytes[at..].to_vec();
+                    at = bytes.len();
+                }
+                SequenceEnd::NotASequence => {
+                    out.push(bytes[at]);
+                    at += 1;
+                }
+            }
+        }
+        out
+    }
+}
+
+enum SequenceEnd {
+    /// The sequence's length in bytes.
+    Complete(usize),
+    /// More input is needed to find its end.
+    Incomplete,
+    /// A lone ESC or one followed by something that is neither CSI nor APC.
+    NotASequence,
+}
+
+/// Where the CSI (`ESC [` up to a final byte) or APC (`ESC _` up to
+/// `ESC \`) sequence at the start of `bytes` ends.
+fn sequence_end(bytes: &[u8]) -> SequenceEnd {
+    match bytes.get(1) {
+        None => SequenceEnd::Incomplete,
+        Some(b'[') => match bytes[2..].iter().position(|b| (0x40..=0x7e).contains(b)) {
+            Some(offset) => SequenceEnd::Complete(2 + offset + 1),
+            None => SequenceEnd::Incomplete,
+        },
+        Some(b'_') => match bytes.windows(2).skip(2).position(|pair| pair == b"\x1b\\") {
+            Some(offset) => SequenceEnd::Complete(2 + offset + 2),
+            None => SequenceEnd::Incomplete,
+        },
+        Some(_) => SequenceEnd::NotASequence,
+    }
+}
+
+fn is_mpv_mode_write(sequence: &[u8]) -> bool {
+    if sequence == b"\x1b_Ga=d;\x1b\\" {
+        return true;
+    }
+    let Some(mode) = sequence.strip_prefix(b"\x1b[?") else {
+        return false;
+    };
+    let Some(mode) = mode.strip_suffix(b"h").or_else(|| mode.strip_suffix(b"l")) else {
+        return false;
+    };
+    STRIPPED_PRIVATE_MODES.contains(&mode)
+}
+
+/// Read mpv's stdout until it closes, writing each read's complete
+/// sequences to the tty under the stdout lock.
+fn spawn_relay(mut from_mpv: ChildStdout) -> JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut filter = TtyFilter::default();
+        let mut buf = [0u8; 16 * 1024];
+        loop {
+            let n = match from_mpv.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => n,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(_) => break,
+            };
+            let out = filter.feed(&buf[..n]);
+            if out.is_empty() {
+                continue;
+            }
+            let mut tty = io::stdout().lock();
+            if tty.write_all(&out).and_then(|()| tty.flush()).is_err() {
+                break;
+            }
+        }
+    })
 }
 
 #[cfg(unix)]
@@ -711,6 +894,9 @@ struct Playback {
     rect: VideoRect,
     volume_percent: u8,
     child: Child,
+    /// Ends when mpv's stdout closes; joined after the kill so the settle
+    /// delete follows the last frame. `None` once joined.
+    relay: Option<JoinHandle<()>>,
     ipc: IpcLink,
 }
 
@@ -931,37 +1117,51 @@ impl VideoPlayer {
             url: &url,
             rect,
             tty,
+            use_shm: self.tools.use_shm,
             volume_percent,
             resume,
             ipc_path: &self.tools.ipc_path,
             ytdlp_override: self.tools.ytdlp_override.as_deref(),
         });
-        // stdout stays the tty: that is where the kitty frames go.
+        // mpv never writes to the tty itself: its stdout is a pipe the relay
+        // carries to the tty with mpv's terminal-mode writes filtered out.
         let child = Command::new(&self.tools.mpv)
             .args(args)
             .stdin(Stdio::null())
-            .stdout(Stdio::inherit())
+            .stdout(Stdio::piped())
             .stderr(Stdio::from(log))
             .spawn();
-        match child {
-            Ok(child) => Ok(Playback {
-                play_id,
-                url,
-                rect,
-                volume_percent,
-                child,
-                ipc: IpcLink::Waiting {
-                    since: Instant::now(),
-                },
-            }),
-            Err(error) => Err(VideoFailure::Spawn(error.to_string())),
-        }
+        let mut child = match child {
+            Ok(child) => child,
+            Err(error) => return Err(VideoFailure::Spawn(error.to_string())),
+        };
+        let Some(from_mpv) = child.stdout.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(VideoFailure::Spawn("mpv has no stdout pipe".to_string()));
+        };
+        Ok(Playback {
+            play_id,
+            url,
+            rect,
+            volume_percent,
+            child,
+            relay: Some(spawn_relay(from_mpv)),
+            ipc: IpcLink::Waiting {
+                since: Instant::now(),
+            },
+        })
     }
 
     fn take_and_kill(&mut self) -> Option<Playback> {
         let mut playback = self.current.take()?;
         let _ = playback.child.kill();
         let _ = playback.child.wait();
+        // The pipe closed with the child, so the relay is at its end: wait
+        // for it so the settle delete lands after mpv's last frame.
+        if let Some(relay) = playback.relay.take() {
+            let _ = relay.join();
+        }
         let _ = fs::remove_file(&self.tools.ipc_path);
         Some(playback)
     }

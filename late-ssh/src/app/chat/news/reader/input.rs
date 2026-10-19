@@ -46,6 +46,12 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
             let url = modal.url().to_owned();
             copy_link(app, &url);
         }
+        // A video: hand it to the watch modal, the player or the setup box.
+        ParsedInput::Byte(b'w') | ParsedInput::Char('w') if modal.watchable() => {
+            let article_id = modal.article_id();
+            app.chat.close_reader();
+            chat::news::watch::svc::watch_article(app, article_id);
+        }
         ParsedInput::Byte(b'n' | b'N') | ParsedInput::Char('n' | 'N') => {
             app.chat.jump_to_reader_article();
             app.set_screen(Screen::Dashboard);

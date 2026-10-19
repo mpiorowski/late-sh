@@ -14,6 +14,7 @@ use crate::app::bonsai::state::BonsaiAction;
 use crate::app::bonsai::svc::BonsaiActionResult;
 use crate::app::calendar::svc::{CalendarAnnouncement, CalendarOp, CalendarWrite};
 use crate::app::chat::news::svc::{BodyFetchOutcome, XMediaLookup};
+use crate::app::chat::news::watch::state::WatchOutcome;
 use crate::app::chat::svc::{GildRefusal, SendRefusal};
 use crate::app::clubhouse::nightcap::svc::{NightcapHouseFailure, NightcapOrderResult};
 use crate::app::common::primitives::Screen;
@@ -599,7 +600,7 @@ mod inner {
         SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
         ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
-    use super::{BodyFetchOutcome, BodyStatus};
+    use super::{BodyFetchOutcome, BodyStatus, WatchOutcome};
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
@@ -1492,6 +1493,18 @@ mod inner {
             meter()
                 .u64_counter("late_ssh_news_reader_opens_total")
                 .with_description("News reader opens by the body status they found")
+                .build()
+        })
+    }
+
+    fn news_watches_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_news_watches_total")
+                .with_description(
+                    "News video watches by step: opened (the player), setup (the setup box instead), played, ended, failed, lost",
+                )
                 .build()
         })
     }
@@ -2564,6 +2577,23 @@ mod inner {
         news_reader_opens_total().add(1, &[KeyValue::new("body", news_body_status_label(status))]);
     }
 
+    fn news_watch_label(outcome: WatchOutcome) -> &'static str {
+        match outcome {
+            WatchOutcome::Opened => "opened",
+            WatchOutcome::Setup => "setup",
+            WatchOutcome::Played => "played",
+            WatchOutcome::Ended => "ended",
+            WatchOutcome::Failed => "failed",
+            WatchOutcome::Lost => "lost",
+        }
+    }
+
+    /// Setup against opened is how many people want to watch and cannot;
+    /// a run of failed or lost is a CLI or mpv regression.
+    pub(crate) fn record_news_watch(outcome: WatchOutcome) {
+        news_watches_total().add(1, &[KeyValue::new("outcome", news_watch_label(outcome))]);
+    }
+
     /// Same shape as the News share: one counter for the submissions and one
     /// for the chips they minted, so the tracks that came in past the day's
     /// cap are visible beside the paid ones.
@@ -3409,7 +3439,7 @@ mod inner {
         SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
         ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
-    use super::{BodyFetchOutcome, BodyStatus};
+    use super::{BodyFetchOutcome, BodyStatus, WatchOutcome};
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
@@ -3483,6 +3513,7 @@ mod inner {
     pub fn record_news_x_media_lookup(_lookup: XMediaLookup) {}
     pub fn record_news_body_fetch(_outcome: BodyFetchOutcome) {}
     pub fn record_news_reader_opened(_status: BodyStatus) {}
+    pub(crate) fn record_news_watch(_outcome: WatchOutcome) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
     pub fn record_booth_thumbnail(_outcome: ThumbnailFetch) {}
     pub fn record_radio_meta_poll(_feed: PolledFeed, _outcome: PollOutcome) {}

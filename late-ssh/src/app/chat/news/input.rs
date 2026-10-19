@@ -53,6 +53,14 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             }
             true
         }
+        // Watch a video story in the terminal, or learn what that takes.
+        // Anything else is not a video, and `w` passes through untouched.
+        b'w' | b'W' => {
+            let Some(article_id) = app.chat.news.selected_item().map(|item| item.article.id) else {
+                return false;
+            };
+            super::watch::svc::watch_article(app, article_id)
+        }
         b'c' | b'C' => {
             if let Some(url) = app.chat.news.selected_url() {
                 let cleaned = crate::app::input::sanitize_paste_markers(url);

@@ -580,7 +580,7 @@ Spawning:
 
 ```
 <mpv> --no-config --really-quiet --terminal=no
-      --vo=kitty --vo-kitty-use-shm=yes --vo-kitty-alt-screen=no --vo-kitty-config-clear=no
+      --vo=kitty --vo-kitty-use-shm=<yes|no> --vo-kitty-alt-screen=no --vo-kitty-config-clear=no
       --vo-kitty-left=<left+1> --vo-kitty-top=<top+1> --vo-kitty-cols=<cols> --vo-kitty-rows=<rows>
       --vo-kitty-width=<cols*cell_px_w> --vo-kitty-height=<rows*cell_px_h>
       --ytdl=yes --ytdl-format=bestvideo[height<=720]+bestaudio/best[height<=720]
@@ -600,13 +600,22 @@ Spawning:
   pull in scripts that write to the terminal. `--terminal=no` so mpv never
   reads stdin or prints. `--vo-kitty-alt-screen=no` is mandatory: the
   default would switch the user's terminal to the alternate screen and
-  wipe the TUI on exit. `--vo-kitty-config-clear=no` is mandatory too:
-  `yes` writes `ESC[2J` on every reconfigure and wipes the TUI around the
-  video (checked against mpv 0.41's `vo_kitty`).
-- stdin null, stdout inherited (the tty), stderr to
-  `$XDG_STATE_HOME/late/video.log` (`LATE_VIDEO_LOG` overrides), the same
-  resolution the webview log uses. Scheme gate as in `open_url_in_browser`:
-  only `http://` and `https://` URLs are ever passed.
+  wipe the TUI on exit. `--vo-kitty-config-clear=no` keeps mpv from
+  clearing on a reconfigure. `--vo-kitty-use-shm` is `yes` only on kitty
+  and Ghostty (`KittyTerminal::supports_shm`): mpv does not fall back when
+  a terminal cannot read shared-memory frames, so WezTerm, Konsole and Rio
+  get escape-coded frames.
+- stdin null, stderr to `$XDG_STATE_HOME/late/video.log` (`LATE_VIDEO_LOG`
+  overrides, same resolution as the webview log), and stdout a pipe: a
+  relay thread carries it to the tty under the stdout lock the SSH
+  forwarder uses, one complete escape sequence at a time, and drops what
+  mpv writes besides frames (captured from mpv 0.41 with stdout on a pipe:
+  hide cursor and any-motion mouse on at start, delete-all-images at both
+  ends, show cursor and mouse off at exit). Those would change state the
+  TUI owns, so they never reach the terminal and nothing has to be
+  restored. mpv draws fine without a tty once all six geometry options are
+  given. Scheme gate as in `open_url_in_browser`: only `http://` and
+  `https://` URLs are ever passed.
 - Geometry change (`video_place`): the kitty output options are startup
   options. Read `time-pos` over IPC, kill the child, respawn with the new
   rectangle and `--start=<pos>`, report `starting` then `playing`. The brief
@@ -622,13 +631,12 @@ Spawning:
   Wait for the socket to appear after spawn (poll up to 5 s); not appearing
   is a `failed`.
 - Stop: send `{"command":["quit"]}`, wait up to 500 ms, then kill. Delete
-  the socket file. With `alt-screen=no` mpv leaves its last frame on
-  screen, and text repaints do not remove graphics, so after every final
-  state the CLI deletes it: a kitty `a=d,d=p` delete at the rectangle's
-  center cell with `q=2`, which leaves the TUI's own images elsewhere. mpv
-  also writes `ESC[?1003h` on start and `ESC[?1003l` and `ESC[?25h` on
-  exit; only the server knows its mouse and cursor modes, so it restores
-  them (below).
+  the socket file, join the relay. mpv's last frame stays on screen and
+  text repaints do not remove graphics, so after every final state the CLI
+  writes `settle_sequence`: a kitty `a=d,d=P` delete at the rectangle's
+  top-left cell with `q=2`. mpv anchors every frame at that cell with no
+  centering, so it is always under the image; `P` frees the image data
+  too; the TUI's own images elsewhere are untouched.
 - Lifecycle invariants: at most one player per CLI; `video_play` while one
   is up stops the old one first. The player stops on `video_stop`, on pair
   socket loss (the reconnect loop's disconnect path), on SSH session end,
@@ -681,12 +689,9 @@ it is not.
   (`news::State::drain_events`) and updates the modal if the `play_id`
   matches. A `Starting`/`Playing`/`Paused` modal with no state for 10 s
   becomes `Lost` on tick.
-- Terminal restore: on a final `video_state` (`ended`, `failed`,
-  `stopped`) for this session's latest `play_id`, whether or not the modal
-  is still open, the TUI re-pushes its mouse triplet (when the interaction
-  mode has the mouse on) and its cursor visibility through
-  `pending_terminal_commands`, since mpv's exit turned `?1003` off and the
-  cursor on.
+- Nothing to restore on a final `video_state`: the CLI's relay keeps mpv's
+  cursor, mouse and delete-all writes off the tty, so the TUI's modes and
+  images are exactly as it left them.
 - `api.rs`: parse `video_state` from the client; route it to the session by
   token the way `clipboard_image` is routed.
 - `news/ui.rs::reading_label` returns `watch` for an unavailable YouTube

@@ -1,0 +1,504 @@
+use std::time::{Duration, Instant};
+
+use chrono::Utc;
+use late_core::models::article::{Article, ArticleFeedItem};
+use late_core::models::article_body::BodyStatus;
+use ratatui::layout::Rect;
+use uuid::Uuid;
+
+use super::*;
+use crate::app::audio::client_state::{ClientKind, VideoBlocker};
+
+const URL: &str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+
+fn video() -> ArticleFeedItem {
+    let now = Utc::now();
+    ArticleFeedItem {
+        article: Article {
+            id: Uuid::now_v7(),
+            created: now,
+            updated: now,
+            user_id: Uuid::now_v7(),
+            url: URL.to_string(),
+            title: "Never gonna".to_string(),
+            summary: "• one".to_string(),
+            ascii_art: String::new(),
+        },
+        author_username: "mat".to_string(),
+        body: BodyStatus::Unavailable,
+    }
+}
+
+/// A player drawn over a 200x50 terminal, as `ui::draw` leaves it.
+fn drawn_player(now: Instant) -> Player {
+    let player = Player::new(&video(), 7, now);
+    player.set_drawn(Player::layout(player.size(), Rect::new(0, 0, 200, 50)));
+    player
+}
+
+#[test]
+fn window_layout_is_a_capped_centered_box_at_two_sizes() {
+    assert_eq!(
+        Player::layout(WatchSize::Window, Rect::new(0, 0, 200, 50)),
+        WatchLayout {
+            // 90 percent of 200 is 180, capped at 160; 90 percent of 50 is 45.
+            // The 5 spare rows split 3 above, 2 below.
+            popup: Rect::new(20, 3, 160, 45),
+            header: Rect::new(21, 4, 158, 2),
+            body: Rect::new(21, 6, 158, 40),
+            footer: Rect::new(21, 46, 158, 1),
+            close: Rect::new(176, 3, 3, 1),
+        }
+    );
+    assert_eq!(
+        Player::layout(WatchSize::Window, Rect::new(0, 0, 100, 30)),
+        WatchLayout {
+            popup: Rect::new(5, 2, 90, 27),
+            header: Rect::new(6, 3, 88, 2),
+            body: Rect::new(6, 5, 88, 22),
+            footer: Rect::new(6, 27, 88, 1),
+            close: Rect::new(91, 2, 3, 1),
+        }
+    );
+}
+
+#[test]
+fn full_layout_is_every_row_but_the_footer() {
+    assert_eq!(
+        Player::layout(WatchSize::Full, Rect::new(0, 0, 200, 50)),
+        WatchLayout {
+            popup: Rect::new(0, 0, 200, 50),
+            header: Rect::default(),
+            body: Rect::new(0, 0, 200, 49),
+            footer: Rect::new(0, 49, 200, 1),
+            close: Rect::default(),
+        }
+    );
+    assert_eq!(
+        Player::layout(WatchSize::Full, Rect::new(0, 0, 80, 24)),
+        WatchLayout {
+            popup: Rect::new(0, 0, 80, 24),
+            header: Rect::default(),
+            body: Rect::new(0, 0, 80, 23),
+            footer: Rect::new(0, 23, 80, 1),
+            close: Rect::default(),
+        }
+    );
+}
+
+/// A terminal too small for a body reserves nothing, so nothing plays.
+#[test]
+fn a_tiny_terminal_has_no_body_and_wants_no_play() {
+    let player = Player::new(&video(), 1, Instant::now());
+    player.set_drawn(Player::layout(WatchSize::Window, Rect::new(0, 0, 10, 6)));
+    assert!(player.drawn().body.is_empty());
+    assert_eq!(player.wanted(), None);
+}
+
+/// Open, `f`, close: the CLI hears a play with the window's body, a place
+/// with the full-screen body, then a stop, and nothing in between.
+#[test]
+fn sync_plays_places_and_stops_from_what_was_drawn() {
+    let area = Rect::new(0, 0, 200, 50);
+    let mut player = drawn_player(Instant::now());
+    let mut live = None;
+
+    assert_eq!(
+        sync(&mut live, player.wanted()),
+        vec![PairControlMessage::VideoPlay {
+            play_id: 7,
+            url: URL.to_string(),
+            left: 21,
+            top: 6,
+            cols: 158,
+            rows: 40,
+        }]
+    );
+    assert_eq!(sync(&mut live, player.wanted()), Vec::new(), "an unchanged draw sends nothing");
+
+    player.toggle_size();
+    assert_eq!(player.size(), WatchSize::Full);
+    player.set_drawn(Player::layout(player.size(), area));
+    assert_eq!(
+        sync(&mut live, player.wanted()),
+        vec![PairControlMessage::VideoPlace {
+            play_id: 7,
+            left: 0,
+            top: 0,
+            cols: 200,
+            rows: 49,
+        }]
+    );
+
+    assert_eq!(
+        sync(&mut live, None),
+        vec![PairControlMessage::VideoStop { play_id: 7 }]
+    );
+    assert_eq!(live, None);
+    assert_eq!(sync(&mut live, None), Vec::new());
+}
+
+/// A new play while the CLI still holds an older one stops the old first.
+#[test]
+fn sync_replaces_an_older_play() {
+    let rect = Rect::new(1, 1, 10, 5);
+    let mut live = Some(LivePlay { play_id: 3, rect });
+    assert_eq!(
+        sync(
+            &mut live,
+            Some(WantedPlay {
+                play_id: 4,
+                url: URL,
+                rect,
+            })
+        ),
+        vec![
+            PairControlMessage::VideoStop { play_id: 3 },
+            PairControlMessage::VideoPlay {
+                play_id: 4,
+                url: URL.to_string(),
+                left: 1,
+                top: 1,
+                cols: 10,
+                rows: 5,
+            },
+        ]
+    );
+    assert_eq!(live, Some(LivePlay { play_id: 4, rect }));
+}
+
+/// The reports a play goes through, each one's status and outcome, and the
+/// footer's status text for it.
+#[test]
+fn reports_drive_the_status_and_report_each_outcome_once() {
+    let now = Instant::now();
+    let mut player = drawn_player(now);
+    assert_eq!(player.status_text(), "starting…");
+
+    let steps = [
+        (VideoReport::Starting, None, WatchStatus::Starting, "starting…"),
+        (
+            VideoReport::Playing {
+                position_s: 83,
+                duration_s: Some(724),
+            },
+            Some(WatchOutcome::Played),
+            WatchStatus::Playing {
+                position_s: 83,
+                duration_s: Some(724),
+            },
+            "▶ 1:23 / 12:04",
+        ),
+        (
+            VideoReport::Paused {
+                position_s: 84,
+                duration_s: Some(724),
+            },
+            None,
+            WatchStatus::Paused {
+                position_s: 84,
+                duration_s: Some(724),
+            },
+            "⏸ 1:24 / 12:04",
+        ),
+        (
+            VideoReport::Playing {
+                position_s: 3725,
+                duration_s: None,
+            },
+            None,
+            WatchStatus::Playing {
+                position_s: 3725,
+                duration_s: None,
+            },
+            "▶ 1:02:05",
+        ),
+        (
+            VideoReport::Ended,
+            Some(WatchOutcome::Ended),
+            WatchStatus::Ended,
+            "ended",
+        ),
+        // Final: a late report after the end changes nothing.
+        (
+            VideoReport::Playing {
+                position_s: 1,
+                duration_s: None,
+            },
+            None,
+            WatchStatus::Ended,
+            "ended",
+        ),
+    ];
+    for (report, outcome, status, text) in steps {
+        assert_eq!(player.apply(&report, now), outcome, "{report:?}");
+        assert_eq!(player.status(), status, "{report:?}");
+        assert_eq!(player.status_text(), text, "{report:?}");
+    }
+    assert_eq!(player.wanted(), None, "an ended play wants nothing from the CLI");
+    assert_eq!(player.control(VideoControl::TogglePause), None);
+}
+
+#[test]
+fn a_failed_play_shows_the_web_line_and_stops_relaying_keys() {
+    let now = Instant::now();
+    let mut player = drawn_player(now);
+    assert_eq!(
+        player.control(VideoControl::SeekForward),
+        Some(PairControlMessage::VideoControl {
+            play_id: 7,
+            control: VideoControl::SeekForward,
+        })
+    );
+    assert_eq!(player.fallback_line(), None);
+    assert_eq!(
+        player.apply(
+            &VideoReport::Failed {
+                message: "mpv exited with status 2".to_string()
+            },
+            now
+        ),
+        Some(WatchOutcome::Failed)
+    );
+    assert_eq!(player.status_text(), "couldn't play");
+    assert_eq!(
+        player.fallback_line(),
+        Some(format!("Watch on the web: {URL}"))
+    );
+    assert_eq!(player.control(VideoControl::SeekForward), None);
+}
+
+/// Ten seconds with no report loses the play, once; a report after that
+/// was only a quiet CLI and brings it back.
+#[test]
+fn a_silent_cli_is_lost_after_ten_seconds() {
+    let start = Instant::now();
+    let mut player = drawn_player(start);
+    assert_eq!(player.expire(start + Duration::from_secs(9)), None);
+    assert_eq!(
+        player.expire(start + WATCH_LOST_AFTER),
+        Some(WatchOutcome::Lost)
+    );
+    assert_eq!(player.status_text(), "lost the CLI");
+    assert_eq!(
+        player.fallback_line(),
+        Some(format!("Watch on the web: {URL}"))
+    );
+    assert_eq!(player.expire(start + Duration::from_secs(60)), None);
+    assert_eq!(player.wanted(), None);
+
+    let later = start + Duration::from_secs(61);
+    player.apply(
+        &VideoReport::Paused {
+            position_s: 5,
+            duration_s: Some(10),
+        },
+        later,
+    );
+    assert_eq!(player.status_text(), "⏸ 0:05 / 0:10");
+    assert_eq!(player.expire(later + Duration::from_secs(9)), None);
+}
+
+#[test]
+fn footer_names_the_size_f_goes_to() {
+    let mut player = drawn_player(Instant::now());
+    let keys = |player: &Player| {
+        player
+            .footer_hints()
+            .into_iter()
+            .map(|(key, hint)| format!("{key} {hint}"))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        keys(&player),
+        ["Space pause", "←/→ seek 10s", "m mute", "f full"]
+    );
+    player.toggle_size();
+    assert_eq!(
+        keys(&player),
+        ["Space pause", "←/→ seek 10s", "m mute", "f window"]
+    );
+}
+
+fn cli(capabilities: &[&str], blockers: &[VideoBlocker]) -> ClientAudioState {
+    ClientAudioState {
+        client_kind: ClientKind::Cli,
+        ssh_mode: ClientSshMode::Native,
+        platform: ClientPlatform::Linux,
+        capabilities: capabilities.iter().map(|c| c.to_string()).collect(),
+        video_blockers: blockers.to_vec(),
+        muted: false,
+        volume_percent: 30,
+    }
+}
+
+fn inputs(cli: Option<ClientAudioState>) -> SetupInputs {
+    SetupInputs {
+        cli,
+        protocol: Some(TerminalImageProtocol::Kitty),
+        multiplexer_term: false,
+        windows_terminal: false,
+        images_off: false,
+    }
+}
+
+fn rows(setup: &SetupBox) -> Vec<(Requirement, Mark)> {
+    setup
+        .rows()
+        .iter()
+        .map(|row| (row.requirement, row.mark))
+        .collect()
+}
+
+/// Plain SSH, the common case: the CLI is the first miss, the tools
+/// cannot be known, and the line is the real installer.
+#[test]
+fn setup_without_a_paired_cli_points_at_the_installer() {
+    let setup = SetupBox::decide(URL, &inputs(None));
+    assert_eq!(
+        rows(&setup),
+        vec![
+            (Requirement::Cli, Mark::Fails),
+            (Requirement::KittyTerminal, Mark::Holds),
+            (Requirement::NoMultiplexer, Mark::Holds),
+            (Requirement::Mpv, Mark::Unknown),
+            (Requirement::YtDlp, Mark::Unknown),
+        ]
+    );
+    assert_eq!(setup.install(), Some(InstallHint::CliInstaller));
+
+    let windows = SetupBox::decide(
+        URL,
+        &SetupInputs {
+            windows_terminal: true,
+            protocol: Some(TerminalImageProtocol::Sixel),
+            ..inputs(None)
+        },
+    );
+    assert_eq!(windows.install(), Some(InstallHint::CliInstallerWindows));
+    assert_eq!(windows.rows()[1].mark, Mark::Fails, "Sixel is not Kitty");
+}
+
+#[test]
+fn setup_in_tmux_with_everything_installed_fails_only_the_multiplexer() {
+    let setup = SetupBox::decide(
+        URL,
+        &SetupInputs {
+            multiplexer_term: true,
+            protocol: None,
+            ..inputs(Some(cli(&["voice"], &[VideoBlocker::Multiplexer])))
+        },
+    );
+    assert_eq!(
+        rows(&setup),
+        vec![
+            (Requirement::Cli, Mark::Holds),
+            // tmux hides the terminal from the server's detection too.
+            (Requirement::KittyTerminal, Mark::Fails),
+            (Requirement::NoMultiplexer, Mark::Fails),
+            (Requirement::Mpv, Mark::Holds),
+            (Requirement::YtDlp, Mark::Holds),
+        ]
+    );
+    assert_eq!(setup.install(), None);
+}
+
+#[test]
+fn setup_on_kitty_missing_ytdlp_fails_one_row() {
+    let setup = SetupBox::decide(URL, &inputs(Some(cli(&["voice"], &[VideoBlocker::NoYtDlp]))));
+    assert_eq!(
+        rows(&setup),
+        vec![
+            (Requirement::Cli, Mark::Holds),
+            (Requirement::KittyTerminal, Mark::Holds),
+            (Requirement::NoMultiplexer, Mark::Holds),
+            (Requirement::Mpv, Mark::Holds),
+            (Requirement::YtDlp, Mark::Fails),
+        ]
+    );
+    assert_eq!(setup.install(), Some(InstallHint::LinuxPackages));
+
+    let mac = SetupBox::decide(
+        URL,
+        &inputs(Some(ClientAudioState {
+            platform: ClientPlatform::Macos,
+            ..cli(&[], &[VideoBlocker::MpvTooOld])
+        })),
+    );
+    assert_eq!(rows(&mac)[3], (Requirement::MpvTooOld, Mark::Fails));
+    assert_eq!(mac.install(), Some(InstallHint::Brew));
+}
+
+/// Everything holds but the Tweaks row is Off: the one case the box can be
+/// green otherwise, so that row leads.
+#[test]
+fn setup_with_images_off_leads_with_the_tweak() {
+    let setup = SetupBox::decide(
+        URL,
+        &SetupInputs {
+            images_off: true,
+            ..inputs(Some(cli(&["voice", "video"], &[])))
+        },
+    );
+    assert_eq!(
+        rows(&setup),
+        vec![
+            (Requirement::ImagesOn, Mark::Fails),
+            (Requirement::Cli, Mark::Holds),
+            (Requirement::KittyTerminal, Mark::Holds),
+            (Requirement::NoMultiplexer, Mark::Holds),
+            (Requirement::Mpv, Mark::Holds),
+            (Requirement::YtDlp, Mark::Holds),
+        ]
+    );
+    assert_eq!(setup.install(), None);
+}
+
+/// A CLI from before `video` reports neither the capability nor blockers:
+/// it needs updating, and its tools cannot be known.
+#[test]
+fn setup_with_a_cli_that_predates_video_asks_for_an_update() {
+    let setup = SetupBox::decide(URL, &inputs(Some(cli(&["voice"], &[]))));
+    assert_eq!(
+        rows(&setup),
+        vec![
+            (Requirement::CliUpdate, Mark::Fails),
+            (Requirement::KittyTerminal, Mark::Holds),
+            (Requirement::NoMultiplexer, Mark::Holds),
+            (Requirement::Mpv, Mark::Unknown),
+            (Requirement::YtDlp, Mark::Unknown),
+        ]
+    );
+    assert_eq!(setup.install(), Some(InstallHint::CliInstaller));
+}
+
+#[test]
+fn setup_box_renders_its_rows_and_lines() {
+    let setup = SetupBox::decide(URL, &inputs(Some(cli(&["voice"], &[VideoBlocker::NoMpv]))));
+    let text: Vec<String> = super::super::ui::setup_lines(&setup)
+        .iter()
+        .map(|line| {
+            line.spans
+                .iter()
+                .map(|span| span.content.as_ref())
+                .collect::<String>()
+        })
+        .collect();
+    assert_eq!(
+        text,
+        vec![
+            "Videos play right here when your setup has:".to_string(),
+            String::new(),
+            "✓ the late CLI               run late.sh through `late`, not plain ssh".to_string(),
+            "✓ a Kitty-graphics terminal  kitty, Ghostty, WezTerm, Konsole, Rio".to_string(),
+            "✓ no tmux or screen          the video is drawn straight to the terminal".to_string(),
+            "✗ mpv 0.36 or newer          plays the video".to_string(),
+            "✓ yt-dlp                     fetches it for mpv".to_string(),
+            String::new(),
+            "Install mpv and yt-dlp with your package manager (apt, dnf, pacman, nix)".to_string(),
+            format!("Watch on the web: {URL}"),
+            String::new(),
+            "c copy link  Esc".to_string(),
+        ]
+    );
+}

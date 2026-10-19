@@ -1300,7 +1300,7 @@ fn log_video_update(update: &VideoUpdate) {
         }
     }
     if let Some(rect) = update.residue
-        && let Err(err) = video::clear_frame(rect)
+        && let Err(err) = video::settle_terminal(rect)
     {
         warn!(play_id, error = %err, "failed to clear the last video frame");
     }

@@ -29,7 +29,9 @@ pub fn news_share_banner(lead: &str, reward: NewsShareReward) -> Banner {
 }
 
 use super::reader::state::{ReaderBody, ReaderModal};
-use super::svc::{ArticleService, BodyLoad, BodyReply};
+use super::svc::{ArticleService, BodyLoad, BodyReply, is_youtube_url};
+use super::watch::state::{LivePlay, Player, SetupBox, SetupInputs, WatchModal};
+use crate::paired_clients::PairControlMessage;
 
 /// This session's news reads: the ids of the snapshot's articles the
 /// reader has read (`article_reads`), a visit to the News room reading
@@ -124,6 +126,13 @@ pub struct State {
     processing: bool,
     current_task: Option<tokio::task::AbortHandle>,
     reader: Option<OpenReader>,
+    /// Never up at the same time as the reader.
+    watch: Option<WatchModal>,
+    /// What the paired CLI was last told to play, kept past the modal so
+    /// closing it still sends the stop (`watch::state::sync`).
+    live_play: Option<LivePlay>,
+    /// The last `play_id` handed out this session.
+    last_play_id: u64,
 }
 
 /// The reader on screen and its outstanding body request. They travel
@@ -158,6 +167,9 @@ impl State {
             processing: false,
             current_task: None,
             reader: None,
+            watch: None,
+            live_play: None,
+            last_play_id: 0,
         }
     }
 
@@ -458,6 +470,7 @@ impl State {
             return false;
         };
         let modal = ReaderModal::open(item);
+        self.watch = None;
         self.mark_article_read(article_id);
         let body_request =
             self.article_service
@@ -475,6 +488,70 @@ impl State {
 
     pub(crate) fn close_reader(&mut self) -> Option<ReaderModal> {
         self.reader.take().map(|open| open.modal)
+    }
+
+    /// Whether a snapshot story is a video the watch modal can play.
+    pub(crate) fn is_watchable(&self, article_id: Uuid) -> bool {
+        self.source_articles
+            .iter()
+            .any(|item| item.article.id == article_id && is_youtube_url(&item.article.url))
+    }
+
+    /// Open the player on a snapshot video, a fresh `play_id` for it, and
+    /// mark it read. False when it left the snapshot or is not a video.
+    pub(crate) fn open_watch_player(&mut self, article_id: Uuid, now: std::time::Instant) -> bool {
+        let Some(item) = self.watchable_item(article_id) else {
+            return false;
+        };
+        self.last_play_id += 1;
+        self.reader = None;
+        self.watch = Some(WatchModal::Player(Player::new(&item, self.last_play_id, now)));
+        self.mark_article_read(article_id);
+        true
+    }
+
+    /// Open the setup box for a snapshot video the user's setup cannot
+    /// play. False when it left the snapshot or is not a video.
+    pub(crate) fn open_watch_setup(&mut self, article_id: Uuid, inputs: &SetupInputs) -> bool {
+        let Some(item) = self.watchable_item(article_id) else {
+            return false;
+        };
+        self.reader = None;
+        self.watch = Some(WatchModal::Setup(SetupBox::decide(&item.article.url, inputs)));
+        true
+    }
+
+    fn watchable_item(&self, article_id: Uuid) -> Option<ArticleFeedItem> {
+        self.source_articles
+            .iter()
+            .find(|item| item.article.id == article_id && is_youtube_url(&item.article.url))
+            .cloned()
+    }
+
+    pub(crate) fn watch(&self) -> Option<&WatchModal> {
+        self.watch.as_ref()
+    }
+
+    pub(crate) fn player_mut(&mut self) -> Option<&mut Player> {
+        match &mut self.watch {
+            Some(WatchModal::Player(player)) => Some(player),
+            Some(WatchModal::Setup(_)) | None => None,
+        }
+    }
+
+    pub(crate) fn close_watch(&mut self) {
+        self.watch = None;
+    }
+
+    /// The pair messages that bring the CLI in line with the open player:
+    /// a play, a move, a stop. Called after every draw, which is what
+    /// records the player's body.
+    pub(crate) fn video_sync(&mut self) -> Vec<PairControlMessage> {
+        let wanted = match &self.watch {
+            Some(WatchModal::Player(player)) => player.wanted(),
+            Some(WatchModal::Setup(_)) | None => None,
+        };
+        super::watch::state::sync(&mut self.live_play, wanted)
     }
 
     pub fn submit_composer(&mut self) {

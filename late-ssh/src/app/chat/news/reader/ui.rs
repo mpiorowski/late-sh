@@ -125,6 +125,9 @@ pub(crate) fn footer_hints(modal: &ReaderModal) -> Vec<(&'static str, &'static s
     if modal.has_links() {
         hints.push(("1-9", "copy link"));
     }
+    if modal.watchable() {
+        hints.push(("w", "watch"));
+    }
     hints.extend([("c", "copy"), ("r", "reply")]);
     hints
 }

@@ -166,6 +166,26 @@ fn a_pending_or_unavailable_body_shows_the_summary_and_one_status_line() {
     assert!(!reader.has_links());
 }
 
+/// A video is watched, not read: pending or not, its fallback names the
+/// watch link, and the footer offers `w`.
+#[test]
+fn a_video_shows_the_watch_line_and_offers_w() {
+    for body in [BodyStatus::Pending, BodyStatus::Unavailable] {
+        let mut item = story(body);
+        item.article.url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ".to_string();
+        let reader = ReaderModal::open(&item);
+        assert!(reader.watchable());
+        assert_eq!(
+            plain(&reader.lay_out(60)).last().map(String::as_str),
+            Some("Watch: https://www.youtube.com/watch?v=dQw4w9WgXcQ")
+        );
+        assert!(super::super::ui::footer_hints(&reader).contains(&("w", "watch")));
+    }
+    let reader = ReaderModal::open(&story(BodyStatus::Unavailable));
+    assert!(!reader.watchable());
+    assert!(!super::super::ui::footer_hints(&reader).contains(&("w", "watch")));
+}
+
 /// Scrolling stops at either end of what the last draw measured, and a
 /// page keeps one line of the last.
 #[test]
