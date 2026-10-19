@@ -1373,7 +1373,12 @@ fn video_messages(
 }
 
 /// A paired CLI's report, as the pair socket would record it.
-fn report_paired_cli(app: &crate::app::state::App, token: &str, capabilities: &[&str], blockers: &[crate::app::audio::client_state::VideoBlocker]) {
+fn report_paired_cli(
+    app: &crate::app::state::App,
+    token: &str,
+    capabilities: &[&str],
+    blockers: &[crate::app::audio::client_state::VideoBlocker],
+) {
     use crate::app::audio::client_state::{
         ClientAudioState, ClientKind, ClientPlatform, ClientSshMode,
     };
@@ -1436,8 +1441,8 @@ async fn news_room_with_a_video(
     (app, rx)
 }
 
-/// With a paired CLI that advertises `video` on a Kitty terminal, `w` on a
-/// YouTube card opens the player, and the CLI hears a play with the
+/// With a paired CLI that advertises `video`, `w` on a YouTube card opens
+/// the player, and the CLI hears a play with the
 /// window's body, a place with the full-screen body on `f`, and a stop on
 /// Esc.
 #[tokio::test]
@@ -1448,21 +1453,25 @@ async fn w_on_a_video_plays_it_through_the_paired_cli() {
     let test_db = new_test_db().await;
     let (mut app, mut rx) = news_room_with_a_video(&test_db, token).await;
     report_paired_cli(&app, token, &["voice", "video"], &[]);
-    app.detected_image_protocol = Some(TerminalImageProtocol::Kitty);
+    // WezTerm: the server draws its images as iTerm2, the CLI's `video`
+    // says the terminal takes Kitty graphics, and the CLI's word decides.
+    app.detected_image_protocol = Some(TerminalImageProtocol::Iterm2);
     video_messages(&mut rx);
 
     app.handle_input(b"w");
     wait_for_render_contains(&mut app, " Watching ").await;
     let played = video_messages(&mut rx);
     let play_id = match played.as_slice() {
-        [PairControlMessage::VideoPlay {
-            play_id,
-            url,
-            left,
-            top,
-            cols,
-            rows,
-        }] => {
+        [
+            PairControlMessage::VideoPlay {
+                play_id,
+                url,
+                left,
+                top,
+                cols,
+                rows,
+            },
+        ] => {
             assert_eq!(url, "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
             // 90 percent of 160x40 is 144x36, centered at (8, 2); the body
             // sits inside the border below the two header rows.

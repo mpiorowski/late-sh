@@ -490,6 +490,13 @@ impl State {
         self.reader.take().map(|open| open.modal)
     }
 
+    /// Whether the selected card is a video: the one case `w` in the News
+    /// room is "watch" and not the global Bonsai shortcut.
+    pub(crate) fn selected_card_is_watchable(&self) -> bool {
+        self.selected_item()
+            .is_some_and(|item| is_youtube_url(&item.article.url))
+    }
+
     /// Whether a snapshot story is a video the watch modal can play.
     pub(crate) fn is_watchable(&self, article_id: Uuid) -> bool {
         self.source_articles
@@ -505,7 +512,11 @@ impl State {
         };
         self.last_play_id += 1;
         self.reader = None;
-        self.watch = Some(WatchModal::Player(Player::new(&item, self.last_play_id, now)));
+        self.watch = Some(WatchModal::Player(Player::new(
+            &item,
+            self.last_play_id,
+            now,
+        )));
         self.mark_article_read(article_id);
         true
     }
@@ -517,7 +528,10 @@ impl State {
             return false;
         };
         self.reader = None;
-        self.watch = Some(WatchModal::Setup(SetupBox::decide(&item.article.url, inputs)));
+        self.watch = Some(WatchModal::Setup(SetupBox::decide(
+            &item.article.url,
+            inputs,
+        )));
         true
     }
 

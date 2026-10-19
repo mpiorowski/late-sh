@@ -119,9 +119,8 @@ pub(crate) fn footer_line(
     let key = Style::default().fg(theme::AMBER_DIM());
     let hint = Style::default().fg(theme::TEXT_DIM());
     let status_width = UnicodeWidthStr::width(status);
-    let pair_width = |(k, h): &(&str, &str)| {
-        UnicodeWidthStr::width(*k) + 1 + UnicodeWidthStr::width(*h) + 2
-    };
+    let pair_width =
+        |(k, h): &(&str, &str)| UnicodeWidthStr::width(*k) + 1 + UnicodeWidthStr::width(*h) + 2;
     let mut hints = hints.to_vec();
     let mut esc = true;
     loop {
@@ -211,7 +210,10 @@ pub(crate) fn setup_lines(setup: &SetupBox) -> Vec<Line<'static>> {
     if let Some(install) = setup.install() {
         lines.push(Line::styled(install.text(), dim));
     }
-    lines.push(Line::styled(format!("Watch on the web: {}", setup.url()), dim));
+    lines.push(Line::styled(
+        format!("Watch on the web: {}", setup.url()),
+        dim,
+    ));
     lines.push(Line::default());
     lines.push(Line::from(vec![
         Span::styled("c", Style::default().fg(theme::AMBER_DIM())),

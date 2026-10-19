@@ -18,7 +18,11 @@ use crate::app::audio::client_state::{
 use crate::app::files::terminal_image::TerminalImageProtocol;
 use crate::paired_clients::{PairControlMessage, VideoControl, VideoReport};
 
-/// A live play with no `video_state` for this long has lost its CLI.
+/// A playing or paused play with no `video_state` for this long has lost
+/// its CLI. A starting one is exempt: the CLI reports `starting` once and
+/// nothing more until mpv has a position, and a yt-dlp resolve can take
+/// longer than this; a start that fails is reported as `failed` by the CLI
+/// itself.
 pub(crate) const WATCH_LOST_AFTER: Duration = Duration::from_secs(10);
 const WINDOW_WIDTH_PERMILLE: u16 = 900;
 const WINDOW_HEIGHT_PERMILLE: u16 = 900;
@@ -55,8 +59,9 @@ pub(crate) enum WatchStatus {
     },
     Ended,
     Failed,
-    /// No word from the CLI for [`WATCH_LOST_AFTER`], or a send reached
-    /// nobody.
+    /// No word from the CLI for [`WATCH_LOST_AFTER`] while playing or
+    /// paused, or a send reached nobody. Final: the stop already went out,
+    /// so a late report must not bring the play back and replay it.
     Lost,
 }
 
@@ -211,12 +216,7 @@ impl Player {
                         ..WatchLayout::default()
                     };
                 }
-                let inner = Rect::new(
-                    popup.x + 1,
-                    popup.y + 1,
-                    popup.width - 2,
-                    popup.height - 2,
-                );
+                let inner = Rect::new(popup.x + 1, popup.y + 1, popup.width - 2, popup.height - 2);
                 WatchLayout {
                     popup,
                     header: Rect::new(inner.x, inner.y, inner.width, WINDOW_HEADER_ROWS),
@@ -274,15 +274,12 @@ impl Player {
     }
 
     /// One `video_state` from the CLI, already matched to this play.
-    /// `Ended` and `Failed` settle the play for good; a report after `Lost`
-    /// brings it back, since the CLI was only quiet.
+    /// `Ended`, `Failed` and `Lost` settle the play for good: a report
+    /// after any of them is late and changes nothing.
     pub(crate) fn apply(&mut self, report: &VideoReport, now: Instant) -> Option<WatchOutcome> {
         match self.status {
-            WatchStatus::Ended | WatchStatus::Failed => return None,
-            WatchStatus::Starting
-            | WatchStatus::Playing { .. }
-            | WatchStatus::Paused { .. }
-            | WatchStatus::Lost => {}
+            WatchStatus::Ended | WatchStatus::Failed | WatchStatus::Lost => return None,
+            WatchStatus::Starting | WatchStatus::Playing { .. } | WatchStatus::Paused { .. } => {}
         }
         self.last_state_at = now;
         match report {
@@ -330,11 +327,18 @@ impl Player {
         }
     }
 
-    /// A live play the CLI has gone quiet on for [`WATCH_LOST_AFTER`].
+    /// A playing or paused play the CLI has gone quiet on for
+    /// [`WATCH_LOST_AFTER`]. A starting one waits for mpv however long it
+    /// takes; `Esc` is the way out of a start that never comes.
     pub(crate) fn expire(&mut self, now: Instant) -> Option<WatchOutcome> {
-        match self.status.is_live()
-            && now.saturating_duration_since(self.last_state_at) >= WATCH_LOST_AFTER
-        {
+        let quiet = match self.status {
+            WatchStatus::Playing { .. } | WatchStatus::Paused { .. } => true,
+            WatchStatus::Starting
+            | WatchStatus::Ended
+            | WatchStatus::Failed
+            | WatchStatus::Lost => false,
+        };
+        match quiet && now.saturating_duration_since(self.last_state_at) >= WATCH_LOST_AFTER {
             true => self.lose(),
             false => None,
         }
@@ -388,6 +392,7 @@ impl Player {
         vec![
             ("Space", "pause"),
             ("←/→", "seek 10s"),
+            ("⇧←/→", "60s"),
             ("m", "mute"),
             (
                 "f",
@@ -491,6 +496,9 @@ pub(crate) enum Requirement {
     /// The Tweaks "Terminal images" row is `Off`.
     ImagesOn,
     Cli,
+    /// A `late` that is paired but does not own the tty: OpenSSH or an
+    /// old mode.
+    CliNative,
     /// A `late` from before `video`: it reports neither the capability nor
     /// what blocks it.
     CliUpdate,
@@ -507,6 +515,7 @@ impl Requirement {
         match self {
             Self::ImagesOn => "terminal images on",
             Self::Cli => "the late CLI",
+            Self::CliNative => "late in native mode",
             Self::CliUpdate => "an up-to-date late CLI",
             Self::KittyTerminal => "a Kitty-graphics terminal",
             Self::NoMultiplexer => "no tmux or screen",
@@ -520,6 +529,7 @@ impl Requirement {
         match self {
             Self::ImagesOn => "Ctrl+O, Tweaks, Terminal images",
             Self::Cli => "run late.sh through `late`, not plain ssh",
+            Self::CliNative => "`late` must own the terminal, not hand it to ssh",
             Self::CliUpdate => "this `late` predates video; reinstall it",
             Self::KittyTerminal => "kitty, Ghostty, WezTerm, Konsole, Rio",
             Self::NoMultiplexer => "the video is drawn straight to the terminal",
@@ -574,8 +584,9 @@ impl InstallHint {
 pub(crate) struct SetupInputs {
     /// The paired CLI's last `client_state`; `None` is plain SSH.
     pub cli: Option<ClientAudioState>,
-    /// The protocol images would draw with, the Tweaks row applied except
-    /// `Off`, which is `images_off`.
+    /// The protocol the server would draw images with, the Tweaks row
+    /// applied except `Off`, which is `images_off`. A hint for the terminal
+    /// row until a CLI reports; the CLI's own blockers decide after that.
     pub protocol: Option<TerminalImageProtocol>,
     /// The session's `TERM` is tmux or screen.
     pub multiplexer_term: bool,
@@ -614,17 +625,31 @@ impl SetupBox {
         }
         rows.push(match &inputs.cli {
             None => row(Requirement::Cli, Mark::Fails),
-            Some(cli) if cli.ssh_mode != ClientSshMode::Native || blocked(VideoBlocker::NotNative) => {
-                row(Requirement::Cli, Mark::Fails)
+            Some(cli)
+                if cli.ssh_mode != ClientSshMode::Native || blocked(VideoBlocker::NotNative) =>
+            {
+                row(Requirement::CliNative, Mark::Fails)
             }
             Some(_) if !reports => row(Requirement::CliUpdate, Mark::Fails),
             Some(_) => row(Requirement::Cli, Mark::Holds),
         });
-        let kitty = inputs.protocol == Some(TerminalImageProtocol::Kitty)
-            && !blocked(VideoBlocker::NotKitty)
-            && !blocked(VideoBlocker::NoPixelSize)
-            && !blocked(VideoBlocker::Platform);
-        rows.push(row(Requirement::KittyTerminal, holds(kitty)));
+        // The CLI sits in the terminal and is the authority on it; the
+        // server's image detection serves images (WezTerm reads as iTerm2
+        // there) and can only confirm a Kitty terminal, never rule one out.
+        let kitty = match reports {
+            true => holds(
+                !blocked(VideoBlocker::NotKitty)
+                    && !blocked(VideoBlocker::NoPixelSize)
+                    && !blocked(VideoBlocker::Platform),
+            ),
+            false => match inputs.protocol {
+                Some(TerminalImageProtocol::Kitty) => Mark::Holds,
+                Some(TerminalImageProtocol::Iterm2 | TerminalImageProtocol::Sixel) | None => {
+                    Mark::Unknown
+                }
+            },
+        };
+        rows.push(row(Requirement::KittyTerminal, kitty));
         let multiplexer = inputs.multiplexer_term || blocked(VideoBlocker::Multiplexer);
         rows.push(row(Requirement::NoMultiplexer, holds(!multiplexer)));
         rows.push(match reports {
@@ -656,9 +681,10 @@ impl SetupBox {
                     false,
                 ) => None,
                 (ClientPlatform::Macos, true) => Some(InstallHint::Brew),
-                (ClientPlatform::Linux | ClientPlatform::Android | ClientPlatform::Unknown, true) => {
-                    Some(InstallHint::LinuxPackages)
-                }
+                (
+                    ClientPlatform::Linux | ClientPlatform::Android | ClientPlatform::Unknown,
+                    true,
+                ) => Some(InstallHint::LinuxPackages),
             },
         };
 

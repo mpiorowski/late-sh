@@ -330,10 +330,11 @@ gates, both required, evaluated when `w` is pressed:
    (`late-ssh/src/paired_clients.rs`, add `ClientAudioState::supports_video`
    and `PairedClientRegistry::has_video_cli`, same shape as `has_voice_cli`
    and `supports_open_url`).
-2. The server's own detection says Kitty: `App::terminal_image_protocol()
-   == Some(TerminalImageProtocol::Kitty)`. That already folds in the Tweaks
-   "Terminal images" row (`Off` hides `watch` too), the tmux exclusion, and
-   XTVERSION/DA1 detection the CLI does not have.
+2. The Tweaks "Terminal images" row is not `Off`: the user's one way to
+   keep graphics out of their terminal. The server's own image detection
+   is not a gate: it maps WezTerm to iTerm2 on purpose for images, and the
+   CLI sits in the terminal and already checked it (tmux included). The
+   setup box uses that detection only as a hint until a CLI reports.
 
 Both pass: the player opens. Either fails: the setup box opens (below),
 built from everything the server knows about why.
@@ -350,8 +351,8 @@ check runs once, so a fixed setup is picked up on the next `late` launch:
 - The terminal is Kitty-graphics family by the same env hints the CLI
   already forwards for images: `TERM=xterm-kitty` or `KITTY_WINDOW_ID`,
   `TERM_PROGRAM` in {`ghostty`, `WezTerm`, `rio`}, `GHOSTTY_RESOURCES_DIR`,
-  `WEZTERM_EXECUTABLE`, `KONSOLE_VERSION`. The server's detection is the
-  second opinion.
+  `WEZTERM_EXECUTABLE`, `KONSOLE_VERSION`. The CLI's word is the one that
+  counts.
 - The tty reports pixel size: `TIOCGWINSZ` on the CLI's own stdout gives
   nonzero `ws_xpixel`/`ws_ypixel`. mpv needs pixels to size the placement;
   a terminal that reports zero cannot host the video.
@@ -403,7 +404,7 @@ Two sizes, toggled by `f`:
   the last; the last row is the footer. `f` again returns to Window.
 
 Footer, left to right, in the reader's `key hint` style:
-`Space pause  ←/→ seek 10s  m mute  f full  Esc`, with `f window` when
+`Space pause  ←/→ seek 10s  ⇧←/→ 60s  m mute  f full  Esc`, with `f window` when
 full, and the status at the right edge in `TEXT_DIM`:
 `starting…` / `▶ 1:23 / 12:04` / `⏸ 1:23 / 12:04` / `ended` /
 `couldn't play`. Trailing hints drop first when the width runs short, the
@@ -416,6 +417,7 @@ open, like the reader):
 |---|---|
 | `Space` | `video_control toggle_pause` |
 | `←` / `→`, `h` / `l` | `video_control seek_back` / `seek_forward` (10 s) |
+| `Shift+←` / `Shift+→`, `H` / `L` | `video_control seek_back_far` / `seek_forward_far` (60 s) |
 | `m` | `video_control toggle_mute` (mpv's own mute, not the house mute) |
 | `f` | Toggle Window / Full, which re-sends the rectangle |
 | `c` | Copy the story's link (same as the reader) |
@@ -464,8 +466,8 @@ How each mark is decided, exhaustively, from what the server holds:
 
 | Row | ✓ | ✗ | · |
 |---|---|---|---|
-| the late CLI | a paired client with `client_kind: cli` and `ssh_mode: native` | no paired client, or `ssh_mode` is `openssh`/`old` (blocker `not_native`) | never |
-| Kitty terminal | server detection says Kitty and the CLI did not send `not_kitty`/`no_pixel_size` | server detection says another protocol or none, or the CLI sent `not_kitty`/`no_pixel_size`, or `platform` blocker | never (the server always has an opinion) |
+| the late CLI | a paired client with `client_kind: cli` and `ssh_mode: native` | no paired client; a paired one with `ssh_mode` `openssh`/`old` (blocker `not_native`) fails as its own row, `late in native mode`; one reporting neither `video` nor blockers predates video and reads `an up-to-date late CLI` | never |
+| Kitty terminal | a reporting CLI sent none of `not_kitty`/`no_pixel_size`/`platform`; with no reporting CLI, server detection says Kitty | a reporting CLI sent `not_kitty`, `no_pixel_size` or `platform` | no reporting CLI and server detection says another protocol or none (it maps WezTerm to iTerm2, so it can only confirm) |
 | no multiplexer | `TERM` is not tmux/screen and no `multiplexer` blocker | either says tmux/screen | never |
 | mpv | CLI paired and no `no_mpv`/`mpv_too_old` blocker | `no_mpv` or `mpv_too_old` (the row says `mpv is too old` for the latter) | no paired CLI |
 | yt-dlp | CLI paired and no `no_ytdlp` blocker | `no_ytdlp` | no paired CLI |
@@ -520,7 +522,7 @@ mirrored in `late-cli/src/ws.rs`; serde tag `event`, snake case):
 ```
 
 `control` is a closed enum: `toggle_pause`, `seek_back`, `seek_forward`,
-`toggle_mute`. `left`/`top` are 0-based terminal cells from the TUI's
+`seek_back_far`, `seek_forward_far`, `toggle_mute`. `left`/`top` are 0-based terminal cells from the TUI's
 `Rect`; `cols`/`rows` the rectangle's size. `play_id` is a per-session
 counter the TUI increments on every `video_play`; the CLI ignores any
 message whose `play_id` is not the one it is playing, and the TUI ignores
@@ -553,19 +555,22 @@ Blocker strings are the snake case of the closed `VideoBlocker` enum:
 closed enum and keeps them on `ClientAudioState`; a string it does not know
 (a newer CLI than the server) is dropped with a `warn` log, not an error,
 because the two binaries release on different schedules. The setup box
-reads them through `PairedClientRegistry::video_blockers(token) ->
-Option<Vec<VideoBlocker>>` (`None` when no CLI is paired).
+reads them through `PairedClientRegistry::cli_state(token) ->
+Option<ClientAudioState>` (`None` when no CLI is paired), since it needs
+the CLI's mode and platform as well.
 
 `state` is a closed enum: `starting`, `playing`, `paused`, `ended`,
 `failed`, `stopped`. `position_s`/`duration_s` are present for `playing` and
 `paused` (`duration_s` is `null` for a live stream); `message` only for
 `failed`. `stopped` answers a `video_stop` once mpv is gone. `ended`,
 `failed` and `stopped` are final: whatever mpv left in the terminal is
-settled, which is the server's cue to restore its terminal modes (below). The CLI sends one on every state change and
-once a second while playing (ride the existing 1 s pair heartbeat tick in
-`maintain_helper`'s loop; do not add a second timer). The server turns it
-into `ArticleEvent::VideoState { user_id, play_id, state }` for the
-session's `news::State`, which is the only consumer.
+settled. The CLI sends one on every state change and once a second while
+playing or paused (the existing 1 s pair heartbeat tick in
+`maintain_helper`'s loop; no second timer), and nothing between its one
+`starting` and mpv's first position. The server turns it into
+`SessionMessage::VideoState { play_id, report }` routed by token like
+`clipboard_image` (not an `ArticleEvent`, which every session of the user
+would receive) for the session's `news::State`, the only consumer.
 
 Document all of it in `late-cli/CONTEXT.md` §6 next to the clipboard and
 voice messages, and add `video` to the capabilities list there.
@@ -579,16 +584,23 @@ New module, same role split as the webview helper code in `ws.rs`: a
 Spawning:
 
 ```
-<mpv> --no-config --really-quiet --terminal=no
+<mpv> --no-config --really-quiet --terminal=no --log-file=<video.log>
       --vo=kitty --vo-kitty-use-shm=<yes|no> --vo-kitty-alt-screen=no --vo-kitty-config-clear=no
       --vo-kitty-left=<left+1> --vo-kitty-top=<top+1> --vo-kitty-cols=<cols> --vo-kitty-rows=<rows>
       --vo-kitty-width=<cols*cell_px_w> --vo-kitty-height=<rows*cell_px_h>
-      --ytdl=yes --ytdl-format=bestvideo[height<=720]+bestaudio/best[height<=720]
+      --ytdl=yes --ytdl-format=bestvideo[protocol^=m3u8][height<=720]+bestaudio[protocol^=m3u8]/bestvideo[height<=720]+bestaudio/best[height<=720]
       --volume=<volume_percent> --keep-open=no
       --input-ipc-server=<runtime dir>/late-video-<pid>.sock
       -- <url>
 ```
 
+- The format asks for the HLS variants first. YouTube serves an
+  open-ended range request, the only kind ffmpeg makes, at playback speed,
+  so a direct stream never caches ahead and every seek stalls for seconds
+  (measured: 4 to 10 s per 10 s seek, a 60 s seek never returned within
+  15 s). HLS segments are bounded requests at full speed: seeks resume in
+  under 0.1 s with minutes cached ahead. Direct streams stay as the
+  fallback for a video without HLS.
 - mpv's `--vo-kitty-left/top` are 1-based (`man mpv`), so the CLI adds one
   to the TUI's 0-based cells. `--vo-kitty-cols/rows` are the size of the
   drawing area in cells, and `--vo-kitty-width/height` its size in pixels,
@@ -598,7 +610,10 @@ Spawning:
   whole vector.
 - `--no-config` so a user's `mpv.conf` cannot change the video output or
   pull in scripts that write to the terminal. `--terminal=no` so mpv never
-  reads stdin or prints. `--vo-kitty-alt-screen=no` is mandatory: the
+  reads stdin or prints; that also silences its stderr, so `--log-file`
+  (the CLI's `video.log`, truncated per play) is where a failed play says
+  why, and the CLI forwards that file's last error line in
+  `video_state.message`. `--vo-kitty-alt-screen=no` is mandatory: the
   default would switch the user's terminal to the alternate screen and
   wipe the TUI on exit. `--vo-kitty-config-clear=no` keeps mpv from
   clearing on a reconfigure. `--vo-kitty-use-shm` is `yes` only on kitty
@@ -624,7 +639,8 @@ Spawning:
   it in `late-cli/CONTEXT.md`; verify, do not assume.
 - Controls over the IPC socket as JSON lines:
   `{"command":["cycle","pause"]}`, `{"command":["seek",-10]}`,
-  `{"command":["seek",10]}`, `{"command":["cycle","mute"]}`. Position and
+  `{"command":["seek",10]}`, `{"command":["seek",-60]}`,
+  `{"command":["seek",60]}`, `{"command":["cycle","mute"]}`. Position and
   duration come from `{"command":["get_property","time-pos"]}` and
   `duration` on the 1 s poll; `pause` gives paused. `--keep-open=no` quits
   at end of file, so an exit status of 0 is `ended`.
@@ -685,10 +701,12 @@ it is not.
   `video_control` from keys, `video_stop` on close. Every send goes through
   `send_control_to_video_cli`; a send that reaches nobody flips the modal to
   `Lost` immediately.
-- `ArticleEvent::VideoState` arrives on the session's event drain
-  (`news::State::drain_events`) and updates the modal if the `play_id`
-  matches. A `Starting`/`Playing`/`Paused` modal with no state for 10 s
-  becomes `Lost` on tick.
+- `SessionMessage::VideoState` arrives on the session's tick drain and
+  updates the modal if the `play_id` matches. A `Playing`/`Paused` modal
+  with no state for 10 s becomes `Lost` on tick; a `Starting` one waits,
+  since a yt-dlp resolve can outlast the timeout and the CLI reports a
+  start that fails itself. `Lost` is final: the stop already went out, so
+  a late report must not replay the video.
 - Nothing to restore on a final `video_state`: the CLI's relay keeps mpv's
   cursor, mouse and delete-all writes off the tty, so the TUI's modes and
   images are exactly as it left them.
@@ -764,9 +782,10 @@ Server:
   in tmux with everything installed (only the multiplexer row ✗); a native
   CLI on Kitty missing `yt-dlp` (one ✗); all green with Tweaks images Off
   (the extra first row). The rendered box text for one of them.
-- Flow test (`input_flow_test.rs`): register a fake paired client on the
+- Flow test (`dashboard_flow_test.rs`, next to the reader's): register a fake paired client on the
   session token (`PairedClientRegistry::register`, the way the clipboard
-  tests do) advertising `video`, make the detected protocol Kitty, share a
+  tests do) advertising `video`, make the detected protocol iTerm2 (WezTerm
+  as the server sees it; the CLI's word decides), share a
   YouTube link, press `w`: the modal opens, a `video_play` with the body
   rect lands on the fake client's channel; `f` lands a `video_place` with
   the full-screen rect; Esc lands a `video_stop`. The same walk with the

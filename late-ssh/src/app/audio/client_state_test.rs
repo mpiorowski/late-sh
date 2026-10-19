@@ -72,7 +72,10 @@ fn video_blockers_parse_from_the_cli_wire_names() {
     ];
     for (wire, blocker) in cases {
         assert_eq!(VideoBlocker::parse(wire), Some(blocker));
-        assert_eq!(serde_json::to_string(&blocker).unwrap(), format!("\"{wire}\""));
+        assert_eq!(
+            serde_json::to_string(&blocker).unwrap(),
+            format!("\"{wire}\"")
+        );
     }
     assert_eq!(VideoBlocker::parse("no_gpu"), None);
 }

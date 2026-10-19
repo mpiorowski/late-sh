@@ -265,6 +265,7 @@ fn mpv_args_for_a_window() {
         resume: None,
         ipc_path: Path::new("/run/user/1000/late-video-42.sock"),
         ytdlp_override: None,
+        log_path: Path::new("/home/me/.local/state/late/video.log"),
     });
     assert_eq!(
         args,
@@ -272,6 +273,7 @@ fn mpv_args_for_a_window() {
             "--no-config",
             "--really-quiet",
             "--terminal=no",
+            "--log-file=/home/me/.local/state/late/video.log",
             "--vo=kitty",
             "--vo-kitty-use-shm=yes",
             "--vo-kitty-alt-screen=no",
@@ -283,7 +285,7 @@ fn mpv_args_for_a_window() {
             "--vo-kitty-width=1000",
             "--vo-kitty-height=560",
             "--ytdl=yes",
-            "--ytdl-format=bestvideo[height<=720]+bestaudio/best[height<=720]",
+            "--ytdl-format=bestvideo[protocol^=m3u8][height<=720]+bestaudio[protocol^=m3u8]/bestvideo[height<=720]+bestaudio/best[height<=720]",
             "--volume=30",
             "--keep-open=no",
             "--input-ipc-server=/run/user/1000/late-video-42.sock",
@@ -316,6 +318,7 @@ fn mpv_args_for_full_screen_resume() {
         }),
         ipc_path: Path::new("/tmp/late-video-7.sock"),
         ytdlp_override: Some(Path::new("/home/me/.local/bin/yt-dlp")),
+        log_path: Path::new("/tmp/video.log"),
     });
     assert_eq!(
         args,
@@ -323,6 +326,7 @@ fn mpv_args_for_full_screen_resume() {
             "--no-config",
             "--really-quiet",
             "--terminal=no",
+            "--log-file=/tmp/video.log",
             "--vo=kitty",
             "--vo-kitty-use-shm=no",
             "--vo-kitty-alt-screen=no",
@@ -334,7 +338,7 @@ fn mpv_args_for_full_screen_resume() {
             "--vo-kitty-width=1917",
             "--vo-kitty-height=1120",
             "--ytdl=yes",
-            "--ytdl-format=bestvideo[height<=720]+bestaudio/best[height<=720]",
+            "--ytdl-format=bestvideo[protocol^=m3u8][height<=720]+bestaudio[protocol^=m3u8]/bestvideo[height<=720]+bestaudio/best[height<=720]",
             "--script-opts=ytdl_hook-ytdl_path=/home/me/.local/bin/yt-dlp",
             "--volume=70",
             "--keep-open=no",
@@ -357,6 +361,8 @@ fn every_control_maps_to_its_mpv_command() {
         ),
         (VideoControl::SeekBack, r#"{"command":["seek",-10]}"#),
         (VideoControl::SeekForward, r#"{"command":["seek",10]}"#),
+        (VideoControl::SeekBackFar, r#"{"command":["seek",-60]}"#),
+        (VideoControl::SeekForwardFar, r#"{"command":["seek",60]}"#),
         (VideoControl::ToggleMute, r#"{"command":["cycle","mute"]}"#),
     ];
     for (control, expected) in cases {
@@ -370,6 +376,8 @@ fn controls_parse_from_their_wire_names() {
         ("toggle_pause", VideoControl::TogglePause),
         ("seek_back", VideoControl::SeekBack),
         ("seek_forward", VideoControl::SeekForward),
+        ("seek_back_far", VideoControl::SeekBackFar),
+        ("seek_forward_far", VideoControl::SeekForwardFar),
         ("toggle_mute", VideoControl::ToggleMute),
     ] {
         let parsed: VideoControl = serde_json::from_value(json!(wire)).unwrap();
@@ -404,7 +412,10 @@ fn every_state_has_its_payload() {
             json!({ "event": "video_state", "play_id": 7, "state": "ended" }),
         ),
         (
-            VideoState::Failed(VideoFailure::Exited(Some(2))),
+            VideoState::Failed(VideoFailure::Exited {
+                code: Some(2),
+                reason: None,
+            }),
             json!({ "event": "video_state", "play_id": 7, "state": "failed", "message": "mpv exited with status 2" }),
         ),
         (
@@ -547,4 +558,42 @@ fn a_non_http_url_never_reaches_mpv() {
         }
     );
     assert!(!player.is_active());
+}
+
+/// With `--terminal=no` mpv's stderr is silent, so the reason a play
+/// failed lives only in its log file. The last error or fatal line is
+/// what the server's log gets, in the CLI's own words (mpv exited 2 on
+/// YouTube's 403 tonight; the log said why).
+#[test]
+fn the_last_error_line_of_the_mpv_log_is_the_failure_reason() {
+    let log = "\
+[   0.001][v][cplayer] Command line options: '--no-config' '--terminal=no'
+[   1.934][w][ffmpeg] https: HTTP error 403 Forbidden
+[   1.934][e][stream] Failed to open https://rr3---sn-oxup5-f5fy.googlevideo.com/videoplayback?expire=1792468455&ei=h5HWaq7
+[   1.934][e][demux] EDL: Could not open source file 'https://rr3---sn-oxup5-f5fy.googlevideo.com/videoplayback?expire=1792468455'.
+[   1.934][f][cplayer] No video or audio streams selected.
+[   1.935][i][cplayer] Exiting... (Errors when loading file)
+[   1.939][v][clipboard/wayland] Deregistering seat 0x1
+";
+    assert_eq!(
+        mpv_log_reason(log),
+        Some("[f][cplayer] No video or audio streams selected.".to_string())
+    );
+    assert_eq!(
+        VideoFailure::Exited {
+            code: Some(2),
+            reason: mpv_log_reason(log),
+        }
+        .message(),
+        "mpv exited with status 2: [f][cplayer] No video or audio streams selected."
+    );
+    assert_eq!(
+        VideoFailure::Exited {
+            code: None,
+            reason: None,
+        }
+        .message(),
+        "mpv was killed by a signal"
+    );
+    assert_eq!(mpv_log_reason("[   0.001][v][cplayer] fine\n"), None);
 }

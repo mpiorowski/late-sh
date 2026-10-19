@@ -4288,11 +4288,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
     if matches!(byte, b'w' | b'W')
         && ctx.screen == Screen::Dashboard
         && app.chat.news_selected
-        && app
-            .chat
-            .news
-            .selected_item()
-            .is_some_and(|item| app.chat.news.is_watchable(item.article.id))
+        && app.chat.news.selected_card_is_watchable()
     {
         return false;
     }

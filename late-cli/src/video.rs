@@ -37,7 +37,13 @@ const IPC_REPLY_TIMEOUT: Duration = Duration::from_millis(500);
 const QUIT_GRACE: Duration = Duration::from_millis(500);
 const QUIT_POLL: Duration = Duration::from_millis(50);
 const SEEK_STEP_S: i64 = 10;
-const YTDL_FORMAT: &str = "bestvideo[height<=720]+bestaudio/best[height<=720]";
+const SEEK_FAR_STEP_S: i64 = 60;
+/// HLS variants first: YouTube serves an open-ended range request (the
+/// only kind ffmpeg makes) at playback speed, so a direct stream never
+/// caches ahead and every seek stalls for seconds, while HLS segments are
+/// bounded requests that arrive at full speed. Direct streams stay as the
+/// fallback for a video without HLS.
+const YTDL_FORMAT: &str = "bestvideo[protocol^=m3u8][height<=720]+bestaudio[protocol^=m3u8]/bestvideo[height<=720]+bestaudio/best[height<=720]";
 /// A relay sequence held past this many bytes is written as it is: mpv's
 /// graphics commands are chunked at 4 KB, so nothing legitimate gets here.
 const RELAY_HOLD_CAP: usize = 8 * 1024 * 1024;
@@ -196,6 +202,9 @@ pub(super) enum VideoControl {
     TogglePause,
     SeekBack,
     SeekForward,
+    /// Shift and the arrows: a minute.
+    SeekBackFar,
+    SeekForwardFar,
     ToggleMute,
 }
 
@@ -233,8 +242,13 @@ pub(super) enum VideoFailure {
     IpcTimeout,
     /// The IPC socket broke while mpv was running.
     Ipc(String),
-    /// mpv exited before the video ended; `None` when a signal ended it.
-    Exited(Option<i32>),
+    /// mpv exited before the video ended; `code` is `None` when a signal
+    /// ended it. `reason` is the last error line of mpv's log file, the
+    /// only place mpv says why with `--terminal=no`.
+    Exited {
+        code: Option<i32>,
+        reason: Option<String>,
+    },
 }
 
 impl VideoFailure {
@@ -247,10 +261,38 @@ impl VideoFailure {
             Self::Inspect(error) => format!("failed to inspect mpv: {error}"),
             Self::IpcTimeout => "mpv never opened its ipc socket".to_string(),
             Self::Ipc(error) => format!("mpv ipc failed: {error}"),
-            Self::Exited(Some(code)) => format!("mpv exited with status {code}"),
-            Self::Exited(None) => "mpv was killed by a signal".to_string(),
+            Self::Exited {
+                code: Some(code),
+                reason: Some(reason),
+            } => format!("mpv exited with status {code}: {reason}"),
+            Self::Exited {
+                code: Some(code),
+                reason: None,
+            } => format!("mpv exited with status {code}"),
+            Self::Exited {
+                code: None,
+                reason: Some(reason),
+            } => format!("mpv was killed by a signal: {reason}"),
+            Self::Exited {
+                code: None,
+                reason: None,
+            } => "mpv was killed by a signal".to_string(),
         }
     }
+}
+
+/// The last error or fatal line of an mpv `--log-file`, without its
+/// timestamp: `[e][stream] Failed to open ...`. mpv truncates the file on
+/// every run, so the text is this play's alone.
+pub(super) fn mpv_log_reason(log: &str) -> Option<String> {
+    log.lines().rev().find_map(|line| {
+        let level_start = line.find("][")?;
+        let rest = &line[level_start + 1..];
+        match rest.starts_with("[e]") || rest.starts_with("[f]") {
+            true => Some(rest.trim_end().to_string()),
+            false => None,
+        }
+    })
 }
 
 /// One `video_state` for the server, plus the rectangle whose last mpv
@@ -452,6 +494,9 @@ pub(super) struct MpvLaunch<'a> {
     pub(super) resume: Option<Resume>,
     pub(super) ipc_path: &'a Path,
     pub(super) ytdlp_override: Option<&'a Path>,
+    /// mpv's own log: with `--terminal=no` nothing reaches stderr, so this
+    /// file is where a failed play says why.
+    pub(super) log_path: &'a Path,
 }
 
 /// The whole mpv command line. The six geometry numbers are the contract
@@ -474,24 +519,30 @@ pub(super) fn mpv_args(launch: &MpvLaunch<'_>) -> Vec<OsString> {
         resume,
         ipc_path,
         ytdlp_override,
+        log_path,
     } = launch;
     let (width, height) = tty.pixels_for(*rect);
     let shm = match use_shm {
         true => "--vo-kitty-use-shm=yes",
         false => "--vo-kitty-use-shm=no",
     };
-    let mut args: Vec<OsString> = [
-        "--no-config",
-        "--really-quiet",
-        "--terminal=no",
-        "--vo=kitty",
-        shm,
-        "--vo-kitty-alt-screen=no",
-        "--vo-kitty-config-clear=no",
-    ]
-    .into_iter()
-    .map(OsString::from)
-    .collect();
+    let mut log_file = OsString::from("--log-file=");
+    log_file.push(log_path);
+    let mut args: Vec<OsString> = ["--no-config", "--really-quiet", "--terminal=no"]
+        .into_iter()
+        .map(OsString::from)
+        .collect();
+    args.push(log_file);
+    args.extend(
+        [
+            "--vo=kitty",
+            shm,
+            "--vo-kitty-alt-screen=no",
+            "--vo-kitty-config-clear=no",
+        ]
+        .into_iter()
+        .map(OsString::from),
+    );
     args.extend(
         [
             format!("--vo-kitty-left={}", u32::from(rect.left) + 1),
@@ -538,6 +589,8 @@ pub(super) fn ipc_command(control: VideoControl) -> Value {
         VideoControl::TogglePause => json!({ "command": ["cycle", "pause"] }),
         VideoControl::SeekBack => json!({ "command": ["seek", -SEEK_STEP_S] }),
         VideoControl::SeekForward => json!({ "command": ["seek", SEEK_STEP_S] }),
+        VideoControl::SeekBackFar => json!({ "command": ["seek", -SEEK_FAR_STEP_S] }),
+        VideoControl::SeekForwardFar => json!({ "command": ["seek", SEEK_FAR_STEP_S] }),
         VideoControl::ToggleMute => json!({ "command": ["cycle", "mute"] }),
     }
 }
@@ -1023,7 +1076,12 @@ impl VideoPlayer {
             Ok(Some(status)) => {
                 let state = match status.code() {
                     Some(0) => VideoState::Ended,
-                    code => VideoState::Failed(VideoFailure::Exited(code)),
+                    code => VideoState::Failed(VideoFailure::Exited {
+                        code,
+                        reason: fs::read_to_string(&self.tools.log_path)
+                            .ok()
+                            .and_then(|log| mpv_log_reason(&log)),
+                    }),
                 };
                 return Some(self.finish(state));
             }
@@ -1122,6 +1180,7 @@ impl VideoPlayer {
             resume,
             ipc_path: &self.tools.ipc_path,
             ytdlp_override: self.tools.ytdlp_override.as_deref(),
+            log_path: &self.tools.log_path,
         });
         // mpv never writes to the tty itself: its stdout is a pipe the relay
         // carries to the tty with mpv's terminal-mode writes filtered out.

@@ -1025,6 +1025,9 @@ pub struct App {
     /// Terminal images tweak on top.
     pub(crate) detected_image_protocol: Option<TerminalImageProtocol>,
     pub(crate) terminal_images_disabled: bool,
+    /// The session's `TERM` names tmux or screen, the same test that
+    /// disables terminal images; the watch setup box names the multiplexer.
+    pub(crate) multiplexer_term: bool,
     /// The forwarded env said Windows Terminal (`WT_SESSION`): the watch
     /// setup box offers the PowerShell installer.
     pub(crate) windows_terminal: bool,
@@ -1975,6 +1978,7 @@ impl App {
             pending_terminal_commands,
             detected_image_protocol,
             terminal_images_disabled,
+            multiplexer_term: terminal_images_disabled,
             windows_terminal: false,
             inline_image_symbol_mode,
             terminal_image_render_state: TerminalImageRenderState::default(),

@@ -1590,6 +1590,7 @@ fn news_help_lines() -> Vec<String> {
             "  Missing something? w shows exactly what, and how to get it.",
             "  Space             pause / play",
             "  ←/→, h/l          seek 10s",
+            "  Shift+←/→, H/L    seek a minute",
             "  m                 mute the video",
             "  f                 full screen / window",
             "  Esc               stop and close",

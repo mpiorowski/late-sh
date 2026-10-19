@@ -120,6 +120,9 @@ pub enum VideoControl {
     TogglePause,
     SeekBack,
     SeekForward,
+    /// Shift and the arrows: a minute.
+    SeekBackFar,
+    SeekForwardFar,
     /// mpv's own mute, not the house mute.
     ToggleMute,
 }
@@ -141,7 +144,9 @@ pub enum VideoReport {
     },
     Ended,
     /// The reason is for the log only, never shown to the user.
-    Failed { message: String },
+    Failed {
+        message: String,
+    },
     /// Answers a `video_stop` once mpv is gone.
     Stopped,
 }

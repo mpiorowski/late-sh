@@ -114,7 +114,11 @@ fn sync_plays_places_and_stops_from_what_was_drawn() {
             rows: 40,
         }]
     );
-    assert_eq!(sync(&mut live, player.wanted()), Vec::new(), "an unchanged draw sends nothing");
+    assert_eq!(
+        sync(&mut live, player.wanted()),
+        Vec::new(),
+        "an unchanged draw sends nothing"
+    );
 
     player.toggle_size();
     assert_eq!(player.size(), WatchSize::Full);
@@ -176,7 +180,12 @@ fn reports_drive_the_status_and_report_each_outcome_once() {
     assert_eq!(player.status_text(), "starting…");
 
     let steps = [
-        (VideoReport::Starting, None, WatchStatus::Starting, "starting…"),
+        (
+            VideoReport::Starting,
+            None,
+            WatchStatus::Starting,
+            "starting…",
+        ),
         (
             VideoReport::Playing {
                 position_s: 83,
@@ -235,7 +244,11 @@ fn reports_drive_the_status_and_report_each_outcome_once() {
         assert_eq!(player.status(), status, "{report:?}");
         assert_eq!(player.status_text(), text, "{report:?}");
     }
-    assert_eq!(player.wanted(), None, "an ended play wants nothing from the CLI");
+    assert_eq!(
+        player.wanted(),
+        None,
+        "an ended play wants nothing from the CLI"
+    );
     assert_eq!(player.control(VideoControl::TogglePause), None);
 }
 
@@ -330,12 +343,24 @@ fn footer_names_the_size_f_goes_to() {
     };
     assert_eq!(
         keys(&player),
-        ["Space pause", "←/→ seek 10s", "m mute", "f full"]
+        [
+            "Space pause",
+            "←/→ seek 10s",
+            "⇧←/→ 60s",
+            "m mute",
+            "f full"
+        ]
     );
     player.toggle_size();
     assert_eq!(
         keys(&player),
-        ["Space pause", "←/→ seek 10s", "m mute", "f window"]
+        [
+            "Space pause",
+            "←/→ seek 10s",
+            "⇧←/→ 60s",
+            "m mute",
+            "f window"
+        ]
     );
 }
 
@@ -395,7 +420,46 @@ fn setup_without_a_paired_cli_points_at_the_installer() {
         },
     );
     assert_eq!(windows.install(), Some(InstallHint::CliInstallerWindows));
-    assert_eq!(windows.rows()[1].mark, Mark::Fails, "Sixel is not Kitty");
+    assert_eq!(
+        windows.rows()[1].mark,
+        Mark::Unknown,
+        "without a CLI the server's detection only confirms, never rules out"
+    );
+}
+
+/// Once a CLI reports, its word on the terminal is the one that counts:
+/// WezTerm reads as iTerm2 to the server's image detection and still
+/// plays, and a CLI in a terminal it cannot draw in fails the row under a
+/// server that saw Kitty. A CLI not running natively fails its own row.
+#[test]
+fn a_reporting_cli_decides_the_terminal_row() {
+    let wezterm = SetupBox::decide(
+        URL,
+        &SetupInputs {
+            protocol: Some(TerminalImageProtocol::Iterm2),
+            ..inputs(Some(cli(&["voice"], &[VideoBlocker::NoYtDlp])))
+        },
+    );
+    assert_eq!(rows(&wezterm)[1], (Requirement::KittyTerminal, Mark::Holds));
+
+    let not_kitty = SetupBox::decide(
+        URL,
+        &inputs(Some(cli(&["voice"], &[VideoBlocker::NotKitty]))),
+    );
+    assert_eq!(
+        rows(&not_kitty)[1],
+        (Requirement::KittyTerminal, Mark::Fails)
+    );
+
+    let openssh = SetupBox::decide(
+        URL,
+        &inputs(Some(ClientAudioState {
+            ssh_mode: ClientSshMode::OpenSsh,
+            ..cli(&["voice"], &[VideoBlocker::NotNative])
+        })),
+    );
+    assert_eq!(rows(&openssh)[0], (Requirement::CliNative, Mark::Fails));
+    assert_eq!(openssh.install(), None);
 }
 
 #[test]
@@ -412,8 +476,9 @@ fn setup_in_tmux_with_everything_installed_fails_only_the_multiplexer() {
         rows(&setup),
         vec![
             (Requirement::Cli, Mark::Holds),
-            // tmux hides the terminal from the server's detection too.
-            (Requirement::KittyTerminal, Mark::Fails),
+            // tmux hides the terminal from the server, and the CLI's word
+            // on it is the one that counts.
+            (Requirement::KittyTerminal, Mark::Holds),
             (Requirement::NoMultiplexer, Mark::Fails),
             (Requirement::Mpv, Mark::Holds),
             (Requirement::YtDlp, Mark::Holds),
@@ -424,7 +489,10 @@ fn setup_in_tmux_with_everything_installed_fails_only_the_multiplexer() {
 
 #[test]
 fn setup_on_kitty_missing_ytdlp_fails_one_row() {
-    let setup = SetupBox::decide(URL, &inputs(Some(cli(&["voice"], &[VideoBlocker::NoYtDlp]))));
+    let setup = SetupBox::decide(
+        URL,
+        &inputs(Some(cli(&["voice"], &[VideoBlocker::NoYtDlp]))),
+    );
     assert_eq!(
         rows(&setup),
         vec![

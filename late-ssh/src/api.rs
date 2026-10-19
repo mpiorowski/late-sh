@@ -31,9 +31,7 @@ use uuid::Uuid;
 
 use crate::{
     app::audio::{
-        client_state::{
-            ClientAudioState, ClientKind, ClientPlatform, ClientSshMode, VideoBlocker,
-        },
+        client_state::{ClientAudioState, ClientKind, ClientPlatform, ClientSshMode, VideoBlocker},
         svc::{AudioMode, PlayerStateReport, QueueItemView},
     },
     app::voice::svc::VoiceClientState,

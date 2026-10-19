@@ -1,5 +1,5 @@
-//! Keys while the watch modal is up. The player relays pause, seek and
-//! mute to the paired CLI and toggles its size; the setup box only copies
+//! Keys while the watch modal is up. The player relays pause, seek (10 s,
+//! a minute with Shift) and mute to the paired CLI and toggles its size; the setup box only copies
 //! and closes. Everything else, mouse included, is swallowed, so nothing
 //! reaches the page under the video.
 
@@ -42,6 +42,16 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
         }
         ParsedInput::Arrow(b'C') | ParsedInput::Byte(b'l') | ParsedInput::Char('l') if player => {
             svc::send_control(app, VideoControl::SeekForward);
+        }
+        ParsedInput::ShiftArrow(b'D') | ParsedInput::Byte(b'H') | ParsedInput::Char('H')
+            if player =>
+        {
+            svc::send_control(app, VideoControl::SeekBackFar);
+        }
+        ParsedInput::ShiftArrow(b'C') | ParsedInput::Byte(b'L') | ParsedInput::Char('L')
+            if player =>
+        {
+            svc::send_control(app, VideoControl::SeekForwardFar);
         }
         ParsedInput::Byte(b'm') | ParsedInput::Char('m') if player => {
             svc::send_control(app, VideoControl::ToggleMute);

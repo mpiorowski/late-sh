@@ -625,6 +625,8 @@ fn video_messages_serialize_to_wire_names() {
         (VideoControl::TogglePause, "toggle_pause"),
         (VideoControl::SeekBack, "seek_back"),
         (VideoControl::SeekForward, "seek_forward"),
+        (VideoControl::SeekBackFar, "seek_back_far"),
+        (VideoControl::SeekForwardFar, "seek_forward_far"),
         (VideoControl::ToggleMute, "toggle_mute"),
     ] {
         assert_eq!(

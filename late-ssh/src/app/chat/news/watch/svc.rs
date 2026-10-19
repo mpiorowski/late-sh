@@ -25,8 +25,8 @@ enum LostCause {
 }
 
 /// `w` on a video story: the player when the paired CLI advertises
-/// `video` and the session draws Kitty graphics, the setup box naming what
-/// is missing otherwise. False when the story is not a video in the
+/// `video` and the Tweaks row has terminal images on, the setup box naming
+/// what is missing otherwise. False when the story is not a video in the
 /// snapshot.
 pub(crate) fn watch_article(app: &mut App, article_id: Uuid) -> bool {
     if !app.chat.news.is_watchable(article_id) {
@@ -64,14 +64,20 @@ fn open_player(app: &mut App, article_id: Uuid) -> bool {
     opened
 }
 
-/// Both gates: a paired CLI that can play, and this session drawing
-/// Kitty graphics (which folds in the Tweaks row and the tmux exclusion).
+/// Both gates: a paired CLI that can play (it sits in the terminal and
+/// already checked it, tmux included; the server's image detection maps
+/// WezTerm to iTerm2 and is no witness here), and the Tweaks "Terminal
+/// images" row not `Off`, the user's one way to keep graphics out.
 fn can_play(app: &App) -> bool {
     let video_cli = app
         .paired_client_registry
         .as_ref()
         .is_some_and(|registry| registry.has_video_cli(&app.session_token));
-    video_cli && app.terminal_image_protocol() == Some(TerminalImageProtocol::Kitty)
+    let images_on = match app.profile_state.profile().terminal_images {
+        TerminalImagesMode::Auto | TerminalImagesMode::Sixel => true,
+        TerminalImagesMode::Off => false,
+    };
+    video_cli && images_on
 }
 
 fn setup_inputs(app: &App) -> SetupInputs {
@@ -85,7 +91,7 @@ fn setup_inputs(app: &App) -> SetupInputs {
             TerminalImagesMode::Auto | TerminalImagesMode::Off => app.detected_image_protocol,
             TerminalImagesMode::Sixel => Some(TerminalImageProtocol::Sixel),
         },
-        multiplexer_term: app.terminal_images_disabled,
+        multiplexer_term: app.multiplexer_term,
         windows_terminal: app.windows_terminal,
         images_off: match images {
             TerminalImagesMode::Off => true,
