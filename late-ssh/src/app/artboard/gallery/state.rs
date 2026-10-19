@@ -99,6 +99,7 @@ pub enum RailRow {
     Gallery(GallerySection),
     /// Starts the framing flow on the board.
     Hang,
+    Avatar,
     /// One archive kind; Enter turns the rail into its list.
     Archive(ArtboardSnapshotKind),
 }
@@ -111,6 +112,7 @@ impl RailRow {
         if gallery_enabled {
             rows.extend(GallerySection::ALL.iter().copied().map(Self::Gallery));
             rows.push(Self::Hang);
+            rows.push(Self::Avatar);
         }
         rows.extend(ArtboardSnapshotKind::ALL.iter().copied().map(Self::Archive));
         rows
@@ -121,6 +123,7 @@ impl RailRow {
             Self::Board => "Board",
             Self::Gallery(section) => section.label(),
             Self::Hang => "Hang a piece",
+            Self::Avatar => "Set avatar",
             Self::Archive(kind) => kind.title(),
         }
     }
@@ -165,6 +168,7 @@ pub enum RailActivation {
     FocusCanvas,
     OpenGallery,
     BeginHang,
+    BeginAvatar,
     OpenArchive(ArtboardSnapshotKind),
 }
 
@@ -193,6 +197,9 @@ pub struct GalleryState {
     /// listing is opened. A loaded listing's own length wins over them.
     counts: Option<ListingCounts>,
     hang: HangFlow,
+    pub(crate) avatar: super::super::avatar::AvatarFlow,
+    avatar_changed: bool,
+    pub(crate) avatar_preview_rows: Cell<usize>,
     /// The last thing the gallery had to say: a refusal, a landed hang, a
     /// failed applause. Shown in the gallery pane's notice line and on the
     /// framing bar; replaced by the next one.
@@ -226,6 +233,9 @@ impl GalleryState {
             sections: Default::default(),
             counts: None,
             hang: HangFlow::Idle,
+            avatar: Default::default(),
+            avatar_changed: false,
+            avatar_preview_rows: Cell::new(16),
             notice: None,
             pending_applause: None,
             take_down_asked: None,
@@ -266,7 +276,7 @@ impl GalleryState {
     pub fn viewed_section(&self) -> Option<GallerySection> {
         match self.selected_row() {
             RailRow::Gallery(section) => Some(section),
-            RailRow::Board | RailRow::Hang | RailRow::Archive(_) => None,
+            RailRow::Board | RailRow::Hang | RailRow::Avatar | RailRow::Archive(_) => None,
         }
     }
 
@@ -278,7 +288,7 @@ impl GalleryState {
     /// True while a key press must not be read as a global hotkey: typing
     /// a title, or framing on the board.
     pub fn captures_typing(&self) -> bool {
-        matches!(self.hang, HangFlow::Framing | HangFlow::Confirm { .. })
+        self.avatar.is_active() || matches!(self.hang, HangFlow::Framing | HangFlow::Confirm { .. })
     }
 
     /// True when Esc has somewhere to go on this page: out of a pane to the
@@ -395,6 +405,7 @@ impl GalleryState {
                 RailActivation::OpenGallery
             }
             RailRow::Hang => RailActivation::BeginHang,
+            RailRow::Avatar => RailActivation::BeginAvatar,
             RailRow::Archive(kind) => RailActivation::OpenArchive(kind),
         }
     }
@@ -651,6 +662,30 @@ impl GalleryState {
             .hang_task(self.viewer_id, title, framed, self.results_tx.clone());
     }
 
+    pub(crate) fn cancel_avatar(&mut self) {
+        self.avatar = Default::default();
+        self.notice = None;
+        self.focus_rail();
+    }
+
+    pub(crate) fn submit_avatar(&mut self) {
+        let super::super::avatar::AvatarFlow::Confirm { avatar, saving, .. } = &mut self.avatar
+        else {
+            return;
+        };
+        if *saving {
+            return;
+        }
+        *saving = true;
+        self.notice = None;
+        self.service
+            .save_avatar_task(self.viewer_id, avatar.clone(), self.results_tx.clone());
+    }
+
+    pub(crate) fn take_avatar_changed(&mut self) -> bool {
+        std::mem::take(&mut self.avatar_changed)
+    }
+
     // ----- tick -----
 
     /// Drain what the service sent back. Returns true when anything on
@@ -660,6 +695,27 @@ impl GalleryState {
         while let Ok(result) = self.results_rx.try_recv() {
             changed = true;
             match result {
+                GalleryResult::AvatarSaved { removed } => {
+                    self.avatar = Default::default();
+                    self.avatar_changed = true;
+                    self.focus_rail();
+                    self.notice = Some(
+                        if removed {
+                            "Avatar removed."
+                        } else {
+                            "Avatar saved. Your profiles now show this crop."
+                        }
+                        .to_string(),
+                    );
+                }
+                GalleryResult::AvatarFailed(error) => {
+                    if let super::super::avatar::AvatarFlow::Confirm { saving, .. } =
+                        &mut self.avatar
+                    {
+                        *saving = false;
+                    }
+                    self.notice = Some(error);
+                }
                 GalleryResult::Counts(counts) => {
                     self.counts = Some(counts);
                 }

@@ -146,7 +146,12 @@ impl State {
     /// tick drains and reports it.
     pub fn tick(&mut self) -> bool {
         let mut changed = self.drain_archive_results();
+        let avatar_was_active = self.gallery.avatar.is_active();
         changed |= self.gallery.tick();
+        if avatar_was_active && !self.gallery.avatar.is_active() {
+            self.private_notice = self.gallery.notice().map(ToString::to_string);
+            super::avatar::finish(self);
+        }
         changed |= !self.event_rx.is_empty();
 
         if !self.is_archive_view_active() && self.snapshot_rx.has_changed().unwrap_or(false) {
@@ -846,7 +851,7 @@ impl State {
         }
         match self.gallery.selected_row() {
             RailRow::Archive(kind) => Some(kind),
-            RailRow::Board | RailRow::Gallery(_) | RailRow::Hang => None,
+            RailRow::Board | RailRow::Gallery(_) | RailRow::Hang | RailRow::Avatar => None,
         }
     }
 
@@ -1033,7 +1038,8 @@ impl State {
     /// True while the gallery, not the board, owns view-mode input: the
     /// rail, a listing, a piece, or the hang flow has focus.
     pub fn gallery_claims_input(&self) -> bool {
-        !matches!(self.gallery.hang(), HangFlow::Idle)
+        self.gallery.avatar.is_active()
+            || !matches!(self.gallery.hang(), HangFlow::Idle)
             || self.gallery.focus() != GalleryFocus::Canvas
     }
 
@@ -1059,6 +1065,30 @@ impl State {
     pub fn cancel_framing(&mut self) {
         self.clear_local_state();
         self.gallery.cancel_hang();
+        self.gallery.cancel_avatar();
+    }
+
+    pub(crate) fn sync_avatar_selection(&mut self) {
+        let super::avatar::AvatarFlow::Framing(frame) = &self.gallery.avatar else {
+            return;
+        };
+        self.editor.selection_anchor = Some(frame.origin);
+        self.editor.selection_shape = EditorSelectionShape::Rect;
+        self.editor.cursor = Pos {
+            x: frame.origin.x + frame.width - 1,
+            y: frame.origin.y + frame.height - 1,
+        };
+        // Keep the frame in view where it fits. The preview can scroll when
+        // the terminal is shorter than the crop.
+        let viewport = self.editor.viewport;
+        if self.editor.cursor.x >= self.editor.viewport_origin.x + viewport.width as usize {
+            self.editor.viewport_origin.x = self.editor.cursor.x + 1 - viewport.width as usize;
+        }
+        if self.editor.cursor.y >= self.editor.viewport_origin.y + viewport.height as usize {
+            self.editor.viewport_origin.y = self.editor.cursor.y + 1 - viewport.height as usize;
+        }
+        self.editor.viewport_origin.x = self.editor.viewport_origin.x.min(frame.origin.x);
+        self.editor.viewport_origin.y = self.editor.viewport_origin.y.min(frame.origin.y);
     }
 
     /// Crop the current selection into a piece and move on to naming it,

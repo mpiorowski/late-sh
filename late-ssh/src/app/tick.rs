@@ -621,6 +621,9 @@ impl App {
             // is up, and it reports its own changes (own edits are
             // input-driven).
             changed |= state.tick();
+            if state.gallery_mut().take_avatar_changed() {
+                self.profile_state.service().find_profile(self.user_id);
+            }
         }
         if let Some(state) = self.lateania_state.as_mut() {
             // Drain even off-screen so the snapshot stays current; only an

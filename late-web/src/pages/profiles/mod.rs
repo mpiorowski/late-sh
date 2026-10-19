@@ -28,6 +28,9 @@ pub(crate) fn router() -> Router<AppState> {
 #[derive(Template)]
 #[template(path = "pages/profiles/page.html")]
 struct Page {
+    avatar_json: String,
+    avatar_text: String,
+    avatar_width: usize,
     headline: String,
     username: String,
     status_id: &'static str,
@@ -144,7 +147,11 @@ async fn handler(
     let contacts = parse_contacts(&work.contact);
     let show_contact = !contacts.is_empty();
 
+    let (avatar_json, avatar_text, avatar_width) = avatar_data(user_profile.avatar.as_ref());
     let page = Page {
+        avatar_json,
+        avatar_text,
+        avatar_width,
         headline: work.headline,
         username: user_profile.username.clone(),
         status_id: work.status.as_str(),
@@ -322,6 +329,40 @@ fn dash_or(value: Option<&str>) -> String {
         .filter(|v| !v.is_empty())
         .map(ToString::to_string)
         .unwrap_or_else(|| "—".to_string())
+}
+
+/// A compact grid for the browser, with script delimiters escaped before it
+/// enters the JSON script element. Every glyph is positioned independently.
+fn avatar_data(avatar: Option<&late_core::models::avatar::Avatar>) -> (String, String, usize) {
+    let Some(avatar) = avatar else {
+        return ("null".to_string(), String::new(), 0);
+    };
+    let mut cells = Vec::new();
+    let mut text = String::new();
+    for y in 0..avatar.height() {
+        let mut x = 0;
+        while x < avatar.width() {
+            if let Some(glyph) = avatar.canvas().glyph_at(dartboard_core::Pos { x, y }) {
+                let color = glyph
+                    .fg
+                    .map(|rgb| format!("#{:02x}{:02x}{:02x}", rgb.r, rgb.g, rgb.b));
+                cells.push((x, y, glyph.ch, glyph.width, color));
+                text.push(glyph.ch);
+                x += glyph.width;
+            } else {
+                text.push(' ');
+                x += 1;
+            }
+        }
+        text.push('\n');
+    }
+    let json =
+        serde_json::json!({ "width": avatar.width(), "height": avatar.height(), "cells": cells })
+            .to_string()
+            .replace('<', "\\u003c")
+            .replace('>', "\\u003e")
+            .replace('&', "\\u0026");
+    (json, text, avatar.width())
 }
 
 #[cfg(test)]

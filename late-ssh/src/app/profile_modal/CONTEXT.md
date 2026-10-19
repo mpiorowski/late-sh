@@ -27,6 +27,12 @@ The measured heights go back to the state as a `ScrollExtent` (interior-mutable,
 
 ## 3. Data
 
+`Profile::avatar`, when set, is an immutable Artboard crop from `user_avatars`.
+The modal centres its original coloured glyphs above late.fetch; it occupies
+its full row count inside the existing scrollable body. Core profile loads,
+batched loads and ordinary profile updates preserve it. The Artboard's
+`Set avatar` flow owns creation and removal (`devdocs/AVATARS.md`).
+
 `ProfileSnapshot` carries everything the modal shows; `ProfileService::do_find_profile` loads it in one pass, including `runner` (`ProfileRunner`: the parsed look and sheet of a standing `deadchannel_runners` row; a row that fails to parse is logged and shown as no runner, the directory's rule), `chip_ledger` as resolved `LedgerRow`s (one batched primary-key lookup per source table, at most `PROFILE_LEDGER_ROWS` ids each) and `chips_month` (earned and net in one scan). The modal never queries.
 
 ## 4. Keys

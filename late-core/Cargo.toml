@@ -19,6 +19,7 @@ otel = [
 workspace = true
 
 [dependencies]
+dartboard-core.workspace = true
 # Core Utils
 anyhow = { workspace = true }
 chrono = { workspace = true }

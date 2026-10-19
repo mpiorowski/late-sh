@@ -54,7 +54,7 @@ pub fn rail_layout(rows: &[RailRow]) -> Vec<RailLine> {
                 lines.push(RailLine::Heading("GALLERY"));
                 lines.push(RailLine::Row(*row));
             }
-            RailRow::Gallery(_) => lines.push(RailLine::Row(*row)),
+            RailRow::Gallery(_) | RailRow::Avatar => lines.push(RailLine::Row(*row)),
             RailRow::Hang => {
                 lines.push(RailLine::Blank);
                 lines.push(RailLine::Row(*row));
@@ -132,6 +132,7 @@ pub fn draw_rail(frame: &mut Frame, area: Rect, state: &State) {
                 rail_label(marker, section.label(), &tail)
             }
             RailRow::Hang => rail_label("+", "Hang a piece", ""),
+            RailRow::Avatar => rail_label("@", "Set avatar", ""),
             RailRow::Archive(kind) => {
                 let tail = state
                     .archive_count(kind)

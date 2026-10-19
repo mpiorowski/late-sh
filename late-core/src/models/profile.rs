@@ -27,6 +27,7 @@ use super::user::{
 
 #[derive(Clone, Debug)]
 pub struct Profile {
+    pub avatar: Option<super::avatar::Avatar>,
     pub created_at: Option<DateTime<Utc>>,
     pub username: String,
     pub bio: String,
@@ -100,6 +101,7 @@ pub struct ProfileWithChipBalance {
 impl Default for Profile {
     fn default() -> Self {
         Self {
+            avatar: None,
             created_at: None,
             username: String::new(),
             bio: String::new(),
@@ -186,7 +188,9 @@ impl Profile {
         let user = User::get(client, user_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("user not found"))?;
-        Ok(Self::from_user(&user))
+        let mut profile = Self::from_user(&user);
+        profile.avatar = super::avatar::Avatar::load(client, user_id).await?;
+        Ok(profile)
     }
 
     pub async fn list_by_user_ids(
@@ -201,9 +205,12 @@ impl Profile {
             .query("SELECT * FROM users WHERE id = ANY($1)", &[&user_ids])
             .await?;
         let mut profiles = HashMap::with_capacity(rows.len());
+        let mut avatars = super::avatar::Avatar::list_by_user_ids(client, user_ids).await?;
         for row in rows {
             let user = User::from(row);
-            profiles.insert(user.id, Self::from_user(&user));
+            let mut profile = Self::from_user(&user);
+            profile.avatar = avatars.remove(&user.id);
+            profiles.insert(user.id, profile);
         }
         Ok(profiles)
     }
@@ -225,8 +232,10 @@ impl Profile {
             .ok_or_else(|| anyhow::anyhow!("user not found"))?;
         let chip_balance = row.get("chip_balance");
         let user = User::from(row);
+        let mut profile = Self::from_user(&user);
+        profile.avatar = super::avatar::Avatar::load(client, user_id).await?;
         Ok(ProfileWithChipBalance {
-            profile: Self::from_user(&user),
+            profile,
             chip_balance,
         })
     }
@@ -387,11 +396,14 @@ impl Profile {
             )
             .await?;
         let row = row.ok_or_else(|| anyhow::anyhow!("user not found"))?;
-        Ok(Self::from_user(&User::from(row)))
+        let mut profile = Self::from_user(&User::from(row));
+        profile.avatar = super::avatar::Avatar::load(client, user_id).await?;
+        Ok(profile)
     }
 
     fn from_user(user: &User) -> Self {
         Self {
+            avatar: None,
             created_at: Some(user.created),
             username: user.username.clone(),
             bio: extract_bio(&user.settings),

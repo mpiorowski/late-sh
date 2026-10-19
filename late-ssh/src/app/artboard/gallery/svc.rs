@@ -161,6 +161,10 @@ impl HangRefusal {
 /// What a spawned gallery task reports back.
 #[derive(Debug)]
 pub enum GalleryResult {
+    AvatarSaved {
+        removed: bool,
+    },
+    AvatarFailed(String),
     Counts(ListingCounts),
     CountsFailed(String),
     /// `generation` is the section's request counter at the time this
@@ -205,6 +209,40 @@ pub struct GalleryService {
 }
 
 impl GalleryService {
+    pub(crate) fn save_avatar_task(
+        &self,
+        user_id: Uuid,
+        avatar: Option<late_core::models::avatar::Avatar>,
+        results: mpsc::UnboundedSender<GalleryResult>,
+    ) {
+        let Some(db) = self.db.clone() else {
+            let _ = results.send(GalleryResult::AvatarFailed(
+                "Avatar saving is unavailable.".to_string(),
+            ));
+            return;
+        };
+        tokio::spawn(async move {
+            let result = async {
+                let client = db.get().await?;
+                late_core::models::avatar::Avatar::save(&client, user_id, avatar.as_ref()).await
+            }
+            .await;
+            let message = match result {
+                Ok(()) => GalleryResult::AvatarSaved {
+                    removed: avatar.is_none(),
+                },
+                Err(error) => {
+                    tracing::error!(%user_id, ?error, "failed to save avatar");
+                    GalleryResult::AvatarFailed(
+                        "Could not save your avatar. Enter retries; Esc returns to the frame."
+                            .to_string(),
+                    )
+                }
+            };
+            let _ = results.send(message);
+        });
+    }
+
     pub fn new(db: Db) -> Self {
         let (splash_tx, splash_rx) = watch::channel(None);
         Self {

@@ -86,6 +86,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, interacting: bool
             draw_framing_bar(frame, layout.canvas, state);
         }
     }
+    super::avatar::draw(frame, area, state);
     if matches!(
         state.gallery().hang(),
         HangFlow::Confirm { .. } | HangFlow::Submitting
@@ -120,10 +121,14 @@ pub fn canvas_area_for_state(screen_size: (u16, u16), rail_visible: bool) -> Rec
 /// left, in the board's own style. Every gallery surface draws through
 /// here so a piece looks the same on the wall, the splash, and the modal.
 pub(crate) fn render_piece_canvas(buf: &mut Buffer, area: Rect, canvas: &Canvas) {
+    render_piece_canvas_at(buf, area, canvas, Pos { x: 0, y: 0 });
+}
+
+pub(crate) fn render_piece_canvas_at(buf: &mut Buffer, area: Rect, canvas: &Canvas, origin: Pos) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let state = CanvasWidgetState::new(canvas, Pos { x: 0, y: 0 });
+    let state = CanvasWidgetState::new(canvas, origin);
     render_canvas_widget(buf, area, &state, dartboard_canvas_style());
 }
 

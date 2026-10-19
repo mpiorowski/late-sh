@@ -209,6 +209,12 @@ fn build_segments(
     };
 
     let mut segments = Vec::new();
+    if let Some(avatar) = &profile.avatar {
+        let mut lines = vec![section_heading("avatar", width_usize)];
+        lines.extend(avatar_lines(avatar, width_usize));
+        lines.push(Line::from(""));
+        segments.push(Segment::Text(lines));
+    }
 
     // ── late.fetch, and the runner ──
     // The runner is a second column beside the grid, each under its own
@@ -473,6 +479,35 @@ fn header_name(state: &ProfileModalState) -> String {
     } else {
         state.fallback_name().to_string()
     }
+}
+
+fn avatar_lines(avatar: &late_core::models::avatar::Avatar, width: usize) -> Vec<Line<'static>> {
+    let canvas = avatar.canvas();
+    (0..avatar.height())
+        .map(|y| {
+            let mut spans = vec![Span::raw(
+                " ".repeat(width.saturating_sub(avatar.width()) / 2),
+            )];
+            let mut x = 0;
+            while x < avatar.width() {
+                let pos = dartboard_core::Pos { x, y };
+                if let Some(glyph) = canvas.glyph_at(pos) {
+                    let color = glyph.fg.map_or(theme::TEXT(), |rgb| {
+                        ratatui::style::Color::Rgb(rgb.r, rgb.g, rgb.b)
+                    });
+                    spans.push(Span::styled(
+                        glyph.ch.to_string(),
+                        Style::default().fg(color).bg(theme::BG_CANVAS()),
+                    ));
+                    x += glyph.width;
+                } else {
+                    spans.push(Span::styled(" ", Style::default().bg(theme::BG_CANVAS())));
+                    x += 1;
+                }
+            }
+            Line::from(spans)
+        })
+        .collect()
 }
 
 fn draw_footer(frame: &mut Frame, area: Rect, scrollable: bool) {

@@ -266,6 +266,10 @@ fn handle_gallery_action(app: &mut App, action: GalleryAction) -> bool {
             app.begin_artboard_hang();
             true
         }
+        GalleryAction::BeginAvatar => {
+            app.begin_artboard_avatar();
+            true
+        }
         GalleryAction::OpenArchive(kind) => {
             if let Some(state) = app.dartboard_state.as_mut() {
                 state.open_archive_list(kind);

@@ -1,3 +1,4 @@
+pub(crate) mod avatar;
 pub mod color_picker;
 pub mod data;
 pub(crate) mod disclaimer;

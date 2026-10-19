@@ -21,6 +21,9 @@ mod article_read_test;
 mod article_test;
 pub mod asterion;
 pub mod audio_ban;
+pub mod avatar;
+#[cfg(test)]
+mod avatar_test;
 pub mod bashquest_graduate;
 #[cfg(test)]
 mod bashquest_graduate_test;

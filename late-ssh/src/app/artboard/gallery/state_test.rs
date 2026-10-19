@@ -30,6 +30,7 @@ fn the_rail_shrinks_to_board_and_archives_while_the_gallery_is_off() {
             RailRow::Gallery(GallerySection::HallOfFame),
             RailRow::Gallery(GallerySection::Mine),
             RailRow::Hang,
+            RailRow::Avatar,
             RailRow::Archive(ArtboardSnapshotKind::Daily),
             RailRow::Archive(ArtboardSnapshotKind::Monthly),
             RailRow::Archive(ArtboardSnapshotKind::Curated),

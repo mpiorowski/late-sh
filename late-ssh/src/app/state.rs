@@ -2517,6 +2517,36 @@ impl App {
         state.begin_framing();
     }
 
+    pub(crate) fn begin_artboard_avatar(&mut self) {
+        self.expire_artboard_ban_if_needed();
+        if self.artboard_banned {
+            self.banner = Some(Banner::error(
+                "Artboard editing is disabled for this account.",
+            ));
+            return;
+        }
+        self.enter_dartboard();
+        let Some(state) = self.dartboard_state.as_mut() else {
+            return;
+        };
+        if !state.gallery().is_enabled() {
+            self.banner = Some(Banner::error("Avatar saving is unavailable."));
+            return;
+        }
+        if state.is_archive_view_active() {
+            self.banner = Some(Banner::error(
+                "Return to the live board first to choose an avatar.",
+            ));
+            return;
+        }
+        self.artboard_interacting = false;
+        state.close_help();
+        state.close_glyph_picker();
+        state.close_color_picker();
+        state.set_viewport_for_screen(self.size);
+        super::artboard::avatar::begin(state);
+    }
+
     pub(crate) fn deactivate_artboard_interaction(&mut self) {
         self.artboard_interacting = false;
         if let Some(state) = self.dartboard_state.as_mut() {

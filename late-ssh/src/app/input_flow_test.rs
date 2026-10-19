@@ -4739,8 +4739,8 @@ async fn artboard_archives_time_travel_from_the_rail() {
     wait_for_render_contains(&mut app, "ARCHIVES").await;
     wait_for_render_contains(&mut app, "Daily").await;
 
-    // Down the rail past Board, four gallery rows, and Hang a piece.
-    for _ in 0..6 {
+    // Down the rail past Board, four gallery rows, Hang a piece, and Set avatar.
+    for _ in 0..7 {
         app.handle_input(b"j");
     }
     app.handle_input(b"\r");
@@ -4753,7 +4753,7 @@ async fn artboard_archives_time_travel_from_the_rail() {
     // Tab back to the rail, up to Board, Enter: live again.
     app.handle_input(b"\t");
     wait_for_render_contains(&mut app, "archive").await;
-    for _ in 0..6 {
+    for _ in 0..7 {
         app.handle_input(b"k");
     }
     app.handle_input(b"\r");
@@ -7397,4 +7397,123 @@ async fn the_usermap_pans_with_every_arrow() {
     app.handle_input(b"\x1b[D"); // left
     let left = app.usermap.view().expect("view");
     assert!(left.vx < right.vx, "left arrow should pan back west");
+}
+
+#[tokio::test]
+async fn artboard_avatar_flows_from_public_board_to_profile_and_can_be_removed() {
+    use crate::app::artboard::{avatar::AvatarFlow, gallery::state::RailRow};
+    use late_core::models::{avatar::Avatar, profile::Profile};
+    let test = new_test_db().await;
+    let user = create_test_user(&test.db, "avatar-flow").await;
+    let mut app = make_app(test.db.clone(), user.id, "avatar-flow-it");
+    app.resize(100, 50).unwrap();
+    app.handle_input(b"4v");
+    wait_for_render_contains(&mut app, "Set avatar").await;
+    app.handle_input(b"i");
+    wait_for_render_contains(&mut app, "Mode       active").await;
+    app.handle_input(b"\x1b[200~@@@@\n@@@@\x1b[201~");
+    app.handle_input(b"\x1b");
+    wait_for_render_contains(&mut app, "Mode       view").await;
+    app.handle_input(b"\x1b");
+    wait_for_render_contains(&mut app, "rail j/k").await;
+    for _ in 0..6 {
+        app.handle_input(b"j");
+    }
+    assert_eq!(
+        app.dartboard_state
+            .as_ref()
+            .unwrap()
+            .gallery()
+            .selected_row(),
+        RailRow::Avatar
+    );
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "Avatar 16x8").await;
+    app.handle_input(b"\x1b[<0;2;2M");
+    app.handle_input(b"\x1b[<0;2;2m");
+    for _ in 0..16 {
+        app.handle_input(b"\x1b[1;2C"); // Shift+right changes width only.
+    }
+    for _ in 0..4 {
+        app.handle_input(b"\x1b[1;2A"); // Shift+up changes height only.
+    }
+    wait_for_render_contains(&mut app, "Avatar 32x4").await;
+    // These keys ordinarily quit, switch page, open a modal or search.
+    app.handle_input(b"q1w\x0f\x06");
+    assert_eq!(app.screen, crate::app::common::primitives::Screen::Artboard);
+    assert!(!app.show_quit_confirm);
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "Use this avatar?").await;
+    let AvatarFlow::Confirm {
+        avatar: Some(preview),
+        ..
+    } = &app.dartboard_state.as_ref().unwrap().gallery().avatar
+    else {
+        panic!("preview")
+    };
+    assert_eq!((preview.width(), preview.height()), (32, 4));
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "Avatar saved").await;
+    let client = test.db.get().await.unwrap();
+    let saved = Avatar::load(&client, user.id).await.unwrap().unwrap();
+    assert_eq!(
+        saved
+            .canvas()
+            .glyph_at(dartboard_core::Pos { x: 0, y: 0 })
+            .unwrap()
+            .ch,
+        '@'
+    );
+    assert_eq!(
+        Profile::load(&client, user.id).await.unwrap().avatar,
+        Some(saved.clone())
+    );
+    // Ordinary profile writes must leave the independently saved crop intact.
+    let mut params = crate::app::profile::state::profile_params_from_profile(
+        &Profile::load(&client, user.id).await.unwrap(),
+    );
+    params.bio = "Painted on the public board.".into();
+    assert_eq!(
+        Profile::update(&client, user.id, params)
+            .await
+            .unwrap()
+            .avatar,
+        Some(saved)
+    );
+    app.open_profile_modal(user.id, user.username.clone());
+    wait_for_render_contains(&mut app, "profile · avatar-flow").await;
+    wait_for_app(&mut app, "avatar profile snapshot", |app| {
+        app.profile_modal_state
+            .profile()
+            .is_some_and(|profile| profile.avatar.is_some())
+    })
+    .await;
+    let profile_frame = render_plain(&mut app);
+    assert!(profile_frame.contains("avatar─") || profile_frame.contains("avatar ─"));
+    wait_for_render_contains(&mut app, "@@@@").await;
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(&mut app, |app| !app.show_profile_modal, "profile closed").await;
+    app.dartboard_state
+        .as_mut()
+        .unwrap()
+        .gallery_mut()
+        .rail_select(RailRow::Avatar);
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "Avatar 16x8").await;
+    app.handle_input(b"x");
+    wait_for_render_contains(&mut app, "Remove your avatar?").await;
+    assert!(Avatar::load(&client, user.id).await.unwrap().is_some());
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "Avatar removed").await;
+    assert!(Avatar::load(&client, user.id).await.unwrap().is_none());
+    app.artboard_banned = true;
+    app.begin_artboard_avatar();
+    assert!(
+        !app.dartboard_state
+            .as_ref()
+            .unwrap()
+            .gallery()
+            .avatar
+            .is_active()
+    );
 }

@@ -4,6 +4,19 @@
 
 {% block content %}
 <style>
+    @font-face {
+        font-family: "Symbols Nerd Font";
+        src: url("/static/fonts/SymbolsNerdFont-Regular.woff2") format("woff2");
+        font-display: block;
+    }
+    @font-face {
+        font-family: "Noto Sans Symbols 2";
+        src: url("/static/fonts/NotoSansSymbols2-Regular.woff2") format("woff2");
+        font-display: block;
+    }
+    .profile-avatar { margin-bottom: 1.5rem; }
+    .profile-avatar canvas { display: block; max-width: 100%; max-height: 320px; width: auto; height: auto; background: #111827; }
+    .profile-avatar a:not([hidden]) { display: inline-block; margin-top: 0.5rem; font-size: 0.7rem; color: #9ca3af; }
     @keyframes cursor-blink {
         0%, 49% { opacity: 1; }
         50%, 100% { opacity: 0; }
@@ -138,6 +151,15 @@
     </div>
 
     <!-- ─── hero ─── -->
+    {% if avatar_width > 0 %}
+    <div class="profile-avatar stagger stagger-2">
+        <canvas id="profile-avatar" role="img" aria-label="@{{ username }}'s avatar, drawn on the public Artboard"></canvas>
+        <a id="avatar-png" download="{{ slug }}-avatar.png" hidden>save PNG</a>
+        <noscript><pre>{{ avatar_text }}</pre></noscript>
+    </div>
+    <script id="avatar-data" type="application/json">{{ avatar_json|safe }}</script>
+    <script src="/static/avatar.js" defer></script>
+    {% endif %}
     <div class="stagger stagger-2 mb-3">
         <div class="inline-flex items-center border px-2.5 py-1 text-[0.7rem] tracking-wide uppercase pill-{{ status_id }}">
             {% if status_id == "open" %}<span class="pulse-dot"></span>{% endif %}

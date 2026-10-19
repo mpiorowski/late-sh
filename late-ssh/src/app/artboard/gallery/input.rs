@@ -21,6 +21,7 @@ pub enum GalleryAction {
     /// The Board row: the live board, whatever archive was up.
     FocusBoard,
     BeginHang,
+    BeginAvatar,
     OpenArchive(ArtboardSnapshotKind),
 }
 
@@ -29,11 +30,15 @@ fn from_activation(activation: RailActivation) -> GalleryAction {
         RailActivation::FocusCanvas => GalleryAction::FocusBoard,
         RailActivation::OpenGallery => GalleryAction::Handled,
         RailActivation::BeginHang => GalleryAction::BeginHang,
+        RailActivation::BeginAvatar => GalleryAction::BeginAvatar,
         RailActivation::OpenArchive(kind) => GalleryAction::OpenArchive(kind),
     }
 }
 
 pub fn handle_key(state: &mut State, screen_size: (u16, u16), byte: u8) -> GalleryAction {
+    if super::super::avatar::handle_key(state, byte) {
+        return GalleryAction::Handled;
+    }
     match state.gallery().hang() {
         HangFlow::Framing => return handle_framing_key(state, screen_size, byte),
         HangFlow::Confirm { .. } => return handle_confirm_key(state, byte),
@@ -75,6 +80,11 @@ fn handle_tab(state: &mut State) -> GalleryAction {
 }
 
 pub fn handle_arrow(state: &mut State, screen_size: (u16, u16), key: u8) -> GalleryAction {
+    if state.gallery().avatar.is_active() {
+        state.set_viewport_for_screen(screen_size);
+        super::super::avatar::handle_arrow(state, key, false);
+        return GalleryAction::Handled;
+    }
     match state.gallery().hang() {
         HangFlow::Framing => return framing_arrow(state, screen_size, key, false),
         HangFlow::Confirm { .. } | HangFlow::Submitting => return GalleryAction::Handled,
@@ -155,6 +165,9 @@ pub fn handle_event(
     screen_size: (u16, u16),
     event: &ParsedInput,
 ) -> GalleryAction {
+    if super::super::avatar::handle_event(state, screen_size, event) {
+        return GalleryAction::Handled;
+    }
     // Keys arrive as bytes through `handle_key` after this; only the rich
     // events the flow needs are taken here, everything else is `Ignored`
     // so the byte path still sees Enter, Esc, and the title's letters.
@@ -208,6 +221,7 @@ pub fn handle_event(
                         GalleryAction::Handled
                     }
                     RailRow::Hang => GalleryAction::BeginHang,
+                    RailRow::Avatar => GalleryAction::BeginAvatar,
                     RailRow::Archive(kind) => GalleryAction::OpenArchive(kind),
                 };
             }
