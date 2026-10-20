@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use late_core::models::article::ArticleFeedItem;
+use late_core::models::article_read::WatchPosition;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
+use uuid::Uuid;
 
 use crate::app::audio::client_state::{
     ClientAudioState, ClientPlatform, ClientSshMode, VideoBlocker,
@@ -24,6 +26,19 @@ use crate::paired_clients::{PairControlMessage, VideoControl, VideoReport};
 /// longer than this; a start that fails is reported as `failed` by the CLI
 /// itself.
 pub(crate) const WATCH_LOST_AFTER: Duration = Duration::from_secs(10);
+/// A resume lands this much before the saved position, so it opens on the
+/// sentence that was playing rather than the middle of the next.
+pub(crate) const WATCH_RESUME_REWIND_S: u64 = 3;
+/// A play stopped inside its first seconds is not worth resuming.
+pub(crate) const WATCH_SAVE_MIN_S: u64 = 10;
+/// A play stopped this close to the end was watched: the next one starts
+/// from the top.
+pub(crate) const WATCH_SAVE_END_MARGIN_S: u64 = 30;
+/// How often a playing position is saved, so a dropped session or a dead
+/// CLI still resumes close to where it was.
+pub(crate) const WATCH_SAVE_EVERY: Duration = Duration::from_secs(15);
+/// How long the footer says `resumed` once a resumed play has a position.
+pub(crate) const WATCH_RESUME_NOTE_FOR: Duration = Duration::from_secs(4);
 const WINDOW_WIDTH_PERMILLE: u16 = 900;
 const WINDOW_HEIGHT_PERMILLE: u16 = 900;
 const WINDOW_MAX_WIDTH: u16 = 160;
@@ -113,10 +128,27 @@ pub(crate) struct WantedPlay<'a> {
     pub play_id: u64,
     pub url: &'a str,
     pub rect: Rect,
+    /// Where to begin: zero, or the saved position less the rewind.
+    pub start_s: u64,
+}
+
+/// What the player leaves behind for the next watch of its video, decided
+/// when it closes (`Player::memory`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WatchMemory {
+    /// Partway through: resume here next time.
+    Save(WatchPosition),
+    /// Watched to the end, or a resumed play stopped back at the top: the
+    /// next watch starts over.
+    Clear,
+    /// Nothing worth writing: no position ever came in, or a fresh play
+    /// stopped inside its first seconds.
+    Nothing,
 }
 
 #[derive(Debug)]
 pub(crate) struct Player {
+    article_id: Uuid,
     url: String,
     title: String,
     author: String,
@@ -127,14 +159,31 @@ pub(crate) struct Player {
     /// Whether `Played` was already reported for this play.
     played: bool,
     last_state_at: Instant,
+    /// Where the reader left this video last time, if partway through.
+    resume_from: Option<WatchPosition>,
+    /// The last position the CLI reported, kept past a failure or a loss
+    /// so the close still saves it.
+    last_seen: Option<WatchPosition>,
+    /// When the position was last saved (`checkpoint`); opening counts.
+    last_saved_at: Instant,
+    /// While set and in the future, the footer says the play was resumed.
+    resume_note_until: Option<Instant>,
     /// The layout the last draw produced: the `[x]` hit target and the
     /// rectangle `wanted` offers the CLI.
     drawn: Cell<WatchLayout>,
 }
 
 impl Player {
-    pub(crate) fn new(item: &ArticleFeedItem, play_id: u64, now: Instant) -> Self {
+    /// A player for `item`, resuming from `resume_from` when the reader
+    /// left it partway through last time.
+    pub(crate) fn new(
+        item: &ArticleFeedItem,
+        play_id: u64,
+        now: Instant,
+        resume_from: Option<WatchPosition>,
+    ) -> Self {
         Self {
+            article_id: item.article.id,
             url: item.article.url.clone(),
             title: item.article.title.clone(),
             author: item.author_username.clone(),
@@ -144,7 +193,24 @@ impl Player {
             status: WatchStatus::Starting,
             played: false,
             last_state_at: now,
+            resume_from,
+            last_seen: None,
+            last_saved_at: now,
+            resume_note_until: None,
             drawn: Cell::new(WatchLayout::default()),
+        }
+    }
+
+    pub(crate) fn article_id(&self) -> Uuid {
+        self.article_id
+    }
+
+    /// Where the CLI is told to begin: the saved position less the rewind,
+    /// zero for a fresh play.
+    pub(crate) fn start_s(&self) -> u64 {
+        match self.resume_from {
+            Some(position) => position.position_s.saturating_sub(WATCH_RESUME_REWIND_S),
+            None => 0,
         }
     }
 
@@ -257,6 +323,7 @@ impl Player {
                 play_id: self.play_id,
                 url: &self.url,
                 rect: body,
+                start_s: self.start_s(),
             }),
             (true, true) | (false, _) => None,
         }
@@ -295,10 +362,16 @@ impl Player {
                     position_s: *position_s,
                     duration_s: *duration_s,
                 };
+                self.last_seen = Some(WatchPosition {
+                    position_s: *position_s,
+                    duration_s: *duration_s,
+                });
                 match self.played {
                     true => None,
                     false => {
                         self.played = true;
+                        self.resume_note_until =
+                            self.resume_from.map(|_| now + WATCH_RESUME_NOTE_FOR);
                         Some(WatchOutcome::Played)
                     }
                 }
@@ -311,6 +384,10 @@ impl Player {
                     position_s: *position_s,
                     duration_s: *duration_s,
                 };
+                self.last_seen = Some(WatchPosition {
+                    position_s: *position_s,
+                    duration_s: *duration_s,
+                });
                 None
             }
             VideoReport::Ended => {
@@ -355,14 +432,68 @@ impl Player {
         }
     }
 
-    /// The footer's right edge.
-    pub(crate) fn status_text(&self) -> String {
+    /// A position worth saving now: the last one reported, once
+    /// [`WATCH_SAVE_EVERY`] has passed since the last save and the play is
+    /// past its first seconds. Called after every report; most answer
+    /// `None`.
+    pub(crate) fn checkpoint(&mut self, now: Instant) -> Option<WatchPosition> {
+        let position = self.last_seen?;
+        if position.position_s < WATCH_SAVE_MIN_S {
+            return None;
+        }
+        if now.saturating_duration_since(self.last_saved_at) < WATCH_SAVE_EVERY {
+            return None;
+        }
+        self.last_saved_at = now;
+        Some(position)
+    }
+
+    /// What to remember for the next watch, as the player closes: the last
+    /// position while partway through, a clear once the video was watched
+    /// to its end (or a resumed one was taken back to the top), nothing
+    /// when no position ever came in or a fresh play stopped at once.
+    pub(crate) fn memory(&self) -> WatchMemory {
+        if self.status == WatchStatus::Ended {
+            return WatchMemory::Clear;
+        }
+        let Some(position) = self.last_seen else {
+            return WatchMemory::Nothing;
+        };
+        let near_the_end = match position.duration_s {
+            Some(duration_s) => position.position_s + WATCH_SAVE_END_MARGIN_S >= duration_s,
+            None => false,
+        };
+        if near_the_end {
+            return WatchMemory::Clear;
+        }
+        if position.position_s < WATCH_SAVE_MIN_S {
+            return match self.resume_from {
+                Some(_) => WatchMemory::Clear,
+                None => WatchMemory::Nothing,
+            };
+        }
+        WatchMemory::Save(position)
+    }
+
+    /// The footer's right edge. A resumed play says so while it starts and
+    /// for [`WATCH_RESUME_NOTE_FOR`] once it plays.
+    pub(crate) fn status_text(&self, now: Instant) -> String {
+        let resumed = match self.resume_note_until {
+            Some(until) => until > now,
+            None => false,
+        };
         match self.status {
-            WatchStatus::Starting => "starting…".to_string(),
+            WatchStatus::Starting => match self.resume_from {
+                Some(position) => format!("resuming from {}…", clock(position.position_s)),
+                None => "starting…".to_string(),
+            },
             WatchStatus::Playing {
                 position_s,
                 duration_s,
-            } => format!("▶ {}", position_label(position_s, duration_s)),
+            } => match resumed {
+                true => format!("▶ {} · resumed", position_label(position_s, duration_s)),
+                false => format!("▶ {}", position_label(position_s, duration_s)),
+            },
             WatchStatus::Paused {
                 position_s,
                 duration_s,
@@ -393,6 +524,7 @@ impl Player {
             ("Space", "pause"),
             ("←/→", "seek 10s"),
             ("⇧←/→", "60s"),
+            ("0", "restart"),
             ("m", "mute"),
             (
                 "f",
@@ -470,11 +602,12 @@ fn play_message(wanted: WantedPlay<'_>) -> PairControlMessage {
         top: wanted.rect.y,
         cols: wanted.rect.width,
         rows: wanted.rect.height,
+        start_s: wanted.start_s,
     }
 }
 
 /// `1:23 / 12:04`, or just the position for a live stream.
-fn position_label(position_s: u64, duration_s: Option<u64>) -> String {
+pub(crate) fn position_label(position_s: u64, duration_s: Option<u64>) -> String {
     match duration_s {
         Some(duration_s) => format!("{} / {}", clock(position_s), clock(duration_s)),
         None => clock(position_s),
@@ -482,7 +615,7 @@ fn position_label(position_s: u64, duration_s: Option<u64>) -> String {
 }
 
 /// `m:ss`, or `h:mm:ss` from an hour on.
-fn clock(seconds: u64) -> String {
+pub(crate) fn clock(seconds: u64) -> String {
     let (hours, minutes, seconds) = (seconds / 3600, seconds / 60 % 60, seconds % 60);
     match hours {
         0 => format!("{minutes}:{seconds:02}"),

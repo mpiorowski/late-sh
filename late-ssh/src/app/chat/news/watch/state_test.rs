@@ -3,6 +3,7 @@ use std::time::{Duration, Instant};
 use chrono::Utc;
 use late_core::models::article::{Article, ArticleFeedItem};
 use late_core::models::article_body::BodyStatus;
+use late_core::models::article_read::WatchPosition;
 use ratatui::layout::Rect;
 use uuid::Uuid;
 
@@ -29,11 +30,23 @@ fn video() -> ArticleFeedItem {
     }
 }
 
-/// A player drawn over a 200x50 terminal, as `ui::draw` leaves it.
+/// A fresh player drawn over a 200x50 terminal, as `ui::draw` leaves it.
 fn drawn_player(now: Instant) -> Player {
-    let player = Player::new(&video(), 7, now);
+    drawn_resuming_player(now, None)
+}
+
+/// A player drawn over a 200x50 terminal, resuming from `resume_from`.
+fn drawn_resuming_player(now: Instant, resume_from: Option<WatchPosition>) -> Player {
+    let player = Player::new(&video(), 7, now, resume_from);
     player.set_drawn(Player::layout(player.size(), Rect::new(0, 0, 200, 50)));
     player
+}
+
+fn at(position_s: u64, duration_s: Option<u64>) -> WatchPosition {
+    WatchPosition {
+        position_s,
+        duration_s,
+    }
 }
 
 #[test]
@@ -89,7 +102,7 @@ fn full_layout_is_every_row_but_the_footer() {
 /// A terminal too small for a body reserves nothing, so nothing plays.
 #[test]
 fn a_tiny_terminal_has_no_body_and_wants_no_play() {
-    let player = Player::new(&video(), 1, Instant::now());
+    let player = Player::new(&video(), 1, Instant::now(), None);
     player.set_drawn(Player::layout(WatchSize::Window, Rect::new(0, 0, 10, 6)));
     assert!(player.drawn().body.is_empty());
     assert_eq!(player.wanted(), None);
@@ -112,6 +125,7 @@ fn sync_plays_places_and_stops_from_what_was_drawn() {
             top: 6,
             cols: 158,
             rows: 40,
+            start_s: 0,
         }]
     );
     assert_eq!(
@@ -154,6 +168,7 @@ fn sync_replaces_an_older_play() {
                 play_id: 4,
                 url: URL,
                 rect,
+                start_s: 1391,
             })
         ),
         vec![
@@ -165,6 +180,7 @@ fn sync_replaces_an_older_play() {
                 top: 1,
                 cols: 10,
                 rows: 5,
+                start_s: 1391,
             },
         ]
     );
@@ -177,7 +193,7 @@ fn sync_replaces_an_older_play() {
 fn reports_drive_the_status_and_report_each_outcome_once() {
     let now = Instant::now();
     let mut player = drawn_player(now);
-    assert_eq!(player.status_text(), "starting…");
+    assert_eq!(player.status_text(now), "starting…");
 
     let steps = [
         (
@@ -242,7 +258,7 @@ fn reports_drive_the_status_and_report_each_outcome_once() {
     for (report, outcome, status, text) in steps {
         assert_eq!(player.apply(&report, now), outcome, "{report:?}");
         assert_eq!(player.status(), status, "{report:?}");
-        assert_eq!(player.status_text(), text, "{report:?}");
+        assert_eq!(player.status_text(now), text, "{report:?}");
     }
     assert_eq!(
         player.wanted(),
@@ -273,7 +289,7 @@ fn a_failed_play_shows_the_web_line_and_stops_relaying_keys() {
         ),
         Some(WatchOutcome::Failed)
     );
-    assert_eq!(player.status_text(), "couldn't play");
+    assert_eq!(player.status_text(now), "couldn't play");
     assert_eq!(
         player.fallback_line(),
         Some(format!("Watch on the web: {URL}"))
@@ -292,7 +308,7 @@ fn a_silent_cli_is_lost_after_ten_seconds_only_once_it_played() {
     let mut player = drawn_player(start);
     assert_eq!(player.expire(start + Duration::from_secs(9)), None);
     assert_eq!(player.expire(start + Duration::from_secs(60)), None);
-    assert_eq!(player.status_text(), "starting…");
+    assert_eq!(player.status_text(start), "starting…");
     assert!(player.wanted().is_some(), "a slow start is still wanted");
 
     let played = start + Duration::from_secs(61);
@@ -308,7 +324,7 @@ fn a_silent_cli_is_lost_after_ten_seconds_only_once_it_played() {
         player.expire(played + WATCH_LOST_AFTER),
         Some(WatchOutcome::Lost)
     );
-    assert_eq!(player.status_text(), "lost the CLI");
+    assert_eq!(player.status_text(played), "lost the CLI");
     assert_eq!(
         player.fallback_line(),
         Some(format!("Watch on the web: {URL}"))
@@ -347,6 +363,7 @@ fn footer_names_the_size_f_goes_to() {
             "Space pause",
             "←/→ seek 10s",
             "⇧←/→ 60s",
+            "0 restart",
             "m mute",
             "f full"
         ]
@@ -358,9 +375,177 @@ fn footer_names_the_size_f_goes_to() {
             "Space pause",
             "←/→ seek 10s",
             "⇧←/→ 60s",
+            "0 restart",
             "m mute",
             "f window"
         ]
+    );
+}
+
+/// A video left at 23:14 resumes three seconds before it: the play asks
+/// the CLI for that start, the footer says so while it starts and for four
+/// seconds once it plays, and then reads as any play.
+#[test]
+fn a_resumed_play_starts_before_the_saved_position_and_says_so() {
+    let opened = Instant::now();
+    let mut player = drawn_resuming_player(opened, Some(at(1394, Some(2910))));
+    assert_eq!(player.status_text(opened), "resuming from 23:14…");
+    assert_eq!(
+        player.wanted().map(|wanted| wanted.start_s),
+        Some(1391),
+        "the rewind lands on the sentence that was playing"
+    );
+
+    let played = opened + Duration::from_secs(2);
+    assert_eq!(
+        player.apply(
+            &VideoReport::Playing {
+                position_s: 1391,
+                duration_s: Some(2910),
+            },
+            played
+        ),
+        Some(WatchOutcome::Played)
+    );
+    assert_eq!(player.status_text(played), "▶ 23:11 / 48:30 · resumed");
+    assert_eq!(
+        player.status_text(played + WATCH_RESUME_NOTE_FOR),
+        "▶ 23:11 / 48:30"
+    );
+
+    let tiny = Player::new(&video(), 2, opened, Some(at(2, Some(90))));
+    assert_eq!(tiny.start_s(), 0, "a position inside the rewind is the top");
+}
+
+/// What a closing player leaves for the next watch, from every state it
+/// can close in.
+#[test]
+fn closing_saves_partway_clears_at_the_end_and_skips_the_first_seconds() {
+    let now = Instant::now();
+    let playing = |position_s, duration_s| VideoReport::Playing {
+        position_s,
+        duration_s,
+    };
+    let cases: Vec<(&str, Option<WatchPosition>, Vec<VideoReport>, WatchMemory)> = vec![
+        ("nothing came in", None, vec![], WatchMemory::Nothing),
+        (
+            "a fresh play stopped at once",
+            None,
+            vec![playing(9, Some(2910))],
+            WatchMemory::Nothing,
+        ),
+        (
+            "a resumed play taken back to the top and stopped",
+            Some(at(1394, Some(2910))),
+            vec![playing(4, Some(2910))],
+            WatchMemory::Clear,
+        ),
+        (
+            "partway through",
+            None,
+            vec![playing(10, Some(2910)), playing(1394, Some(2910))],
+            WatchMemory::Save(at(1394, Some(2910))),
+        ),
+        (
+            "paused partway through",
+            None,
+            vec![
+                playing(500, Some(2910)),
+                VideoReport::Paused {
+                    position_s: 501,
+                    duration_s: Some(2910),
+                },
+            ],
+            WatchMemory::Save(at(501, Some(2910))),
+        ),
+        (
+            "a live stream, no duration",
+            None,
+            vec![playing(700, None)],
+            WatchMemory::Save(at(700, None)),
+        ),
+        (
+            "the last half minute",
+            None,
+            vec![playing(2880, Some(2910))],
+            WatchMemory::Clear,
+        ),
+        (
+            "watched to the end",
+            None,
+            vec![playing(2900, Some(2910)), VideoReport::Ended],
+            WatchMemory::Clear,
+        ),
+        (
+            "the CLI failed mid-play",
+            None,
+            vec![
+                playing(1394, Some(2910)),
+                VideoReport::Failed {
+                    message: "mpv exited".to_string(),
+                },
+            ],
+            WatchMemory::Save(at(1394, Some(2910))),
+        ),
+    ];
+    for (name, resume_from, reports, expected) in cases {
+        let mut player = drawn_resuming_player(now, resume_from);
+        for report in &reports {
+            player.apply(report, now);
+        }
+        assert_eq!(player.memory(), expected, "{name}");
+    }
+
+    let mut lost = drawn_player(now);
+    lost.apply(&playing(1394, Some(2910)), now);
+    lost.expire(now + WATCH_LOST_AFTER);
+    assert_eq!(
+        lost.memory(),
+        WatchMemory::Save(at(1394, Some(2910))),
+        "a lost CLI keeps the last position"
+    );
+}
+
+/// The position is saved every fifteen seconds of play, never inside the
+/// first ten seconds, and opening counts as the first save.
+#[test]
+fn the_playing_position_is_checkpointed_every_fifteen_seconds() {
+    let opened = Instant::now();
+    let mut player = drawn_player(opened);
+    assert_eq!(player.checkpoint(opened), None, "nothing reported yet");
+
+    let mut saved = Vec::new();
+    for second in 1..=40u64 {
+        let now = opened + Duration::from_secs(second);
+        player.apply(
+            &VideoReport::Playing {
+                position_s: second,
+                duration_s: Some(2910),
+            },
+            now,
+        );
+        if let Some(position) = player.checkpoint(now) {
+            saved.push((second, position));
+        }
+    }
+    assert_eq!(
+        saved,
+        vec![(15, at(15, Some(2910))), (30, at(30, Some(2910))),]
+    );
+
+    let mut early = drawn_player(opened);
+    let later = opened + Duration::from_secs(60);
+    early.apply(
+        &VideoReport::Playing {
+            position_s: 5,
+            duration_s: Some(2910),
+        },
+        later,
+    );
+    assert_eq!(
+        early.checkpoint(later),
+        None,
+        "a position inside the first ten seconds is never saved"
     );
 }
 

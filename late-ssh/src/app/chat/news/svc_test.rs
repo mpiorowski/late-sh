@@ -302,11 +302,10 @@ async fn a_listening_replica_picks_up_shares_and_deletes_from_the_notify() {
 async fn recv_reads(events: &mut tokio::sync::broadcast::Receiver<ArticleEvent>) -> Vec<Uuid> {
     timeout(Duration::from_secs(2), async {
         loop {
-            if let ArticleEvent::ReadsLoaded {
-                read_article_ids, ..
-            } = events.recv().await.expect("article event")
+            if let ArticleEvent::ReadsLoaded { reads, .. } =
+                events.recv().await.expect("article event")
             {
-                return read_article_ids;
+                return reads.into_iter().map(|row| row.article_id).collect();
             }
         }
     })

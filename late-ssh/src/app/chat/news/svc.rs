@@ -9,7 +9,7 @@ use late_core::{
     models::{
         article::{Article, ArticleParams},
         article_body::{ArticleBody, BodyStatus},
-        article_read::ArticleRead,
+        article_read::{ArticleRead, WatchPosition},
         moderation_audit_log::ModerationAuditLog,
         user::User,
     },
@@ -149,6 +149,51 @@ impl ArticleService {
         });
     }
 
+    /// Remember where the reader left a video, then republish their reads
+    /// so every session of theirs shows the card's progress.
+    pub fn save_watch_position_task(
+        &self,
+        user_id: Uuid,
+        article_id: Uuid,
+        position: WatchPosition,
+    ) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = service
+                .save_watch_position_and_publish(user_id, article_id, position)
+                .await
+            {
+                late_core::error_span!(
+                    "article_watch_position_save_failed",
+                    error = ?e,
+                    user_id = %user_id,
+                    article_id = %article_id,
+                    position_s = position.position_s,
+                    "failed to save the video position"
+                );
+            }
+        });
+    }
+
+    /// The video was watched to the end: the next watch starts over.
+    pub fn clear_watch_position_task(&self, user_id: Uuid, article_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = service
+                .clear_watch_position_and_publish(user_id, article_id)
+                .await
+            {
+                late_core::error_span!(
+                    "article_watch_position_clear_failed",
+                    error = ?e,
+                    user_id = %user_id,
+                    article_id = %article_id,
+                    "failed to clear the video position"
+                );
+            }
+        });
+    }
+
     pub fn list_articles_task(&self) {
         let service = self.clone();
         tokio::spawn(async move {
@@ -235,14 +280,36 @@ impl ArticleService {
         self.publish_reads(&db_client, user_id).await
     }
 
+    async fn save_watch_position_and_publish(
+        &self,
+        user_id: Uuid,
+        article_id: Uuid,
+        position: WatchPosition,
+    ) -> Result<()> {
+        let db_client = self.db.get().await?;
+        ArticleRead::save_watch_position(&db_client, user_id, article_id, position)
+            .await
+            .context("saving the video position")?;
+        self.publish_reads(&db_client, user_id).await
+    }
+
+    async fn clear_watch_position_and_publish(
+        &self,
+        user_id: Uuid,
+        article_id: Uuid,
+    ) -> Result<()> {
+        let db_client = self.db.get().await?;
+        ArticleRead::clear_watch_position(&db_client, user_id, article_id)
+            .await
+            .context("clearing the video position")?;
+        self.publish_reads(&db_client, user_id).await
+    }
+
     async fn publish_reads(&self, db_client: &tokio_postgres::Client, user_id: Uuid) -> Result<()> {
-        let read_article_ids = ArticleRead::article_ids_for_user(db_client, user_id)
+        let reads = ArticleRead::rows_for_user(db_client, user_id)
             .await
             .context("loading article reads")?;
-        self.publish_event(ArticleEvent::ReadsLoaded {
-            user_id,
-            read_article_ids,
-        });
+        self.publish_event(ArticleEvent::ReadsLoaded { user_id, reads });
         Ok(())
     }
 

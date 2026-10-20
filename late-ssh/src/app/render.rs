@@ -970,6 +970,7 @@ impl App {
             articles: self.chat.news.displayed_articles(),
             selected_index: self.chat.news.selected_index(),
             marker: self.chat.news.marker(),
+            watch_positions: self.chat.news.watch_positions(),
             mine_only: self.chat.news.mine_only(),
         };
         let feeds_view = chat::feeds::ui::FeedListView {

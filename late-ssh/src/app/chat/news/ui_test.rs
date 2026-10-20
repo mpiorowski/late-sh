@@ -3,7 +3,7 @@ use chrono::Utc;
 use late_core::models::article::{Article, ArticleFeedItem};
 use late_core::models::article_body::BodyStatus;
 use ratatui::{Terminal, backend::TestBackend};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 fn card(body: BodyStatus) -> ArticleFeedItem {
@@ -42,6 +42,7 @@ fn meta_row(item: ArticleFeedItem) -> String {
                     articles: &articles,
                     selected_index: 0,
                     marker: &marker,
+                    watch_positions: &HashMap::new(),
                     mine_only: false,
                 },
             )

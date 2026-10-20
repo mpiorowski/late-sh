@@ -128,8 +128,11 @@ pub(crate) fn end_session(app: &mut App) {
 }
 
 /// One `video_state` from the paired CLI. A report for any play but the
-/// open one is late and dropped.
+/// open one is late and dropped. Every fifteen seconds of play the
+/// position is saved (`news::State::checkpoint_watch`), so a session that
+/// drops still resumes close to where it was.
 pub(crate) fn apply_report(app: &mut App, play_id: u64, report: &VideoReport) {
+    let now = Instant::now();
     let Some(player) = app
         .chat
         .news
@@ -139,7 +142,9 @@ pub(crate) fn apply_report(app: &mut App, play_id: u64, report: &VideoReport) {
         tracing::debug!(play_id, "dropping video state for a play no longer open");
         return;
     };
-    let Some(outcome) = player.apply(report, Instant::now()) else {
+    let outcome = player.apply(report, now);
+    app.chat.news.checkpoint_watch(now);
+    let Some(outcome) = outcome else {
         return;
     };
     // The CLI's reason is for the log only, never shown raw.

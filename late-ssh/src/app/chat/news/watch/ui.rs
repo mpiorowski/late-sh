@@ -2,6 +2,8 @@
 //! where it went; the paired CLI's mpv draws the video over exactly that
 //! rectangle. The setup box is a small card in the reader's frame style.
 
+use std::time::Instant;
+
 use ratatui::{
     Frame,
     layout::Rect,
@@ -71,7 +73,7 @@ fn draw_player(frame: &mut Frame, area: Rect, player: &Player) {
         frame.render_widget(
             Paragraph::new(footer_line(
                 &player.footer_hints(),
-                &player.status_text(),
+                &player.status_text(Instant::now()),
                 usize::from(layout.footer.width),
             )),
             layout.footer,

@@ -87,7 +87,8 @@ pub enum PairControlMessage {
     /// Play a News video in the rectangle the TUI reserved, in 0-based
     /// terminal cells. Only CLIs advertising `video` get it. `play_id` is a
     /// per-session counter tying every later message to this play, so a
-    /// stale one on either side is dropped.
+    /// stale one on either side is dropped. `start_s` is where to begin:
+    /// zero for the top, the saved position for a resume.
     VideoPlay {
         play_id: u64,
         url: String,
@@ -95,6 +96,7 @@ pub enum PairControlMessage {
         top: u16,
         cols: u16,
         rows: u16,
+        start_s: u64,
     },
     /// The play's rectangle moved (Window/Full, a resize).
     VideoPlace {
@@ -123,6 +125,9 @@ pub enum VideoControl {
     /// Shift and the arrows: a minute.
     SeekBackFar,
     SeekForwardFar,
+    /// `0` or Home: back to the top, for a resumed play the user would
+    /// rather rewatch.
+    Restart,
     /// mpv's own mute, not the house mute.
     ToggleMute,
 }

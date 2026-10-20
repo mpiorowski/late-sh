@@ -1059,6 +1059,9 @@ fn chat_view<'a>(
     static AFK_LINES: OnceLock<HashMap<Uuid, DateTime<Utc>>> = OnceLock::new();
     static DRUNK_LEVELS: OnceLock<HashMap<Uuid, u8>> = OnceLock::new();
     static NEWS_MARKER: OnceLock<HashSet<Uuid>> = OnceLock::new();
+    static NEWS_WATCH_POSITIONS: OnceLock<
+        HashMap<Uuid, late_core::models::article_read::WatchPosition>,
+    > = OnceLock::new();
     static NAME_STYLES: OnceLock<HashMap<Uuid, crate::app::common::username_effect::ResolvedName>> =
         OnceLock::new();
     static AWAY_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
@@ -1095,6 +1098,7 @@ fn chat_view<'a>(
             articles: &[],
             selected_index: 0,
             marker: NEWS_MARKER.get_or_init(HashSet::new),
+            watch_positions: NEWS_WATCH_POSITIONS.get_or_init(HashMap::new),
             mine_only: false,
         },
         discover_selected: false,

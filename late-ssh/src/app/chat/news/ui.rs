@@ -1,6 +1,7 @@
 use crate::app::chat::list_ui::{draw_mine_only_status, filtered_list_areas};
 use crate::app::chat::news::state::is_unread;
 use crate::app::chat::news::svc::is_youtube_url;
+use crate::app::chat::news::watch::state::position_label;
 use crate::app::chat::ui_text::format_news_ascii_art_for_display;
 use crate::app::common::primitives::format_relative_time;
 use crate::app::common::theme;
@@ -11,17 +12,20 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
 use late_core::models::article::{ArticleFeedItem, NEWS_SHARE_REWARD_CHIPS};
 use late_core::models::article_body::BodyStatus;
+use late_core::models::article_read::WatchPosition;
 
 pub struct ArticleListView<'a> {
     pub articles: &'a [ArticleFeedItem],
     pub selected_index: usize,
     pub marker: &'a HashSet<Uuid>,
+    /// Where the reader left each video they are partway through.
+    pub watch_positions: &'a HashMap<Uuid, WatchPosition>,
     pub mine_only: bool,
 }
 
@@ -132,11 +136,13 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
                         format!(" - {}", article.created.format("%a %Y-%m-%d %H:%M UTC")),
                         Style::default().fg(theme::TEXT_FAINT()),
                     ),
-                    match reading_label(item) {
+                    match reading_label(item, view.watch_positions) {
                         Some(label) => Span::styled(
                             format!(" - {}", label.text()),
                             match label {
-                                ReadingLabel::Watch => Style::default().fg(theme::AMBER()),
+                                ReadingLabel::Watch | ReadingLabel::Resume(_) => {
+                                    Style::default().fg(theme::AMBER())
+                                }
                                 ReadingLabel::Minutes(_) | ReadingLabel::Link => {
                                     Style::default().fg(theme::TEXT_DIM())
                                 }
@@ -181,6 +187,8 @@ pub(crate) enum ReadingLabel {
     /// A video, for everyone: watching is the user's intent, and `w` says
     /// what their setup needs when it cannot play.
     Watch,
+    /// A video this reader is partway through: `w` picks up here.
+    Resume(WatchPosition),
 }
 
 impl ReadingLabel {
@@ -189,15 +197,26 @@ impl ReadingLabel {
             Self::Minutes(minutes) => format!("{minutes} min read"),
             Self::Link => "link".to_string(),
             Self::Watch => "watch".to_string(),
+            Self::Resume(position) => format!(
+                "▶ {}",
+                position_label(position.position_s, position.duration_s)
+            ),
         }
     }
 }
 
 /// The card's reading label; nothing while a page's fetch is pending. A
-/// video never gets text, so it reads `watch` whatever its body says.
-pub(crate) fn reading_label(item: &ArticleFeedItem) -> Option<ReadingLabel> {
+/// video never gets text, so it reads `watch` whatever its body says, or
+/// where this reader left it when they are partway through.
+pub(crate) fn reading_label(
+    item: &ArticleFeedItem,
+    watch_positions: &HashMap<Uuid, WatchPosition>,
+) -> Option<ReadingLabel> {
     if is_youtube_url(&item.article.url) {
-        return Some(ReadingLabel::Watch);
+        return Some(match watch_positions.get(&item.article.id) {
+            Some(position) => ReadingLabel::Resume(*position),
+            None => ReadingLabel::Watch,
+        });
     }
     match item.body {
         BodyStatus::Ready { reading_minutes } => Some(ReadingLabel::Minutes(reading_minutes)),

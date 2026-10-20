@@ -205,6 +205,8 @@ pub(super) enum VideoControl {
     /// Shift and the arrows: a minute.
     SeekBackFar,
     SeekForwardFar,
+    /// Back to the top.
+    Restart,
     ToggleMute,
 }
 
@@ -495,12 +497,13 @@ pub(super) struct MpvLaunch<'a> {
     pub(super) rect: VideoRect,
     pub(super) tty: TtySize,
     pub(super) use_shm: bool,
-    pub(super) volume_percent: u8,
     pub(super) ipc_path: &'a Path,
     pub(super) ytdlp_override: Option<&'a Path>,
     /// mpv's own log: with `--terminal=no` nothing reaches stderr, so this
     /// file is where a failed play says why.
     pub(super) log_path: &'a Path,
+    /// Where to begin, in seconds; zero is the top and adds no argument.
+    pub(super) start_s: u64,
 }
 
 /// The whole mpv command line. The six geometry numbers are the contract
@@ -519,10 +522,10 @@ pub(super) fn mpv_args(launch: &MpvLaunch<'_>) -> Vec<OsString> {
         rect,
         tty,
         use_shm,
-        volume_percent,
         ipc_path,
         ytdlp_override,
         log_path,
+        start_s,
     } = launch;
     let (width, height) = tty.pixels_for(*rect);
     let shm = match use_shm {
@@ -559,12 +562,18 @@ pub(super) fn mpv_args(launch: &MpvLaunch<'_>) -> Vec<OsString> {
         ]
         .map(OsString::from),
     );
+    if *start_s > 0 {
+        args.push(format!("--start={start_s}").into());
+    }
     if let Some(ytdlp) = ytdlp_override {
         let mut arg = OsString::from("--script-opts=ytdl_hook-ytdl_path=");
         arg.push(ytdlp);
         args.push(arg);
     }
-    args.push(format!("--volume={volume_percent}").into());
+    // Full level, as any video player opens: the house volume is for the
+    // radio, which is silenced while a video plays, and a video at 30
+    // percent of itself is just quiet. `m` and the system mixer remain.
+    args.push("--volume=100".into());
     args.push("--keep-open=no".into());
     let mut ipc = OsString::from("--input-ipc-server=");
     ipc.push(ipc_path);
@@ -582,6 +591,7 @@ pub(super) fn ipc_command(control: VideoControl) -> Value {
         VideoControl::SeekForward => json!({ "command": ["seek", SEEK_STEP_S] }),
         VideoControl::SeekBackFar => json!({ "command": ["seek", -SEEK_FAR_STEP_S] }),
         VideoControl::SeekForwardFar => json!({ "command": ["seek", SEEK_FAR_STEP_S] }),
+        VideoControl::Restart => json!({ "command": ["seek", 0, "absolute"] }),
         VideoControl::ToggleMute => json!({ "command": ["cycle", "mute"] }),
     }
 }
@@ -979,17 +989,17 @@ impl VideoPlayer {
         self.current.is_some()
     }
 
-    /// Start `url` in `rect`, stopping whatever was playing first. The old
-    /// play gets no report: the server superseded it.
+    /// Start `url` in `rect` from `start_s`, stopping whatever was playing
+    /// first. The old play gets no report: the server superseded it.
     pub(super) fn play(
         &mut self,
         play_id: u64,
         url: String,
         rect: VideoRect,
-        volume_percent: u8,
+        start_s: u64,
     ) -> VideoUpdate {
         let residue = self.take_and_kill().map(|old| old.rect);
-        let state = match self.spawn(play_id, url, rect, volume_percent) {
+        let state = match self.spawn(play_id, url, rect, start_s) {
             Ok(playback) => {
                 self.current = Some(playback);
                 VideoState::Starting
@@ -1195,7 +1205,7 @@ impl VideoPlayer {
         play_id: u64,
         url: String,
         rect: VideoRect,
-        volume_percent: u8,
+        start_s: u64,
     ) -> Result<Playback, VideoFailure> {
         // The server is trusted, but the URL is the one string here that
         // ends up as a command argument, so the scheme gate stays.
@@ -1223,10 +1233,10 @@ impl VideoPlayer {
             rect,
             tty,
             use_shm: self.tools.use_shm,
-            volume_percent,
             ipc_path: &self.tools.ipc_path,
             ytdlp_override: self.tools.ytdlp_override.as_deref(),
             log_path: &self.tools.log_path,
+            start_s,
         });
         // mpv never writes to the tty itself: its stdout is a pipe the relay
         // carries to the tty with mpv's terminal-mode writes filtered out.

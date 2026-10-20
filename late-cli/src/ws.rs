@@ -122,6 +122,8 @@ enum PairControlMessage {
     },
     /// Play a News video in the TUI's reserved rectangle. Advertised via the
     /// `video` capability; `play_id` ties every later message to this play.
+    /// `start_s` is where to begin; a server from before resumes sends
+    /// none, which is the top.
     VideoPlay {
         play_id: u64,
         url: String,
@@ -129,6 +131,8 @@ enum PairControlMessage {
         top: u16,
         cols: u16,
         rows: u16,
+        #[serde(default)]
+        start_s: u64,
     },
     VideoPlace {
         play_id: u64,
@@ -1222,6 +1226,7 @@ async fn handle_pair_control(
             top,
             cols,
             rows,
+            start_s,
         } => {
             let rect = VideoRect {
                 left,
@@ -1229,13 +1234,8 @@ async fn handle_pair_control(
                 cols,
                 rows,
             };
-            info!(play_id, url = %url, ?rect, "starting video");
-            let update = video.play(
-                play_id,
-                url,
-                rect,
-                playback.volume_percent.load(Ordering::Relaxed),
-            );
+            info!(play_id, url = %url, ?rect, start_s, "starting video");
+            let update = video.play(play_id, url, rect, start_s);
             report_video(ws, update).await?;
             silence_for_video(video.is_active(), playback, webview);
             Ok(false)

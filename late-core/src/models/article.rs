@@ -262,12 +262,14 @@ pub enum ArticleEvent {
     },
     /// This user's news reads among the snapshot's articles
     /// (`article_reads`), loaded at session start and after every write
-    /// (a News room visit, one article opened). Reads only grow, so a
-    /// session merges each load into what it holds, in whatever order the
-    /// loads land, and counts its own unread badge from them against the
-    /// shared snapshot.
+    /// (a News room visit, one article opened, a video position saved).
+    /// Reads only grow, so a session merges each load into what it holds,
+    /// in whatever order the loads land, and counts its own unread badge
+    /// from them against the shared snapshot. The video positions riding
+    /// the rows replace what the session holds: the newest load is the
+    /// truth about where a video stands.
     ReadsLoaded {
         user_id: Uuid,
-        read_article_ids: Vec<Uuid>,
+        reads: Vec<super::article_read::ArticleReadRow>,
     },
 }

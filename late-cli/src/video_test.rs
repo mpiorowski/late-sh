@@ -297,6 +297,7 @@ fn os_args(args: &[&str]) -> Vec<OsString> {
     args.iter().map(OsString::from).collect()
 }
 
+/// A window, resumed from a saved position: `--start` carries it.
 #[test]
 fn mpv_args_for_a_window() {
     let args = mpv_args(&MpvLaunch {
@@ -309,10 +310,10 @@ fn mpv_args_for_a_window() {
         },
         tty: tty(),
         use_shm: true,
-        volume_percent: 30,
         ipc_path: Path::new("/run/user/1000/late-video-42.sock"),
         ytdlp_override: None,
         log_path: Path::new("/home/me/.local/state/late/video.log"),
+        start_s: 1391,
     });
     assert_eq!(
         args,
@@ -333,7 +334,8 @@ fn mpv_args_for_a_window() {
             "--vo-kitty-height=560",
             "--ytdl=yes",
             "--ytdl-format=bestvideo[protocol^=m3u8][height<=720]+bestaudio[protocol^=m3u8]/bestvideo[height<=720]+bestaudio/best[height<=720]",
-            "--volume=30",
+            "--start=1391",
+            "--volume=100",
             "--keep-open=no",
             "--input-ipc-server=/run/user/1000/late-video-42.sock",
             "--",
@@ -356,10 +358,10 @@ fn mpv_args_for_full_screen_without_shared_memory() {
         },
         tty: TtySize::new(213, 57, 1917, 1140).unwrap(),
         use_shm: false,
-        volume_percent: 70,
         ipc_path: Path::new("/tmp/late-video-7.sock"),
         ytdlp_override: Some(Path::new("/home/me/.local/bin/yt-dlp")),
         log_path: Path::new("/tmp/video.log"),
+        start_s: 0,
     });
     assert_eq!(
         args,
@@ -381,7 +383,7 @@ fn mpv_args_for_full_screen_without_shared_memory() {
             "--ytdl=yes",
             "--ytdl-format=bestvideo[protocol^=m3u8][height<=720]+bestaudio[protocol^=m3u8]/bestvideo[height<=720]+bestaudio/best[height<=720]",
             "--script-opts=ytdl_hook-ytdl_path=/home/me/.local/bin/yt-dlp",
-            "--volume=70",
+            "--volume=100",
             "--keep-open=no",
             "--input-ipc-server=/tmp/late-video-7.sock",
             "--",
@@ -401,6 +403,10 @@ fn every_control_maps_to_its_mpv_command() {
         (VideoControl::SeekForward, r#"{"command":["seek",10]}"#),
         (VideoControl::SeekBackFar, r#"{"command":["seek",-60]}"#),
         (VideoControl::SeekForwardFar, r#"{"command":["seek",60]}"#),
+        (
+            VideoControl::Restart,
+            r#"{"command":["seek",0,"absolute"]}"#,
+        ),
         (VideoControl::ToggleMute, r#"{"command":["cycle","mute"]}"#),
     ];
     for (control, expected) in cases {
@@ -416,6 +422,7 @@ fn controls_parse_from_their_wire_names() {
         ("seek_forward", VideoControl::SeekForward),
         ("seek_back_far", VideoControl::SeekBackFar),
         ("seek_forward_far", VideoControl::SeekForwardFar),
+        ("restart", VideoControl::Restart),
         ("toggle_mute", VideoControl::ToggleMute),
     ] {
         let parsed: VideoControl = serde_json::from_value(json!(wire)).unwrap();
@@ -585,7 +592,7 @@ fn a_non_http_url_never_reaches_mpv() {
             cols: 80,
             rows: 24,
         },
-        30,
+        0,
     );
     assert_eq!(
         update,

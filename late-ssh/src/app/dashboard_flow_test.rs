@@ -1187,10 +1187,11 @@ async fn opening_a_shares_modal_marks_that_article_read() {
 
     crate::test_helpers::wait_until(
         || async {
-            ArticleRead::article_ids_for_user(&client, me.id)
+            ArticleRead::rows_for_user(&client, me.id)
                 .await
                 .expect("reads")
-                .contains(&newer.id)
+                .iter()
+                .any(|row| row.article_id == newer.id)
         },
         "the read is stored",
     )
@@ -1442,9 +1443,10 @@ async fn news_room_with_a_video(
 }
 
 /// With a paired CLI that advertises `video`, `w` on a YouTube card opens
-/// the player, and the CLI hears a play with the
-/// window's body, a place with the full-screen body on `f`, and a stop on
-/// Esc.
+/// the player, and the CLI hears a play with the window's body, a place
+/// with the full-screen body on `f`, and a stop on Esc. Closing partway
+/// through leaves the position on the card and in the database, and the
+/// next `w` resumes three seconds before it.
 #[tokio::test]
 async fn w_on_a_video_plays_it_through_the_paired_cli() {
     use crate::app::files::terminal_image::TerminalImageProtocol;
@@ -1470,6 +1472,7 @@ async fn w_on_a_video_plays_it_through_the_paired_cli() {
                 top,
                 cols,
                 rows,
+                start_s: 0,
             },
         ] => {
             assert_eq!(url, "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
@@ -1494,6 +1497,14 @@ async fn w_on_a_video_plays_it_through_the_paired_cli() {
         }]
     );
 
+    crate::app::chat::news::watch::svc::apply_report(
+        &mut app,
+        play_id,
+        &crate::paired_clients::VideoReport::Playing {
+            position_s: 1394,
+            duration_s: Some(2910),
+        },
+    );
     app.handle_input(b"\x1b");
     wait_for_app(&mut app, "Esc to close the player", |app| {
         !app.chat.has_watch()
@@ -1504,6 +1515,42 @@ async fn w_on_a_video_plays_it_through_the_paired_cli() {
         video_messages(&mut rx),
         vec![PairControlMessage::VideoStop { play_id }]
     );
+    wait_for_render_contains(&mut app, "UTC - ▶ 23:14 / 48:30").await;
+    let client = test_db.db.get().await.expect("db client");
+    let me = app.user_id;
+    crate::test_helpers::wait_until(
+        || async {
+            late_core::models::article_read::ArticleRead::rows_for_user(&client, me)
+                .await
+                .expect("reads")
+                .iter()
+                .any(|row| {
+                    row.watch_position
+                        == Some(late_core::models::article_read::WatchPosition {
+                            position_s: 1394,
+                            duration_s: Some(2910),
+                        })
+                })
+        },
+        "the position is stored",
+    )
+    .await;
+
+    app.handle_input(b"w");
+    wait_for_render_contains(&mut app, "resuming from 23:14…").await;
+    match video_messages(&mut rx).as_slice() {
+        [
+            PairControlMessage::VideoPlay {
+                start_s,
+                play_id: resumed,
+                ..
+            },
+        ] => {
+            assert_eq!(*start_s, 1391, "three seconds before where it was left");
+            assert_ne!(*resumed, play_id, "a fresh play id");
+        }
+        other => panic!("expected one resumed video_play, got {other:?}"),
+    }
 }
 
 /// A paired CLI that is missing mpv: the card still reads `watch`, `w`

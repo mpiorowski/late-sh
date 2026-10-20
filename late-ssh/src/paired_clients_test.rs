@@ -606,9 +606,10 @@ fn video_messages_serialize_to_wire_names() {
             top: 3,
             cols: 100,
             rows: 28,
+            start_s: 1391,
         })
         .unwrap(),
-        r#"{"event":"video_play","play_id":7,"url":"https://www.youtube.com/watch?v=x","left":10,"top":3,"cols":100,"rows":28}"#
+        r#"{"event":"video_play","play_id":7,"url":"https://www.youtube.com/watch?v=x","left":10,"top":3,"cols":100,"rows":28,"start_s":1391}"#
     );
     assert_eq!(
         serde_json::to_string(&PairControlMessage::VideoPlace {
@@ -627,6 +628,7 @@ fn video_messages_serialize_to_wire_names() {
         (VideoControl::SeekForward, "seek_forward"),
         (VideoControl::SeekBackFar, "seek_back_far"),
         (VideoControl::SeekForwardFar, "seek_forward_far"),
+        (VideoControl::Restart, "restart"),
         (VideoControl::ToggleMute, "toggle_mute"),
     ] {
         assert_eq!(

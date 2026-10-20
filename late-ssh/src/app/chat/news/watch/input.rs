@@ -1,6 +1,6 @@
 //! Keys while the watch modal is up. The player relays pause, seek (10 s,
-//! a minute with Shift) and mute to the paired CLI and toggles its size; the setup box only copies
-//! and closes. Everything else, mouse included, is swallowed, so nothing
+//! a minute with Shift), restart and mute to the paired CLI and toggles
+//! its size; the setup box only copies and closes. Everything else, mouse included, is swallowed, so nothing
 //! reaches the page under the video.
 
 use ratatui::layout::Position;
@@ -52,6 +52,9 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
             if player =>
         {
             svc::send_control(app, VideoControl::SeekForwardFar);
+        }
+        ParsedInput::Byte(b'0') | ParsedInput::Char('0') | ParsedInput::Home if player => {
+            svc::send_control(app, VideoControl::Restart);
         }
         ParsedInput::Byte(b'm') | ParsedInput::Char('m') if player => {
             svc::send_control(app, VideoControl::ToggleMute);
