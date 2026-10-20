@@ -1,5 +1,10 @@
 use chrono::Utc;
+use late_core::models::chat_message::ChatMessage;
+use late_core::models::chat_room::ChatRoom;
+use late_core::models::deadchannel_ambush::{Ambush, AmbushOutcome, NewAmbush};
 use late_core::models::deadchannel_runner::DeadchannelRunner;
+use late_core::models::notification::Notification;
+use late_core::models::user::User;
 use late_core::test_utils::create_test_user;
 use tokio::sync::mpsc;
 use tokio::time::{Duration, timeout};
@@ -7,12 +12,15 @@ use tokio::time::{Duration, timeout};
 use super::{FightOutcome, FightService};
 use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::svc::ChatService;
-use crate::app::deadchannel::fight::data::RATIONS_PER_DAY;
-use crate::app::deadchannel::fight::road::{Mark, Trace};
-use crate::app::deadchannel::fight::state::{Applied, Call, Command, Pick, Sheet, Slot};
+use crate::app::deadchannel::fight::cards::Card;
+use crate::app::deadchannel::fight::data::{CROSSING_LEVEL_BAND, RATIONS_PER_DAY};
+use crate::app::deadchannel::fight::road::{Mark, Node, Trace};
+use crate::app::deadchannel::fight::state::{
+    Applied, Call, Command, Meeting, Pick, Prey, Refusal, Sheet, Slot,
+};
 use crate::app::deadchannel::runner::state::Look;
 use crate::app::games::chips::svc::ChipService;
-use crate::test_helpers::{age_payout_claims, new_test_db};
+use crate::test_helpers::{age_payout_claims, new_test_db, wait_until};
 
 async fn runner_and_service(
     name: &str,
@@ -55,7 +63,7 @@ async fn a_step_spends_a_ration_and_lands_the_fight_and_the_road_on_the_row() {
     let (tx, mut rx) = mpsc::unbounded_channel();
 
     svc.act_task(user_id, "mira".to_string(), STEP_IN, tx.clone());
-    let FightOutcome::Acted { sheet, outcome } = answer(&mut rx).await else {
+    let FightOutcome::Acted { sheet, outcome, .. } = answer(&mut rx).await else {
         panic!("a start answers with the sheet");
     };
     assert_eq!(outcome.applied, Applied::Started { pick: Pick::Fair });
@@ -82,7 +90,7 @@ async fn a_step_spends_a_ration_and_lands_the_fight_and_the_road_on_the_row() {
 
     // A second device stepping in finds the same fight and spends nothing.
     svc.act_task(user_id, "mira".to_string(), STEP_IN, tx);
-    let FightOutcome::Acted { sheet, outcome } = answer(&mut rx).await else {
+    let FightOutcome::Acted { sheet, outcome, .. } = answer(&mut rx).await else {
         panic!("a resume answers with the sheet");
     };
     assert_eq!(outcome.applied, Applied::Resumed);
@@ -92,7 +100,7 @@ async fn a_step_spends_a_ration_and_lands_the_fight_and_the_road_on_the_row() {
     // what the row holds after is what the answer showed.
     let (tx, mut rx) = mpsc::unbounded_channel();
     svc.act_task(user_id, "mira".to_string(), Command::Auto, tx);
-    let FightOutcome::Acted { sheet, outcome } = answer(&mut rx).await else {
+    let FightOutcome::Acted { sheet, outcome, .. } = answer(&mut rx).await else {
         panic!("a turn answers with the sheet");
     };
     assert!(!outcome.lines.is_empty());
@@ -129,7 +137,7 @@ async fn a_purchase_at_the_armorer_lands_on_the_row() {
         },
         tx.clone(),
     );
-    let FightOutcome::Acted { sheet, outcome } = answer(&mut rx).await else {
+    let FightOutcome::Acted { sheet, outcome, .. } = answer(&mut rx).await else {
         panic!("a purchase answers with the sheet");
     };
     assert_eq!(
@@ -171,32 +179,39 @@ async fn a_loan_and_a_deposit_land_on_the_row() {
     let (test_db, user_id, svc) = runner_and_service("fight-svc-money").await;
     let (tx, mut rx) = mpsc::unbounded_channel();
 
-    // A fresh runner's 50 bits, the level-1 loan of 50 (5 more on the
-    // debt), then all 100 into the locker less its 10.
+    // A fresh runner's 50 bits, the level-1 loan of 108 (the wall price
+    // of a piece, 11 more on the debt), then all 158 into the locker less
+    // its 16.
     svc.act_task(user_id, "mira".to_string(), Command::Borrow, tx.clone());
     let FightOutcome::Acted { outcome, .. } = answer(&mut rx).await else {
         panic!("a loan answers with the sheet");
     };
-    assert_eq!(outcome.applied, Applied::Borrowed { amount: 50, fee: 5 });
+    assert_eq!(
+        outcome.applied,
+        Applied::Borrowed {
+            amount: 108,
+            fee: 11
+        }
+    );
     svc.act_task(user_id, "mira".to_string(), Command::Deposit, tx);
-    let FightOutcome::Acted { sheet, outcome } = answer(&mut rx).await else {
+    let FightOutcome::Acted { sheet, outcome, .. } = answer(&mut rx).await else {
         panic!("a deposit answers with the sheet");
     };
     assert_eq!(
         outcome.applied,
         Applied::Deposited {
-            stored: 90,
-            fee: 10
+            stored: 142,
+            fee: 16
         }
     );
-    assert_eq!((sheet.bits, sheet.stash, sheet.debt), (0, 90, 55));
+    assert_eq!((sheet.bits, sheet.stash, sheet.debt), (0, 142, 119));
 
     let client = test_db.db.get().await.expect("db client");
     let row = DeadchannelRunner::find_by_user(&client, user_id)
         .await
         .expect("find")
         .expect("row");
-    assert_eq!((row.bits, row.stash, row.debt), (0, 90, 55));
+    assert_eq!((row.bits, row.stash, row.debt), (0, 142, 119));
 }
 
 #[tokio::test]
@@ -235,7 +250,7 @@ async fn the_descent_rolls_a_stale_day() {
 
     let (tx, mut rx) = mpsc::unbounded_channel();
     svc.reload_task(user_id, tx);
-    let FightOutcome::Reloaded { sheet } = answer(&mut rx).await else {
+    let FightOutcome::Reloaded { sheet, .. } = answer(&mut rx).await else {
         panic!("a reload answers with the sheet");
     };
     assert_eq!(sheet.day, Utc::now().date_naive());
@@ -593,13 +608,15 @@ async fn a_glass_and_the_crystals_are_stored_on_the_row() {
         },
         tx.clone(),
     );
-    let FightOutcome::Acted { sheet, outcome } = answer(&mut rx).await else {
+    let FightOutcome::Acted { sheet, outcome, .. } = answer(&mut rx).await else {
         panic!("a glass answers with the sheet");
     };
     assert_eq!(
         outcome.applied,
         Applied::Drank {
-            drink: Drink::DeadAirNeat
+            drink: Drink::DeadAirNeat,
+            crystals: 1,
+            bits: 0,
         }
     );
     assert_eq!((sheet.crystals, sheet.drink), (2, Some(Drink::DeadAirNeat)));
@@ -614,8 +631,587 @@ async fn a_glass_and_the_crystals_are_stored_on_the_row() {
         (2, Some("dead_air_neat"))
     );
     svc.reload_task(user_id, tx);
-    let FightOutcome::Reloaded { sheet } = answer(&mut rx).await else {
+    let FightOutcome::Reloaded { sheet, .. } = answer(&mut rx).await else {
         panic!("a reload answers with the sheet");
     };
     assert_eq!((sheet.crystals, sheet.drink), (2, Some(Drink::DeadAirNeat)));
+}
+
+/// A second runner on the same database, their row set for today.
+async fn another_runner(
+    test_db: &late_core::test_utils::TestDb,
+    name: &str,
+) -> (uuid::Uuid, String) {
+    let user = create_test_user(&test_db.db, name).await;
+    let client = test_db.db.get().await.expect("db client");
+    let look = Look::random(1, &mut rand::thread_rng());
+    DeadchannelRunner::ensure_for_user(&client, user.id, &look.to_json())
+        .await
+        .expect("a runner");
+    (user.id, user.username)
+}
+
+async fn sheet_of(test_db: &late_core::test_utils::TestDb, user_id: uuid::Uuid) -> Sheet {
+    let client = test_db.db.get().await.expect("db client");
+    let row = DeadchannelRunner::find_by_user(&client, user_id)
+        .await
+        .expect("find")
+        .expect("row");
+    Sheet::from_row(&row).expect("sheet")
+}
+
+async fn store(test_db: &late_core::test_utils::TestDb, sheet: &Sheet) {
+    let client = test_db.db.get().await.expect("db client");
+    DeadchannelRunner::store_sheet(&**client, sheet.to_write())
+        .await
+        .expect("store");
+}
+
+/// `user_id`'s row set for today, stood one step short of the crossing
+/// down its lane, carrying `bits`. Returns the crossing's lane.
+async fn at_the_crossing(
+    test_db: &late_core::test_utils::TestDb,
+    user_id: uuid::Uuid,
+    bits: i64,
+) -> u8 {
+    let mut sheet = sheet_of(test_db, user_id).await;
+    sheet.day = FightService::today();
+    sheet.bits = bits;
+    let road = sheet.todays_road();
+    let (step, lane) = road
+        .steps
+        .iter()
+        .enumerate()
+        .find_map(|(step, lanes)| {
+            lanes
+                .iter()
+                .position(|node| *node == Node::Crossing)
+                .map(|lane| (step as i32 + 1, lane as u8))
+        })
+        .expect("every road has a crossing");
+    sheet.rations_left = RATIONS_PER_DAY - (step - 1);
+    sheet.road.path = (1..step)
+        .map(|_| Trace {
+            lane,
+            mark: Mark::Won,
+        })
+        .collect();
+    store(test_db, &sheet).await;
+    lane
+}
+
+/// `user_id`'s row set for today and asleep, carrying `bits`.
+async fn asleep(test_db: &late_core::test_utils::TestDb, user_id: uuid::Uuid, bits: i64) {
+    let mut sheet = sheet_of(test_db, user_id).await;
+    sheet.day = FightService::today();
+    sheet.bits = bits;
+    store(test_db, &sheet).await;
+}
+
+/// The fight on `user_id`'s row left at one signal, so the next hit
+/// ends it.
+async fn one_hit_from_down(test_db: &late_core::test_utils::TestDb, user_id: uuid::Uuid) {
+    let mut sheet = sheet_of(test_db, user_id).await;
+    sheet.fight.as_mut().expect("a fight on the row").foe_signal = 1;
+    store(test_db, &sheet).await;
+}
+
+/// The wire's message in #deadchannel that starts with `opening`, once
+/// the fire-and-forget post lands.
+async fn wire_line(test_db: &late_core::test_utils::TestDb, opening: &str) -> ChatMessage {
+    let read = || async {
+        let client = test_db.db.get().await.expect("db client");
+        let room = ChatRoom::get_or_create_deadchannel_room(&client)
+            .await
+            .expect("the wire");
+        ChatMessage::list_recent(&client, room.id, 20)
+            .await
+            .expect("list the wire")
+            .into_iter()
+            .find(|message| message.body.starts_with(opening))
+    };
+    wait_until(|| async { read().await.is_some() }, opening).await;
+    read().await.expect("the line landed")
+}
+
+/// Waits for `user_id`'s mention of the wire's `message`.
+async fn mentioned(
+    test_db: &late_core::test_utils::TestDb,
+    user_id: uuid::Uuid,
+    message: &ChatMessage,
+) {
+    wait_until(
+        || async {
+            let client = test_db.db.get().await.expect("db client");
+            Notification::list_for_user(&client, user_id, 20)
+                .await
+                .expect("list mentions")
+                .iter()
+                .any(|mention| mention.message_id == message.id)
+        },
+        "the wire's mention",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_crossing_takes_the_sleepers_bits_and_the_sleeper_answers_for_them() {
+    let (test_db, mira, svc) = runner_and_service("fight-cross-mira").await;
+    let (tom, tom_name) = another_runner(&test_db, "fight-cross-tom").await;
+    let lane = at_the_crossing(&test_db, mira, 50).await;
+    asleep(&test_db, tom, 340).await;
+    let client = test_db.db.get().await.expect("db client");
+
+    // The road shows tom at the crossing before the step.
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.reload_task(mira, tx);
+    let FightOutcome::Reloaded { lookout, .. } = answer(&mut rx).await else {
+        panic!("a reload answers with the sheet");
+    };
+    let shown = lookout.crossing.expect("tom is at the crossing");
+    assert_eq!(shown.rival.username, tom_name);
+    assert_eq!((shown.carrying, shown.stake), (340, 170));
+    assert_eq!(shown.rival.level, 1);
+    assert!(lookout.token.is_none());
+    assert!(lookout.news.is_none());
+
+    // The step: tom on the row, a ration spent, the ambush row claimed.
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.cross_task(mira, "mira".to_string(), lane, tx);
+    let FightOutcome::Acted { sheet, outcome, .. } = answer(&mut rx).await else {
+        panic!("a crossing answers with the sheet");
+    };
+    let Applied::Crossed { rival } = outcome.applied else {
+        panic!("tom is on the row: {:?}", outcome.applied);
+    };
+    assert_eq!(rival.username, tom_name);
+    assert!(!rival.answer);
+    assert_eq!(sheet.fight.as_ref().map(|fight| fight.foe_bits), Some(170));
+    let crossings = Ambush::crossings_of_day(&**client, FightService::today())
+        .await
+        .expect("read");
+    let crossing = crossings
+        .iter()
+        .find(|row| row.id == rival.ambush_id)
+        .expect("the ambush row");
+    assert_eq!(crossing.defender_user_id, tom);
+    assert_eq!(crossing.stake, 170);
+    assert!(crossing.outcome.is_none());
+
+    // Tom renames while the fight sits on mira's row: the wire names and
+    // mentions him as he is now, the scene keeps the name the fight took.
+    let tom_now = User::rename(&client, tom, &format!("{tom_name}now"))
+        .await
+        .expect("rename")
+        .username;
+    assert_ne!(tom_now, tom_name);
+
+    // Tom is down in one: half of what he carried moves, the row closes,
+    // the news lands.
+    one_hit_from_down(&test_db, mira).await;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.act_task(mira, "mira".to_string(), Command::Auto, tx);
+    let FightOutcome::Acted {
+        sheet,
+        outcome,
+        lookout,
+    } = answer(&mut rx).await
+    else {
+        panic!("a turn answers with the sheet");
+    };
+    assert!(
+        matches!(outcome.applied, Applied::Ambushed { stake: 170, .. }),
+        "{:?}",
+        outcome.applied
+    );
+    assert_eq!(
+        outcome.lines.last(),
+        Some(&format!("you take 170 bits off {tom_name}."))
+    );
+    assert_eq!(sheet.bits, 220);
+    assert_eq!(sheet.exp, 0);
+    assert_eq!(sheet.kills, 0);
+    assert!(sheet.fight.is_none());
+    assert!(lookout.crossing.is_none(), "the step is taken");
+    let toms = sheet_of(&test_db, tom).await;
+    assert_eq!(toms.bits, 170);
+    assert_eq!(toms.signal, 10, "a sleeper loses only what they carry");
+    let closed = Ambush::get(&**client, rival.ambush_id)
+        .await
+        .expect("read")
+        .expect("the row");
+    assert_eq!(closed.outcome, Some(AmbushOutcome::Won));
+    assert_eq!(closed.bits_moved, 170);
+    // The wire names who lost what to whom, tom by mention, as he is now.
+    let line = wire_line(&test_db, "@mira crossed").await;
+    assert_eq!(
+        line.body,
+        format!(
+            "@mira crossed @{tom_now} at step {} and won. @{tom_now} never woke and lost 170 bits to @mira.",
+            sheet.road.path.len()
+        )
+    );
+    mentioned(&test_db, tom, &line).await;
+
+    // Mira cannot cross tom again today, nor anyone: the day's caps.
+    let lane_again = at_the_crossing(&test_db, mira, 390).await;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.cross_task(mira, "mira".to_string(), lane_again, tx);
+    let FightOutcome::Acted { sheet, outcome, .. } = answer(&mut rx).await else {
+        panic!("a crossing answers");
+    };
+    assert_eq!(outcome.applied, Applied::Refused(Refusal::NobodyThere));
+    assert_eq!(sheet.bits, 390);
+
+    // Mira banks the loot: the answer is still for the 170 she took, out
+    // of the locker, and the road says what she holds in all.
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.act_task(mira, "mira".to_string(), Command::Deposit, tx);
+    let FightOutcome::Acted { sheet, .. } = answer(&mut rx).await else {
+        panic!("a deposit answers");
+    };
+    assert_eq!((sheet.bits, sheet.stash), (0, 351));
+
+    // Tom's row reads the news and is owed an answer, with mira on the wire.
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.reload_task(tom, tx);
+    let FightOutcome::Reloaded { lookout, .. } = answer(&mut rx).await else {
+        panic!("a reload answers");
+    };
+    let news = lookout.news.expect("the news");
+    assert_eq!(news.id, rival.ambush_id);
+    let token = lookout.token.expect("an answer owed");
+    assert_eq!(token.ambush.id, rival.ambush_id);
+    let crosser = token.prey.expect("mira is on the wire");
+    // The name mira goes by now, not the "mira" the crossing row kept: the
+    // answer's wire line mentions it, and a mention finds its runner by the
+    // current handle.
+    let mira_name = User::list_usernames_by_ids(&client, &[mira])
+        .await
+        .expect("read")
+        .remove(&mira)
+        .expect("mira's user row");
+    assert_ne!(mira_name, "mira");
+    assert_eq!(crosser.rival.username, mira_name);
+    assert_eq!((crosser.carrying, crosser.stake), (351, 170));
+
+    // The answer: no ration, mira on tom's row, and what she took at stake.
+    let tom_name = tom_now;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.answer_task(tom, tom_name.clone(), tx);
+    let FightOutcome::Acted { sheet, outcome, .. } = answer(&mut rx).await else {
+        panic!("an answer answers");
+    };
+    let Applied::Crossed { rival: back } = outcome.applied else {
+        panic!("mira is on the row: {:?}", outcome.applied);
+    };
+    assert!(back.answer);
+    assert_eq!(back.user_id, mira);
+    assert_eq!(sheet.rations_left, RATIONS_PER_DAY);
+    assert!(sheet.road.path.is_empty());
+    one_hit_from_down(&test_db, tom).await;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.act_task(tom, tom_name.clone(), Command::Auto, tx);
+    let FightOutcome::Acted {
+        sheet,
+        outcome,
+        lookout,
+    } = answer(&mut rx).await
+    else {
+        panic!("a turn answers");
+    };
+    assert!(
+        matches!(outcome.applied, Applied::Ambushed { stake: 170, .. }),
+        "{:?}",
+        outcome.applied
+    );
+    assert_eq!(sheet.bits, 340);
+    let miras = sheet_of(&test_db, mira).await;
+    assert_eq!((miras.bits, miras.stash), (0, 181), "out of the locker");
+    assert!(lookout.token.is_none(), "the answer is given");
+    let answered = Ambush::get(&**client, back.ambush_id)
+        .await
+        .expect("read")
+        .expect("the answer row");
+    assert_eq!(answered.answer_to, Some(rival.ambush_id));
+    assert_eq!(answered.outcome, Some(AmbushOutcome::Won));
+    assert_eq!(answered.bits_moved, 170);
+    let line = wire_line(&test_db, &format!("@{tom_name} answered")).await;
+    assert_eq!(
+        line.body,
+        format!(
+            "@{tom_name} answered @{mira_name} and won. @{mira_name} lost 170 bits to @{tom_name}."
+        )
+    );
+    mentioned(&test_db, mira, &line).await;
+
+    // A second answer: nothing owed.
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.answer_task(tom, tom_name, tx);
+    let FightOutcome::Acted { outcome, .. } = answer(&mut rx).await else {
+        panic!("an answer answers");
+    };
+    assert_eq!(outcome.applied, Applied::Refused(Refusal::NoAnswerOwed));
+}
+
+#[tokio::test]
+async fn going_down_at_a_crossing_pays_the_sleeper_and_owes_no_answer() {
+    let (test_db, mira, svc) = runner_and_service("fight-fall-mira").await;
+    let (tom, tom_name) = another_runner(&test_db, "fight-fall-tom").await;
+    let lane = at_the_crossing(&test_db, mira, 120).await;
+    asleep(&test_db, tom, 0).await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.cross_task(mira, "mira".to_string(), lane, tx);
+    let FightOutcome::Acted { outcome, .. } = answer(&mut rx).await else {
+        panic!("a crossing answers");
+    };
+    let Applied::Crossed { rival } = outcome.applied else {
+        panic!("tom is on the row: {:?}", outcome.applied);
+    };
+
+    // Mira at one signal against a heavy hitter: the turn ends her day.
+    let mut sheet = sheet_of(&test_db, mira).await;
+    sheet.signal = 1;
+    sheet.exp = 100;
+    sheet.fight.as_mut().expect("a fight").foe_attack = 50;
+    store(&test_db, &sheet).await;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.act_task(mira, "mira".to_string(), Command::EndTurn, tx);
+    let FightOutcome::Acted { sheet, outcome, .. } = answer(&mut rx).await else {
+        panic!("a turn answers");
+    };
+    assert!(
+        matches!(outcome.applied, Applied::Downed { bits_lost: 120, .. }),
+        "{:?}",
+        outcome.applied
+    );
+    assert!(sheet.is_down());
+    assert_eq!(sheet.bits, 0);
+    assert_eq!(sheet.exp, 65);
+    assert_eq!(sheet_of(&test_db, tom).await.bits, 120);
+    let closed = Ambush::get(&**client, rival.ambush_id)
+        .await
+        .expect("read")
+        .expect("the row");
+    assert_eq!(closed.outcome, Some(AmbushOutcome::Lost));
+    assert_eq!(closed.bits_moved, -120);
+    let line = wire_line(&test_db, "@mira crossed").await;
+    assert_eq!(
+        line.body,
+        format!(
+            "@mira crossed @{tom_name} at step {} and went down. @{tom_name} never woke. @mira lost their signal and 120 bits to @{tom_name}.",
+            sheet.road.path.len()
+        )
+    );
+    mentioned(&test_db, tom, &line).await;
+
+    // Tom's row reads the news; nothing to answer.
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.reload_task(tom, tx);
+    let FightOutcome::Reloaded { lookout, .. } = answer(&mut rx).await else {
+        panic!("a reload answers");
+    };
+    assert_eq!(lookout.news.map(|news| news.id), Some(rival.ambush_id));
+    assert!(lookout.token.is_none());
+}
+
+#[tokio::test]
+async fn the_crossing_meets_only_a_sleeper_in_the_band_on_the_wire() {
+    let (test_db, mira, svc) = runner_and_service("fight-band-mira").await;
+    let (tom, _) = another_runner(&test_db, "fight-band-tom").await;
+    let lane = at_the_crossing(&test_db, mira, 50).await;
+
+    // Out of the band: nobody there, nothing spent.
+    let mut toms = sheet_of(&test_db, tom).await;
+    toms.day = FightService::today();
+    toms.level = 4;
+    store(&test_db, &toms).await;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.cross_task(mira, "mira".to_string(), lane, tx);
+    let FightOutcome::Acted {
+        sheet,
+        outcome,
+        lookout,
+    } = answer(&mut rx).await
+    else {
+        panic!("a crossing answers");
+    };
+    assert_eq!(outcome.applied, Applied::Refused(Refusal::NobodyThere));
+    assert_eq!(
+        sheet.rations_left,
+        RATIONS_PER_DAY - sheet.road.path.len() as i32
+    );
+    assert!(lookout.crossing.is_none());
+
+    // In the band but down: still nobody.
+    toms.level = 2;
+    toms.signal = 0;
+    store(&test_db, &toms).await;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.cross_task(mira, "mira".to_string(), lane, tx);
+    let FightOutcome::Acted { outcome, .. } = answer(&mut rx).await else {
+        panic!("a crossing answers");
+    };
+    assert_eq!(outcome.applied, Applied::Refused(Refusal::NobodyThere));
+
+    // Up, in the band, on the wire: met.
+    toms.signal = toms.max_signal();
+    store(&test_db, &toms).await;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.cross_task(mira, "mira".to_string(), lane, tx);
+    let FightOutcome::Acted { outcome, .. } = answer(&mut rx).await else {
+        panic!("a crossing answers");
+    };
+    assert!(
+        matches!(outcome.applied, Applied::Crossed { .. }),
+        "{:?}",
+        outcome.applied
+    );
+}
+
+/// A sleeper is crossed only by a runner they could answer back: the
+/// sim reads the sleeper's answer at full signal against the attacker's
+/// numbers, and under risky (three in ten) the attacker walks past. A
+/// level 3 against a level 5 is nobody there; the same level is a
+/// crossing.
+#[tokio::test]
+async fn a_sleeper_who_could_not_answer_back_is_not_crossed() {
+    let (test_db, mira, svc) = runner_and_service("fight-gate-mira").await;
+    let (tom, tom_name) = another_runner(&test_db, "fight-gate-tom").await;
+    let lane = at_the_crossing(&test_db, mira, 50).await;
+    let mut miras = sheet_of(&test_db, mira).await;
+    miras.level = 5;
+    miras.peak_level = 5;
+    miras.weapon_tier = 5;
+    miras.armor_tier = 5;
+    miras.cards = vec![Card::Jab];
+    miras.signal = miras.max_signal();
+    store(&test_db, &miras).await;
+    asleep(&test_db, tom, 340).await;
+    let mut toms = sheet_of(&test_db, tom).await;
+    toms.level = 3;
+    toms.peak_level = 3;
+    toms.weapon_tier = 3;
+    toms.armor_tier = 3;
+    toms.cards = vec![Card::Jab];
+    toms.signal = toms.max_signal();
+    store(&test_db, &toms).await;
+
+    // In the band, on the wire, and no answer in them: the road shows
+    // nobody and the step meets nobody.
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.reload_task(mira, tx);
+    let FightOutcome::Reloaded { lookout, .. } = answer(&mut rx).await else {
+        panic!("a reload answers");
+    };
+    assert!(lookout.crossing.is_none(), "{:?}", lookout.crossing);
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.cross_task(mira, "mira".to_string(), lane, tx);
+    let FightOutcome::Acted { outcome, .. } = answer(&mut rx).await else {
+        panic!("a crossing answers");
+    };
+    assert_eq!(outcome.applied, Applied::Refused(Refusal::NobodyThere));
+
+    // The same level answers back easily: met.
+    toms.level = 5;
+    toms.peak_level = 5;
+    toms.weapon_tier = 5;
+    toms.armor_tier = 5;
+    toms.signal = toms.max_signal();
+    store(&test_db, &toms).await;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.cross_task(mira, "mira".to_string(), lane, tx);
+    let FightOutcome::Acted { outcome, .. } = answer(&mut rx).await else {
+        panic!("a crossing answers");
+    };
+    let Applied::Crossed { rival } = outcome.applied else {
+        panic!("tom is on the row: {:?}", outcome.applied);
+    };
+    assert_eq!(rival.username, tom_name);
+}
+
+fn blank_portrait() -> [String; 3] {
+    [
+        "     ".to_string(),
+        "  @  ".to_string(),
+        "     ".to_string(),
+    ]
+}
+
+/// A sleeper whose row still carries yesterday's rival fight: the roll
+/// under the crosser's lock wipes the fight and closes its ambush row as
+/// dropped, the same as the roll on the runner's own touch. Without that
+/// the row would read a fight that ended nowhere.
+#[tokio::test]
+async fn crossing_a_sleeper_rolls_their_day_and_drops_their_hanging_fight() {
+    let (test_db, mira, svc) = runner_and_service("fight-roll-mira").await;
+    let (tom, tom_name) = another_runner(&test_db, "fight-roll-tom").await;
+    let (dax, dax_name) = another_runner(&test_db, "fight-roll-dax").await;
+    let lane = at_the_crossing(&test_db, mira, 50).await;
+    let client = test_db.db.get().await.expect("db client");
+
+    // Yesterday tom crossed dax and never finished: the fight is on tom's
+    // row, dated yesterday, and the ambush row is still open.
+    let yesterday = FightService::today() - chrono::Duration::days(1);
+    let hanging = Ambush::insert(
+        &**client,
+        &NewAmbush {
+            id: uuid::Uuid::now_v7(),
+            day: yesterday,
+            attacker_user_id: tom,
+            defender_user_id: dax,
+            attacker_username: tom_name.clone(),
+            defender_username: dax_name.clone(),
+            step: Some(3),
+            stake: 20,
+            answer_to: None,
+            started_at: Utc::now() - chrono::Duration::days(1),
+        },
+    )
+    .await
+    .expect("insert")
+    .expect("the row claimed");
+    let mut toms = sheet_of(&test_db, tom).await;
+    toms.day = yesterday;
+    toms.bits = 120;
+    // Dax climbed out of mira's band since, so tom is the one sleeper
+    // mira can meet.
+    let mut daxs = sheet_of(&test_db, dax).await;
+    daxs.level = 1 + CROSSING_LEVEL_BAND + 1;
+    store(&test_db, &daxs).await;
+    let prey = Prey::of(
+        &daxs,
+        &dax_name,
+        blank_portrait(),
+        hanging.id,
+        Meeting::Crossing,
+    );
+    toms.engage_rival(prey, &mut rand::thread_rng());
+    assert!(toms.fight.is_some());
+    store(&test_db, &toms).await;
+
+    // Mira steps onto the crossing and meets tom, as the preview did.
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    svc.cross_task(mira, "mira".to_string(), lane, tx);
+    let FightOutcome::Acted { outcome, .. } = answer(&mut rx).await else {
+        panic!("a crossing answers with the sheet");
+    };
+    let Applied::Crossed { rival } = outcome.applied else {
+        panic!("tom is on the row: {:?}", outcome.applied);
+    };
+    assert_eq!(rival.username, tom_name);
+
+    // Tom's row rolled under the lock: today, no fight, and the hanging
+    // ambush closed as dropped with nothing moved.
+    let toms = sheet_of(&test_db, tom).await;
+    assert_eq!(toms.day, FightService::today());
+    assert!(toms.fight.is_none());
+    let dropped = Ambush::get(&**client, hanging.id)
+        .await
+        .expect("read")
+        .expect("the row");
+    assert_eq!(dropped.outcome, Some(AmbushOutcome::Dropped));
+    assert_eq!(dropped.bits_moved, 0);
 }

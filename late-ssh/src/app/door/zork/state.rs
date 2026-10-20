@@ -14,7 +14,9 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::task::JoinHandle;
 
-const IDLE_SHUTDOWN: Duration = Duration::from_secs(20 * 60);
+/// Close a running game after this long without forwarded game input,
+/// detached time included. The shared door window (`door::game::IDLE_WINDOW`).
+const IDLE_SHUTDOWN: Duration = crate::app::door::game::IDLE_WINDOW;
 const RETURN_TIMEOUT: Duration = Duration::from_secs(8);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Mode {
@@ -312,7 +314,7 @@ impl State {
             self.pending = None;
             self.mode = Mode::Actions;
             self.message =
-                "Closed after 20 minutes without game input. Continue resumes the last autosave."
+                "Closed after 30 minutes without game input. Continue resumes the last autosave."
                     .into();
             self.refresh();
         }

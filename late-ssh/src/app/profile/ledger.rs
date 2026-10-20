@@ -193,6 +193,7 @@ const fn pointer(mv: ChipMove) -> Pointer {
         | ChipMove::DailyEightBallWin
         | ChipMove::DailyNineBallWin
         | ChipMove::DailySnookerWin
+        | ChipMove::RealmConquest
         | ChipMove::TronWin
         | ChipMove::GreendragonDragonSlain
         | ChipMove::DarkroomEscape

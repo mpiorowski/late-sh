@@ -1,32 +1,47 @@
 use chrono::{DateTime, Utc};
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 use super::super::chat::{showcase::svc::ShowcaseFeedItem, work::svc::WorkFeedItem};
 use crate::app::common::primitives::format_relative_time_short;
 use late_core::models::{profile::Profile, work_profile::WorkStatus};
 
-/// The two shelves of the work page: the people, and the remote job feed
-/// (`app/jobs`).
+/// The three sections of the People page: the map of where everyone is
+/// (`app/usermap`), the profiles, and the remote job feed (`app/jobs`).
+/// `]` steps right through them and `[` steps left, both wrapping, and the
+/// page opens on the map.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Shelf {
-    People,
+    Map,
+    Profiles,
     Jobs,
 }
 
 impl Shelf {
+    pub(crate) const ALL: [Shelf; 3] = [Shelf::Map, Shelf::Profiles, Shelf::Jobs];
+
     pub(crate) const fn title(self) -> &'static str {
         match self {
-            Self::People => "people",
-            Self::Jobs => "jobs",
+            Self::Map => "Map",
+            Self::Profiles => "Profiles",
+            Self::Jobs => "Jobs",
         }
     }
 
-    pub(crate) const fn other(self) -> Self {
+    pub(crate) const fn next(self) -> Self {
         match self {
-            Self::People => Self::Jobs,
-            Self::Jobs => Self::People,
+            Self::Map => Self::Profiles,
+            Self::Profiles => Self::Jobs,
+            Self::Jobs => Self::Map,
+        }
+    }
+
+    pub(crate) const fn prev(self) -> Self {
+        match self {
+            Self::Map => Self::Jobs,
+            Self::Profiles => Self::Map,
+            Self::Jobs => Self::Profiles,
         }
     }
 }
@@ -81,6 +96,8 @@ pub(crate) fn person_row(
 pub(crate) struct PersonEntry<'a> {
     pub(crate) user_id: Uuid,
     pub(crate) username: &'a str,
+    /// Connected right now; the list leads with these.
+    pub(crate) online: bool,
     pub(crate) work: Option<&'a WorkFeedItem>,
     /// Newest-first, inherited from the showcase feed's sort order.
     pub(crate) projects: Vec<&'a ShowcaseFeedItem>,
@@ -176,6 +193,9 @@ pub(crate) struct DirectoryState {
     focus: usize,
     search_mode: bool,
     search_query: String,
+    /// Who is connected, as the presence tick last handed it over. The
+    /// Profiles section lists them first.
+    online: HashSet<Uuid>,
 }
 
 impl DirectoryState {
@@ -183,22 +203,35 @@ impl DirectoryState {
         Self {
             mine_only: false,
             mouse: Default::default(),
-            shelf: Shelf::People,
+            shelf: Shelf::Map,
             detail_open: false,
             narrow: Cell::new(false),
             selected: 0,
             focus: 0,
             search_mode: false,
             search_query: String::new(),
+            online: HashSet::new(),
         }
+    }
+
+    pub(crate) fn online(&self) -> &HashSet<Uuid> {
+        &self.online
+    }
+
+    pub(crate) fn set_online(&mut self, online: HashSet<Uuid>) {
+        self.online = online;
+        self.mouse.invalidate();
+    }
+
+    /// The selected person moved to another row (the list regrouped around
+    /// them): the cursor follows and the detail focus stays where it was.
+    pub(crate) fn follow(&mut self, index: usize) {
+        self.selected = index;
+        self.mouse.invalidate();
     }
 
     pub(crate) fn shelf(&self) -> Shelf {
         self.shelf
-    }
-
-    pub(crate) fn toggle_shelf(&mut self) {
-        self.set_shelf(self.shelf.other());
     }
 
     pub(crate) fn set_shelf(&mut self, shelf: Shelf) {
@@ -365,14 +398,16 @@ impl DirectoryState {
 }
 
 /// Build the people list: one entry per user who has a work card or at least
-/// one project, sorted by their latest activity, newest first. Each person's
-/// projects keep the showcase feed's newest-first order.
+/// one project. The connected come first, then everyone else, each group by
+/// latest activity, newest first. Each person's projects keep the showcase
+/// feed's newest-first order.
 pub(crate) fn person_entries<'a>(
     projects: &'a [ShowcaseFeedItem],
     people: &'a [WorkFeedItem],
     mine_only: bool,
     viewer: Uuid,
     query: &str,
+    online: &HashSet<Uuid>,
 ) -> Vec<PersonEntry<'a>> {
     let query = normalize_query(query);
     let mut by_user: HashMap<Uuid, PersonEntry<'a>> = HashMap::new();
@@ -385,6 +420,7 @@ pub(crate) fn person_entries<'a>(
             PersonEntry {
                 user_id,
                 username: &item.author_username,
+                online: online.contains(&user_id),
                 work: Some(item),
                 projects: Vec::new(),
             }
@@ -399,6 +435,7 @@ pub(crate) fn person_entries<'a>(
                 PersonEntry {
                     user_id,
                     username: &item.author_username,
+                    online: online.contains(&user_id),
                     work: None,
                     projects: Vec::new(),
                 }
@@ -415,7 +452,12 @@ pub(crate) fn person_entries<'a>(
                 && (query.is_empty() || person_matches(entry, &query))
         })
         .collect();
-    entries.sort_by_key(|b| std::cmp::Reverse(b.latest_activity()));
+    entries.sort_by_key(|b| {
+        (
+            std::cmp::Reverse(b.online),
+            std::cmp::Reverse(b.latest_activity()),
+        )
+    });
     entries
 }
 

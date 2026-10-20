@@ -28,7 +28,7 @@ use crate::app::common::primitives::thousands;
 use crate::app::common::theme;
 use crate::usernames::UsernameLookup;
 
-use super::state::{Drink, State};
+use super::state::{Drink, State, cut_off};
 use super::stools::SEAT_COUNT;
 
 /// The most lines the bar keeps on the wall, whatever the height.
@@ -125,7 +125,12 @@ fn draw_bar(frame: &mut Frame, area: Rect, view: &NightcapView<'_>) {
     draw_tab_board(frame, tab, view);
     draw_lines(frame, lines, view);
     draw_notice(frame, notice, view.state);
-    draw_footer(frame, footer, view.state);
+    let my_level = view
+        .drunk_levels
+        .get(&view.state.user_id())
+        .copied()
+        .unwrap_or(0);
+    draw_footer(frame, footer, view.state, cut_off(my_level));
 }
 
 /// The muted TV in the corner: one caption at a time, held for a while,
@@ -389,7 +394,7 @@ fn draw_notice(frame: &mut Frame, area: Rect, state: &State) {
     );
 }
 
-fn draw_footer(frame: &mut Frame, area: Rect, state: &State) {
+fn draw_footer(frame: &mut Frame, area: Rect, state: &State, cut_off: bool) {
     let key = Style::default().fg(theme::AMBER_DIM());
     let hint = Style::default().fg(theme::TEXT_DIM());
     let spans = if let Some(draft) = state.carving_text() {
@@ -401,6 +406,14 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &State) {
             Span::styled(" carve  ", hint),
             Span::styled("Esc", key),
             Span::styled(" drop the knife", hint),
+        ]
+    } else if state.menu_open() && cut_off {
+        // The house has stopped pouring: no prices to read, just why.
+        vec![
+            Span::styled("cut off. ", Style::default().fg(theme::AMBER())),
+            Span::styled("water's on the house until you come back down.  ", hint),
+            Span::styled("d", key),
+            Span::styled(" close", hint),
         ]
     } else if state.menu_open() {
         let mut spans = Vec::new();

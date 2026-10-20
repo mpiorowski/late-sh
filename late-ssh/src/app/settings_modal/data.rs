@@ -1018,6 +1018,15 @@ pub(crate) fn country_label(code: Option<&str>) -> String {
     format!("[{normalized}] {name}")
 }
 
+/// The country a code names, for anywhere a stored profile code has to be
+/// shown to somebody (the active map's list, for one).
+pub(crate) fn country_name(code: &str) -> Option<&'static str> {
+    COUNTRIES
+        .iter()
+        .find(|country| country.code.eq_ignore_ascii_case(code.trim()))
+        .map(|country| country.name)
+}
+
 pub(crate) fn filter_countries(query: &str) -> Vec<&'static CountryOption> {
     let query = query.trim().to_ascii_lowercase();
     COUNTRIES

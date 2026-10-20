@@ -203,6 +203,7 @@ fn chat_guide_lists_user_facing_slash_commands() {
         "/petname [name]",
         "/poll",
         "/profile [@user]",
+        "/shrug",
         "/tea",
         "/upload <url>",
     ] {

@@ -39,7 +39,9 @@ room is the chat surface, and the full history lives in #lounge on Home.
   it: the session sits itself down at login (`State::new`, `first_stand`),
   from the records presence already has. Bots have no session, so no
   presence; they are found in `active_users` for the online flags only.
-  The headcount in the frame title is the crowd's.
+  The frame title shows no headcount: the crowd counts terminal sessions
+  only, so it read lower than the sidebar's online count (which takes IRC
+  too), and two "online" numbers that disagree confuse more than they say.
 - **Nobody hands out seats.** A session picks its own spot
   (`crowd::pick_spot`: a random free seat, drawn per session, else the first
   free standing spot, else the door stack, `map::DOOR_STACK` slots and
@@ -80,8 +82,9 @@ room is the chat surface, and the full history lives in #lounge on Home.
   drives the walker's wobble and the passed-out figure here, and the printed
   `(word)` beside the name on chat author labels. `GhostService` seeds the
   map from DB every 60s on every replica (`run_drunk_glow_task`) and a pour
-  bumps it at once on the replica that poured; another replica catches up on
-  its next seed. The same map feeds chat author label tinting everywhere via
+  bumps it at once on the replica that poured; a pour that lands while a
+  seed is mid-read outranks the seed's older row, and another replica
+  catches up on its next seed. The same map feeds chat author label tinting everywhere via
   `App.drunk_levels` (copied ~1/s in `App::tick`). It is not pruned by
   presence, so recent drinkers who logged out keep tinting their chat
   history until they decay.
@@ -157,13 +160,24 @@ room is the chat surface, and the full history lives in #lounge on Home.
 ## 5. First-visit tour
 
 - Armed by `!extract_clubhouse_tutorial_done(user.settings)`
-  (`users.settings.clubhouse_tutorial_done`, late-core). Fires once on the
+  (`users.settings.clubhouse_tutorial_done`, late-core). While armed the
+  session lands in the Clubhouse whatever the "Land on" tweak says
+  (`app/state.rs`), since the tour only fires there. A house-wide rerun is
+  a forward migration that drops the key from every row (`245_reset_clubhouse_tour.sql`
+  is the shape); the welcome pour stays once-ever through its own DB claim,
+  so a regular gets the greeting line and no second drink. Fires once on the
   first clubhouse entry: a centered box at the door pitches what late.sh is
   (`Tutorial::Welcome`), then **Enter moves every stop on** and the tour
   walks the newcomer to the next page itself: `VisitChat` (Home) ->
   `VisitMusic` (still on Home) -> `VisitArcade` -> `VisitLobby` (still on
-  The Arcade) -> `VisitTable` -> `VisitGames` -> `VisitDungeon` (still on Games) -> `VisitArtboard` -> `VisitDirectory` ->
-  `VisitLeaderboard` -> `VisitZen` -> `Homecoming` (back in the tavern).
+  The Arcade) -> `VisitTable` -> `VisitGames` -> `VisitDungeon` (still on Games) -> `VisitArtboard` ->
+  `VisitMap` -> `VisitProfiles` -> `VisitJobs` (the three sections of the
+  People page: `TourMove::Map` lands on the page with its Map section up
+  whatever a rerun left it on, and each Enter then steps `]` itself through
+  `TourMove::NextSection`, so the newcomer learns no key mid-tour and each
+  box stays a few lines) -> `VisitLeaderboard` -> `VisitCalendar` -> `VisitZen` ->
+  `Homecoming` (back in the tavern). Every top-level page gets one stop, and
+  the copy is kept plain: short sentences, no flourish.
 - At `VisitArtboard`, the stop lands behind the content disclaimer: the page
   stays bare and the tour box offers `S` (show the art for this visit) or
   Enter (skip to Profiles). The standalone disclaimer dialog never draws in
@@ -253,5 +267,5 @@ room is the chat surface, and the full history lives in #lounge on Home.
 - `walkable` allows standing ON the counter but never behind it; the flood
   fill tests in `map.rs` guard the bartender alley seal and seat
   reachability. `DOOR_STACK` slots must stay walkable.
-- The tavern draws no widget chrome; headcount and key hints live in
+- The tavern draws no widget chrome; its key hints live in
   `app_frame_title` (`render.rs`). Update that line when keys change.

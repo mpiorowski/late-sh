@@ -84,7 +84,13 @@ fn screen_has_chat_pane(screen: Screen) -> bool {
         screen,
         // Games draws a pane only while this session has a watch open (the
         // watch chat); the hub proper and a preview resolve to no room.
-        Screen::Dashboard | Screen::DailyMatch | Screen::HouseTable | Screen::Zen | Screen::Games
+        // Realm draws one only while its chat is shown in place of the rail.
+        Screen::Dashboard
+            | Screen::DailyMatch
+            | Screen::HouseTable
+            | Screen::Zen
+            | Screen::Games
+            | Screen::Realm
     )
 }
 
@@ -1003,6 +1009,14 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
             app.chat.clear_message_selection();
             return;
         }
+        // So do the clickable page numbers in the top bar, which leave the
+        // same way (keyboard-only mode ignores them, as everywhere else).
+        if let ParsedInput::Mouse(mouse) = &event
+            && app.interaction_mode.mouse_enabled()
+            && handle_topbar_screen_click(app, app.screen, *mouse)
+        {
+            return;
+        }
         // Quit stays global on the prompt, as it is on the page behind it.
         if matches!(
             event,
@@ -1441,6 +1455,7 @@ fn handle_games_hub_input(app: &mut App, event: &ParsedInput) -> bool {
                     // will, but the match still has to be exhaustive.
                     HubGame::NightCity
                     | HubGame::Lateania
+                    | HubGame::Realm
                     | HubGame::Minecraft
                     | HubGame::VintageStory
                     | HubGame::Rebels
@@ -1580,6 +1595,10 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
             // characters to play is no longer a foregone conclusion.
             app.set_screen(Screen::Lateania);
         }
+        // The standing world, play or watch alike: the board is the same
+        // and joining happens from it (`j`), after seeing the map. Nothing
+        // to open between seasons, which lasts a sweeper tick at most.
+        HubGame::Realm => crate::app::door::realm::input::open_realm(app),
         // Played from the game client, not the terminal: the landing says
         // how to connect and there is nothing to launch.
         HubGame::Minecraft | HubGame::VintageStory => {}
@@ -2011,6 +2030,14 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         return crate::app::lobby::house::input::handle_event(app, event);
     }
 
+    if ctx.screen == Screen::Realm {
+        // Full-screen realm game: same shape as the daily board.
+        if door_games_allows_global_help(event) {
+            return false;
+        }
+        return crate::app::door::realm::input::handle_event(app, event);
+    }
+
     if ctx.screen == Screen::Scratchpad {
         // Unlike the daily board / house table above, this is a free-typing
         // text editor, not a game board: '?' is a character someone can
@@ -2055,6 +2082,11 @@ fn handle_directory_catalog_input(app: &mut App, event: &ParsedInput) -> bool {
     }
     if app.directory_state.search_mode() {
         return crate::app::directory::input::handle_search_input(app, event);
+    }
+    if app.directory_state.shelf() == crate::app::directory::state::Shelf::Jobs
+        && app.jobs.search_mode()
+    {
+        return crate::app::jobs::input::handle_search_input(app, event);
     }
 
     match event {
@@ -2411,6 +2443,33 @@ fn dispatch_escape(app: &mut App) {
             return;
         }
         crate::app::lobby::daily::board_input::close_board(app);
+        return;
+    }
+    // Esc from the realm board drops back to the Games hub. There is
+    // nothing to confirm on the way out: closing the board is not leaving
+    // the game, because a running realm cannot be left at all.
+    if ctx.screen == Screen::Realm {
+        // The colour picker peels first, then the results card, then a
+        // picked chat message: Esc puts away what is on top before it puts
+        // the whole board away. The selection has to go here, since a lone
+        // Esc never reaches the board's own keys, and one left standing
+        // would take `j`/`k` the moment the board is reopened.
+        if app.realm.join_cancel() {
+            return;
+        }
+        if app.realm.close_results() {
+            return;
+        }
+        if let Some(chat_room_id) = app.realm.shown_chat_room_id()
+            && app
+                .chat
+                .selected_message_body_in_room(chat_room_id)
+                .is_some()
+        {
+            app.chat.clear_message_selection();
+            return;
+        }
+        crate::app::door::realm::input::close_board(app);
         return;
     }
     // Esc from a house table mirrors the daily board: peel chat selection
@@ -3149,6 +3208,7 @@ fn embedded_chat_room_id(app: &App, screen: Screen) -> Option<Uuid> {
         Screen::HouseTable => app.house.chat_room_id(),
         Screen::Zen => app.zen_chat_room_id(),
         Screen::Games => crate::app::door::spectate::input::chat_room_id(app),
+        Screen::Realm => app.realm.shown_chat_room_id(),
         _ => None,
     }
 }
@@ -3442,6 +3502,9 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         Screen::DailyMatch => false,
         // House table arrows are consumed in handle_dedicated_screen_input.
         Screen::HouseTable => false,
+        // Realm arrows are routed by the full-screen dispatch before this
+        // match; nothing to do here.
+        Screen::Realm => false,
         // Scratchpad arrows are consumed in handle_dedicated_screen_input.
         Screen::Scratchpad => false,
         // Zen arrows are consumed in handle_dedicated_screen_input.
@@ -3665,6 +3728,33 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_settings = true;
 }
 
+/// `/map` typed into a composer: land on the Profiles page, on its map
+/// shelf. It closes the modal stack the same way every other opener does,
+/// since a modal left up would cover the page it just went to.
+pub(crate) fn open_usermap_globally(app: &mut App) {
+    clear_prefix_arms(app);
+    app.show_help = false;
+    app.show_mod_modal = false;
+    app.show_profile_modal = false;
+    app.show_sheet_modal = false;
+    app.show_poll_modal = false;
+    app.poll_modal_state.close();
+    app.show_gild_modal = false;
+    app.gild_modal_state.close();
+    app.show_bonsai_modal = false;
+    app.show_lobby_modal = false;
+    app.show_hub_modal = false;
+    app.show_settings = false;
+    app.show_quit_confirm = false;
+    close_icon_picker(app);
+    app.chat.close_overlay();
+    app.chat.close_news_modal();
+    app.chat.cancel_room_jump();
+    app.set_screen(Screen::Profiles);
+    app.directory_state
+        .set_shelf(crate::app::directory::state::Shelf::Map);
+}
+
 /// Shared Shop entry point for Ctrl+S, `/shop`, and locked-feature nudges.
 pub(crate) fn open_shop_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
@@ -3860,6 +3950,19 @@ fn tour_advance(app: &mut App) {
         TourMove::Stay => {}
         // Through `leave_board` so a practice table left behind is dropped.
         TourMove::Page(screen) => crate::app::lobby::daily::board_input::leave_board(app, screen),
+        // The People page, on its map whatever section a rerun left it on.
+        TourMove::Map => {
+            crate::app::lobby::daily::board_input::leave_board(app, Screen::Profiles);
+            crate::app::directory::input::switch_shelf(
+                app,
+                crate::app::directory::state::Shelf::Map,
+            );
+        }
+        // `]`: the next section of the People page.
+        TourMove::NextSection => {
+            let next = app.directory_state.shelf().next();
+            crate::app::directory::input::switch_shelf(app, next);
+        }
         // A pool table nobody else sees, for one break.
         TourMove::Table => {
             let username = app.username.clone();
@@ -3899,7 +4002,7 @@ fn game_owns_ctrl_s(app: &App) -> bool {
         Screen::Lateania => app.lateania_state.is_some(),
         Screen::GreenDragon => app.greendragon_state.is_some(),
         Screen::Darkroom => app.darkroom_state.is_some(),
-        Screen::DailyMatch | Screen::HouseTable | Screen::City => true,
+        Screen::DailyMatch | Screen::HouseTable | Screen::Realm | Screen::City => true,
         // Menus, launchers and plain pages. A running terminal door never
         // gets here, so its screen only ever means the launcher.
         Screen::Dashboard
@@ -4079,9 +4182,8 @@ fn open_zen_globally(app: &mut App) {
     app.chat.clear_message_selection();
 }
 
-/// The page the chord on Zen hands back. A daily board or a house table
-/// does not survive the trip (`set_screen` closes it on the way out), so Zen
-/// remembers the page it was opened from instead. One opened from Zen hands
+/// The page the chord on Zen hands back. For a daily board, Realm, or house
+/// table, Zen remembers the page the game was opened from. One opened from Zen hands
 /// back Zen's own page, which the workspace base carries; with none, Zen
 /// walks into the Clubhouse like a session that landed there.
 fn zen_return_screen(app: &App) -> Option<Screen> {
@@ -4090,6 +4192,7 @@ fn zen_return_screen(app: &App) -> Option<Screen> {
     let opened_from = match app.screen {
         Screen::DailyMatch => app.daily.board.as_ref().map(|board| board.return_screen),
         Screen::HouseTable => Some(app.house.return_screen),
+        Screen::Realm => app.realm.board.as_ref().map(|board| board.return_screen),
         Screen::Dashboard
         | Screen::Games
         | Screen::Arcade
@@ -4557,6 +4660,9 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         }
         Screen::HouseTable => {
             // House table keys are handled in handle_dedicated_screen_input.
+        }
+        Screen::Realm => {
+            // Realm keys are handled in handle_dedicated_screen_input.
         }
         Screen::Scratchpad => {
             // Scratchpad keys are handled in handle_dedicated_screen_input.

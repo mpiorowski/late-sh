@@ -21,6 +21,7 @@ fn other(n: u128, spot: Spot, since_ms: i64) -> PresenceRecord {
         },
         nightcap: None,
         street: None,
+        lounge: false,
     }
 }
 
@@ -48,7 +49,7 @@ fn placement(state: &State, n: u128) -> Option<Placement> {
 #[test]
 fn a_session_sits_down_the_moment_it_logs_in() {
     let state = session(vec![other(2, Spot::Walking { x: 30, y: 12 }, 0)], false);
-    assert_eq!(state.headcount(), 2);
+    assert_eq!(state.crowd.headcount(), 2);
     assert!(
         matches!(placement(&state, ME), Some(Placement::Seated(_))),
         "a returning user spawns seated, not at the door"
@@ -238,14 +239,21 @@ fn tutorial_tours_every_page_then_comes_home() {
             Tutorial::VisitArtboard,
             TourModal::None,
         ),
+        (TourMove::Map, Tutorial::VisitMap, TourModal::None),
         (
-            TourMove::Page(Screen::Profiles),
-            Tutorial::VisitDirectory,
+            TourMove::NextSection,
+            Tutorial::VisitProfiles,
             TourModal::None,
         ),
+        (TourMove::NextSection, Tutorial::VisitJobs, TourModal::None),
         (
             TourMove::Page(Screen::Leaderboard),
             Tutorial::VisitLeaderboard,
+            TourModal::None,
+        ),
+        (
+            TourMove::Page(Screen::Calendars),
+            Tutorial::VisitCalendar,
             TourModal::None,
         ),
         (TourMove::Zen, Tutorial::VisitZen, TourModal::None),

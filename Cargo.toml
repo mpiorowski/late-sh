@@ -14,6 +14,8 @@ members = [
     "late-webview",
     "late-zork",
 ]
+# Dev-only generator, run by hand: its own lockfile, never in a prod build.
+exclude = ["tools/realm-mapgen"]
 resolver = "2"
 
 [workspace.lints.rust]

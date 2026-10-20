@@ -28,10 +28,12 @@ use late_core::models::{
     daily_match::DAILY_MATCH_CHANGED_CHANNEL,
     deadchannel_name_hit::DEADCHANNEL_NAME_HIT_CHANNEL,
     deadchannel_runner::DEADCHANNEL_RUNNER_CHANGED_CHANNEL,
+    deadchannel_spawn::DEADCHANNEL_SPAWN_CHANNEL,
     marketplace::{SHOP_CATALOG_CHANGED_CHANNEL, SHOP_USER_CHANGED_CHANNEL},
     pot::POT_CHANGED_CHANNEL,
     presence::PRESENCE_CHANNEL,
     quest::{QUEST_ASSIGNMENTS_CHANGED_CHANNEL, QUEST_USER_CHANGED_CHANNEL},
+    realm_game::REALM_GAME_CHANGED_CHANNEL,
 };
 use tokio::sync::mpsc;
 
@@ -48,6 +50,7 @@ const RETRY_DELAY: Duration = Duration::from_secs(5);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Refresh {
     RunnerLooks,
+    LoungeSpawn,
     CrownHolder,
     DailyMatches,
     Pot,
@@ -55,6 +58,7 @@ pub enum Refresh {
     ActiveQuestBoards,
     ShopFlairDirectory,
     CalendarNotices,
+    RealmGames,
 }
 
 impl Refresh {
@@ -62,6 +66,7 @@ impl Refresh {
     fn what(self) -> &'static str {
         match self {
             Refresh::RunnerLooks => "runner looks",
+            Refresh::LoungeSpawn => "lounge spawn",
             Refresh::CrownHolder => "crown holder",
             Refresh::DailyMatches => "daily matches",
             Refresh::Pot => "pot",
@@ -69,6 +74,7 @@ impl Refresh {
             Refresh::ActiveQuestBoards => "active quest boards",
             Refresh::ShopFlairDirectory => "shop flair directory",
             Refresh::CalendarNotices => "calendar server notices",
+            Refresh::RealmGames => "realm games",
         }
     }
 }
@@ -117,16 +123,18 @@ pub enum Channel {
     DailyMatchChanged,
     DeadchannelNameHit,
     DeadchannelRunnerChanged,
+    DeadchannelSpawn,
     PotChanged,
     Presence,
     QuestAssignmentsChanged,
     QuestUserChanged,
+    RealmGameChanged,
     ShopCatalogChanged,
     ShopUserChanged,
 }
 
 impl Channel {
-    pub const ALL: [Channel; 15] = [
+    pub const ALL: [Channel; 17] = [
         Channel::CalendarChanged,
         Channel::ArticlesChanged,
         Channel::BonsaiChanged,
@@ -136,10 +144,12 @@ impl Channel {
         Channel::DailyMatchChanged,
         Channel::DeadchannelNameHit,
         Channel::DeadchannelRunnerChanged,
+        Channel::DeadchannelSpawn,
         Channel::PotChanged,
         Channel::Presence,
         Channel::QuestAssignmentsChanged,
         Channel::QuestUserChanged,
+        Channel::RealmGameChanged,
         Channel::ShopCatalogChanged,
         Channel::ShopUserChanged,
     ];
@@ -156,10 +166,12 @@ impl Channel {
             Channel::DailyMatchChanged => DAILY_MATCH_CHANGED_CHANNEL,
             Channel::DeadchannelNameHit => DEADCHANNEL_NAME_HIT_CHANNEL,
             Channel::DeadchannelRunnerChanged => DEADCHANNEL_RUNNER_CHANGED_CHANNEL,
+            Channel::DeadchannelSpawn => DEADCHANNEL_SPAWN_CHANNEL,
             Channel::PotChanged => POT_CHANGED_CHANNEL,
             Channel::Presence => PRESENCE_CHANNEL,
             Channel::QuestAssignmentsChanged => QUEST_ASSIGNMENTS_CHANGED_CHANNEL,
             Channel::QuestUserChanged => QUEST_USER_CHANGED_CHANNEL,
+            Channel::RealmGameChanged => REALM_GAME_CHANGED_CHANNEL,
             Channel::ShopCatalogChanged => SHOP_CATALOG_CHANGED_CHANNEL,
             Channel::ShopUserChanged => SHOP_USER_CHANGED_CHANNEL,
         }

@@ -987,6 +987,7 @@ impl russh::server::Handler for ClientHandler {
             door_rc_service: self.state.door_rc_service.clone(),
             initial_door_rcs,
             daily_service: self.state.daily_service.clone(),
+            realm_service: self.state.realm_service.clone(),
             house_registry: self.state.house_registry.clone(),
             dartboard_server: self.state.dartboard_server.clone(),
             dartboard_provenance: self.state.dartboard_provenance.clone(),
@@ -1008,6 +1009,7 @@ impl russh::server::Handler for ClientHandler {
             guide_service: crate::app::deadchannel::guide::svc::GuideService::new(
                 self.state.db.clone(),
             ),
+            lounge_service: self.state.lounge_service.clone(),
             initial_bonsai_tree,
             initial_bonsai_decay_protection,
             pet_service: self.state.pet_service.clone(),

@@ -92,9 +92,9 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: ClubhouseView<'_>) {
 
 fn draw_tavern(frame: &mut Frame, area: Rect, view: &ClubhouseView<'_>) {
     let state = view.state;
-    // No widget border: the room's own walls are the frame. The headcount
-    // and keybinds live in the app frame title (`app_frame_title` in
-    // `render.rs`), so the tavern gets every cell.
+    // No widget border: the room's own walls are the frame. The keybinds
+    // live in the app frame title (`app_frame_title` in `render.rs`), so
+    // the tavern gets every cell.
     let inner = area;
     if inner.width < 4 || inner.height < 4 {
         return;
@@ -1270,19 +1270,19 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
                             .fg(theme::TEXT_BRIGHT())
                             .add_modifier(Modifier::BOLD),
                     ),
-                    Span::styled(": a late-night clubhouse that lives in a terminal.", text),
+                    Span::styled(" is a late-night clubhouse in a terminal.", text),
                 ]),
                 Line::from(Span::styled(
-                    "one tavern and six pages: chat, games, a shared canvas,",
+                    "this tavern, plus seven pages: chat, games, a canvas,",
                     text,
                 )),
                 Line::from(Span::styled(
-                    "the people, the scores. everyone you'll see here is real.",
+                    "people, scores, events. everyone here is a real person.",
                     text,
                 )),
                 Line::default(),
                 Line::from(Span::styled(
-                    "you're on the welcome mat. let's take the tour.",
+                    "this is the welcome mat. let's walk through the house.",
                     text,
                 )),
             ],
@@ -1292,7 +1292,7 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
             " ☾ make yourself at home ☽ ",
             vec![
                 Line::from(Span::styled(
-                    "that was the house. this room is its map:",
+                    "that was the house. this room is the hub.",
                     text,
                 )),
                 Line::from(Span::styled(
@@ -1318,21 +1318,25 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
                 ]),
                 Line::from(vec![
                     Span::styled("[Ctrl+O] ", key),
-                    Span::styled("introduce yourself · ", text),
+                    Span::styled("settings and your profile · ", text),
                     Span::styled("[?] ", key),
                     Span::styled("the full guide", text),
                 ]),
                 Line::from(vec![
+                    Span::styled("[5] ", key),
+                    Span::styled("the people: the map, the profiles, the jobs", text),
+                ]),
+                Line::from(vec![
                     Span::styled("[n] ", key),
-                    Span::styled("step outside to Nightcap for a quiet drink", text),
+                    Span::styled("Nightcap, the small bar out back", text),
                 ]),
                 Line::default(),
                 Line::from(Span::styled(
-                    "psst: see the bar glowing, northwest? walk over.",
+                    "the bar is glowing, up and to the left. walk over.",
                     dim,
                 )),
                 Line::from(Span::styled(
-                    "the bartender pours every new face their first drink.",
+                    "the bartender pours new faces their first drink.",
                     dim,
                 )),
             ],
@@ -1349,8 +1353,11 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
         | Tutorial::VisitGames
         | Tutorial::VisitDungeon
         | Tutorial::VisitArtboard
-        | Tutorial::VisitDirectory
+        | Tutorial::VisitMap
+        | Tutorial::VisitProfiles
+        | Tutorial::VisitJobs
         | Tutorial::VisitLeaderboard
+        | Tutorial::VisitCalendar
         | Tutorial::VisitZen
         | Tutorial::Off
         | Tutorial::Pending
@@ -1397,11 +1404,10 @@ pub fn draw_tour_overlay(
             Screen::Dashboard,
             " ✦ the tour · [1] home ",
             vec![
-                Line::from(vec![
-                    Span::styled("every room, thread and DM on ", text),
-                    Span::styled("late.sh", name),
-                    Span::styled(" lives here.", text),
-                ]),
+                Line::from(vec![Span::styled(
+                    "all the chat is here. rooms, threads and DMs.",
+                    text,
+                )]),
                 Line::default(),
                 Line::from(vec![
                     Span::styled("[i] ", key),
@@ -1421,9 +1427,9 @@ pub fn draw_tour_overlay(
                 ]),
                 Line::from(vec![
                     Span::styled("[/private #room] ", key),
-                    Span::styled("invite-only · your ", text),
+                    Span::styled("invite only · ", text),
                     Span::styled("Mentions", name),
-                    Span::styled(" wait in the rail", text),
+                    Span::styled(" is in the rail on the left", text),
                 ]),
             ],
             "the music",
@@ -1433,25 +1439,22 @@ pub fn draw_tour_overlay(
             " ✦ the tour · [2] the arcade ",
             vec![
                 Line::from(vec![
-                    Span::styled("solo games: ", text),
+                    Span::styled("single-player games. ", text),
                     Span::styled("Lateris, Snake, 2048, Sudoku, Solitaire", name),
-                    Span::styled("...", text),
+                    Span::styled(" and more.", text),
                 ]),
                 Line::from(vec![
                     Span::styled("daily puzzles pay ", text),
                     Span::styled("Late Chips", name),
-                    Span::styled("; quests and streaks stack up top.", text),
+                    Span::styled(". quests and streaks sit at the top.", text),
                 ]),
                 Line::default(),
                 Line::from(vec![
-                    Span::styled("chips buy things. ", text),
-                    Span::styled("[/shop] ", key),
-                    Span::styled("rented badges, flags, titles, name effects,", text),
+                    Span::styled("chips buy things in ", text),
+                    Span::styled("[/shop]", key),
+                    Span::styled(": badges, flags, titles, name effects,", text),
                 ]),
-                Line::from(Span::styled(
-                    "a pet companion to feed, an aquarium with real fish.",
-                    text,
-                )),
+                Line::from(Span::styled("a pet to look after, a fish tank.", text)),
             ],
             "the lobby",
         ),
@@ -1459,44 +1462,34 @@ pub fn draw_tour_overlay(
             Screen::Games,
             " ✦ the tour · [3] the games ",
             vec![
-                Line::from(Span::styled("the big ones live behind this door:", text)),
+                Line::from(Span::styled("the big games are behind this door.", text)),
                 Line::default(),
                 Line::from(vec![
                     Span::styled("Lateania", name),
-                    Span::styled(": our own MMO. one shared world, bosses, mounts.", text),
+                    Span::styled(", our own MMO. one shared world, bosses, mounts.", text),
                 ]),
                 Line::from(vec![
                     Span::styled("DCSS", name),
-                    Span::styled(": the most played roguelike alive, for good reason.", text),
+                    Span::styled(", the most played roguelike there is.", text),
                 ]),
                 Line::from(Span::styled(
-                    "pick a species, pledge a god, dive for the Orb of Zot;",
-                    text,
-                )),
-                Line::from(Span::styled(
-                    "easy to start, years to master, no two runs alike.",
+                    "easy to start, hard to master, no two runs the same.",
                     text,
                 )),
                 Line::from(vec![
                     Span::styled("NetHack", name),
-                    Span::styled(
-                        ": the legend itself; the DevTeam thought of everything.",
-                        text,
-                    ),
+                    Span::styled(", the classic.", text),
                 ]),
                 Line::from(vec![
                     Span::styled("Brogue", name),
-                    Span::styled(": the most beautiful dungeon ASCII ever drew.", text),
+                    Span::styled(", the prettiest dungeon drawn in ASCII.", text),
                 ]),
                 Line::from(vec![
                     Span::styled("Green Dragon", name),
-                    Span::styled(": the legendary BBS door, reborn.", text),
+                    Span::styled(", the old BBS door game, rebuilt here.", text),
                 ]),
                 Line::default(),
-                Line::from(Span::styled(
-                    "and much more; your wins stick to your name.",
-                    text,
-                )),
+                Line::from(Span::styled("and more. your wins stay on your name.", text)),
             ],
             "a taste of the dungeon",
         ),
@@ -1505,13 +1498,13 @@ pub fn draw_tour_overlay(
             " ✦ the tour · [4] the artboard ",
             vec![
                 Line::from(Span::styled(
-                    "one shared canvas, the whole house draws at once.",
+                    "one canvas, and everyone draws on it at the same time.",
                     text,
                 )),
                 Line::from(vec![
-                    Span::styled("it may contain ", text),
+                    Span::styled("it may have ", text),
                     Span::styled("NSFW", name),
-                    Span::styled(" content, so it stays hidden until you say so.", text),
+                    Span::styled(" content on it, so it stays hidden until you say so.", text),
                 ]),
                 Line::default(),
                 Line::from(Span::styled(
@@ -1519,26 +1512,26 @@ pub fn draw_tour_overlay(
                     text,
                 )),
                 Line::from(Span::styled(
-                    "either way: the artboard asks again next time you open it.",
+                    "either way. the artboard asks again next time you open it.",
                     text,
                 )),
             ],
-            "the profiles",
+            "the people",
         ),
         Tutorial::VisitArtboard => (
             Screen::Artboard,
             " ✦ the tour · [4] the artboard ",
             vec![
                 Line::from(Span::styled(
-                    "one shared canvas, the whole house draws at once.",
+                    "one canvas, and everyone draws on it at the same time.",
                     text,
                 )),
                 Line::from(Span::styled(
-                    "everything stays, and every glyph remembers who drew it.",
+                    "nothing is erased, and every glyph remembers who drew it.",
                     text,
                 )),
                 Line::from(vec![
-                    Span::styled("the whole board hangs public at ", text),
+                    Span::styled("the whole board is public at ", text),
                     Span::styled("late.sh/gallery", name),
                     Span::styled(".", text),
                 ]),
@@ -1551,30 +1544,74 @@ pub fn draw_tour_overlay(
                 ]),
                 Line::from(vec![
                     Span::styled("[Esc] ", key),
-                    Span::styled("the rail: gallery and archives · ", text),
+                    Span::styled("gallery and archives · ", text),
                     Span::styled("[?] ", key),
-                    Span::styled("the local guide, here and everywhere", text),
+                    Span::styled("the guide for this page, on every page", text),
+                ]),
+            ],
+            "the people",
+        ),
+        // The People page is three short stops on one page: the box stays
+        // small and Enter steps `]` through the sections itself.
+        Tutorial::VisitMap => (
+            Screen::Profiles,
+            " ✦ the tour · [5] the people · map ",
+            vec![
+                Line::from(Span::styled(
+                    "where everyone is. the Earth, shaded by who is online where.",
+                    text,
+                )),
+                Line::default(),
+                Line::from(vec![
+                    Span::styled("[Ctrl+O] ", key),
+                    Span::styled("set your country and you show up on it.", text),
                 ]),
             ],
             "the profiles",
         ),
-        Tutorial::VisitDirectory => (
+        Tutorial::VisitProfiles => (
             Screen::Profiles,
-            " ✦ the tour · [5] the profiles ",
+            " ✦ the tour · [5] the people · profiles ",
             vec![
                 Line::from(Span::styled(
-                    "the people: everyone who ships a project or posts a work card.",
+                    "everyone who shared a project or posted a work card.",
                     text,
                 )),
                 Line::from(vec![
-                    Span::styled("your profile gets a public page at ", text),
+                    Span::styled("yours gets a public page at ", text),
                     Span::styled("late.sh/profiles", name),
                     Span::styled(".", text),
                 ]),
                 Line::default(),
                 Line::from(vec![
-                    Span::styled("[Ctrl+O] ", key),
-                    Span::styled("fill yours in: bio, links, what you're building.", text),
+                    Span::styled("[w] ", key),
+                    Span::styled("fill yours in · ", text),
+                    Span::styled("[s] ", key),
+                    Span::styled("search people", text),
+                ]),
+            ],
+            "the jobs",
+        ),
+        Tutorial::VisitJobs => (
+            Screen::Profiles,
+            " ✦ the tour · [5] the people · jobs ",
+            vec![
+                Line::from(Span::styled(
+                    "remote job postings, pulled every night from the big feeds.",
+                    text,
+                )),
+                Line::from(Span::styled(
+                    "put tags on your card and the shelf shows what fits you.",
+                    text,
+                )),
+                Line::default(),
+                Line::from(vec![
+                    Span::styled("[s] ", key),
+                    Span::styled("search · ", text),
+                    Span::styled("[/] ", key),
+                    Span::styled("for me · ", text),
+                    Span::styled("[/jobs] ", key),
+                    Span::styled("from any composer", text),
                 ]),
             ],
             "the leaderboards",
@@ -1584,22 +1621,30 @@ pub fn draw_tour_overlay(
             " ✦ the tour · [6] the leaderboards ",
             vec![
                 Line::from(Span::styled(
-                    "every game keeps score: chips, wins, streaks, high scores,",
+                    "every game keeps score. chips, wins, streaks, high scores,",
                     text,
                 )),
                 Line::from(Span::styled(
-                    "monthly and all-time. each month's top three wear badges",
+                    "monthly and all time. the top three each month get a badge",
                     text,
                 )),
+                Line::from(Span::styled("next to their name in chat.", text)),
+            ],
+            "the events",
+        ),
+        Tutorial::VisitCalendar => (
+            Screen::Calendars,
+            " ✦ the tour · [7] the events ",
+            vec![
                 Line::from(Span::styled(
-                    "beside their name in chat, for everyone to see.",
+                    "the events board. anyone can post an event, everyone sees it,",
                     text,
                 )),
-                Line::default(),
-                Line::from(Span::styled(
-                    "your name lands here sooner than you think.",
-                    text,
-                )),
+                Line::from(vec![
+                    Span::styled("[i] ", key),
+                    Span::styled("says I'm in. your own private events sit beside it,", text),
+                ]),
+                Line::from(Span::styled("in green, and only you see them.", text)),
             ],
             "zen",
         ),
@@ -1608,7 +1653,7 @@ pub fn draw_tour_overlay(
             " ✦ the tour · [Ctrl+F] zen ",
             vec![
                 Line::from(Span::styled(
-                    "the whole house cut down to what you keep alive:",
+                    "one page with just the things you want to keep an eye on.",
                     text,
                 )),
                 Line::from(vec![
@@ -1627,9 +1672,9 @@ pub fn draw_tour_overlay(
                 Line::default(),
                 Line::from(vec![
                     Span::styled("[Ctrl+F] ", key),
-                    Span::styled("from any page opens it; the same chord", text),
+                    Span::styled("opens it from any page. the same chord", text),
                 ]),
-                Line::from(Span::styled("hands you back to wherever you were.", text)),
+                Line::from(Span::styled("takes you back to where you were.", text)),
                 Line::default(),
                 Line::from(vec![
                     Span::styled("[Tab] ", key),
@@ -1809,9 +1854,9 @@ fn table_header(table: TableStop) -> TourHeader {
             "this table needs a bigger window. the lobby has one waiting.",
             next("next: the games"),
         ),
-        TableStop::Racked => ("your table, your break. nobody is watching.", next("break")),
+        TableStop::Racked => ("a table just for you. take the break.", next("break")),
         TableStop::Played => (
-            "that was real physics. the lobby has a table waiting.",
+            "that was real physics. the lobby has real tables waiting.",
             next("next: the games"),
         ),
     };
@@ -1848,15 +1893,19 @@ pub(crate) fn tour_header(
                         format!("{} stations", RadioStation::enabled().count()),
                         name,
                     ),
-                    Span::styled(", live and always on, plus a ", text),
+                    Span::styled(", always on, plus a ", text),
                     Span::styled("YouTube", name),
                     Span::styled(" jukebox.", text),
                 ]),
                 Line::from(vec![
-                    Span::styled("SSH carries no sound: ", text),
-                    Span::styled("late.sh/listen", name),
-                    Span::styled(" plays it in any browser.", text),
+                    Span::styled("SSH has no sound. install the ", text),
+                    Span::styled("late", name),
+                    Span::styled(" CLI and run it instead of ssh:", text),
                 ]),
+                Line::from(Span::styled(
+                    "curl -fsSL https://cli.late.sh/install.sh | bash",
+                    name,
+                )),
                 Line::from(vec![
                     Span::styled("[v r] ", key),
                     Span::styled("opens this list · ", text),
@@ -1871,15 +1920,18 @@ pub(crate) fn tour_header(
             lines: vec![
                 Line::from(vec![
                     Span::styled("[Ctrl+G] ", key),
-                    Span::styled("opens this from anywhere: all the multiplayer.", text),
+                    Span::styled(
+                        "opens this from anywhere. all the multiplayer is here.",
+                        text,
+                    ),
                 ]),
                 Line::from(vec![
                     Span::styled("chess, pool, backgammon, cards", name),
-                    Span::styled(": challenge anyone, move whenever.", text),
+                    Span::styled(". challenge anyone, move when you like.", text),
                 ]),
                 Line::from(vec![
                     Span::styled("Poker, Blackjack", name),
-                    Span::styled(" and more live tables are always open.", text),
+                    Span::styled(" and other live tables are always open.", text),
                 ]),
             ],
             keys: next("next: one shot of pool"),
@@ -1888,11 +1940,11 @@ pub(crate) fn tour_header(
         Tutorial::VisitDungeon => Some(TourHeader {
             title: "✦ the tour · a taste of the dungeon",
             lines: vec![Line::from(vec![
-                Span::styled("one fight, sketched. ", text),
+                Span::styled("a quick fight to try it. ", text),
                 Span::styled("Dungeon Crawl", name),
                 Span::styled(" and ", text),
                 Span::styled("NetHack", name),
-                Span::styled(" run here for real.", text),
+                Span::styled(" are the real thing.", text),
             ])],
             keys: if fight_won {
                 next("next: the artboard")
@@ -1907,8 +1959,11 @@ pub(crate) fn tour_header(
         | Tutorial::VisitArcade
         | Tutorial::VisitGames
         | Tutorial::VisitArtboard
-        | Tutorial::VisitDirectory
+        | Tutorial::VisitMap
+        | Tutorial::VisitProfiles
+        | Tutorial::VisitJobs
         | Tutorial::VisitLeaderboard
+        | Tutorial::VisitCalendar
         | Tutorial::VisitZen
         | Tutorial::Homecoming
         | Tutorial::Done => None,

@@ -256,6 +256,16 @@ async fn main() -> anyhow::Result<()> {
         pg_listener.subscribe(late_ssh::app::lobby::daily::svc::DailyService::CHANNELS),
     );
     daily_service.start_sweeper_task();
+    let realm_service = late_ssh::app::door::realm::svc::RealmService::new(
+        db.clone(),
+        chip_service.clone(),
+        activity_publisher.clone(),
+        ai_service.clone(),
+    );
+    let _realm_notify_task = realm_service.start_notify_worker(
+        pg_listener.subscribe(late_ssh::app::door::realm::svc::RealmService::CHANNELS),
+    );
+    realm_service.start_sweeper_task();
     let lateania_service = late_ssh::app::door::lateania::svc::LateaniaService::new(
         activity_publisher.clone(),
         chip_service.clone(),
@@ -367,6 +377,26 @@ async fn main() -> anyhow::Result<()> {
         db.clone(),
         pg_listener.subscribe(late_ssh::app::presence::svc::PresenceService::CHANNELS),
     );
+    let is_draining = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // The lounge spawns (`app/deadchannel/lounge`): every replica runs the
+    // spawner and the sweeper against the same rows, the channel carries
+    // every change of the live spawn, and the resync re-reads it.
+    let lounge_service = late_ssh::app::deadchannel::lounge::svc::LoungeService::new(
+        db.clone(),
+        late_ssh::app::deadchannel::fight::svc::FightService::new(
+            db.clone(),
+            chat_service.clone(),
+            chip_service.clone(),
+        ),
+        chat_service.clone(),
+        presence_service.clone(),
+        runner_look_service.subscribe(),
+        is_draining.clone(),
+    );
+    let _lounge_notify_task = lounge_service.start_notify_worker(
+        pg_listener.subscribe(late_ssh::app::deadchannel::lounge::svc::LoungeService::CHANNELS),
+    );
+    let _lounge_spawner_task = lounge_service.start_spawner_task();
     // The crown's glyph crosses replicas over Postgres, not over any
     // in-process broadcast; the listener also seeds this replica's holder on
     // every (re)connect. See `app/crown/svc.rs`.
@@ -480,6 +510,7 @@ async fn main() -> anyhow::Result<()> {
         live_games,
         door_rc_service,
         daily_service,
+        realm_service,
         bonsai_service,
         pet_service,
         aquarium_service,
@@ -514,9 +545,10 @@ async fn main() -> anyhow::Result<()> {
         irc_registry: irc_registry.clone(),
         ssh_attempt_limiter,
         ws_pair_limiter,
-        is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        is_draining,
         runner_looks: runner_look_service.clone(),
         presence: presence_service,
+        lounge_service,
     };
 
     let session_shutdown = CancellationToken::new();

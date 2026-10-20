@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
+use late_core::models::deadchannel_ambush::{Ambush, AmbushOutcome};
 use late_core::models::deadchannel_runner::DeadchannelRunner;
 use late_core::test_utils::create_test_user;
 use tokio::time::{Duration, timeout};
@@ -10,7 +11,7 @@ use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::svc::ChatService;
 use crate::app::deadchannel::fight::data::{FOES, RATIONS_PER_DAY, RULES};
 use crate::app::deadchannel::fight::road::{Mark, Node};
-use crate::app::deadchannel::fight::state::{Applied, Call, Outcome, Refusal};
+use crate::app::deadchannel::fight::state::{Applied, Call, Lookout, Outcome, Refusal};
 use crate::app::deadchannel::fight::state::{Command, Pick, Sheet};
 use crate::app::deadchannel::fight::svc::{FightOutcome, FightService};
 use crate::app::deadchannel::runner::state::Look;
@@ -233,6 +234,7 @@ async fn a_card_refused_keeps_the_scene_and_a_step_refused_ends_it() {
             applied: Applied::Refused(refusal),
             lines: vec![line.to_string()],
         },
+        lookout: Lookout::default(),
     };
 
     session
@@ -434,7 +436,7 @@ async fn a_draft_is_taken_on_the_road_and_kept_on_the_row() {
     assert_eq!(session.draft(), None);
     assert_eq!(
         session.till.as_deref(),
-        Some("brace is in your deck now, in place of a strike."),
+        Some("‹brace› is in your deck now, in place of a ‹strike›."),
         "the pick is the road's word"
     );
     assert!(!session.take_card(0), "nothing is owed: the key is free");
@@ -448,4 +450,81 @@ async fn a_draft_is_taken_on_the_road_and_kept_on_the_row() {
     session.enter();
     assert!(session.scene_open());
     answered(&mut session).await;
+}
+
+/// A crossing won against the session's runner, as the lookout would carry it.
+fn crossed_by_tom(id: u128) -> Ambush {
+    let now = chrono::Utc::now();
+    Ambush {
+        id: uuid::Uuid::from_u128(id),
+        day: now.date_naive(),
+        attacker_user_id: uuid::Uuid::from_u128(7),
+        defender_user_id: uuid::Uuid::nil(),
+        attacker_username: "tom".to_string(),
+        defender_username: "mira".to_string(),
+        step: Some(6),
+        stake: 340,
+        answer_to: None,
+        started_at: now,
+        ended_at: Some(now),
+        outcome: Some(AmbushOutcome::Won),
+        bits_moved: 340,
+    }
+}
+
+/// The lookout's news, handed to the session the way a reload would.
+fn hand_news(session: &mut FightSession, news: Option<Ambush>) {
+    let sheet = session.sheet.clone().expect("the mirror landed");
+    session
+        .outcome_tx
+        .send(FightOutcome::Reloaded {
+            sheet,
+            lookout: Lookout {
+                crossing: None,
+                token: None,
+                news,
+            },
+        })
+        .expect("the session is listening");
+    assert!(session.tick(), "the lookout landed");
+}
+
+/// The news of the last fight on this runner is read once: it is on the
+/// road until the runner steps from it or goes back to the street, and
+/// the same fight does not come back on the next lookout. A newer fight
+/// does.
+#[tokio::test]
+async fn the_news_is_read_once_from_the_road() {
+    let (_test_db, mut session) = session_with_runner("fight-session-news").await;
+
+    session.step_up();
+    answered(&mut session).await;
+    hand_news(&mut session, Some(crossed_by_tom(1)));
+    assert!(session.lookout.news.is_some(), "the news is on the road");
+
+    session.call(Call::Fight(Pick::Fair));
+    answered(&mut session).await;
+    hand_news(&mut session, Some(crossed_by_tom(1)));
+    assert!(
+        session.lookout.news.is_none(),
+        "the step from the road took the news off it"
+    );
+    hand_news(&mut session, Some(crossed_by_tom(2)));
+    assert!(
+        session.lookout.news.is_some(),
+        "a newer fight is news again"
+    );
+
+    session.leave_scene();
+    session.close();
+    hand_news(&mut session, Some(crossed_by_tom(2)));
+    assert!(
+        session.lookout.news.is_none(),
+        "going back to the street took the news off the road"
+    );
+    hand_news(&mut session, Some(crossed_by_tom(3)));
+    assert!(
+        session.lookout.news.is_some(),
+        "a newer fight is news again"
+    );
 }

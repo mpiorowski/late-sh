@@ -314,6 +314,10 @@ impl App {
         changed |= self.bonsai.tick();
         changed |= self.fight.tick();
         changed |= self.tailor.tick();
+        // The lounge spawns (`app/deadchannel/lounge`): the spawn copy, a
+        // runner's `/hit`, the word it came back with, and the scene's
+        // strike and countdown frames.
+        changed |= crate::app::deadchannel::lounge::svc::tick(self, anim_half);
         changed |= self.guide.tick();
         changed |= self.tick_pot();
         // News state is ticked inside chat.tick()
@@ -329,6 +333,10 @@ impl App {
         self.chat
             .set_favorite_room_ids(self.profile_state.profile().favorite_room_ids.clone());
         self.chat
+            .set_viewer_tz(crate::app::profile::svc::parse_account_tz(
+                self.profile_state.profile().timezone.as_deref(),
+            ));
+        self.realm
             .set_viewer_tz(crate::app::profile::svc::parse_account_tz(
                 self.profile_state.profile().timezone.as_deref(),
             ));
@@ -512,6 +520,7 @@ impl App {
             &self.chat.live_streams,
             &self.live_games.live_rows(),
             &self.calendar,
+            &self.realm,
             reading,
             picture_settings,
         );
@@ -524,6 +533,40 @@ impl App {
         }
         if daily_tick.own_loss {
             self.pet_state.note_loss(Instant::now());
+        }
+        // The map counts only while the Profiles page shows its shelf, and
+        // leaving drops it so coming back asks again. Its counts arrive from
+        // a task; nothing else would ask for the frame that shows them.
+        let map_shown =
+            self.screen == Screen::Profiles && self.directory_state.shelf() == Shelf::Map;
+        if map_shown != self.usermap.is_shown() {
+            match map_shown {
+                true => {
+                    let profile = self.profile_state.service().clone();
+                    self.usermap.show(&profile);
+                }
+                false => self.usermap.hide(),
+            }
+            changed = true;
+        }
+        changed |= self.usermap.tick();
+        let realm_tick = self.realm.tick();
+        changed |= realm_tick.changed;
+        if let Some(b) = realm_tick.banner {
+            self.banner = Some(b);
+            changed = true;
+        }
+        // The realm board stays open across a hop (it is a stop on the
+        // backtick cycle and a live row on the hub), so like the native
+        // remakes below it can be forgotten. Once it has gone the shared door
+        // window off screen, close it as `q` would; never while it is the open
+        // screen, which is what stamps the clock.
+        if self.screen != Screen::Realm && self.realm.board_idle_expired() {
+            self.realm.close_board();
+            changed = true;
+        }
+        if self.screen == Screen::Realm {
+            self.realm.touch_board();
         }
         // Modal cursor, pending claim, and glow follow the daily snapshot.
         self.lobby.sync(&self.daily);
@@ -562,6 +605,15 @@ impl App {
                 self.house.chat_join_requested = true;
                 self.chat.join_game_room_chat(chat_room_id);
             }
+        }
+        // The world's room is known once the board's row loads, the daily
+        // board's shape: join once per board, whether the chat is shown or
+        // not, so the hidden pane can still count what is said.
+        if self.screen == crate::app::common::primitives::Screen::Realm {
+            if let Some(chat_room_id) = self.realm.take_chat_join() {
+                self.chat.join_game_room_chat(chat_room_id);
+            }
+            self.sync_visible_chat_room();
         }
         if let Some(state) = self.dartboard_state.as_mut() {
             // The shared canvas drains remote ops, snapshot swaps, and
@@ -951,16 +1003,19 @@ impl App {
             // actually moves, or every second would invalidate every cached
             // chat row.
             if let Some(active_users) = &self.active_users {
-                let (online_count, away_user_ids, active_friends) = {
+                let (online_ids, away_user_ids, active_friends) = {
                     let roster = active_users.lock_recover();
                     (
-                        crate::state::online_human_count(&roster),
+                        crate::state::online_human_ids(&roster),
                         crate::app::common::away::away_user_ids(&roster),
                         self.chat.active_friends(&roster),
                     )
                 };
-                if online_count != self.online_count {
-                    self.online_count = online_count;
+                if online_ids.len() != self.online_count {
+                    self.online_count = online_ids.len();
+                    changed = true;
+                }
+                if crate::app::directory::input::presence_changed(self, online_ids) {
                     changed = true;
                 }
                 if away_user_ids != self.away_user_ids {
@@ -1457,6 +1512,7 @@ impl App {
         if self.screen == Screen::Clubhouse
             || self.screen == Screen::City
             || crate::app::door::hub::state::animates(self)
+            || crate::app::deadchannel::lounge::svc::animates(self)
             || self.right_sidebar_visible()
             || (self.live_strip_shown() && self.live.aiming())
             || (self.screen == Screen::Zen && self.zen.shows_equalizer())
@@ -1637,7 +1693,8 @@ impl App {
                 None => Place::Whole,
             },
             Screen::Profiles => match self.directory_state.shelf() {
-                Shelf::People => Place::PeopleShelf,
+                Shelf::Map => Place::MapShelf,
+                Shelf::Profiles => Place::PeopleShelf,
                 Shelf::Jobs => Place::JobsShelf,
             },
             Screen::Artboard => match &self.dartboard_state {
@@ -1667,6 +1724,7 @@ impl App {
             | Screen::City
             | Screen::Zen
             | Screen::DailyMatch
+            | Screen::Realm
             | Screen::Scratchpad => Place::Whole,
         }
     }

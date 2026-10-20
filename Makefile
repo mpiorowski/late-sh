@@ -111,7 +111,7 @@ arena:
 # rules change.
 .PHONY: deadchannel-arena
 deadchannel-arena:
-	$(MAKE) test-llm ARGS="-p late-ssh --run-ignored all --no-capture -E 'test(deadchannel::fight::arena) and not test(arena_sweep)'"
+	$(MAKE) test-llm ARGS="-p late-ssh --run-ignored all --no-capture -E 'test(deadchannel::fight::arena) and not test(arena_sweep) and not test(arena_crystals)'"
 
 # The balance sweep: one reading per candidate set of rules in
 # arena_test.rs::SWEEP, side by side, written to
@@ -119,6 +119,13 @@ deadchannel-arena:
 .PHONY: deadchannel-sweep
 deadchannel-sweep:
 	$(MAKE) test-llm ARGS="-p late-ssh --run-ignored all --no-capture -E 'test(arena_sweep)'"
+
+# The crystal question (fight/BALANCE.md, "What a crystal buys"): the crystal
+# players side by side under the live rules and with pours priced in bits,
+# written to late-ssh/target/deadchannel-crystals.md.
+.PHONY: deadchannel-crystals
+deadchannel-crystals:
+	$(MAKE) test-llm ARGS="-p late-ssh --run-ignored all --no-capture -E 'test(arena_crystals)'"
 
 # Whole simulated runs, start to finish: one seeded climb a player from a
 # fresh row to the first mark, every shop visit, step, and turn, written to
@@ -146,6 +153,18 @@ check: .env
 
 start: .env keys
 	docker compose -f docker-compose.yml up --build
+
+# Drop the per-test databases that killed test runs leave behind. Each test
+# makes its own and drops it on the way out, but a cancelled or timed-out run
+# does not — and a few thousand of them make postgres crawl on startup, which
+# shows up as `make start` failing on an unhealthy database.
+.PHONY: test-db-clean
+test-db-clean:
+	@docker compose exec -T postgres psql -U $${LATE_DB_USER:-postgres} -t -A \
+		-c "SELECT datname FROM pg_database WHERE datname LIKE 'test\_%'" \
+		| awk '{print "DROP DATABASE IF EXISTS \""$$0"\";"}' \
+		| docker compose exec -T postgres psql -U $${LATE_DB_USER:-postgres} -q -f -
+	@echo "leftover test databases dropped (templates left alone)"
 
 .PHONY: start-amd64
 start-amd64: .env keys

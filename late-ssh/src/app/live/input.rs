@@ -43,6 +43,7 @@ pub fn reply_from_key(app: &mut App) -> bool {
         | Some(LiveSource::Stream(_))
         | Some(LiveSource::DoorGame(_))
         | Some(LiveSource::BoardEvent(_))
+        | Some(LiveSource::Realm(_))
         | None => false,
     }
 }
@@ -193,6 +194,14 @@ fn open(app: &mut App, source: LiveSource, origin: Origin) -> bool {
                 }
                 None => false,
             }
+        }
+        // The board of the world the moment happened on, to play or to
+        // watch, the way the hub card opens it. On that board already there
+        // is nothing to open. Gone between the frame and the key (the world
+        // left the listing): nothing to open.
+        LiveSource::Realm(game_id) => {
+            let return_screen = return_screen_for_opening(app);
+            crate::app::door::realm::input::open_from_live(app, game_id, return_screen)
         }
     }
 }

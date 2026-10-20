@@ -16,6 +16,7 @@ fn record(session_id: Uuid, user_id: Uuid, x: u16) -> PresenceRecord {
         },
         nightcap: None,
         street: None,
+        lounge: false,
     }
 }
 

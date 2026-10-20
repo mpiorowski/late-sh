@@ -39,7 +39,7 @@ fn the_rail_wraps_the_cards_alone_when_nobody_is_live() {
 #[test]
 fn select_jumps_directly() {
     let mut s = State::default();
-    s.select(public(), 8);
+    s.select(public(), 9);
     assert_eq!(s.selected_game(public()), HubGame::GreenDragon);
     s.select(public(), 99);
     assert_eq!(s.selected_game(public()), HubGame::GreenDragon);
@@ -52,6 +52,7 @@ fn all_games_are_listed_in_order() {
         [
             "Night City",
             "Lateania",
+            "Realm",
             "DCSS",
             "NetHack",
             "Brogue",

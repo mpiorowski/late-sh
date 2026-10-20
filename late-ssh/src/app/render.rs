@@ -211,6 +211,7 @@ struct DrawContext<'a> {
     /// `HubGame::live_screen` (the one definition the backtick cycle also
     /// reads) before the door states are borrowed or taken below.
     lateania_live: bool,
+    realm_live: bool,
     nethack_live: bool,
     dcss_live: bool,
     brogue_live: bool,
@@ -278,6 +279,8 @@ struct DrawContext<'a> {
     jobs_state: &'a crate::app::jobs::state::JobsState,
     /// The viewer's languages from their profile, for the job matcher.
     viewer_langs: &'a [String],
+    /// Whether the viewer set a country, for the map's title.
+    viewer_has_country: bool,
     clubhouse_state: &'a crate::app::clubhouse::state::State,
     clubhouse_own_username: &'a str,
     nightcap_state: &'a crate::app::clubhouse::nightcap::state::State,
@@ -310,6 +313,7 @@ struct DrawContext<'a> {
     city_sheet: Option<&'a crate::app::deadchannel::fight::state::Sheet>,
     city_scene: Option<&'a crate::app::deadchannel::fight::session::Scene>,
     city_picker: Option<&'a crate::app::deadchannel::fight::session::Picker>,
+    city_lookout: &'a crate::app::deadchannel::fight::state::Lookout,
     city_till: Option<&'a str>,
     city_tailor: crate::app::deadchannel::tailor::ui::MirrorView<'a>,
     city_guide: &'a crate::app::deadchannel::guide::state::State,
@@ -371,9 +375,16 @@ struct DrawContext<'a> {
     show_lobby_modal: bool,
     lobby: &'a crate::app::lobby::state::LobbyState,
     daily: &'a crate::app::lobby::daily::state::DailyState,
+    realm: &'a crate::app::door::realm::state::RealmState,
+    /// The realm board's chat: shown in place of the rail, hidden with an
+    /// unread count, or absent while the board has no room.
+    realm_chat: Option<crate::app::door::realm::ui::RealmChatPane<'a>>,
     paper_modal: Option<&'a crate::app::paper::state::PaperModal>,
     stream_modal: Option<&'a crate::app::state::StreamModal>,
     show_help: bool,
+    /// The Profiles page's map shelf. Mutable because drawing is what tells
+    /// the view how big the map area is.
+    usermap: &'a mut crate::app::usermap::state::UserMapState,
     help_modal_state: &'a help_modal::state::HelpModalState,
     show_ultimate_modal: bool,
     ultimate_state: &'a crate::app::ultimates::UltimateState,
@@ -465,6 +476,7 @@ impl App {
         // (some door states are even taken out of `self` for the draw).
         use crate::app::door::hub::state::HubGame;
         let lateania_live = HubGame::Lateania.live_screen(self).is_some();
+        let realm_live = HubGame::Realm.live_screen(self).is_some();
         let nethack_live = HubGame::Nethack.live_screen(self).is_some();
         let dcss_live = HubGame::Dcss.live_screen(self).is_some();
         let brogue_live = HubGame::Brogue.live_screen(self).is_some();
@@ -785,6 +797,7 @@ impl App {
                 &live_rows,
                 &self.live_games,
                 &self.calendar,
+                &self.realm,
             )
         } else {
             None
@@ -841,6 +854,7 @@ impl App {
                     &live_rows,
                     &self.live_games,
                     &self.calendar,
+                    &self.realm,
                 )
                 .map(|strip| crate::app::live::ui::status_text(&strip))
         } else {
@@ -860,6 +874,22 @@ impl App {
         let status_station_track = match self.paired_source {
             late_core::models::user::AudioSource::Radio => radio_now_playing.as_deref(),
             late_core::models::user::AudioSource::Youtube => status_youtube_track.as_deref(),
+        };
+        // The lounge's spawn (`deadchannel/lounge`) as the scene above the
+        // #lounge card's composer, for a runner only.
+        let dashboard_lounge = if home_selected && self.is_runner() {
+            let now_ms = crate::app::presence::svc::now_ms();
+            self.lounge.showing(now_ms).map(|spawn| {
+                crate::app::deadchannel::lounge::ui::scene(
+                    spawn,
+                    self.lounge.word(),
+                    self.user_id,
+                    &self.runner_looks,
+                    now_ms,
+                )
+            })
+        } else {
+            None
         };
         let dashboard_view = chat::ui::DashboardChatView {
             activity_ticker: self.chat.activity_ticker(),
@@ -899,6 +929,7 @@ impl App {
             reaction_picker_active: self.chat.is_reaction_leader_active(),
             composer: self.chat.composer(),
             composing: self.chat.composing,
+            lounge: dashboard_lounge,
             mention_matches: &self.chat.mention_ac.matches,
             mention_selected: self.chat.mention_ac.selected,
             mention_active: self.chat.mention_ac.active,
@@ -1227,6 +1258,78 @@ impl App {
                     chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
                     selection_scroll: Some(&self.chat.selection_scroll),
                 });
+        // The world's chat on the realm board, while it is up; hidden, the
+        // board only needs to know how much has been said since.
+        let realm_chat = match (self.realm.chat_room_id(), self.realm.shown_chat_room_id()) {
+            (None, _) => crate::app::door::realm::ui::RealmChatPane::Absent,
+            (Some(room_id), None) => crate::app::door::realm::ui::RealmChatPane::Hidden {
+                unread: self.chat.unread_counts.get(&room_id).copied().unwrap_or(0),
+            },
+            (Some(_), Some(chat_room_id)) => crate::app::door::realm::ui::RealmChatPane::Shown(
+                Box::new(chat::ui::EmbeddedRoomChatView {
+                    messages_inset: 1,
+                    title: "Realm Chat",
+                    messages: self.chat.messages_for_room(chat_room_id),
+                    overlay: self.chat.overlay(),
+                    image_modal,
+                    rows_cache: &mut self.realm_chat_rows_cache,
+                    rows_versions: chat::ui::ChatRowsVersions {
+                        room_id: Some(chat_room_id),
+                        room_version: self.chat.room_version(chat_room_id),
+                        chat_ctx_epoch: self.chat.context_epoch(),
+                        app_ctx_epoch: self.chat_ctx_epoch,
+                    },
+                    usernames: chat_usernames,
+                    countries: chat_countries,
+                    friend_user_ids: self.chat.friend_user_ids(),
+                    live_user_ids: &self.chat.live_user_ids,
+                    message_reactions,
+                    message_gilds,
+                    inline_images: &self.chat.inline_image_cache,
+                    dividers: crate::app::chat::ui::ChatDividers {
+                        afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
+                        left_app: self.chat.device_left_at(),
+                    },
+                    current_user_id: self.user_id,
+                    voice_channel_id: self
+                        .chat
+                        .voice_channels_by_room_id
+                        .get(&chat_room_id)
+                        .map(|channel| channel.id),
+                    voice_snapshot,
+                    voice_paired_cli_supports_voice: paired_cli_supports_voice,
+                    show_flag_fallback: self.profile_state.profile().show_flag_fallback,
+                    selected_message_id: self.chat.selected_message_id,
+                    selected_image_message: self
+                        .chat
+                        .selected_message_has_inline_image_in_room(chat_room_id),
+                    highlighted_message_id: self.chat.highlighted_message_id,
+                    reaction_picker_active: self.chat.is_reaction_leader_active(),
+                    composer: self.chat.composer(),
+                    composer_inert: chat::ui::ComposerInert::No,
+                    composing: self.chat.composing,
+                    mention_matches: &self.chat.mention_ac.matches,
+                    mention_selected: self.chat.mention_ac.selected,
+                    mention_active: self.chat.mention_ac.active,
+                    reply_author: self.chat.reply_target().map(|reply| reply.author.as_str()),
+                    is_editing: self.chat.edited_message_id.is_some(),
+                    bonsai_glyphs,
+                    chat_badges,
+                    profile_award_badges,
+                    drunk_levels: &self.drunk_levels,
+                    name_flair: &self.name_flair,
+                    away_user_ids: &self.away_user_ids,
+                    name_flicker,
+                    translations: &self.chat.translations,
+                    translation_hidden: &self.chat.translation_hidden,
+                    keep_composer_focused: self.profile_state.profile().keep_composer_focused,
+                    composer_rect_slot: Some(&self.chat.last_composer_rect),
+                    composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
+                    chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
+                    selection_scroll: Some(&self.chat.selection_scroll),
+                }),
+            ),
+        };
         // The watch chat: docked beside the watched screen for a watcher,
         // read-only beside their own game for the player.
         let watch_chat_view =
@@ -1613,6 +1716,7 @@ impl App {
                         lateania_slots: self.lateania_service.character_slots(self.user_id),
                         lateania_slot_cursor: self.lateania_slot_cursor,
                         lateania_live,
+                        realm_live,
                         nethack_live,
                         dcss_live,
                         brogue_live,
@@ -1659,6 +1763,7 @@ impl App {
                         directory_state: &self.directory_state,
                         jobs_state: &self.jobs,
                         viewer_langs: &self.profile_state.profile().langs,
+                        viewer_has_country: self.profile_state.profile().country.is_some(),
                         clubhouse_state: &self.clubhouse,
                         clubhouse_own_username: self.profile_state.profile().username.as_str(),
                         nightcap_state: &self.nightcap,
@@ -1678,6 +1783,7 @@ impl App {
                         city_sheet: self.fight.sheet.as_ref(),
                         city_scene: self.fight.scene.as_ref(),
                         city_picker: self.fight.picker.as_ref(),
+                        city_lookout: &self.fight.lookout,
                         city_till: self.fight.till.as_deref(),
                         city_tailor: crate::app::deadchannel::tailor::ui::MirrorView {
                             draft: self.tailor.draft.as_ref(),
@@ -1735,9 +1841,12 @@ impl App {
                         show_lobby_modal: self.show_lobby_modal,
                         lobby: &self.lobby,
                         daily: &self.daily,
+                        realm: &self.realm,
+                        realm_chat: Some(realm_chat),
                         paper_modal: self.paper.modal.as_ref(),
                         stream_modal: self.stream_modal.as_ref(),
                         show_help: self.show_help,
+                        usermap: &mut self.usermap,
                         help_modal_state: &self.help_modal_state,
                         show_ultimate_modal: self.show_ultimate_modal,
                         ultimate_state: &self.ultimate_state,
@@ -2182,6 +2291,8 @@ impl App {
                         lateania_slots: ctx.lateania_slots.clone(),
                         lateania_slot_cursor: ctx.lateania_slot_cursor,
                         lateania_live: ctx.lateania_live,
+                        realm_live: ctx.realm_live,
+                        realm: ctx.realm,
                         nethack_live: ctx.nethack_live,
                         dcss_live: ctx.dcss_live,
                         brogue_live: ctx.brogue_live,
@@ -2396,7 +2507,9 @@ impl App {
                     crate::app::directory::ui::DirectoryPageView {
                         directory: ctx.directory_state,
                         jobs: ctx.jobs_state,
+                        usermap: &mut *ctx.usermap,
                         viewer_langs: ctx.viewer_langs,
+                        viewer_has_country: ctx.viewer_has_country,
                         projects: ctx.chat_view.showcase_view.items,
                         people: ctx.chat_view.work_view.items,
                         work_marker: ctx.chat_view.work_view.marker_read_at,
@@ -2464,6 +2577,7 @@ impl App {
                     sheet: ctx.city_sheet,
                     scene: ctx.city_scene,
                     picker: ctx.city_picker,
+                    lookout: ctx.city_lookout,
                     till: ctx.city_till,
                     tailor: ctx.city_tailor,
                     guide: ctx.city_guide,
@@ -2567,6 +2681,15 @@ impl App {
                 terminal_images,
                 ctx.daily_chat_view.take(),
             ),
+            Screen::Realm => crate::app::door::realm::ui::draw(
+                frame,
+                content_area,
+                ctx.realm,
+                ctx.realm_chat
+                    .take()
+                    .unwrap_or(crate::app::door::realm::ui::RealmChatPane::Absent),
+                terminal_images,
+            ),
             Screen::HouseTable => crate::app::lobby::house::ui::draw(
                 frame,
                 content_area,
@@ -2663,7 +2786,10 @@ impl App {
             // leading space (1) + icon (2) + message + border padding (4)
             let msg_w = (banner.message.len() as u16) + 7;
             let toast_w = msg_w.max(20).min(inner.width);
-            let toast_x = inner.x + inner.width.saturating_sub(toast_w);
+            // Centred, not right-aligned: screens with a right-hand info rail
+            // (the realm board's territory/points panel, for one) had their
+            // most important column covered by every toast.
+            let toast_x = inner.x + inner.width.saturating_sub(toast_w) / 2;
             let toast_area = Rect::new(toast_x, inner.y, toast_w, 3);
             frame.render_widget(Clear, toast_area);
             let notif_block = Block::default()
@@ -3073,7 +3199,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::GreenDragon => "Green Dragon",
         Screen::Arcade => "The Arcade",
         Screen::Artboard => "Artboard",
-        Screen::Profiles => "Profiles",
+        Screen::Profiles => "People",
         Screen::Leaderboard => "Leaderboards",
         Screen::Calendars => "Calendars",
         Screen::Clubhouse => "Clubhouse",
@@ -3081,6 +3207,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::City => "Undercity",
         Screen::DailyMatch => "Daily Match",
         Screen::HouseTable => "House Table",
+        Screen::Realm => "Realm",
         Screen::Scratchpad => "Scratchpad",
         Screen::Zen => "Zen",
     };
@@ -3273,13 +3400,10 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     }
 
     // The clubhouse tavern draws no widget chrome of its own, so the
-    // headcount and keybinds live up here.
+    // keybinds live up here.
     if screen == Screen::Clubhouse {
         spans.push(Span::styled(
-            format!(
-                "· {} inside · Tab/0-7 pages · arrows/hjkl walk · Enter interact · i say · s sit · w wave · x dance · n out back ",
-                ctx.clubhouse_state.headcount()
-            ),
+            "· Tab/0-7 pages · arrows/hjkl walk · Enter interact · i say · s sit · w wave · x dance · n out back ",
             Style::default().fg(theme::TEXT_DIM()),
         ));
     }
@@ -3381,12 +3505,10 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         ));
     }
 
+    // People's title bar is only how to move between its sections; what
+    // can be done in the current section is the page's footer.
     if screen == Screen::Profiles {
-        let hints: &[(&str, &str)] = &[
-            ("i", "new project"),
-            ("w", "work card"),
-            ("Enter", "copy link"),
-        ];
+        let hints: &[(&str, &str)] = &[("[ ]", "section")];
         for (key, desc) in hints {
             spans.push(Span::styled("· ", Style::default().fg(theme::BORDER_DIM())));
             spans.push(Span::styled(

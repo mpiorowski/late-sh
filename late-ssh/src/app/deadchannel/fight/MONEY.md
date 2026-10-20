@@ -66,7 +66,11 @@ the road itself: a cache pays bits with no fight in it.
 `Command::Deposit` puts everything on hand in the locker (`stash`) less
 `LOCKER_FEE_PERCENT` (10, rounded up, so no deposit is free; LoGD's bank
 takes nothing and pays interest, the locker pays none).
-`Command::Withdraw` takes it all out for free.
+`Command::Withdraw` takes it all out for free. Against a crossing,
+which takes half of what a sleeper carries (`CROSSING.md`), the cut is
+the cheaper bet only for a runner crossed more than one night in five:
+the locker is a choice, not a chore. It is no shelter from the answer:
+the runner you crossed fights for what you took out of the locker too.
 
 - A drop never reaches it; an Old Signal mark and a step off the ledge
   empty it.
@@ -82,9 +86,14 @@ takes nothing and pays interest, the locker pays none).
 
 ## The bits machine
 
-`Command::Borrow` lends everything up to the cap, `LOAN_PER_LEVEL` (50)
-times the level less what is owed (`loan_cap`, `loan_room`); a level-2
-runner can borrow both tier-1 pieces.
+`Command::Borrow` lends everything up to the cap, the wall price of one
+piece at the runner's level (`Rules::loan_cap`, `Sheet::loan_cap`), less
+what is owed (`loan_room`). The cap moves with the wall: 108 at level 1,
+506 at level 2, 11340 at level 10. The machine buys the piece now and the
+garnish takes about two levels of kills to square it, so a loan is one
+piece ahead of the level for a tenth of its price. A loan that could
+not reach a piece would bridge nothing one more glyph would not
+(`arena.rs`, the borrower against the ambient runner, is the reading).
 
 - The fee is flat: `LOAN_FEE_PERCENT` (10, rounded up) of what is handed
   over goes on the debt with the loan (`loan_fee`,

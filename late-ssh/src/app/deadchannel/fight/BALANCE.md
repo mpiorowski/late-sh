@@ -92,7 +92,7 @@ a value (`Sheet::apply_under`), so a candidate is tried by building a
 | `foe_signal_percent` | 100 | a glyph's signal over the table's: how many turns a fight lasts |
 | `hit_percent`, `hit_ramp_percent` | 175, 3 | a glyph's hit: its attack less a quarter of your defense, times the first at level 1 and the second more for every level past it |
 | `block_percent` | 60 | a block card, as a share of your defense |
-| `cache_percent` | 50 | a cache, as a share of the fair glyph's bits |
+| `cache_percent` | 60 | a cache, as a share of the fair glyph's bits; the crossing takes one quiet node a day off the sim's road, and this pays it back |
 | `old_signal` | 300 / 35 / 22 | the Old Signal's signal, attack, defense |
 | `crystal_drop_one_in` | 12 | crystals from plain kills |
 | `bright_signal_percent`, `bright_edge_level_percent`, `bright_guard_level_percent` | 150, 50, 0 | how hard the bright glyph is: its signal over the plain one's, and the shares of the level added to its attack and to its defense |
@@ -100,6 +100,7 @@ a value (`Sheet::apply_under`), so a candidate is tried by building a
 | `bright_bits_times` | 2 | what it pays |
 | `cart_crystals`, `cart_lead_crystals` | 3, 2 | the blade shop's price at or under the level, and what every tier above it adds |
 | `ink_crystals` | 10 | what INK asks to ink a draft: about half of what a careful climb finds |
+| `pour_crystals`, `pour_bits_percent` | 1, 0 | what a pour at Dead Air costs: crystals, and bits as a share of a cache at the level; live, the glass's crystal and no bits |
 | `jab_percent` | 75 | a jab, as a share of a strike |
 | `brace_percent` | 100 | a brace, as a share of a block |
 | `siphon_mend_percent` | 75 | what a siphon mends, as a share of a strike |
@@ -169,6 +170,21 @@ nothing about the climb (`sim_test.rs` holds that).
 | `BORROWER` | ambient, plus the machine's loan whenever it puts the next piece in reach |
 | `INKER` | keen, but the crystals go to the needle first: the first draft not inked, whenever the needle would take it |
 
+A player's bar habit is `Drinks` (never; a glass every day; or one saved
+for the hard fight: the gate, or a bright glyph the route would step in
+against, read before the glass so it goes on the fight it makes safer),
+and its blade habit is `Carts` (never; always; from a tier; only when
+the bits on hand fall short of the piece at the wall).
+
+**`sim::crystal_players()`: the crystal matrix.** The careful runner
+with one change at a time: both hands, three bright rules (never, at
+easy, at even), and nine ways to spend a crystal (none, a glass daily,
+a glass for the hard fight, a pour daily, blades, blades when short, a
+glass daily plus blades, INK, and INK first then a glass for the hard
+fight): 54 players, each read against the row beside it. The bright rule is in the matrix because the bright glyph is where
+the crystals come from and where a glass is worth most, so a spend read
+under one bright rule alone measures the rule.
+
 `sim::builds()` is all sixteen builds. A named player on another deck is
 `Player { build, ..sim::AMBIENT }`.
 
@@ -209,18 +225,25 @@ Everything is seeded: the same rules give the same reading.
    table: a rule that reads right as a median can still be a bad day.
 3. Put the candidates in `arena_test.rs::SWEEP`, each a name and a
    `Rules { field: value, ..RULES }`, the live rules first.
-4. `make deadchannel-sweep` writes `late-ssh/target/deadchannel-sweep.md`:
+4. `make deadchannel-crystals` writes
+   `late-ssh/target/deadchannel-crystals.md`: the crystal matrix under
+   the live rules and under each candidate in
+   `arena_test.rs::CRYSTAL_RULES` (`crystals_table`, section 6, "What a
+   crystal buys"), then the bright glyph and the Old Signal with each
+   glass. About a minute. The question it answers is where a crystal
+   should go; edit `CRYSTAL_RULES` to price the bar differently.
+5. `make deadchannel-sweep` writes `late-ssh/target/deadchannel-sweep.md`:
    one reading per candidate, side by side, a miss count, every draft's
    two options per candidate, and the missed bands spelled out
    underneath. About fifteen seconds a candidate.
-5. Move one knob at a time until the cause is clear, then sweep the
+6. Move one knob at a time until the cause is clear, then sweep the
    neighbours of the pick: a setting whose neighbours miss is a knife
    edge and will not survive the next change.
-6. Set the constants in `data.rs`. Run the targeted suite: the contract,
+7. Set the constants in `data.rs`. Run the targeted suite: the contract,
    `sim_test.rs`, and the tests that spell numbers out (`state_test.rs`,
    `ui_test.rs`, `city/ui_test.rs`, `svc_test.rs`). Read each moved
    number before re-blessing it.
-7. Update the guide (`guide/data.rs`) and the card's rule line and face
+8. Update the guide (`guide/data.rs`) and the card's rule line and face
    if a rule a player reads changed, and section 6 here with the new
    reading.
 
@@ -283,33 +306,33 @@ The live reading (house build), under one patch a day:
 
 | boss reached, careful / ambient | careful | ambient (drops) | reckless (drops) | keen | inker | second climb on the key: mark 1 / mark 5 / mark 1 inked | lv after day 1 / 7 | kit lead | top kit at | keen lead, top kit | gear | patch, careful / ambient | careful patch days | dropped | idle | fair low | turns | signal left, key / sharp | bright on the key (signal left) | bright sharp | pour low | boss key / sharp / key with a glass / key inked | crystals a day | builds: ambient day, boss on the key |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| day 16 / 17 | day 17 | day 21 (2) | day 24 (3) | day 17 | day 17 | day 20 / 16 / 16 | 3 / 9 | -0.5 to +0.5 | lv 15 | +0.5, lv 15 | 77% | 5% / 6% | 59% | 0% | 18% | 100% | 2.6 to 3.8 | 79% / 88% | 48 to 100% (38%) | 90 to 100% | -5 | 57% / 90% / 90% / 64% | 1.1 | day 20 to 24, 43 to 70% |
+| day 16 / 17 | day 16 | day 22 (2) | day 23 (3) | day 17 | day 17 | day 20 / 16 / 16 | 3 / 10 | +0.0 to +0.5 | lv 15 | +0.5, lv 15 | 79% | 4% / 6% | 56% | 0% | 17% | 100% | 2.6 to 3.8 | 79% / 88% | 48 to 100% (38%) | 90 to 100% | -5 | 57% / 90% / 90% / 64% | 1.1 | day 20 to 24, 43 to 70% |
 
 The curve (median level at the end of the day):
 
-| day | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 10 | 12 | 14 | 16 | 17 | 21 | 24 |
+| day | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 10 | 12 | 14 | 15 | 16 | 22 | 23 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| careful | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 12 | 13 | 15 | 15 | marked | | |
+| careful | 3 | 4 | 5 | 7 | 8 | 9 | 10 | 10 | 12 | 14 | 15 | 15 | marked | | |
 | ambient | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 13 | 14 | 15 | 15 | marked | |
-| reckless | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 13 | 14 | 15 | 15 | 15 | marked |
+| reckless | 3 | 4 | 5 | 7 | 7 | 8 | 9 | 10 | 12 | 13 | 14 | 15 | 15 | 15 | marked |
 
 The first two days, read sharp (medians over the seeds; every seed is at
 the same level):
 
 | day | level | kit at dusk | cards | glyphs down | dropped | earned | gear | patch | bits at dusk | crystals |
 |---|---|---|---|---|---|---|---|---|---|---|
-| 1 | 3 | weapon 2, armor 2 | 1 | 5 | 0% | 1,728 | 1,066 | 30 | 673 | 0 |
-| 2 | 4 | weapon 4, armor 3 | 1 | 5 | 4% | 4,044 | 3,114 | 57 | 1,169 | 1 |
+| 1 | 3 | weapon 2, armor 2 | 1 | 5 | 0% | 1,974 | 1,066 | 30 | 916 | 0 |
+| 2 | 4 | weapon 4, armor 4 | 1 | 5 | 0% | 4,236 | 4,354 | 54 | 1,150 | 1 |
 
 Every draft's two options on the key, each over the eight builds that
 carry it:
 
 | draft | card | mean day of the mark | Old Signal |
 |---|---|---|---|
-| lv 3 | jab / brace | 24.1 / 23.0 | 54% / 53% |
-| lv 6 | riposte / bulwark | 23.9 / 23.2 | 55% / 52% |
-| lv 9 | burn / ground | 24.3 / 22.8 | 49% / 58% |
-| lv 12 | sever / mute | 23.7 / 23.4 | 56% / 51% |
+| lv 3 | jab / brace | 23.0 / 22.5 | 54% / 53% |
+| lv 6 | riposte / bulwark | 23.1 / 22.4 | 55% / 52% |
+| lv 9 | burn / ground | 23.3 / 22.1 | 49% / 58% |
+| lv 12 | sever / mute | 23.2 / 22.3 | 56% / 51% |
 
 What the tables say:
 
@@ -390,6 +413,70 @@ What the tables say:
   holds every pour within the dice of dry. Read sharp, a pour moves
   the Old Signal from 90% to 88 to 95%: the pours are road cards, the
   glasses are the gate's.
+
+### What a crystal buys
+
+The crystal matrix (`make deadchannel-crystals`), live rules, the
+house build, 80 seeds: the day of the mark, with the drops in brackets.
+
+| hand · brights | none | glass daily | glass for the hard | pour daily | blades | blades when short | glass daily + blades | ink | ink, then a glass for the hard |
+|---|---|---|---|---|---|---|---|---|---|
+| key · never | 22 (2) | 18 (1) | 17 (1) | 21 (2) | 21 (2) | 22 (2) | 18 (1) | 21 (2) | 18 (1) |
+| key · at easy | 23 (2) | 20 (1) | 18 (1) | 21 (1) | 21 (2) | 21 (2) | 22 (1) | 22 (2) | 19 (1) |
+| key · at even | 57 (15) | 26 (4) | 21 (2) | 68 (19) | 70 (20) | 66 (18) | 26 (4) | 40 (8) | 21 (2) |
+| sharp · never | 16 (0) | 16 (0) | 16 (0) | 16 (0) | 16 (0) | 16 (0) | 16 (0) | 16 (0) | 16 (0) |
+| sharp · at easy | 17 (0) | 17 (0) | 16 (0) | 17 (0) | 16 (0) | 16 (0) | 17 (0) | 16 (0) | 16 (0) |
+| sharp · at even | 24 (2) | 17 (0) | 17 (0) | 23 (2) | 24 (2) | 25 (2) | 17 (0) | 18 (0) | 17 (0) |
+
+Crystals found over a climb: 6 to 8 taking no brights, 10 to 12 at
+easy, 17 to 19 at even. Blades bought over a climb: 1 taking no
+brights, 2 to 3 otherwise, out of a kit of thirty pieces.
+
+- **A crystal is a glass, and the glass is for the bright glyph and
+  the gate.** Static on ice turns the bright fight on the key from 60,
+  48, and 69% (levels 7, 9, 14) into 92, 98, and 97%, and the Old
+  Signal on the key from 57% into 100% (the tables above). That is the
+  whole of a crystal's worth in days: on the key, one glass saved for
+  the gate (`glass for the hard`, never a bright) is day 17 against day
+  22 with none; a runner who takes brights at even drops fifteen times
+  without a glass and twice with one saved for them. Read sharp the
+  glass is worth nothing until the brights at even, where it is the
+  seven days between day 24 with two drops and day 17 with none.
+- **Blades buy nothing.** Every crystal to the blade shop is a piece or
+  three over a climb, out of thirty the wall sells, and the mark lands
+  on the same day as spending none: the armorer already keeps the kit
+  level with the runner (the kit lead band), so a tier bought with
+  crystals is a tier bits would have bought a day later. Holding
+  crystals for blades is holding them for the smallest thing they buy.
+- **The saved glass beats the daily one.** On the key the runner who
+  drinks only before a bright or the gate marks on day 21 with two
+  drops against day 26 with four for the daily drinker, on fewer
+  glasses: the daily glass is spent before fair fights that did not
+  need it and is gone when the bright comes, and the saved one is
+  there. The road's threat word already says which day is which.
+- **A pour is not a daily.** Feedback (a surge) poured every day buys
+  no day on either hand under the live price, and priced in bits (a
+  cache's worth, or half of one, no crystal) it costs 7,000 to 21,000
+  bits a climb for the same day: the pour is a road card for the day
+  the deck is the problem, and pricing it in bits makes a sink that
+  buys nothing. The pours stay a crystal.
+- **INK is one draft a climb, and it costs this climb nothing only if
+  the brights are safe.** Ten crystals is the whole of what a climb
+  finds taking brights at easy, so the inker inks one draft (the median)
+  and reaches the mark on the same day as spending nothing; read sharp
+  at even it is a day behind the glass (18 against 17, no drops). On
+  the key, hoarding for the needle while taking brights at even is day
+  40 with eight drops: the crystal that should have been the glass
+  before the bright is in the pile. "Ink first, then the glass" never
+  reaches ten, because the glasses take the crystals one at a time
+  before the pile grows; it is the glass column with a longer name. The
+  needle's pay is the second climb (above: day 16 on the key with every
+  draft inked), and a draft a climb is the pace it is bought at.
+- **The key must not take brights at even without a glass**: day 57
+  with fifteen drops. The threat word is read at full signal on the
+  key, and the bright glyph at even is a coin flip whose tails is the
+  full fall. With a glass in hand it is day 21 to 26; at easy it is
+  day 18 to 23 with or without.
 
 ## 7. Soft spots and the tests worth adding
 

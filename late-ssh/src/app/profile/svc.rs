@@ -161,6 +161,24 @@ impl From<&IrcToken> for IrcTokenStatus {
     }
 }
 
+/// People per country for one slice of the map, busiest first.
+#[derive(Clone, Debug)]
+pub struct CountryCounts {
+    pub counts: Vec<(String, usize)>,
+    /// What only the online slice knows, read under the same lock as the
+    /// counts so it is one moment. `None` for the slices read from the
+    /// database.
+    pub online: Option<OnlineCounts>,
+}
+
+#[derive(Clone, Debug)]
+pub struct OnlineCounts {
+    /// Every human connected, country or not: the map's "15 of 17".
+    pub total: usize,
+    /// Who is in each country, by code, alphabetical.
+    pub names: HashMap<String, Vec<String>>,
+}
+
 /// Parse an account's timezone tweak into a `chrono_tz::Tz`. `None` (unset,
 /// blank, or unparseable) means "no local zone" — callers fall back to UTC.
 pub fn parse_account_tz(timezone: Option<&str>) -> Option<chrono_tz::Tz> {
@@ -203,6 +221,98 @@ impl ProfileService {
     }
 
     // Snapshot
+    /// People per country, for whichever slice the map is showing.
+    ///
+    /// "Online now" is the odd one out: it has to intersect process memory
+    /// (who is connected) with the database (where they said they are), so it
+    /// is the one that cannot be a single query. The other two are a count
+    /// with a cutoff, and `last_seen` is what makes "here this month" mean
+    /// anything.
+    pub async fn country_counts(
+        &self,
+        mode: crate::app::usermap::state::MapMode,
+    ) -> Result<CountryCounts> {
+        use crate::app::usermap::state::{MapMode, RECENT_DAYS};
+        let mut counts = match mode {
+            MapMode::Online => self.active_country_counts().await?,
+            MapMode::Recent => {
+                let client = self.db.get().await?;
+                let cutoff = Utc::now() - chrono::Duration::days(RECENT_DAYS);
+                CountryCounts {
+                    counts: User::country_counts_since(&client, Some(cutoff)).await?,
+                    online: None,
+                }
+            }
+            MapMode::Everyone => {
+                let client = self.db.get().await?;
+                CountryCounts {
+                    counts: User::country_counts_since(&client, None).await?,
+                    online: None,
+                }
+            }
+        };
+        // Busiest first, then alphabetical, so the list beside the map has a
+        // stable order rather than a query plan's.
+        counts
+            .counts
+            .sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        Ok(counts)
+    }
+
+    /// Who is online, counted by the country they put on their profile.
+    ///
+    /// The two halves live in different places — who is connected is in
+    /// process memory, where they say they are is in the database — so this
+    /// is the one place that joins them. Anybody who has not set a country is
+    /// simply absent: `/map` is a map of the people who said where
+    /// they are, and guessing at the rest would be worse than leaving them
+    /// off.
+    ///
+    /// Bots are excluded the same way the headcount excludes them (no
+    /// fingerprint means no human at a keyboard).
+    pub async fn active_country_counts(&self) -> Result<CountryCounts> {
+        let online: Vec<(Uuid, String)> = {
+            let guard = self.active_users.lock_recover();
+            guard
+                .iter()
+                .filter(|(_, user)| user.fingerprint.is_some())
+                .map(|(id, user)| (*id, user.username.clone()))
+                .collect()
+        };
+        let total = online.len();
+        if online.is_empty() {
+            return Ok(CountryCounts {
+                counts: Vec::new(),
+                online: Some(OnlineCounts {
+                    total,
+                    names: HashMap::new(),
+                }),
+            });
+        }
+        let client = self.db.get().await?;
+        let countries = User::list_all_country_map(&client).await?;
+        let mut names: HashMap<String, Vec<String>> = HashMap::new();
+        for (user_id, username) in online {
+            if let Some(code) = countries.get(&user_id) {
+                names.entry(code.clone()).or_default().push(username);
+            }
+        }
+        for people in names.values_mut() {
+            people.sort_by_key(|name| name.to_lowercase());
+        }
+        let mut counts: Vec<(String, usize)> = names
+            .iter()
+            .map(|(code, people)| (code.clone(), people.len()))
+            .collect();
+        // Busiest first, then alphabetical, so the list beside the map has a
+        // stable order rather than a hash map's.
+        counts.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        Ok(CountryCounts {
+            counts,
+            online: Some(OnlineCounts { total, names }),
+        })
+    }
+
     pub fn subscribe_snapshot(&self, user_id: Uuid) -> watch::Receiver<ProfileSnapshot> {
         self.snapshot_sender(user_id).subscribe()
     }

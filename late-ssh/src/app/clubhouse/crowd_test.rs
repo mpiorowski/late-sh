@@ -26,6 +26,7 @@ fn record(n: u128, spot: Spot, since_ms: i64) -> PresenceRecord {
         clubhouse: stand(spot, since_ms),
         nightcap: None,
         street: None,
+        lounge: false,
     }
 }
 

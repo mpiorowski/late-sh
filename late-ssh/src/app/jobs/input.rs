@@ -1,5 +1,5 @@
-//! Keys on the Jobs shelf, and on the post form over it. The page-level
-//! keys (`Space`, `w`, `i`) are the directory's; these are the shelf's own.
+//! Keys on the Jobs section, and on the post form over it. The page-level
+//! keys (`[`, `]`, `w`, `i`) are the directory's; these are the section's own.
 
 use late_core::models::job_posting::JobSource;
 
@@ -74,6 +74,10 @@ pub(crate) fn handle_byte(app: &mut App, byte: u8) -> bool {
             retract_selected(app);
             true
         }
+        b's' | b'S' => {
+            app.jobs.enter_search();
+            true
+        }
         b'/' => {
             app.jobs.toggle_for_me();
             let banner = if app.jobs.for_me {
@@ -92,6 +96,52 @@ pub(crate) fn handle_byte(app: &mut App, byte: u8) -> bool {
         }
         _ => false,
     }
+}
+
+/// Keys while the search box is open: the query takes the printable keys,
+/// the arrows (and Ctrl+J/K) still walk the narrowed rows, Enter keeps the
+/// highlighted posting and closes the box, Esc closes it.
+pub(crate) fn handle_search_input(app: &mut App, event: &ParsedInput) -> bool {
+    let len = visible_len(app);
+    app.jobs.clamp_selection(len);
+    match event {
+        ParsedInput::Byte(0x1B) => app.jobs.exit_search(),
+        ParsedInput::Byte(b'\r') => submit_search(app),
+        ParsedInput::Byte(0x7F | 0x08) => app.jobs.search_backspace(),
+        ParsedInput::Arrow(b'B') | ParsedInput::Byte(0x0A) => app.jobs.move_selection(1, len),
+        ParsedInput::Arrow(b'A') | ParsedInput::Byte(0x0B) => app.jobs.move_selection(-1, len),
+        ParsedInput::PageDown => app.jobs.move_selection(6, len),
+        ParsedInput::PageUp => app.jobs.move_selection(-6, len),
+        ParsedInput::Char(ch) => app.jobs.search_push(*ch),
+        ParsedInput::Byte(byte) if byte.is_ascii_graphic() || *byte == b' ' => {
+            app.jobs.search_push(*byte as char);
+        }
+        _ => {}
+    }
+    let len = visible_len(app);
+    app.jobs.clamp_selection(len);
+    true
+}
+
+/// Leaving search keeps the highlighted posting highlighted: capture its id
+/// under the query, rebuild the query-less rows, and re-find it there.
+pub(crate) fn submit_search(app: &mut App) {
+    let tags = own_tags(app);
+    let id = app
+        .jobs
+        .visible(&tags)
+        .get(app.jobs.selected())
+        .map(|posting| posting.id);
+    app.jobs.exit_search();
+    let index = id
+        .and_then(|id| {
+            app.jobs
+                .visible(&tags)
+                .iter()
+                .position(|posting| posting.id == id)
+        })
+        .unwrap_or(0);
+    app.jobs.select_and_open(index);
 }
 
 fn copy_link(app: &mut App) {
@@ -248,8 +298,12 @@ pub(crate) fn handle_arrow(app: &mut App, key: u8) -> bool {
     }
 }
 
-/// Esc on the shelf: close the stacked detail pane.
+/// Esc on the shelf: leave search, or close the stacked detail pane.
 pub(crate) fn handle_escape(app: &mut App) -> bool {
+    if app.jobs.search_mode() {
+        app.jobs.exit_search();
+        return true;
+    }
     if app.jobs.narrow() && app.jobs.detail_open() {
         app.jobs.close_detail();
         return true;

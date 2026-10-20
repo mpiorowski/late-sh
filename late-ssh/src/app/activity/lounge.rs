@@ -221,6 +221,11 @@ fn repeat_key(event: &ActivityEvent) -> String {
         ActivityKind::AquariumSproutCut => "aquarium-cut".to_string(),
         ActivityKind::AquariumSproutWithered => "aquarium-withered".to_string(),
         ActivityKind::PetPetted => "pet-petted".to_string(),
+        ActivityKind::RealmCalls { game_id, day } => format!("realm-calls:{game_id}:{day}"),
+        // Keyed on the world: one line per rise and one per fall, however
+        // close two seasons come.
+        ActivityKind::RealmSeasonOpened { game_id, .. } => format!("realm-opened:{game_id}"),
+        ActivityKind::RealmSeasonEnded { game_id, .. } => format!("realm-ended:{game_id}"),
     };
     format!("{user}:{shape}")
 }

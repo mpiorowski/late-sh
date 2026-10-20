@@ -17,6 +17,7 @@ pub mod lateania;
 pub mod minecraft;
 pub mod nethack;
 pub mod rc;
+pub mod realm;
 pub mod rebels;
 pub mod spectate;
 pub mod usurper;

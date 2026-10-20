@@ -37,6 +37,16 @@ fn radio_paradise_now_playing_yields_the_current_song() {
     );
 }
 
+/// Between tracks (station ids, breaks) Radio Paradise reports a null title;
+/// that is a feed with nothing on air, not a failed poll.
+#[test]
+fn radio_paradise_null_title_is_not_a_song() {
+    let body = r#"{"time":57,"artist":"","title":null,"album":null,"year":null,"cover":null}"#;
+    for feed in [PolledFeed::ParadiseMain, PolledFeed::ParadiseKfat] {
+        assert_eq!(feed.parse(body).unwrap(), None);
+    }
+}
+
 #[test]
 fn fip_live_metadata_yields_the_current_song() {
     let body = r#"{"prev":[],"now":{"firstLine":"Invisible Thread","firstLineSongUuid":"5cc1","secondLine":"Shai Maestro Trio","secondLineSongUuid":"5cc1","thirdLine":"Jazz","songUuid":"5cc1","cover":"04fe","startTime":1791026761,"endTime":1791027040},"next":[],"delayToRefresh":120000}"#;

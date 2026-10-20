@@ -476,6 +476,30 @@ impl ChatRoom {
         Ok(Self::from(row))
     }
 
+    /// Chat room for one realm world: `kind = 'game'` (hidden from the Home
+    /// rail, no Mentions, no IRC), `game_kind = 'realm'`, public, so anyone
+    /// who opens the board joins through the public game-room path and
+    /// talks, players and watchers alike. The slug is `realm-{game_id}`,
+    /// unique per world, so each season starts on an empty room. Idempotent:
+    /// a second call returns the room the first one made.
+    pub async fn get_or_create_realm_room(
+        client: &impl GenericClient,
+        game_id: Uuid,
+    ) -> Result<Self> {
+        let slug = format!("realm-{game_id}");
+        let row = client
+            .query_one(
+                "INSERT INTO chat_rooms (kind, visibility, auto_join, slug, game_kind)
+                 VALUES ('game', 'public', false, $1, 'realm')
+                 ON CONFLICT (game_kind, slug) WHERE kind = 'game'
+                 DO UPDATE SET updated = current_timestamp
+                 RETURNING *",
+                &[&slug],
+            )
+            .await?;
+        Ok(Self::from(row))
+    }
+
     /// Create a private room owned by `created_by`. The creator is recorded in
     /// the same statement, so a private room is never momentarily ownerless.
     pub async fn create_private_room(

@@ -141,15 +141,13 @@ fn activate_selection(app: &mut App) {
     }
 }
 
-/// Keys on the challenge picker overlay: `j`/`k` walk the game list, Esc
-/// closes it, Enter posts the picked game.
 /// The page a board or table opened right now hands back when it closes:
-/// the current page, unless that is itself a board or a table. Switching
-/// surfaces while one is already open keeps the original return screen, so
-/// Esc never lands on a dead board. Every entry that can fire with a board
-/// or table up reads it from here: the modal, and the live strip's opener
-/// (`live/input.rs`), which the status line's Live segment reaches from
-/// any page.
+/// the current page, unless that is itself a board, a table or the realm.
+/// Switching surfaces while one is already open keeps the original return
+/// screen, so Esc never lands on a dead board. Every entry that can fire
+/// with a board or table up reads it from here: the modal, and the live
+/// strip's opener (`live/input.rs`), which the status line's Live segment
+/// reaches from any page.
 pub(crate) fn return_screen_for_opening(app: &App) -> Screen {
     if app.screen == Screen::DailyMatch {
         app.daily
@@ -159,11 +157,19 @@ pub(crate) fn return_screen_for_opening(app: &App) -> Screen {
             .unwrap_or(Screen::Dashboard)
     } else if app.screen == Screen::HouseTable {
         app.house.return_screen
+    } else if app.screen == Screen::Realm {
+        app.realm
+            .board
+            .as_ref()
+            .map(|board| board.return_screen)
+            .unwrap_or(Screen::Games)
     } else {
         app.screen
     }
 }
 
+/// Keys on the challenge picker overlay: `j`/`k` walk the game list, Esc
+/// closes it, Enter posts the picked game.
 fn handle_draft_input(app: &mut App, event: ParsedInput) {
     match event {
         ParsedInput::Byte(0x1B) => {

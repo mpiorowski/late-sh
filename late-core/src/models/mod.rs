@@ -63,8 +63,10 @@ pub mod darkroom_save;
 pub mod darkroom_veteran;
 #[cfg(test)]
 mod darkroom_veteran_test;
+pub mod deadchannel_ambush;
 pub mod deadchannel_name_hit;
 pub mod deadchannel_runner;
+pub mod deadchannel_spawn;
 pub mod door_log_cursor;
 pub mod door_milestone;
 pub mod door_rc;
@@ -144,6 +146,7 @@ pub mod profile_award;
 #[cfg(test)]
 mod profile_award_test;
 pub mod quest;
+pub mod realm_game;
 pub mod referral;
 #[cfg(test)]
 mod referral_test;

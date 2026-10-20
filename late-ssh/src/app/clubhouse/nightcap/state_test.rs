@@ -35,6 +35,7 @@ fn sitter(n: u128, stool: u8, sat_at_ms: i64) -> PresenceRecord {
             drinks: 0,
         }),
         street: None,
+        lounge: false,
     }
 }
 
@@ -181,7 +182,7 @@ fn taking_a_free_stool_clears_the_last_message() {
 fn only_the_seated_may_speak_or_order() {
     let mut mine = session(1);
     assert!(!mine.compose_allowed());
-    assert_eq!(mine.pick(Order::Drink(Drink::HouseBeer)), None);
+    assert_eq!(mine.pick(Order::Drink(Drink::HouseBeer), 0), None);
     assert_eq!(mine.last_message.as_deref(), Some("take a seat first."));
     assert!(!mine.menu_open());
 
@@ -199,7 +200,7 @@ fn one_order_at_a_time_until_the_house_answers() {
     mine.toggle_menu();
 
     assert_eq!(
-        mine.pick(Order::Drink(Drink::WhiskeyNeat)),
+        mine.pick(Order::Drink(Drink::WhiskeyNeat), 0),
         Some(Order::Drink(Drink::WhiskeyNeat))
     );
     assert!(!mine.menu_open(), "an order closes the menu");
@@ -208,7 +209,7 @@ fn one_order_at_a_time_until_the_house_answers() {
         Some("you order the whiskey neat.")
     );
 
-    assert_eq!(mine.pick(Order::Round), None);
+    assert_eq!(mine.pick(Order::Round, 0), None);
     assert_eq!(mine.last_message.as_deref(), Some("the house is on it."));
 
     // The settled order comes back over the channel svc.rs writes to.
@@ -224,7 +225,39 @@ fn one_order_at_a_time_until_the_house_answers() {
         mine.last_message.as_deref(),
         Some("whiskey neat, 250 chips. 1,750 left on the tab.")
     );
-    assert_eq!(mine.pick(Order::Round), Some(Order::Round));
+    assert_eq!(mine.pick(Order::Round, 0), Some(Order::Round));
+}
+
+#[test]
+fn a_wasted_patron_is_cut_off_and_nothing_is_ordered() {
+    use late_core::models::drinks::DRUNK_MAX_LEVEL;
+
+    assert!(!cut_off(DRUNK_MAX_LEVEL - 1), "sloshed still gets served");
+    assert!(cut_off(DRUNK_MAX_LEVEL));
+
+    let mut mine = session(1);
+    mine.toggle_seat(0, NOW);
+    mine.toggle_menu();
+
+    for order in [
+        Order::Drink(Drink::HouseBeer),
+        Order::Drink(Drink::TopShelf),
+        Order::Round,
+    ] {
+        assert_eq!(mine.pick(order, DRUNK_MAX_LEVEL), None);
+        assert_eq!(
+            mine.last_message.as_deref(),
+            Some("you're cut off. the house slides you a water.")
+        );
+    }
+    assert!(mine.menu_open(), "the menu stays up so the patron sees why");
+
+    // A refusal never took the in-flight slot: once they come back down,
+    // the next order goes straight through.
+    assert_eq!(
+        mine.pick(Order::Drink(Drink::HouseBeer), DRUNK_MAX_LEVEL - 1),
+        Some(Order::Drink(Drink::HouseBeer))
+    );
 }
 
 #[test]
@@ -357,14 +390,14 @@ fn a_carve_settling_never_frees_a_pour_still_in_flight() {
     let mut mine = session(1);
     mine.toggle_seat(0, NOW);
     assert_eq!(
-        mine.pick(Order::Drink(Drink::HouseBeer)),
+        mine.pick(Order::Drink(Drink::HouseBeer), 0),
         Some(Order::Drink(Drink::HouseBeer))
     );
 
     mine.apply_outcome(Outcome::Carved { stool: 0 }, NOW);
     assert_eq!(mine.last_message.as_deref(), Some("carved into stool 1."));
     assert_eq!(
-        mine.pick(Order::Round),
+        mine.pick(Order::Round, 0),
         None,
         "the pour is still with the house"
     );
@@ -380,7 +413,7 @@ fn a_carve_settling_never_frees_a_pour_still_in_flight() {
         },
         NOW,
     );
-    assert_eq!(mine.pick(Order::Round), Some(Order::Round));
+    assert_eq!(mine.pick(Order::Round, 0), Some(Order::Round));
 }
 
 #[test]
@@ -473,12 +506,16 @@ fn the_menu_counts_the_drinks_waiting_without_saying_anything() {
 
     // A count landing mid-order is not the answer to that order.
     assert_eq!(
-        mine.pick(Order::Drink(Drink::HouseBeer)),
+        mine.pick(Order::Drink(Drink::HouseBeer), 0),
         Some(Order::Drink(Drink::HouseBeer))
     );
     mine.apply_outcome(Outcome::Credits { waiting: 2 }, NOW);
     assert_eq!(mine.free_drinks(), 2);
-    assert_eq!(mine.pick(Order::Round), None, "the pour is still in flight");
+    assert_eq!(
+        mine.pick(Order::Round, 0),
+        None,
+        "the pour is still in flight"
+    );
     assert_eq!(mine.last_message.as_deref(), Some("the house is on it."));
 
     // The comped pour spends one and says what is left in the same breath,

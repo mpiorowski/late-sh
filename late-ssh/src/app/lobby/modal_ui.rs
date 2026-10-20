@@ -1,11 +1,11 @@
-//! Lobby modal (daily games): your matches + the open lobby in one
-//! scrollable list. All daily-games interaction happens here; the sidebar
-//! panel is passive.
+//! The Lobby modal: the daily matches and the house tables in one
+//! scrollable list, plus the daily challenge overlay. The widgets it draws
+//! with are `modal_widgets.rs`.
 
 use chrono::Utc;
 use ratatui::{
     Frame,
-    layout::{Constraint, Flex, Layout, Rect},
+    layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
@@ -23,6 +23,9 @@ use crate::app::{
         },
     },
     lobby::house::{state::HouseState, tables::HouseTable},
+    lobby::modal_widgets::{
+        centered_rect, col, empty_line, gap, key, marker_span, section_line, text,
+    },
     lobby::state::{LobbyEntry, LobbyState},
 };
 
@@ -263,22 +266,15 @@ fn selected_line_index(
 // alone pads but never truncates, so a long username would swallow the gap
 // and run columns together; `col` truncates with an ellipsis and always
 // leaves at least one space before the next column.
-const NAME_COL: usize = 16;
-const GAME_COL: usize = 12;
-const DETAIL_COL: usize = 25;
+pub(super) const NAME_COL: usize = 16;
+pub(super) const GAME_COL: usize = 12;
+pub(super) const DETAIL_COL: usize = 25;
 const PRICE_COL: usize = 16;
 
-fn col(text: &str, width: usize) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    if chars.len() < width {
-        return format!("{text:<width$}");
-    }
-    let mut out: String = chars.into_iter().take(width.saturating_sub(2)).collect();
-    out.push('…');
-    out.push(' ');
-    out
-}
-
+/// Cut `text` to `width` characters, marking the cut. `col` pads as well;
+/// this is for places that do their own padding.
+/// Break an explanation into lines that fit the overlay, on word
+/// boundaries. Short enough not to need a real wrapper.
 fn match_line(daily: &DailyState, item: &DailyMatchItem, selected: bool) -> Line<'static> {
     let (_, opponent) = daily.opponent_of(item);
     let opponent = opponent.unwrap_or_else(|| "player".to_string());
@@ -666,71 +662,6 @@ fn draw_footer(frame: &mut Frame, area: Rect, lobby: &LobbyState, daily: &DailyS
     spans.push(key("esc"));
     spans.push(text(" close"));
     frame.render_widget(Paragraph::new(Line::from(spans)).centered(), area);
-}
-
-fn marker_span(selected: bool) -> Span<'static> {
-    if selected {
-        Span::styled(
-            "► ",
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        )
-    } else {
-        Span::raw("  ")
-    }
-}
-
-fn section_line(width: usize, label: &str) -> Line<'static> {
-    let used = 3 + label.chars().count() + 1;
-    let trail = width.saturating_sub(used).max(1);
-    Line::from(vec![
-        Span::styled("── ".to_string(), Style::default().fg(theme::BORDER_DIM())),
-        Span::styled(
-            label.to_string(),
-            Style::default()
-                .fg(theme::AMBER_DIM())
-                .add_modifier(Modifier::ITALIC),
-        ),
-        Span::raw(" "),
-        Span::styled("─".repeat(trail), Style::default().fg(theme::BORDER_DIM())),
-    ])
-}
-
-fn empty_line(message: &str) -> Line<'static> {
-    Line::from(Span::styled(
-        format!("  {message}"),
-        Style::default()
-            .fg(theme::TEXT_FAINT())
-            .add_modifier(Modifier::ITALIC),
-    ))
-}
-
-fn key(label: &str) -> Span<'static> {
-    Span::styled(
-        label.to_string(),
-        Style::default()
-            .fg(theme::AMBER_DIM())
-            .add_modifier(Modifier::BOLD),
-    )
-}
-
-fn text(label: &str) -> Span<'static> {
-    Span::styled(label.to_string(), Style::default().fg(theme::TEXT_DIM()))
-}
-
-fn gap() -> Span<'static> {
-    Span::raw("   ")
-}
-
-fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
-    let vertical = Layout::vertical([Constraint::Length(height.min(area.height))])
-        .flex(Flex::Center)
-        .split(area);
-    let horizontal = Layout::horizontal([Constraint::Length(width.min(area.width))])
-        .flex(Flex::Center)
-        .split(vertical[0]);
-    horizontal[0]
 }
 
 #[cfg(test)]

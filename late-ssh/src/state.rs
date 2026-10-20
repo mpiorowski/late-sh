@@ -38,7 +38,7 @@ use late_core::{
     rate_limit::IpRateLimiter,
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     net::IpAddr,
     sync::{Arc, Mutex},
     time::Instant,
@@ -69,14 +69,23 @@ pub struct ActiveUser {
 
 pub type ActiveUsers = Arc<Mutex<HashMap<Uuid, ActiveUser>>>;
 
-/// Connected humans only: the always-on bots (@bartender, @graybeard, @bot)
-/// register with no fingerprint and are excluded, matching the clubhouse
-/// headcount.
+/// Connected humans only, over SSH or IRC: the always-on bots (@bartender,
+/// @graybeard, @bot) register with no fingerprint and are excluded.
 pub fn online_human_count(active_users: &HashMap<Uuid, ActiveUser>) -> usize {
     active_users
         .values()
         .filter(|user| user.fingerprint.is_some())
         .count()
+}
+
+/// The same roster as [`online_human_count`], by id: who the Profiles page
+/// lists first.
+pub fn online_human_ids(active_users: &HashMap<Uuid, ActiveUser>) -> HashSet<Uuid> {
+    active_users
+        .iter()
+        .filter(|(_, user)| user.fingerprint.is_some())
+        .map(|(user_id, _)| *user_id)
+        .collect()
 }
 
 /// Everyone at the bar right now except `buyer`: the roster a round pays for.
@@ -141,6 +150,7 @@ pub struct State {
     pub live_games: crate::app::door::spectate::svc::LiveGamesService,
     pub door_rc_service: crate::app::door::rc::DoorRcService,
     pub daily_service: crate::app::lobby::daily::svc::DailyService,
+    pub realm_service: crate::app::door::realm::svc::RealmService,
     pub house_registry: crate::app::lobby::house::registry::HouseTableRegistry,
     pub dartboard_server: dartboard_local::ServerHandle,
     pub dartboard_provenance: SharedArtboardProvenance,
@@ -190,4 +200,8 @@ pub struct State {
     /// Nightcap stools and on the night city street, this replica's
     /// sessions and every other replica's, over Postgres.
     pub presence: crate::app::presence::svc::PresenceService,
+    /// The lounge spawns (`app/deadchannel/lounge`): the spawner and
+    /// sweeper on this replica, the live spawn every session copies, and
+    /// the hit path.
+    pub lounge_service: crate::app::deadchannel::lounge::svc::LoungeService,
 }

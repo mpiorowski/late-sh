@@ -1,5 +1,5 @@
-//! The Jobs shelf on the Profiles page: a list of postings beside a
-//! detail pane, the same frame the People shelf uses, the "for you"
+//! The Jobs section of the People page: a list of postings beside a
+//! detail pane, the same frame the Profiles section uses, the "for you"
 //! lines a person's own card prints, and the post form over the page.
 
 use crate::app::common::mouse_ui::{self, Surface};
@@ -24,26 +24,20 @@ use crate::app::common::theme;
 pub(crate) const JOBS_HINTS: &[(&str, &str)] = &[
     ("j/k", "jobs"),
     ("Enter", "copy link"),
+    ("s", "search"),
     ("/", "for me"),
     ("n", "post a job"),
     ("d", "take down"),
-    ("w", "your profile"),
-    ("Space", "people"),
 ];
 pub(crate) const JOBS_NARROW_HINTS: &[(&str, &str)] = &[
     ("j/k", "jobs"),
     ("l", "open"),
+    ("s", "search"),
     ("/", "for me"),
     ("n", "post"),
-    ("w", "your profile"),
-    ("Space", "people"),
 ];
-pub(crate) const JOBS_DETAIL_NARROW_HINTS: &[(&str, &str)] = &[
-    ("h", "back"),
-    ("Enter", "copy link"),
-    ("d", "take down"),
-    ("Space", "people"),
-];
+pub(crate) const JOBS_DETAIL_NARROW_HINTS: &[(&str, &str)] =
+    &[("h", "back"), ("Enter", "copy link"), ("d", "take down")];
 
 /// Tags on a list row.
 const ROW_TAGS: usize = 4;
@@ -76,6 +70,7 @@ pub(crate) fn draw_jobs_shelf(frame: &mut Surface<'_>, area: Rect, view: &JobsSh
         draw_empty(frame, area, view);
         return;
     }
+    let area = draw_tags_nudge(frame, area, view);
     if !view.narrow {
         let cols =
             Layout::horizontal([Constraint::Percentage(42), Constraint::Fill(1)]).split(area);
@@ -88,9 +83,38 @@ pub(crate) fn draw_jobs_shelf(frame: &mut Surface<'_>, area: Rect, view: &JobsSh
     }
 }
 
+/// One dim row over the shelf for a viewer with nothing to match on, so
+/// `for me` is not discovered empty: the rest of the body is handed back.
+/// Nothing while the box is open, on a short frame, or once they have tags.
+fn draw_tags_nudge(frame: &mut Surface<'_>, area: Rect, view: &JobsShelfView<'_>) -> Rect {
+    if !view.viewer_tags.is_empty() || view.jobs.search_mode() || view.short || area.height < 6 {
+        return area;
+    }
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let key = Style::default().fg(theme::AMBER());
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("  no tags on your card yet · ", dim),
+            Span::styled("w", key),
+            Span::styled(" picks your skills, then ", dim),
+            Span::styled("/", key),
+            Span::styled(" keeps the postings that fit you", dim),
+        ])),
+        Rect::new(area.x, area.y, area.width, 1),
+    );
+    Rect::new(area.x, area.y + 1, area.width, area.height - 1)
+}
+
 fn draw_empty(frame: &mut Surface<'_>, area: Rect, view: &JobsShelfView<'_>) {
     if !view.jobs.loaded {
         draw_notice(frame, area, "Reading the shelf…", &[]);
+    } else if view.jobs.search_mode() {
+        draw_notice(
+            frame,
+            area,
+            "No posting matches.",
+            &["Company, role, stack, region, pay and excerpt are searched. Esc closes the box."],
+        );
     } else if view.jobs.for_me && view.viewer_tags.is_empty() {
         draw_notice(
             frame,
@@ -432,7 +456,7 @@ pub(crate) fn for_you_lines(matches: &[&JobPosting], width: usize) -> Vec<Line<'
         ]));
     }
     lines.push(Line::from(Span::styled(
-        "  Space opens the Jobs shelf; / there keeps only your matches.",
+        "  ] opens the Jobs section; / there keeps only your matches.",
         faint,
     )));
     lines
@@ -489,20 +513,6 @@ pub(crate) fn shelf_count(jobs: &JobsState, viewer_tags: &[String]) -> Option<us
         return None;
     }
     Some(jobs.visible(viewer_tags).len())
-}
-
-/// The page footer's right side while the for-me filter is on.
-pub(crate) fn footer_note(jobs: &JobsState) -> Vec<Span<'static>> {
-    if jobs.for_me {
-        vec![Span::styled(
-            "for me ",
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
-        )]
-    } else {
-        Vec::new()
-    }
 }
 
 // The post form

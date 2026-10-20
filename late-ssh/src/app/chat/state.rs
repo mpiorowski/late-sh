@@ -260,6 +260,7 @@ impl ComposerCommands {
             | Screen::Zen
             | Screen::DailyMatch
             | Screen::HouseTable
+            | Screen::Realm
             | Screen::Scratchpad => Self::Enabled,
         }
     }
@@ -1074,6 +1075,7 @@ pub struct ChatState {
     requested_help_topic: Option<HelpTopic>,
     requested_room_info_modal: Option<RoomInfoRequest>,
     requested_settings_modal: bool,
+    requested_usermap: bool,
     requested_shop_modal: bool,
     requested_onboard: bool,
     requested_lobby_toggle: bool,
@@ -1108,6 +1110,14 @@ pub struct ChatState {
     /// Set by an admin's /haunt; consumed by `deadchannel::haunt::svc`
     /// (which owns the whisper).
     requested_haunt: Option<crate::app::deadchannel::haunt::state::HauntCommand>,
+    /// Set by `/hit` while `hits_on`; consumed by `deadchannel::lounge::svc`
+    /// every tick. Swallowed then, never posted; otherwise the line is
+    /// words.
+    requested_hit: bool,
+    /// Whether `/hit` is the lounge's here: a standing runner looking at
+    /// #lounge, where the spawn and every answer to a hit are drawn.
+    /// Written by the lounge tick (`set_hits_on`).
+    hits_on: bool,
     /// Set by `/paper`; consumed by `paper::svc::tick` every tick.
     requested_paper: Option<crate::app::paper::state::PaperCommand>,
     requested_jobs: Option<crate::app::jobs::state::JobsCommand>,
@@ -1434,6 +1444,7 @@ impl ChatState {
             requested_help_topic: None,
             requested_room_info_modal: None,
             requested_settings_modal: false,
+            requested_usermap: false,
             requested_shop_modal: false,
             requested_onboard: false,
             requested_lobby_toggle: false,
@@ -1456,6 +1467,8 @@ impl ChatState {
             requested_crown: None,
             requested_pot: None,
             requested_haunt: None,
+            requested_hit: false,
+            hits_on: false,
             requested_paper: None,
             requested_jobs: None,
             own_message_landed: None,
@@ -2128,6 +2141,10 @@ impl ChatState {
         self.requested_help_topic.take()
     }
 
+    pub fn take_requested_usermap(&mut self) -> bool {
+        std::mem::take(&mut self.requested_usermap)
+    }
+
     pub fn take_requested_settings_modal(&mut self) -> bool {
         std::mem::take(&mut self.requested_settings_modal)
     }
@@ -2242,6 +2259,14 @@ impl ChatState {
         &mut self,
     ) -> Option<crate::app::deadchannel::haunt::state::HauntCommand> {
         self.requested_haunt.take()
+    }
+
+    pub(crate) fn take_requested_hit(&mut self) -> bool {
+        std::mem::take(&mut self.requested_hit)
+    }
+
+    pub(crate) fn set_hits_on(&mut self, hits_on: bool) {
+        self.hits_on = hits_on;
     }
 
     pub(crate) fn take_own_message_landed(&mut self) -> Option<(Uuid, Uuid)> {
@@ -4000,9 +4025,21 @@ impl ChatState {
             return None;
         }
 
-        // Admin-only on purpose, and not an error for anyone else: for a
-        // non-admin the line falls through and posts as plain text, exactly
-        // as if the command did not exist. First contact stays a mystery.
+        // `/hit` is the lounge's (`deadchannel/lounge`) for a runner looking
+        // at #lounge: swallowed and never posted, whatever is or is not
+        // there to hit. Anywhere else, and for anyone else, it falls
+        // through to the unknown-command banner like any slash word.
+        if self.hits_on
+            && crate::app::deadchannel::lounge::state::parse_lounge_command(&body).is_some()
+        {
+            self.clear_composer_after_submit();
+            self.requested_hit = true;
+            return None;
+        }
+
+        // Admin-only on purpose: for a non-admin the line falls through to
+        // the unknown-command banner, exactly as if the command did not
+        // exist. First contact stays a mystery.
         if self.is_admin
             && let Some(parsed) = crate::app::deadchannel::haunt::state::parse_haunt_command(&body)
         {
@@ -4220,6 +4257,15 @@ impl ChatState {
             return None;
         }
 
+        // The same question as `/active`, answered on the map instead of in a
+        // list — and, once open, two wider slices of it than `/active` can
+        // show.
+        if body.trim() == "/map" {
+            self.clear_composer_after_submit();
+            self.requested_usermap = true;
+            return None;
+        }
+
         if let Some(rest) = body.trim().strip_prefix("/brb")
             && (rest.is_empty() || rest.starts_with(char::is_whitespace))
         {
@@ -4242,18 +4288,7 @@ impl ChatState {
                 return Some(Banner::error("Use /brb <reason> from inside a room"));
             };
             let chat_body = format!("🌙 brb: {reason}");
-            let request_id = Uuid::now_v7();
-            self.service
-                .send_message_with_reply_task(super::svc::SendMessageTask {
-                    user_id: self.user_id,
-                    room_id,
-                    room_slug: self.room_slug(room_id),
-                    body: chat_body,
-                    reply_to_message_id: None,
-                    request_id,
-                    is_admin: self.is_admin,
-                });
-            self.pending_send_notices.push_back(request_id);
+            self.send_command_message(room_id, chat_body);
             // `/brb` goes away now instead of after the idle threshold, and
             // the next key comes back.
             self.requested_brb = true;
@@ -4644,18 +4679,7 @@ impl ChatState {
                 return Some(Banner::error("Roll from inside a room"));
             };
             let rolls = roll_dice(&specs, &mut OsRng);
-            let request_id = Uuid::now_v7();
-            self.service
-                .send_message_with_reply_task(super::svc::SendMessageTask {
-                    user_id: self.user_id,
-                    room_id,
-                    room_slug: self.room_slug(room_id),
-                    body: format_roll_result(&specs, &rolls),
-                    reply_to_message_id: None,
-                    request_id,
-                    is_admin: self.is_admin,
-                });
-            self.pending_send_notices.push_back(request_id);
+            self.send_command_message(room_id, format_roll_result(&specs, &rolls));
             return None;
         }
 
@@ -4669,18 +4693,17 @@ impl ChatState {
             let variant = self.next_cup_variant;
             self.next_cup_variant = (variant + 1) % CUP_VARIANT_COUNT;
             let art = cup_art(kind, variant);
-            let request_id = Uuid::now_v7();
-            self.service
-                .send_message_with_reply_task(super::svc::SendMessageTask {
-                    user_id: self.user_id,
-                    room_id,
-                    room_slug: self.room_slug(room_id),
-                    body: art,
-                    reply_to_message_id: None,
-                    request_id,
-                    is_admin: self.is_admin,
-                });
-            self.pending_send_notices.push_back(request_id);
+            self.send_command_message(room_id, art);
+            return None;
+        }
+
+        if parse_shrug_command(&body) {
+            let room_id = self.composer_room_id;
+            self.clear_composer_after_submit();
+            let Some(room_id) = room_id else {
+                return Some(Banner::error("Send /shrug from inside a room"));
+            };
+            self.send_command_message(room_id, SHRUG.to_string());
             return None;
         }
 
@@ -4694,18 +4717,7 @@ impl ChatState {
             let Some(room_id) = room_id else {
                 return Some(Banner::error("Send actions from inside a room"));
             };
-            let request_id = Uuid::now_v7();
-            self.service
-                .send_message_with_reply_task(super::svc::SendMessageTask {
-                    user_id: self.user_id,
-                    room_id,
-                    room_slug: self.room_slug(room_id),
-                    body: action_body,
-                    reply_to_message_id: None,
-                    request_id,
-                    is_admin: self.is_admin,
-                });
-            self.pending_send_notices.push_back(request_id);
+            self.send_command_message(room_id, action_body);
             return None;
         }
 
@@ -4773,6 +4785,23 @@ impl ChatState {
             self.clear_composer_after_submit();
         }
         cooldown_banner
+    }
+
+    /// Posts a command's generated body to `room_id` as a plain message
+    /// and tracks it like any other send.
+    fn send_command_message(&mut self, room_id: Uuid, body: String) {
+        let request_id = Uuid::now_v7();
+        self.service
+            .send_message_with_reply_task(super::svc::SendMessageTask {
+                user_id: self.user_id,
+                room_id,
+                room_slug: self.room_slug(room_id),
+                body,
+                reply_to_message_id: None,
+                request_id,
+                is_admin: self.is_admin,
+            });
+        self.pending_send_notices.push_back(request_id);
     }
 
     /// A submit-time heads-up that a mentioned ghost bot is still cooling
@@ -8170,6 +8199,14 @@ pub(crate) fn parse_cup_command(input: &str) -> Option<CupKind> {
         "/tea" => Some(CupKind::Tea),
         _ => None,
     }
+}
+
+const SHRUG: &str = "¯\\_(ツ)_/¯";
+
+/// Parse `/shrug` (case-insensitive, no arguments). Arguments fall through
+/// to the unknown-command handler, like `/coffee`.
+pub(crate) fn parse_shrug_command(input: &str) -> bool {
+    input.trim().eq_ignore_ascii_case("/shrug")
 }
 
 /// Build the multi-line ASCII body for `/coffee` or `/tea`. `variant`

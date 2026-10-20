@@ -22,7 +22,7 @@ async fn artboard_disclaimer_hides_content_and_only_allows_the_current_visit() {
     assert!(!frame.contains("rail j/k"));
     app.handle_input(b"i\r \t?");
     app.handle_input(b"\x1b[200~private drawing\x1b[201~");
-    app.handle_input(b"\x1b[<0;15;1M");
+    app.handle_input(b"\x1b[<0;3;6M");
     assert_eq!(app.screen, Screen::Artboard);
     assert!(!app.artboard_interacting);
     assert!(app.artboard_disclaimer_visible());
@@ -233,7 +233,7 @@ async fn artboard_disclaimer_tour_choice_keeps_account_settings() {
     app.set_screen(Screen::Artboard);
     let frame = render_plain(&mut app);
     assert!(
-        frame.contains("[S] show · [Enter] skip: the profiles"),
+        frame.contains("[S] show · [Enter] skip: the people"),
         "frame={frame:?}"
     );
     assert!(!frame.contains("Artboard may contain NSFW content"));
@@ -254,7 +254,7 @@ async fn artboard_disclaimer_tour_choice_keeps_account_settings() {
     wait_for_render_contains(&mut app, "Mode       view").await;
     let frame = render_plain(&mut app);
     assert!(
-        frame.contains("[Enter] next: the profiles"),
+        frame.contains("[Enter] next: the people"),
         "frame={frame:?}"
     );
     assert!(!frame.contains("Artboard may contain NSFW content"));
@@ -268,6 +268,75 @@ async fn artboard_disclaimer_tour_choice_keeps_account_settings() {
     app.handle_input(b"4");
     assert!(app.artboard_disclaimer_visible());
     assert!(render_plain(&mut app).contains("Always View"));
+}
+
+/// Someone who turned the content disclaimer off already sees the art: the
+/// stop takes its plain shape over the live board, `s` is just another
+/// swallowed key, and Enter walks on.
+#[tokio::test]
+async fn artboard_tour_stop_shows_the_board_when_the_disclaimer_is_off() {
+    use crate::app::clubhouse::state::Tutorial;
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "tour-view-always-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "tour-view-always-flow-it");
+    app.resize(80, 24).unwrap();
+    app.set_device_artboard_disclaimer(false);
+    app.clubhouse.tutorial = Tutorial::VisitArtboard;
+    app.set_screen(Screen::Artboard);
+
+    assert!(!app.artboard_disclaimer_visible());
+    assert!(app.dartboard_state.is_some(), "seated on landing");
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("[Enter] next: the people"),
+        "frame={frame:?}"
+    );
+    assert!(!frame.contains("[S] show"), "frame={frame:?}");
+
+    app.handle_input(b"s");
+    assert_eq!(app.screen, Screen::Artboard);
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitArtboard);
+    app.handle_input(b"\r");
+    assert_eq!(app.screen, Screen::Profiles);
+    assert_eq!(app.clubhouse.tutorial, Tutorial::VisitMap);
+}
+
+#[tokio::test]
+async fn artboard_disclaimer_allows_clicking_topbar_page_numbers_without_consent() {
+    use crate::app::common::primitives::Screen;
+    use late_core::models::user::InteractionMode;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "art-topbar-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "art-topbar-flow-it");
+    // Topbar digits sit at 0-based columns 14, 16, ... on row 0; SGR is 1-based.
+    for (column, screen) in [
+        (12, Screen::Clubhouse),
+        (14, Screen::Dashboard),
+        (16, Screen::Arcade),
+        (18, Screen::Games),
+        (22, Screen::Profiles),
+        (24, Screen::Leaderboard),
+        (26, Screen::Calendars),
+    ] {
+        app.set_screen(Screen::Artboard);
+        render_plain(&mut app);
+        assert!(app.artboard_disclaimer_visible());
+        let click = format!("\x1b[<0;{};1M", column + 1);
+
+        app.interaction_mode = InteractionMode::Keyboard;
+        app.handle_input(click.as_bytes());
+        assert_eq!(app.screen, Screen::Artboard, "keyboard-only ignores clicks");
+
+        app.interaction_mode = InteractionMode::Hybrid;
+        app.handle_input(click.as_bytes());
+        assert_eq!(app.screen, screen, "column {column}");
+        assert!(!app.artboard_content_accepted);
+        assert!(app.dartboard_state.is_none());
+        assert!(app.artboard_disclaimer_enabled());
+    }
 }
 
 #[tokio::test]
@@ -1016,7 +1085,7 @@ async fn screen_number_keys_switch_between_pages_including_profiles() {
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"5");
-    wait_for_render_contains(&mut app, " Profiles ").await;
+    wait_for_render_contains(&mut app, " People ").await;
 
     app.handle_input(b"1");
     wait_for_render_contains(&mut app, " Home ").await;
@@ -1055,7 +1124,9 @@ async fn profiles_page_keys_drive_the_merged_feed() {
     let mut app = make_app(test_db.db.clone(), user.id, "profiles-feed-flow-it");
 
     app.handle_input(b"5");
-    wait_for_render_contains(&mut app, " Profiles ").await;
+    wait_for_render_contains(&mut app, " People ").await;
+    // The page opens on the map; the feed keys live one section on.
+    app.handle_input(b"]");
 
     // `i` opens the profile editor on a blank project form. The form's first
     // row is already being typed into, so one Esc stops typing and a second
@@ -1192,7 +1263,7 @@ async fn shift_tab_cycles_screens_backwards() {
     wait_for_render_contains(&mut app, " Leaderboards ").await;
 
     app.handle_input(b"\x1b[Z");
-    wait_for_render_contains(&mut app, "Profiles").await;
+    wait_for_render_contains(&mut app, " People ").await;
 
     app.handle_input(b"\x1b[Z");
     wait_for_render_contains(&mut app, "Artboard may contain NSFW content").await;
@@ -1234,7 +1305,7 @@ async fn tab_cycles_screens_forward_through_all_including_profiles() {
     wait_for_render_contains(&mut app, "Mode       view").await;
 
     app.handle_input(b"\t");
-    wait_for_render_contains(&mut app, " Profiles ").await;
+    wait_for_render_contains(&mut app, " People ").await;
 
     app.handle_input(b"\t");
     wait_for_render_contains(&mut app, " Leaderboards ").await;
@@ -1563,6 +1634,7 @@ async fn ctrl_s_stays_in_native_games() {
         Screen::Darkroom,
         Screen::DailyMatch,
         Screen::HouseTable,
+        Screen::Realm,
         Screen::City,
     ] {
         app.set_screen(screen);
@@ -1586,6 +1658,279 @@ async fn ctrl_s_stays_in_native_games() {
     app.set_screen(Screen::Games);
     app.handle_input(b"\x13");
     assert!(app.show_hub_modal);
+}
+
+#[tokio::test]
+async fn realm_keeps_the_originating_page_when_switching_games_or_visiting_zen() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::lobby::modal_input::return_screen_for_opening;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "realm-return-origin").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "realm-return-origin-it");
+
+    app.set_screen(Screen::Profiles);
+    app.realm.open_board(uuid::Uuid::new_v4(), Screen::Profiles);
+    app.set_screen(Screen::Realm);
+    assert_eq!(return_screen_for_opening(&app), Screen::Profiles);
+    app.handle_input(b"\x06");
+    assert_eq!(app.screen, Screen::Zen);
+    app.handle_input(b"\x06");
+    assert_eq!(app.screen, Screen::Profiles);
+}
+
+/// The realm board is a stop on the backtick cycle like a detached
+/// roguelike: the key hops out with the board kept open, and from Home the
+/// same key hops back onto it.
+#[tokio::test]
+async fn the_realm_board_is_a_backtick_stop() {
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "realm-hop").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "realm-hop-it");
+
+    app.set_screen(Screen::Dashboard);
+    app.realm.open_board(uuid::Uuid::new_v4(), Screen::Games);
+    app.set_screen(Screen::Realm);
+
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Dashboard, "a hop out lands on the base");
+    assert!(app.realm.board.is_some(), "with the board kept open");
+
+    app.handle_input(b"`");
+    assert_eq!(
+        app.screen,
+        Screen::Realm,
+        "and the next hop comes back to it"
+    );
+}
+
+/// A realm board hopped away from and forgotten closes after the shared door
+/// window, the same deadline the native remakes keep: never while it is the
+/// open screen, and on-screen time does not count toward it.
+#[tokio::test]
+async fn the_idle_deadline_closes_a_forgotten_realm_board() {
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "realm-idle").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "realm-idle-it");
+
+    app.set_screen(Screen::Dashboard);
+    app.realm.open_board(uuid::Uuid::new_v4(), Screen::Games);
+    app.set_screen(Screen::Realm);
+
+    app.realm.force_board_idle_for_test();
+    app.tick();
+    assert!(
+        app.realm.board.is_some(),
+        "expected the open screen to shield the board from the close"
+    );
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Dashboard);
+    app.tick();
+    assert!(
+        app.realm.board.is_some(),
+        "expected on-screen time not to count toward the idle deadline"
+    );
+
+    app.realm.force_board_idle_for_test();
+    assert!(
+        app.tick(),
+        "expected the closing tick to dirty the frame so the hub row clears"
+    );
+    assert!(
+        app.realm.board.is_none(),
+        "expected the idle deadline to close the board"
+    );
+    app.handle_input(b"`");
+    assert_eq!(
+        app.screen,
+        Screen::Dashboard,
+        "expected no hop once the board has idled out"
+    );
+}
+
+/// The world's chat is put away when the board opens, so the map has the
+/// screen; `c` puts it up in the rail's place and `i` types into the
+/// world's own room, and `c` again hides it.
+#[tokio::test]
+async fn the_realm_chat_is_hidden_until_asked_for() {
+    use crate::app::activity::lounge::{SYSTEM_FINGERPRINT, SYSTEM_USERNAME};
+    use crate::app::common::primitives::Screen;
+    use late_core::models::user::{User, UserParams};
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "realm-chat").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "realm-chat-it");
+    {
+        let client = test_db.db.get().await.expect("db");
+        User::create(
+            &client,
+            UserParams {
+                fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                username: SYSTEM_USERNAME.to_string(),
+                settings: serde_json::json!({ "bot": true, "system": true }),
+            },
+        )
+        .await
+        .expect("create system user");
+    }
+    let game = app
+        .realm
+        .service()
+        .open_season()
+        .await
+        .expect("open season")
+        .expect("a world rises");
+    let room_id = game.chat_room_id.expect("the world has its room");
+
+    app.set_screen(Screen::Games);
+    app.realm.open_board(game.id, Screen::Games);
+    app.set_screen(Screen::Realm);
+    wait_for_render_contains(&mut app, "c chat").await;
+    assert_eq!(app.realm.shown_chat_room_id(), None, "hidden by default");
+
+    app.handle_input(b"c");
+    wait_for_render_contains(&mut app, "No messages yet").await;
+    wait_for_render_contains(&mut app, "c hide chat").await;
+    assert_eq!(app.realm.shown_chat_room_id(), Some(room_id));
+
+    app.handle_input(b"i");
+    assert!(app.chat.composing, "i opens the composer");
+    assert_eq!(app.chat.composer_room_id(), Some(room_id));
+
+    app.handle_input(b"\x1b");
+    app.pending_escape_started_at = Some(std::time::Instant::now() - Duration::from_secs(1));
+    crate::app::input::flush_pending_escape(&mut app);
+    assert!(!app.chat.composing, "Esc puts the composer away");
+    app.handle_input(b"c");
+    wait_for_render_not_contains(&mut app, "No messages yet").await;
+    assert_eq!(app.screen, Screen::Realm, "and the board stays up");
+}
+
+/// A lone Esc on the realm board peels a picked chat message first, the
+/// daily board's shape: the selection goes, the board stays. Only the next
+/// Esc puts the board away. Otherwise the selection would outlive the board
+/// and take `j`/`k` the moment it is reopened.
+#[tokio::test]
+async fn a_lone_esc_lets_go_of_a_picked_realm_chat_message_before_closing_the_board() {
+    use crate::app::activity::lounge::{SYSTEM_FINGERPRINT, SYSTEM_USERNAME};
+    use crate::app::common::primitives::Screen;
+    use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
+    use late_core::models::user::{User, UserParams};
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "realm-chat-esc").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "realm-chat-esc-it");
+    {
+        let client = test_db.db.get().await.expect("db");
+        User::create(
+            &client,
+            UserParams {
+                fingerprint: SYSTEM_FINGERPRINT.to_string(),
+                username: SYSTEM_USERNAME.to_string(),
+                settings: serde_json::json!({ "bot": true, "system": true }),
+            },
+        )
+        .await
+        .expect("create system user");
+    }
+    let game = app
+        .realm
+        .service()
+        .open_season()
+        .await
+        .expect("open season")
+        .expect("a world rises");
+    let room_id = game.chat_room_id.expect("the world has its room");
+    let message = {
+        let client = test_db.db.get().await.expect("db");
+        ChatMessage::create(
+            &client,
+            ChatMessageParams {
+                room_id,
+                user_id: user.id,
+                body: "the walls of season one".to_string(),
+            },
+        )
+        .await
+        .expect("create message")
+    };
+
+    app.set_screen(Screen::Games);
+    app.realm.open_board(game.id, Screen::Games);
+    app.set_screen(Screen::Realm);
+    wait_for_render_contains(&mut app, "c chat").await;
+    app.handle_input(b"c");
+    wait_for_render_contains(&mut app, "the walls of season one").await;
+    assert!(
+        app.chat.select_message_by_id_in_room(room_id, message.id),
+        "a click picks the message"
+    );
+
+    app.handle_input(b"\x1b");
+    app.pending_escape_started_at = Some(std::time::Instant::now() - Duration::from_secs(1));
+    crate::app::input::flush_pending_escape(&mut app);
+    assert_eq!(
+        app.chat.selected_message_body_in_room(room_id),
+        None,
+        "Esc lets the message go"
+    );
+    assert_eq!(app.screen, Screen::Realm, "and the board stays up");
+    assert!(app.realm.board.is_some());
+
+    app.handle_input(b"\x1b");
+    app.pending_escape_started_at = Some(std::time::Instant::now() - Duration::from_secs(1));
+    crate::app::input::flush_pending_escape(&mut app);
+    assert_eq!(
+        app.screen,
+        Screen::Games,
+        "the next Esc puts the board away"
+    );
+    assert!(app.realm.board.is_none());
+}
+
+/// A lone Esc never reaches the realm board's own keys: it is held as a
+/// pending escape and flushed later. It still has to put the colour picker
+/// away before it puts the board away, and a picker left open when the board
+/// closes does not come back with the next board.
+#[tokio::test]
+async fn a_lone_esc_puts_the_realm_colour_picker_away_first() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::door::realm::state::RealmJoinDraft;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "realm-esc-picker").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "realm-esc-picker-it");
+    let game_id = uuid::Uuid::new_v4();
+    let picker = || RealmJoinDraft {
+        game_id,
+        game_name: "Season 1".to_string(),
+        color: 0,
+        taken: Vec::new(),
+    };
+
+    app.set_screen(Screen::Games);
+    app.realm.open_board(game_id, Screen::Games);
+    app.set_screen(Screen::Realm);
+    app.realm.join_draft = Some(picker());
+
+    app.handle_input(b"\x1b");
+    app.pending_escape_started_at = Some(std::time::Instant::now() - Duration::from_secs(1));
+    crate::app::input::flush_pending_escape(&mut app);
+    assert!(app.realm.join_draft.is_none(), "the picker is put away");
+    assert_eq!(app.screen, Screen::Realm, "and the board stays up");
+    assert!(app.realm.board.is_some());
+
+    app.realm.join_draft = Some(picker());
+    crate::app::door::realm::input::close_board(&mut app);
+    app.realm.open_board(game_id, Screen::Games);
+    assert!(
+        app.realm.join_draft.is_none(),
+        "a closed board takes its picker with it"
+    );
 }
 
 #[tokio::test]
@@ -3615,19 +3960,33 @@ async fn forced_tour_walks_the_house_on_enter_with_one_shot_of_pool() {
 
     // The rest of the route is Enter alone; at the Artboard stop `s` shows
     // the art first, so this walk sees it.
+    app.handle_input(b"\r");
+    assert_eq!(app.screen, Screen::Artboard);
+    app.handle_input(b"s");
+    assert!(app.artboard_content_accepted);
+
+    // The People page is three stops on one page: Enter lands on the map
+    // and then steps the page's own sections, no key of the page needed.
+    use crate::app::directory::state::Shelf;
+    for (stage, shelf) in [
+        (Tutorial::VisitMap, Shelf::Map),
+        (Tutorial::VisitProfiles, Shelf::Profiles),
+        (Tutorial::VisitJobs, Shelf::Jobs),
+    ] {
+        app.handle_input(b"\r");
+        assert_eq!(app.screen, Screen::Profiles);
+        assert_eq!(app.clubhouse.tutorial, stage);
+        assert_eq!(app.directory_state.shelf(), shelf);
+    }
+
     for screen in [
-        Screen::Artboard,
-        Screen::Profiles,
         Screen::Leaderboard,
+        Screen::Calendars,
         Screen::Zen,
         Screen::Clubhouse,
     ] {
         app.handle_input(b"\r");
         assert_eq!(app.screen, screen);
-        if screen == Screen::Artboard {
-            app.handle_input(b"s");
-            assert!(app.artboard_content_accepted);
-        }
     }
     assert_eq!(app.clubhouse.tutorial, Tutorial::Homecoming);
 
@@ -3656,7 +4015,7 @@ async fn forced_tour_can_skip_artboard_without_viewing_it() {
         "frame={frame:?}"
     );
     assert!(
-        frame.contains("[S] show · [Enter] skip: the profiles"),
+        frame.contains("[S] show · [Enter] skip: the people"),
         "frame={frame:?}"
     );
     assert!(!frame.contains("Mode       view"));
@@ -3679,7 +4038,10 @@ async fn forced_tour_can_skip_artboard_without_viewing_it() {
 
     for screen in [
         Screen::Profiles,
+        Screen::Profiles,
+        Screen::Profiles,
         Screen::Leaderboard,
+        Screen::Calendars,
         Screen::Zen,
         Screen::Clubhouse,
     ] {
@@ -4570,13 +4932,17 @@ async fn landing_page_tweak_picks_the_first_screen_except_for_new_users() {
     use late_core::models::user::LandingPage;
 
     let test_db = new_test_db().await;
-    for (idx, (page, is_new_user, expected)) in [
-        (LandingPage::Clubhouse, false, Screen::Clubhouse),
-        (LandingPage::Home, false, Screen::Dashboard),
-        (LandingPage::Zen, false, Screen::Zen),
+    for (idx, (page, is_new_user, tour_pending, expected)) in [
+        (LandingPage::Clubhouse, false, false, Screen::Clubhouse),
+        (LandingPage::Home, false, false, Screen::Dashboard),
+        (LandingPage::Zen, false, false, Screen::Zen),
         // A first session always starts in the tavern, where the tour runs.
-        (LandingPage::Zen, true, Screen::Clubhouse),
-        (LandingPage::Home, true, Screen::Clubhouse),
+        (LandingPage::Zen, true, false, Screen::Clubhouse),
+        (LandingPage::Home, true, false, Screen::Clubhouse),
+        // So does a regular whose tour flag was reset: the tour only fires
+        // in the tavern, and a Home or Zen landing would never show it.
+        (LandingPage::Home, false, true, Screen::Clubhouse),
+        (LandingPage::Zen, false, true, Screen::Clubhouse),
     ]
     .into_iter()
     .enumerate()
@@ -4589,13 +4955,21 @@ async fn landing_page_tweak_picks_the_first_screen_except_for_new_users() {
             SessionWorld {
                 landing_page: Some(page),
                 is_new_user,
+                tour_pending,
                 ..SessionWorld::default()
             },
         );
         assert_eq!(
             app.screen, expected,
-            "landing {page:?}, new user {is_new_user}"
+            "landing {page:?}, new user {is_new_user}, tour pending {tour_pending}"
         );
+        if tour_pending {
+            assert_eq!(
+                app.clubhouse.tutorial,
+                crate::app::clubhouse::state::Tutorial::Welcome,
+                "the reset tour opens at the door"
+            );
+        }
     }
 }
 
@@ -6629,7 +7003,7 @@ async fn the_road_and_the_hand_fit_an_80_by_24_terminal() {
         "[Enter] fight",
         "hiss  lv 2",
         "▸ [▚]",
-        "[g] flicker, half pay",
+        "[g] step down, half pay",
         "esc back",
     ] {
         assert!(
@@ -6823,6 +7197,8 @@ async fn profiles_mouse_search_selects_person_and_profile_popup_owns_input() {
     let mut app = make_app(db.db.clone(), user.id, "profiles-mouse-search");
     app.resize(80, 24).unwrap();
     app.set_screen(Screen::Profiles);
+    app.directory_state
+        .set_shelf(crate::app::directory::state::Shelf::Profiles);
     wait_for_render_contains(&mut app, "@profiles-mouse-author").await;
     app.interaction_mode = InteractionMode::Hybrid;
     app.render().unwrap();
@@ -6922,4 +7298,103 @@ async fn zen_swallows_the_key_after_the_live_prefix_from_a_focused_inbox() {
         !app.live_prefix_armed,
         "j is swallowed and spends the prefix"
     );
+}
+
+/// `/map` typed into a composer lands on the People page, on its Map
+/// section, and the tick turns the counts on for exactly as long as the
+/// section is on screen. `]` steps on to Profiles and the map goes quiet.
+#[tokio::test]
+async fn the_map_command_lands_on_the_profiles_map_shelf() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::directory::state::Shelf;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "usermap-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), user.id, "usermap-flow-it");
+    wait_for_render_contains(&mut app, "lounge").await;
+
+    app.handle_input(b"/map\r");
+    assert_eq!(
+        app.screen,
+        Screen::Profiles,
+        "the command lands on the page"
+    );
+    assert_eq!(app.directory_state.shelf(), Shelf::Map, "on its map shelf");
+    app.tick();
+    assert!(app.usermap.is_shown(), "the tick asks for the counts");
+    wait_for_render_contains(&mut app, "where everyone is").await;
+
+    app.handle_input(b"]");
+    assert_eq!(app.directory_state.shelf(), Shelf::Profiles);
+    app.tick();
+    assert!(
+        !app.usermap.is_shown(),
+        "a shelf nobody looks at counts nothing"
+    );
+    wait_for_render_not_contains(&mut app, "where everyone is").await;
+}
+
+/// All four arrows pan. Up and down used to walk the country list instead,
+/// which read as two of the four arrows being broken — and the map was pinned
+/// to the top of its box, so even after the binding was fixed there was
+/// nothing above the equator to pan to.
+#[tokio::test]
+async fn the_usermap_pans_with_every_arrow() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "usermap-pan-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let mut app = make_app(test_db.db.clone(), user.id, "usermap-pan-flow-it");
+    wait_for_render_contains(&mut app, "lounge").await;
+
+    app.handle_input(b"/map\r");
+    wait_for_render_contains(&mut app, "where everyone is").await;
+
+    // Zoom in until there is somewhere to go on both axes. Fitted, the whole
+    // world is on screen and every arrow is correctly a no-op; the map is
+    // twice as wide as it is tall, so the vertical room arrives last.
+    let map = app.usermap.map().expect("earth");
+    for _ in 0..12 {
+        let view = app.usermap.view().expect("a view once drawn");
+        if view.can_pan_vertically(&map) && view.can_pan_horizontally(&map) {
+            break;
+        }
+        app.handle_input(b"+");
+        // A draw is what applies the new scale to the view.
+        let _ = render_plain(&mut app);
+    }
+    let view = app.usermap.view().expect("view");
+    assert!(
+        view.can_pan_vertically(&map) && view.can_pan_horizontally(&map),
+        "zooming in should eventually leave room to pan: {view:?}"
+    );
+    let start = view;
+
+    app.handle_input(b"\x1b[C"); // right
+    let right = app.usermap.view().expect("view");
+    assert!(right.vx > start.vx, "right arrow should pan east");
+
+    app.handle_input(b"\x1b[B"); // down
+    let down = app.usermap.view().expect("view");
+    assert!(down.vy > start.vy, "down arrow should pan south");
+
+    app.handle_input(b"\x1b[A"); // up
+    let up = app.usermap.view().expect("view");
+    assert!(up.vy < down.vy, "up arrow should pan back north");
+
+    app.handle_input(b"\x1b[D"); // left
+    let left = app.usermap.view().expect("view");
+    assert!(left.vx < right.vx, "left arrow should pan back west");
 }

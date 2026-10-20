@@ -47,6 +47,9 @@ pub enum LiveSource {
     /// starts, by event id. The viewer's own personal events ride it too,
     /// for the viewer alone.
     BoardEvent(Uuid),
+    /// The house's standing world, by game id: its last moment (a rise, an
+    /// arrival, a take, a fall, the end), stamped by the write that made it.
+    Realm(Uuid),
 }
 
 /// The two lanes of the queue. The strip always takes from `News` first.
@@ -64,7 +67,8 @@ fn lane(source: LiveSource) -> Lane {
         | LiveSource::BoothTrack(_)
         | LiveSource::Stream(_)
         | LiveSource::DoorGame(_)
-        | LiveSource::BoardEvent(_) => Lane::Rest,
+        | LiveSource::BoardEvent(_)
+        | LiveSource::Realm(_) => Lane::Rest,
     }
 }
 
@@ -107,7 +111,9 @@ fn chrono_of(duration: Duration) -> chrono::Duration {
 /// How long a source stays up at least, once it goes up.
 fn min_for(source: LiveSource) -> chrono::Duration {
     chrono_of(match source {
-        LiveSource::DailyMatch(_) | LiveSource::DailyResult(_) => LIVE_MATCH_MIN,
+        LiveSource::DailyMatch(_) | LiveSource::DailyResult(_) | LiveSource::Realm(_) => {
+            LIVE_MATCH_MIN
+        }
         LiveSource::BoothTrack(_) => LIVE_TRACK_MIN,
         LiveSource::Stream(_) => LIVE_STREAM_MIN,
         LiveSource::DoorGame(_) => LIVE_DOOR_GAME_MIN,

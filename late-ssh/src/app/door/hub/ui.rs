@@ -47,6 +47,10 @@ pub struct HubView<'a> {
     /// Lateania's backtick-detach recency window is live: the sidebar marks
     /// it as a game in progress (a hop or Enter re-joins the character).
     pub lateania_live: bool,
+    /// The realm board is open on this session, hopped away from.
+    pub realm_live: bool,
+    /// What the Realm card reads: the standing world, as this session sees it.
+    pub realm: &'a crate::app::door::realm::state::RealmState,
     /// Roguelike doors with a live detached game this session: the sidebar
     /// marks them and their landing offers resume instead of launch.
     pub nethack_live: bool,
@@ -81,6 +85,7 @@ impl HubView<'_> {
     fn is_live(&self, game: HubGame) -> bool {
         match game {
             HubGame::Lateania => self.lateania_live,
+            HubGame::Realm => self.realm_live,
             HubGame::Nethack => self.nethack_live,
             HubGame::Dcss => self.dcss_live,
             HubGame::Brogue => self.brogue_live,
@@ -319,6 +324,9 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
             view.lateania_slot_cursor,
             scroll,
         ),
+        HubGame::Realm => {
+            crate::app::door::realm::landing_ui::draw_landing(frame, body[1], view.realm, scroll)
+        }
         HubGame::Minecraft => crate::app::door::minecraft::ui::draw_landing(frame, body[1], scroll),
         HubGame::VintageStory => {
             crate::app::door::vintagestory::ui::draw_landing(frame, body[1], scroll)
@@ -675,6 +683,7 @@ fn draw_footer(frame: &mut Frame, area: Rect, selected: HubGame) {
     let hints: &[(&str, &str)] = match selected {
         HubGame::NightCity => &[switch, scroll, ("Enter", "descend")],
         HubGame::Minecraft | HubGame::VintageStory => &[switch, scroll],
+        HubGame::Realm => &[switch, scroll, ("Enter", "enter the realm")],
         HubGame::Dcss
         | HubGame::Nethack
         | HubGame::Brogue
