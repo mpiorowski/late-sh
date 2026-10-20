@@ -182,6 +182,8 @@ the YouTube booth go quiet while a video plays and come back after.
 
 The CLI connects to `late.sh` using your SSH key. Only your key **fingerprint** is stored — not the full public key. No IP logging, no tracking.
 
+To spot lag, the CLI times two round trips every few seconds (the SSH connection, and how fast your terminal answers) and sends them to the server, which keeps them only as fleet-wide histograms by operating system, never per user.
+
 If you'd rather not use your real key:
 
 ```bash

@@ -12,6 +12,7 @@ mod clipboard;
 
 mod config;
 mod identity;
+mod latency;
 mod mpris;
 mod pty;
 mod raw_mode;
@@ -100,11 +101,12 @@ async fn main() -> Result<()> {
     }
     info!("starting ssh session");
     let (token_tx, token_rx) = oneshot::channel();
+    let (latency_sink, latency_samples) = latency::latency_queue();
     let SshProcess {
         completion_task,
         resize_handle,
         input_gate,
-    } = spawn_ssh(&config, &ssh_identity, token_tx).await?;
+    } = spawn_ssh(&config, &ssh_identity, token_tx, latency_sink).await?;
     let resize_task = tokio::spawn(forward_resize_events(resize_handle));
 
     let token = tokio::time::timeout(Duration::from_secs(10), token_rx)
@@ -116,7 +118,9 @@ async fn main() -> Result<()> {
         .context("ssh session token channel closed")?;
     flush_stdin_input_queue();
     input_gate.store(true, Ordering::Relaxed);
-    let ssh_exit = wait_for_ssh_with_ws_pairing(completion_task, &config, token, &audio).await?;
+    let ssh_exit =
+        wait_for_ssh_with_ws_pairing(completion_task, &config, token, &audio, latency_samples)
+            .await?;
 
     audio.stop.store(true, Ordering::Relaxed);
     resize_task.abort();
@@ -253,7 +257,12 @@ async fn run_openssh_mode(config: Config, ssh_identity: Option<std::path::PathBu
     }
     info!("starting OpenSSH interactive session");
     let ssh::OpenSshProcess { completion_task } = session.spawn_shell(&config)?;
-    let ssh_exit = wait_for_ssh_with_ws_pairing(completion_task, &config, token, &audio).await?;
+    // The ssh child owns the terminal here, so nothing samples; the held sink
+    // keeps the pair loop's queue open and quiet (`latency.rs`).
+    let (_latency_sink, latency_samples) = latency::latency_queue();
+    let ssh_exit =
+        wait_for_ssh_with_ws_pairing(completion_task, &config, token, &audio, latency_samples)
+            .await?;
 
     audio.stop.store(true, Ordering::Relaxed);
     debug!(?ssh_exit, "ssh session ended");
@@ -267,6 +276,7 @@ async fn wait_for_ssh_with_ws_pairing(
     config: &Config,
     token: String,
     audio: &AudioRuntime,
+    latency_samples: tokio::sync::mpsc::Receiver<latency::LatencySample>,
 ) -> Result<ssh::SshExit> {
     tokio::select! {
         result = completion_task => {
@@ -275,13 +285,18 @@ async fn wait_for_ssh_with_ws_pairing(
                 Err(err) => Err(anyhow::anyhow!("ssh session task join failed: {err}")),
             }
         }
-        () = run_ws_pairing(config, token, audio) => {
+        () = run_ws_pairing(config, token, audio, latency_samples) => {
             std::future::pending::<Result<ssh::SshExit>>().await
         }
     }
 }
 
-async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
+async fn run_ws_pairing(
+    config: &Config,
+    token: String,
+    audio: &AudioRuntime,
+    mut latency_samples: tokio::sync::mpsc::Receiver<latency::LatencySample>,
+) {
     info!("received session token and starting websocket pairing");
     let api_base_url = config.api_base_url.clone();
     let video_probe = video::probe(config.ssh_mode, client_platform_label());
@@ -358,6 +373,7 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
                         desktop_media: &mut desktop_media,
                         desktop_commands: &mut desktop_commands,
                         viz_frames: &mut viz_frames,
+                        latency_samples: &mut latency_samples,
                     },
                 )
                 .await;

@@ -35,6 +35,7 @@ use crate::proxy_protocol;
 use crate::render_signal::RenderSignal;
 use crate::session_bootstrap::{ArcadeSessionPreloads, load_arcade_session_preloads};
 use crate::state::{ActiveSession, State};
+use crate::terminal_probe::{self, PROBE_QUERY, ProbeExpiry, TerminalProbe};
 use crate::terminal_size::clamp_terminal_size;
 use crate::usernames;
 
@@ -65,6 +66,12 @@ const OUTPUT_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
 /// How long a session may stay over [`OUTPUT_BUDGET_BYTES`] before we
 /// disconnect it instead of waiting for SSH keepalive to reap it.
 const OUTPUT_STALL_DISCONNECT: Duration = Duration::from_secs(30);
+/// The window one `late_ssh_session_output_bytes_per_second` sample averages.
+const OUTPUT_RATE_WINDOW: Duration = Duration::from_secs(10);
+/// Longest a quitting session waits for its in-flight probe to be answered
+/// ([`settle_terminal_probe`]). Covers a slow link; a terminal that never
+/// answers costs its user this much on quit, only until the probe retires.
+const PROBE_SETTLE_MAX: Duration = Duration::from_millis(500);
 
 /// Tracks bytes handed to russh for the app channel versus window credit the
 /// client sends back. russh queues writes beyond the client's SSH channel
@@ -140,6 +147,9 @@ struct ClientHandler {
     /// render, so typed characters echo without waiting for the next world tick.
     render_signal: Option<Arc<RenderSignal>>,
     output_budget: Arc<OutputBudget>,
+    /// Set when the shell starts; the render loop sends its queries and
+    /// `data` feeds it the replies (`terminal_probe.rs`).
+    terminal_probe: Option<Arc<TerminalProbe>>,
     input_tx: Option<tokio::sync::mpsc::Sender<Vec<u8>>>,
     input_rx: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>,
     cli_mode: bool,
@@ -441,6 +451,7 @@ impl Server {
             app: None,
             render_signal: None,
             output_budget: Arc::new(OutputBudget::new()),
+            terminal_probe: None,
             input_tx: None,
             input_rx: None,
             cli_mode: false,
@@ -561,6 +572,15 @@ impl ClientHandler {
         self.session_token = Some(session_token.clone());
         self.session_rx = Some(session_rx);
         Ok(session_token)
+    }
+
+    /// Settled by the time the shell starts: `LATE_CLI_MODE` arrives as an
+    /// env request before the shell request.
+    fn session_client(&self) -> metrics::SessionClient {
+        match self.cli_mode {
+            true => metrics::SessionClient::Cli,
+            false => metrics::SessionClient::Ssh,
+        }
     }
 
     fn track_active_session_token(&self, session_token: &str) {
@@ -1287,12 +1307,16 @@ impl russh::server::Handler for ClientHandler {
             let app = Arc::clone(app);
             let signal = Arc::new(RenderSignal::new());
             self.render_signal = Some(Arc::clone(&signal));
+            let probe = Arc::new(TerminalProbe::new(Instant::now()));
+            self.terminal_probe = Some(Arc::clone(&probe));
             let ctx = RenderContext {
                 handle,
                 channel_id,
                 frame_drop_log_every: self.state.config.frame_drop_log_every,
                 signal: Arc::clone(&signal),
                 budget: Arc::clone(&self.output_budget),
+                client: self.session_client(),
+                probe,
             };
             app.lock().await.set_repaint_signal(Arc::clone(&signal));
             let mut session_start = self.session_start.take();
@@ -1306,6 +1330,10 @@ impl russh::server::Handler for ClientHandler {
                 let mut stats_drawn: u64 = 0;
                 let mut stats_skipped: u64 = 0;
                 let mut stats_since = Instant::now();
+                // Bytes this session wrote since the window opened, for the
+                // per-session output rate.
+                let mut window_bytes: usize = 0;
+                let mut window_since = Instant::now();
                 // The world tick is adaptive: each pass reports how soon the
                 // next one is needed (`App::wake_hint`), so idle sessions
                 // sleep at the idle floor while animated screens keep the
@@ -1388,11 +1416,23 @@ impl russh::server::Handler for ClientHandler {
                                 stats_skipped = 0;
                                 stats_since = Instant::now();
                             }
+                            window_bytes += outcome.bytes_sent;
+                            let window = window_since.elapsed();
+                            if window >= OUTPUT_RATE_WINDOW {
+                                metrics::record_session_output_rate(
+                                    ctx.client,
+                                    window_bytes as f64 / window.as_secs_f64(),
+                                );
+                                window_bytes = 0;
+                                window_since = Instant::now();
+                            }
                             if outcome.should_quit {
                                 tracing::debug!("app requested quit, closing connection");
+                                settle_terminal_probe(&ctx.probe).await;
                                 clean_disconnect(&ctx.handle, ctx.channel_id).await;
                                 break;
                             }
+                            drive_terminal_probe(&ctx, outcome.bytes_sent).await;
                             if advance_world {
                                 world_deadline = Instant::now() + outcome.wake_hint;
                             } else {
@@ -1452,9 +1492,23 @@ impl russh::server::Handler for ClientHandler {
         let Some(input_tx) = self.input_tx.as_ref() else {
             return Ok(());
         };
+        // Probe replies are the terminal talking, not the user: they never
+        // reach the input queue (`terminal_probe.rs`).
+        let (input, replies) = terminal_probe::strip_replies(data);
+        if replies > 0
+            && let Some(probe) = self.terminal_probe.as_ref()
+            && let Some(sample) = probe.answered(Instant::now())
+        {
+            let client = self.session_client();
+            metrics::record_terminal_probe(client, metrics::TerminalProbeOutcome::Answered);
+            metrics::record_terminal_rtt(client, sample.backlog, sample.rtt.as_secs_f64());
+        }
+        if input.is_empty() {
+            return Ok(());
+        }
         match input_tx.try_reserve() {
             Ok(permit) => {
-                permit.send(data.to_vec());
+                permit.send(input.into_owned());
             }
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
                 tracing::warn!(
@@ -1610,17 +1664,21 @@ struct RenderContext {
     frame_drop_log_every: u64,
     signal: Arc<RenderSignal>,
     budget: Arc<OutputBudget>,
+    client: metrics::SessionClient,
+    probe: Arc<TerminalProbe>,
 }
 
 /// What one render pass produced: whether the app asked to quit, how soon
 /// the next world tick is needed (`App::wake_hint` read under the same
-/// lock, after any draw, so it sees the slots the draw recorded), and
-/// whether the pass drew a frame or skipped clean (feeds the loop's debug
-/// stats line).
+/// lock, after any draw, so it sees the slots the draw recorded), whether
+/// the pass drew a frame or skipped clean (feeds the loop's debug stats
+/// line), and the bytes it handed to the channel (frame plus terminal
+/// commands; feeds the output rate and the probe's backlog label).
 struct RenderOutcome {
     should_quit: bool,
     wake_hint: Duration,
     drew: bool,
+    bytes_sent: usize,
 }
 
 impl RenderOutcome {
@@ -1630,6 +1688,7 @@ impl RenderOutcome {
             // Unused: the loop breaks on quit.
             wake_hint: crate::app::tick::IDLE_TICK,
             drew: false,
+            bytes_sent: 0,
         }
     }
 }
@@ -1640,6 +1699,10 @@ async fn render_once(
     ctx: &RenderContext,
     advance_world: bool,
 ) -> anyhow::Result<RenderOutcome> {
+    let reason = match advance_world {
+        true => metrics::RenderReason::WorldTick,
+        false => metrics::RenderReason::Input,
+    };
     let (frame, terminal_commands, mut wake_hint) = {
         let mut app = app.lock().await;
         if !app.running {
@@ -1669,13 +1732,10 @@ async fn render_once(
                 should_quit: false,
                 wake_hint: app.wake_hint(),
                 drew: false,
+                bytes_sent: 0,
             });
         }
-        metrics::record_render(if advance_world {
-            metrics::RenderReason::WorldTick
-        } else {
-            metrics::RenderReason::Input
-        });
+        metrics::record_render(reason);
         let frame = app.render().context("rendering frame")?;
         let terminal_commands = std::mem::take(&mut app.pending_terminal_commands);
         let wake_hint = app.wake_hint();
@@ -1683,6 +1743,7 @@ async fn render_once(
     };
 
     let frame_len = frame.len();
+    let mut bytes_sent = 0;
     let frame_sent = match timeout(
         Duration::from_millis(50),
         ctx.handle.data(ctx.channel_id, frame),
@@ -1691,6 +1752,8 @@ async fn render_once(
     {
         Ok(Ok(())) => {
             ctx.budget.record_sent(frame_len);
+            metrics::record_frame_bytes(reason, frame_len);
+            bytes_sent += frame_len;
             true
         }
         Ok(Err(err)) => {
@@ -1732,6 +1795,7 @@ async fn render_once(
         {
             Ok(Ok(())) => {
                 ctx.budget.record_sent(command_len);
+                bytes_sent += command_len;
             }
             Ok(Err(err)) => {
                 return Err(anyhow::anyhow!(
@@ -1766,7 +1830,49 @@ async fn render_once(
         should_quit: false,
         wake_hint,
         drew: true,
+        bytes_sent,
     })
+}
+
+/// Expires a lost probe, then sends the next one if it is due, right behind
+/// the `bytes_ahead` this pass wrote (`terminal_probe.rs`). The probe only
+/// keeps time; its telemetry lives here and in the `data` handler.
+async fn drive_terminal_probe(ctx: &RenderContext, bytes_ahead: usize) {
+    let now = Instant::now();
+    match ctx.probe.expire(now) {
+        None => {}
+        Some(ProbeExpiry::Unanswered) => {
+            metrics::record_terminal_probe(ctx.client, metrics::TerminalProbeOutcome::Unanswered);
+        }
+        Some(ProbeExpiry::Retired) => {
+            metrics::record_terminal_probe(ctx.client, metrics::TerminalProbeOutcome::Unanswered);
+            tracing::info!("terminal never answered the round-trip probe; probing stopped");
+        }
+    }
+    if !ctx.probe.try_start(now, bytes_ahead) {
+        return;
+    }
+    match timeout(
+        Duration::from_millis(50),
+        ctx.handle.data(ctx.channel_id, PROBE_QUERY.to_vec()),
+    )
+    .await
+    {
+        Ok(Ok(())) => ctx.budget.record_sent(PROBE_QUERY.len()),
+        // A busy or closed channel: the query never left, so nothing is in
+        // flight. A closed one ends the loop on the next frame send.
+        Ok(Err(_)) | Err(_) => ctx.probe.cancel(Instant::now()),
+    }
+}
+
+/// A probe still in flight when the session quits would be answered after
+/// the user's ssh exits, and the answer would land in their shell as stray
+/// characters. Hold the goodbye until the answer is in, briefly.
+async fn settle_terminal_probe(probe: &TerminalProbe) {
+    let deadline = Instant::now() + PROBE_SETTLE_MAX;
+    while probe.in_flight() && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
 }
 
 async fn clean_disconnect(handle: &russh::server::Handle, channel_id: ChannelId) {

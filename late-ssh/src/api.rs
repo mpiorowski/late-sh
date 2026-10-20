@@ -75,6 +75,28 @@ fn bands_from_wire(bands: WireBands) -> [f32; VIZ_BANDS] {
     }
 }
 
+/// What a paired CLI's `latency` sample timed. Wire names match
+/// `late-cli/src/latency.rs`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum WireLatencyKind {
+    SshRtt,
+    Terminal,
+}
+
+impl From<WireLatencyKind> for metrics::CliLatencyKind {
+    fn from(kind: WireLatencyKind) -> Self {
+        match kind {
+            WireLatencyKind::SshRtt => Self::SshRtt,
+            WireLatencyKind::Terminal => Self::Terminal,
+        }
+    }
+}
+
+/// A CLI latency sample past this is a broken clock or a forged report, not
+/// a round trip: the server's own probe gives up at 30 s.
+const CLI_LATENCY_MAX: Duration = Duration::from_secs(60);
+
 #[derive(Deserialize)]
 #[serde(tag = "event")]
 enum WsPayload {
@@ -143,6 +165,10 @@ enum WsPayload {
         deafened: bool,
         speaking: bool,
     },
+    /// One round trip the CLI timed; telemetry only, never routed to the
+    /// session.
+    #[serde(rename = "latency")]
+    Latency { kind: WireLatencyKind, micros: u64 },
 }
 
 /// How many upcoming tracks `/api/listen` exposes. The listen page shows a
@@ -772,6 +798,8 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State, clien
         .set_stream_preferences(user_id, radio_station);
     let mut audio_rx = state.audio_service.subscribe_ws();
     let mut last_client_kind = ClientKind::Unknown;
+    // Labels this socket's latency samples; `client_state` arrives first.
+    let mut client_platform = ClientPlatform::Unknown;
     metrics::record_ws_pair_success();
     tracing::info!(token_hint = %token_hint, "ws pair websocket established");
 
@@ -901,6 +929,7 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State, clien
                                 // depends only on the user's persisted source, so
                                 // who else is paired cannot change what this
                                 // client should be playing.
+                                client_platform = platform;
                                 if let Some(kind) = state.paired_client_registry.update_state_and_enforce_mute_policy(
                                     &token,
                                     registration_id,
@@ -1031,6 +1060,23 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State, clien
                                         speaking,
                                     },
                                 );
+                                continue;
+                            }
+                            WsPayload::Latency { kind, micros } => {
+                                match Duration::from_micros(micros) {
+                                    elapsed if elapsed > CLI_LATENCY_MAX => {
+                                        tracing::warn!(
+                                            token_hint = %token_hint,
+                                            micros,
+                                            "dropping out-of-range cli latency sample"
+                                        );
+                                    }
+                                    elapsed => metrics::record_cli_latency(
+                                        kind.into(),
+                                        client_platform,
+                                        elapsed.as_secs_f64(),
+                                    ),
+                                }
                                 continue;
                             }
                         };

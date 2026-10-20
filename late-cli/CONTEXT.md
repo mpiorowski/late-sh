@@ -85,6 +85,7 @@ OpenSSH mode differs slightly: it authenticates and fetches the token first thro
 - `src/clipboard.rs` - paired `/paste-image` clipboard read, Wayland/X clipboard backend use, PNG encoding, and local size guards. Clipboard support is only advertised on Linux, macOS, and Windows; Android/Termux builds do not depend on `arboard`.
 - `src/config.rs` - flags, env vars, defaults, logging
 - `src/identity.rs` - dedicated key discovery/generation
+- `src/latency.rs` - the round trips native mode times for the server (`ssh_rtt`, `terminal`), the sample queue, and the watch that sees the server's terminal probe pass through. See "Latency samples" below
 - `src/mpris.rs` - Linux MPRIS service, track metadata projection, and the desktop command queue (transport/volume mapped to server-routed `set_muted`/`set_volume`); other platforms compile a no-op publisher
 - `src/ssh.rs` - native SSH, OpenSSH ControlMaster mode, legacy PTY subprocess mode, token parsing, resize forwarding
 - `src/pty.rs` - terminal size/PTY helpers
@@ -313,6 +314,13 @@ Client to server for voice state:
 { "event": "voice_state", "joined": true, "room": "late-voice-00000000-0000-0000-0000-000000000000", "muted": false, "deafened": false, "speaking": false }
 ```
 
+Client to server, native mode only (see "Latency samples"):
+
+```json
+{ "event": "latency", "kind": "ssh_rtt", "micros": 42000 }
+{ "event": "latency", "kind": "terminal", "micros": 900 }
+```
+
 Client state labels:
 - `ssh_mode`: `native`, `openssh`, `old`
 - `platform`: `linux`, `macos`, `windows`, `android`, or `unknown`
@@ -327,6 +335,7 @@ Pairing behavior:
 - The first `client_state` is sent immediately after connect. It is resent after local mute/volume controls; source changes, voice, and video use their own handling (`voice_state`, `video_state`). The video probe runs once at startup, so a fixed setup is picked up on the next `late` launch.
 - `/paste-image` in SSH chat depends on the paired CLI control channel. The server only sends `request_clipboard_image` after seeing `clipboard_image` in the latest paired client's `client_state.capabilities`, so older CLIs and the webview helper do not receive unsupported control events.
 - Linux Wayland support for `/paste-image` depends on the workspace `arboard` dependency enabling `wayland-data-control`; Hyprland uses this path. Without it, the CLI may report that the clipboard does not contain an image even when Wayland has `image/png` content.
+- Latency samples: the server times the whole trip to the user's terminal by following frames with a DSR status query (`CSI 5 n`) and waiting for `CSI 0 n` (`late-ssh/src/terminal_probe.rs`). The CLI passes both through untouched and splits the trip. `ssh_rtt` times `send_ping` (an SSH keepalive and its reply) every 10 s, the transport alone; `terminal` runs from the output loop reading the chunk that carries the query to the stdin thread reading the answer, the user's terminal alone, including any frame still being parsed ahead of it (`TerminalProbeWatch`). Both go into a 16-sample queue (`latency_queue`) that the pair loop drains as `latency` events; a full queue (socket down) drops samples rather than waiting. Native mode only: `openssh` gives the terminal to an ssh child outright, and `old` (which relays it through a local pty) is not wired, so their queue stays empty. The server records them as `late_ssh_cli_latency_seconds{kind,platform}`, and a server older than the CLI logs a parse error per sample, so it must deploy first.
 - Clipboard images are converted to PNG in the CLI before upload. The CLI rejects zero-size images, very large decoded RGBA buffers, and PNG payloads above the upload cap before sending them over the pair socket.
 
 Embedded YouTube helper window:

@@ -104,6 +104,25 @@ resource "kubernetes_daemon_set_v1" "ssh_edge" {
           "kubernetes.io/os" = "linux"
         }
 
+        # A TUI session idles between frames, and by default any pause past
+        # the retransmit timeout drops a connection back to slow start, so
+        # the next big frame (a screen switch, a resize) waits extra round
+        # trips to reach the user. Host network puts this pod in the node's
+        # network namespace, so the setting covers every client-facing
+        # socket on the node (this HAProxy, ipv6-proxy, LiveKit); the kernel
+        # reads it live, so open connections get it too. SCALE.md, Pain
+        # Point 11.
+        init_container {
+          name    = "tcp-tuning"
+          image   = "haproxy:2.9-alpine"
+          command = ["sysctl", "-w", "net.ipv4.tcp_slow_start_after_idle=0"]
+
+          security_context {
+            privileged  = true
+            run_as_user = 0
+          }
+        }
+
         container {
           name    = "haproxy"
           image   = "haproxy:2.9-alpine"

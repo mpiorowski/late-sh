@@ -17,6 +17,26 @@ fn ws_payload_heartbeat_parses() {
 }
 
 #[test]
+fn ws_payload_latency_parses_the_clis_two_sample_kinds() {
+    let json = r#"{"event":"latency","kind":"ssh_rtt","micros":42000}"#;
+    assert!(matches!(
+        serde_json::from_str::<WsPayload>(json).unwrap(),
+        WsPayload::Latency {
+            kind: WireLatencyKind::SshRtt,
+            micros: 42000,
+        }
+    ));
+    let json = r#"{"event":"latency","kind":"terminal","micros":900}"#;
+    assert!(matches!(
+        serde_json::from_str::<WsPayload>(json).unwrap(),
+        WsPayload::Latency {
+            kind: WireLatencyKind::Terminal,
+            micros: 900,
+        }
+    ));
+}
+
+#[test]
 fn ws_payload_viz_parses_sixteen_bands_and_stretches_an_old_clis_eight() {
     let sixteen: Vec<f32> = (0..VIZ_BANDS).map(|i| i as f32 / 16.0).collect();
     let json = serde_json::json!({

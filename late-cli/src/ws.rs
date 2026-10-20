@@ -27,6 +27,7 @@ use super::{
     audio::VizSample,
     clipboard,
     config::{open_state_log, state_log_path},
+    latency::LatencySample,
     mpris::{DesktopCommand, DesktopMedia, IcecastTrack, MediaSource, RadioTrack, YoutubeTrack},
     video::{
         self, PlaceOutcome, VideoBlocker, VideoControl, VideoPlayer, VideoRect, VideoState,
@@ -636,7 +637,8 @@ impl Drop for WebviewPlaybackController {
 
 /// Mutable client-side runtime driven by the pair websocket loop: the webview
 /// helper, the video player, voice state, the desktop media surface with its
-/// command feed, and the playback analyzer's spectrum frames.
+/// command feed, the playback analyzer's spectrum frames, and the round trips
+/// the SSH side timed (`latency.rs`).
 pub(super) struct PairRuntime<'a> {
     pub(super) webview: &'a mut WebviewPlaybackController,
     pub(super) video: &'a mut VideoPlayer,
@@ -644,6 +646,7 @@ pub(super) struct PairRuntime<'a> {
     pub(super) desktop_media: &'a mut DesktopMedia,
     pub(super) desktop_commands: &'a mut tokio::sync::mpsc::Receiver<DesktopCommand>,
     pub(super) viz_frames: &'a mut broadcast::Receiver<VizSample>,
+    pub(super) latency_samples: &'a mut tokio::sync::mpsc::Receiver<LatencySample>,
 }
 
 /// How long a pair connection has to hold before the retry loop treats it as
@@ -872,6 +875,9 @@ async fn pair_session_loop(
                         unreachable!("the audio runtime holds the analyzer sender for the whole pair loop")
                     }
                 }
+            }
+            Some(sample) = runtime.latency_samples.recv() => {
+                ws.send(Message::Text(sample.payload().to_string().into())).await?;
             }
             _ = voice_state_heartbeat.tick(), if runtime.voice.joined => {
                 send_voice_state(ws, runtime.voice).await?;

@@ -2483,6 +2483,325 @@
     },
     {
       "type": "row",
+      "title": "Wire & Latency",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 210
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Terminal Round Trip",
+      "description": "Server writing a status query (DSR) to the user's terminal answering it: network both ways, any backlog ahead of the query, the ssh client, the terminal's parse. Split by the bytes the same render pass wrote ahead of the query (none, small up to 4 KiB, medium up to 32 KiB, large). Large well above none means bytes on the wire are what users feel as lag.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le, backlog) (rate(late_ssh_terminal_rtt_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p50 {{backlog}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le, backlog) (rate(late_ssh_terminal_rtt_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p95 {{backlog}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 16,
+            "lineWidth": 2,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 211
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Round Trip by Client",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "description": "Terminal round trip over the range, by client (plain ssh or the late CLI) and the bytes written ahead of the query.",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le, client, backlog) (increase(late_ssh_terminal_rtt_seconds_bucket[$__range])))",
+          "legendFormat": "p50 {{client}} {{backlog}}",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le, client, backlog) (increase(late_ssh_terminal_rtt_seconds_bucket[$__range])))",
+          "legendFormat": "p95 {{client}} {{backlog}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.15
+              },
+              {
+                "color": "red",
+                "value": 0.4
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 211
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Frame Size",
+      "description": "Bytes of each drawn frame handed to the SSH channel, by render reason. A frame is a ratatui diff; terminal commands (images, OSC) are not in it.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le, reason) (rate(late_ssh_frame_bytes_bucket[$__rate_interval])))",
+          "legendFormat": "p50 {{reason}}"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le, reason) (rate(late_ssh_frame_bytes_bucket[$__rate_interval])))",
+          "legendFormat": "p95 {{reason}}"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le, reason) (rate(late_ssh_frame_bytes_bucket[$__rate_interval])))",
+          "legendFormat": "p99 {{reason}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 16,
+            "lineWidth": 2,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 219
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Session Output Rate",
+      "description": "One session's SSH output (frames plus terminal commands) averaged over 10 s windows, across sessions. p95 is the heavy sessions: animated screens, the screensaver, images.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(late_ssh_session_output_bytes_per_second_bucket[$__rate_interval])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(late_ssh_session_output_bytes_per_second_bucket[$__rate_interval])))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "C",
+          "expr": "sum(rate(late_ssh_session_output_bytes_per_second_sum[$__rate_interval])) / sum(rate(late_ssh_session_output_bytes_per_second_count[$__rate_interval]))",
+          "legendFormat": "mean"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 16,
+            "lineWidth": 2,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 219
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Probe Answer Rate (%)",
+      "description": "Share of round-trip probes the terminal answered within 30 s. A session whose terminal ignores three in a row stops probing, so a low rate is a terminal without DSR support or a link stalled for 30 s.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "100 * sum by (client) (rate(late_ssh_terminal_probes_total{outcome=\"answered\"}[$__rate_interval])) / sum by (client) (rate(late_ssh_terminal_probes_total[$__rate_interval]))",
+          "legendFormat": "{{client}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 16,
+            "lineWidth": 2,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 227
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "CLI Trip Split",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "description": "For native-mode late CLI sessions, the whole trip the server timed next to the two halves the CLI timed: ssh_rtt is the SSH transport alone, terminal is the user's terminal alone (query out of the CLI to its answer back).",
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le) (increase(late_ssh_terminal_rtt_seconds_bucket{client=\"cli\"}[$__range])))",
+          "legendFormat": "p50 whole trip",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (increase(late_ssh_terminal_rtt_seconds_bucket{client=\"cli\"}[$__range])))",
+          "legendFormat": "p95 whole trip",
+          "instant": true
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.5, sum by (le, kind) (increase(late_ssh_cli_latency_seconds_bucket[$__range])))",
+          "legendFormat": "p50 {{kind}}",
+          "instant": true
+        },
+        {
+          "refId": "D",
+          "expr": "histogram_quantile(0.95, sum by (le, kind) (increase(late_ssh_cli_latency_seconds_bucket[$__range])))",
+          "legendFormat": "p95 {{kind}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 0.15
+              },
+              {
+                "color": "red",
+                "value": 0.4
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 227
+      }
+    },
+    {
+      "type": "row",
       "title": "Presence",
       "collapsed": false,
       "datasource": {
@@ -2494,7 +2813,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 210
+        "y": 235
       }
     },
     {
@@ -2529,7 +2848,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 211
+        "y": 236
       }
     },
     {
@@ -2568,7 +2887,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 211
+        "y": 236
       }
     },
     {
@@ -2618,7 +2937,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 211
+        "y": 236
       }
     },
     {
@@ -2634,7 +2953,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 219
+        "y": 244
       }
     },
     {
@@ -2691,7 +3010,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 220
+        "y": 245
       }
     },
     {
@@ -2778,7 +3097,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 220
+        "y": 245
       }
     },
     {
@@ -2835,7 +3154,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 220
+        "y": 245
       }
     },
     {
@@ -2851,7 +3170,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 228
+        "y": 253
       }
     },
     {
@@ -2908,7 +3227,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 229
+        "y": 254
       }
     },
     {
@@ -2965,7 +3284,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 229
+        "y": 254
       }
     },
     {
@@ -3022,7 +3341,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 229
+        "y": 254
       }
     },
     {
@@ -3075,7 +3394,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 237
+        "y": 262
       }
     },
     {
@@ -3212,7 +3531,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 245
+        "y": 270
       }
     },
     {
@@ -3298,7 +3617,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 254
+        "y": 279
       }
     },
     {
@@ -3330,7 +3649,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 264
+        "y": 289
       }
     },
     {
@@ -3387,7 +3706,7 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 276
+        "y": 301
       }
     },
     {
@@ -3450,7 +3769,7 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 276
+        "y": 301
       }
     },
     {
@@ -3507,7 +3826,7 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 276
+        "y": 301
       }
     },
     {
@@ -3564,7 +3883,7 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 276
+        "y": 301
       }
     }
   ]

@@ -7,6 +7,7 @@ use late_core::models::media_queue_item::SongQueueReward;
 use crate::app::activity::event::ActivityGame;
 use crate::app::arcade::share::ShareCardKind;
 use crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleArtLoad;
+use crate::app::audio::client_state::ClientPlatform;
 use crate::app::audio::radio_meta::polled::PolledFeed;
 use crate::app::audio::radio_meta::svc::PollOutcome;
 use crate::app::audio::svc::ThumbnailFetch;
@@ -32,6 +33,7 @@ use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
 use crate::app::referral::svc::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement};
 use crate::ircd::conn::{IrcHistoryOutcome, IrcHistoryRequest};
 use crate::pg_listener::Refresh;
+use crate::terminal_probe::ProbeBacklog;
 use late_core::models::article_body::BodyStatus;
 use late_core::models::calendar::CalendarRefusalKind;
 use late_core::models::referral::ReferralSource;
@@ -356,6 +358,33 @@ pub enum SessionUser {
     Returning,
 }
 
+/// What the session's terminal sits behind: plain ssh, or the `late` CLI,
+/// which passes the terminal's bytes through untouched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionClient {
+    Ssh,
+    Cli,
+}
+
+/// How one terminal round-trip probe ended (`terminal_probe.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalProbeOutcome {
+    Answered,
+    /// No reply within the probe timeout.
+    Unanswered,
+}
+
+/// What a paired CLI's latency sample timed (`late-cli/src/latency.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CliLatencyKind {
+    /// An SSH keepalive and its reply: the network and both SSH stacks,
+    /// without the terminal.
+    SshRtt,
+    /// The server's status query leaving the CLI for the terminal, to the
+    /// terminal's answer coming back: the user's terminal alone.
+    Terminal,
+}
+
 /// Which board of a daily puzzle ended: the shared daily or a personal one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArcadeMode {
@@ -603,6 +632,9 @@ mod inner {
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome};
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
+    use super::{
+        CliLatencyKind, ClientPlatform, ProbeBacklog, SessionClient, TerminalProbeOutcome,
+    };
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{PollOutcome, PolledFeed};
@@ -761,6 +793,86 @@ mod inner {
                 .build()
         })
     }
+
+    fn frame_bytes() -> &'static Histogram<u64> {
+        static METRIC: OnceLock<Histogram<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_histogram("late_ssh_frame_bytes")
+                .with_description(
+                    "Bytes of each drawn frame handed to the SSH channel, by render reason",
+                )
+                .with_unit("By")
+                .with_boundaries(vec![
+                    64.0, 256.0, 1024.0, 4096.0, 8192.0, 16384.0, 32768.0, 65536.0, 131072.0,
+                    262144.0, 524288.0, 1048576.0,
+                ])
+                .build()
+        })
+    }
+
+    fn session_output_bytes_per_second() -> &'static Histogram<f64> {
+        static METRIC: OnceLock<Histogram<f64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .f64_histogram("late_ssh_session_output_bytes_per_second")
+                .with_description(
+                    "One session's SSH output rate (frames and terminal commands), one sample per session per 10 s window",
+                )
+                .with_unit("By/s")
+                .with_boundaries(vec![
+                    128.0, 512.0, 1024.0, 2048.0, 4096.0, 8192.0, 16384.0, 32768.0, 65536.0,
+                    131072.0, 262144.0, 524288.0, 1048576.0,
+                ])
+                .build()
+        })
+    }
+
+    fn terminal_probes_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_terminal_probes_total")
+                .with_description(
+                    "Terminal round-trip probes (DSR status queries), by client and whether the terminal answered",
+                )
+                .build()
+        })
+    }
+
+    fn terminal_rtt_seconds() -> &'static Histogram<f64> {
+        static METRIC: OnceLock<Histogram<f64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .f64_histogram("late_ssh_terminal_rtt_seconds")
+                .with_description(
+                    "Server write to the user's terminal answering, by client and the bytes written ahead of the probe",
+                )
+                .with_unit("s")
+                .with_boundaries(TRIP_BOUNDARIES.to_vec())
+                .build()
+        })
+    }
+
+    fn cli_latency_seconds() -> &'static Histogram<f64> {
+        static METRIC: OnceLock<Histogram<f64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .f64_histogram("late_ssh_cli_latency_seconds")
+                .with_description(
+                    "Round trips a paired CLI timed: ssh_rtt is the transport alone, terminal is the user's terminal alone",
+                )
+                .with_unit("s")
+                .with_boundaries(TRIP_BOUNDARIES.to_vec())
+                .build()
+        })
+    }
+
+    /// Shared by the two round-trip histograms so the CLI's split lines up
+    /// with the server's whole trip bucket for bucket.
+    const TRIP_BOUNDARIES: [f64; 16] = [
+        0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.5, 0.75, 1.0, 2.0, 5.0, 10.0, 30.0,
+    ];
 
     fn render_stall_skips_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
@@ -2000,6 +2112,80 @@ mod inner {
 
     pub fn record_render_frame_drop() {
         render_frame_drops_total().add(1, &[]);
+    }
+
+    pub fn record_frame_bytes(reason: RenderReason, bytes: usize) {
+        frame_bytes().record(
+            bytes as u64,
+            &[KeyValue::new("reason", render_reason_label(reason))],
+        );
+    }
+
+    fn session_client_label(client: SessionClient) -> &'static str {
+        match client {
+            SessionClient::Ssh => "ssh",
+            SessionClient::Cli => "cli",
+        }
+    }
+
+    pub fn record_session_output_rate(client: SessionClient, bytes_per_second: f64) {
+        session_output_bytes_per_second().record(
+            bytes_per_second,
+            &[KeyValue::new("client", session_client_label(client))],
+        );
+    }
+
+    fn terminal_probe_outcome_label(outcome: TerminalProbeOutcome) -> &'static str {
+        match outcome {
+            TerminalProbeOutcome::Answered => "answered",
+            TerminalProbeOutcome::Unanswered => "unanswered",
+        }
+    }
+
+    pub fn record_terminal_probe(client: SessionClient, outcome: TerminalProbeOutcome) {
+        terminal_probes_total().add(
+            1,
+            &[
+                KeyValue::new("client", session_client_label(client)),
+                KeyValue::new("outcome", terminal_probe_outcome_label(outcome)),
+            ],
+        );
+    }
+
+    fn probe_backlog_label(backlog: ProbeBacklog) -> &'static str {
+        match backlog {
+            ProbeBacklog::None => "none",
+            ProbeBacklog::Small => "small",
+            ProbeBacklog::Medium => "medium",
+            ProbeBacklog::Large => "large",
+        }
+    }
+
+    pub fn record_terminal_rtt(client: SessionClient, backlog: ProbeBacklog, seconds: f64) {
+        terminal_rtt_seconds().record(
+            seconds,
+            &[
+                KeyValue::new("client", session_client_label(client)),
+                KeyValue::new("backlog", probe_backlog_label(backlog)),
+            ],
+        );
+    }
+
+    fn cli_latency_kind_label(kind: CliLatencyKind) -> &'static str {
+        match kind {
+            CliLatencyKind::SshRtt => "ssh_rtt",
+            CliLatencyKind::Terminal => "terminal",
+        }
+    }
+
+    pub fn record_cli_latency(kind: CliLatencyKind, platform: ClientPlatform, seconds: f64) {
+        cli_latency_seconds().record(
+            seconds,
+            &[
+                KeyValue::new("kind", cli_latency_kind_label(kind)),
+                KeyValue::new("platform", platform.metric_label().unwrap_or("unknown")),
+            ],
+        );
     }
 
     pub fn record_render_stall_skip() {
@@ -3442,6 +3628,9 @@ mod inner {
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome};
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
+    use super::{
+        CliLatencyKind, ClientPlatform, ProbeBacklog, SessionClient, TerminalProbeOutcome,
+    };
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{PollOutcome, PolledFeed};
@@ -3471,6 +3660,11 @@ mod inner {
     pub fn record_cli_pair_usage(_ssh_mode: &str, _platform: &str) {}
     pub fn add_cli_pair_active(_delta: i64, _ssh_mode: &str, _platform: &str) {}
     pub fn record_render_frame_drop() {}
+    pub fn record_frame_bytes(_reason: RenderReason, _bytes: usize) {}
+    pub fn record_session_output_rate(_client: SessionClient, _bytes_per_second: f64) {}
+    pub fn record_terminal_probe(_client: SessionClient, _outcome: TerminalProbeOutcome) {}
+    pub fn record_terminal_rtt(_client: SessionClient, _backlog: ProbeBacklog, _seconds: f64) {}
+    pub fn record_cli_latency(_kind: CliLatencyKind, _platform: ClientPlatform, _seconds: f64) {}
     pub fn record_render_stall_skip() {}
     pub fn record_render_stall_disconnect() {}
     pub fn record_chat_message_sent() {}

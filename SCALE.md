@@ -444,6 +444,87 @@ What would fix it, cheapest first:
 Shortening the grace period is not a fix: it trades this for cutting every
 draining SSH session sooner.
 
+### 11. Bytes on the wire become lag the server cannot see
+
+Every server-side number can be green while users feel lag. `render_once`
+hands a frame to russh in microseconds and counts it done; what the user waits
+for is the network round trip, plus every byte queued ahead of that frame
+divided by their bandwidth, plus their terminal parsing it. None of that shows
+in kube. Three ways bytes turn into lag:
+
+- **A keystroke's frame queues behind animation.** Frames leave in order, so
+  the frame answering a key waits for any animation frames still in the pipe.
+  Nothing paces frames to what the client absorbs: the `OutputBudget` guard
+  (Pain Point 1) acts at 32 MB outstanding, which protects memory, not
+  latency, and it cannot see most of the backlog anyway. russh queues only
+  once the SSH window is full; before that the bytes sit in the kernel and
+  in the edge HAProxy.
+- **Slow start after idle.** By default a connection that pauses longer than
+  its retransmit timeout drops back to slow start (about 14 KB per round
+  trip). Idle sessions tick every 500 ms and clean passes send nothing, so a
+  connection is often cold when the user switches screens, and a 30 to 60 KB
+  repaint then pays two or three extra round trips: 300 to 450 ms more for a
+  user 150 ms away.
+- **The terminal.** True-colour frames plus the backend's per-glyph cursor
+  moves (a bordered empty 160x40 frame is 3.5 KB against 1.9 KB stock,
+  `terminal_backend_test.rs`) cost real parse time in slower terminals.
+
+Measured 2026-10-20 at 33 sessions: `service-ssh` egress about 447 KB/s, so
+about 13.5 KB/s per session and about 7 KB per drawn frame (61 draws/s fleet
+wide). The averages are harmless; bursts and the screensaver pieces (up to
+200 KB/s each, `late-ssh/src/app/ascii/CONTEXT.md`) are where the theory
+would bite. The edge read `tcp_slow_start_after_idle = 1`, `cubic`,
+`tcp_notsent_lowat` unlimited.
+
+**What is measured** (dashboard row Wire & Latency):
+
+- `late_ssh_terminal_rtt_seconds{client,backlog}`: the server's own
+  end-to-end trip (`late-ssh/src/terminal_probe.rs`). Every 10 s the render
+  loop follows a pass with a DSR status query; the terminal answers only
+  after parsing everything before it, so the answer time is what a user
+  waits for a frame. `backlog` is what that pass wrote ahead of the query
+  (`none`, `small` up to 4 KiB, `medium` up to 32 KiB, `large`), and a large
+  pass is probed as soon as the last probe is 2 s old, so big repaints get
+  sampled. `late_ssh_terminal_probes_total{client,outcome}` gives the answer
+  rate.
+- `late_ssh_frame_bytes{reason}` per drawn frame, and
+  `late_ssh_session_output_bytes_per_second{client}`, one sample per session
+  per 10 s window.
+- `late_ssh_cli_latency_seconds{kind,platform}`: the native `late` CLI splits
+  the same trip. `ssh_rtt` is an SSH keepalive round trip (transport only),
+  `terminal` is the query leaving the CLI to the answer coming back (the
+  terminal only). Sent over the pair WebSocket as `latency` events.
+
+**Shipped against slow start:** the `ssh-edge` DaemonSet's `tcp-tuning` init
+container sets `net.ipv4.tcp_slow_start_after_idle=0` in `server-1`'s host
+network namespace (`infra/ssh-tcp.tf`). Verify after the infra apply with
+`kubectl exec -n kube-system ds/ssh-edge -- cat /proc/sys/net/ipv4/tcp_slow_start_after_idle`
+(expect `0`).
+
+**How to read it, after about a week of data:**
+
+- `backlog="large"` p95 well above `backlog="none"` p95 (say 100 ms or more)
+  means bytes on the wire are what users feel. Do the fix below.
+- `none` already high means plain network distance. Nothing server-side
+  shortens that.
+- For CLI sessions, compare the whole trip with its halves. A large
+  `terminal` half means the terminal is the bottleneck, and smaller frames
+  help more than pacing.
+
+**Future fix, after monitoring confirms it: pace frames by acknowledgement,
+the way mosh does.** A frame that answers input always goes out at once. A
+world-tick frame (animation) waits while a probe is still unanswered, and
+while pacing is active every frame carries a probe, so the terminal's
+answers clock the session at exactly what its link and terminal absorb. A
+skipped frame costs nothing: the ratatui diff folds it into the next one.
+Fast links never wait, so they see no change; slow links stop building a
+queue, and a keystroke never waits behind animation. A terminal that does
+not answer DSR keeps today's behaviour (the probe retires after three
+losses). Pair it with `tcp_notsent_lowat` (about 16 KiB) on the edge, so the
+backlog sits in russh and HAProxy where late-ssh can see it rather than in
+the kernel's send buffer; on its own that setting only moves the queue. The
+`OutputBudget` memory guard stays as it is.
+
 ## Render-Cost Program (shipped 2026-07-22/23)
 
 Consolidated from RENDER_COST.md (deleted). The canonical description of the gate contract and the adaptive tick lives in CONTEXT.md §2.6; this section keeps the scale-relevant summary, the rules that must not be violated, and the open follow-ups.
@@ -878,6 +959,12 @@ Before increasing app replicas substantially:
 - move app pools behind PgBouncer transaction pooling
 - avoid multiplying deadpool connections by replica count
 
+### 10. Pace frames by acknowledgement, once the latency data says so
+
+Read the Wire & Latency row after about a week, then decide. The criteria
+and the design are in Pain Point 11. Not before: the point is to find out
+whether bytes on the wire are what users feel, before building against it.
+
 ## 1000-User Target Architecture
 
 Suggested shape:
@@ -889,7 +976,7 @@ Suggested shape:
 - PgBouncer: DB connection smoothing
 - Postgres: durable state
 - Audio: dedicated scalable streaming path, not one small Icecast pod on the app node
-- Observability: dashboard for active sessions, per-pod session count, render frames/sec, frame drops, DB pool wait, Postgres top SQL, p95 input latency. Partially exists: the Rendering row (renders, clean skips, draws/session, stall guard), `late_ssh_sessions_active`, `late_ssh_render_frame_drops_total` (a flat ~909/min per stalled session is the stalled-client signature), and `late_ssh_render_stall_{skips,disconnects}_total`; DB pool wait as `late_db_checkout_seconds` (every `Db::get`, by outcome) with `late_db_pool_connections{state}`, `late_db_pool_waiters` and `late_ssh_chat_read_permits_in_use`, and session start as `late_ssh_session_start_seconds{stage,user}` (accept to first frame), all in the Operations row; traces in VictoriaTraces (Jaeger API on `monitoring/victoriatraces:10428`)
+- Observability: dashboard for active sessions, per-pod session count, render frames/sec, frame drops, DB pool wait, Postgres top SQL, p95 input latency. Partially exists: the Rendering row (renders, clean skips, draws/session, stall guard), `late_ssh_sessions_active`, `late_ssh_render_frame_drops_total` (a flat ~909/min per stalled session is the stalled-client signature), and `late_ssh_render_stall_{skips,disconnects}_total`; DB pool wait as `late_db_checkout_seconds` (every `Db::get`, by outcome) with `late_db_pool_connections{state}`, `late_db_pool_waiters` and `late_ssh_chat_read_permits_in_use`, and session start as `late_ssh_session_start_seconds{stage,user}` (accept to first frame), all in the Operations row; what a user waits to see a frame in the Wire & Latency row (terminal round trip by bytes written ahead, frame size, per-session output rate, the native CLI's split of the trip; Pain Point 11); traces in VictoriaTraces (Jaeger API on `monitoring/victoriatraces:10428`)
 - Per-pod telemetry identity (prerequisite for the above once replicas > 1): each app pod now sets `OTEL_RESOURCE_ATTRIBUTES=service.instance.id=$(POD_NAME)` (downward-API pod name) in Terraform (`infra/service-ssh.tf`, `infra/service-web.tf`). The SDK's env resource detector picks it up and the collector's `resource_to_telemetry_conversion` turns it into a `service_instance_id`/`instance` metric label. Before this, every pod exported an identical otel series (e.g. `late_ssh_sessions_active`) and they clobbered each other on scrape (the 32h A/B window showed the gauge alternating between the two pods' values). Query per pod with `... by (instance)`.
 
 The goal is not "1000 pods". The goal is "N SSH pods, each owning a shard of sessions".
