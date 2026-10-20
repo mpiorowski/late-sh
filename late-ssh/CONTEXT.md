@@ -107,7 +107,16 @@ Keystrokes land in a bounded per-session queue (`INPUT_QUEUE_CAP` 256, input
 dropped with a warning when full) that the render task drains into
 `App::handle_input()` right before each pass, so ordinary input never takes
 the app mutex. Bursts of `input queue full` in prod are paste bombs, not lost
-typing.
+typing. One pass hands over at most `INPUT_DRAIN_MAX_MESSAGES` (64) messages
+or `INPUT_DRAIN_MAX_TIME` (4 ms) of handling, whichever comes first, then
+draws and re-arms itself for the rest (`drain_input`): a key flood costs its
+own session a frame of lag, never the tokio worker the pass runs on.
+
+**Slow passes.** `late_ssh_render_pass_seconds{reason,screen}` times the
+locked part of every pass (input drain, tick, draw). A pass longer than
+`HOT_TICK` logs `slow render pass` with the username and screen, at most once
+a minute per session, so `_msg:"slow render pass"` in VictoriaLogs names who
+is pinning a worker while the fleet's CPU average still looks green.
 
 **Wall clock, not counters.** `marquee_tick` is derived from elapsed wall time,
 and every frame edge compares its period index against the previous tick's
@@ -410,7 +419,9 @@ a no-op twin when built without `otel`.
 - Render: `late_ssh_renders_total{reason}`,
   `late_ssh_renders_skipped_clean_total`, `late_ssh_render_frame_drops_total`
   (a flat ~909/min is one stalled client), `late_ssh_render_stall_*`,
-  `late_ssh_frame_bytes{reason}`, `late_ssh_session_output_bytes_per_second`.
+  `late_ssh_frame_bytes{reason}`, `late_ssh_session_output_bytes_per_second`,
+  `late_ssh_render_pass_seconds{reason,screen}`,
+  `late_ssh_render_input_budget_hits_total`.
 - Engagement: `late_ssh_attention_seconds_total{screen,place,presence}` and
   `late_ssh_place_visits_total{screen,place}`, fed on the 1 Hz edge by
   `tick.rs::record_attention`. `place` is `none` except where a screen holds

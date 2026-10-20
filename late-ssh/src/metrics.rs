@@ -909,6 +909,34 @@ mod inner {
         })
     }
 
+    fn render_input_budget_hits_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_render_input_budget_hits_total")
+                .with_description(
+                    "Render passes that stopped draining input at the per-pass budget with input still queued",
+                )
+                .build()
+        })
+    }
+
+    fn render_pass_seconds() -> &'static Histogram<f64> {
+        static METRIC: OnceLock<Histogram<f64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .f64_histogram("late_ssh_render_pass_seconds")
+                .with_description(
+                    "Time one render pass held the app lock (input drain, tick, draw), by render reason and the screen it ended on",
+                )
+                .with_unit("s")
+                .with_boundaries(vec![
+                    0.001, 0.002, 0.004, 0.008, 0.016, 0.033, 0.066, 0.132, 0.25, 0.5, 1.0,
+                ])
+                .build()
+        })
+    }
+
     fn chat_messages_sent_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -2196,6 +2224,20 @@ mod inner {
 
     pub fn record_render_stall_disconnect() {
         render_stall_disconnects_total().add(1, &[]);
+    }
+
+    pub fn record_render_input_budget_hit() {
+        render_input_budget_hits_total().add(1, &[]);
+    }
+
+    pub fn record_render_pass(reason: RenderReason, screen: Screen, seconds: f64) {
+        render_pass_seconds().record(
+            seconds,
+            &[
+                KeyValue::new("reason", render_reason_label(reason)),
+                KeyValue::new("screen", screen_label(screen)),
+            ],
+        );
     }
 
     pub fn record_chat_message_sent() {
@@ -3669,6 +3711,8 @@ mod inner {
     pub fn record_cli_latency(_kind: CliLatencyKind, _platform: ClientPlatform, _seconds: f64) {}
     pub fn record_render_stall_skip() {}
     pub fn record_render_stall_disconnect() {}
+    pub fn record_render_input_budget_hit() {}
+    pub fn record_render_pass(_reason: RenderReason, _screen: Screen, _seconds: f64) {}
     pub fn record_chat_message_sent() {}
     pub fn record_chat_message_edited() {}
     pub fn record_game_win(_game: ActivityGame) {}

@@ -624,7 +624,8 @@ fn edit_canvas_detects_real_canvas_changes_even_if_helper_reports_false() {
     let mut state = test_state();
     state.snapshot.canvas = Canvas::with_size(5, 3);
 
-    let changed = state.edit_canvas(|_editor, canvas, color| {
+    let reach = EditReach::Within(Bounds::single(Pos { x: 0, y: 0 }));
+    let changed = state.edit_canvas(reach, |_editor, canvas, color| {
         let _ = canvas.put_glyph_colored(Pos { x: 0, y: 0 }, '👍', color);
         false
     });
@@ -677,4 +678,40 @@ fn commit_floating_moves_selected_region() {
     assert_eq!(state.snapshot.canvas.get(Pos { x: 1, y: 1 }), ' ');
     assert_eq!(state.snapshot.canvas.get(Pos { x: 2, y: 1 }), ' ');
     assert!(!state.has_floating());
+}
+
+/// Edits read only the cells they can reach, a column either side included
+/// for wide glyphs. These are the edges where a bounded diff could miss a
+/// change; debug builds check every edit against the whole-board diff, so a
+/// miss fails here.
+#[test]
+fn edits_beside_wide_glyphs_reach_the_other_half() {
+    let mut state = test_state();
+    state.snapshot.canvas = Canvas::with_size(384, 192);
+    let _ = state.snapshot.canvas.put_glyph(Pos { x: 3, y: 5 }, '👍');
+    let _ = state.snapshot.canvas.put_glyph(Pos { x: 11, y: 5 }, '👍');
+
+    // A narrow glyph typed over the right half of a wide one clears it.
+    state.editor.cursor = Pos { x: 4, y: 5 };
+    let _ = state.handle_editor_action(EditorAction::InsertChar('x'));
+    assert_eq!(state.snapshot.canvas.cell(Pos { x: 3, y: 5 }), None);
+    assert_eq!(state.snapshot.canvas.get(Pos { x: 4, y: 5 }), 'x');
+
+    // A wide glyph typed just left of another wide one replaces it.
+    state.editor.cursor = Pos { x: 10, y: 5 };
+    let _ = state.handle_editor_action(EditorAction::InsertChar('🌱'));
+    assert_eq!(state.snapshot.canvas.get(Pos { x: 10, y: 5 }), '🌱');
+    assert_eq!(
+        state.snapshot.canvas.cell(Pos { x: 11, y: 5 }),
+        Some(CellValue::WideCont)
+    );
+    assert_eq!(state.snapshot.canvas.cell(Pos { x: 12, y: 5 }), None);
+
+    // Backspace from just right of a wide glyph clears all of it.
+    state.editor.cursor = Pos { x: 12, y: 5 };
+    let _ = state.handle_editor_action(EditorAction::Backspace);
+    assert_eq!(state.snapshot.canvas.cell(Pos { x: 10, y: 5 }), None);
+    assert_eq!(state.snapshot.canvas.cell(Pos { x: 11, y: 5 }), None);
+    assert_eq!(state.editor.cursor, Pos { x: 10, y: 5 });
+    assert_eq!(state.snapshot.canvas.get(Pos { x: 4, y: 5 }), 'x');
 }

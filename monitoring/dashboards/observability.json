@@ -2445,7 +2445,7 @@
     {
       "type": "timeseries",
       "title": "Render Stalls",
-      "description": "Output-budget guard: paused render passes and forced disconnects for clients not reading their stream",
+      "description": "Output-budget guard: paused render passes and forced disconnects for clients not reading their stream. Input budget hits: passes that stopped handing a session's queued input to the app at 64 messages or 4 ms (a key flood or a slow handler) and left the rest for the next pass.",
       "datasource": {
         "uid": "victoriametrics",
         "type": "victoriametrics-metrics-datasource"
@@ -2460,6 +2460,11 @@
           "refId": "B",
           "expr": "rate(late_ssh_render_stall_disconnects_total[$__rate_interval])",
           "legendFormat": "stall disconnects"
+        },
+        {
+          "refId": "C",
+          "expr": "rate(late_ssh_render_input_budget_hits_total[$__rate_interval])",
+          "legendFormat": "input budget hits"
         }
       ],
       "fieldConfig": {
@@ -2801,6 +2806,116 @@
       }
     },
     {
+      "type": "timeseries",
+      "title": "Render Pass Time",
+      "description": "How long one render pass held the app lock (input drain, tick, draw), across sessions. The red line is the hot tick (66 ms): a p99 above it for minutes is a session pinning a tokio worker while the fleet's CPU average stays green. `_msg:\"slow render pass\"` in VictoriaLogs names the user and screen.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(late_ssh_render_pass_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p50"
+        },
+        {
+          "refId": "B",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(late_ssh_render_pass_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p95"
+        },
+        {
+          "refId": "C",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(late_ssh_render_pass_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "p99"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 16,
+            "lineWidth": 2,
+            "showPoints": "auto",
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.066
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 235
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Render Pass p99 by Screen",
+      "description": "p99 render pass time per screen the pass ended on. One screen far above the rest is where to look.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "histogram_quantile(0.99, sum by (le, screen) (rate(late_ssh_render_pass_seconds_bucket[$__rate_interval])))",
+          "legendFormat": "{{screen}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "fillOpacity": 16,
+            "lineWidth": 2,
+            "showPoints": "auto",
+            "thresholdsStyle": {
+              "mode": "line"
+            }
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 0.066
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 235
+      }
+    },
+    {
       "type": "row",
       "title": "Presence",
       "collapsed": false,
@@ -2813,7 +2928,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 235
+        "y": 243
       }
     },
     {
@@ -2848,7 +2963,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 236
+        "y": 244
       }
     },
     {
@@ -2887,7 +3002,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 236
+        "y": 244
       }
     },
     {
@@ -2937,7 +3052,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 236
+        "y": 244
       }
     },
     {
@@ -2953,7 +3068,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 244
+        "y": 252
       }
     },
     {
@@ -3010,7 +3125,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 245
+        "y": 253
       }
     },
     {
@@ -3097,7 +3212,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 245
+        "y": 253
       }
     },
     {
@@ -3154,7 +3269,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 245
+        "y": 253
       }
     },
     {
@@ -3170,7 +3285,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 253
+        "y": 261
       }
     },
     {
@@ -3227,7 +3342,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 254
+        "y": 262
       }
     },
     {
@@ -3284,7 +3399,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 254
+        "y": 262
       }
     },
     {
@@ -3341,7 +3456,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 254
+        "y": 262
       }
     },
     {
@@ -3394,7 +3509,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 262
+        "y": 270
       }
     },
     {
@@ -3531,7 +3646,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 270
+        "y": 278
       }
     },
     {
@@ -3617,7 +3732,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 279
+        "y": 287
       }
     },
     {
@@ -3649,7 +3764,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 289
+        "y": 297
       }
     },
     {
@@ -3706,7 +3821,7 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 301
+        "y": 309
       }
     },
     {
@@ -3769,7 +3884,7 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 301
+        "y": 309
       }
     },
     {
@@ -3826,7 +3941,7 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 301
+        "y": 309
       }
     },
     {
@@ -3883,7 +3998,7 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 301
+        "y": 309
       }
     }
   ]

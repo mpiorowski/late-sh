@@ -522,6 +522,11 @@ would bite. The edge read `tcp_slow_start_after_idle = 1`, `cubic`,
   the same trip. `ssh_rtt` is an SSH keepalive round trip (transport only),
   `terminal` is the query leaving the CLI to the answer coming back (the
   terminal only). Sent over the pair WebSocket as `latency` events.
+- `late_ssh_render_pass_seconds{reason,screen}`: how long each render pass
+  held the app lock (input drain, tick, draw), the server-side half the
+  trip above cannot separate. One slow session pins a tokio worker while the
+  fleet's CPU average stays green; a pass over the hot tick (66 ms) also logs
+  `slow render pass` with the username and screen, once a minute per session.
 
 **Shipped against slow start:** the `ssh-edge` DaemonSet's `tcp-tuning` init
 container sets `net.ipv4.tcp_slow_start_after_idle=0` in `server-1`'s host
@@ -1009,7 +1014,7 @@ Suggested shape:
 - PgBouncer: DB connection smoothing
 - Postgres: durable state
 - Audio: dedicated scalable streaming path, not one small Icecast pod on the app node
-- Observability: dashboard for active sessions, per-pod session count, render frames/sec, frame drops, DB pool wait, Postgres top SQL, p95 input latency. Partially exists: the Rendering row (renders, clean skips, draws/session, stall guard), `late_ssh_sessions_active`, `late_ssh_render_frame_drops_total` (a flat ~909/min per stalled session is the stalled-client signature), and `late_ssh_render_stall_{skips,disconnects}_total`; DB pool wait as `late_db_checkout_seconds` (every `Db::get`, by outcome) with `late_db_pool_connections{state}`, `late_db_pool_waiters` and `late_ssh_chat_read_permits_in_use`, and session start as `late_ssh_session_start_seconds{stage,user}` (accept to first frame), all in the Operations row; what a user waits to see a frame in the Wire & Latency row (terminal round trip by the second of output before it, frame size, per-session output rate, the native CLI's split of the trip; Pain Point 11); traces in VictoriaTraces (Jaeger API on `monitoring/victoriatraces:10428`)
+- Observability: dashboard for active sessions, per-pod session count, render frames/sec, frame drops, DB pool wait, Postgres top SQL, p95 input latency. Partially exists: the Rendering row (renders, clean skips, draws/session, stall guard), `late_ssh_sessions_active`, `late_ssh_render_frame_drops_total` (a flat ~909/min per stalled session is the stalled-client signature), and `late_ssh_render_stall_{skips,disconnects}_total`; DB pool wait as `late_db_checkout_seconds` (every `Db::get`, by outcome) with `late_db_pool_connections{state}`, `late_db_pool_waiters` and `late_ssh_chat_read_permits_in_use`, and session start as `late_ssh_session_start_seconds{stage,user}` (accept to first frame), all in the Operations row; what a user waits to see a frame in the Wire & Latency row (terminal round trip by the second of output before it, frame size, per-session output rate, the native CLI's split of the trip, render pass time by screen; Pain Point 11); traces in VictoriaTraces (Jaeger API on `monitoring/victoriatraces:10428`)
 - Per-pod telemetry identity (prerequisite for the above once replicas > 1): each app pod now sets `OTEL_RESOURCE_ATTRIBUTES=service.instance.id=$(POD_NAME)` (downward-API pod name) in Terraform (`infra/service-ssh.tf`, `infra/service-web.tf`). The SDK's env resource detector picks it up and the collector's `resource_to_telemetry_conversion` turns it into a `service_instance_id`/`instance` metric label. Before this, every pod exported an identical otel series (e.g. `late_ssh_sessions_active`) and they clobbered each other on scrape (the 32h A/B window showed the gauge alternating between the two pods' values). Query per pod with `... by (instance)`.
 
 The goal is not "1000 pods". The goal is "N SSH pods, each owning a shard of sessions".
