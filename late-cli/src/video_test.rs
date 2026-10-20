@@ -497,8 +497,7 @@ fn mpv_properties_read_as_a_state() {
 /// every image; per frame a cursor move and a graphics command; on exit
 /// delete every image, show cursor, mouse off, a cursor move.
 const MPV_START: &[u8] = b"\x1b[?25l\x1b[?1003h\x1b_Ga=d;\x1b\\";
-const MPV_FRAME: &[u8] =
-    b"\x1b[2;3f\x1b_Ga=T,t=s,f=24,s=266,v=200,C=1,q=2,m=1;bXB2LWtpdHR5\x1b\\";
+const MPV_FRAME: &[u8] = b"\x1b[2;3f\x1b_Ga=T,t=s,f=24,s=266,v=200,C=1,q=2,m=1;bXB2LWtpdHR5\x1b\\";
 const MPV_END: &[u8] = b"\x1b_Ga=d;\x1b\\\x1b[?25h\x1b[?1003l\x1b[40;0f";
 
 /// Feed `reads` through one filter and return what each tty write carries,

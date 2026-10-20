@@ -796,7 +796,10 @@ enum MpvWrite {
     /// A terminal mode the TUI owns: dropped.
     Mode,
     /// `ESC [ row ; col f`: where the next frame goes.
-    CursorMove { row: u32, col: u32 },
+    CursorMove {
+        row: u32,
+        col: u32,
+    },
     /// `ESC _ G a=d ; ESC \`: every image on screen.
     DeleteAll,
     /// Any other kitty graphics command: a frame, or a chunk of one.

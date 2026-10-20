@@ -47,7 +47,8 @@ const WINDOW_HEADER_ROWS: u16 = 2;
 
 #[derive(Debug)]
 pub(crate) enum WatchModal {
-    Player(Player),
+    /// Boxed: a play's state dwarfs the setup box.
+    Player(Box<Player>),
     Setup(SetupBox),
 }
 

@@ -7,10 +7,7 @@ fn a_smaller_screen_is_drawn_whole() {
 
 #[test]
 fn a_larger_screen_follows_the_cursor() {
-    assert_eq!(
-        fit_axis(120, 80, 60),
-        AxisFit { src: 20, len: 80 }
-    );
+    assert_eq!(fit_axis(120, 80, 60), AxisFit { src: 20, len: 80 });
 }
 
 #[test]

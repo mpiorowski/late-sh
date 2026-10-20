@@ -524,12 +524,12 @@ impl State {
         self.last_play_id += 1;
         self.reader = None;
         let resume_from = self.watch_positions.get(&article_id).copied();
-        self.watch = Some(WatchModal::Player(Player::new(
+        self.watch = Some(WatchModal::Player(Box::new(Player::new(
             &item,
             self.last_play_id,
             now,
             resume_from,
-        )));
+        ))));
         self.mark_article_read(article_id);
         true
     }
