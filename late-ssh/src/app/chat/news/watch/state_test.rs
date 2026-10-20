@@ -540,6 +540,66 @@ fn the_playing_position_is_checkpointed_every_fifteen_seconds() {
     );
 }
 
+/// A fresh play that a checkpoint already saved has a position stored, so
+/// taken back to the top and stopped it clears that position as a resumed
+/// play would, and the next watch starts over rather than jumping back.
+#[test]
+fn a_checkpointed_play_taken_back_to_the_top_clears() {
+    let opened = Instant::now();
+    let later = opened + WATCH_SAVE_EVERY;
+    let mut player = drawn_player(opened);
+    player.apply(
+        &VideoReport::Playing {
+            position_s: 40,
+            duration_s: Some(2910),
+        },
+        later,
+    );
+    assert_eq!(player.checkpoint(later), Some(at(40, Some(2910))));
+
+    player.apply(
+        &VideoReport::Playing {
+            position_s: 2,
+            duration_s: Some(2910),
+        },
+        later,
+    );
+    assert_eq!(player.memory(), WatchMemory::Clear);
+}
+
+/// Once the play is over, what it leaves is the close's to decide: a final
+/// report past the save interval checkpoints nothing, so no near-end
+/// position is written for the close to clear.
+#[test]
+fn a_finished_play_is_never_checkpointed() {
+    let opened = Instant::now();
+    let later = opened + WATCH_SAVE_EVERY;
+    let near_the_end = VideoReport::Playing {
+        position_s: 2900,
+        duration_s: Some(2910),
+    };
+    let finals = [
+        ("ended", VideoReport::Ended),
+        (
+            "failed",
+            VideoReport::Failed {
+                message: "mpv exited".to_string(),
+            },
+        ),
+    ];
+    for (name, report) in finals {
+        let mut player = drawn_player(opened);
+        player.apply(&near_the_end, opened);
+        player.apply(&report, later);
+        assert_eq!(player.checkpoint(later), None, "{name}");
+    }
+
+    let mut lost = drawn_player(opened);
+    lost.apply(&near_the_end, opened);
+    lost.expire(opened + WATCH_LOST_AFTER);
+    assert_eq!(lost.checkpoint(later), None, "lost");
+}
+
 fn cli(capabilities: &[&str], blockers: &[VideoBlocker]) -> ClientAudioState {
     ClientAudioState {
         client_kind: ClientKind::Cli,

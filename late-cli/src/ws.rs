@@ -5,14 +5,11 @@ use serde::Deserialize;
 use serde_json::json;
 use std::collections::HashMap;
 #[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-#[cfg(unix)]
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::{
-    env, fs,
-    fs::OpenOptions,
+    env,
     io::Write,
-    path::{Path, PathBuf},
+    path::PathBuf,
     process::{Child, Command, Stdio},
     sync::{
         Arc, Mutex,
@@ -29,6 +26,7 @@ use super::audio::loopback::{HelperAudioCapture, helper_stream_env};
 use super::{
     audio::VizSample,
     clipboard,
+    config::{open_state_log, state_log_path},
     mpris::{DesktopCommand, DesktopMedia, IcecastTrack, MediaSource, RadioTrack, YoutubeTrack},
     video::{
         self, PlaceOutcome, VideoBlocker, VideoControl, VideoPlayer, VideoRect, VideoState,
@@ -577,26 +575,6 @@ fn webview_helper_stderr() -> Result<WebviewHelperStderr> {
     })
 }
 
-/// Open a child's stderr log for append, private to this user, refusing a
-/// symlinked file or directory.
-pub(super) fn open_state_log(path: &Path) -> Result<fs::File> {
-    ensure_state_log_dir(path)?;
-    let mut options = OpenOptions::new();
-    options.create(true).append(true);
-    #[cfg(unix)]
-    {
-        options.mode(0o600).custom_flags(nix::libc::O_NOFOLLOW);
-    }
-    let file = options
-        .open(path)
-        .with_context(|| format!("failed to open log at {}", path.display()))?;
-    #[cfg(unix)]
-    {
-        let _ = file.set_permissions(fs::Permissions::from_mode(0o600));
-    }
-    Ok(file)
-}
-
 fn write_helper_token(child: &mut Child, token: &str) -> Result<()> {
     let mut stdin = child
         .stdin
@@ -609,54 +587,6 @@ fn write_helper_token(child: &mut Child, token: &str) -> Result<()> {
         .write_all(b"\n")
         .context("failed to terminate webview helper token")?;
     Ok(())
-}
-
-/// A child's log file: the `override_key` env var, else `file_name` in the
-/// late state directory.
-pub(super) fn state_log_path(override_key: &str, file_name: &str) -> PathBuf {
-    if let Some(path) = nonempty_os_env(override_key) {
-        return PathBuf::from(path);
-    }
-
-    #[cfg(unix)]
-    {
-        if let Some(base) = nonempty_os_env("XDG_STATE_HOME") {
-            return PathBuf::from(base).join("late").join(file_name);
-        }
-        if let Some(home) = nonempty_os_env("HOME") {
-            return PathBuf::from(home)
-                .join(".local")
-                .join("state")
-                .join("late")
-                .join(file_name);
-        }
-        if let Some(base) = nonempty_os_env("XDG_RUNTIME_DIR") {
-            return PathBuf::from(base).join("late").join(file_name);
-        }
-        env::temp_dir()
-            .join(format!("late-{}", effective_user_id()))
-            .join(file_name)
-    }
-
-    #[cfg(windows)]
-    {
-        if let Some(base) = nonempty_os_env("LOCALAPPDATA") {
-            return PathBuf::from(base).join("late").join(file_name);
-        }
-        if let Some(profile) = nonempty_os_env("USERPROFILE") {
-            return PathBuf::from(profile)
-                .join("AppData")
-                .join("Local")
-                .join("late")
-                .join(file_name);
-        }
-        return env::temp_dir().join("late").join(file_name);
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    {
-        env::temp_dir().join("late").join(file_name)
-    }
 }
 
 fn nonempty_os_env(key: &str) -> Option<std::ffi::OsString> {
@@ -696,31 +626,6 @@ fn exit_signal_name(status: &std::process::ExitStatus) -> Option<&'static str> {
 #[cfg(not(unix))]
 fn exit_signal_name(_status: &std::process::ExitStatus) -> Option<&'static str> {
     None
-}
-
-fn ensure_state_log_dir(path: &Path) -> Result<()> {
-    let parent = path.parent().context("log path has no parent directory")?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("failed to create log directory at {}", parent.display()))?;
-    #[cfg(unix)]
-    {
-        let metadata = fs::symlink_metadata(parent)
-            .with_context(|| format!("failed to inspect log directory at {}", parent.display()))?;
-        if metadata.file_type().is_symlink() || !metadata.is_dir() {
-            anyhow::bail!(
-                "log directory is not a real directory: {}",
-                parent.display()
-            );
-        }
-        let _ = fs::set_permissions(parent, fs::Permissions::from_mode(0o700));
-    }
-    Ok(())
-}
-
-#[cfg(unix)]
-fn effective_user_id() -> u32 {
-    // SAFETY: geteuid has no preconditions and does not modify memory.
-    unsafe { nix::libc::geteuid() }
 }
 
 impl Drop for WebviewPlaybackController {

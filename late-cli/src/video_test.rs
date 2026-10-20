@@ -493,46 +493,141 @@ fn mpv_properties_read_as_a_state() {
 }
 
 /// What mpv 0.41's kitty output actually writes around its frames, captured
-/// with stdout on a pipe: hide cursor, any-motion mouse on, delete every
-/// image, then per frame a cursor move and a graphics command, then delete
-/// every image, show cursor, mouse off, a cursor move. The relay lets only
-/// the frames through, whole, however the reads split them.
+/// with stdout on a pipe: on start hide cursor, any-motion mouse on, delete
+/// every image; per frame a cursor move and a graphics command; on exit
+/// delete every image, show cursor, mouse off, a cursor move.
+const MPV_START: &[u8] = b"\x1b[?25l\x1b[?1003h\x1b_Ga=d;\x1b\\";
+const MPV_FRAME: &[u8] =
+    b"\x1b[2;3f\x1b_Ga=T,t=s,f=24,s=266,v=200,C=1,q=2,m=1;bXB2LWtpdHR5\x1b\\";
+const MPV_END: &[u8] = b"\x1b_Ga=d;\x1b\\\x1b[?25h\x1b[?1003l\x1b[40;0f";
+
+/// Feed `reads` through one filter and return what each tty write carries,
+/// checking every write is wrapped in a cursor save and restore: the SSH
+/// forwarder writes between any two of them, and finds the cursor where it
+/// left it.
+fn relay_writes(reads: &[&[u8]]) -> Vec<Vec<u8>> {
+    let mut filter = TtyFilter::default();
+    reads
+        .iter()
+        .map(|read| filter.feed(read))
+        .filter(|write| !write.is_empty())
+        .map(|write| {
+            match write
+                .strip_prefix(b"\x1b7")
+                .and_then(|rest| rest.strip_suffix(b"\x1b8"))
+            {
+                Some(inner) => inner.to_vec(),
+                None => panic!("a write without a cursor save and restore: {write:?}"),
+            }
+        })
+        .collect()
+}
+
+/// The relay lets only mpv's frames through, whole, however the reads split
+/// them: its terminal modes are dropped, its cursor moves travel with the
+/// graphics commands they position and never alone, and its delete of every
+/// image becomes a delete of the frames it placed.
 #[test]
 fn the_relay_strips_mpv_terminal_modes_and_passes_frames_whole() {
-    let start = b"\x1b[?25l\x1b[?1003h\x1b_Ga=d;\x1b\\";
-    let frame = b"\x1b[2;3f\x1b_Ga=T,t=s,f=24,s=266,v=200,C=1,q=2,m=1;bXB2LWtpdHR5\x1b\\";
-    let end = b"\x1b_Ga=d;\x1b\\\x1b[?25h\x1b[?1003l\x1b[40;0f";
-    let mut stream = Vec::new();
-    stream.extend_from_slice(start);
-    stream.extend_from_slice(frame);
-    stream.extend_from_slice(frame);
-    stream.extend_from_slice(end);
-
-    let mut expected = Vec::new();
-    expected.extend_from_slice(frame);
-    expected.extend_from_slice(frame);
-    expected.extend_from_slice(b"\x1b[40;0f");
+    let stream = [MPV_START, MPV_FRAME, MPV_FRAME, MPV_END].concat();
+    let expected = [
+        MPV_FRAME,
+        MPV_FRAME,
+        b"\x1b_Ga=d,d=P,x=3,y=2,q=2\x1b\\".as_slice(),
+    ]
+    .concat();
 
     // Every split point, including inside `ESC[?10`, inside `_Ga=d;` and
     // between ESC and the backslash that closes a graphics command.
     for split in 0..=stream.len() {
-        let mut filter = TtyFilter::default();
-        let mut out = filter.feed(&stream[..split]);
-        out.extend(filter.feed(&stream[split..]));
-        assert_eq!(out, expected, "split at {split}");
+        let written = relay_writes(&[&stream[..split], &stream[split..]]).concat();
+        assert_eq!(written, expected, "split at {split}");
     }
 
-    // A sequence the read cut in half is held, not written half.
-    let mut filter = TtyFilter::default();
-    let cut = frame.len() / 2;
-    assert_eq!(filter.feed(&frame[..cut]), b"\x1b[2;3f".to_vec());
-    assert_eq!(filter.feed(&frame[cut..]), frame[6..].to_vec());
+    // A sequence the read cut in half is held, not written half, and the
+    // cursor move before it waits with it.
+    let cut = MPV_FRAME.len() / 2;
+    assert_eq!(
+        relay_writes(&[&MPV_FRAME[..cut], &MPV_FRAME[cut..]]),
+        vec![MPV_FRAME.to_vec()]
+    );
 
     // Modes the TUI itself uses are not mpv's and pass untouched.
-    let mut filter = TtyFilter::default();
     assert_eq!(
-        filter.feed(b"\x1b[?1006h\x1b[?2004htext"),
-        b"\x1b[?1006h\x1b[?2004htext".to_vec()
+        relay_writes(&[b"\x1b[?1006h\x1b[?2004htext".as_slice()]),
+        vec![b"\x1b[?1006h\x1b[?2004htext".to_vec()]
+    );
+}
+
+/// Without shared memory a frame is many graphics commands, and the
+/// terminal places it at the cursor when the last one lands. The SSH
+/// forwarder writes between any two relay writes and moves the cursor, so
+/// each command goes out behind mpv's cursor move in the same write: the
+/// frame lands in the rectangle, never where the TUI left the cursor.
+#[test]
+fn a_frame_split_across_reads_is_placed_where_mpv_put_it() {
+    let cursor = b"\x1b[4;11f".as_slice();
+    let first = b"\x1b_Ga=T,f=24,s=8,v=4,C=1,q=2,m=1;AAAA\x1b\\".as_slice();
+    let middle = b"\x1b_Gm=1;BBBB\x1b\\".as_slice();
+    let last = b"\x1b_Gm=0;CCCC\x1b\\".as_slice();
+
+    let writes = relay_writes(&[[cursor, first].concat().as_slice(), middle, last]);
+
+    assert_eq!(
+        writes,
+        vec![
+            [cursor, first].concat(),
+            [cursor, middle].concat(),
+            [cursor, last].concat(),
+        ]
+    );
+}
+
+/// A move tears mpv's output down and rebuilds it in the new rectangle, and
+/// frames drawn before the teardown can still be in the pipe when the
+/// move's own settle goes out. mpv deletes every image as it tears the
+/// output down; the relay turns that into the settle of the rectangle its
+/// frames were in, so the delete lands after the last old frame.
+#[test]
+fn moving_the_output_deletes_the_old_frames_after_the_last_one() {
+    let window = VideoRect {
+        left: 10,
+        top: 3,
+        cols: 100,
+        rows: 28,
+    };
+    let full = VideoRect {
+        left: 0,
+        top: 0,
+        cols: 200,
+        rows: 49,
+    };
+    // mpv's cursor moves for `--vo-kitty-top/left` of each.
+    let image = b"\x1b_Ga=T,t=s,f=24,s=8,v=4,C=1,q=2,m=1;cGF0aA==\x1b\\".as_slice();
+    let in_window = [b"\x1b[4;11f".as_slice(), image].concat();
+    let in_full = [b"\x1b[1;1f".as_slice(), image].concat();
+
+    let written = relay_writes(&[
+        MPV_START,
+        in_window.as_slice(),
+        in_window.as_slice(),
+        MPV_END,
+        MPV_START,
+        in_full.as_slice(),
+        MPV_END,
+    ])
+    .concat();
+
+    assert_eq!(
+        written,
+        [
+            in_window.as_slice(),
+            in_window.as_slice(),
+            settle_sequence(window).as_bytes(),
+            in_full.as_slice(),
+            settle_sequence(full).as_bytes(),
+        ]
+        .concat()
     );
 }
 

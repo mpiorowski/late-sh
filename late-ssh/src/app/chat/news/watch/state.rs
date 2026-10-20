@@ -132,11 +132,11 @@ pub(crate) struct WantedPlay<'a> {
 pub(crate) enum WatchMemory {
     /// Partway through: resume here next time.
     Save(WatchPosition),
-    /// Watched to the end, or a resumed play stopped back at the top: the
-    /// next watch starts over.
+    /// Watched to the end, or stopped back at the top with a position
+    /// stored: the next watch starts over.
     Clear,
-    /// Nothing worth writing: no position ever came in, or a fresh play
-    /// stopped inside its first seconds.
+    /// Nothing worth writing: no position ever came in, or a play with
+    /// nothing stored stopped inside its first seconds.
     Nothing,
 }
 
@@ -155,6 +155,10 @@ pub(crate) struct Player {
     last_state_at: Instant,
     /// Where the reader left this video last time, if partway through.
     resume_from: Option<WatchPosition>,
+    /// Whether a position is stored for this video: the one it resumed
+    /// from, or a checkpoint since. Taken back to the top, the close then
+    /// has a position to clear.
+    position_stored: bool,
     /// The last position the CLI reported, kept past a failure or a loss
     /// so the close still saves it.
     last_seen: Option<WatchPosition>,
@@ -188,6 +192,7 @@ impl Player {
             played: false,
             last_state_at: now,
             resume_from,
+            position_stored: resume_from.is_some(),
             last_seen: None,
             last_saved_at: now,
             resume_note_until: None,
@@ -418,11 +423,19 @@ impl Player {
         }
     }
 
-    /// A position worth saving now: the last one reported, once
-    /// [`WATCH_SAVE_EVERY`] has passed since the last save and the play is
-    /// past its first seconds. Called after every report; most answer
-    /// `None`.
+    /// A position worth saving now: the last one reported, while the play
+    /// is playing or paused, once [`WATCH_SAVE_EVERY`] has passed since the
+    /// last save and the play is past its first seconds. Called after every
+    /// report; most answer `None`. A play that is over is the close's to
+    /// decide (`memory`).
     pub(crate) fn checkpoint(&mut self, now: Instant) -> Option<WatchPosition> {
+        match self.status {
+            WatchStatus::Playing(_) | WatchStatus::Paused(_) => {}
+            WatchStatus::Starting
+            | WatchStatus::Ended
+            | WatchStatus::Failed
+            | WatchStatus::Lost => return None,
+        }
         let position = self.last_seen?;
         if position.position_s < WATCH_SAVE_MIN_S {
             return None;
@@ -431,13 +444,15 @@ impl Player {
             return None;
         }
         self.last_saved_at = now;
+        self.position_stored = true;
         Some(position)
     }
 
     /// What to remember for the next watch, as the player closes: the last
     /// position while partway through, a clear once the video was watched
-    /// to its end (or a resumed one was taken back to the top), nothing
-    /// when no position ever came in or a fresh play stopped at once.
+    /// to its end (or taken back to the top with a position stored),
+    /// nothing when no position ever came in or a play with nothing stored
+    /// stopped at once.
     pub(crate) fn memory(&self) -> WatchMemory {
         if self.status == WatchStatus::Ended {
             return WatchMemory::Clear;
@@ -453,9 +468,9 @@ impl Player {
             return WatchMemory::Clear;
         }
         if position.position_s < WATCH_SAVE_MIN_S {
-            return match self.resume_from {
-                Some(_) => WatchMemory::Clear,
-                None => WatchMemory::Nothing,
+            return match self.position_stored {
+                true => WatchMemory::Clear,
+                false => WatchMemory::Nothing,
             };
         }
         WatchMemory::Save(position)

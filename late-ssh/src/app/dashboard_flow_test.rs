@@ -1553,6 +1553,49 @@ async fn w_on_a_video_plays_it_through_the_paired_cli() {
     }
 }
 
+/// A video outlasts the idle limit without a key. The session goes away,
+/// but the screensaver waits for the player to close: mpv keeps painting
+/// its rectangle, so a screensaver drawn under it would fight the video
+/// for the screen, and the key that dismisses one would never reach the
+/// player.
+#[tokio::test]
+async fn a_video_playing_past_the_idle_limit_keeps_the_screen_and_the_keys() {
+    use crate::app::common::away::AWAY_AFTER;
+
+    let token = "news-watch-away-flow-it";
+    let test_db = new_test_db().await;
+    let (mut app, mut rx) = news_room_with_a_video(&test_db, token).await;
+    report_paired_cli(&app, token, &["voice", "video"], &[]);
+    app.handle_input(b"w");
+    wait_for_render_contains(&mut app, " Watching ").await;
+    let play_id = match video_messages(&mut rx).as_slice() {
+        [PairControlMessage::VideoPlay { play_id, .. }] => *play_id,
+        other => panic!("expected one video_play, got {other:?}"),
+    };
+    crate::app::chat::news::watch::svc::apply_report(
+        &mut app,
+        play_id,
+        &crate::paired_clients::VideoReport::Playing {
+            position_s: 1800,
+            duration_s: Some(2910),
+        },
+    );
+
+    app.last_active_at = std::time::Instant::now() - AWAY_AFTER;
+    assert!(app.sync_away(), "the session goes away as ever");
+    let frame = render_plain(&mut app);
+    assert!(frame.contains(" Watching "), "{frame}");
+
+    app.handle_input(b" ");
+    assert_eq!(
+        video_messages(&mut rx),
+        vec![PairControlMessage::VideoControl {
+            play_id,
+            control: crate::paired_clients::VideoControl::TogglePause,
+        }]
+    );
+}
+
 /// A paired CLI that is missing mpv: the card still reads `watch`, `w`
 /// opens the setup box with the mpv row failing and yt-dlp holding, and
 /// nothing reaches the CLI.

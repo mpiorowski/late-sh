@@ -1127,33 +1127,53 @@ impl App {
                 away,
             );
         }
-        if let Some(playback) = self.screensaver_playback {
-            let trigger = match self.sent_away {
-                true => crate::metrics::ScreensaverTrigger::Brb,
-                false => crate::metrics::ScreensaverTrigger::Idle,
-            };
-            crate::metrics::record_screensaver(trigger, playback.selection(), playback.piece());
-        }
         true
     }
 
     /// The piece covering the screen while this session is away, `None`
-    /// while it is here or with the Tweak off (Settings, Tweaks,
-    /// `Screensaver`).
+    /// while it is here, while the News watch modal is up, or with the
+    /// Tweak off (Settings, Tweaks, `Screensaver`).
     pub(crate) fn screensaver(&self) -> Option<late_core::models::user::AsciiPiece> {
-        if !self.away {
+        if !self.screensaver_due() {
             return None;
         }
         let selection = self.profile_state.profile().screensaver.selection()?;
         super::ascii::playback::Playback::resolve(self.screensaver_playback, selection)
     }
 
+    /// Bring the screensaver up or down with `screensaver_due`, counting
+    /// each one put up: at the away edge, or on a later 1Hz sync once the
+    /// watch modal it waited for closes.
     pub(crate) fn sync_screensaver(&mut self, now: Instant, rng: &mut impl rand::Rng) -> bool {
         let selection = self
-            .away
+            .screensaver_due()
             .then(|| self.profile_state.profile().screensaver.selection())
             .flatten();
-        super::ascii::playback::Playback::sync(&mut self.screensaver_playback, selection, now, rng)
+        let was_up = self.screensaver_playback.is_some();
+        let changed = super::ascii::playback::Playback::sync(
+            &mut self.screensaver_playback,
+            selection,
+            now,
+            rng,
+        );
+        if !was_up && let Some(playback) = self.screensaver_playback {
+            let trigger = match self.sent_away {
+                true => crate::metrics::ScreensaverTrigger::Brb,
+                false => crate::metrics::ScreensaverTrigger::Idle,
+            };
+            crate::metrics::record_screensaver(trigger, playback.selection(), playback.piece());
+        }
+        changed
+    }
+
+    /// Away, and nothing on screen that the screensaver would fight: the
+    /// paired CLI's mpv paints the watch player's rectangle whatever the
+    /// TUI draws under it, and the key that drops a screensaver would never
+    /// reach the player. A video outlasts the idle limit without a key, so
+    /// the screensaver waits for the modal to close; the 1Hz sync brings it
+    /// up then.
+    fn screensaver_due(&self) -> bool {
+        self.away && !self.chat.has_watch()
     }
 
     /// The rail modes this session renders from: this device's stored layout if

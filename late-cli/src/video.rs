@@ -23,10 +23,7 @@ use std::{
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader, ReadHalf, WriteHalf};
 
-use super::{
-    config::SshMode,
-    ws::{open_state_log, state_log_path},
-};
+use super::config::{SshMode, open_state_log, state_log_path};
 
 /// The first mpv release with `--vo=kitty`.
 const MIN_MPV: (u32, u32) = (0, 36);
@@ -514,8 +511,8 @@ pub(super) struct MpvLaunch<'a> {
 /// screen and wipes the TUI on exit. `--vo-kitty-config-clear=no` keeps mpv
 /// from clearing on every reconfigure. Neither stops mpv's own writes of
 /// cursor, mouse and delete-all-images commands around the frames; the
-/// relay (`TtyFilter`) strips those, and `settle_sequence` removes the
-/// frames it leaves behind.
+/// relay (`TtyFilter`) strips or rewrites those, and `settle_sequence`
+/// removes the frames a killed mpv leaves behind.
 pub(super) fn mpv_args(launch: &MpvLaunch<'_>) -> Vec<OsString> {
     let MpvLaunch {
         url,
@@ -677,6 +674,11 @@ pub(super) fn playback_state(
 /// the server as keys. The TUI's own images elsewhere are untouched.
 pub(super) fn settle_sequence(rect: VideoRect) -> String {
     let (x, y) = rect.origin_cell();
+    delete_placements_at(x, y)
+}
+
+/// The kitty delete of every placement covering the 1-based cell (`x`, `y`).
+fn delete_placements_at(x: u32, y: u32) -> String {
     format!("\x1b_Ga=d,d=P,x={x},y={y},q=2\x1b\\")
 }
 
@@ -691,25 +693,43 @@ pub(super) fn settle_terminal(rect: VideoRect) -> io::Result<()> {
 /// Carries mpv's stdout to the tty with mpv's terminal-mode writes removed
 /// and every escape sequence delivered whole.
 ///
+/// The SSH forwarder writes the TUI to the same tty between any two relay
+/// writes, so each write is self-contained: it is wrapped in a cursor save
+/// and restore, so a TUI draw split around it finds the cursor where it
+/// left it, and mpv's cursor move goes out in front of every graphics
+/// command it positions rather than on its own, so a frame lands where
+/// mpv put it however the reads split it (the terminal places an image at
+/// the cursor when its last chunk lands).
+///
 /// mpv's kitty output writes, besides the frames, a hide-cursor and an
 /// any-motion mouse enable on start, a show-cursor and mouse disable on
-/// exit, and a delete-all-images command at both ends. Each of those would
-/// change state the TUI owns (the mouse mode it chose, its hidden cursor,
-/// its own images), so they are dropped here instead of restored later.
-/// Everything else (cursor moves, the graphics commands that carry frames)
-/// passes through, but only once a sequence is complete: a graphics
-/// command split across two reads would otherwise let the SSH forwarder's
-/// bytes land inside its payload.
+/// exit, and a delete-all-images command at both ends. The modes would
+/// change state the TUI owns (the mouse mode it chose, its hidden cursor),
+/// so they are dropped instead of restored later. The delete would take
+/// the TUI's own images with it, so it becomes a delete of the cells this
+/// relay placed frames at: mpv writes it as it tears its output down, so
+/// it lands after the last frame of that output whatever was in flight.
+/// Every sequence passes only once complete: a graphics command split
+/// across two reads would otherwise let the SSH forwarder's bytes land
+/// inside its payload.
 #[derive(Default)]
 pub(super) struct TtyFilter {
     /// The start of an escape sequence the input has not finished yet.
     held: Vec<u8>,
+    /// mpv's last cursor move, as the 1-based `(row, col)` it named.
+    cursor: Option<(u32, u32)>,
+    /// The cells frames went out at since mpv last deleted its images.
+    placed: Vec<(u32, u32)>,
 }
 
 /// DEC private modes mpv's kitty output sets and resets; the TUI owns all
 /// three (cursor visibility, any-motion mouse tracking, the alternate
 /// screen).
 const STRIPPED_PRIVATE_MODES: [&[u8]; 3] = [b"25", b"1003", b"1049"];
+/// DECSC and DECRC around every relay write. The TUI never uses them, so
+/// the one save slot is the relay's.
+const SAVE_CURSOR: &[u8] = b"\x1b7";
+const RESTORE_CURSOR: &[u8] = b"\x1b8";
 
 impl TtyFilter {
     pub(super) fn feed(&mut self, input: &[u8]) -> Vec<u8> {
@@ -725,10 +745,7 @@ impl TtyFilter {
             }
             match sequence_end(&bytes[at..]) {
                 SequenceEnd::Complete(len) => {
-                    let sequence = &bytes[at..at + len];
-                    if !is_mpv_mode_write(sequence) {
-                        out.extend_from_slice(sequence);
-                    }
+                    self.relay_sequence(&bytes[at..at + len], &mut out);
                     at += len;
                 }
                 SequenceEnd::Incomplete if bytes.len() - at > RELAY_HOLD_CAP => {
@@ -745,8 +762,81 @@ impl TtyFilter {
                 }
             }
         }
-        out
+        match out.is_empty() {
+            true => out,
+            false => [SAVE_CURSOR, out.as_slice(), RESTORE_CURSOR].concat(),
+        }
     }
+
+    fn relay_sequence(&mut self, sequence: &[u8], out: &mut Vec<u8>) {
+        match MpvWrite::of(sequence) {
+            MpvWrite::Mode => {}
+            MpvWrite::CursorMove { row, col } => self.cursor = Some((row, col)),
+            MpvWrite::DeleteAll => {
+                for (row, col) in self.placed.drain(..) {
+                    out.extend_from_slice(delete_placements_at(col, row).as_bytes());
+                }
+            }
+            MpvWrite::Graphics => {
+                if let Some((row, col)) = self.cursor {
+                    out.extend_from_slice(format!("\x1b[{row};{col}f").as_bytes());
+                    if !self.placed.contains(&(row, col)) {
+                        self.placed.push((row, col));
+                    }
+                }
+                out.extend_from_slice(sequence);
+            }
+            MpvWrite::Other => out.extend_from_slice(sequence),
+        }
+    }
+}
+
+/// What one complete escape sequence from mpv is to the relay.
+enum MpvWrite {
+    /// A terminal mode the TUI owns: dropped.
+    Mode,
+    /// `ESC [ row ; col f`: where the next frame goes.
+    CursorMove { row: u32, col: u32 },
+    /// `ESC _ G a=d ; ESC \`: every image on screen.
+    DeleteAll,
+    /// Any other kitty graphics command: a frame, or a chunk of one.
+    Graphics,
+    Other,
+}
+
+impl MpvWrite {
+    fn of(sequence: &[u8]) -> Self {
+        if sequence == b"\x1b_Ga=d;\x1b\\" {
+            return Self::DeleteAll;
+        }
+        if sequence.starts_with(b"\x1b_G") {
+            return Self::Graphics;
+        }
+        let Some(params) = sequence.strip_prefix(b"\x1b[") else {
+            return Self::Other;
+        };
+        if let Some(mode) = params.strip_prefix(b"?")
+            && let Some(mode) = mode.strip_suffix(b"h").or_else(|| mode.strip_suffix(b"l"))
+            && STRIPPED_PRIVATE_MODES.contains(&mode)
+        {
+            return Self::Mode;
+        }
+        match params
+            .strip_suffix(b"f")
+            .or_else(|| params.strip_suffix(b"H"))
+            .and_then(cursor_cell)
+        {
+            Some((row, col)) => Self::CursorMove { row, col },
+            None => Self::Other,
+        }
+    }
+}
+
+/// `row;col`, as a cursor move's parameters spell it.
+fn cursor_cell(params: &[u8]) -> Option<(u32, u32)> {
+    let params = std::str::from_utf8(params).ok()?;
+    let (row, col) = params.split_once(';')?;
+    Some((row.parse().ok()?, col.parse().ok()?))
 }
 
 enum SequenceEnd {
@@ -775,21 +865,8 @@ fn sequence_end(bytes: &[u8]) -> SequenceEnd {
     }
 }
 
-fn is_mpv_mode_write(sequence: &[u8]) -> bool {
-    if sequence == b"\x1b_Ga=d;\x1b\\" {
-        return true;
-    }
-    let Some(mode) = sequence.strip_prefix(b"\x1b[?") else {
-        return false;
-    };
-    let Some(mode) = mode.strip_suffix(b"h").or_else(|| mode.strip_suffix(b"l")) else {
-        return false;
-    };
-    STRIPPED_PRIVATE_MODES.contains(&mode)
-}
-
-/// Read mpv's stdout until it closes, writing each read's complete
-/// sequences to the tty under the stdout lock.
+/// Read mpv's stdout until it closes, writing what each read completes to
+/// the tty as one write under the stdout lock.
 fn spawn_relay(mut from_mpv: ChildStdout) -> JoinHandle<()> {
     std::thread::spawn(move || {
         let mut filter = TtyFilter::default();
@@ -947,7 +1024,9 @@ struct Playback {
 
 impl Playback {
     /// Settle the frame at `old`, then send the move to `self.rect` over
-    /// the socket. Only called once the socket is up.
+    /// the socket. Only called once the socket is up. Frames mpv drew at
+    /// `old` before the teardown can reach the tty after this settle; the
+    /// relay deletes those when mpv tears the old output down.
     async fn move_output(&mut self, old: VideoRect) -> Result<(), VideoFailure> {
         if let Err(error) = settle_terminal(old) {
             return Err(VideoFailure::Inspect(format!(
@@ -1241,8 +1320,14 @@ impl VideoPlayer {
 }
 
 impl Drop for VideoPlayer {
+    /// The SSH session ended under a play: nothing is left to report to,
+    /// so the settle's error goes nowhere. The CLI never leaves the
+    /// alternate screen on its own, so without it the last frame would sit
+    /// over the shell.
     fn drop(&mut self) {
-        self.take_and_kill();
+        if let Some(old) = self.take_and_kill() {
+            let _ = settle_terminal(old.rect);
+        }
     }
 }
 
