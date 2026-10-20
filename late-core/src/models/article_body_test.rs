@@ -24,15 +24,11 @@ async fn share(client: &tokio_postgres::Client, user_id: Uuid, url: &str) -> Art
     .expect("create article")
 }
 
-fn feed_status(
-    feed: &[crate::models::article::FeedArticle],
-    id: Uuid,
-) -> (BodyStatus, Option<u16>) {
-    let row = feed
-        .iter()
+fn feed_status(feed: &[crate::models::article::FeedArticle], id: Uuid) -> BodyStatus {
+    feed.iter()
         .find(|row| row.article.id == id)
-        .expect("article in feed");
-    (row.body, row.reading_minutes)
+        .expect("article in feed")
+        .body
 }
 
 /// A story with no body row is pending on the feed; a stored body reads
@@ -47,7 +43,7 @@ async fn bodies_round_trip_and_ride_the_feed_as_status_only() {
     let video = share(&client, sharer.id, "https://youtu.be/body-video").await;
 
     let feed = Article::list_feed(&client, 20).await.expect("feed");
-    assert_eq!(feed_status(&feed, readable.id), (BodyStatus::Pending, None));
+    assert_eq!(feed_status(&feed, readable.id), BodyStatus::Pending);
     assert_eq!(
         ArticleBody::find(&client, readable.id).await.expect("find"),
         None
@@ -72,10 +68,10 @@ async fn bodies_round_trip_and_ride_the_feed_as_status_only() {
         },
         ReaderLine::Rule,
     ];
-    ArticleBody::store_ready(&client, readable.id, "example.com", 441, &lines)
+    ArticleBody::store_ready(&client, readable.id, 441, &lines)
         .await
         .expect("store ready");
-    ArticleBody::store_unavailable(&client, video.id, "youtu.be")
+    ArticleBody::store_unavailable(&client, video.id)
         .await
         .expect("store unavailable");
 
@@ -83,7 +79,6 @@ async fn bodies_round_trip_and_ride_the_feed_as_status_only() {
         .await
         .expect("find")
         .expect("ready body");
-    assert_eq!(body.domain, "example.com");
     assert_eq!(
         body.content,
         BodyContent::Ready {
@@ -95,12 +90,9 @@ async fn bodies_round_trip_and_ride_the_feed_as_status_only() {
     let feed = Article::list_feed(&client, 20).await.expect("feed");
     assert_eq!(
         feed_status(&feed, readable.id),
-        (BodyStatus::Ready, Some(3))
+        BodyStatus::Ready { reading_minutes: 3 }
     );
-    assert_eq!(
-        feed_status(&feed, video.id),
-        (BodyStatus::Unavailable, None)
-    );
+    assert_eq!(feed_status(&feed, video.id), BodyStatus::Unavailable);
 }
 
 /// Retention keeps the row and drops the text, so the card reads `link`
@@ -117,7 +109,7 @@ async fn retention_retires_old_bodies_to_unavailable() {
         spans: vec![ReaderSpan::Text("words".to_string())],
     }];
     for id in [old.id, fresh.id] {
-        ArticleBody::store_ready(&client, id, "example.com", 1, &lines)
+        ArticleBody::store_ready(&client, id, 1, &lines)
             .await
             .expect("store ready");
     }
@@ -146,7 +138,7 @@ async fn retention_retires_old_bodies_to_unavailable() {
             .expect("find fresh")
             .expect("fresh row")
             .status(),
-        BodyStatus::Ready
+        BodyStatus::Ready { reading_minutes: 1 }
     );
 }
 
@@ -159,8 +151,8 @@ async fn an_unknown_stored_status_fails_to_parse() {
     let article = share(&client, sharer.id, "https://example.com/body-unknown").await;
     client
         .execute(
-            "INSERT INTO article_bodies (article_id, status, domain, word_count, lines)
-             VALUES ($1, 'archived', 'example.com', 0, '[]'::jsonb)",
+            "INSERT INTO article_bodies (article_id, status, word_count, lines)
+             VALUES ($1, 'archived', 0, '[]'::jsonb)",
             &[&article.id],
         )
         .await
@@ -179,13 +171,13 @@ async fn pending_bodies_past_the_share_budget_are_settled_unavailable() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
     let sharer = create_test_user(&test_db.db, "article-body-settle").await;
-    let stuck = share(&client, sharer.id, "https://www.example.com/body-stuck?x=1").await;
+    let stuck = share(&client, sharer.id, "https://example.com/body-stuck").await;
     let fresh = share(&client, sharer.id, "https://example.com/body-fresh").await;
     let read = share(&client, sharer.id, "https://example.com/body-read").await;
     let lines = vec![ReaderLine::Paragraph {
         spans: vec![ReaderSpan::Text("words".to_string())],
     }];
-    ArticleBody::store_ready(&client, read.id, "example.com", 1, &lines)
+    ArticleBody::store_ready(&client, read.id, 1, &lines)
         .await
         .expect("store ready");
     for id in [stuck.id, read.id] {
@@ -209,7 +201,6 @@ async fn pending_bodies_past_the_share_budget_are_settled_unavailable() {
         .expect("find stuck")
         .expect("settled row");
     assert_eq!(stuck_body.content, BodyContent::Unavailable);
-    assert_eq!(stuck_body.domain, "www.example.com");
     assert_eq!(
         ArticleBody::find(&client, fresh.id)
             .await
@@ -223,6 +214,6 @@ async fn pending_bodies_past_the_share_budget_are_settled_unavailable() {
             .expect("find read")
             .expect("ready row")
             .status(),
-        BodyStatus::Ready
+        BodyStatus::Ready { reading_minutes: 1 }
     );
 }

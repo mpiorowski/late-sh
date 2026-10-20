@@ -11,7 +11,6 @@
 CREATE TABLE article_bodies (
     article_id UUID PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
     status TEXT NOT NULL,
-    domain TEXT NOT NULL,
     word_count INTEGER NOT NULL,
     lines JSONB NOT NULL,
     fetched_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp

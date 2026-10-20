@@ -431,15 +431,13 @@ async fn a_readable_share_stores_a_ready_body() {
         .await
         .expect("find body")
         .expect("a body row");
-    assert_eq!(body.domain, "localhost");
     let BodyContent::Ready { word_count, lines } = body.content else {
         panic!("expected a ready body, got {:?}", body.content);
     };
     assert_eq!(lines.len(), 2);
     assert!(word_count > 30);
     let feed = Article::list_feed(&client, 20).await.expect("feed");
-    assert_eq!(feed[0].body, BodyStatus::Ready);
-    assert_eq!(feed[0].reading_minutes, Some(1));
+    assert_eq!(feed[0].body, BodyStatus::Ready { reading_minutes: 1 });
 }
 
 /// A fetch that cannot read the page still lands a row, `unavailable`, so
@@ -496,6 +494,5 @@ async fn a_youtube_share_is_unavailable_without_a_fetch() {
         .await
         .expect("find body")
         .expect("a body row");
-    assert_eq!(body.domain, "www.youtube.com");
     assert_eq!(body.content, BodyContent::Unavailable);
 }

@@ -2554,7 +2554,7 @@ mod inner {
     fn news_body_status_label(status: BodyStatus) -> &'static str {
         match status {
             BodyStatus::Pending => "pending",
-            BodyStatus::Ready => "ready",
+            BodyStatus::Ready { .. } => "ready",
             BodyStatus::Unavailable => "unavailable",
         }
     }

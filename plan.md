@@ -178,7 +178,6 @@ Migrations are new files from `246_` on. Never edit an applied migration.
 CREATE TABLE article_bodies (
     article_id UUID PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
     status TEXT NOT NULL,            -- 'ready' | 'unavailable'
-    domain TEXT NOT NULL,            -- host of the final URL after redirects
     word_count INTEGER NOT NULL,     -- 0 when unavailable
     lines JSONB NOT NULL,            -- Vec<ReaderLine>, empty when unavailable
     fetched_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
@@ -186,13 +185,13 @@ CREATE TABLE article_bodies (
 ```
 
 No row means **pending**. The three states are a closed Rust enum
-`BodyStatus { Pending, Ready, Unavailable }`; `status` text parses
+`BodyStatus { Pending, Ready { reading_minutes }, Unavailable }`; `status` text parses
 exhaustively and an unknown value is an error, not a default. A statement
 trigger on `article_bodies` fires `articles_changed` (same function as
 migration 198) so every replica's cards flip from pending to `7 min read`.
 
 Bodies never ride the snapshot: `ArticleFeedItem` carries `body: BodyStatus`
-and `reading_minutes: Option<u16>` from a `LEFT JOIN`, and the reader loads
+(the reading time inside `Ready`) from a `LEFT JOIN`, and the reader loads
 the one row by id on open (`ArticleBody::find`). The snapshot is re-read on
 every notify on every replica; a 50 KB body per article would multiply that.
 
@@ -312,7 +311,8 @@ YouTube and **not** an X status (`is_youtube_url`, `tweet_status_id`):
    failure never fails the share.
 2. GET with `User-Agent: late.sh (https://late.sh)`, follow up to 5
    redirects, 10 s timeout, read at most 2 MB, accept only
-   `text/html` (or `application/xhtml+xml`). `domain` is the final URL's host.
+   `text/html` (or `application/xhtml+xml`). The reader's header shows the
+   shared URL's host; no host is stored.
 3. Readability: add `dom_smoothie` (Rust port of Mozilla Readability) to
    `late-ssh`. It yields the article node tree. Walk it into `Vec<ReaderLine>`:
    `h1`–`h6` → `Heading`, `p` → `Paragraph`, `blockquote` → `Quote`,

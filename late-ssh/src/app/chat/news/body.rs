@@ -304,7 +304,7 @@ impl Walker<'_> {
                 }
                 "p" => {
                     self.flush(context);
-                    let spans = self.inline_spans(&child);
+                    let spans = inline_spans(self.base_url, &child);
                     self.push_spans(context, spans);
                 }
                 "blockquote" => {
@@ -321,7 +321,7 @@ impl Walker<'_> {
                 }
                 "li" => {
                     self.flush(context);
-                    let spans = self.inline_spans(&child);
+                    let spans = inline_spans(self.base_url, &child);
                     if !spans.is_empty() {
                         self.lines.push(ReaderLine::ListItem { spans });
                     }
@@ -336,7 +336,9 @@ impl Walker<'_> {
                     self.flush(context);
                     self.lines.push(ReaderLine::Rule);
                 }
-                tag if is_inline(tag) => self.inline_into_loose(&child),
+                tag if is_inline(tag) => {
+                    collect_inline_element(self.base_url, &child, None, &mut self.loose);
+                }
                 _ => {
                     self.flush(context);
                     self.walk_block(&child, context);
@@ -360,54 +362,48 @@ impl Walker<'_> {
             Context::Quote => ReaderLine::Quote { spans },
         });
     }
+}
 
-    fn inline_spans(&self, node: &NodeRef<'_>) -> Vec<ReaderSpan> {
-        let mut builder = SpanBuilder::default();
-        self.collect_inline(node, None, &mut builder);
-        builder.finish()
-    }
+fn inline_spans(base_url: &Url, node: &NodeRef<'_>) -> Vec<ReaderSpan> {
+    let mut builder = SpanBuilder::default();
+    collect_inline(base_url, node, None, &mut builder);
+    builder.finish()
+}
 
-    fn inline_into_loose(&mut self, node: &NodeRef<'_>) {
-        let mut builder = std::mem::take(&mut self.loose);
-        self.collect_inline_element(node, None, &mut builder);
-        self.loose = builder;
-    }
-
-    fn collect_inline(&self, node: &NodeRef<'_>, link: Option<&str>, out: &mut SpanBuilder) {
-        for child in node.children() {
-            if child.is_text() {
-                out.push(&child.text(), link);
-            } else if child.is_element() {
-                // A nested list belongs to the walk, not to this item's text.
-                if child.has_name("ul") || child.has_name("ol") {
-                    continue;
-                }
-                self.collect_inline_element(&child, link, out);
+fn collect_inline(base_url: &Url, node: &NodeRef<'_>, link: Option<&str>, out: &mut SpanBuilder) {
+    for child in node.children() {
+        if child.is_text() {
+            out.push(&child.text(), link);
+        } else if child.is_element() {
+            // A nested list belongs to the walk, not to this item's text.
+            if child.has_name("ul") || child.has_name("ol") {
+                continue;
             }
+            collect_inline_element(base_url, &child, link, out);
         }
     }
+}
 
-    fn collect_inline_element(
-        &self,
-        node: &NodeRef<'_>,
-        link: Option<&str>,
-        out: &mut SpanBuilder,
-    ) {
-        let Some(name) = node.node_name() else {
-            return;
-        };
-        let name = name.to_ascii_lowercase();
-        match name.as_str() {
-            tag if is_dropped(tag) => {}
-            "br" => out.push(" ", link),
-            "a" if link.is_none() => {
-                let href = node
-                    .attr("href")
-                    .and_then(|href| resolve_link(self.base_url, &href));
-                self.collect_inline(node, href.as_deref(), out);
-            }
-            _ => self.collect_inline(node, link, out),
+fn collect_inline_element(
+    base_url: &Url,
+    node: &NodeRef<'_>,
+    link: Option<&str>,
+    out: &mut SpanBuilder,
+) {
+    let Some(name) = node.node_name() else {
+        return;
+    };
+    let name = name.to_ascii_lowercase();
+    match name.as_str() {
+        tag if is_dropped(tag) => {}
+        "br" => out.push(" ", link),
+        "a" if link.is_none() => {
+            let href = node
+                .attr("href")
+                .and_then(|href| resolve_link(base_url, &href));
+            collect_inline(base_url, node, href.as_deref(), out);
         }
+        _ => collect_inline(base_url, node, link, out),
     }
 }
 
@@ -540,19 +536,16 @@ fn is_inline(tag: &str) -> bool {
 /// An absolute http(s) link, or none: a `javascript:` or `mailto:` link
 /// and a jump within the same page read as plain text.
 fn resolve_link(base_url: &Url, href: &str) -> Option<String> {
-    let mut resolved = base_url.join(href.trim()).ok()?;
+    let resolved = base_url.join(href.trim()).ok()?;
     if !matches!(resolved.scheme(), "http" | "https") {
         return None;
     }
+    let mut target = resolved.clone();
+    target.set_fragment(None);
     let mut page = base_url.clone();
     page.set_fragment(None);
-    let fragment = resolved.fragment().map(str::to_string);
-    resolved.set_fragment(None);
-    if fragment.is_some() && resolved == page {
+    if resolved.fragment().is_some() && target == page {
         return None;
-    }
-    if let Some(fragment) = fragment {
-        resolved.set_fragment(Some(&fragment));
     }
     Some(resolved.into())
 }

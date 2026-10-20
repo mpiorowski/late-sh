@@ -184,7 +184,6 @@ fn headlines_merge_news_and_rss_newest_first_and_a_shared_entry_lists_once() {
         },
         author_username: "mira".to_string(),
         body: late_core::models::article_body::BodyStatus::Pending,
-        reading_minutes: None,
     };
     let entries = vec![
         // Shared to News already: the article speaks for it.

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use late_core::models::article::ArticleFeedItem;
 use late_core::models::article_body::{
-    ArticleBody, BodyContent, BodyStatus, ReaderLine, ReaderSpan,
+    ArticleBody, BodyContent, BodyStatus, ReaderLine, ReaderSpan, reading_minutes,
 };
 use ratatui::layout::Rect;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -68,8 +68,13 @@ pub(crate) type ReaderRow = Vec<ReaderSegment>;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ReaderBody {
     /// The card says the text is stored; its lines are on their way.
-    Loading,
-    Ready(Vec<ReaderLine>),
+    Loading { reading_minutes: u16 },
+    Ready {
+        lines: Vec<ReaderLine>,
+        /// The numbered links' URLs, in first-appearance order.
+        links: Vec<String>,
+        reading_minutes: u16,
+    },
     /// The fetch has not landed.
     Pending,
     /// No text to show; the reader shows the summary and the link.
@@ -101,10 +106,7 @@ pub(crate) struct ReaderModal {
     ascii_art: String,
     author: String,
     shared_at: DateTime<Utc>,
-    reading_minutes: Option<u16>,
     body: ReaderBody,
-    /// The numbered links' URLs, in first-appearance order.
-    links: Vec<String>,
     scroll_offset: Cell<u16>,
     viewport: Cell<ReaderViewport>,
     drag_grab: Cell<Option<u16>>,
@@ -115,7 +117,7 @@ impl ReaderModal {
     /// its lines arrive; the rest show their summary straight away.
     pub(crate) fn open(item: &ArticleFeedItem) -> Self {
         let body = match item.body {
-            BodyStatus::Ready => ReaderBody::Loading,
+            BodyStatus::Ready { reading_minutes } => ReaderBody::Loading { reading_minutes },
             BodyStatus::Pending => ReaderBody::Pending,
             BodyStatus::Unavailable => ReaderBody::Unavailable,
         };
@@ -127,9 +129,7 @@ impl ReaderModal {
             ascii_art: item.article.ascii_art.clone(),
             author: item.author_username.clone(),
             shared_at: item.article.created,
-            reading_minutes: item.reading_minutes,
             body,
-            links: Vec::new(),
             scroll_offset: Cell::new(0),
             viewport: Cell::new(ReaderViewport::default()),
             drag_grab: Cell::new(None),
@@ -148,48 +148,51 @@ impl ReaderModal {
         &self.body
     }
 
-    /// The body row as loaded: `None` is a fetch still pending. The row
-    /// arrives shared with every other session's drain of the same event;
-    /// by the time this one reads it the others have usually dropped
-    /// theirs, and the text moves out without a copy.
+    /// The body row as loaded: `None` is a fetch still pending. The row is
+    /// shared with every session's copy of the event, so the lines are
+    /// cloned out of it.
     pub(crate) fn apply_body(&mut self, body: Option<Arc<ArticleBody>>) {
-        let body =
-            body.map(|body| Arc::try_unwrap(body).unwrap_or_else(|shared| (*shared).clone()));
-        self.body = match body.map(|body| body.content) {
-            Some(BodyContent::Ready { word_count, lines }) => {
-                self.reading_minutes =
-                    Some(late_core::models::article_body::reading_minutes(word_count));
-                ReaderBody::Ready(lines)
-            }
+        self.set_body(match body.as_deref().map(|body| &body.content) {
+            Some(BodyContent::Ready { word_count, lines }) => ReaderBody::Ready {
+                links: numbered_links(lines),
+                lines: lines.clone(),
+                reading_minutes: reading_minutes(*word_count),
+            },
             Some(BodyContent::Unavailable) => ReaderBody::Unavailable,
             None => ReaderBody::Pending,
-        };
-        self.links = match &self.body {
-            ReaderBody::Ready(lines) => numbered_links(lines),
-            ReaderBody::Loading | ReaderBody::Pending | ReaderBody::Unavailable => Vec::new(),
-        };
-        self.invalidate_viewport();
-        self.scroll_offset.set(0);
+        });
     }
 
     /// The body could not be loaded: show the summary and the link rather
     /// than a loading line that will never resolve.
     pub(crate) fn fail_load(&mut self) {
-        self.body = ReaderBody::Unavailable;
-        self.links = Vec::new();
-        self.invalidate_viewport();
+        self.set_body(ReaderBody::Unavailable);
+    }
+
+    /// A new body lays out from the top, against a fresh draw.
+    fn set_body(&mut self, body: ReaderBody) {
+        self.body = body;
+        self.viewport.set(ReaderViewport::default());
+        self.cancel_drag();
         self.scroll_offset.set(0);
     }
 
     /// The URL behind `[n]`, for the `1`..`9` keys.
     pub(crate) fn link(&self, n: usize) -> Option<&str> {
-        n.checked_sub(1)
-            .and_then(|index| self.links.get(index))
-            .map(String::as_str)
+        match &self.body {
+            ReaderBody::Ready { links, .. } => n
+                .checked_sub(1)
+                .and_then(|index| links.get(index))
+                .map(String::as_str),
+            ReaderBody::Loading { .. } | ReaderBody::Pending | ReaderBody::Unavailable => None,
+        }
     }
 
     pub(crate) fn has_links(&self) -> bool {
-        !self.links.is_empty()
+        match &self.body {
+            ReaderBody::Ready { links, .. } => !links.is_empty(),
+            ReaderBody::Loading { .. } | ReaderBody::Pending | ReaderBody::Unavailable => false,
+        }
     }
 
     /// Every row of the reader at `width` columns: the header, then the
@@ -198,11 +201,11 @@ impl ReaderModal {
         let width = width.max(1);
         let mut rows = Vec::new();
         match &self.body {
-            ReaderBody::Ready(lines) => {
+            ReaderBody::Ready { lines, links, .. } => {
                 self.push_header(&mut rows, width);
-                self.push_article(&mut rows, lines, width);
+                push_article(&mut rows, lines, links, width);
             }
-            ReaderBody::Loading => {
+            ReaderBody::Loading { .. } => {
                 self.push_fallback(&mut rows, width, "Loading the article…".to_string());
             }
             ReaderBody::Pending => {
@@ -217,10 +220,14 @@ impl ReaderModal {
 
     fn meta(&self) -> String {
         let mut parts = vec![domain_label(&self.url)];
-        if let (ReaderBody::Ready(_) | ReaderBody::Loading, Some(minutes)) =
-            (&self.body, self.reading_minutes)
-        {
-            parts.push(format!("{minutes} min read"));
+        match &self.body {
+            ReaderBody::Loading { reading_minutes }
+            | ReaderBody::Ready {
+                reading_minutes, ..
+            } => {
+                parts.push(format!("{reading_minutes} min read"));
+            }
+            ReaderBody::Pending | ReaderBody::Unavailable => {}
         }
         parts.push(format!(
             "shared by @{} {}",
@@ -240,13 +247,13 @@ impl ReaderModal {
             rows,
             &[ReaderSegment::new(title, ReaderInk::Title)],
             width,
-            None,
+            0,
         );
         push_wrapped(
             rows,
             &[ReaderSegment::new(self.meta(), ReaderInk::Meta)],
             width,
-            None,
+            0,
         );
         rows.push(vec![ReaderSegment::new("─".repeat(width), ReaderInk::Rule)]);
     }
@@ -270,7 +277,7 @@ impl ReaderModal {
                 rows,
                 &[ReaderSegment::new(bullet, ReaderInk::Body)],
                 width,
-                Some(2),
+                2,
             );
         }
         rows.push(Vec::new());
@@ -278,108 +285,8 @@ impl ReaderModal {
             rows,
             &[ReaderSegment::new(status, ReaderInk::Status)],
             width,
-            None,
+            0,
         );
-    }
-
-    fn push_article(&self, rows: &mut Vec<ReaderRow>, lines: &[ReaderLine], width: usize) {
-        rows.push(Vec::new());
-        for line in lines {
-            match line {
-                ReaderLine::Heading { level, text } => {
-                    if rows.last().is_some_and(|row| !row.is_empty()) {
-                        rows.push(Vec::new());
-                    }
-                    let text = if *level <= 2 {
-                        text.to_uppercase()
-                    } else {
-                        text.clone()
-                    };
-                    push_wrapped(
-                        rows,
-                        &[ReaderSegment::new(text, ReaderInk::Heading)],
-                        width,
-                        None,
-                    );
-                }
-                ReaderLine::Paragraph { spans } => {
-                    push_wrapped(
-                        rows,
-                        &self.span_segments(spans, ReaderInk::Body),
-                        width,
-                        None,
-                    );
-                    rows.push(Vec::new());
-                }
-                ReaderLine::Quote { spans } => {
-                    let segments = self.span_segments(spans, ReaderInk::Quote);
-                    for row in wrap_segments(&segments, width.saturating_sub(2).max(1), 0) {
-                        let mut gutter = vec![ReaderSegment::new("│ ", ReaderInk::Gutter)];
-                        gutter.extend(row);
-                        rows.push(gutter);
-                    }
-                    rows.push(Vec::new());
-                }
-                ReaderLine::Code { lines } => {
-                    for code in lines {
-                        rows.push(vec![
-                            ReaderSegment::new("│ ", ReaderInk::Gutter),
-                            ReaderSegment::new(
-                                clip_to_width(code, width.saturating_sub(2)),
-                                ReaderInk::Code,
-                            ),
-                        ]);
-                    }
-                    rows.push(Vec::new());
-                }
-                ReaderLine::ListItem { spans } => {
-                    let mut segments = vec![ReaderSegment::new("• ", ReaderInk::Body)];
-                    segments.extend(self.span_segments(spans, ReaderInk::Body));
-                    push_wrapped(rows, &segments, width, Some(2));
-                }
-                ReaderLine::Rule => {
-                    rows.push(vec![ReaderSegment::new(
-                        "─".repeat(width.min(24)),
-                        ReaderInk::Rule,
-                    )]);
-                    rows.push(Vec::new());
-                }
-            }
-        }
-        if !self.links.is_empty() {
-            if rows.last().is_some_and(|row| !row.is_empty()) {
-                rows.push(Vec::new());
-            }
-            rows.push(vec![ReaderSegment::new("LINKS", ReaderInk::Heading)]);
-            for (index, href) in self.links.iter().enumerate() {
-                let mark = format!("[{}] ", index + 1);
-                let room = width.saturating_sub(UnicodeWidthStr::width(mark.as_str()));
-                rows.push(vec![
-                    ReaderSegment::new(mark, ReaderInk::LinkMark),
-                    ReaderSegment::new(clip_to_width(href, room), ReaderInk::LinkUrl),
-                ]);
-            }
-        }
-    }
-
-    /// A line's spans with each numbered link followed by its `[n]`.
-    fn span_segments(&self, spans: &[ReaderSpan], ink: ReaderInk) -> Vec<ReaderSegment> {
-        let mut segments = Vec::new();
-        for span in spans {
-            match span {
-                ReaderSpan::Text(text) => segments.push(ReaderSegment::new(text.clone(), ink)),
-                ReaderSpan::Link { text, href } => {
-                    segments.push(ReaderSegment::new(text.clone(), ink));
-                    if let Some(index) = self.links.iter().position(|link| link == href) {
-                        segments.push(ReaderSegment::new(
-                            format!(" [{}]", index + 1),
-                            ReaderInk::LinkMark,
-                        ));
-                    }
-                }
-            }
-        }
-        segments
     }
 
     pub(crate) fn scroll_offset(&self) -> u16 {
@@ -421,11 +328,6 @@ impl ReaderModal {
             self.cancel_drag();
         }
         self.scroll(0);
-    }
-
-    fn invalidate_viewport(&self) {
-        self.viewport.set(ReaderViewport::default());
-        self.cancel_drag();
     }
 
     pub(crate) fn thumb(&self) -> Rect {
@@ -496,6 +398,106 @@ fn numbered_links(lines: &[ReaderLine]) -> Vec<String> {
     links
 }
 
+fn push_article(rows: &mut Vec<ReaderRow>, lines: &[ReaderLine], links: &[String], width: usize) {
+    rows.push(Vec::new());
+    for line in lines {
+        match line {
+            ReaderLine::Heading { level, text } => {
+                if rows.last().is_some_and(|row| !row.is_empty()) {
+                    rows.push(Vec::new());
+                }
+                let text = if *level <= 2 {
+                    text.to_uppercase()
+                } else {
+                    text.clone()
+                };
+                push_wrapped(
+                    rows,
+                    &[ReaderSegment::new(text, ReaderInk::Heading)],
+                    width,
+                    0,
+                );
+            }
+            ReaderLine::Paragraph { spans } => {
+                push_wrapped(
+                    rows,
+                    &span_segments(spans, links, ReaderInk::Body),
+                    width,
+                    0,
+                );
+                rows.push(Vec::new());
+            }
+            ReaderLine::Quote { spans } => {
+                let segments = span_segments(spans, links, ReaderInk::Quote);
+                for row in wrap_segments(&segments, width.saturating_sub(2).max(1), 0) {
+                    let mut gutter = vec![ReaderSegment::new("│ ", ReaderInk::Gutter)];
+                    gutter.extend(row);
+                    rows.push(gutter);
+                }
+                rows.push(Vec::new());
+            }
+            ReaderLine::Code { lines } => {
+                for code in lines {
+                    rows.push(vec![
+                        ReaderSegment::new("│ ", ReaderInk::Gutter),
+                        ReaderSegment::new(
+                            clip_to_width(code, width.saturating_sub(2)),
+                            ReaderInk::Code,
+                        ),
+                    ]);
+                }
+                rows.push(Vec::new());
+            }
+            ReaderLine::ListItem { spans } => {
+                let mut segments = vec![ReaderSegment::new("• ", ReaderInk::Body)];
+                segments.extend(span_segments(spans, links, ReaderInk::Body));
+                push_wrapped(rows, &segments, width, 2);
+            }
+            ReaderLine::Rule => {
+                rows.push(vec![ReaderSegment::new(
+                    "─".repeat(width.min(24)),
+                    ReaderInk::Rule,
+                )]);
+                rows.push(Vec::new());
+            }
+        }
+    }
+    if !links.is_empty() {
+        if rows.last().is_some_and(|row| !row.is_empty()) {
+            rows.push(Vec::new());
+        }
+        rows.push(vec![ReaderSegment::new("LINKS", ReaderInk::Heading)]);
+        for (index, href) in links.iter().enumerate() {
+            let mark = format!("[{}] ", index + 1);
+            let room = width.saturating_sub(UnicodeWidthStr::width(mark.as_str()));
+            rows.push(vec![
+                ReaderSegment::new(mark, ReaderInk::LinkMark),
+                ReaderSegment::new(clip_to_width(href, room), ReaderInk::LinkUrl),
+            ]);
+        }
+    }
+}
+
+/// A line's spans with each numbered link followed by its `[n]`.
+fn span_segments(spans: &[ReaderSpan], links: &[String], ink: ReaderInk) -> Vec<ReaderSegment> {
+    let mut segments = Vec::new();
+    for span in spans {
+        match span {
+            ReaderSpan::Text(text) => segments.push(ReaderSegment::new(text.clone(), ink)),
+            ReaderSpan::Link { text, href } => {
+                segments.push(ReaderSegment::new(text.clone(), ink));
+                if let Some(index) = links.iter().position(|link| link == href) {
+                    segments.push(ReaderSegment::new(
+                        format!(" [{}]", index + 1),
+                        ReaderInk::LinkMark,
+                    ));
+                }
+            }
+        }
+    }
+    segments
+}
+
 /// `example.com` out of the story's URL, without a leading `www.`.
 fn domain_label(url: &str) -> String {
     match reqwest::Url::parse(url) {
@@ -511,9 +513,9 @@ fn push_wrapped(
     rows: &mut Vec<ReaderRow>,
     segments: &[ReaderSegment],
     width: usize,
-    hanging: Option<usize>,
+    hanging: usize,
 ) {
-    rows.extend(wrap_segments(segments, width, hanging.unwrap_or(0)));
+    rows.extend(wrap_segments(segments, width, hanging));
 }
 
 /// Word-wrap styled text to `width` cells. Continuation rows are indented

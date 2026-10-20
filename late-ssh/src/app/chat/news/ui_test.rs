@@ -6,7 +6,7 @@ use ratatui::{Terminal, backend::TestBackend};
 use std::collections::HashSet;
 use uuid::Uuid;
 
-fn card(body: BodyStatus, reading_minutes: Option<u16>) -> ArticleFeedItem {
+fn card(body: BodyStatus) -> ArticleFeedItem {
     let now = Utc::now();
     ArticleFeedItem {
         article: Article {
@@ -21,7 +21,6 @@ fn card(body: BodyStatus, reading_minutes: Option<u16>) -> ArticleFeedItem {
         },
         author_username: "mat".to_string(),
         body,
-        reading_minutes,
     }
 }
 
@@ -61,9 +60,9 @@ fn meta_row(item: ArticleFeedItem) -> String {
 /// there is nothing to read here, and nothing while the fetch is pending.
 #[test]
 fn card_meta_reads_the_body_status() {
-    assert!(meta_row(card(BodyStatus::Ready, Some(7))).ends_with("UTC - 7 min read"));
-    assert!(meta_row(card(BodyStatus::Unavailable, None)).ends_with("UTC - link"));
-    assert!(meta_row(card(BodyStatus::Pending, None)).ends_with("UTC"));
+    assert!(meta_row(card(BodyStatus::Ready { reading_minutes: 7 })).ends_with("UTC - 7 min read"));
+    assert!(meta_row(card(BodyStatus::Unavailable)).ends_with("UTC - link"));
+    assert!(meta_row(card(BodyStatus::Pending)).ends_with("UTC"));
 }
 
 #[test]

@@ -3911,29 +3911,30 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
     // available), then the other permanent rooms and Mentions. Mirrors
     // `state.rs::visual_order_for_rooms`.
     let core_order = ["lounge", "announcements", "suggestions", "bugs"];
-    let (lounge, core_rest) = core_order.split_at(1);
-    for slug in lounge {
-        if let Some((room, _)) = chat_rooms
+    let [lounge, core_rest @ ..] = core_order;
+    let core_room = |slug: &str| {
+        chat_rooms
             .iter()
             .find(|(r, _)| is_chat_list_room(r) && r.permanent && r.slug.as_deref() == Some(slug))
-        {
-            let is_selected = room_selected(room.id);
-            push_row(
-                room_line(
+            .map(|(room, _)| room)
+    };
+    if let Some(room) = core_room(lounge) {
+        let is_selected = room_selected(room.id);
+        push_row(
+            room_line(
+                room,
+                room_display_label(
                     room,
-                    room_display_label(
-                        room,
-                        view.usernames,
-                        view.current_user_id,
-                        view.away_user_ids,
-                    ),
-                    is_selected,
-                    view.room_jump_active.then(|| jump_keys.next()).flatten(),
+                    view.usernames,
+                    view.current_user_id,
+                    view.away_user_ids,
                 ),
-                Some(RoomSlot::Room(room.id)),
                 is_selected,
-            );
-        }
+                view.room_jump_active.then(|| jump_keys.next()).flatten(),
+            ),
+            Some(RoomSlot::Room(room.id)),
+            is_selected,
+        );
     }
     let news_line = {
         let prefix = room_jump_prefix(
@@ -3987,10 +3988,7 @@ fn build_room_list_rows(view: &ChatRoomListView<'_>, rooms_area: Rect) -> RoomLi
         push_row(feeds_line, Some(RoomSlot::Feeds), view.feeds_selected);
     }
     for slug in core_rest {
-        if let Some((room, _)) = chat_rooms
-            .iter()
-            .find(|(r, _)| is_chat_list_room(r) && r.permanent && r.slug.as_deref() == Some(slug))
-        {
+        if let Some(room) = core_room(slug) {
             let is_selected = room_selected(room.id);
             push_row(
                 room_line(
@@ -4784,7 +4782,7 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     // available), then the other permanent rooms and Mentions. Mirrors
     // `state.rs::visual_order_for_rooms`.
     let core_order = ["lounge", "announcements", "suggestions", "bugs"];
-    let (lounge, core_rest) = core_order.split_at(1);
+    let [lounge, core_rest @ ..] = core_order;
     let core_room = |slug: &str| {
         view.chat_rooms
             .iter()
@@ -4799,10 +4797,8 @@ fn build_cozy_room_rail_rows(view: &ChatRoomListView<'_>, width: u16) -> RoomLis
     let core_collapsed = collapsed_set.contains(&RoomSection::Core);
     push_row(section_header(RoomSection::Core), None, false);
     if !core_collapsed {
-        for slug in lounge {
-            if let Some(room_id) = core_room(slug) {
-                push_slot(RoomSlot::Room(room_id), &mut push_row);
-            }
+        if let Some(room_id) = core_room(lounge) {
+            push_slot(RoomSlot::Room(room_id), &mut push_row);
         }
         if !favorited(RoomSlot::News) {
             push_slot(RoomSlot::News, &mut push_row);

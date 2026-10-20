@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use crate::models::article_body::{ArticleBody, BodyStatus, reading_minutes};
+use crate::models::article_body::{ArticleBody, BodyStatus};
 use crate::models::chips::{ChipMove, UserChips};
 
 /// What publishing one article pays its author. Every share path funnels
@@ -86,20 +86,9 @@ impl Article {
             .map(|row| {
                 let status: Option<String> = row.get("body_status");
                 let word_count: Option<i32> = row.get("body_word_count");
-                let body = BodyStatus::from_column(status.as_deref())?;
-                let reading_minutes = match (body, word_count) {
-                    (BodyStatus::Ready, Some(words)) => {
-                        Some(reading_minutes(u32::try_from(words)?))
-                    }
-                    (BodyStatus::Ready, None) => {
-                        anyhow::bail!("ready article body without a word count")
-                    }
-                    (BodyStatus::Pending | BodyStatus::Unavailable, _) => None,
-                };
                 Ok(FeedArticle {
+                    body: BodyStatus::from_columns(status.as_deref(), word_count)?,
                     article: Self::from(row),
-                    body,
-                    reading_minutes,
                 })
             })
             .collect()
@@ -245,18 +234,15 @@ pub struct ArticleSnapshot {
 pub struct FeedArticle {
     pub article: Article,
     pub body: BodyStatus,
-    pub reading_minutes: Option<u16>,
 }
 
 #[derive(Clone)]
 pub struct ArticleFeedItem {
     pub article: Article,
     pub author_username: String,
-    /// Where the story's body stands; the card's meta and the reader's
-    /// first frame read it.
+    /// Where the story's body stands, with its reading time once ready; the
+    /// card's meta and the reader's first frame read it.
     pub body: BodyStatus,
-    /// `Some` exactly when `body` is ready.
-    pub reading_minutes: Option<u16>,
 }
 
 #[derive(Clone, Debug)]

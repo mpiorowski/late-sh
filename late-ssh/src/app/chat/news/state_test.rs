@@ -42,7 +42,6 @@ fn article(id: u128, author: Uuid, created_minutes: i64) -> ArticleFeedItem {
         },
         author_username: "author".to_string(),
         body: late_core::models::article_body::BodyStatus::Pending,
-        reading_minutes: None,
     }
 }
 
@@ -262,7 +261,7 @@ async fn a_body_load_failure_does_not_end_a_share_in_flight() {
     let lines = vec![ReaderLine::Paragraph {
         spans: vec![ReaderSpan::Text("words".to_string())],
     }];
-    ArticleBody::store_ready(&client, story.id, "example.com", 1, &lines)
+    ArticleBody::store_ready(&client, story.id, 1, &lines)
         .await
         .expect("store ready");
     let service = ArticleService::new(test_db.db.clone(), AiService::new(false, None));

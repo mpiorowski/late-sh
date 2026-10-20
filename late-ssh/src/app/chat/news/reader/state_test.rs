@@ -24,10 +24,6 @@ fn story(body: BodyStatus) -> ArticleFeedItem {
         },
         author_username: "mat".to_string(),
         body,
-        reading_minutes: match body {
-            BodyStatus::Ready => Some(1),
-            BodyStatus::Pending | BodyStatus::Unavailable => None,
-        },
     }
 }
 
@@ -45,7 +41,6 @@ fn link(text: &str, href: &str) -> ReaderSpan {
 fn ready(lines: Vec<ReaderLine>) -> Option<Arc<ArticleBody>> {
     Some(Arc::new(ArticleBody {
         article_id: Uuid::from_u128(7),
-        domain: "example.com".to_string(),
         content: BodyContent::Ready {
             word_count: 12,
             lines,
@@ -65,8 +60,8 @@ fn plain(rows: &[ReaderRow]) -> Vec<String> {
 /// reaches them (a repeat keeps its number), and the Links list after.
 #[test]
 fn a_ready_body_lays_out_with_links_numbered_in_first_appearance_order() {
-    let mut reader = ReaderModal::open(&story(BodyStatus::Ready));
-    assert_eq!(*reader.body(), ReaderBody::Loading);
+    let mut reader = ReaderModal::open(&story(BodyStatus::Ready { reading_minutes: 1 }));
+    assert_eq!(*reader.body(), ReaderBody::Loading { reading_minutes: 1 });
 
     reader.apply_body(ready(vec![
         ReaderLine::Heading {
@@ -152,10 +147,9 @@ fn a_pending_or_unavailable_body_shows_the_summary_and_one_status_line() {
         ]
     );
 
-    let mut reader = ReaderModal::open(&story(BodyStatus::Ready));
+    let mut reader = ReaderModal::open(&story(BodyStatus::Ready { reading_minutes: 1 }));
     reader.apply_body(Some(Arc::new(ArticleBody {
         article_id: Uuid::from_u128(7),
-        domain: "example.com".to_string(),
         content: BodyContent::Unavailable,
         fetched_at: Utc::now(),
     })));

@@ -202,7 +202,6 @@ impl ArticleService {
                 author_username: display_author(&usernames, row.article.user_id),
                 article: row.article,
                 body: row.body,
-                reading_minutes: row.reading_minutes,
             })
             .collect();
 
@@ -475,23 +474,21 @@ impl ArticleService {
                     "failed to store article body"
                 );
             }
-            (BodyRead::Ready { domain, body }, Ok(())) => {
+            (BodyRead::Ready(body), Ok(())) => {
                 metrics::record_news_body_fetch(BodyFetchOutcome::Ready);
                 tracing::info!(
-                    %domain,
                     words = body.word_count,
                     lines = body.lines.len(),
                     "article body stored"
                 );
             }
-            (BodyRead::Skipped { .. }, Ok(())) => {
+            (BodyRead::Skipped, Ok(())) => {
                 metrics::record_news_body_fetch(BodyFetchOutcome::Skipped);
                 tracing::info!("article body skipped for a video or x post");
             }
-            (BodyRead::Failed { domain, error }, Ok(())) => {
+            (BodyRead::Failed(error), Ok(())) => {
                 metrics::record_news_body_fetch(BodyFetchOutcome::Failed(error.failure));
                 tracing::warn!(
-                    %domain,
                     failure = ?error.failure,
                     error = ?error.source,
                     "article body unavailable"
@@ -501,34 +498,26 @@ impl ArticleService {
     }
 
     async fn read_body(&self, url: &str, deadline: tokio::time::Instant) -> BodyRead {
-        let domain = url_host(url);
         if is_youtube_url(url) || tweet_status_id(url).is_some() {
-            return BodyRead::Skipped { domain };
+            return BodyRead::Skipped;
         }
         match tokio::time::timeout_at(deadline, self.fetch_readable_body(url)).await {
-            Ok(Ok((domain, body))) => BodyRead::Ready { domain, body },
-            Ok(Err(error)) => BodyRead::Failed { domain, error },
-            Err(_) => BodyRead::Failed {
-                domain,
-                error: BodyFetchError::new(
-                    BodyFetchFailure::Timeout,
-                    anyhow::anyhow!("the share's processing budget ran out"),
-                ),
-            },
+            Ok(Ok(body)) => BodyRead::Ready(body),
+            Ok(Err(error)) => BodyRead::Failed(error),
+            Err(_) => BodyRead::Failed(BodyFetchError::new(
+                BodyFetchFailure::Timeout,
+                anyhow::anyhow!("the share's processing budget ran out"),
+            )),
         }
     }
 
-    async fn fetch_readable_body(
-        &self,
-        url: &str,
-    ) -> Result<(String, ReadableBody), BodyFetchError> {
+    async fn fetch_readable_body(&self, url: &str) -> Result<ReadableBody, BodyFetchError> {
         let page = body::fetch_page(&self.body_client, url).await?;
-        let domain = page.final_url.host_str().unwrap_or_default().to_string();
         let extracted =
             tokio::task::spawn_blocking(move || body::readable_body(&page.html, &page.final_url))
                 .await;
         match extracted {
-            Ok(Ok(body)) => Ok((domain, body)),
+            Ok(Ok(body)) => Ok(body),
             Ok(Err(error)) => Err(error),
             Err(join) => Err(BodyFetchError::new(BodyFetchFailure::Extract, join)),
         }
@@ -537,12 +526,11 @@ impl ArticleService {
     async fn store_read_body(&self, article_id: Uuid, read: &BodyRead) -> Result<()> {
         let client = self.db.get().await?;
         match read {
-            BodyRead::Ready { domain, body } => {
-                ArticleBody::store_ready(&client, article_id, domain, body.word_count, &body.lines)
-                    .await
+            BodyRead::Ready(body) => {
+                ArticleBody::store_ready(&client, article_id, body.word_count, &body.lines).await
             }
-            BodyRead::Skipped { domain } | BodyRead::Failed { domain, .. } => {
-                ArticleBody::store_unavailable(&client, article_id, domain).await
+            BodyRead::Skipped | BodyRead::Failed(_) => {
+                ArticleBody::store_unavailable(&client, article_id).await
             }
         }
     }
@@ -947,18 +935,10 @@ impl ArticleService {
 
 /// What the body step read for one story, before it is stored.
 enum BodyRead {
-    Ready {
-        domain: String,
-        body: ReadableBody,
-    },
+    Ready(ReadableBody),
     /// A video or an X post: no page to read, by design.
-    Skipped {
-        domain: String,
-    },
-    Failed {
-        domain: String,
-        error: BodyFetchError,
-    },
+    Skipped,
+    Failed(BodyFetchError),
 }
 
 /// How one story's body step ended, for `late_ssh_news_body_fetches_total`.
@@ -1130,14 +1110,6 @@ fn is_ai_blocklisted_url(url: &str) -> bool {
         return false;
     };
     host == "cyberspace.online" || host.ends_with(".cyberspace.online")
-}
-
-/// The host of a share's URL, for a body row that never fetched a page.
-fn url_host(url: &str) -> String {
-    match reqwest::Url::parse(url) {
-        Ok(parsed) => parsed.host_str().unwrap_or_default().to_string(),
-        Err(_) => String::new(),
-    }
 }
 
 fn is_youtube_url(url: &str) -> bool {

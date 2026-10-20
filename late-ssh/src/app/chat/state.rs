@@ -7464,20 +7464,18 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
     // rooms and Mentions. Mirrored by both rail builders in `ui.rs`.
     let core_collapsed = collapsed_sections.contains(&RoomSection::Core);
     let core_order = ["lounge", "announcements", "suggestions", "bugs"];
-    let (lounge, core_rest) = core_order.split_at(1);
+    let [lounge, core_rest @ ..] = core_order;
     let core_room = |slug: &str| {
         rooms
             .iter()
             .find(|(r, _)| is_chat_list_room(r) && r.permanent && r.slug.as_deref() == Some(slug))
             .map(|(room, _)| room.id)
     };
-    for slug in lounge {
-        if let Some(room_id) = core_room(slug)
-            && pushed_rooms.insert(room_id)
-            && !core_collapsed
-        {
-            order.push(RoomSlot::Room(room_id));
-        }
+    if let Some(room_id) = core_room(lounge)
+        && pushed_rooms.insert(room_id)
+        && !core_collapsed
+    {
+        order.push(RoomSlot::Room(room_id));
     }
     if !core_collapsed {
         if !pushed_rooms.contains(&FAVORITE_ID_NEWS) {

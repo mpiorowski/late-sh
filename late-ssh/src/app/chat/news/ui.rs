@@ -169,10 +169,10 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
 /// when there is no text to read here (a video, an X post, a page the fetch
 /// could not read), nothing while the fetch is pending.
 pub(crate) fn reading_label(item: &ArticleFeedItem) -> Option<String> {
-    match (item.body, item.reading_minutes) {
-        (BodyStatus::Ready, Some(minutes)) => Some(format!("{minutes} min read")),
-        (BodyStatus::Ready, None) | (BodyStatus::Pending, _) => None,
-        (BodyStatus::Unavailable, _) => Some("link".to_string()),
+    match item.body {
+        BodyStatus::Ready { reading_minutes } => Some(format!("{reading_minutes} min read")),
+        BodyStatus::Pending => None,
+        BodyStatus::Unavailable => Some("link".to_string()),
     }
 }
 

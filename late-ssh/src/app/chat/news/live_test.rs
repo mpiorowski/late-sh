@@ -39,7 +39,6 @@ fn article(n: u128, title: &str, shared_secs: i64) -> ArticleFeedItem {
         },
         author_username: "mat".to_string(),
         body: late_core::models::article_body::BodyStatus::Pending,
-        reading_minutes: None,
     }
 }
 

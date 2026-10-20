@@ -13,22 +13,30 @@ pub const READING_WORDS_PER_MINUTE: u32 = 220;
 pub enum BodyStatus {
     /// The fetch has not landed yet.
     Pending,
-    /// The article text is stored and the reader shows it.
-    Ready,
+    /// The article text is stored and the reader shows it; the card reads
+    /// `7 min read`.
+    Ready { reading_minutes: u16 },
     /// There is no text to show (a video, an X post, a page the fetch could
     /// not read, a body retired by retention): the reader shows the summary.
     Unavailable,
 }
 
 impl BodyStatus {
-    /// The `status` column of a `LEFT JOIN`ed body row: none is pending, and
-    /// a value no build ever wrote is an error rather than a guess.
-    pub fn from_column(status: Option<&str>) -> Result<Self> {
-        match status {
-            None => Ok(Self::Pending),
-            Some("ready") => Ok(Self::Ready),
-            Some("unavailable") => Ok(Self::Unavailable),
-            Some(other) => bail!("unknown article body status {other:?}"),
+    /// The `status` and `word_count` columns of a `LEFT JOIN`ed body row:
+    /// none is pending, and a row no build ever wrote is an error rather
+    /// than a guess.
+    pub fn from_columns(status: Option<&str>, word_count: Option<i32>) -> Result<Self> {
+        match (status, word_count) {
+            (None, _) => Ok(Self::Pending),
+            (Some("ready"), Some(words)) => Ok(Self::Ready {
+                reading_minutes: reading_minutes(
+                    u32::try_from(words).context("negative word count")?,
+                ),
+            }),
+            (Some("unavailable"), _) => Ok(Self::Unavailable),
+            (status, word_count) => {
+                bail!("unknown article body row: status {status:?}, word count {word_count:?}")
+            }
         }
     }
 }
@@ -69,8 +77,6 @@ pub enum BodyContent {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArticleBody {
     pub article_id: Uuid,
-    /// The host the fetch ended on, after redirects.
-    pub domain: String,
     pub content: BodyContent,
     pub fetched_at: DateTime<Utc>,
 }
@@ -84,8 +90,10 @@ pub fn reading_minutes(word_count: u32) -> u16 {
 
 impl ArticleBody {
     pub fn status(&self) -> BodyStatus {
-        match self.content {
-            BodyContent::Ready { .. } => BodyStatus::Ready,
+        match &self.content {
+            BodyContent::Ready { word_count, .. } => BodyStatus::Ready {
+                reading_minutes: reading_minutes(*word_count),
+            },
             BodyContent::Unavailable => BodyStatus::Unavailable,
         }
     }
@@ -106,7 +114,6 @@ impl ArticleBody {
     pub async fn store_ready(
         client: &Client,
         article_id: Uuid,
-        domain: &str,
         word_count: u32,
         lines: &[ReaderLine],
     ) -> Result<()> {
@@ -114,29 +121,27 @@ impl ArticleBody {
         let word_count = i32::try_from(word_count).context("word count out of range")?;
         client
             .execute(
-                "INSERT INTO article_bodies (article_id, status, domain, word_count, lines)
-                 VALUES ($1, 'ready', $2, $3, $4)
+                "INSERT INTO article_bodies (article_id, status, word_count, lines)
+                 VALUES ($1, 'ready', $2, $3)
                  ON CONFLICT (article_id) DO UPDATE
-                 SET status = EXCLUDED.status, domain = EXCLUDED.domain,
-                     word_count = EXCLUDED.word_count, lines = EXCLUDED.lines,
-                     fetched_at = current_timestamp",
-                &[&article_id, &domain, &word_count, &lines],
+                 SET status = EXCLUDED.status, word_count = EXCLUDED.word_count,
+                     lines = EXCLUDED.lines, fetched_at = current_timestamp",
+                &[&article_id, &word_count, &lines],
             )
             .await?;
         Ok(())
     }
 
     /// Record that a story has no text to read, so its card stops waiting.
-    pub async fn store_unavailable(client: &Client, article_id: Uuid, domain: &str) -> Result<()> {
+    pub async fn store_unavailable(client: &Client, article_id: Uuid) -> Result<()> {
         client
             .execute(
-                "INSERT INTO article_bodies (article_id, status, domain, word_count, lines)
-                 VALUES ($1, 'unavailable', $2, 0, '[]'::jsonb)
+                "INSERT INTO article_bodies (article_id, status, word_count, lines)
+                 VALUES ($1, 'unavailable', 0, '[]'::jsonb)
                  ON CONFLICT (article_id) DO UPDATE
-                 SET status = EXCLUDED.status, domain = EXCLUDED.domain,
-                     word_count = 0, lines = '[]'::jsonb,
+                 SET status = EXCLUDED.status, word_count = 0, lines = '[]'::jsonb,
                      fetched_at = current_timestamp",
-                &[&article_id, &domain],
+                &[&article_id],
             )
             .await?;
         Ok(())
@@ -173,10 +178,8 @@ impl ArticleBody {
     ) -> Result<u64> {
         let settled = client
             .execute(
-                "INSERT INTO article_bodies (article_id, status, domain, word_count, lines)
-                 SELECT a.id, 'unavailable',
-                        COALESCE(substring(a.url FROM '^[A-Za-z][A-Za-z0-9+.-]*://([^/?#:]+)'), ''),
-                        0, '[]'::jsonb
+                "INSERT INTO article_bodies (article_id, status, word_count, lines)
+                 SELECT a.id, 'unavailable', 0, '[]'::jsonb
                  FROM articles a
                  WHERE a.created < $1
                    AND NOT EXISTS (SELECT 1 FROM article_bodies b WHERE b.article_id = a.id)
@@ -189,8 +192,8 @@ impl ArticleBody {
 
     fn from_row(row: &Row) -> Result<Self> {
         let status: String = row.get("status");
-        let content = match BodyStatus::from_column(Some(&status))? {
-            BodyStatus::Ready => {
+        let content = match status.as_str() {
+            "ready" => {
                 let word_count: i32 = row.get("word_count");
                 let lines: serde_json::Value = row.get("lines");
                 BodyContent::Ready {
@@ -198,12 +201,11 @@ impl ArticleBody {
                     lines: serde_json::from_value(lines).context("reading reader lines")?,
                 }
             }
-            BodyStatus::Unavailable => BodyContent::Unavailable,
-            BodyStatus::Pending => unreachable!("a stored row always has a status"),
+            "unavailable" => BodyContent::Unavailable,
+            other => bail!("unknown article body status {other:?}"),
         };
         Ok(Self {
             article_id: row.get("article_id"),
-            domain: row.get("domain"),
             content,
             fetched_at: row.get("fetched_at"),
         })

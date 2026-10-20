@@ -320,12 +320,12 @@ impl State {
     /// Mark the one article the reader opened on as read, and no other. Its
     /// mark clears now, and the write always goes: it is a no-op on a row
     /// that exists, and a reopen is the retry of a write that failed.
-    pub fn mark_article_read(&mut self, item: &ArticleFeedItem) {
+    pub fn mark_article_read(&mut self, article_id: Uuid) {
         if let Reads::Loaded(read_ids) = &mut self.reads {
-            read_ids.insert(item.article.id);
+            read_ids.insert(article_id);
         }
         self.article_service
-            .mark_article_read_task(self.user_id, item.article.id);
+            .mark_article_read_task(self.user_id, article_id);
     }
 
     pub fn composer_push(&mut self, ch: char) {
@@ -446,12 +446,11 @@ impl State {
             .source_articles
             .iter()
             .find(|item| item.article.id == article_id)
-            .cloned()
         else {
             return false;
         };
-        self.reader = Some(ReaderModal::open(&item));
-        self.mark_article_read(&item);
+        self.reader = Some(ReaderModal::open(item));
+        self.mark_article_read(article_id);
         self.article_service
             .load_body_task(self.user_id, article_id);
         true
