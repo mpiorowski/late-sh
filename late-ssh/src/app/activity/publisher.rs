@@ -124,6 +124,35 @@ impl ActivityPublisher {
         });
     }
 
+    /// The house opened the next world and it is mustering. No user to look
+    /// up, so a plain send.
+    pub fn realm_season_opened(&self, game_id: Uuid, season: i32, world: &str, opens_in: &str) {
+        let _ = self.tx.send(ActivityEvent::realm_season_opened(
+            game_id, season, world, opens_in,
+        ));
+    }
+
+    /// A world ended, conquered or dissolved. The winner's name is already
+    /// in the state, so no lookup here either.
+    pub fn realm_season_ended(
+        &self,
+        game_id: Uuid,
+        season: i32,
+        winner: Option<String>,
+        pot: i64,
+        players: u8,
+    ) {
+        let _ = self.tx.send(ActivityEvent::realm_season_ended(
+            game_id, season, winner, pot, players,
+        ));
+    }
+
+    /// A realm called its players. No user to look up, so this is a plain
+    /// send rather than a task.
+    pub fn realm_calls(&self, game_id: Uuid, name: &str, day: i32) {
+        let _ = self.tx.send(ActivityEvent::realm_calls(game_id, name, day));
+    }
+
     pub fn sat_down_task(&self, user_id: Uuid, game: ActivityGame) {
         let publisher = self.clone();
         tokio::spawn(async move {

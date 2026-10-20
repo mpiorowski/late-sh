@@ -14,11 +14,14 @@ use crate::app::bonsai::state::BonsaiAction;
 use crate::app::bonsai::svc::BonsaiActionResult;
 use crate::app::calendar::svc::{CalendarAnnouncement, CalendarOp, CalendarWrite};
 use crate::app::chat::news::svc::XMediaLookup;
-use crate::app::chat::svc::GildRefusal;
+use crate::app::chat::svc::{GildRefusal, SendRefusal};
 use crate::app::clubhouse::nightcap::svc::{NightcapHouseFailure, NightcapOrderResult};
 use crate::app::common::primitives::Screen;
 use crate::app::crown::svc::CrownRefusal;
 use crate::app::deadchannel::haunt::state::GateVerdict;
+use crate::app::door::realm::svc::{
+    RealmChatRoomAttach, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError,
+};
 use crate::app::door::zork::protocol::{Action as ZorkAction, Edition as ZorkEdition};
 use crate::app::games::chips::svc::{GiftDrinkRefusal, RoundRefusal};
 use crate::app::leaderboard::svc::AwardAnnouncementOutcome;
@@ -399,6 +402,7 @@ pub enum Place {
     Home(HomeRoom),
     /// The open Arcade board or House Table game.
     Game(ActivityGame),
+    MapShelf,
     PeopleShelf,
     JobsShelf,
     ArtboardCanvas,
@@ -588,9 +592,10 @@ mod inner {
         JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, LoungeBeat,
         NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
         OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome,
-        PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, Refresh,
-        RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SessionStartStage,
-        SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
+        PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, RealmChatRoomAttach,
+        RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
+        RoundRefusal, RunnerDoor, Screen, SendRefusal, SessionStartStage, SessionUser,
+        SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
         ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
     use super::{BonsaiAction, BonsaiActionResult};
@@ -631,6 +636,7 @@ mod inner {
             ActivityGame::Nethack => "nethack",
             ActivityGame::Nonogram => "nonogram",
             ActivityGame::Poker => "poker",
+            ActivityGame::Realm => "realm",
             ActivityGame::RubiksCube => "rubiks_cube",
             ActivityGame::SlidingPuzzle => "sliding_puzzle",
             ActivityGame::Sshattrick => "sshattrick",
@@ -816,6 +822,17 @@ mod inner {
             GildRefusal::AlreadyGilded => "already_gilded",
             GildRefusal::HeldHigher => "held_higher",
             GildRefusal::InsufficientChips => "insufficient_chips",
+        }
+    }
+
+    fn send_refusal_label(refusal: &SendRefusal) -> &'static str {
+        match refusal {
+            SendRefusal::NotAMember => "not_a_member",
+            SendRefusal::Banned => "banned",
+            SendRefusal::AnnouncementsAdminOnly => "announcements_admin_only",
+            SendRefusal::ReportOnly(_) => "report_only",
+            SendRefusal::SlowMode { .. } => "slow_mode",
+            SendRefusal::LinkCooldown { .. } => "link_cooldown",
         }
     }
 
@@ -1314,6 +1331,16 @@ mod inner {
         })
     }
 
+    fn chat_sends_refused_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_chat_sends_refused_total")
+                .with_description("Chat sends refused by a room rule, by reason")
+                .build()
+        })
+    }
+
     fn daily_win_payouts_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -1333,6 +1360,66 @@ mod inner {
                 .u64_counter("late_ssh_daily_snapshot_rows_rejected_total")
                 .with_description(
                     "Daily match rows left out of the lobby snapshot, by reason, counted once per replica when a row first goes missing. `unknown_game` is expected during a rolling deploy that adds a game; anything else is a corrupt row or a build that cannot read what another wrote",
+                )
+                .build()
+        })
+    }
+
+    fn realm_payouts_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_realm_payouts_total")
+                .with_description(
+                    "Realm pot settlements by outcome: one per place paid (or found already paid, on a retry), one per game that had nothing to pay, one per credit that failed and is left for the sweeper",
+                )
+                .build()
+        })
+    }
+
+    fn realm_seasons_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_realm_seasons_total")
+                .with_description(
+                    "Realm season openings by the sweeper, by outcome: opened, standing (another replica opened it first), failed",
+                )
+                .build()
+        })
+    }
+
+    fn realm_chat_room_attachments_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_realm_chat_room_attachments_total")
+                .with_description(
+                    "Chat rooms the sweeper attached to a standing realm world from before rooms were born with it, by outcome: attached, failed",
+                )
+                .build()
+        })
+    }
+
+    fn realm_chat_rooms_reaped_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_realm_chat_rooms_reaped_total")
+                .with_description(
+                    "Realm chat rooms hard-deleted by the sweeper 30 days after their world ended",
+                )
+                .build()
+        })
+    }
+
+    fn realm_snapshot_rows_rejected_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_realm_snapshot_rows_rejected_total")
+                .with_description(
+                    "Realm game rows left out of the Lobby snapshot, by reason, counted once per replica when a row first goes missing: a corrupt row or a build that cannot read what another wrote",
                 )
                 .build()
         })
@@ -1951,6 +2038,7 @@ mod inner {
             Refresh::ActiveQuestBoards => "active_quest_boards",
             Refresh::ShopFlairDirectory => "shop_flair_directory",
             Refresh::CalendarNotices => "calendar_notices",
+            Refresh::RealmGames => "realm_games",
         }
     }
 
@@ -2058,6 +2146,7 @@ mod inner {
             Screen::Zen => "zen",
             Screen::DailyMatch => "daily_match",
             Screen::HouseTable => "house_table",
+            Screen::Realm => "realm",
             Screen::Scratchpad => "scratchpad",
         }
     }
@@ -2093,6 +2182,7 @@ mod inner {
             Place::Whole => "none",
             Place::Home(room) => home_room_label(room),
             Place::Game(game) => game_label(game),
+            Place::MapShelf => "map",
             Place::PeopleShelf => "people",
             Place::JobsShelf => "jobs",
             Place::ArtboardCanvas => "canvas",
@@ -2264,6 +2354,72 @@ mod inner {
         );
     }
 
+    fn realm_payout_label(payout: RealmPayout) -> &'static str {
+        match payout {
+            RealmPayout::Paid => "paid",
+            RealmPayout::AlreadyPaid => "already_paid",
+            RealmPayout::Unearned => "unearned",
+            RealmPayout::Dissolved => "dissolved",
+            RealmPayout::Failed => "failed",
+        }
+    }
+
+    pub fn record_realm_payout(payout: RealmPayout) {
+        realm_payouts_total().add(1, &[KeyValue::new("outcome", realm_payout_label(payout))]);
+    }
+
+    fn realm_season_open_label(outcome: RealmSeasonOpen) -> &'static str {
+        match outcome {
+            RealmSeasonOpen::Opened => "opened",
+            RealmSeasonOpen::Standing => "standing",
+            RealmSeasonOpen::Failed => "failed",
+        }
+    }
+
+    pub fn record_realm_season_open(outcome: RealmSeasonOpen) {
+        realm_seasons_total().add(
+            1,
+            &[KeyValue::new("outcome", realm_season_open_label(outcome))],
+        );
+    }
+
+    fn realm_chat_room_attach_label(outcome: RealmChatRoomAttach) -> &'static str {
+        match outcome {
+            RealmChatRoomAttach::Attached => "attached",
+            RealmChatRoomAttach::Failed => "failed",
+        }
+    }
+
+    pub fn record_realm_chat_room_attach(outcome: RealmChatRoomAttach) {
+        realm_chat_room_attachments_total().add(
+            1,
+            &[KeyValue::new(
+                "outcome",
+                realm_chat_room_attach_label(outcome),
+            )],
+        );
+    }
+
+    pub fn record_realm_chat_rooms_reaped(deleted: u64) {
+        realm_chat_rooms_reaped_total().add(deleted, &[]);
+    }
+
+    fn realm_snapshot_row_rejected_label(error: &RealmSnapshotRowError) -> &'static str {
+        match error {
+            RealmSnapshotRowError::UnreadableState(_) => "unreadable_state",
+        }
+    }
+
+    pub fn record_realm_snapshot_row_rejected(error: &RealmSnapshotRowError) {
+        realm_snapshot_rows_rejected_total().add(
+            1,
+            &[KeyValue::new(
+                "reason",
+                realm_snapshot_row_rejected_label(error),
+            )],
+        );
+    }
+
     fn irc_history_request_label(request: IrcHistoryRequest) -> &'static str {
         match request {
             IrcHistoryRequest::Explicit => "explicit",
@@ -2413,6 +2569,10 @@ mod inner {
 
     pub fn record_gild_refused(refusal: GildRefusal) {
         chat_gilds_refused_total().add(1, &[KeyValue::new("reason", gild_refusal_label(refusal))]);
+    }
+
+    pub(crate) fn record_chat_send_refused(refusal: &SendRefusal) {
+        chat_sends_refused_total().add(1, &[KeyValue::new("reason", send_refusal_label(refusal))]);
     }
 
     pub fn record_bonsai_action(action: BonsaiAction, result: BonsaiActionResult) {
@@ -3182,9 +3342,10 @@ mod inner {
         JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, LoungeBeat,
         NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
         OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome,
-        PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, Refresh,
-        RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SessionStartStage,
-        SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
+        PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, RealmChatRoomAttach,
+        RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
+        RoundRefusal, RunnerDoor, Screen, SendRefusal, SessionStartStage, SessionUser,
+        SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
         ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
     use super::{BonsaiAction, BonsaiActionResult};
@@ -3250,6 +3411,11 @@ mod inner {
     pub fn record_daily_win_payout(_payout: DailyWinPayout) {}
     pub fn record_pool_shot(_outcome: PoolShotOutcome) {}
     pub fn record_daily_snapshot_row_rejected(_error: &SnapshotRowError) {}
+    pub fn record_realm_payout(_payout: RealmPayout) {}
+    pub fn record_realm_season_open(_outcome: RealmSeasonOpen) {}
+    pub fn record_realm_chat_room_attach(_outcome: RealmChatRoomAttach) {}
+    pub fn record_realm_chat_rooms_reaped(_deleted: u64) {}
+    pub fn record_realm_snapshot_row_rejected(_error: &RealmSnapshotRowError) {}
     pub fn record_irc_history(_request: IrcHistoryRequest, _outcome: IrcHistoryOutcome) {}
     pub fn record_news_shared(_reward: NewsShareReward) {}
     pub fn record_news_x_media_lookup(_lookup: XMediaLookup) {}
@@ -3258,6 +3424,7 @@ mod inner {
     pub fn record_radio_meta_poll(_feed: PolledFeed, _outcome: PollOutcome) {}
     pub fn record_gild_bought(_tier: GildTier) {}
     pub fn record_gild_refused(_refusal: GildRefusal) {}
+    pub(crate) fn record_chat_send_refused(_refusal: &SendRefusal) {}
     pub fn record_bonsai_action(_action: BonsaiAction, _result: BonsaiActionResult) {}
     pub fn record_crown_taken(_price: i64) {}
     pub fn record_crown_take_refused(_refusal: CrownRefusal) {}

@@ -38,8 +38,8 @@ from the edition list to the Games hub.
 Backtick steps out without killing the child; the workspace has one live stop
 for the trilogy. Games-card entry opens the menus while retaining that child.
 Changing editions or choosing manual/new waits for the old child's successful
-checkpoint exit before starting the next. Twenty minutes without forwarded
-gameplay input closes the proxy, including while detached. Continue then loads
+checkpoint exit before starting the next. Thirty minutes (the shared door
+window, `door::game::IDLE_WINDOW`) without forwarded gameplay input closes the proxy, including while detached. Continue then loads
 the last completed automatic checkpoint. Menu navigation, mouse noise, and
 metadata requests do not reset the gameplay timer. Client state without a live
 game does not outlive the visit: leaving the menus drops it (`App::leave_zork`),
@@ -159,7 +159,7 @@ Voluntary switching uses SIGUSR1 and refuses exit on failed persistence.
 | `LATE_ZORK_STORY_DIR` | `/usr/share/late-zork`. |
 | `LATE_ZORK_DATA_DIR` | `/var/lib/late-zork`. |
 | `LATE_ZORK_LISTEN_ADDR` / `LATE_ZORK_PORT` | `0.0.0.0` / `2331`, private service only. |
-| `LATE_ZORK_IDLE_TIMEOUT` | Host fallback SSH timeout 3600 seconds; client gameplay timeout remains 20 minutes. |
+| `LATE_ZORK_IDLE_TIMEOUT` | Host fallback SSH timeout 3600 seconds; client gameplay timeout remains 30 minutes. |
 
 `docker/doors/zork.Dockerfile` builds the vendored curses frontend with
 `SOUND_TYPE=none ZORK_DOOR=1`, checks story hashes, and preserves corresponding
@@ -204,7 +204,7 @@ wire keys.
 | Metric | Labels | Recorded when |
 |---|---|---|
 | `late_ssh_zork_launches_total` | `edition`, `action` (`auto`/`manual`/`new`) | A host child is requested. Continue on the live edition resumes and records nothing. |
-| `late_ssh_zork_session_ends_total` | `edition`, `end` (`quit`, `returned`, `save_rejected`, `busy`, `crashed`, `connect_failed`, `idle`) | A proxy closes, mapped from the exit status, or the 20-minute reap drops it. |
+| `late_ssh_zork_session_ends_total` | `edition`, `end` (`quit`, `returned`, `save_rejected`, `busy`, `crashed`, `connect_failed`, `idle`) | A proxy closes, mapped from the exit status, or the 30-minute reap drops it. |
 | `late_ssh_zork_switches_total` | `result` (`switched`, `save_failed`, `timed_out`) | A switch away from a live game resolves. |
 | `late_ssh_zork_catalogue_reads_total` | `result` (`read`, `failed`) | A menu save-slot read lands. |
 | `late_ssh_zork_suggestions_total` | `result` (`typed`, `not_at_prompt`, `none_waiting`) | F3 on a visible game. |

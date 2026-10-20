@@ -34,13 +34,18 @@ fn read_to_the_end(state: &mut State, width: u16, height: u16) -> String {
     seen
 }
 
-/// The copy as the runner reads it: the marks gone, the opening words
-/// (short enough to sit on one row, where a wrap cannot split them).
-fn opening(text: &str) -> String {
+/// The copy as the runner reads it: the read-only marks gone (a card's
+/// angle marks stay, the way every screen names a card).
+fn unmarked(text: &str) -> String {
     text.chars()
-        .filter(|ch| *ch != '`' && *ch != '*')
-        .take(30)
+        .filter(|ch| !matches!(ch, '`' | '*' | '{' | '}'))
         .collect()
+}
+
+/// The opening words of the copy as the runner reads it, short enough to
+/// sit on one row, where a wrap cannot split them.
+fn opening(text: &str) -> String {
+    unmarked(text).chars().take(30).collect()
 }
 
 #[test]
@@ -88,9 +93,13 @@ fn the_guide_shows_every_block_between_the_top_and_the_end() {
             }
         }
     }
-    // The marks are read, never printed.
+    // The marks are read, never printed; a card keeps its angle marks.
     assert!(!seen.contains('`'));
     assert!(!seen.contains('*'));
+    assert!(!seen.contains('{'));
+    assert!(!seen.contains('}'));
+    assert!(seen.contains("‹jab›: free, hits for three quarters"));
+    assert!(seen.contains("‹surge› in tonight's deck"));
 }
 
 #[test]
@@ -127,7 +136,8 @@ fn a_narrow_frame_wraps_instead_of_cutting() {
         for block in section.blocks {
             if let Block::Keys(keys) = block {
                 for key in *keys {
-                    let first_word = key.does.split(' ').next().unwrap();
+                    let does = unmarked(key.does);
+                    let first_word = does.split(' ').next().unwrap();
                     assert!(seen.contains(first_word), "missing {:?}", key.does);
                 }
             }

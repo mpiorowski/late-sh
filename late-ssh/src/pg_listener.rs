@@ -33,6 +33,7 @@ use late_core::models::{
     pot::POT_CHANGED_CHANNEL,
     presence::PRESENCE_CHANNEL,
     quest::{QUEST_ASSIGNMENTS_CHANGED_CHANNEL, QUEST_USER_CHANGED_CHANNEL},
+    realm_game::REALM_GAME_CHANGED_CHANNEL,
 };
 use tokio::sync::mpsc;
 
@@ -57,6 +58,7 @@ pub enum Refresh {
     ActiveQuestBoards,
     ShopFlairDirectory,
     CalendarNotices,
+    RealmGames,
 }
 
 impl Refresh {
@@ -72,6 +74,7 @@ impl Refresh {
             Refresh::ActiveQuestBoards => "active quest boards",
             Refresh::ShopFlairDirectory => "shop flair directory",
             Refresh::CalendarNotices => "calendar server notices",
+            Refresh::RealmGames => "realm games",
         }
     }
 }
@@ -125,12 +128,13 @@ pub enum Channel {
     Presence,
     QuestAssignmentsChanged,
     QuestUserChanged,
+    RealmGameChanged,
     ShopCatalogChanged,
     ShopUserChanged,
 }
 
 impl Channel {
-    pub const ALL: [Channel; 16] = [
+    pub const ALL: [Channel; 17] = [
         Channel::CalendarChanged,
         Channel::ArticlesChanged,
         Channel::BonsaiChanged,
@@ -145,6 +149,7 @@ impl Channel {
         Channel::Presence,
         Channel::QuestAssignmentsChanged,
         Channel::QuestUserChanged,
+        Channel::RealmGameChanged,
         Channel::ShopCatalogChanged,
         Channel::ShopUserChanged,
     ];
@@ -166,6 +171,7 @@ impl Channel {
             Channel::Presence => PRESENCE_CHANNEL,
             Channel::QuestAssignmentsChanged => QUEST_ASSIGNMENTS_CHANGED_CHANNEL,
             Channel::QuestUserChanged => QUEST_USER_CHANGED_CHANNEL,
+            Channel::RealmGameChanged => REALM_GAME_CHANGED_CHANNEL,
             Channel::ShopCatalogChanged => SHOP_CATALOG_CHANGED_CHANNEL,
             Channel::ShopUserChanged => SHOP_USER_CHANGED_CHANNEL,
         }

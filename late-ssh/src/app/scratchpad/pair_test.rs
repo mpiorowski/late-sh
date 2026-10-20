@@ -171,10 +171,22 @@ async fn pairing_lifecycle_preserves_invite_input_sync_and_departure() {
         frame.contains("paired with @alice-pair"),
         "the second ask completes the handshake; frame={frame:?}"
     );
+    assert!(
+        !frame.contains("wants to pair"),
+        "the completed handshake clears the invite banner; frame={frame:?}"
+    );
 
     // Alice never accepted anything: her session picks the pairing up on its
     // next tick, because she already asked for it.
-    wait_for_render_contains(&mut alice, "paired with @bob-pair").await;
+    let frame = render_plain(&mut alice);
+    assert!(
+        frame.contains("paired with @bob-pair"),
+        "the first asker's next tick opens the editor; frame={frame:?}"
+    );
+    assert!(
+        !frame.contains("Asked @bob-pair to pair"),
+        "the completed handshake clears the waiting banner; frame={frame:?}"
+    );
 
     alice.handle_input(b"fn main() {}");
 

@@ -140,7 +140,7 @@ const BILLBOARD_LINES: [&str; 8] = [
     "VIDS   tuned to a dead channel",
     "NOODLES   two bowls or none",
     "THE LOWER CITY   all the way down",
-    "BITS   it hums. it has never once paid out",
+    "BITS   it hums. it lends now, and it remembers",
     "OFF-STREET   rooms by the hour, by the night",
     "THE WIRE   back up to #deadchannel",
 ];
@@ -392,6 +392,14 @@ pub(crate) fn glow(neon: Neon) -> Style {
 
 pub(crate) fn dim(neon: Neon) -> Style {
     ink(scale(neon_rgb(neon), 0.55))
+}
+
+/// An action's verb, the thing a key does: one green on every screen of
+/// the game, right after the key's amber `[x]`, so what can be done reads
+/// apart from what is only said. Cards and glyph moves have their own
+/// colors (`fight/ui.rs`, the vocabulary).
+pub(crate) fn action() -> Style {
+    lit(Neon::Green)
 }
 
 /// The neon a landmark burns in: its sign's color, or the street's grey
@@ -1762,7 +1770,7 @@ pub(super) fn draw_framed(
     frame.render_widget(body, body_rect);
     if let Some(word) = word {
         frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(word.to_string(), lit(Neon::Cyan))))
+            Paragraph::new(Line::from(fight_ui::card_marked(word, lit(Neon::Cyan))))
                 .wrap(Wrap { trim: true }),
             word_rect,
         );
@@ -1935,7 +1943,8 @@ fn patch_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
             };
             lines.push(Line::from(vec![
                 Span::styled("[p] ", key),
-                Span::styled("patch to full for ", text),
+                Span::styled("patch", action()),
+                Span::styled(" your signal to full for ", text),
                 Span::styled(format!("{price} bits"), style),
             ]));
         }
@@ -1997,7 +2006,8 @@ fn locker_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
                 ))),
                 (_, stored) => lines.push(Line::from(vec![
                     Span::styled("[d] ", key),
-                    Span::styled("lock up ", text),
+                    Span::styled("lock up", action()),
+                    Span::styled(" ", text),
                     Span::styled(format!("{stored} bits"), number),
                     Span::styled(format!(", the locker keeps {fee}"), text),
                 ])),
@@ -2009,7 +2019,8 @@ fn locker_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
                 ))),
                 stash => lines.push(Line::from(vec![
                     Span::styled("[w] ", key),
-                    Span::styled("take out ", text),
+                    Span::styled("take out", action()),
+                    Span::styled(" ", text),
                     Span::styled(format!("{stash} bits"), number),
                 ])),
             }
@@ -2079,7 +2090,8 @@ fn machine_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
                 ))),
                 room => lines.push(Line::from(vec![
                     Span::styled("[b] ", key),
-                    Span::styled("borrow ", text),
+                    Span::styled("borrow", action()),
+                    Span::styled(" ", text),
                     Span::styled(format!("{room} bits"), number),
                     Span::styled(format!(", {} more on the debt", sheet.loan_fee()), text),
                 ])),
@@ -2092,7 +2104,8 @@ fn machine_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
                 ))),
                 (debt, bits) => lines.push(Line::from(vec![
                     Span::styled("[r] ", key),
-                    Span::styled("feed it ", text),
+                    Span::styled("repay", action()),
+                    Span::styled(" ", text),
                     Span::styled(format!("{} bits", debt.min(bits)), number),
                 ])),
             }
@@ -2190,7 +2203,8 @@ fn armorer_lines(view: &CityView<'_>, short_by: usize) -> Vec<Line<'static>> {
     lines.push(Line::default());
     lines.push(Line::from(vec![
         Span::styled("[↑↓] ", key),
-        Span::styled("pick a tier", text),
+        Span::styled("pick", action()),
+        Span::styled(" a tier", text),
     ]));
     // A row per key, so a purchase that changes what it says never
     // changes how many rows the panel has.
@@ -2199,9 +2213,10 @@ fn armorer_lines(view: &CityView<'_>, short_by: usize) -> Vec<Line<'static>> {
         match picked > sheet.tier_of(slot) {
             true => {
                 let price = sheet.outfit_price(slot, picked);
+                keys.push(Span::styled("buy", action()));
                 keys.push(Span::styled(
                     format!(
-                        "{} for ",
+                        " {} for ",
                         gear_name(slot, picked).expect("a tier on the wall")
                     ),
                     text,
@@ -2218,8 +2233,8 @@ fn armorer_lines(view: &CityView<'_>, short_by: usize) -> Vec<Line<'static>> {
     }
     lines.push(Line::from(Span::styled(
         format!(
-            "power equals tier. {}% back on what you hand in. bits only, no credit.",
-            TRADE_IN_PERCENT
+            "power equals tier, +{}% a tier past your level. {}% back on what you hand in. bits only.",
+            RULES.price_lead_percent, TRADE_IN_PERCENT
         ),
         dim_text,
     )));
@@ -2260,23 +2275,48 @@ fn bar_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     // Why the bartender would not pour, in the row's own order and words.
     let refusal = sheet.glass_refused().map(|(_, line)| line);
     let edge = drink_edge(sheet.level);
+    // A glass says what it moves on the sheet; a pour names its card in
+    // the card's neon and says what the card does, so nobody buys a name.
     for drink in Drink::MENU {
-        let (label, does) = match drink {
-            Drink::StaticOnIce => ("[s] ", format!("+{edge} attack")),
-            Drink::DeadAirNeat => ("[d] ", format!("+{edge} defense")),
-            Drink::TestPattern => (
-                "[t] ",
+        let label = match drink {
+            Drink::StaticOnIce => "[s] ",
+            Drink::DeadAirNeat => "[d] ",
+            Drink::TestPattern => "[t] ",
+            Drink::Feedback => "[f] ",
+            Drink::Squelch => "[u] ",
+            Drink::SignOff => "[o] ",
+        };
+        let does = match (drink, drink.pour()) {
+            (_, Some(card)) => vec![
+                fight_ui::card_mark(card),
+                Span::styled(" ".repeat(9 - card.marked().chars().count()), text),
+                Span::styled(card.rule(), dim_text),
+            ],
+            (Drink::StaticOnIce, None) => {
+                vec![Span::styled(
+                    format!("+{edge} attack until the roll"),
+                    dim_text,
+                )]
+            }
+            (Drink::DeadAirNeat, None) => {
+                vec![Span::styled(
+                    format!("+{edge} defense until the roll"),
+                    dim_text,
+                )]
+            }
+            (Drink::TestPattern, None) => vec![Span::styled(
                 format!(
-                    "+{} signal, and filled",
+                    "+{} max signal until the roll, and filled",
                     sheet.level * DRINK_SIGNAL_PER_LEVEL
                 ),
-            ),
-            Drink::Feedback => ("[f] ", "a surge in tonight's deck".to_string()),
-            Drink::Squelch => ("[u] ", "a burn in tonight's deck".to_string()),
-            Drink::SignOff => ("[o] ", "a mute in tonight's deck".to_string()),
+                dim_text,
+            )],
+            (Drink::Feedback | Drink::Squelch | Drink::SignOff, None) => {
+                unreachable!("every pour names its card")
+            }
         };
         let lit_row = refusal.is_none();
-        lines.push(Line::from(vec![
+        let mut row = vec![
             Span::styled(
                 label,
                 match lit_row {
@@ -2288,12 +2328,13 @@ fn bar_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
                 format!("{:<18}", drink.name()),
                 match (sheet.drink == Some(drink), lit_row) {
                     (true, _) => lit(Neon::Amber),
-                    (false, true) => text,
+                    (false, true) => action(),
                     (false, false) => dim_text,
                 },
             ),
-            Span::styled(does, dim_text),
-        ]));
+        ];
+        row.extend(does);
+        lines.push(Line::from(row));
     }
     lines.push(Line::from(vec![
         Span::styled("    ", text),
@@ -2307,7 +2348,7 @@ fn bar_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
         None => Line::default(),
     });
     lines.push(Line::from(Span::styled(
-        format!("a glass is {DRINK_CRYSTALS} crystal. one a day, and it wears off at the roll. a pour is a card in every deck dealt today."),
+        format!("a glass is {DRINK_CRYSTALS} crystal, one a day, worn off at the roll. a pour is its card in every deck dealt today."),
         dim_text,
     )));
     lines
@@ -2353,7 +2394,6 @@ fn ink_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     ]));
     lines.push(Line::default());
     for draft in &DRAFTS {
-        let [first, second] = draft.options.map(|card| card.name());
         let (status, style, lit_row) = match sheet.needle_refused(&RULES, draft.level) {
             None => (format!("for {price} crystals"), dim_text, true),
             Some((Refusal::AlreadyInked, _)) => ("inked".to_string(), lit(Neon::Amber), false),
@@ -2398,39 +2438,69 @@ fn ink_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
             true => Span::styled("▸ ", key),
             false => Span::styled("  ", text),
         };
+        let [first, second] = draft.options;
+        // The cards keep their neon whatever the needle says: a card is
+        // drawn one way everywhere. The column fits the widest pair.
+        let pair = first.marked().chars().count() + 3 + second.marked().chars().count();
         lines.push(Line::from(vec![
             marker,
             Span::styled(
                 format!("{:<10}", format!("level {}", draft.level)),
-                dim_text,
-            ),
-            Span::styled(
-                format!("{:<19}", format!("{first} · {second}")),
                 match lit_row {
                     true => text,
                     false => dim_text,
                 },
             ),
+            fight_ui::card_mark(first),
+            Span::styled(" · ", dim_text),
+            fight_ui::card_mark(second),
+            Span::styled(" ".repeat(24 - pair), text),
             Span::styled(status, style),
         ]));
     }
     lines.push(Line::default());
+    // What the picked draft's two cards do, in two rows that are always
+    // there: the cursor moving changes what they say, never the panel.
+    for card in picked.options {
+        lines.push(Line::from(vec![
+            Span::styled("  ", text),
+            fight_ui::card_mark(card),
+            Span::styled(" ".repeat(11 - card.marked().chars().count()), text),
+            Span::styled(card.rule(), dim_text),
+        ]));
+    }
+    lines.push(Line::from(vec![
+        Span::styled("  ", text),
+        Span::styled(
+            format!("the level {} draft takes the place of a ", picked.level),
+            muted_text,
+        ),
+        fight_ui::card_mark(picked.replaces),
+        Span::styled(". inked, the other comes in too.", muted_text),
+    ]));
+    lines.push(Line::default());
     lines.push(Line::from(vec![
         Span::styled("[↑↓] ", key),
-        Span::styled("pick a draft", text),
+        Span::styled("pick", action()),
+        Span::styled(" a draft", text),
     ]));
     // The key's row, or the refusal standing in for it, so the panel
     // keeps its rows whatever the needle says.
     lines.push(match sheet.needle_refused(&RULES, picked.level) {
         None => {
-            let [first, second] = picked.options.map(|card| card.name());
+            let [first, second] = picked.options;
             Line::from(vec![
                 Span::styled("[i] ", key),
-                Span::styled(format!("ink {first} and {second} for "), text),
+                Span::styled("ink", action()),
+                Span::styled(" ", text),
+                fight_ui::card_mark(first),
+                Span::styled(" and ", text),
+                fight_ui::card_mark(second),
+                Span::styled(" for ", text),
                 Span::styled(format!("{price} crystals"), number),
             ])
         }
-        Some((_, line)) => Line::from(Span::styled(line, text)),
+        Some((_, line)) => Line::from(fight_ui::card_marked(&line, text)),
     });
     lines.push(Line::from(Span::styled(
         "a draft inked is both its cards from its level on, this climb and every one after. one draft a mark, and one more.",
@@ -2470,9 +2540,10 @@ fn cart_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
         match sheet.cart_tier(slot).zip(sheet.cart_price(slot)) {
             Some((tier, crystals)) => lines.push(Line::from(vec![
                 Span::styled(label, key),
+                Span::styled("buy", action()),
                 Span::styled(
                     format!(
-                        "{} for ",
+                        " {} for ",
                         gear_name(slot, tier).expect("a tier on the wall")
                     ),
                     text,

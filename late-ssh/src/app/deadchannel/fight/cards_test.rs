@@ -298,3 +298,26 @@ fn every_card_does_what_it_says() {
     };
     assert_eq!(Card::Sever.effect(&powers, &half).damage, 20);
 }
+
+/// `Card::ALL` holds every card a deck can hold (the starting ten, both
+/// options of every draft, static) once each, and a name read back
+/// through `Card::named` is the card it was written from, so a line's
+/// `‹mark›` always finds its card.
+#[test]
+fn every_card_is_listed_once_and_its_name_reads_back() {
+    let mut dealt: Vec<Card> = DECK.to_vec();
+    dealt.extend(DRAFTS.iter().flat_map(|draft| draft.options));
+    dealt.push(Card::Static);
+    for card in &dealt {
+        assert!(Card::ALL.contains(card), "{card:?} missing from Card::ALL");
+    }
+    for (i, card) in Card::ALL.iter().enumerate() {
+        assert!(
+            !Card::ALL[i + 1..].contains(card),
+            "{card:?} listed twice in Card::ALL"
+        );
+        assert_eq!(Card::named(card.name()), Some(*card));
+        assert_eq!(card.marked(), format!("‹{}›", card.name()));
+    }
+    assert_eq!(Card::named("haymaker"), None);
+}

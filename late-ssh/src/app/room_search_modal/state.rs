@@ -50,6 +50,7 @@ impl PickerScope {
             | Screen::City
             | Screen::DailyMatch
             | Screen::HouseTable
+            | Screen::Realm
             | Screen::Scratchpad => Self::AllSlots,
         }
     }

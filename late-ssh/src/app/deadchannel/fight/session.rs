@@ -85,6 +85,12 @@ pub(crate) struct FightSession {
     /// scene open (a purchase or a patch, or its refusal), shown in the
     /// panel that asked.
     pub till: Option<String>,
+    /// The fight the lookout's news told of that the runner has read: it
+    /// was on the road when they stepped from it or went back to the
+    /// street. A lookout carrying the same fight again arrives with no
+    /// news, so the road says it once; a newer fight is news again, and
+    /// so is the same one on the next connection.
+    news_read: Option<Uuid>,
     user_id: Uuid,
     username: String,
     svc: FightService,
@@ -112,6 +118,7 @@ impl FightSession {
             picker: None,
             scene: None,
             till: None,
+            news_read: None,
             user_id,
             username,
             svc,
@@ -233,6 +240,7 @@ impl FightSession {
         if !answers {
             return;
         }
+        self.mark_news_read();
         match call {
             Call::Fight(_) => {
                 self.open_scene();
@@ -259,6 +267,7 @@ impl FightSession {
         else {
             return false;
         };
+        self.mark_news_read();
         self.request(Command::Draft { card });
         true
     }
@@ -298,6 +307,7 @@ impl FightSession {
         if !self.ready() {
             return;
         }
+        self.mark_news_read();
         self.open_scene();
         self.svc.cross_task(
             self.user_id,
@@ -322,6 +332,7 @@ impl FightSession {
         if !self.ready() {
             return false;
         }
+        self.mark_news_read();
         self.open_scene();
         self.svc
             .answer_task(self.user_id, self.username.clone(), self.outcome_tx.clone());
@@ -375,8 +386,29 @@ impl FightSession {
     /// waiting on the next step in (Esc over the scene is the run, not
     /// this).
     pub(crate) fn close(&mut self) {
+        if self.picker.is_some() {
+            self.mark_news_read();
+        }
         self.picker = None;
         self.scene = None;
+    }
+
+    /// The news on the road has been read: the runner acted on the road
+    /// (a step, the crossing, the answer, a draft), or left it for the
+    /// street.
+    fn mark_news_read(&mut self) {
+        if let Some(news) = &self.lookout.news {
+            self.news_read = Some(news.id);
+        }
+    }
+
+    /// A lookout off the service, with the news the runner has read
+    /// stripped.
+    fn adopt(&mut self, mut lookout: Lookout) {
+        if lookout.news.as_ref().map(|news| news.id) == self.news_read {
+            lookout.news = None;
+        }
+        self.lookout = lookout;
     }
 
     pub(crate) fn scene_open(&self) -> bool {
@@ -492,13 +524,13 @@ impl FightSession {
                 } => {
                     self.action_in_flight = false;
                     self.sheet = Some(sheet);
-                    self.lookout = lookout;
+                    self.adopt(lookout);
                     self.show(outcome.applied, outcome.lines);
                     self.read_odds();
                 }
                 FightOutcome::Reloaded { sheet, lookout } => {
                     self.sheet = Some(sheet);
-                    self.lookout = lookout;
+                    self.adopt(lookout);
                     self.read_odds();
                 }
                 FightOutcome::NoRunner => {

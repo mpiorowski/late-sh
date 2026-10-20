@@ -146,6 +146,7 @@ pub mod profile_award;
 #[cfg(test)]
 mod profile_award_test;
 pub mod quest;
+pub mod realm_game;
 pub mod referral;
 #[cfg(test)]
 mod referral_test;

@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::app::common::primitives::Banner;
 use crate::app::directory::editor;
 use crate::app::{input::ParsedInput, state::App};
@@ -17,6 +19,7 @@ pub(crate) fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
         return false;
     };
     let size = app.size;
+    let shelf = app.directory_state.shelf();
     match mouse.kind {
         MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
             let delta = if mouse.kind == MouseEventKind::ScrollUp {
@@ -24,14 +27,19 @@ pub(crate) fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
             } else {
                 3
             };
-            if app.directory_state.shelf() == Shelf::Jobs {
-                app.jobs.mouse.scroll(x, y, delta, size)
-            } else {
-                app.directory_state.mouse.scroll(x, y, delta, size)
+            match shelf {
+                Shelf::Map => crate::app::usermap::input::handle_mouse(app, mouse),
+                Shelf::Jobs => app.jobs.mouse.scroll(x, y, delta, size),
+                Shelf::Profiles => app.directory_state.mouse.scroll(x, y, delta, size),
             }
         }
+        // A drag pans the map and the release after it is not a pick; the
+        // other shelves have nothing to do with either.
+        MouseEventKind::Drag | MouseEventKind::Up if shelf == Shelf::Map => {
+            crate::app::usermap::input::handle_mouse(app, mouse)
+        }
         MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
-            let on_jobs = app.directory_state.shelf() == Shelf::Jobs;
+            let on_jobs = shelf == Shelf::Jobs;
             if app.directory_state.mouse.click_track(x, y, size)
                 || (on_jobs && app.jobs.mouse.click_track(x, y, size))
             {
@@ -43,12 +51,21 @@ pub(crate) fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
                 .target(x, y, size)
                 .or_else(|| on_jobs.then(|| app.jobs.mouse.target(x, y, size)).flatten());
             let Some(target) = target else {
-                return false;
+                // The page's own targets come first (the section row, the footer);
+                // the rest of the map shelf is the map's.
+                return match shelf {
+                    Shelf::Map => crate::app::usermap::input::handle_mouse(app, mouse),
+                    Shelf::Profiles | Shelf::Jobs => false,
+                };
             };
             match target {
                 Target::Shelf(shelf) => {
-                    app.directory_state.set_shelf(shelf);
+                    switch_shelf(app, shelf);
                     app.jobs.mouse.invalidate();
+                }
+                Target::MapMode(mode) => {
+                    let profile = app.profile_state.service().clone();
+                    app.usermap.set_mode(mode, &profile);
                 }
                 Target::Person(id) => {
                     let entries = person_entries(
@@ -57,6 +74,7 @@ pub(crate) fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
                         app.directory_state.mine_only,
                         app.user_id,
                         app.directory_state.active_query(),
+                        app.directory_state.online(),
                     );
                     if let Some(index) = entries.iter().position(|entry| entry.user_id == id) {
                         app.directory_state.select_and_open(index);
@@ -71,6 +89,9 @@ pub(crate) fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
                     {
                         app.directory_state.set_shelf(Shelf::Jobs);
                         app.jobs.select_and_open(index);
+                        if app.jobs.search_mode() {
+                            crate::app::jobs::input::submit_search(app);
+                        }
                     }
                 }
                 Target::Key(key) => {
@@ -109,6 +130,7 @@ fn focus_item(app: &mut App, wanted: FocusedItem) -> bool {
         app.directory_state.mine_only,
         app.user_id,
         app.directory_state.active_query(),
+        app.directory_state.online(),
     );
     let found = entries
         .get(app.directory_state.selected())
@@ -150,6 +172,7 @@ fn entry_len(app: &App) -> usize {
         app.directory_state.mine_only,
         app.user_id,
         app.directory_state.active_query(),
+        app.directory_state.online(),
     )
     .len()
 }
@@ -161,6 +184,7 @@ fn focus_len(app: &App) -> usize {
         app.directory_state.mine_only,
         app.user_id,
         app.directory_state.active_query(),
+        app.directory_state.online(),
     );
     entries
         .get(app.directory_state.selected())
@@ -175,6 +199,7 @@ fn selected_user_id(app: &App) -> Option<uuid::Uuid> {
         app.directory_state.mine_only,
         app.user_id,
         app.directory_state.active_query(),
+        app.directory_state.online(),
     );
     entries
         .get(app.directory_state.selected())
@@ -190,6 +215,7 @@ pub(crate) fn resolve_selection(app: &App) -> Option<Selection> {
         app.directory_state.mine_only,
         app.user_id,
         app.directory_state.active_query(),
+        app.directory_state.online(),
     );
     let entry = entries.get(app.directory_state.selected())?;
     let user_id = entry.user_id;
@@ -251,6 +277,7 @@ fn submit_search(app: &mut App) {
         app.directory_state.mine_only,
         app.user_id,
         "",
+        app.directory_state.online(),
     );
     let index = user_id
         .and_then(|user_id| entries.iter().position(|entry| entry.user_id == user_id))
@@ -258,11 +285,50 @@ fn submit_search(app: &mut App) {
     app.directory_state.select_and_open(index);
 }
 
-/// Keys that work on either shelf.
+/// The presence tick hands over who is connected. The Profiles section groups
+/// the connected first, so a login or logout moves rows; the cursor follows
+/// its person rather than its index. True when anything moved.
+pub(crate) fn presence_changed(app: &mut App, online: HashSet<uuid::Uuid>) -> bool {
+    if app.directory_state.online() == &online {
+        return false;
+    }
+    let user_id = selected_user_id(app);
+    app.directory_state.set_online(online);
+    if let Some(user_id) = user_id {
+        let entries = person_entries(
+            app.chat.showcase.all_items(),
+            app.chat.work.all_items(),
+            app.directory_state.mine_only,
+            app.user_id,
+            app.directory_state.active_query(),
+            app.directory_state.online(),
+        );
+        if let Some(index) = entries.iter().position(|entry| entry.user_id == user_id) {
+            app.directory_state.follow(index);
+        }
+    }
+    true
+}
+
+/// Land on a section. Leaving one drops its search box, so a section is
+/// never found with a stale query narrowing it.
+pub(crate) fn switch_shelf(app: &mut App, shelf: Shelf) {
+    app.directory_state.set_shelf(shelf);
+    app.jobs.exit_search();
+}
+
+/// Keys that work on every section: `[`/`]` step between them (the title
+/// bar advertises these), `w` and `i` open the editor.
 fn handle_shelf_byte(app: &mut App, byte: u8) -> bool {
     match byte {
-        b' ' => {
-            app.directory_state.toggle_shelf();
+        b']' => {
+            let next = app.directory_state.shelf().next();
+            switch_shelf(app, next);
+            true
+        }
+        b'[' => {
+            let prev = app.directory_state.shelf().prev();
+            switch_shelf(app, prev);
             true
         }
         b'w' | b'W' => {
@@ -283,8 +349,9 @@ pub(crate) fn handle_idle_byte(app: &mut App, byte: u8) -> bool {
         return true;
     }
     match app.directory_state.shelf() {
+        Shelf::Map => crate::app::usermap::input::handle_byte(app, byte),
         Shelf::Jobs => handle_jobs_byte(app, byte),
-        Shelf::People => handle_people_byte(app, byte),
+        Shelf::Profiles => handle_people_byte(app, byte),
     }
 }
 
@@ -400,11 +467,13 @@ fn copy_focused_link(app: &mut App) {
     }
 }
 
-/// Idle page-sized selection jumps on the people feed.
+/// Idle page-sized jumps: down the people feed, the postings, or the map's
+/// country list.
 pub(crate) fn move_idle_selection(app: &mut App, delta: isize) {
     match app.directory_state.shelf() {
+        Shelf::Map => app.usermap.move_cursor(delta),
         Shelf::Jobs => crate::app::jobs::input::move_selection(app, delta),
-        Shelf::People => {
+        Shelf::Profiles => {
             let len = entry_len(app);
             app.directory_state.move_selection(delta, len);
         }
@@ -413,10 +482,12 @@ pub(crate) fn move_idle_selection(app: &mut App, delta: isize) {
 
 /// Idle arrow keys: up/down move between people, left/right move the detail
 /// focus across the selected person's card and projects (or, stacked, open
-/// and close the detail pane).
+/// and close the detail pane). On the map, all four pan.
 pub(crate) fn handle_idle_arrow(app: &mut App, key: u8) -> bool {
-    if app.directory_state.shelf() == Shelf::Jobs {
-        return crate::app::jobs::input::handle_arrow(app, key);
+    match app.directory_state.shelf() {
+        Shelf::Map => return crate::app::usermap::input::handle_arrow(app, key),
+        Shelf::Jobs => return crate::app::jobs::input::handle_arrow(app, key),
+        Shelf::Profiles => {}
     }
     match key {
         b'A' => handle_people_byte(app, b'k'),

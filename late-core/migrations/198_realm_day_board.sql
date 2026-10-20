@@ -1,0 +1,15 @@
+-- The board as each realm day closed, so a finished game can be walked
+-- through day by day instead of only read as a list of things that happened.
+--
+-- The logs in `realm_days` already say what every player did; what they never
+-- said is where anybody *was*. Spawns were never logged at all, and a player
+-- who left or went quiet freed territories the log only counted. So the map
+-- could not be reconstructed from the actions, however complete they looked.
+--
+-- This is written once per day, at the rollover — which is the moment the
+-- question is about, the board as it stood just before everyone's points came
+-- back — and once more when the game finishes. Nullable because every day
+-- archived before this column existed has no board to give, and because the
+-- live upsert as a day is played must not overwrite the closing snapshot with
+-- a mid-day one.
+ALTER TABLE realm_days ADD COLUMN board JSONB;

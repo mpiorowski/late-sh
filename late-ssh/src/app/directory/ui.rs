@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph},
 };
@@ -25,31 +25,30 @@ use crate::app::{
     },
     jobs::{
         state::{FOR_YOU_LIMIT, JobsState, matches, viewer_tags, wants_matches},
-        ui::{JobsShelfView, draw_jobs_shelf, footer_note, for_you_lines, shelf_count},
+        ui::{JobsShelfView, draw_jobs_shelf, for_you_lines, shelf_count},
     },
+    usermap::state::{MapMode, UserMapState},
 };
 
 const PEOPLE_HINTS: &[(&str, &str)] = &[
     ("j/k", "people"),
     ("h/l", "focus"),
     ("Enter", "copy"),
-    ("w", "profile"),
-    ("i", "project"),
     ("e", "edit"),
     ("d", "delete"),
     ("s", "search"),
     ("/", "mine"),
-    ("Space", "jobs"),
 ];
 const PEOPLE_NARROW_HINTS: &[(&str, &str)] = &[
     ("j/k", "people"),
     ("l", "open"),
-    ("w", "your profile"),
-    ("i", "add project"),
     ("s", "search"),
     ("/", "mine"),
-    ("Space", "jobs"),
 ];
+/// Page-wide actions, on the right of every section's footer. Clickable,
+/// so the mouse reaches the editor from any section.
+const PAGE_ACTIONS: &[(&str, &str, u8)] =
+    &[("w", "your profile", b'w'), ("i", "add project", b'i')];
 const DETAIL_NARROW_HINTS: &[(&str, &str)] = &[
     ("h", "back"),
     ("l", "focus"),
@@ -68,8 +67,14 @@ const SHORT_BELOW_HEIGHT: u16 = 24;
 pub(crate) struct DirectoryPageView<'a> {
     pub(crate) directory: &'a DirectoryState,
     pub(crate) jobs: &'a JobsState,
+    /// The map shelf. Mutable because its draw records where the map and
+    /// the country list landed, which is what its mouse reads.
+    pub(crate) usermap: &'a mut UserMapState,
     /// The viewer's languages from their profile, part of their match tags.
     pub(crate) viewer_langs: &'a [String],
+    /// Whether the viewer set a country, so the map can say when they are
+    /// not on it.
+    pub(crate) viewer_has_country: bool,
     pub(crate) projects: &'a [ShowcaseFeedItem],
     pub(crate) people: &'a [WorkFeedItem],
     pub(crate) work_marker: Option<DateTime<Utc>>,
@@ -84,40 +89,37 @@ pub(crate) fn draw_directory_page(frame: &mut Frame, area: Rect, view: Directory
     let size = frame.area();
     view.directory.mouse.begin((size.width, size.height));
     view.jobs.mouse.begin((size.width, size.height));
-    draw_page(
+    // The page draws on the buffer; the map paints on the frame, so it goes
+    // last, into the body the page kept for it.
+    let map_body = draw_page(
         &mut Surface {
             buffer: frame.buffer_mut(),
         },
         area,
-        view,
+        &view,
     );
+    if let Some(body) = map_body {
+        crate::app::usermap::ui::draw(frame, body, view.usermap, view.viewer_has_country);
+    }
 }
 
-fn draw_page(frame: &mut Surface<'_>, area: Rect, view: DirectoryPageView<'_>) {
+/// Draw the page but the map; returns the body when the map shelf is up, for
+/// the caller to paint the map into.
+fn draw_page(frame: &mut Surface<'_>, area: Rect, view: &DirectoryPageView<'_>) -> Option<Rect> {
     let narrow = area.width < STACK_BELOW_WIDTH;
     view.directory.set_narrow(narrow);
     view.jobs.set_narrow(narrow);
     let short = area.height < SHORT_BELOW_HEIGHT;
-    let own_tags = own_viewer_tags(&view);
+    let own_tags = own_viewer_tags(view);
 
-    let search_height = if view.directory.search_mode() { 3 } else { 0 };
-    let mut actions = vec![
-        ("[Your profile]", Target::Key(b'w')),
-        ("[Add project]", Target::Key(b'i')),
-    ];
-    match view.directory.shelf() {
-        Shelf::People => actions.extend([
-            ("[Search]", Target::Key(b's')),
-            ("[Mine]", Target::Key(b'/')),
-        ]),
-        Shelf::Jobs => actions.extend([
-            ("[For me]", Target::Key(b'/')),
-            ("[Post job]", Target::Key(b'n')),
-        ]),
-    }
-    let [strip, controls, search, body, footer] = Layout::vertical([
+    let jobs_search = view.directory.shelf() == Shelf::Jobs && view.jobs.search_mode();
+    let search_height = if view.directory.search_mode() || jobs_search {
+        3
+    } else {
+        0
+    };
+    let [section_row, search, body, footer] = Layout::vertical([
         Constraint::Length(1),
-        Constraint::Length(mouse_ui::buttons_height(area.width, &actions)),
         Constraint::Length(search_height),
         Constraint::Fill(1),
         Constraint::Length(1),
@@ -130,19 +132,31 @@ fn draw_page(frame: &mut Surface<'_>, area: Rect, view: DirectoryPageView<'_>) {
         view.directory.mine_only,
         view.current_user_id,
         view.directory.active_query(),
+        view.directory.online(),
     );
     let selected = view
         .directory
         .selected()
         .min(entries.len().saturating_sub(1));
 
-    draw_shelf_strip(frame, strip, &view, entries.len(), &own_tags);
-    mouse_ui::buttons(frame, controls, &view.directory.mouse, &actions);
+    draw_section_row(frame, section_row, view, entries.len(), &own_tags);
     if view.directory.search_mode() {
-        draw_search_box(frame, search, view.directory.search_query());
+        draw_search_box(
+            frame,
+            search,
+            " Search people and projects ",
+            view.directory.search_query(),
+        );
+    } else if jobs_search {
+        draw_search_box(frame, search, " Search jobs ", view.jobs.search_query());
     }
 
-    match view.directory.shelf() {
+    let mut map_body = None;
+    let hints = match view.directory.shelf() {
+        Shelf::Map => {
+            map_body = Some(body);
+            crate::app::usermap::ui::hints(view.usermap)
+        }
         Shelf::Jobs => {
             let shelf = JobsShelfView {
                 jobs: view.jobs,
@@ -153,43 +167,28 @@ fn draw_page(frame: &mut Surface<'_>, area: Rect, view: DirectoryPageView<'_>) {
                 current_user_id: view.current_user_id,
             };
             draw_jobs_shelf(frame, body, &shelf);
-            let line = row_with_hint(
-                hint_line(crate::app::jobs::ui::hints(&shelf)).spans,
-                footer_note(view.jobs),
-                footer.width as usize,
-            );
-            frame.render_widget(Paragraph::new(line), footer);
+            crate::app::jobs::ui::hints(&shelf)
         }
-        Shelf::People => {
-            let hints = if !narrow {
+        Shelf::Profiles => {
+            if !narrow {
                 let cols = Layout::horizontal([Constraint::Percentage(42), Constraint::Fill(1)])
                     .split(body);
-                draw_people_list(frame, cols[0], &view, &entries, selected, short);
-                draw_person_detail(frame, cols[1], &view, entries.get(selected), &own_tags);
+                draw_people_list(frame, cols[0], view, &entries, selected, short);
+                draw_person_detail(frame, cols[1], view, entries.get(selected), &own_tags);
                 PEOPLE_HINTS
             } else if view.directory.detail_open() {
-                draw_person_detail(frame, body, &view, entries.get(selected), &own_tags);
+                draw_person_detail(frame, body, view, entries.get(selected), &own_tags);
                 DETAIL_NARROW_HINTS
             } else {
-                draw_people_list(frame, body, &view, &entries, selected, short);
+                draw_people_list(frame, body, view, &entries, selected, short);
                 PEOPLE_NARROW_HINTS
-            };
-            let right = if view.directory.mine_only {
-                vec![Span::styled(
-                    "mine only ",
-                    Style::default()
-                        .fg(theme::AMBER())
-                        .add_modifier(Modifier::BOLD),
-                )]
-            } else {
-                Vec::new()
-            };
-            let line = row_with_hint(hint_line(hints).spans, right, footer.width as usize);
-            frame.render_widget(Paragraph::new(line), footer);
+            }
         }
-    }
+    };
+    draw_footer(frame, footer, view, hints);
     view.directory.mouse.finish();
     view.jobs.mouse.finish();
+    map_body
 }
 
 /// The viewer's match tags: their own card's normalized skills plus their
@@ -203,95 +202,206 @@ fn own_viewer_tags(view: &DirectoryPageView<'_>) -> Vec<String> {
     viewer_tags(card, view.viewer_langs)
 }
 
-/// `people 12 · jobs 31`, the active shelf bright, with the search named
-/// on the right while it is open.
-fn draw_shelf_strip(
+/// One clickable label on the section row's right: a filter of the
+/// current section. The active one is lit and has nothing to do on a click.
+struct Filter {
+    label: &'static str,
+    active: bool,
+    target: Target,
+}
+
+/// The section's filters, in the order the row prints them.
+fn section_filters(view: &DirectoryPageView<'_>) -> Vec<Filter> {
+    match view.directory.shelf() {
+        Shelf::Map => MapMode::ALL
+            .into_iter()
+            .map(|mode| Filter {
+                label: mode.tab_label(),
+                active: mode == view.usermap.mode(),
+                target: Target::MapMode(mode),
+            })
+            .collect(),
+        Shelf::Profiles => vec![
+            Filter {
+                label: "everyone",
+                active: !view.directory.mine_only,
+                target: Target::Key(b'/'),
+            },
+            Filter {
+                label: "mine",
+                active: view.directory.mine_only,
+                target: Target::Key(b'/'),
+            },
+            Filter {
+                label: "search",
+                active: view.directory.search_mode(),
+                target: Target::Key(b's'),
+            },
+        ],
+        Shelf::Jobs => vec![
+            Filter {
+                label: "all",
+                active: !view.jobs.for_me,
+                target: Target::Key(b'/'),
+            },
+            Filter {
+                label: "for me",
+                active: view.jobs.for_me,
+                target: Target::Key(b'/'),
+            },
+            Filter {
+                label: "search",
+                active: view.jobs.search_mode(),
+                target: Target::Key(b's'),
+            },
+        ],
+    }
+}
+
+/// ` Map 1   Profiles 12   Jobs 31 ` on the left, the active section lit
+/// like the page tabs in the title bar; the section's filters on the right.
+/// Every label is a click target. The filters drop when the row is too
+/// narrow for both; the keys still reach them.
+fn draw_section_row(
     frame: &mut Surface<'_>,
     area: Rect,
     view: &DirectoryPageView<'_>,
     people: usize,
     own_tags: &[String],
 ) {
-    let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
-    for (idx, shelf) in [Shelf::People, Shelf::Jobs].into_iter().enumerate() {
+    let mut spans: Vec<Span<'static>> = Vec::new();
+    let mut x = area.x;
+    for shelf in Shelf::ALL {
+        let active = shelf == view.directory.shelf();
+        let count = match shelf {
+            Shelf::Map => Some(view.directory.online().len()),
+            Shelf::Profiles => Some(people),
+            Shelf::Jobs => shelf_count(view.jobs, own_tags),
+        };
+        let count = match count {
+            Some(count) => format!(" {count}"),
+            None => String::new(),
+        };
+        let (name_style, count_style) = if active {
+            let lit = Style::default()
+                .fg(theme::BG_SELECTION())
+                .bg(theme::AMBER())
+                .add_modifier(Modifier::BOLD);
+            (lit, lit)
+        } else {
+            (
+                Style::default().fg(theme::TEXT_DIM()),
+                Style::default().fg(theme::TEXT_FAINT()),
+            )
+        };
+        let width = (shelf.title().chars().count() + count.chars().count() + 2) as u16;
+        spans.push(Span::styled(format!(" {}", shelf.title()), name_style));
+        spans.push(Span::styled(format!("{count} "), count_style));
+        spans.push(Span::raw(" "));
+        if x < area.right() {
+            view.directory.mouse.hit(
+                Rect::new(x, area.y, width.min(area.right() - x), area.height.min(1)),
+                Target::Shelf(shelf),
+            );
+        }
+        x = x.saturating_add(width + 1);
+    }
+
+    let filters = section_filters(view);
+    let mut right: Vec<Span<'static>> = Vec::new();
+    for (idx, filter) in filters.iter().enumerate() {
         if idx > 0 {
-            spans.push(Span::styled(
-                "  ·  ",
+            right.push(Span::styled(
+                " · ",
                 Style::default().fg(theme::TEXT_FAINT()),
             ));
         }
-        let active = shelf == view.directory.shelf();
-        let style = if active {
+        let style = if filter.active {
             Style::default()
                 .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme::TEXT_DIM())
         };
-        spans.push(Span::styled(shelf.title(), style));
-        let count = match shelf {
-            Shelf::People => Some(people),
-            Shelf::Jobs => shelf_count(view.jobs, own_tags),
-        };
-        if let Some(count) = count {
-            spans.push(Span::styled(
-                format!(" {count}"),
-                Style::default().fg(if active {
-                    theme::AMBER_DIM()
-                } else {
-                    theme::TEXT_FAINT()
-                }),
-            ));
+        right.push(Span::styled(filter.label, style));
+    }
+    right.push(Span::raw(" "));
+    let left_len = spans.len();
+    let line = row_with_hint(spans, right, area.width as usize);
+    let fitted = line.spans.len() > left_len;
+    frame.render_widget(Paragraph::new(line), area);
+
+    // Only when the filters made it onto the row: they end at its right edge.
+    if fitted {
+        let widths: Vec<u16> = filters
+            .iter()
+            .map(|filter| filter.label.chars().count() as u16)
+            .collect();
+        let total = widths.iter().sum::<u16>() + 3 * (widths.len() as u16 - 1) + 1;
+        let mut x = area.right() - total;
+        for (filter, width) in filters.into_iter().zip(widths) {
+            if !filter.active {
+                view.directory
+                    .mouse
+                    .hit(Rect::new(x, area.y, width, 1), filter.target);
+            }
+            x += width + 3;
         }
     }
-    let right = if view.directory.search_mode() {
-        vec![Span::styled(
-            "searching ",
-            Style::default().fg(theme::TEXT_DIM()),
-        )]
-    } else {
-        Vec::new()
-    };
-    let people_width = Span::raw(format!("people {people}")).width() as u16;
-    view.directory.mouse.hit(
-        Rect::new(
-            area.x + 1,
-            area.y,
-            people_width.min(area.width.saturating_sub(1)),
-            area.height.min(1),
-        ),
-        Target::Shelf(Shelf::People),
-    );
-    let jobs_x = area.x.saturating_add(1 + people_width + 5);
-    if jobs_x < area.right() {
-        view.directory.mouse.hit(
-            Rect::new(
-                jobs_x,
-                area.y,
-                (Span::raw(format!(
-                    "jobs{}",
-                    shelf_count(view.jobs, own_tags)
-                        .map_or(String::new(), |count| format!(" {count}"))
-                ))
-                .width() as u16)
-                    .min(area.right() - jobs_x),
-                area.height.min(1),
-            ),
-            Target::Shelf(Shelf::Jobs),
-        );
-    }
-    frame.render_widget(
-        Paragraph::new(row_with_hint(spans, right, area.width as usize)),
-        area,
-    );
 }
 
-fn draw_search_box(frame: &mut Surface<'_>, area: Rect, query: &str) {
+/// The section's keys on the left, the page-wide actions on the right (each
+/// a click target). The actions drop when the row is too narrow for both.
+fn draw_footer(
+    frame: &mut Surface<'_>,
+    area: Rect,
+    view: &DirectoryPageView<'_>,
+    hints: &[(&str, &str)],
+) {
+    let key_style = Style::default()
+        .fg(theme::AMBER_DIM())
+        .add_modifier(Modifier::BOLD);
+    let desc_style = Style::default().fg(theme::TEXT_DIM());
+    let mut right: Vec<Span<'static>> = Vec::new();
+    for (idx, (key, desc, _)) in PAGE_ACTIONS.iter().enumerate() {
+        if idx > 0 {
+            right.push(Span::styled(
+                " · ",
+                Style::default().fg(theme::TEXT_FAINT()),
+            ));
+        }
+        right.push(Span::styled(*key, key_style));
+        right.push(Span::styled(format!(" {desc}"), desc_style));
+    }
+    right.push(Span::raw(" "));
+    let left = hint_line(hints).spans;
+    let left_len = left.len();
+    let line = row_with_hint(left, right, area.width as usize);
+    let fitted = line.spans.len() > left_len;
+    frame.render_widget(Paragraph::new(line), area);
+
+    if fitted {
+        let widths: Vec<u16> = PAGE_ACTIONS
+            .iter()
+            .map(|(key, desc, _)| (key.chars().count() + 1 + desc.chars().count()) as u16)
+            .collect();
+        let total = widths.iter().sum::<u16>() + 3 * (widths.len() as u16 - 1) + 1;
+        let mut x = area.right() - total;
+        for ((_, _, byte), width) in PAGE_ACTIONS.iter().zip(widths) {
+            view.directory
+                .mouse
+                .hit(Rect::new(x, area.y, width, 1), Target::Key(*byte));
+            x += width + 3;
+        }
+    }
+}
+
+fn draw_search_box(frame: &mut Surface<'_>, area: Rect, title: &'static str, query: &str) {
     if area.is_empty() {
         return;
     }
     let block = Block::default()
-        .title(" Search people and projects ")
+        .title(title)
         .borders(Borders::ALL)
         .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
     let inner = block.inner(area);
@@ -340,17 +450,52 @@ fn draw_people_list(
     }
 
     let item_height: u16 = if short { 3 } else { 4 };
-    let focus = selected * usize::from(item_height);
+    // The connected lead the list under a rule of their own and the rest
+    // follow under theirs; with nobody connected there is nothing to rule
+    // off and the rows sit where they always did.
+    let online = entries.iter().take_while(|entry| entry.online).count();
+    let rules = match (online > 0, online < entries.len()) {
+        (false, _) => 0,
+        (true, false) => 1,
+        (true, true) => 2,
+    };
+    let rules_above = |index: usize| match (online > 0, index < online) {
+        (false, _) => 0,
+        (true, true) => 1,
+        (true, false) => 2,
+    };
+    let row_top = |index: usize| index * usize::from(item_height) + rules_above(index);
+    // A row right under a rule brings the rule into view with it.
+    let led_by_rule = online > 0 && (selected == 0 || selected == online);
+    let focus = row_top(selected) - usize::from(led_by_rule);
     mouse_ui::scroll(
         frame,
         area,
         &view.directory.mouse,
         Pane::PeopleList,
-        entries.len() * usize::from(item_height),
-        focus..focus + usize::from(item_height),
+        entries.len() * usize::from(item_height) + rules,
+        focus..row_top(selected) + usize::from(item_height),
         |frame, content, window| {
+            let offline_rule = (online * usize::from(item_height) + 1) as u16;
+            let groups = [
+                (0, "online", online, theme::SUCCESS()),
+                (
+                    offline_rule,
+                    "offline",
+                    entries.len() - online,
+                    theme::TEXT(),
+                ),
+            ];
+            for (y, label, count, color) in groups.into_iter().take(rules) {
+                if y >= window.y && y < window.bottom() {
+                    frame.render_widget(
+                        Paragraph::new(group_rule(label, count, color, usize::from(content.width))),
+                        Rect::new(0, y, content.width, 1),
+                    );
+                }
+            }
             for (index, entry) in entries.iter().enumerate() {
-                let y = (index * usize::from(item_height)) as u16;
+                let y = row_top(index) as u16;
                 if y >= window.bottom() {
                     break;
                 }
@@ -385,6 +530,24 @@ fn draw_people_list(
             }
         },
     );
+}
+
+/// `── online ────────`: the rule over a group of the people list.
+fn group_rule(label: &str, count: usize, color: Color, width: usize) -> Line<'static> {
+    let rule = Style::default().fg(theme::BORDER());
+    let lead = "\u{2500}\u{2500} ";
+    let count = format!(" {count}");
+    let tail = width
+        .saturating_sub(lead.chars().count() + label.chars().count() + count.chars().count() + 1);
+    Line::from(vec![
+        Span::styled(lead, rule),
+        Span::styled(
+            label.to_string(),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(count, Style::default().fg(theme::TEXT_DIM())),
+        Span::styled(format!(" {}", "\u{2500}".repeat(tail)), rule),
+    ])
 }
 
 /// Line 1: name, status (or project count without a card), age at the

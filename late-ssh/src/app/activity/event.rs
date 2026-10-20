@@ -231,6 +231,33 @@ pub enum ActivityKind {
     AquariumSproutWithered,
     /// The first pet of the UTC day cleared the DB chip gate.
     PetPetted,
+    /// The house opened the next world and it stands frozen while people
+    /// arrive. The invitation, and the only one with a deadline on it:
+    /// `opens_in` is the muster as Realm writes it for a sentence ("a day"),
+    /// so the headline cannot drift from the rule.
+    RealmSeasonOpened {
+        game_id: Uuid,
+        season: i32,
+        opens_in: String,
+    },
+    /// The world ended: conquered by `winner`, or dissolved when nobody held
+    /// it. `pot` is what the conquest paid in all, 0 when it paid nothing.
+    RealmSeasonEnded {
+        game_id: Uuid,
+        season: i32,
+        winner: Option<String>,
+        pot: i64,
+        players: u8,
+    },
+    /// A realm's day turned over and everyone in it has points again. The
+    /// one activity line that belongs to a game rather than a person: it is
+    /// an open call, and naming a player would be naming the wrong thing.
+    RealmCalls {
+        game_id: Uuid,
+        /// The realm day that just opened — keys the repeat gate, so a
+        /// rollover announced twice is announced once.
+        day: i32,
+    },
 }
 
 impl ActivityKind {
@@ -258,6 +285,9 @@ impl ActivityKind {
             | Self::GameStarted { .. }
             | Self::BossSlain { .. }
             | Self::SatDown { .. }
+            | Self::RealmCalls { .. }
+            | Self::RealmSeasonOpened { .. }
+            | Self::RealmSeasonEnded { .. }
             | Self::DailyResult { .. } => ActivityCategory::Game,
             Self::GameScored { .. } => ActivityCategory::Quest,
             Self::BonsaiWatered | Self::BonsaiLost { .. } => ActivityCategory::Bonsai,
@@ -289,6 +319,7 @@ pub enum ActivityGame {
     Nethack,
     Nonogram,
     Poker,
+    Realm,
     RubiksCube,
     SlidingPuzzle,
     Sshattrick,
@@ -343,7 +374,9 @@ impl ActivityGame {
             Self::Blackjack | Self::Poker | Self::Asterion | Self::Tron | Self::Ssnake => {
                 GameFamily::Table
             }
-            Self::Chess | Self::TicTacToe | Self::Sshattrick => GameFamily::Match,
+            // A realm is players against each other, not a house table: the
+            // Lobby is only where it is started from.
+            Self::Chess | Self::TicTacToe | Self::Sshattrick | Self::Realm => GameFamily::Match,
         }
     }
 
@@ -362,6 +395,7 @@ impl ActivityGame {
             Self::Nethack => "nethack",
             Self::Nonogram => "nonogram",
             Self::Poker => "poker",
+            Self::Realm => "realm",
             Self::RubiksCube => "rubiks_cube",
             Self::SlidingPuzzle => "sliding_puzzle",
             Self::Sshattrick => "sshattrick",
@@ -392,6 +426,7 @@ impl ActivityGame {
             Self::Nethack => "NetHack",
             Self::Nonogram => "Nonogram",
             Self::Poker => "Poker",
+            Self::Realm => "Realm",
             Self::RubiksCube => "Rubik's Cube",
             Self::SlidingPuzzle => "Sliding Puzzle",
             Self::Sshattrick => "ssHattrick",
@@ -468,6 +503,7 @@ impl ActivityEvent {
             ActivityGame::Nethack => "conquered NetHack",
             ActivityGame::Nonogram => "solved Nonogram",
             ActivityGame::Poker => "won Poker hand",
+            ActivityGame::Realm => "conquered the Realm",
             ActivityGame::RubiksCube => "solved Rubik's Cube",
             ActivityGame::SlidingPuzzle => "solved Sliding Puzzle",
             ActivityGame::Sshattrick => "won ssHattrick match",
@@ -551,6 +587,7 @@ impl ActivityEvent {
             | ActivityGame::Minesweeper
             | ActivityGame::Nonogram
             | ActivityGame::Poker
+            | ActivityGame::Realm
             | ActivityGame::RubiksCube
             | ActivityGame::SlidingPuzzle
             | ActivityGame::Sshattrick
@@ -586,6 +623,60 @@ impl ActivityEvent {
             username,
             ActivityKind::BossSlain { game, boss },
             action,
+        )
+    }
+
+    /// The house opened a world and it is mustering. Attributed to nobody,
+    /// like the daily call: the invitation is the house's.
+    pub fn realm_season_opened(game_id: Uuid, season: i32, world: &str, opens_in: &str) -> Self {
+        Self::new(
+            None,
+            "realm",
+            ActivityKind::RealmSeasonOpened {
+                game_id,
+                season,
+                opens_in: opens_in.to_string(),
+            },
+            format!("rises: season {season} on {world}, the gates open in {opens_in}"),
+        )
+    }
+
+    /// A world ended. Attributed to nobody: the conqueror has their own
+    /// `GameWon` line, and this one is about the world.
+    pub fn realm_season_ended(
+        game_id: Uuid,
+        season: i32,
+        winner: Option<String>,
+        pot: i64,
+        players: u8,
+    ) -> Self {
+        let action = match winner.as_deref() {
+            Some(winner) => format!("has fallen: season {season} is {winner}'s"),
+            None => format!("fell silent: season {season} ended with nobody holding it"),
+        };
+        Self::new(
+            None,
+            "realm",
+            ActivityKind::RealmSeasonEnded {
+                game_id,
+                season,
+                winner,
+                pot,
+                players,
+            },
+            action,
+        )
+    }
+
+    /// A realm refilled everyone's points. Attributed to nobody: the feed
+    /// line reads "realm <name> calls its players", because the summons is
+    /// the game's, not any player's.
+    pub fn realm_calls(game_id: Uuid, name: &str, day: i32) -> Self {
+        Self::new(
+            None,
+            "realm",
+            ActivityKind::RealmCalls { game_id, day },
+            format!("{name} calls its players"),
         )
     }
 

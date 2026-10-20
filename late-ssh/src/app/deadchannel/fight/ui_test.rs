@@ -7,7 +7,9 @@ use rand::{SeedableRng, rngs::StdRng};
 
 use late_core::models::deadchannel_ambush::{Ambush, AmbushOutcome};
 
-use super::{PickerView, SceneView, corrupt, draw_picker, draw_scene, news_line};
+use super::{
+    PickerView, SceneView, card_marked, card_style, corrupt, draw_picker, draw_scene, news_line,
+};
 use crate::app::deadchannel::fight::cards::Card;
 use crate::app::deadchannel::fight::data::{MAX_LEVEL, RATIONS_PER_DAY, RULES, exp_to_seek};
 use crate::app::deadchannel::fight::road::{Mark, Node, Trace};
@@ -442,7 +444,7 @@ fn the_road_shows_the_map_and_the_glyph_under_the_cursor_with_its_threat() {
         "{text}"
     );
     assert!(text.contains("[Enter] fight"), "{text}");
-    assert!(text.contains("[g] flicker, half pay easy"), "{text}");
+    assert!(text.contains("[g] step down, half pay easy"), "{text}");
     assert!(text.contains("esc back"), "{text}");
 
     // The same panel fits a terminal with no rows to spare: the lanes
@@ -525,12 +527,18 @@ fn the_road_shows_a_bright_glyph_a_rest_and_a_cache_under_the_cursor() {
         rest.contains("clear   3 static cards out of your deck"),
         "{rest}"
     );
-    assert!(rest.contains("[Enter] clear the deck"), "{rest}");
+    assert!(rest.contains("[Enter] rest: clear the deck"), "{rest}");
     assert!(!rest.contains("mend"), "a rest no longer mends\n{rest}");
     assert!(rest.contains("[+]"), "{rest}");
+    let word = rest
+        .find("1 static card gone.")
+        .expect("the last step's word");
+    let ahead = rest
+        .find("▸ a doorway out of the rain")
+        .expect("the step ahead");
     assert!(
-        rest.contains("1 static card gone."),
-        "the last step's word\n{rest}"
+        word < ahead,
+        "the last step's word is behind the runner, above the step ahead\n{rest}"
     );
 
     let (at, picker) = before(&sheet, Node::Cache);
@@ -692,11 +700,11 @@ fn a_draft_owed_takes_the_road_panel() {
         let screen = render_road(&sheet, &picker, height, None);
         for text in [
             "a new card",
-            "level 6. it takes the place of a block, until the mark",
-            "[1] riposte hits for a block and a half plus all the block you have up",
-            "[2] bulwark two energy. holds two blocks and a half",
+            "level 6. it takes the place of a ‹block›, until the mark",
+            "[1] ‹riposte› hits for a block and a half plus all the block you have up",
+            "[2] ‹bulwark› two energy. holds two blocks and a half",
             "[1] [2] take one",
-            "drafted: brace",
+            "drafted: ‹brace›",
         ] {
             assert!(screen.contains(text), "{text} at {height} rows\n{screen}");
         }
@@ -710,7 +718,7 @@ fn a_draft_owed_takes_the_road_panel() {
     sheet.cards.push(Card::Bulwark);
     let screen = render_road(&sheet, &picker, 24, None);
     assert!(screen.contains("[Enter] fight"), "{screen}");
-    assert!(screen.contains("drafted: brace · bulwark"), "{screen}");
+    assert!(screen.contains("drafted: ‹brace› · ‹bulwark›"), "{screen}");
 }
 
 /// A runner stood one step short of the crossing on `sheet`'s road, down
@@ -740,7 +748,8 @@ fn before_the_crossing(sheet: &Sheet) -> (Sheet, Picker) {
     )
 }
 
-fn tom(stake: i64) -> Prey {
+/// Tom carrying `carrying` bits, the crossing's half of them at stake.
+fn tom(carrying: i64) -> Prey {
     Prey {
         rival: Rival {
             user_id: Uuid::from_u128(7),
@@ -757,7 +766,8 @@ fn tom(stake: i64) -> Prey {
         signal: 30,
         attack: 5,
         defense: 2,
-        stake,
+        carrying,
+        stake: carrying / 2,
     }
 }
 
@@ -822,7 +832,7 @@ fn the_road_shows_the_sleeper_at_the_crossing_and_the_answer_owed() {
         "{crossing}"
     );
     assert!(
-        crossing.contains("carrying 340 bits · a ration · fall, lose all you carry"),
+        crossing.contains("carrying 340 bits, 170 to take · a ration · fall, lose all"),
         "{crossing}"
     );
     assert!(crossing.contains("[Enter] cross tom"), "{crossing}");
@@ -861,6 +871,9 @@ fn the_road_shows_the_sleeper_at_the_crossing_and_the_answer_owed() {
             crossing: None,
             token: Some(Token {
                 ambush: crossed.clone(),
+                // Renamed since: the news keeps the night's name, the
+                // answer offered is to the one he goes by now.
+                crosser: "tomas".to_string(),
                 prey: Some(tom(90)),
             }),
             news: Some(crossed.clone()),
@@ -871,10 +884,10 @@ fn the_road_shows_the_sleeper_at_the_crossing_and_the_answer_owed() {
         "{owed}"
     );
     assert!(
-        owed.contains("you are owed an answer. tom is on the wire, carrying 90. no ration. even"),
+        owed.contains("owed an answer: tomas is on the wire, 45 bits to take. no ration. even"),
         "{owed}"
     );
-    assert!(owed.contains("[r] answer tom"), "{owed}");
+    assert!(owed.contains("[r] answer tomas"), "{owed}");
 
     let off = render_road_with(
         &at,
@@ -883,13 +896,14 @@ fn the_road_shows_the_sleeper_at_the_crossing_and_the_answer_owed() {
             crossing: None,
             token: Some(Token {
                 ambush: crossed,
+                crosser: "tomas".to_string(),
                 prey: None,
             }),
             news: None,
         },
     );
     assert!(
-        off.contains("tom is off the wire. it keeps for a day."),
+        off.contains("tomas is off the wire. it keeps two days."),
         "{off}"
     );
     assert!(!off.contains("[r]"), "{off}");
@@ -919,7 +933,7 @@ fn the_news_line_tells_the_sleeper_what_happened() {
     );
     assert_eq!(
         news_line(&row(false, AmbushOutcome::Won, 0)),
-        "tom crossed you while you were gone. you were carrying nothing."
+        "tom crossed you while you were gone. they took nothing."
     );
     assert_eq!(
         news_line(&row(false, AmbushOutcome::Lost, -120)),
@@ -951,7 +965,7 @@ fn a_rival_on_the_scene_wears_their_own_face_and_name() {
         &mut StdRng::seed_from_u64(5),
     );
     let scene = Scene {
-        lines: vec!["tom. awake this time, carrying 90 bits.".to_string()],
+        lines: vec!["tom. awake this time, carrying 90 bits, 45 to take.".to_string()],
         latest: 1,
         over: false,
         waiting: false,
@@ -962,4 +976,28 @@ fn a_rival_on_the_scene_wears_their_own_face_and_name() {
     assert!(text.contains(" the crossing "), "{text}");
     assert!(text.contains("lv 3  tom"), "{text}");
     assert!(text.contains("▗▖▝"), "tom's own face\n{text}");
+}
+
+/// A line the machine wrote reads back as spans: every `‹name›` naming a
+/// card in that card's style, marks kept, and a mark naming no card left
+/// plain, so a typo prints as text instead of as a card.
+#[test]
+fn a_line_names_its_cards_in_their_own_neon() {
+    let plain = ratatui::style::Style::default();
+    let spans: Vec<(String, ratatui::style::Style)> = card_marked(
+        "‹brace› is in your deck now, in place of a ‹strike›. ‹haymaker›",
+        plain,
+    )
+    .into_iter()
+    .map(|span| (span.content.to_string(), span.style))
+    .collect();
+    assert_eq!(
+        spans,
+        vec![
+            ("‹brace›".to_string(), card_style(Card::Brace)),
+            (" is in your deck now, in place of a ".to_string(), plain),
+            ("‹strike›".to_string(), card_style(Card::Strike)),
+            (". ‹haymaker›".to_string(), plain),
+        ]
+    );
 }

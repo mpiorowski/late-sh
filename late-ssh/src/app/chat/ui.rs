@@ -5716,7 +5716,7 @@ fn draw_selected_content(
             .borders(Borders::ALL)
             .border_style(Style::default().fg(theme::BORDER()));
         let hint_text = Paragraph::new(Line::from(Span::styled(
-            " j/k navigate · Enter copy link · i edit yours on Profiles (5) · e edit · d delete",
+            " j/k navigate · Enter copy link · i edit yours on People (5) · e edit · d delete",
             Style::default().fg(theme::TEXT_DIM()),
         )))
         .block(hint_block);

@@ -51,6 +51,14 @@ struct AzuraCastCurrent {
     song: Song,
 }
 
+/// Between tracks (station ids, breaks) `title` is null.
+#[derive(serde::Deserialize)]
+struct ParadiseNowPlaying {
+    #[serde(default)]
+    artist: String,
+    title: Option<String>,
+}
+
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct RadioFranceLive {
@@ -143,7 +151,8 @@ impl PolledFeed {
     }
 
     /// The current track out of one response body, or `None` while the
-    /// provider reports that no track is on air (FIP between songs). A
+    /// provider reports that no track is on air (FIP or Radio Paradise
+    /// between songs). A
     /// payload without a title is an error. Either way the caller shows the
     /// station label. The artist may be empty: some tracks are tagged with
     /// a title only.
@@ -166,7 +175,15 @@ impl PolledFeed {
             | Self::ParadiseGlobe
             | Self::ParadiseBeyond
             | Self::ParadiseKfat => {
-                serde_json::from_str::<Song>(body).context("parsing radio paradise now-playing")?
+                let now = serde_json::from_str::<ParadiseNowPlaying>(body)
+                    .context("parsing radio paradise now-playing")?;
+                match now.title {
+                    Some(title) => Song {
+                        artist: now.artist,
+                        title,
+                    },
+                    None => return Ok(None),
+                }
             }
             Self::FipJazz => {
                 let now = serde_json::from_str::<RadioFranceLive>(body)

@@ -1333,8 +1333,12 @@ impl GhostService {
 
     async fn seed_drunk_levels(&self) -> Result<()> {
         let client = self.db.get().await?;
+        // Taken before the read: a pour committed on this replica after
+        // this instant is newer than the snapshot and must survive it.
+        let seeded_at = chrono::Utc::now();
         let rows = UserDrinks::all_active(&client).await?;
         self.drunk_map.set_drunk_states(
+            seeded_at,
             rows.into_iter()
                 .map(|drinks| (drinks.user_id, drinks.drunk_points, drinks.last_drink_at))
                 .collect(),

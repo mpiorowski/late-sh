@@ -306,6 +306,7 @@ pub struct SessionConfig {
     pub greendragon_service: crate::app::door::greendragon::svc::GreenDragonService,
     pub darkroom_service: crate::app::door::darkroom::svc::DarkroomService,
     pub daily_service: crate::app::lobby::daily::svc::DailyService,
+    pub realm_service: crate::app::door::realm::svc::RealmService,
     pub house_registry: crate::app::lobby::house::registry::HouseTableRegistry,
     /// Shared in-proc dartboard server handle. Each session only connects,
     /// consuming a color slot and showing up in `peer_count`, when the user actually
@@ -772,6 +773,8 @@ pub struct App {
     pub(crate) daily_chat_rows_cache: chat::ui::ChatRowsCache,
     /// House table embedded chat, same reasoning as the daily cache.
     pub(crate) house_chat_rows_cache: chat::ui::ChatRowsCache,
+    /// Row cache for the realm board's chat pane.
+    pub(crate) realm_chat_rows_cache: chat::ui::ChatRowsCache,
     /// Row cache for the door watch chat: the pane beside a watched screen,
     /// or beside this player's own running game. One screen draws it at a
     /// time, and the cache is keyed by room and width.
@@ -860,6 +863,7 @@ pub struct App {
     pub(crate) shop_state: crate::app::hub::shop::state::ShopState,
     pub(crate) ultimate_service: crate::app::ultimates::UltimateService,
     pub(crate) ultimate_state: crate::app::ultimates::UltimateState,
+    pub(crate) usermap: crate::app::usermap::state::UserMapState,
 
     /// Arcade Hub
     pub(crate) game_selection: usize,
@@ -1007,6 +1011,8 @@ pub struct App {
     pub(crate) lobby: crate::app::lobby::state::LobbyState,
     /// Daily correspondence games: sidebar panel and board state.
     pub(crate) daily: crate::app::lobby::daily::state::DailyState,
+    /// Realm territory-conquest games: per-session snapshot + board state.
+    pub(crate) realm: crate::app::door::realm::state::RealmState,
     /// The live strip at the top of the #lounge card.
     pub(crate) live: crate::app::live::state::LiveState,
     /// House tables: the fixed multiplayer tables behind the Lobby modal.
@@ -1308,6 +1314,9 @@ impl App {
             Screen::DailyMatch => self.daily.board_chat_room_id(),
             // The open house table's permanent chat room.
             Screen::HouseTable => self.house.chat_room_id(),
+            // The world's chat, only while it is shown: hidden, it counts
+            // what is said as unread.
+            Screen::Realm => self.realm.shown_chat_room_id(),
             // The watched player's chat, while this session watches one.
             Screen::Games => self.spectate_chat_room_id(),
             // The watchers' chat beside this player's own running game.
@@ -1654,9 +1663,11 @@ impl App {
         );
         // Everyone lands in the clubhouse by default: the tavern is the front
         // door of late.sh (and the first-visit tutorial starts there). The
-        // "Land on" tweak sends returning users to Home or Zen instead; new
-        // users always start in the clubhouse so the tutorial runs.
-        let landing = if config.is_new_user {
+        // "Land on" tweak sends returning users to Home or Zen instead; a
+        // session with the tour still to walk (a first-ever one, or any
+        // account after a house-wide reset of the flag) always starts in the
+        // clubhouse so the tutorial runs.
+        let landing = if config.is_new_user || !config.clubhouse_tutorial_done {
             LandingPage::Clubhouse
         } else {
             config.landing_page
@@ -1877,6 +1888,7 @@ impl App {
             active_room_rows_cache: chat::ui::ChatRowsCache::default(),
             daily_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             house_chat_rows_cache: chat::ui::ChatRowsCache::default(),
+            realm_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             watch_chat_rows_cache: chat::ui::ChatRowsCache::default(),
             zen_chat_rows_caches: Vec::new(),
             poll_modal_state: chat::polls::state::PollModalState::new(),
@@ -1930,6 +1942,7 @@ impl App {
             quest_state,
             shop_state,
             ultimate_service: config.ultimate_service,
+            usermap: Default::default(),
             ultimate_state: crate::app::ultimates::UltimateState::with_cooldowns(
                 config.initial_ultimate_cooldowns,
             ),
@@ -2014,6 +2027,11 @@ impl App {
             repaint_signal: None,
             lobby: crate::app::lobby::state::LobbyState::new(&daily),
             daily,
+            realm: crate::app::door::realm::state::RealmState::new(
+                config.realm_service.clone(),
+                config.user_id,
+                username.clone(),
+            ),
             live: crate::app::live::state::LiveState::new(),
             house: crate::app::lobby::house::state::HouseState::new(
                 config.user_id,
@@ -2089,6 +2107,11 @@ impl App {
             .set_viewer_tz(crate::app::profile::svc::parse_account_tz(
                 app.profile_state.profile().timezone.as_deref(),
             ));
+        // Realm writes every hour in both clocks, so it needs the same zone.
+        app.realm
+            .set_viewer_tz(crate::app::profile::svc::parse_account_tz(
+                app.profile_state.profile().timezone.as_deref(),
+            ));
         app.chat.sync_selection();
         app.sync_visible_chat_room();
         Ok(app)
@@ -2148,11 +2171,11 @@ impl App {
     }
 
     /// A backtick detach hopped out of the Lateania world recently enough
-    /// that the door still counts as a live stop on the workspace cycle.
+    /// that the door still counts as a live stop on the workspace cycle: the
+    /// shared door window (`door::game::IDLE_WINDOW`).
     pub(crate) fn lateania_recently_active(&self) -> bool {
-        const LATEANIA_DETACH_WINDOW: Duration = Duration::from_secs(5 * 60);
         self.lateania_detached_at
-            .is_some_and(|at| at.elapsed() < LATEANIA_DETACH_WINDOW)
+            .is_some_and(|at| at.elapsed() < crate::app::door::game::IDLE_WINDOW)
     }
 
     pub(crate) fn enter_greendragon(&mut self) {
@@ -3422,11 +3445,12 @@ impl App {
     }
 
     /// A seated Nightcap patron orders from the house menu. `State::pick`
-    /// gates it (a stool, one order at a time); `nightcap::svc` moves the
+    /// gates it (a stool, one order at a time, not cut off); `nightcap::svc` moves the
     /// chips off-thread on the same rails as the tavern's bartender and
     /// reports back over the session's outcome channel.
     pub(crate) fn nightcap_order(&mut self, order: crate::app::clubhouse::nightcap::state::Order) {
-        let Some(order) = self.nightcap.pick(order) else {
+        let drunk_level = self.clubhouse.drunk_level(self.user_id, chrono::Utc::now());
+        let Some(order) = self.nightcap.pick(order, drunk_level) else {
             return;
         };
         crate::app::clubhouse::nightcap::svc::spawn_order(

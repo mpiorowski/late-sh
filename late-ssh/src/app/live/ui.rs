@@ -27,7 +27,7 @@ use crate::app::{
     calendar::live as event_live,
     chat::news::live as news_live,
     common::theme,
-    door::spectate::live as door_live,
+    door::{realm::live as realm_live, spectate::live as door_live},
     games::pool_core::canvas::Rgb,
     lobby::daily::{live_board::canvas_background, live_strip as match_strip},
     statusline::data::TITLE_COLS,
@@ -137,6 +137,7 @@ pub(crate) fn live_strip_lines(
         LiveStripView::Stream(stream) => stream_live::body(budget, stream),
         LiveStripView::DoorGame(game) => door_live::body(budget, game),
         LiveStripView::Event(event) => event_live::body(budget, event),
+        LiveStripView::Realm(realm) => realm_live::body(budget, realm),
     };
     frame_lines(width, body)
 }
@@ -234,6 +235,7 @@ pub(crate) fn live_strip_compact_line(width: u16, strip: &LiveStripView<'_>) -> 
         LiveStripView::Stream(_) => stream_live::glow(),
         LiveStripView::DoorGame(_) => door_live::glow(),
         LiveStripView::Event(event) => event_live::glow(event),
+        LiveStripView::Realm(realm) => realm_live::glow(realm),
     };
     let mut rule = rule_line(width, glow);
     rule.spans.truncate(3);
@@ -253,6 +255,7 @@ fn compact_body_spans(rest: u16, strip: &LiveStripView<'_>) -> Vec<Span<'static>
         LiveStripView::Stream(stream) => stream_live::compact_spans(rest, stream),
         LiveStripView::DoorGame(game) => door_live::compact_spans(rest, game),
         LiveStripView::Event(event) => event_live::compact_spans(rest, event),
+        LiveStripView::Realm(realm) => realm_live::compact_spans(rest, realm),
     }
 }
 

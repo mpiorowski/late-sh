@@ -313,8 +313,8 @@ fn a_page_stop_names_its_page_key_and_moves_on_with_enter() {
 #[test]
 fn the_artboard_stop_offers_show_or_skip_until_the_art_is_shown() {
     for (hidden, breaker) in [
-        (true, "[S] show · [Enter] skip: the profiles"),
-        (false, "[Enter] next: the profiles"),
+        (true, "[S] show · [Enter] skip: the people"),
+        (false, "[Enter] next: the people"),
     ] {
         let backend = ratatui::backend::TestBackend::new(80, 24);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();

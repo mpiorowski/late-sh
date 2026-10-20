@@ -434,6 +434,15 @@ async fn attention_follows_the_profiles_shelf() {
     app.tick();
     assert_eq!(
         app.attention_spot,
+        Some((Screen::Profiles, Place::MapShelf)),
+        "the page opens on the map"
+    );
+
+    app.directory_state.set_shelf(Shelf::Profiles);
+    app.last_one_hz_index = None;
+    app.tick();
+    assert_eq!(
+        app.attention_spot,
         Some((Screen::Profiles, Place::PeopleShelf))
     );
 

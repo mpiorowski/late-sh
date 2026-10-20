@@ -18,6 +18,7 @@ use late_core::models::{
     chat_slow_mode::ChatSlowMode,
     game_room::GameKind,
     moderation_audit_log::ModerationAuditLog,
+    notification::Notification,
     profile::{Profile, ProfileParams},
     room_ban::RoomBan,
     server_ban::ServerBan,
@@ -5221,6 +5222,18 @@ async fn deadchannel_join_requires_the_invitation() {
     );
     assert!(welcome.contains("/leave"), "{welcome}");
     assert!(welcome.contains("/join #deadchannel"), "{welcome}");
+    // "@dc-hopeful." is a mention and a full stop: it lands in theirs.
+    crate::test_helpers::wait_until(
+        || async {
+            Notification::list_for_user(&client, user.id, 20)
+                .await
+                .expect("list mentions")
+                .iter()
+                .any(|mention| mention.message_preview.contains("welcome to the wire"))
+        },
+        "the welcome's mention",
+    )
+    .await;
     let voice = service
         .ensure_first_contact_voice()
         .await
@@ -5281,7 +5294,7 @@ async fn deadchannel_join_requires_the_invitation() {
     assert_eq!(returned.look, runner.look);
     assert!(returned.left_at.is_none());
     // And so is coming back.
-    wait_for_message_containing(&test_db.db, room_id, "dc-hopeful is back on the wire.").await;
+    wait_for_message_containing(&test_db.db, room_id, "@dc-hopeful is back on the wire.").await;
 
     // Neither the duplicate join nor the return is a first time: the
     // welcome was posted once; with the leave and the return the voice has

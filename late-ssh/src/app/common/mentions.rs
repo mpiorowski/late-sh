@@ -54,29 +54,17 @@ pub(crate) fn extract_mentions(body: &str) -> Vec<String> {
             continue;
         }
 
-        if !in_code && ch == '@' && valid_mention_start(body, idx) {
-            let mut end = idx + ch.len_utf8();
-            let mut has_mention_chars = false;
-
-            while end < body.len() {
-                let Some(next) = body[end..].chars().next() else {
-                    break;
-                };
-                if !is_mention_char(next) {
-                    break;
-                }
-                has_mention_chars = true;
-                end += next.len_utf8();
+        if !in_code
+            && ch == '@'
+            && valid_mention_start(body, idx)
+            && let Some(end) = mention_end(body, idx)
+        {
+            let username = body[idx + 1..end].to_ascii_lowercase();
+            if !usernames.contains(&username) {
+                usernames.push(username);
             }
-
-            if has_mention_chars {
-                let username = body[idx + 1..end].to_ascii_lowercase();
-                if !usernames.contains(&username) {
-                    usernames.push(username);
-                }
-                idx = end;
-                continue;
-            }
+            idx = end;
+            continue;
         }
 
         idx += ch.len_utf8();
@@ -104,33 +92,21 @@ pub(crate) fn mention_spans(text: &str, body_style: Style) -> Vec<Span<'static>>
             continue;
         }
 
-        if !in_code && ch == '@' && valid_mention_start(text, idx) {
-            let mut end = idx + ch.len_utf8();
-            let mut has_mention_chars = false;
-
-            while end < text.len() {
-                let Some(next) = text[end..].chars().next() else {
-                    break;
-                };
-                if !is_mention_char(next) {
-                    break;
-                }
-                has_mention_chars = true;
-                end += next.len_utf8();
+        if !in_code
+            && ch == '@'
+            && valid_mention_start(text, idx)
+            && let Some(end) = mention_end(text, idx)
+        {
+            if segment_start < idx {
+                spans.push(Span::styled(
+                    text[segment_start..idx].to_string(),
+                    body_style,
+                ));
             }
-
-            if has_mention_chars {
-                if segment_start < idx {
-                    spans.push(Span::styled(
-                        text[segment_start..idx].to_string(),
-                        body_style,
-                    ));
-                }
-                spans.push(Span::styled(text[idx..end].to_string(), mention_style));
-                idx = end;
-                segment_start = end;
-                continue;
-            }
+            spans.push(Span::styled(text[idx..end].to_string(), mention_style));
+            idx = end;
+            segment_start = end;
+            continue;
         }
 
         idx += ch.len_utf8();
@@ -144,6 +120,22 @@ pub(crate) fn mention_spans(text: &str, body_style: Style) -> Vec<Span<'static>>
     }
 
     spans
+}
+
+/// Where the handle of the mention whose `@` sits at byte offset `at`
+/// ends, or `None` when no handle follows. Trailing dots are the
+/// sentence's, not the handle's: a username never ends in one
+/// (`sanitize_username_input`), so "thanks @alice." mentions alice.
+fn mention_end(text: &str, at: usize) -> Option<usize> {
+    let start = at + '@'.len_utf8();
+    let len = text[start..]
+        .find(|c: char| !is_mention_char(c))
+        .unwrap_or(text.len() - start);
+    let handle = text[start..start + len].trim_end_matches('.');
+    match handle.is_empty() {
+        true => None,
+        false => Some(start + handle.len()),
+    }
 }
 
 fn advance_past_backticks(text: &str, mut idx: usize) -> usize {

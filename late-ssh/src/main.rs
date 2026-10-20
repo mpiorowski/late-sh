@@ -263,6 +263,16 @@ async fn main() -> anyhow::Result<()> {
         pg_listener.subscribe(late_ssh::app::lobby::daily::svc::DailyService::CHANNELS),
     );
     daily_service.start_sweeper_task();
+    let realm_service = late_ssh::app::door::realm::svc::RealmService::new(
+        db.clone(),
+        chip_service.clone(),
+        activity_publisher.clone(),
+        ai_service.clone(),
+    );
+    let _realm_notify_task = realm_service.start_notify_worker(
+        pg_listener.subscribe(late_ssh::app::door::realm::svc::RealmService::CHANNELS),
+    );
+    realm_service.start_sweeper_task();
     let lateania_service = late_ssh::app::door::lateania::svc::LateaniaService::new(
         activity_publisher.clone(),
         chip_service.clone(),
@@ -507,6 +517,7 @@ async fn main() -> anyhow::Result<()> {
         live_games,
         door_rc_service,
         daily_service,
+        realm_service,
         bonsai_service,
         pet_service,
         aquarium_service,

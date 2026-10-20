@@ -260,6 +260,7 @@ impl ComposerCommands {
             | Screen::Zen
             | Screen::DailyMatch
             | Screen::HouseTable
+            | Screen::Realm
             | Screen::Scratchpad => Self::Enabled,
         }
     }
@@ -1074,6 +1075,7 @@ pub struct ChatState {
     requested_help_topic: Option<HelpTopic>,
     requested_room_info_modal: Option<RoomInfoRequest>,
     requested_settings_modal: bool,
+    requested_usermap: bool,
     requested_shop_modal: bool,
     requested_onboard: bool,
     requested_lobby_toggle: bool,
@@ -1442,6 +1444,7 @@ impl ChatState {
             requested_help_topic: None,
             requested_room_info_modal: None,
             requested_settings_modal: false,
+            requested_usermap: false,
             requested_shop_modal: false,
             requested_onboard: false,
             requested_lobby_toggle: false,
@@ -2136,6 +2139,10 @@ impl ChatState {
 
     pub fn take_requested_help_topic(&mut self) -> Option<HelpTopic> {
         self.requested_help_topic.take()
+    }
+
+    pub fn take_requested_usermap(&mut self) -> bool {
+        std::mem::take(&mut self.requested_usermap)
     }
 
     pub fn take_requested_settings_modal(&mut self) -> bool {
@@ -4247,6 +4254,15 @@ impl ChatState {
         if body.trim() == "/active" {
             self.clear_composer_after_submit();
             self.open_active_users_overlay();
+            return None;
+        }
+
+        // The same question as `/active`, answered on the map instead of in a
+        // list — and, once open, two wider slices of it than `/active` can
+        // show.
+        if body.trim() == "/map" {
+            self.clear_composer_after_submit();
+            self.requested_usermap = true;
             return None;
         }
 

@@ -4,14 +4,14 @@ use rand::{SeedableRng, rngs::StdRng};
 use uuid::Uuid;
 
 use super::{
-    Answer, Applied, Call, Command, Drink, Fight, News, Outcome, Pick, Prey, Quarry, Refusal,
-    Rival, Sheet, SheetError, Slot, crossing_order,
+    Answer, Applied, Call, Command, Drink, Fight, Meeting, News, Outcome, Pick, Prey, Quarry,
+    Reach, Refusal, Rival, Sheet, SheetError, Slot, crossing_order,
 };
 use crate::app::deadchannel::fight::cards::{Card, DECK, DRAFTS, ENERGY, HAND, STATIC_CAP};
 use crate::app::deadchannel::fight::data::{
     BRIGHT_LINE, CRYSTAL_LINE, DRAFT_LINE, FOES, FoeTier, HEARD_LINE, Intent, MARK_BONUS_CAP,
-    MAX_LEVEL, OLD_SIGNAL, PATCHED_TODAY_LINE, RATIONS_PER_DAY, RULES, RUNNER_PATTERN, START_BITS,
-    STATIC_LINE, exp_to_advance, exp_to_seek, title,
+    MAX_LEVEL, OLD_SIGNAL, PATCHED_TODAY_LINE, RATIONS_PER_DAY, RULES, RUNNER_PATTERN, Rules,
+    START_BITS, STATIC_LINE, exp_to_advance, exp_to_seek, title,
 };
 use crate::app::deadchannel::fight::road::{Mark, Node, RoadRun, Trace};
 use crate::app::deadchannel::fight::state::MAX_TIER;
@@ -720,7 +720,9 @@ fn dead_air_pours_one_glass_a_day_for_a_crystal() {
     assert_eq!(
         poured.applied,
         Applied::Drank {
-            drink: Drink::StaticOnIce
+            drink: Drink::StaticOnIce,
+            crystals: 1,
+            bits: 0,
         }
     );
     assert_eq!((sheet.crystals, sheet.drink), (2, Some(Drink::StaticOnIce)));
@@ -804,12 +806,16 @@ fn a_pour_puts_a_card_in_the_deck_until_the_roll() {
     assert_eq!(
         poured.applied,
         Applied::Drank {
-            drink: Drink::Feedback
+            drink: Drink::Feedback,
+            crystals: 1,
+            bits: 0,
         }
     );
     assert_eq!(
         poured.lines,
-        vec!["feedback. the glass hums before you touch it. a surge in your deck until the roll."]
+        vec![
+            "feedback. the glass hums before you touch it. a ‹surge› in your deck until the roll."
+        ]
     );
     assert_eq!((sheet.crystals, sheet.attack(), sheet.defense()), (1, 1, 1));
     let deck = sheet.deck();
@@ -862,7 +868,7 @@ fn ink_takes_a_draft_for_crystals_one_a_mark_and_one_more() {
     );
     assert_eq!(
         short.lines,
-        vec!["10 crystals to ink jab and brace. you are 1 short."]
+        vec!["10 crystals to ink ‹jab› and ‹brace›. you are 1 short."]
     );
 
     sheet.crystals = 25;
@@ -881,7 +887,7 @@ fn ink_takes_a_draft_for_crystals_one_a_mark_and_one_more() {
         inked.lines,
         vec![
             "the needle goes in. 10 crystals. it does not hurt the way you expected.",
-            "jab and brace are both yours from here, this climb and every one after."
+            "‹jab› and ‹brace› are both yours from here, this climb and every one after."
         ]
     );
     assert_eq!((sheet.crystals, sheet.inks.clone()), (15, vec![3]));
@@ -914,7 +920,7 @@ fn ink_takes_a_draft_for_crystals_one_a_mark_and_one_more() {
     );
     assert_eq!(
         ahead.lines[1],
-        "burn and ground are both yours from level 9 on, this climb and every one after."
+        "‹burn› and ‹ground› are both yours from level 9 on, this climb and every one after."
     );
     assert_eq!(sheet.deck().len(), DECK.len() + 1, "no pick at 9 yet");
     sheet.cards.push(Card::Ground);
@@ -2248,7 +2254,7 @@ fn a_level_that_owes_a_card_holds_the_road_until_one_is_taken() {
                 card: Card::Brace,
                 replaces: Card::Strike,
             },
-            lines: vec!["brace is in your deck now, in place of a strike.".to_string()],
+            lines: vec!["‹brace› is in your deck now, in place of a ‹strike›.".to_string()],
         }
     );
     assert_eq!(
@@ -2500,7 +2506,8 @@ fn before_the_crossing() -> (Sheet, u8) {
     (sheet, lane)
 }
 
-fn tom(stake: i64, answer: bool) -> Prey {
+/// Tom carrying `carrying` bits, the crossing's half of them at stake.
+fn tom(carrying: i64, answer: bool) -> Prey {
     Prey {
         rival: Rival {
             user_id: Uuid::from_u128(7),
@@ -2517,7 +2524,8 @@ fn tom(stake: i64, answer: bool) -> Prey {
         signal: 20,
         attack: 3,
         defense: 0,
-        stake,
+        carrying,
+        stake: carrying / 2,
     }
 }
 
@@ -2548,7 +2556,7 @@ fn a_crossing_spends_a_ration_and_puts_the_sleeper_on_the_row() {
     );
     assert_eq!(
         outcome.lines,
-        vec!["tom. asleep on their feet, carrying 340 bits.".to_string()]
+        vec!["tom. asleep on their feet, carrying 340 bits, 170 to take.".to_string()]
     );
     assert_eq!(sheet.rations_left, rations - 1);
     assert_eq!(
@@ -2564,7 +2572,10 @@ fn a_crossing_spends_a_ration_and_puts_the_sleeper_on_the_row() {
     assert_eq!(fight.foe_signal, 20);
     assert_eq!(fight.foe_max_signal, 20);
     assert_eq!(fight.foe_attack, 3);
-    assert_eq!(fight.foe_bits, 340);
+    assert_eq!(
+        fight.foe_bits, 170,
+        "the crossing's half of what tom carries"
+    );
     assert_eq!(fight.foe_exp, 0);
     assert_eq!(fight.pattern(), RUNNER_PATTERN);
     assert_eq!(fight.portrait(), ["  ▘  ", " ▗▖▝ ", "  ▖  "]);
@@ -2584,6 +2595,114 @@ fn a_crossing_spends_a_ration_and_puts_the_sleeper_on_the_row() {
     assert_eq!(Sheet::from_row(&row).expect("a readable sheet"), sheet);
 }
 
+/// A crossing takes half of what the sleeper carries, rounded down, so a
+/// night carrying is a bet and the locker a choice, not a chore.
+/// A pour is priced by the rules: the glass's crystal live, and under the
+/// "pours for bits" candidate a share of a cache in bits and no crystal.
+/// A glass is a crystal under either.
+#[test]
+fn a_pour_is_priced_by_the_rules() {
+    let bits_for_pours = Rules {
+        pour_crystals: 0,
+        pour_bits_percent: 100,
+        ..RULES
+    };
+    let mut rng = StdRng::seed_from_u64(1);
+    let mut sheet = fresh();
+    sheet.level = 6;
+    sheet.signal = sheet.max_signal();
+    sheet.crystals = 0;
+    sheet.bits = 10_000;
+    let cache = bits_for_pours.cache(6);
+    assert!(cache > 0);
+
+    // A pour: the cache's worth of bits, no crystal.
+    let poured = sheet.apply_under(
+        &bits_for_pours,
+        Command::Drink {
+            drink: Drink::Feedback,
+        },
+        &mut rng,
+    );
+    assert_eq!(
+        poured.applied,
+        Applied::Drank {
+            drink: Drink::Feedback,
+            crystals: 0,
+            bits: cache,
+        }
+    );
+    assert_eq!((sheet.crystals, sheet.bits), (0, 10_000 - cache));
+
+    // A glass still asks a crystal under the same rules.
+    sheet.drink = None;
+    let glass = sheet.apply_under(
+        &bits_for_pours,
+        Command::Drink {
+            drink: Drink::StaticOnIce,
+        },
+        &mut rng,
+    );
+    assert_eq!(
+        glass.applied,
+        Applied::Refused(Refusal::ShortCrystals { by: 1 })
+    );
+
+    // Short of the bits: refused, nothing poured.
+    sheet.bits = cache - 1;
+    let short = sheet.apply_under(
+        &bits_for_pours,
+        Command::Drink {
+            drink: Drink::Feedback,
+        },
+        &mut rng,
+    );
+    assert_eq!(short.applied, Applied::Refused(Refusal::Short { by: 1 }));
+    assert_eq!(sheet.drink, None);
+}
+
+#[test]
+fn the_crossing_stakes_half_of_what_the_sleeper_carries() {
+    let mut sleeper = fresh();
+    let portrait = || [String::new(), String::new(), String::new()];
+    for (carrying, stake) in [(340, 170), (99, 49), (1, 0), (0, 0)] {
+        sleeper.bits = carrying;
+        let prey = Prey::of(&sleeper, "tom", portrait(), Uuid::nil(), Meeting::Crossing);
+        assert_eq!((prey.carrying, prey.stake), (carrying, stake));
+    }
+}
+
+/// The answer is for what the crossing took, wherever the crosser put it:
+/// the stake is the take or half of what they hold on hand, whichever is
+/// more, and never more than hand and locker together.
+#[test]
+fn the_answer_stakes_what_was_taken_out_of_hand_and_locker() {
+    let mut crosser = fresh();
+    let portrait = || [String::new(), String::new(), String::new()];
+    for (bits, stash, owed, carrying, stake) in [
+        (20, 400, 170, 420, 170),
+        (390, 0, 10, 390, 195),
+        (0, 100, 170, 100, 100),
+        (0, 0, 170, 0, 0),
+    ] {
+        crosser.bits = bits;
+        crosser.stash = stash;
+        let prey = Prey::of(
+            &crosser,
+            "tom",
+            portrait(),
+            Uuid::nil(),
+            Meeting::Answer { owed },
+        );
+        assert_eq!(
+            (prey.carrying, prey.stake),
+            (carrying, stake),
+            "{bits} {stash} {owed}"
+        );
+        assert!(prey.rival.answer);
+    }
+}
+
 #[test]
 fn putting_a_sleeper_down_reports_the_stake_and_moves_nothing_on_the_sheet() {
     let (mut sheet, lane) = before_the_crossing();
@@ -2600,7 +2719,7 @@ fn putting_a_sleeper_down_reports_the_stake_and_moves_nothing_on_the_sheet() {
         outcome.applied,
         Applied::Ambushed {
             rival: tom(340, false).rival,
-            stake: 340
+            stake: 170
         }
     );
     assert_eq!(
@@ -2694,7 +2813,7 @@ fn an_answer_spends_nothing_and_is_refused_down_waiting_or_with_nobody_to_answer
     );
     assert_eq!(
         outcome.lines,
-        vec!["tom. awake this time, carrying 90 bits.".to_string()]
+        vec!["tom. awake this time, carrying 90 bits, 45 to take.".to_string()]
     );
     assert_eq!(sheet.rations_left, 0);
     assert!(sheet.road.path.is_empty(), "an answer is no step");
@@ -2742,12 +2861,27 @@ fn the_hand_earns_with_the_garnish_first_and_is_robbed_up_to_the_stake() {
     assert_eq!(sheet.debt, 0);
     assert_eq!(sheet.earn(0), 0);
 
-    assert_eq!(sheet.robbed(340), 80, "what is there");
+    assert_eq!(sheet.robbed(340, Reach::Hand), 80, "what is there");
     assert_eq!(sheet.bits, 0);
     sheet.bits = 500;
-    assert_eq!(sheet.robbed(340), 340, "the stake");
+    assert_eq!(sheet.robbed(340, Reach::Hand), 340, "the stake");
     assert_eq!(sheet.bits, 160);
-    assert_eq!(sheet.robbed(0), 0);
+    assert_eq!(sheet.robbed(0, Reach::Hand), 0);
+
+    // A crossing never reaches the locker; the answer does, hand first.
+    sheet.bits = 50;
+    sheet.stash = 300;
+    assert_eq!(sheet.robbed(200, Reach::Hand), 50);
+    assert_eq!((sheet.bits, sheet.stash), (0, 300));
+    sheet.bits = 50;
+    assert_eq!(sheet.robbed(200, Reach::HandAndLocker), 200);
+    assert_eq!((sheet.bits, sheet.stash), (0, 150));
+    assert_eq!(
+        sheet.robbed(500, Reach::HandAndLocker),
+        150,
+        "what is there"
+    );
+    assert_eq!((sheet.bits, sheet.stash), (0, 0));
 }
 
 #[test]

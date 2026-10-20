@@ -46,7 +46,7 @@ const TRAIN_GAP: u64 = 140;
 /// Words the signs on the towers spell, top to bottom.
 const SIGNS: [&str; 7] = ["BAR", "VIDS", "BITS", "TEK", "INK", "PAWN", "SLEEP"];
 /// The ticker under the skyline, scrolling one cell a tick.
-const TICKER: &str = "TUNED TO A DEAD CHANNEL   ///   DEAD AIR POURS CRYSTALS, ONE A NIGHT   ///   NOODLES, TWO BOWLS OR NONE   ///   BITS: IT HUMS. IT HAS NEVER ONCE PAID OUT   ///   THE LOWER CITY, ALL THE WAY DOWN   ///   ";
+const TICKER: &str = "TUNED TO A DEAD CHANNEL   ///   DEAD AIR: A GLASS FOR A CRYSTAL, ONE A NIGHT   ///   NOODLES, TWO BOWLS OR NONE   ///   BITS: IT HUMS. IT LENDS NOW, AND IT REMEMBERS   ///   THE LOWER CITY, ALL THE WAY DOWN   ///   ";
 /// The name's letters, five rows tall in full blocks. A space between
 /// letters, three between the words.
 const GLYPH_ROWS: usize = 5;
@@ -559,7 +559,7 @@ fn body(view: &LandingView<'_>) -> Vec<Line<'static>> {
             ink(INK_BRIGHT),
         )),
         Line::from(Span::styled(
-            "  Ten steps of road a day, a glyph on every lane, and a bar that pours crystals.",
+            "  Ten steps of road a day, a glyph on every lane, and a bar that pours for crystals.",
             ink(INK),
         )),
         Line::raw(""),

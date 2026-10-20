@@ -180,5 +180,5 @@ async fn failed_return_keeps_the_live_game_and_idle_timeout_reaps_it() {
     state.tick();
     assert!(!state.is_running());
     assert!(state.proxy().is_none());
-    assert!(state.message().contains("20 minutes"));
+    assert!(state.message().contains("30 minutes"));
 }

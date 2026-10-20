@@ -206,6 +206,38 @@ pub const DECK: [Card; 10] = [
 ];
 
 impl Card {
+    /// Every card, the starting ten's kinds first, then the drafts' in
+    /// draft order, then static.
+    pub const ALL: [Card; 14] = [
+        Card::Strike,
+        Card::Siphon,
+        Card::Block,
+        Card::Surge,
+        Card::Wipe,
+        Card::Jab,
+        Card::Brace,
+        Card::Riposte,
+        Card::Bulwark,
+        Card::Burn,
+        Card::Ground,
+        Card::Sever,
+        Card::Mute,
+        Card::Static,
+    ];
+
+    /// The card `name` stands for: the inverse of [`Card::name`].
+    pub fn named(name: &str) -> Option<Card> {
+        Card::ALL.into_iter().find(|card| card.name() == name)
+    }
+
+    /// The name as every line the game prints writes it, `‹jab›`: the
+    /// renderers read the marks and draw the card in its own neon
+    /// (`ui.rs::card_marked`), so a card reads as a card wherever it is
+    /// named.
+    pub fn marked(self) -> String {
+        format!("‹{}›", self.name())
+    }
+
     pub fn cost(self) -> u8 {
         match self {
             Card::Jab | Card::Brace | Card::Burn => 0,

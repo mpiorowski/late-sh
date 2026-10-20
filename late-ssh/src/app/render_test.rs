@@ -16,6 +16,44 @@ fn line_text(line: &ratatui::text::Line<'_>) -> String {
 }
 
 #[test]
+fn toast_banners_are_centered_within_the_content_area() {
+    use super::{DIRECT_DRAIN_TOAST_MESSAGE, DRAIN_TOAST_MESSAGE, draw_toast_banner};
+    use crate::app::common::primitives::{Banner, BannerKind};
+    use ratatui::{Terminal, backend::TestBackend, layout::Rect};
+
+    for (message, width) in [
+        ("Saved", 90),
+        ("Saved ☕", 90),
+        (DRAIN_TOAST_MESSAGE, 90),
+        (DIRECT_DRAIN_TOAST_MESSAGE, 36),
+    ] {
+        let mut terminal = Terminal::new(TestBackend::new(100, 20)).expect("terminal");
+        let area = Rect::new(5, 2, width, 12);
+        let banner = Banner {
+            message: message.to_string(),
+            kind: BannerKind::Info,
+            created_at: std::time::Instant::now(),
+        };
+        terminal
+            .draw(|frame| draw_toast_banner(frame, area, &banner))
+            .expect("draw toast");
+        let buffer = terminal.backend().buffer();
+        let left = (area.x..area.right())
+            .find(|&x| buffer[(x, area.y)].symbol() == "┌")
+            .expect("left border");
+        let right = (area.x..area.right())
+            .find(|&x| buffer[(x, area.y)].symbol() == "┐")
+            .expect("right border");
+        let left_margin = left - area.x;
+        let right_margin = area.right() - right - 1;
+        assert!(
+            left_margin.abs_diff(right_margin) <= 1,
+            "toast must leave equal margins: {message:?}, {left_margin} vs {right_margin}"
+        );
+    }
+}
+
+#[test]
 fn sidebar_enabled_prefers_settings_draft_while_modal_is_open() {
     assert!(!sidebar_enabled(true, false, true));
     assert!(sidebar_enabled(true, true, false));

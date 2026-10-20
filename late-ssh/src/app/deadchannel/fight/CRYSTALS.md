@@ -76,6 +76,13 @@ cursor on it.
 | `u` | squelch | a burn in the deck |
 | `o` | sign-off | a mute in the deck |
 
+- A pour is priced by the rules (`Rules::pour_crystals`,
+  `Rules::pour_bits`): live, the glass's crystal and no bits. The
+  "pours for bits" candidate (`arena_test.rs::CRYSTAL_RULES`, `make
+  deadchannel-crystals`) prices one at a share of a cache and no
+  crystal; `BALANCE.md`, section 6, "What a crystal buys", is what it
+  measured: a daily pour buys no day on either hand at any price, so
+  the pours stay a crystal.
 - The last three are pours (GAME.md, "Dead Air pours a card"): a card
   in every deck dealt today (`Drink::pour`, added by `Sheet::deck`), not
   a point on the sheet. A fight already on the row keeps the deck it was
@@ -90,8 +97,9 @@ cursor on it.
   fight is left to use it in), a glass already poured (`GlassPoured`),
   no crystal (`ShortCrystals`).
 - The panel (`city/ui.rs::bar_lines`) shows what each glass does at this
-  level and spells the refusal ahead of the keys; the answer is the
-  `till` line; no news.
+  level, names each pour's card in its neon with the card's rule, and
+  spells the refusal ahead of the keys; the answer is the `till` line;
+  no news.
 
 ## The blade shop
 
@@ -136,8 +144,10 @@ only the nuke clears it (GAME.md, "INK: the needle").
 - A stored level no draft is owed at, or one stored twice, is
   `SheetError::Inks`, never a blank.
 - The panel (`city/ui.rs::ink_lines`) lists every draft with its two
-  cards, says which are inked, and prices the rest; up/down walk the
-  cursor over the drafts and `i` inks the picked one, its refusal in the
+  cards, says which are inked, and prices the rest; under the list, in
+  rows that are always there, the picked draft's two cards with their
+  rules and the card the pick replaces; up/down walk the cursor over the
+  drafts and `i` inks the picked one, its refusal in the
   key's row when the needle would not. Never a digit or `q`: those stay
   the globals' over every panel, and a misfired page switch must not buy
   something a mark cannot take back. The answer is the `till` line; no

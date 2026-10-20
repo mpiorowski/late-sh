@@ -431,7 +431,7 @@ fn the_idle_kick_banks_the_seat_without_charging_it() {
     // Nothing frees a seat when a session drops, so for anyone who closes
     // their terminal the kick is the only settle path: it has to pay out.
     // It must not charge the bail penalty though, since it is involuntary
-    // and two minutes out, so it cannot be used to dodge a crash.
+    // and five minutes out, so it cannot be used to dodge a crash.
     let (mut state, a, _, _) = arena_state();
     state.steer(a, Direction::Left);
     state.players[0].chips = 250;

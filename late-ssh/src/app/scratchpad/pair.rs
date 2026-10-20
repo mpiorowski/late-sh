@@ -116,6 +116,8 @@ fn enter_scratchpad(
     partner_id: Uuid,
     partner_username: String,
 ) {
+    // The completed handshake makes the invite and waiting banners obsolete.
+    app.banner = None;
     app.scratchpad = Some(ScratchpadState::new(
         registry,
         shared,

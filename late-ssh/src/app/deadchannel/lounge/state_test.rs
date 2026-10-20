@@ -8,7 +8,8 @@ use uuid::Uuid;
 
 use super::{
     AFTERMATH_MS, Due, LoungeCommand, STRIKE_MS, SceneText, animates, due, hits_needed, is_stale,
-    left_secs, lifetime_secs, minute_of_day, parse_lounge_command, roll_dice, scene_text, shows,
+    left_secs, lifetime_secs, mentions, minute_of_day, names, parse_lounge_command, roll_dice,
+    scene_text, shows,
 };
 
 fn day() -> LoungeDay {
@@ -256,4 +257,16 @@ fn an_older_payload_of_the_held_spawn_is_stale() {
     // The hits that arrived after the kill, or fewer hits than held: stale.
     assert!(is_stale(Some(&down), &two_hits));
     assert!(is_stale(Some(&two_hits), &one_hit));
+}
+
+/// The scene says the hitters by name; the wire mentions them, so its line
+/// lands in each hitter's mentions.
+#[test]
+fn the_wire_mentions_the_hitters_the_scene_names() {
+    let three = spawn(SpawnKind::Howler, vec![hit("tom"), hit("dax"), hit("mira")]);
+    assert_eq!(names(&three), "tom, dax and mira");
+    assert_eq!(mentions(&three), "@tom, @dax and @mira");
+    let one = spawn(SpawnKind::Flicker, vec![hit("tom")]);
+    assert_eq!(mentions(&one), "@tom");
+    assert_eq!(mentions(&spawn(SpawnKind::Flicker, Vec::new())), "");
 }

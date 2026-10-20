@@ -28,6 +28,10 @@ pub(crate) struct JobsState {
     pub(crate) loaded: bool,
     /// `/` on the shelf: only postings that match the viewer's tags.
     pub(crate) for_me: bool,
+    /// `s` on the shelf: the search box is open and `search_query` narrows
+    /// the rows (`search_matches`), on top of `for_me`.
+    search_mode: bool,
+    search_query: String,
     pub(crate) mouse: crate::app::directory::mouse::MouseState,
     selected: usize,
     /// Under the stacked layout the detail pane opens over the list.
@@ -48,6 +52,8 @@ impl JobsState {
             items: Vec::new(),
             loaded: false,
             for_me: false,
+            search_mode: false,
+            search_query: String::new(),
             selected: 0,
             mouse: Default::default(),
             detail_open: false,
@@ -108,6 +114,48 @@ impl JobsState {
         self.selected = 0;
     }
 
+    pub(crate) fn enter_search(&mut self) {
+        self.search_mode = true;
+        self.search_query.clear();
+        self.search_changed();
+    }
+
+    pub(crate) fn exit_search(&mut self) {
+        self.search_mode = false;
+        self.search_query.clear();
+        self.search_changed();
+    }
+
+    pub(crate) fn search_mode(&self) -> bool {
+        self.search_mode
+    }
+
+    pub(crate) fn search_query(&self) -> &str {
+        &self.search_query
+    }
+
+    pub(crate) fn search_push(&mut self, ch: char) {
+        if self.search_query.chars().count() < SEARCH_LIMIT {
+            self.search_query.push(ch);
+            self.search_changed();
+        }
+    }
+
+    pub(crate) fn search_backspace(&mut self) {
+        self.search_query.pop();
+        self.search_changed();
+    }
+
+    /// The rows under the box moved: back to the top of them, and the
+    /// recorded hits are stale.
+    fn search_changed(&mut self) {
+        self.selected = 0;
+        self.mouse
+            .reset_pane(crate::app::directory::mouse::Pane::JobsList);
+        self.mouse
+            .reset_pane(crate::app::directory::mouse::Pane::JobsDetail);
+    }
+
     pub(crate) fn set_narrow(&self, narrow: bool) {
         self.narrow.set(narrow);
     }
@@ -131,14 +179,44 @@ impl JobsState {
     }
 
     /// The rows the shelf shows right now: everything, or the viewer's
-    /// matches best first.
+    /// matches best first, narrowed to the search while the box is open.
     pub(crate) fn visible<'a>(&'a self, viewer_tags: &[String]) -> Vec<&'a JobPosting> {
-        if self.for_me {
+        let rows: Vec<&JobPosting> = if self.for_me {
             matches(&self.items, viewer_tags, self.items.len())
         } else {
             self.items.iter().collect()
+        };
+        if !self.search_mode {
+            return rows;
         }
+        rows.into_iter()
+            .filter(|posting| search_matches(posting, &self.search_query))
+            .collect()
     }
+}
+
+/// The longest search a person can type.
+const SEARCH_LIMIT: usize = 60;
+
+/// Whether a posting answers a search: every word of the query is found,
+/// case-insensitively, somewhere in the company, the role, a tag, a region,
+/// the pay or the excerpt. An empty query matches everything.
+pub(crate) fn search_matches(posting: &JobPosting, query: &str) -> bool {
+    let haystack = [
+        posting.company.as_str(),
+        posting.title.as_str(),
+        posting.pay.as_str(),
+        posting.excerpt.as_str(),
+    ]
+    .into_iter()
+    .chain(posting.tags.iter().map(String::as_str))
+    .chain(posting.regions.iter().map(String::as_str))
+    .collect::<Vec<_>>()
+    .join(" ")
+    .to_lowercase();
+    query
+        .split_whitespace()
+        .all(|word| haystack.contains(&word.to_lowercase()))
 }
 
 /// What `/jobs` asked for. The open is for everyone; the rest is the

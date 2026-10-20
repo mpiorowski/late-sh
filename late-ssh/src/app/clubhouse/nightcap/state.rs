@@ -10,6 +10,7 @@ use ratatui_textarea::{TextArea, WrapMode};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use uuid::Uuid;
 
+use late_core::models::drinks::DRUNK_MAX_LEVEL;
 use late_core::models::nightcap_carving::CARVING_MAX_CHARS;
 
 use crate::app::common::composer::new_themed_textarea;
@@ -90,6 +91,15 @@ impl Drink {
             Drink::WhiskeyNeat | Drink::OldFashioned | Drink::TopShelf => false,
         }
     }
+}
+
+/// Whether the house has stopped pouring for a patron at `drunk_level`:
+/// the top of the ladder ("wasted"), the same line the tavern's bartender
+/// is told to cut at. Below it the bar pours anything, so a patron can
+/// still drink their way up; at it, nothing on the menu, rounds included,
+/// since a round pours the buyer's own drink too.
+pub fn cut_off(drunk_level: u8) -> bool {
+    drunk_level >= DRUNK_MAX_LEVEL
 }
 
 /// What a seated patron asked the house for.
@@ -324,6 +334,10 @@ impl State {
         &self.wall_snapshot
     }
 
+    pub fn user_id(&self) -> Uuid {
+        self.user_id
+    }
+
     pub fn my_seat(&self) -> Option<usize> {
         self.own.map(|stand| usize::from(stand.stool))
     }
@@ -498,14 +512,21 @@ impl State {
     /// Hand an order to the house. `Some` means the caller should spawn it
     /// (`svc::spawn_order`); `None` means the footer already said why not.
     /// One order at a time: the chips move off-thread and a second press
-    /// before the first settles would double-charge.
-    pub fn pick(&mut self, order: Order) -> Option<Order> {
+    /// before the first settles would double-charge. A patron at
+    /// `drunk_level` the house has [`cut_off`] gets nothing, banked
+    /// credits included: nothing is charged, and the menu stays open so
+    /// they can see why.
+    pub fn pick(&mut self, order: Order, drunk_level: u8) -> Option<Order> {
         if self.my_seat().is_none() {
             self.note_compose_needs_seat();
             return None;
         }
         if self.order_in_flight {
             self.last_message = Some("the house is on it.".to_string());
+            return None;
+        }
+        if cut_off(drunk_level) {
+            self.last_message = Some("you're cut off. the house slides you a water.".to_string());
             return None;
         }
         self.order_in_flight = true;

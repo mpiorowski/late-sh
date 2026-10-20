@@ -43,8 +43,8 @@ pub(crate) fn hits_needed(kind: SpawnKind) -> i32 {
 /// How long a spawn of `kind` stays before it slips away.
 pub(crate) fn lifetime_secs(kind: SpawnKind) -> i64 {
     match kind {
-        SpawnKind::Flicker => 90,
-        SpawnKind::Howler => 180,
+        SpawnKind::Flicker => 300,
+        SpawnKind::Howler => 600,
     }
 }
 
@@ -145,13 +145,28 @@ pub(crate) fn shows(spawn: &Spawn, now_ms: i64) -> bool {
     }
 }
 
-/// The names of everyone who hit, joined the way the wire says them:
+/// The names of everyone who hit, joined the way the scene says them:
 /// "tom", "tom and dax", "tom, dax and mira".
 pub(crate) fn names(spawn: &Spawn) -> String {
-    let names: Vec<&str> = spawn.hits.iter().map(|hit| hit.username.as_str()).collect();
+    joined(spawn.hits.iter().map(|hit| hit.username.clone()).collect())
+}
+
+/// Everyone who hit as `@` mentions, joined the way the wire says them:
+/// "@tom, @dax and @mira", so the line lands in their mentions too.
+pub(crate) fn mentions(spawn: &Spawn) -> String {
+    joined(
+        spawn
+            .hits
+            .iter()
+            .map(|hit| format!("@{}", hit.username))
+            .collect(),
+    )
+}
+
+fn joined(names: Vec<String>) -> String {
     match names.as_slice() {
         [] => String::new(),
-        [one] => (*one).to_string(),
+        [one] => one.clone(),
         [all @ .., last] => format!("{} and {last}", all.join(", ")),
     }
 }

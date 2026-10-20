@@ -26,8 +26,9 @@ const EXIT_GRACE_TICKS: u8 = 10;
 /// Close a running game after this long without a single forwarded keystroke.
 /// Detached games (the player stepped out with ` and never came back) would
 /// otherwise hold a host child forever; the close is a clean SIGHUP-save on
-/// the host, so the run resumes on the next launch.
-const IDLE_SHUTDOWN: Duration = Duration::from_secs(20 * 60);
+/// the host, so the run resumes on the next launch. The shared door window
+/// (`door::game::IDLE_WINDOW`), so every door stop ages out on one clock.
+const IDLE_SHUTDOWN: Duration = crate::app::door::game::IDLE_WINDOW;
 
 /// Everything a fresh per-session Brogue door state needs. One struct instead
 /// of a long positional constructor, so every call site names what it passes.
