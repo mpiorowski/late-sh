@@ -3,9 +3,9 @@
 //! modal and not a transparency.
 
 use late_core::models::paper::EditionStep;
-use ratatui::layout::Position;
 
-use crate::app::input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput};
+use crate::app::common::scroll_view::ScrollMouse;
+use crate::app::input::{MouseEvent, ParsedInput};
 use crate::app::state::App;
 
 use super::state::PaperModal;
@@ -26,7 +26,7 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
         }
         ParsedInput::FocusLost => {
             if let Some(modal) = &app.paper.modal {
-                modal.cancel_drag();
+                modal.view.cancel_drag();
             }
         }
         ParsedInput::Byte(0x1B | b'\r' | b'\n' | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
@@ -36,14 +36,14 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
         | ParsedInput::Char('j' | 'J')
         | ParsedInput::Arrow(b'B') => {
             if let Some(modal) = app.paper.modal.as_mut() {
-                modal.scroll(1);
+                modal.view.scroll(1);
             }
         }
         ParsedInput::Byte(b'k' | b'K')
         | ParsedInput::Char('k' | 'K')
         | ParsedInput::Arrow(b'A') => {
             if let Some(modal) = app.paper.modal.as_mut() {
-                modal.scroll(-1);
+                modal.view.scroll(-1);
             }
         }
         ParsedInput::Byte(b'h' | b'H')
@@ -54,17 +54,17 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
         | ParsedInput::Arrow(b'C') => browse(app, EditionStep::Later),
         ParsedInput::PageDown => {
             if let Some(modal) = app.paper.modal.as_mut() {
-                modal.scroll(10);
+                modal.view.scroll(10);
             }
         }
         ParsedInput::PageUp => {
             if let Some(modal) = app.paper.modal.as_mut() {
-                modal.scroll(-10);
+                modal.view.scroll(-10);
             }
         }
         ParsedInput::Home => {
             if let Some(modal) = app.paper.modal.as_mut() {
-                modal.scroll_to_top();
+                modal.view.scroll_to_top();
             }
         }
         _ => {}
@@ -72,36 +72,21 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
 }
 
 /// Returns true only for the close control; the App owns request cancellation.
+/// A track click pages by the body's full height.
 fn handle_mouse(modal: &PaperModal, mouse: MouseEvent) -> bool {
-    if mouse.kind == MouseEventKind::Up {
-        modal.cancel_drag();
-        return false;
-    }
-    let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) else {
-        return false;
-    };
-    let point = Position::new(x, y);
-    let viewport = modal.viewport();
-    match mouse.kind {
-        MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
-            modal.cancel_drag();
-            if viewport.close.contains(point) {
-                return true;
-            }
-            let thumb = modal.thumb();
-            if thumb.contains(point) {
-                modal.begin_drag(y);
-            } else if viewport.track.contains(point) {
-                let page = viewport.body.height.min(i16::MAX as u16) as i16;
-                modal.scroll(if y < thumb.y { -page } else { page });
-            }
+    let page = i32::from(modal.view.viewport().body.height);
+    match modal.view.handle_mouse(mouse) {
+        ScrollMouse::Done => false,
+        ScrollMouse::Close => true,
+        ScrollMouse::PageUp => {
+            modal.view.scroll(-page);
+            false
         }
-        MouseEventKind::Drag if mouse.button == Some(MouseButton::Left) => modal.drag_to(y),
-        MouseEventKind::ScrollUp if viewport.popup.contains(point) => modal.scroll(-3),
-        MouseEventKind::ScrollDown if viewport.popup.contains(point) => modal.scroll(3),
-        _ => {}
+        ScrollMouse::PageDown => {
+            modal.view.scroll(page);
+            false
+        }
     }
-    false
 }
 
 #[cfg(test)]

@@ -23,20 +23,39 @@ pub enum BodyStatus {
 
 impl BodyStatus {
     /// The `status` and `word_count` columns of a `LEFT JOIN`ed body row:
-    /// none is pending, and a row no build ever wrote is an error rather
-    /// than a guess.
+    /// none is pending.
     pub fn from_columns(status: Option<&str>, word_count: Option<i32>) -> Result<Self> {
+        let status = match status {
+            Some(status) => Some(StoredStatus::parse(status)?),
+            None => None,
+        };
         match (status, word_count) {
             (None, _) => Ok(Self::Pending),
-            (Some("ready"), Some(words)) => Ok(Self::Ready {
+            (Some(StoredStatus::Ready), Some(words)) => Ok(Self::Ready {
                 reading_minutes: reading_minutes(
                     u32::try_from(words).context("negative word count")?,
                 ),
             }),
-            (Some("unavailable"), _) => Ok(Self::Unavailable),
-            (status, word_count) => {
-                bail!("unknown article body row: status {status:?}, word count {word_count:?}")
-            }
+            (Some(StoredStatus::Ready), None) => bail!("ready article body without a word count"),
+            (Some(StoredStatus::Unavailable), _) => Ok(Self::Unavailable),
+        }
+    }
+}
+
+/// A stored row's `status`, the two values the table's CHECK allows. Both
+/// read paths (the feed's join and [`ArticleBody::find`]) parse it here.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum StoredStatus {
+    Ready,
+    Unavailable,
+}
+
+impl StoredStatus {
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "ready" => Ok(Self::Ready),
+            "unavailable" => Ok(Self::Unavailable),
+            other => bail!("unknown article body status {other:?}"),
         }
     }
 }
@@ -192,8 +211,8 @@ impl ArticleBody {
 
     fn from_row(row: &Row) -> Result<Self> {
         let status: String = row.get("status");
-        let content = match status.as_str() {
-            "ready" => {
+        let content = match StoredStatus::parse(&status)? {
+            StoredStatus::Ready => {
                 let word_count: i32 = row.get("word_count");
                 let lines: serde_json::Value = row.get("lines");
                 BodyContent::Ready {
@@ -201,8 +220,7 @@ impl ArticleBody {
                     lines: serde_json::from_value(lines).context("reading reader lines")?,
                 }
             }
-            "unavailable" => BodyContent::Unavailable,
-            other => bail!("unknown article body status {other:?}"),
+            StoredStatus::Unavailable => BodyContent::Unavailable,
         };
         Ok(Self {
             article_id: row.get("article_id"),

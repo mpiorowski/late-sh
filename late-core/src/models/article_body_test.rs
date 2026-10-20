@@ -142,24 +142,39 @@ async fn retention_retires_old_bodies_to_unavailable() {
     );
 }
 
-/// A status no build wrote is an error, not a guess.
+/// The schema holds the body contract, so no write path can land a row the
+/// readers would choke on: one bad row would fail the whole feed read on
+/// every replica.
 #[tokio::test]
-async fn an_unknown_stored_status_fails_to_parse() {
+async fn the_schema_refuses_rows_outside_the_body_contract() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
-    let sharer = create_test_user(&test_db.db, "article-body-unknown").await;
-    let article = share(&client, sharer.id, "https://example.com/body-unknown").await;
-    client
-        .execute(
-            "INSERT INTO article_bodies (article_id, status, word_count, lines)
-             VALUES ($1, 'archived', 0, '[]'::jsonb)",
-            &[&article.id],
-        )
-        .await
-        .expect("insert unknown status");
+    let sharer = create_test_user(&test_db.db, "article-body-contract").await;
+    let article = share(&client, sharer.id, "https://example.com/body-contract").await;
 
-    assert!(ArticleBody::find(&client, article.id).await.is_err());
-    assert!(Article::list_feed(&client, 20).await.is_err());
+    for (status, word_count, lines) in [
+        ("archived", 0, "[]"),
+        ("ready", 0, "[]"),
+        ("unavailable", 3, "[]"),
+        ("unavailable", 0, r#"[{"kind": "rule"}]"#),
+        ("ready", -1, "[]"),
+    ] {
+        let inserted = client
+            .execute(
+                "INSERT INTO article_bodies (article_id, status, word_count, lines)
+                 VALUES ($1, $2, $3, $4::text::jsonb)",
+                &[&article.id, &status, &word_count, &lines],
+            )
+            .await;
+        assert!(
+            inserted.is_err(),
+            "{status} with {word_count} words and {lines} must be refused"
+        );
+    }
+    assert_eq!(
+        ArticleBody::find(&client, article.id).await.expect("find"),
+        None
+    );
 }
 
 /// A story past the share budget with no body row had its fetch cut short

@@ -2,13 +2,10 @@
 //! Everything else is swallowed, so the reader reads like a modal and not
 //! a transparency.
 
-use ratatui::layout::Position;
-
 use crate::app::chat;
 use crate::app::common::primitives::{Banner, Screen};
-use crate::app::input::{
-    MouseButton, MouseEvent, MouseEventKind, ParsedInput, sanitize_paste_markers,
-};
+use crate::app::common::scroll_view::ScrollMouse;
+use crate::app::input::{MouseEvent, ParsedInput, sanitize_paste_markers};
 use crate::app::state::App;
 
 use super::state::ReaderModal;
@@ -23,21 +20,21 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
                 app.chat.close_reader();
             }
         }
-        ParsedInput::FocusLost => modal.cancel_drag(),
+        ParsedInput::FocusLost => modal.view().cancel_drag(),
         ParsedInput::Byte(0x1B) => app.chat.close_reader(),
         ParsedInput::Byte(b'j') | ParsedInput::Char('j') | ParsedInput::Arrow(b'B') => {
-            modal.scroll(1);
+            modal.view().scroll(1);
         }
         ParsedInput::Byte(b'k') | ParsedInput::Char('k') | ParsedInput::Arrow(b'A') => {
-            modal.scroll(-1);
+            modal.view().scroll(-1);
         }
         ParsedInput::Byte(b' ') | ParsedInput::Char(' ') | ParsedInput::PageDown => modal.page(1),
         ParsedInput::Byte(b'b') | ParsedInput::Char('b') | ParsedInput::PageUp => modal.page(-1),
         ParsedInput::Byte(b'g') | ParsedInput::Char('g') | ParsedInput::Home => {
-            modal.scroll_to_top();
+            modal.view().scroll_to_top();
         }
         ParsedInput::Byte(b'G') | ParsedInput::Char('G') | ParsedInput::End => {
-            modal.scroll_to_bottom();
+            modal.view().scroll_to_bottom();
         }
         ParsedInput::Byte(digit @ b'1'..=b'9') => {
             let n = usize::from(digit - b'0');
@@ -77,34 +74,19 @@ fn copy_link(app: &mut App, url: &str) {
     app.banner = Some(Banner::success("Link copied!"));
 }
 
-/// Returns true only for the close control.
+/// Returns true only for the close control. A track click pages the way
+/// `Space` and `b` do.
 fn handle_mouse(modal: &ReaderModal, mouse: MouseEvent) -> bool {
-    if mouse.kind == MouseEventKind::Up {
-        modal.cancel_drag();
-        return false;
-    }
-    let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) else {
-        return false;
-    };
-    let point = Position::new(x, y);
-    let viewport = modal.viewport();
-    match mouse.kind {
-        MouseEventKind::Down if mouse.button == Some(MouseButton::Left) => {
-            modal.cancel_drag();
-            if viewport.close.contains(point) {
-                return true;
-            }
-            let thumb = modal.thumb();
-            if thumb.contains(point) {
-                modal.begin_drag(y);
-            } else if viewport.track.contains(point) {
-                modal.page(if y < thumb.y { -1 } else { 1 });
-            }
+    match modal.view().handle_mouse(mouse) {
+        ScrollMouse::Done => false,
+        ScrollMouse::Close => true,
+        ScrollMouse::PageUp => {
+            modal.page(-1);
+            false
         }
-        MouseEventKind::Drag if mouse.button == Some(MouseButton::Left) => modal.drag_to(y),
-        MouseEventKind::ScrollUp if viewport.popup.contains(point) => modal.scroll(-3),
-        MouseEventKind::ScrollDown if viewport.popup.contains(point) => modal.scroll(3),
-        _ => {}
+        ScrollMouse::PageDown => {
+            modal.page(1);
+            false
+        }
     }
-    false
 }

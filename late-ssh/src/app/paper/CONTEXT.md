@@ -40,6 +40,9 @@ It is also where the operator's word lands: every `#announcements` post from the
 
 ## Reader controls
 
+The offset, the drawn geometry, the scrollbar thumb and its drag, and the mouse
+gestures are the shared `ScrollView` (`app/common/scroll_view.rs`, also the News
+reader's); the paper owns its keys, its page size, and what closing means.
 The wheel inside the popup scrolls three wrapped rows. The right-margin scrollbar
 appears only when the paper overflows; its thumb drags proportionally, and track
 clicks page toward the pointer. Outside clicks do not dismiss. The draw records

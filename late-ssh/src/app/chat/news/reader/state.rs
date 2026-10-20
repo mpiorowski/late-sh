@@ -1,24 +1,25 @@
 //! The News reader: one story, opened from a News card, the live strip, or
 //! the Live panel. Holds the story, its body as far as it has loaded, the
 //! links the body numbers, and the scroll. The layout is pure and laid out
-//! at draw time against the drawn width; lines carry [`ReaderInk`], and
-//! `ui.rs` turns inks into colours inside the draw, the way the paper does.
+//! at draw time against the drawn width, then kept until the width, the
+//! body, or the meta line changes, so a long body is not wrapped again every
+//! frame. Lines carry [`ReaderInk`], and `ui.rs` turns inks into colours
+//! inside the draw, the way the paper does.
 
-use std::cell::Cell;
-use std::sync::Arc;
+use std::cell::{Ref, RefCell};
 
 use chrono::{DateTime, Utc};
 use late_core::models::article::ArticleFeedItem;
 use late_core::models::article_body::{
     ArticleBody, BodyContent, BodyStatus, ReaderLine, ReaderSpan, reading_minutes,
 };
-use ratatui::layout::Rect;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use uuid::Uuid;
 
 use crate::app::chat::news::ui::split_summary_bullets;
 use crate::app::chat::ui_text::format_news_ascii_art_for_display;
 use crate::app::common::primitives::format_relative_time;
+use crate::app::common::scroll_view::ScrollView;
 
 /// The widest the article text runs, however wide the terminal.
 pub(crate) const READER_MAX_TEXT_WIDTH: usize = 80;
@@ -81,20 +82,12 @@ pub(crate) enum ReaderBody {
     Unavailable,
 }
 
-/// Geometry and wrapped extent published by the draw, in frame cells.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct ReaderViewport {
-    pub popup: Rect,
-    pub body: Rect,
-    pub close: Rect,
-    pub track: Rect,
-    pub content_height: u16,
-}
-
-impl ReaderViewport {
-    fn max_scroll(self) -> u16 {
-        self.content_height.saturating_sub(self.body.height)
-    }
+/// The rows last laid out, and what they were laid out for.
+#[derive(Clone, Debug)]
+struct ReaderLayout {
+    width: usize,
+    meta: String,
+    rows: Vec<ReaderRow>,
 }
 
 #[derive(Clone, Debug)]
@@ -107,9 +100,10 @@ pub(crate) struct ReaderModal {
     author: String,
     shared_at: DateTime<Utc>,
     body: ReaderBody,
-    scroll_offset: Cell<u16>,
-    viewport: Cell<ReaderViewport>,
-    drag_grab: Cell<Option<u16>>,
+    view: ScrollView,
+    /// Kept between draws: the draw asks for the rows every frame, and a
+    /// long body is costly to wrap.
+    layout: RefCell<Option<ReaderLayout>>,
 }
 
 impl ReaderModal {
@@ -130,9 +124,8 @@ impl ReaderModal {
             author: item.author_username.clone(),
             shared_at: item.article.created,
             body,
-            scroll_offset: Cell::new(0),
-            viewport: Cell::new(ReaderViewport::default()),
-            drag_grab: Cell::new(None),
+            view: ScrollView::default(),
+            layout: RefCell::new(None),
         }
     }
 
@@ -148,15 +141,23 @@ impl ReaderModal {
         &self.body
     }
 
-    /// The body row as loaded: `None` is a fetch still pending. The row is
-    /// shared with every session's copy of the event, so the lines are
-    /// cloned out of it.
-    pub(crate) fn apply_body(&mut self, body: Option<Arc<ArticleBody>>) {
-        self.set_body(match body.as_deref().map(|body| &body.content) {
+    pub(crate) fn view(&self) -> &ScrollView {
+        &self.view
+    }
+
+    /// One page: the body's height less a line, so a line carries over.
+    pub(crate) fn page(&self, direction: i32) {
+        let height = i32::from(self.view.viewport().body.height);
+        self.view.scroll(direction * (height - 1).max(1));
+    }
+
+    /// The body row as loaded: `None` is a fetch still pending.
+    pub(crate) fn apply_body(&mut self, body: Option<ArticleBody>) {
+        self.set_body(match body.map(|body| body.content) {
             Some(BodyContent::Ready { word_count, lines }) => ReaderBody::Ready {
-                links: numbered_links(lines),
-                lines: lines.clone(),
-                reading_minutes: reading_minutes(*word_count),
+                links: numbered_links(&lines),
+                lines,
+                reading_minutes: reading_minutes(word_count),
             },
             Some(BodyContent::Unavailable) => ReaderBody::Unavailable,
             None => ReaderBody::Pending,
@@ -169,12 +170,11 @@ impl ReaderModal {
         self.set_body(ReaderBody::Unavailable);
     }
 
-    /// A new body lays out from the top, against a fresh draw.
+    /// A new body lays out afresh, from the top, against a fresh draw.
     fn set_body(&mut self, body: ReaderBody) {
         self.body = body;
-        self.viewport.set(ReaderViewport::default());
-        self.cancel_drag();
-        self.scroll_offset.set(0);
+        self.view = ScrollView::default();
+        *self.layout.get_mut() = None;
     }
 
     /// The URL behind `[n]`, for the `1`..`9` keys.
@@ -196,23 +196,42 @@ impl ReaderModal {
     }
 
     /// Every row of the reader at `width` columns: the header, then the
-    /// article text or the summary fallback.
-    pub(crate) fn lay_out(&self, width: usize) -> Vec<ReaderRow> {
+    /// article text or the summary fallback. Laid out again only when the
+    /// width, the body, or the meta line (its relative time) has changed.
+    pub(crate) fn lay_out(&self, width: usize) -> Ref<'_, [ReaderRow]> {
         let width = width.max(1);
+        let meta = self.meta();
+        let fresh = matches!(
+            &*self.layout.borrow(),
+            Some(layout) if layout.width == width && layout.meta == meta
+        );
+        if !fresh {
+            let rows = self.build_rows(width, &meta);
+            self.layout
+                .replace(Some(ReaderLayout { width, meta, rows }));
+        }
+        Ref::map(self.layout.borrow(), |layout| match layout {
+            Some(layout) => layout.rows.as_slice(),
+            None => unreachable!("the layout was stored above"),
+        })
+    }
+
+    fn build_rows(&self, width: usize, meta: &str) -> Vec<ReaderRow> {
         let mut rows = Vec::new();
         match &self.body {
             ReaderBody::Ready { lines, links, .. } => {
-                self.push_header(&mut rows, width);
+                self.push_header(&mut rows, width, meta);
                 push_article(&mut rows, lines, links, width);
             }
             ReaderBody::Loading { .. } => {
-                self.push_fallback(&mut rows, width, "Loading the article…".to_string());
+                self.push_fallback(&mut rows, width, meta, "Loading the article…".to_string());
             }
             ReaderBody::Pending => {
-                self.push_fallback(&mut rows, width, "Fetching the article…".to_string());
+                self.push_fallback(&mut rows, width, meta, "Fetching the article…".to_string());
             }
             ReaderBody::Unavailable => {
-                self.push_fallback(&mut rows, width, format!("Read on the web: {}", self.url));
+                let status = format!("Read on the web: {}", self.url);
+                self.push_fallback(&mut rows, width, meta, status);
             }
         }
         rows
@@ -237,7 +256,7 @@ impl ReaderModal {
         parts.join(" · ")
     }
 
-    fn push_header(&self, rows: &mut Vec<ReaderRow>, width: usize) {
+    fn push_header(&self, rows: &mut Vec<ReaderRow>, width: usize, meta: &str) {
         let title = if self.title.trim().is_empty() {
             "news update"
         } else {
@@ -249,16 +268,11 @@ impl ReaderModal {
             width,
             0,
         );
-        push_wrapped(
-            rows,
-            &[ReaderSegment::new(self.meta(), ReaderInk::Meta)],
-            width,
-            0,
-        );
+        push_wrapped(rows, &[ReaderSegment::new(meta, ReaderInk::Meta)], width, 0);
         rows.push(vec![ReaderSegment::new("─".repeat(width), ReaderInk::Rule)]);
     }
 
-    fn push_fallback(&self, rows: &mut Vec<ReaderRow>, width: usize, status: String) {
+    fn push_fallback(&self, rows: &mut Vec<ReaderRow>, width: usize, meta: &str, status: String) {
         let art = format_news_ascii_art_for_display(&self.ascii_art, ART_ROWS);
         if !art.is_empty()
             && art
@@ -270,7 +284,7 @@ impl ReaderModal {
             }
             rows.push(Vec::new());
         }
-        self.push_header(rows, width);
+        self.push_header(rows, width, meta);
         rows.push(Vec::new());
         for bullet in split_summary_bullets(&self.summary) {
             push_wrapped(
@@ -286,89 +300,6 @@ impl ReaderModal {
             &[ReaderSegment::new(status, ReaderInk::Status)],
             width,
             0,
-        );
-    }
-
-    pub(crate) fn scroll_offset(&self) -> u16 {
-        self.scroll_offset.get()
-    }
-
-    /// Clamped to the last drawn body; with no body drawn yet the offset
-    /// stays put and the next draw clamps it.
-    pub(crate) fn scroll(&self, delta: i32) {
-        let viewport = self.viewport.get();
-        if viewport.body.is_empty() {
-            return;
-        }
-        let next = i32::from(self.scroll_offset.get()) + delta;
-        self.scroll_offset
-            .set(next.clamp(0, i32::from(viewport.max_scroll())) as u16);
-    }
-
-    /// One page: the body's height less a line, so a line carries over.
-    pub(crate) fn page(&self, direction: i32) {
-        let height = i32::from(self.viewport.get().body.height);
-        self.scroll(direction * (height - 1).max(1));
-    }
-
-    pub(crate) fn scroll_to_top(&self) {
-        self.scroll_offset.set(0);
-    }
-
-    pub(crate) fn scroll_to_bottom(&self) {
-        self.scroll(i32::from(u16::MAX));
-    }
-
-    pub(crate) fn viewport(&self) -> ReaderViewport {
-        self.viewport.get()
-    }
-
-    pub(crate) fn set_viewport(&self, viewport: ReaderViewport) {
-        if self.viewport.replace(viewport) != viewport {
-            self.cancel_drag();
-        }
-        self.scroll(0);
-    }
-
-    pub(crate) fn thumb(&self) -> Rect {
-        let viewport = self.viewport.get();
-        let track = viewport.track;
-        if track.is_empty() || viewport.max_scroll() == 0 {
-            return Rect::default();
-        }
-        let height = (u32::from(track.height) * u32::from(viewport.body.height)
-            / u32::from(viewport.content_height))
-        .max(1)
-        .min(u32::from(track.height)) as u16;
-        let travel = track.height - height;
-        let top = (u32::from(self.scroll_offset.get()) * u32::from(travel)
-            + u32::from(viewport.max_scroll()) / 2)
-            / u32::from(viewport.max_scroll());
-        Rect::new(track.x, track.y + top as u16, 1, height)
-    }
-
-    pub(crate) fn begin_drag(&self, y: u16) {
-        self.drag_grab.set(Some(y.saturating_sub(self.thumb().y)));
-    }
-
-    pub(crate) fn cancel_drag(&self) {
-        self.drag_grab.set(None);
-    }
-
-    pub(crate) fn drag_to(&self, y: u16) {
-        let Some(grab) = self.drag_grab.get() else {
-            return;
-        };
-        let viewport = self.viewport.get();
-        let travel = viewport.track.height.saturating_sub(self.thumb().height);
-        if travel == 0 {
-            return;
-        }
-        let top = (i32::from(y) - i32::from(viewport.track.y) - i32::from(grab))
-            .clamp(0, i32::from(travel)) as u32;
-        self.scroll_offset.set(
-            ((top * u32::from(viewport.max_scroll()) + u32::from(travel) / 2) / u32::from(travel))
-                as u16,
         );
     }
 }

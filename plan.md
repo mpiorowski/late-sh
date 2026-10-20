@@ -3,7 +3,9 @@
 Spec for the next pass on the News surface (`late-ssh/src/app/chat/news/`).
 Read `GUIDE.md`, `CONTEXT.md` §4/§8, `late-ssh/src/app/chat/CONTEXT.md` §11
 (News), `late-ssh/src/app/live/CONTEXT.md`, and `DESIGN_GUIDE.md` §6.1 before
-touching code. Ship as three PRs in the order below; each lands alone.
+touching code. PR 1 (the reader and article bodies) is built; this file
+specs what PR 2 (saves) and PR 3 (note, reply linkage, reactions) add on
+top. Each lands alone.
 
 ## Goal
 
@@ -21,49 +23,13 @@ chip path in News.
 - Syntax highlighting in code blocks, inline images in the body.
 - Web (`late-web`) rendering of articles.
 
-## What exists today (do not re-derive)
+## Starting point
 
-- `articles` row: `url`, `title`, `summary` (three AI bullets), `ascii_art`.
-  Shared global snapshot of the newest `NEWS_FEED_LIMIT` (20) articles,
-  re-read by every replica on `articles_changed` (statement trigger,
-  migration 198) through `ArticleService::start_notify_worker`.
-- Extraction never fetches the page. `extract_via_ai` asks Gemini with
-  Search grounding; only the hero image is fetched (`article_ascii_art`).
-  YouTube (`extract_youtube`) and X (`extract_tweet`) have their own paths.
-- Per-user state is reads only: `article_reads`, loaded as
-  `ArticleEvent::ReadsLoaded`, bounded to the snapshot's articles.
-- The article modal (`NewsModalState` in `chat/state.rs`, drawn by
-  `news/ui.rs::draw_article_modal`, keys in `app/input.rs::handle_news_modal_input`)
-  shows thumbnail, title, URL, meta, three bullets. It opens only from the
-  live strip (`o`) and the Live panel; the News room has no key that opens it.
-- News room keys: `i` share, `Enter` copy link, `j`/`k`, `d` delete,
-  `r` reply in #lounge, `/` toggle mine-only.
-- A reply quotes `> @sharer: 📰 Title` with no id back to the article
-  (`ReplyTo::Article`, `chat/state.rs`), so the article cannot count or
-  find its replies.
-- The paper modal (`paper/state.rs::PaperModal`, `paper/ui.rs::draw`) is the
-  house's scrolling reader: j/k, scrollbar track and thumb, drag, footer.
-  Copy its shape; do not share its code unless a shared primitive falls
-  out naturally.
+PR 1 is built: the reader (`news/reader/`), article bodies and their fetch,
+and the per-user reads. `late-ssh/src/app/chat/CONTEXT.md` §11 (News) is the
+truth for all of it; do not re-derive it from this file.
 
 ## UX contract
-
-### Opening a story opens the reader
-
-One surface replaces the small modal: **the reader**. Every path that opened
-the modal opens the reader instead: live strip `o`, Live panel row click,
-and, new, `Enter` on a card in the News room. There is no intermediate
-"summary modal with a Read full button"; the reader *is* the modal.
-
-The reader has two bodies, decided by the stored body status:
-
-- **Ready**: title, meta line, the article text (see Reader layout).
-- **Unavailable or Pending** (every YouTube and X share, a paywall, a
-  JavaScript-only page, a page still being fetched): the hero ASCII art,
-  title, meta line, the three bullets, and one line in `TEXT_DIM`:
-  `Read on the web: <url>` for unavailable, `Fetching the article…` for
-  pending. Same frame, same keys. This is the old modal's content inside
-  the new frame.
 
 ### Keys
 
@@ -133,6 +99,9 @@ never silently.
 
 ## Reader layout
 
+Built in PR 1, except the note row, the social row, and the footer's `s`,
+`e`, `t` hints, which PR 2 and PR 3 add.
+
 Frame: centered box like the paper's (`PAPER_*_PERMILLE` style sizing,
 `BORDER_ACTIVE`, title ` Reading ` in `AMBER_GLOW`, `[x]` top right,
 scrollbar track in the right margin when content overflows). Body wrapped
@@ -170,54 +139,14 @@ runs short, the way the paper's footer does.
 
 ## Data
 
-Migrations are new files from `246_` on. Never edit an applied migration.
+Migrations are new files from `247_` on. Never edit an applied migration.
 
-### `article_bodies` (PR 1)
+### Body retention (PR 2)
 
-```sql
-CREATE TABLE article_bodies (
-    article_id UUID PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
-    status TEXT NOT NULL,            -- 'ready' | 'unavailable'
-    word_count INTEGER NOT NULL,     -- 0 when unavailable
-    lines JSONB NOT NULL,            -- Vec<ReaderLine>, empty when unavailable
-    fetched_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
-);
-```
-
-No row means **pending**. The three states are a closed Rust enum
-`BodyStatus { Pending, Ready { reading_minutes }, Unavailable }`; `status` text parses
-exhaustively and an unknown value is an error, not a default. A statement
-trigger on `article_bodies` fires `articles_changed` (same function as
-migration 198) so every replica's cards flip from pending to `7 min read`.
-
-Bodies never ride the snapshot: `ArticleFeedItem` carries `body: BodyStatus`
-(the reading time inside `Ready`) from a `LEFT JOIN`, and the reader loads
-the one row by id on open (`ArticleBody::find`). The snapshot is re-read on
-every notify on every replica; a 50 KB body per article would multiply that.
-
-`ReaderLine` (in `late-core/src/models/article_body.rs`, serde-tagged):
-
-```rust
-pub enum ReaderLine {
-    Heading { level: u8, text: String },
-    Paragraph { spans: Vec<ReaderSpan> },
-    Quote { spans: Vec<ReaderSpan> },
-    Code { lines: Vec<String> },
-    ListItem { spans: Vec<ReaderSpan> },
-    Rule,
-}
-pub enum ReaderSpan {
-    Text(String),
-    Link { text: String, href: String },
-}
-```
-
-Retention: once a day, delete bodies whose `fetched_at` is older than 30
-days and whose article has no row in `article_saves`. Hook it where the
-house already runs daily sweeps (the paper's print sweeper is the model;
-verify the location in `paper/svc.rs` and `main.rs`). A deleted body means
-the card reads `link` and the reader shows the fallback; nothing else
-changes.
+The hourly body sweep's `ArticleBody::retire_fetched_before` retires every
+ready body older than 30 days. With saves it skips a story anyone saved:
+`AND NOT EXISTS (SELECT 1 FROM article_saves s WHERE s.article_id =
+article_bodies.article_id)`, with a case in `article_body_test.rs`.
 
 ### `article_saves` (PR 2)
 
@@ -297,89 +226,37 @@ ArticleReaction)>`, all bounded to the snapshot's articles, loaded at session
 start and after every per-user write (read, save toggle, reaction toggle),
 merged into `news::State` the way reads are today (reads only grow; saves
 and reactions replace, since they can be removed). The saved *view* is a
-separate load, `ArticleEvent::SavedLoaded { user_id, items }`, requested
-when `/` enters the saved view and after a save toggle while in it.
+separate load, requested when `/` enters the saved view and after a save
+toggle while in it.
 
-## Fetch pipeline (PR 1)
-
-Inside `do_process_url`, after `create_shared` returns and
-`ArticleEvent::Created` is published, for every article that is **not**
-YouTube and **not** an X status (`is_youtube_url`, `tweet_status_id`):
-
-1. `fetch_body(article_id, url)` runs as its own step inside the same task
-   and the same 5-minute budget, after the share is already visible. Its
-   failure never fails the share.
-2. GET with `User-Agent: late.sh (https://late.sh)`, follow up to 5
-   redirects, 10 s timeout, read at most 2 MB, accept only
-   `text/html` (or `application/xhtml+xml`). The reader's header shows the
-   shared URL's host; no host is stored.
-3. Readability: add `dom_smoothie` (Rust port of Mozilla Readability) to
-   `late-ssh`. It yields the article node tree. Walk it into `Vec<ReaderLine>`:
-   `h1`–`h6` → `Heading`, `p` → `Paragraph`, `blockquote` → `Quote`,
-   `pre` → `Code`, `li` → `ListItem`, `hr` → `Rule`, `a` → `ReaderSpan::Link`
-   with absolute `href` resolved against the final URL; `img`, `figure`,
-   `table`, scripts, nav are dropped. Collapse whitespace; drop empty
-   paragraphs. Cap at 2,000 lines and 200 KB of text; past the cap, truncate
-   and append `Paragraph("… continues on the web")`.
-4. `word_count` is the body's words; `reading_minutes = ceil(words / 220)`.
-5. Insert `article_bodies` `ready`, or `unavailable` on any failure. The
-   failure reason is a closed `BodyFetchFailure { Fetch, NotHtml, TooLarge,
-   Timeout, Extract, Empty }` used for the metric and the log, never stored.
-6. YouTube and X get an `unavailable` row immediately, so their cards read
-   `link` and never sit in pending.
-
-Blocklist: `is_ai_blocklisted_url` already stops cyberspace.online before
-extraction; the body fetch sits after it and needs no second check.
+Replica-ready shape (`CONTEXT.md`, the multi-replica rule): an answer to one
+session's own request (the saved view, a toggle's result) comes back on a
+private `oneshot` that session holds, the way `ArticleService::load_body_task`
+answers the reader, never on the shared `ArticleEvent` broadcast, where every
+session of the same user would take it. What other sessions must see rides
+`articles_changed` and the snapshot, as bodies do.
 
 ## Where code lives
 
 Everything new is inside `late-ssh/src/app/chat/news/` except the models,
 migrations, and the two chat-surface changes named above.
 
-- `news/reader/` subdomain, same roles as the paper modal: `state.rs`
-  (`ReaderModal`: article id, header, `Vec<ReaderLine>` or the fallback
-  payload, scroll, viewport, link list, picker open), `ui.rs` (`draw`),
-  `input.rs` (keys, wheel, `[x]`, scrollbar drag). `news::State` owns
-  `Option<ReaderModal>`; `chat/state.rs` keeps thin `open_reader_for_article`
-  / `close_reader` / `reader()` delegations because `render.rs`, `app/input.rs`,
-  and `live/input.rs` reach it through `ChatState`. `NewsModalState`,
-  `draw_article_modal`, `handle_news_modal_input` and `ArticleModalView` are
-  deleted, not kept beside the reader.
-- `news/svc.rs` orchestrates: body fetch, save toggle, reaction toggle,
-  saved-list load, marks load, with every failure logged in one `match`
-  and surfaced as an `ArticleEvent::Failed`-style event the state turns
-  into a banner. The fetch and the DOM walk live in `news/body.rs` as pure
-  work (`fn lines_from_html(html, base_url) -> Vec<ReaderLine>`), testable
-  with fixture HTML and no network.
+- `news/reader/`: the picker row (`e`) and the `s`, `t` keys on the
+  built reader.
+- `news/svc.rs` orchestrates: save toggle, reaction toggle, saved-list
+  load, marks load, with every failure logged in one `match` and answered
+  to the asking session, which turns it into a banner.
 - `news/state.rs`: view enum `NewsView { All, Mine, Saved }` replaces the
-  `mine_only` bool (`toggle_mine_only` → `cycle_view`), social fields,
-  `reader`.
+  `mine_only` bool (`toggle_mine_only` → `cycle_view`), social fields.
 - `news/ui.rs`: card rows 2, 4, 8 per Cards above.
-- `late-core/src/models/`: `article_body.rs`, `article_save.rs`,
-  `article_reaction.rs`, each with the adjacent `_test.rs`. `article.rs`
-  gains the joins, `note`, `list_saved_by_user`.
-- `late-ssh/src/metrics.rs`: `record_news_body_fetch(BodyFetchOutcome)`,
-  `record_news_reader_opened(BodyStatus)`, `record_news_save(SaveToggle)`,
+- `late-core/src/models/`: `article_save.rs`, `article_reaction.rs`, each
+  with the adjacent `_test.rs`. `article.rs` gains the joins, `note`,
+  `list_saved_by_user`.
+- `late-ssh/src/metrics.rs`: `record_news_save(SaveToggle)`,
   `record_news_reaction(ArticleReactionAction)`, each with its no-op twin
   under `#[cfg(not(feature = "otel"))]`. Labels from the closed enums.
 
 ## Tests (next to the code, `make test-llm ARGS="-p late-ssh -E 'test(news)'"`)
-
-PR 1:
-- `body_test.rs`: fixture HTML with headings, paragraphs with links, a
-  quote, a `pre`, a list, an `hr`, nav and script junk → exact
-  `Vec<ReaderLine>` (whole-state assertion); relative hrefs resolve; the
-  line cap truncates and appends the continuation line.
-- `svc_test.rs`: a non-YouTube share ends with a `ready` or `unavailable`
-  row and the share succeeds either way (stub the HTTP client or point at a
-  local server the way other svc tests do; a failing fetch still publishes
-  `Created`); a YouTube share gets `unavailable` without a fetch.
-- `reader/state_test.rs`: open on a ready body builds the link list in
-  first-appearance order; `1` copies `[1]`; open on pending shows the
-  fetching line; scroll clamps.
-- `ui_test.rs`: card meta reads `7 min read` / `link` / nothing by status.
-- Flow test: strip `o` opens the reader (replace the modal assertion in
-  `live` or `input_flow_test.rs`), News room `Enter` opens it, `c` copies.
 
 PR 2:
 - `article_save_test.rs`: toggle saves then unsaves; `ids_for_user` is
@@ -399,21 +276,14 @@ PR 3:
 
 ## Docs to update in the same PRs
 
-- `late-ssh/src/app/chat/CONTEXT.md` §11 News: the reader, body states,
-  saves, reactions, note, reply linkage, keys, the deleted modal.
-- `late-ssh/src/app/live/CONTEXT.md`: `o` opens the reader.
-- `CONTEXT.md` §4 data model table: `article_bodies`, `article_saves`,
-  `article_reactions`, the two new columns; §8 if the snapshot contract
-  gains the "bodies never ride the snapshot" invariant (it should).
+- `late-ssh/src/app/chat/CONTEXT.md` §11 News: saves, reactions, note,
+  reply linkage, keys.
+- `CONTEXT.md` §4 data model table: `article_saves`, `article_reactions`,
+  the two new columns.
 - `late-ssh/src/app/help_modal/data.rs` `HelpTopic::News` lines and its test.
 - Nothing in `plan.md` itself; delete this file when PR 3 merges.
 
 ## Decisions already made
 
-- Straight to the reader: no summary-first modal, no "read full" button.
-- Videos and X posts are links. Their reader is the fallback body.
-- Bodies live in their own table and never in the snapshot.
 - Reactions mint nothing. One reaction per person per story, four icons.
-- `Enter` opens, `c` copies, in both the room and the reader.
-- `dom_smoothie` is the one new dependency. Flag it in the PR description.
 - Retention: 30 days unless saved by anyone.

@@ -10,7 +10,8 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use super::state::{READER_MAX_TEXT_WIDTH, ReaderInk, ReaderModal, ReaderRow, ReaderViewport};
+use super::state::{READER_MAX_TEXT_WIDTH, ReaderInk, ReaderModal, ReaderRow};
+use crate::app::common::scroll_view::ScrollViewport;
 use crate::app::common::theme;
 
 const READER_WIDTH_PERMILLE: u16 = 900;
@@ -48,10 +49,10 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, modal: &ReaderModal) {
     };
 
     if inner.width < 24 || inner.height < 5 {
-        modal.set_viewport(ReaderViewport {
+        modal.view().set_viewport(ScrollViewport {
             popup,
             close,
-            ..ReaderViewport::default()
+            ..ScrollViewport::default()
         });
         return;
     }
@@ -82,25 +83,28 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, modal: &ReaderModal) {
     } else {
         Rect::default()
     };
-    modal.set_viewport(ReaderViewport {
+    modal.view().set_viewport(ScrollViewport {
         popup,
         body: body_area,
         close,
         track,
         content_height,
     });
-    let lines: Vec<Line<'static>> = rows.iter().map(row_line).collect();
-    frame.render_widget(
-        Paragraph::new(lines).scroll((modal.scroll_offset(), 0)),
-        body_area,
-    );
+    // Only the rows in view become lines; the layout itself is kept.
+    let lines: Vec<Line<'static>> = rows
+        .iter()
+        .skip(usize::from(modal.view().offset()))
+        .take(usize::from(body_area.height))
+        .map(row_line)
+        .collect();
+    frame.render_widget(Paragraph::new(lines), body_area);
     if !track.is_empty() {
         frame.render_widget(
             Paragraph::new(vec![Line::from("│"); track.height as usize])
                 .style(Style::default().fg(theme::BORDER_DIM())),
             track,
         );
-        let thumb = modal.thumb();
+        let thumb = modal.view().thumb();
         frame.render_widget(
             Paragraph::new(vec![Line::from("█"); thumb.height as usize])
                 .style(Style::default().fg(theme::AMBER_DIM())),

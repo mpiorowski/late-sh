@@ -3793,8 +3793,8 @@ fn the_cyberspace_section_carries_the_pane_the_pinned_rooms_and_c_mail() {
         order_for(true, &HashSet::new()),
         vec![
             RoomSlot::Room(lounge),
-            RoomSlot::Notifications,
             RoomSlot::News,
+            RoomSlot::Notifications,
             RoomSlot::Discover,
             RoomSlot::Cyberspace,
             RoomSlot::CyberspaceNotifications,
@@ -3810,8 +3810,8 @@ fn the_cyberspace_section_carries_the_pane_the_pinned_rooms_and_c_mail() {
         order_for(false, &HashSet::new()),
         vec![
             RoomSlot::Room(lounge),
-            RoomSlot::Notifications,
             RoomSlot::News,
+            RoomSlot::Notifications,
             RoomSlot::Discover,
         ]
     );
@@ -3822,8 +3822,8 @@ fn the_cyberspace_section_carries_the_pane_the_pinned_rooms_and_c_mail() {
         order_for(true, &collapsed),
         vec![
             RoomSlot::Room(lounge),
-            RoomSlot::Notifications,
             RoomSlot::News,
+            RoomSlot::Notifications,
             RoomSlot::Discover,
         ]
     );

@@ -3,7 +3,7 @@ use chrono::{DateTime, Utc};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use crate::models::article_body::{ArticleBody, BodyStatus};
+use crate::models::article_body::BodyStatus;
 use crate::models::chips::{ChipMove, UserChips};
 
 /// What publishing one article pays its author. Every share path funnels
@@ -269,21 +269,5 @@ pub enum ArticleEvent {
     ReadsLoaded {
         user_id: Uuid,
         read_article_ids: Vec<Uuid>,
-    },
-    /// The one body a reader opened, for the session that asked. `None` is
-    /// a story whose fetch has not landed. The body rides the shared event
-    /// channel behind an `Arc`: every session drains the event and all but
-    /// one drop it, so none of them clones the text.
-    BodyLoaded {
-        user_id: Uuid,
-        article_id: Uuid,
-        body: Option<std::sync::Arc<ArticleBody>>,
-    },
-    /// The body a reader opened could not be read from the database. The
-    /// reader falls back to the summary; it is not a share's failure, so the
-    /// composer never hears of it.
-    BodyLoadFailed {
-        user_id: Uuid,
-        article_id: Uuid,
     },
 }

@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 
 use ratatui_textarea::{TextArea, WrapMode};
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, oneshot, watch};
 use uuid::Uuid;
 
 use crate::app::common::{composer, primitives::Banner};
@@ -29,7 +29,7 @@ pub fn news_share_banner(lead: &str, reward: NewsShareReward) -> Banner {
 }
 
 use super::reader::state::{ReaderBody, ReaderModal};
-use super::svc::ArticleService;
+use super::svc::{ArticleService, BodyLoad, BodyReply};
 
 /// This session's news reads: the ids of the snapshot's articles the
 /// reader has read (`article_reads`), a visit to the News room reading
@@ -123,7 +123,15 @@ pub struct State {
     composer: TextArea<'static>,
     processing: bool,
     current_task: Option<tokio::task::AbortHandle>,
-    reader: Option<ReaderModal>,
+    reader: Option<OpenReader>,
+}
+
+/// The reader on screen and its outstanding body request. They travel
+/// together: closing or reopening the reader drops the request with it, so
+/// an answer only ever lands on the reader that asked.
+struct OpenReader {
+    modal: ReaderModal,
+    body_request: Option<oneshot::Receiver<BodyReply>>,
 }
 
 impl State {
@@ -449,19 +457,24 @@ impl State {
         else {
             return false;
         };
-        self.reader = Some(ReaderModal::open(item));
+        let modal = ReaderModal::open(item);
         self.mark_article_read(article_id);
-        self.article_service
-            .load_body_task(self.user_id, article_id);
+        let body_request =
+            self.article_service
+                .load_body_task(self.user_id, article_id, BodyLoad::Open);
+        self.reader = Some(OpenReader {
+            modal,
+            body_request: Some(body_request),
+        });
         true
     }
 
     pub(crate) fn reader(&self) -> Option<&ReaderModal> {
-        self.reader.as_ref()
+        self.reader.as_ref().map(|open| &open.modal)
     }
 
     pub(crate) fn close_reader(&mut self) -> Option<ReaderModal> {
-        self.reader.take()
+        self.reader.take().map(|open| open.modal)
     }
 
     pub fn submit_composer(&mut self) {
@@ -480,9 +493,10 @@ impl State {
         let changed = self.snapshot_rx.has_changed().unwrap_or(false) || !self.event_rx.is_empty();
         let snapshot_banner = self.drain_snapshot();
         let event_banner = self.drain_events();
+        let body = self.drain_reader_body();
         NewsTick {
-            banner: event_banner.or(snapshot_banner),
-            changed,
+            banner: event_banner.or(body.banner).or(snapshot_banner),
+            changed: changed || body.changed,
         }
     }
 
@@ -515,22 +529,70 @@ impl State {
     }
 
     /// A reader left waiting on a fetch asks again once the snapshot says
-    /// the body landed, so it turns into the article without a reopen.
-    fn reload_pending_reader(&self) {
-        let Some(reader) = &self.reader else {
+    /// the body landed, so it turns into the article without a reopen. One
+    /// request at a time: a snapshot landing while one is out asks nothing.
+    fn reload_pending_reader(&mut self) {
+        let Some(open) = &mut self.reader else {
             return;
         };
-        if *reader.body() != ReaderBody::Pending {
+        if open.body_request.is_some() || *open.modal.body() != ReaderBody::Pending {
             return;
         }
+        let article_id = open.modal.article_id();
         let landed = self
             .source_articles
             .iter()
-            .any(|item| item.article.id == reader.article_id() && item.body != BodyStatus::Pending);
+            .any(|item| item.article.id == article_id && item.body != BodyStatus::Pending);
         if landed {
-            self.article_service
-                .load_body_task(self.user_id, reader.article_id());
+            open.body_request = Some(self.article_service.load_body_task(
+                self.user_id,
+                article_id,
+                BodyLoad::Landed,
+            ));
         }
+    }
+
+    /// The open reader's body answer, once it lands: the reader shows the
+    /// text, or falls back to the summary with a banner.
+    fn drain_reader_body(&mut self) -> NewsTick {
+        let quiet = NewsTick {
+            banner: None,
+            changed: false,
+        };
+        let Some(open) = &mut self.reader else {
+            return quiet;
+        };
+        let Some(request) = &mut open.body_request else {
+            return quiet;
+        };
+        let reply = match request.try_recv() {
+            Ok(reply) => reply,
+            Err(oneshot::error::TryRecvError::Empty) => return quiet,
+            // The load task ended without answering (it panicked): the
+            // summary beats a loading line that never resolves.
+            Err(oneshot::error::TryRecvError::Closed) => BodyReply::Failed,
+        };
+        open.body_request = None;
+        let tick = match reply {
+            BodyReply::Loaded(body) => {
+                open.modal.apply_body(body);
+                NewsTick {
+                    banner: None,
+                    changed: true,
+                }
+            }
+            BodyReply::Failed => {
+                open.modal.fail_load();
+                NewsTick {
+                    banner: Some(Banner::error("Couldn't load the article text.")),
+                    changed: true,
+                }
+            }
+        };
+        // A "still pending" answer can cross the snapshot that said the body
+        // landed, and that snapshot will not come again: ask once more now.
+        self.reload_pending_reader();
+        tick
     }
 
     fn drain_events(&mut self) -> Option<Banner> {
@@ -578,32 +640,6 @@ impl State {
                             && let Reads::Loaded(read_ids) = &self.reads
                         {
                             self.marker = read_ids.clone();
-                        }
-                    }
-                    ArticleEvent::BodyLoaded {
-                        user_id,
-                        article_id,
-                        body,
-                    } if self.user_id == user_id => {
-                        if let Some(reader) = self
-                            .reader
-                            .as_mut()
-                            .filter(|reader| reader.article_id() == article_id)
-                        {
-                            reader.apply_body(body);
-                        }
-                    }
-                    ArticleEvent::BodyLoadFailed {
-                        user_id,
-                        article_id,
-                    } if self.user_id == user_id => {
-                        if let Some(reader) = self
-                            .reader
-                            .as_mut()
-                            .filter(|reader| reader.article_id() == article_id)
-                        {
-                            reader.fail_load();
-                            banner = Some(Banner::error("Couldn't load the article text."));
                         }
                     }
                     _ => (),

@@ -233,24 +233,27 @@ fn clamp_index_passes_through_when_within_bounds() {
     assert_eq!(clamp_index(1, 5), 1);
 }
 
-/// The reader's body load failing is the reader's problem, not the
-/// composer's: a share in flight stays in flight, and the reader falls back
-/// to the summary.
+/// A body answer reaches only the session that asked. With the same user
+/// on a second session (a phone beside the laptop), the phone opening the
+/// same story leaves the laptop's reader where it was: its text, and how
+/// far down it had scrolled.
 #[tokio::test]
-async fn a_body_load_failure_does_not_end_a_share_in_flight() {
+async fn a_body_answer_reaches_only_the_session_that_asked() {
     use crate::app::chat::news::reader::state::ReaderBody;
+    use crate::app::common::scroll_view::ScrollViewport;
     use late_core::models::article_body::{ArticleBody, ReaderLine, ReaderSpan};
+    use ratatui::layout::Rect;
 
     let test_db = new_test_db().await;
     let client = test_db.db.get().await.expect("db client");
-    let sharer = create_test_user(&test_db.db, "load-fail-sharer").await;
-    let reader = create_test_user(&test_db.db, "load-fail-reader").await;
+    let sharer = create_test_user(&test_db.db, "two-sessions-sharer").await;
+    let reader = create_test_user(&test_db.db, "two-sessions-reader").await;
     let story = Article::create_by_user_id(
         &client,
         sharer.id,
         ArticleParams {
             user_id: sharer.id,
-            url: "https://example.com/load-fail".to_string(),
+            url: "https://example.com/two-sessions".to_string(),
             title: "Title".to_string(),
             summary: "Summary".to_string(),
             ascii_art: "...".to_string(),
@@ -265,40 +268,58 @@ async fn a_body_load_failure_does_not_end_a_share_in_flight() {
         .await
         .expect("store ready");
     let service = ArticleService::new(test_db.db.clone(), AiService::new(false, None));
-    let mut state = State::new(service.clone(), reader.id, false);
+    let mut laptop = State::new(service.clone(), reader.id, false);
+    let mut phone = State::new(service.clone(), reader.id, false);
     wait_until(
         || {
-            state.tick();
-            std::future::ready(state.all_articles().len() == 1)
+            laptop.tick();
+            phone.tick();
+            std::future::ready(laptop.all_articles().len() == 1 && phone.all_articles().len() == 1)
         },
-        "the snapshot loads",
+        "both sessions load the snapshot",
     )
     .await;
+    let is_ready = |state: &State| {
+        matches!(
+            state.reader().map(|modal| modal.body()),
+            Some(ReaderBody::Ready { .. })
+        )
+    };
 
-    // No await from here on: the spawned tasks (the body load, the share)
-    // never run, so the only event the state sees is the one published.
-    assert!(state.open_reader(story.id));
-    state.start_composing();
-    for ch in "https://example.com/in-flight".chars() {
-        state.composer_push(ch);
-    }
-    state.submit_composer();
-    assert!(state.processing(), "the share is in flight");
-
-    service.publish_event(ArticleEvent::BodyLoadFailed {
-        user_id: reader.id,
-        article_id: story.id,
+    assert!(laptop.open_reader(story.id));
+    wait_until(
+        || {
+            laptop.tick();
+            std::future::ready(is_ready(&laptop))
+        },
+        "the laptop's reader gets its text",
+    )
+    .await;
+    let view = laptop.reader().expect("laptop reader").view();
+    view.set_viewport(ScrollViewport {
+        body: Rect::new(0, 0, 40, 10),
+        content_height: 50,
+        ..ScrollViewport::default()
     });
-    let tick = state.tick();
+    view.scroll(7);
 
-    assert!(
-        state.processing(),
-        "a body load failure must not end the share"
-    );
+    assert!(phone.open_reader(story.id));
+    wait_until(
+        || {
+            laptop.tick();
+            phone.tick();
+            std::future::ready(is_ready(&phone))
+        },
+        "the phone's reader gets its text",
+    )
+    .await;
+    laptop.tick();
+
+    let laptop_reader = laptop.reader().expect("laptop reader still open");
+    assert!(matches!(laptop_reader.body(), ReaderBody::Ready { .. }));
     assert_eq!(
-        state.reader().map(|modal| modal.body().clone()),
-        Some(ReaderBody::Unavailable),
-        "the reader falls back to the summary"
+        laptop_reader.view().offset(),
+        7,
+        "the phone's answer must not reach the laptop"
     );
-    assert!(tick.banner.is_some(), "the reader's failure is a banner");
 }

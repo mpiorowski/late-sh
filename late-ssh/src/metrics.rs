@@ -2537,6 +2537,7 @@ mod inner {
             BodyFetchOutcome::StoreFailed => "store_failed",
             BodyFetchOutcome::Failed(BodyFetchFailure::Fetch) => "fetch",
             BodyFetchOutcome::Failed(BodyFetchFailure::NotHtml) => "not_html",
+            BodyFetchOutcome::Failed(BodyFetchFailure::Encoding) => "encoding",
             BodyFetchOutcome::Failed(BodyFetchFailure::TooLarge) => "too_large",
             BodyFetchOutcome::Failed(BodyFetchFailure::Timeout) => "timeout",
             BodyFetchOutcome::Failed(BodyFetchFailure::Extract) => "extract",

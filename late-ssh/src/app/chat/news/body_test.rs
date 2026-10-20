@@ -1,10 +1,13 @@
-use std::net::IpAddr;
+use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 
 use late_core::models::article_body::{ReaderLine, ReaderSpan};
 use reqwest::Url;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use super::{
-    BODY_CONTINUES, BODY_MAX_LINES, BodyFetchFailure, is_public_ip, lines_from_html, readable_body,
+    BODY_CONTINUES, BODY_MAX_LINES, BODY_MAX_REDIRECTS, BodyFetchError, BodyFetchFailure,
+    cap_lines, client_with_resolver, fetch_page, lines_from_html, readable_body,
 };
 
 const ARTICLE: &str = r#"<!doctype html>
@@ -156,27 +159,204 @@ fn a_page_without_words_is_empty() {
     assert_eq!(error.failure, BodyFetchFailure::Empty);
 }
 
-/// The fetch never connects inside the network.
+/// A code block's lines count one by one against the line cap, so a `pre`
+/// of mostly blank lines (no text to weigh against the byte cap) is cut
+/// inside instead of carrying the body past both caps.
 #[test]
-fn only_public_addresses_are_fetchable() {
-    for private in [
-        "127.0.0.1",
-        "10.1.2.3",
-        "172.16.0.9",
-        "192.168.1.1",
-        "169.254.169.254",
-        "100.64.0.1",
-        "0.0.0.0",
-        "::1",
-        "fd00::1",
-        "fe80::1",
-        "::ffff:127.0.0.1",
-    ] {
-        let ip: IpAddr = private.parse().expect("ip");
-        assert!(!is_public_ip(ip), "{private} must not be fetchable");
+fn a_code_block_counts_line_by_line_and_is_cut_inside() {
+    let intro = ReaderLine::Paragraph {
+        spans: vec![text("Intro.")],
+    };
+    let code: Vec<String> = (0..BODY_MAX_LINES * 2)
+        .map(|n| {
+            if n % 2 == 0 {
+                "x".to_string()
+            } else {
+                String::new()
+            }
+        })
+        .collect();
+
+    let capped = cap_lines(vec![
+        intro.clone(),
+        ReaderLine::Code {
+            lines: code.clone(),
+        },
+        ReaderLine::Paragraph {
+            spans: vec![text("After the code.")],
+        },
+    ]);
+
+    assert_eq!(
+        capped,
+        vec![
+            intro,
+            ReaderLine::Code {
+                lines: code[..BODY_MAX_LINES - 1].to_vec(),
+            },
+            ReaderLine::Paragraph {
+                spans: vec![text(BODY_CONTINUES)],
+            },
+        ]
+    );
+}
+
+/// Resolves every name to this machine, so a test's pages are reachable by
+/// name while the client's own redirect policy still sees every hop.
+struct LoopbackResolver;
+
+impl reqwest::dns::Resolve for LoopbackResolver {
+    fn resolve(&self, _name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        Box::pin(async {
+            let loopback = SocketAddr::from(([127, 0, 0, 1], 0));
+            Ok(Box::new(std::iter::once(loopback)) as reqwest::dns::Addrs)
+        })
     }
-    for public in ["93.184.216.34", "2606:4700::6810:85e5"] {
-        let ip: IpAddr = public.parse().expect("ip");
-        assert!(is_public_ip(ip), "{public} is public");
+}
+
+/// A loopback server answering each request with `answer(path, port)`.
+/// Returns its port and every path it was asked for, in order.
+async fn serve(answer: fn(&str, u16) -> Vec<u8>) -> (u16, Arc<Mutex<Vec<String>>>) {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind page server");
+    let port = listener.local_addr().expect("page server addr").port();
+    let asked = Arc::new(Mutex::new(Vec::new()));
+    let log = Arc::clone(&asked);
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                match socket.read(&mut chunk).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => request.extend_from_slice(&chunk[..n]),
+                }
+            }
+            let path = String::from_utf8_lossy(&request)
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or_default()
+                .to_string();
+            log.lock().expect("request log").push(path.clone());
+            let _ = socket.write_all(&answer(&path, port)).await;
+        }
+    });
+    (port, asked)
+}
+
+fn redirect(location: &str) -> Vec<u8> {
+    format!(
+        "HTTP/1.1 302 Found\r\nlocation: {location}\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
+    )
+    .into_bytes()
+}
+
+fn page(content_type: &str, body: &[u8]) -> Vec<u8> {
+    let mut response = format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: {content_type}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+        body.len()
+    )
+    .into_bytes();
+    response.extend_from_slice(body);
+    response
+}
+
+async fn fetch_error(url: &str) -> BodyFetchError {
+    match fetch_page(&client_with_resolver(LoopbackResolver), url).await {
+        Ok(page) => panic!("expected the fetch to fail, it read {}", page.final_url),
+        Err(error) => error,
     }
+}
+
+const PAGE_HTML: &[u8] = b"<html><body><article><p>Read me.</p></article></body></html>";
+
+/// A redirect to a host name is followed, and the page is read where the
+/// chain ended.
+#[tokio::test]
+async fn a_redirect_to_a_host_name_is_followed() {
+    let (port, asked) = serve(|path, port| match path {
+        "/start" => redirect(&format!("http://elsewhere.test:{port}/page")),
+        _ => page("text/html", PAGE_HTML),
+    })
+    .await;
+
+    let fetched = match fetch_page(
+        &client_with_resolver(LoopbackResolver),
+        &format!("http://late.test:{port}/start"),
+    )
+    .await
+    {
+        Ok(fetched) => fetched,
+        Err(error) => panic!("the redirect is followed: {error:?}"),
+    };
+
+    assert_eq!(
+        fetched.final_url.as_str(),
+        format!("http://elsewhere.test:{port}/page")
+    );
+    assert_eq!(*asked.lock().expect("request log"), ["/start", "/page"]);
+}
+
+/// A redirect to a literal private address is refused before any
+/// connection. The resolver never sees a literal, so the client's redirect
+/// policy is the only guard there.
+#[tokio::test]
+async fn a_redirect_to_a_private_literal_is_refused_without_connecting() {
+    let (port, asked) = serve(|path, port| match path {
+        "/start" => redirect(&format!("http://127.0.0.1:{port}/inside")),
+        _ => page("text/html", PAGE_HTML),
+    })
+    .await;
+
+    let error = fetch_error(&format!("http://late.test:{port}/start")).await;
+
+    assert_eq!(error.failure, BodyFetchFailure::Fetch);
+    assert_eq!(
+        *asked.lock().expect("request log"),
+        ["/start"],
+        "the private address is never asked"
+    );
+}
+
+/// A chain of redirects is followed [`BODY_MAX_REDIRECTS`] times, and the
+/// one after that is refused.
+#[tokio::test]
+async fn a_redirect_chain_stops_after_the_limit() {
+    let (port, asked) = serve(|path, port| {
+        let hop: usize = path
+            .trim_start_matches("/hop/")
+            .parse()
+            .expect("a hop number");
+        redirect(&format!("http://late.test:{port}/hop/{}", hop + 1))
+    })
+    .await;
+
+    let error = fetch_error(&format!("http://late.test:{port}/hop/0")).await;
+
+    assert_eq!(error.failure, BodyFetchFailure::Fetch);
+    // The shared URL, then one request per redirect followed.
+    assert_eq!(
+        asked.lock().expect("request log").len(),
+        BODY_MAX_REDIRECTS + 1
+    );
+}
+
+/// A page that is not UTF-8 gets no body rather than garbled text.
+#[tokio::test]
+async fn a_page_that_is_not_utf8_is_refused() {
+    let (port, _) = serve(|_, _| {
+        page(
+            "text/html; charset=iso-8859-1",
+            b"<html><body><article><p>caf\xe9 cr\xe8me</p></article></body></html>",
+        )
+    })
+    .await;
+
+    let error = fetch_error(&format!("http://late.test:{port}/page")).await;
+
+    assert_eq!(error.failure, BodyFetchFailure::Encoding);
 }

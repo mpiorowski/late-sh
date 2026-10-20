@@ -4,10 +4,10 @@ use late_core::models::article_body::{
     ArticleBody, BodyContent, BodyStatus, ReaderLine, ReaderSpan,
 };
 use ratatui::layout::Rect;
-use std::sync::Arc;
 use uuid::Uuid;
 
-use super::{ReaderBody, ReaderModal, ReaderRow, ReaderViewport};
+use super::{ReaderBody, ReaderModal, ReaderRow};
+use crate::app::common::scroll_view::ScrollViewport;
 
 fn story(body: BodyStatus) -> ArticleFeedItem {
     let now = Utc::now();
@@ -38,15 +38,15 @@ fn link(text: &str, href: &str) -> ReaderSpan {
     }
 }
 
-fn ready(lines: Vec<ReaderLine>) -> Option<Arc<ArticleBody>> {
-    Some(Arc::new(ArticleBody {
+fn ready(lines: Vec<ReaderLine>) -> Option<ArticleBody> {
+    Some(ArticleBody {
         article_id: Uuid::from_u128(7),
         content: BodyContent::Ready {
             word_count: 12,
             lines,
         },
         fetched_at: Utc::now(),
-    }))
+    })
 }
 
 fn plain(rows: &[ReaderRow]) -> Vec<String> {
@@ -57,11 +57,16 @@ fn plain(rows: &[ReaderRow]) -> Vec<String> {
 
 /// A ready body opens loading, then lays out as the article: the header,
 /// each line kind in its form, links numbered in the order the text first
-/// reaches them (a repeat keeps its number), and the Links list after.
+/// reaches them (a repeat keeps its number), and the Links list after. The
+/// lines landing replace what was laid out while loading.
 #[test]
 fn a_ready_body_lays_out_with_links_numbered_in_first_appearance_order() {
     let mut reader = ReaderModal::open(&story(BodyStatus::Ready { reading_minutes: 1 }));
     assert_eq!(*reader.body(), ReaderBody::Loading { reading_minutes: 1 });
+    assert_eq!(
+        plain(&reader.lay_out(30)).last().map(String::as_str),
+        Some("Loading the article…")
+    );
 
     reader.apply_body(ready(vec![
         ReaderLine::Heading {
@@ -148,11 +153,11 @@ fn a_pending_or_unavailable_body_shows_the_summary_and_one_status_line() {
     );
 
     let mut reader = ReaderModal::open(&story(BodyStatus::Ready { reading_minutes: 1 }));
-    reader.apply_body(Some(Arc::new(ArticleBody {
+    reader.apply_body(Some(ArticleBody {
         article_id: Uuid::from_u128(7),
         content: BodyContent::Unavailable,
         fetched_at: Utc::now(),
-    })));
+    }));
     let rows = plain(&reader.lay_out(60));
     assert_eq!(
         rows.last().map(String::as_str),
@@ -161,32 +166,30 @@ fn a_pending_or_unavailable_body_shows_the_summary_and_one_status_line() {
     assert!(!reader.has_links());
 }
 
-/// Scrolling stops at either end of what the last draw measured.
+/// Scrolling stops at either end of what the last draw measured, and a
+/// page keeps one line of the last.
 #[test]
 fn scroll_clamps_to_the_drawn_extent() {
     let reader = ReaderModal::open(&story(BodyStatus::Pending));
-    reader.scroll(5);
-    assert_eq!(
-        reader.scroll_offset(),
-        0,
-        "nothing drawn, nothing to scroll"
-    );
+    let view = reader.view();
+    view.scroll(5);
+    assert_eq!(view.offset(), 0, "nothing drawn, nothing to scroll");
 
-    reader.set_viewport(ReaderViewport {
+    view.set_viewport(ScrollViewport {
         popup: Rect::new(0, 0, 40, 20),
         body: Rect::new(2, 1, 30, 10),
         close: Rect::default(),
         track: Rect::new(38, 1, 1, 10),
         content_height: 25,
     });
-    reader.scroll(-3);
-    assert_eq!(reader.scroll_offset(), 0);
+    view.scroll(-3);
+    assert_eq!(view.offset(), 0);
     reader.page(1);
-    assert_eq!(reader.scroll_offset(), 9, "a page keeps one line");
-    reader.scroll_to_bottom();
-    assert_eq!(reader.scroll_offset(), 15);
-    reader.scroll(4);
-    assert_eq!(reader.scroll_offset(), 15);
-    reader.scroll_to_top();
-    assert_eq!(reader.scroll_offset(), 0);
+    assert_eq!(view.offset(), 9, "a page keeps one line");
+    view.scroll_to_bottom();
+    assert_eq!(view.offset(), 15);
+    view.scroll(4);
+    assert_eq!(view.offset(), 15);
+    view.scroll_to_top();
+    assert_eq!(view.offset(), 0);
 }

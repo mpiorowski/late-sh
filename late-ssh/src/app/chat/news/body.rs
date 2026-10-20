@@ -3,12 +3,12 @@
 //! `svc.rs` owns the timing budget, the store, the log, and the metric.
 //!
 //! The fetch goes out to whatever URL a user shared and its text is shown
-//! to everyone, so it only ever connects to public addresses: the resolver
-//! drops private, loopback, and link-local answers, a literal IP host is
-//! checked before the request and on every redirect, and no proxy is used
-//! (a proxy would resolve the name past the resolver).
+//! to everyone, so it only ever connects to public addresses, under the
+//! house rule in `app/common/public_net.rs`: the resolver drops non-public
+//! answers, a literal IP host is checked before the request and on every
+//! redirect, and no proxy is used (a proxy would resolve the name past the
+//! resolver).
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
 use dom_query::{Document, NodeRef};
@@ -16,11 +16,14 @@ use late_core::models::article_body::{ReaderLine, ReaderSpan};
 use late_core::telemetry::TracedExt;
 use reqwest::Url;
 
+use crate::app::common::public_net::{PublicOnlyResolver, is_public_http_url};
+
 const BODY_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
 const BODY_MAX_BYTES: usize = 2_000_000;
-const BODY_MAX_REDIRECTS: usize = 5;
+pub(crate) const BODY_MAX_REDIRECTS: usize = 5;
 const BODY_USER_AGENT: &str = "late.sh (https://late.sh)";
-/// Past either cap the body is cut and closed with [`BODY_CONTINUES`].
+/// Past either cap the body is cut and closed with [`BODY_CONTINUES`]. A
+/// code block's lines count one by one, so no block runs the body past them.
 pub(crate) const BODY_MAX_LINES: usize = 2_000;
 pub(crate) const BODY_MAX_TEXT_BYTES: usize = 200_000;
 pub(crate) const BODY_CONTINUES: &str = "… continues on the web";
@@ -34,6 +37,9 @@ pub enum BodyFetchFailure {
     Fetch,
     /// The answer was not an HTML page.
     NotHtml,
+    /// The page is not UTF-8. Only UTF-8 is read: a page in another
+    /// encoding gets no body rather than garbled text.
+    Encoding,
     /// The page is bigger than [`BODY_MAX_BYTES`].
     TooLarge,
     /// The page did not arrive inside [`BODY_FETCH_TIMEOUT`], or the share's
@@ -76,15 +82,26 @@ pub struct ReadableBody {
 
 /// The client every body fetch goes through.
 pub fn http_client() -> reqwest::Client {
+    client_with_resolver(PublicOnlyResolver)
+}
+
+/// The body fetch's client over `resolver`: production resolves through
+/// [`PublicOnlyResolver`], and a test hands in one that reaches its own
+/// loopback server, under the same redirect policy.
+pub(crate) fn client_with_resolver(
+    resolver: impl reqwest::dns::Resolve + 'static,
+) -> reqwest::Client {
     reqwest::Client::builder()
         .user_agent(BODY_USER_AGENT)
         .timeout(BODY_FETCH_TIMEOUT)
         .no_proxy()
-        .dns_resolver(PublicOnlyResolver)
+        .dns_resolver(resolver)
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            if attempt.previous().len() >= BODY_MAX_REDIRECTS {
+            // `previous` starts with the shared URL itself, which is not a
+            // redirect.
+            if attempt.previous().len() > BODY_MAX_REDIRECTS {
                 attempt.error("too many redirects")
-            } else if !is_fetchable(attempt.url()) {
+            } else if !is_public_http_url(attempt.url()) {
                 attempt.error("redirect to a non-public address")
             } else {
                 attempt.follow()
@@ -103,7 +120,7 @@ pub async fn fetch_page(
         Ok(url) => url,
         Err(e) => return Err(BodyFetchError::new(BodyFetchFailure::Fetch, e)),
     };
-    if !is_fetchable(&url) {
+    if !is_public_http_url(&url) {
         return Err(BodyFetchError::new(
             BodyFetchFailure::Fetch,
             anyhow::anyhow!("not a public http(s) url"),
@@ -159,10 +176,10 @@ pub async fn fetch_page(
         }
     }
 
-    Ok(FetchedPage {
-        final_url,
-        html: String::from_utf8_lossy(&bytes).into_owned(),
-    })
+    match String::from_utf8(bytes) {
+        Ok(html) => Ok(FetchedPage { final_url, html }),
+        Err(e) => Err(BodyFetchError::new(BodyFetchFailure::Encoding, e)),
+    }
 }
 
 /// The page's readable part as reader lines, capped, with its word count.
@@ -232,21 +249,54 @@ pub fn word_count(lines: &[ReaderLine]) -> u32 {
 }
 
 /// Cut a body at [`BODY_MAX_LINES`] lines or [`BODY_MAX_TEXT_BYTES`] of
-/// text, whichever comes first, and close it with [`BODY_CONTINUES`].
+/// text, whichever comes first, and close it with [`BODY_CONTINUES`]. Each
+/// line of a code block counts on its own and a block is cut inside, so the
+/// reader's row count stays bounded whatever the page puts in a `pre`.
 fn cap_lines(lines: Vec<ReaderLine>) -> Vec<ReaderLine> {
-    let mut text_bytes = 0;
-    let mut kept = Vec::with_capacity(lines.len().min(BODY_MAX_LINES + 1));
+    let mut lines_left = BODY_MAX_LINES;
+    let mut bytes_left = BODY_MAX_TEXT_BYTES;
+    let mut kept = Vec::new();
     for line in lines {
-        text_bytes += line_text_bytes(&line);
-        if kept.len() == BODY_MAX_LINES || text_bytes > BODY_MAX_TEXT_BYTES {
-            kept.push(ReaderLine::Paragraph {
-                spans: vec![ReaderSpan::Text(BODY_CONTINUES.to_string())],
-            });
-            return kept;
+        match line {
+            ReaderLine::Code { lines: code } => {
+                let mut fitting = Vec::new();
+                let mut cut = false;
+                for code_line in code {
+                    if lines_left == 0 || code_line.len() > bytes_left {
+                        cut = true;
+                        break;
+                    }
+                    lines_left -= 1;
+                    bytes_left -= code_line.len();
+                    fitting.push(code_line);
+                }
+                if !fitting.is_empty() {
+                    kept.push(ReaderLine::Code { lines: fitting });
+                }
+                if cut {
+                    kept.push(continues_line());
+                    return kept;
+                }
+            }
+            line => {
+                let bytes = line_text_bytes(&line);
+                if lines_left == 0 || bytes > bytes_left {
+                    kept.push(continues_line());
+                    return kept;
+                }
+                lines_left -= 1;
+                bytes_left -= bytes;
+                kept.push(line);
+            }
         }
-        kept.push(line);
     }
     kept
+}
+
+fn continues_line() -> ReaderLine {
+    ReaderLine::Paragraph {
+        spans: vec![ReaderSpan::Text(BODY_CONTINUES.to_string())],
+    }
 }
 
 fn line_text_bytes(line: &ReaderLine) -> usize {
@@ -581,81 +631,6 @@ fn request_error(e: reqwest::Error) -> BodyFetchError {
         BodyFetchFailure::Fetch
     };
     BodyFetchError::new(failure, e)
-}
-
-/// An http(s) URL whose host, when it is a literal IP, is public. A name is
-/// checked by [`PublicOnlyResolver`] when it resolves.
-fn is_fetchable(url: &Url) -> bool {
-    if !matches!(url.scheme(), "http" | "https") {
-        return false;
-    }
-    let Some(host) = url.host_str() else {
-        return false;
-    };
-    // An IPv6 literal comes bracketed (`[::1]`).
-    match host
-        .trim_start_matches('[')
-        .trim_end_matches(']')
-        .parse::<IpAddr>()
-    {
-        Ok(ip) => is_public_ip(ip),
-        Err(_) => true,
-    }
-}
-
-pub(crate) fn is_public_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => is_public_ipv4(ip),
-        IpAddr::V6(ip) => match ip.to_ipv4_mapped() {
-            Some(mapped) => is_public_ipv4(mapped),
-            None => {
-                let first = ip.segments()[0];
-                !(ip.is_loopback()
-                    || ip.is_unspecified()
-                    || ip.is_multicast()
-                    // Unique local, fc00::/7.
-                    || (first & 0xfe00) == 0xfc00
-                    // Link local, fe80::/10.
-                    || (first & 0xffc0) == 0xfe80)
-            }
-        },
-    }
-}
-
-fn is_public_ipv4(ip: Ipv4Addr) -> bool {
-    let [a, b, ..] = ip.octets();
-    !(ip.is_private()
-        || ip.is_loopback()
-        || ip.is_link_local()
-        || ip.is_broadcast()
-        || ip.is_documentation()
-        || ip.is_unspecified()
-        || ip.is_multicast()
-        // "This network", 0.0.0.0/8, and reserved, 240.0.0.0/4.
-        || a == 0
-        || a >= 240
-        // Carrier-grade NAT, 100.64.0.0/10.
-        || (a == 100 && (b & 0xc0) == 64))
-}
-
-/// System DNS with every non-public answer dropped, so a shared name that
-/// points inside the network never gets a connection.
-struct PublicOnlyResolver;
-
-impl reqwest::dns::Resolve for PublicOnlyResolver {
-    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
-        let host = name.as_str().to_string();
-        Box::pin(async move {
-            let addrs: Vec<SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
-                .await?
-                .filter(|addr| is_public_ip(addr.ip()))
-                .collect();
-            if addrs.is_empty() {
-                return Err(format!("{host} has no public address").into());
-            }
-            Ok(Box::new(addrs.into_iter()) as reqwest::dns::Addrs)
-        })
-    }
 }
 
 #[cfg(test)]

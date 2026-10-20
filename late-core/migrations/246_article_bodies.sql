@@ -8,12 +8,19 @@
 -- fetch could not read; `lines` is empty). An hourly sweep settles a story
 -- past the share budget with no row as 'unavailable' (its fetch was cut
 -- short) and strips the text of ready rows older than 30 days.
+--
+-- The checks hold the contract every reader relies on: a status no build
+-- writes cannot land (one such row would fail the whole feed read on every
+-- replica), a ready body has words, and an unavailable one has neither
+-- words nor lines.
 CREATE TABLE article_bodies (
     article_id UUID PRIMARY KEY REFERENCES articles(id) ON DELETE CASCADE,
-    status TEXT NOT NULL,
-    word_count INTEGER NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('ready', 'unavailable')),
+    word_count INTEGER NOT NULL CHECK (word_count >= 0),
     lines JSONB NOT NULL,
-    fetched_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+    fetched_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
+    CHECK ((status = 'ready') = (word_count > 0)),
+    CHECK (status = 'ready' OR lines = '[]'::jsonb)
 );
 
 -- The cards read the body status off the snapshot (a LEFT JOIN), so a body

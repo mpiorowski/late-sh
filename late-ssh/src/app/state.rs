@@ -2970,7 +2970,10 @@ impl App {
         self.size = (cols, rows);
         self.leaderboard_page.clear_hit_regions();
         if let Some(modal) = &self.paper.modal {
-            modal.invalidate_viewport();
+            modal.view.invalidate();
+        }
+        if let Some(reader) = self.chat.reader() {
+            reader.view().invalidate();
         }
         self.sync_aquarium_bounds();
         // We can't use `Terminal::resize()` here: since ratatui 0.30.2 its

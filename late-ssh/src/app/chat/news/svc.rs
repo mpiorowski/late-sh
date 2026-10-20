@@ -19,7 +19,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
@@ -535,9 +535,17 @@ impl ArticleService {
         }
     }
 
-    /// Load the one body the reader opened, for this session only. A load
-    /// that fails is a banner; the reader keeps its summary.
-    pub fn load_body_task(&self, user_id: Uuid, article_id: Uuid) {
+    /// Load the one body a reader is showing. The answer goes back to the
+    /// asking session alone, on the returned channel: no other session, of
+    /// this user or anyone, ever sees it. A load that fails is logged here
+    /// and answered `Failed`, which the reader turns into a banner.
+    pub fn load_body_task(
+        &self,
+        user_id: Uuid,
+        article_id: Uuid,
+        load: BodyLoad,
+    ) -> oneshot::Receiver<BodyReply> {
+        let (tx, rx) = oneshot::channel();
         let service = self.clone();
         tokio::spawn(
             async move {
@@ -546,17 +554,16 @@ impl ArticleService {
                     ArticleBody::find(&client, article_id).await
                 }
                 .await;
-                match loaded {
+                let reply = match loaded {
                     Ok(body) => {
-                        metrics::record_news_reader_opened(match &body {
-                            Some(body) => body.status(),
-                            None => BodyStatus::Pending,
-                        });
-                        service.publish_event(ArticleEvent::BodyLoaded {
-                            user_id,
-                            article_id,
-                            body: body.map(std::sync::Arc::new),
-                        });
+                        match load {
+                            BodyLoad::Open => metrics::record_news_reader_opened(match &body {
+                                Some(body) => body.status(),
+                                None => BodyStatus::Pending,
+                            }),
+                            BodyLoad::Landed => {}
+                        }
+                        BodyReply::Loaded(body)
                     }
                     Err(e) => {
                         late_core::error_span!(
@@ -566,12 +573,12 @@ impl ArticleService {
                             article_id = %article_id,
                             "failed to load article body"
                         );
-                        service.publish_event(ArticleEvent::BodyLoadFailed {
-                            user_id,
-                            article_id,
-                        });
+                        BodyReply::Failed
                     }
-                }
+                };
+                // A reader closed or reopened since asking has dropped its
+                // receiver; the answer is then nobody's.
+                let _ = tx.send(reply);
             }
             .instrument(info_span!(
                 "article.load_body",
@@ -579,6 +586,7 @@ impl ArticleService {
                 article_id = %article_id
             )),
         );
+        rx
     }
 
     /// The body sweep, hourly on every replica: settle the stories whose
@@ -939,6 +947,24 @@ enum BodyRead {
     /// A video or an X post: no page to read, by design.
     Skipped,
     Failed(BodyFetchError),
+}
+
+/// Why a reader asks for its body. Only an open counts toward
+/// `late_ssh_news_reader_opens_total`; asking again once a pending body has
+/// landed is the same open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BodyLoad {
+    Open,
+    Landed,
+}
+
+/// The answer to one reader's body request.
+#[derive(Debug)]
+pub enum BodyReply {
+    /// The stored body; `None` is a story whose fetch has not landed.
+    Loaded(Option<ArticleBody>),
+    /// The row could not be read; the service has logged it.
+    Failed,
 }
 
 /// How one story's body step ended, for `late_ssh_news_body_fetches_total`.
