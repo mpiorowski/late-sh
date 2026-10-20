@@ -510,16 +510,14 @@ impl State {
 
     /// Whether a snapshot story is a video the watch modal can play.
     pub(crate) fn is_watchable(&self, article_id: Uuid) -> bool {
-        self.source_articles
-            .iter()
-            .any(|item| item.article.id == article_id && is_youtube_url(&item.article.url))
+        self.watchable_item(article_id).is_some()
     }
 
     /// Open the player on a snapshot video, a fresh `play_id` for it, and
     /// mark it read. A video the reader left partway through resumes
     /// there. False when it left the snapshot or is not a video.
     pub(crate) fn open_watch_player(&mut self, article_id: Uuid, now: Instant) -> bool {
-        let Some(item) = self.watchable_item(article_id) else {
+        let Some(item) = self.watchable_item(article_id).cloned() else {
             return false;
         };
         self.close_watch();
@@ -542,20 +540,17 @@ impl State {
         let Some(item) = self.watchable_item(article_id) else {
             return false;
         };
+        let setup = SetupBox::decide(&item.article.url, inputs);
         self.close_watch();
         self.reader = None;
-        self.watch = Some(WatchModal::Setup(SetupBox::decide(
-            &item.article.url,
-            inputs,
-        )));
+        self.watch = Some(WatchModal::Setup(setup));
         true
     }
 
-    fn watchable_item(&self, article_id: Uuid) -> Option<ArticleFeedItem> {
+    fn watchable_item(&self, article_id: Uuid) -> Option<&ArticleFeedItem> {
         self.source_articles
             .iter()
             .find(|item| item.article.id == article_id && is_youtube_url(&item.article.url))
-            .cloned()
     }
 
     pub(crate) fn watch(&self) -> Option<&WatchModal> {
@@ -574,10 +569,7 @@ impl State {
     /// now, so the card shows the progress at once, and the write goes out
     /// as a task whose load brings every session of the reader's in line.
     pub(crate) fn close_watch(&mut self) {
-        let Some(modal) = self.watch.take() else {
-            return;
-        };
-        let WatchModal::Player(player) = modal else {
+        let Some(WatchModal::Player(player)) = self.watch.take() else {
             return;
         };
         let article_id = player.article_id();

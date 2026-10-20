@@ -403,7 +403,6 @@ fn in_multiplexer(vars: &HashMap<String, String>) -> bool {
             .is_some_and(|term| term.starts_with("tmux") || term.starts_with("screen"))
 }
 
-/// Which Kitty-graphics terminal the env describes, if any.
 /// Shared-memory frames: the terminal table, unless `LATE_VIDEO_SHM` is
 /// exactly `yes` or `no`. The override exists to try the other path on a
 /// terminal that tears or one the table is wrong about.
@@ -415,6 +414,7 @@ pub(super) fn use_shared_memory(vars: &HashMap<String, String>) -> bool {
     }
 }
 
+/// Which Kitty-graphics terminal the env describes, if any.
 pub(super) fn kitty_terminal(vars: &HashMap<String, String>) -> Option<KittyTerminal> {
     if env_value(vars, "TERM") == Some("xterm-kitty")
         || env_value(vars, "KITTY_WINDOW_ID").is_some()
@@ -527,60 +527,54 @@ pub(super) fn mpv_args(launch: &MpvLaunch<'_>) -> Vec<OsString> {
         log_path,
         start_s,
     } = launch;
+    let (left, top) = rect.origin_cell();
     let (width, height) = tty.pixels_for(*rect);
     let shm = match use_shm {
-        true => "--vo-kitty-use-shm=yes",
-        false => "--vo-kitty-use-shm=no",
+        true => "yes",
+        false => "no",
     };
-    let mut log_file = OsString::from("--log-file=");
-    log_file.push(log_path);
-    let mut args: Vec<OsString> = ["--no-config", "--really-quiet", "--terminal=no"]
-        .into_iter()
-        .map(OsString::from)
-        .collect();
-    args.push(log_file);
-    args.extend(
-        [
-            "--vo=kitty",
-            shm,
-            "--vo-kitty-alt-screen=no",
-            "--vo-kitty-config-clear=no",
-        ]
-        .into_iter()
-        .map(OsString::from),
-    );
-    args.extend(
-        [
-            format!("--vo-kitty-left={}", u32::from(rect.left) + 1),
-            format!("--vo-kitty-top={}", u32::from(rect.top) + 1),
-            format!("--vo-kitty-cols={}", rect.cols),
-            format!("--vo-kitty-rows={}", rect.rows),
-            format!("--vo-kitty-width={width}"),
-            format!("--vo-kitty-height={height}"),
-            "--ytdl=yes".to_string(),
-            format!("--ytdl-format={YTDL_FORMAT}"),
-        ]
-        .map(OsString::from),
-    );
+    let mut args: Vec<OsString> = vec![
+        "--no-config".into(),
+        "--really-quiet".into(),
+        "--terminal=no".into(),
+        path_arg("--log-file=", log_path),
+        "--vo=kitty".into(),
+        format!("--vo-kitty-use-shm={shm}").into(),
+        "--vo-kitty-alt-screen=no".into(),
+        "--vo-kitty-config-clear=no".into(),
+        format!("--vo-kitty-left={left}").into(),
+        format!("--vo-kitty-top={top}").into(),
+        format!("--vo-kitty-cols={}", rect.cols).into(),
+        format!("--vo-kitty-rows={}", rect.rows).into(),
+        format!("--vo-kitty-width={width}").into(),
+        format!("--vo-kitty-height={height}").into(),
+        "--ytdl=yes".into(),
+        format!("--ytdl-format={YTDL_FORMAT}").into(),
+    ];
     if *start_s > 0 {
         args.push(format!("--start={start_s}").into());
     }
     if let Some(ytdlp) = ytdlp_override {
-        let mut arg = OsString::from("--script-opts=ytdl_hook-ytdl_path=");
-        arg.push(ytdlp);
-        args.push(arg);
+        args.push(path_arg("--script-opts=ytdl_hook-ytdl_path=", ytdlp));
     }
     // Full level, as any video player opens: the house volume is for the
     // radio, which is silenced while a video plays, and a video at 30
     // percent of itself is just quiet. `m` and the system mixer remain.
-    args.push("--volume=100".into());
-    args.push("--keep-open=no".into());
-    let mut ipc = OsString::from("--input-ipc-server=");
-    ipc.push(ipc_path);
-    args.push(ipc);
-    args.push("--".into());
-    args.push(url.into());
+    args.extend([
+        "--volume=100".into(),
+        "--keep-open=no".into(),
+        path_arg("--input-ipc-server=", ipc_path),
+        "--".into(),
+        (*url).into(),
+    ]);
     args
+}
+
+/// `--flag=<path>`, the path kept as the OS gave it.
+fn path_arg(flag: &str, path: &Path) -> OsString {
+    let mut arg = OsString::from(flag);
+    arg.push(path);
+    arg
 }
 
 /// The mpv IPC message for one control, before its `request_id`.
@@ -602,11 +596,12 @@ pub(super) fn ipc_command(control: VideoControl) -> Value {
 /// current value is a no-op, so the swap goes through `null`). The stream
 /// and its position carry on underneath.
 pub(super) fn place_commands(rect: VideoRect, tty: TtySize) -> Vec<Value> {
+    let (left, top) = rect.origin_cell();
     let (width, height) = tty.pixels_for(rect);
     let set = |name: &str, value: Value| json!({ "command": ["set_property", name, value] });
     vec![
-        set("vo-kitty-left", json!(u32::from(rect.left) + 1)),
-        set("vo-kitty-top", json!(u32::from(rect.top) + 1)),
+        set("vo-kitty-left", json!(left)),
+        set("vo-kitty-top", json!(top)),
         set("vo-kitty-cols", json!(rect.cols)),
         set("vo-kitty-rows", json!(rect.rows)),
         set("vo-kitty-width", json!(width)),
@@ -631,43 +626,23 @@ pub(super) enum PlaceOutcome {
 
 /// The `video_state` pair event for one update.
 pub(super) fn video_state_payload(play_id: u64, state: &VideoState) -> Value {
-    match state {
-        VideoState::Starting => {
-            json!({ "event": "video_state", "play_id": play_id, "state": "starting" })
-        }
+    let mut payload = match state {
+        VideoState::Starting => json!({ "state": "starting" }),
         VideoState::Playing {
             position_s,
             duration_s,
-        } => json!({
-            "event": "video_state",
-            "play_id": play_id,
-            "state": "playing",
-            "position_s": position_s,
-            "duration_s": duration_s,
-        }),
+        } => json!({ "state": "playing", "position_s": position_s, "duration_s": duration_s }),
         VideoState::Paused {
             position_s,
             duration_s,
-        } => json!({
-            "event": "video_state",
-            "play_id": play_id,
-            "state": "paused",
-            "position_s": position_s,
-            "duration_s": duration_s,
-        }),
-        VideoState::Ended => {
-            json!({ "event": "video_state", "play_id": play_id, "state": "ended" })
-        }
-        VideoState::Failed(failure) => json!({
-            "event": "video_state",
-            "play_id": play_id,
-            "state": "failed",
-            "message": failure.message(),
-        }),
-        VideoState::Stopped => {
-            json!({ "event": "video_state", "play_id": play_id, "state": "stopped" })
-        }
-    }
+        } => json!({ "state": "paused", "position_s": position_s, "duration_s": duration_s }),
+        VideoState::Ended => json!({ "state": "ended" }),
+        VideoState::Failed(failure) => json!({ "state": "failed", "message": failure.message() }),
+        VideoState::Stopped => json!({ "state": "stopped" }),
+    };
+    payload["event"] = json!("video_state");
+    payload["play_id"] = json!(play_id);
+    payload
 }
 
 /// The state mpv's properties describe. No position yet means it is still
@@ -865,9 +840,7 @@ enum IpcReply {
 
 #[derive(Deserialize)]
 struct IpcMessage {
-    #[serde(default)]
     request_id: Option<u64>,
-    #[serde(default)]
     error: Option<String>,
     #[serde(default)]
     data: Value,
@@ -959,6 +932,9 @@ enum IpcLink {
 struct Playback {
     play_id: u64,
     rect: VideoRect,
+    /// The tty read at spawn: it sized the first rectangle's pixels and
+    /// sizes every move's.
+    tty: TtySize,
     child: Child,
     /// Ends when mpv's stdout closes; joined after the kill so the settle
     /// delete follows the last frame. `None` once joined.
@@ -967,6 +943,28 @@ struct Playback {
     /// A `video_place` that arrived before the socket was up: the
     /// rectangle whose frame to settle once the move goes through.
     pending_place: Option<VideoRect>,
+}
+
+impl Playback {
+    /// Settle the frame at `old`, then send the move to `self.rect` over
+    /// the socket. Only called once the socket is up.
+    async fn move_output(&mut self, old: VideoRect) -> Result<(), VideoFailure> {
+        if let Err(error) = settle_terminal(old) {
+            return Err(VideoFailure::Inspect(format!(
+                "settling the old frame: {error}"
+            )));
+        }
+        let IpcLink::Connected(ipc) = &mut self.ipc else {
+            unreachable!("a move is only sent over a connected ipc link");
+        };
+        for command in place_commands(self.rect, self.tty) {
+            match ipc.request(command).await {
+                Ok(IpcReply::Success(_) | IpcReply::Error) => {}
+                Err(error) => return Err(VideoFailure::Ipc(error.to_string())),
+            }
+        }
+        Ok(())
+    }
 }
 
 /// At most one mpv per CLI. Owned by the pair loop for the whole session,
@@ -1019,7 +1017,6 @@ impl VideoPlayer {
     /// output swap go over the socket. Before the socket is up the move
     /// waits for `poll`.
     pub(super) async fn place(&mut self, play_id: u64, rect: VideoRect) -> PlaceOutcome {
-        let tty = self.tools.startup_tty;
         let Some(playback) = self.current_for(play_id) else {
             return PlaceOutcome::Unchanged;
         };
@@ -1033,43 +1030,11 @@ impl VideoPlayer {
                 playback.pending_place = Some(playback.pending_place.unwrap_or(old));
                 PlaceOutcome::Deferred
             }
-            IpcLink::Connected(_) => match self.move_output(play_id, old, rect, tty).await {
+            IpcLink::Connected(_) => match playback.move_output(old).await {
                 Ok(()) => PlaceOutcome::Moved,
                 Err(failure) => PlaceOutcome::Failed(self.fail(failure)),
             },
         }
-    }
-
-    /// Settle the frame at `old` and send the move to `rect`. The tty read
-    /// at spawn sizes the pixels, as it did the first rectangle.
-    async fn move_output(
-        &mut self,
-        play_id: u64,
-        old: VideoRect,
-        rect: VideoRect,
-        tty: Option<TtySize>,
-    ) -> Result<(), VideoFailure> {
-        let Some(tty) = tty.or_else(TtySize::read) else {
-            return Err(VideoFailure::NoPixelSize);
-        };
-        if let Err(error) = settle_terminal(old) {
-            return Err(VideoFailure::Inspect(format!(
-                "settling the old frame: {error}"
-            )));
-        }
-        let Some(playback) = self.current_for(play_id) else {
-            return Ok(());
-        };
-        let IpcLink::Connected(ipc) = &mut playback.ipc else {
-            return Ok(());
-        };
-        for command in place_commands(rect, tty) {
-            match ipc.request(command).await {
-                Ok(IpcReply::Success(_) | IpcReply::Error) => {}
-                Err(error) => return Err(VideoFailure::Ipc(error.to_string())),
-            }
-        }
-        Ok(())
     }
 
     /// Relay a key. A control for another play, or before mpv's socket is
@@ -1141,19 +1106,12 @@ impl VideoPlayer {
                 Err(_) => return Some(self.fail(VideoFailure::IpcTimeout)),
             }
         }
-        let play_id = playback.play_id;
-        if let Some(old) = playback.pending_place.take() {
-            let rect = playback.rect;
-            if let Err(failure) = self
-                .move_output(play_id, old, rect, self.tools.startup_tty)
-                .await
-            {
-                return Some(self.fail(failure));
-            }
+        if let Some(old) = playback.pending_place.take()
+            && let Err(failure) = playback.move_output(old).await
+        {
+            return Some(self.fail(failure));
         }
-        let Some(playback) = self.current_for(play_id) else {
-            return None;
-        };
+        let play_id = playback.play_id;
         let IpcLink::Connected(ipc) = &mut playback.ipc else {
             unreachable!("the ipc link was connected just above");
         };
@@ -1258,6 +1216,7 @@ impl VideoPlayer {
         Ok(Playback {
             play_id,
             rect,
+            tty,
             child,
             relay: Some(spawn_relay(from_mpv)),
             ipc: IpcLink::Waiting {

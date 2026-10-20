@@ -1328,8 +1328,6 @@ async fn persist_device_audio(
     }
 }
 
-/// Drop a paired-client registration and refresh the remaining clients'
-/// playback-source view.
 /// The blockers this server knows. An unknown one comes from a CLI newer
 /// than the server and is dropped with a warn: the two binaries release on
 /// their own schedules, and the rest of the report must still land.
@@ -1346,6 +1344,8 @@ fn parse_video_blockers(wire: &[String], token_hint: &str) -> Vec<VideoBlocker> 
     blockers
 }
 
+/// Drop a paired-client registration and refresh the remaining clients'
+/// playback-source view.
 fn release_pair_registration(state: &State, token: &str, registration_id: u64) {
     state
         .paired_client_registry

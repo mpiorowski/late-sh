@@ -1,7 +1,7 @@
 //! Keys while the watch modal is up. The player relays pause, seek (10 s,
 //! a minute with Shift), restart and mute to the paired CLI and toggles
-//! its size; the setup box only copies and closes. Everything else, mouse included, is swallowed, so nothing
-//! reaches the page under the video.
+//! its size; the setup box only copies and closes. Everything else, mouse
+//! included, is swallowed, so nothing reaches the page under the video.
 
 use ratatui::layout::Position;
 

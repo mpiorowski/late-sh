@@ -208,10 +208,7 @@ fn reports_drive_the_status_and_report_each_outcome_once() {
                 duration_s: Some(724),
             },
             Some(WatchOutcome::Played),
-            WatchStatus::Playing {
-                position_s: 83,
-                duration_s: Some(724),
-            },
+            WatchStatus::Playing(at(83, Some(724))),
             "▶ 1:23 / 12:04",
         ),
         (
@@ -220,10 +217,7 @@ fn reports_drive_the_status_and_report_each_outcome_once() {
                 duration_s: Some(724),
             },
             None,
-            WatchStatus::Paused {
-                position_s: 84,
-                duration_s: Some(724),
-            },
+            WatchStatus::Paused(at(84, Some(724))),
             "⏸ 1:24 / 12:04",
         ),
         (
@@ -232,10 +226,7 @@ fn reports_drive_the_status_and_report_each_outcome_once() {
                 duration_s: None,
             },
             None,
-            WatchStatus::Playing {
-                position_s: 3725,
-                duration_s: None,
-            },
+            WatchStatus::Playing(at(3725, None)),
             "▶ 1:02:05",
         ),
         (

@@ -13,7 +13,7 @@ use ratatui::{
 };
 use unicode_width::UnicodeWidthStr;
 
-use super::state::{Mark, Player, SetupBox, WatchModal, WatchSize, centered_rect};
+use super::state::{Mark, Player, SetupBox, WatchModal, WatchSize, centered_rect, close_rect};
 use crate::app::chat::news::reader::state::domain_label;
 use crate::app::common::primitives::format_relative_time;
 use crate::app::common::theme;
@@ -162,11 +162,7 @@ fn draw_setup(frame: &mut Frame, area: Rect, setup: &SetupBox) {
     let popup = centered_rect(width, height, area);
     frame.render_widget(Clear, popup);
     frame.render_widget(frame_block(" Watch in the terminal "), popup);
-    let close = if popup.width >= 5 && popup.height > 0 {
-        Rect::new(popup.right() - 4, popup.y, 3, 1)
-    } else {
-        Rect::default()
-    };
+    let close = close_rect(popup);
     setup.set_close(close);
     draw_close(frame, close);
     let inner = Block::default().borders(Borders::ALL).inner(popup);

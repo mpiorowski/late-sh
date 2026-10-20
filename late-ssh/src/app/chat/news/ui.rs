@@ -197,10 +197,7 @@ impl ReadingLabel {
             Self::Minutes(minutes) => format!("{minutes} min read"),
             Self::Link => "link".to_string(),
             Self::Watch => "watch".to_string(),
-            Self::Resume(position) => format!(
-                "▶ {}",
-                position_label(position.position_s, position.duration_s)
-            ),
+            Self::Resume(position) => format!("▶ {}", position_label(position)),
         }
     }
 }

@@ -64,14 +64,8 @@ pub(crate) enum WatchSize {
 pub(crate) enum WatchStatus {
     /// Asked for, nothing played yet.
     Starting,
-    Playing {
-        position_s: u64,
-        duration_s: Option<u64>,
-    },
-    Paused {
-        position_s: u64,
-        duration_s: Option<u64>,
-    },
+    Playing(WatchPosition),
+    Paused(WatchPosition),
     Ended,
     Failed,
     /// No word from the CLI for [`WATCH_LOST_AFTER`] while playing or
@@ -84,7 +78,7 @@ impl WatchStatus {
     /// Whether mpv is (as far as the server knows) up on the CLI.
     fn is_live(self) -> bool {
         match self {
-            Self::Starting | Self::Playing { .. } | Self::Paused { .. } => true,
+            Self::Starting | Self::Playing(_) | Self::Paused(_) => true,
             Self::Ended | Self::Failed | Self::Lost => false,
         }
     }
@@ -269,11 +263,7 @@ impl Player {
                 let width = permille(area.width, WINDOW_WIDTH_PERMILLE).min(WINDOW_MAX_WIDTH);
                 let height = permille(area.height, WINDOW_HEIGHT_PERMILLE);
                 let popup = centered_rect(width, height, area);
-                let close = if popup.width >= 5 && popup.height > 0 {
-                    Rect::new(popup.right() - 4, popup.y, 3, 1)
-                } else {
-                    Rect::default()
-                };
+                let close = close_rect(popup);
                 // Inside the border: header, body, footer.
                 if popup.width < 3 || popup.height < WINDOW_HEADER_ROWS + 4 {
                     return WatchLayout {
@@ -346,7 +336,7 @@ impl Player {
     pub(crate) fn apply(&mut self, report: &VideoReport, now: Instant) -> Option<WatchOutcome> {
         match self.status {
             WatchStatus::Ended | WatchStatus::Failed | WatchStatus::Lost => return None,
-            WatchStatus::Starting | WatchStatus::Playing { .. } | WatchStatus::Paused { .. } => {}
+            WatchStatus::Starting | WatchStatus::Playing(_) | WatchStatus::Paused(_) => {}
         }
         self.last_state_at = now;
         match report {
@@ -358,14 +348,12 @@ impl Player {
                 position_s,
                 duration_s,
             } => {
-                self.status = WatchStatus::Playing {
+                let position = WatchPosition {
                     position_s: *position_s,
                     duration_s: *duration_s,
                 };
-                self.last_seen = Some(WatchPosition {
-                    position_s: *position_s,
-                    duration_s: *duration_s,
-                });
+                self.status = WatchStatus::Playing(position);
+                self.last_seen = Some(position);
                 match self.played {
                     true => None,
                     false => {
@@ -380,14 +368,12 @@ impl Player {
                 position_s,
                 duration_s,
             } => {
-                self.status = WatchStatus::Paused {
+                let position = WatchPosition {
                     position_s: *position_s,
                     duration_s: *duration_s,
                 };
-                self.last_seen = Some(WatchPosition {
-                    position_s: *position_s,
-                    duration_s: *duration_s,
-                });
+                self.status = WatchStatus::Paused(position);
+                self.last_seen = Some(position);
                 None
             }
             VideoReport::Ended => {
@@ -409,7 +395,7 @@ impl Player {
     /// takes; `Esc` is the way out of a start that never comes.
     pub(crate) fn expire(&mut self, now: Instant) -> Option<WatchOutcome> {
         let quiet = match self.status {
-            WatchStatus::Playing { .. } | WatchStatus::Paused { .. } => true,
+            WatchStatus::Playing(_) | WatchStatus::Paused(_) => true,
             WatchStatus::Starting
             | WatchStatus::Ended
             | WatchStatus::Failed
@@ -487,17 +473,11 @@ impl Player {
                 Some(position) => format!("resuming from {}…", clock(position.position_s)),
                 None => "starting…".to_string(),
             },
-            WatchStatus::Playing {
-                position_s,
-                duration_s,
-            } => match resumed {
-                true => format!("▶ {} · resumed", position_label(position_s, duration_s)),
-                false => format!("▶ {}", position_label(position_s, duration_s)),
+            WatchStatus::Playing(position) => match resumed {
+                true => format!("▶ {} · resumed", position_label(position)),
+                false => format!("▶ {}", position_label(position)),
             },
-            WatchStatus::Paused {
-                position_s,
-                duration_s,
-            } => format!("⏸ {}", position_label(position_s, duration_s)),
+            WatchStatus::Paused(position) => format!("⏸ {}", position_label(position)),
             WatchStatus::Ended => "ended".to_string(),
             WatchStatus::Failed => "couldn't play".to_string(),
             WatchStatus::Lost => "lost the CLI".to_string(),
@@ -511,8 +491,8 @@ impl Player {
                 Some(format!("Watch on the web: {}", self.url))
             }
             WatchStatus::Starting
-            | WatchStatus::Playing { .. }
-            | WatchStatus::Paused { .. }
+            | WatchStatus::Playing(_)
+            | WatchStatus::Paused(_)
             | WatchStatus::Ended => None,
         }
     }
@@ -607,10 +587,10 @@ fn play_message(wanted: WantedPlay<'_>) -> PairControlMessage {
 }
 
 /// `1:23 / 12:04`, or just the position for a live stream.
-pub(crate) fn position_label(position_s: u64, duration_s: Option<u64>) -> String {
-    match duration_s {
-        Some(duration_s) => format!("{} / {}", clock(position_s), clock(duration_s)),
-        None => clock(position_s),
+pub(crate) fn position_label(position: WatchPosition) -> String {
+    match position.duration_s {
+        Some(duration_s) => format!("{} / {}", clock(position.position_s), clock(duration_s)),
+        None => clock(position.position_s),
     }
 }
 
@@ -858,6 +838,14 @@ fn holds(holds: bool) -> Mark {
     match holds {
         true => Mark::Holds,
         false => Mark::Fails,
+    }
+}
+
+/// The `[x]` on a popup's top border, or nothing on one too small for it.
+pub(crate) fn close_rect(popup: Rect) -> Rect {
+    match popup.width >= 5 && popup.height > 0 {
+        true => Rect::new(popup.right() - 4, popup.y, 3, 1),
+        false => Rect::default(),
     }
 }
 

@@ -76,10 +76,10 @@ pub(super) fn spawn_decoder_thread(
 
         while !stop.load(Ordering::Relaxed) {
             // A silenced CLI (muted, a source it cannot play natively, or a
-            // video playing) holds no connection: an open stream downloads at full bitrate
-            // whether or not anyone hears it. Startup is exempt until the
-            // runtime has been told the decoder is ready and the boot grace
-            // has run out.
+            // video playing) holds no connection: an open stream downloads
+            // at full bitrate whether or not anyone hears it. Startup is
+            // exempt until the runtime has been told the decoder is ready
+            // and the boot grace has run out.
             let silenced = ready_tx.is_none()
                 && Instant::now() >= park_allowed_at
                 && (muted.load(Ordering::Relaxed)

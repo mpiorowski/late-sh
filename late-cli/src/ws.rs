@@ -1287,13 +1287,14 @@ async fn report_video(
     >,
     update: VideoUpdate,
 ) -> Result<()> {
-    log_video_update(&update);
+    log_and_settle_video_update(&update);
     let payload = video::video_state_payload(update.play_id, &update.state);
     ws.send(Message::Text(payload.to_string().into())).await?;
     Ok(())
 }
 
-fn log_video_update(update: &VideoUpdate) {
+/// Log the update's outcome, then clear the frame a gone mpv left behind.
+fn log_and_settle_video_update(update: &VideoUpdate) {
     let play_id = update.play_id;
     match &update.state {
         VideoState::Starting => info!(play_id, "video starting"),
@@ -1347,7 +1348,7 @@ pub(super) fn end_video_without_socket(
             play_id = update.play_id,
             "pair socket closed; stopping video"
         );
-        log_video_update(&update);
+        log_and_settle_video_update(&update);
     }
     silence_for_video(false, playback, webview);
 }
