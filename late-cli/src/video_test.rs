@@ -71,6 +71,54 @@ fn shared_memory_frames_go_only_to_terminals_that_read_them() {
     for (terminal, shm) in cases {
         assert_eq!(terminal.supports_shm(), shm, "{terminal:?}");
     }
+    // `LATE_VIDEO_SHM` overrides the table either way, for trying the
+    // other path on a terminal that tears or one the table is wrong about.
+    let mut ghostty = HashMap::from([("TERM_PROGRAM".to_string(), "ghostty".to_string())]);
+    assert!(use_shared_memory(&ghostty));
+    ghostty.insert("LATE_VIDEO_SHM".to_string(), "no".to_string());
+    assert!(!use_shared_memory(&ghostty));
+    let mut wezterm = HashMap::from([("TERM_PROGRAM".to_string(), "WezTerm".to_string())]);
+    assert!(!use_shared_memory(&wezterm));
+    wezterm.insert("LATE_VIDEO_SHM".to_string(), "yes".to_string());
+    assert!(use_shared_memory(&wezterm));
+    wezterm.insert("LATE_VIDEO_SHM".to_string(), "maybe".to_string());
+    assert!(
+        !use_shared_memory(&wezterm),
+        "anything but yes or no is the table"
+    );
+}
+
+/// `f` and a resize move mpv's output in place: the six geometry options
+/// are set over the socket, then the output is torn down and rebuilt so
+/// mpv reads them, while the stream and its position carry on. Verified
+/// against mpv 0.41: setting the options alone changes nothing, and
+/// setting `vo` to its current value is a no-op, so the swap goes
+/// through `null`.
+#[test]
+fn a_place_moves_the_output_in_place_through_the_socket() {
+    let full = VideoRect {
+        left: 0,
+        top: 0,
+        cols: 160,
+        rows: 39,
+    };
+    let commands: Vec<String> = place_commands(full, tty())
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(
+        commands,
+        [
+            r#"{"command":["set_property","vo-kitty-left",1]}"#,
+            r#"{"command":["set_property","vo-kitty-top",1]}"#,
+            r#"{"command":["set_property","vo-kitty-cols",160]}"#,
+            r#"{"command":["set_property","vo-kitty-rows",39]}"#,
+            r#"{"command":["set_property","vo-kitty-width",1600]}"#,
+            r#"{"command":["set_property","vo-kitty-height",780]}"#,
+            r#"{"command":["set_property","vo","null"]}"#,
+            r#"{"command":["set_property","vo","kitty"]}"#,
+        ]
+    );
 }
 
 #[test]
@@ -262,7 +310,6 @@ fn mpv_args_for_a_window() {
         tty: tty(),
         use_shm: true,
         volume_percent: 30,
-        resume: None,
         ipc_path: Path::new("/run/user/1000/late-video-42.sock"),
         ytdlp_override: None,
         log_path: Path::new("/home/me/.local/state/late/video.log"),
@@ -295,11 +342,10 @@ fn mpv_args_for_a_window() {
     );
 }
 
-/// Full screen after `f`: a respawn that keeps position, pause and mute,
-/// with a `LATE_YTDLP_BIN` override, on a terminal without shared memory.
-/// Cells that are not whole pixels round down.
+/// Full screen, with a `LATE_YTDLP_BIN` override, on a terminal without
+/// shared memory. Cells that are not whole pixels round down.
 #[test]
-fn mpv_args_for_full_screen_resume() {
+fn mpv_args_for_full_screen_without_shared_memory() {
     let args = mpv_args(&MpvLaunch {
         url: "https://youtu.be/abc",
         rect: VideoRect {
@@ -311,11 +357,6 @@ fn mpv_args_for_full_screen_resume() {
         tty: TtySize::new(213, 57, 1917, 1140).unwrap(),
         use_shm: false,
         volume_percent: 70,
-        resume: Some(Resume {
-            position_s: 83.46,
-            paused: true,
-            muted: true,
-        }),
         ipc_path: Path::new("/tmp/late-video-7.sock"),
         ytdlp_override: Some(Path::new("/home/me/.local/bin/yt-dlp")),
         log_path: Path::new("/tmp/video.log"),
@@ -342,9 +383,6 @@ fn mpv_args_for_full_screen_resume() {
             "--script-opts=ytdl_hook-ytdl_path=/home/me/.local/bin/yt-dlp",
             "--volume=70",
             "--keep-open=no",
-            "--start=83.5",
-            "--pause",
-            "--mute=yes",
             "--input-ipc-server=/tmp/late-video-7.sock",
             "--",
             "https://youtu.be/abc",
@@ -526,7 +564,7 @@ async fn messages_for_another_play_are_dropped() {
         cols: 80,
         rows: 24,
     };
-    assert_eq!(player.place(7, rect).await, None);
+    assert_eq!(player.place(7, rect).await, PlaceOutcome::Unchanged);
     assert_eq!(player.control(7, VideoControl::TogglePause).await, None);
     assert_eq!(player.stop(7).await, None);
     assert_eq!(player.poll().await, None);

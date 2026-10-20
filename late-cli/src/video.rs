@@ -340,7 +340,7 @@ pub(super) fn probe(ssh_mode: SshMode, platform: &str) -> VideoProbe {
         tools: VideoTools {
             mpv,
             ytdlp_override,
-            use_shm: kitty_terminal(&vars).is_some_and(KittyTerminal::supports_shm),
+            use_shm: use_shared_memory(&vars),
             startup_tty: tty,
             ipc_path: ipc_socket_path(),
             log_path: state_log_path("LATE_VIDEO_LOG", "video.log"),
@@ -402,6 +402,17 @@ fn in_multiplexer(vars: &HashMap<String, String>) -> bool {
 }
 
 /// Which Kitty-graphics terminal the env describes, if any.
+/// Shared-memory frames: the terminal table, unless `LATE_VIDEO_SHM` is
+/// exactly `yes` or `no`. The override exists to try the other path on a
+/// terminal that tears or one the table is wrong about.
+pub(super) fn use_shared_memory(vars: &HashMap<String, String>) -> bool {
+    match env_value(vars, "LATE_VIDEO_SHM") {
+        Some("yes") => true,
+        Some("no") => false,
+        Some(_) | None => kitty_terminal(vars).is_some_and(KittyTerminal::supports_shm),
+    }
+}
+
 pub(super) fn kitty_terminal(vars: &HashMap<String, String>) -> Option<KittyTerminal> {
     if env_value(vars, "TERM") == Some("xterm-kitty")
         || env_value(vars, "KITTY_WINDOW_ID").is_some()
@@ -479,19 +490,12 @@ fn ipc_socket_path() -> PathBuf {
 
 /// Where a respawned mpv picks up after a geometry change.
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(super) struct Resume {
-    pub(super) position_s: f64,
-    pub(super) paused: bool,
-    pub(super) muted: bool,
-}
-
 pub(super) struct MpvLaunch<'a> {
     pub(super) url: &'a str,
     pub(super) rect: VideoRect,
     pub(super) tty: TtySize,
     pub(super) use_shm: bool,
     pub(super) volume_percent: u8,
-    pub(super) resume: Option<Resume>,
     pub(super) ipc_path: &'a Path,
     pub(super) ytdlp_override: Option<&'a Path>,
     /// mpv's own log: with `--terminal=no` nothing reaches stderr, so this
@@ -516,7 +520,6 @@ pub(super) fn mpv_args(launch: &MpvLaunch<'_>) -> Vec<OsString> {
         tty,
         use_shm,
         volume_percent,
-        resume,
         ipc_path,
         ytdlp_override,
         log_path,
@@ -563,18 +566,6 @@ pub(super) fn mpv_args(launch: &MpvLaunch<'_>) -> Vec<OsString> {
     }
     args.push(format!("--volume={volume_percent}").into());
     args.push("--keep-open=no".into());
-    match resume {
-        Some(resume) => {
-            args.push(format!("--start={:.1}", resume.position_s).into());
-            if resume.paused {
-                args.push("--pause".into());
-            }
-            if resume.muted {
-                args.push("--mute=yes".into());
-            }
-        }
-        None => {}
-    }
     let mut ipc = OsString::from("--input-ipc-server=");
     ipc.push(ipc_path);
     args.push(ipc);
@@ -593,6 +584,39 @@ pub(super) fn ipc_command(control: VideoControl) -> Value {
         VideoControl::SeekForwardFar => json!({ "command": ["seek", SEEK_FAR_STEP_S] }),
         VideoControl::ToggleMute => json!({ "command": ["cycle", "mute"] }),
     }
+}
+
+/// The socket commands that move mpv's output to `rect`: the six geometry
+/// options, then the output torn down and rebuilt so mpv reads them (it
+/// reads them only when it configures the output, and setting `vo` to its
+/// current value is a no-op, so the swap goes through `null`). The stream
+/// and its position carry on underneath.
+pub(super) fn place_commands(rect: VideoRect, tty: TtySize) -> Vec<Value> {
+    let (width, height) = tty.pixels_for(rect);
+    let set = |name: &str, value: Value| json!({ "command": ["set_property", name, value] });
+    vec![
+        set("vo-kitty-left", json!(u32::from(rect.left) + 1)),
+        set("vo-kitty-top", json!(u32::from(rect.top) + 1)),
+        set("vo-kitty-cols", json!(rect.cols)),
+        set("vo-kitty-rows", json!(rect.rows)),
+        set("vo-kitty-width", json!(width)),
+        set("vo-kitty-height", json!(height)),
+        set("vo", json!("null")),
+        set("vo", json!("kitty")),
+    ]
+}
+
+/// What a `video_place` did.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum PlaceOutcome {
+    /// mpv's output is in the new rectangle; the old frame is settled.
+    Moved,
+    /// mpv's socket is not up yet: applied once it is, from `poll`.
+    Deferred,
+    /// No such play, or the rectangle it already has.
+    Unchanged,
+    /// The socket broke: mpv is gone and this says so.
+    Failed(VideoUpdate),
 }
 
 /// The `video_state` pair event for one update.
@@ -915,25 +939,6 @@ impl MpvIpc {
             duration.as_ref().and_then(Value::as_f64),
         ))
     }
-
-    /// Where to pick up after a respawn; `None` when mpv has no position yet.
-    async fn resume(&mut self) -> io::Result<Option<Resume>> {
-        let Some(position_s) = self
-            .property("time-pos")
-            .await?
-            .as_ref()
-            .and_then(Value::as_f64)
-        else {
-            return Ok(None);
-        };
-        let paused = self.property("pause").await?;
-        let muted = self.property("mute").await?;
-        Ok(Some(Resume {
-            position_s,
-            paused: paused.as_ref().and_then(Value::as_bool).unwrap_or(false),
-            muted: muted.as_ref().and_then(Value::as_bool).unwrap_or(false),
-        }))
-    }
 }
 
 enum IpcLink {
@@ -943,14 +948,15 @@ enum IpcLink {
 
 struct Playback {
     play_id: u64,
-    url: String,
     rect: VideoRect,
-    volume_percent: u8,
     child: Child,
     /// Ends when mpv's stdout closes; joined after the kill so the settle
     /// delete follows the last frame. `None` once joined.
     relay: Option<JoinHandle<()>>,
     ipc: IpcLink,
+    /// A `video_place` that arrived before the socket was up: the
+    /// rectangle whose frame to settle once the move goes through.
+    pending_place: Option<VideoRect>,
 }
 
 /// At most one mpv per CLI. Owned by the pair loop for the whole session,
@@ -983,7 +989,7 @@ impl VideoPlayer {
         volume_percent: u8,
     ) -> VideoUpdate {
         let residue = self.take_and_kill().map(|old| old.rect);
-        let state = match self.spawn(play_id, url, rect, volume_percent, None) {
+        let state = match self.spawn(play_id, url, rect, volume_percent) {
             Ok(playback) => {
                 self.current = Some(playback);
                 VideoState::Starting
@@ -997,33 +1003,63 @@ impl VideoPlayer {
         }
     }
 
-    /// Move the video to `rect`. The kitty output options are startup
-    /// options, so this respawns mpv at the same position, pause and mute.
-    pub(super) async fn place(&mut self, play_id: u64, rect: VideoRect) -> Option<VideoUpdate> {
-        let playback = self.current_for(play_id)?;
+    /// Move a play's output to `rect` in place: the old frame is settled
+    /// first (the delete targets its origin cell, which the new frame may
+    /// cover, so it must go before the rebuild), then the geometry and the
+    /// output swap go over the socket. Before the socket is up the move
+    /// waits for `poll`.
+    pub(super) async fn place(&mut self, play_id: u64, rect: VideoRect) -> PlaceOutcome {
+        let tty = self.tools.startup_tty;
+        let Some(playback) = self.current_for(play_id) else {
+            return PlaceOutcome::Unchanged;
+        };
         if playback.rect == rect {
-            return None;
+            return PlaceOutcome::Unchanged;
         }
-        let resume = match &mut playback.ipc {
-            IpcLink::Connected(ipc) => match ipc.resume().await {
-                Ok(resume) => resume,
-                Err(error) => return Some(self.fail(VideoFailure::Ipc(error.to_string()))),
-            },
-            IpcLink::Waiting { .. } => None,
-        };
-        let old = self.take_and_kill()?;
-        let state = match self.spawn(play_id, old.url, rect, old.volume_percent, resume) {
-            Ok(playback) => {
-                self.current = Some(playback);
-                VideoState::Starting
+        let old = playback.rect;
+        playback.rect = rect;
+        match &mut playback.ipc {
+            IpcLink::Waiting { .. } => {
+                playback.pending_place = Some(playback.pending_place.unwrap_or(old));
+                PlaceOutcome::Deferred
             }
-            Err(failure) => VideoState::Failed(failure),
+            IpcLink::Connected(_) => match self.move_output(play_id, old, rect, tty).await {
+                Ok(()) => PlaceOutcome::Moved,
+                Err(failure) => PlaceOutcome::Failed(self.fail(failure)),
+            },
+        }
+    }
+
+    /// Settle the frame at `old` and send the move to `rect`. The tty read
+    /// at spawn sizes the pixels, as it did the first rectangle.
+    async fn move_output(
+        &mut self,
+        play_id: u64,
+        old: VideoRect,
+        rect: VideoRect,
+        tty: Option<TtySize>,
+    ) -> Result<(), VideoFailure> {
+        let Some(tty) = tty.or_else(TtySize::read) else {
+            return Err(VideoFailure::NoPixelSize);
         };
-        Some(VideoUpdate {
-            play_id,
-            state,
-            residue: Some(old.rect),
-        })
+        if let Err(error) = settle_terminal(old) {
+            return Err(VideoFailure::Inspect(format!(
+                "settling the old frame: {error}"
+            )));
+        }
+        let Some(playback) = self.current_for(play_id) else {
+            return Ok(());
+        };
+        let IpcLink::Connected(ipc) = &mut playback.ipc else {
+            return Ok(());
+        };
+        for command in place_commands(rect, tty) {
+            match ipc.request(command).await {
+                Ok(IpcReply::Success(_) | IpcReply::Error) => {}
+                Err(error) => return Err(VideoFailure::Ipc(error.to_string())),
+            }
+        }
+        Ok(())
     }
 
     /// Relay a key. A control for another play, or before mpv's socket is
@@ -1095,10 +1131,22 @@ impl VideoPlayer {
                 Err(_) => return Some(self.fail(VideoFailure::IpcTimeout)),
             }
         }
+        let play_id = playback.play_id;
+        if let Some(old) = playback.pending_place.take() {
+            let rect = playback.rect;
+            if let Err(failure) = self
+                .move_output(play_id, old, rect, self.tools.startup_tty)
+                .await
+            {
+                return Some(self.fail(failure));
+            }
+        }
+        let Some(playback) = self.current_for(play_id) else {
+            return None;
+        };
         let IpcLink::Connected(ipc) = &mut playback.ipc else {
             unreachable!("the ipc link was connected just above");
         };
-        let play_id = playback.play_id;
         match ipc.state().await {
             Ok(VideoState::Starting) => None,
             Ok(state) => Some(VideoUpdate {
@@ -1148,7 +1196,6 @@ impl VideoPlayer {
         url: String,
         rect: VideoRect,
         volume_percent: u8,
-        resume: Option<Resume>,
     ) -> Result<Playback, VideoFailure> {
         // The server is trusted, but the URL is the one string here that
         // ends up as a command argument, so the scheme gate stays.
@@ -1177,7 +1224,6 @@ impl VideoPlayer {
             tty,
             use_shm: self.tools.use_shm,
             volume_percent,
-            resume,
             ipc_path: &self.tools.ipc_path,
             ytdlp_override: self.tools.ytdlp_override.as_deref(),
             log_path: &self.tools.log_path,
@@ -1201,14 +1247,13 @@ impl VideoPlayer {
         };
         Ok(Playback {
             play_id,
-            url,
             rect,
-            volume_percent,
             child,
             relay: Some(spawn_relay(from_mpv)),
             ipc: IpcLink::Waiting {
                 since: Instant::now(),
             },
+            pending_place: None,
         })
     }
 

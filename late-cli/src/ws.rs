@@ -30,7 +30,10 @@ use super::{
     audio::VizSample,
     clipboard,
     mpris::{DesktopCommand, DesktopMedia, IcecastTrack, MediaSource, RadioTrack, YoutubeTrack},
-    video::{self, VideoBlocker, VideoControl, VideoPlayer, VideoRect, VideoState, VideoUpdate},
+    video::{
+        self, PlaceOutcome, VideoBlocker, VideoControl, VideoPlayer, VideoRect, VideoState,
+        VideoUpdate,
+    },
     voice::VoiceRuntimeState,
 };
 
@@ -1250,9 +1253,11 @@ async fn handle_pair_control(
                 cols,
                 rows,
             };
-            if let Some(update) = video.place(play_id, rect).await {
-                info!(play_id, ?rect, "moved video");
-                report_video(ws, update).await?;
+            match video.place(play_id, rect).await {
+                PlaceOutcome::Moved => info!(play_id, ?rect, "moved video"),
+                PlaceOutcome::Deferred => info!(play_id, ?rect, "video move waits for mpv"),
+                PlaceOutcome::Unchanged => {}
+                PlaceOutcome::Failed(update) => report_video(ws, update).await?,
             }
             silence_for_video(video.is_active(), playback, webview);
             Ok(false)
