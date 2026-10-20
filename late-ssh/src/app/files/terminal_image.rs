@@ -524,6 +524,19 @@ pub(crate) fn protocol_from_xtversion(version: &str) -> Option<TerminalImageProt
     protocol_from_identity(version)
 }
 
+/// Longest terminal name a session keeps for its logs.
+const TERMINAL_NAME_MAX_CHARS: usize = 64;
+
+/// A name the client gave its terminal (its XTVERSION reply, its `TERM`) as
+/// a session keeps it for its logs. The client can send anything there, so
+/// control characters are dropped and the length is capped.
+pub(crate) fn terminal_name_for_log(name: &str) -> String {
+    name.chars()
+        .filter(|ch| !ch.is_control())
+        .take(TERMINAL_NAME_MAX_CHARS)
+        .collect()
+}
+
 pub(crate) fn protocol_from_env_hint(name: &str, value: &str) -> Option<TerminalImageProtocol> {
     match name.trim() {
         "TERM_PROGRAM" | "LC_TERMINAL" => protocol_from_terminal_program(value),

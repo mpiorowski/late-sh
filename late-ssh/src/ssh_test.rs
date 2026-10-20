@@ -770,3 +770,14 @@ async fn favoriting_mentions_over_ssh_survives_a_reconnect() {
         .expect("disconnect second session");
     handle.abort();
 }
+
+#[test]
+fn a_cli_that_ran_the_token_exec_is_labelled_cli_without_the_env_flag() {
+    use crate::metrics::SessionClient;
+    use crate::ssh::session_client;
+    // Native and openssh modes: token exec, no env.
+    assert_eq!(session_client(false, true), SessionClient::Cli);
+    // Old subprocess mode: env flag, token served at the pty request only.
+    assert_eq!(session_client(true, false), SessionClient::Cli);
+    assert_eq!(session_client(false, false), SessionClient::Ssh);
+}

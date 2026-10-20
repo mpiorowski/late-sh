@@ -482,14 +482,24 @@ would bite. The edge read `tcp_slow_start_after_idle = 1`, `cubic`,
   end-to-end trip (`late-ssh/src/terminal_probe.rs`). Every 10 s the render
   loop follows a pass with a DSR status query; the terminal answers only
   after parsing everything before it, so the answer time is what a user
-  waits for a frame. `backlog` is what that pass wrote ahead of the query
-  (`none`, `small` up to 4 KiB, `medium` up to 32 KiB, `large`), and a large
-  pass is probed as soon as the last probe is 2 s old, so big repaints get
-  sampled. `late_ssh_terminal_probes_total{client,outcome}` gives the answer
-  rate.
+  waits for a frame. `backlog` is what the session wrote in the second
+  before the query, the pass that carried it included, so animation frames
+  still in the pipe count (`none`, `small` up to 4 KiB, `medium` up to
+  32 KiB, `large`); a large backlog is probed as soon as the last probe is
+  2 s old, so big repaints and heavy animation get sampled.
+  `late_ssh_terminal_probes_total{client,outcome}` gives the answer rate.
 - `late_ssh_frame_bytes{reason}` per drawn frame, and
   `late_ssh_session_output_bytes_per_second{client}`, one sample per session
   per 10 s window.
+- One `session wire summary` log line per session when it ends, in
+  VictoriaLogs: user, client, `TERM`, the terminal's own name (its XTVERSION
+  reply), how the session ended (`closed`, `stalled`, `failed`), bytes,
+  frames, mean and peak output rate, probes answered and lost, and per
+  backlog bucket the trip count, average and slowest (`rtt_none_avg_ms`,
+  `rtt_large_max_ms`, ...). This is the per-user view the metrics leave out
+  on purpose. `_msg:"session wire summary" username:alice` finds one user;
+  `_time:24h _msg:"session wire summary" | sort by (rtt_large_max_ms desc) | limit 20`
+  lists the worst sessions of the day.
 - `late_ssh_cli_latency_seconds{kind,platform}`: the native `late` CLI splits
   the same trip. `ssh_rtt` is an SSH keepalive round trip (transport only),
   `terminal` is the query leaving the CLI to the answer coming back (the
@@ -510,6 +520,11 @@ network namespace (`infra/ssh-tcp.tf`). Verify after the infra apply with
 - For CLI sessions, compare the whole trip with its halves. A large
   `terminal` half means the terminal is the bottleneck, and smaller frames
   help more than pacing.
+- For one user, read their summary lines. A slow `rtt_fastest_ms` is their
+  network distance. Fine `rtt_none_*` with slow `rtt_large_*` is a link our
+  bytes outrun. A high `peak_bytes_per_sec` is a heavy screen. Lost or
+  retired probes, or `ended=stalled`, are a terminal ignoring DSR or a link
+  that stopped reading.
 
 **Future fix, after monitoring confirms it: pace frames by acknowledgement,
 the way mosh does.** A frame that answers input always goes out at once. A
@@ -976,7 +991,7 @@ Suggested shape:
 - PgBouncer: DB connection smoothing
 - Postgres: durable state
 - Audio: dedicated scalable streaming path, not one small Icecast pod on the app node
-- Observability: dashboard for active sessions, per-pod session count, render frames/sec, frame drops, DB pool wait, Postgres top SQL, p95 input latency. Partially exists: the Rendering row (renders, clean skips, draws/session, stall guard), `late_ssh_sessions_active`, `late_ssh_render_frame_drops_total` (a flat ~909/min per stalled session is the stalled-client signature), and `late_ssh_render_stall_{skips,disconnects}_total`; DB pool wait as `late_db_checkout_seconds` (every `Db::get`, by outcome) with `late_db_pool_connections{state}`, `late_db_pool_waiters` and `late_ssh_chat_read_permits_in_use`, and session start as `late_ssh_session_start_seconds{stage,user}` (accept to first frame), all in the Operations row; what a user waits to see a frame in the Wire & Latency row (terminal round trip by bytes written ahead, frame size, per-session output rate, the native CLI's split of the trip; Pain Point 11); traces in VictoriaTraces (Jaeger API on `monitoring/victoriatraces:10428`)
+- Observability: dashboard for active sessions, per-pod session count, render frames/sec, frame drops, DB pool wait, Postgres top SQL, p95 input latency. Partially exists: the Rendering row (renders, clean skips, draws/session, stall guard), `late_ssh_sessions_active`, `late_ssh_render_frame_drops_total` (a flat ~909/min per stalled session is the stalled-client signature), and `late_ssh_render_stall_{skips,disconnects}_total`; DB pool wait as `late_db_checkout_seconds` (every `Db::get`, by outcome) with `late_db_pool_connections{state}`, `late_db_pool_waiters` and `late_ssh_chat_read_permits_in_use`, and session start as `late_ssh_session_start_seconds{stage,user}` (accept to first frame), all in the Operations row; what a user waits to see a frame in the Wire & Latency row (terminal round trip by the second of output before it, frame size, per-session output rate, the native CLI's split of the trip; Pain Point 11); traces in VictoriaTraces (Jaeger API on `monitoring/victoriatraces:10428`)
 - Per-pod telemetry identity (prerequisite for the above once replicas > 1): each app pod now sets `OTEL_RESOURCE_ATTRIBUTES=service.instance.id=$(POD_NAME)` (downward-API pod name) in Terraform (`infra/service-ssh.tf`, `infra/service-web.tf`). The SDK's env resource detector picks it up and the collector's `resource_to_telemetry_conversion` turns it into a `service_instance_id`/`instance` metric label. Before this, every pod exported an identical otel series (e.g. `late_ssh_sessions_active`) and they clobbered each other on scrape (the 32h A/B window showed the gauge alternating between the two pods' values). Query per pod with `... by (instance)`.
 
 The goal is not "1000 pods". The goal is "N SSH pods, each owning a shard of sessions".

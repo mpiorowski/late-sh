@@ -2496,7 +2496,7 @@
     {
       "type": "timeseries",
       "title": "Terminal Round Trip",
-      "description": "Server writing a status query (DSR) to the user's terminal answering it: network both ways, any backlog ahead of the query, the ssh client, the terminal's parse. Split by the bytes the same render pass wrote ahead of the query (none, small up to 4 KiB, medium up to 32 KiB, large). Large well above none means bytes on the wire are what users feel as lag.",
+      "description": "Server writing a status query (DSR) to the user's terminal answering it: network both ways, any backlog ahead of the query, the ssh client, the terminal's parse. Split by the bytes the session wrote in the second before the query, the pass that carried it included (none, small up to 4 KiB, medium up to 32 KiB, large). Large well above none means bytes on the wire are what users feel as lag.",
       "datasource": {
         "uid": "victoriametrics",
         "type": "victoriametrics-metrics-datasource"
@@ -2539,7 +2539,7 @@
         "uid": "victoriametrics",
         "type": "victoriametrics-metrics-datasource"
       },
-      "description": "Terminal round trip over the range, by client (plain ssh or the late CLI) and the bytes written ahead of the query.",
+      "description": "Terminal round trip over the range, by client (plain ssh or the late CLI) and the bytes written in the second before the query.",
       "targets": [
         {
           "refId": "A",

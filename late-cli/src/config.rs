@@ -540,7 +540,7 @@ fn ensure_state_log_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn nonempty_os_env(key: &str) -> Option<std::ffi::OsString> {
+pub(super) fn nonempty_os_env(key: &str) -> Option<std::ffi::OsString> {
     env::var_os(key).filter(|value| !value.is_empty())
 }
 

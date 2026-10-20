@@ -126,6 +126,8 @@ pub(super) struct TtySize {
 }
 
 impl TtySize {
+    /// Built only from a unix tty read; elsewhere there is no tty size to read.
+    #[cfg(any(unix, test))]
     pub(super) fn new(cols: u16, rows: u16, xpixel: u16, ypixel: u16) -> Option<Self> {
         match (cols, rows, xpixel, ypixel) {
             (0, _, _, _) | (_, 0, _, _) | (_, _, 0, _) | (_, _, _, 0) => None,

@@ -30,7 +30,8 @@ use crate::{
         TerminalImageProtocol, TerminalImageRenderState, da1_probe, iterm2_capabilities_probe,
         kitty_cleanup_commands, protocol_from_device_attributes, protocol_from_env_hint,
         protocol_from_term, protocol_from_terminal_features, protocol_from_xtversion,
-        term_disables_terminal_images, terminal_image_cleanup_commands, terminal_string_terminator,
+        term_disables_terminal_images, terminal_image_cleanup_commands, terminal_name_for_log,
+        terminal_string_terminator,
     },
     app::{
         chat,
@@ -1031,6 +1032,9 @@ pub struct App {
     /// The forwarded env said Windows Terminal (`WT_SESSION`): the watch
     /// setup box offers the PowerShell installer.
     pub(crate) windows_terminal: bool,
+    /// The terminal's own name for itself, from its XTVERSION reply; named
+    /// in the session's wire summary log (`ssh.rs`).
+    terminal_version: Option<String>,
     pub(crate) inline_image_symbol_mode: InlineImageSymbolMode,
     pub(crate) terminal_image_render_state: TerminalImageRenderState,
 
@@ -2000,6 +2004,7 @@ impl App {
             terminal_images_disabled,
             multiplexer_term: terminal_images_disabled,
             windows_terminal: false,
+            terminal_version: None,
             inline_image_symbol_mode,
             terminal_image_render_state: TerminalImageRenderState::default(),
             notifier,
@@ -2928,6 +2933,7 @@ impl App {
             images_disabled = self.terminal_images_disabled,
             "terminal xtversion reply"
         );
+        self.terminal_version = Some(terminal_name_for_log(value));
         self.apply_inline_image_symbol_mode(InlineImageSymbolMode::from_identity(value));
         if self.terminal_images_disabled {
             return;
@@ -2935,6 +2941,11 @@ impl App {
         if let Some(protocol) = protocol_from_xtversion(value) {
             self.detected_image_protocol = Some(protocol);
         }
+    }
+
+    /// The terminal's XTVERSION name, when it answered the startup probe.
+    pub(crate) fn terminal_version(&self) -> Option<&str> {
+        self.terminal_version.as_deref()
     }
 
     pub(crate) fn apply_terminal_capabilities(&mut self, value: &str) {

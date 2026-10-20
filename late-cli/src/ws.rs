@@ -520,7 +520,7 @@ impl WebviewPlaybackController {
 /// both binaries in the same directory), then a bare name for `$PATH`.
 #[cfg(not(any(target_os = "windows", target_os = "macos")))]
 pub(super) fn webview_helper_program() -> PathBuf {
-    if let Some(path) = nonempty_os_env("LATE_WEBVIEW_BIN") {
+    if let Some(path) = super::config::nonempty_os_env("LATE_WEBVIEW_BIN") {
         return PathBuf::from(path);
     }
     if let Ok(exe) = std::env::current_exe()
@@ -588,10 +588,6 @@ fn write_helper_token(child: &mut Child, token: &str) -> Result<()> {
         .write_all(b"\n")
         .context("failed to terminate webview helper token")?;
     Ok(())
-}
-
-fn nonempty_os_env(key: &str) -> Option<std::ffi::OsString> {
-    env::var_os(key).filter(|value| !value.is_empty())
 }
 
 fn env_flag(key: &str) -> bool {

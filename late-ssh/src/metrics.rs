@@ -366,6 +366,17 @@ pub enum SessionClient {
     Cli,
 }
 
+impl SessionClient {
+    /// The `client` metric label, also the field the session wire summary
+    /// logs (`ssh.rs`).
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Ssh => "ssh",
+            Self::Cli => "cli",
+        }
+    }
+}
+
 /// How one terminal round-trip probe ended (`terminal_probe.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalProbeOutcome {
@@ -846,7 +857,7 @@ mod inner {
             meter()
                 .f64_histogram("late_ssh_terminal_rtt_seconds")
                 .with_description(
-                    "Server write to the user's terminal answering, by client and the bytes written ahead of the probe",
+                    "Server write to the user's terminal answering, by client and the bytes the session wrote in the second before the probe",
                 )
                 .with_unit("s")
                 .with_boundaries(TRIP_BOUNDARIES.to_vec())
@@ -2121,18 +2132,9 @@ mod inner {
         );
     }
 
-    fn session_client_label(client: SessionClient) -> &'static str {
-        match client {
-            SessionClient::Ssh => "ssh",
-            SessionClient::Cli => "cli",
-        }
-    }
-
     pub fn record_session_output_rate(client: SessionClient, bytes_per_second: f64) {
-        session_output_bytes_per_second().record(
-            bytes_per_second,
-            &[KeyValue::new("client", session_client_label(client))],
-        );
+        session_output_bytes_per_second()
+            .record(bytes_per_second, &[KeyValue::new("client", client.label())]);
     }
 
     fn terminal_probe_outcome_label(outcome: TerminalProbeOutcome) -> &'static str {
@@ -2146,7 +2148,7 @@ mod inner {
         terminal_probes_total().add(
             1,
             &[
-                KeyValue::new("client", session_client_label(client)),
+                KeyValue::new("client", client.label()),
                 KeyValue::new("outcome", terminal_probe_outcome_label(outcome)),
             ],
         );
@@ -2165,7 +2167,7 @@ mod inner {
         terminal_rtt_seconds().record(
             seconds,
             &[
-                KeyValue::new("client", session_client_label(client)),
+                KeyValue::new("client", client.label()),
                 KeyValue::new("backlog", probe_backlog_label(backlog)),
             ],
         );
