@@ -70,6 +70,13 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
             app.chat.close_reader();
             app.chat.news.delete_article(article_id);
         }
+        // Keep the story for later, or let it go, without leaving it.
+        ParsedInput::Byte(b's') | ParsedInput::Char('s') => {
+            let article_id = modal.article_id();
+            if let Some(banner) = app.chat.news.toggle_save(article_id) {
+                app.banner = Some(banner);
+            }
+        }
         _ => {}
     }
 }

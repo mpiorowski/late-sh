@@ -1,7 +1,8 @@
-use super::{ArticleListView, ascii_preview_if_fit, draw_article_list};
+use super::{ArticleListView, ascii_preview_if_fit, draw_article_list, lay_out, scroll_offset};
 use chrono::Utc;
 use late_core::models::article::{Article, ArticleFeedItem};
 use late_core::models::article_body::BodyStatus;
+use late_core::models::article_read::WatchPosition;
 use ratatui::{Terminal, backend::TestBackend};
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
@@ -28,25 +29,11 @@ fn card_at(url: &str, body: BodyStatus) -> ArticleFeedItem {
     }
 }
 
-/// The card's meta row, as drawn.
-fn meta_row(item: ArticleFeedItem) -> String {
-    let mut terminal = Terminal::new(TestBackend::new(140, 12)).expect("terminal");
-    let marker = HashSet::new();
-    let articles = [item];
+/// The list as drawn on a `width` by `height` terminal, one string a row.
+fn drawn(view: &ArticleListView<'_>, width: u16, height: u16) -> Vec<String> {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
     terminal
-        .draw(|frame| {
-            draw_article_list(
-                frame,
-                frame.area(),
-                &ArticleListView {
-                    articles: &articles,
-                    selected_index: 0,
-                    marker: &marker,
-                    watch_positions: &HashMap::new(),
-                    mine_only: false,
-                },
-            )
-        })
+        .draw(|frame| draw_article_list(frame, frame.area(), view))
         .expect("draw");
     let buffer = terminal.backend().buffer();
     (0..buffer.area.height)
@@ -54,20 +41,48 @@ fn meta_row(item: ArticleFeedItem) -> String {
             (0..buffer.area.width)
                 .map(|x| buffer[(x, y)].symbol())
                 .collect::<String>()
+                .trim_end()
+                .to_string()
         })
-        .find(|row| row.contains("@mat - "))
+        .collect()
+}
+
+fn view<'a>(
+    articles: &'a [ArticleFeedItem],
+    saved_len: usize,
+    selected_index: usize,
+    marker: &'a HashSet<Uuid>,
+    watch_positions: &'a HashMap<Uuid, WatchPosition>,
+) -> ArticleListView<'a> {
+    ArticleListView {
+        articles,
+        saved_len,
+        saved_count: saved_len,
+        selected_index,
+        marker,
+        watch_positions,
+        mine_only: false,
+    }
+}
+
+/// The card's meta row, as drawn.
+fn meta_row(item: ArticleFeedItem) -> String {
+    let marker = HashSet::new();
+    let positions = HashMap::new();
+    let articles = [item];
+    drawn(&view(&articles, 0, 0, &marker, &positions), 140, 12)
+        .into_iter()
+        .find(|row| row.contains("@mat ·"))
         .expect("a meta row")
-        .trim_end()
-        .to_string()
 }
 
 /// The meta row ends in the reading time once the body is in, `link` when
-/// there is nothing to read here, and nothing while the fetch is pending.
+/// there is nothing to read here, and the domain while the fetch is pending.
 #[test]
 fn card_meta_reads_the_body_status() {
-    assert!(meta_row(card(BodyStatus::Ready { reading_minutes: 7 })).ends_with("UTC - 7 min read"));
-    assert!(meta_row(card(BodyStatus::Unavailable)).ends_with("UTC - link"));
-    assert!(meta_row(card(BodyStatus::Pending)).ends_with("UTC"));
+    assert!(meta_row(card(BodyStatus::Ready { reading_minutes: 7 })).ends_with("· 7 min read"));
+    assert!(meta_row(card(BodyStatus::Unavailable)).ends_with("· link"));
+    assert!(meta_row(card(BodyStatus::Pending)).ends_with("· example.com"));
 }
 
 /// A video reads `watch` for everyone, whatever its body row says; any
@@ -75,12 +90,90 @@ fn card_meta_reads_the_body_status() {
 #[test]
 fn card_meta_reads_watch_for_a_video() {
     let video = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
-    assert!(meta_row(card_at(video, BodyStatus::Unavailable)).ends_with("UTC - watch"));
-    assert!(meta_row(card_at(video, BodyStatus::Pending)).ends_with("UTC - watch"));
+    assert!(meta_row(card_at(video, BodyStatus::Unavailable)).ends_with("youtube.com · watch"));
+    assert!(meta_row(card_at(video, BodyStatus::Pending)).ends_with("youtube.com · watch"));
     assert!(
         meta_row(card_at("https://x.com/a/status/1", BodyStatus::Unavailable))
-            .ends_with("UTC - link")
+            .ends_with("x.com · link")
     );
+}
+
+/// With a shelf, a rule heads it and another heads the feed; every story
+/// takes two rows and the selected one opens out with its link and its
+/// bullets. Without a shelf there are no rules at all.
+#[test]
+fn the_list_sections_the_shelf_over_the_feed_and_opens_the_selected_story() {
+    let positions = HashMap::new();
+    let mut kept = card_at("https://example.com/kept", BodyStatus::Unavailable);
+    kept.article.title = "Kept for later".to_string();
+    let articles = [kept, card(BodyStatus::Ready { reading_minutes: 7 })];
+    // Both read, so no dot gets in the way of the rows.
+    let marker: HashSet<Uuid> = articles.iter().map(|item| item.article.id).collect();
+
+    let rows = drawn(&view(&articles, 1, 1, &marker, &positions), 80, 12);
+    assert!(
+        rows[0].starts_with("── saved · 1 of 10 ──"),
+        "{:?}",
+        rows[0]
+    );
+    assert_eq!(rows[1], "  Kept for later");
+    assert!(rows[2].starts_with("  @mat ·"));
+    assert!(rows[3].starts_with("── latest ──"), "{:?}", rows[3]);
+    assert_eq!(rows[4], "  Why LISTEN/NOTIFY stops scaling");
+    assert!(rows[5].ends_with("· 7 min read"));
+    assert_eq!(rows[6], "  https://example.com/listen-notify");
+    assert_eq!(rows[7], "  • one");
+    assert_eq!(rows[8], "  • two");
+    assert_eq!(rows[9], "  • three");
+    assert_eq!(rows[10], "");
+
+    let rows = drawn(&view(&articles, 0, 0, &marker, &positions), 80, 12);
+    assert_eq!(rows[0], "  Kept for later");
+    assert!(rows.iter().all(|row| !row.contains("──")));
+}
+
+/// The unread dot marks a feed story the visit's marker has no read for,
+/// and never a story on the shelf: the shelf is the reader's own list.
+#[test]
+fn the_unread_dot_marks_the_feed_and_not_the_shelf() {
+    let marker = HashSet::new();
+    let positions = HashMap::new();
+    let articles = [card(BodyStatus::Unavailable), card(BodyStatus::Unavailable)];
+    let rows = drawn(&view(&articles, 1, 1, &marker, &positions), 80, 12);
+    assert!(rows[1].starts_with("  Why"), "{:?}", rows[1]);
+    assert!(rows[4].starts_with("● Why"), "{:?}", rows[4]);
+}
+
+/// A bullet that runs on takes two rows at most, the second cut with an
+/// ellipsis, so the opened story stays a card and not a page.
+#[test]
+fn a_long_bullet_is_cut_at_two_rows() {
+    let marker = HashSet::new();
+    let positions = HashMap::new();
+    let mut item = card(BodyStatus::Unavailable);
+    item.article.summary = format!("• {}", "word ".repeat(60));
+    let articles = [item];
+    let layout = lay_out(&view(&articles, 0, 0, &marker, &positions), 60);
+    // Title, meta, link, then the bullet's two rows.
+    assert_eq!(layout.rows.len(), 5);
+    assert_eq!(layout.selected, 0..5);
+    let last: String = layout.rows[4]
+        .line
+        .spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect();
+    assert!(last.trim_end().ends_with('…'), "{last:?}");
+}
+
+/// The draw scrolls just enough to keep the selected story's last row in
+/// view, and no further than its first row on a short screen.
+#[test]
+fn the_scroll_keeps_the_selected_story_in_view() {
+    assert_eq!(scroll_offset(&(0..2), 10), 0);
+    assert_eq!(scroll_offset(&(8..14), 10), 4);
+    assert_eq!(scroll_offset(&(8..14), 3), 8);
+    assert_eq!(scroll_offset(&(8..14), 0), 8);
 }
 
 #[test]

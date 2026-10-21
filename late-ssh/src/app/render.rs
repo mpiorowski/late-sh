@@ -968,6 +968,8 @@ impl App {
         };
         let news_view = chat::news::ui::ArticleListView {
             articles: self.chat.news.displayed_articles(),
+            saved_len: self.chat.news.saved_len(),
+            saved_count: self.chat.news.saved_count(),
             selected_index: self.chat.news.selected_index(),
             marker: self.chat.news.marker(),
             watch_positions: self.chat.news.watch_positions(),

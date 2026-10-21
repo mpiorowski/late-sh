@@ -14,7 +14,7 @@ use crate::app::audio::svc::ThumbnailFetch;
 use crate::app::bonsai::state::BonsaiAction;
 use crate::app::bonsai::svc::BonsaiActionResult;
 use crate::app::calendar::svc::{CalendarAnnouncement, CalendarOp, CalendarWrite};
-use crate::app::chat::news::svc::{BodyFetchOutcome, XMediaLookup};
+use crate::app::chat::news::svc::{BodyFetchOutcome, NewsSaveOutcome, XMediaLookup};
 use crate::app::chat::news::watch::state::WatchOutcome;
 use crate::app::chat::svc::{GildRefusal, SendRefusal};
 use crate::app::clubhouse::nightcap::svc::{NightcapHouseFailure, NightcapOrderResult};
@@ -633,7 +633,6 @@ mod inner {
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
-    use super::XMediaLookup;
     use super::{
         ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, AwardAnnouncementOutcome,
         BioScreenOutcome, CrownRefusal, DailyPuzzle, DailyWinPayout, DoorGame, DoorWatchOutcome,
@@ -656,6 +655,7 @@ mod inner {
     };
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
+    use super::{NewsSaveOutcome, XMediaLookup};
     use super::{PollOutcome, PolledFeed};
     use super::{
         ZorkAction, ZorkCatalogueRead, ZorkEdition, ZorkSessionEnd, ZorkSuggestion,
@@ -1674,6 +1674,18 @@ mod inner {
                 .u64_counter("late_ssh_news_watches_total")
                 .with_description(
                     "News video watches by step: opened (the player), setup (the setup box instead), played, ended, failed, lost",
+                )
+                .build()
+        })
+    }
+
+    fn news_saves_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_news_saves_total")
+                .with_description(
+                    "News shelf writes by outcome: saved, unsaved, or full (the shelf refused an eleventh)",
                 )
                 .build()
         })
@@ -2868,6 +2880,20 @@ mod inner {
         news_watches_total().add(1, &[KeyValue::new("outcome", news_watch_label(outcome))]);
     }
 
+    fn news_save_label(outcome: NewsSaveOutcome) -> &'static str {
+        match outcome {
+            NewsSaveOutcome::Saved => "saved",
+            NewsSaveOutcome::Unsaved => "unsaved",
+            NewsSaveOutcome::Full => "full",
+        }
+    }
+
+    /// Saved against unsaved is how much the shelf gets used; a run of
+    /// full is readers wanting a bigger one.
+    pub fn record_news_save(outcome: NewsSaveOutcome) {
+        news_saves_total().add(1, &[KeyValue::new("outcome", news_save_label(outcome))]);
+    }
+
     /// Same shape as the News share: one counter for the submissions and one
     /// for the chips they minted, so the tracks that came in past the day's
     /// cap are visible beside the paid ones.
@@ -3698,7 +3724,6 @@ mod inner {
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
-    use super::XMediaLookup;
     use super::{
         ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, AwardAnnouncementOutcome,
         BioScreenOutcome, CrownRefusal, DailyPuzzle, DailyWinPayout, DoorGame, DoorWatchOutcome,
@@ -3721,6 +3746,7 @@ mod inner {
     };
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
+    use super::{NewsSaveOutcome, XMediaLookup};
     use super::{PollOutcome, PolledFeed};
     use super::{
         ZorkAction, ZorkCatalogueRead, ZorkEdition, ZorkSessionEnd, ZorkSuggestion,
@@ -3806,6 +3832,7 @@ mod inner {
     pub fn record_news_body_fetch(_outcome: BodyFetchOutcome) {}
     pub fn record_news_reader_opened(_status: BodyStatus) {}
     pub(crate) fn record_news_watch(_outcome: WatchOutcome) {}
+    pub fn record_news_save(_outcome: NewsSaveOutcome) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
     pub fn record_booth_thumbnail(_outcome: ThumbnailFetch) {}
     pub fn record_radio_meta_poll(_feed: PolledFeed, _outcome: PollOutcome) {}

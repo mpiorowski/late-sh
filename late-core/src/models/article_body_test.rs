@@ -2,6 +2,7 @@ use crate::{
     models::{
         article::{Article, ArticleParams},
         article_body::{ArticleBody, BodyContent, BodyStatus, ReaderLine, ReaderSpan},
+        article_save::ArticleSave,
     },
     test_utils::{create_test_user, test_db},
 };
@@ -97,7 +98,7 @@ async fn bodies_round_trip_and_ride_the_feed_as_status_only() {
 
 /// Retention keeps the row and drops the text, so the card reads `link`
 /// rather than waiting on a fetch that will never come. A fresh body is
-/// left alone.
+/// left alone, and so is an old one somebody saved.
 #[tokio::test]
 async fn retention_retires_old_bodies_to_unavailable() {
     let test_db = test_db().await;
@@ -105,10 +106,11 @@ async fn retention_retires_old_bodies_to_unavailable() {
     let sharer = create_test_user(&test_db.db, "article-body-retention").await;
     let old = share(&client, sharer.id, "https://example.com/body-old").await;
     let fresh = share(&client, sharer.id, "https://example.com/body-fresh").await;
+    let kept = share(&client, sharer.id, "https://example.com/body-kept").await;
     let lines = vec![ReaderLine::Paragraph {
         spans: vec![ReaderSpan::Text("words".to_string())],
     }];
-    for id in [old.id, fresh.id] {
+    for id in [old.id, fresh.id, kept.id] {
         ArticleBody::store_ready(&client, id, 1, &lines)
             .await
             .expect("store ready");
@@ -116,11 +118,17 @@ async fn retention_retires_old_bodies_to_unavailable() {
     client
         .execute(
             "UPDATE article_bodies SET fetched_at = current_timestamp - interval '31 days'
-             WHERE article_id = $1",
-            &[&old.id],
+             WHERE article_id = ANY($1)",
+            &[&vec![old.id, kept.id]],
         )
         .await
-        .expect("age the old body");
+        .expect("age the old bodies");
+    // A story on a reader's shelf keeps its text past retention.
+    let reader = create_test_user(&test_db.db, "article-body-retention-reader").await;
+    let mut saving_client = test_db.db.get().await.expect("db client");
+    ArticleSave::save(&mut saving_client, reader.id, kept.id)
+        .await
+        .expect("save the kept story");
 
     let retired = ArticleBody::retire_fetched_before(&client, Utc::now() - Duration::days(30))
         .await
@@ -137,6 +145,14 @@ async fn retention_retires_old_bodies_to_unavailable() {
             .await
             .expect("find fresh")
             .expect("fresh row")
+            .status(),
+        BodyStatus::Ready { reading_minutes: 1 }
+    );
+    assert_eq!(
+        ArticleBody::find(&client, kept.id)
+            .await
+            .expect("find kept")
+            .expect("kept row")
             .status(),
         BodyStatus::Ready { reading_minutes: 1 }
     );

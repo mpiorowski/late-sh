@@ -12,6 +12,7 @@ use late_core::models::article::{
 };
 use late_core::models::article_body::BodyStatus;
 use late_core::models::article_read::WatchPosition;
+use late_core::models::article_save::NEWS_SAVED_LIMIT;
 
 /// The success banner for a share, from what it actually minted. Both share
 /// surfaces (the News composer and an RSS `s`) read this, so neither can
@@ -110,12 +111,60 @@ pub struct NewsTick {
     pub changed: bool,
 }
 
+/// The banner for a shelf that will not take another story.
+pub(crate) fn shelf_full_banner() -> Banner {
+    Banner::error(&format!(
+        "Saved is full: {NEWS_SAVED_LIMIT} stories. Press s on one of them to make room."
+    ))
+}
+
+/// The News list in display order: the reader's shelf first, newest save
+/// first, then the feed's stories that are not on it, newest first. A
+/// saved story appears once, on the shelf, whatever the feed holds; the
+/// feed's copy of it is the one shown, since the snapshot carries the
+/// freshest body status. The mine-only filter applies to both parts.
+pub(crate) fn display_order(
+    saved: &[ArticleFeedItem],
+    feed: &[ArticleFeedItem],
+    mine_only: Option<Uuid>,
+) -> (Vec<ArticleFeedItem>, usize) {
+    let shown = |item: &ArticleFeedItem| match mine_only {
+        Some(user_id) => item.article.user_id == user_id,
+        None => true,
+    };
+    let saved_ids: HashSet<Uuid> = saved.iter().map(|item| item.article.id).collect();
+    let mut rows: Vec<ArticleFeedItem> = saved
+        .iter()
+        .map(|item| {
+            feed.iter()
+                .find(|fresh| fresh.article.id == item.article.id)
+                .unwrap_or(item)
+        })
+        .filter(|item| shown(item))
+        .cloned()
+        .collect();
+    let saved_len = rows.len();
+    rows.extend(
+        feed.iter()
+            .filter(|item| !saved_ids.contains(&item.article.id) && shown(item))
+            .cloned(),
+    );
+    (rows, saved_len)
+}
+
 pub struct State {
     article_service: ArticleService,
     user_id: Uuid,
     is_admin: bool,
     source_articles: Vec<ArticleFeedItem>,
+    /// The reader's shelf (`article_saves`), newest save first, at most
+    /// `NEWS_SAVED_LIMIT`. Replaced by every load; a save or an unsave
+    /// moves it at once, ahead of the write, so the story changes section
+    /// under the key.
+    saved_articles: Vec<ArticleFeedItem>,
     articles: Vec<ArticleFeedItem>,
+    /// How many leading rows of `articles` are the shelf.
+    saved_len: usize,
     mine_only: bool,
     selected: usize,
     snapshot_rx: watch::Receiver<ArticleSnapshot>,
@@ -155,12 +204,15 @@ impl State {
         let event_rx = article_service.subscribe_events();
         article_service.list_articles_task();
         article_service.load_reads_task(user_id);
+        article_service.load_saves_task(user_id);
         Self {
             article_service,
             user_id,
             is_admin,
             source_articles: Vec::new(),
+            saved_articles: Vec::new(),
             articles: Vec::new(),
+            saved_len: 0,
             mine_only: false,
             selected: 0,
             snapshot_rx,
@@ -180,25 +232,57 @@ impl State {
         }
     }
 
-    /// All articles known to the client, ignoring any mine-only filter.
-    /// Used by surfaces that should not be affected by chat-page filtering.
+    /// The shared snapshot, ignoring the shelf and any mine-only filter:
+    /// what the live strip, the Zen headlines and the paper read. The shelf
+    /// is the reader's own and never rides these.
     pub fn all_articles(&self) -> &[ArticleFeedItem] {
         &self.source_articles
     }
 
-    /// Articles in current display order, with the mine-only filter applied
-    /// when active. This is what the chat news view renders and what the
-    /// j/k/d/Enter selection operates on.
+    /// Articles in current display order (`display_order`): the shelf, then
+    /// the feed, with the mine-only filter applied when active. This is
+    /// what the chat news view renders and what the j/k/s/d/Enter
+    /// selection operates on.
     pub fn displayed_articles(&self) -> &[ArticleFeedItem] {
         &self.articles
+    }
+
+    /// How many leading rows of `displayed_articles` are the shelf.
+    pub fn saved_len(&self) -> usize {
+        self.saved_len
+    }
+
+    /// How many stories the shelf holds, filter or no filter.
+    pub fn saved_count(&self) -> usize {
+        self.saved_articles.len()
+    }
+
+    pub(crate) fn is_saved(&self, article_id: Uuid) -> bool {
+        self.saved_articles
+            .iter()
+            .any(|item| item.article.id == article_id)
+    }
+
+    /// A story this session knows: in the snapshot, or on the shelf once it
+    /// has left the snapshot. Every action on a story by id (the reader,
+    /// the watch, a reply, a delete) resolves it here.
+    pub(crate) fn find_article(&self, article_id: Uuid) -> Option<&ArticleFeedItem> {
+        self.source_articles
+            .iter()
+            .chain(self.saved_articles.iter())
+            .find(|item| item.article.id == article_id)
     }
 
     pub fn set_is_admin(&mut self, is_admin: bool) {
         self.is_admin = is_admin;
     }
 
+    /// A visit to the News room: the feed and the shelf are re-read, the
+    /// shelf being replica-ready by refreshing when its page opens (a
+    /// delete by an admin on another replica shows up here).
     pub fn list_articles(&self) {
         self.article_service.list_articles_task();
+        self.article_service.load_saves_task(self.user_id);
     }
 
     pub fn mine_only(&self) -> bool {
@@ -216,12 +300,12 @@ impl State {
             .get(self.selected.min(self.articles.len().saturating_sub(1)))
             .map(|item| item.article.id);
 
-        let mut next: Vec<ArticleFeedItem> = self.source_articles.clone();
-        if self.mine_only {
-            next.retain(|item| item.article.user_id == self.user_id);
-        }
+        let mine_only = self.mine_only.then_some(self.user_id);
+        let (next, saved_len) =
+            display_order(&self.saved_articles, &self.source_articles, mine_only);
 
         self.articles = next;
+        self.saved_len = saved_len;
         if let Some(id) = prev_id
             && let Some(idx) = self.articles.iter().position(|item| item.article.id == id)
         {
@@ -247,12 +331,7 @@ impl State {
 
         // The article exists but is hidden by the mine-only filter. Drop the
         // filter so the article becomes visible and selectable.
-        if self.mine_only
-            && self
-                .source_articles
-                .iter()
-                .any(|item| item.article.id == article_id)
-        {
+        if self.mine_only && self.find_article(article_id).is_some() {
             self.mine_only = false;
             self.rebuild_display();
             if let Some(index) = self
@@ -454,13 +533,55 @@ impl State {
         }
     }
 
+    /// `s` on the selected story: onto the shelf, or off it. The cursor
+    /// stays where it is in the list rather than following the story to
+    /// its new section: the story that came next is what is under it now,
+    /// so saving reads as "keep this, move on". With nothing after it, the
+    /// cursor follows the story.
+    pub(crate) fn toggle_save_selected(&mut self) -> Option<Banner> {
+        let index = self.selected_index();
+        let article_id = self.articles.get(index)?.article.id;
+        let follower = self.articles.get(index + 1).map(|item| item.article.id);
+        let banner = self.toggle_save(article_id)?;
+        if let Some(index) = follower.and_then(|follower| {
+            self.articles
+                .iter()
+                .position(|item| item.article.id == follower)
+        }) {
+            self.selected = index;
+        }
+        Some(banner)
+    }
+
+    /// Put a story on the shelf, or take it off: the session's own list
+    /// moves now, so the story changes section under the key, and the
+    /// write goes out as a task whose load brings every session of the
+    /// reader's in line. A full shelf refuses here, before any write; one
+    /// another session filled meanwhile refuses in the service and comes
+    /// back as `SaveRefused`. None when the story is not known.
+    pub(crate) fn toggle_save(&mut self, article_id: Uuid) -> Option<Banner> {
+        let item = self.find_article(article_id)?.clone();
+        let banner = if self.is_saved(article_id) {
+            self.saved_articles
+                .retain(|saved| saved.article.id != article_id);
+            self.article_service
+                .unsave_article_task(self.user_id, article_id);
+            Banner::success("Taken off saved.")
+        } else if self.saved_articles.len() >= NEWS_SAVED_LIMIT as usize {
+            return Some(shelf_full_banner());
+        } else {
+            self.saved_articles.insert(0, item);
+            self.article_service
+                .save_article_task(self.user_id, article_id);
+            Banner::success("Saved for later.")
+        };
+        self.rebuild_display();
+        Some(banner)
+    }
+
     /// Delete a story by id: its sharer's own, or any for an admin.
     pub fn delete_article(&mut self, article_id: Uuid) {
-        let Some(item) = self
-            .source_articles
-            .iter()
-            .find(|item| item.article.id == article_id)
-        else {
+        let Some(item) = self.find_article(article_id) else {
             return;
         };
         if item.article.user_id != self.user_id && !self.is_admin {
@@ -470,14 +591,11 @@ impl State {
             .delete_article(self.user_id, article_id, self.is_admin);
     }
 
-    /// Open the reader on a snapshot story, marking it read and asking for
-    /// its body. False when the story left the snapshot (deleted).
+    /// Open the reader on a known story (the snapshot's or the shelf's),
+    /// marking it read and asking for its body. False when the story is
+    /// gone (deleted).
     pub(crate) fn open_reader(&mut self, article_id: Uuid) -> bool {
-        let Some(item) = self
-            .source_articles
-            .iter()
-            .find(|item| item.article.id == article_id)
-        else {
+        let Some(item) = self.find_article(article_id) else {
             return false;
         };
         let modal = ReaderModal::open(item);
@@ -548,9 +666,8 @@ impl State {
     }
 
     fn watchable_item(&self, article_id: Uuid) -> Option<&ArticleFeedItem> {
-        self.source_articles
-            .iter()
-            .find(|item| item.article.id == article_id && is_youtube_url(&item.article.url))
+        self.find_article(article_id)
+            .filter(|item| is_youtube_url(&item.article.url))
     }
 
     pub(crate) fn watch(&self) -> Option<&WatchModal> {
@@ -757,7 +874,16 @@ impl State {
                         banner = Some(Banner::error(&format!("Failed: {}", error)));
                     }
                     ArticleEvent::Deleted { user_id } if self.user_id == user_id => {
+                        // The delete cascaded through the shelf; re-read it.
+                        self.article_service.load_saves_task(self.user_id);
                         banner = Some(Banner::success("Article deleted."));
+                    }
+                    ArticleEvent::SavesLoaded { user_id, saved } if self.user_id == user_id => {
+                        self.saved_articles = saved;
+                        self.rebuild_display();
+                    }
+                    ArticleEvent::SaveRefused { user_id } if self.user_id == user_id => {
+                        banner = Some(shelf_full_banner());
                     }
                     ArticleEvent::ReadsLoaded { user_id, reads } if self.user_id == user_id => {
                         // Reads only grow, so a load merges: two writes'

@@ -1,6 +1,6 @@
 use super::{
-    Reads, State, clamp_index, has_fresh_unread_from_others, is_unread, is_unread_at, move_index,
-    news_unread_label, unread_in_snapshot,
+    Reads, State, clamp_index, display_order, has_fresh_unread_from_others, is_unread,
+    is_unread_at, move_index, news_unread_label, unread_in_snapshot,
 };
 use crate::app::ai::svc::AiService;
 use crate::app::chat::news::svc::ArticleService;
@@ -229,6 +229,36 @@ fn the_first_snapshot_a_session_sees_is_not_announced() {
         &read(&[]),
         READER
     ));
+}
+
+/// The shelf leads, newest save first, then the feed less what is on the
+/// shelf: a saved story appears once, and the feed's copy (the fresher
+/// body) is the one shown. Mine-only filters both parts.
+#[test]
+fn the_display_puts_the_shelf_over_the_feed_once_each() {
+    let feed = vec![
+        article(3, OTHER, 3),
+        article(2, READER, 2),
+        article(1, OTHER, 1),
+    ];
+    let mut saved_two = article(2, READER, 2);
+    saved_two.body = late_core::models::article_body::BodyStatus::Unavailable;
+    let saved = vec![saved_two, article(9, OTHER, -100)];
+
+    let (rows, saved_len) = display_order(&saved, &feed, None);
+    let ids: Vec<u128> = rows.iter().map(|item| item.article.id.as_u128()).collect();
+    assert_eq!(ids, vec![2, 9, 3, 1]);
+    assert_eq!(saved_len, 2);
+    assert_eq!(rows[0].body, feed[1].body, "the feed's copy is shown");
+
+    let (rows, saved_len) = display_order(&saved, &feed, Some(READER));
+    let ids: Vec<u128> = rows.iter().map(|item| item.article.id.as_u128()).collect();
+    assert_eq!(ids, vec![2]);
+    assert_eq!(saved_len, 1);
+
+    let (rows, saved_len) = display_order(&[], &feed, None);
+    assert_eq!(rows.len(), 3);
+    assert_eq!(saved_len, 0);
 }
 
 #[test]

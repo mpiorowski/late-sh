@@ -169,7 +169,9 @@ impl ArticleBody {
     /// Retention: drop the text of every ready body fetched before
     /// `fetched_before`. The row stays as `unavailable`, so the card reads
     /// `link` and the reader shows the summary instead of a fetch that
-    /// will never come. Returns how many bodies were retired.
+    /// will never come. A story on anyone's shelf (`article_saves`) keeps
+    /// its text: it was saved to be read. Returns how many bodies were
+    /// retired.
     pub async fn retire_fetched_before(
         client: &Client,
         fetched_before: DateTime<Utc>,
@@ -178,7 +180,10 @@ impl ArticleBody {
             .execute(
                 "UPDATE article_bodies
                  SET status = 'unavailable', word_count = 0, lines = '[]'::jsonb
-                 WHERE status = 'ready' AND fetched_at < $1",
+                 WHERE status = 'ready' AND fetched_at < $1
+                   AND NOT EXISTS (
+                       SELECT 1 FROM article_saves s WHERE s.article_id = article_bodies.article_id
+                   )",
                 &[&fetched_before],
             )
             .await?;

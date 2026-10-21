@@ -3,13 +3,16 @@ use crate::app::ai::svc::AiService;
 use crate::metrics;
 use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 use anyhow::{Context, Result};
-use late_core::models::article::{ArticleEvent, ArticleFeedItem, ArticleSnapshot, NEWS_FEED_LIMIT};
+use late_core::models::article::{
+    ArticleEvent, ArticleFeedItem, ArticleSnapshot, FeedArticle, NEWS_FEED_LIMIT,
+};
 use late_core::{
     db::Db,
     models::{
         article::{Article, ArticleParams},
         article_body::{ArticleBody, BodyStatus},
         article_read::{ArticleRead, WatchPosition},
+        article_save::{ArticleSave, SaveOutcome},
         moderation_audit_log::ModerationAuditLog,
         user::User,
     },
@@ -194,6 +197,67 @@ impl ArticleService {
         });
     }
 
+    /// This reader's shelf, at session start and on a News room visit.
+    pub fn load_saves_task(&self, user_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = service.load_and_publish_saves(user_id).await {
+                late_core::error_span!(
+                    "article_saves_load_failed",
+                    error = ?e,
+                    user_id = %user_id,
+                    "failed to load saved articles"
+                );
+            }
+        });
+    }
+
+    /// Put a story on the reader's shelf, then republish the shelf so every
+    /// session of theirs shows it. A shelf already full by the time the
+    /// write lands (another session filled it) raises `SaveRefused` ahead
+    /// of the reload that takes the story back off.
+    pub fn save_article_task(&self, user_id: Uuid, article_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            match service.save_and_publish(user_id, article_id).await {
+                Ok(SaveOutcome::Saved) => metrics::record_news_save(NewsSaveOutcome::Saved),
+                Ok(SaveOutcome::AlreadySaved) => {}
+                Ok(SaveOutcome::Full) => {
+                    metrics::record_news_save(NewsSaveOutcome::Full);
+                    service.publish_event(ArticleEvent::SaveRefused { user_id });
+                }
+                Err(e) => {
+                    late_core::error_span!(
+                        "article_save_failed",
+                        error = ?e,
+                        user_id = %user_id,
+                        article_id = %article_id,
+                        "failed to save the article"
+                    );
+                }
+            }
+        });
+    }
+
+    /// Take a story off the reader's shelf, then republish the shelf.
+    pub fn unsave_article_task(&self, user_id: Uuid, article_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            match service.unsave_and_publish(user_id, article_id).await {
+                Ok(()) => metrics::record_news_save(NewsSaveOutcome::Unsaved),
+                Err(e) => {
+                    late_core::error_span!(
+                        "article_unsave_failed",
+                        error = ?e,
+                        user_id = %user_id,
+                        article_id = %article_id,
+                        "failed to unsave the article"
+                    );
+                }
+            }
+        });
+    }
+
     pub fn list_articles_task(&self) {
         let service = self.clone();
         tokio::spawn(async move {
@@ -234,21 +298,7 @@ impl ArticleService {
     async fn do_list_articles(&self) -> Result<()> {
         let db_client = self.db.get().await?;
         let articles = Article::list_feed(&db_client, NEWS_FEED_LIMIT).await?;
-        let user_ids = articles
-            .iter()
-            .map(|row| row.article.user_id)
-            .collect::<HashSet<_>>()
-            .into_iter()
-            .collect::<Vec<_>>();
-        let usernames = User::list_usernames_by_ids(&db_client, &user_ids).await?;
-        let articles = articles
-            .into_iter()
-            .map(|row| ArticleFeedItem {
-                author_username: display_author(&usernames, row.article.user_id),
-                article: row.article,
-                body: row.body,
-            })
-            .collect();
+        let articles = self.attach_sharers(&db_client, articles).await?;
 
         self.publish_snapshot(ArticleSnapshot {
             user_id: None, // Global feed
@@ -258,9 +308,66 @@ impl ArticleService {
         Ok(())
     }
 
+    /// Feed rows into cards: the sharer's username joins each one.
+    async fn attach_sharers(
+        &self,
+        db_client: &tokio_postgres::Client,
+        rows: Vec<FeedArticle>,
+    ) -> Result<Vec<ArticleFeedItem>> {
+        let user_ids = rows
+            .iter()
+            .map(|row| row.article.user_id)
+            .collect::<HashSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
+        let usernames = User::list_usernames_by_ids(db_client, &user_ids).await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| ArticleFeedItem {
+                author_username: display_author(&usernames, row.article.user_id),
+                article: row.article,
+                body: row.body,
+            })
+            .collect())
+    }
+
     async fn load_and_publish_reads(&self, user_id: Uuid) -> Result<()> {
         let db_client = self.db.get().await?;
         self.publish_reads(&db_client, user_id).await
+    }
+
+    async fn load_and_publish_saves(&self, user_id: Uuid) -> Result<()> {
+        let db_client = self.db.get().await?;
+        self.publish_saves(&db_client, user_id).await
+    }
+
+    async fn save_and_publish(&self, user_id: Uuid, article_id: Uuid) -> Result<SaveOutcome> {
+        let mut db_client = self.db.get().await?;
+        let outcome = ArticleSave::save(&mut db_client, user_id, article_id)
+            .await
+            .context("saving the article")?;
+        self.publish_saves(&db_client, user_id).await?;
+        Ok(outcome)
+    }
+
+    async fn unsave_and_publish(&self, user_id: Uuid, article_id: Uuid) -> Result<()> {
+        let db_client = self.db.get().await?;
+        ArticleSave::unsave(&db_client, user_id, article_id)
+            .await
+            .context("unsaving the article")?;
+        self.publish_saves(&db_client, user_id).await
+    }
+
+    async fn publish_saves(&self, db_client: &tokio_postgres::Client, user_id: Uuid) -> Result<()> {
+        let rows = ArticleSave::list_for_user(db_client, user_id)
+            .await
+            .context("loading saved articles")?;
+        let saved = self
+            .attach_sharers(db_client, rows)
+            .await
+            .context("naming the saved articles' sharers")?;
+        self.publish_event(ArticleEvent::SavesLoaded { user_id, saved });
+        Ok(())
     }
 
     /// A visit to the News room: every article in the snapshot is read.
@@ -1100,6 +1207,16 @@ pub enum XMediaLookup {
     Clean,
     Sensitive,
     Unavailable,
+}
+
+/// What a press of `s` did to the shelf, for
+/// `metrics::record_news_save`. A run of `full` is readers wanting a
+/// bigger shelf than [`late_core::models::article_save::NEWS_SAVED_LIMIT`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewsSaveOutcome {
+    Saved,
+    Unsaved,
+    Full,
 }
 
 #[derive(Deserialize)]

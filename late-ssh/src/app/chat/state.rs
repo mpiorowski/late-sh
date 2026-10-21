@@ -2560,13 +2560,7 @@ impl ChatState {
         let Some(lounge_id) = self.lounge_room_id() else {
             return false;
         };
-        let Some(item) = self
-            .news
-            .all_articles()
-            .iter()
-            .find(|item| item.article.id == article_id)
-            .cloned()
-        else {
+        let Some(item) = self.news.find_article(article_id).cloned() else {
             return false;
         };
         let author = match item.author_username.trim() {

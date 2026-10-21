@@ -82,16 +82,7 @@ impl Article {
                 &[&limit],
             )
             .await?;
-        rows.into_iter()
-            .map(|row| {
-                let status: Option<String> = row.get("body_status");
-                let word_count: Option<i32> = row.get("body_word_count");
-                Ok(FeedArticle {
-                    body: BodyStatus::from_columns(status.as_deref(), word_count)?,
-                    article: Self::from(row),
-                })
-            })
-            .collect()
+        rows.into_iter().map(FeedArticle::from_row).collect()
     }
 
     /// Articles shared inside `[floor, ceiling)` with the sharer's username,
@@ -230,13 +221,28 @@ pub struct ArticleSnapshot {
     pub articles: Vec<ArticleFeedItem>,
 }
 
-/// One row of [`Article::list_feed`], before the sharer's name is attached.
+/// One row of [`Article::list_feed`] or a reader's shelf
+/// ([`super::article_save::ArticleSave::list_for_user`]), before the
+/// sharer's name is attached.
 pub struct FeedArticle {
     pub article: Article,
     pub body: BodyStatus,
 }
 
-#[derive(Clone)]
+impl FeedArticle {
+    /// A row of `articles.*` joined with the body's `status` and
+    /// `word_count` as `body_status` and `body_word_count`.
+    pub fn from_row(row: tokio_postgres::Row) -> Result<Self> {
+        let status: Option<String> = row.get("body_status");
+        let word_count: Option<i32> = row.get("body_word_count");
+        Ok(Self {
+            body: BodyStatus::from_columns(status.as_deref(), word_count)?,
+            article: Article::from(row),
+        })
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct ArticleFeedItem {
     pub article: Article,
     pub author_username: String,
@@ -271,5 +277,22 @@ pub enum ArticleEvent {
     ReadsLoaded {
         user_id: Uuid,
         reads: Vec<super::article_read::ArticleReadRow>,
+    },
+    /// This user's shelf (`article_saves`), newest save first and at most
+    /// [`super::article_save::NEWS_SAVED_LIMIT`] stories, loaded at session
+    /// start, on a News room visit, and after every save or unsave. The
+    /// shelf moves (a save, an unsave, a delete cascading), so each load
+    /// replaces what the session holds.
+    SavesLoaded {
+        user_id: Uuid,
+        saved: Vec<ArticleFeedItem>,
+    },
+    /// A save the shelf refused: it already held
+    /// [`super::article_save::NEWS_SAVED_LIMIT`] stories by the time the
+    /// write landed (another session of the user's filled it). The
+    /// `SavesLoaded` that follows takes the story back off the session's
+    /// shelf.
+    SaveRefused {
+        user_id: Uuid,
     },
 }
