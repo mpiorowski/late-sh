@@ -458,6 +458,21 @@ async fn attention_follows_the_profiles_shelf() {
     assert_eq!(app.attention_place(), Place::Whole, "the lobby is no board");
 }
 
+/// A session counts as at the keys for five minutes after its last key,
+/// then as a terminal left open. Attention time and output bytes both
+/// split on it.
+#[tokio::test]
+async fn attention_presence_goes_idle_five_minutes_after_the_last_key() {
+    use crate::metrics::Presence;
+    let (_test_db, mut app) = chat_compose_app("tick-presence").await;
+
+    app.last_active_at = Instant::now() - Duration::from_secs(4 * 60);
+    assert_eq!(app.attention_presence(), Presence::Active);
+
+    app.last_active_at = Instant::now() - Duration::from_secs(6 * 60);
+    assert_eq!(app.attention_presence(), Presence::Idle);
+}
+
 #[tokio::test]
 async fn randomer_screensaver_rotation_updates_the_wake_tier_without_input() {
     use crate::app::ascii::{

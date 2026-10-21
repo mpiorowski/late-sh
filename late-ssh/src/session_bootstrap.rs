@@ -439,12 +439,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         .splash_piece_for_login(device.shows_artboard_disclaimer(&user))
         .await;
 
-    let first_contact_gate = crate::app::deadchannel::haunt::svc::bootstrap_gate(
-        state,
-        permissions.can_moderate(),
-        &user,
-    )
-    .await;
+    let first_contact_gate =
+        crate::app::deadchannel::haunt::svc::bootstrap_gate(state, &user).await;
     SessionConfig {
         cols,
         rows,

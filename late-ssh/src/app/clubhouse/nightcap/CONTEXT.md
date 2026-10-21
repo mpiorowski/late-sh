@@ -125,7 +125,7 @@ the seated speak. See `clubhouse/CONTEXT.md` for the parent slice.
   `App::sync_presence`).
 - Occupant names come from the sitter's presence record, which carries the
   session's live profile name, never cached at sit time, so a rename reaches
-  the stool. Root `CONTEXT.md` §8.1 names seat labels as the case not to
+  the stool. `late-ssh/CONTEXT.md` (username directory) names seat labels as the case not to
   build a per-feature username cache for.
 - Each stool shows how long it has been held (`SeatView.seated_for`,
   coarse minutes) and the occupant's drunk `(word)` from `App.drunk_levels`,

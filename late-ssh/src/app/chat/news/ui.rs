@@ -1,41 +1,38 @@
 use crate::app::chat::list_ui::{draw_mine_only_status, filtered_list_areas};
 use crate::app::chat::news::state::is_unread;
-use crate::app::chat::ui_text::{NewsPayload, format_news_ascii_art_for_display};
+use crate::app::chat::news::svc::is_youtube_url;
+use crate::app::chat::news::watch::state::position_label;
+use crate::app::chat::ui_text::format_news_ascii_art_for_display;
 use crate::app::common::primitives::format_relative_time;
 use crate::app::common::theme;
 use ratatui::{
     Frame,
-    layout::{Constraint, Direction, Flex, Layout, Margin, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Wrap},
 };
-use std::collections::HashSet;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use std::collections::{HashMap, HashSet};
+use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
 use late_core::models::article::{ArticleFeedItem, NEWS_SHARE_REWARD_CHIPS};
+use late_core::models::article_body::BodyStatus;
+use late_core::models::article_read::WatchPosition;
 
 pub struct ArticleListView<'a> {
     pub articles: &'a [ArticleFeedItem],
     pub selected_index: usize,
     pub marker: &'a HashSet<Uuid>,
+    /// Where the reader left each video they are partway through.
+    pub watch_positions: &'a HashMap<Uuid, WatchPosition>,
     pub mine_only: bool,
-}
-
-pub(crate) struct ArticleModalView<'a> {
-    pub payload: &'a NewsPayload,
-    pub meta: &'a str,
 }
 
 const ITEM_HEIGHT: u16 = 10;
 const THUMB_WIDTH: u16 = 14;
 const THUMB_LINES: usize = 6;
 const SUMMARY_LINES: usize = 3;
-const MODAL_SUMMARY_BULLETS: usize = 3;
-const MODAL_SUMMARY_LINES_PER_BULLET: usize = 2;
-const MODAL_MAX_WIDTH: u16 = 160;
-const MODAL_MIN_WIDTH: u16 = 24;
 
 pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'_>) {
     let (status_area, list_area) = filtered_list_areas(area, view.mine_only);
@@ -139,6 +136,20 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
                         format!(" - {}", article.created.format("%a %Y-%m-%d %H:%M UTC")),
                         Style::default().fg(theme::TEXT_FAINT()),
                     ),
+                    match reading_label(item, view.watch_positions) {
+                        Some(label) => Span::styled(
+                            format!(" - {}", label.text()),
+                            match label {
+                                ReadingLabel::Watch | ReadingLabel::Resume(_) => {
+                                    Style::default().fg(theme::AMBER())
+                                }
+                                ReadingLabel::Minutes(_) | ReadingLabel::Link => {
+                                    Style::default().fg(theme::TEXT_DIM())
+                                }
+                            },
+                        ),
+                        None => Span::raw(""),
+                    },
                 ]),
             ];
 
@@ -166,61 +177,49 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
     }
 }
 
-pub(crate) fn draw_article_modal(frame: &mut Frame, area: Rect, view: ArticleModalView<'_>) {
-    if area.width < MODAL_MIN_WIDTH || area.height < 5 {
-        return;
+/// The card meta's last segment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ReadingLabel {
+    /// How long the story's text takes to read.
+    Minutes(u16),
+    /// No text to read here: an X post, a page the fetch could not read.
+    Link,
+    /// A video, for everyone: watching is the user's intent, and `w` says
+    /// what their setup needs when it cannot play.
+    Watch,
+    /// A video this reader is partway through: `w` picks up here.
+    Resume(WatchPosition),
+}
+
+impl ReadingLabel {
+    pub(crate) fn text(self) -> String {
+        match self {
+            Self::Minutes(minutes) => format!("{minutes} min read"),
+            Self::Link => "link".to_string(),
+            Self::Watch => "watch".to_string(),
+            Self::Resume(position) => format!("▶ {}", position_label(position)),
+        }
     }
+}
 
-    let popup_width = area
-        .width
-        .saturating_sub(2)
-        .clamp(MODAL_MIN_WIDTH, MODAL_MAX_WIDTH)
-        .min(area.width);
-    let content_width = popup_width.saturating_sub(4) as usize;
-    let content_lines = build_article_modal_lines(&view, content_width);
-    let popup_height = (content_lines.len() as u16 + 3).min(area.height).max(5);
-    let popup = centered_rect(popup_width, popup_height, area);
-    frame.render_widget(Clear, popup);
-
-    let modal_bg = Style::default().bg(theme::BG_CANVAS());
-    let block = Block::default()
-        .title(" News Item ")
-        .title_style(
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        )
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE()))
-        .style(modal_bg);
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-
-    let layout = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).split(inner);
-    let content = layout[0].inner(Margin {
-        horizontal: 1,
-        vertical: 0,
-    });
-    frame.render_widget(Paragraph::new(content_lines).style(modal_bg), content);
-
-    let footer = Line::from(vec![
-        Span::styled("Enter", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" copy link", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("  ", Style::default().fg(theme::BORDER())),
-        Span::styled("N", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" open in News", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("  ", Style::default().fg(theme::BORDER())),
-        Span::styled("r", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" reply in #lounge", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("  ", Style::default().fg(theme::BORDER())),
-        Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
-    ]);
-    let footer_area = layout[1].inner(Margin {
-        horizontal: 1,
-        vertical: 0,
-    });
-    frame.render_widget(Paragraph::new(footer).style(modal_bg), footer_area);
+/// The card's reading label; nothing while a page's fetch is pending. A
+/// video never gets text, so it reads `watch` whatever its body says, or
+/// where this reader left it when they are partway through.
+pub(crate) fn reading_label(
+    item: &ArticleFeedItem,
+    watch_positions: &HashMap<Uuid, WatchPosition>,
+) -> Option<ReadingLabel> {
+    if is_youtube_url(&item.article.url) {
+        return Some(match watch_positions.get(&item.article.id) {
+            Some(position) => ReadingLabel::Resume(*position),
+            None => ReadingLabel::Watch,
+        });
+    }
+    match item.body {
+        BodyStatus::Ready { reading_minutes } => Some(ReadingLabel::Minutes(reading_minutes)),
+        BodyStatus::Pending => None,
+        BodyStatus::Unavailable => Some(ReadingLabel::Link),
+    }
 }
 
 fn ascii_preview_if_fit(ascii_art: &str, target_width: usize, max_lines: usize) -> Vec<String> {
@@ -245,115 +244,6 @@ fn ascii_preview_if_fit(ascii_art: &str, target_width: usize, max_lines: usize) 
     lines.into_iter().take(max_lines).collect()
 }
 
-fn build_article_modal_lines(view: &ArticleModalView<'_>, width: usize) -> Vec<Line<'static>> {
-    let title_style = Style::default()
-        .fg(theme::TEXT_BRIGHT())
-        .add_modifier(Modifier::BOLD);
-    let url_style = Style::default()
-        .fg(theme::TEXT_FAINT())
-        .add_modifier(Modifier::ITALIC);
-    let meta_style = Style::default().fg(theme::TEXT_DIM());
-    let body_style = Style::default().fg(theme::TEXT());
-    let art_style = Style::default().fg(theme::AMBER_DIM());
-
-    let (left_width, gap_width, right_width) = modal_columns(width);
-    let title = normalize_inline_text(&view.payload.title);
-    let url = normalize_inline_text(&view.payload.url);
-    let mut right_rows = Vec::new();
-
-    for row in wrap_plain_display_width(
-        if title.is_empty() {
-            "news update"
-        } else {
-            title.as_str()
-        },
-        right_width,
-    ) {
-        right_rows.push((row, title_style));
-    }
-    if !url.is_empty() {
-        for row in wrap_plain_display_width(&url, right_width) {
-            right_rows.push((row, url_style));
-        }
-    }
-    if !view.meta.is_empty() {
-        for row in wrap_plain_display_width(view.meta, right_width) {
-            right_rows.push((row, meta_style));
-        }
-    }
-    for bullet in split_summary_bullets(&view.payload.summary)
-        .into_iter()
-        .take(MODAL_SUMMARY_BULLETS)
-    {
-        for row in wrap_plain_display_width(&bullet, right_width)
-            .into_iter()
-            .take(MODAL_SUMMARY_LINES_PER_BULLET)
-        {
-            right_rows.push((row, body_style));
-        }
-    }
-
-    let ascii_lines = if left_width == 0 {
-        Vec::new()
-    } else {
-        ascii_preview_if_fit(&view.payload.ascii_art, left_width, THUMB_LINES)
-    };
-    let row_count = ascii_lines.len().max(right_rows.len()).max(1);
-
-    let mut lines = Vec::with_capacity(row_count + 2);
-    lines.push(Line::default());
-    for idx in 0..row_count {
-        let left = ascii_lines.get(idx).map(String::as_str).unwrap_or("");
-        let (right, right_style) = right_rows
-            .get(idx)
-            .map(|(text, style)| (text.as_str(), *style))
-            .unwrap_or(("", body_style));
-        lines.push(article_modal_row(
-            left,
-            left_width,
-            gap_width,
-            right,
-            right_style,
-            art_style,
-        ));
-    }
-    lines.push(Line::default());
-    lines
-}
-
-fn modal_columns(width: usize) -> (usize, usize, usize) {
-    let left_width = THUMB_WIDTH as usize;
-    let gap_width = 2;
-    if width >= left_width + gap_width + 12 {
-        (left_width, gap_width, width - left_width - gap_width)
-    } else {
-        (0, 0, width.max(1))
-    }
-}
-
-fn article_modal_row(
-    left: &str,
-    left_width: usize,
-    gap_width: usize,
-    right: &str,
-    right_style: Style,
-    art_style: Style,
-) -> Line<'static> {
-    if left_width == 0 {
-        return Line::from(Span::styled(right.to_string(), right_style));
-    }
-
-    Line::from(vec![
-        Span::styled(pad_to_display_width(left, left_width), art_style),
-        Span::raw(" ".repeat(gap_width)),
-        Span::styled(right.to_string(), right_style),
-    ])
-}
-
-fn normalize_inline_text(value: &str) -> String {
-    value.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
 pub(crate) fn split_summary_bullets(text: &str) -> Vec<String> {
     text.replace("\\n", "\n")
         .lines()
@@ -364,75 +254,6 @@ pub(crate) fn split_summary_bullets(text: &str) -> Vec<String> {
             format!("• {stripped}")
         })
         .collect()
-}
-
-fn wrap_plain_display_width(text: &str, width: usize) -> Vec<String> {
-    if text.trim().is_empty() {
-        return Vec::new();
-    }
-    if width == 0 {
-        return vec![String::new()];
-    }
-
-    let chars: Vec<char> = text.chars().collect();
-    let mut out = Vec::new();
-    let mut idx = 0;
-    while idx < chars.len() {
-        let mut end = idx;
-        let mut used = 0;
-        while end < chars.len() {
-            let ch_width = UnicodeWidthChar::width(chars[end]).unwrap_or(0);
-            if used > 0 && used + ch_width > width {
-                break;
-            }
-            used += ch_width;
-            end += 1;
-            if used >= width {
-                break;
-            }
-        }
-
-        let break_at = if end < chars.len() {
-            let mut pos = end;
-            while pos > idx && chars[pos - 1] != ' ' {
-                pos -= 1;
-            }
-            if pos > idx { pos } else { end.max(idx + 1) }
-        } else {
-            end
-        };
-        out.push(chars[idx..break_at].iter().collect());
-        idx = break_at;
-        while idx < chars.len() && chars[idx] == ' ' {
-            idx += 1;
-        }
-    }
-    out
-}
-
-fn pad_to_display_width(text: &str, width: usize) -> String {
-    let mut out = String::new();
-    let mut used = 0;
-    for ch in text.chars() {
-        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-        if used + ch_width > width {
-            break;
-        }
-        out.push(ch);
-        used += ch_width;
-    }
-    out.push_str(&" ".repeat(width.saturating_sub(used)));
-    out
-}
-
-fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
-    let vertical = Layout::vertical([Constraint::Length(height.min(area.height))])
-        .flex(Flex::Center)
-        .split(area);
-    let horizontal = Layout::horizontal([Constraint::Length(width.min(area.width))])
-        .flex(Flex::Center)
-        .split(vertical[0]);
-    horizontal[0]
 }
 
 #[cfg(test)]

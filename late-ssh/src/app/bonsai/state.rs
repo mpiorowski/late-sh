@@ -492,9 +492,11 @@ impl BonsaiState {
             self.message = Some("Pinched and leaf branches will not wire".to_string());
             return false;
         }
+        // A steer replaces any lean the tip carries (one inherited from a
+        // wired parent included), so each key means exactly its direction.
         branch.status = BranchStatus::Wired;
-        branch.bend_x = (branch.bend_x + dx).clamp(-3, 3);
-        branch.bend_y = (branch.bend_y + dy).clamp(-2, 3);
+        branch.bend_x = dx;
+        branch.bend_y = dy;
         let direction = wire_direction_label(branch.bend_x, branch.bend_y);
         self.mode = BonsaiMode::Wire;
         self.message = Some(format!("Wire set: future growth will lean {direction}"));
@@ -1737,20 +1739,14 @@ fn growth_tip_order(
     ordered
 }
 
+/// The step a wired or leaning tip takes. A bend is an absolute direction:
+/// `(0, 1)` is straight up whichever way the segment leans. A tip with no
+/// bend keeps its own lean and rises.
 fn growth_step(branch: &Branch) -> (i16, i16) {
-    let current_dx = (branch.end_x - branch.start_x).signum();
-    let step_x = if branch.bend_x != 0 {
-        branch.bend_x.signum() as i16
-    } else {
-        current_dx
-    };
-    let step_y = match branch.bend_y.cmp(&0) {
-        std::cmp::Ordering::Greater => 1,
-        std::cmp::Ordering::Less => -1,
-        std::cmp::Ordering::Equal if branch.bend_x != 0 => 0,
-        std::cmp::Ordering::Equal => 1,
-    };
-    (step_x, step_y)
+    match (branch.bend_x, branch.bend_y) {
+        (0, 0) => ((branch.end_x - branch.start_x).signum(), 1),
+        (bend_x, bend_y) => (bend_x.signum() as i16, bend_y.signum() as i16),
+    }
 }
 
 fn side_shoot_threshold(cause: GrowthCause, _tip: &Branch, vigor: i32, water_stress: i32) -> u64 {

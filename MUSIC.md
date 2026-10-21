@@ -1,10 +1,31 @@
 # Music Inventory
 
-This file tracks the local music catalog used by `late.sh` radio.
+This file tracks the local music catalog used by `late.sh` radio: the two
+house mounts Liquidsoap serves through Icecast, `/chill` (the lofi and ambient
+playlists, mixed evenly; the `lofi` station) and `/classical`.
+Every track is CC0, CC-BY or public domain; the public `/listen` page links
+here for attribution. Third-party stations (Nightride, Plaza, Radio Paradise,
+...) are never restreamed; they are listed in the station catalogue
+(`late-ssh/src/app/audio/STATIONS.md`).
 
-- Runtime source of truth for playback order is the `.m3u` files in `infra/liquidsoap/`.
-- Source of truth for reproducible fetching is `scripts/fetch_cc_music.py` plus `scripts/fetch_ambient_refresh.py` for the expanded ambient catalog.
-- `CONTEXT.md` should keep only high-signal status and point here for detailed track inventories.
+How the library ships:
+
+- `scripts/fetch_cc_music.py` downloads a genre into `tmp/<genre>/` (Bandcamp
+  via yt-dlp, Internet Archive and a curated FMA manifest via urllib) and
+  writes its `.m3u` (`--genre`, `--music-dir`, `--skip-m3u`). Needs `yt-dlp`,
+  `ffmpeg`, `ffprobe`.
+- The `.m3u` playlists in `infra/liquidsoap/` live in git and are the runtime
+  source of truth for order, licenses and source URLs, in Liquidsoap
+  `annotate:` format (CC-BY attribution rides the metadata to the sidebar).
+- Binaries live in Cloudflare R2 (the `MUSIC_BUCKET` GitHub variable), never
+  in git. The manual `sync_music` workflow wipes and re-copies every genre
+  directory onto the Liquidsoap PVC; it is never a side effect of an infra
+  deploy. A ConfigMap change (playlists, `radio.liq`, `icecast.xml`) rolls the
+  pods through `config_hash` annotations.
+- `radio.liq` plays each playlist through `mksafe` (silence, never a crash,
+  when the PVC is empty), `mode="randomize"` with `check_next` guarding
+  back-to-back repeats, and formats now-playing as `Artist - Title | Duration`
+  (`rewrite_np_metadata`).
 
 ## Library Status
 

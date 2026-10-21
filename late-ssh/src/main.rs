@@ -216,6 +216,7 @@ async fn main() -> anyhow::Result<()> {
     let _calendar_sweeper_task = calendar_service.start_sweeper_task();
     let _article_notify_task =
         article_service.start_notify_worker(pg_listener.subscribe(ArticleService::CHANNELS));
+    let _article_body_sweep_task = article_service.start_body_sweep_task();
     let feed_service = FeedService::new(db.clone());
     feed_service.start_poll_task();
     let cyberspace_service = late_ssh::app::chat::cyberspace::svc::CyberspaceService::new(
@@ -566,7 +567,7 @@ async fn main() -> anyhow::Result<()> {
 
     // The door log pipe: tail each door host's append-only log files over the
     // stats SSH session and land runs/milestones/badges (the contract lives
-    // in `app/leaderboard/CONTEXT.md`). One task per door, gated on the same
+    // in `app/door/ingest/CONTEXT.md`). One task per door, gated on the same
     // flag as that door's client; single-replica by the same assumption as
     // every other process-global singleton here.
     let door_ingest_service = late_ssh::app::door::ingest::svc::DoorIngestService::new(

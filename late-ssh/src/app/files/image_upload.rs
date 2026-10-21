@@ -11,6 +11,7 @@ use reqwest::{Url, redirect::Policy};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::app::common::public_net::is_public_ip;
 use crate::config::{FilesConfig, MAX_IMAGE_BYTES};
 
 type HmacSha256 = Hmac<Sha256>;
@@ -306,27 +307,10 @@ async fn validate_download_url(raw_url: &str) -> Result<ValidatedDownloadUrl> {
     Ok(ValidatedDownloadUrl { url, host, addrs })
 }
 
+/// The house rule for user-supplied URLs (`app/common/public_net.rs`), the
+/// same one the News reader's fetch holds.
 fn is_blocked_ip(ip: IpAddr) -> bool {
-    match ip {
-        IpAddr::V4(ip) => {
-            let octets = ip.octets();
-            ip.is_private()
-                || ip.is_loopback()
-                || ip.is_link_local()
-                || ip.is_unspecified()
-                || ip.is_broadcast()
-                || ip.is_multicast()
-                || (octets[0] == 100 && (64..=127).contains(&octets[1]))
-                || (octets[0] == 198 && (18..=19).contains(&octets[1]))
-        }
-        IpAddr::V6(ip) => {
-            ip.is_loopback()
-                || ip.is_unspecified()
-                || ip.is_unique_local()
-                || ip.is_unicast_link_local()
-                || ip.is_multicast()
-        }
-    }
+    !is_public_ip(ip)
 }
 
 async fn read_response_limited(mut resp: reqwest::Response, max_bytes: usize) -> Result<Vec<u8>> {
@@ -377,3 +361,7 @@ fn hmac_sha256(key: &[u8], data: &[u8]) -> Vec<u8> {
 fn sha256_hex(data: &[u8]) -> String {
     hex::encode(Sha256::digest(data))
 }
+
+#[cfg(test)]
+#[path = "image_upload_test.rs"]
+mod image_upload_test;

@@ -3,9 +3,10 @@
 // the player's screen alone. Opened (Enter on the row) it takes the whole
 // page: the header over the screen, and the watch chat docked beside it
 // (`chat_dock`) under its `N watching` row. The screen is the player's size, not ours: a smaller one is
-// centered, a larger one is cropped to a window around the game's cursor
-// (crawl and NetHack park it on the `@`), or pinned top-left while the game
-// hides its cursor (`crop_anchor`; Brogue). Brogue's black canvas is keyed
+// pinned top-left, the way every door draws its own game, a larger one is
+// cropped to a window around the game's cursor (crawl and NetHack park it on
+// the `@`), or pinned top-left while the game hides its cursor
+// (`crop_anchor`; Brogue). Brogue's black canvas is keyed
 // out the way its own door screen keys it, so the theme shows through.
 //
 // The chat only ever docks where the game keeps its whole minimum screen
@@ -138,23 +139,23 @@ pub struct SpectateView<'a> {
     pub watchers: usize,
 }
 
-/// One axis of the fit: where to start reading the player's screen, how far
-/// in to start drawing, and how many cells to draw.
+/// One axis of the fit: where to start reading the player's screen and how
+/// many cells to draw. Drawing always starts at the view's edge.
 #[derive(Debug, PartialEq, Eq)]
 pub struct AxisFit {
     pub src: u16,
-    pub dst: u16,
     pub len: u16,
 }
 
 /// Fit `screen_len` cells of the player's screen into `view_len` cells of
-/// ours: centered when it fits, otherwise a window that keeps `cursor` in
-/// the middle, clamped to the screen's edges.
+/// ours: the whole screen from the view's edge when it fits (the doors draw
+/// their own games top-left, so a watch matches what the player sees),
+/// otherwise a window that keeps `cursor` in the middle, clamped to the
+/// screen's edges.
 pub fn fit_axis(screen_len: u16, view_len: u16, cursor: u16) -> AxisFit {
     if screen_len <= view_len {
         return AxisFit {
             src: 0,
-            dst: (view_len - screen_len) / 2,
             len: screen_len,
         };
     }
@@ -162,7 +163,6 @@ pub fn fit_axis(screen_len: u16, view_len: u16, cursor: u16) -> AxisFit {
         src: cursor
             .saturating_sub(view_len / 2)
             .min(screen_len - view_len),
-        dst: 0,
         len: view_len,
     }
 }
@@ -243,8 +243,8 @@ pub fn draw(
                 let x = fit_axis(cols, body.width, anchor_col);
                 let y = fit_axis(rows, body.height, anchor_row);
                 let target = Rect {
-                    x: body.x + x.dst,
-                    y: body.y + y.dst,
+                    x: body.x,
+                    y: body.y,
                     width: x.len,
                     height: y.len,
                 };

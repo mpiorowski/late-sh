@@ -9,8 +9,9 @@ use chrono::{DateTime, Duration, Utc};
 use late_core::models::article::{
     Article, ArticleEvent, ArticleFeedItem, ArticleParams, NEWS_FEED_LIMIT,
 };
+use late_core::models::article_read::{ArticleReadRow, WatchPosition};
 use late_core::test_utils::create_test_user;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
 const READER: Uuid = Uuid::from_u128(100);
@@ -27,6 +28,14 @@ fn read(ids: &[u128]) -> HashSet<Uuid> {
     ids.iter().map(|id| Uuid::from_u128(*id)).collect()
 }
 
+/// A loaded read with no video position.
+fn read_row(article_id: Uuid) -> ArticleReadRow {
+    ArticleReadRow {
+        article_id,
+        watch_position: None,
+    }
+}
+
 fn article(id: u128, author: Uuid, created_minutes: i64) -> ArticleFeedItem {
     let created = at(created_minutes);
     ArticleFeedItem {
@@ -41,6 +50,7 @@ fn article(id: u128, author: Uuid, created_minutes: i64) -> ArticleFeedItem {
             ascii_art: "...".to_string(),
         },
         author_username: "author".to_string(),
+        body: late_core::models::article_body::BodyStatus::Pending,
     }
 }
 
@@ -73,7 +83,8 @@ fn nothing_is_unread_while_the_reads_load() {
 
 /// Two writes' loads landing in the wrong order: the fuller one first, then
 /// one taken before the second write. Reads only grow, so the session
-/// merges and never takes a read back.
+/// merges and never takes a read back. Video positions move, so the newest
+/// load replaces them: one without the position is a clear that landed.
 #[tokio::test]
 async fn a_load_landing_out_of_order_never_takes_a_read_back() {
     let test_db = new_test_db().await;
@@ -107,17 +118,38 @@ async fn a_load_landing_out_of_order_never_takes_a_read_back() {
     .await;
     assert_eq!(state.unread_count(), 2);
 
+    let halfway = WatchPosition {
+        position_s: 1394,
+        duration_s: Some(2910),
+    };
     service.publish_event(ArticleEvent::ReadsLoaded {
         user_id: reader.id,
-        read_article_ids: vec![first.id, second.id],
+        reads: vec![
+            read_row(first.id),
+            ArticleReadRow {
+                article_id: second.id,
+                watch_position: Some(halfway),
+            },
+        ],
     });
+    state.tick();
+    assert_eq!(
+        state.watch_positions(),
+        &HashMap::from([(second.id, halfway)])
+    );
+
     service.publish_event(ArticleEvent::ReadsLoaded {
         user_id: reader.id,
-        read_article_ids: vec![first.id],
+        reads: vec![read_row(first.id)],
     });
     state.tick();
 
     assert_eq!(state.unread_count(), 0);
+    assert_eq!(
+        state.watch_positions(),
+        &HashMap::new(),
+        "a load without the position is the clear that landed"
+    );
     let second_item = state
         .all_articles()
         .iter()
@@ -230,4 +262,95 @@ fn move_index_returns_zero_for_empty_list() {
 #[test]
 fn clamp_index_passes_through_when_within_bounds() {
     assert_eq!(clamp_index(1, 5), 1);
+}
+
+/// A body answer reaches only the session that asked. With the same user
+/// on a second session (a phone beside the laptop), the phone opening the
+/// same story leaves the laptop's reader where it was: its text, and how
+/// far down it had scrolled.
+#[tokio::test]
+async fn a_body_answer_reaches_only_the_session_that_asked() {
+    use crate::app::chat::news::reader::state::ReaderBody;
+    use crate::app::common::scroll_view::ScrollViewport;
+    use late_core::models::article_body::{ArticleBody, ReaderLine, ReaderSpan};
+    use ratatui::layout::Rect;
+
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let sharer = create_test_user(&test_db.db, "two-sessions-sharer").await;
+    let reader = create_test_user(&test_db.db, "two-sessions-reader").await;
+    let story = Article::create_by_user_id(
+        &client,
+        sharer.id,
+        ArticleParams {
+            user_id: sharer.id,
+            url: "https://example.com/two-sessions".to_string(),
+            title: "Title".to_string(),
+            summary: "Summary".to_string(),
+            ascii_art: "...".to_string(),
+        },
+    )
+    .await
+    .expect("create story");
+    let lines = vec![ReaderLine::Paragraph {
+        spans: vec![ReaderSpan::Text("words".to_string())],
+    }];
+    ArticleBody::store_ready(&client, story.id, 1, &lines)
+        .await
+        .expect("store ready");
+    let service = ArticleService::new(test_db.db.clone(), AiService::new(false, None));
+    let mut laptop = State::new(service.clone(), reader.id, false);
+    let mut phone = State::new(service.clone(), reader.id, false);
+    wait_until(
+        || {
+            laptop.tick();
+            phone.tick();
+            std::future::ready(laptop.all_articles().len() == 1 && phone.all_articles().len() == 1)
+        },
+        "both sessions load the snapshot",
+    )
+    .await;
+    let is_ready = |state: &State| {
+        matches!(
+            state.reader().map(|modal| modal.body()),
+            Some(ReaderBody::Ready { .. })
+        )
+    };
+
+    assert!(laptop.open_reader(story.id));
+    wait_until(
+        || {
+            laptop.tick();
+            std::future::ready(is_ready(&laptop))
+        },
+        "the laptop's reader gets its text",
+    )
+    .await;
+    let view = laptop.reader().expect("laptop reader").view();
+    view.set_viewport(ScrollViewport {
+        body: Rect::new(0, 0, 40, 10),
+        content_height: 50,
+        ..ScrollViewport::default()
+    });
+    view.scroll(7);
+
+    assert!(phone.open_reader(story.id));
+    wait_until(
+        || {
+            laptop.tick();
+            phone.tick();
+            std::future::ready(is_ready(&phone))
+        },
+        "the phone's reader gets its text",
+    )
+    .await;
+    laptop.tick();
+
+    let laptop_reader = laptop.reader().expect("laptop reader still open");
+    assert!(matches!(laptop_reader.body(), ReaderBody::Ready { .. }));
+    assert_eq!(
+        laptop_reader.view().offset(),
+        7,
+        "the phone's answer must not reach the laptop"
+    );
 }

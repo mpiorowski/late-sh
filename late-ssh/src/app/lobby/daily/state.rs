@@ -274,7 +274,7 @@ pub struct DailyBoardState {
     /// you got there — only what arrives while you are watching.
     pub pool_animated: Option<usize>,
     /// Shots being re-simulated for playback on a blocking thread. The tick
-    /// path does not run physics (root `CONTEXT.md` §2.5), so the animation is
+    /// path does not run physics (`late-ssh/CONTEXT.md`, sync/async boundary), so the animation is
     /// asked for here and collected a tick or two later. Several because a
     /// replayed visit is several shots; a fresh shot is a vector of one.
     pub(super) timeline_rx: Option<oneshot::Receiver<Vec<Timeline>>>,

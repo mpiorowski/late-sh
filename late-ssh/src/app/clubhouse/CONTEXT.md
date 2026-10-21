@@ -34,7 +34,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
   spot it picked or the cell it walked to, when, its last emote, its last
   pet). Every replica holding the same records draws the same room
   (`crowd::crowd`). No process-global seat map: presence is replica-clean
-  (root CONTEXT.md §0, §7).
+  (root CONTEXT.md, multi-replica rule; `SCALE.md`, Pain Point 2 ledger).
 - **Everyone who logs in is in the room**, whether or not they ever open
   it: the session sits itself down at login (`State::new`, `first_stand`),
   from the records presence already has. Bots have no session, so no
@@ -89,7 +89,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
   presence, so recent drinkers who logged out keep tinting their chat
   history until they decay.
 - **Name flair:** a bought Name Glow/Gradient/Shimmer, 24h or 30-day tier (see
-  `hub/CONTEXT.md`) paints the name-label foreground per character
+  `hub/shop/CONTEXT.md`) paints the name-label foreground per character
   (`put_label_styled` in `ui.rs`, flair from `ClubhouseView.name_flair` =
   `App.name_flair`, resolved ~1/s in `App::tick` from the process-shared
   flair directory). Composes with the drunk bg tint; does not touch the
@@ -104,7 +104,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
 
 ## 4. Chat: bubbles, not a panel
 
-- The old embedded `#lounge` chat panel is gone. `ui::draw` splits the area
+- There is no embedded `#lounge` chat panel. `ui::draw` splits the area
   into the tavern plus the shared `ComposerBlockView` footer (same block the
   dashboard card uses; grows while typing, shows placeholder hints idle).
 - `i` (or Enter in the open) composes into #lounge through the normal global
@@ -152,7 +152,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
   (`@bartender buy @user a drink`, `one for @user`, `@user's next one is on
   me`, the closed `GIFT_PHRASES` list) instead leaves one 200-chip credit on that person's tab, even while they
   are offline, without pouring the buyer. The recipient claims it on their
-  own order; see `app/chat/CONTEXT.md` §9d. The tutorial greeting stays free.
+  own order; see `app/ai/ROUND.md`. The tutorial greeting stays free.
 - Message selection/reactions/scroll do not exist on this screen; Home owns
   them. The lounge is still pinned as the visible chat room for read cursors
   (`sync_visible_chat_room`).
@@ -252,8 +252,8 @@ room is the chat surface, and the full history lives in #lounge on Home.
   `UserDrinks::record_welcome_pour`, an insert-only comp that returns
   `None` for anyone who has ever drunk, so tour reruns after a mid-tour
   disconnect can't double-comp.
-- The Ctrl+O profile nudge lives here on purpose: the old
-  "open settings on connect" behavior was removed in favor of this beat.
+- The Ctrl+O profile nudge lives here on purpose: nothing opens Settings on
+  connect.
 
 ## 6. Gotchas
 

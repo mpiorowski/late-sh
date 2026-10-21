@@ -1,6 +1,6 @@
 # The lounge spawns, as built (late-ssh/src/app/deadchannel/lounge)
 
-Parent: `../CONTEXT.md` §3d (the pointer and the seams). Design and the
+Parent: `../CONTEXT.md` §3d. Design and the
 reasons: `../GAME.md`, "The lounge pass". The first shared world object:
 a glyph in a three-row scene above #lounge's composer that runners put
 down together. Runners only; civilians see a composer. Three flickers and one howler a day,
@@ -63,10 +63,12 @@ Tests sit beside each file (`state_test.rs`, `svc_test.rs`, `ui_test.rs`).
   failure). A slain spawn a dead replica left unpaid for 30s is settled
   by any sweeper; those sessions saw the kill before the pay and catch
   up on their next press.
-- **The wire, once per spawn:** "@tom, @dax and @mira put down a howler
-  in the lounge. a crystal each." or "a howler slipped past the lounge.
-  nobody was looking." (with the hitters mentioned when some hit it:
-  `mentions`, the wire's twin of the scene's `names`).
+- **The wire, at most once per spawn:** "@tom, @dax and @mira put down
+  a howler in the lounge. a crystal each." or "a howler slipped past the
+  lounge. @tom and @dax hit it; it needed three." (`mentions`, the
+  wire's twin of the scene's `names`). A spawn nobody hit slips away
+  with no line (`slipped_line` answers `None`); the metric and the log
+  line still count it.
   Nothing in #lounge, nothing in scrollback, nothing on IRC: the spawn
   is render-layer chrome above the composer of runners looking at the
   lounge card, and the `/hit` line never becomes a message.
@@ -100,3 +102,32 @@ Tests sit beside each file (`state_test.rs`, `svc_test.rs`, `ui_test.rs`).
 moved but could not be announced). The fight counter sees each pay as
 `pocketed` on its own side. Spans: `deadchannel.lounge.sweep`,
 `deadchannel.lounge.hit_task`, `deadchannel.fight.pocket`.
+
+## Files
+
+| File | Owns |
+|---|---|
+| `lounge/state.rs` | Pure: `due`, `roll_dice`, `hits_needed` / `lifetime_secs` per `SpawnKind`, `pay_for` (as the sheet's `Leavings`), `parse_lounge_command`, `shows`, `is_stale`, `names`, `scene_text` (`SceneText`: the headline, the detail, and whether the `/hit` key goes with them), `animates`, `left_secs`. No I/O, no clock. `lounge/CONTEXT.md`. |
+| `lounge/data.rs` | The copy and the art: the wire's slain and slipped lines, the scene's answers to a hit, the faces, the seats, the strike frames. |
+| `lounge/svc.rs` | `LoungeService`: the spawner and sweeper on every replica, the notify worker into a process-shared `watch<Option<Spawn>>`, `hit_task` / `hit` (the settled sheet, one conditional update, the pay through `FightService::pocket` before the slain row is announced), `announce` (a failed `pg_notify` logged and counted), `tick(app, anim_half)` (the session's side; writes chat's `hits_on`, owes the scene's frames), and `animates(app)` (the wake cadence's seam). The metric and the log line per outcome. `lounge/CONTEXT.md`. |
+| `lounge/session.rs` | `LoungeSession`: the tick copy of the spawn, the session's own word and its expiry, one hit in flight, `showing`, `animating`, the countdown's last painted second. Decides nothing. |
+| `lounge/ui.rs` | `LoungeScene` and `scene` (three rows: the hitters' seats, the lane and its strike, the face, the words), `SCENE_HEIGHT`. Pure; `chat/ui.rs::draw_dashboard_chat_card` draws it above the composer. |
+
+## Seams
+
+The lounge's seams: `App.lounge` (the session), one tick line in
+`tick.rs` (`lounge::svc::tick`, with the half animation edge) and one
+in its wake cadence (`lounge::svc::animates`, the half tier while a
+strike or a dissolve plays), `looking_at_lounge` on the presence
+record (`App::sync_presence`: Home with the #lounge card up, the
+`lounge` flag in `models/presence.rs`), `dashboard_lounge` in
+`render.rs` (the scene for a runner on the #lounge card, built off the
+spawn and the runner directory's looks, handed to the dashboard card
+for the rows above its composer), chat's `requested_hit` slot and `hits_on`
+flag (`submit_composer` swallows `/hit` while a runner is looking at
+#lounge and lets it fall through to the unknown-command banner anywhere
+else and for anyone else;
+`set_hits_on` is written by the lounge tick), `FightService::settled_sheet`
+and `pocket` (`Command::Pocket(Leavings)`, the one sheet writer paying
+the leavings), `State.lounge_service` (started in `main.rs`), and
+`Channel::DeadchannelSpawn` in `pg_listener.rs`.

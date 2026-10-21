@@ -311,6 +311,46 @@ fn downward_wire_grows_a_drooping_segment() {
     assert!(child.end_y >= 1);
 }
 
+fn steer_and_grow(graph: BonsaiGraph, tip_id: i32, dx: i8, dy: i8) -> (Branch, Branch) {
+    let tip_before = graph.branch(tip_id).unwrap().clone();
+    let mut state = state_for_graph(graph, Some(tip_id));
+    let applied = state.apply(
+        BonsaiCommand::Branch {
+            branch_id: tip_id,
+            action: BranchAction::Bend { dx, dy },
+        },
+        BonsaiService::today(),
+    );
+    assert_eq!(applied, Applied::Changed);
+
+    let new_id = grow_tip_once(&mut state.graph, tip_id, 42, 75, 0, GrowthCause::Water).unwrap();
+    (tip_before, state.graph.branch(new_id).unwrap().clone())
+}
+
+/// Steering up means up, whichever way the tip already leans.
+#[test]
+fn steering_a_diagonal_tip_up_grows_straight_up() {
+    let graph = graph_with_two_isolated_tips();
+    let tip_id = first_editable_tip(&graph);
+
+    let (tip, child) = steer_and_grow(graph, tip_id, 0, 1);
+
+    assert_eq!((child.end_x, child.end_y), (tip.end_x, tip.end_y + 1));
+}
+
+/// A tip grown off a wire inherits its lean; a new steer replaces that
+/// lean instead of adding to it.
+#[test]
+fn a_steer_replaces_the_inherited_lean() {
+    let mut graph = graph_with_two_isolated_tips();
+    let tip_id = first_editable_tip(&graph);
+    graph.branch_mut(tip_id).unwrap().bend_x = -1;
+
+    let (tip, child) = steer_and_grow(graph, tip_id, 0, 1);
+
+    assert_eq!((child.end_x, child.end_y), (tip.end_x, tip.end_y + 1));
+}
+
 #[test]
 fn growth_wave_advances_multiple_tips() {
     let mut graph = graph_with_two_editable_tips();

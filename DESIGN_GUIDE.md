@@ -332,7 +332,9 @@ These are current outer-popup reference sizes, not app-wide requirements:
 | Help | 80% of available width, 85% of height | [Help](late-ssh/src/app/help_modal/ui.rs) |
 | Calendar | Desired width 76, task-dependent height | [Calendar](late-ssh/src/app/calendar/ui.rs) |
 | Profile | Width capped at 110 | [Profile](late-ssh/src/app/profile_modal/ui.rs) |
-| Paper / News article | Width capped at 160 | [Paper](late-ssh/src/app/paper/ui.rs), [News](late-ssh/src/app/chat/news/ui.rs) |
+| Paper | 90% of width and height, width capped at 160 | [Paper](late-ssh/src/app/paper/ui.rs) |
+| News reader | 90% of width and height, width capped at 120, text column at most 80 | [Reader](late-ssh/src/app/chat/news/reader/ui.rs) |
+| News watch | 90% of width and height, width capped at 160; full screen but the footer row on `f`; the setup box width capped at 72 | [Watch](late-ssh/src/app/chat/news/watch/ui.rs) |
 
 A common framing pattern clears the covered cells before drawing the popup.
 Clearing and painting the intended background are separate operations:

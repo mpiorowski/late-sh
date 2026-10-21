@@ -703,38 +703,6 @@ fn handle_overlay_input(app: &mut App, event: &ParsedInput) {
     }
 }
 
-fn handle_news_modal_input(app: &mut App, event: &ParsedInput) {
-    match event {
-        ParsedInput::Byte(b'\r' | b'\n') => {
-            if let Some(url) = app.chat.news_modal_url() {
-                let cleaned = sanitize_paste_markers(url);
-                app.pending_clipboard = Some(cleaned.trim().to_owned());
-                app.banner = Some(crate::app::common::primitives::Banner::success(
-                    "Link copied!",
-                ));
-            }
-            app.chat.close_news_modal();
-        }
-        ParsedInput::Byte(b'n' | b'N') | ParsedInput::Char('n' | 'N') => {
-            app.chat.jump_to_news_modal_article();
-            app.set_screen(Screen::Dashboard);
-        }
-        // Reply in #lounge quoting the article, as `r` on the live strip or
-        // in the News feed does, and take the user there to write it.
-        ParsedInput::Byte(b'r' | b'R') | ParsedInput::Char('r' | 'R') => {
-            let Some(article_id) = app.chat.news_modal().map(|modal| modal.article_id) else {
-                return;
-            };
-            app.chat.close_news_modal();
-            if chat::news::input::reply_in_lounge(app, article_id) {
-                app.set_screen(Screen::Dashboard);
-            }
-        }
-        ParsedInput::Byte(0x1B) => app.chat.close_news_modal(),
-        _ => {}
-    }
-}
-
 fn handle_image_modal_input(app: &mut App, event: &ParsedInput) {
     match event {
         ParsedInput::Byte(0x1B | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
@@ -908,8 +876,13 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.chat.has_news_modal() {
-        handle_news_modal_input(app, &event);
+    if app.chat.has_watch() {
+        chat::news::watch::input::handle_input(app, &event);
+        return;
+    }
+
+    if app.chat.has_reader() {
+        chat::news::reader::input::handle_input(app, &event);
         return;
     }
 
@@ -2358,8 +2331,12 @@ fn dispatch_escape(app: &mut App) {
         app.paper.close_modal();
         return;
     }
-    if app.chat.has_news_modal() {
-        app.chat.close_news_modal();
+    if app.chat.has_watch() {
+        app.chat.close_watch();
+        return;
+    }
+    if app.chat.has_reader() {
+        app.chat.close_reader();
         return;
     }
     if app.chat.has_image_modal() {
@@ -3643,7 +3620,7 @@ fn reset_composers_for_page_change(app: &mut App) {
     app.chat.reset_composer();
     app.chat.feeds.stop_processing();
     app.chat.news.stop_composing();
-    app.chat.close_news_modal();
+    app.chat.close_news_modals();
 }
 
 fn is_room_search_shortcut(event: &ParsedInput) -> bool {
@@ -3676,7 +3653,7 @@ fn close_overlays_for_modal(app: &mut App) {
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_news_modal();
+    app.chat.close_news_modals();
     app.chat.cancel_room_jump();
     app.chat.message_search.clear();
 }
@@ -3714,7 +3691,7 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_news_modal();
+    app.chat.close_news_modals();
     app.chat.cancel_room_jump();
     let device_rails = app.rail_modes();
     let device_artboard_disclaimer = app.artboard_disclaimer_enabled();
@@ -3748,7 +3725,7 @@ pub(crate) fn open_usermap_globally(app: &mut App) {
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_news_modal();
+    app.chat.close_news_modals();
     app.chat.cancel_room_jump();
     app.set_screen(Screen::Profiles);
     app.directory_state
@@ -3772,7 +3749,7 @@ pub(crate) fn open_shop_modal_globally(app: &mut App) {
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_news_modal();
+    app.chat.close_news_modals();
     app.chat.cancel_room_jump();
     app.show_hub_modal = true;
 }
@@ -3829,7 +3806,7 @@ fn open_bonsai_modal_globally(app: &mut App) {
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_news_modal();
+    app.chat.close_news_modals();
     app.chat.cancel_room_jump();
     app.show_bonsai_modal = true;
 }
@@ -3852,7 +3829,7 @@ pub(crate) fn open_daily_modal_globally(app: &mut App) {
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_news_modal();
+    app.chat.close_news_modals();
     app.chat.cancel_room_jump();
     app.lobby.mark_seen(&app.daily);
     app.show_lobby_modal = true;
@@ -4302,6 +4279,16 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         b'0' | b'1' | b'2' | b'3' | b'4' | b'5' | b'6' | b'7' | b'8' | b'9' | b'w' | b'W'
     ) && ctx.screen == Screen::Dashboard
         && app.chat.is_reaction_leader_active()
+    {
+        return false;
+    }
+
+    // On a video card in the News room `w` watches it rather than opening
+    // the Bonsai: let it reach the News handler. Any other card keeps `w`.
+    if matches!(byte, b'w' | b'W')
+        && ctx.screen == Screen::Dashboard
+        && app.chat.news_selected
+        && app.chat.news.selected_card_is_watchable()
     {
         return false;
     }

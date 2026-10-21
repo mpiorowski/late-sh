@@ -184,3 +184,108 @@ fn output_budget_positive_window_adjust_clears_backlog() {
     assert!(!budget.over_budget());
     assert_eq!(budget.outstanding(), 0);
 }
+
+/// A key flood: the pass hands the app its budget's worth of input, leaves
+/// the rest queued, and marks the session dirty so the next pass picks it up
+/// at once instead of holding the worker until the queue is dry.
+#[test]
+fn input_drain_stops_at_the_message_budget_and_rearms_the_loop() {
+    let signal = RenderSignal::new();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(INPUT_QUEUE_CAP);
+    for i in 0..200u8 {
+        tx.try_send(vec![i]).expect("queue has room");
+    }
+
+    let mut handled = Vec::new();
+    let drain = drain_input(
+        &mut rx,
+        &signal,
+        INPUT_DRAIN_MAX_MESSAGES,
+        Duration::from_secs(60),
+        |data| {
+            handled.push(data[0]);
+            true
+        },
+    );
+
+    assert_eq!(drain, InputDrain::BudgetHit);
+    assert_eq!(handled, (0..64u8).collect::<Vec<_>>());
+    assert_eq!(rx.len(), 136);
+    assert!(signal.dirty.load(Ordering::Acquire));
+}
+
+#[test]
+fn input_drain_stops_when_the_time_budget_is_spent() {
+    let signal = RenderSignal::new();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(INPUT_QUEUE_CAP);
+    for i in 0..3u8 {
+        tx.try_send(vec![i]).expect("queue has room");
+    }
+
+    let mut handled = Vec::new();
+    // A spent clock still hands over one message, so every pass progresses.
+    let drain = drain_input(&mut rx, &signal, 64, Duration::ZERO, |data| {
+        handled.push(data[0]);
+        true
+    });
+
+    assert_eq!(drain, InputDrain::BudgetHit);
+    assert_eq!(handled, vec![0]);
+    assert_eq!(rx.len(), 2);
+    assert!(signal.dirty.load(Ordering::Acquire));
+}
+
+#[test]
+fn input_drain_that_empties_the_queue_on_the_budget_is_not_a_budget_hit() {
+    let signal = RenderSignal::new();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(INPUT_QUEUE_CAP);
+    for i in 0..64u8 {
+        tx.try_send(vec![i]).expect("queue has room");
+    }
+
+    let drain = drain_input(&mut rx, &signal, 64, Duration::from_secs(60), |_| true);
+
+    assert_eq!(drain, InputDrain::Drained);
+    assert!(rx.is_empty());
+    assert!(!signal.dirty.load(Ordering::Acquire));
+}
+
+#[test]
+fn input_drain_stops_on_quit_and_reports_an_empty_queue() {
+    let signal = RenderSignal::new();
+    let (tx, mut rx) = tokio::sync::mpsc::channel::<Vec<u8>>(INPUT_QUEUE_CAP);
+
+    assert_eq!(
+        drain_input(&mut rx, &signal, 64, Duration::from_secs(60), |_| true),
+        InputDrain::Empty
+    );
+
+    for i in 0..3u8 {
+        tx.try_send(vec![i]).expect("queue has room");
+    }
+    let drain = drain_input(&mut rx, &signal, 64, Duration::from_secs(60), |data| {
+        data[0] != 1
+    });
+    assert_eq!(drain, InputDrain::Quit);
+    assert_eq!(rx.len(), 1);
+}
+
+#[test]
+fn slow_pass_warns_once_a_minute_and_only_past_the_hot_tick() {
+    let now = Instant::now();
+    let slow = SLOW_PASS + Duration::from_millis(1);
+
+    assert!(
+        !slow_pass_due(SLOW_PASS, None, now),
+        "the hot tick itself is fine"
+    );
+    assert!(slow_pass_due(slow, None, now), "first slow pass warns");
+    assert!(
+        !slow_pass_due(slow, Some(now), now + Duration::from_secs(59)),
+        "a second slow pass inside the minute stays quiet"
+    );
+    assert!(
+        slow_pass_due(slow, Some(now), now + SLOW_PASS_WARN_EVERY),
+        "a minute later it warns again"
+    );
+}

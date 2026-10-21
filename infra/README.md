@@ -237,7 +237,7 @@ accept plain `late.sh`. Both must be DNS-only, never proxied: the traffic is raw
 TCP. Simple Voice Chat adds a second hostPort, 24454 UDP, reached at the same
 address, so it needs no DNS of its own; open it in any Hetzner Cloud Firewall
 on `agent-1`. The world lives on the `minecraft-data` PVC (`local-path`,
-`prevent_destroy`) on `agent-1`'s disk; `worldborder set 6000` at startup caps
+`prevent_destroy`) on `agent-1`'s disk; `worldborder set 10400` at startup caps
 its disk growth there.
 
 Access is online-mode plus an enforced whitelist. `MINECRAFT_WHITELIST` and
@@ -318,7 +318,7 @@ late-ssh prod profile.
 deploy-time rollout step: deploy a parser-capable image first, then set the
 GitHub environment variable `IRC_PROXY_EMIT=1` and run a subsequent
 infrastructure deployment. Rollback reverses the order. The prod profile always
-accepts PROXY headers, so the old accept-side toggle is gone.
+accepts PROXY headers, so there is no accept-side toggle.
 
 ### IPv6 edge proxy
 

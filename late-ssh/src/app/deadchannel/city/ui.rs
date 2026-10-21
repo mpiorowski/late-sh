@@ -262,12 +262,22 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: CityView<'_>) {
     draw_popover(frame, area, &view);
     draw_panel(frame, area, &view);
     // The sheet strip, the road, and the fight scene (`fight/ui.rs`): the
-    // runner's budget while walking, the road or the scene over
-    // everything when one is open. The two are never open together.
+    // strip is the runner's budget and is always up while there is a
+    // sheet, so the road and the scene open under its row, never over it.
+    // The two overlays are never open together.
+    let overlay = match view.sheet {
+        Some(_) => Rect {
+            x: area.x,
+            y: area.y + 1,
+            width: area.width,
+            height: area.height.saturating_sub(1),
+        },
+        None => area,
+    };
     if let Some(picker) = view.picker {
         fight_ui::draw_picker(
             frame,
-            area,
+            overlay,
             fight_ui::PickerView {
                 sheet: view.sheet,
                 picker,
@@ -279,24 +289,21 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, view: CityView<'_>) {
             },
         );
     }
-    match (view.sheet, view.scene) {
-        (Some(sheet), None) => {
-            if view.picker.is_none() {
-                fight_ui::draw_strip(frame, area, sheet);
-            }
-        }
-        (sheet, Some(scene)) => fight_ui::draw_scene(
+    if let Some(scene) = view.scene {
+        fight_ui::draw_scene(
             frame,
-            area,
+            overlay,
             fight_ui::SceneView {
-                sheet,
+                sheet: view.sheet,
                 scene,
                 look: view.look,
                 own_username: view.own_username,
                 tick: t,
             },
-        ),
-        (None, None) => {}
+        );
+    }
+    if let Some(sheet) = view.sheet {
+        fight_ui::draw_strip(frame, area, sheet);
     }
     if view.guide.is_open() {
         guide_ui::draw(frame, area, view.guide);

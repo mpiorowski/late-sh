@@ -24,6 +24,9 @@ mod ssh_ban_test;
 #[cfg(test)]
 mod ssh_test;
 pub mod state;
+pub mod terminal_probe;
+#[cfg(test)]
+mod terminal_probe_test;
 pub(crate) mod terminal_size;
 #[cfg(test)]
 pub mod test_helpers;

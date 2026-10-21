@@ -8,7 +8,8 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use super::state::{PaperInk, PaperLine, PaperModal, PaperViewport};
+use super::state::{PaperInk, PaperLine, PaperModal};
+use crate::app::common::scroll_view::ScrollViewport;
 use crate::app::common::theme;
 
 /// The paper takes most of the screen: on a busy day it is many rooms of
@@ -47,10 +48,10 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, modal: &PaperModal) {
     };
 
     if inner.width < 24 || inner.height < 5 {
-        modal.set_viewport(PaperViewport {
+        modal.view.set_viewport(ScrollViewport {
             popup,
             close,
-            ..PaperViewport::default()
+            ..ScrollViewport::default()
         });
         return;
     }
@@ -75,21 +76,21 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, modal: &PaperModal) {
     } else {
         Rect::default()
     };
-    modal.set_viewport(PaperViewport {
+    modal.view.set_viewport(ScrollViewport {
         popup,
         body: body_area,
         close,
         track,
         content_height,
     });
-    frame.render_widget(paragraph.scroll((modal.scroll_offset(), 0)), body_area);
+    frame.render_widget(paragraph.scroll((modal.view.offset(), 0)), body_area);
     if !track.is_empty() {
         frame.render_widget(
             Paragraph::new(vec![Line::from("│"); track.height as usize])
                 .style(Style::default().fg(theme::BORDER_DIM())),
             track,
         );
-        let thumb = modal.thumb();
+        let thumb = modal.view.thumb();
         frame.render_widget(
             Paragraph::new(vec![Line::from("█"); thumb.height as usize])
                 .style(Style::default().fg(theme::AMBER_DIM())),

@@ -5,17 +5,17 @@
 - Domain: Usurper, the real upstream LORD-era BBS door game (Jakob Dangarden 1993-2009, GPL-2.0-or-later; Rick Parrish's 32/64-bit Free Pascal port), run on a PTY inside a **dedicated `late-usurper` SSH host** and reached by late-ssh as a network-proxied door (the same model as the NetHack/DCSS doors).
 - Primary audience: LLM agents changing the Usurper launcher UI, the SSH client transport, the host crate (PTY bridge / auth / dropfiles / node leases / CP437), input forwarding/filtering, or its config/deploy wiring.
 - Status: Active
-- Parent context: `../../../../../CONTEXT.md`
+- Parent context: `../CONTEXT.md` (the door family)
 - Stability note: `[STABLE]` sections change rarely; `[VOLATILE]` sections change with the launcher UI, keybindings, or build/deploy wiring.
 
 ---
 
 ## 0. Context Maintenance Protocol [STABLE]
 
-Read this after root `CONTEXT.md` whenever a task touches the Usurper launcher, launch/leave behavior, the SSH client transport, the `late-usurper` host (PTY bridge, auth, dropfiles, node leases, CP437 transcoding, seeding), input forwarding/filtering, or Usurper config/deploy wiring.
+Read this after `../CONTEXT.md` whenever a task touches the Usurper launcher, launch/leave behavior, the SSH client transport, the `late-usurper` host (PTY bridge, auth, dropfiles, node leases, CP437 transcoding, seeding), input forwarding/filtering, or Usurper config/deploy wiring.
 
 - Keep this file aligned with the SSH transport contract, the client/host split, the dropfile/node model, config knobs, and known gotchas.
-- Update root `CONTEXT.md` when routing, the top-level screen list/tab order, or global keybindings change.
+- Update `../CONTEXT.md` when the hub roster or the door family changes, and `late-ssh/CONTEXT.md` for global keys.
 - Treat tests and code as authoritative when comments drift; patch stale comments or this file before handoff.
 - Do not add `pub use` re-export layers; `mod.rs` stays declaration-only.
 

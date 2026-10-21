@@ -49,6 +49,10 @@ pub(super) struct AudioRuntime {
     /// handler; the decoder thread reads it so a switch/reconnect finishing
     /// after the user moved to YouTube cannot re-enable output.
     pub(super) native_source_selected: Arc<AtomicBool>,
+    /// True while a News video plays through mpv: output goes silent and the
+    /// stream parks, without touching the user-controlled `muted` flag.
+    /// Driven by the pair-WS video handling.
+    pub(super) silenced_for_video: Arc<AtomicBool>,
     pub(super) stream_url: Arc<Mutex<String>>,
     pub(super) stream_generation: Arc<AtomicU64>,
     pub(super) stream_flushed_generation: Arc<AtomicU64>,
@@ -154,6 +158,7 @@ impl AudioRuntime {
         // the user's persisted preference is Youtube.
         let source_is_icecast = Arc::new(AtomicBool::new(true));
         let native_source_selected = Arc::new(AtomicBool::new(true));
+        let silenced_for_video = Arc::new(AtomicBool::new(false));
         let stream_url = Arc::new(Mutex::new(audio_base_url.clone()));
         let stream_generation = Arc::new(AtomicU64::new(0));
         let stream_flushed_generation = Arc::new(AtomicU64::new(0));
@@ -167,6 +172,7 @@ impl AudioRuntime {
             Arc::clone(&muted),
             Arc::clone(&volume_percent),
             Arc::clone(&source_is_icecast),
+            Arc::clone(&silenced_for_video),
             Arc::clone(&stream_generation),
             Arc::clone(&stream_flushed_generation),
             audio_output_device.as_deref(),
@@ -180,6 +186,7 @@ impl AudioRuntime {
             Arc::clone(&stream_flushed_generation),
             Arc::clone(&source_is_icecast),
             Arc::clone(&native_source_selected),
+            Arc::clone(&silenced_for_video),
             Arc::clone(&muted),
             queue_tx,
             source_spec,
@@ -212,6 +219,7 @@ impl AudioRuntime {
             volume_percent,
             source_is_icecast,
             native_source_selected,
+            silenced_for_video,
             stream_url,
             stream_generation,
             stream_flushed_generation,
@@ -232,6 +240,7 @@ impl AudioRuntime {
             volume_percent: Arc::new(AtomicU8::new(0)),
             source_is_icecast: Arc::new(AtomicBool::new(true)),
             native_source_selected: Arc::new(AtomicBool::new(true)),
+            silenced_for_video: Arc::new(AtomicBool::new(false)),
             stream_url: Arc::new(Mutex::new(String::new())),
             stream_generation: Arc::new(AtomicU64::new(0)),
             stream_flushed_generation: Arc::new(AtomicU64::new(0)),
