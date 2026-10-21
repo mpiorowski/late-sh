@@ -1715,14 +1715,16 @@ fn node_lines(
                     Span::styled("the crossing", lit(Neon::Magenta)),
                     Span::styled("   nobody is here tonight", dim_text),
                 ]),
+                // Two rows, the node's third included: one would run past
+                // the panel.
                 Line::from(vec![
                     Span::styled("      ", text),
-                    Span::styled(
-                        "every runner within two levels was crossed today, is off the wire, or could not answer you back.",
-                        muted,
-                    ),
+                    Span::styled("every runner within two levels was crossed today,", muted),
                 ]),
-                Line::default(),
+                Line::from(vec![
+                    Span::styled("      ", text),
+                    Span::styled("is off the wire, or could not answer you back.", muted),
+                ]),
             ],
         },
     };

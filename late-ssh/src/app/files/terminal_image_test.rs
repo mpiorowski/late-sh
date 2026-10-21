@@ -607,3 +607,16 @@ fn non_sixel_terminal_image_data_skips_sixel_encoding() {
     assert!(data.supports_protocol(TerminalImageProtocol::Kitty));
     assert!(!data.supports_protocol(TerminalImageProtocol::Sixel));
 }
+
+#[test]
+fn terminal_name_for_log_drops_control_characters_and_caps_the_length() {
+    assert_eq!(
+        terminal_name_for_log("WezTerm 20240203-110809-5046fc22"),
+        "WezTerm 20240203-110809-5046fc22"
+    );
+    assert_eq!(
+        terminal_name_for_log("kitty\x1b[31m(0.35)\n"),
+        "kitty[31m(0.35)"
+    );
+    assert_eq!(terminal_name_for_log(&"x".repeat(500)).len(), 64);
+}

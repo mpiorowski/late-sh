@@ -73,6 +73,7 @@ struct Harness {
     stream: FakeStream,
     muted: Arc<AtomicBool>,
     native_source_selected: Arc<AtomicBool>,
+    silenced_for_video: Arc<AtomicBool>,
     /// Samples the stand-in output callback has taken off the queue.
     drained: Arc<AtomicUsize>,
     stop: Arc<AtomicBool>,
@@ -97,6 +98,7 @@ fn start_decoder(muted: bool, boot_grace: Duration) -> Harness {
     let (queue_tx, mut queue_rx) = HeapRb::<f32>::new(44_100 * 2 * 2).split();
     let muted = Arc::new(AtomicBool::new(muted));
     let native_source_selected = Arc::new(AtomicBool::new(true));
+    let silenced_for_video = Arc::new(AtomicBool::new(false));
     let stop = Arc::new(AtomicBool::new(false));
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
 
@@ -106,6 +108,7 @@ fn start_decoder(muted: bool, boot_grace: Duration) -> Harness {
         Arc::new(AtomicU64::new(0)),
         Arc::new(AtomicBool::new(true)),
         Arc::clone(&native_source_selected),
+        Arc::clone(&silenced_for_video),
         Arc::clone(&muted),
         queue_tx,
         spec,
@@ -132,6 +135,7 @@ fn start_decoder(muted: bool, boot_grace: Duration) -> Harness {
         stream,
         muted,
         native_source_selected,
+        silenced_for_video,
         drained,
         stop,
     }
@@ -178,6 +182,25 @@ fn leaving_the_native_source_closes_the_stream() {
         .native_source_selected
         .store(true, Ordering::Relaxed);
     wait_until("returning to radio reopened the stream", || {
+        open.load(Ordering::SeqCst) == 1
+    });
+}
+
+/// mpv owns the speakers while a News video plays; the radio stream must
+/// not keep downloading underneath it.
+#[test]
+fn a_video_closes_the_stream_and_its_end_reopens_it() {
+    let harness = start_decoder(false, Duration::ZERO);
+    let open = &harness.stream.open;
+    wait_until("the stream is open", || open.load(Ordering::SeqCst) == 1);
+
+    harness.silenced_for_video.store(true, Ordering::Relaxed);
+    wait_until("the video closed the stream", || {
+        open.load(Ordering::SeqCst) == 0
+    });
+
+    harness.silenced_for_video.store(false, Ordering::Relaxed);
+    wait_until("the video's end reopened the stream", || {
         open.load(Ordering::SeqCst) == 1
     });
 }

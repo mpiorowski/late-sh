@@ -41,9 +41,9 @@ decision; this table mirrors them.
 
 | Dial | Value | Constant |
 |---|---|---|
-| Cadence | weekly (decided 2026-08-27; the design said daily, but at this size a daily pot is an arcade afternoon and its thresholds never fire) | `next_draw_at` |
+| Cadence | weekly (a daily pot at this size is an arcade afternoon and its thresholds never fire) | `next_draw_at` |
 | Ticket price | 100 chips | `POT_TICKET_PRICE` |
-| Per-user cap | 10 tickets per UTC day (70 a week; decided 2026-08-27 so the raffle is about showing up, and 1,000 a day is reachable by anyone who plays) | `POT_MAX_TICKETS_PER_DAY` |
+| Per-user cap | 10 tickets per UTC day (70 a week, so the raffle is about showing up; 1,000 chips a day is reachable by anyone who plays) | `POT_MAX_TICKETS_PER_DAY` |
 | Payout | 80% of the ticket sum, floored | `payout_for` |
 | Draw | Monday 21:00 UTC (late evening in Europe, afternoon across the US) | `POT_DRAW_WEEKDAY`, `POT_DRAW_HOUR_UTC` |
 
@@ -121,12 +121,10 @@ it is stale until the next refresh (the sweeper's minute at most).
 
 ## 7. There is no sidebar panel
 
-The pot had a two-row `RightSidebarComponent::Pot` panel until 2026-08-28; it
-is gone, variant and all. The size and countdown live in the status HUD badge
-below, and `/pot` answers in full. A stored `"pot"` key in a user's panel list
-is dropped on read by `RightSidebarComponent::from_key`, exactly like the
-retired `"activity"` and `"visualizer"` keys, so no settings migration is
-needed.
+The size and countdown live in the status HUD badge below, and `/pot`
+answers in full. A stored `"pot"` key in a user's panel list is dropped on
+read by `RightSidebarComponent::from_key`, like `"activity"` and
+`"visualizer"`.
 
 ## 7b. The status HUD badge
 
@@ -201,7 +199,7 @@ spent on a failure, so the next sweep retries.
   (the daily cap) reaches the service, so nothing downstream re-checks the
   number; whether today still has room is the insert's `WHERE`.
 
-## 11. Out of scope (decided with the pot, 2026-08-27)
+## 11. Out of scope
 
 A machine in the Late Lounge tavern, a sealed-bid twin for the marquee,
 seeding the pot with minted chips, and more than one pot at a time.

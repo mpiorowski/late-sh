@@ -275,7 +275,7 @@ impl AiService {
 
     /// A grounded (Google Search) call whose reply is expected to be JSON.
     /// Grounding and JSON response mode don't mix, proven on gemini-3.6-flash
-    /// and never re-tested since (root `CONTEXT.md` §10, 2026-08-06):
+    /// and never re-tested since (`infra/RUNBOOK.md` incident log, 2026-08-06):
     /// attaching the `googleSearch` tool together with
     /// `responseMimeType: application/json` gets a 200 whose body has no
     /// `candidates` at all (the model thinks, then emits nothing). So this

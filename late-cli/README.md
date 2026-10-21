@@ -135,8 +135,8 @@ server-side, not in the CLI config file.
 
 On Linux desktops, `late` publishes the selected YouTube, Icecast, or radio
 track over MPRIS, including title, artist, duration, and source details when the
-server provides them. This is read-only: playback remains controlled from the
-paired late.sh TUI. If no desktop D-Bus session is available (for example, in a
+server provides them. Play/pause and the volume slider map to the session's
+mute and volume, routed through the server like the TUI's own keys. If no desktop D-Bus session is available (for example, in a
 headless shell), the CLI continues normally without MPRIS. To keep media keys
 and widgets for another player, turn it off with `--no-mpris`, `LATE_NO_MPRIS=1`,
 or `mpris = false` in the config file.
@@ -160,7 +160,7 @@ On WSL, audio startup failures now include a targeted hint covering `DISPLAY`, `
 
 For debugging, `late --verbose` writes parent CLI logs to a file when stderr is
 an interactive terminal, so debug output does not corrupt the TUI. The startup
-notice prints the path. Set `LATE_LOG_STDERR=1` to force the old stderr behavior,
+notice prints the path. Set `LATE_LOG_STDERR=1` to log to stderr anyway,
 or redirect stderr with `late -v 2>late-debug.log`.
 
 The embedded YouTube helper writes WebKit/GStreamer stderr to
@@ -170,9 +170,19 @@ to combine helper stderr with the parent debug stream. On Linux the CLI sets
 `WEBKIT_DISABLE_DMABUF_RENDERER=1` for the helper unless you already provided a
 value.
 
+YouTube links shared to News can play right in the terminal (`w` on the card)
+when `late` runs in native mode on Linux or macOS, in a Kitty-graphics terminal
+(kitty, Ghostty, WezTerm, Konsole, Rio) outside tmux/screen, with `mpv` 0.36 or
+newer and `yt-dlp` installed. `LATE_MPV_BIN` and `LATE_YTDLP_BIN` point at
+specific binaries; mpv's stderr goes to `$XDG_STATE_HOME/late/video.log` or
+`~/.local/state/late/video.log` (override with `LATE_VIDEO_LOG`). The radio and
+the YouTube booth go quiet while a video plays and come back after.
+
 ## Privacy
 
 The CLI connects to `late.sh` using your SSH key. Only your key **fingerprint** is stored — not the full public key. No IP logging, no tracking.
+
+To spot lag, the CLI times two round trips every few seconds (the SSH connection, and how fast your terminal answers) and sends them to the server, which keeps them only as fleet-wide histograms by operating system, never per user.
 
 If you'd rather not use your real key:
 

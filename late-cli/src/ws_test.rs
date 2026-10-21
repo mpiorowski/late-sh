@@ -276,3 +276,91 @@ fn a_session_that_heard_the_server_is_established() {
         }
     );
 }
+
+fn client_info(video_blockers: Vec<VideoBlocker>) -> PairClientInfo {
+    PairClientInfo {
+        ssh_mode: "native",
+        platform: "linux",
+        video_blockers,
+    }
+}
+
+/// A CLI that can play advertises `video` and sends no blockers.
+#[test]
+fn client_state_advertises_video_when_nothing_blocks_it() {
+    let payload = client_state_payload(&client_info(vec![]), false, 30);
+    let capabilities = payload["capabilities"].as_array().unwrap();
+    assert!(capabilities.contains(&json!("video")));
+    assert!(payload.get("video_blockers").is_none());
+}
+
+/// A CLI that cannot play sends every blocker by its wire name instead.
+#[test]
+fn client_state_sends_blockers_instead_of_video() {
+    let payload = client_state_payload(
+        &client_info(vec![VideoBlocker::NotKitty, VideoBlocker::NoMpv]),
+        false,
+        30,
+    );
+    let capabilities = payload["capabilities"].as_array().unwrap();
+    assert!(!capabilities.contains(&json!("video")));
+    assert_eq!(payload["video_blockers"], json!(["not_kitty", "no_mpv"]));
+}
+
+/// A `video_play` without `start_s` is from a server that predates
+/// resumes, and starts from the top.
+#[test]
+fn video_controls_deserialize_from_wire_names() {
+    for (wire, expected_start) in [
+        (
+            r#"{"event":"video_play","play_id":7,"url":"https://www.youtube.com/watch?v=abc","left":10,"top":3,"cols":100,"rows":28}"#,
+            0,
+        ),
+        (
+            r#"{"event":"video_play","play_id":7,"url":"https://www.youtube.com/watch?v=abc","left":10,"top":3,"cols":100,"rows":28,"start_s":1391}"#,
+            1391,
+        ),
+    ] {
+        let play = serde_json::from_str::<PairControlMessage>(wire).unwrap();
+        let PairControlMessage::VideoPlay {
+            play_id,
+            url,
+            left,
+            top,
+            cols,
+            rows,
+            start_s,
+        } = play
+        else {
+            panic!("expected video_play");
+        };
+        assert_eq!(
+            (play_id, url.as_str(), left, top, cols, rows, start_s),
+            (
+                7,
+                "https://www.youtube.com/watch?v=abc",
+                10,
+                3,
+                100,
+                28,
+                expected_start
+            )
+        );
+    }
+
+    let control = serde_json::from_str::<PairControlMessage>(
+        r#"{"event":"video_control","play_id":7,"control":"seek_back"}"#,
+    )
+    .unwrap();
+    assert!(matches!(
+        control,
+        PairControlMessage::VideoControl {
+            play_id: 7,
+            control: VideoControl::SeekBack
+        }
+    ));
+
+    let stop = serde_json::from_str::<PairControlMessage>(r#"{"event":"video_stop","play_id":7}"#)
+        .unwrap();
+    assert!(matches!(stop, PairControlMessage::VideoStop { play_id: 7 }));
+}

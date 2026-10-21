@@ -5,7 +5,7 @@
 //! spawn standing in its real home room, and reports who survives and where
 //! every point of damage came from. Test-only; it never ships.
 //!
-//! Why it exists: every balance number in CONTEXT.md §7 that was "modelled"
+//! Why it exists: every balance number in COMBAT.md that was "modelled"
 //! rather than measured has drifted from the engine at least once. The arena
 //! measures. A [`Recipe`] is explicit about everything that moves a fight
 //! (class, level, archetype, gear, companion, coat, potions, policy, and the

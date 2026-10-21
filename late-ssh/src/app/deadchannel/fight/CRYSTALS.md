@@ -1,6 +1,6 @@
 # The crystal pass, as built (late-ssh/src/app/deadchannel/fight)
 
-Parent: `../CONTEXT.md` §3c (the fight: the row, the lock, the day roll,
+Parent: `CONTEXT.md` (the fight: the row, the lock, the day roll,
 the wire). Design and the reasons: `../GAME.md`, "The crystal pass". This
 file is the contract of the things bits cannot buy: crystals, the bright
 glyph, Dead Air, and the blade shop. How

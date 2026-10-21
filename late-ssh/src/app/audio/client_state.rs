@@ -76,6 +76,48 @@ impl ClientPlatform {
     }
 }
 
+/// One reason a paired CLI cannot play a News video, as it reports them in
+/// `client_state.video_blockers` (`late-cli/src/video.rs` owns the checks).
+/// The watch setup box marks its rows from these.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum VideoBlocker {
+    /// OpenSSH and old modes: the CLI does not own the tty.
+    NotNative,
+    /// Only Linux and macOS play video.
+    Platform,
+    /// tmux or screen sits between mpv and the terminal.
+    Multiplexer,
+    /// The CLI's env does not look like a Kitty-graphics terminal.
+    NotKitty,
+    /// The tty reports no pixel size, so mpv cannot size its placement.
+    NoPixelSize,
+    NoMpv,
+    /// Older than 0.36, or a version string that does not parse.
+    MpvTooOld,
+    #[serde(rename = "no_ytdlp")]
+    NoYtDlp,
+}
+
+impl VideoBlocker {
+    /// The wire string the CLI sends. `None` for a string this server does
+    /// not know: a newer CLI than the server, which releases on its own
+    /// schedule, so the caller drops it with a warn instead of failing.
+    pub fn parse(wire: &str) -> Option<Self> {
+        match wire {
+            "not_native" => Some(Self::NotNative),
+            "platform" => Some(Self::Platform),
+            "multiplexer" => Some(Self::Multiplexer),
+            "not_kitty" => Some(Self::NotKitty),
+            "no_pixel_size" => Some(Self::NoPixelSize),
+            "no_mpv" => Some(Self::NoMpv),
+            "mpv_too_old" => Some(Self::MpvTooOld),
+            "no_ytdlp" => Some(Self::NoYtDlp),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ClientAudioState {
     pub client_kind: ClientKind,
@@ -85,6 +127,9 @@ pub struct ClientAudioState {
     pub platform: ClientPlatform,
     #[serde(default)]
     pub capabilities: Vec<String>,
+    /// Present only when `video` is not in `capabilities`.
+    #[serde(default)]
+    pub video_blockers: Vec<VideoBlocker>,
     pub muted: bool,
     pub volume_percent: u8,
 }
@@ -96,6 +141,7 @@ impl Default for ClientAudioState {
             ssh_mode: ClientSshMode::Unknown,
             platform: ClientPlatform::Unknown,
             capabilities: Vec::new(),
+            video_blockers: Vec::new(),
             muted: false,
             volume_percent: 30,
         }
@@ -131,6 +177,16 @@ impl ClientAudioState {
                 .capabilities
                 .iter()
                 .any(|capability| capability == "open_url")
+    }
+
+    /// The `video` capability: every precondition for playing a News video
+    /// in the terminal held when the CLI started.
+    pub fn supports_video(&self) -> bool {
+        self.client_kind == ClientKind::Cli
+            && self
+                .capabilities
+                .iter()
+                .any(|capability| capability == "video")
     }
 
     pub(crate) fn cli_usage_labels(&self) -> Option<(&'static str, &'static str)> {

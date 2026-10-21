@@ -1,8 +1,7 @@
 # FRD: Embedded IRC Server (ircd) for late.sh Chat
 
 ## Metadata
-- Status: Draft / pre-implementation
-- Last updated: 2026-06-11
+- Status: Implemented. This is the original design and its rationale; current behavior, IRCv3 caps and history included, is in `late-ssh/src/ircd/CONTEXT.md`, which wins where the two differ.
 - Audience: LLM agents and human contributors implementing the feature
 - Terminology used throughout: **ircd** = the IRC server (this feature); **ircc** = an IRC client (irssi, HexChat, mIRC, Igloo, Quassel, WeeChat, Textual, etc.)
 
@@ -242,7 +241,7 @@ not trigger another replay.
 
 ## 12. Resolved Questions (v1 defaults) & Remaining Items
 
-Decided 2026-06-11:
+Decided:
 
 1. **`#general` alias** — none; `#lounge` only.
 2. **TLS termination** — in-process rustls (§5.2 A5); cert requirements per §5.2 A6.

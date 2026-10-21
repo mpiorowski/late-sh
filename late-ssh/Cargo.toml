@@ -73,6 +73,10 @@ russh.workspace = true
 axum = { workspace = true, features = ["ws"] }
 reqwest = { workspace = true, features = ["json", "stream"] }
 image.workspace = true
+# Readability (article body extraction for the News reader) and the DOM it
+# hands back, walked into reader lines by `app/chat/news/body.rs`.
+dom_smoothie.workspace = true
+dom_query.workspace = true
 tower-http = { workspace = true, features = ["cors", "trace"] }
 qrcodegen.workspace = true
 rumenx-sudoku.workspace = true

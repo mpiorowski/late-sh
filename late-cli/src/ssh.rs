@@ -12,18 +12,20 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
+    time::{Duration, Instant},
 };
 use tokio::{
     io::AsyncWriteExt,
     sync::{mpsc, oneshot},
     task::JoinHandle,
+    time::MissedTickBehavior,
 };
 use tracing::{debug, info};
 
 use super::{
     config::{Config, SshMode},
     identity::ssh_key_setup_hint,
+    latency::{LatencyKind, LatencySample, LatencySink, SSH_PING_INTERVAL, TerminalProbeWatch},
     pty::terminal_size_or_default,
 };
 
@@ -168,14 +170,17 @@ pub(super) enum WriterCommand {
     Close,
 }
 
+/// `latency` collects the round trips native mode times (`latency.rs`); the
+/// subprocess (`old`) mode is not wired and drops it.
 pub(super) async fn spawn_ssh(
     config: &Config,
     identity_file: &Path,
     token_tx: oneshot::Sender<String>,
+    latency: LatencySink,
 ) -> Result<SshProcess> {
     match config.ssh_mode {
         SshMode::Subprocess => spawn_subprocess_ssh(config, identity_file, token_tx),
-        SshMode::Native => spawn_native_ssh(config, identity_file, token_tx).await,
+        SshMode::Native => spawn_native_ssh(config, identity_file, token_tx, latency).await,
         SshMode::OpenSsh => {
             anyhow::bail!("openssh mode must use prepare_openssh_ssh")
         }
@@ -691,6 +696,7 @@ async fn spawn_native_ssh(
     config: &Config,
     identity_file: &Path,
     token_tx: oneshot::Sender<String>,
+    latency: LatencySink,
 ) -> Result<SshProcess> {
     let target = ResolvedTarget::from_config(config)?;
     let private_key = keys::load_secret_key(identity_file, None).with_context(|| {
@@ -744,6 +750,8 @@ async fn spawn_native_ssh(
         );
     }
 
+    // Shared with the keepalive sampler from here on.
+    let session = Arc::new(session);
     let token = fetch_native_session_token(&session)
         .await
         .context("failed to fetch session token over native ssh handshake")?;
@@ -772,12 +780,23 @@ async fn spawn_native_ssh(
     let writer_tx_for_completion = writer_tx.clone();
     let writer_tx_for_resize = writer_tx.clone();
 
+    let probe_watch = Arc::new(TerminalProbeWatch::default());
+    let probe_watch_for_stdin = Arc::clone(&probe_watch);
+    let latency_for_stdin = latency.clone();
+
     let writer_task = tokio::spawn(async move { drive_native_writer(write_half, writer_rx).await });
     spawn_stdin_forwarder("late-cli-stdin-native", move || {
-        forward_stdin_to_native(writer_tx, input_gate_for_task)
+        forward_stdin_to_native(
+            writer_tx,
+            input_gate_for_task,
+            &probe_watch_for_stdin,
+            &latency_for_stdin,
+        )
     });
+    let rtt_task = tokio::spawn(sample_ssh_rtt(Arc::clone(&session), latency));
     let completion_task = tokio::spawn(async move {
-        let exit = drive_native_output(&mut read_half).await;
+        let exit = drive_native_output(&mut read_half, &probe_watch).await;
+        rtt_task.abort();
         let _ = writer_tx_for_completion.send(WriterCommand::Close);
         let _ = writer_task.await;
         let _ = session
@@ -993,7 +1012,10 @@ fn forward_ssh_output(mut pty: fs::File, token_tx: oneshot::Sender<String>) -> R
     Ok(())
 }
 
-async fn drive_native_output(read_half: &mut ChannelReadHalf) -> Result<SshExit> {
+async fn drive_native_output(
+    read_half: &mut ChannelReadHalf,
+    probe_watch: &TerminalProbeWatch,
+) -> Result<SshExit> {
     let mut stdout = tokio::io::stdout();
     let mut stderr = tokio::io::stderr();
     let mut exit_code = None;
@@ -1002,6 +1024,7 @@ async fn drive_native_output(read_half: &mut ChannelReadHalf) -> Result<SshExit>
     while let Some(msg) = read_half.wait().await {
         match msg {
             ChannelMsg::Data { data } => {
+                probe_watch.saw_output(data.as_ref(), Instant::now());
                 stdout.write_all(data.as_ref()).await?;
                 stdout.flush().await?;
             }
@@ -1140,6 +1163,8 @@ fn forward_stdin_to_pty(mut pty: fs::File, input_gate: Arc<AtomicBool>) -> Resul
 fn forward_stdin_to_native(
     tx: mpsc::UnboundedSender<WriterCommand>,
     input_gate: Arc<AtomicBool>,
+    probe_watch: &TerminalProbeWatch,
+    latency: &LatencySink,
 ) -> Result<()> {
     let mut stdin = std::io::stdin().lock();
     let mut buf = [0u8; 4096];
@@ -1158,11 +1183,35 @@ fn forward_stdin_to_native(
         if !input_gate.load(Ordering::Relaxed) {
             continue;
         }
+        if let Some(sample) = probe_watch.saw_input(&buf[..n], Instant::now()) {
+            latency.record(sample);
+        }
         if tx.send(WriterCommand::Data(buf[..n].to_vec())).is_err() {
             break;
         }
     }
     Ok(())
+}
+
+/// Times an SSH keepalive round trip every [`SSH_PING_INTERVAL`] for the
+/// `ssh_rtt` sample, until the session ends.
+async fn sample_ssh_rtt(session: Arc<client::Handle<NativeClientHandler>>, latency: LatencySink) {
+    let mut ticker = tokio::time::interval(SSH_PING_INTERVAL);
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    loop {
+        ticker.tick().await;
+        let sent_at = Instant::now();
+        match session.send_ping().await {
+            // russh also resolves a ping when the session dies, so only a
+            // live session's answer is a round trip.
+            Ok(()) if !session.is_closed() => latency.record(LatencySample {
+                kind: LatencyKind::SshRtt,
+                elapsed: sent_at.elapsed(),
+            }),
+            Ok(()) => break,
+            Err(_) => break,
+        }
+    }
 }
 
 #[derive(Debug)]

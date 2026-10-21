@@ -12,11 +12,13 @@ mod clipboard;
 
 mod config;
 mod identity;
+mod latency;
 mod mpris;
 mod pty;
 mod raw_mode;
 mod ssh;
 mod update;
+mod video;
 mod voice;
 mod ws;
 
@@ -28,7 +30,8 @@ use ssh::{SshProcess, flush_stdin_input_queue, forward_resize_events, spawn_ssh}
 use ws::{
     MAX_CONSECUTIVE_FAILURES, PAIR_RECONNECT_DELAY, PAIR_SLOW_RECONNECT_DELAY, PairAttempt,
     PairClientInfo, PairRetryPolicy, PairRuntime, PlaybackState, ReconnectPlan,
-    WebviewPlaybackController, client_platform_label, establish_pair_session, run_pair_session,
+    WebviewPlaybackController, client_platform_label, end_video_without_socket,
+    establish_pair_session, run_pair_session,
 };
 
 #[tokio::main]
@@ -98,11 +101,12 @@ async fn main() -> Result<()> {
     }
     info!("starting ssh session");
     let (token_tx, token_rx) = oneshot::channel();
+    let (latency_sink, latency_samples) = latency::latency_queue();
     let SshProcess {
         completion_task,
         resize_handle,
         input_gate,
-    } = spawn_ssh(&config, &ssh_identity, token_tx).await?;
+    } = spawn_ssh(&config, &ssh_identity, token_tx, latency_sink).await?;
     let resize_task = tokio::spawn(forward_resize_events(resize_handle));
 
     let token = tokio::time::timeout(Duration::from_secs(10), token_rx)
@@ -114,7 +118,9 @@ async fn main() -> Result<()> {
         .context("ssh session token channel closed")?;
     flush_stdin_input_queue();
     input_gate.store(true, Ordering::Relaxed);
-    let ssh_exit = wait_for_ssh_with_ws_pairing(completion_task, &config, token, &audio).await?;
+    let ssh_exit =
+        wait_for_ssh_with_ws_pairing(completion_task, &config, token, &audio, latency_samples)
+            .await?;
 
     audio.stop.store(true, Ordering::Relaxed);
     resize_task.abort();
@@ -251,7 +257,12 @@ async fn run_openssh_mode(config: Config, ssh_identity: Option<std::path::PathBu
     }
     info!("starting OpenSSH interactive session");
     let ssh::OpenSshProcess { completion_task } = session.spawn_shell(&config)?;
-    let ssh_exit = wait_for_ssh_with_ws_pairing(completion_task, &config, token, &audio).await?;
+    // The ssh child owns the terminal here, so nothing samples; the held sink
+    // keeps the pair loop's queue open and quiet (`latency.rs`).
+    let (_latency_sink, latency_samples) = latency::latency_queue();
+    let ssh_exit =
+        wait_for_ssh_with_ws_pairing(completion_task, &config, token, &audio, latency_samples)
+            .await?;
 
     audio.stop.store(true, Ordering::Relaxed);
     debug!(?ssh_exit, "ssh session ended");
@@ -265,6 +276,7 @@ async fn wait_for_ssh_with_ws_pairing(
     config: &Config,
     token: String,
     audio: &AudioRuntime,
+    latency_samples: tokio::sync::mpsc::Receiver<latency::LatencySample>,
 ) -> Result<ssh::SshExit> {
     tokio::select! {
         result = completion_task => {
@@ -273,19 +285,31 @@ async fn wait_for_ssh_with_ws_pairing(
                 Err(err) => Err(anyhow::anyhow!("ssh session task join failed: {err}")),
             }
         }
-        () = run_ws_pairing(config, token, audio) => {
+        () = run_ws_pairing(config, token, audio, latency_samples) => {
             std::future::pending::<Result<ssh::SshExit>>().await
         }
     }
 }
 
-async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
+async fn run_ws_pairing(
+    config: &Config,
+    token: String,
+    audio: &AudioRuntime,
+    mut latency_samples: tokio::sync::mpsc::Receiver<latency::LatencySample>,
+) {
     info!("received session token and starting websocket pairing");
     let api_base_url = config.api_base_url.clone();
+    let video_probe = video::probe(config.ssh_mode, client_platform_label());
+    match video_probe.blockers.as_slice() {
+        [] => info!("video watch available"),
+        blockers => info!(?blockers, "video watch unavailable"),
+    }
     let client = PairClientInfo {
         ssh_mode: config.ssh_mode.client_state_label(),
         platform: client_platform_label(),
+        video_blockers: video_probe.blockers,
     };
+    let mut video = video::VideoPlayer::new(video_probe.tools);
     let played_samples = Arc::clone(&audio.played_samples);
     let muted = Arc::clone(&audio.muted);
     let volume_percent = Arc::clone(&audio.volume_percent);
@@ -295,6 +319,7 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
     let stream_generation = Arc::clone(&audio.stream_generation);
     let stream_flushed_generation = Arc::clone(&audio.stream_flushed_generation);
     let icecast_stream_url = audio.icecast_stream_url.clone();
+    let silenced_for_video = Arc::clone(&audio.silenced_for_video);
     // Copy scalar state before entering the long-lived pair loop.
     let sample_rate = audio.sample_rate;
     let mut webview = WebviewPlaybackController::new(
@@ -322,6 +347,7 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
         stream_generation: &stream_generation,
         stream_flushed_generation: &stream_flushed_generation,
         icecast_stream_url: &icecast_stream_url,
+        silenced_for_video: &silenced_for_video,
     };
     let mut policy = PairRetryPolicy::new();
     loop {
@@ -342,13 +368,16 @@ async fn run_ws_pairing(config: &Config, token: String, audio: &AudioRuntime) {
                     &playback,
                     PairRuntime {
                         webview: &mut webview,
+                        video: &mut video,
                         voice: &mut voice,
                         desktop_media: &mut desktop_media,
                         desktop_commands: &mut desktop_commands,
                         viz_frames: &mut viz_frames,
+                        latency_samples: &mut latency_samples,
                     },
                 )
                 .await;
+                end_video_without_socket(&mut video, &playback, &mut webview);
                 match &session.result {
                     Err(err) => error!(error = ?err, "pair websocket session failed"),
                     Ok(()) => info!("pair websocket closed by the server"),

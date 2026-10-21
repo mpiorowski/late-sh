@@ -1059,6 +1059,9 @@ fn chat_view<'a>(
     static AFK_LINES: OnceLock<HashMap<Uuid, DateTime<Utc>>> = OnceLock::new();
     static DRUNK_LEVELS: OnceLock<HashMap<Uuid, u8>> = OnceLock::new();
     static NEWS_MARKER: OnceLock<HashSet<Uuid>> = OnceLock::new();
+    static NEWS_WATCH_POSITIONS: OnceLock<
+        HashMap<Uuid, late_core::models::article_read::WatchPosition>,
+    > = OnceLock::new();
     static NAME_STYLES: OnceLock<HashMap<Uuid, crate::app::common::username_effect::ResolvedName>> =
         OnceLock::new();
     static AWAY_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
@@ -1095,6 +1098,7 @@ fn chat_view<'a>(
             articles: &[],
             selected_index: 0,
             marker: NEWS_MARKER.get_or_init(HashSet::new),
+            watch_positions: NEWS_WATCH_POSITIONS.get_or_init(HashMap::new),
             mine_only: false,
         },
         discover_selected: false,
@@ -1908,12 +1912,12 @@ fn room_list_rows_keep_directory_surfaces_out_of_home() {
 
     assert_eq!(
         hit_slots,
-        vec![RoomSlot::Notifications, RoomSlot::News, RoomSlot::Discover,]
+        vec![RoomSlot::News, RoomSlot::Notifications, RoomSlot::Discover,]
     );
 }
 
 #[test]
-fn cozy_room_rail_places_voice_news_and_feeds_below_mentions_with_jump_keys() {
+fn cozy_room_rail_places_news_and_feeds_under_lounge_with_jump_keys() {
     let lounge = ChatRoom {
         id: Uuid::from_u128(1),
         created: Utc::now(),
@@ -1988,9 +1992,9 @@ fn cozy_room_rail_places_voice_news_and_feeds_below_mentions_with_jump_keys() {
         &keyed_slots[..6],
         &[
             (RoomSlot::Room(lounge.id), "a lounge".to_string()),
-            (RoomSlot::Notifications, "s mentions".to_string()),
-            (RoomSlot::News, "d news".to_string()),
-            (RoomSlot::Feeds, "f rss".to_string()),
+            (RoomSlot::News, "s news".to_string()),
+            (RoomSlot::Feeds, "d rss".to_string()),
+            (RoomSlot::Notifications, "f mentions".to_string()),
             // Discover ("+ browse rooms") is the last entry in Core, so the
             // topic rooms below it start one jump key later.
             (RoomSlot::Discover, "g + browse rooms".to_string()),

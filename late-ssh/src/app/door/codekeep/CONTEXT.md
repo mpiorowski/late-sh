@@ -5,7 +5,7 @@
 - Upstream: CodeKeep: The Pale 1.0.9, https://github.com/tooyipjee/codekeep
 - License: MIT; attribution is in `NOTICE`.
 - Status: Active.
-- Parent context: `../../../../../CONTEXT.md`.
+- Parent context: `../CONTEXT.md` (the door family).
 
 ## Summary
 

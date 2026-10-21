@@ -6,8 +6,8 @@ and register it in `late-ssh/src/app/lobby/house/ssnake/levels.rs` to ship a
 new arena.
 
 The arena is perpetual: clearing one of these reshuffles the table to another
-random file, so a level is a lap, not a match. The original `lives`,
-`lives-bonus` and `points-bonus` keys are gone — there are no lives left, and
+random file, so a level is a lap, not a match. Level files carry no `lives`,
+`lives-bonus` or `points-bonus` keys: there are no lives, and
 chip payouts come from the constants in `ssnake/settings.rs` rather than from
 each level.
 

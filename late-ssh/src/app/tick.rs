@@ -127,6 +127,8 @@ impl App {
             changed = true;
         }
 
+        changed |= crate::app::chat::news::watch::svc::tick(self, now, one_hz);
+
         self.sync_visible_chat_room();
         // Presence (`app/presence`): everyone's records into the tavern,
         // the stools and the street, and this session's record out: a send
@@ -397,6 +399,9 @@ impl App {
                 SessionMessage::ClipboardImageFailed { message } => {
                     self.chat.clear_pending_clipboard_image_upload();
                     self.banner = Some(crate::app::common::primitives::Banner::error(&message));
+                }
+                SessionMessage::VideoState { play_id, report } => {
+                    crate::app::chat::news::watch::svc::apply_report(self, play_id, &report);
                 }
                 SessionMessage::Toast { message, error } => {
                     self.banner = Some(if error {

@@ -758,7 +758,7 @@ fn thornveil_falls_is_reachable_gated_and_sits_below_kaelmyr() {
     // ("some Thornveil boss has half the hp of Kaelmyr's weakest") passed for
     // every boss in the land and so guarded nothing. Raising Thornveil is an
     // open decision; when it moves, this test must be re-blessed deliberately
-    // and CONTEXT.md §9's measured ladder updated with it.
+    // and PROGRESSION.md's measured ladder updated with it.
     let band = |of: &dyn Fn(&MobSpawn) -> bool, boss: bool| -> (i32, i32) {
         let levels: Vec<i32> = world
             .spawns
@@ -783,12 +783,12 @@ fn thornveil_falls_is_reachable_gated_and_sits_below_kaelmyr() {
     assert_eq!(
         (thornveil_trash, thornveil_boss),
         ((58, 69), (64, 68)),
-        "Thornveil's measured level band moved; re-bless it against CONTEXT.md §9"
+        "Thornveil's measured level band moved; re-bless it against PROGRESSION.md"
     );
     assert_eq!(
         (kaelmyr_trash, kaelmyr_boss),
         ((63, 78), (69, 80)),
-        "Kaelmyr's measured level band moved; re-bless it against CONTEXT.md §9"
+        "Kaelmyr's measured level band moved; re-bless it against PROGRESSION.md"
     );
     // The ordering those two bands encode, stated as the property rather than
     // left implicit in the numbers above.
@@ -1270,7 +1270,7 @@ fn the_archipelago_ramps_past_the_last_crown_instead_of_sitting_flat_at_the_cap(
         .collect();
     assert_eq!(
         boss_levels, expected,
-        "one displayed level per island from Lv82 to the cap; re-bless against CONTEXT.md §9"
+        "one displayed level per island from Lv82 to the cap; re-bless against PROGRESSION.md"
     );
     assert!(
         boss_levels[0] > ascendant.level,
@@ -2415,7 +2415,7 @@ fn zone_level_bands_are_sane_and_cover_the_road() {
     assert!(road.levels.is_some(), "the home region has hostile levels");
 }
 
-// ---- The world resist/weak pass (spec: CONTEXT.md, same-named section) -------------
+// ---- The world resist/weak pass (spec: COMBAT.md, same-named section) -------------
 //
 // One theme per generated zone; regulars wear the theme's resist/weak, bosses
 // keep their authored profiles. The tests below pin the placement to the theme
@@ -2708,7 +2708,7 @@ fn class_school_mix(class: super::super::classes::Class) -> Vec<(DamageType, f64
 
 #[test]
 fn the_world_pass_redistributes_grind_rates_but_never_rebalances_a_class() {
-    // The grind-rate model, from CONTEXT.md ("The world resist/weak pass"): at band
+    // The grind-rate model, from COMBAT.md ("The world resist/weak pass"): at band
     // gear every class is ~75% auto damage (always Physical, and regulars are
     // never weak to or resistant against it), ~25% abilities in the class's
     // school mix, and a weapon oil adds a flat rider in the coat's school.

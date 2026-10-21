@@ -1,18 +1,86 @@
-use super::{ArticleModalView, ascii_preview_if_fit, build_article_modal_lines};
-use crate::app::chat::ui_text::NewsPayload;
-use ratatui::text::Line;
-use unicode_width::UnicodeWidthStr;
+use super::{ArticleListView, ascii_preview_if_fit, draw_article_list};
+use chrono::Utc;
+use late_core::models::article::{Article, ArticleFeedItem};
+use late_core::models::article_body::BodyStatus;
+use ratatui::{Terminal, backend::TestBackend};
+use std::collections::{HashMap, HashSet};
+use uuid::Uuid;
 
-fn lines_to_strings(lines: &[Line]) -> Vec<String> {
-    lines
-        .iter()
-        .map(|line| {
-            line.spans
-                .iter()
-                .map(|span| span.content.as_ref())
+fn card(body: BodyStatus) -> ArticleFeedItem {
+    card_at("https://example.com/listen-notify", body)
+}
+
+fn card_at(url: &str, body: BodyStatus) -> ArticleFeedItem {
+    let now = Utc::now();
+    ArticleFeedItem {
+        article: Article {
+            id: Uuid::now_v7(),
+            created: now,
+            updated: now,
+            user_id: Uuid::now_v7(),
+            url: url.to_string(),
+            title: "Why LISTEN/NOTIFY stops scaling".to_string(),
+            summary: "• one\n• two\n• three".to_string(),
+            ascii_art: String::new(),
+        },
+        author_username: "mat".to_string(),
+        body,
+    }
+}
+
+/// The card's meta row, as drawn.
+fn meta_row(item: ArticleFeedItem) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(140, 12)).expect("terminal");
+    let marker = HashSet::new();
+    let articles = [item];
+    terminal
+        .draw(|frame| {
+            draw_article_list(
+                frame,
+                frame.area(),
+                &ArticleListView {
+                    articles: &articles,
+                    selected_index: 0,
+                    marker: &marker,
+                    watch_positions: &HashMap::new(),
+                    mine_only: false,
+                },
+            )
+        })
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    (0..buffer.area.height)
+        .map(|y| {
+            (0..buffer.area.width)
+                .map(|x| buffer[(x, y)].symbol())
                 .collect::<String>()
         })
-        .collect()
+        .find(|row| row.contains("@mat - "))
+        .expect("a meta row")
+        .trim_end()
+        .to_string()
+}
+
+/// The meta row ends in the reading time once the body is in, `link` when
+/// there is nothing to read here, and nothing while the fetch is pending.
+#[test]
+fn card_meta_reads_the_body_status() {
+    assert!(meta_row(card(BodyStatus::Ready { reading_minutes: 7 })).ends_with("UTC - 7 min read"));
+    assert!(meta_row(card(BodyStatus::Unavailable)).ends_with("UTC - link"));
+    assert!(meta_row(card(BodyStatus::Pending)).ends_with("UTC"));
+}
+
+/// A video reads `watch` for everyone, whatever its body row says; any
+/// other story with no text still reads `link`.
+#[test]
+fn card_meta_reads_watch_for_a_video() {
+    let video = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+    assert!(meta_row(card_at(video, BodyStatus::Unavailable)).ends_with("UTC - watch"));
+    assert!(meta_row(card_at(video, BodyStatus::Pending)).ends_with("UTC - watch"));
+    assert!(
+        meta_row(card_at("https://x.com/a/status/1", BodyStatus::Unavailable))
+            .ends_with("UTC - link")
+    );
 }
 
 #[test]
@@ -43,99 +111,4 @@ fn ascii_preview_returns_empty_for_zero_dimensions() {
 fn ascii_preview_drops_blank_lines_before_width_check() {
     let out = ascii_preview_if_fit("\n   \n ab \n\\n cd  \n", 3, 6);
     assert_eq!(out, vec![" ab".to_string(), " cd".to_string()]);
-}
-
-#[test]
-fn article_modal_lines_use_feed_style_without_news_emoji() {
-    let payload = NewsPayload {
-        title: "Nobody understands the point of hybrid cars".to_string(),
-        summary: "YouTube video by Technology Connections.\nOpen the link to watch on YouTube."
-            .to_string(),
-        url: "https://www.youtube.com/watch?v=KnUFH5GX_fI".to_string(),
-        ascii_art: ".. .-:::----\n. .:==-.....\n:-:--:     .\n-===---:   :\n      ..".to_string(),
-    };
-    let view = ArticleModalView {
-        payload: &payload,
-        meta: "@artboard - 12 mins ago - Wed 2026-05-06 20:12 UTC",
-    };
-    let rendered = lines_to_strings(&build_article_modal_lines(&view, 100));
-
-    assert_eq!(rendered.first().map(String::as_str), Some(""));
-    assert_eq!(rendered.last().map(String::as_str), Some(""));
-    assert!(!rendered.join("\n").contains('📰'));
-    assert!(rendered[1].contains(".. .-:::----"));
-    assert!(rendered[1].contains("Nobody understands the point of hybrid cars"));
-    assert!(rendered[2].contains("https://www.youtube.com/watch?v=KnUFH5GX_fI"));
-    assert!(rendered[3].contains("@artboard - 12 mins ago - Wed 2026-05-06 20:12 UTC"));
-}
-
-#[test]
-fn article_modal_lines_respect_terminal_cell_width() {
-    let payload = NewsPayload {
-        title: "Nobody understands the point of hybrid cars".to_string(),
-        summary: "YouTube video by Technology Connections.\nOpen the link to watch on YouTube."
-            .to_string(),
-        url: "https://www.youtube.com/watch?v=KnUFH5GX_fI".to_string(),
-        ascii_art: ".. .-:::----\n. .:==-.....\n:-:--:     .".to_string(),
-    };
-    let view = ArticleModalView {
-        payload: &payload,
-        meta: "@artboard - 12 mins ago - Wed 2026-05-06 20:12 UTC",
-    };
-    let width = 58;
-
-    for rendered in lines_to_strings(&build_article_modal_lines(&view, width)) {
-        assert!(
-            UnicodeWidthStr::width(rendered.as_str()) <= width,
-            "line overflowed {width} cells: {rendered:?}"
-        );
-    }
-}
-
-#[test]
-fn article_modal_lines_tolerate_less_than_six_art_rows() {
-    let payload = NewsPayload {
-        title: "Tiny art".to_string(),
-        summary: "One summary line.".to_string(),
-        url: "https://example.com".to_string(),
-        ascii_art: "\n  *  \n\n".to_string(),
-    };
-    let view = ArticleModalView {
-        payload: &payload,
-        meta: "@artboard - now - Wed 2026-05-06 20:12 UTC",
-    };
-    let rendered = lines_to_strings(&build_article_modal_lines(&view, 80)).join("\n");
-
-    assert!(rendered.contains("  *"));
-    assert!(rendered.contains("Tiny art"));
-    assert!(rendered.contains("One summary line."));
-}
-
-#[test]
-fn article_modal_lines_expand_each_summary_bullet_to_two_rows() {
-    let payload = NewsPayload {
-        title: "Modal expansion".to_string(),
-        summary: [
-            "First bullet has enough words to wrap into a second visible row in the modal.",
-            "Second bullet also has enough words to use two visible rows in the modal.",
-            "Third bullet should still appear with the same two row budget.",
-            "Fourth bullet should not appear because the modal caps summary bullets.",
-        ]
-        .join("\n"),
-        url: "https://example.com/news".to_string(),
-        ascii_art: String::new(),
-    };
-    let view = ArticleModalView {
-        payload: &payload,
-        meta: "",
-    };
-    let rendered = lines_to_strings(&build_article_modal_lines(&view, 48));
-    let body = rendered.join("\n");
-
-    assert!(body.contains("First bullet"));
-    assert!(body.contains("second visible"));
-    assert!(body.contains("Second bullet"));
-    assert!(body.contains("two visible"));
-    assert!(body.contains("Third bullet"));
-    assert!(!body.contains("Fourth bullet"));
 }

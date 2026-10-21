@@ -3,6 +3,7 @@ use chrono::{DateTime, Utc};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
+use crate::models::article_body::BodyStatus;
 use crate::models::chips::{ChipMove, UserChips};
 
 /// What publishing one article pays its author. Every share path funnels
@@ -63,6 +64,34 @@ impl Article {
             )
             .await?;
         Ok(rows.into_iter().map(Self::from).collect())
+    }
+
+    /// The shared news snapshot's rows: the newest `limit` articles, each
+    /// with where its body stands. Only the body's status and word count
+    /// ride along, never its lines: the snapshot is re-read on every notify
+    /// on every replica, and the reader loads the one body it opens
+    /// ([`ArticleBody::find`]).
+    pub async fn list_feed(client: &Client, limit: i64) -> Result<Vec<FeedArticle>> {
+        let rows = client
+            .query(
+                "SELECT a.*, b.status AS body_status, b.word_count AS body_word_count
+                 FROM articles a
+                 LEFT JOIN article_bodies b ON b.article_id = a.id
+                 ORDER BY a.created DESC
+                 LIMIT $1",
+                &[&limit],
+            )
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                let status: Option<String> = row.get("body_status");
+                let word_count: Option<i32> = row.get("body_word_count");
+                Ok(FeedArticle {
+                    body: BodyStatus::from_columns(status.as_deref(), word_count)?,
+                    article: Self::from(row),
+                })
+            })
+            .collect()
     }
 
     /// Articles shared inside `[floor, ceiling)` with the sharer's username,
@@ -201,10 +230,19 @@ pub struct ArticleSnapshot {
     pub articles: Vec<ArticleFeedItem>,
 }
 
+/// One row of [`Article::list_feed`], before the sharer's name is attached.
+pub struct FeedArticle {
+    pub article: Article,
+    pub body: BodyStatus,
+}
+
 #[derive(Clone)]
 pub struct ArticleFeedItem {
     pub article: Article,
     pub author_username: String,
+    /// Where the story's body stands, with its reading time once ready; the
+    /// card's meta and the reader's first frame read it.
+    pub body: BodyStatus,
 }
 
 #[derive(Clone, Debug)]
@@ -224,12 +262,14 @@ pub enum ArticleEvent {
     },
     /// This user's news reads among the snapshot's articles
     /// (`article_reads`), loaded at session start and after every write
-    /// (a News room visit, one article opened). Reads only grow, so a
-    /// session merges each load into what it holds, in whatever order the
-    /// loads land, and counts its own unread badge from them against the
-    /// shared snapshot.
+    /// (a News room visit, one article opened, a video position saved).
+    /// Reads only grow, so a session merges each load into what it holds,
+    /// in whatever order the loads land, and counts its own unread badge
+    /// from them against the shared snapshot. The video positions riding
+    /// the rows replace what the session holds: the newest load is the
+    /// truth about where a video stands.
     ReadsLoaded {
         user_id: Uuid,
-        read_article_ids: Vec<Uuid>,
+        reads: Vec<super::article_read::ArticleReadRow>,
     },
 }

@@ -8,8 +8,10 @@ pub(crate) mod mouse;
 pub(crate) mod mouse_ui;
 pub mod overlay;
 pub mod primitives;
+pub(crate) mod public_net;
 pub mod qr;
 pub mod readline;
+pub(crate) mod scroll_view;
 pub mod sidebar;
 pub mod splash_tips;
 pub mod textarea_input;
@@ -35,6 +37,9 @@ mod mentions_test;
 
 #[cfg(test)]
 mod primitives_test;
+
+#[cfg(test)]
+mod public_net_test;
 
 #[cfg(test)]
 mod readline_test;

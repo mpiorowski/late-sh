@@ -5845,7 +5845,7 @@ fn extend_archipelago(
         // Kaethyr Ascendant, the last crown, is Lv80 at 397. The shallow
         // islands therefore hit softer than he does and the deep ones harder:
         // the Archipelago is off-road content that runs past the end of the
-        // road, not a rung on it. See CONTEXT.md §9 for the full ladder.
+        // road, not a rung on it. See PROGRESSION.md for the full ladder.
         let apex = isle + 3 >= super::archipelago::ISLAND_COUNT;
         let mut rng = MazeRng::new(ARCH_SEED ^ (isle as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15));
 
@@ -7683,7 +7683,7 @@ pub fn is_reaches_room(id: RoomId) -> bool {
     (REACHES_BASE..REACHES_BASE + REACHES_ZONES as u32 * REACHES_ZONE_STRIDE).contains(&id)
 }
 
-/// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
+/// The world resist/weak pass (spec: COMBAT.md, same-named section): one theme per
 /// Reaches zone, in `REACHES_ZONES_DATA` order. Regulars inherit the theme's
 /// profile; the zone boss wears the theme's weakness but never its resist
 /// (prep is a pure reward on the fight players provision for).
@@ -8261,7 +8261,7 @@ pub fn is_kaelmyr_room(id: RoomId) -> bool {
     (KAELMYR_BASE..KAELMYR_BASE + KAELMYR_ZONES as u32 * KAELMYR_ZONE_STRIDE).contains(&id)
 }
 
-/// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
+/// The world resist/weak pass (spec: COMBAT.md, same-named section): one theme per
 /// Kaelmyr zone, in `KAELMYR_ZONES_DATA` order. Regulars inherit the theme's
 /// profile; the zone boss wears the theme's weakness but never its resist
 /// (prep is a pure reward on the fight players provision for).
@@ -8907,7 +8907,7 @@ pub fn is_lakes_room(id: RoomId) -> bool {
     (LAKES_BASE..LAKES_BASE + LAKES_ZONES as u32 * LAKES_ZONE_STRIDE).contains(&id)
 }
 
-/// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
+/// The world resist/weak pass (spec: COMBAT.md, same-named section): one theme per
 /// Sunderlakes zone, in `LAKES_ZONES_DATA` order. Regulars inherit the
 /// theme's profile; the zone boss wears the theme's weakness but never its resist
 /// (prep is a pure reward on the fight players provision for).
@@ -9779,7 +9779,7 @@ pub fn region_atlas_entry(id: RoomId) -> Option<(&'static str, &'static str)> {
         .map(|&(name, _, _, tier, _)| (name, tier))
 }
 
-/// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
+/// The world resist/weak pass (spec: COMBAT.md, same-named section): one theme per
 /// Broceliande zone, in `BROCELIANDE_ZONES_DATA` order. Regulars inherit the
 /// theme's profile; the zone boss wears the theme's weakness but never its resist
 /// (prep is a pure reward on the fight players provision for).
@@ -10445,7 +10445,7 @@ fn extend_broceliande(
 //   Thornveil notable reads below Kaelmyr's shallowest, so it lands as a
 //   Reaches-tier side country, not a second road through the same stretch.
 //   Raising it is an open balance decision, not a settled one - see the
-//   measured ladder in CONTEXT.md §9. `tier` is not comparable across bands:
+//   measured ladder in PROGRESSION.md. `tier` is not comparable across bands:
 //   the band rows in `tune_spawn_balance` do most of the work, so compare
 //   displayed levels, never the tier literals.
 //
@@ -11115,7 +11115,7 @@ const AELUNOR_CREATURES: [&str; 20] = [
     "Wild Hunt Rider",
 ];
 
-/// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
+/// The world resist/weak pass (spec: COMBAT.md, same-named section): one theme per
 /// Aelunor glade, in `AELUNOR_ZONES_DATA` order. Regulars inherit the theme's
 /// profile whatever affix they roll (the affix buys stats and loot, not a
 /// different school game); the glade bosses keep their own authored profile
@@ -12407,7 +12407,7 @@ fn wildbound_named(creature: &str, tier: usize) -> &'static str {
     )
 }
 
-/// The world resist/weak pass (spec: CONTEXT.md, same-named section): one theme per
+/// The world resist/weak pass (spec: COMBAT.md, same-named section): one theme per
 /// Frontier zone, in `FRONTIER_ZONES_DATA` order, derived from the zone's
 /// flavor. Regulars inherit the theme's profile; the zone boss wears the theme's weakness but never its resist
 /// (prep is a pure reward on the fight players provision for).

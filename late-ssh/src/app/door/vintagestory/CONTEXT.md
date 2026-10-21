@@ -4,7 +4,7 @@
 - Scope: the Vintage Story card in the Games hub (`late-ssh/src/app/door/vintagestory`), the server it describes (`infra/vintagestory.tf`), and its image (`docker/vintagestory/`, `.github/workflows/vintagestory.yml`).
 - Upstream: the official Vintage Story dedicated server by Anego Studios, plus Anego's arm64 launcher build (github.com/anegostudios/VintagestoryServerArm64).
 - Status: Active.
-- Parent context: `../../../../../CONTEXT.md`.
+- Parent context: `../CONTEXT.md` (the door family).
 
 ## Summary
 

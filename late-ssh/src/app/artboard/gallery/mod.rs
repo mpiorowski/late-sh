@@ -1,6 +1,6 @@
 //! The Artboard gallery: pieces hung off the shared board, applause, the
 //! monthly award, and the page rail that puts them in front of people.
-//! See `late-ssh/src/app/artboard/CONTEXT.md`.
+//! See `late-ssh/src/app/artboard/gallery/CONTEXT.md`.
 
 pub mod frame;
 pub mod input;

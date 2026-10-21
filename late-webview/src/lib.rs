@@ -1,6 +1,6 @@
 //! Embedded webview for CLI-side YouTube playback.
 //!
-//! See late-ssh/src/app/audio/CONTEXT.md §17.
+//! See late-webview/CONTEXT.md.
 //!
 //! On Linux this crate ships as the standalone `late-webview` helper binary
 //! so the `late` binary never links WebKitGTK/GTK: a host without the

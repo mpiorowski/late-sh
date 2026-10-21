@@ -75,6 +75,7 @@ fn paired_client_snapshot_tracks_latest_state() {
             ssh_mode: ClientSshMode::Native,
             platform: ClientPlatform::Macos,
             capabilities: vec!["clipboard_image".to_string()],
+            video_blockers: Vec::new(),
             muted: true,
             volume_percent: 35,
         },
@@ -106,6 +107,7 @@ fn voice_cli_detection_ignores_webview_preferred_snapshot() {
             ssh_mode: ClientSshMode::Native,
             platform: ClientPlatform::Linux,
             capabilities: vec!["voice".to_string()],
+            video_blockers: Vec::new(),
             muted: false,
             volume_percent: 30,
         },
@@ -128,6 +130,7 @@ fn voice_cli_detection_ignores_webview_preferred_snapshot() {
             ssh_mode: ClientSshMode::Native,
             platform: ClientPlatform::Linux,
             capabilities: vec!["youtube".to_string()],
+            video_blockers: Vec::new(),
             muted: false,
             volume_percent: 30,
         },
@@ -164,6 +167,7 @@ fn cli_muted_tracks_cli_entry_and_ignores_webview_entries() {
             ssh_mode: ClientSshMode::Native,
             platform: ClientPlatform::Linux,
             capabilities: vec!["youtube".to_string()],
+            video_blockers: Vec::new(),
             muted: true,
             volume_percent: 30,
         },
@@ -182,6 +186,7 @@ fn cli_muted_tracks_cli_entry_and_ignores_webview_entries() {
             ssh_mode: ClientSshMode::Native,
             platform: ClientPlatform::Linux,
             capabilities: vec!["youtube".to_string()],
+            video_blockers: Vec::new(),
             muted: true,
             volume_percent: 30,
         },
@@ -196,6 +201,7 @@ fn cli_muted_tracks_cli_entry_and_ignores_webview_entries() {
             ssh_mode: ClientSshMode::Native,
             platform: ClientPlatform::Linux,
             capabilities: vec!["youtube".to_string()],
+            video_blockers: Vec::new(),
             muted: false,
             volume_percent: 30,
         },
@@ -224,6 +230,7 @@ fn paired_client_request_clipboard_image_reaches_cli_not_webview() {
             ssh_mode: ClientSshMode::Native,
             platform: ClientPlatform::Linux,
             capabilities: vec!["clipboard_image".to_string()],
+            video_blockers: Vec::new(),
             muted: false,
             volume_percent: 30,
         },
@@ -246,6 +253,7 @@ fn paired_client_request_clipboard_image_reaches_cli_not_webview() {
             ssh_mode: ClientSshMode::Unknown,
             platform: ClientPlatform::Unknown,
             capabilities: Vec::new(),
+            video_blockers: Vec::new(),
             muted: false,
             volume_percent: 30,
         },
@@ -279,6 +287,7 @@ fn paired_client_request_clipboard_image_false_when_only_webview() {
             ssh_mode: ClientSshMode::Unknown,
             platform: ClientPlatform::Unknown,
             capabilities: Vec::new(),
+            video_blockers: Vec::new(),
             muted: false,
             volume_percent: 30,
         },
@@ -310,6 +319,7 @@ fn paired_client_clipboard_request_consumed_once() {
             ssh_mode: ClientSshMode::Native,
             platform: ClientPlatform::Linux,
             capabilities: vec!["clipboard_image".to_string()],
+            video_blockers: Vec::new(),
             muted: false,
             volume_percent: 30,
         },
@@ -369,6 +379,7 @@ fn state_update_never_sends_pair_control_message() {
             ssh_mode: ClientSshMode::Native,
             platform: ClientPlatform::Linux,
             capabilities: vec!["youtube".to_string()],
+            video_blockers: Vec::new(),
             muted: false,
             volume_percent: 30,
         },
@@ -393,6 +404,7 @@ fn set_audio_source_pushes_playback_source_to_every_entry() {
             ssh_mode: ClientSshMode::Native,
             platform: ClientPlatform::Linux,
             capabilities: vec!["youtube".to_string()],
+            video_blockers: Vec::new(),
             muted: false,
             volume_percent: 30,
         },
@@ -409,6 +421,7 @@ fn set_audio_source_pushes_playback_source_to_every_entry() {
             ssh_mode: ClientSshMode::Unknown,
             platform: ClientPlatform::Unknown,
             capabilities: Vec::new(),
+            video_blockers: Vec::new(),
             muted: false,
             volume_percent: 30,
         },
@@ -522,5 +535,113 @@ fn set_control_messages_serialize_to_wire_names() {
     assert_eq!(
         serde_json::to_string(&PairControlMessage::SetVolume { volume_percent: 45 }).unwrap(),
         r#"{"event":"set_volume","volume_percent":45}"#
+    );
+}
+
+fn cli_state(capabilities: &[&str]) -> ClientAudioState {
+    ClientAudioState {
+        client_kind: ClientKind::Cli,
+        ssh_mode: ClientSshMode::Native,
+        platform: ClientPlatform::Linux,
+        capabilities: capabilities.iter().map(|c| c.to_string()).collect(),
+        video_blockers: Vec::new(),
+        muted: false,
+        volume_percent: 30,
+    }
+}
+
+/// Video controls reach only a CLI advertising `video`: the webview helper
+/// (which claims every other capability) and a CLI without it are skipped.
+#[test]
+fn video_controls_reach_only_the_video_capable_cli() {
+    let registry = PairedClientRegistry::new("https://audio.late.sh");
+    let user_id = Uuid::now_v7();
+    let stop = PairControlMessage::VideoStop { play_id: 1 };
+
+    let (plain_tx, mut plain_rx) = tokio::sync::mpsc::channel(PAIR_CONTROL_QUEUE_CAP);
+    let plain_id = registry
+        .register("tok".to_string(), plain_tx, user_id, AudioSource::default())
+        .expect("paired register");
+    registry.update_state_and_enforce_mute_policy("tok", plain_id, cli_state(&["voice"]));
+    let (webview_tx, mut webview_rx) = tokio::sync::mpsc::channel(PAIR_CONTROL_QUEUE_CAP);
+    let webview_id = registry
+        .register("tok".to_string(), webview_tx, user_id, AudioSource::Youtube)
+        .expect("paired register");
+    registry.update_state_and_enforce_mute_policy(
+        "tok",
+        webview_id,
+        ClientAudioState {
+            client_kind: ClientKind::Webview,
+            ..cli_state(&["video", "youtube"])
+        },
+    );
+
+    assert!(!registry.has_video_cli("tok"));
+    assert!(!registry.send_control_to_video_cli("tok", stop.clone()));
+    assert!(plain_rx.try_recv().is_err());
+    assert!(webview_rx.try_recv().is_err());
+
+    let (video_tx, mut video_rx) = tokio::sync::mpsc::channel(PAIR_CONTROL_QUEUE_CAP);
+    let video_id = registry
+        .register("tok".to_string(), video_tx, user_id, AudioSource::default())
+        .expect("paired register");
+    registry.update_state_and_enforce_mute_policy("tok", video_id, cli_state(&["video"]));
+
+    assert!(registry.has_video_cli("tok"));
+    assert!(registry.send_control_to_video_cli("tok", stop.clone()));
+    assert_eq!(video_rx.try_recv().unwrap(), stop);
+    assert!(plain_rx.try_recv().is_err());
+    assert!(webview_rx.try_recv().is_err());
+}
+
+/// `late-cli/src/ws.rs` deserializes these exact shapes.
+#[test]
+fn video_messages_serialize_to_wire_names() {
+    use crate::paired_clients::VideoControl;
+    assert_eq!(
+        serde_json::to_string(&PairControlMessage::VideoPlay {
+            play_id: 7,
+            url: "https://www.youtube.com/watch?v=x".to_string(),
+            left: 10,
+            top: 3,
+            cols: 100,
+            rows: 28,
+            start_s: 1391,
+        })
+        .unwrap(),
+        r#"{"event":"video_play","play_id":7,"url":"https://www.youtube.com/watch?v=x","left":10,"top":3,"cols":100,"rows":28,"start_s":1391}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&PairControlMessage::VideoPlace {
+            play_id: 7,
+            left: 0,
+            top: 0,
+            cols: 180,
+            rows: 44,
+        })
+        .unwrap(),
+        r#"{"event":"video_place","play_id":7,"left":0,"top":0,"cols":180,"rows":44}"#
+    );
+    for (control, wire) in [
+        (VideoControl::TogglePause, "toggle_pause"),
+        (VideoControl::SeekBack, "seek_back"),
+        (VideoControl::SeekForward, "seek_forward"),
+        (VideoControl::SeekBackFar, "seek_back_far"),
+        (VideoControl::SeekForwardFar, "seek_forward_far"),
+        (VideoControl::Restart, "restart"),
+        (VideoControl::ToggleMute, "toggle_mute"),
+    ] {
+        assert_eq!(
+            serde_json::to_string(&PairControlMessage::VideoControl {
+                play_id: 7,
+                control
+            })
+            .unwrap(),
+            format!(r#"{{"event":"video_control","play_id":7,"control":"{wire}"}}"#)
+        );
+    }
+    assert_eq!(
+        serde_json::to_string(&PairControlMessage::VideoStop { play_id: 7 }).unwrap(),
+        r#"{"event":"video_stop","play_id":7}"#
     );
 }

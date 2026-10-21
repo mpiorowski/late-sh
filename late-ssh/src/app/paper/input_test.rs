@@ -1,7 +1,7 @@
 use ratatui::{Terminal, backend::TestBackend, layout::Rect};
 
 use super::*;
-use crate::app::input::MouseModifiers;
+use crate::app::input::{MouseButton, MouseEventKind, MouseModifiers};
 use crate::app::paper::{
     state::{PaperInk, PaperSpan},
     ui,
@@ -36,46 +36,46 @@ fn mouse(kind: MouseEventKind, x: u16, y: u16) -> MouseEvent {
 #[test]
 fn wheel_scrolls_only_inside_the_paper_and_stops_at_both_ends() {
     let modal = paper();
-    let body = modal.viewport().body;
+    let body = modal.view.viewport().body;
     handle_mouse(&modal, mouse(MouseEventKind::ScrollDown, 0, 0));
-    assert_eq!(modal.scroll_offset(), 0);
+    assert_eq!(modal.view.offset(), 0);
     handle_mouse(&modal, mouse(MouseEventKind::ScrollDown, body.x, body.y));
-    assert_eq!(modal.scroll_offset(), 3);
+    assert_eq!(modal.view.offset(), 3);
     for _ in 0..100 {
         handle_mouse(&modal, mouse(MouseEventKind::ScrollDown, body.x, body.y));
     }
-    assert_eq!(modal.scroll_offset(), 100 - body.height);
+    assert_eq!(modal.view.offset(), 100 - body.height);
     for _ in 0..100 {
         handle_mouse(&modal, mouse(MouseEventKind::ScrollUp, body.x, body.y));
     }
-    assert_eq!(modal.scroll_offset(), 0);
+    assert_eq!(modal.view.offset(), 0);
 }
 
 #[test]
 fn scrollbar_pages_drags_and_releases_outside_the_popup() {
     let modal = paper();
-    let viewport = modal.viewport();
+    let viewport = modal.view.viewport();
     let track = viewport.track;
     handle_mouse(
         &modal,
         mouse(MouseEventKind::Down, track.x, track.bottom() - 1),
     );
-    assert_eq!(modal.scroll_offset(), viewport.body.height);
-    let thumb = modal.thumb();
+    assert_eq!(modal.view.offset(), viewport.body.height);
+    let thumb = modal.view.thumb();
     handle_mouse(&modal, mouse(MouseEventKind::Down, thumb.x, thumb.y));
     handle_mouse(&modal, mouse(MouseEventKind::Drag, 0, track.bottom() + 3));
-    assert_eq!(modal.scroll_offset(), 100 - viewport.body.height);
+    assert_eq!(modal.view.offset(), 100 - viewport.body.height);
     handle_mouse(&modal, mouse(MouseEventKind::Drag, 0, 0));
-    assert_eq!(modal.scroll_offset(), 0);
+    assert_eq!(modal.view.offset(), 0);
     handle_mouse(&modal, mouse(MouseEventKind::Up, 0, 0));
     handle_mouse(&modal, mouse(MouseEventKind::Drag, track.x, track.bottom()));
-    assert_eq!(modal.scroll_offset(), 0, "release outside cancels dragging");
+    assert_eq!(modal.view.offset(), 0, "release outside cancels dragging");
 }
 
 #[test]
 fn only_left_press_on_close_requests_dismissal() {
     let modal = paper();
-    let close = modal.viewport().close;
+    let close = modal.view.viewport().close;
     assert!(!handle_mouse(&modal, mouse(MouseEventKind::Down, 0, 0)));
     assert!(!handle_mouse(
         &modal,
@@ -93,24 +93,24 @@ fn only_left_press_on_close_requests_dismissal() {
 #[test]
 fn resize_cancels_drag_and_short_content_has_no_scrollbar() {
     let mut modal = paper();
-    let thumb = modal.thumb();
+    let thumb = modal.view.thumb();
     handle_mouse(&modal, mouse(MouseEventKind::Down, thumb.x, thumb.y));
-    modal.invalidate_viewport();
-    assert_eq!(modal.viewport().close, Rect::default());
+    modal.view.invalidate();
+    assert_eq!(modal.view.viewport().close, Rect::default());
     draw(&modal, 100, 30);
     handle_mouse(&modal, mouse(MouseEventKind::Drag, thumb.x, 29));
-    assert_eq!(modal.scroll_offset(), 0);
-    modal.scroll(90);
+    assert_eq!(modal.view.offset(), 0);
+    modal.view.scroll(90);
     modal.lines.truncate(2);
     draw(&modal, 100, 30);
-    assert_eq!(modal.scroll_offset(), 0);
-    assert!(modal.viewport().track.is_empty());
-    assert!(modal.thumb().is_empty());
+    assert_eq!(modal.view.offset(), 0);
+    assert!(modal.view.viewport().track.is_empty());
+    assert!(modal.view.thumb().is_empty());
     let loading = PaperModal::at_the_press();
     draw(&loading, 80, 24);
-    loading.scroll(3);
-    assert_eq!(loading.scroll_offset(), 0);
-    assert!(loading.viewport().track.is_empty());
+    loading.view.scroll(3);
+    assert_eq!(loading.view.offset(), 0);
+    assert!(loading.view.viewport().track.is_empty());
 }
 
 #[tokio::test]
@@ -133,7 +133,7 @@ async fn paper_mouse_routing_honors_mode_modal_priority_and_loading_cancellation
     let mut screen = vt100::Parser::new(24, 80, 0);
     screen.process(&bytes);
     let modal = app.paper.modal.as_ref().unwrap();
-    let viewport = modal.viewport();
+    let viewport = modal.view.viewport();
     assert_eq!(
         screen
             .screen()
@@ -148,12 +148,12 @@ async fn paper_mouse_routing_honors_mode_modal_priority_and_loading_cancellation
     app.interaction_mode = InteractionMode::Keyboard;
     app.handle_input(wheel.as_bytes());
     app.handle_input(close.as_bytes());
-    assert_eq!(app.paper.modal.as_ref().unwrap().scroll_offset(), 0);
+    assert_eq!(app.paper.modal.as_ref().unwrap().view.offset(), 0);
     app.interaction_mode = InteractionMode::Mouse;
     app.handle_input(wheel.as_bytes());
-    assert_eq!(app.paper.modal.as_ref().unwrap().scroll_offset(), 3);
+    assert_eq!(app.paper.modal.as_ref().unwrap().view.offset(), 3);
     app.handle_input(b"j");
-    assert_eq!(app.paper.modal.as_ref().unwrap().scroll_offset(), 4);
+    assert_eq!(app.paper.modal.as_ref().unwrap().view.offset(), 4);
     assert_eq!(
         app.leaderboard_page.selected_board(),
         opened_board,

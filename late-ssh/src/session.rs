@@ -29,6 +29,11 @@ pub enum SessionMessage {
     ClipboardImageFailed {
         message: String,
     },
+    /// A paired CLI's `video_state` for the News watch modal.
+    VideoState {
+        play_id: u64,
+        report: crate::paired_clients::VideoReport,
+    },
     Toast {
         message: String,
         error: bool,

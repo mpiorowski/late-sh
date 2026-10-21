@@ -1,6 +1,6 @@
 # The money pass, as built (late-ssh/src/app/deadchannel/fight)
 
-Parent: `../CONTEXT.md` §3c (the fight: the row, the lock, the day roll,
+Parent: `CONTEXT.md` (the fight: the row, the lock, the day roll,
 the wire). Design and the reasons: `../GAME.md`, "The money pass". This
 file is the contract of the five things that keep a runner from locking:
 the road's warning, the step down, the lockers, the bits machine, and the
@@ -13,8 +13,7 @@ All of them are commands on the same sheet under the same row lock
 `fight/ui.rs::draw_picker`, the road, centered over the street at the
 scene's width, opened by `FightSession::step_up` (`f`, or Enter at the
 screen) unless the mirror shows a fight waiting on the row. The road
-itself (the map, the steps, the rests and caches) is `../CONTEXT.md`
-§3c; this is the part of it that warns.
+itself (the map, the steps, the rests and caches) is `CONTEXT.md`; this is the part of it that warns.
 
 - On top, your face and sheet: level, signal bar, attack and defense with
   the kit, rations, bits, crystals, exp toward the next level, the

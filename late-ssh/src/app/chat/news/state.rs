@@ -1,7 +1,8 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 use ratatui_textarea::{TextArea, WrapMode};
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, oneshot, watch};
 use uuid::Uuid;
 
 use crate::app::common::{composer, primitives::Banner};
@@ -9,6 +10,8 @@ use late_core::models::article::{
     ArticleEvent, ArticleFeedItem, ArticleSnapshot, NEWS_FEED_LIMIT, NEWS_SHARE_MAX_PAID_PER_DAY,
     NEWS_SHARE_REWARD_CHIPS, NewsShareReward,
 };
+use late_core::models::article_body::BodyStatus;
+use late_core::models::article_read::WatchPosition;
 
 /// The success banner for a share, from what it actually minted. Both share
 /// surfaces (the News composer and an RSS `s`) read this, so neither can
@@ -27,11 +30,14 @@ pub fn news_share_banner(lead: &str, reward: NewsShareReward) -> Banner {
     }
 }
 
-use super::svc::ArticleService;
+use super::reader::state::{ReaderBody, ReaderModal};
+use super::svc::{ArticleService, BodyLoad, BodyReply, is_youtube_url};
+use super::watch::state::{LivePlay, Player, SetupBox, SetupInputs, WatchMemory, WatchModal};
+use crate::paired_clients::PairControlMessage;
 
 /// This session's news reads: the ids of the snapshot's articles the
 /// reader has read (`article_reads`), a visit to the News room reading
-/// every one of them and the article modal reading one. Reads only grow,
+/// every one of them and opening the reader reading one. Reads only grow,
 /// so a load merges into what is held. Until the first load answers, the
 /// badge stays empty rather than guessing: no reads means everything is
 /// unread, which is not the same as not knowing yet.
@@ -115,12 +121,32 @@ pub struct State {
     snapshot_rx: watch::Receiver<ArticleSnapshot>,
     event_rx: broadcast::Receiver<ArticleEvent>,
     reads: Reads,
+    /// Where this reader left each video they are partway through, by
+    /// article: the resume point for the player and the card's progress.
+    /// Replaced by every load, kept in step by the session's own saves.
+    watch_positions: HashMap<Uuid, WatchPosition>,
     marker: HashSet<Uuid>,
     preserve_marker: bool,
     composing: bool,
     composer: TextArea<'static>,
     processing: bool,
     current_task: Option<tokio::task::AbortHandle>,
+    reader: Option<OpenReader>,
+    /// Never up at the same time as the reader.
+    watch: Option<WatchModal>,
+    /// What the paired CLI was last told to play, kept past the modal so
+    /// closing it still sends the stop (`watch::state::sync`).
+    live_play: Option<LivePlay>,
+    /// The last `play_id` handed out this session.
+    last_play_id: u64,
+}
+
+/// The reader on screen and its outstanding body request. They travel
+/// together: closing or reopening the reader drops the request with it, so
+/// an answer only ever lands on the reader that asked.
+struct OpenReader {
+    modal: ReaderModal,
+    body_request: Option<oneshot::Receiver<BodyReply>>,
 }
 
 impl State {
@@ -140,12 +166,17 @@ impl State {
             snapshot_rx,
             event_rx,
             reads: Reads::Loading,
+            watch_positions: HashMap::new(),
             marker: HashSet::new(),
             preserve_marker: false,
             composing: false,
             composer: new_news_textarea(),
             processing: false,
             current_task: None,
+            reader: None,
+            watch: None,
+            live_play: None,
+            last_play_id: 0,
         }
     }
 
@@ -265,6 +296,10 @@ impl State {
         &self.reads
     }
 
+    pub(crate) fn watch_positions(&self) -> &HashMap<Uuid, WatchPosition> {
+        &self.watch_positions
+    }
+
     pub fn composing(&self) -> bool {
         self.composing
     }
@@ -313,15 +348,15 @@ impl State {
         self.article_service.mark_read_task(self.user_id);
     }
 
-    /// Mark the one article the modal opened on as read, and no other. Its
+    /// Mark the one article the reader opened on as read, and no other. Its
     /// mark clears now, and the write always goes: it is a no-op on a row
     /// that exists, and a reopen is the retry of a write that failed.
-    pub fn mark_article_read(&mut self, item: &ArticleFeedItem) {
+    pub fn mark_article_read(&mut self, article_id: Uuid) {
         if let Reads::Loaded(read_ids) = &mut self.reads {
-            read_ids.insert(item.article.id);
+            read_ids.insert(article_id);
         }
         self.article_service
-            .mark_article_read_task(self.user_id, item.article.id);
+            .mark_article_read_task(self.user_id, article_id);
     }
 
     pub fn composer_push(&mut self, ch: char) {
@@ -414,14 +449,170 @@ impl State {
     }
 
     pub fn delete_selected(&mut self) {
-        if let Some(item) = self.articles.get(self.selected_index()) {
-            let is_owner = item.article.user_id == self.user_id;
-            if !is_owner && !self.is_admin {
-                return;
-            }
-            self.article_service
-                .delete_article(self.user_id, item.article.id, self.is_admin);
+        if let Some(article_id) = self.selected_item().map(|item| item.article.id) {
+            self.delete_article(article_id);
         }
+    }
+
+    /// Delete a story by id: its sharer's own, or any for an admin.
+    pub fn delete_article(&mut self, article_id: Uuid) {
+        let Some(item) = self
+            .source_articles
+            .iter()
+            .find(|item| item.article.id == article_id)
+        else {
+            return;
+        };
+        if item.article.user_id != self.user_id && !self.is_admin {
+            return;
+        }
+        self.article_service
+            .delete_article(self.user_id, article_id, self.is_admin);
+    }
+
+    /// Open the reader on a snapshot story, marking it read and asking for
+    /// its body. False when the story left the snapshot (deleted).
+    pub(crate) fn open_reader(&mut self, article_id: Uuid) -> bool {
+        let Some(item) = self
+            .source_articles
+            .iter()
+            .find(|item| item.article.id == article_id)
+        else {
+            return false;
+        };
+        let modal = ReaderModal::open(item);
+        self.close_watch();
+        self.mark_article_read(article_id);
+        let body_request =
+            self.article_service
+                .load_body_task(self.user_id, article_id, BodyLoad::Open);
+        self.reader = Some(OpenReader {
+            modal,
+            body_request: Some(body_request),
+        });
+        true
+    }
+
+    pub(crate) fn reader(&self) -> Option<&ReaderModal> {
+        self.reader.as_ref().map(|open| &open.modal)
+    }
+
+    pub(crate) fn close_reader(&mut self) -> Option<ReaderModal> {
+        self.reader.take().map(|open| open.modal)
+    }
+
+    /// Whether the selected card is a video: the one case `w` in the News
+    /// room is "watch" and not the global Bonsai shortcut.
+    pub(crate) fn selected_card_is_watchable(&self) -> bool {
+        self.selected_item()
+            .is_some_and(|item| is_youtube_url(&item.article.url))
+    }
+
+    /// Whether a snapshot story is a video the watch modal can play.
+    pub(crate) fn is_watchable(&self, article_id: Uuid) -> bool {
+        self.watchable_item(article_id).is_some()
+    }
+
+    /// Open the player on a snapshot video, a fresh `play_id` for it, and
+    /// mark it read. A video the reader left partway through resumes
+    /// there. False when it left the snapshot or is not a video.
+    pub(crate) fn open_watch_player(&mut self, article_id: Uuid, now: Instant) -> bool {
+        let Some(item) = self.watchable_item(article_id).cloned() else {
+            return false;
+        };
+        self.close_watch();
+        self.last_play_id += 1;
+        self.reader = None;
+        let resume_from = self.watch_positions.get(&article_id).copied();
+        self.watch = Some(WatchModal::Player(Box::new(Player::new(
+            &item,
+            self.last_play_id,
+            now,
+            resume_from,
+        ))));
+        self.mark_article_read(article_id);
+        true
+    }
+
+    /// Open the setup box for a snapshot video the user's setup cannot
+    /// play. False when it left the snapshot or is not a video.
+    pub(crate) fn open_watch_setup(&mut self, article_id: Uuid, inputs: &SetupInputs) -> bool {
+        let Some(item) = self.watchable_item(article_id) else {
+            return false;
+        };
+        let setup = SetupBox::decide(&item.article.url, inputs);
+        self.close_watch();
+        self.reader = None;
+        self.watch = Some(WatchModal::Setup(setup));
+        true
+    }
+
+    fn watchable_item(&self, article_id: Uuid) -> Option<&ArticleFeedItem> {
+        self.source_articles
+            .iter()
+            .find(|item| item.article.id == article_id && is_youtube_url(&item.article.url))
+    }
+
+    pub(crate) fn watch(&self) -> Option<&WatchModal> {
+        self.watch.as_ref()
+    }
+
+    pub(crate) fn player_mut(&mut self) -> Option<&mut Player> {
+        match &mut self.watch {
+            Some(WatchModal::Player(player)) => Some(player),
+            Some(WatchModal::Setup(_)) | None => None,
+        }
+    }
+
+    /// Close the watch modal. A closing player leaves its position behind
+    /// for the next watch (`Player::memory`): the session's own map changes
+    /// now, so the card shows the progress at once, and the write goes out
+    /// as a task whose load brings every session of the reader's in line.
+    pub(crate) fn close_watch(&mut self) {
+        let Some(WatchModal::Player(player)) = self.watch.take() else {
+            return;
+        };
+        let article_id = player.article_id();
+        match player.memory() {
+            WatchMemory::Save(position) => {
+                self.watch_positions.insert(article_id, position);
+                self.article_service
+                    .save_watch_position_task(self.user_id, article_id, position);
+            }
+            WatchMemory::Clear => {
+                self.watch_positions.remove(&article_id);
+                self.article_service
+                    .clear_watch_position_task(self.user_id, article_id);
+            }
+            WatchMemory::Nothing => {}
+        }
+    }
+
+    /// After a `video_state`: save the playing position every
+    /// `WATCH_SAVE_EVERY` (`Player::checkpoint`), so a session that drops
+    /// mid-video still resumes close to where it was.
+    pub(crate) fn checkpoint_watch(&mut self, now: Instant) {
+        let Some(player) = self.player_mut() else {
+            return;
+        };
+        let article_id = player.article_id();
+        let Some(position) = player.checkpoint(now) else {
+            return;
+        };
+        self.watch_positions.insert(article_id, position);
+        self.article_service
+            .save_watch_position_task(self.user_id, article_id, position);
+    }
+
+    /// The pair messages that bring the CLI in line with the open player:
+    /// a play, a move, a stop. Called after every draw, which is what
+    /// records the player's body.
+    pub(crate) fn video_sync(&mut self) -> Vec<PairControlMessage> {
+        let wanted = match &self.watch {
+            Some(WatchModal::Player(player)) => player.wanted(),
+            Some(WatchModal::Setup(_)) | None => None,
+        };
+        super::watch::state::sync(&mut self.live_play, wanted)
     }
 
     pub fn submit_composer(&mut self) {
@@ -440,9 +631,10 @@ impl State {
         let changed = self.snapshot_rx.has_changed().unwrap_or(false) || !self.event_rx.is_empty();
         let snapshot_banner = self.drain_snapshot();
         let event_banner = self.drain_events();
+        let body = self.drain_reader_body();
         NewsTick {
-            banner: event_banner.or(snapshot_banner),
-            changed,
+            banner: event_banner.or(body.banner).or(snapshot_banner),
+            changed: changed || body.changed,
         }
     }
 
@@ -462,6 +654,7 @@ impl State {
         };
         self.source_articles = snapshot.articles;
         self.rebuild_display();
+        self.reload_pending_reader();
         if !announce {
             return None;
         }
@@ -471,6 +664,73 @@ impl State {
             "{} new {noun} in news",
             news_unread_label(unread)
         )))
+    }
+
+    /// A reader left waiting on a fetch asks again once the snapshot says
+    /// the body landed, so it turns into the article without a reopen. One
+    /// request at a time: a snapshot landing while one is out asks nothing.
+    fn reload_pending_reader(&mut self) {
+        let Some(open) = &mut self.reader else {
+            return;
+        };
+        if open.body_request.is_some() || *open.modal.body() != ReaderBody::Pending {
+            return;
+        }
+        let article_id = open.modal.article_id();
+        let landed = self
+            .source_articles
+            .iter()
+            .any(|item| item.article.id == article_id && item.body != BodyStatus::Pending);
+        if landed {
+            open.body_request = Some(self.article_service.load_body_task(
+                self.user_id,
+                article_id,
+                BodyLoad::Landed,
+            ));
+        }
+    }
+
+    /// The open reader's body answer, once it lands: the reader shows the
+    /// text, or falls back to the summary with a banner.
+    fn drain_reader_body(&mut self) -> NewsTick {
+        let quiet = NewsTick {
+            banner: None,
+            changed: false,
+        };
+        let Some(open) = &mut self.reader else {
+            return quiet;
+        };
+        let Some(request) = &mut open.body_request else {
+            return quiet;
+        };
+        let reply = match request.try_recv() {
+            Ok(reply) => reply,
+            Err(oneshot::error::TryRecvError::Empty) => return quiet,
+            // The load task ended without answering (it panicked): the
+            // summary beats a loading line that never resolves.
+            Err(oneshot::error::TryRecvError::Closed) => BodyReply::Failed,
+        };
+        open.body_request = None;
+        let tick = match reply {
+            BodyReply::Loaded(body) => {
+                open.modal.apply_body(body);
+                NewsTick {
+                    banner: None,
+                    changed: true,
+                }
+            }
+            BodyReply::Failed => {
+                open.modal.fail_load();
+                NewsTick {
+                    banner: Some(Banner::error("Couldn't load the article text.")),
+                    changed: true,
+                }
+            }
+        };
+        // A "still pending" answer can cross the snapshot that said the body
+        // landed, and that snapshot will not come again: ask once more now.
+        self.reload_pending_reader();
+        tick
     }
 
     fn drain_events(&mut self) -> Option<Banner> {
@@ -499,17 +759,23 @@ impl State {
                     ArticleEvent::Deleted { user_id } if self.user_id == user_id => {
                         banner = Some(Banner::success("Article deleted."));
                     }
-                    ArticleEvent::ReadsLoaded {
-                        user_id,
-                        read_article_ids,
-                    } if self.user_id == user_id => {
+                    ArticleEvent::ReadsLoaded { user_id, reads } if self.user_id == user_id => {
                         // Reads only grow, so a load merges: two writes'
                         // loads landing in either order never take a read
                         // back, and neither does a load older than a mark
-                        // this session made itself.
+                        // this session made itself. The video positions
+                        // move, so the load replaces them.
+                        self.watch_positions = reads
+                            .iter()
+                            .filter_map(|row| {
+                                row.watch_position
+                                    .map(|position| (row.article_id, position))
+                            })
+                            .collect();
+                        let read_article_ids = reads.into_iter().map(|row| row.article_id);
                         match &mut self.reads {
                             Reads::Loading => {
-                                self.reads = Reads::Loaded(read_article_ids.into_iter().collect());
+                                self.reads = Reads::Loaded(read_article_ids.collect());
                             }
                             Reads::Loaded(read_ids) => read_ids.extend(read_article_ids),
                         }

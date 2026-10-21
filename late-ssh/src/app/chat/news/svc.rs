@@ -1,3 +1,4 @@
+use super::body::{self, BodyFetchError, BodyFetchFailure, ReadableBody};
 use crate::app::ai::svc::AiService;
 use crate::metrics;
 use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
@@ -7,7 +8,8 @@ use late_core::{
     db::Db,
     models::{
         article::{Article, ArticleParams},
-        article_read::ArticleRead,
+        article_body::{ArticleBody, BodyStatus},
+        article_read::{ArticleRead, WatchPosition},
         moderation_audit_log::ModerationAuditLog,
         user::User,
     },
@@ -17,7 +19,7 @@ use serde::Deserialize;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
-use tokio::sync::{broadcast, mpsc, watch};
+use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
@@ -37,12 +39,23 @@ const TWEET_TITLE_MAX_CHARS: usize = 100;
 /// The post's own text gets two of the card's three bullets; the third is
 /// always the attribution line.
 const TWEET_TEXT_BULLETS: usize = 2;
+/// Ready bodies older than this lose their text.
+const ARTICLE_BODY_RETENTION: chrono::TimeDelta = chrono::TimeDelta::days(30);
+/// A story this old with no body row had its fetch cut short: the body step
+/// ends inside [`PROCESS_URL_TIMEOUT`], and a minute covers the store.
+const ARTICLE_BODY_PENDING_GRACE: chrono::TimeDelta = chrono::TimeDelta::minutes(6);
+/// Both sweeps are one idempotent statement each, so running them hourly
+/// costs nothing and a cut-short fetch stops reading as pending within the
+/// hour.
+const ARTICLE_BODY_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
 #[derive(Clone)]
 pub struct ArticleService {
     db: Db,
     ai_service: AiService,
     http_client: reqwest::Client,
+    /// The reader's page fetch, public addresses only (`body.rs`).
+    body_client: reqwest::Client,
     snapshot_tx: watch::Sender<ArticleSnapshot>,
     snapshot_rx: watch::Receiver<ArticleSnapshot>,
     evt_tx: broadcast::Sender<ArticleEvent>,
@@ -57,11 +70,20 @@ impl ArticleService {
             db,
             ai_service,
             http_client: reqwest::Client::new(),
+            body_client: body::http_client(),
             snapshot_tx,
             snapshot_rx,
             evt_tx,
         }
     }
+    /// Swap the body fetch's client, for a test that serves its page from
+    /// a loopback port the real client refuses to reach.
+    #[cfg(test)]
+    pub(crate) fn with_body_client(mut self, client: reqwest::Client) -> Self {
+        self.body_client = client;
+        self
+    }
+
     pub fn subscribe_snapshot(&self) -> watch::Receiver<ArticleSnapshot> {
         self.snapshot_rx.clone()
     }
@@ -127,6 +149,51 @@ impl ArticleService {
         });
     }
 
+    /// Remember where the reader left a video, then republish their reads
+    /// so every session of theirs shows the card's progress.
+    pub fn save_watch_position_task(
+        &self,
+        user_id: Uuid,
+        article_id: Uuid,
+        position: WatchPosition,
+    ) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = service
+                .save_watch_position_and_publish(user_id, article_id, position)
+                .await
+            {
+                late_core::error_span!(
+                    "article_watch_position_save_failed",
+                    error = ?e,
+                    user_id = %user_id,
+                    article_id = %article_id,
+                    position_s = position.position_s,
+                    "failed to save the video position"
+                );
+            }
+        });
+    }
+
+    /// The video was watched to the end: the next watch starts over.
+    pub fn clear_watch_position_task(&self, user_id: Uuid, article_id: Uuid) {
+        let service = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = service
+                .clear_watch_position_and_publish(user_id, article_id)
+                .await
+            {
+                late_core::error_span!(
+                    "article_watch_position_clear_failed",
+                    error = ?e,
+                    user_id = %user_id,
+                    article_id = %article_id,
+                    "failed to clear the video position"
+                );
+            }
+        });
+    }
+
     pub fn list_articles_task(&self) {
         let service = self.clone();
         tokio::spawn(async move {
@@ -166,19 +233,20 @@ impl ArticleService {
     #[tracing::instrument(skip(self))]
     async fn do_list_articles(&self) -> Result<()> {
         let db_client = self.db.get().await?;
-        let articles = Article::list_recent(&db_client, NEWS_FEED_LIMIT).await?;
+        let articles = Article::list_feed(&db_client, NEWS_FEED_LIMIT).await?;
         let user_ids = articles
             .iter()
-            .map(|article| article.user_id)
+            .map(|row| row.article.user_id)
             .collect::<HashSet<_>>()
             .into_iter()
             .collect::<Vec<_>>();
         let usernames = User::list_usernames_by_ids(&db_client, &user_ids).await?;
         let articles = articles
             .into_iter()
-            .map(|article| ArticleFeedItem {
-                author_username: display_author(&usernames, article.user_id),
-                article,
+            .map(|row| ArticleFeedItem {
+                author_username: display_author(&usernames, row.article.user_id),
+                article: row.article,
+                body: row.body,
             })
             .collect();
 
@@ -212,14 +280,36 @@ impl ArticleService {
         self.publish_reads(&db_client, user_id).await
     }
 
+    async fn save_watch_position_and_publish(
+        &self,
+        user_id: Uuid,
+        article_id: Uuid,
+        position: WatchPosition,
+    ) -> Result<()> {
+        let db_client = self.db.get().await?;
+        ArticleRead::save_watch_position(&db_client, user_id, article_id, position)
+            .await
+            .context("saving the video position")?;
+        self.publish_reads(&db_client, user_id).await
+    }
+
+    async fn clear_watch_position_and_publish(
+        &self,
+        user_id: Uuid,
+        article_id: Uuid,
+    ) -> Result<()> {
+        let db_client = self.db.get().await?;
+        ArticleRead::clear_watch_position(&db_client, user_id, article_id)
+            .await
+            .context("clearing the video position")?;
+        self.publish_reads(&db_client, user_id).await
+    }
+
     async fn publish_reads(&self, db_client: &tokio_postgres::Client, user_id: Uuid) -> Result<()> {
-        let read_article_ids = ArticleRead::article_ids_for_user(db_client, user_id)
+        let reads = ArticleRead::rows_for_user(db_client, user_id)
             .await
             .context("loading article reads")?;
-        self.publish_event(ArticleEvent::ReadsLoaded {
-            user_id,
-            read_article_ids,
-        });
+        self.publish_event(ArticleEvent::ReadsLoaded { user_id, reads });
         Ok(())
     }
 
@@ -288,30 +378,41 @@ impl ArticleService {
 
         let handle = tokio::spawn(
             async move {
-                let processing = tokio::time::timeout(
-                    PROCESS_URL_TIMEOUT,
-                    service.do_process_url(user_id, &target_url),
-                )
-                .await;
+                // One budget for the whole task: the share, then the body.
+                let deadline = tokio::time::Instant::now() + PROCESS_URL_TIMEOUT;
+                let processing =
+                    tokio::time::timeout_at(deadline, service.do_process_url(user_id, &target_url))
+                        .await;
 
-                if let Err(e) = match processing {
-                    Ok(result) => result,
-                    Err(_) => Err(anyhow::anyhow!(
-                        "article processing timed out after {} seconds",
-                        PROCESS_URL_TIMEOUT.as_secs()
-                    )),
-                } {
-                    late_core::error_span!(
-                        "article_process_failed",
-                        error = ?e,
-                        url = %target_url,
-                        "failed to process article url"
-                    );
-                    service.publish_event(ArticleEvent::Failed {
+                match processing {
+                    // The share is up and its `Created` is out, so nothing
+                    // past here can fail it: the body step logs its own. It
+                    // runs as its own task, out of reach of the abort handle
+                    // this task hands the session, so cancelling the composer
+                    // never cuts a fetch short.
+                    Ok(Ok(article)) => {
+                        let body_service = service.clone();
+                        tokio::spawn(
+                            async move {
+                                body_service
+                                    .store_body(article.id, &article.url, deadline)
+                                    .await;
+                            }
+                            .instrument(info_span!(
+                                "article.store_body_task",
+                                article_id = %article.id
+                            )),
+                        );
+                    }
+                    Ok(Err(e)) => service.share_failed(user_id, &target_url, e),
+                    Err(_) => service.share_failed(
                         user_id,
-                        error: e.to_string(),
-                        url: Some(target_url.clone()),
-                    });
+                        &target_url,
+                        anyhow::anyhow!(
+                            "article processing timed out after {} seconds",
+                            PROCESS_URL_TIMEOUT.as_secs()
+                        ),
+                    ),
                 }
             }
             .instrument(info_span!(
@@ -324,8 +425,22 @@ impl ArticleService {
         handle.abort_handle()
     }
 
+    fn share_failed(&self, user_id: Uuid, url: &str, e: anyhow::Error) {
+        late_core::error_span!(
+            "article_process_failed",
+            error = ?e,
+            url = %url,
+            "failed to process article url"
+        );
+        self.publish_event(ArticleEvent::Failed {
+            user_id,
+            error: e.to_string(),
+            url: Some(url.to_string()),
+        });
+    }
+
     #[tracing::instrument(skip(self), fields(user_id = %user_id, url = %url))]
-    async fn do_process_url(&self, user_id: Uuid, url: &str) -> Result<()> {
+    async fn do_process_url(&self, user_id: Uuid, url: &str) -> Result<Article> {
         // cyberspace.online's API terms ban feeding their content to AI
         // systems, and this pipeline summarizes the page with AI. Hard stop
         // here so no share path (chat link, RSS share) can route their
@@ -367,9 +482,9 @@ impl ArticleService {
         //    and an RSS entry shared with `s`) land here, so this is the one
         //    place a share is rewarded.
         tracing::info!(%url, "saving article to database");
-        let reward = {
+        let (article, reward) = {
             let mut db_client = self.db.get().await?;
-            let (_, reward) = Article::create_shared(
+            let (article, reward) = Article::create_shared(
                 &mut db_client,
                 user_id,
                 ArticleParams {
@@ -382,7 +497,7 @@ impl ArticleService {
             )
             .await?;
             metrics::record_news_shared(reward);
-            reward
+            (article, reward)
         };
 
         // The insert fired `articles_changed`; every replica's listener,
@@ -398,7 +513,189 @@ impl ArticleService {
             reward,
         });
 
-        Ok(())
+        Ok(article)
+    }
+
+    /// The reader's body for a story that is already shared: fetched and
+    /// stored as `ready`, or stored as `unavailable` (a video or an X post
+    /// without a fetch, any page the fetch could not read). Runs inside the
+    /// share's own budget, `deadline`. This is the body step's orchestration:
+    /// its every outcome is logged and counted here, and none of them reaches
+    /// the sharer, whose share already succeeded.
+    #[tracing::instrument(skip(self, deadline), fields(article_id = %article_id, url = %url))]
+    pub(crate) async fn store_body(
+        &self,
+        article_id: Uuid,
+        url: &str,
+        deadline: tokio::time::Instant,
+    ) {
+        let read = self.read_body(url, deadline).await;
+        let stored = self.store_read_body(article_id, &read).await;
+        match (read, stored) {
+            (_, Err(e)) => {
+                metrics::record_news_body_fetch(BodyFetchOutcome::StoreFailed);
+                late_core::error_span!(
+                    "article_body_store_failed",
+                    error = ?e,
+                    article_id = %article_id,
+                    "failed to store article body"
+                );
+            }
+            (BodyRead::Ready(body), Ok(())) => {
+                metrics::record_news_body_fetch(BodyFetchOutcome::Ready);
+                tracing::info!(
+                    words = body.word_count,
+                    lines = body.lines.len(),
+                    "article body stored"
+                );
+            }
+            (BodyRead::Skipped, Ok(())) => {
+                metrics::record_news_body_fetch(BodyFetchOutcome::Skipped);
+                tracing::info!("article body skipped for a video or x post");
+            }
+            (BodyRead::Failed(error), Ok(())) => {
+                metrics::record_news_body_fetch(BodyFetchOutcome::Failed(error.failure));
+                tracing::warn!(
+                    failure = ?error.failure,
+                    error = ?error.source,
+                    "article body unavailable"
+                );
+            }
+        }
+    }
+
+    async fn read_body(&self, url: &str, deadline: tokio::time::Instant) -> BodyRead {
+        if is_youtube_url(url) || tweet_status_id(url).is_some() {
+            return BodyRead::Skipped;
+        }
+        match tokio::time::timeout_at(deadline, self.fetch_readable_body(url)).await {
+            Ok(Ok(body)) => BodyRead::Ready(body),
+            Ok(Err(error)) => BodyRead::Failed(error),
+            Err(_) => BodyRead::Failed(BodyFetchError::new(
+                BodyFetchFailure::Timeout,
+                anyhow::anyhow!("the share's processing budget ran out"),
+            )),
+        }
+    }
+
+    async fn fetch_readable_body(&self, url: &str) -> Result<ReadableBody, BodyFetchError> {
+        let page = body::fetch_page(&self.body_client, url).await?;
+        let extracted =
+            tokio::task::spawn_blocking(move || body::readable_body(&page.html, &page.final_url))
+                .await;
+        match extracted {
+            Ok(Ok(body)) => Ok(body),
+            Ok(Err(error)) => Err(error),
+            Err(join) => Err(BodyFetchError::new(BodyFetchFailure::Extract, join)),
+        }
+    }
+
+    async fn store_read_body(&self, article_id: Uuid, read: &BodyRead) -> Result<()> {
+        let client = self.db.get().await?;
+        match read {
+            BodyRead::Ready(body) => {
+                ArticleBody::store_ready(&client, article_id, body.word_count, &body.lines).await
+            }
+            BodyRead::Skipped | BodyRead::Failed(_) => {
+                ArticleBody::store_unavailable(&client, article_id).await
+            }
+        }
+    }
+
+    /// Load the one body a reader is showing. The answer goes back to the
+    /// asking session alone, on the returned channel: no other session, of
+    /// this user or anyone, ever sees it. A load that fails is logged here
+    /// and answered `Failed`, which the reader turns into a banner.
+    pub fn load_body_task(
+        &self,
+        user_id: Uuid,
+        article_id: Uuid,
+        load: BodyLoad,
+    ) -> oneshot::Receiver<BodyReply> {
+        let (tx, rx) = oneshot::channel();
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let loaded = async {
+                    let client = service.db.get().await?;
+                    ArticleBody::find(&client, article_id).await
+                }
+                .await;
+                let reply = match loaded {
+                    Ok(body) => {
+                        match load {
+                            BodyLoad::Open => metrics::record_news_reader_opened(match &body {
+                                Some(body) => body.status(),
+                                None => BodyStatus::Pending,
+                            }),
+                            BodyLoad::Landed => {}
+                        }
+                        BodyReply::Loaded(body)
+                    }
+                    Err(e) => {
+                        late_core::error_span!(
+                            "article_body_load_failed",
+                            error = ?e,
+                            user_id = %user_id,
+                            article_id = %article_id,
+                            "failed to load article body"
+                        );
+                        BodyReply::Failed
+                    }
+                };
+                // A reader closed or reopened since asking has dropped its
+                // receiver; the answer is then nobody's.
+                let _ = tx.send(reply);
+            }
+            .instrument(info_span!(
+                "article.load_body",
+                user_id = %user_id,
+                article_id = %article_id
+            )),
+        );
+        rx
+    }
+
+    /// The body sweep, hourly on every replica: settle the stories whose
+    /// fetch was cut short, retire the text of old bodies. Each is one
+    /// idempotent statement, so replicas racing it is harmless.
+    pub fn start_body_sweep_task(&self) -> tokio::task::JoinHandle<()> {
+        let service = self.clone();
+        tokio::spawn(async move {
+            loop {
+                service
+                    .sweep_bodies()
+                    .instrument(info_span!("article.body_sweep"))
+                    .await;
+                tokio::time::sleep(ARTICLE_BODY_SWEEP_INTERVAL).await;
+            }
+        })
+    }
+
+    async fn sweep_bodies(&self) {
+        let swept = async {
+            let client = self.db.get().await?;
+            let now = chrono::Utc::now();
+            let settled =
+                ArticleBody::settle_pending_before(&client, now - ARTICLE_BODY_PENDING_GRACE)
+                    .await
+                    .context("settling pending bodies")?;
+            let retired = ArticleBody::retire_fetched_before(&client, now - ARTICLE_BODY_RETENTION)
+                .await
+                .context("retiring stale bodies")?;
+            Ok::<_, anyhow::Error>((settled, retired))
+        }
+        .await;
+        match swept {
+            Ok((settled, retired)) => {
+                tracing::info!(settled, retired, "swept article bodies");
+            }
+            Err(e) => late_core::error_span!(
+                "article_body_sweep_failed",
+                error = ?e,
+                "failed to sweep article bodies"
+            ),
+        }
     }
 
     async fn article_ascii_art(&self, url: &str, image_url: Option<&str>) -> Result<String> {
@@ -711,6 +1008,42 @@ impl ArticleService {
     }
 }
 
+/// What the body step read for one story, before it is stored.
+enum BodyRead {
+    Ready(ReadableBody),
+    /// A video or an X post: no page to read, by design.
+    Skipped,
+    Failed(BodyFetchError),
+}
+
+/// Why a reader asks for its body. Only an open counts toward
+/// `late_ssh_news_reader_opens_total`; asking again once a pending body has
+/// landed is the same open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BodyLoad {
+    Open,
+    Landed,
+}
+
+/// The answer to one reader's body request.
+#[derive(Debug)]
+pub enum BodyReply {
+    /// The stored body; `None` is a story whose fetch has not landed.
+    Loaded(Option<ArticleBody>),
+    /// The row could not be read; the service has logged it.
+    Failed,
+}
+
+/// How one story's body step ended, for `late_ssh_news_body_fetches_total`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BodyFetchOutcome {
+    Ready,
+    Skipped,
+    Failed(BodyFetchFailure),
+    /// The read finished but the row did not land; the card stays pending.
+    StoreFailed,
+}
+
 #[derive(Deserialize)]
 struct ArticleExtraction {
     title: String,
@@ -872,7 +1205,7 @@ fn is_ai_blocklisted_url(url: &str) -> bool {
     host == "cyberspace.online" || host.ends_with(".cyberspace.online")
 }
 
-fn is_youtube_url(url: &str) -> bool {
+pub(crate) fn is_youtube_url(url: &str) -> bool {
     let Ok(parsed) = reqwest::Url::parse(url) else {
         return false;
     };

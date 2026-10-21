@@ -135,6 +135,13 @@ fn chips_guide_lists_every_earning_surface() {
     assert!(news.contains(&format!(
         "At most {NEWS_SHARE_MAX_PAID_PER_DAY} shares a day"
     )));
+    // Enter reads the story; copying the link moved to c.
+    assert!(news.contains("Enter             open the reader on the selected story"));
+    assert!(news.contains("c                 copy selected link"));
+    // Watching is offered to everyone and names what it takes.
+    assert!(news.contains("w                 watch a YouTube story in the terminal"));
+    assert!(news.contains("Needs the late CLI, a Kitty-graphics terminal"));
+    assert!(news.contains("mpv 0.36+ with yt-dlp"));
     // Losing at a non-betting surface must never read as a chip risk, and the
     // pay-nothing surfaces have to be called out or the bot invents payouts.
     assert!(chips.contains("the losers lose nothing"));

@@ -29,6 +29,8 @@ struct PlaybackOutputState {
     /// cannot decode directly (today: YouTube). Driven by
     /// `SetPlaybackSource` over the pair WS.
     source_is_icecast: Arc<AtomicBool>,
+    /// A News video is playing through mpv.
+    silenced_for_video: Arc<AtomicBool>,
     stream_generation: Arc<AtomicU64>,
     stream_flushed_generation: Arc<AtomicU64>,
     last_flushed_generation: u64,
@@ -49,6 +51,7 @@ pub(super) fn build_output_stream(
     muted: Arc<AtomicBool>,
     volume_percent: Arc<AtomicU8>,
     source_is_icecast: Arc<AtomicBool>,
+    silenced_for_video: Arc<AtomicBool>,
     stream_generation: Arc<AtomicU64>,
     stream_flushed_generation: Arc<AtomicU64>,
     audio_output_device: Option<&str>,
@@ -82,6 +85,7 @@ pub(super) fn build_output_stream(
         muted,
         volume_percent,
         source_is_icecast,
+        silenced_for_video,
         stream_generation,
         stream_flushed_generation,
         last_flushed_generation: 0,
@@ -231,8 +235,10 @@ where
     // `muted` is the user's intent (`m` keybind). `source_is_icecast` is the
     // structural gate: a YouTube preference means the CLI has nothing direct
     // to decode, so we emit silence even if the user toggled unmuted.
-    let muted =
-        state.muted.load(Ordering::Relaxed) || !state.source_is_icecast.load(Ordering::Relaxed);
+    // `silenced_for_video` is temporary and local: mpv owns the speakers.
+    let muted = state.muted.load(Ordering::Relaxed)
+        || !state.source_is_icecast.load(Ordering::Relaxed)
+        || state.silenced_for_video.load(Ordering::Relaxed);
     let linear = state.volume_percent.load(Ordering::Relaxed) as f32 / 100.0;
     let volume = linear * linear;
     let source_channels = state.source_channels;

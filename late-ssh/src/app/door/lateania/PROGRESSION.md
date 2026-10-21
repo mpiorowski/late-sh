@@ -1,15 +1,13 @@
 # Lateania: the progression map
 
 Where every land sits, what it pays, what opens it, and the numbers to read
-before re-tuning any of it. Split out of `CONTEXT.md` because it is the one
+before re-tuning any of it, and the balance audit at the end. It is the one
 block an agent doing balance or content work needs whole, and the one block
 everything else can ignore.
 
 **This file owns these numbers.** `CONTEXT.md` keeps no copy of the land
 levels, the loot tiers or the power ladder, on purpose: a second copy is a
-copy that goes stale, which is how the Thornveil rows sat at "estimated" for
-a release and how an Archipelago tier got picked by comparing literals across
-two tuning bands. Change a land here, and nowhere else.
+copy that goes stale. Change a land here, and nowhere else.
 
 Regenerate every measured number in this file with the atlas yardstick:
 
@@ -17,15 +15,15 @@ Regenerate every measured number in this file with the atlas yardstick:
 make test-llm ARGS="-p late-ssh --run-ignored all --no-capture -E 'test(region_atlas_yardstick)'"
 ```
 
-Combat mechanics (classes, abilities, the resist/weak pass, where a
-character's damage comes from) stay in `CONTEXT.md` §7: this file is about
-where a fight happens, that one is about how it resolves.
+Combat mechanics (classes, abilities, the resist/weak pass, combat rules,
+items) are in `COMBAT.md`: this file is about where a fight happens, that
+one is about how it resolves.
 
 ---
 
 ## The shape of the game [VOLATILE]
 
-One place to look for "where does this land sit, what lives in it, and how do you get there". **The level over a foe's head means "come at this level".** A crown reads the target it is tuned to fall at (`world::CROWNS`); everything else reads by its *bite* off the crown ladder (`MobSpawn::level` → `level_for_bite`: the level of the prepared character whose crown hits like this, discounted by `TRASH_BITE_PCT` 70 for a regular and `BOSS_BITE_PCT` 85 for a zone boss). Health never enters it: a sponge is a longer fight, not a deadlier one. The old `max_hp + damage * 4` power estimate is gone. Every table below is read off the engine (`region_progress` bands, the atlas yardstick, and the `arena_report_extra` roster `Every boss as the engine fields it`). None of it is a source of truth; `world.rs` is. Re-derive after a retune rather than trust.
+One place to look for "where does this land sit, what lives in it, and how do you get there". **The level over a foe's head means "come at this level".** A crown reads the target it is tuned to fall at (`world::CROWNS`); everything else reads by its *bite* off the crown ladder (`MobSpawn::level` → `level_for_bite`: the level of the prepared character whose crown hits like this, discounted by `TRASH_BITE_PCT` 70 for a regular and `BOSS_BITE_PCT` 85 for a zone boss). Health never enters it: a sponge is a longer fight, not a deadlier one. Every table below is read off the engine (`region_progress` bands, the atlas yardstick, and the `arena_report_extra` roster `Every boss as the engine fields it`). None of it is a source of truth; `world.rs` is. Re-derive after a retune rather than trust.
 
 ### The crowns and the story they encode [STABLE]
 
@@ -177,7 +175,7 @@ Nine named bosses sit on the critical path; five of them hold a key.
 - **A hard gate is a title check; the 20-zone realms are not gated at all.** The Frontier, the Reaches, and Kaelmyr are each a chain of 20 zones where **each zone's boss room holds the `Down` exit into the next zone** (`extend_frontier`, `extend_reaches`, `extend_kaelmyr`). Reaching Yssgar means walking through 19 prior boss chambers, but no title is checked on any of them, so nothing forces a player to actually kill them. Depth and a boss standing in the doorway are the whole obstacle.
 - **The last two gates each hand over a continent.** One title opens 20 zones. King's Bane -> all of the Reaches, Yssgar's Bane -> all of Kaelmyr. This is deliberate; the gauntlet, not the gate, is what paces the back half.
 - **Kaelmyr has exactly one door and it is inside Yssgar's room.** `kaelmyr_seagate_room` finds the room where `Yssgar, the Sundering Deep` spawns and hangs `Dir::Down` there. There is no second entrance, so Kaethyr is unreachable without the Yssgar title by either walking or the Ways.
-- **The Ways carry no gate rules of their own.** `CONTINENT_WAYSTONES` used to hold a third field naming the title each far gate wanted, and `svc::travel` enforced it a second time - the same rule in two places, free to drift. Both are gone: a waystone destination is now offered on `world::waystone_is_known` (have you stood there) and nothing else, so **every title check in the game lives in `can_cross_progression_gate`**. Fast travel still cannot skip a gate, because it only ever returns you somewhere you already walked.
+- **The Ways carry no gate rules of their own.** A waystone destination is offered on `world::waystone_is_known` (have you stood there) and nothing else, so **every title check in the game lives in `can_cross_progression_gate`**. Fast travel still cannot skip a gate, because it only ever returns you somewhere you already walked.
 
 ### The connections
 
@@ -237,7 +235,7 @@ Two things fall out of that table and are easy to miss:
 
 **How the level scale reads, and where it stops resolving.** Everything comes from `MobSpawn::level` and bites the UI, not the engine:
 
-- **A crown reads its target, everything else reads by bite.** `level_for_bite` walks the `CROWNS` ladder: linear between neighbouring crowns, extrapolated past either end, clamped to 1..100. A regular's damage is read at `TRASH_BITE_PCT` (70) of a crown's, a zone boss's at `BOSS_BITE_PCT` (85), so a land's trash reads a few levels under its crown by construction. Retuning a foe's damage therefore always moves its level; retuning its health never does. There is no knee any more: the scale is only as uneven as the crown ladder itself (five levels per crown through the core, then 15, 10, 10, 5 across the endgame).
+- **A crown reads its target, everything else reads by bite.** `level_for_bite` walks the `CROWNS` ladder: linear between neighbouring crowns, extrapolated past either end, clamped to 1..100. A regular's damage is read at `TRASH_BITE_PCT` (70) of a crown's, a zone boss's at `BOSS_BITE_PCT` (85), so a land's trash reads a few levels under its crown by construction. Retuning a foe's damage therefore always moves its level; retuning its health never does. There is no knee: the scale is only as uneven as the crown ladder itself (five levels per crown through the core, then 15, 10, 10, 5 across the endgame).
 - **Saturation at 100.** Anything biting past the Ascendant's 397 extrapolates on the last segment (five levels per 29 damage) and clamps at 100. Only the Archipelago gets there, and only at its very top: islands 18 and 19 share `Lv100` bosses and the deepest rooms of the last two islands read `Lv100` regulars. Everything below that resolves, one boss level per island from `Lv82`. Keep it that way - when the whole region saturates, twenty islands collapse to one ceiling and there is no reason to sail past the first. `the_archipelago_ramps_past_the_last_crown_instead_of_sitting_flat_at_the_cap` asserts the entire ladder rather than its endpoints, because the flat version had both endpoints looking correct.
 - **A doorstep can read past its crown.** A land's band row is calibrated at its deepest zone against the crown standing there, so the last zone bosses before it read close to it: Kaelmyr's zones 17-18 read Lv77-80 with the Unquenched at Lv75 next door. The crown is still the harder fight (twice the health); the level over the head only says how hard it hits.
 
@@ -304,5 +302,157 @@ exercises Archipelago gear (the arena's deepest is `L100 kael20`, t=60).
 Reference points: the final crown Kaethyr Ascendant is fielded at **397 damage / 24542 hp, L80**; Kaethyr Unquenched at 368 / 22722, L75. Two consequences worth knowing before re-tuning:
 - **A boss cannot read L100 without out-hitting the final crown.** `level_for_bite` discounts a boss's bite by `BOSS_BITE_PCT` (85) and a regular's by `TRASH_BITE_PCT` (70), so trash reads L100 at 359 damage but a boss needs 436, which is past the Ascendant's 397. **This is settled: the Archipelago is allowed past him.** It is off-road content reached only by portal, gated by nothing and granting no title, so it runs past the end of the crown ladder rather than sitting on a rung of it (the Path of Exile shape: the campaign boss is not the hardest thing in the game). Kaethyr Ascendant remains the strongest thing *on the road*, which is the claim that actually matters, and every island out-reads him by design. Islands 0-9 still hit softer than he does; islands 10-19 hit harder.
 - **Never raise the final crown's *damage* to make it "the strongest".** Past L80 `level_for_bite` extrapolates on the slope between the last two crown rows (5 levels per 29 damage). Widening that gap flattens the slope and pushes every displayed level above 80 *down*. Raise its `max_hp` instead (via `CROWN_KILL_TICKS` for that row): health never enters `MobSpawn::level`, so a longer fight costs nothing in the level ladder.
-- **XP does not follow damage, and a tier moves both at once.** This is why the Archipelago could not be fixed by re-picking its tier: `tier` scales hp, damage *and* xp together, so pulling the tier down to tame the damage also cut the xp base, and pushing it up to pay better xp is what flattened every island to L100. The two were one knob. They are now separate: the Archipelago's band row is **1:1** and `extend_archipelago` authors hp, damage and xp per island directly, so each can move without dragging the others. Measured xp per point of mob health: Kaelmyr **0.89**, Archipelago **1.40** (it was 0.38, making the deadliest ground in the game also the slowest to level on). Gold is `xp/5` (`gold_for_kill`), so it follows. Pinned by `the_archipelago_is_the_fastest_ground_in_the_game_to_reach_the_cap_on`.
-- **Displayed level says nothing about what a land costs to clear.** `MobSpawn::level` is a reading of *damage* only; health never enters it. So a land's loot tier must be set against the health it charges, never against the level it displays. Measured health the road charges per realm tier: t=1 **960**, t=10 **1455**, t=20 **2005**, t=30 **2773**, t=40 **3573**, t=60 **4376**. Checked against that, Broceliande (924hp at its deepest, paying t=10) and Thornveil (2760-3288hp, paying t=29-40) are priced correctly and look under-paid only if you compare their levels; the Wildbound's Scorched Flats charged **3960hp** and paid **t=18**, which was a real two-fold under-payment and is now t=25-29.
+- **XP does not follow damage, and a tier moves both at once.** This is why the Archipelago could not be fixed by re-picking its tier: `tier` scales hp, damage *and* xp together, so pulling the tier down to tame the damage also cut the xp base, and pushing it up to pay better xp is what flattened every island to L100. The two were one knob. They are now separate: the Archipelago's band row is **1:1** and `extend_archipelago` authors hp, damage and xp per island directly, so each can move without dragging the others. Measured xp per point of mob health: Kaelmyr **0.89**, Archipelago **1.40**. Gold is `xp/5` (`gold_for_kill`), so it follows. Pinned by `the_archipelago_is_the_fastest_ground_in_the_game_to_reach_the_cap_on`.
+- **Displayed level says nothing about what a land costs to clear.** `MobSpawn::level` is a reading of *damage* only; health never enters it. So a land's loot tier must be set against the health it charges, never against the level it displays. Measured health the road charges per realm tier: t=1 **960**, t=10 **1455**, t=20 **2005**, t=30 **2773**, t=40 **3573**, t=60 **4376**. Checked against that, Broceliande (924hp at its deepest, paying t=10) and Thornveil (2760-3288hp, paying t=29-40) are priced correctly and look under-paid only if you compare their levels; the Wildbound's Scorched Flats charges **3960hp** and pays t=25-29.
+
+## Balance audit: where damage comes from (L30-60)
+
+An audit of the 30-60 band, the levels most of the game is played at. Every
+claim here is read out of the engine; the arena (`arena.rs`, see
+`CONTEXT.md` §10) measures the live damage composition per class. Nothing here
+is a contract: promote a finding into a test before acting on it.
+
+### Measured from the code
+
+**Every class's auto-attack is Physical.** The combat round resolves it as
+`profile.apply(player_atk, DamageType::Physical)` with no class branch: a Mage
+swings Physical exactly like a Warrior. This is why weapon coats are not a
+martial mechanic.
+
+**The class attack formula is the single biggest class-dependent lever**
+(`classes::stats_at`). Four tiers, and the gap never closes:
+
+| tier | formula | attack at L50 | classes |
+|---|---|---|---|
+| A | `7 + 2l` | 105 | Berserker |
+| A | `6 + 2l` | 104 | Warrior, Rogue, Ranger, Monk, Valewalker |
+| B | `5 + 2l` | 103 | Mage, Necromancer, Warlock, Runemaster, Spiritmaster |
+| C | `6 + 1.5l` | 79 | Skald |
+| C | `5 + 1.5l` | 78 | Cleric, Druid, Bard, Paladin, Beastlord |
+
+C tier is a flat ~25% deficit on the term that carries most of the damage.
+
+**The whole pet package is Physical and no coat can touch it.** Pet bite,
+Savage Bite, Pounce, and Rend all pass `DamageType::Physical`, and the coat
+block spends a charge only on the player's own swing. Against the 14
+Physical-wall bosses (Aelunor's 12 zone bosses at Lv53-69 among them) a pet
+build loses its companion's damage with zero counterplay.
+
+**Weapon coats are everyone's lever, not the martial lever.** Nothing on the
+`use_item` -> `coat_school_tier` -> `coat_weapon` path checks class.
+`weapon_coat` is a single `Option`, so a new coat overwrites the old (wasting
+its charges): one school at a time, never two. `DotSource::Coat` refreshes one
+wound rather than stacking, so while charges last the coat is a flat
+`per_tick` every tick, plus `COAT_DOT_TICKS` lingering ticks after the last
+swing.
+
+**Coats out-cover the casters on the resist/weak board.** `COAT_SCHOOLS` is
+Fire/Frost/Holy/Lightning/Poison. Against the 16 `ZoneTheme` weaknesses:
+
+| kit | weak lanes covered |
+|---|---|
+| any class carrying all five coat schools | **12 / 16** |
+| Mage, in-band damage schools (Fire/Frost/Lightning) | 9 / 16 |
+| Runemaster, in-band (Arcane/Fire/Lightning) | 9 / 16 |
+| any class with no coats | 0 / 16 |
+
+Only the Arcane lanes (Storm, Resonant) and Shadow lanes (Profane, Fae) are out
+of reach. A Rogue with a shopping bag exploits the world pass better than a
+Mage does, because a caster's schools ride its ability share while a coat
+rides the auto.
+
+**A Cleric cannot afford to attack anywhere in 1-60 at base regen.** Regen 6
+against Smite (9/tick), Holy Fire (6.7/tick), Hammer of Faith (9.3/tick). The
+first sustainable offensive ability is Divine Radiance at L41, at 5.1 resource
+per tick for 2.6 damage per tick. Judgment at L50 costs exactly the regen
+(6.0/tick). This is a hole, not a trade-off: nothing is bought with the
+shortfall.
+
+**Traits split into ones that scale and ones that do not.** The distinction is
+whether a trait multiplies a term that grows, or hands over a flat amount that
+the shared terms outgrow:
+
+- **Scale with the game.** `Pack Bond` multiplies the pet (+30%). `Opportunist`
+  doubles one auto per fight, so it is worth `1/fight_length`: huge on 3-tick
+  trash, near nothing on a boss. `Hunter's Instinct` multiplies both autos and
+  abilities for the back half of every fight. `Reaping Harvest` heals
+  `3 + level/4` per landed auto, free, every tick: 50-100% of post-armor
+  incoming damage in this band, and the reason Valewalker chain-pulls with no
+  downtime. `Frenzy` ramps from full health (`missing_pct / 2`) to +50% at
+  death's door, PvE and PvP.
+- **Do not.** `Battle Hymn` / `War-Chant` give more of a resource that buys
+  abilities, the smaller term, and the two classes carrying it pay the C attack
+  tier for it. `Light of the Dawn` amplifies healing on a class that cannot
+  attack. The on-kill restores (Necromancer, Spiritmaster, Warlock) pay nothing
+  inside a fight and nothing at all on a boss. `Unbreakable` is one saved death
+  per life, not throughput.
+
+Re-shaping the flat traits to multiply a shared term would be the cheapest way
+to make class choice matter more without nerfing anything.
+
+### Ability scores, measured
+
+The arena's build table (L55 Frontier-10, 200 ticks, dps against a neutral
+foe), per Warrior/Rogue/Mage/Cleric: peak STR +5/+4/+2/+3%, peak DEX
++5/+4/+2/+4%, peak INT +1/+2/+4/+4%, **peak WIS +5/+4/+13/+8%**, peak CON
++9..11% hp, blessed +17..24%, cursed -13..-17%, glass cannon +14/+11/+4/+9% at
+-10..12% hp. **Wisdom is the best damage score for a caster** (a Mage's regen
+7 -> 11 is +57% resource, worth three times its INT), and INT is the weakest
+damage score because it lifts only the spell-power half of an ability, not its
+table magnitude. Whether to retune (INT at 3%/mod, or WIS at 1 per 2 modifier
+points) or leave it as the caster's choice between burst and stamina is open.
+
+### Where the world pass's own model diverges
+
+`AUTO_SHARE` splits output into auto plus abilities and **has no pet term**.
+The routed grind-rate budget in `world_test.rs` therefore certifies a character
+with no companion. If a strong tame is the normal case, the coat rider is a
+smaller share of a real character than the model says, and every declared band
+shrinks with it: the +-15% per-zone swing, the >=+5% best-zone-and-coat
+meaningfulness floor, and the <=+18% routed ceiling. This is the same failure
+mode the `TIER_ATTACK_BAR` comment warns about. The fix is a pet term in the
+model, not a re-tune; until then, do not read the world-pass percentages as
+what a player experiences.
+
+### Known defects
+
+Each is read from the code and open:
+
+- **`Pack Bond`'s cooldown reduction is a no-op on Savage Bite.**
+  `base_cd - base_cd * BEASTLORD_PET_PCT / 100` on integers: a `cooldown` of 3
+  gives `3 - 0 = 3`. cd 4 -> 3, 6 -> 5 and 7 -> 5 all work; only cd 3, the
+  pet's most frequent skill, silently does not.
+- **`Pack Bond` does not make the companion "hardier" the way the trait text
+  says.** `Pet::max_hp` has no Beastlord branch; the toughness is a 30% cut to
+  the splash in `wound_pet`, so the sheet shows an identical pet HP pool.
+- **Skald is Bard plus 1 attack and 2 HP.** Same resource, curve and regen, and
+  the trait is the same branch
+  (`matches!(p.class, Some(Class::Bard) | Some(Class::Skald))`) with the same
+  description string. Skald also has the thinnest roster in the band: 9
+  abilities by L45 against Rogue's 12, nothing between L42 and L50.
+- **Mage and Runemaster are the same class statistically.** Identical
+  `stats_at`, primary score, resource and archetype shapes, and one shared `if`
+  for both traits. The only difference is unlock density: Runemaster has dead
+  bands at 28-36 and 42-50 and no Empower between L16 and L75.
+- **Runemaster's fantasy is not implemented.** Its description promises a graven
+  mark "left to smoulder and then detonate"; Detonation Rune is a plain
+  `DamageOverTime`, and the only Runemaster-aware code is the shared
+  spell-damage `if`.
+- **Four items are Mage-locked and the newer classes have no equivalent.**
+  Apprentice Staff and Runed Battlestaff are `Some(Class::Mage)`, so a
+  Runemaster swings the Rusty Shortsword (attack 4) until the unrestricted
+  Embergate Falchion. Early game only.
+- **Duplicate ability names inside one class.** Warrior 2x Earthshaker, Bard 3x
+  Crescendo, Warlock 3x Chaos Bolt and 2x Curse of Agony, Mage 2x Blizzard and
+  2x Meteor, Cleric 2x Sanctuary, Druid 2x Thorn Lash and 2x Nature's Wrath,
+  Paladin 2x Lay on Hands and 2x Hammer of Justice, Berserker 2x Rampage. They
+  render as duplicates in the hotbar and the abilities panel.
+
+### Open questions
+
+- Beastlord's archetype choice looks inverted: DPS applies `attack_pct` to only
+  part of its output, so Wildwarden (tank) costs it little damage for +22%
+  mitigation and +12% HP.
+- Nothing in the engine caps or diminishes the flat terms (gear, pet, coat), so
+  class-dependent share should shrink further as tames and coat tiers climb.
+  Worth measuring at L100 with a Worldserpent and a tier-5 oil.

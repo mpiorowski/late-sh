@@ -55,7 +55,7 @@ rows. It replaced the presence tile, and a stored `presence` reads as
 newest first; see §3 for its keys), headlines (News articles and the
 viewer's RSS entries merged newest first, two rows each (the title with
 its source and age, then the link), an entry shared to News listed once,
-as the article), live (the Live panel's rows, `../live/CONTEXT.md` §1:
+as the article), live (the Live panel's rows, `../live/PANEL.md`:
 the same four rows the sidebar's panel draws, each with its `s1`-`s4`
 key, wider so less is cut; `nobody playing` while nothing is on), blank. The look (border style, gap, titles) is
 part of the layout.
@@ -252,8 +252,8 @@ status component off; a row narrower than the keys is all status line.
   on the current terminal, so a press moves exactly one row or column and
   writes back the share that reproduces it. A resize stops with
   `MIN_TILE_CELLS` (3) left on either side, a border and one row inside,
-  so a clock fits a one-row tile. Layouts saved with the earlier
-  percent `ratio` field no longer parse and reset to the default.
+  so a clock fits a one-row tile. A saved layout that does not parse
+  (one with a percent `ratio` field, say) resets to the default.
 - The watching pet is a render-time fact: `draw_rice` finds the pet tile's
   neighbouring tank and bonsai from the frame's rects (`layout::pet_neighbours`) and passes both sides
   into `draw_pet_box`, which records them with the travel, the box's rect,

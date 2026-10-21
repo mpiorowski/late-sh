@@ -1,6 +1,6 @@
 # The crossing, as built (late-ssh/src/app/deadchannel/fight)
 
-Parent: `../CONTEXT.md` §3c (the fight: the row, the lock, the day roll,
+Parent: `CONTEXT.md` (the fight: the row, the lock, the day roll,
 the wire). Design and the reasons: `../GAME.md`, "The crossing pass".
 One quiet step of every road holds a `Node::Crossing` on one lane beside
 a rest and a cache, and who waits there is another runner, asleep. The

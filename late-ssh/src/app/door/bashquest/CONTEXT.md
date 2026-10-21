@@ -5,17 +5,17 @@
 - Domain: BashQuest, a native late.sh original (not a foreign upstream binary): an interactive terminal game teaching Linux/Bash, 90 levels across 18 tiers, written by Tony "Hardlygospel" Hosaroygard (GPL-3.0, `github.com/hardlygospel/bashquest`), run on a PTY inside a **dedicated `late-bashquest` SSH host** and reached by late-ssh as a network-proxied door (same transport model as dopewars/DCSS).
 - Primary audience: LLM agents changing the BashQuest launcher UI, the SSH client transport, the host crate (PTY bridge / auth), input forwarding, or its config/deploy wiring.
 - Status: Active
-- Parent context: `../../../../../CONTEXT.md`
+- Parent context: `../CONTEXT.md` (the door family)
 - Stability note: `[STABLE]` sections change rarely; `[VOLATILE]` sections change with the launcher UI or build/deploy wiring.
 
 ---
 
 ## 0. Context Maintenance Protocol [STABLE]
 
-Read this after root `CONTEXT.md` whenever a task touches the BashQuest launcher, launch/leave behavior, the SSH client transport, the `late-bashquest` host (PTY bridge, auth), input forwarding, or BashQuest config/deploy wiring.
+Read this after `../CONTEXT.md` whenever a task touches the BashQuest launcher, launch/leave behavior, the SSH client transport, the `late-bashquest` host (PTY bridge, auth), input forwarding, or BashQuest config/deploy wiring.
 
 - Keep this file aligned with the SSH transport contract, the client/host split, the spawn args, config knobs, and known gotchas.
-- Update root `CONTEXT.md` when routing, the top-level screen list/tab order, or global keybindings change.
+- Update `../CONTEXT.md` when the hub roster or the door family changes, and `late-ssh/CONTEXT.md` for global keys.
 - Treat tests and code as authoritative when comments drift; patch stale comments or this file before handoff.
 - Do not add `pub use` re-export layers; `mod.rs` stays declaration-only.
 
@@ -106,7 +106,7 @@ Input capture contract (client side):
 - `State::set_viewport` (client, from the draw path) resizes the local parser and sends a `Resize` command; the client forwards a `window_change`, the host applies `TIOCSWINSZ`, and the kernel signals `SIGWINCH` — bashquest.sh doesn't read window size dynamically mid-challenge, but a fresh screen redraw (e.g. the next menu) picks up `$LINES`/`$COLUMNS` correctly since they're re-read, not cached, at each render.
 
 ### Render
-- `draw_running` blits the current `vt100` screen; before `Running` it shows "Starting bashquest...". The app frame title shows a dimmed `by github.com/hardlygospel/bashquest` credit, plus `· Ctrl-C quit` while running.
+- `draw_running` blits the current `vt100` screen; before `Running` it shows "Starting bashquest...". The frame title credit is in §5.
 
 ---
 
@@ -119,25 +119,7 @@ Input capture contract (client side):
 
 ## 6. Configuration And Deploy [VOLATILE]
 
-### Client config (`late-ssh/src/config.rs` profile → `SessionConfig` → `App`)
-- Client enabled/host/port are profile literals in `late-ssh/src/config.rs` (dev `service-bashquest`, prod `late-bashquest-sv`, port 2330); `LATE_BASHQUEST_SECRET` is the only env the client reads (must equal the host's).
-
-### Host config (`late-bashquest` env)
-- `LATE_BASHQUEST_SECRET` (required), `LATE_BASHQUEST_BIN` (default `/usr/local/bin/bashquest.sh`), `LATE_BASHQUEST_DATA_DIR` (default `/var/lib/late-bashquest`, the one shared persistent HOME on the PVC), `LATE_BASHQUEST_LISTEN_ADDR` (default `0.0.0.0`), `LATE_BASHQUEST_PORT` (default `2330`), `LATE_BASHQUEST_IDLE_TIMEOUT`.
-
-### Binary sourcing — **pinned commit, not a compiled build**
-- Unlike every other door, there is nothing to compile: `bashquest.sh` is fetched by exact commit SHA and SHA-256-verified in `docker/doors/bashquest.Dockerfile` (`bashquest-build` stage), then `chmod 0755`'d. Bump `BASHQUEST_COMMIT`/`BASHQUEST_URL`/`BASHQUEST_SHA256` together when pulling in a newer upstream version, and update `NOTICE`.
-- `BASHQUEST_AUTOLOGIN` is not a late.sh patch: it's an upstream feature bashquest.sh itself added specifically to support this integration (opt-in, backward-compatible — unset, the script behaves exactly as it always has for standalone `curl | bash` users). No source is forked or modified.
-
-### Images (Dockerfile)
-- `base` copies the verified script to `/usr/local/bin/bashquest.sh` (from the `bashquest-build` stage) so `dev-bashquest` (which derives from `base`) can run it; prod ships the same copy in `runtime-bashquest`, which also installs `ncurses-term` for `clear`'s terminfo lookup (§9). `late-bashquest` (the host binary) builds in its own `builder-bashquest` cargo-chef stage, same shape as every other door host.
-- The committed `.env.dev` / `.env.dev2` templates carry the host-side settings compose passes to `service-bashquest` (`LATE_BASHQUEST_PORT` / `_SECRET` / `_DATA_DIR`), mirroring the dopewars/DCSS block; the client's host and port are profile literals, not env.
-
-### Prod (Kubernetes / terraform)
-- `infra/doors.tf` (`bashquest` entry, stamped out by the `infra/door` module): the `late-bashquest` Deployment (replicas **1**, `runtime-bashquest` image, `bashquest-save` PVC mounted at the shared HOME, a `bashquest-save-seed` initContainer that chowns the mount to `late`, `RUST_LOG`/`LATE_BASHQUEST_SECRET`/`LATE_BASHQUEST_DATA_DIR` env) + `late-bashquest-sv` ClusterIP Service on 2330, the RWO `bashquest-save` PVC (`local-path`, 256Mi, `prevent_destroy`), and the `bashquest-identity-secret` (random 64-char) injected into **both** service-ssh and late-bashquest so they derive the same key. **Deployed unconditionally**; kill-before-create rollout (`maxSurge=0`/`maxUnavailable=1`) so the old pod releases the RWO volume before the new one mounts it.
-- `infra/service-ssh.tf` injects the client's only env, `LATE_BASHQUEST_SECRET`.
-- `replicas` must stay 1 (one RWO volume holds every player's shared save data; assumes the single-node `local-path` cluster).
-- CI: `-bashquest` releases route through `release.yml` to the generic `deploy_service.yml` (image-only `kubectl set image` on the existing deployment, or a `-target=module.door["bashquest"]` terraform bootstrap on first deploy). `doors.yml` build-validates `docker/doors/bashquest.Dockerfile` (fetch + checksum + the `docker/doors/smoke/bashquest.sh` smoke test) and publishes the pinned `door-bashquest` image on main pushes at the tag pinned in the root Dockerfile.
+Env knobs on both halves, the script sourcing (fetched by pinned commit and SHA-256, nothing compiled; bump the `BASHQUEST_*` ARGs and `NOTICE` together), the image stages, the `infra/doors.tf` entry and the `-bashquest` release flow are in [`DEPLOY.md`](DEPLOY.md). The client reads only `LATE_BASHQUEST_SECRET`, which must equal the host's; host/port are profile literals in `late-ssh/src/config.rs`. `replicas` stays 1: one RWO volume holds every player's shared save data.
 
 ---
 
@@ -161,24 +143,18 @@ Input capture contract (client side):
 
 ## 8. Tests And Verification [STABLE]
 
-Root policy applies: agents should not run `cargo test`/`nextest`/`clippy` as blocking verification; mention the focused command in handoff.
+Agents run the focused tests through the capped runner: `make test-llm ARGS="-p late-bashquest -p late-ssh -E 'package(late-bashquest) or test(bashquest)'"`.
 
 Inline pure tests cover:
-- Client `identity.rs` / host `identity.rs`: derivation determinism + a cross-crate known-answer fingerprint test (`SHA256:9NHbIJzzfj+WQ4YoYYlgWtjvH7N+FE2m1KYAp3X/73c` for secret `late-bashquest-kat-v1`), pinning the cross-crate contract from day one (unlike dopewars, which shipped this as a TODO).
+- Client `identity.rs` / host `identity.rs`: derivation determinism + a cross-crate known-answer fingerprint test (`SHA256:9NHbIJzzfj+WQ4YoYYlgWtjvH7N+FE2m1KYAp3X/73c` for secret `late-bashquest-kat-v1`), pinning the cross-crate contract.
 - Host `playname.rs`: sanitization (alnum+underscore only, cap at 20, empty falls back to `"player"`).
 - Host `server.rs`: auth records/sanitizes the playname, a rejected auth records none, and `effective_term` falls back to `xterm-256color` for an unresolvable or hostile TERM while passing a resolvable one through.
 - Client `state.rs`: `connect` no-op when disabled; `forward_input` without a proxy is a no-op; `strip_input_noise` drops mouse/paste but keeps keys/arrows; exit-grace opens on close and counts down; a disabled door's `HandleFlow` settles to `Missing` instead of hanging in `Loading`.
 - Client `proxy.rs`'s `marker_test`: `extract_marker` parses a well-formed marker, finds one surrounded by other bytes and reports the correct strip span, rejects a marker whose certificate doesn't match its embedded digest (tamper/corruption), ignores plain output with no marker, and ignores a truncated one.
 - `late-core/src/models/bashquest_graduate_test.rs` (DB-integration, needs `TEST_DATABASE_URL`): `record` is idempotent per account (a second report doesn't overwrite the first certificate), `list_all` returns every graduate.
-- `app/door/hub/state_test.rs` + `app/door/hub/ui_test.rs`: selector ordering, screen `next`/`prev` placement, and sidebar hit-test coordinates (updated for the 11th `HubGame`/19-row sidebar).
+- `app/door/hub/state_test.rs` + `app/door/hub/ui_test.rs`: selector ordering, screen `next`/`prev` placement, and sidebar hit-test coordinates.
 
 The PTY bridge (`host.rs`) and the russh client/server loops are process/network-bound and not unit-tested; verify launch/play/logout manually against a real host.
-
-Focused commands for human verification:
-
-```bash
-cargo test -p late-bashquest && cargo test -p late-ssh bashquest
-```
 
 (Don't fold these into one `-p late-bashquest -p late-ssh bashquest` — the `bashquest` name filter would also apply to the host crate and skip its tests.)
 
@@ -192,33 +168,19 @@ cargo test -p late-bashquest && cargo test -p late-ssh bashquest
 
 ### Host-side (`late-bashquest`)
 - **Ctrl-S freeze (XON/XOFF).** Cleared on the PTY before exec, same as every other door host.
-- **`clear` needs terminfo even though bashquest.sh is "plain ANSI".** This shipped broken: the door was built on the assumption that a non-curses script has no terminfo dependency, but `clear_screen() { clear; }` does, and `runtime-bashquest` only carried the ncurses-base entry set. A ghostty client (`xterm-ghostty`, terminfo installed on the player's machine, absent on the host) got `'xterm-ghostty': unknown terminal type.` twice per redraw and a screen that never cleared, so banners/menus stacked. Fixed on both sides: `effective_term` in `server.rs` (§4) and `ncurses-term` in the runtime image. Don't reintroduce the "no terminfo concerns" assumption.
+- **`clear` needs terminfo even though bashquest.sh is "plain ANSI".** A non-curses script still has a terminfo dependency through `clear_screen() { clear; }`, so `runtime-bashquest` must carry more than the ncurses-base entry set. A client TERM the host lacks (e.g. `xterm-ghostty`) gets `'xterm-ghostty': unknown terminal type.` twice per redraw and a screen that never clears, so banners and menus stack. Both sides guard it: `effective_term` in `server.rs` (§4) and `ncurses-term` in the runtime image. Don't reintroduce the "no terminfo concerns" assumption.
 - **Shared HOME is a feature, not a bug.** Every session getting the *same* `LATE_BASHQUEST_DATA_DIR` is deliberate (see §7), unlike almost every other door host in this codebase.
 
 ### Operational
 - **Continuous save, not save-on-exit.** bashquest.sh calls `save_progress` after nearly every state change (see the `save_progress` call sites in `bashquest.sh`), so a pod restart or dropped connection loses at most the single in-flight unanswered challenge — never earned XP, level progress, or achievements.
-- **Playground on the PVC.** `LATE_BASHQUEST_DATA_DIR` is one shared directory; `replicas` must stay 1 (RWO volume, single-node `local-path`). bashquest.sh's own account system (`register_user`/`login_user`/`autologin`) handles concurrent access to `users.db` the same way it always has for any multi-user install of the script.
-- Script fetched by pinned commit (see §6); when bumping versions, update the `BASHQUEST_*` Dockerfile `ARG`s (incl. `BASHQUEST_SHA256`) and `NOTICE`.
+- **Playground on the PVC.** `LATE_BASHQUEST_DATA_DIR` is one shared directory; `replicas` must stay 1 (RWO volume, single-node `local-path`). bashquest.sh's own account system (`register_user`/`login_user`/`autologin`) handles concurrent access to `users.db` as it does for any multi-user install of the script.
 
 ### Possible future work
-- ~~Milestones/chips/awards for graduation~~ **Done — see §10.** Graduation reporting shipped without a screen scrape: `late-bashquest` reads its own certificate file directly (it already controls that filesystem) rather than needing a machine-readable achievement file added to bashquest.sh. Tier-completion milestones (short of full graduation) are still unimplemented; the same host-side file-check approach would extend to them if bashquest.sh ever wrote a per-tier marker file.
+- Tier-completion milestones (short of full graduation) are unimplemented. The §10 host-side file check would extend to them if bashquest.sh ever wrote a per-tier marker file.
 - A public web/TUI badge for graduation (like nethack's Amulet/ascension badge on the profile modal) is not wired up. `profile_award.rs`'s category tables and `profile_modal/badges.rs`'s legend would need a `BASHQUEST_GRADUATE_AWARD_CATEGORY` entry; the `bashquest_graduates` table (§10) is intentionally separate from `profile_awards` since it holds full certificate text, not just a badge fact.
 
 ---
 
 ## 10. Certificate / Anti-Forgery Pipeline [STABLE]
 
-Records a verified "this account graduated BashQuest" fact in the database, making sure nothing in the chain can be spoofed by a player who only ever gets PTY keystrokes into the running game, never a shell or filesystem access.
-
-**Nothing publishes this table.** The door records the graduation and stops there. Exposing graduates anywhere, in the TUI or on the web, is its own change and its own decision: the rows hold a player's handle and their full certificate text.
-
-**Chain of custody, host → client → database:**
-
-1. **Host (`late-bashquest/src/host.rs`):** right before closing the channel in `run_bridge` (after the child has already exited — see `report_certificate`), check whether bashquest.sh wrote `$data_dir/.bashquest/<playname>.certificate.txt` (its own `graduation_ceremony`, only reached after completing all 90 levels). If so, send a marker **directly via `handle.data()`** — never anything read from the child's PTY output. This fires on **every** session a graduate plays, deliberately: the host cannot know whether late-ssh persisted anything (`handle.data()` returning Ok only means the bytes were queued), so a local "already reported" sentinel would turn one failed database write into a permanently lost certificate while suppressing the only path that could heal it. Re-sending is absorbed by step 5's idempotent insert.
-2. **Marker format** (`CERT_MARKER_TAG = b"\x00BQCERT\x01"`, byte-identical in both `host.rs` and client `proxy.rs`): `TAG <64-hex blake3 digest of certificate> \x01 <handle> \x01 <certificate bytes> \x00`. The leading NUL is not something bashquest.sh ever legitimately prints (plain ANSI/UTF-8 only) and is sent from a call site the child process's output never flows through, so nothing the player types or pastes can reach it.
-3. **Client (`late-ssh/src/app/door/bashquest/proxy.rs`, `extract_marker`):** every inbound `ChannelMsg::Data` is scanned for a complete marker before being fed to the vt100 parser. A match is stripped out (so it never corrupts the rendered screen) and verified against its own embedded digest before being trusted — a marker split across an unlucky chunk boundary is dropped rather than recorded with truncated content, not perfectly robust to adversarial fragmentation (see the doc comment on `extract_marker`; only needs to be correct for the common case, since the host always sends it as one call immediately before closing).
-4. **`BashquestProcess::take_graduation`** hands the parsed `GraduationRecord` (handle + certificate bytes) up to `state.rs`'s `tick()`, which already holds the session's real, SSH-authenticated `user_id` — never anything derived from the claimed handle alone.
-5. **`door::bashquest::graduate::BashquestAwards::spawn_record`** (the same fire-and-forget shape as the roguelike doors' `ingest::award` milestone sink) persists it via `late_core::models::bashquest_graduate::BashquestGraduate::record`, an `INSERT ... ON CONFLICT (user_id) DO NOTHING` into the `bashquest_graduates` table (migration `142_create_bashquest_graduates.sql`) — first record per account wins and is immutable; a re-report is a harmless no-op.
-**Why each hop matters:** a player has no shell, so they cannot write the certificate file themselves (step 1's precondition). The marker cannot come from anywhere except host-originated Rust code (step 1/2). The client cross-checks the digest before trusting content (step 3). The database write is keyed off the session's real authenticated account, not the self-reported handle string (step 4/5). Breaking the guarantee requires compromising late-bashquest's host process itself, not just knowing how the format works.
-
-**If something reads this table later:** `BashquestGraduate::list_all` already filters `user_id IS NOT NULL`, so an account deleted through the normal path drops out while its historical row survives (`user_id` is `ON DELETE SET NULL`). Keep that filter, and if the rows get mirrored anywhere, replace the copy rather than append to it, or a deletion here never reaches the mirror.
+A graduation (all 90 levels) is recorded once per account in `bashquest_graduates` (migration 142) without trusting anything the child prints: the host reads the certificate file bashquest.sh writes and sends a NUL-led marker over the channel from host Rust code, the client strips and digest-checks it before vt100 parsing, and the insert is keyed off the session's authenticated `user_id`, idempotent per account. **Nothing publishes this table**; exposing graduates is its own decision. The five hops, why each one matters, and the rules for any future reader of the table are in [`CERTIFICATE.md`](CERTIFICATE.md).

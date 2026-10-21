@@ -5,7 +5,7 @@
 //!
 //! This is the one place a runner is told how the city works, so it is
 //! kept exact: a key, a price, a rule, or a counter that changes changes
-//! here in the same change (CONTEXT.md, §3b). Every noun passes the
+//! here in the same change (city/CONTEXT.md). Every noun passes the
 //! screenshot test (static, signal, glyph, ration, bit, wire), lowercase.
 //!
 //! Prose carries four marks the renderer reads: `` `f` `` is a key, drawn

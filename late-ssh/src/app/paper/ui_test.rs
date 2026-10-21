@@ -100,11 +100,11 @@ fn wrapped_rows_define_the_scroll_limit_and_resize_reclamps_it() {
     terminal
         .draw(|frame| draw(frame, frame.area(), &modal))
         .unwrap();
-    let viewport = modal.viewport();
+    let viewport = modal.view.viewport();
     assert!(viewport.content_height > viewport.body.height);
-    modal.scroll(i16::MAX);
+    modal.view.scroll(i32::MAX);
     assert_eq!(
-        modal.scroll_offset(),
+        modal.view.offset(),
         viewport.content_height - viewport.body.height
     );
     terminal
@@ -117,15 +117,15 @@ fn wrapped_rows_define_the_scroll_limit_and_resize_reclamps_it() {
         }),
         "bottom still contains text"
     );
-    let previous = modal.scroll_offset();
+    let previous = modal.view.offset();
     let mut larger = Terminal::new(TestBackend::new(150, 40)).unwrap();
     larger
         .draw(|frame| draw(frame, frame.area(), &modal))
         .unwrap();
-    assert!(modal.scroll_offset() < previous);
-    let viewport = modal.viewport();
+    assert!(modal.view.offset() < previous);
+    let viewport = modal.view.viewport();
     assert_eq!(
-        modal.scroll_offset(),
+        modal.view.offset(),
         viewport.content_height.saturating_sub(viewport.body.height)
     );
 }
@@ -141,21 +141,21 @@ fn a_frame_too_small_to_print_keeps_the_reading_position() {
     terminal
         .draw(|frame| draw(frame, frame.area(), &modal))
         .unwrap();
-    modal.scroll(30);
-    assert_eq!(modal.scroll_offset(), 30);
+    modal.view.scroll(30);
+    assert_eq!(modal.view.offset(), 30);
 
     // Resized, not yet redrawn: a key must not move the reader.
-    modal.invalidate_viewport();
-    modal.scroll(-5);
-    assert_eq!(modal.scroll_offset(), 30);
+    modal.view.invalidate();
+    modal.view.scroll(-5);
+    assert_eq!(modal.view.offset(), 30);
 
     // Shrunk under the printable minimum, then a key, then grown back.
     let mut tiny = Terminal::new(TestBackend::new(20, 4)).unwrap();
     tiny.draw(|frame| draw(frame, frame.area(), &modal))
         .unwrap();
-    modal.scroll(1);
+    modal.view.scroll(1);
     terminal
         .draw(|frame| draw(frame, frame.area(), &modal))
         .unwrap();
-    assert_eq!(modal.scroll_offset(), 30);
+    assert_eq!(modal.view.offset(), 30);
 }

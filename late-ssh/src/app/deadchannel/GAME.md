@@ -1110,7 +1110,7 @@ never does.
 ## The city pass: the street (2026-09-18)
 
 Status: **built, art only, under the clubhouse.** The night city exists
-(`late-ssh/src/app/deadchannel/city/`, see `CONTEXT.md` §3b beside this
+(`late-ssh/src/app/deadchannel/city/`, see `city/CONTEXT.md` beside this
 file). It is the undercity: `0` is the clubhouse, `0` again goes down,
 runners only (2026-09-19; it was a dedicated page `7` for a day). Two art
 registers are built and one is still to be chosen. Decisions this pass
@@ -1171,7 +1171,7 @@ fixed:
   bar's drink list, the reader's lines (which point at the haunting).
 - **Shared, nothing timed.** Every runner who went down this session
   stands on the street until they log out, lit while looking and dim while
-  on another page (CONTEXT.md §3b). No spawns, no clock. The screen's
+  on another page (city/CONTEXT.md). No spawns, no clock. The screen's
   static and the rain are render-only ambience.
 
 Done since: the signs smear into the wet ground, a car runs the street
@@ -1187,7 +1187,7 @@ street: the locker, the band choice.
 ## The fight pass: where the ration goes (2026-09-24)
 
 Status: **built as an experiment, staff only like the rest**
-(`late-ssh/src/app/deadchannel/fight/`, `CONTEXT.md` §3c beside this
+(`late-ssh/src/app/deadchannel/fight/`, `fight/CONTEXT.md` beside this
 file). The question was where the daily fights happen and how anyone
 sees them. The three surfaces already answered half of it (the ration
 ritual is the city's, the wire is the log); this pass fixed the shape:
@@ -1474,7 +1474,7 @@ to ask which steps are bright tomorrow.
 
 Status: **the round and the road are built, staff only like the rest**
 (2026-10-06; `fight/cards.rs`, `fight/road.rs`, `fight/policy.rs`,
-`CONTEXT.md` §3c, measured in `fight/BALANCE.md`). The level colors
+`fight/CONTEXT.md`, measured in `fight/BALANCE.md`). The level colors
 were built earlier. Ambush, the arena, and bounties are decided, not
 built. "As built" below says where the code differs from what this
 section decided, and why. A design conversation after the fight,
@@ -1855,7 +1855,7 @@ slip into the wire; and the "hide the static" setting and its name.
 ## The crossing pass: a runner on the road (2026-10-15)
 
 Status: **built, staff only like the rest** (`fight/` with the rest of
-the road, `CONTEXT.md` §3c "The crossing"; the rows in
+the road, `fight/CONTEXT.md` "The crossing"; the rows in
 `deadchannel_ambushes`). Ambush on the road-node shape "PvP at forty
 people" chose, and the first negative-sum thing in the game, so the
 decisions are mostly about who pays what.

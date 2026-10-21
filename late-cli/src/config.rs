@@ -277,21 +277,8 @@ pub(super) fn init_logging(verbose: bool) -> Result<Option<PathBuf>> {
         return Ok(None);
     }
 
-    let path = cli_log_path();
-    ensure_log_dir(&path)?;
-    let mut options = OpenOptions::new();
-    options.create(true).append(true);
-    #[cfg(unix)]
-    {
-        options.mode(0o600).custom_flags(nix::libc::O_NOFOLLOW);
-    }
-    let file = options
-        .open(&path)
-        .with_context(|| format!("failed to open CLI log at {}", path.display()))?;
-    #[cfg(unix)]
-    {
-        let _ = file.set_permissions(fs::Permissions::from_mode(0o600));
-    }
+    let path = state_log_path("LATE_LOG_FILE", "late.log");
+    let file = open_state_log(&path)?;
     let writer = move || {
         file.try_clone()
             .expect("failed to clone late CLI log file handle")
@@ -466,69 +453,85 @@ fn parse_toml_bool(raw: &str, line_number: usize) -> Result<bool> {
     }
 }
 
-fn cli_log_path() -> PathBuf {
-    if let Some(path) = nonempty_os_env("LATE_LOG_FILE") {
+/// A log file: the `override_key` env var, else `file_name` in the late
+/// state directory.
+pub(super) fn state_log_path(override_key: &str, file_name: &str) -> PathBuf {
+    if let Some(path) = nonempty_os_env(override_key) {
         return PathBuf::from(path);
     }
 
     #[cfg(unix)]
     {
         if let Some(base) = nonempty_os_env("XDG_STATE_HOME") {
-            return PathBuf::from(base).join("late").join("late.log");
+            return PathBuf::from(base).join("late").join(file_name);
         }
         if let Some(home) = nonempty_os_env("HOME") {
             return PathBuf::from(home)
                 .join(".local")
                 .join("state")
                 .join("late")
-                .join("late.log");
+                .join(file_name);
         }
         if let Some(base) = nonempty_os_env("XDG_RUNTIME_DIR") {
-            return PathBuf::from(base).join("late").join("late.log");
+            return PathBuf::from(base).join("late").join(file_name);
         }
         env::temp_dir()
             .join(format!("late-{}", effective_user_id()))
-            .join("late.log")
+            .join(file_name)
     }
 
     #[cfg(windows)]
     {
         if let Some(base) = nonempty_os_env("LOCALAPPDATA") {
-            return PathBuf::from(base).join("late").join("late.log");
+            return PathBuf::from(base).join("late").join(file_name);
         }
         if let Some(profile) = nonempty_os_env("USERPROFILE") {
             return PathBuf::from(profile)
                 .join("AppData")
                 .join("Local")
                 .join("late")
-                .join("late.log");
+                .join(file_name);
         }
-        return env::temp_dir().join("late").join("late.log");
+        return env::temp_dir().join("late").join(file_name);
     }
 
     #[cfg(not(any(unix, windows)))]
     {
-        env::temp_dir().join("late").join("late.log")
+        env::temp_dir().join("late").join(file_name)
     }
 }
 
-fn ensure_log_dir(path: &Path) -> Result<()> {
-    let parent = path
-        .parent()
-        .context("CLI log path has no parent directory")?;
-    fs::create_dir_all(parent)
-        .with_context(|| format!("failed to create CLI log directory at {}", parent.display()))?;
+/// Open a log for append, private to this user, refusing a symlinked file
+/// or directory: the CLI's own and each child's stderr.
+pub(super) fn open_state_log(path: &Path) -> Result<fs::File> {
+    ensure_state_log_dir(path)?;
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
     #[cfg(unix)]
     {
-        let metadata = fs::symlink_metadata(parent).with_context(|| {
-            format!(
-                "failed to inspect CLI log directory at {}",
-                parent.display()
-            )
-        })?;
+        options.mode(0o600).custom_flags(nix::libc::O_NOFOLLOW);
+    }
+    let file = options
+        .open(path)
+        .with_context(|| format!("failed to open log at {}", path.display()))?;
+    #[cfg(unix)]
+    {
+        let _ = file.set_permissions(fs::Permissions::from_mode(0o600));
+    }
+    Ok(file)
+}
+
+fn ensure_state_log_dir(path: &Path) -> Result<()> {
+    let parent = path.parent().context("log path has no parent directory")?;
+    fs::create_dir_all(parent)
+        .with_context(|| format!("failed to create log directory at {}", parent.display()))?;
+    #[cfg(unix)]
+    {
+        let metadata = fs::symlink_metadata(parent)
+            .with_context(|| format!("failed to inspect log directory at {}", parent.display()))?;
         if metadata.file_type().is_symlink() || !metadata.is_dir() {
             anyhow::bail!(
-                "CLI log directory is not a real directory: {}",
+                "log directory is not a real directory: {}",
                 parent.display()
             );
         }
@@ -537,7 +540,7 @@ fn ensure_log_dir(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn nonempty_os_env(key: &str) -> Option<std::ffi::OsString> {
+pub(super) fn nonempty_os_env(key: &str) -> Option<std::ffi::OsString> {
     env::var_os(key).filter(|value| !value.is_empty())
 }
 

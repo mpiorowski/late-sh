@@ -2,7 +2,7 @@ use crate::models::article::NEWS_FEED_LIMIT;
 use crate::{
     models::{
         article::{Article, ArticleParams},
-        article_read::ArticleRead,
+        article_read::{ArticleRead, ArticleReadRow, WatchPosition},
     },
     test_utils::{create_test_user, test_db},
 };
@@ -25,6 +25,16 @@ async fn share(client: &tokio_postgres::Client, user_id: Uuid, url: &str) -> Art
     .expect("create article")
 }
 
+/// The ids a load carries for one reader.
+async fn read_ids(client: &tokio_postgres::Client, user_id: Uuid) -> Vec<Uuid> {
+    ArticleRead::rows_for_user(client, user_id)
+        .await
+        .expect("reader rows")
+        .into_iter()
+        .map(|row| row.article_id)
+        .collect()
+}
+
 /// A read is the reader's alone, opening it twice is one read, and reading
 /// the feed adds every snapshot article without touching another reader.
 #[tokio::test]
@@ -43,34 +53,15 @@ async fn article_reads_are_per_reader_and_the_feed_read_covers_the_snapshot() {
     ArticleRead::mark_read(&client, reader.id, first.id)
         .await
         .expect("mark first again");
-    assert_eq!(
-        ArticleRead::article_ids_for_user(&client, reader.id)
-            .await
-            .expect("reader reads"),
-        vec![first.id]
-    );
-    assert_eq!(
-        ArticleRead::article_ids_for_user(&client, other.id)
-            .await
-            .expect("other reads"),
-        Vec::<Uuid>::new()
-    );
+    assert_eq!(read_ids(&client, reader.id).await, vec![first.id]);
+    assert_eq!(read_ids(&client, other.id).await, Vec::<Uuid>::new());
 
     ArticleRead::mark_feed_read(&client, reader.id)
         .await
         .expect("read the feed");
-    let reads: HashSet<Uuid> = ArticleRead::article_ids_for_user(&client, reader.id)
-        .await
-        .expect("reader reads after the feed")
-        .into_iter()
-        .collect();
+    let reads: HashSet<Uuid> = read_ids(&client, reader.id).await.into_iter().collect();
     assert!(reads.contains(&first.id) && reads.contains(&second.id));
-    assert_eq!(
-        ArticleRead::article_ids_for_user(&client, other.id)
-            .await
-            .expect("other reads after the feed"),
-        Vec::<Uuid>::new()
-    );
+    assert_eq!(read_ids(&client, other.id).await, Vec::<Uuid>::new());
 }
 
 /// Only the snapshot's articles ride a load: a read of an article past the
@@ -96,9 +87,7 @@ async fn a_load_carries_only_the_snapshots_articles() {
         .await
         .expect("mark the oldest");
     assert_eq!(
-        ArticleRead::article_ids_for_user(&client, reader.id)
-            .await
-            .expect("reads"),
+        read_ids(&client, reader.id).await,
         Vec::<Uuid>::new(),
         "an article past the snapshot is not loaded"
     );
@@ -106,9 +95,82 @@ async fn a_load_carries_only_the_snapshots_articles() {
     ArticleRead::mark_feed_read(&client, reader.id)
         .await
         .expect("read the feed");
-    let reads = ArticleRead::article_ids_for_user(&client, reader.id)
-        .await
-        .expect("reads after the feed");
+    let reads = read_ids(&client, reader.id).await;
     assert_eq!(reads.len(), NEWS_FEED_LIMIT as usize);
     assert!(!reads.contains(&oldest.id));
+}
+
+/// A watch keeps where the reader left it, on their row alone; the end of
+/// the video clears it; the load carries it beside the read.
+#[tokio::test]
+async fn a_watch_position_is_saved_cleared_and_loaded_with_the_read() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let sharer = create_test_user(&test_db.db, "watch-position-sharer").await;
+    let reader = create_test_user(&test_db.db, "watch-position-reader").await;
+    let other = create_test_user(&test_db.db, "watch-position-other").await;
+    let video = share(&client, sharer.id, "https://www.youtube.com/watch?v=pos").await;
+
+    // No read row yet: the save is the read.
+    ArticleRead::save_watch_position(
+        &client,
+        reader.id,
+        video.id,
+        WatchPosition {
+            position_s: 1394,
+            duration_s: Some(2910),
+        },
+    )
+    .await
+    .expect("save");
+    assert_eq!(
+        ArticleRead::rows_for_user(&client, reader.id)
+            .await
+            .expect("reader rows"),
+        vec![ArticleReadRow {
+            article_id: video.id,
+            watch_position: Some(WatchPosition {
+                position_s: 1394,
+                duration_s: Some(2910),
+            }),
+        }]
+    );
+    assert_eq!(read_ids(&client, other.id).await, Vec::<Uuid>::new());
+
+    // A later save moves it; a live stream has no duration.
+    ArticleRead::save_watch_position(
+        &client,
+        reader.id,
+        video.id,
+        WatchPosition {
+            position_s: 1500,
+            duration_s: None,
+        },
+    )
+    .await
+    .expect("save again");
+    assert_eq!(
+        ArticleRead::rows_for_user(&client, reader.id)
+            .await
+            .expect("reader rows")[0]
+            .watch_position,
+        Some(WatchPosition {
+            position_s: 1500,
+            duration_s: None,
+        })
+    );
+
+    ArticleRead::clear_watch_position(&client, reader.id, video.id)
+        .await
+        .expect("clear");
+    assert_eq!(
+        ArticleRead::rows_for_user(&client, reader.id)
+            .await
+            .expect("reader rows"),
+        vec![ArticleReadRow {
+            article_id: video.id,
+            watch_position: None,
+        }],
+        "the read stays, the position goes"
+    );
 }

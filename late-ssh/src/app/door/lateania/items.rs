@@ -1364,7 +1364,7 @@ pub const fn masterwork_id(n: u32) -> u32 {
     CRAFTED_BASE + 180 + n
 }
 /// Weapon oils, the martial school lever of the world resist/weak pass
-/// (CONTEXT.md, "The world resist/weak pass" section): a flat, charge-limited rider added to the
+/// (COMBAT.md, "The world resist/weak pass" section): a flat, charge-limited rider added to the
 /// Physical auto, one school per family. `school` indexes `OIL_SCHOOLS`.
 pub const fn oil_id(school: u32, tier: u32) -> u32 {
     CRAFTED_BASE + 300 + school * 20 + tier
