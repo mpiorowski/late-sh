@@ -99,8 +99,9 @@ fn card_meta_reads_watch_for_a_video() {
 }
 
 /// With a shelf, a rule heads it and another heads the feed; every story
-/// takes two rows and the selected one opens out with its link and its
-/// bullets. Without a shelf there are no rules at all.
+/// takes two rows, a blank row parts one story from the next, and the
+/// selected one opens out with its link and its bullets. Without a shelf
+/// there are no rules at all.
 #[test]
 fn the_list_sections_the_shelf_over_the_feed_and_opens_the_selected_story() {
     let positions = HashMap::new();
@@ -118,17 +119,21 @@ fn the_list_sections_the_shelf_over_the_feed_and_opens_the_selected_story() {
     );
     assert_eq!(rows[1], "  Kept for later");
     assert!(rows[2].starts_with("  @mat ·"));
-    assert!(rows[3].starts_with("── latest ──"), "{:?}", rows[3]);
-    assert_eq!(rows[4], "  Why LISTEN/NOTIFY stops scaling");
-    assert!(rows[5].ends_with("· 7 min read"));
-    assert_eq!(rows[6], "  https://example.com/listen-notify");
-    assert_eq!(rows[7], "  • one");
-    assert_eq!(rows[8], "  • two");
-    assert_eq!(rows[9], "  • three");
-    assert_eq!(rows[10], "");
+    assert_eq!(rows[3], "");
+    assert!(rows[4].starts_with("── latest ──"), "{:?}", rows[4]);
+    assert_eq!(rows[5], "  Why LISTEN/NOTIFY stops scaling");
+    assert!(rows[6].ends_with("· 7 min read"));
+    assert_eq!(rows[7], "  https://example.com/listen-notify");
+    assert_eq!(rows[8], "  • one");
+    assert_eq!(rows[9], "  • two");
+    assert_eq!(rows[10], "  • three");
+    assert_eq!(rows[11], "");
 
     let rows = drawn(&view(&articles, 0, 0, &marker, &positions), 80, 12);
     assert_eq!(rows[0], "  Kept for later");
+    assert_eq!(rows[5], "  • three");
+    assert_eq!(rows[6], "");
+    assert_eq!(rows[7], "  Why LISTEN/NOTIFY stops scaling");
     assert!(rows.iter().all(|row| !row.contains("──")));
 }
 
@@ -141,11 +146,12 @@ fn the_unread_dot_marks_the_feed_and_not_the_shelf() {
     let articles = [card(BodyStatus::Unavailable), card(BodyStatus::Unavailable)];
     let rows = drawn(&view(&articles, 1, 1, &marker, &positions), 80, 12);
     assert!(rows[1].starts_with("  Why"), "{:?}", rows[1]);
-    assert!(rows[4].starts_with("● Why"), "{:?}", rows[4]);
+    assert!(rows[5].starts_with("● Why"), "{:?}", rows[5]);
 }
 
-/// A bullet that runs on takes two rows at most, the second cut with an
-/// ellipsis, so the opened story stays a card and not a page.
+/// A bullet that runs on takes two rows at most, the second hung under the
+/// text after the bullet and cut with an ellipsis, so the opened story
+/// stays a card and not a page.
 #[test]
 fn a_long_bullet_is_cut_at_two_rows() {
     let marker = HashSet::new();
@@ -157,13 +163,17 @@ fn a_long_bullet_is_cut_at_two_rows() {
     // Title, meta, link, then the bullet's two rows.
     assert_eq!(layout.rows.len(), 5);
     assert_eq!(layout.selected, 0..5);
-    let last: String = layout.rows[4]
-        .line
-        .spans
-        .iter()
-        .map(|span| span.content.as_ref())
-        .collect();
-    assert!(last.trim_end().ends_with('…'), "{last:?}");
+    let text = |row: usize| -> String {
+        layout.rows[row]
+            .line
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
+    };
+    assert!(text(3).starts_with("  • word"), "{:?}", text(3));
+    assert!(text(4).starts_with("    word"), "{:?}", text(4));
+    assert!(text(4).trim_end().ends_with('…'), "{:?}", text(4));
 }
 
 /// The draw scrolls just enough to keep the selected story's last row in

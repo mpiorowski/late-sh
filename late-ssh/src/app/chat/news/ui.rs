@@ -53,6 +53,8 @@ const ART_MIN_LIST_WIDTH: u16 = 90;
 /// The summary's bullets on the selected story, and the rows each may take.
 const SUMMARY_BULLETS: usize = 3;
 const BULLET_ROWS: usize = 2;
+/// The bullet and its space: a point's later rows hang this far in.
+const BULLET_HANG: usize = 2;
 
 /// One row of the list as drawn: its text, and the slice of art that sits
 /// at its right.
@@ -111,9 +113,10 @@ pub(crate) fn scroll_offset(selected: &Range<usize>, height: usize) -> usize {
 
 /// Every row of the list for `width` columns: a rule over the shelf and
 /// one over the feed when there is a shelf, two rows a story (its title,
-/// then who shared it, when, where, and what reading it takes), and the
-/// selected story opened out with its link and up to three bullets of its
-/// summary, its art beside them when the list is wide enough.
+/// then who shared it, when, where, and what reading it takes) with a
+/// blank row between stories, and the selected story opened out with its
+/// link and up to three bullets of its summary, its art beside them when
+/// the list is wide enough.
 pub(crate) fn lay_out(view: &ArticleListView<'_>, width: u16) -> ListLayout {
     let mut rows: Vec<ListRow> = Vec::new();
     let mut selected = 0..0;
@@ -124,6 +127,13 @@ pub(crate) fn lay_out(view: &ArticleListView<'_>, width: u16) -> ListLayout {
     let full_width = usize::from(width);
 
     for (index, item) in view.articles.iter().enumerate() {
+        // A blank row between stories, and above the feed's rule.
+        if index > 0 {
+            rows.push(ListRow {
+                line: Line::default(),
+                art: None,
+            });
+        }
         if sectioned && index == 0 {
             rows.push(section_rule(
                 &format!("saved · {} of {NEWS_SAVED_LIMIT}", view.saved_count),
@@ -177,11 +187,11 @@ fn detail_rows(article: &Article, text_width: usize) -> Vec<Line<'static>> {
                 .add_modifier(Modifier::ITALIC),
         ),
     ])];
-    for bullet in split_summary_bullets(&article.summary)
+    for point in summary_points(&article.summary)
         .iter()
         .take(SUMMARY_BULLETS)
     {
-        for text in bullet_rows(bullet, text_width) {
+        for text in bullet_rows(point, text_width) {
             lines.push(Line::from(vec![
                 Span::raw(" ".repeat(GUTTER)),
                 Span::styled(text, Style::default().fg(theme::TEXT())),
@@ -225,11 +235,10 @@ fn story_rows(
     let separator = || Span::styled(" · ", Style::default().fg(theme::TEXT_FAINT()));
     let mut meta = vec![
         Span::raw(" ".repeat(GUTTER)),
+        // Amber but not bold: the title leads the story.
         Span::styled(
             format!("@{}", item.author_username),
-            Style::default()
-                .fg(theme::AMBER())
-                .add_modifier(Modifier::BOLD),
+            Style::default().fg(theme::AMBER()),
         ),
         separator(),
         Span::styled(
@@ -279,17 +288,23 @@ fn section_rule(label: &str, width: usize) -> ListRow {
     }
 }
 
-/// A bullet wrapped to `width`, at most `BULLET_ROWS` rows, the last one
-/// clipped with an ellipsis when the bullet runs on.
-fn bullet_rows(bullet: &str, width: usize) -> Vec<String> {
-    let width = width.max(1);
-    let wrapped = wrap_plain_line(bullet, width);
-    if wrapped.len() <= BULLET_ROWS {
-        return wrapped;
+/// A summary point behind its bullet, wrapped to `width` with its later
+/// rows hung under the text, the way the reader sets bullets: at most
+/// `BULLET_ROWS` rows, the last one clipped with an ellipsis when the point
+/// runs on.
+fn bullet_rows(point: &str, width: usize) -> Vec<String> {
+    let text_width = width.saturating_sub(BULLET_HANG).max(1);
+    let mut wrapped = wrap_plain_line(point, text_width);
+    if wrapped.len() > BULLET_ROWS {
+        wrapped.truncate(BULLET_ROWS);
+        if let Some(last) = wrapped.last_mut() {
+            *last = truncate_cells(&format!("{last} …"), text_width);
+        }
     }
-    let mut rows: Vec<String> = wrapped.into_iter().take(BULLET_ROWS).collect();
-    if let Some(last) = rows.last_mut() {
-        *last = truncate_cells(&format!("{last} …"), width);
+    let mut rows = Vec::new();
+    for (index, text) in wrapped.into_iter().enumerate() {
+        let lead = if index == 0 { "• " } else { "  " };
+        rows.push(format!("{lead}{text}"));
     }
     rows
 }
@@ -361,15 +376,26 @@ fn ascii_preview_if_fit(ascii_art: &str, target_width: usize, max_lines: usize) 
     lines.into_iter().take(max_lines).collect()
 }
 
-pub(crate) fn split_summary_bullets(text: &str) -> Vec<String> {
+/// The summary's points, one a line, each without the bullet mark it came
+/// with.
+fn summary_points(text: &str) -> Vec<String> {
     text.replace("\\n", "\n")
         .lines()
         .map(str::trim)
         .filter(|line| !line.is_empty())
         .map(|line| {
-            let stripped = line.trim_start_matches('•').trim_start_matches('-').trim();
-            format!("• {stripped}")
+            line.trim_start_matches('•')
+                .trim_start_matches('-')
+                .trim()
+                .to_string()
         })
+        .collect()
+}
+
+pub(crate) fn split_summary_bullets(text: &str) -> Vec<String> {
+    summary_points(text)
+        .into_iter()
+        .map(|point| format!("• {point}"))
         .collect()
 }
 

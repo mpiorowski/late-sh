@@ -174,7 +174,10 @@ fn the_rows_say_why_there_is_nothing_to_paint() {
         text(&Bench::NoRunner),
         vec!["nothing to print. you have no runner yet.".to_string()]
     );
-    assert_eq!(text(&Bench::Open(Box::new(Draft::new(None, 0)))).len(), POSTER_HEIGHT);
+    assert_eq!(
+        text(&Bench::Open(Box::new(Draft::new(None, 0)))).len(),
+        POSTER_HEIGHT
+    );
 }
 
 #[test]
