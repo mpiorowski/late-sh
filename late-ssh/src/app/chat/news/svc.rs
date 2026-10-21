@@ -1209,9 +1209,9 @@ pub enum XMediaLookup {
     Unavailable,
 }
 
-/// What a press of `s` did to the shelf, for
-/// `metrics::record_news_save`. A run of `full` is readers wanting a
-/// bigger shelf than [`late_core::models::article_save::NEWS_SAVED_LIMIT`].
+/// What a press of `s` did to the shelf: what `news::State::toggle_save`
+/// returns (and `news::state::save_banner` words), and what a write counts
+/// on `metrics::record_news_save`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NewsSaveOutcome {
     Saved,

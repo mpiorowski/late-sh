@@ -3,13 +3,14 @@ use super::{
     is_unread_at, move_index, news_unread_label, unread_in_snapshot,
 };
 use crate::app::ai::svc::AiService;
-use crate::app::chat::news::svc::ArticleService;
+use crate::app::chat::news::svc::{ArticleService, NewsSaveOutcome};
 use crate::test_helpers::{new_test_db, wait_until};
 use chrono::{DateTime, Duration, Utc};
 use late_core::models::article::{
     Article, ArticleEvent, ArticleFeedItem, ArticleParams, NEWS_FEED_LIMIT,
 };
 use late_core::models::article_read::{ArticleReadRow, WatchPosition};
+use late_core::models::article_save::{ArticleSave, NEWS_SAVED_LIMIT};
 use late_core::test_utils::create_test_user;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
@@ -259,6 +260,74 @@ fn the_display_puts_the_shelf_over_the_feed_once_each() {
     let (rows, saved_len) = display_order(&[], &feed, None);
     assert_eq!(rows.len(), 3);
     assert_eq!(saved_len, 0);
+}
+
+/// `s` on a feed story shelves it and hands the cursor to the story that
+/// came after it; on a full shelf it refuses and the cursor stays put.
+#[tokio::test]
+async fn a_save_moves_the_cursor_on_and_a_refused_one_leaves_it() {
+    let test_db = new_test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let sharer = create_test_user(&test_db.db, "shelf-cursor-sharer").await;
+    let reader = create_test_user(&test_db.db, "shelf-cursor-reader").await;
+    let mut stories = Vec::new();
+    for n in 0..NEWS_SAVED_LIMIT + 2 {
+        let params = ArticleParams {
+            user_id: sharer.id,
+            url: format!("https://example.com/shelf-cursor-{n}"),
+            title: "Title".to_string(),
+            summary: "Summary".to_string(),
+            ascii_art: "...".to_string(),
+        };
+        stories.push(
+            Article::create_by_user_id(&client, sharer.id, params)
+                .await
+                .expect("create story"),
+        );
+    }
+    // One short of full, so three stories sit in the feed under the shelf.
+    let shelf_len = NEWS_SAVED_LIMIT as usize - 1;
+    for story in stories.iter().take(shelf_len) {
+        ArticleSave::save(&mut client, reader.id, story.id)
+            .await
+            .expect("save");
+    }
+    let service = ArticleService::new(test_db.db.clone(), AiService::new(false, None));
+    let mut state = State::new(service, reader.id, false);
+    wait_until(
+        || {
+            state.tick();
+            std::future::ready(
+                state.all_articles().len() == stories.len() && state.saved_count() == shelf_len,
+            )
+        },
+        "the feed and the shelf load",
+    )
+    .await;
+    let feed_ids: Vec<Uuid> = state.displayed_articles()[shelf_len..]
+        .iter()
+        .map(|item| item.article.id)
+        .collect();
+    assert_eq!(feed_ids.len(), 3);
+    let selected_id = |state: &State| state.selected_item().map(|item| item.article.id);
+    state.select_article_by_id(feed_ids[0]);
+    assert_eq!(state.selected_index(), shelf_len);
+
+    assert_eq!(state.toggle_save_selected(), Some(NewsSaveOutcome::Saved));
+    assert_eq!(state.saved_count(), NEWS_SAVED_LIMIT as usize);
+    assert_eq!(
+        selected_id(&state),
+        Some(feed_ids[1]),
+        "the save hands the cursor on"
+    );
+
+    assert_eq!(state.toggle_save_selected(), Some(NewsSaveOutcome::Full));
+    assert_eq!(state.saved_count(), NEWS_SAVED_LIMIT as usize);
+    assert_eq!(
+        selected_id(&state),
+        Some(feed_ids[1]),
+        "a refused save moves nothing"
+    );
 }
 
 #[test]

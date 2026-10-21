@@ -32,7 +32,7 @@ pub fn news_share_banner(lead: &str, reward: NewsShareReward) -> Banner {
 }
 
 use super::reader::state::{ReaderBody, ReaderModal};
-use super::svc::{ArticleService, BodyLoad, BodyReply, is_youtube_url};
+use super::svc::{ArticleService, BodyLoad, BodyReply, NewsSaveOutcome, is_youtube_url};
 use super::watch::state::{LivePlay, Player, SetupBox, SetupInputs, WatchMemory, WatchModal};
 use crate::paired_clients::PairControlMessage;
 
@@ -111,11 +111,16 @@ pub struct NewsTick {
     pub changed: bool,
 }
 
-/// The banner for a shelf that will not take another story.
-pub(crate) fn shelf_full_banner() -> Banner {
-    Banner::error(&format!(
-        "Saved is full: {NEWS_SAVED_LIMIT} stories. Press s on one of them to make room."
-    ))
+/// The banner for an `s`, from what it did to the shelf. Both `s` surfaces
+/// (the News room and the reader) and a save the service refused read this.
+pub(crate) fn save_banner(outcome: NewsSaveOutcome) -> Banner {
+    match outcome {
+        NewsSaveOutcome::Saved => Banner::success("Saved for later."),
+        NewsSaveOutcome::Unsaved => Banner::success("Taken off saved."),
+        NewsSaveOutcome::Full => Banner::error(&format!(
+            "Saved is full: {NEWS_SAVED_LIMIT} stories. Press s on one of them to make room."
+        )),
+    }
 }
 
 /// The News list in display order: the reader's shelf first, newest save
@@ -257,7 +262,7 @@ impl State {
         self.saved_articles.len()
     }
 
-    pub(crate) fn is_saved(&self, article_id: Uuid) -> bool {
+    fn is_saved(&self, article_id: Uuid) -> bool {
         self.saved_articles
             .iter()
             .any(|item| item.article.id == article_id)
@@ -537,20 +542,21 @@ impl State {
     /// stays where it is in the list rather than following the story to
     /// its new section: the story that came next is what is under it now,
     /// so saving reads as "keep this, move on". With nothing after it, the
-    /// cursor follows the story.
-    pub(crate) fn toggle_save_selected(&mut self) -> Option<Banner> {
+    /// cursor follows the story; a refused save moves nothing.
+    pub(crate) fn toggle_save_selected(&mut self) -> Option<NewsSaveOutcome> {
         let index = self.selected_index();
         let article_id = self.articles.get(index)?.article.id;
         let follower = self.articles.get(index + 1).map(|item| item.article.id);
-        let banner = self.toggle_save(article_id)?;
-        if let Some(index) = follower.and_then(|follower| {
-            self.articles
-                .iter()
-                .position(|item| item.article.id == follower)
-        }) {
-            self.selected = index;
+        let outcome = self.toggle_save(article_id)?;
+        match outcome {
+            NewsSaveOutcome::Saved | NewsSaveOutcome::Unsaved => {
+                if let Some(follower) = follower {
+                    self.select_article_by_id(follower);
+                }
+            }
+            NewsSaveOutcome::Full => {}
         }
-        Some(banner)
+        Some(outcome)
     }
 
     /// Put a story on the shelf, or take it off: the session's own list
@@ -559,24 +565,24 @@ impl State {
     /// reader's in line. A full shelf refuses here, before any write; one
     /// another session filled meanwhile refuses in the service and comes
     /// back as `SaveRefused`. None when the story is not known.
-    pub(crate) fn toggle_save(&mut self, article_id: Uuid) -> Option<Banner> {
+    pub(crate) fn toggle_save(&mut self, article_id: Uuid) -> Option<NewsSaveOutcome> {
         let item = self.find_article(article_id)?.clone();
-        let banner = if self.is_saved(article_id) {
+        let outcome = if self.is_saved(article_id) {
             self.saved_articles
                 .retain(|saved| saved.article.id != article_id);
             self.article_service
                 .unsave_article_task(self.user_id, article_id);
-            Banner::success("Taken off saved.")
+            NewsSaveOutcome::Unsaved
         } else if self.saved_articles.len() >= NEWS_SAVED_LIMIT as usize {
-            return Some(shelf_full_banner());
+            return Some(NewsSaveOutcome::Full);
         } else {
             self.saved_articles.insert(0, item);
             self.article_service
                 .save_article_task(self.user_id, article_id);
-            Banner::success("Saved for later.")
+            NewsSaveOutcome::Saved
         };
         self.rebuild_display();
-        Some(banner)
+        Some(outcome)
     }
 
     /// Delete a story by id: its sharer's own, or any for an admin.
@@ -883,7 +889,7 @@ impl State {
                         self.rebuild_display();
                     }
                     ArticleEvent::SaveRefused { user_id } if self.user_id == user_id => {
-                        banner = Some(shelf_full_banner());
+                        banner = Some(save_banner(NewsSaveOutcome::Full));
                     }
                     ArticleEvent::ReadsLoaded { user_id, reads } if self.user_id == user_id => {
                         // Reads only grow, so a load merges: two writes'

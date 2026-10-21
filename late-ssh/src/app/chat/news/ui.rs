@@ -8,6 +8,7 @@ use crate::app::chat::news::reader::state::domain_label;
 use crate::app::chat::news::state::is_unread;
 use crate::app::chat::news::svc::is_youtube_url;
 use crate::app::chat::news::watch::state::position_label;
+use crate::app::chat::ui::truncate_cells;
 use crate::app::chat::ui_text::format_news_ascii_art_for_display;
 use crate::app::common::markdown::wrap_plain_line;
 use crate::app::common::primitives::format_relative_time_short;
@@ -24,7 +25,7 @@ use std::ops::Range;
 use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
 
-use late_core::models::article::{ArticleFeedItem, NEWS_SHARE_REWARD_CHIPS};
+use late_core::models::article::{Article, ArticleFeedItem, NEWS_SHARE_REWARD_CHIPS};
 use late_core::models::article_body::BodyStatus;
 use late_core::models::article_read::WatchPosition;
 use late_core::models::article_save::NEWS_SAVED_LIMIT;
@@ -53,17 +54,17 @@ const ART_MIN_LIST_WIDTH: u16 = 90;
 const SUMMARY_BULLETS: usize = 3;
 const BULLET_ROWS: usize = 2;
 
-/// One row of the list as drawn: its text, whether it is part of the
-/// selected story, and the slice of art that sits at its right.
+/// One row of the list as drawn: its text, and the slice of art that sits
+/// at its right.
 pub(crate) struct ListRow {
     pub(crate) line: Line<'static>,
-    pub(crate) selected: bool,
     pub(crate) art: Option<String>,
 }
 
 pub(crate) struct ListLayout {
     pub(crate) rows: Vec<ListRow>,
-    /// The rows of the selected story, the ones a draw must keep in view.
+    /// The rows of the selected story: highlighted, and the ones a draw
+    /// must keep in view.
     pub(crate) selected: Range<usize>,
 }
 
@@ -71,9 +72,6 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
     let (status_area, list_area) = filtered_list_areas(area, view.mine_only);
     if let Some(status_area) = status_area {
         draw_mine_only_status(frame, status_area, "news");
-    }
-    if list_area.width == 0 || list_area.height == 0 {
-        return;
     }
 
     if view.articles.is_empty() {
@@ -85,19 +83,19 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
         return;
     }
 
-    let layout = lay_out(view, list_area.width);
+    let ListLayout { rows, selected } = lay_out(view, list_area.width);
     let height = usize::from(list_area.height);
-    let offset = scroll_offset(&layout.selected, height);
+    let offset = scroll_offset(&selected, height);
     let art_x = list_area.right().saturating_sub(ART_WIDTH);
-    for (row_index, row) in layout.rows.iter().enumerate().skip(offset).take(height) {
+    for (row_index, row) in rows.into_iter().enumerate().skip(offset).take(height) {
         let y = list_area.y + (row_index - offset) as u16;
         let row_area = Rect::new(list_area.x, y, list_area.width, 1);
-        let style = theme::row_style(row.selected);
-        frame.render_widget(Paragraph::new(row.line.clone()).style(style), row_area);
-        if let Some(art) = &row.art {
+        let style = theme::row_style(selected.contains(&row_index));
+        frame.render_widget(Paragraph::new(row.line).style(style), row_area);
+        if let Some(art) = row.art {
             let art_area = Rect::new(art_x, y, ART_WIDTH, 1);
             frame.render_widget(
-                Paragraph::new(art.as_str()).style(style.fg(theme::AMBER_DIM())),
+                Paragraph::new(art).style(style.fg(theme::AMBER_DIM())),
                 art_area,
             );
         }
@@ -108,9 +106,6 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
 /// scrolling just enough to show its last row, so moving down the list
 /// walks it up the screen and moving back up walks it down.
 pub(crate) fn scroll_offset(selected: &Range<usize>, height: usize) -> usize {
-    if height == 0 {
-        return selected.start;
-    }
     selected.end.saturating_sub(height).min(selected.start)
 }
 
@@ -139,65 +134,61 @@ pub(crate) fn lay_out(view: &ArticleListView<'_>, width: u16) -> ListLayout {
             rows.push(section_rule("latest", full_width));
         }
         let is_selected = index == selected_index;
-        let on_shelf = index < view.saved_len;
-        let start = rows.len();
-        if is_selected {
-            let with_art = width >= ART_MIN_LIST_WIDTH;
-            let text_width = full_width.saturating_sub(
-                GUTTER
-                    + if with_art {
-                        usize::from(ART_WIDTH) + 1
-                    } else {
-                        0
-                    },
-            );
-            let mut lines = story_rows(item, view, on_shelf, text_width);
-            lines.push(Line::from(vec![
-                Span::raw(" ".repeat(GUTTER)),
-                Span::styled(
-                    clip_to_width(&item.article.url, text_width),
-                    Style::default()
-                        .fg(theme::TEXT_FAINT())
-                        .add_modifier(Modifier::ITALIC),
-                ),
-            ]));
-            for bullet in split_summary_bullets(&item.article.summary)
-                .iter()
-                .take(SUMMARY_BULLETS)
-            {
-                for text in bullet_rows(bullet, text_width) {
-                    lines.push(Line::from(vec![
-                        Span::raw(" ".repeat(GUTTER)),
-                        Span::styled(text, Style::default().fg(theme::TEXT())),
-                    ]));
-                }
-            }
-            let art = if with_art {
-                ascii_preview_if_fit(&item.article.ascii_art, usize::from(ART_WIDTH), lines.len())
-            } else {
-                Vec::new()
-            };
-            let mut art = art.into_iter();
-            for line in lines {
-                rows.push(ListRow {
-                    line,
-                    selected: true,
-                    art: art.next(),
-                });
-            }
-            selected = start..rows.len();
+        let with_art = is_selected && width >= ART_MIN_LIST_WIDTH;
+        let art_columns = if with_art {
+            usize::from(ART_WIDTH) + 1
         } else {
-            let text_width = full_width.saturating_sub(GUTTER);
-            for line in story_rows(item, view, on_shelf, text_width) {
-                rows.push(ListRow {
-                    line,
-                    selected: false,
-                    art: None,
-                });
-            }
+            0
+        };
+        let text_width = full_width.saturating_sub(GUTTER + art_columns);
+        let mut lines = story_rows(item, view, index < view.saved_len, text_width);
+        if is_selected {
+            lines.extend(detail_rows(&item.article, text_width));
+        }
+        let art = if with_art {
+            ascii_preview_if_fit(&item.article.ascii_art, usize::from(ART_WIDTH), lines.len())
+        } else {
+            Vec::new()
+        };
+        let mut art = art.into_iter();
+        let start = rows.len();
+        for line in lines {
+            rows.push(ListRow {
+                line,
+                art: art.next(),
+            });
+        }
+        if is_selected {
+            selected = start..rows.len();
         }
     }
     ListLayout { rows, selected }
+}
+
+/// What the selected story opens out with: its link, then up to
+/// `SUMMARY_BULLETS` bullets of its summary.
+fn detail_rows(article: &Article, text_width: usize) -> Vec<Line<'static>> {
+    let mut lines = vec![Line::from(vec![
+        Span::raw(" ".repeat(GUTTER)),
+        Span::styled(
+            truncate_cells(&article.url, text_width),
+            Style::default()
+                .fg(theme::TEXT_FAINT())
+                .add_modifier(Modifier::ITALIC),
+        ),
+    ])];
+    for bullet in split_summary_bullets(&article.summary)
+        .iter()
+        .take(SUMMARY_BULLETS)
+    {
+        for text in bullet_rows(bullet, text_width) {
+            lines.push(Line::from(vec![
+                Span::raw(" ".repeat(GUTTER)),
+                Span::styled(text, Style::default().fg(theme::TEXT())),
+            ]));
+        }
+    }
+    lines
 }
 
 /// A story's two rows: the title behind its unread dot, and the meta.
@@ -224,7 +215,7 @@ fn story_rows(
     let title = Line::from(vec![
         dot,
         Span::styled(
-            clip_to_width(article.title.trim(), text_width),
+            truncate_cells(article.title.trim(), text_width),
             Style::default()
                 .fg(theme::TEXT_BRIGHT())
                 .add_modifier(Modifier::BOLD),
@@ -284,7 +275,6 @@ fn section_rule(label: &str, width: usize) -> ListRow {
             ),
             Span::styled(format!(" {tail}"), Style::default().fg(theme::BORDER())),
         ]),
-        selected: false,
         art: None,
     }
 }
@@ -299,31 +289,9 @@ fn bullet_rows(bullet: &str, width: usize) -> Vec<String> {
     }
     let mut rows: Vec<String> = wrapped.into_iter().take(BULLET_ROWS).collect();
     if let Some(last) = rows.last_mut() {
-        *last = clip_to_width(&format!("{last} …"), width);
+        *last = truncate_cells(&format!("{last} …"), width);
     }
     rows
-}
-
-/// `text` cut to `width` cells, an ellipsis marking the cut.
-fn clip_to_width(text: &str, width: usize) -> String {
-    if UnicodeWidthStr::width(text) <= width {
-        return text.to_string();
-    }
-    let budget = width.saturating_sub(1);
-    let mut out = String::new();
-    let mut used = 0;
-    for ch in text.chars() {
-        let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-        if used + w > budget {
-            break;
-        }
-        used += w;
-        out.push(ch);
-    }
-    if width > 0 {
-        out.push('…');
-    }
-    out
 }
 
 /// The card meta's last segment.

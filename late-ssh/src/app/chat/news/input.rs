@@ -84,8 +84,8 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
         // Keep the selected story for later, or let it go: it changes
         // section at once, the cursor stays put.
         b's' | b'S' => {
-            if let Some(banner) = app.chat.news.toggle_save_selected() {
-                app.banner = Some(banner);
+            if let Some(outcome) = app.chat.news.toggle_save_selected() {
+                app.banner = Some(super::state::save_banner(outcome));
             }
             true
         }
