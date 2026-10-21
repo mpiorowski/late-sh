@@ -111,6 +111,7 @@ fn a_stored_game_replays_shot_for_shot() {
                 speed: 1.5 + (f * 0.31).sin().abs() * 4.0,
                 called_pocket: None,
                 play_again: false,
+                put_back: false,
             }
         })
         .collect();
@@ -158,6 +159,7 @@ fn shots_serialise_losslessly() {
         speed: 4.567_891_234,
         called_pocket: Some(3),
         play_again: false,
+        put_back: false,
     };
     let round_tripped: Shot = serde_json::from_str(&serde_json::to_string(&shot).unwrap()).unwrap();
     assert_eq!(round_tripped, shot);

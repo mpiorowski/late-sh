@@ -198,3 +198,56 @@ fn crossing_answer(day: NaiveDate, answerer: Uuid, attacker: Uuid, crossing: Uui
         started_at: Utc::now(),
     }
 }
+
+/// The nuke clears every sheet's fight, so a crossing still being fought
+/// would never see the `settle_day` that closes it. The nuke closes it as
+/// dropped itself, nothing moved, and leaves a finished one as it was.
+#[tokio::test]
+async fn the_nuke_drops_a_crossing_still_being_fought() {
+    let test_db = test_db().await;
+    let pooled = test_db.db.get().await.expect("db client");
+    let client: &tokio_postgres::Client = &pooled;
+    let tom = create_test_user(&test_db.db, "nuke-tom").await.id;
+    let mira = create_test_user(&test_db.db, "nuke-mira").await.id;
+    let dax = create_test_user(&test_db.db, "nuke-dax").await.id;
+    let day = fresh_day();
+
+    let open = Ambush::insert(client, &crossing(day, tom, mira, 6))
+        .await
+        .expect("insert")
+        .expect("the open crossing lands");
+    let finished = Ambush::insert(client, &crossing(day, dax, tom, 6))
+        .await
+        .expect("insert")
+        .expect("the finished crossing lands");
+    let ended_at = Utc::now() - Duration::hours(1);
+    assert!(
+        Ambush::end(client, finished.id, AmbushOutcome::Won, 170, ended_at)
+            .await
+            .expect("end")
+    );
+    let finished = Ambush::get(client, finished.id)
+        .await
+        .expect("read")
+        .expect("row");
+
+    client
+        .execute("SELECT deadchannel_nuke_runners()", &[])
+        .await
+        .expect("the nuke");
+
+    let open = Ambush::get(client, open.id)
+        .await
+        .expect("read")
+        .expect("row");
+    assert_eq!(open.outcome, Some(AmbushOutcome::Dropped));
+    assert!(open.ended_at.is_some());
+    assert_eq!(open.bits_moved, 0);
+    assert_eq!(
+        Ambush::get(client, finished.id)
+            .await
+            .expect("read")
+            .expect("row"),
+        finished
+    );
+}

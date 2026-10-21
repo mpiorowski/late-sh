@@ -472,12 +472,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         .splash_piece_for_login(device.shows_artboard_disclaimer(&user))
         .await;
 
-    let first_contact_gate = crate::app::deadchannel::haunt::svc::bootstrap_gate(
-        state,
-        permissions.can_moderate(),
-        &user,
-    )
-    .await;
+    let first_contact_gate =
+        crate::app::deadchannel::haunt::svc::bootstrap_gate(state, &user).await;
     SessionConfig {
         cols,
         rows,
@@ -552,6 +548,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             state.chip_service.clone(),
         ),
         tailor_service: crate::app::deadchannel::tailor::svc::TailorService::new(state.db.clone()),
+        poster_service: crate::app::deadchannel::poster::svc::PosterService::new(state.db.clone()),
         guide_service: crate::app::deadchannel::guide::svc::GuideService::new(state.db.clone()),
         lounge_service: state.lounge_service.clone(),
         initial_bonsai_tree,

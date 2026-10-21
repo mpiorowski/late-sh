@@ -69,6 +69,19 @@ const OUTPUT_RATE_WINDOW: Duration = Duration::from_secs(10);
 /// ([`settle_terminal_probe`]). Covers a slow link; a terminal that never
 /// answers costs its user this much on quit, only until the probe retires.
 const PROBE_SETTLE_MAX: Duration = Duration::from_millis(500);
+/// Most queued input messages one render pass hands to the app before it
+/// draws what it has ([`drain_input`]).
+const INPUT_DRAIN_MAX_MESSAGES: usize = 64;
+/// Wall time spent in `App::handle_input` after which one render pass stops
+/// draining and draws what it has. Checked between messages, so one slow
+/// message (a big paste) can run past it; a key flood then costs its own
+/// session a frame of lag instead of holding the tokio worker for the whole
+/// queue.
+const INPUT_DRAIN_MAX_TIME: Duration = Duration::from_millis(4);
+/// A pass that holds the app lock longer than the hot tick is one the user
+/// can feel; it is warned about, once per [`SLOW_PASS_WARN_EVERY`].
+const SLOW_PASS: Duration = crate::app::tick::HOT_TICK;
+const SLOW_PASS_WARN_EVERY: Duration = Duration::from_secs(60);
 
 /// Tracks bytes handed to russh for the app channel versus window credit the
 /// client sends back. russh queues writes beyond the client's SSH channel
@@ -1186,7 +1199,11 @@ async fn run_session_with_context<S: FrameSink>(
     mut session_start: Option<SessionStart>,
     who: Option<SessionWho>,
 ) {
-    app.lock().await.set_repaint_signal(Arc::clone(&ctx.signal));
+    let username = {
+        let mut app = app.lock().await;
+        app.set_repaint_signal(Arc::clone(&ctx.signal));
+        app.username.clone()
+    };
     let started = Instant::now();
     let mut output = OutputTally::default();
     let mut previous_render: Option<Instant> = None;
@@ -1202,6 +1219,8 @@ async fn run_session_with_context<S: FrameSink>(
     // per-session output rate.
     let mut window_bytes: usize = 0;
     let mut window_since = Instant::now();
+    // When this session last logged a slow render pass.
+    let mut slow_pass_warned_at: Option<Instant> = None;
     // The world tick is adaptive: each pass reports how soon the
     // next one is needed (`App::wake_hint`), so idle sessions
     // sleep at the idle floor while animated screens keep the
@@ -1267,6 +1286,17 @@ async fn run_session_with_context<S: FrameSink>(
         match render_once(&app, &mut input_rx, &ctx, advance_world).await {
             Ok(outcome) => {
                 previous_render = Some(Instant::now());
+                if let Some(pass) = outcome.pass
+                    && slow_pass_due(pass.took, slow_pass_warned_at, Instant::now())
+                {
+                    slow_pass_warned_at = Some(Instant::now());
+                    tracing::warn!(
+                        username = %username,
+                        screen = ?pass.screen,
+                        pass_ms = pass.took.as_millis() as u64,
+                        "slow render pass"
+                    );
+                }
                 if outcome.drew
                     && let Some(start) = session_start.take()
                 {
@@ -1497,13 +1527,15 @@ struct RenderContext<S> {
 /// the next world tick is needed (`App::wake_hint` read under the same
 /// lock, after any draw, so it sees the slots the draw recorded), whether
 /// the pass drew a frame or skipped clean (feeds the loop's debug stats
-/// line), and the bytes it handed to the channel (frame plus terminal
-/// commands; feeds the output rate and the probe's backlog label).
+/// line), the bytes it handed to the channel (frame plus terminal
+/// commands; feeds the output rate and the probe's backlog label), and how
+/// long it held the app lock (`None` on quit; feeds the slow-pass warning).
 struct RenderOutcome {
     should_quit: bool,
     wake_hint: Duration,
     drew: bool,
     bytes_sent: usize,
+    pass: Option<RenderPass>,
 }
 
 impl RenderOutcome {
@@ -1514,6 +1546,92 @@ impl RenderOutcome {
             wake_hint: crate::app::tick::IDLE_TICK,
             drew: false,
             bytes_sent: 0,
+            pass: None,
+        }
+    }
+}
+
+/// How long one pass held the app lock (input drain, tick, draw) and the
+/// screen it ended on.
+#[derive(Debug, Clone, Copy)]
+struct RenderPass {
+    took: Duration,
+    screen: crate::app::common::primitives::Screen,
+}
+
+/// Where the session was when a pass drew, for attributing the bytes it
+/// sent (`late_ssh_output_bytes_total`).
+#[derive(Debug, Clone, Copy)]
+struct OutputSpot {
+    screen: crate::app::common::primitives::Screen,
+    place: metrics::Place,
+    presence: metrics::Presence,
+}
+
+impl OutputSpot {
+    fn record(self, kind: metrics::OutputKind, bytes: usize) {
+        metrics::record_output_bytes(self.screen, self.place, self.presence, kind, bytes);
+    }
+}
+
+/// Whether a pass this slow is worth a warning: it ran past [`SLOW_PASS`]
+/// and the session has not warned within [`SLOW_PASS_WARN_EVERY`].
+fn slow_pass_due(took: Duration, last_warned: Option<Instant>, now: Instant) -> bool {
+    if took <= SLOW_PASS {
+        return false;
+    }
+    match last_warned {
+        None => true,
+        Some(at) => now.duration_since(at) >= SLOW_PASS_WARN_EVERY,
+    }
+}
+
+/// How one pass's input drain ended.
+#[derive(Debug, PartialEq, Eq)]
+enum InputDrain {
+    /// Nothing was queued.
+    Empty,
+    /// Every queued message was handled.
+    Drained,
+    /// The budget ran out with input still queued. The signal is marked dirty
+    /// and woken, so the next pass picks the rest up after the render gap.
+    BudgetHit,
+    /// The app stopped running partway through.
+    Quit,
+}
+
+/// Hands queued input to `handle` until the queue runs dry, `handle` reports
+/// the app stopped (it returns whether the app is still running), or the
+/// pass's budget is spent: `max_messages` handled or `max_time` spent
+/// handling them, whichever comes first. At least one message is handled per
+/// call, so a pass always makes progress.
+fn drain_input<T>(
+    input_rx: &mut tokio::sync::mpsc::Receiver<T>,
+    signal: &RenderSignal,
+    max_messages: usize,
+    max_time: Duration,
+    mut handle: impl FnMut(T) -> bool,
+) -> InputDrain {
+    let started = Instant::now();
+    let mut handled = 0;
+    loop {
+        let spent = handled >= max_messages || started.elapsed() >= max_time;
+        if handled > 0 && spent {
+            if input_rx.is_empty() {
+                return InputDrain::Drained;
+            }
+            signal.wake();
+            return InputDrain::BudgetHit;
+        }
+        let Ok(data) = input_rx.try_recv() else {
+            return match handled {
+                0 => InputDrain::Empty,
+                _ => InputDrain::Drained,
+            };
+        };
+        handled += 1;
+        if !handle(data) {
+            return InputDrain::Quit;
         }
     }
 }
@@ -1528,8 +1646,9 @@ async fn render_once<S: FrameSink>(
         true => metrics::RenderReason::WorldTick,
         false => metrics::RenderReason::Input,
     };
-    let (frame, terminal_commands, mut wake_hint) = {
+    let (frame, terminal_commands, mut wake_hint, pass, spot) = {
         let mut app = app.lock().await;
+        let locked_at = Instant::now();
         if !app.running {
             return Ok(RenderOutcome::quit());
         }
@@ -1542,20 +1661,32 @@ async fn render_once<S: FrameSink>(
         // whole point of routing resize through input_tx instead of
         // taking the app lock from the handler callback.
         let mut changed = ctx.signal.dirty.swap(false, Ordering::AcqRel);
-        while let Ok(event) = input_rx.try_recv() {
-            changed = true;
-            match event {
-                SshInputEvent::Bytes(data) => app.handle_input(&data),
-                SshInputEvent::Resize { cols, rows } => {
-                    let size = clamp_terminal_size(u32::from(cols), u32::from(rows));
-                    if let Err(e) = app.resize(size.cols, size.rows) {
-                        tracing::error!(error = ?e, cols, rows, "error resizing app");
+        let drain = drain_input(
+            input_rx,
+            &ctx.signal,
+            INPUT_DRAIN_MAX_MESSAGES,
+            INPUT_DRAIN_MAX_TIME,
+            |event| {
+                match event {
+                    SshInputEvent::Bytes(data) => app.handle_input(&data),
+                    SshInputEvent::Resize { cols, rows } => {
+                        let size = clamp_terminal_size(u32::from(cols), u32::from(rows));
+                        if let Err(e) = app.resize(size.cols, size.rows) {
+                            tracing::error!(error = ?e, cols, rows, "error resizing app");
+                        }
                     }
                 }
+                app.running
+            },
+        );
+        match drain {
+            InputDrain::Empty => {}
+            InputDrain::Drained => changed = true,
+            InputDrain::BudgetHit => {
+                metrics::record_render_input_budget_hit();
+                changed = true;
             }
-            if !app.running {
-                return Ok(RenderOutcome::quit());
-            }
+            InputDrain::Quit => return Ok(RenderOutcome::quit()),
         }
         if advance_world {
             changed |= app.tick();
@@ -1565,18 +1696,34 @@ async fn render_once<S: FrameSink>(
         // so the next real frame needs no forced repaint.
         if !changed {
             metrics::record_render_skipped_clean();
+            let pass = RenderPass {
+                took: locked_at.elapsed(),
+                screen: app.screen,
+            };
+            metrics::record_render_pass(reason, pass.screen, pass.took.as_secs_f64());
             return Ok(RenderOutcome {
                 should_quit: false,
                 wake_hint: app.wake_hint(),
                 drew: false,
                 bytes_sent: 0,
+                pass: Some(pass),
             });
         }
         metrics::record_render(reason);
         let frame = app.render().context("rendering frame")?;
         let terminal_commands = std::mem::take(&mut app.pending_terminal_commands);
         let wake_hint = app.wake_hint();
-        (frame, terminal_commands, wake_hint)
+        let pass = RenderPass {
+            took: locked_at.elapsed(),
+            screen: app.screen,
+        };
+        metrics::record_render_pass(reason, pass.screen, pass.took.as_secs_f64());
+        let spot = OutputSpot {
+            screen: app.screen,
+            place: app.attention_place(),
+            presence: app.attention_presence(),
+        };
+        (frame, terminal_commands, wake_hint, pass, spot)
     };
 
     let frame_len = frame.len();
@@ -1587,6 +1734,7 @@ async fn render_once<S: FrameSink>(
                 budget.record_sent(frame_len);
             }
             metrics::record_frame_bytes(reason, frame_len);
+            spot.record(metrics::OutputKind::Frame, frame_len);
             bytes_sent += frame_len;
             true
         }
@@ -1621,6 +1769,7 @@ async fn render_once<S: FrameSink>(
                 if let Some(budget) = &ctx.budget {
                     budget.record_sent(command_len);
                 }
+                spot.record(metrics::OutputKind::Command, command_len);
                 bytes_sent += command_len;
             }
             Ok(false) => {
@@ -1652,6 +1801,7 @@ async fn render_once<S: FrameSink>(
         wake_hint,
         drew: true,
         bytes_sent,
+        pass: Some(pass),
     })
 }
 

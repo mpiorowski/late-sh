@@ -155,6 +155,7 @@ pub fn lines(landmark: Landmark) -> &'static [&'static str] {
         | Landmark::Vids
         | Landmark::Pawn => CLOSED_LINES,
         Landmark::Ink
+        | Landmark::Prints
         | Landmark::Armorer
         | Landmark::Tailor
         | Landmark::Lockers
@@ -188,6 +189,7 @@ pub fn title(landmark: Landmark) -> &'static str {
         Landmark::Reader => "the reader",
         Landmark::Stairs => "the stairs down",
         Landmark::Ink => "ink",
+        Landmark::Prints => "prints",
         Landmark::Baths => "the baths",
         Landmark::Sleep => "sleep",
         Landmark::Shrine => "the shrine",
@@ -222,6 +224,7 @@ pub fn pitch(landmark: Landmark) -> &'static str {
         Landmark::Ink => {
             "the needle. a draft inked is both its cards, this climb and every one after. crystals only"
         }
+        Landmark::Prints => "the poster: 32 by 12, painted here, hung on your profile. free",
         Landmark::Baths
         | Landmark::Sleep
         | Landmark::Shrine

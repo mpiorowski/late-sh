@@ -57,11 +57,7 @@ pub(crate) fn whisper_frame_for(
 /// stage-1 burst is live, untouched otherwise. Draw-time transform only;
 /// the clock text itself is never wrong.
 pub(crate) fn apply_clock_glitch(haunt: &HauntState, marquee_tick: usize, clock: String) -> String {
-    match haunt
-        .clock_glitch
-        .as_ref()
-        .and_then(|glitch| glitch.corruption(marquee_tick))
-    {
+    match haunt.clock_glitch.corruption(marquee_tick) {
         Some(burst_seed) => glitched_clock(&clock, burst_seed),
         None => clock,
     }

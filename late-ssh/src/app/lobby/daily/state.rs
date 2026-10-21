@@ -2412,13 +2412,19 @@ impl DailyState {
         detail.row.turn_user_id = Some(next);
     }
 
-    /// Esc while building a checkers path or a backgammon turn clears the
-    /// in-progress input instead of closing the board. Returns whether
-    /// anything was cleared.
+    /// Esc while a resign prompt is open, or while building a checkers path or
+    /// a backgammon turn, clears that instead of closing the board. Returns
+    /// whether anything was cleared.
     pub fn cancel_pending_move(&mut self) -> bool {
         let Some(board) = &mut self.board else {
             return false;
         };
+        // An open resign prompt is the most recent thing asked, so Esc answers
+        // it — no — before it does anything else, leaving included.
+        if board.resign_confirm {
+            board.resign_confirm = false;
+            return true;
+        }
         let Some(detail) = &mut board.detail else {
             return false;
         };

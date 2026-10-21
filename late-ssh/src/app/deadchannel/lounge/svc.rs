@@ -277,14 +277,17 @@ impl LoungeService {
         .await
     }
 
-    /// End every spawn past its time; whoever ends one tells the wire.
+    /// End every spawn past its time; whoever ends one tells the wire,
+    /// unless nobody hit it.
     async fn end_slipped(&self, now: DateTime<Utc>) -> Result<()> {
         let client = self.db.get().await?;
         for spawn in Spawn::end_expired(&**client, now).await? {
             metrics::record_deadchannel_lounge(LoungeBeat::Slipped);
             tracing::info!(spawn_id = %spawn.id, kind = spawn.kind.as_str(), hits = spawn.hits.len(), "lounge spawn slipped away");
             announce(&client, &spawn).await;
-            self.chat.post_wire_line_task(data::slipped_line(&spawn));
+            if let Some(line) = data::slipped_line(&spawn) {
+                self.chat.post_wire_line_task(line);
+            }
         }
         Ok(())
     }

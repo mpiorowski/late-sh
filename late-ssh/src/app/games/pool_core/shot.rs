@@ -39,6 +39,12 @@ pub struct Shot {
     /// turn, records in the history, and resets the clock like any other.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub play_again: bool,
+    /// Snooker: the fouled player calling for the balls to be **put back**
+    /// after a foul and a miss, and the offender to play again from where
+    /// they were. The other half of the same right as `play_again`, and a move
+    /// in the same way.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub put_back: bool,
 }
 
 impl Default for Shot {
@@ -53,6 +59,7 @@ impl Default for Shot {
             speed: 0.0,
             called_pocket: None,
             play_again: false,
+            put_back: false,
         }
     }
 }

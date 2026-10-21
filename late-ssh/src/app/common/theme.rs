@@ -108,6 +108,7 @@ pub enum ThemeKind {
     TronP4 = 102,
     Substrata = 103,
     Zenburn = 104,
+    GruberDarker = 105,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -232,7 +233,7 @@ struct Palette {
     badge_gold: Color,
 }
 
-pub const OPTIONS: &[ThemeOption; 105] = &[
+pub const OPTIONS: &[ThemeOption; 106] = &[
     ThemeOption {
         kind: ThemeKind::Contrast,
         group: ThemeGroup::Core,
@@ -454,6 +455,12 @@ pub const OPTIONS: &[ThemeOption; 105] = &[
         group: ThemeGroup::Ports,
         id: "zenburn",
         label: "Zenburn",
+    },
+    ThemeOption {
+        kind: ThemeKind::GruberDarker,
+        group: ThemeGroup::Ports,
+        id: "gruber-darker",
+        label: "Gruber Darker",
     },
     ThemeOption {
         kind: ThemeKind::CopperFresh,
@@ -1795,6 +1802,38 @@ const PALETTE_ZENBURN: Palette = Palette {
     badge_bronze: Color::Rgb(175, 131, 101),
     badge_silver: Color::Rgb(188, 188, 188),
     badge_gold: Color::Rgb(240, 223, 175),
+};
+
+// Palette from rexim's Gruber Darker theme:
+// https://github.com/rexim/gruber-darker-theme/blob/master/gruber-darker-theme.el
+const PALETTE_GRUBER_DARKER: Palette = Palette {
+    bg_canvas: Color::Rgb(24, 24, 24),
+    bg_selection: Color::Rgb(72, 72, 72),
+    bg_highlight: Color::Rgb(40, 40, 40),
+    border_dim: Color::Rgb(69, 61, 65),
+    border: Color::Rgb(82, 73, 78),
+    border_active: Color::Rgb(255, 221, 51),
+    text_faint: Color::Rgb(86, 95, 115),
+    text_dim: Color::Rgb(149, 169, 159),
+    text_muted: Color::Rgb(150, 166, 200),
+    text: Color::Rgb(228, 228, 239),
+    text_bright: Color::Rgb(244, 244, 255),
+    amber: Color::Rgb(255, 221, 51),
+    amber_dim: Color::Rgb(115, 201, 54),
+    amber_glow: Color::Rgb(245, 245, 245),
+    chat_body: Color::Rgb(228, 228, 239),
+    chat_author: Color::Rgb(150, 166, 200),
+    mention: Color::Rgb(255, 221, 51),
+    success: Color::Rgb(115, 201, 54),
+    error: Color::Rgb(244, 56, 65),
+    bot: Color::Rgb(158, 149, 199),
+    bonsai_sprout: Color::Rgb(149, 169, 159),
+    bonsai_leaf: Color::Rgb(115, 201, 54),
+    bonsai_canopy: Color::Rgb(115, 201, 54),
+    bonsai_bloom: Color::Rgb(158, 149, 199),
+    badge_bronze: Color::Rgb(115, 201, 54),
+    badge_silver: Color::Rgb(228, 228, 239),
+    badge_gold: Color::Rgb(255, 221, 51),
 };
 
 const PALETTE_COPPER_FRESH: Palette = Palette {
@@ -4215,6 +4254,7 @@ fn palette_for_kind(kind: ThemeKind) -> &'static Palette {
         ThemeKind::TronP4 => &PALETTE_TRON_P4_GREEN,
         ThemeKind::Substrata => &PALETTE_VIM_SUBSTRATA,
         ThemeKind::Zenburn => &PALETTE_ZENBURN,
+        ThemeKind::GruberDarker => &PALETTE_GRUBER_DARKER,
         ThemeKind::CopperFresh => &PALETTE_COPPER_FRESH,
         ThemeKind::ExposedCopper => &PALETTE_EXPOSED_COPPER,
         ThemeKind::WeatheredCopper => &PALETTE_WEATHERED_COPPER,

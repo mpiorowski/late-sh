@@ -17,7 +17,7 @@ use crate::app::games::pool_core::shot::Shot;
 use crate::app::input::{MouseButton, MouseEvent, MouseEventKind};
 use crate::app::lobby::daily::pool::DailyPoolState;
 use crate::app::lobby::daily::pool_draft::{
-    self, AimGear, PointerOutcome, PoolCueHit, PoolDraft, ReplaySpan,
+    self, AimGear, FoulChoice, PointerOutcome, PoolCueHit, PoolDraft, ReplaySpan,
 };
 use crate::app::lobby::daily::state::DailyMatchDetail;
 use crate::app::state::App;
@@ -49,10 +49,12 @@ fn draft_mut(app: &mut App) -> Option<(&mut PoolDraft, &DailyPoolState)> {
 /// c           put the shot back to square: centre ball, dead-on aim
 /// v           swap the overview for the view down the shot
 /// y           snooker: after a foul, make them play it again
+/// b           snooker: after a foul and a miss, put the balls back for them
 /// x  s  w     arm the stroke light / normal / strong, then draw and push
+/// j  k        with a stroke armed: 0.1 m/s slower / faster (`pool_priority_key`)
 /// h  l        turn the cue a degree; H/L a tenth of one
 /// r  R        watch the last shot again, or the whole of the last visit
-/// X           resign
+/// X           resign: asks first, `y` confirms, any other key backs out
 /// ```
 ///
 /// **`r` is replay here, not resign.** Every other board resigns on `r`, and
@@ -62,15 +64,30 @@ fn draft_mut(app: &mut App) -> Option<(&mut PoolDraft, &DailyPoolState)> {
 /// resigns on `r`, so both replay keys are swallowed here whether or not
 /// there is anything to replay.
 ///
-/// **`X` has that one job.** The stroke keys are lowercase only: resigning is
-/// two presses of `X` and arming then dropping a stroke is two presses of
-/// `x`, and a held Shift or a Caps Lock must not turn one into the other.
+/// **`X` has that one job, and it asks.** It sits on the light stroke's key,
+/// so a Shift held a beat too long is all it takes to reach it. The stroke
+/// keys are lowercase only, and the prompt `X` opens is answered by `y` and by
+/// nothing else: a second `X` does not confirm (a stuck Shift would), and any
+/// other key — the `x` that was meant all along, say — closes it and does
+/// nothing more, so the slip costs one keypress.
 ///
 /// This overlaps wasd, which is why it runs before the shared cursor keys —
 /// but pool has no cell cursor for wasd to move, so nothing is lost.
 pub(crate) fn pool_key(app: &mut App, byte: u8) -> bool {
     if !is_pool_board(app) {
         return false;
+    }
+    if resign_prompt_open(app) {
+        if byte == b'y' || byte == b'Y' {
+            // Armed, so this is the second half of the shared two-step.
+            app.daily.board_resign();
+        } else if let Some(board) = &mut app.daily.board {
+            board.resign_confirm = false;
+        }
+        return true;
+    }
+    if foul_dialog_key(app, byte) {
+        return true;
     }
     match byte {
         b'[' => pool_cycle_target(app, -1),
@@ -99,6 +116,9 @@ pub(crate) fn pool_key(app: &mut App, byte: u8) -> bool {
         // rather than play from where they left you. Refused otherwise, so it
         // costs the other games nothing.
         b'y' | b'Y' => pool_play_again(app),
+        // After a foul *and a miss*: the balls go back where they were struck
+        // from and the offender plays again. Refused otherwise.
+        b'b' | b'B' => pool_put_back(app),
         // Watch it again: the last shot, or — shifted — every shot of the
         // visit it belongs to, which on a correspondence board is exactly what
         // happened while you were away. Allowed to whoever is looking, because
@@ -125,6 +145,110 @@ pub(crate) fn pool_key(app: &mut App, byte: u8) -> bool {
             None => false,
         },
     }
+}
+
+/// The keys pool takes ahead of the match chat, which otherwise owns `i`,
+/// `j` and `k` on every board. Only while they mean something here: an open
+/// resign prompt answers to every key (anything but `y` closes it, or the `y`
+/// after a chat key would resign), a stroke armed steps the speed by 0.1 m/s
+/// on `j`/`k`, and the foul dialog walks its choices on them. Any other time
+/// they fall through to chat as usual.
+pub(crate) fn pool_priority_key(app: &mut App, byte: u8) -> bool {
+    if !is_pool_board(app) {
+        return false;
+    }
+    if resign_prompt_open(app) {
+        return pool_key(app, byte);
+    }
+    if !matches!(byte, b'j' | b'k') {
+        return false;
+    }
+    let Some((draft, state)) = draft_mut(app) else {
+        return false;
+    };
+    if draft.foul_dialog_open(state) {
+        return foul_dialog_key(app, byte);
+    }
+    draft.step_speed(byte == b'k')
+}
+
+/// The foul dialog, while it is up, owns the keyboard: a number picks a
+/// choice, the cursor keys and Enter pick one by walking, and `y` / `b` keep
+/// meaning what they mean outside it. The camera, the replay (watching the
+/// foul again is a fair thing to want before deciding), resigning and leaving
+/// fall through; everything that would touch the shot is swallowed, because
+/// there is no shot to touch until the choice is made.
+///
+/// Returns whether the key was the dialog's.
+fn foul_dialog_key(app: &mut App, byte: u8) -> bool {
+    let Some((draft, state)) = draft_mut(app) else {
+        return false;
+    };
+    if !draft.foul_dialog_open(state) {
+        return false;
+    }
+    let choices = FoulChoice::offered(state);
+    let picked = match byte {
+        b'1'..=b'9' => choices.get((byte - b'1') as usize).copied(),
+        b'\r' | b'\n' | b' ' => choices.get(draft.foul.cursor).copied(),
+        b'y' | b'Y' => Some(FoulChoice::HandBack),
+        b'b' | b'B' => choices
+            .contains(&FoulChoice::PutBack)
+            .then_some(FoulChoice::PutBack),
+        b'j' | b'J' => {
+            draft.foul_step(state, 1);
+            None
+        }
+        b'k' | b'K' => {
+            draft.foul_step(state, -1);
+            None
+        }
+        b'v' | b'V' | b'r' | b'R' | b'X' | b'q' | b'Q' => return false,
+        _ => None,
+    };
+    if let Some(choice) = picked {
+        pool_foul_choose(app, choice);
+    }
+    true
+}
+
+/// Act on a choice made in the foul dialog.
+pub(crate) fn pool_foul_choose(app: &mut App, choice: FoulChoice) -> bool {
+    match choice {
+        FoulChoice::PlayOn => match draft_mut(app) {
+            Some((draft, state)) => {
+                draft.play_on(state);
+                true
+            }
+            None => false,
+        },
+        FoulChoice::HandBack => pool_play_again(app),
+        FoulChoice::PutBack => pool_put_back(app),
+    }
+}
+
+/// The foul dialog is up for this player, and where its choices are drawn.
+fn foul_dialog_hit(app: &mut App) -> Option<pool_draft::FoulDialogHit> {
+    let open = draft_mut(app).is_some_and(|(draft, state)| draft.foul_dialog_open(state));
+    if !open {
+        return None;
+    }
+    app.daily
+        .board
+        .as_ref()?
+        .detail
+        .as_ref()?
+        .pool()?
+        .foul_hit
+        .get()
+}
+
+/// The resign prompt is up, waiting on its answer.
+fn resign_prompt_open(app: &App) -> bool {
+    app.daily
+        .board
+        .as_ref()
+        .is_some_and(|board| board.resign_confirm)
 }
 
 /// Whether the open board is one of the cue games.
@@ -161,6 +285,22 @@ pub(crate) fn handle_pool_mouse(app: &mut App, mouse: &MouseEvent) -> bool {
     // Mouse coordinates are 1-based; the frame buffer is 0-based.
     let x = mouse.x.saturating_sub(1);
     let y = mouse.y.saturating_sub(1);
+
+    // The foul dialog takes the mouse while it is up: a click on a choice is
+    // that choice, and nothing else reaches the shot underneath it.
+    if let Some(hit) = foul_dialog_hit(app) {
+        if mouse.kind == MouseEventKind::Up
+            && mouse.button == Some(MouseButton::Left)
+            && let Some(index) = hit.choice_at(x, y)
+        {
+            let choice = draft_mut(app)
+                .and_then(|(_, state)| FoulChoice::offered(state).get(index).copied());
+            if let Some(choice) = choice {
+                pool_foul_choose(app, choice);
+            }
+        }
+        return true;
+    }
 
     match mouse.kind {
         // Motion, with or without a button. Consumed only when it actually
@@ -298,18 +438,10 @@ fn click_cue_panel(app: &mut App, hit: PoolCueHit, x: u16, y: u16) {
     pool_commit_mode(app);
 }
 
-/// Which gear the modifiers held during a pointer report ask for.
-///
-/// Ctrl is fine, Shift *or* Alt is coarse. Both are read as coarse because
-/// Shift is the one that cannot be relied on: xterm and most of its
-/// descendants reserve Shift+mouse for the terminal's own selection and
-/// swallow the report, so on those terminals a Shift-held sweep never arrives
-/// as one. Alt is the fallback that works there and costs nothing elsewhere.
+/// Which gear the modifiers held during a pointer report ask for: Ctrl is
+/// fine, anything else is the ordinary rate.
 fn gear_of(mouse: &MouseEvent) -> AimGear {
-    AimGear::of(
-        mouse.modifiers.ctrl,
-        mouse.modifiers.shift || mouse.modifiers.alt,
-    )
+    AimGear::of(mouse.modifiers.ctrl)
 }
 
 /// The spot on the cloth under the pointer, when it is over the table at all.
@@ -397,6 +529,19 @@ pub(crate) fn pool_play_again(app: &mut App) -> bool {
     if can {
         app.daily.pool_send(Shot {
             play_again: true,
+            ..Shot::default()
+        });
+    }
+    can
+}
+
+/// `b`: put the balls back after a foul and a miss, and make the offender
+/// play it again from there. Refused unless the last shot was called a miss.
+pub(crate) fn pool_put_back(app: &mut App) -> bool {
+    let can = draft_mut(app).is_some_and(|(_, state)| state.miss.is_some());
+    if can {
+        app.daily.pool_send(Shot {
+            put_back: true,
             ..Shot::default()
         });
     }

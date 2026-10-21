@@ -1,6 +1,6 @@
 # The haunting (late-ssh/src/app/deadchannel/haunt)
 
-Part of Dead Channel (`../CONTEXT.md`; design in `../GAME.md`, first contact). The first-contact ladder that haunts staff into the game: the clock glitch, the whisper, the splash, the breakthrough, and the name hit on the wire.
+Part of Dead Channel (`../CONTEXT.md`; design in `../GAME.md`, first contact). The first-contact ladder that haunts people into the game: the clock glitch, the whisper, the splash, the breakthrough, and the name hit on the wire.
 
 ## Files
 
@@ -62,9 +62,7 @@ day-scale gaps (whisper gap, invitation delay) are 20 hours rather than
 
 Who is haunted (GAME.md, "the eligibility gate is a whisper campaign"):
 **stage 1 is universal, stages 2-4 need the gate.** Stage 1 arms for
-staff (admins and moderators) and nobody else, a rule in code rather than
-a switch, so nothing fires for real users while copy and thresholds await
-design review; opening it up is a code change. Stages 2-4
+every session. Stages 2-4
 arm when the gate passes: at least `ACTIVE_MIN_HOURS` (8) of lifetime
 connected time (`user_online_time.total_milliseconds`, the
 online-time leaderboard's table, one primary-key read at bootstrap;
@@ -82,7 +80,7 @@ come first: the bio screen (a paid AI call) is only claimed once the
 hours and the touched settings already pass. Eligibility
 gates entering the funnel, never continuing it: any stage-2 hit on
 record arms stages 2-4 whatever the bio later becomes. All three
-thresholds are placeholders pending design review.
+thresholds are placeholders.
 
 **Replica rule.** The daily and lifetime caps are enforced by conditional
 claims on the user row (`User::claim_first_contact_glitch_burst`,
@@ -109,8 +107,8 @@ number of replicas spend one AI call per text.
    answer re-dices and mirrors the row's count, a failed one defers a
    few minutes. At `GLITCH_TOTAL_CAP` (3) the clock goes quiet for good
    and stage 2 opens (the quiet is part of the escalation). Chrome,
-   never content; timezone label untouched. Armed for every staff
-   session, gate or no gate.
+   never content; timezone label untouched. Armed for every session,
+   gate or no gate.
 2. **Name flicker (personal, witnessed).** Only once stage 1 has spent its share
    (glitch hits at the cap): on the landing echo of this session's own
    send (the one moment of guaranteed attention), a 1-in-3 roll may
@@ -146,8 +144,8 @@ number of replicas spend one AI call per text.
    somebody opening the room a minute afterwards sees a clean name. The
    person being haunted declines their own copy off the wire by
    recognising their live hit (a second device of theirs holds no live
-   hit and witnesses it normally), and the audience is exactly stage 1's:
-   only staff are in it, so nothing of the haunting reaches a real user.
+   hit and witnesses it normally); every session in the room is the
+   audience.
 3. **Whisper (the held door).** Plays `WHISPER_TOTAL_CAP` (2) times per
    person, at least `WHISPER_GAP_HOURS` (20) apart, each from its own
    line pool: the first door says the static noticed you, the second
@@ -191,7 +189,7 @@ number of replicas spend one AI call per text.
    door's static, heavier and pulsing quicker, over the whole frame and
    every modal, `BREAKTHROUGH_LINE` typing in a gap torn out of the middle,
    about seven seconds, every key swallowed ahead of door passthrough and
-   the parser. Known gap to close before the haunting leaves staff: the
+   the parser. Known gap: the
    claim is stamped `dm_delay` before the DM sends, so a
    replica stopping in that window leaves a stamp with no DM, and nothing
    repairs it but `/haunt reset` by hand. The DM comes from the game's first voice - `afterglow`
@@ -236,15 +234,15 @@ number of replicas spend one AI call per text.
    rail: the last room in Core, under `#voice`, above Discover, never in
    Channels (`chat/state.rs::is_deadchannel_room`, read by
    `visual_order_for_rooms` and both rail builders in `chat/ui.rs`).
-   Copy and name face design review before real users ever see them.
 
 ## `/haunt` (admin composer command)
 
 Parsed in `chat/state.rs::submit_composer` **only when `is_admin`**
 (enum + parser live in `haunt/state.rs`); for everyone else, moderators
 included, the line posts as plain text, exactly as if the command did
-not exist. Admin-only on purpose while the ladder runs for staff: a
-moderator who could type `/haunt` would know what the glitches were.
+not exist. Admin-only on purpose: it skips caps, forces the invitation
+and wipes marks, and anyone else who could type it would know what the
+glitches were.
 Drained by `haunt::svc::tick`.
 
 - `/haunt` - status: whether stage 1 and the chosen
@@ -354,13 +352,12 @@ Drained by `haunt::svc::tick`.
   reset.
 - Every voiced or corrupted character obeys the screenshot test (static /
   signal / city / channel vocabulary, never Unix internals); the whisper
-  pool and the invitation plea need feed-template-grade variety before
-  leaving staff scope (GAME.md, Open questions).
+  pool and the invitation plea do not have feed-template-grade variety
+  yet (GAME.md, Open questions).
 - The invitation runs through `ChatService::send_message`, so DM
   delivery, unread badges, and IRC projection behave like any DM.
 - Test apps pass `FirstContactMarks::spent_for_tests()` and
   `FirstContactGate::closed_for_tests()` so no stage can fire in a test
-  unless armed on purpose (`test_helpers` compiles unconditionally, so
-  those helpers carry no `#[cfg(test)]`).
+  unless armed on purpose (both `#[cfg(test)]`, like `test_helpers`).
 - `right_sidebar_visible` (in `tick.rs`) is `pub(crate)` for the glitch's
   visibility gate.

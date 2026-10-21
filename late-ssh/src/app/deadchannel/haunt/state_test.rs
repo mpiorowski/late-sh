@@ -541,9 +541,9 @@ fn the_gate_needs_all_three_legs_and_screens_only_when_useful() {
     );
     assert_eq!(gate.bio, BioStanding::Unscreened);
 
-    // The gate bootstrap hands back for anyone who is not staff: no leg holds,
-    // and nothing is worth the paid screen.
-    let closed = FirstContactGate::closed();
+    // The gate test apps arm with: no leg holds, and nothing is worth the
+    // paid screen.
+    let closed = FirstContactGate::closed_for_tests();
     assert_eq!(
         closed,
         FirstContactGate {

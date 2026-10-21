@@ -63,10 +63,12 @@ Tests sit beside each file (`state_test.rs`, `svc_test.rs`, `ui_test.rs`).
   failure). A slain spawn a dead replica left unpaid for 30s is settled
   by any sweeper; those sessions saw the kill before the pay and catch
   up on their next press.
-- **The wire, once per spawn:** "@tom, @dax and @mira put down a howler
-  in the lounge. a crystal each." or "a howler slipped past the lounge.
-  nobody was looking." (with the hitters mentioned when some hit it:
-  `mentions`, the wire's twin of the scene's `names`).
+- **The wire, at most once per spawn:** "@tom, @dax and @mira put down
+  a howler in the lounge. a crystal each." or "a howler slipped past the
+  lounge. @tom and @dax hit it; it needed three." (`mentions`, the
+  wire's twin of the scene's `names`). A spawn nobody hit slips away
+  with no line (`slipped_line` answers `None`); the metric and the log
+  line still count it.
   Nothing in #lounge, nothing in scrollback, nothing on IRC: the spawn
   is render-layer chrome above the composer of runners looking at the
   lounge card, and the `/hit` line never becomes a message.

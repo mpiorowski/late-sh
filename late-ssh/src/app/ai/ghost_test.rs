@@ -401,3 +401,102 @@ fn mention_target_for_user_prefers_sanitized_current_username() {
         "@current-user"
     );
 }
+
+async fn say(db: &Db, room_id: Uuid, user_id: Uuid, body: &str) -> ChatMessage {
+    let client = db.get().await.expect("db client");
+    ChatMessage::create_with_reply_to(
+        &client,
+        late_core::models::chat_message::ChatMessageParams {
+            room_id,
+            user_id,
+            body: body.to_string(),
+        },
+        None,
+    )
+    .await
+    .expect("message")
+}
+
+#[tokio::test]
+async fn remember_and_forget_me_cannot_talk_past_the_ladder() {
+    use crate::app::chat::notifications::svc::NotificationService;
+    use late_core::test_utils::{create_test_user, test_db};
+
+    let test_db = test_db().await;
+    let db = test_db.db.clone();
+    let patron = create_test_user(&db, "ladder-patron").await;
+    let bartender = create_test_user(&db, "ladder-keep").await;
+    let bartender = BotUser {
+        id: bartender.id,
+        username: bartender.username,
+    };
+    let client = db.get().await.expect("db client");
+    let room = ChatRoom::get_or_create_public_room(&client, "ladder-bar")
+        .await
+        .expect("room");
+    ChatRoomMember::join(&client, room.id, bartender.id)
+        .await
+        .expect("join bartender");
+    let ghost = GhostService::new(
+        db.clone(),
+        ChatService::new(db.clone(), NotificationService::new(db.clone())),
+        AiService::new(false, None),
+        ActiveUsers::default(),
+        broadcast::channel(8).0,
+        crate::usernames::UsernameDirectory::default(),
+        ChipService::new(db.clone()),
+        DrunkMap::new(),
+        MentionLadders::new(),
+        Uuid::now_v7(),
+    );
+    // Each line lands after the last one was handled, as a patron typing
+    // them would: a remember, a wipe, again and again.
+    for words in ["stouts", "porters"] {
+        let remember = say(
+            &db,
+            room.id,
+            patron.id,
+            &format!("@{} remember {words}", bartender.username),
+        )
+        .await;
+        ghost
+            .bartender_remember(&bartender, &remember, words, true)
+            .await
+            .expect("remember");
+        let forget = say(
+            &db,
+            room.id,
+            patron.id,
+            &format!("@{} forget me", bartender.username),
+        )
+        .await;
+        ghost
+            .bartender_forget(&bartender, &forget)
+            .await
+            .expect("forget");
+    }
+
+    let lines: Vec<String> = ChatMessage::list_recent(&client, room.id, 50)
+        .await
+        .expect("list")
+        .into_iter()
+        .filter(|message| message.user_id == bartender.id)
+        .map(|message| message.body)
+        .collect();
+    assert_eq!(
+        lines.len(),
+        1,
+        "only the first answer beats the ladder: {lines:?}"
+    );
+    assert!(
+        REMEMBER_DONE_LINES.contains(&lines[0].as_str()),
+        "{lines:?}"
+    );
+    assert!(
+        BartenderMemory::list_for_user(&client, patron.id)
+            .await
+            .expect("memories")
+            .is_empty(),
+        "every wipe still lands while throttled"
+    );
+}

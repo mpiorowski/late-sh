@@ -9,7 +9,8 @@
 //! bonsai's sides when the column is narrower than the canvas.
 //!
 //! Top to bottom: late.fetch (the fact grid, with the runner column
-//! beside it for runners, each under its own heading), bio, showcases, the
+//! beside it for a standing runner, each under its own heading), bio,
+//! showcases, the
 //! bonsai (the whole canvas at its true size), the aquarium with the pet
 //! beside it (each a full-width section when the other is not owned),
 //! badges (all of them, always), and the chips ledger. The same order on
@@ -36,7 +37,12 @@ use crate::app::{
     bonsai::render::{apply_sway, canvas_lines_in},
     common::{markdown::render_body_to_lines, theme, time::timezone_current_time},
     deadchannel::{
-        fight::data as fight_data, fight::ui as fight_ui, runner::state::PORTRAIT_WIDTH,
+        fight::ui as fight_ui,
+        poster::{
+            state::{POSTER_WIDTH, test_card},
+            ui as poster_ui,
+        },
+        runner::state::PORTRAIT_WIDTH,
         runner::ui as runner_ui,
     },
     hub::aquarium::{state::AquariumState, ui as aquarium_ui},
@@ -60,19 +66,20 @@ const CHROME_ROWS: u16 = 4;
 const SIDE_MARGIN: u16 = 2;
 /// The reef band: the tallest creature plus the surface and floor rows.
 const AQUARIUM_HEIGHT: u16 = 11;
-/// The runner column: the portrait, the keys, and the widest row, `exp`
-/// with its bar and six-digit figures on a marked climb.
-const RUNNER_WIDTH: u16 = 42;
+/// The runner column: the portrait, a gap, and the poster beside it.
+const RUNNER_WIDTH: u16 = (PORTRAIT_WIDTH + PORTRAIT_GAP + POSTER_WIDTH) as u16;
+/// Columns between the portrait and the poster.
+const PORTRAIT_GAP: usize = 2;
+/// Under a runner's test card, for its owner: where a poster is made.
+const POSTER_HINT: &str = "PRINTS, west end, past the tailor.";
 /// Columns between two columns that sit side by side.
 const COLUMN_GAP: u16 = 3;
 /// Two columns sit side by side when the body is at least this wide. Beside
-/// the runner the grid keeps 45 columns, enough for every fact but a long
+/// the runner the grid keeps 48 columns, enough for every fact but a long
 /// free-text one; beside the pet the reef keeps 63.
 const BESIDE_MIN_WIDTH: u16 = 90;
 /// The pet column beside the reef: the longest name a pet can carry.
 const PET_WIDTH: u16 = PET_NAME_MAX_CHARS as u16;
-/// Cells in the runner's signal and exp bars, the fight scene's count.
-const RUNNER_BAR_CELLS: usize = 12;
 
 /// One stretch of the body. Each knows its height, so the column can be
 /// measured before it is painted.
@@ -104,20 +111,11 @@ impl Segment {
     }
 }
 
-/// `viewer_is_runner` gates the runner column: until the public flip
-/// (deadchannel/runner/CONTEXT.md), what happens on the row is shown only to
-/// people on it. One argument to drop at the flip.
-pub(crate) fn draw(
-    frame: &mut Frame,
-    area: Rect,
-    state: &ProfileModalState,
-    wall_tick: usize,
-    viewer_is_runner: bool,
-) {
+pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState, wall_tick: usize) {
     let width = area.width.saturating_sub(4).clamp(MIN_WIDTH, MAX_WIDTH);
     let body_width = width.saturating_sub(2 + SIDE_MARGIN * 2);
 
-    let (segments, chips_top) = build_segments(state, body_width, wall_tick, viewer_is_runner);
+    let (segments, chips_top) = build_segments(state, body_width, wall_tick);
     let content_height: u16 = segments.iter().map(Segment::height).sum();
 
     // As tall as the terminal allows, but no taller than the content needs:
@@ -192,7 +190,6 @@ fn build_segments(
     state: &ProfileModalState,
     width: u16,
     wall_tick: usize,
-    viewer_is_runner: bool,
 ) -> (Vec<Segment>, Option<u16>) {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let text = Style::default().fg(theme::TEXT());
@@ -212,11 +209,11 @@ fn build_segments(
 
     // ── late.fetch, and the runner ──
     // The runner is a second column beside the grid, each under its own
-    // heading, for runners looking at a runner: the row is nobody else's
-    // business until the public flip. A narrow body makes it a section.
+    // heading, for anyone looking at a standing runner. A narrow body makes
+    // it a section.
     let grid = late_fetch_lines(state, profile);
-    let runner = state.runner().filter(|_| viewer_is_runner);
-    match runner {
+    let own = state.viewing_own();
+    match state.runner() {
         None => {
             let mut lines = vec![section_heading("late.fetch", width_usize)];
             lines.extend(grid);
@@ -227,7 +224,7 @@ fn build_segments(
             let mut left = vec![section_heading("late.fetch", left_width)];
             left.extend(grid);
             let mut right = vec![runner_heading(runner, usize::from(RUNNER_WIDTH))];
-            right.extend(runner_lines(runner));
+            right.extend(runner_lines(runner, own));
             segments.push(Segment::Beside {
                 left,
                 right,
@@ -239,7 +236,7 @@ fn build_segments(
             lines.extend(grid);
             lines.push(Line::from(""));
             lines.push(runner_heading(runner, width_usize));
-            lines.extend(runner_lines(runner));
+            lines.extend(runner_lines(runner, own));
             segments.push(Segment::Text(lines));
         }
     }
@@ -514,34 +511,25 @@ fn runner_heading(runner: &ProfileRunner, width: usize) -> Line<'static> {
     )
 }
 
-/// The runner's rows, no frame anywhere: the three-row portrait on the
-/// left, losing cells to static in proportion to the missing signal
-/// (`fight::ui::corrupt`, the fight scene's wound), and one `key  value`
-/// column beside and below it, the grid's own shape: the signal and exp
-/// bars and the bits beside the face, then the kit by name, the glyphs put
-/// down, and the Old Signal marks with their title once there are any.
-/// The level is the heading's badge, so it has no row. The sheet arrives
-/// settled for today (the service applies the day roll to the view), so
-/// the signal is what the runner would find on the row. Rations are not
-/// here: the street's strip and the frame HUD carry them for the runner
-/// themself.
-fn runner_lines(runner: &ProfileRunner) -> Vec<Line<'static>> {
+/// The runner's rows, no frame anywhere: the three-row portrait at the
+/// top left, losing cells to static in proportion to the missing signal
+/// (`fight::ui::corrupt`, the fight scene's wound), and the poster beside
+/// it, 32 by 12 on its own paper (`poster::ui::canvas_lines`, the street's
+/// drawing). A runner with no poster shows the test card, seeded by the
+/// runner so it is the same on every open, and its owner is told where
+/// posters are made. The level and the marks are the heading's badge; the
+/// rest of the sheet stays on the street.
+fn runner_lines(runner: &ProfileRunner, own: bool) -> Vec<Line<'static>> {
     let dim = Style::default().fg(theme::TEXT_DIM());
-    let text = Style::default().fg(theme::TEXT());
-    let key = Style::default().fg(theme::AMBER_DIM());
-    let bright = Style::default().fg(theme::TEXT_BRIGHT());
     let sheet = &runner.sheet;
+    let seed = sheet.user_id.as_u128() as u64;
 
     // The face, wounded by the missing signal; the seed is the runner, so
     // the same cells are gone on every open.
     let missing =
         1.0 - sheet.signal.clamp(0, sheet.max_signal()) as f32 / sheet.max_signal() as f32;
     let worn = runner.look.rows();
-    let face = fight_ui::corrupt(
-        worn.each_ref().map(|worn| worn.piece.row),
-        missing,
-        sheet.user_id.as_u128() as u64,
-    );
+    let face = fight_ui::corrupt(worn.each_ref().map(|worn| worn.piece.row), missing, seed);
     let portrait = face.into_iter().zip(worn).map(|(cells, worn)| {
         let tint = Style::default().fg(runner_ui::tint_color(worn.tint));
         cells
@@ -553,93 +541,31 @@ fn runner_lines(runner: &ProfileRunner) -> Vec<Line<'static>> {
             .collect::<Vec<Span<'static>>>()
     });
 
-    let fact = |label: &str, mut value: Vec<Span<'static>>| {
-        let mut row = vec![Span::styled(format!("{label:<8}"), key)];
-        row.append(&mut value);
-        row
+    let poster = match &runner.poster {
+        Some(canvas) => poster_ui::canvas_lines(canvas, None, None),
+        None => poster_ui::canvas_lines(&test_card(seed), None, None),
     };
-    let signal = match sheet.is_down() {
-        true => Span::styled(" down", Style::default().fg(theme::ERROR())),
-        false => Span::styled(format!(" {}/{}", sheet.signal, sheet.max_signal()), text),
-    };
-    // Past the top of the ladder the exp climbs toward the Old Signal.
-    let exp_goal = match fight_data::exp_to_advance(sheet.level) {
-        Some(need) => need,
-        None => fight_data::exp_to_seek(),
-    };
-    let glyphs = match sheet.kills {
-        1 => "1 down".to_string(),
-        n => format!("{n} down"),
-    };
-    let mut facts = vec![
-        fact("signal", {
-            let mut value = runner_bar(
-                sheet.signal.into(),
-                sheet.max_signal().into(),
-                Style::default().fg(theme::BONSAI_LEAF()),
-            )
-            .to_vec();
-            value.push(signal);
-            value
-        }),
-        fact("exp", {
-            let mut value =
-                runner_bar(sheet.exp, exp_goal, Style::default().fg(theme::AMBER())).to_vec();
-            value.push(Span::styled(format!(" {}/{exp_goal}", sheet.exp), text));
-            value
-        }),
-        fact(
-            "bits",
-            vec![Span::styled(ledger::thousands(sheet.bits), bright)],
-        ),
-        fact(
-            "weapon",
-            vec![Span::styled(fight_ui::weapon_name(sheet).to_string(), text)],
-        ),
-        fact(
-            "armor",
-            vec![Span::styled(fight_ui::armor_name(sheet).to_string(), text)],
-        ),
-        fact("glyphs", vec![Span::styled(glyphs, text)]),
-    ];
-    if let Some(title) = fight_data::title(sheet.marks) {
-        facts.push(fact(
-            "marks",
-            vec![Span::styled(format!("╬{} {title}", sheet.marks), text)],
-        ));
-    }
-
-    // The facts run past the portrait; the rows under it keep its column
-    // empty so the keys stay in one line.
+    // The poster runs past the portrait; the rows under the face keep its
+    // column empty so the poster stays one block.
     let blank = " ".repeat(PORTRAIT_WIDTH);
     let mut portrait = portrait.into_iter();
-    facts
+    let mut lines: Vec<Line<'static>> = poster
         .into_iter()
-        .map(|fact| {
+        .map(|poster_row| {
             let mut row = match portrait.next() {
                 Some(row) => row,
                 None => vec![Span::raw(blank.clone())],
             };
-            row.push(Span::raw("  "));
-            row.extend(fact);
+            row.push(Span::raw(" ".repeat(PORTRAIT_GAP)));
+            row.extend(poster_row.spans);
             Line::from(row)
         })
-        .collect()
-}
-
-/// A runner bar: `RUNNER_BAR_CELLS` cells, the filled run in `filled` and
-/// the rest as dim shade.
-fn runner_bar(current: i64, max: i64, filled: Style) -> [Span<'static>; 2] {
-    let max = max.max(1);
-    let cells =
-        ((current.clamp(0, max) as f64 / max as f64) * RUNNER_BAR_CELLS as f64).round() as usize;
-    [
-        Span::styled("█".repeat(cells), filled),
-        Span::styled(
-            "░".repeat(RUNNER_BAR_CELLS - cells),
-            Style::default().fg(theme::BORDER_DIM()),
-        ),
-    ]
+        .collect();
+    // From the column's edge: the hint is wider than the poster.
+    if runner.poster.is_none() && own {
+        lines.push(Line::from(Span::styled(POSTER_HINT, dim)));
+    }
+    lines
 }
 
 /// A section heading: a dim label trailed by a rule, with a blank row above

@@ -3,33 +3,8 @@
 {% block title %}Artboard Gallery - late.sh{% endblock %}
 
 {% block content %}
+<link rel="stylesheet" href="/static/board.css">
 <style>
-    @font-face {
-        font-family: "Symbols Nerd Font";
-        src:
-            url("/static/fonts/SymbolsNerdFont-Regular.woff2") format("woff2"),
-            url("/static/fonts/SymbolsNerdFont-Regular.ttf") format("truetype");
-        font-style: normal;
-        font-weight: 400;
-        font-display: block;
-    }
-
-    @font-face {
-        font-family: "Noto Sans Symbols 2";
-        src:
-            url("/static/fonts/NotoSansSymbols2-Regular.woff2") format("woff2"),
-            url("/static/fonts/NotoSansSymbols2-Regular.ttf") format("truetype");
-        font-style: normal;
-        font-weight: 400;
-        font-display: block;
-        /* The face's own symbol coverage (cmap), so the download only happens when the
-           snapshot contains a glyph it can render; plain text never fetches it. */
-        unicode-range: U+21AF-2219, U+2299-22C6, U+2316-232B, U+237B-244A, U+25A0-27BE,
-            U+2800-28FF, U+2981-29EB, U+2B00-2BFF, U+4DC0-4DFF, U+10140-101FD, U+102E0-102FB,
-            U+10E60-10E7E, U+1D2C0-1D378, U+1F000-1F10F, U+1F16D-1F1AD, U+1F30D-1F336,
-            U+1F378-1F5FA, U+1F650-1F6FC, U+1F774-1F8B1, U+1F900-1F946, U+1FA00-1FBF9;
-    }
-
     :root {
         --gallery-font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Symbols Nerd Font", "Noto Sans Symbols 2", "Noto Sans Symbols", "Apple Color Emoji", "Segoe UI Emoji", monospace;
     }
@@ -427,6 +402,7 @@
 
 {% if has_selected %}
 <script id="snapshot-data" type="application/json">{{ snapshot_json|safe }}</script>
+<script src="/static/board.js"></script>
 <script>
     function gallery() {
         return {
@@ -454,10 +430,6 @@
             zoomLabel: '100%',
             statusText: 'drag or swipe to pan · scroll or pinch to zoom',
             defaultStatus: 'drag or swipe to pan · scroll or pinch to zoom',
-            cellW: 8,
-            cellH: 16,
-            fontSize: 14,
-            fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Symbols Nerd Font", "Noto Sans Symbols 2", "Noto Sans Symbols", "Apple Color Emoji", "Segoe UI Emoji", monospace',
             minScale: 0.1,
             maxScale: 12,
 
@@ -465,7 +437,6 @@
                 const dataEl = document.getElementById('snapshot-data');
                 this.snapshot = JSON.parse(dataEl.textContent);
                 this.canvas = document.getElementById('gallery-canvas');
-                this.ctx = this.canvas.getContext('2d');
 
                 this.glyphs = new Map();
                 this.cells = this.snapshot.cells.map((cell) => ({
@@ -498,42 +469,13 @@
 
             keyFor(x, y) {return x + ',' + y;},
 
-            fontSpec() {
-                return this.fontSize + 'px ' + this.fontFamily;
-            },
-
             async renderWhenFontsReady() {
-                if (!document.fonts) return;
-                // Passing the snapshot's characters lets unicode-range gate the fetch.
-                const text = Array.from(new Set(this.cells.map((cell) => cell.ch))).join('');
-                try {
-                    await Promise.allSettled([
-                        document.fonts.load(this.fontSize + 'px "Symbols Nerd Font"'),
-                        document.fonts.load(this.fontSize + 'px "Noto Sans Symbols 2"', text)
-                    ]);
-                    this.renderSnapshot();
-                } catch (_) {
-                    // Keep the initial render if the browser blocks or cannot load the webfont.
-                }
+                await lateBoard.fontsReady(this.snapshot);
+                this.renderSnapshot();
             },
 
             renderSnapshot() {
-                const c = this.canvas;
-                c.width = this.snapshot.width * this.cellW;
-                c.height = this.snapshot.height * this.cellH;
-                c.style.width = c.width + 'px';
-                c.style.height = c.height + 'px';
-
-                const ctx = this.ctx;
-                ctx.fillStyle = '#111827';
-                ctx.fillRect(0, 0, c.width, c.height);
-                ctx.font = this.fontSpec();
-                ctx.textBaseline = 'top';
-
-                for (const cell of this.cells) {
-                    ctx.fillStyle = cell.fg || '#d1d5db';
-                    ctx.fillText(cell.ch, cell.x * this.cellW, cell.y * this.cellH);
-                }
+                lateBoard.draw(this.canvas, this.snapshot);
             },
 
             applyTransform() {

@@ -87,31 +87,28 @@ fn help_tab_hit_uses_overlay_tab_rects() {
     );
 }
 
+/// The picker is drawn over the whole page area, rail included, and a
+/// click arrives in 1-based SGR coordinates; the bars and presets
+/// themselves are `common::color_picker`'s.
 #[test]
-fn color_picker_hit_reads_bars_and_presets() {
+fn color_picker_hit_reads_the_popup_over_the_page_area() {
     let mut state = test_state();
-    assert_eq!(color_picker_hit((80, 24), &state, 30, 12), None);
-    state.open_color_picker();
-    let popup = color_picker_popup(artboard_game_area_for_screen((80, 24), false));
-    let layout = color_picker_layout(popup).unwrap();
-    let green = channel_bar_rect(layout.channels[1]);
+    let area = artboard_game_area_for_screen((80, 24), false);
+    let green_floor = (area.top()..area.bottom())
+        .flat_map(|row| (area.left()..area.right()).map(move |col| (col, row)))
+        .find(|&(col, row)| {
+            color_picker::hit(area, col, row)
+                == Some(color_picker::Hit::Channel(color_picker::Channel::Green, 0))
+        })
+        .expect("the green bar is on the page");
     assert_eq!(
-        color_picker_hit((80, 24), &state, green.x + 1, green.y + 1),
-        Some(ColorPickerHit::Channel(Channel::Green, 0))
-    );
-    assert_eq!(
-        color_picker_hit((80, 24), &state, green.right(), green.y + 1),
-        Some(ColorPickerHit::Channel(Channel::Green, 255))
-    );
-    let preset = preset_rect(layout.presets, 7);
-    assert_eq!(
-        color_picker_hit((80, 24), &state, preset.x + 2, preset.y + 1),
-        Some(ColorPickerHit::Preset(7))
-    );
-    // The label column is dead.
-    assert_eq!(
-        color_picker_hit((80, 24), &state, layout.hex.x + 1, layout.hex.y + 1),
+        color_picker_hit((80, 24), &state, green_floor.0 + 1, green_floor.1 + 1),
         None
+    );
+    state.open_color_picker();
+    assert_eq!(
+        color_picker_hit((80, 24), &state, green_floor.0 + 1, green_floor.1 + 1),
+        Some(color_picker::Hit::Channel(color_picker::Channel::Green, 0))
     );
 }
 

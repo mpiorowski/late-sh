@@ -9,7 +9,13 @@ use late_core::{
         rss_feed_read::RssFeedRead,
     },
 };
-use std::time::Duration;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 use tokio::sync::{broadcast, watch};
 use tracing::{Instrument, info_span};
 use uuid::Uuid;
@@ -28,6 +34,8 @@ const MAX_ENTRIES_PER_FETCH: usize = 20;
 #[derive(Clone, Default)]
 pub struct FeedSnapshot {
     pub user_id: Option<Uuid>,
+    /// Which list produced this snapshot, in the order the lists started.
+    pub seq: u64,
     pub feeds: Vec<RssFeed>,
     pub entries: Vec<RssEntryView>,
 }
@@ -69,6 +77,7 @@ pub struct FeedService {
     db: Db,
     snapshot_tx: watch::Sender<FeedSnapshot>,
     snapshot_rx: watch::Receiver<FeedSnapshot>,
+    list_seq: Arc<AtomicU64>,
     evt_tx: broadcast::Sender<FeedEvent>,
 }
 
@@ -80,6 +89,7 @@ impl FeedService {
             db,
             snapshot_tx,
             snapshot_rx,
+            list_seq: Arc::new(AtomicU64::new(0)),
             evt_tx,
         }
     }
@@ -116,16 +126,21 @@ impl FeedService {
     }
 
     async fn do_list(&self, user_id: Uuid) -> Result<()> {
+        let seq = self.list_seq.fetch_add(1, Ordering::Relaxed);
         let client = self.db.get().await?;
         let feeds = RssFeed::list_for_user(&client, user_id).await?;
         let entries =
             RssEntry::list_visible_for_user(&client, user_id, ENTRY_LIMIT, PER_FEED_ENTRY_LIMIT)
                 .await?;
-        self.snapshot_tx.send(FeedSnapshot {
-            user_id: Some(user_id),
-            feeds,
-            entries,
-        })?;
+        publish_list(
+            &self.snapshot_tx,
+            FeedSnapshot {
+                user_id: Some(user_id),
+                seq,
+                feeds,
+                entries,
+            },
+        );
         Ok(())
     }
 
@@ -423,6 +438,19 @@ impl FeedService {
         .context("RSS fetch timed out")??;
         Ok(String::from_utf8_lossy(&bytes).to_string())
     }
+}
+
+/// Each list runs in its own task, so they can finish out of order. A list
+/// that started earlier and finished later must not replace a newer list for
+/// the same user: nothing would list again to correct it.
+fn publish_list(tx: &watch::Sender<FeedSnapshot>, snapshot: FeedSnapshot) {
+    tx.send_if_modified(|current| {
+        if current.user_id == snapshot.user_id && current.seq > snapshot.seq {
+            return false;
+        }
+        *current = snapshot;
+        true
+    });
 }
 
 #[derive(Debug)]

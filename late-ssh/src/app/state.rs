@@ -93,7 +93,12 @@ enum VoiceToggleIntent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum IconPickerTarget {
     Composer,
-    Reaction { room_id: Uuid, message_id: Uuid },
+    Reaction {
+        room_id: Uuid,
+        message_id: Uuid,
+    },
+    /// The poster on PRINTS's bench (`app/deadchannel/poster`).
+    Poster,
 }
 
 fn voice_toggle_intent(
@@ -327,6 +332,8 @@ pub struct SessionConfig {
     pub fight_service: crate::app::deadchannel::fight::svc::FightService,
     /// The look's writer after the join (`app/deadchannel/tailor`).
     pub tailor_service: crate::app::deadchannel::tailor::svc::TailorService,
+    /// The poster's reader and writer at PRINTS (`app/deadchannel/poster`).
+    pub poster_service: crate::app::deadchannel::poster::svc::PosterService,
     /// The first descent's claim (`app/deadchannel/guide`).
     pub guide_service: crate::app::deadchannel::guide::svc::GuideService,
     /// The lounge spawns (`app/deadchannel/lounge`): the live spawn and
@@ -849,6 +856,9 @@ pub struct App {
     /// The tailor's mirror (`app/deadchannel/tailor`): the draft while
     /// the panel is open, and the write that puts it on the row.
     pub(crate) tailor: crate::app::deadchannel::tailor::session::TailorSession,
+    /// PRINTS (`app/deadchannel/poster`): the poster on the bench while the
+    /// panel is open, and the write that hangs or burns it.
+    pub(crate) poster: crate::app::deadchannel::poster::session::PosterSession,
     /// The lounge spawns (`app/deadchannel/lounge`): this session's copy of
     /// the spawn, its own `/hit` and the word it came back with.
     pub(crate) lounge: crate::app::deadchannel::lounge::session::LoungeSession,
@@ -1582,6 +1592,11 @@ impl App {
             config.user_id,
             config.tailor_service.clone(),
         );
+        let poster = crate::app::deadchannel::poster::session::PosterSession::new(
+            config.user_id,
+            config.username.clone(),
+            config.poster_service.clone(),
+        );
         let guide = crate::app::deadchannel::guide::session::GuideSession::new(
             config.user_id,
             config.guide_service.clone(),
@@ -1708,7 +1723,6 @@ impl App {
             LandingPage::Zen => Screen::Zen,
         };
         let haunt = crate::app::deadchannel::haunt::svc::arm(
-            config.permissions.can_moderate(),
             config.user_id,
             &config.username,
             config.first_contact,
@@ -1815,6 +1829,7 @@ impl App {
             presence,
             fight,
             tailor,
+            poster,
             guide,
             lounge,
             chip_service: config.chip_service,
@@ -1950,6 +1965,7 @@ impl App {
             key_fingerprint: config.key_fingerprint,
             profile_modal_state: profile_modal::state::ProfileModalState::new(
                 config.profile_service.clone(),
+                config.user_id,
             ),
             settings_modal_state,
             sheet_modal_state: sheet_modal::state::SheetModalState::new(),

@@ -1,4 +1,23 @@
-use super::parse_feed;
+use tokio::sync::watch;
+use uuid::Uuid;
+
+use super::{FeedSnapshot, parse_feed, publish_list};
+
+#[test]
+fn an_older_list_finishing_late_does_not_replace_a_newer_one() {
+    let (tx, rx) = watch::channel(FeedSnapshot::default());
+    let user_id = Some(Uuid::now_v7());
+    let list = |seq| FeedSnapshot {
+        user_id,
+        seq,
+        ..FeedSnapshot::default()
+    };
+    publish_list(&tx, list(2));
+    publish_list(&tx, list(1));
+    assert_eq!(rx.borrow().seq, 2);
+    publish_list(&tx, list(3));
+    assert_eq!(rx.borrow().seq, 3);
+}
 
 #[test]
 fn parse_feed_reads_rss_items() {

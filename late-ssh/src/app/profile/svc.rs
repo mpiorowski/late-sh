@@ -62,15 +62,18 @@ pub struct ProfilePet {
     pub name: Option<String>,
 }
 
-/// What a profile shows of a runner: the face and the sheet, for the
-/// runner section. Present only while the viewed user stands on the row
-/// (`deadchannel_runners.left_at` unset); a look or sheet the row cannot
-/// parse is logged and shown as no runner, the way the directory treats
-/// it, so one bad row never blanks a profile.
+/// What a profile shows of a runner: the face, the sheet (the badge's
+/// level and marks, the signal that wounds the face), and the poster from
+/// PRINTS, for the runner column. Present only while the viewed user
+/// stands on the row (`deadchannel_runners.left_at` unset); a look or sheet
+/// the row cannot parse is logged and shown as no runner, the way the
+/// directory treats it, so one bad row never blanks a profile. A poster
+/// that does not decode is logged and shown as none (the test card).
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProfileRunner {
     pub look: crate::app::deadchannel::runner::state::Look,
     pub sheet: crate::app::deadchannel::fight::state::Sheet,
+    pub poster: Option<dartboard_core::Canvas>,
 }
 
 #[derive(Clone, Default)]
@@ -400,7 +403,21 @@ impl ProfileService {
                         // then it can hold yesterday's dead signal. Nothing
                         // is written here; the fight service owns the row.
                         sheet.settle(crate::app::deadchannel::fight::svc::FightService::today());
-                        Some(ProfileRunner { look, sheet })
+                        let poster = match row.poster {
+                            Some(value) => match serde_json::from_value(value) {
+                                Ok(canvas) => Some(canvas),
+                                Err(error) => {
+                                    tracing::error!(error = %error, user_id = %user_id, "runner poster failed to decode; profile shows the test card");
+                                    None
+                                }
+                            },
+                            None => None,
+                        };
+                        Some(ProfileRunner {
+                            look,
+                            sheet,
+                            poster,
+                        })
                     }
                     (Err(error), _) => {
                         tracing::error!(error = %error, user_id = %user_id, "runner look failed to parse; profile shows no runner");

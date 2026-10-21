@@ -1141,6 +1141,7 @@ fn a_row_naming_an_unknown_glyph_is_rejected() {
         road: None,
         cards: None,
         inks: None,
+        poster: None,
         fight: Some(serde_json::json!({
             "quarry": {"glyph": 99}, "foe_signal": 1, "foe_max_signal": 1, "foe_attack": 1,
             "foe_defense": 1, "foe_bits": 1, "foe_exp": 1, "log": [], "bright": false,
@@ -2474,6 +2475,7 @@ fn row_of(sheet: &Sheet) -> DeadchannelRunner {
         road: write.road,
         cards: write.cards,
         inks: write.inks,
+        poster: None,
         fight: write.fight,
         user_id: write.user_id,
         look: serde_json::json!({}),

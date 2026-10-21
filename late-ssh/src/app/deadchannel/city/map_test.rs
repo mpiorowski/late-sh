@@ -125,6 +125,7 @@ fn a_shop_is_in_reach_on_its_whole_floor_and_only_there() {
         Landmark::Bits,
         Landmark::Blades,
         Landmark::Ink,
+        Landmark::Prints,
     ] {
         let reach = landmark.reach();
         let shop = BUILDINGS

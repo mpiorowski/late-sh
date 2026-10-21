@@ -8,7 +8,7 @@
 
 use crate::app::games::pool_core::{
     canvas::Canvas,
-    cue::{MAX_SPEED, MISCUE_LIMIT, NATURAL_ROLL_TIP, PowerBand, ShotMode},
+    cue::{MAX_SPEED, MISCUE_LIMIT, NATURAL_ROLL_TIP, PULL_ROWS, PowerBand, ShotMode},
     cue_ui::{self, CueView},
 };
 
@@ -117,12 +117,12 @@ fn a_cushion_target_still_draws_something() {
 
 #[test]
 fn power_pulls_the_cue_back() {
-    let tip_row = |power: f64| {
+    let tip_row = |pull: f64| {
         let mut c = canvas();
         let panel = cue_ui::draw(
             &mut c,
             &CueView {
-                power,
+                pull,
                 mode: ShotMode::Stroke(PowerBand::Normal),
                 ..CueView::default()
             },
@@ -183,7 +183,7 @@ fn a_struck_cue_stays_thrown_through_the_ball() {
         let panel = cue_ui::draw(
             &mut c,
             &CueView {
-                power: 0.5,
+                pull: 0.5,
                 mode: ShotMode::Stroke(PowerBand::Normal),
                 follow_through,
                 ..CueView::default()
@@ -223,6 +223,39 @@ fn aim_reads_as_a_bearing() {
 }
 
 #[test]
+fn the_cue_follows_the_hand_whatever_the_band() {
+    // The draw-back is the gesture, not the speed: a full pull in `light` is
+    // as far back on screen as one in `strong`, and moves one terminal row
+    // per row of pointer travel. Drawn by speed, a light full pull barely
+    // left the ball and the cue then jumped when the shot fired.
+    let tip_row = |pull: f64, band: PowerBand| {
+        // Tall, so the panel has room for the whole gesture.
+        let mut c = Canvas::new(34, 44, [0, 0, 0]);
+        let panel = cue_ui::draw(
+            &mut c,
+            &CueView {
+                pull,
+                mode: ShotMode::Stroke(band),
+                ..CueView::default()
+            },
+        );
+        let x = panel.cue.0 as i32;
+        let start = (panel.cue.1 + panel.cue_radius) as i32;
+        (start..c.height() as i32)
+            .find(|y| c.get(x, *y) == [80, 120, 170])
+            .expect("the tip is drawn")
+    };
+    let light = tip_row(1.0, PowerBand::Light);
+    assert_eq!(light, tip_row(1.0, PowerBand::Strong));
+    let travel = light - tip_row(0.0, PowerBand::Light);
+    let rows = (PULL_ROWS * 2.0) as i32;
+    assert!(
+        (travel - rows).abs() <= 1,
+        "a full pull is {rows} pixel rows on a panel with room for it: {travel}"
+    );
+}
+
+#[test]
 fn the_stroke_reads_as_a_band_a_bar_and_a_speed() {
     // The bar is drawn against the armed *band*, not the whole speed range, so
     // a full pull looks the same in every band and reads differently. That is
@@ -254,11 +287,20 @@ fn the_stroke_reads_as_a_band_a_bar_and_a_speed() {
     assert_ne!(light, strong, "the same bar must not read the same speed");
 
     let half = cue_ui::power_label(
-        PowerBand::Normal.ceiling() / 2.0,
+        PowerBand::Normal.speed_at(0.5),
         Some(PowerBand::Normal),
         MAX_SPEED,
     );
     assert!(half.starts_with("normal ▓▓▓▓▓░░░░░"), "got {half}");
+    let floor = cue_ui::power_label(
+        PowerBand::Normal.floor(),
+        Some(PowerBand::Normal),
+        MAX_SPEED,
+    );
+    assert!(
+        floor.starts_with("normal ░░░░░░░░░░"),
+        "the bar is drawn from the band's floor, not from nought: {floor}"
+    );
     assert!(
         cue_ui::power_label(0.0, None, MAX_SPEED).starts_with("stroke ░░░░░░░░░░"),
         "an unarmed cue still has something to say"
@@ -272,10 +314,9 @@ fn the_bands_climb_and_reach_the_top() {
         ceilings.windows(2).all(|w| w[0] < w[1]),
         "light < normal < strong: {ceilings:?}"
     );
-    assert_eq!(
-        PowerBand::Strong.ceiling(),
-        1.0,
-        "the top band must reach a real break"
+    assert!(
+        PowerBand::Strong.ceiling() <= 1.0,
+        "no band may ask for more than the server accepts"
     );
     // Overlapping ranges: every speed under the cap is reachable from more
     // than one band, so there is no gap to fall into between them.
@@ -303,6 +344,49 @@ fn a_band_is_pinned_to_how_hard_people_actually_hit() {
         "and only the top band breaks a rack: {}",
         top(PowerBand::Strong)
     );
+    assert!(
+        top(PowerBand::Strong) < 9.0,
+        "without reaching speeds nobody can control: {}",
+        top(PowerBand::Strong)
+    );
+    assert!(
+        top(PowerBand::Normal) >= 4.5,
+        "a normal full pull breaks a snooker pack: {}",
+        top(PowerBand::Normal)
+    );
+}
+
+#[test]
+fn every_band_is_a_range_and_the_ranges_overlap() {
+    // Arming a band is asking for a kind of shot: `normal` is never a nudge
+    // and `strong` never a roll, however the cue comes through. Neighbours
+    // overlap so no speed falls between them.
+    let (light, normal, strong) = (PowerBand::Light, PowerBand::Normal, PowerBand::Strong);
+    for band in PowerBand::ALL {
+        assert!(
+            band.floor() > 0.0 && band.floor() < band.ceiling(),
+            "{band:?}"
+        );
+        assert_eq!(band.speed_at(0.0), band.floor());
+        assert_eq!(band.speed_at(1.0), band.ceiling());
+    }
+    assert!(light.floor() < normal.floor() && normal.floor() < strong.floor());
+    assert!(normal.floor() < light.ceiling(), "light and normal overlap");
+    assert!(
+        strong.floor() < normal.ceiling(),
+        "normal and strong overlap"
+    );
+    let half = normal.speed_at(0.5) * MAX_SPEED;
+    assert!(
+        (1.5..2.0).contains(&half),
+        "halfway up normal is an ordinary rolling pot, not a firm one: {half}"
+    );
+    for band in PowerBand::ALL {
+        for k in 0..=10 {
+            let within = k as f64 / 10.0;
+            assert!((band.within(band.speed_at(within)) - within).abs() < 1e-9);
+        }
+    }
 }
 
 #[test]
@@ -384,7 +468,7 @@ fn a_full_pull_keeps_the_butt_of_the_cue_on_screen() {
     cue_ui::draw(
         &mut c,
         &CueView {
-            power: 1.0,
+            pull: 1.0,
             mode: ShotMode::Stroke(PowerBand::Strong),
             ..CueView::default()
         },

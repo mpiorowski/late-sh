@@ -1,8 +1,8 @@
 use super::*;
 use crate::app::artboard::gallery::svc::GalleryService;
 use crate::app::artboard::provenance::ArtboardProvenance;
-use crate::app::artboard::state::PAINT_PALETTE;
 use crate::app::artboard::svc::{ArtboardSnapshotService, DartboardService, DartboardSnapshot};
+use crate::app::common::color_picker::PAINT_PALETTE;
 use dartboard_core::{Canvas, CellValue};
 use dartboard_editor::Clipboard;
 use ratatui::widgets::{Block, Borders};

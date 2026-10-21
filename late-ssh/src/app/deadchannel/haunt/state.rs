@@ -17,8 +17,8 @@
 //! Replica rule (root CONTEXT.md): nothing here is a source of truth. The
 //! lifetime and daily caps are enforced by conditional claims on the user
 //! row; the machines only decide *when to ask* and hold their schedule
-//! while the row answers. Stage 1 fires for staff (admins and moderators)
-//! and nobody else, by decision in code; stages 2-4 need the gate on top.
+//! while the row answers. Stage 1 fires for everyone; stages 2-4 need the
+//! gate on top.
 
 use chrono::{DateTime, Utc};
 use late_core::models::user::{FirstContactBioVerdict, FirstContactHitCaps, FirstContactHitClaim};
@@ -29,8 +29,7 @@ use uuid::Uuid;
 /// chosen into `#deadchannel`. Rides the proven ghost-user plumbing
 /// (dedicated DB user, fixed fingerprint, @bartender's shape). The name
 /// comes from GAME.md's own note that "afterglow" was reserved for naming
-/// something inside the world; copy and name still face design review
-/// before the haunting reaches anyone but staff.
+/// something inside the world.
 pub(crate) const VOICE_USERNAME: &str = "afterglow";
 pub(crate) const VOICE_FINGERPRINT: &str = "afterglow-fp-000";
 
@@ -240,10 +239,10 @@ impl FirstContactGate {
         self.active_hours >= ACTIVE_MIN_HOURS && self.touched_settings >= TOUCHED_SETTINGS_MIN
     }
 
-    /// Nothing passes, and nothing is worth screening: what bootstrap
-    /// returns for anyone who is not staff, and what test apps use so no stage
-    /// past 1 can arm unless a test arms one on purpose.
-    pub(crate) fn closed() -> Self {
+    /// Nothing passes, and nothing is worth screening: what test apps use
+    /// so no stage past 1 can arm unless a test arms one on purpose.
+    #[cfg(test)]
+    pub(crate) fn closed_for_tests() -> Self {
         Self {
             active_hours: 0,
             touched_settings: 0,
@@ -338,7 +337,7 @@ impl FirstContactMarks {
     }
 
     /// Everything already spent: what test apps use so no stage can fire
-    /// under an admin-permission test unless a test arms one on purpose.
+    /// in a test unless a test arms one on purpose.
     #[cfg(test)]
     pub(crate) fn spent_for_tests() -> Self {
         Self {
@@ -358,9 +357,9 @@ pub(crate) struct HauntState {
     /// Stage 3: the armed splash whisper. `Some` only while the splash is
     /// holding the door for it.
     pub(crate) whisper: Option<WhisperState>,
-    /// Stage 1: the clock-glitch scheduler. Session-local dice; the caps
-    /// live on the row.
-    pub(crate) clock_glitch: Option<ClockGlitch>,
+    /// Stage 1: the clock-glitch scheduler, armed for every session.
+    /// Session-local dice; the caps live on the row.
+    pub(crate) clock_glitch: ClockGlitch,
     /// Stage 2: the own-name flicker roller.
     pub(crate) name_flicker: Option<NameFlicker>,
     /// Stage 4: the breakthrough, the full-screen beat that carries the
@@ -380,10 +379,7 @@ pub(crate) struct HauntState {
     /// The eligibility gate as evaluated at bootstrap (for `/haunt` status
     /// and the arming decision).
     pub(crate) gate: FirstContactGate,
-    /// Stage 1 armed for this session: staff only. Evaluated once at
-    /// arming.
-    pub(crate) stage1: bool,
-    /// Stages 2-4 armed: stage 1 plus the gate, or a funnel already entered
+    /// Stages 2-4 armed: the gate passed, or a funnel already entered
     /// (eligibility gates entering, never continuing). `/haunt arm` forces
     /// it for the session.
     pub(crate) chosen: bool,
@@ -508,7 +504,7 @@ const DISSOLVE_TICKS: usize = 16;
 /// you. Screenshot-test vocabulary only (static, signal, city, channel,
 /// door); a repeated whisper is a bug report, not a haunting, so this
 /// pool grows under the same variety discipline as feed templates
-/// (GAME.md, Open questions) before it ever leaves staff scope.
+/// (GAME.md, Open questions).
 const WHISPER_LINES: [&str; 6] = [
     "you were not supposed to notice this yet",
     "the sky down here is the color of a dead channel",
@@ -686,8 +682,7 @@ const GLITCH_DEFER_MAX_TICKS: usize = 10 * 60 * 1000 / 66; // ~10 min
 pub(crate) const GLITCH_DAILY_CAP: u32 = 2;
 /// The ladder's share of clock bursts (the persisted counter): once this
 /// many have been seen, the clock goes quiet and stage 2 opens. The quiet
-/// is part of the escalation; whether unchosen users keep an unbounded
-/// ambient clock is a question for when the haunting leaves staff
+/// is part of the escalation; unchosen users go quiet at the same cap
 /// (GAME.md).
 pub(crate) const GLITCH_TOTAL_CAP: u32 = 3;
 /// Fuse on a forced burst: the `/haunt glitch` banner covers the sidebar

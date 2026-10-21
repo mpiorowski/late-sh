@@ -316,6 +316,7 @@ impl App {
         changed |= self.bonsai.tick();
         changed |= self.fight.tick();
         changed |= self.tailor.tick();
+        changed |= self.poster.tick();
         // The lounge spawns (`app/deadchannel/lounge`): the spawn copy, a
         // runner's `/hit`, the word it came back with, and the scene's
         // strike and countdown frames.
@@ -971,6 +972,7 @@ impl App {
                 if self.screen == Screen::City && !self.is_runner() {
                     self.fight.close();
                     self.tailor.close();
+                    self.poster.close();
                     self.guide.state.close();
                     self.set_screen(Screen::Clubhouse);
                     changed = true;
@@ -1670,11 +1672,16 @@ impl App {
             self.attention_spot = spot;
             crate::metrics::record_place_visit(self.screen, place);
         }
-        let presence = match self.last_active_at.elapsed() < ATTENTION_ACTIVE_WINDOW {
+        crate::metrics::record_attention(self.screen, place, self.attention_presence(), seconds);
+    }
+
+    /// Whether a key landed within [`ATTENTION_ACTIVE_WINDOW`], or the
+    /// terminal is only left open.
+    pub(crate) fn attention_presence(&self) -> crate::metrics::Presence {
+        match self.last_active_at.elapsed() < ATTENTION_ACTIVE_WINDOW {
             true => crate::metrics::Presence::Active,
             false => crate::metrics::Presence::Idle,
-        };
-        crate::metrics::record_attention(self.screen, place, presence, seconds);
+        }
     }
 
     /// Where inside the current screen the user is, for the screens that

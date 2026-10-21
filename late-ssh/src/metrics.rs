@@ -47,6 +47,14 @@ pub enum ScreensaverTrigger {
     Brb,
 }
 
+/// What a chunk of a session's SSH output was: a drawn frame (the ratatui
+/// diff) or a terminal command written after it (image transmissions, OSC).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputKind {
+    Frame,
+    Command,
+}
+
 /// Why the render loop drew a frame. The loop can only distinguish its two
 /// wake sources; event-driven renders currently ride the world tick, so they
 /// count as `WorldTick` until the loop becomes event-driven.
@@ -87,6 +95,27 @@ pub enum SummaryResult {
     /// AI is disabled or unconfigured for this deployment.
     Unavailable,
     Failed,
+}
+
+/// How one write to @bartender's memory of a patron resolved
+/// (`app/ai/bartender_memory.rs`). The failures are the ones nobody else
+/// sees: an exchange is stored off the reply path, and a failed remember or
+/// wipe gets no line in the room.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BartenderMemoryWrite {
+    /// An exchange kept once the patron's tail closed.
+    ExchangeStored,
+    /// A "remember" request written down.
+    RequestedStored,
+    /// Either kind, turned away: the patron said "forget me" after it.
+    TurnedAway,
+    /// Either kind, already stored for that message.
+    AlreadyStored,
+    /// "forget me" landed, whether or not there was anything to wipe.
+    Wiped,
+    ExchangeFailed,
+    RequestedFailed,
+    WipeFailed,
 }
 
 /// How one page of The Late Edition (`app/paper`) came off the press.
@@ -310,6 +339,22 @@ pub enum TailorBeat {
     Worn,
     NoRunner,
     Failed,
+}
+
+/// A poster at PRINTS (`app/deadchannel/poster`): `Saved` and `Burned`
+/// landed, `NoRunner` found no standing runner to hang it on or take it
+/// off, `Failed` is the write not landing. The read when the panel opens:
+/// `ReadFailed` is the wall not read (the panel cannot open on it),
+/// `Undecodable` a stored poster that is no canvas (the panel opens on a
+/// bare wall).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PosterBeat {
+    Saved,
+    Burned,
+    NoRunner,
+    Failed,
+    ReadFailed,
+    Undecodable,
 }
 
 /// What the presence wire did (`app/presence`): `Published` a notify
@@ -621,7 +666,9 @@ mod inner {
 
     use crate::app::activity::event::GameFamily;
 
+    use super::BartenderMemoryWrite;
     use super::HomeRoom;
+    use super::PosterBeat;
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
@@ -633,12 +680,12 @@ mod inner {
         GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
         JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, LoungeBeat,
         NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
-        OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome,
-        PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, RealmChatRoomAttach,
-        RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
-        RoundRefusal, RunnerDoor, Screen, SendRefusal, SessionStartStage, SessionUser,
-        SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
-        ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
+        OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult, Place,
+        PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire,
+        RealmChatRoomAttach, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh,
+        RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SendRefusal,
+        SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason,
+        SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome};
     use super::{BonsaiAction, BonsaiActionResult};
@@ -830,11 +877,22 @@ mod inner {
                 .with_description(
                     "One session's SSH output rate (frames and terminal commands), one sample per session per 10 s window",
                 )
-                .with_unit("By/s")
                 .with_boundaries(vec![
                     128.0, 512.0, 1024.0, 2048.0, 4096.0, 8192.0, 16384.0, 32768.0, 65536.0,
                     131072.0, 262144.0, 524288.0, 1048576.0,
                 ])
+                .build()
+        })
+    }
+
+    fn output_bytes_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_output_bytes_total")
+                .with_description(
+                    "Bytes handed to the SSH channel, by the screen and place the session was on, whether anyone was at the keys, and frame or terminal command",
+                )
                 .build()
         })
     }
@@ -905,6 +963,34 @@ mod inner {
                 .with_description(
                     "Sessions disconnected after staying over the SSH output budget too long",
                 )
+                .build()
+        })
+    }
+
+    fn render_input_budget_hits_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_render_input_budget_hits_total")
+                .with_description(
+                    "Render passes that stopped draining input at the per-pass budget with input still queued",
+                )
+                .build()
+        })
+    }
+
+    fn render_pass_seconds() -> &'static Histogram<f64> {
+        static METRIC: OnceLock<Histogram<f64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .f64_histogram("late_ssh_render_pass_seconds")
+                .with_description(
+                    "Time one render pass held the app lock (input drain, tick, draw), by render reason and the screen it ended on",
+                )
+                .with_unit("s")
+                .with_boundaries(vec![
+                    0.001, 0.002, 0.004, 0.008, 0.016, 0.033, 0.066, 0.132, 0.25, 0.5, 1.0,
+                ])
                 .build()
         })
     }
@@ -1813,6 +1899,16 @@ mod inner {
         })
     }
 
+    fn deadchannel_poster_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_deadchannel_poster_total")
+                .with_description("deadchannel posters saved and burned at PRINTS, by beat")
+                .build()
+        })
+    }
+
     fn deadchannel_lounge_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -1951,6 +2047,21 @@ mod inner {
 
     pub fn record_deadchannel_tailor(beat: TailorBeat) {
         deadchannel_tailor_total().add(1, &[KeyValue::new("beat", tailor_beat_label(beat))]);
+    }
+
+    fn poster_beat_label(beat: PosterBeat) -> &'static str {
+        match beat {
+            PosterBeat::Saved => "saved",
+            PosterBeat::Burned => "burned",
+            PosterBeat::NoRunner => "no_runner",
+            PosterBeat::Failed => "failed",
+            PosterBeat::ReadFailed => "read_failed",
+            PosterBeat::Undecodable => "undecodable",
+        }
+    }
+
+    pub fn record_deadchannel_poster(beat: PosterBeat) {
+        deadchannel_poster_total().add(1, &[KeyValue::new("beat", poster_beat_label(beat))]);
     }
 
     fn lounge_beat_label(beat: LoungeBeat) -> &'static str {
@@ -2137,6 +2248,31 @@ mod inner {
             .record(bytes_per_second, &[KeyValue::new("client", client.label())]);
     }
 
+    pub fn record_output_bytes(
+        screen: Screen,
+        place: Place,
+        presence: Presence,
+        kind: OutputKind,
+        bytes: usize,
+    ) {
+        output_bytes_total().add(
+            bytes as u64,
+            &[
+                KeyValue::new("screen", screen_label(screen)),
+                KeyValue::new("place", place_label(place)),
+                KeyValue::new("presence", presence_label(presence)),
+                KeyValue::new("kind", output_kind_label(kind)),
+            ],
+        );
+    }
+
+    fn output_kind_label(kind: OutputKind) -> &'static str {
+        match kind {
+            OutputKind::Frame => "frame",
+            OutputKind::Command => "command",
+        }
+    }
+
     fn terminal_probe_outcome_label(outcome: TerminalProbeOutcome) -> &'static str {
         match outcome {
             TerminalProbeOutcome::Answered => "answered",
@@ -2196,6 +2332,20 @@ mod inner {
 
     pub fn record_render_stall_disconnect() {
         render_stall_disconnects_total().add(1, &[]);
+    }
+
+    pub fn record_render_input_budget_hit() {
+        render_input_budget_hits_total().add(1, &[]);
+    }
+
+    pub fn record_render_pass(reason: RenderReason, screen: Screen, seconds: f64) {
+        render_pass_seconds().record(
+            seconds,
+            &[
+                KeyValue::new("reason", render_reason_label(reason)),
+                KeyValue::new("screen", screen_label(screen)),
+            ],
+        );
     }
 
     pub fn record_chat_message_sent() {
@@ -2915,6 +3065,41 @@ mod inner {
         round_drinks_cashed_total().add(1, &[]);
     }
 
+    fn bartender_memory_write_label(write: BartenderMemoryWrite) -> &'static str {
+        match write {
+            BartenderMemoryWrite::ExchangeStored => "exchange_stored",
+            BartenderMemoryWrite::RequestedStored => "requested_stored",
+            BartenderMemoryWrite::TurnedAway => "turned_away",
+            BartenderMemoryWrite::AlreadyStored => "already_stored",
+            BartenderMemoryWrite::Wiped => "wiped",
+            BartenderMemoryWrite::ExchangeFailed => "exchange_failed",
+            BartenderMemoryWrite::RequestedFailed => "requested_failed",
+            BartenderMemoryWrite::WipeFailed => "wipe_failed",
+        }
+    }
+
+    fn bartender_memory_writes_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_bartender_memory_writes_total")
+                .with_description(
+                    "@bartender memory writes (kept exchanges, remember requests, forget-me wipes) by outcome",
+                )
+                .build()
+        })
+    }
+
+    pub fn record_bartender_memory(write: BartenderMemoryWrite) {
+        bartender_memory_writes_total().add(
+            1,
+            &[KeyValue::new(
+                "outcome",
+                bartender_memory_write_label(write),
+            )],
+        );
+    }
+
     /// The house's off-thread work at the Nightcap failed. Orders are counted
     /// under `record_nightcap_order`; this is what a healthy order counter
     /// cannot see: a quiet bar or a stale menu.
@@ -3609,6 +3794,8 @@ mod inner {
 mod inner {
     use late_core::models::user::{AsciiPiece, AsciiSelection};
 
+    use super::BartenderMemoryWrite;
+    use super::PosterBeat;
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
@@ -3620,12 +3807,12 @@ mod inner {
         GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
         JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, LoungeBeat,
         NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
-        OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome,
-        PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, RealmChatRoomAttach,
-        RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
-        RoundRefusal, RunnerDoor, Screen, SendRefusal, SessionStartStage, SessionUser,
-        SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
-        ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
+        OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult, Place,
+        PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire,
+        RealmChatRoomAttach, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh,
+        RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SendRefusal,
+        SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason,
+        SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome};
     use super::{BonsaiAction, BonsaiActionResult};
@@ -3647,6 +3834,7 @@ mod inner {
     pub fn record_deadchannel_fight(_beat: FightBeat) {}
     pub fn record_deadchannel_old_signal_payout(_payout: OldSignalPayout) {}
     pub fn record_deadchannel_tailor(_beat: TailorBeat) {}
+    pub fn record_deadchannel_poster(_beat: PosterBeat) {}
     pub fn record_deadchannel_lounge(_beat: LoungeBeat) {}
     pub fn record_presence(_beat: PresenceWire) {}
     pub fn record_presence_records(_scope: PresenceScope, _count: usize) {}
@@ -3664,11 +3852,21 @@ mod inner {
     pub fn record_render_frame_drop() {}
     pub fn record_frame_bytes(_reason: RenderReason, _bytes: usize) {}
     pub fn record_session_output_rate(_client: SessionClient, _bytes_per_second: f64) {}
+    pub fn record_output_bytes(
+        _screen: Screen,
+        _place: Place,
+        _presence: Presence,
+        _kind: OutputKind,
+        _bytes: usize,
+    ) {
+    }
     pub fn record_terminal_probe(_client: SessionClient, _outcome: TerminalProbeOutcome) {}
     pub fn record_terminal_rtt(_client: SessionClient, _backlog: ProbeBacklog, _seconds: f64) {}
     pub fn record_cli_latency(_kind: CliLatencyKind, _platform: ClientPlatform, _seconds: f64) {}
     pub fn record_render_stall_skip() {}
     pub fn record_render_stall_disconnect() {}
+    pub fn record_render_input_budget_hit() {}
+    pub fn record_render_pass(_reason: RenderReason, _screen: Screen, _seconds: f64) {}
     pub fn record_chat_message_sent() {}
     pub fn record_chat_message_edited() {}
     pub fn record_game_win(_game: ActivityGame) {}
@@ -3726,6 +3924,7 @@ mod inner {
     pub fn record_nightcap_order(_result: NightcapOrderResult) {}
     pub fn record_nightcap_house_failure(_failure: NightcapHouseFailure) {}
     pub fn record_round_drink_cashed() {}
+    pub fn record_bartender_memory(_write: BartenderMemoryWrite) {}
     pub fn record_pot_tickets_bought(_tickets: i64, _chips: i64) {}
     pub fn record_pot_buy_refused(_refusal: PotRefusal) {}
     pub fn record_pot_drawn(_payout: i64, _tickets: i64) {}

@@ -46,4 +46,5 @@ tracing-opentelemetry = { workspace = true, optional = true }
 opentelemetry-http = { workspace = true, optional = true }
 
 [dev-dependencies]
+late-core = { workspace = true, features = ["testing"] }
 tower.workspace = true

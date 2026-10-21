@@ -335,6 +335,136 @@ fn blocked(rack: &RackState, from: [f64; 2], to: [f64; 2], target: u8, r: f64) -
         })
 }
 
+/// The most the striker could still score off the table as it stands: every
+/// red with a black after it, the colours, a black for the colour they are on
+/// after a red, and the extra a free ball buys.
+///
+/// The figure a snooker scoreboard calls "remaining". It ignores fouls, which
+/// is what makes it the line a frame is conceded on: past it, the player
+/// behind can only win by being given points, and a correspondence game with
+/// no referee to call a miss has no way to make that happen on purpose.
+pub fn points_remaining(state: &GameState) -> i32 {
+    let reds = (RED_FIRST..=RED_LAST)
+        .filter(|id| state.on_table(*id))
+        .count() as i32;
+    let colours: i32 = COLOURS
+        .into_iter()
+        .filter(|id| state.on_table(*id))
+        .map(value)
+        .sum();
+    let mut left = reds * (value(RED_FIRST) + value(BLACK)) + colours;
+    if state.on_colour {
+        left += value(BLACK);
+    }
+    if state.free_ball {
+        // The free ball scores as the ball on and then the striker is on
+        // what follows it: a red and a black while reds are up, otherwise the
+        // lowest colour a second time.
+        left += if reds > 0 {
+            value(RED_FIRST) + value(BLACK)
+        } else {
+            COLOURS
+                .into_iter()
+                .find(|id| state.on_table(*id))
+                .map_or(0, value)
+        };
+    }
+    left
+}
+
+/// Nothing but the black is left: no red, no other colour.
+pub fn only_black_left(state: &GameState) -> bool {
+    state.on_table(BLACK)
+        && !(RED_FIRST..=RED_LAST).any(|id| state.on_table(id))
+        && COLOURS
+            .into_iter()
+            .filter(|id| *id != BLACK)
+            .all(|id| !state.on_table(id))
+}
+
+/// One seat leads by more than `remaining`, and returns which.
+///
+/// Only ever *acted on* with the black alone on the table, where it is the
+/// real rule: more than seven in it and the frame is over. Anywhere earlier
+/// the player behind is left to play for snookers, which is the best part of
+/// the end of a frame (`snookers_required` says how many).
+pub fn out_of_reach(scores: [i32; 2], remaining: i32) -> Option<u8> {
+    let lead = scores[0] - scores[1];
+    if lead > remaining {
+        Some(0)
+    } else if -lead > remaining {
+        Some(1)
+    } else {
+        None
+    }
+}
+
+/// Someone is behind by more than is left on the table.
+pub fn needs_snookers(scores: [i32; 2], remaining: i32) -> bool {
+    out_of_reach(scores, remaining).is_some()
+}
+
+/// How many snookers the player `deficit` behind needs to *win*, with
+/// `remaining` on the table (`points_remaining`). Nought while clearing the
+/// table would do.
+///
+/// Counted to win rather than to tie, because a level frame here is a draw
+/// rather than a re-spotted black. Each snooker is worth the least a foul on
+/// the ball on can pay: four while the reds are up, the lowest colour's value
+/// (but never under four) once they are gone.
+pub fn snookers_required(state: &GameState, deficit: i32, remaining: i32) -> i32 {
+    if deficit < remaining {
+        return 0;
+    }
+    let reds = (RED_FIRST..=RED_LAST).any(|id| state.on_table(id));
+    let per_snooker = if reds {
+        MIN_PENALTY
+    } else {
+        COLOURS
+            .into_iter()
+            .find(|id| state.on_table(*id))
+            .map_or(MIN_PENALTY, |id| value(id).max(MIN_PENALTY))
+    };
+    let short = deficit - remaining + 1;
+    (short + per_snooker - 1) / per_snooker
+}
+
+/// The shot failed to hit a ball that was on, first: nothing at all, or the
+/// wrong ball. The half of a miss the table can answer.
+pub fn missed_ball_on(state: &GameState, outcome: &ShotOutcome) -> bool {
+    let targets = legal_targets(state);
+    outcome
+        .first_contact
+        .is_none_or(|hit| !targets.contains(&hit))
+}
+
+/// Foul **and a miss**, as near as a board with no referee can call it.
+///
+/// The real call is the referee's opinion that the striker did not make their
+/// best attempt to hit the ball on, and nothing here can read intent. What the
+/// rule book *does* say plainly is when a miss is never called, and that is
+/// the half this keeps: not with the black alone on the table, and not when
+/// either player needs snookers before or after the stroke — a player who
+/// needs snookers is entitled to lay them, and putting the balls back for
+/// them would undo the very thing the end of a frame is played for. Every
+/// other failure to hit the ball on is called, snookered or not, which is how
+/// the professional game tends to play it anyway.
+///
+/// The miss runs out by itself: each one pays the other player, so a player
+/// who keeps missing soon needs snookers, and then it is no longer called.
+pub fn is_miss(
+    before: &GameState,
+    outcome: &ShotOutcome,
+    scores_before: [i32; 2],
+    scores_after: [i32; 2],
+    remaining_after: i32,
+) -> bool {
+    missed_ball_on(before, outcome)
+        && !only_black_left(before)
+        && !needs_snookers(scores_before, points_remaining(before))
+        && !needs_snookers(scores_after, remaining_after)
+}
+
 /// Who has won a finished frame: the higher score, or nobody on a tie.
 ///
 /// A real tie re-spots the black and plays for it. That is a whole extra frame

@@ -4,6 +4,8 @@ use ratatui::backend::TestBackend;
 
 use crate::app::deadchannel::fight::state::{Lookout, Sheet};
 use crate::app::deadchannel::guide::state::State as GuideState;
+use crate::app::deadchannel::poster::session::Bench;
+use crate::app::deadchannel::poster::ui as poster_ui;
 use crate::app::deadchannel::street::state::StreetRunner;
 use crate::app::deadchannel::tailor::ui as tailor_ui;
 
@@ -30,6 +32,12 @@ fn render(state: &State, width: u16, height: u16) -> String {
                         word: None,
                         changed: false,
                         saving: false,
+                    },
+                    poster: poster_ui::PosterView {
+                        bench: &Bench::Shut,
+                        hung: false,
+                        writing: None,
+                        word: None,
                     },
                     guide: &GuideState::new(),
                     own_user_id: Uuid::nil(),
@@ -117,6 +125,12 @@ fn the_armorer_prices_the_picked_row_against_the_sheet() {
                         changed: false,
                         saving: false,
                     },
+                    poster: poster_ui::PosterView {
+                        bench: &Bench::Shut,
+                        hung: false,
+                        writing: None,
+                        word: None,
+                    },
                     guide: &GuideState::new(),
                     own_user_id: Uuid::nil(),
                     street: &StreetView::new(),
@@ -198,6 +212,12 @@ fn render_panel(
                         word: tailor_word,
                         changed: false,
                         saving: false,
+                    },
+                    poster: poster_ui::PosterView {
+                        bench: &Bench::Shut,
+                        hung: false,
+                        writing: None,
+                        word: None,
                     },
                     guide: &GuideState::new(),
                     own_user_id: Uuid::nil(),
@@ -549,6 +569,12 @@ fn patch_prices_the_gap_and_says_when_there_is_nothing_to_buy() {
                             changed: false,
                             saving: false,
                         },
+                        poster: poster_ui::PosterView {
+                            bench: &Bench::Shut,
+                            hung: false,
+                            writing: None,
+                            word: None,
+                        },
                         guide: &GuideState::new(),
                         own_user_id: Uuid::nil(),
                         street: &StreetView::new(),
@@ -719,6 +745,12 @@ fn every_cell_sits_on_the_city_night_not_the_theme_canvas() {
                         word: None,
                         changed: false,
                         saving: false,
+                    },
+                    poster: poster_ui::PosterView {
+                        bench: &Bench::Shut,
+                        hung: false,
+                        writing: None,
+                        word: None,
                     },
                     guide: &GuideState::new(),
                     own_user_id: Uuid::nil(),
@@ -891,6 +923,12 @@ fn other_runners_stand_on_the_street_with_their_names_and_you_are_not_twice() {
                         changed: false,
                         saving: false,
                     },
+                    poster: poster_ui::PosterView {
+                        bench: &Bench::Shut,
+                        hung: false,
+                        writing: None,
+                        word: None,
+                    },
                     guide: &GuideState::new(),
                     own_user_id: mira,
                     street: &street,
@@ -972,6 +1010,12 @@ fn a_runner_who_is_looking_carries_a_light_and_one_who_is_away_does_not() {
                 changed: false,
                 saving: false,
             },
+            poster: poster_ui::PosterView {
+                bench: &Bench::Shut,
+                hung: false,
+                writing: None,
+                word: None,
+            },
             guide: &guide,
             own_user_id: Uuid::nil(),
             street: &street,
@@ -988,4 +1032,95 @@ fn a_runner_who_is_looking_carries_a_light_and_one_who_is_away_does_not() {
         }
     };
     assert!(brightness(true) > brightness(false));
+}
+
+/// The city with PRINTS's panel open on `bench`, `word` as the printer's
+/// last word, on a `width` by `height` terminal.
+fn render_prints(width: u16, height: u16, state: &State, bench: &Bench, word: &str) -> String {
+    let backend = TestBackend::new(width, height);
+    let mut terminal = Terminal::new(backend).unwrap();
+    terminal
+        .draw(|frame| {
+            draw(
+                frame,
+                frame.area(),
+                CityView {
+                    state,
+                    own_username: "mira",
+                    look: None,
+                    sheet: None,
+                    scene: None,
+                    picker: None,
+                    lookout: &Lookout::default(),
+                    till: None,
+                    tailor: tailor_ui::MirrorView {
+                        draft: None,
+                        word: None,
+                        changed: false,
+                        saving: false,
+                    },
+                    poster: poster_ui::PosterView {
+                        bench,
+                        hung: false,
+                        writing: None,
+                        word: Some(word),
+                    },
+                    guide: &GuideState::new(),
+                    own_user_id: Uuid::nil(),
+                    street: &StreetView::new(),
+                    runner_looks: &HashMap::new(),
+                    usernames: &UsernameLookup::new(&HashMap::new(), None),
+                },
+            )
+        })
+        .unwrap();
+    let buffer = terminal.backend().buffer().clone();
+    let mut screen = String::new();
+    for y in 0..buffer.area.height {
+        for x in 0..buffer.area.width {
+            screen.push_str(buffer[(x, y)].symbol());
+        }
+        screen.push('\n');
+    }
+    screen
+}
+
+/// PRINTS's panel is the city's frame around the poster: its cells at the
+/// top left of the body, the keys beside them, the printer's word at the
+/// foot. A short terminal cuts the poster's rows before the word.
+#[test]
+fn the_prints_panel_frames_the_poster_and_the_printers_word() {
+    use crate::app::deadchannel::poster::state::{Draft, Edit};
+
+    let mut state = State::new();
+    state.open_panel(Landmark::Prints);
+    let mut draft = Draft::new(None, 0);
+    for ch in "HELLO".chars() {
+        draft.edit(Edit::Type(ch));
+    }
+    let bench = Bench::Open(Box::new(draft));
+    let word = "the press runs. it hangs on your profile now.";
+    for (width, height) in [(120, 40), (80, 20)] {
+        let screen = render_prints(width, height, &state, &bench, word);
+        for needle in [" prints ", "│HELLO", "[^S] save it", word, " Esc closes "] {
+            assert!(
+                screen.contains(needle),
+                "{needle} at {width}x{height}\n{screen}"
+            );
+        }
+    }
+    let screen = render_prints(80, 14, &state, &bench, word);
+    for needle in ["│HELLO", word] {
+        assert!(
+            screen.contains(needle),
+            "{needle} on a short terminal\n{screen}"
+        );
+    }
+
+    // Before the wall is read, the panel says so in a line.
+    let screen = render_prints(120, 40, &state, &Bench::Reading { marks: 0 }, word);
+    assert!(
+        screen.contains("the printer goes to find what hangs on your wall..."),
+        "{screen}"
+    );
 }

@@ -28,8 +28,8 @@ use crate::app::games::pool_core::{
     shot::BallFrame,
     table::{Geometry, PocketKind, TableSpec},
     table_ui::{
-        CLOTH, GHOST, MARKING, Overlay, POCKET, POCKET_CALLED, RAIL, RAIL_DARK, SURROUND,
-        leg_style, marking_at, paint_ball, ring,
+        CLOTH, GHOST, MARKING, Overlay, POCKET, POCKET_CALLED, RAIL, RAIL_DARK, leg_style,
+        marking_at, paint_ball, ring,
     },
 };
 
@@ -65,6 +65,12 @@ const FOCAL_W: f64 = 1.05;
 /// perspective puts the far corner ball under a pixel, and a ball you cannot
 /// see is worse than a ball drawn slightly too large.
 const MIN_BALL_PX: f64 = 1.5;
+
+/// The room behind and around the table in this view. Lighter than the
+/// overview's `SURROUND`, because here the far pockets sit right on the
+/// horizon, and a black hole against a near-black room is a pocket nobody can
+/// find. A mid grey keeps every hole outlined against something.
+const ROOM: Rgb = [74, 76, 82];
 
 /// Where the eye is and which way it looks. Built from the shot itself, so the
 /// view *is* the aim: there is no camera to fly and nothing to get lost in.
@@ -250,7 +256,7 @@ fn paint_cloth(canvas: &mut Canvas, spec: &TableSpec, geom: &Geometry, eye: &Eye
     for py in 0..canvas.height() as i32 {
         for px in 0..canvas.cols() as i32 {
             let Some((at, span)) = eye.probe(px as f64 + 0.5, py as f64 + 0.5) else {
-                canvas.set(px, py, SURROUND);
+                canvas.set(px, py, ROOM);
                 continue;
             };
             canvas.set(px, py, cloth_at(spec, geom, sight, at, rail, span * 0.5));
@@ -270,7 +276,7 @@ fn cloth_at(
     let (x, y) = (at[0], at[1]);
     let outside = (-x).max(x - spec.length).max((-y).max(y - spec.width));
     if outside > rail {
-        return SURROUND;
+        return ROOM;
     }
 
     // A pocket swallows the cloth and the rail alike, so it is checked first.

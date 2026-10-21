@@ -50,8 +50,8 @@ Local state:
 
 - `late-ssh/src/app/artboard/gallery/` (the gallery subdomain, same file roles; `gallery/CONTEXT.md`)
 
-- `late-ssh/src/app/artboard/color_picker.rs`
-  - Pure state machine for the paint colour picker (`Ctrl+K`): `ColorPicker { color, row, hex, preset }`, rows `Red` / `Green` / `Blue` / `Hex` / `Presets`, `move_row`, `adjust`, `jump`, `set_channel`, `select_preset`, `type_hex`, `hex_backspace`. Edits a working copy; `State::apply_color_picker` makes it the paint colour. Drawing and hit tests are in `ui.rs`, keys in `input.rs`.
+- `late-ssh/src/app/common/color_picker.rs` (shared with PRINTS in the undercity, `app/deadchannel/poster`)
+  - The paint colour picker (`Ctrl+K` here): the pure state machine `ColorPicker { color, row, hex, preset }`, rows `Red` / `Green` / `Blue` / `Hex` / `Presets`, `move_row`, `adjust`, `jump`, `set_channel`, `select_preset`, `type_hex`, `hex_backspace`, `click`; `PAINT_PALETTE`, the sixteen presets (the info block's palette rows too); the popup's `draw(frame, area, picker, title)` and `hit(area, col, row)`. Edits a working copy; `State::apply_color_picker` makes it the paint colour. The keys stay each host's: the Artboard's are in `input.rs`.
 
 - `late-ssh/src/app/artboard/data.rs`
   - Static help text for the Artboard help overlay.
@@ -79,7 +79,7 @@ Local state:
   - Wraps `dartboard_editor::EditorSession` for cursor, viewport, selection, swatches, floating brush, edit actions, and pointer behavior.
   - Maintains local-only state: brush, drag brush, paint color (`Option<RgbColor>`, `None` is the peer colour; `select_palette_color` / `cycle_paint_color` pick a preset, `apply_color_picker` any RGB), the colour picker, help overlay, glyph picker, hover position, the archive browser, swatch preview suppression.
   - `tick()` drains archive loader results, live `watch` snapshots, and service events.
-  - Local mutations use `edit_canvas` or `submit_canvas_diff`: diff local canvas changes into `CanvasOp`, update local/shared provenance, then submit to the service.
+  - Local mutations go through `edit_board` (`edit_canvas` adds the archive check): every edit names its `EditReach` up front (`action_reach` for editor actions, `pointer_reach` for brush strokes), the diff reads only that area plus a column either side for wide glyphs (`crop_canvas` + `diff_canvas_op`), local/shared provenance takes the op against the cropped before-board, and the op goes to the service. Cursor moves, pans, selection and hover reach `Nothing` and copy nothing in release; only the editor's row/column shifts and a brush stroke jumping to a viewport edge reach `Anywhere` (a whole-board diff). Debug builds check every edit, `Nothing` included, against the whole-board diff.
   - Archive view is read-only; edit paths refuse to submit while `archives.active` is set.
   - Archive browsing (`open_archive_list`, `archive_move`, `close_archive_list`, `exit_archive_view`): the cursor in the rail's list sets `wanted`; `request_wanted_archive` serves it from the board, then the cache (`ARCHIVE_CACHE_SIZE` = 8), then one fetch at a time; a landed fetch re-checks `wanted` so a cursor that moved on is caught up with. Esc keeps the archive on the board; the Board row (`exit_archive_view`) restores live.
   - Owner overlay renders a derived canvas replacing each glyph with owner initials/colors.
@@ -101,7 +101,7 @@ Local state:
   - Converts `InputAction::Copy` into `app.pending_clipboard` and `InputAction::Leave` into edit-mode deactivation.
 
 - `late-ssh/src/app/artboard/ui.rs`
-  - Rendering for canvas, info sidebar, swatch strip, help overlay, glyph picker, the colour picker modal (`draw_color_picker`, `color_picker_hit`, `palette_hit` for the info block's palette rows), owner overlay, floating preview, and selection; `draw_game` lays the rail and the gallery pane around them in view mode.
+  - Rendering for canvas, info sidebar, swatch strip, help overlay, glyph picker, the colour picker modal (`common::color_picker::draw` over the page area; `color_picker_hit` reads a click through `common::color_picker::hit`), `palette_hit` for the info block's palette rows, owner overlay, floating preview, and selection; `draw_game` lays the rail and the gallery pane around them in view mode.
   - Uses `ratatui`, `dartboard_tui`, and app theme helpers.
   - `canvas_area_for_state(size, rail_visible)` must match the frame layout; hit tests and the editor viewport depend on it. The rail's visibility is published by the draw path (`GalleryState::set_rail_visible`), so input math follows the last frame.
   - `render_piece_canvas` draws any piece canvas in the board's style; every gallery surface goes through it.
@@ -245,12 +245,12 @@ Related tests:
 - `late-core/src/models/artboard_test.rs` covers snapshot upsert replacement, uniqueness, special/daily/monthly archive listing, insert-if-absent, prefix listing, and delete by board key.
 
 Inline module tests:
-- `color_picker.rs` (`color_picker_test.rs`): whole-state walks of the rows, hex typing and backspace, preset wrap and tracking.
+- `common/color_picker.rs` (`color_picker_test.rs`): whole-state walks of the rows, hex typing and backspace, preset wrap and tracking, the popup's hit tests and a click.
 - `provenance.rs`: paint/clear provenance and replace retagging.
-- `state.rs`: coordinate conversion, owner initials/colors, help scroll, floating/selection behavior, paste cursor logic, swatch/glyph behavior, the picker applying or discarding a colour.
+- `state.rs`: coordinate conversion, owner initials/colors, help scroll, floating/selection behavior, paste cursor logic, swatch/glyph behavior, the picker applying or discarding a colour, bounded edits and brush strokes reaching the other half of a wide glyph (`edits_beside_wide_glyphs_reach_the_other_half`, `brush_strokes_beside_wide_glyphs_reach_the_other_half`).
 - `input.rs`: mouse routing, raw control mapping, swatch interactions, double-click glyph brush, help/glyph picker routing, the colour picker keys and the palette click, selection, paste/stamp behavior.
 - `page.rs`: view-mode right-drag pan, non-canvas right-click handling, Alt-arrow pan.
-- `ui.rs`: canvas layout, info/sidebar layout, help tabs/hit tests, the colour picker's hit tests and rendered modal, the palette rows' hit test, swatch boxes, wide glyph cursor origin, the rail-aware board area.
+- `ui.rs`: canvas layout, info/sidebar layout, help tabs/hit tests, the colour picker over the page area and its rendered modal, the palette rows' hit test, swatch boxes, wide glyph cursor origin, the rail-aware board area.
 
 ## Key Invariants
 
@@ -277,6 +277,7 @@ Inline module tests:
 - Monthly rollover uses system user/client IDs `0`; actor lookup can fail intentionally and should fall back to cloned shared provenance.
 - Wide glyph handling affects cursor rendering, selection coverage, double-click sampling, provenance, swatches, and ownership overlay.
 - `diff_canvas_op` abstracts many editor mutations into server ops; editor changes can affect sync granularity and provenance application.
+- `EditReach` encodes where each `dartboard_editor` action can write; it matches `EditorAction` exhaustively, so a crate upgrade that adds an action breaks the build. An upgrade that changes where an existing action writes fails the debug-build check in any test that drives that action; an action no test drives goes unchecked.
 - Archive lists are keys only and one canvas loads at a time, so retention can grow without the page paying for it; the per-session cache is bounded (`ARCHIVE_CACHE_SIZE`).
 - UI hit testing depends on exact layout math shared by `ui.rs`, `input.rs`, and `page.rs`.
 - SGR mouse coordinates are 1-based at the parser boundary; Artboard hit tests assume normalized coordinates from app input.

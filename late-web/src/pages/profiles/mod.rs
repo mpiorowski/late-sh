@@ -10,7 +10,9 @@ use axum::{
     routing::get,
 };
 use chrono::{DateTime, Utc};
+use dartboard_core::Canvas;
 use late_core::models::{
+    deadchannel_runner::DeadchannelRunner,
     profile::Profile,
     showcase::Showcase,
     user::User,
@@ -28,6 +30,9 @@ pub(crate) fn router() -> Router<AppState> {
 #[derive(Template)]
 #[template(path = "pages/profiles/page.html")]
 struct Page {
+    /// The runner's poster, its cells drawn by `/static/board.js` like a
+    /// gallery snapshot. `None` without a standing runner or a poster.
+    poster_json: Option<String>,
     headline: String,
     username: String,
     status_id: &'static str,
@@ -144,7 +149,21 @@ async fn handler(
     let contacts = parse_contacts(&work.contact);
     let show_contact = !contacts.is_empty();
 
+    let poster_json = match DeadchannelRunner::poster(&client, work.user_id)
+        .await
+        .context("failed to load runner poster")?
+    {
+        Some(value) => match serde_json::from_value::<Canvas>(value) {
+            Ok(canvas) => Some(crate::pages::gallery::canvas_json(&canvas)?),
+            Err(error) => {
+                tracing::error!(error = %error, user_id = %work.user_id, "runner poster failed to decode; profile page shows none");
+                None
+            }
+        },
+        None => None,
+    };
     let page = Page {
+        poster_json,
         headline: work.headline,
         username: user_profile.username.clone(),
         status_id: work.status.as_str(),

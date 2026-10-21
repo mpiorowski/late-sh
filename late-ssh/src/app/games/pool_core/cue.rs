@@ -51,6 +51,12 @@ pub const SPIN_PER_TIP: f64 = 2.5;
 /// a malformed shot cannot hand the simulator an absurd amount of energy.
 pub const MAX_SPEED: f64 = 12.0;
 
+/// Rows of downward pointer travel that draw the cue from nothing to a full
+/// pull. Here rather than with the other pointer rates because the cue panel
+/// needs it too: it draws the cue back exactly one terminal row per row the
+/// pointer has travelled, so the cue on screen is where the hand is.
+pub const PULL_ROWS: f64 = 14.0;
+
 /// How hard a full pull of the cue hits.
 ///
 /// Three bands rather than one continuous scale because a terminal pointer has
@@ -74,17 +80,65 @@ impl PowerBand {
     ///
     /// The numbers are pinned to how hard people actually hit, not spread
     /// evenly over the range. A pot at conversational pace is 2-3 m/s, a
-    /// firm shot down the table 4-5, and only a break approaches the cap — so
-    /// `normal` tops out around 4 m/s and reaches its middle, where an
-    /// untouched cue sits, at a natural rolling shot. The first cut of these
-    /// put `normal` at two thirds of a break, which made every shot feel like
-    /// a slam; the second was still a fifth too hard to play position with.
+    /// firm shot down the table 4-5, and a pool break around 8. The first cut
+    /// of these put `normal` at two thirds of a break, which made every shot
+    /// feel like a slam; the second was still a fifth too hard to play
+    /// position with; the third topped `normal` at 3.5 m/s, which could not
+    /// break a snooker pack (a break-off that brings the cue ball back to
+    /// baulk wants 3.5-5 on the twelve-footer), and let `strong` reach the
+    /// whole 12 m/s cap, which nobody could use.
+    ///
+    /// `strong` therefore stops short of `MAX_SPEED`. The cap is a sanity
+    /// limit on what the server accepts, not a speed any band promises.
     pub fn ceiling(self) -> f64 {
         match self {
-            Self::Light => 0.12,
-            Self::Normal => 0.29,
-            Self::Strong => 1.0,
+            Self::Light => 0.10,
+            Self::Normal => 0.40,
+            Self::Strong => 0.70,
         }
+    }
+
+    /// Fraction of `MAX_SPEED` the gentlest stroke in this band plays. A band
+    /// is a *range*, not a ceiling over nought: arming `normal` is asking for
+    /// an ordinary shot, and an ordinary shot is never a nudge, however slowly
+    /// the cue comes through — nor is `strong` ever a roll. The ranges overlap
+    /// (light 0.2-1.2 m/s, normal 0.6-4.8, strong 2.4-8.4), so every speed a
+    /// player wants is reachable from two bands and none falls between.
+    ///
+    /// The first floors (0.4 / 1.2 / 3.6) were a table length too fast: on the
+    /// bar box a cue ball struck at 1.2 m/s rolls 1.85 m, the whole table, so
+    /// the slowest `normal` stroke was already a firm one.
+    pub fn floor(self) -> f64 {
+        match self {
+            Self::Light => 0.2 / MAX_SPEED,
+            Self::Normal => 0.6 / MAX_SPEED,
+            Self::Strong => 2.4 / MAX_SPEED,
+        }
+    }
+
+    /// Fraction of `MAX_SPEED` for `within`, 0 (the floor) to 1 (the
+    /// ceiling) of this band. The one place a pull or a push becomes a speed.
+    ///
+    /// **Geometric, not linear**: each step up the band multiplies the speed
+    /// by the same factor. How far a ball rolls goes with the square of its
+    /// speed, so equal steps in m/s spend the low half of the band on shots
+    /// that all die short and crowd every real decision into its bottom
+    /// corner. Halfway up `normal` is 1.7 m/s, a ball that crosses the table
+    /// and comes back a little; linear put it at 2.7, twice the distance.
+    pub fn speed_at(self, within: f64) -> f64 {
+        // Clamped so the top of the band is the ceiling exactly, not a
+        // rounding error past it.
+        (self.floor() * (self.ceiling() / self.floor()).powf(within.clamp(0.0, 1.0)))
+            .clamp(self.floor(), self.ceiling())
+    }
+
+    /// Where `speed` (a fraction of `MAX_SPEED`) sits in this band, 0 to 1:
+    /// `speed_at` backwards, for the readout's bar.
+    pub fn within(self, speed: f64) -> f64 {
+        if speed <= self.floor() {
+            return 0.0;
+        }
+        ((speed / self.floor()).ln() / (self.ceiling() / self.floor()).ln()).clamp(0.0, 1.0)
     }
 
     pub fn label(self) -> &'static str {
@@ -185,7 +239,7 @@ impl ShotMode {
             Self::Aim => "move to turn, click to keep",
             Self::Spin => "click the face to set the tip",
             Self::Place => "it follows you, click to set",
-            Self::Stroke(_) => "pull down, push up to strike",
+            Self::Stroke(_) => "pull back; push speed = power",
         }
     }
 }

@@ -312,14 +312,11 @@ place at all: scarcity of place is the fiction's spine, same as the
 Status (2026-09-02): all four stages and the eligibility gate exist in
 this directory, `late-ssh/src/app/deadchannel/` (see `CONTEXT.md` beside this file), built
 for several replicas (every cap and stamp a conditional claim on the
-user row). Stage 1 is staff only, a rule in code rather than a switch,
-so nothing fires for non-staff users yet (staff: admins and moderators,
-the mods meeting it cold as the first playtest); stages 2-4 sit behind connected time, touched
+user row). The haunting is open to everyone: stage 1 arms for every
+session (the mods met it cold first, as the playtest); stages 2-4 sit behind connected time, touched
 settings, and an AI-screened bio with placeholder thresholds (7 days of
 online time, 2 keys, 100 characters; the length is only the floor under
-which no screen is spent, the AI screen does the judging). Copy, the
-voice's name, and the thresholds still face design review before the
-haunting leaves staff.
+which no screen is spent, the AI screen does the judging).
 
 - **The game is never announced; it arrives.** Onboarding as haunting: the
   bridge fiction says the city is behind the screen and chat is the leak,
@@ -343,8 +340,7 @@ haunting leaves staff.
      see that?" gets "no?" back, which is deniability and gossip in one
      move), rare (order of once per hours-long session, at most once or
      twice a day per user), render-layer only (the one DB touch is the
-     per-user burst counter), staff-scoped until the haunting is opened
-     up in code. Ladder count (tuned 2026-09-01): **three
+     per-user burst counter), open to every session. Ladder count (tuned 2026-09-01): **three
      bursts total per person**, persisted; the third quiets the clock
      for good and opens stage 2, and the quiet is itself part of the
      escalation. Whether unchosen users keep an unbounded ambient clock
@@ -514,8 +510,8 @@ haunting leaves staff.
     the failure mode. No fake errors, no fake disconnects, nothing
     resembling a real terminal failure. Static and corruption are
     obviously *voiced*, never mechanical.
-  - **Staff only until opened up in code**, and a ready answer for the
-    inevitable "I found a display bug" report.
+  - **A ready answer** for the inevitable "I found a display bug"
+    report.
 - **First contact is a nonrenewable resource.** It works exactly once per
   person. Two timing rules: never burn it on real users while it is
   staff-scoped scaffolding, and never light it until the breach is close.
@@ -827,8 +823,8 @@ something other people see without a number.
 |---|---|---|
 | chat author line | mark + level | everyone in the room |
 | clubhouse floor | mark | everyone on the floor |
-| profile card (`p`, `/profile @user`) | portrait + sheet | anyone who looks |
-| web `/profiles/{slug}` | portrait + sheet | the whole internet: the brag that leaves the terminal |
+| profile card (`p`, `/profile @user`) | badge + portrait + poster | anyone who looks |
+| web `/profiles/{slug}` | poster (the portrait is not drawn there) | the whole internet: the brag that leaves the terminal |
 | #deadchannel messages | portrait in a 3-row gutter beside every runner's message | runners only; the wire is the game's own room, so the face rides every message there (decided 2026-09-02) |
 | the wire | portrait as a three-line message | runners; printed by the game on a level gained and on an Old Signal kill, the two moments worth a picture |
 | the fight panel (later) | two portraits facing | whoever is watching |
@@ -896,16 +892,32 @@ What the sketches decided:
 
 - **One tint per piece, never per cell**, from a closed palette of about
   seven (static grey, amber, phosphor green, cyan, magenta, red, white),
-  opened by level. No earned tint: gold stays out of the palette. Two people in the same three
+  opened by level. No earned tint on the face: gold stays out of the
+  palette. **The Old Signal mark opens every colour on the poster, and
+  only there**: without a mark the poster's brush holds the seven tints
+  (all of them, whatever the level), with one it mixes any colour. The
+  face keeps its seven; a feat still earns a badge, never clothes. Two people in the same three
   pieces and different tints already look different, so the catalog
   multiplies without more art. The wire prints portraits in plain text
   (chat bodies carry no color and IRC would need color codes); the
   profile card, the #deadchannel gutter, and the fight panel paint them.
-- **"Build your own" means composing, never drawing.** No freehand cells.
-  A closed piece set is what makes a look legible ("that coat is season
-  one"), and it is also the only thing between the tailor and a room
-  full of ASCII dicks. Building is picking a hood, eyes, a coat, and a
-  tint for each. That is the whole editor.
+- **The face is composed, never drawn.** No freehand cells in a
+  portrait. A closed piece set is what makes a look legible ("that coat
+  is season one") at one cell and in a gutter beside every message, and
+  it is also the only thing between the tailor and a room full of ASCII
+  dicks. Building a face is picking a hood, eyes, a coat, and a tint for
+  each. That is the whole of the tailor's editor.
+- **The poster is the one free-painted surface.** A 32 by 12 picture,
+  painted at PRINTS (a shop on the street by the tailor, free) and hung
+  on the profile beside the face, in the terminal and on the web. It is
+  profile-sized and lives only there: never in the chat, the wire, the
+  street, or the fight, so the legibility rule above stays the face's.
+  It is moderated the way the Artboard is: a moderator takes one down
+  (`/mod deadchannel remove-poster`), and its owner burns it at PRINTS.
+  A runner without one shows the test card, seven bars in the seven
+  tints. The name is poster on purpose: never "mark" (taken twice),
+  "tag" (showcases wear hashtags on the same screen) or "card" (the
+  fight's word).
 - **Glyph width is the real risk.** Box drawing and block elements are
   single width everywhere; shapes like `◉ ◈ ◔ ◌` are ambiguous width
   and render double wide in some terminals and fonts, which would tear
@@ -957,11 +969,11 @@ single bounty exists.
 
 ### The sheet (what the profile card shows)
 
-For a runner, above the ordinary profile: the portrait; name, mark,
-level, band; signal as a bar; rations and charge left today; weapon and
-armor by name; marks and the title they earn; bits on hand (public on
-purpose: LORD's rankings showed gold, and visible wealth is what a bounty
-is placed on later). The stash stays private. For anyone who never
+For a runner, beside the ordinary profile: the badge (mark, level, and
+marks), the portrait wounded by the missing signal, and the poster. The
+rest of the sheet (signal, exp, bits, the kit, the tally) stays on the
+street, where the strip and the Night City card carry it for the runner
+themself; the stash stays private. For anyone who never
 joined, the card shows nothing game-related; civilians reading a
 runner's card see "ghost, level 7" and have no idea what it means,
 which is fine.
@@ -1186,7 +1198,7 @@ street: the locker, the band choice.
 
 ## The fight pass: where the ration goes (2026-09-24)
 
-Status: **built as an experiment, staff only like the rest**
+Status: **built as an experiment**
 (`late-ssh/src/app/deadchannel/fight/`, `fight/CONTEXT.md` beside this
 file). The question was where the daily fights happen and how anyone
 sees them. The three surfaces already answered half of it (the ration
@@ -1267,7 +1279,7 @@ armorer's till, and the tailor's mirror.
 
 ## The money pass: the step down, the locker, the machine, the ledge
 
-Status: **built, staff only like the rest** (`fight/` and `city/`,
+Status: **built** (`fight/` and `city/`,
 `fight/MONEY.md`). The question was a real one: a
 runner walked past the armorer, levelled on exp into the hiss with bare
 hands, dropped, and stood at level 2 with no bits and a fight they win
@@ -1318,7 +1330,7 @@ one it borrowed from.
 
 ## The crystal pass: the wall's price, the bright glyph, and something to want (2026-10-04)
 
-Status: **built, staff only like the rest** (`fight/`, `city/`,
+Status: **built** (`fight/`, `city/`,
 `fight/CRYSTALS.md`). A week of staff play asked two questions at once.
 A level 8 runner held the whole level 15 kit, both pieces, with bits to
 spare: the armorer was finished half way up the ladder. And with the kit
@@ -1472,7 +1484,7 @@ to ask which steps are bright tomorrow.
 
 ## The road pass: the daily run, the hand, and being seen (2026-09-24)
 
-Status: **the round and the road are built, staff only like the rest**
+Status: **the round and the road are built**
 (2026-10-06; `fight/cards.rs`, `fight/road.rs`, `fight/policy.rs`,
 `fight/CONTEXT.md`, measured in `fight/BALANCE.md`). The level colors
 were built earlier. Ambush, the arena, and bounties are decided, not
@@ -1796,7 +1808,7 @@ do, and share rate per completion per daily is the first number to pull.
 
 ## The lounge pass: the glyph on the composer (2026-10-14)
 
-Status: **built, staff only like the rest** (`late-ssh/src/app/deadchannel/lounge/`,
+Status: **built** (`late-ssh/src/app/deadchannel/lounge/`,
 `CONTEXT.md` §3d). The first piece of "#lounge: the snack" and the
 first shared world object: one spawn, server-side hits, every runner's
 screen in step. Decided over ambush as the social piece to ship first,
@@ -1839,8 +1851,9 @@ social thing a new runner meets is a pile-on, not a mugging.
   most three caches and one crystal a day, and only for runners who
   were there. Nothing in the lounge hits back; the only stake is time.
   A dropped signal cannot hit.
-- **The wire, once per spawn.** The kill names everyone who hit; a
-  slip says nobody was looking, or who hit it and that it needed three.
+- **The wire, at most once per spawn.** The kill names everyone who
+  hit; a slip names who hit it and how many it needed, and a spawn
+  nobody hit slips away unsaid.
   Nothing lands in #lounge, in scrollback, or on IRC.
 - **Measured where it lands.** The lounge's pay is not in the sim yet:
   the budget bounds it (three caches and a crystal a day at most), and
@@ -1854,7 +1867,7 @@ slip into the wire; and the "hide the static" setting and its name.
 
 ## The crossing pass: a runner on the road (2026-10-15)
 
-Status: **built, staff only like the rest** (`fight/` with the rest of
+Status: **built** (`fight/` with the rest of
 the road, `fight/CONTEXT.md` "The crossing"; the rows in
 `deadchannel_ambushes`). Ambush on the road-node shape "PvP at forty
 people" chose, and the first negative-sum thing in the game, so the

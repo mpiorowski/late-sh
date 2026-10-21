@@ -11,13 +11,21 @@
 //! `ing` contraction is the one deliberate exception, and it reads as speech
 //! rather than as damage.
 //!
-//! Spending instructions are never touched at any level: the phrases in
+//! Instructions to the bar are never touched at any level: the phrases in
 //! [`spending_phrase_spans`] that buy the house a round or put one drink on
-//! a named patron's tab. The bartender matches these literally, so slurring
-//! them would silently lose an order. The matchers live in
-//! `late_core::models::drink_round` and are shared here.
+//! a named patron's tab, and the [`memory_phrase_spans`] that ask the
+//! bartender to remember or to forget. A remember request is kept whole, every
+//! line of it, since what the patron asks him to remember outlives the drink.
+//! Alcohol preference and opt-in wording
+//! is protected too, so literal requests and preferences keep their wording.
+//! Slurring these would silently lose an order or a wipe. The matchers live
+//! in `late_core::models::drink_round` and `bartender_memory` and are
+//! shared here.
 
-use late_core::models::drink_round::spending_phrase_spans;
+use late_core::models::{
+    bartender_memory::{alcohol_phrase_spans, memory_phrase_spans, remember_request_span},
+    drink_round::spending_phrase_spans,
+};
 
 /// Shortest word that can take a typo. Below this there is no interior left
 /// once the first and last characters are off limits.
@@ -96,6 +104,12 @@ pub(crate) fn slur(body: &str, level: u8, seed: u64) -> String {
 
     let mut rng = SlurRng::new(seed);
     let mut out = String::with_capacity(body.len());
+    // Spans are otherwise worked out line by line, and a remember request's
+    // later lines carry no "remember" of their own.
+    let (body, kept) = match remember_request_span(body) {
+        Some((start, _)) => body.split_at(start),
+        None => (body, ""),
+    };
     // Everything before this offset is the untouchable quote line, so the
     // hiccup has to land after it too.
     let mut quoted_len = 0;
@@ -112,11 +126,21 @@ pub(crate) fn slur(body: &str, level: u8, seed: u64) -> String {
         }
         out.push_str(&slur_line(line, &intensity, &mut rng));
     }
+    out.push_str(kept);
 
     if rng.percent(intensity.hiccup_percent) {
         out = with_hiccup(&out, quoted_len, &mut rng);
     }
     out
+}
+
+/// Byte ranges no scramble or hiccup may land in: everything the bar reads
+/// literally.
+fn protected_spans(text: &str) -> Vec<(usize, usize)> {
+    let mut spans = spending_phrase_spans(text);
+    spans.extend(memory_phrase_spans(text));
+    spans.extend(alcohol_phrase_spans(text));
+    spans
 }
 
 /// Code spans pass through untouched: this is a developer chat, and a typo
@@ -139,7 +163,7 @@ fn slur_line(line: &str, intensity: &Intensity, rng: &mut SlurRng) -> String {
 }
 
 fn slur_segment(segment: &str, intensity: &Intensity, rng: &mut SlurRng) -> String {
-    let protected = spending_phrase_spans(segment);
+    let protected = protected_spans(segment);
     let mut out = String::with_capacity(segment.len());
     let mut offset = 0;
     // Inclusive split keeps each token's trailing whitespace attached, so
@@ -268,11 +292,11 @@ fn slurred(chars: &[char], rng: &mut SlurRng) -> Option<String> {
 
 /// Drop a single `*hic*` between two words. It only ever widens a gap, so no
 /// token is split, but the gap itself still has to be fair game: gaps inside a
-/// code span, inside a spending phrase (a hiccup mid-order would break the match
-/// the same way a scramble would), or in the quoted line before `from` are off
-/// limits. With nothing eligible the hiccup goes on the end.
+/// code span, inside a phrase the bar reads (a hiccup mid-order would break the
+/// match the same way a scramble would), or in the quoted line before `from` are
+/// off limits. With nothing eligible the hiccup goes on the end.
 fn with_hiccup(text: &str, from: usize, rng: &mut SlurRng) -> String {
-    let protected = spending_phrase_spans(text);
+    let protected = protected_spans(text);
     let mut gaps = Vec::new();
     let mut in_code = false;
     for (index, c) in text.char_indices() {

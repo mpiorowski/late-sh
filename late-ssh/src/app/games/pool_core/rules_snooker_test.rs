@@ -431,3 +431,91 @@ fn the_last_red_is_followed_by_a_colour_of_choice() {
         "now the colours come in order"
     );
 }
+
+#[test]
+fn the_points_remaining_are_a_scoreboard_s() {
+    use crate::app::games::pool_core::rules_snooker::{out_of_reach, points_remaining};
+    let mut state = frame();
+    assert_eq!(points_remaining(&state), 147, "the maximum, from the break");
+
+    state.on_colour = true;
+    assert_eq!(
+        points_remaining(&state),
+        154,
+        "a black after the red just potted"
+    );
+    state.on_colour = false;
+
+    let reds: Vec<u8> = (RED_FIRST..=RED_LAST).collect();
+    pot(&mut state, &reds);
+    assert_eq!(points_remaining(&state), 27, "the colours alone");
+    state.free_ball = true;
+    assert_eq!(
+        points_remaining(&state),
+        29,
+        "and the yellow twice off a free ball"
+    );
+    state.free_ball = false;
+
+    pot(&mut state, &[YELLOW, GREEN, BROWN, BLUE, PINK]);
+    assert_eq!(points_remaining(&state), value(BLACK));
+    assert_eq!(
+        out_of_reach([15, 7], 7),
+        Some(0),
+        "eight ahead with the black left"
+    );
+    assert_eq!(
+        out_of_reach([14, 7], 7),
+        None,
+        "seven ahead can still be tied"
+    );
+    assert_eq!(out_of_reach([0, 8], 7), Some(1));
+}
+
+#[test]
+fn snookers_required_count_to_a_win() {
+    use crate::app::games::pool_core::rules_snooker::{only_black_left, snookers_required};
+    let mut state = frame();
+    let reds: Vec<u8> = (RED_FIRST..=RED_LAST).collect();
+    pot(&mut state, &reds);
+    pot(&mut state, &[YELLOW, GREEN, BROWN, BLUE]);
+    // Pink and black: thirteen on, and each snooker on the pink pays six.
+    assert_eq!(snookers_required(&state, 12, 13), 0, "clearing wins it");
+    assert_eq!(snookers_required(&state, 13, 13), 1, "clearing only ties");
+    assert_eq!(snookers_required(&state, 19, 13), 2);
+    assert!(!only_black_left(&state));
+    pot(&mut state, &[PINK]);
+    assert!(only_black_left(&state));
+    assert_eq!(
+        snookers_required(&state, 21, 7),
+        3,
+        "fifteen short at seven a time"
+    );
+
+    // With reds up a snooker is worth the minimum four.
+    let state = frame();
+    assert_eq!(snookers_required(&state, 150, 147), 1);
+    assert_eq!(snookers_required(&state, 155, 147), 3);
+}
+
+#[test]
+fn a_miss_is_a_failure_to_hit_the_ball_on_outside_the_exceptions() {
+    use crate::app::games::pool_core::rules_snooker::is_miss;
+    let state = frame();
+    // A red was on: nothing hit, or a colour first, is a miss.
+    assert!(is_miss(&state, &shot(None, &[]), [0, 0], [0, 4], 147));
+    assert!(is_miss(
+        &state,
+        &shot(Some(BLACK), &[]),
+        [0, 0],
+        [0, 7],
+        147
+    ));
+    // The red hit first and the cue ball in-off: a foul, not a miss.
+    let mut in_off = shot(Some(RED_FIRST), &[]);
+    in_off.cue_potted = true;
+    assert!(!is_miss(&state, &in_off, [0, 0], [0, 4], 147));
+    // Either side needing snookers, before or after, and it is not called.
+    assert!(!is_miss(&state, &shot(None, &[]), [0, 150], [0, 154], 147));
+    assert!(!is_miss(&state, &shot(None, &[]), [0, 144], [0, 148], 147));
+}

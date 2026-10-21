@@ -24,7 +24,7 @@
 
 use crate::app::games::pool_core::{
     canvas::{Canvas, Rgb, mix},
-    cue::{MISCUE_LIMIT, PowerBand, ShotMode},
+    cue::{MISCUE_LIMIT, PULL_ROWS, PowerBand, ShotMode},
     table_ui::{self, CUE_BALL, FAULT, GUIDE, WHITE, ball_colour, is_stripe},
 };
 
@@ -79,8 +79,10 @@ pub struct CueView {
     pub aim_offset: f64,
     /// Tip placement on the cue ball's face: `[across, up]` in ball radii.
     pub tip: [f64; 2],
-    /// Draw-back, 0 to 1, already scaled into the armed band.
-    pub power: f64,
+    /// Where the cue is, 0 (at the ball) to 1 (a full pull), *within* the
+    /// armed band — the gesture, not the speed. Drawn one terminal row per
+    /// row of pointer travel, so it moves exactly as the hand does.
+    pub pull: f64,
     /// What the pointer is wired to, so that control is the bright one.
     pub mode: ShotMode,
     /// The shot has been struck and is on its way. The cue is drawn thrown
@@ -119,7 +121,7 @@ impl Default for CueView {
             distance: 0.5,
             aim_offset: 0.0,
             tip: [0.0, 0.0],
-            power: 0.0,
+            pull: 0.0,
             mode: ShotMode::Idle,
             follow_through: false,
         }
@@ -358,12 +360,23 @@ fn draw_cue_ball(canvas: &mut Canvas, view: &CueView, x: f64, y: f64, r: f64) {
     canvas.disc(mark_x, mark_y, (r * 0.18).max(1.0), TIP_MARK);
 }
 
-/// How much of the room below the cue ball a full pull uses. The rest is the
+/// Most of the room below the cue ball a full pull may use. The rest is the
 /// butt of the cue, which has to stay on screen: a cue drawn back until it
 /// vanishes off the bottom reads as no cue at all.
 const PULL_SHARE: f64 = 0.72;
 
-/// The cue, pointing up at the ball from below and drawn back by the power.
+/// Pixels the cue travels for a full pull: one terminal row (two pixel rows)
+/// per row of pointer travel, so the drawn cue follows the hand exactly — or,
+/// on a panel too short for that, as much of the room as can be spared.
+///
+/// It used to be the room times the *speed*, which put a full pull in the
+/// `light` band a tenth of the way back: the hand moved fourteen rows and the
+/// cue barely moved, then jumped to the ball when the shot fired.
+fn pull_travel(space: f64) -> f64 {
+    (space * PULL_SHARE).min(PULL_ROWS * 2.0)
+}
+
+/// The cue, pointing up at the ball from below and drawn back by the pull.
 fn draw_cue(canvas: &mut Canvas, view: &CueView, x: f64, cue_y: f64, cue_r: f64, h: f64) {
     // Scale the draw-back to the room below the ball, not to the ball's size.
     // Pulling back by a fixed multiple of the radius looks right on a tall
@@ -371,7 +384,8 @@ fn draw_cue(canvas: &mut Canvas, view: &CueView, x: f64, cue_y: f64, cue_r: f64,
     // point the player has no cue at exactly the moment they are aiming it.
     let rest_y = cue_y + cue_rest_offset(cue_r) + 1.0;
     let space = (h - rest_y).max(2.0);
-    let pull = view.power.clamp(0.0, 1.0) * space * PULL_SHARE;
+    let travel = pull_travel(space);
+    let pull = view.pull.clamp(0.0, 1.0) * travel;
     // Struck: the cue is thrown *through* where the ball was and left there
     // until the shot finishes playing. A cue that returned to rest the instant
     // the stroke registered gave the player nothing to tell a struck shot from
@@ -431,12 +445,7 @@ pub fn spin_label(tip: [f64; 2]) -> String {
 /// a full bar in `light` and a full bar in `strong` look the same and read
 /// differently — which is the point of having bands at all.
 pub fn power_label(power: f64, band: Option<PowerBand>, max_speed: f64) -> String {
-    let ceiling = band.map(PowerBand::ceiling).unwrap_or(1.0);
-    let within = if ceiling > 0.0 {
-        (power / ceiling).clamp(0.0, 1.0)
-    } else {
-        0.0
-    };
+    let within = band.map_or(power.clamp(0.0, 1.0), |band| band.within(power));
     let filled = (within * 10.0).round() as usize;
     let bar: String = "▓".repeat(filled) + &"░".repeat(10 - filled);
     let name = band.map(PowerBand::label).unwrap_or("stroke");

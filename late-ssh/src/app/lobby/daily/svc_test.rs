@@ -1580,6 +1580,7 @@ fn played_shots(n: usize) -> Vec<PoolShotRecord> {
                 speed: 1.0,
                 called_pocket: None,
                 play_again: false,
+                put_back: false,
             },
             label: "earlier".to_string(),
             at: chrono::Utc::now(),
@@ -1635,6 +1636,7 @@ fn potting_shot(azimuth: f64) -> Shot {
         speed: 1.4,
         called_pocket: None,
         play_again: false,
+        put_back: false,
     }
 }
 
@@ -1701,6 +1703,7 @@ async fn pool_shots_validate_the_turn_and_the_stroke() {
         speed: 7.0,
         called_pocket: None,
         play_again: false,
+        put_back: false,
     };
     assert!(
         svc.play_pool_shot(waiting, claimed.id, break_shot)

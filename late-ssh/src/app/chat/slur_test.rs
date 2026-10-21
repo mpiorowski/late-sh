@@ -1,5 +1,6 @@
 use super::*;
 
+use late_core::models::bartender_memory::{is_forget_request, remember_request};
 use late_core::models::drink_round::{ROUND_PHRASES, contains_round_request, gift_drink_target};
 use late_core::models::drinks::DRUNK_MAX_LEVEL;
 
@@ -212,5 +213,76 @@ fn non_ascii_text_is_left_alone() {
         assert!(slurred.contains("刚刚部署完成了"), "{slurred}");
         assert!(slurred.contains('🍻'), "{slurred}");
         assert!(slurred.contains("gänsefüßchen"), "{slurred}");
+    }
+}
+
+/// The bartender reads "forget me" and "remember" literally off the stored
+/// line, so drink must not scramble them or hiccup between their words. What
+/// a patron asks him to remember is kept as typed, so drink leaves all of
+/// it alone.
+#[test]
+fn asking_the_bar_to_forget_or_remember_survives_any_amount_of_drink() {
+    for level in 1..=DRUNK_MAX_LEVEL {
+        for seed in 1..200 {
+            for request in [
+                "@bartender forget me",
+                "@bartender forget  me",
+                "@bartender\nforget me",
+                "forget   me @bartender",
+            ] {
+                let wipe = slur(request, level, seed);
+                assert!(
+                    is_forget_request(&wipe, "bartender"),
+                    "level {level} seed {seed} lost the wipe: {wipe}"
+                );
+            }
+            let words = format!("I drink stouts. {CORPUS}\nand `never` with ice. {CORPUS}");
+            for request in [
+                format!("@bartender remember {words}"),
+                format!("@bartender, Remember: {words}"),
+                format!("@bartender\nremember {words}"),
+                format!("> @alice: earlier\n@bartender remember {words}"),
+            ] {
+                let slurred = slur(&request, level, seed);
+                assert_eq!(
+                    remember_request(past_quote(&slurred), "bartender"),
+                    Some(words.as_str()),
+                    "level {level} seed {seed} lost the remember: {slurred}"
+                );
+            }
+        }
+    }
+}
+
+/// What the bartender reads: the message past a leading reply quote line.
+fn past_quote(text: &str) -> &str {
+    match text.split_once('\n') {
+        Some((first, rest)) if first.starts_with("> ") => rest,
+        _ => text,
+    }
+}
+
+#[test]
+fn alcohol_preferences_and_literal_opt_ins_survive_drunk_typing() {
+    for level in 1..=DRUNK_MAX_LEVEL {
+        for seed in 1..100 {
+            for phrase in [
+                "intoxicating",
+                "ALCOHOLIC",
+                "with alcohol",
+                "with   alcohol",
+                "non-intoxicating",
+                "non-alcoholic",
+                "nonintoxicating",
+                "nonalcoholic",
+            ] {
+                let body = format!("@bartender {phrase}, {CORPUS}");
+                let slurred = slur(&body, level, seed);
+                assert!(
+                    slurred.contains(phrase),
+                    "level {level} seed {seed} lost {phrase:?}: {slurred}"
+                );
+            }
+        }
     }
 }

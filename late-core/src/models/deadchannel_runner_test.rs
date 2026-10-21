@@ -207,3 +207,114 @@ async fn the_guide_is_claimed_once_and_only_by_a_standing_runner() {
             .expect("mark guide seen after leaving")
     );
 }
+
+#[tokio::test]
+async fn prints_hangs_replaces_and_burns_a_standing_runners_poster() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "runner-poster").await;
+    let look = serde_json::json!({"hood": "hood.cross"});
+    DeadchannelRunner::ensure_for_user(&client, user.id, &look)
+        .await
+        .expect("ensure");
+    assert_eq!(
+        DeadchannelRunner::poster(&client, user.id)
+            .await
+            .expect("poster"),
+        None
+    );
+    // Burning a bare wall leaves it bare.
+    assert!(
+        DeadchannelRunner::clear_poster(&client, user.id)
+            .await
+            .expect("burn nothing")
+    );
+
+    let first = serde_json::json!({"width": 32, "height": 12, "cells": [], "colors": []});
+    let second = serde_json::json!({"width": 32, "height": 12, "cells": [[{"x": 0, "y": 0}, {"Narrow": "@"}]], "colors": []});
+    for poster in [&first, &second] {
+        assert!(
+            DeadchannelRunner::store_poster(&client, user.id, poster)
+                .await
+                .expect("store poster")
+        );
+        assert_eq!(
+            DeadchannelRunner::poster(&client, user.id)
+                .await
+                .expect("poster")
+                .as_ref(),
+            Some(poster)
+        );
+    }
+    // The profile's row read carries it too, and the look is untouched.
+    let row = DeadchannelRunner::find_by_user(&client, user.id)
+        .await
+        .expect("find")
+        .expect("row");
+    assert_eq!((row.poster, row.look), (Some(second.clone()), look));
+
+    assert!(
+        DeadchannelRunner::clear_poster(&client, user.id)
+            .await
+            .expect("burn")
+    );
+    assert_eq!(
+        DeadchannelRunner::poster(&client, user.id)
+            .await
+            .expect("poster"),
+        None
+    );
+}
+
+#[tokio::test]
+async fn a_leavers_poster_is_out_of_their_reach_but_not_a_moderators() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "runner-poster-left").await;
+    DeadchannelRunner::ensure_for_user(&client, user.id, &serde_json::json!({}))
+        .await
+        .expect("ensure");
+    let poster = serde_json::json!({"width": 32, "height": 12, "cells": [], "colors": []});
+    DeadchannelRunner::store_poster(&client, user.id, &poster)
+        .await
+        .expect("store poster");
+    DeadchannelRunner::mark_left(&client, user.id)
+        .await
+        .expect("mark left");
+
+    // Gone dark: nothing to paint on, nothing shown, nothing to burn.
+    let other = serde_json::json!({"width": 32, "height": 12, "cells": [[{"x": 1, "y": 1}, {"Narrow": "x"}]], "colors": []});
+    assert!(
+        !DeadchannelRunner::store_poster(&client, user.id, &other)
+            .await
+            .expect("store after leaving")
+    );
+    assert_eq!(
+        DeadchannelRunner::poster(&client, user.id)
+            .await
+            .expect("poster after leaving"),
+        None
+    );
+    assert!(
+        !DeadchannelRunner::clear_poster(&client, user.id)
+            .await
+            .expect("burn after leaving")
+    );
+
+    // The row still holds it, and moderation takes it down once.
+    assert!(
+        DeadchannelRunner::clear_poster_any(&**client, user.id)
+            .await
+            .expect("moderator clear")
+    );
+    assert!(
+        !DeadchannelRunner::clear_poster_any(&**client, user.id)
+            .await
+            .expect("moderator clear again")
+    );
+    let row = DeadchannelRunner::find_by_user(&client, user.id)
+        .await
+        .expect("find")
+        .expect("row");
+    assert_eq!(row.poster, None);
+}

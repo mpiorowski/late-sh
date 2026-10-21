@@ -16,6 +16,7 @@ fn moderators_have_staff_caps_without_admin_caps() {
     assert!(permissions.has(Caps::RENAME_ROOM));
     assert!(permissions.has(Caps::RENAME_USER));
     assert!(permissions.has(Caps::RESTORE_ARTBOARD));
+    assert!(permissions.has(Caps::REMOVE_DEADCHANNEL_POSTER));
     assert!(permissions.has(Caps::DELETE_AUDIO_TRACK));
     assert!(!permissions.has(Caps::PERMA_BAN_USER));
     assert!(!permissions.has(Caps::GRANT_MOD));
