@@ -199,10 +199,9 @@ fn handle_color_picker_event(
         ParsedInput::Mouse(mouse) => {
             if matches!(mouse.kind, MouseEventKind::Down)
                 && matches!(mouse.button, Some(MouseButton::Left))
+                && let Some(hit) = color_picker_hit(screen_size, state, mouse.x, mouse.y)
             {
-                if let Some(hit) = color_picker_hit(screen_size, state, mouse.x, mouse.y) {
-                    color_picker(state).click(hit);
-                }
+                color_picker(state).click(hit);
             }
             // The modal owns the mouse while it is up.
         }

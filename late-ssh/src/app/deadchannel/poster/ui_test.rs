@@ -34,7 +34,7 @@ fn painted_draft(marks: i32) -> Draft {
 /// recorded for the mouse.
 #[test]
 fn the_bench_draws_the_poster_and_the_keys_beside_it() {
-    let bench = Bench::Open(painted_draft(0));
+    let bench = Bench::Open(Box::new(painted_draft(0)));
     let view = PosterView {
         bench: &bench,
         hung: false,
@@ -78,7 +78,7 @@ fn an_armed_burn_warns_in_its_own_row() {
     let mut draft = painted_draft(0);
     draft.saved(draft.canvas.clone());
     draft.arm_burn();
-    let bench = Bench::Open(draft);
+    let bench = Bench::Open(Box::new(draft));
     let view = PosterView {
         bench: &bench,
         hung: true,
@@ -102,7 +102,7 @@ fn an_armed_burn_warns_in_its_own_row() {
 /// bench.
 #[test]
 fn the_full_palette_shows_the_colour_and_its_picker() {
-    let mut bench = Bench::Open(painted_draft(1));
+    let mut bench = Bench::Open(Box::new(painted_draft(1)));
     let shown = |bench: &Bench| {
         screen(&draw_bench(
             96,
@@ -141,7 +141,7 @@ fn the_full_palette_shows_the_colour_and_its_picker() {
 /// one shorter than it shows the rows it has.
 #[test]
 fn a_narrow_or_short_body_keeps_the_poster() {
-    let bench = Bench::Open(painted_draft(0));
+    let bench = Bench::Open(Box::new(painted_draft(0)));
     let view = PosterView {
         bench: &bench,
         hung: false,
@@ -174,7 +174,7 @@ fn the_rows_say_why_there_is_nothing_to_paint() {
         text(&Bench::NoRunner),
         vec!["nothing to print. you have no runner yet.".to_string()]
     );
-    assert_eq!(text(&Bench::Open(Draft::new(None, 0))).len(), POSTER_HEIGHT);
+    assert_eq!(text(&Bench::Open(Box::new(Draft::new(None, 0)))).len(), POSTER_HEIGHT);
 }
 
 #[test]

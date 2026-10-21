@@ -1098,7 +1098,7 @@ fn the_prints_panel_frames_the_poster_and_the_printers_word() {
     for ch in "HELLO".chars() {
         draft.edit(Edit::Type(ch));
     }
-    let bench = Bench::Open(draft);
+    let bench = Bench::Open(Box::new(draft));
     let word = "the press runs. it hangs on your profile now.";
     for (width, height) in [(120, 40), (80, 20)] {
         let screen = render_prints(width, height, &state, &bench, word);

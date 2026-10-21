@@ -350,6 +350,8 @@ fn panel_width(width: u16) -> u16 {
 
 /// The shot the board draws (`shown_shot`): the local draft itself, or one
 /// rebuilt from the other side's broadcast.
+// This transient render input stays on the stack to avoid allocating each frame.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ShownShot<'a> {
     Local(&'a PoolDraft),
     Shared(PoolDraft),
