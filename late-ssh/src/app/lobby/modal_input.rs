@@ -188,17 +188,6 @@ fn handle_draft_input(app: &mut App, event: ParsedInput) {
         | ParsedInput::Char('k' | 'K') => {
             app.daily.draft_move_selection(-1);
         }
-        // The match length, on the cue games that have frames to count.
-        ParsedInput::Arrow(b'C')
-        | ParsedInput::Byte(b'l' | b'L')
-        | ParsedInput::Char('l' | 'L') => {
-            app.daily.draft_cycle_best_of(1);
-        }
-        ParsedInput::Arrow(b'D')
-        | ParsedInput::Byte(b'h' | b'H')
-        | ParsedInput::Char('h' | 'H') => {
-            app.daily.draft_cycle_best_of(-1);
-        }
         _ => {}
     }
 }

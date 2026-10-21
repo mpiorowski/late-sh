@@ -458,6 +458,8 @@ const AIM_FINE_STEP: f64 = 0.1 * std::f64::consts::PI / 180.0;
 const TIP_STEP: f64 = 0.05;
 /// Pull per keypress, for the keyboard-only path.
 const PULL_STEP: f64 = 0.05;
+/// Stroke speed per `j`/`k` press, in m/s: the readout's own last digit.
+const SPEED_STEP: f64 = 0.1;
 
 // ── Pointer sensitivity ───────────────────────────────────────────────
 //
@@ -1332,6 +1334,27 @@ impl PoolDraft {
     pub fn nudge_pull(&mut self, delta: f64) {
         self.push.by_mouse = false;
         self.pull = (self.pull + delta).clamp(0.0, 1.0);
+    }
+
+    /// `k` / `j` in a stroke: the speed up or down to the next `SPEED_STEP`,
+    /// held inside the armed band. Snapped to the grid, so a speed the mouse
+    /// left at 1.73 steps to 1.8 or 1.7 and every press after lands on the
+    /// tenth the readout shows. Refused outside a stroke.
+    pub fn step_speed(&mut self, faster: bool) -> bool {
+        let Some(band) = self.mode.band() else {
+            return false;
+        };
+        // The slack absorbs the round trip through the band's log scale,
+        // which brings 1.8 back as 1.7999999.
+        let tenths = self.power() * MAX_SPEED / SPEED_STEP;
+        let next = if faster {
+            (tenths + 1e-3).floor() + 1.0
+        } else {
+            (tenths - 1e-3).ceil() - 1.0
+        };
+        self.push.by_mouse = false;
+        self.pull = band.within(next * SPEED_STEP / MAX_SPEED);
+        true
     }
 }
 

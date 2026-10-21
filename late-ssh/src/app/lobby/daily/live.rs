@@ -70,7 +70,10 @@ pub fn finish_headline(item: &DailyFinishedItem) -> String {
             let winner = winner.as_deref().unwrap_or("player");
             match item.win_payout {
                 Some(DailyWinPayout::Paid) => {
-                    format!("{winner} won · {phrase} · +{} chips", item.win_chips)
+                    format!(
+                        "{winner} won · {phrase} · +{} chips",
+                        item.game.win_payout()
+                    )
                 }
                 Some(DailyWinPayout::Unplayed)
                 | Some(DailyWinPayout::PairDayCapped)
@@ -215,10 +218,6 @@ pub enum LiveBoard {
         seat0_id: Uuid,
         /// Snooker frame score per seat; zeros in eight- and nine-ball.
         scores: [i32; 2],
-        /// Frames in the match, and frames won per seat. A single frame is
-        /// `1` and says nothing about frames.
-        best_of: u8,
-        frames_won: [u8; 2],
         /// The last shot as the commentator called it (`3, 6 down`).
         last: Option<String>,
     },
@@ -497,8 +496,6 @@ impl MatchSummary {
                         cue,
                         seat0_id: state.seats[0],
                         scores: state.scores,
-                        best_of: state.best_of,
-                        frames_won: state.frames_won,
                         last: state.shots.last().map(|shot| shot.label.clone()),
                     },
                 })

@@ -1245,6 +1245,38 @@ fn the_pull_stays_inside_its_band_however_hard_it_is_pushed() {
 }
 
 #[test]
+fn j_and_k_step_the_stroke_a_tenth_of_a_metre_a_second_inside_its_band() {
+    let (state, mut draft) = drafted();
+    assert!(!draft.step_speed(true), "no stroke armed, nothing to step");
+    draft.toggle_mode(ShotMode::Stroke(PowerBand::Normal));
+    let speed = |draft: &PoolDraft| draft.shot(&state).expect("aimed").speed;
+    let on_grid = |v: f64| ((v * 10.0) - (v * 10.0).round()).abs() < 1e-6;
+
+    // Off the grid, as the mouse might leave it: the first press snaps up to
+    // the next tenth, and every press after is exactly one tenth.
+    draft.pull = 0.37;
+    let start = speed(&draft);
+    assert!(draft.step_speed(true));
+    let up = speed(&draft);
+    assert!(on_grid(up), "lands on a tenth: {up}");
+    assert!(up > start && up - start <= 0.1 + 1e-9, "{start} -> {up}");
+    draft.step_speed(true);
+    assert!((speed(&draft) - (up + 0.1)).abs() < 1e-6);
+    draft.step_speed(false);
+    assert!((speed(&draft) - up).abs() < 1e-6);
+
+    // Held down, it stops at the band's ends rather than leaving the band.
+    for _ in 0..100 {
+        draft.step_speed(true);
+    }
+    assert!((speed(&draft) - PowerBand::Normal.ceiling() * MAX_SPEED).abs() < 1e-6);
+    for _ in 0..100 {
+        draft.step_speed(false);
+    }
+    assert!((speed(&draft) - PowerBand::Normal.floor() * MAX_SPEED).abs() < 1e-6);
+}
+
+#[test]
 fn aiming_at_a_bare_point_drops_the_ball_target() {
     // This is the cushion case, and the only thing the mouse can pick that the
     // keyboard cannot.
@@ -2095,77 +2127,6 @@ fn lined_up(state: &mut DailyPoolState, id: u8, keep: &[u8]) -> Shot {
         play_again: false,
         put_back: false,
     }
-}
-
-#[test]
-fn a_match_of_several_frames_racks_again_until_somebody_has_enough() {
-    let (a, b) = players();
-    let mut state = DailyPoolState::new_match(PoolRules::NineBall, a, b, 3);
-    assert_eq!(state.frames_needed(), 2);
-    let spec = state.spec().expect("known table");
-
-    let shot = lined_up(&mut state, 9, &[]);
-    let played = state.apply_shot(0, &shot).expect("a legal shot");
-    assert!(!played.finished, "one frame of three is not the match");
-    assert_eq!(played.winner, None);
-    assert!(played.label.contains("frames 1-0"), "{}", played.label);
-    assert_eq!(state.frames_won, [1, 0]);
-    assert_eq!(state.frame, 1);
-    assert_eq!(state.turn, 1, "the breaks alternate");
-    assert_eq!(state.frame_first_shot, 1);
-    assert!(
-        state.game_state().is_break(),
-        "the new rack is still to break"
-    );
-    assert_eq!(state.ball_in_hand, Some(BallInHand::Kitchen));
-    assert_eq!(
-        state.rack,
-        rack::build(spec, state.rules.rack_kind(), frame_seed(state.seed, 1))
-            .rounded(PERSIST_DECIMALS),
-        "a fresh rack, from the seed the match derives for frame two"
-    );
-    assert!(
-        state.last_shot_sim().is_some(),
-        "the shot that ended the frame can still be animated"
-    );
-
-    let shot = lined_up(&mut state, 9, &[]);
-    assert!(!state.apply_shot(1, &shot).expect("legal").finished);
-    assert_eq!(state.frames_won, [1, 1]);
-    assert_eq!(state.turn, 0);
-
-    // The deciding frame has some play in it before the nine goes down.
-    let filler = state.shots.last().cloned().expect("shots so far");
-    state
-        .shots
-        .extend(std::iter::repeat_n(filler, FRAME_MIN_SHOTS));
-    let shot = lined_up(&mut state, 9, &[]);
-    let played = state.apply_shot(0, &shot).expect("legal");
-    assert!(played.finished, "two frames of three is the match");
-    assert_eq!(played.winner, Some(0));
-    assert_eq!(state.frames_won, [2, 1]);
-    assert_eq!(
-        state.counted_frames,
-        [1, 0],
-        "a frame won in one stroke does not count toward the prize; a played one does"
-    );
-    assert!(
-        state.apply_shot(1, &break_shot()).is_err(),
-        "and it is over"
-    );
-}
-
-#[test]
-fn frame_seeds_rebuild_the_match_from_one_number() {
-    assert_eq!(frame_seed(42, 0), 42, "frame one racks as every match did");
-    assert_ne!(frame_seed(42, 1), frame_seed(42, 2));
-    assert_eq!(frame_seed(42, 3), frame_seed(42, 3));
-    let (a, b) = players();
-    assert_eq!(
-        DailyPoolState::new_match(PoolRules::Snooker, a, b, 4).best_of,
-        1,
-        "a length that is not on the menu is a single frame"
-    );
 }
 
 #[test]

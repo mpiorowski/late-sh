@@ -127,6 +127,62 @@ async fn only_lowercase_arms_a_stroke_and_shift_x_only_resigns() {
 }
 
 #[tokio::test]
+async fn j_and_k_step_an_armed_stroke_ahead_of_the_match_chat() {
+    // The match chat owns `j`/`k` on every board; pool borrows them only
+    // while a stroke is armed, which is the one time they mean speed.
+    let (_test_db, mut app) = unbroken_rack("pool-keys-speed").await;
+    let speed = |app: &App| {
+        app.daily
+            .board
+            .as_ref()
+            .and_then(|board| board.detail.as_ref())
+            .and_then(DailyMatchDetail::pool)
+            .expect("a pool board")
+            .draft
+            .power()
+            * crate::app::games::pool_core::cue::MAX_SPEED
+    };
+    let (before, idle) = (mode(&app), speed(&app));
+    board_input::handle_key(&mut app, b'k');
+    assert_eq!(mode(&app), before, "unarmed, k is not pool's");
+    assert_eq!(speed(&app), idle);
+
+    board_input::handle_key(&mut app, b's');
+    board_input::handle_key(&mut app, b'k');
+    let up = speed(&app);
+    assert!(
+        board_input::handle_key(&mut app, b'k'),
+        "armed, pool takes k"
+    );
+    assert!((speed(&app) - (up + 0.1)).abs() < 1e-6);
+    board_input::handle_key(&mut app, b'j');
+    assert!((speed(&app) - up).abs() < 1e-6);
+    assert_eq!(mode(&app), ShotMode::Stroke(PowerBand::Normal));
+}
+
+#[tokio::test]
+async fn the_chat_keys_close_the_resign_prompt_too() {
+    // `i`, `j` and `k` belong to the match chat and are routed there before
+    // the board sees them. While the prompt is up they must still close it,
+    // or the `y` after them (snooker's "play again") resigns the match.
+    let (_test_db, mut app) = unbroken_rack("pool-keys-resign-chat").await;
+    assert!(
+        app.daily.board_chat_room_id().is_some(),
+        "the match has its chat, which is what takes these keys"
+    );
+    for key in *b"ijk" {
+        board_input::handle_key(&mut app, b'X');
+        assert!(resign_asked(&app));
+        board_input::handle_key(&mut app, key);
+        assert!(
+            !resign_asked(&app),
+            "{:?} left the prompt armed",
+            key as char
+        );
+    }
+}
+
+#[tokio::test]
 async fn the_resign_prompt_is_answered_by_y_and_closed_by_anything_else() {
     // `X` is Shift away from the light stroke, so the slip has to be cheap:
     // the `x` that was meant closes the prompt and does nothing more, and a
