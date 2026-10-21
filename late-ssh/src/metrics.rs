@@ -7,13 +7,15 @@ use late_core::models::media_queue_item::SongQueueReward;
 use crate::app::activity::event::ActivityGame;
 use crate::app::arcade::share::ShareCardKind;
 use crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleArtLoad;
+use crate::app::audio::client_state::ClientPlatform;
 use crate::app::audio::radio_meta::polled::PolledFeed;
 use crate::app::audio::radio_meta::svc::PollOutcome;
 use crate::app::audio::svc::ThumbnailFetch;
 use crate::app::bonsai::state::BonsaiAction;
 use crate::app::bonsai::svc::BonsaiActionResult;
 use crate::app::calendar::svc::{CalendarAnnouncement, CalendarOp, CalendarWrite};
-use crate::app::chat::news::svc::XMediaLookup;
+use crate::app::chat::news::svc::{BodyFetchOutcome, XMediaLookup};
+use crate::app::chat::news::watch::state::WatchOutcome;
 use crate::app::chat::svc::{GildRefusal, SendRefusal};
 use crate::app::clubhouse::nightcap::svc::{NightcapHouseFailure, NightcapOrderResult};
 use crate::app::common::primitives::Screen;
@@ -31,6 +33,8 @@ use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
 use crate::app::referral::svc::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement};
 use crate::ircd::conn::{IrcHistoryOutcome, IrcHistoryRequest};
 use crate::pg_listener::Refresh;
+use crate::terminal_probe::ProbeBacklog;
+use late_core::models::article_body::BodyStatus;
 use late_core::models::calendar::CalendarRefusalKind;
 use late_core::models::referral::ReferralSource;
 
@@ -41,6 +45,14 @@ pub enum ScreensaverTrigger {
     Idle,
     /// `/brb`.
     Brb,
+}
+
+/// What a chunk of a session's SSH output was: a drawn frame (the ratatui
+/// diff) or a terminal command written after it (image transmissions, OSC).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OutputKind {
+    Frame,
+    Command,
 }
 
 /// Why the render loop drew a frame. The loop can only distinguish its two
@@ -83,6 +95,27 @@ pub enum SummaryResult {
     /// AI is disabled or unconfigured for this deployment.
     Unavailable,
     Failed,
+}
+
+/// How one write to @bartender's memory of a patron resolved
+/// (`app/ai/bartender_memory.rs`). The failures are the ones nobody else
+/// sees: an exchange is stored off the reply path, and a failed remember or
+/// wipe gets no line in the room.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BartenderMemoryWrite {
+    /// An exchange kept once the patron's tail closed.
+    ExchangeStored,
+    /// A "remember" request written down.
+    RequestedStored,
+    /// Either kind, turned away: the patron said "forget me" after it.
+    TurnedAway,
+    /// Either kind, already stored for that message.
+    AlreadyStored,
+    /// "forget me" landed, whether or not there was anything to wipe.
+    Wiped,
+    ExchangeFailed,
+    RequestedFailed,
+    WipeFailed,
 }
 
 /// How one page of The Late Edition (`app/paper`) came off the press.
@@ -354,6 +387,44 @@ pub enum SessionUser {
     Returning,
 }
 
+/// What the session's terminal sits behind: plain ssh, or the `late` CLI,
+/// which passes the terminal's bytes through untouched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SessionClient {
+    Ssh,
+    Cli,
+}
+
+impl SessionClient {
+    /// The `client` metric label, also the field the session wire summary
+    /// logs (`ssh.rs`).
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Ssh => "ssh",
+            Self::Cli => "cli",
+        }
+    }
+}
+
+/// How one terminal round-trip probe ended (`terminal_probe.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalProbeOutcome {
+    Answered,
+    /// No reply within the probe timeout.
+    Unanswered,
+}
+
+/// What a paired CLI's latency sample timed (`late-cli/src/latency.rs`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CliLatencyKind {
+    /// An SSH keepalive and its reply: the network and both SSH stacks,
+    /// without the terminal.
+    SshRtt,
+    /// The server's status query leaving the CLI for the terminal, to the
+    /// terminal's answer coming back: the user's terminal alone.
+    Terminal,
+}
+
 /// Which board of a daily puzzle ended: the shared daily or a personal one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArcadeMode {
@@ -579,6 +650,7 @@ mod inner {
 
     use crate::app::activity::event::GameFamily;
 
+    use super::BartenderMemoryWrite;
     use super::HomeRoom;
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
@@ -591,15 +663,19 @@ mod inner {
         GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
         JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, LoungeBeat,
         NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
-        OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome,
-        PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, RealmChatRoomAttach,
-        RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
-        RoundRefusal, RunnerDoor, Screen, SendRefusal, SessionStartStage, SessionUser,
-        SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
-        ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
+        OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult, Place,
+        PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire,
+        RealmChatRoomAttach, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh,
+        RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SendRefusal,
+        SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason,
+        SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
+    use super::{BodyFetchOutcome, BodyStatus, WatchOutcome};
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
+    use super::{
+        CliLatencyKind, ClientPlatform, ProbeBacklog, SessionClient, TerminalProbeOutcome,
+    };
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{PollOutcome, PolledFeed};
@@ -608,6 +684,7 @@ mod inner {
         ZorkSwitchResult,
     };
     use crate::app::bonsai::state::BranchAction;
+    use crate::app::chat::news::body::BodyFetchFailure;
     use crate::app::referral::state::AttachRefusal;
 
     fn meter() -> opentelemetry::metrics::Meter {
@@ -758,6 +835,97 @@ mod inner {
         })
     }
 
+    fn frame_bytes() -> &'static Histogram<u64> {
+        static METRIC: OnceLock<Histogram<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_histogram("late_ssh_frame_bytes")
+                .with_description(
+                    "Bytes of each drawn frame handed to the SSH channel, by render reason",
+                )
+                .with_unit("By")
+                .with_boundaries(vec![
+                    64.0, 256.0, 1024.0, 4096.0, 8192.0, 16384.0, 32768.0, 65536.0, 131072.0,
+                    262144.0, 524288.0, 1048576.0,
+                ])
+                .build()
+        })
+    }
+
+    fn session_output_bytes_per_second() -> &'static Histogram<f64> {
+        static METRIC: OnceLock<Histogram<f64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .f64_histogram("late_ssh_session_output_bytes_per_second")
+                .with_description(
+                    "One session's SSH output rate (frames and terminal commands), one sample per session per 10 s window",
+                )
+                .with_boundaries(vec![
+                    128.0, 512.0, 1024.0, 2048.0, 4096.0, 8192.0, 16384.0, 32768.0, 65536.0,
+                    131072.0, 262144.0, 524288.0, 1048576.0,
+                ])
+                .build()
+        })
+    }
+
+    fn output_bytes_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_output_bytes_total")
+                .with_description(
+                    "Bytes handed to the SSH channel, by the screen and place the session was on, whether anyone was at the keys, and frame or terminal command",
+                )
+                .build()
+        })
+    }
+
+    fn terminal_probes_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_terminal_probes_total")
+                .with_description(
+                    "Terminal round-trip probes (DSR status queries), by client and whether the terminal answered",
+                )
+                .build()
+        })
+    }
+
+    fn terminal_rtt_seconds() -> &'static Histogram<f64> {
+        static METRIC: OnceLock<Histogram<f64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .f64_histogram("late_ssh_terminal_rtt_seconds")
+                .with_description(
+                    "Server write to the user's terminal answering, by client and the bytes the session wrote in the second before the probe",
+                )
+                .with_unit("s")
+                .with_boundaries(TRIP_BOUNDARIES.to_vec())
+                .build()
+        })
+    }
+
+    fn cli_latency_seconds() -> &'static Histogram<f64> {
+        static METRIC: OnceLock<Histogram<f64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .f64_histogram("late_ssh_cli_latency_seconds")
+                .with_description(
+                    "Round trips a paired CLI timed: ssh_rtt is the transport alone, terminal is the user's terminal alone",
+                )
+                .with_unit("s")
+                .with_boundaries(TRIP_BOUNDARIES.to_vec())
+                .build()
+        })
+    }
+
+    /// Shared by the two round-trip histograms so the CLI's split lines up
+    /// with the server's whole trip bucket for bucket.
+    const TRIP_BOUNDARIES: [f64; 16] = [
+        0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.2, 0.3, 0.5, 0.75, 1.0, 2.0, 5.0, 10.0, 30.0,
+    ];
+
     fn render_stall_skips_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -778,6 +946,34 @@ mod inner {
                 .with_description(
                     "Sessions disconnected after staying over the SSH output budget too long",
                 )
+                .build()
+        })
+    }
+
+    fn render_input_budget_hits_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_render_input_budget_hits_total")
+                .with_description(
+                    "Render passes that stopped draining input at the per-pass budget with input still queued",
+                )
+                .build()
+        })
+    }
+
+    fn render_pass_seconds() -> &'static Histogram<f64> {
+        static METRIC: OnceLock<Histogram<f64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .f64_histogram("late_ssh_render_pass_seconds")
+                .with_description(
+                    "Time one render pass held the app lock (input drain, tick, draw), by render reason and the screen it ended on",
+                )
+                .with_unit("s")
+                .with_boundaries(vec![
+                    0.001, 0.002, 0.004, 0.008, 0.016, 0.033, 0.066, 0.132, 0.25, 0.5, 1.0,
+                ])
                 .build()
         })
     }
@@ -1471,6 +1667,40 @@ mod inner {
         })
     }
 
+    fn news_body_fetches_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_news_body_fetches_total")
+                .with_description(
+                    "News reader body steps by how they ended: ready, skipped (a video or an X post), store_failed, or why the page could not be read",
+                )
+                .build()
+        })
+    }
+
+    fn news_reader_opens_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_news_reader_opens_total")
+                .with_description("News reader opens by the body status they found")
+                .build()
+        })
+    }
+
+    fn news_watches_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_news_watches_total")
+                .with_description(
+                    "News video watches by step: opened (the player), setup (the setup box instead), played, ended, failed, lost",
+                )
+                .build()
+        })
+    }
+
     fn news_share_chips_paid_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -1964,12 +2194,116 @@ mod inner {
         render_frame_drops_total().add(1, &[]);
     }
 
+    pub fn record_frame_bytes(reason: RenderReason, bytes: usize) {
+        frame_bytes().record(
+            bytes as u64,
+            &[KeyValue::new("reason", render_reason_label(reason))],
+        );
+    }
+
+    pub fn record_session_output_rate(client: SessionClient, bytes_per_second: f64) {
+        session_output_bytes_per_second()
+            .record(bytes_per_second, &[KeyValue::new("client", client.label())]);
+    }
+
+    pub fn record_output_bytes(
+        screen: Screen,
+        place: Place,
+        presence: Presence,
+        kind: OutputKind,
+        bytes: usize,
+    ) {
+        output_bytes_total().add(
+            bytes as u64,
+            &[
+                KeyValue::new("screen", screen_label(screen)),
+                KeyValue::new("place", place_label(place)),
+                KeyValue::new("presence", presence_label(presence)),
+                KeyValue::new("kind", output_kind_label(kind)),
+            ],
+        );
+    }
+
+    fn output_kind_label(kind: OutputKind) -> &'static str {
+        match kind {
+            OutputKind::Frame => "frame",
+            OutputKind::Command => "command",
+        }
+    }
+
+    fn terminal_probe_outcome_label(outcome: TerminalProbeOutcome) -> &'static str {
+        match outcome {
+            TerminalProbeOutcome::Answered => "answered",
+            TerminalProbeOutcome::Unanswered => "unanswered",
+        }
+    }
+
+    pub fn record_terminal_probe(client: SessionClient, outcome: TerminalProbeOutcome) {
+        terminal_probes_total().add(
+            1,
+            &[
+                KeyValue::new("client", client.label()),
+                KeyValue::new("outcome", terminal_probe_outcome_label(outcome)),
+            ],
+        );
+    }
+
+    fn probe_backlog_label(backlog: ProbeBacklog) -> &'static str {
+        match backlog {
+            ProbeBacklog::None => "none",
+            ProbeBacklog::Small => "small",
+            ProbeBacklog::Medium => "medium",
+            ProbeBacklog::Large => "large",
+        }
+    }
+
+    pub fn record_terminal_rtt(client: SessionClient, backlog: ProbeBacklog, seconds: f64) {
+        terminal_rtt_seconds().record(
+            seconds,
+            &[
+                KeyValue::new("client", client.label()),
+                KeyValue::new("backlog", probe_backlog_label(backlog)),
+            ],
+        );
+    }
+
+    fn cli_latency_kind_label(kind: CliLatencyKind) -> &'static str {
+        match kind {
+            CliLatencyKind::SshRtt => "ssh_rtt",
+            CliLatencyKind::Terminal => "terminal",
+        }
+    }
+
+    pub fn record_cli_latency(kind: CliLatencyKind, platform: ClientPlatform, seconds: f64) {
+        cli_latency_seconds().record(
+            seconds,
+            &[
+                KeyValue::new("kind", cli_latency_kind_label(kind)),
+                KeyValue::new("platform", platform.metric_label().unwrap_or("unknown")),
+            ],
+        );
+    }
+
     pub fn record_render_stall_skip() {
         render_stall_skips_total().add(1, &[]);
     }
 
     pub fn record_render_stall_disconnect() {
         render_stall_disconnects_total().add(1, &[]);
+    }
+
+    pub fn record_render_input_budget_hit() {
+        render_input_budget_hits_total().add(1, &[]);
+    }
+
+    pub fn record_render_pass(reason: RenderReason, screen: Screen, seconds: f64) {
+        render_pass_seconds().record(
+            seconds,
+            &[
+                KeyValue::new("reason", render_reason_label(reason)),
+                KeyValue::new("screen", screen_label(screen)),
+            ],
+        );
     }
 
     pub fn record_chat_message_sent() {
@@ -2503,6 +2837,59 @@ mod inner {
         );
     }
 
+    /// A run of one failure label is what a site blocking the fetch, or a
+    /// readability regression, looks like.
+    fn news_body_fetch_label(outcome: BodyFetchOutcome) -> &'static str {
+        match outcome {
+            BodyFetchOutcome::Ready => "ready",
+            BodyFetchOutcome::Skipped => "skipped",
+            BodyFetchOutcome::StoreFailed => "store_failed",
+            BodyFetchOutcome::Failed(BodyFetchFailure::Fetch) => "fetch",
+            BodyFetchOutcome::Failed(BodyFetchFailure::NotHtml) => "not_html",
+            BodyFetchOutcome::Failed(BodyFetchFailure::Encoding) => "encoding",
+            BodyFetchOutcome::Failed(BodyFetchFailure::TooLarge) => "too_large",
+            BodyFetchOutcome::Failed(BodyFetchFailure::Timeout) => "timeout",
+            BodyFetchOutcome::Failed(BodyFetchFailure::Extract) => "extract",
+            BodyFetchOutcome::Failed(BodyFetchFailure::Empty) => "empty",
+        }
+    }
+
+    pub fn record_news_body_fetch(outcome: BodyFetchOutcome) {
+        news_body_fetches_total().add(
+            1,
+            &[KeyValue::new("outcome", news_body_fetch_label(outcome))],
+        );
+    }
+
+    fn news_body_status_label(status: BodyStatus) -> &'static str {
+        match status {
+            BodyStatus::Pending => "pending",
+            BodyStatus::Ready { .. } => "ready",
+            BodyStatus::Unavailable => "unavailable",
+        }
+    }
+
+    pub fn record_news_reader_opened(status: BodyStatus) {
+        news_reader_opens_total().add(1, &[KeyValue::new("body", news_body_status_label(status))]);
+    }
+
+    fn news_watch_label(outcome: WatchOutcome) -> &'static str {
+        match outcome {
+            WatchOutcome::Opened => "opened",
+            WatchOutcome::Setup => "setup",
+            WatchOutcome::Played => "played",
+            WatchOutcome::Ended => "ended",
+            WatchOutcome::Failed => "failed",
+            WatchOutcome::Lost => "lost",
+        }
+    }
+
+    /// Setup against opened is how many people want to watch and cannot;
+    /// a run of failed or lost is a CLI or mpv regression.
+    pub(crate) fn record_news_watch(outcome: WatchOutcome) {
+        news_watches_total().add(1, &[KeyValue::new("outcome", news_watch_label(outcome))]);
+    }
+
     /// Same shape as the News share: one counter for the submissions and one
     /// for the chips they minted, so the tracks that came in past the day's
     /// cap are visible beside the paid ones.
@@ -2634,6 +3021,41 @@ mod inner {
     /// A patron walked up and drank a credit somebody else paid for.
     pub fn record_round_drink_cashed() {
         round_drinks_cashed_total().add(1, &[]);
+    }
+
+    fn bartender_memory_write_label(write: BartenderMemoryWrite) -> &'static str {
+        match write {
+            BartenderMemoryWrite::ExchangeStored => "exchange_stored",
+            BartenderMemoryWrite::RequestedStored => "requested_stored",
+            BartenderMemoryWrite::TurnedAway => "turned_away",
+            BartenderMemoryWrite::AlreadyStored => "already_stored",
+            BartenderMemoryWrite::Wiped => "wiped",
+            BartenderMemoryWrite::ExchangeFailed => "exchange_failed",
+            BartenderMemoryWrite::RequestedFailed => "requested_failed",
+            BartenderMemoryWrite::WipeFailed => "wipe_failed",
+        }
+    }
+
+    fn bartender_memory_writes_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_bartender_memory_writes_total")
+                .with_description(
+                    "@bartender memory writes (kept exchanges, remember requests, forget-me wipes) by outcome",
+                )
+                .build()
+        })
+    }
+
+    pub fn record_bartender_memory(write: BartenderMemoryWrite) {
+        bartender_memory_writes_total().add(
+            1,
+            &[KeyValue::new(
+                "outcome",
+                bartender_memory_write_label(write),
+            )],
+        );
     }
 
     /// The house's off-thread work at the Nightcap failed. Orders are counted
@@ -3330,6 +3752,7 @@ mod inner {
 mod inner {
     use late_core::models::user::{AsciiPiece, AsciiSelection};
 
+    use super::BartenderMemoryWrite;
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
@@ -3341,15 +3764,19 @@ mod inner {
         GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
         JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, LoungeBeat,
         NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
-        OnlineTimeFlushResult, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome,
-        PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire, RealmChatRoomAttach,
-        RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
-        RoundRefusal, RunnerDoor, Screen, SendRefusal, SessionStartStage, SessionUser,
-        SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
-        ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
+        OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult, Place,
+        PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire,
+        RealmChatRoomAttach, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh,
+        RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SendRefusal,
+        SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason,
+        SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
+    use super::{BodyFetchOutcome, BodyStatus, WatchOutcome};
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
+    use super::{
+        CliLatencyKind, ClientPlatform, ProbeBacklog, SessionClient, TerminalProbeOutcome,
+    };
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{PollOutcome, PolledFeed};
@@ -3379,8 +3806,23 @@ mod inner {
     pub fn record_cli_pair_usage(_ssh_mode: &str, _platform: &str) {}
     pub fn add_cli_pair_active(_delta: i64, _ssh_mode: &str, _platform: &str) {}
     pub fn record_render_frame_drop() {}
+    pub fn record_frame_bytes(_reason: RenderReason, _bytes: usize) {}
+    pub fn record_session_output_rate(_client: SessionClient, _bytes_per_second: f64) {}
+    pub fn record_output_bytes(
+        _screen: Screen,
+        _place: Place,
+        _presence: Presence,
+        _kind: OutputKind,
+        _bytes: usize,
+    ) {
+    }
+    pub fn record_terminal_probe(_client: SessionClient, _outcome: TerminalProbeOutcome) {}
+    pub fn record_terminal_rtt(_client: SessionClient, _backlog: ProbeBacklog, _seconds: f64) {}
+    pub fn record_cli_latency(_kind: CliLatencyKind, _platform: ClientPlatform, _seconds: f64) {}
     pub fn record_render_stall_skip() {}
     pub fn record_render_stall_disconnect() {}
+    pub fn record_render_input_budget_hit() {}
+    pub fn record_render_pass(_reason: RenderReason, _screen: Screen, _seconds: f64) {}
     pub fn record_chat_message_sent() {}
     pub fn record_chat_message_edited() {}
     pub fn record_game_win(_game: ActivityGame) {}
@@ -3419,6 +3861,9 @@ mod inner {
     pub fn record_irc_history(_request: IrcHistoryRequest, _outcome: IrcHistoryOutcome) {}
     pub fn record_news_shared(_reward: NewsShareReward) {}
     pub fn record_news_x_media_lookup(_lookup: XMediaLookup) {}
+    pub fn record_news_body_fetch(_outcome: BodyFetchOutcome) {}
+    pub fn record_news_reader_opened(_status: BodyStatus) {}
+    pub(crate) fn record_news_watch(_outcome: WatchOutcome) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
     pub fn record_booth_thumbnail(_outcome: ThumbnailFetch) {}
     pub fn record_radio_meta_poll(_feed: PolledFeed, _outcome: PollOutcome) {}
@@ -3435,6 +3880,7 @@ mod inner {
     pub fn record_nightcap_order(_result: NightcapOrderResult) {}
     pub fn record_nightcap_house_failure(_failure: NightcapHouseFailure) {}
     pub fn record_round_drink_cashed() {}
+    pub fn record_bartender_memory(_write: BartenderMemoryWrite) {}
     pub fn record_pot_tickets_bought(_tickets: i64, _chips: i64) {}
     pub fn record_pot_buy_refused(_refusal: PotRefusal) {}
     pub fn record_pot_drawn(_payout: i64, _tickets: i64) {}

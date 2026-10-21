@@ -1582,7 +1582,7 @@ pub fn game_name(stored: &str, season: i32) -> String {
 }
 
 /// The world a state is played on, for a sentence: "Earth", or what a drawn
-/// world is ("5 continents · 8 islands · 160 lands").
+/// world is ("5 continents · 8 islands · 240 lands").
 pub fn world_label(state: &RealmGameState) -> String {
     match state.ruleset.map_spec.as_ref() {
         Some(spec) => spec.summary(),

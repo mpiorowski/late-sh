@@ -388,14 +388,6 @@ pub(super) struct WrappedChatEntry {
 
 // ── News formatting ─────────────────────────────────────────
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct NewsPayload {
-    pub title: String,
-    pub summary: String,
-    pub url: String,
-    pub ascii_art: String,
-}
-
 pub(crate) fn format_news_ascii_art_for_display(ascii: &str, max_rows: usize) -> Vec<String> {
     if max_rows == 0 {
         return Vec::new();

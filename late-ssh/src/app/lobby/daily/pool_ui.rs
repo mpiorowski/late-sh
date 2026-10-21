@@ -35,7 +35,7 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 use uuid::Uuid;
 
@@ -46,7 +46,7 @@ use crate::app::{
         canvas::{Canvas, rgb},
         cue::{MAX_SPEED, ShotMode},
         cue_ui::{self, BACKDROP, CueView},
-        rules::PoolRules,
+        rules::{self, PoolRules},
         rules_snooker,
         table::{self, TableSpec},
         table_3d::{self, Eye},
@@ -55,7 +55,7 @@ use crate::app::{
     lobby::daily::{
         board_ui::{name_for, result_banner},
         pool::DailyPoolState,
-        pool_draft::{PoolCueHit, PoolDetail, PoolDraft},
+        pool_draft::{FoulChoice, FoulDialogHit, PoolCueHit, PoolDetail, PoolDraft},
         state::{DailyBoardState, DailyMatchDetail, DailyState, format_deadline},
     },
 };
@@ -136,16 +136,161 @@ pub(crate) fn draw(
     // One shot is drawn, and it is not always this player's. While the other
     // side is at the table their board broadcasts what they are lining up, and
     // drawing it is the only moment a correspondence game looks like the game
-    // it is modelling. The renderer takes a *share* either way, so the local
-    // and the remote path are the same code and cannot drift.
-    let shown = shown_shot(daily, board, detail, pool);
+    // it is modelling. Both are drawn by the same code, from a `PoolDraft`.
+    let mine =
+        !board.spectating && detail.is_active() && detail.row.turn_user_id == Some(daily.user_id());
+    let shown = shown_shot(pool, mine);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(table_border(daily, board, detail, pool));
     let table_area = block.inner(cols[0]);
     frame.render_widget(block, cols[0]);
-    draw_table(frame, table_area, spec, pool, &shown, board);
-    draw_panels(frame, cols[1], daily, board, detail, pool, &shown);
+    draw_table(frame, table_area, spec, pool, shown.draft(), board);
+    draw_panels(frame, cols[1], daily, board, detail, pool, shown.draft());
+    if foul_dialog_shown(daily, board, detail, pool) {
+        draw_foul_dialog(frame, table_area, board, pool);
+    } else {
+        pool.foul_hit.set(None);
+    }
+}
+
+/// The foul dialog is this player's to answer right now: their turn, the
+/// other side's foul, nothing rolling, and no choice made yet.
+fn foul_dialog_shown(
+    daily: &DailyState,
+    board: &DailyBoardState,
+    detail: &DailyMatchDetail,
+    pool: &PoolDetail,
+) -> bool {
+    !board.spectating
+        && detail.is_active()
+        && detail.row.turn_user_id == Some(daily.user_id())
+        && !rolling(board, pool)
+        && pool.draft.foul_dialog_open(&pool.state)
+}
+
+/// Rows above the first choice inside the dialog's border: what happened,
+/// what it paid, the free ball if there is one, and the question.
+const FOUL_HEADER_ROWS: u16 = 5;
+/// Each choice is its name and a line on what it does.
+const FOUL_ROWS_EACH: u16 = 2;
+const FOUL_DIALOG_WIDTH: u16 = 64;
+
+/// The choice after a snooker foul, as a dialog over the table that has to be
+/// answered before the shot can be touched.
+///
+/// A dialog rather than a key in the legend because the choice is the rule,
+/// and the rule is the part a newcomer to snooker does not know exists: a
+/// legend line reading `y b on a foul` teaches nothing to somebody who has
+/// never been asked "do you want to play that, or make them play again?".
+/// So it says what happened, what it paid, and what each choice does, in
+/// words, and waits.
+fn draw_foul_dialog(frame: &mut Frame, over: Rect, board: &DailyBoardState, pool: &PoolDetail) {
+    let state = &pool.state;
+    let offender = name_for(board, state.user_of(rules::other_seat(state.turn)));
+    let choices = FoulChoice::offered(state);
+    let height = 2 + FOUL_HEADER_ROWS + FOUL_ROWS_EACH * choices.len() as u16 + 2;
+    let width = FOUL_DIALOG_WIDTH.min(over.width);
+    let height = height.min(over.height);
+    let area = Rect {
+        x: over.x + over.width.saturating_sub(width) / 2,
+        y: over.y + over.height.saturating_sub(height) / 2,
+        width,
+        height,
+    };
+    frame.render_widget(Clear, area);
+    let block = Block::default()
+        .title(format!(" {offender} fouled "))
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::AMBER()));
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    let text = Style::default().fg(theme::TEXT());
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let what = match state.last_foul {
+        Some(foul) => format!(" {offender}'s foul: {}.", foul.label()),
+        None => format!(" {offender} fouled."),
+    };
+    let mut lines = vec![Line::from(Span::styled(what, text))];
+    lines.push(Line::from(Span::styled(
+        if state.miss.is_some() {
+            " And a miss: they did not hit the ball they were on.".to_string()
+        } else {
+            String::new()
+        },
+        text,
+    )));
+    lines.push(Line::from(Span::styled(
+        if state.last_penalty > 0 {
+            format!(" You get {} points for it.", state.last_penalty)
+        } else {
+            String::new()
+        },
+        Style::default().fg(theme::SUCCESS()),
+    )));
+    lines.push(Line::from(Span::styled(
+        if state.free_ball {
+            " Free ball: if you play, any ball counts as the ball on."
+        } else {
+            ""
+        },
+        Style::default().fg(theme::SUCCESS()),
+    )));
+    lines.push(Line::from(Span::styled(
+        " How do you want to go on?",
+        Style::default()
+            .fg(theme::TEXT_BRIGHT())
+            .add_modifier(Modifier::BOLD),
+    )));
+    for (index, choice) in choices.iter().enumerate() {
+        let selected = index == pool.draft.foul.cursor;
+        let marker = if selected { "►" } else { " " };
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!(" {marker} {}  ", index + 1),
+                Style::default().fg(theme::AMBER()),
+            ),
+            Span::styled(
+                choice.title(),
+                Style::default()
+                    .fg(if selected {
+                        theme::TEXT_BRIGHT()
+                    } else {
+                        theme::TEXT()
+                    })
+                    .add_modifier(if selected {
+                        Modifier::BOLD
+                    } else {
+                        Modifier::empty()
+                    }),
+            ),
+        ]));
+        lines.push(Line::from(Span::styled(
+            format!("      {}", choice.explain(&offender)),
+            dim,
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        format!(
+            " 1-{} or ↑↓ and enter to choose · r watch the foul again",
+            choices.len()
+        ),
+        dim,
+    )));
+    frame.render_widget(Paragraph::new(lines), inner);
+    pool.foul_hit.set(Some(FoulDialogHit {
+        area: inner,
+        first_row: inner.y + FOUL_HEADER_ROWS,
+        rows_each: FOUL_ROWS_EACH,
+        count: choices.len(),
+    }));
 }
 
 /// Whether the board is mid-shot: one on the wire, one being re-simulated, or
@@ -203,25 +348,37 @@ fn panel_width(width: u16) -> u16 {
     (width / 4).clamp(PANEL_WIDTH, MAX_PANEL_WIDTH)
 }
 
+/// The shot the board draws (`shown_shot`): the local draft itself, or one
+/// rebuilt from the other side's broadcast.
+pub(crate) enum ShownShot<'a> {
+    Local(&'a PoolDraft),
+    Shared(PoolDraft),
+}
+
+impl ShownShot<'_> {
+    pub(crate) fn draft(&self) -> &PoolDraft {
+        match self {
+            Self::Local(draft) => draft,
+            Self::Shared(draft) => draft,
+        }
+    }
+}
+
 /// The shot the board should be drawing: this player's own while it is their
 /// turn, otherwise whatever the other side last broadcast.
 ///
-/// Falls back to the local draft when nothing has arrived, so a board that
-/// nobody is composing on still shows a sensible cue rather than an empty
-/// panel. A spectator is neither player and gets the broadcast if there is one.
-fn shown_shot(
-    daily: &DailyState,
-    board: &DailyBoardState,
-    detail: &DailyMatchDetail,
-    pool: &PoolDetail,
-) -> PoolDraft {
-    let mine =
-        !board.spectating && detail.is_active() && detail.row.turn_user_id == Some(daily.user_id());
-    let share = match pool.watching {
-        Some(theirs) if !mine => theirs,
-        _ => pool.draft.share(),
-    };
-    PoolDraft::watching(share)
+/// The player's own is the draft itself, never a copy through a share: a
+/// share has no room for the push being timed, so a copy reads the power off
+/// the draw while the stroke plays the push, and it starts each frame with an
+/// empty rebound cache. Falls back to the local draft when nothing has
+/// arrived, so a board that nobody is composing on still shows a sensible cue
+/// rather than an empty panel. A spectator is neither player and gets the
+/// broadcast if there is one.
+pub(crate) fn shown_shot(pool: &PoolDetail, mine: bool) -> ShownShot<'_> {
+    match pool.watching {
+        Some(theirs) if !mine => ShownShot::Shared(PoolDraft::watching(theirs)),
+        _ => ShownShot::Local(&pool.draft),
+    }
 }
 
 fn draw_table(
@@ -421,9 +578,9 @@ pub(crate) const LEGEND: [[(&str, &str); 2]; 8] = [
     [("h l", "aim 1°"), ("[ ]", "ball")],
     [("H L", "aim 0.1°"), ("'", "lowest ball")],
     [("a", "mouse aim"), ("m", "ball in hand")],
-    // The mouse's answer to `h l` against `H L`: hold a modifier while it
-    // moves and the same sweep is worth four times as much, or a tenth.
-    [("shift", "fast aim"), ("ctrl", "fine aim")],
+    // The mouse's answer to `H L`: hold Ctrl while it moves and the same
+    // sweep is worth a tenth as much. `j k` is the stroke's fine control.
+    [("ctrl", "fine aim"), ("j k", "±0.1 m/s")],
     [("e", "spin"), ("p", "call pocket")],
     [("x s w", "stroke"), ("v", "eye view")],
     [("c", "reset"), ("r R", "replay")],
@@ -509,7 +666,11 @@ fn info_lines(
         ),
         Span::styled(format!(" · {}", state.table), dim),
     ])];
-    lines.push(Line::from(""));
+    // Snooker spends this row on the scoreboard below instead: it has two
+    // lines to say there and the panel has eight rows.
+    if !state.rules.scores() {
+        lines.push(Line::from(""));
+    }
 
     for seat in 0u8..2 {
         let user = state.user_of(seat);
@@ -538,12 +699,68 @@ fn info_lines(
             },
         )));
     }
-    lines.push(Line::from(""));
+    // Snooker's scoreboard: the two scores above say who is ahead, this says
+    // by how much, how much is left to win it with, and what the player at
+    // the table has put together this visit.
+    if state.rules.scores() {
+        lines.push(Line::from(Span::styled(snooker_scoreboard(state), dim)));
+        // Who needs snookers, and how many: the end of a frame is played for
+        // these, so it is said in so many words rather than left as sums.
+        lines.push(match snookers_needed(state) {
+            Some((seat, count)) => {
+                let user = state.user_of(seat);
+                let who = if user == me {
+                    "you need".to_string()
+                } else {
+                    format!("{} needs", name_for(board, user))
+                };
+                let plural = if count == 1 { "" } else { "s" };
+                Line::from(Span::styled(
+                    format!("{who} {count} snooker{plural}"),
+                    Style::default().fg(theme::AMBER()),
+                ))
+            }
+            None => Line::from(""),
+        });
+    } else {
+        lines.push(Line::from(""));
+    }
 
     let targets = state.legal_targets();
     lines.push(Line::from(on_line(state, &targets)));
     lines.extend(last_shot_lines(pool, board.pool_shot_pending()));
     lines
+}
+
+/// `break 23 · lead 18 · 51 left`: the current break, the gap between the two
+/// scores, and the points still on the table (`points_remaining`, the most the
+/// striker could yet score). When the gap is more than is left, the line under
+/// it says who needs snookers (`snookers_needed`).
+pub(crate) fn snooker_scoreboard(state: &DailyPoolState) -> String {
+    let gap = (state.scores[0] - state.scores[1]).abs();
+    let gap = if gap == 0 {
+        "level".to_string()
+    } else {
+        format!("lead {gap}")
+    };
+    format!(
+        "break {} · {gap} · {} left",
+        state.current_break,
+        state.points_remaining()
+    )
+}
+
+/// The seat that needs snookers to win, and how many
+/// (`rules_snooker::snookers_required`). `None` while clearing would do.
+pub(crate) fn snookers_needed(state: &DailyPoolState) -> Option<(u8, i32)> {
+    let deficit = state.scores[0] - state.scores[1];
+    let trailing = if deficit > 0 { 1 } else { 0 };
+    let count = rules_snooker::snookers_required(
+        &state.game_state(),
+        deficit.abs(),
+        state.points_remaining(),
+    );
+    (deficit != 0 && count > 0).then_some((trailing, count))
 }
 
 /// What the last shot did: the free ball it left, the foul it was, or its
@@ -755,7 +972,7 @@ fn draw_cue_panel(
             .and_then(|line| line.sighted)
             .map_or(0.0, |(_, offset)| offset),
         tip: draft.tip,
-        power: draft.power(),
+        pull: draft.pull,
         mode: draft.mode,
         // From the moment the stroke registers until the shot has finished
         // playing. No timer: the shot's own lifetime is the window, which is
@@ -792,7 +1009,7 @@ fn status_line(
 ) -> Line<'static> {
     if board.resign_confirm {
         return Line::from(Span::styled(
-            "Resign this match? Press X again to confirm.",
+            "Resign this match? y to resign, any other key to keep playing.",
             Style::default()
                 .fg(theme::ERROR())
                 .add_modifier(Modifier::BOLD),
@@ -873,6 +1090,9 @@ fn status_line(
 /// status line. At most one at a time, and the order is the order of urgency.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Prompt {
+    /// Snooker: the other player fouled, and the dialog over the table is
+    /// waiting on how this player wants to go on.
+    Fouled,
     /// The cue ball is off the table and has to be set down.
     MustPlace,
     /// Ball in hand granted, cue ball still up: an offer, not a demand.
@@ -887,7 +1107,8 @@ impl Prompt {
     /// Every prompt, for the test that lays the status line out at its
     /// longest.
     #[cfg(test)]
-    pub(crate) const ALL: [Self; 4] = [
+    pub(crate) const ALL: [Self; 5] = [
+        Self::Fouled,
         Self::MustPlace,
         Self::InHand,
         Self::CallPocket,
@@ -896,6 +1117,10 @@ impl Prompt {
 
     fn span(self) -> Span<'static> {
         match self {
+            Self::Fouled => Span::styled(
+                "   their foul: choose how to go on",
+                Style::default().fg(theme::AMBER()),
+            ),
             Self::MustPlace => Span::styled(
                 "   click the cloth to set the cue ball down",
                 Style::default().fg(theme::ERROR()),
@@ -919,7 +1144,10 @@ impl Prompt {
 }
 
 fn prompt_for(pool: &PoolDetail) -> Option<Prompt> {
-    if pool.state.must_place() && pool.draft.place.is_none() {
+    // First, because it decides whether there is a shot here to set up at all.
+    if pool.draft.foul_dialog_open(&pool.state) {
+        Some(Prompt::Fouled)
+    } else if pool.state.must_place() && pool.draft.place.is_none() {
         Some(Prompt::MustPlace)
     } else if pool.state.ball_in_hand.is_some() && pool.draft.place.is_none() {
         Some(Prompt::InHand)
@@ -946,12 +1174,18 @@ pub(crate) fn shooter_spans(mode: ShotMode, prompt: Option<Prompt>) -> Vec<Span<
     let prompt = match prompt {
         Some(Prompt::MustPlace | Prompt::InHand) if mode == ShotMode::Place => None,
         Some(
-            prompt @ (Prompt::MustPlace | Prompt::InHand | Prompt::CallPocket | Prompt::Calling(_)),
+            prompt @ (Prompt::Fouled
+            | Prompt::MustPlace
+            | Prompt::InHand
+            | Prompt::CallPocket
+            | Prompt::Calling(_)),
         ) => Some(prompt),
         None => None,
     };
+    // The foul's choice is said instead of the mouse hint: it comes first,
+    // and the two together do not fit the narrowest board.
     let hint = match prompt {
-        Some(Prompt::MustPlace) => None,
+        Some(Prompt::MustPlace | Prompt::Fouled) => None,
         Some(Prompt::InHand | Prompt::CallPocket | Prompt::Calling(_)) | None => Some(mode.hint()),
     };
     let mut spans = vec![Span::styled(

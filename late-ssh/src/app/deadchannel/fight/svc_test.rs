@@ -12,9 +12,9 @@ use tokio::time::{Duration, timeout};
 use super::{FightOutcome, FightService};
 use crate::app::chat::notifications::svc::NotificationService;
 use crate::app::chat::svc::ChatService;
+use crate::app::deadchannel::fight::cards::Card;
 use crate::app::deadchannel::fight::data::{CROSSING_LEVEL_BAND, RATIONS_PER_DAY};
 use crate::app::deadchannel::fight::road::{Mark, Node, Trace};
-use crate::app::deadchannel::fight::cards::Card;
 use crate::app::deadchannel::fight::state::{
     Applied, Call, Command, Meeting, Pick, Prey, Refusal, Sheet, Slot,
 };
@@ -1181,7 +1181,13 @@ async fn crossing_a_sleeper_rolls_their_day_and_drops_their_hanging_fight() {
     let mut daxs = sheet_of(&test_db, dax).await;
     daxs.level = 1 + CROSSING_LEVEL_BAND + 1;
     store(&test_db, &daxs).await;
-    let prey = Prey::of(&daxs, &dax_name, blank_portrait(), hanging.id, Meeting::Crossing);
+    let prey = Prey::of(
+        &daxs,
+        &dax_name,
+        blank_portrait(),
+        hanging.id,
+        Meeting::Crossing,
+    );
     toms.engage_rival(prey, &mut rand::thread_rng());
     assert!(toms.fight.is_some());
     store(&test_db, &toms).await;

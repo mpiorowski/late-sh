@@ -22,7 +22,7 @@ Read the details in [LICENSE](LICENSE), the plain-English policy in [LICENSING.m
 
 - SSH TUI with dashboard, chat, profile, news, and arcade screens
 - Mouse controls on Profiles (screen 5): click people, jobs, links, and form controls; wheel scrolls the hovered pane
-- The events board on `7`: anyone posts an event, everyone sees it, `i` says I'm in; your own events sit beside it, private. A post is a line in #lounge, the hour before a timed event it heads the Home `now` strip and the Live panel, an all-day event takes the #lounge topic row for its day, the start is a headline
+- The events board on `7`: anyone posts an event, everyone sees it, `i` says I'm in; your own events sit beside it, private
 - Real-time global chat and shared activity feed
 - Audio streaming via Icecast/Liquidsoap, played by the paired CLI or the public `/listen` page
 - Animated ASCII scenes in Zen tiles and away screensavers, with random and five-minute randomer modes
@@ -128,22 +128,23 @@ cargo build --release --bin late
 
 ## Local Development
 
-For development without Docker wrapping the Rust builds, you can run the
-infrastructure in Docker and the apps natively:
+Everything runs in Docker Compose: the development profiles point at the
+compose service names (`postgres`, `icecast`), so `late-ssh` and `late-web`
+do not run outside it.
 
 ```bash
-docker compose up -d postgres icecast liquidsoap
-cargo run -p late-ssh
-cargo run -p late-web
+mise install        # rust, mold and cargo-nextest, as pinned in .mise.toml
+make start          # copies .env.dev to .env and starts the stack
+ssh localhost -p 2222
 ```
 
-Local host development can use Cargo's normal defaults, including the standard
-repo-local `target/` directory. The `/app/target` path is only for Docker/dev
-containers.
+Personal keys (an AI key, a YouTube key) go in the gitignored `.env.local`,
+which wins over `.env`. `make start-instance2` runs a second instance from
+`.env.dev2`.
 
 The Zork door is enabled in the development profile. Build its vendored asset
-image once before building the Compose services (the current door base images
-target amd64):
+image once before building the Compose services (the door base images target
+amd64):
 
 ```bash
 docker build --platform linux/amd64 -f docker/doors/zork.Dockerfile \
@@ -151,96 +152,15 @@ docker build --platform linux/amd64 -f docker/doors/zork.Dockerfile \
 make start
 ```
 
-Open Games (`3`) → **Zork Trilogy** → choose an edition. Each has automatic
-progress and one deliberate `SAVE`; the six slots belong to your account.
-`SAVE` accepts an optional description, `RESTORE` asks before returning to the
-edition menu, and backtick steps out while the current game stays open.
-After 20 minutes without game input, Continue resumes its last prompt.
-See the [Zork component context](late-ssh/src/app/door/zork/CONTEXT.md) for the
-save contract, standalone host configuration, container tests, and rollout order.
-
-```bash
-export CARGO_HOME=$HOME/.cargo
-```
-
-Use `mise install` to get the expected Rust toolchain, `mold` linker, and
-`cargo-nextest`.
-
-To test newspaper scrolling in the Docker stack, run `make seed-paper`, then
-open `/paper` in the TUI. This replaces today's Reading and Outside sections
-with clearly marked sample text and enables the paper. Use
-`make seed-paper PAPER_PARAGRAPHS=5` for a shorter edition (default: 100;
-range: 1–1000). Close and reopen `/paper` after reseeding; no restart is needed.
-
-To test IRC history in Halloy, run `make seed-irc-history USERNAME=yourname`
-with your local TUI username. It adds 400 numbered messages to `#history-lab`,
-80 to `##history-lab`, two 80-message DM conversations with `history_ada` and
-`history^lin`, and 40 messages to `#lounge`. Samples include Unicode, replies,
-long and multiline bodies, and equal timestamps. Rerunning restores these
-fixture messages and preserves other chat and existing read markers.
-
-Connect Halloy to localhost port 6667 without TLS, using an IRC token from the
-local app's Settings. Reconnect after seeding, join `#history-lab` and
-`##history-lab`, and scroll upward to request older pages. Open the two peer
-queries to check DM history. These SQL fixtures populate stored history; they
-do not send live events. No server restart is needed after seeding.
-
-To test the Artboard gallery, run `make seed-artboard` after the current stack
-has applied its migrations. It creates 11 test accounts and 12 distinguishable,
-numbered ASCII pieces with applause. The first three have enough applause for
-monthly awards. Pieces 01–11 predate today UTC and qualify for the daily splash
-queue. Piece 01 is selected for today, unless a non-fixture piece owns the day;
-choose any piece 1–11 with `make seed-artboard ART_SPLASH_PIECE=3`. Restart the
-SSH service with `docker compose restart service-ssh` and reconnect to refresh
-its splash cache.
-
-Open Artboard (`4`), choose **Newest** in the gallery rail, and press `v` on a
-piece to applaud. Fixture SSH identities are retained in the gitignored
-`tmp/artboard-seed-keys/` directory. For example:
-
-```bash
-ssh -o IdentitiesOnly=yes -i tmp/artboard-seed-keys/art_artist1 -p 2222 localhost
-```
-
-Artboard opens behind a content disclaimer because the art may be NSFW.
-Press `V` (**View**) for this visit, `A` (**Always View**) to turn off future
-reminders on this device, or `B` (**Back to Chat**) to return to Home (screen `1`). The default-on **Artboard
-content disclaimer** toggle in Settings → Tweaks can turn reminders off or on.
-The choice is per device (the SSH key you logged in with), so it can stay on
-at work and off at home. A device that has never chosen inherits the account's
-value: on for a new account, off if you pressed Always View before the setting
-became per device.
-The page shortcuts `1`, `2`, `3`, `5`, `6`, and `7` also work from the disclaimer;
-leaving this way keeps the reminder enabled for the next visit.
-The same toggle gates the login splash: only with it off does the day's
-gallery piece replace the coffee cup, so newcomers always see the cup.
-During the newcomer tour the dialog does not appear: the tour box at the
-Artboard stop offers `S` to show the art for that visit or Enter to skip to
-Profiles, and neither changes the preference.
-
-Accounts are `art_artist1`–`art_artist3`, `art_voter1`–`art_voter4`, `art_mod1`/
-`art_mod2`, and `art_admin1`/`art_admin2`, each with a matching key filename.
-Their tutorial is already marked completed, including when reseeding existing
-fixture accounts.
-They join the normal public auto-join rooms, including `#lounge`. From Home,
-select `#lounge` and enter `/mod` in its composer to open the staff console.
-Rerunning restores these fixture pieces, applause, and staff roles; it
-preserves account preferences and all other users and art. Changes made while
-testing these pieces are reset by the next seed. Existing leaderboard seeding
-is separate, so art seeding does not rewrite game scores.
-The dev profile grants admin privileges to every session; set `force_admin`
-to `false` in `late-ssh/src/config.rs` when testing role-based permissions.
+Fixtures for manual testing, each described in its domain's `CONTEXT.md`:
+`make seed-artboard` (gallery pieces, applause and staff accounts),
+`make seed-calendar` (the events board), `make seed-paper` (a long edition of
+The Late Edition), `make seed-irc-history USERNAME=<you>` (IRC history for
+Halloy and other clients), and `make seed-leaderboard`. The development
+profile grants admin to every session; set `force_admin` to `false` in
+`late-ssh/src/config.rs` to test role-based permissions.
 
 ## Verification
-
-For events-board development, run `make seed-calendar` after starting the
-current stack. Fixture accounts are two ordinary users, a moderator and an
-admin, with a board of posts between them (one on now, one half an hour out),
-a few "I'm in"s and a private event; SSH keys live in
-`tmp/calendar-seed-keys/`. Press `1` to see the `now` strip and the Live
-panel, `7` for the board: `n` posts, `i` says I'm in, right-click offers what
-you may do. See [CALENDAR.md](CALENDAR.md) for the rules, the two #lounge
-lines, timing, telemetry and the fixture.
 
 Run the local gate before opening a PR:
 
@@ -275,7 +195,7 @@ If you distribute a fork, do not present it as the official `late.sh` service or
 
 ## More Context
 
-- [CONTEXT.md](CONTEXT.md) — architecture, invariants, and working context. Written for LLMs — feed this to your AI editor for best results.
-- [CONTRIBUTING.md](CONTRIBUTING.md) — workflow, test rules, module patterns, and AI-assisted development tips.
-- [THEME.md](THEME.md) — how to contribute a new built-in SSH theme via PR.
-- [late-cli/README.md](late-cli/README.md) — CLI-specific usage and behavior.
+- [CONTEXT.md](CONTEXT.md): the map of the codebase, the rules that cross domains, and where each domain's own `CONTEXT.md` lives. Written for humans and LLMs alike; point your AI editor at it first.
+- [CONTRIBUTING.md](CONTRIBUTING.md): workflow, test rules, module patterns, and AI-assisted development tips.
+- [THEME.md](THEME.md): how to contribute a new built-in SSH theme via PR.
+- [late-cli/README.md](late-cli/README.md): CLI-specific usage and behavior.

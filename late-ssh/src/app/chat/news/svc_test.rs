@@ -302,11 +302,10 @@ async fn a_listening_replica_picks_up_shares_and_deletes_from_the_notify() {
 async fn recv_reads(events: &mut tokio::sync::broadcast::Receiver<ArticleEvent>) -> Vec<Uuid> {
     timeout(Duration::from_secs(2), async {
         loop {
-            if let ArticleEvent::ReadsLoaded {
-                read_article_ids, ..
-            } = events.recv().await.expect("article event")
+            if let ArticleEvent::ReadsLoaded { reads, .. } =
+                events.recv().await.expect("article event")
             {
-                return read_article_ids;
+                return reads.into_iter().map(|row| row.article_id).collect();
             }
         }
     })
@@ -348,4 +347,151 @@ async fn an_open_reads_one_article_and_a_room_visit_reads_the_feed() {
     let mut both = vec![older.id, newer.id];
     both.sort();
     assert_eq!(read_article_ids, both);
+}
+
+/// Serves `html` as `text/html` to every request on a loopback port and
+/// counts the requests. Returns the page's URL, by the name `localhost`, so
+/// the production client's refusal comes from its resolver.
+async fn serve_page(
+    html: &'static str,
+) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind page server");
+    let addr = listener.local_addr().expect("page server addr");
+    let hits = std::sync::Arc::new(AtomicUsize::new(0));
+    let served = std::sync::Arc::clone(&hits);
+    tokio::spawn(async move {
+        loop {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            served.fetch_add(1, Ordering::SeqCst);
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                match socket.read(&mut chunk).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => request.extend_from_slice(&chunk[..n]),
+                }
+            }
+            let response = format!(
+                "HTTP/1.1 200 OK\r\ncontent-type: text/html; charset=utf-8\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{html}",
+                html.len()
+            );
+            let _ = socket.write_all(response.as_bytes()).await;
+        }
+    });
+    (
+        format!("http://localhost:{}/posts/listen-notify", addr.port()),
+        hits,
+    )
+}
+
+const PAGE: &str = "<html><head><title>Listen</title></head><body><article>\
+    <p>Every replica holds one connection that listens on every channel the domains \
+    subscribe to, and a worker per domain re-reads its snapshot whenever a notify lands.</p>\
+    <p>A burst of writes collapses into a single read, which is the whole trick, and \
+    <a href=\"/docs\">the docs</a> say as much.</p></article></body></html>";
+
+fn budget() -> tokio::time::Instant {
+    tokio::time::Instant::now() + Duration::from_secs(30)
+}
+
+/// A shared page that reads stores a `ready` body with its lines, and the
+/// snapshot's card flips from pending to its reading time.
+#[tokio::test]
+async fn a_readable_share_stores_a_ready_body() {
+    use late_core::models::article_body::{ArticleBody, BodyContent, BodyStatus};
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "news-body-ready").await;
+    let (url, hits) = serve_page(PAGE).await;
+    let client = test_db.db.get().await.expect("db client");
+    let article =
+        Article::create_by_user_id(&client, user.id, article_params(user.id, &url, "Listen"))
+            .await
+            .expect("share");
+    // The real client refuses loopback; this test is about the store.
+    let service = make_article_service(test_db.db.clone()).with_body_client(
+        reqwest::Client::builder()
+            .no_proxy()
+            .build()
+            .expect("client"),
+    );
+
+    service.store_body(article.id, &url, budget()).await;
+
+    assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+    let body = ArticleBody::find(&client, article.id)
+        .await
+        .expect("find body")
+        .expect("a body row");
+    let BodyContent::Ready { word_count, lines } = body.content else {
+        panic!("expected a ready body, got {:?}", body.content);
+    };
+    assert_eq!(lines.len(), 2);
+    assert!(word_count > 30);
+    let feed = Article::list_feed(&client, 20).await.expect("feed");
+    assert_eq!(feed[0].body, BodyStatus::Ready { reading_minutes: 1 });
+}
+
+/// A fetch that cannot read the page still lands a row, `unavailable`, so
+/// the card reads `link` instead of waiting. Here it is the production
+/// client's resolver refusing a name that points at loopback, so the page
+/// is never connected to.
+#[tokio::test]
+async fn an_unreadable_share_stores_an_unavailable_body() {
+    use late_core::models::article_body::{ArticleBody, BodyContent};
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "news-body-blocked").await;
+    let (url, hits) = serve_page(PAGE).await;
+    let client = test_db.db.get().await.expect("db client");
+    let article =
+        Article::create_by_user_id(&client, user.id, article_params(user.id, &url, "Listen"))
+            .await
+            .expect("share");
+    let service = make_article_service(test_db.db.clone());
+
+    service.store_body(article.id, &url, budget()).await;
+
+    assert_eq!(
+        hits.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "a private address is never connected to"
+    );
+    let body = ArticleBody::find(&client, article.id)
+        .await
+        .expect("find body")
+        .expect("a body row");
+    assert_eq!(body.content, BodyContent::Unavailable);
+}
+
+/// A video gets its `unavailable` row straight away: there is no page to
+/// read, so its card never sits pending.
+#[tokio::test]
+async fn a_youtube_share_is_unavailable_without_a_fetch() {
+    use late_core::models::article_body::{ArticleBody, BodyContent};
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "news-body-video").await;
+    let url = "https://www.youtube.com/watch?v=KnUFH5GX_fI";
+    let client = test_db.db.get().await.expect("db client");
+    let article =
+        Article::create_by_user_id(&client, user.id, article_params(user.id, url, "Video"))
+            .await
+            .expect("share");
+    let service = make_article_service(test_db.db.clone());
+
+    service.store_body(article.id, url, budget()).await;
+
+    let body = ArticleBody::find(&client, article.id)
+        .await
+        .expect("find body")
+        .expect("a body row");
+    assert_eq!(body.content, BodyContent::Unavailable);
 }

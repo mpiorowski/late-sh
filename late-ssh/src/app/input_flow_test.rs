@@ -5624,7 +5624,7 @@ async fn zen_s_then_a_digit_opens_the_live_tiles_row_from_any_tile() {
 
     app.handle_input(b"sx");
     assert_eq!(
-        app.chat.news_modal_url(),
+        app.chat.reader().map(|reader| reader.url()),
         None,
         "a stray suffix opens nothing"
     );
@@ -5632,21 +5632,21 @@ async fn zen_s_then_a_digit_opens_the_live_tiles_row_from_any_tile() {
 
     app.handle_input(b"s1");
     assert_eq!(
-        app.chat.news_modal_url(),
+        app.chat.reader().map(|reader| reader.url()),
         Some("https://example.com/terminal-renaissance"),
         "s1 opens the article"
     );
     assert!(!app.chat.is_composing(), "the key never reaches a composer");
 
     // `s1` with a chat tile focused opens the same article.
-    app.chat.close_news_modal();
+    app.chat.close_reader();
     app.zen.focus = app
         .zen
         .first_tile_of(TileKind::Chat)
         .expect("the default has a chat");
     app.handle_input(b"s1");
     assert_eq!(
-        app.chat.news_modal_url(),
+        app.chat.reader().map(|reader| reader.url()),
         Some("https://example.com/terminal-renaissance"),
         "s1 opens the article from a chat tile"
     );
@@ -5711,7 +5711,7 @@ async fn zen_clicks_under_the_open_tile_picker_reach_nothing() {
     let click = format!("\x1b[<0;{};{}M", rows.x + 2, rows.y + 1);
     app.handle_input(click.as_bytes());
     assert_eq!(
-        app.chat.news_modal_url(),
+        app.chat.reader().map(|reader| reader.url()),
         None,
         "a click under the picker opens nothing"
     );
@@ -5723,7 +5723,7 @@ async fn zen_clicks_under_the_open_tile_picker_reach_nothing() {
     render_plain(&mut app);
     app.handle_input(click.as_bytes());
     assert_eq!(
-        app.chat.news_modal_url(),
+        app.chat.reader().map(|reader| reader.url()),
         Some("https://example.com/under-the-picker"),
         "the click opens the article once the picker is gone"
     );
@@ -6256,8 +6256,9 @@ async fn f_favorites_the_bugs_room_from_the_rail() {
     app.resize(160, 32).expect("resize test terminal");
     wait_for_render_contains(&mut app, "bugs").await;
 
-    // Core order is lounge, then bugs: one step right lands on it.
-    app.handle_input(b"l");
+    // Core order is lounge, news, then bugs (no RSS without feeds): two
+    // steps right land on it.
+    app.handle_input(b"ll");
     assert_eq!(app.chat.selected_room_id, Some(bugs.id));
     wait_for_render_contains(&mut app, "a report to read").await;
 
@@ -6298,8 +6299,9 @@ async fn f_favorites_the_mentions_entry() {
     wait_for_render_contains(&mut app, "\u{258C}lounge").await;
     assert_eq!(app.chat.selected_room_id, Some(lounge.id));
 
-    // Core order here is lounge, then mentions: one step right lands on it.
-    app.handle_input(b"l");
+    // Core order here is lounge, news, then mentions: two steps right land
+    // on it.
+    app.handle_input(b"ll");
     assert!(app.chat.notifications_selected);
 
     app.handle_input(b"f");

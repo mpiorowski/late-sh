@@ -23,12 +23,23 @@
 //!
 //! Surface-agnostic like the rest of the kernel: the board screen and a
 //! future live table draw the same line.
+//!
+//! **The cue ball off a cushion is the exception to "none of this is
+//! physics"**, because the straight-line geometry there is wrong in a way a
+//! player can see. Off the rail the ball's spin no longer matches its new
+//! direction, so it slides, and the cloth bends its path until it rolls again
+//! — with centre ball, never mind english. A drawn mirror (even one turned for
+//! side, which is all it used to be) is the direction the ball leaves on, not
+//! the way it goes. So when the caller can say how the shot will be struck,
+//! the rebound is the simulator's own path for the cue ball alone on the table
+//! (`trace_rebound`), drawn as the curve it is.
 
 use crate::app::games::pool_core::{
-    ball::CUE,
+    ball::{Ball, CUE},
     collide,
-    cue::SPIN_PER_TIP,
-    shot::BallFrame,
+    cue::{SPIN_PER_TIP, Strike},
+    shot::{BallFrame, RackState, ShotEvent},
+    sim,
     table::{Geometry, TableSpec},
 };
 
@@ -129,6 +140,150 @@ pub struct ShotLine {
     pub tangent: Option<[f64; 2]>,
     /// Where the cue ball ends up after its first cushion.
     pub rebound: Option<[f64; 2]>,
+    /// The way it gets there, when the shot was traced (`trace_rebound`):
+    /// the curve off the rail, ending at `rebound`.
+    pub bend: Option<Trace>,
+}
+
+/// Points kept on a traced rebound.
+pub const TRACE_POINTS: usize = 48;
+
+/// The cue ball's path off its first cushion, as the simulator plays it, from
+/// the contact to the next cushion, a pocket, or where it stops. Evenly spaced
+/// along the path, so the curve is drawn as finely where it bends as where it
+/// runs straight. `Copy` and fixed-size, like the rest of a `ShotLine`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Trace {
+    points: [[f64; 2]; TRACE_POINTS],
+    len: usize,
+}
+
+impl Trace {
+    pub fn points(&self) -> &[[f64; 2]] {
+        &self.points[..self.len]
+    }
+
+    /// The same path, stopped where the cue ball's centre comes within a
+    /// ball's width of one of `balls`: the end of the path as drawn, since
+    /// past a contact the trace (which played the cue ball alone) says
+    /// nothing true.
+    fn until_contact(&self, balls: &[BallFrame], radius: f64) -> Self {
+        let touch = 2.0 * radius;
+        let mut out = *self;
+        for index in 1..self.len {
+            let (a, b) = (self.points[index - 1], self.points[index]);
+            let hit = balls
+                .iter()
+                .filter(|ball| !ball.potted && ball.id != CUE)
+                .filter_map(|ball| entry(a, b, ball.pos, touch))
+                .min_by(|x, y| x.total_cmp(y));
+            if let Some(t) = hit {
+                out.points[index] = add(a, scale(sub(b, a), t));
+                out.len = index + 1;
+                return out;
+            }
+        }
+        out
+    }
+}
+
+/// Where along segment `a`→`b` (0 to 1) a point comes within `reach` of
+/// `centre`, if it does.
+fn entry(a: [f64; 2], b: [f64; 2], centre: [f64; 2], reach: f64) -> Option<f64> {
+    let d = sub(b, a);
+    let f = sub(a, centre);
+    let qa = dot(d, d);
+    if qa < 1e-18 {
+        return (distance(a, centre) < reach).then_some(0.0);
+    }
+    let qb = 2.0 * dot(f, d);
+    let qc = dot(f, f) - reach * reach;
+    if qc < 0.0 {
+        return Some(0.0);
+    }
+    let disc = qb * qb - 4.0 * qa * qc;
+    if disc < 0.0 {
+        return None;
+    }
+    let t = (-qb - disc.sqrt()) / (2.0 * qa);
+    (0.0..=1.0).contains(&t).then_some(t)
+}
+
+/// Play `strike` from `from` with the cue ball alone on the table and keep its
+/// path off the first cushion. `None` when it never meets one.
+///
+/// Alone, because what the line can honestly promise ends at the first ball
+/// anyway (`Trace::until_contact` cuts it there), and because a lone ball is
+/// the cheap case of the simulator: a few thousand closed-form steps. The
+/// caller still caches it, since the board asks for the line several times a
+/// frame.
+pub fn trace_rebound(
+    spec: &TableSpec,
+    geom: &Geometry,
+    from: [f64; 2],
+    strike: &Strike,
+) -> Option<Trace> {
+    let rack = RackState {
+        balls: vec![Ball::resting(CUE, from)],
+    };
+    let result = sim::simulate(spec, geom, &rack, strike);
+    let timeline = &result.timeline;
+    let mut stops = timeline
+        .events
+        .iter()
+        .filter_map(|event| match event.event {
+            ShotEvent::BallHitCushion { ball: CUE, .. }
+            | ShotEvent::BallPotted { ball: CUE, .. } => {
+                Some((event.t, matches!(event.event, ShotEvent::BallPotted { .. })))
+            }
+            _ => None,
+        });
+    let (start, potted) = stops.next()?;
+    if potted {
+        return None;
+    }
+    let end = stops.next().map_or(timeline.duration, |(t, _)| t);
+    let at = |t: f64| {
+        timeline
+            .sample(t)
+            .into_iter()
+            .find(|frame| frame.id == CUE)
+            .map(|frame| frame.pos)
+    };
+    // Sample finely in time, then even the points out along the path: the
+    // bend is a fraction of a second off the rail and the roll after it can
+    // be several seconds, so equal times would spend every point on the
+    // straight.
+    const FINE: usize = 400;
+    let raw: Vec<[f64; 2]> = (0..=FINE)
+        .filter_map(|k| {
+            let f = k as f64 / FINE as f64;
+            at(start + (end - start) * f * f)
+        })
+        .collect();
+    if raw.len() < 2 {
+        return None;
+    }
+    let mut along = vec![0.0];
+    for pair in raw.windows(2) {
+        along.push(along.last().copied().unwrap_or(0.0) + distance(pair[0], pair[1]));
+    }
+    let total = *along.last().unwrap_or(&0.0);
+    let mut points = [[0.0; 2]; TRACE_POINTS];
+    let mut cursor = 0;
+    for (index, point) in points.iter_mut().enumerate() {
+        let want = total * index as f64 / (TRACE_POINTS - 1) as f64;
+        while cursor + 1 < along.len() - 1 && along[cursor + 1] < want {
+            cursor += 1;
+        }
+        let span = (along[cursor + 1] - along[cursor]).max(1e-12);
+        let t = ((want - along[cursor]) / span).clamp(0.0, 1.0);
+        *point = add(raw[cursor], scale(sub(raw[cursor + 1], raw[cursor]), t));
+    }
+    Some(Trace {
+        points,
+        len: TRACE_POINTS,
+    })
 }
 
 impl ShotLine {
@@ -177,12 +332,20 @@ impl ShotLine {
                 kind: LegKind::Tangent,
             });
         }
-        if let Some(to) = self.rebound {
-            legs.push(Leg {
+        match (self.bend, self.rebound) {
+            (Some(bend), _) => {
+                legs.extend(bend.points().windows(2).map(|pair| Leg {
+                    from: pair[0],
+                    to: pair[1],
+                    kind: LegKind::Rebound,
+                }));
+            }
+            (None, Some(to)) => legs.push(Leg {
                 from: self.hit.at(),
                 to,
                 kind: LegKind::Rebound,
-            });
+            }),
+            (None, None) => {}
         }
         legs
     }
@@ -198,6 +361,22 @@ pub fn shot_line(
     from: [f64; 2],
     azimuth: f64,
     tip_side: f64,
+) -> ShotLine {
+    shot_line_traced(spec, geom, balls, from, azimuth, tip_side, || None)
+}
+
+/// `shot_line`, with a way to trace the rebound for real (`trace_rebound`),
+/// asked only when the line does meet a cushion first. Without one, or when
+/// the trace does not start where the line meets the rail, the rebound is the
+/// turned mirror it always was.
+pub fn shot_line_traced(
+    spec: &TableSpec,
+    geom: &Geometry,
+    balls: &[BallFrame],
+    from: [f64; 2],
+    azimuth: f64,
+    tip_side: f64,
+    trace: impl FnOnce() -> Option<Trace>,
 ) -> ShotLine {
     let (sin, cos) = azimuth.sin_cos();
     let dir = [cos, sin];
@@ -265,7 +444,21 @@ pub fn shot_line(
         Hit::Cushion { .. } | Hit::Pocket { .. } | Hit::Nothing { .. } => (None, None),
     };
 
+    let bend = match hit {
+        Hit::Cushion { at, .. } => trace()
+            .filter(|trace| {
+                trace
+                    .points()
+                    .first()
+                    .is_some_and(|start| distance(*start, at) < radius)
+            })
+            .map(|trace| trace.until_contact(balls, radius)),
+        Hit::Ball { .. } | Hit::Pocket { .. } | Hit::Nothing { .. } => None,
+    };
     let rebound = match hit {
+        Hit::Cushion { .. } if bend.is_some() => {
+            bend.and_then(|bend| bend.points().last().copied())
+        }
         Hit::Cushion { at, normal } => {
             // The mirror, turned by what the english does to the impact. A
             // rebound drawn as a plain reflection said english off a rail did
@@ -290,6 +483,7 @@ pub fn shot_line(
         object,
         tangent,
         rebound,
+        bend,
     }
 }
 

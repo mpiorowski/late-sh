@@ -1,11 +1,11 @@
 use dartboard_core::{Canvas, CanvasOp, CellValue, Pos, RgbColor};
 use dartboard_editor::{
-    AppKey, AppModifiers, AppPointerEvent, Bounds, EditorAction, EditorContext, EditorKeyDispatch,
-    EditorPointerDispatch, EditorSession, FloatingSelection as EditorFloatingSelection, KeyMap,
-    Mode as EditorMode, MoveDir, SWATCH_CAPACITY, Selection as EditorSelection,
-    SelectionShape as EditorSelectionShape, Swatch, SwatchActivation, Viewport,
-    backspace as editor_backspace, capture_bounds, capture_selection, diff_canvas_op,
-    dismiss_floating as editor_dismiss_floating,
+    AppKey, AppModifiers, AppPointerButton, AppPointerEvent, AppPointerKind, Bounds, Clipboard,
+    EditorAction, EditorContext, EditorKeyDispatch, EditorPointerDispatch, EditorSession,
+    FloatingSelection as EditorFloatingSelection, KeyMap, Mode as EditorMode, MoveDir,
+    SWATCH_CAPACITY, Selection as EditorSelection, SelectionShape as EditorSelectionShape, Swatch,
+    SwatchActivation, Viewport, backspace as editor_backspace, capture_bounds, capture_selection,
+    diff_canvas_op, dismiss_floating as editor_dismiss_floating,
     export_system_clipboard_text as editor_export_system_clipboard_text,
     handle_editor_action as editor_handle_action, handle_editor_pointer as editor_handle_pointer,
     paste_text_block, stamp_floating as editor_stamp_floating,
@@ -361,16 +361,11 @@ impl State {
         if copied_to_slot.is_some() {
             self.prepare_primary_clipboard_slot();
         }
-        let before = self.snapshot.canvas.clone();
-        let before_provenance = self.snapshot.provenance.clone();
-        let color = self.active_user_color();
-        let dispatch =
-            editor_handle_action(&mut self.editor, &mut self.snapshot.canvas, action, color);
+        let reach = self.action_reach(action);
+        let (dispatch, _) = self.edit_board(reach, |editor, canvas, color| {
+            editor_handle_action(editor, canvas, action, color)
+        });
         self.sync_floating_source_selection();
-
-        if self.snapshot.canvas != before {
-            let _ = self.submit_canvas_diff(before, before_provenance);
-        }
 
         if dispatch.handled
             && let Some(idx) = copied_to_slot
@@ -382,17 +377,16 @@ impl State {
     }
 
     pub fn handle_pointer_event(&mut self, pointer: AppPointerEvent) -> EditorPointerDispatch {
-        let before = self.snapshot.canvas.clone();
-        let before_provenance = self.snapshot.provenance.clone();
         let had_floating = self.editor.floating.is_some();
         let had_local_floating = self.floating_source_selection.is_some();
         let pointer_over_canvas = self
             .editor
             .canvas_pos_for_pointer(pointer.column, pointer.row, &self.snapshot.canvas)
             .is_some();
-        let color = self.active_user_color();
-        let dispatch =
-            editor_handle_pointer(&mut self.editor, &mut self.snapshot.canvas, pointer, color);
+        let reach = self.pointer_reach(pointer);
+        let (dispatch, _) = self.edit_board(reach, |editor, canvas, color| {
+            editor_handle_pointer(editor, canvas, pointer, color)
+        });
         self.sync_floating_source_selection();
         if had_floating && had_local_floating && self.editor.floating.is_none() {
             self.restore_floating_source_selection();
@@ -400,15 +394,13 @@ impl State {
         if self.editor.floating.is_none() || pointer_over_canvas {
             self.suppress_swatch_preview = false;
         }
-        if self.snapshot.canvas != before {
-            let _ = self.submit_canvas_diff(before, before_provenance);
-        }
         dispatch
     }
 
     pub fn backspace(&mut self, screen_size: (u16, u16)) {
         self.set_viewport_for_screen(screen_size);
-        let _ = self.edit_canvas(|editor, canvas, _| editor_backspace(editor, canvas));
+        let reach = EditReach::Within(backspace_bounds(self.editor.cursor));
+        let _ = self.edit_canvas(reach, |editor, canvas, _| editor_backspace(editor, canvas));
     }
 
     pub fn paste_bytes(&mut self, bytes: &[u8], screen_size: (u16, u16)) {
@@ -419,8 +411,10 @@ impl State {
         };
 
         let start = self.editor.cursor;
-        let _ =
-            self.edit_canvas(|editor, canvas, color| paste_text_block(editor, canvas, text, color));
+        let reach = EditReach::Within(text_block_bounds(start, text));
+        let _ = self.edit_canvas(reach, |editor, canvas, color| {
+            paste_text_block(editor, canvas, text, color)
+        });
         self.editor.cursor = paste_cursor_end(
             start,
             text,
@@ -636,27 +630,39 @@ impl State {
         let was_temp_brush =
             self.active_brush.is_some() && self.floating_source_selection.is_none();
 
-        let before = self.snapshot.canvas.clone();
-        if !floating.transparent {
-            if let Some(bounds) = self.floating_source_bounds {
-                clear_bounds_on(&mut self.snapshot.canvas, bounds);
-            } else if let Some(selection) = self.floating_source_selection {
-                clear_bounds_on(
-                    &mut self.snapshot.canvas,
-                    selection.bounds().normalized_for_canvas(&before),
-                );
-            }
-        }
-        let color = self.active_user_color();
-        dartboard_editor::stamp_clipboard(
-            &mut self.snapshot.canvas,
-            &floating.clipboard,
-            self.editor.cursor,
-            color,
+        // An opaque lift leaves its source empty; the stamp lands at the
+        // cursor.
+        let source = match (
             floating.transparent,
-        );
-        let before_provenance = self.snapshot.provenance.clone();
-        let _ = self.submit_canvas_diff(before, before_provenance);
+            self.floating_source_bounds,
+            self.floating_source_selection,
+        ) {
+            (true, _, _) | (false, None, None) => None,
+            (false, Some(bounds), _) => Some(bounds),
+            (false, None, Some(selection)) => Some(
+                selection
+                    .bounds()
+                    .normalized_for_canvas(&self.snapshot.canvas),
+            ),
+        };
+        let cursor = self.editor.cursor;
+        let stamp = stamp_bounds(cursor, &floating.clipboard);
+        let reach = match source {
+            Some(source) => union_bounds(source, stamp),
+            None => stamp,
+        };
+        let _ = self.edit_board(EditReach::Within(reach), |_, canvas, color| {
+            if let Some(source) = source {
+                clear_bounds_on(canvas, source);
+            }
+            dartboard_editor::stamp_clipboard(
+                canvas,
+                &floating.clipboard,
+                cursor,
+                color,
+                floating.transparent,
+            );
+        });
         editor_dismiss_floating(&mut self.editor);
         self.floating_source_selection = None;
         self.floating_source_bounds = None;
@@ -1276,8 +1282,10 @@ impl State {
         }
         self.set_viewport_for_screen(screen_size);
         let start = self.editor.cursor;
-        let changed = self
-            .edit_canvas(|editor, canvas, color| paste_text_block(editor, canvas, &icon, color));
+        let reach = EditReach::Within(text_block_bounds(start, &icon));
+        let changed = self.edit_canvas(reach, |editor, canvas, color| {
+            paste_text_block(editor, canvas, &icon, color)
+        });
         if changed {
             self.editor.cursor = paste_cursor_end(
                 start,
@@ -1423,43 +1431,182 @@ impl State {
 
     fn edit_canvas(
         &mut self,
+        reach: EditReach,
         edit: impl FnOnce(&mut EditorSession, &mut Canvas, RgbColor) -> bool,
     ) -> bool {
         if self.is_archive_view_active() {
             return false;
         }
-        let before = self.snapshot.canvas.clone();
-        let before_provenance = self.snapshot.provenance.clone();
+        let (_, submitted) = self.edit_board(reach, edit);
+        submitted
+    }
+
+    /// Runs `edit` on the local board and submits what it changed as one op.
+    /// The diff reads only the edit's `reach`, so a keystroke costs a few
+    /// cells, not two copies and a diff of the whole board. Debug builds
+    /// check every edit, a `Nothing` one included, against the whole-board
+    /// diff.
+    fn edit_board<R>(
+        &mut self,
+        reach: EditReach,
+        edit: impl FnOnce(&mut EditorSession, &mut Canvas, RgbColor) -> R,
+    ) -> (R, bool) {
         let color = self.active_user_color();
-        let _ = edit(&mut self.editor, &mut self.snapshot.canvas, color);
-        if self.snapshot.canvas == before {
-            return false;
+        let area = match reach {
+            EditReach::Nothing => {
+                #[cfg(debug_assertions)]
+                let whole_before = self.snapshot.canvas.clone();
+                let result = edit(&mut self.editor, &mut self.snapshot.canvas, color);
+                #[cfg(debug_assertions)]
+                debug_assert_eq!(
+                    diff_canvas_op(&whole_before, &self.snapshot.canvas, color),
+                    None,
+                    "edit wrote outside its reach {reach:?}"
+                );
+                return (result, false);
+            }
+            EditReach::Within(bounds) => Some(widen_for_wide_glyphs(bounds, &self.snapshot.canvas)),
+            EditReach::Anywhere => None,
+        };
+        #[cfg(debug_assertions)]
+        let whole_before = self.snapshot.canvas.clone();
+        let before = match area {
+            Some(area) => crop_canvas(&self.snapshot.canvas, area),
+            None => self.snapshot.canvas.clone(),
+        };
+        let result = edit(&mut self.editor, &mut self.snapshot.canvas, color);
+        let op = match area {
+            Some(area) => diff_canvas_op(&before, &crop_canvas(&self.snapshot.canvas, area), color),
+            None => diff_canvas_op(&before, &self.snapshot.canvas, color),
+        };
+        #[cfg(debug_assertions)]
+        debug_assert_eq!(
+            op,
+            diff_canvas_op(&whole_before, &self.snapshot.canvas, color),
+            "edit wrote outside its reach {reach:?}"
+        );
+        let submitted = self.submit_edit_op(&before, op);
+        (result, submitted)
+    }
+
+    /// Where an editor action can write, read off the editor before it runs.
+    fn action_reach(&self, action: EditorAction) -> EditReach {
+        let cursor = self.editor.cursor;
+        match action {
+            EditorAction::Move { .. }
+            | EditorAction::MoveDownLine
+            | EditorAction::Pan { .. }
+            | EditorAction::ClearSelection
+            | EditorAction::TransposeSelectionCorner
+            | EditorAction::CopySelection
+            | EditorAction::ExportSystemClipboard
+            | EditorAction::ActivateSwatch(_)
+            | EditorAction::ToggleFloatingTransparency => EditReach::Nothing,
+            EditorAction::InsertChar(ch) => EditReach::Within(Bounds {
+                min_x: cursor.x,
+                max_x: cursor.x + Canvas::display_width(ch) - 1,
+                min_y: cursor.y,
+                max_y: cursor.y,
+            }),
+            EditorAction::Backspace => EditReach::Within(backspace_bounds(cursor)),
+            EditorAction::Delete => EditReach::Within(Bounds::single(cursor)),
+            EditorAction::CutSelection
+            | EditorAction::FillSelectionOrCell(_)
+            | EditorAction::SmartFill
+            | EditorAction::DrawBorder => EditReach::Within(
+                self.editor
+                    .selection_or_cursor_bounds()
+                    .normalized_for_canvas(&self.snapshot.canvas),
+            ),
+            EditorAction::PastePrimarySwatch => match &self.editor.swatches[PRIMARY_SWATCH_IDX] {
+                Some(swatch) => EditReach::Within(stamp_bounds(cursor, &swatch.clipboard)),
+                None => EditReach::Nothing,
+            },
+            // A stamp where the cursor is, then one a step away; a jump to
+            // a viewport edge has no small box.
+            EditorAction::StrokeFloating { dir } => match (&self.editor.floating, dir) {
+                (None, _) => EditReach::Nothing,
+                (Some(floating), MoveDir::Left | MoveDir::Right | MoveDir::Up | MoveDir::Down) => {
+                    let stamp = stamp_bounds(cursor, &floating.clipboard);
+                    EditReach::Within(Bounds {
+                        min_x: stamp.min_x.saturating_sub(1),
+                        max_x: stamp.max_x + 1,
+                        min_y: stamp.min_y.saturating_sub(1),
+                        max_y: stamp.max_y + 1,
+                    })
+                }
+                (
+                    Some(_),
+                    MoveDir::LineStart | MoveDir::LineEnd | MoveDir::PageUp | MoveDir::PageDown,
+                ) => EditReach::Anywhere,
+            },
+            // The editor's row and column shifts rebuild the whole board.
+            EditorAction::PushLeft
+            | EditorAction::PushRight
+            | EditorAction::PushUp
+            | EditorAction::PushDown
+            | EditorAction::PullFromLeft
+            | EditorAction::PullFromRight
+            | EditorAction::PullFromUp
+            | EditorAction::PullFromDown => EditReach::Anywhere,
         }
-        self.submit_canvas_diff(before, before_provenance)
+    }
+
+    /// Where a pointer event can write: only a left press or drag over the
+    /// board with a brush up stamps, along the stroke from its anchor and
+    /// last stamp to the pointer.
+    fn pointer_reach(&self, pointer: AppPointerEvent) -> EditReach {
+        let Some(floating) = self.editor.floating.as_ref() else {
+            return EditReach::Nothing;
+        };
+        let paints = matches!(
+            pointer.kind,
+            AppPointerKind::Down(AppPointerButton::Left)
+                | AppPointerKind::Drag(AppPointerButton::Left)
+        );
+        if !paints {
+            return EditReach::Nothing;
+        }
+        let Some(pos) =
+            self.editor
+                .canvas_pos_for_pointer(pointer.column, pointer.row, &self.snapshot.canvas)
+        else {
+            return EditReach::Nothing;
+        };
+        let mut reach = Bounds::single(pos);
+        for point in [
+            self.editor.paint_stroke_anchor,
+            self.editor.paint_stroke_last,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            reach = union_bounds(reach, Bounds::single(point));
+        }
+        reach.max_x += floating.clipboard.width.saturating_sub(1);
+        reach.max_y += floating.clipboard.height.saturating_sub(1);
+        EditReach::Within(reach)
     }
 
     fn invalidate_owner_overlay_cache(&self) {
         *self.owner_overlay_cache.borrow_mut() = None;
     }
 
-    fn submit_canvas_diff(
-        &mut self,
-        before: Canvas,
-        before_provenance: super::provenance::ArtboardProvenance,
-    ) -> bool {
+    /// Records who painted what `op` changed, against `before` (the board,
+    /// or the part of it the edit could reach, as it was before the edit),
+    /// and sends the op.
+    fn submit_edit_op(&mut self, before: &Canvas, op: Option<CanvasOp>) -> bool {
         if self.is_archive_view_active() {
             return false;
         }
-        let Some(op) = diff_canvas_op(&before, &self.snapshot.canvas, self.active_user_color())
-        else {
+        let Some(op) = op else {
             return false;
         };
         self.invalidate_owner_overlay_cache();
-        self.snapshot.provenance = before_provenance;
         self.snapshot
             .provenance
-            .apply_op(&before, &op, &self.username);
-        apply_shared_op(&self.shared_provenance, &before, &op, &self.username);
+            .apply_op(before, &op, &self.username);
+        apply_shared_op(&self.shared_provenance, before, &op, &self.username);
         self.svc.submit_op(op);
         true
     }
@@ -1505,8 +1652,15 @@ impl State {
     }
 
     fn stamp_floating(&mut self) -> bool {
-        let _ =
-            self.edit_canvas(|editor, canvas, color| editor_stamp_floating(editor, canvas, color));
+        let reach = match self.editor.floating.as_ref() {
+            Some(floating) => {
+                EditReach::Within(stamp_bounds(self.editor.cursor, &floating.clipboard))
+            }
+            None => EditReach::Nothing,
+        };
+        let _ = self.edit_canvas(reach, |editor, canvas, color| {
+            editor_stamp_floating(editor, canvas, color)
+        });
         true
     }
 
@@ -1769,6 +1923,111 @@ fn selection_shape_to_tui(shape: EditorSelectionShape) -> TuiSelectionShape {
     match shape {
         EditorSelectionShape::Rect => TuiSelectionShape::Rect,
         EditorSelectionShape::Ellipse => TuiSelectionShape::Ellipse,
+    }
+}
+
+/// Where an edit can write on the board, so its diff reads that area and
+/// not the whole board.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum EditReach {
+    /// The edit never writes to the board.
+    Nothing,
+    /// Only cells inside these bounds can change, give or take the other
+    /// half of a wide glyph the edit overlaps.
+    Within(Bounds),
+    /// The edit can move glyphs anywhere on the board.
+    Anywhere,
+}
+
+/// `bounds` plus a column either side, kept on the board: a write can clear
+/// a wide glyph whose other half sits just outside the cells it touched.
+fn widen_for_wide_glyphs(bounds: Bounds, canvas: &Canvas) -> Bounds {
+    let last_x = canvas.width.saturating_sub(1);
+    let last_y = canvas.height.saturating_sub(1);
+    Bounds {
+        min_x: bounds.min_x.saturating_sub(1).min(last_x),
+        max_x: (bounds.max_x + 1).min(last_x),
+        min_y: bounds.min_y.min(last_y),
+        max_y: bounds.max_y.min(last_y),
+    }
+}
+
+/// The glyphs whose origin lies inside `area`, on an empty board the size
+/// of `canvas`: all a diff confined to `area` reads.
+fn crop_canvas(canvas: &Canvas, area: Bounds) -> Canvas {
+    let mut crop = Canvas::with_size(canvas.width, canvas.height);
+    for y in area.min_y..=area.max_y {
+        for x in area.min_x..=area.max_x {
+            let pos = Pos { x, y };
+            let Some(glyph) = canvas.glyph_at(pos) else {
+                continue;
+            };
+            if glyph.pos != pos {
+                continue;
+            }
+            let _ = match glyph.fg {
+                Some(fg) => crop.put_glyph_colored(pos, glyph.ch, fg),
+                None => crop.put_glyph(pos, glyph.ch),
+            };
+        }
+    }
+    crop
+}
+
+fn union_bounds(a: Bounds, b: Bounds) -> Bounds {
+    Bounds {
+        min_x: a.min_x.min(b.min_x),
+        max_x: a.max_x.max(b.max_x),
+        min_y: a.min_y.min(b.min_y),
+        max_y: a.max_y.max(b.max_y),
+    }
+}
+
+/// The cells a clipboard stamped at `pos` covers.
+fn stamp_bounds(pos: Pos, clipboard: &Clipboard) -> Bounds {
+    Bounds {
+        min_x: pos.x,
+        max_x: pos.x + clipboard.width.saturating_sub(1),
+        min_y: pos.y,
+        max_y: pos.y + clipboard.height.saturating_sub(1),
+    }
+}
+
+/// Backspace steps left, then clears the glyph there.
+fn backspace_bounds(cursor: Pos) -> Bounds {
+    Bounds::from_points(
+        Pos {
+            x: cursor.x.saturating_sub(1),
+            y: cursor.y,
+        },
+        cursor,
+    )
+}
+
+/// The cells `paste_text_block` writes when `text` lands at `start`: one row
+/// per line, as wide as the widest line in display cells.
+fn text_block_bounds(start: Pos, text: &str) -> Bounds {
+    let mut widest = 0;
+    let mut line = 0;
+    let mut lines = 1;
+    for ch in text.chars() {
+        match ch {
+            '\r' => {}
+            '\n' => {
+                lines += 1;
+                line = 0;
+            }
+            ch => {
+                line += Canvas::display_width(ch);
+                widest = widest.max(line);
+            }
+        }
+    }
+    Bounds {
+        min_x: start.x,
+        max_x: start.x + widest.saturating_sub(1),
+        min_y: start.y,
+        max_y: start.y + lines - 1,
     }
 }
 

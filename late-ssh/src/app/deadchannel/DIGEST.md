@@ -1,11 +1,10 @@
 # DIGEST.md: the feed budget and the paper
 
 Status: **seed doc, vision + decisions.** Spun out of the GAME.md phase 1
-prerequisite (2026-08-31 spitball session) after it grew a second job: the
+prerequisite after it grew a second job: the
 same engine that keeps deadchannel from spamming #lounge is also the engine
 behind the welcome-back screen. Nothing here is committed design; every step
-gets its own design review before implementation. This file exists so the
-next session starts from the thesis instead of re-deriving it.
+gets its own design review before implementation.
 
 Load-bearing for GAME.md: deadchannel phase 2 does not start until the
 budget (step 2 below) is live. The game's whole output is feed lines; this
@@ -34,13 +33,13 @@ doc is the valve and the inbox they flow through.
   well, but it is pull, and nobody pulls: the people it would help most
   (the ones who were gone) are exactly the ones who do not know to run it.
   Meanwhile the device mark (`user_ssh_keys`, the Two Marks in
-  `chat/CONTEXT.md`) already knows precisely how long you were gone, and
+  `chat/MARKS.md`) already knows precisely how long you were gone, and
   the app does nothing with that moment beyond a thin divider rule.
 - **Half the population never "logs in".** Sessions stay open for days;
   their return moment is a keypress after hours of silence, not a
   connect. The AFK set (`state.rs::AfkUsers`, per-session `last_input_at`)
   already detects this edge and spends it on an indicator.
-- **The retention read (from GAME.md discussion, 2026-08-31):** joins are
+- **The retention read (from the GAME.md discussion):** joins are
   constant but the daily count is flat, so churn eats the funnel. The
   lever for 40 → 80 daily users is D1/D7 return, and "come back tomorrow"
   needs a concrete payoff on arrival. The paper is that payoff, and
@@ -54,7 +53,7 @@ budget decides what #lounge sees live, and everything (shipped or dropped)
 flows into a personal welcome-back paper shown when you return from a real
 break, so the room stays calm and no story is ever lost.
 
-## Decisions made (2026-08-31)
+## Decisions made
 
 - **Budget before game.** The valve ships before deadchannel phase 2 sends
   a single line. Tuning spam pressure while building a game is how both

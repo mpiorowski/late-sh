@@ -102,7 +102,7 @@ reverse) removes the referral too.
 
 Truth is the three tables. The Invites dialog is read on open and after a
 successful attach; there is no notify channel and no live refresh, by the
-"read on open" rule in the root `CONTEXT.md` §0.
+"read on open" rule in the root `CONTEXT.md` (multi-replica rule).
 
 ## Telemetry
 
@@ -169,7 +169,7 @@ None of this is built. In the order to reach for it:
 1. **Delete the farm's accounts.** That cascades their referral rows away,
    pending and qualified alike, so nothing more pays.
 2. **An off switch.** A row that `sweep` reads before the pay step (a
-   process-wide switch is a row, root CONTEXT.md §0; no code reads a
+   process-wide switch is a row, root CONTEXT.md multi-replica rule; no code reads a
    switch table today, so this brings one back). Judging keeps
    running, `qualified` rows wait, nothing is lost, and payouts stop without
    a deploy.

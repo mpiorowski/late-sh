@@ -930,10 +930,10 @@ fn visual_order_matches_cozy_rail_grouping() {
         }),
         vec![
             RoomSlot::Room(lounge),
-            RoomSlot::Room(announcements),
-            RoomSlot::Notifications,
             RoomSlot::News,
             RoomSlot::Feeds,
+            RoomSlot::Room(announcements),
+            RoomSlot::Notifications,
             RoomSlot::Room(deadchannel),
             RoomSlot::Discover,
             RoomSlot::Room(public_zeta),
@@ -1200,8 +1200,8 @@ fn visual_order_promotes_unread_dms_above_channels() {
         vec![
             RoomSlot::Room(dm_carol.id),
             RoomSlot::Room(lounge),
-            RoomSlot::Notifications,
             RoomSlot::News,
+            RoomSlot::Notifications,
             RoomSlot::Discover,
             RoomSlot::Room(dm_bob.id),
             RoomSlot::Room(public_alpha),
@@ -3793,8 +3793,8 @@ fn the_cyberspace_section_carries_the_pane_the_pinned_rooms_and_c_mail() {
         order_for(true, &HashSet::new()),
         vec![
             RoomSlot::Room(lounge),
-            RoomSlot::Notifications,
             RoomSlot::News,
+            RoomSlot::Notifications,
             RoomSlot::Discover,
             RoomSlot::Cyberspace,
             RoomSlot::CyberspaceNotifications,
@@ -3810,8 +3810,8 @@ fn the_cyberspace_section_carries_the_pane_the_pinned_rooms_and_c_mail() {
         order_for(false, &HashSet::new()),
         vec![
             RoomSlot::Room(lounge),
-            RoomSlot::Notifications,
             RoomSlot::News,
+            RoomSlot::Notifications,
             RoomSlot::Discover,
         ]
     );
@@ -3822,8 +3822,8 @@ fn the_cyberspace_section_carries_the_pane_the_pinned_rooms_and_c_mail() {
         order_for(true, &collapsed),
         vec![
             RoomSlot::Room(lounge),
-            RoomSlot::Notifications,
             RoomSlot::News,
+            RoomSlot::Notifications,
             RoomSlot::Discover,
         ]
     );

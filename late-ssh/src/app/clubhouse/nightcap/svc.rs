@@ -184,7 +184,7 @@ impl HouseVoice {
     }
 
     /// A drinker's name for the line. The directory is the roster's own
-    /// names (root `CONTEXT.md` §8.1), so a rename reaches the wall; a
+    /// names (`late-ssh/CONTEXT.md`, username directory), so a rename reaches the wall; a
     /// buyer who deleted their account is "somebody".
     fn name_of(&self, user_id: Option<Uuid>) -> String {
         user_id

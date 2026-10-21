@@ -1290,7 +1290,7 @@ Deliberate single-player/TUI adaptations (documented, not oversights):
 ### Rewards wiring (the long-standing TODO) — DONE
 
 Implemented 2026-07, mirroring the NetHack milestone shape
-(`door/nethack/award.rs`), fired from the dragon-kill arm in `state.rs`
+(`door/ingest/award.rs`), fired from the dragon-kill arm in `state.rs`
 next to the bounty-closure hook:
 
 - [x] **Migration 100** seeds the `greendragon_dragon_slain` reward

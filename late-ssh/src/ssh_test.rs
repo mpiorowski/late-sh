@@ -725,9 +725,10 @@ async fn favoriting_mentions_over_ssh_survives_a_reconnect() {
     shell.data(&b"1"[..]).await.expect("open home");
     expect_shell_data_contains(&mut shell, b"favprobe").await;
 
-    // Core reads lounge, mentions, news, browse; the probe room sits below
-    // in Channels. One step right from lounge is Mentions.
-    shell.data(&b"l"[..]).await.expect("step to mentions");
+    // Core reads lounge, news, mentions, browse (no RSS: this account has no
+    // feeds); the probe room sits below in Channels. Two steps right from
+    // lounge is Mentions.
+    shell.data(&b"ll"[..]).await.expect("step to mentions");
     shell.data(&b"f"[..]).await.expect("favorite mentions");
     expect_shell_data_contains(&mut shell, b"Added to favorites").await;
     client
@@ -768,4 +769,15 @@ async fn favoriting_mentions_over_ssh_survives_a_reconnect() {
         .await
         .expect("disconnect second session");
     handle.abort();
+}
+
+#[test]
+fn a_cli_that_ran_the_token_exec_is_labelled_cli_without_the_env_flag() {
+    use crate::metrics::SessionClient;
+    use crate::ssh::session_client;
+    // Native and openssh modes: token exec, no env.
+    assert_eq!(session_client(false, true), SessionClient::Cli);
+    // Old subprocess mode: env flag, token served at the pty request only.
+    assert_eq!(session_client(true, false), SessionClient::Cli);
+    assert_eq!(session_client(false, false), SessionClient::Ssh);
 }

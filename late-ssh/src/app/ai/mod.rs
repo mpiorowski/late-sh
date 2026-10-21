@@ -1,3 +1,4 @@
+pub mod bartender_memory;
 pub mod ghost;
 pub mod ladder;
 pub mod screen;

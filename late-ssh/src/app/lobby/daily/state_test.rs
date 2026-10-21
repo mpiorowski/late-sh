@@ -648,6 +648,7 @@ fn pool_shot(speed: f64) -> Shot {
         speed,
         called_pocket: None,
         play_again: false,
+        put_back: false,
     }
 }
 

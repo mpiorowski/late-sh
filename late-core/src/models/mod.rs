@@ -14,6 +14,9 @@ mod artboard_piece_test;
 #[cfg(test)]
 mod artboard_test;
 pub mod article;
+pub mod article_body;
+#[cfg(test)]
+mod article_body_test;
 pub mod article_read;
 #[cfg(test)]
 mod article_read_test;
@@ -24,6 +27,9 @@ pub mod audio_ban;
 pub mod avatar;
 #[cfg(test)]
 mod avatar_test;
+pub mod bartender_memory;
+#[cfg(test)]
+mod bartender_memory_test;
 pub mod bashquest_graduate;
 #[cfg(test)]
 mod bashquest_graduate_test;

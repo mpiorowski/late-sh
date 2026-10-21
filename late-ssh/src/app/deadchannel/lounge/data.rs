@@ -21,18 +21,22 @@ pub(crate) fn slain_line(spawn: &Spawn) -> String {
     }
 }
 
-/// The wire's line for a spawn that slipped away.
-pub(crate) fn slipped_line(spawn: &Spawn) -> String {
-    let kind = spawn.kind.as_str();
+/// The wire's line for a spawn that slipped away, when anyone hit it.
+/// One nobody touched slips away unsaid: a line naming nobody is noise
+/// on the wire.
+pub(crate) fn slipped_line(spawn: &Spawn) -> Option<String> {
     if spawn.hits.is_empty() {
-        return format!("a {kind} slipped past the lounge. nobody was looking.");
+        return None;
     }
+    let kind = spawn.kind.as_str();
     let who = mentions(spawn);
     let needed = match spawn.kind {
         SpawnKind::Flicker => "one",
         SpawnKind::Howler => "three",
     };
-    format!("a {kind} slipped past the lounge. {who} hit it; it needed {needed}.")
+    Some(format!(
+        "a {kind} slipped past the lounge. {who} hit it; it needed {needed}."
+    ))
 }
 
 /// The spawn's face, three rows of nine cells: the big one the hitters
@@ -72,3 +76,7 @@ pub(crate) const SIGNAL_DOWN_LINE: &str =
     "your signal is down. nothing in there can see you until tomorrow.";
 pub(crate) const NOT_ANSWERING_LINE: &str = "the static is not answering. try again.";
 pub(crate) const DECIDING_LINE: &str = "the static is deciding.";
+
+#[cfg(test)]
+#[path = "data_test.rs"]
+mod data_test;

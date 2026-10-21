@@ -1,6 +1,6 @@
 # The crossing, as built (late-ssh/src/app/deadchannel/fight)
 
-Parent: `../CONTEXT.md` §3c (the fight: the row, the lock, the day roll,
+Parent: `CONTEXT.md` (the fight: the row, the lock, the day roll,
 the wire). Design and the reasons: `../GAME.md`, "The crossing pass".
 One quiet step of every road holds a `Node::Crossing` on one lane beside
 a rest and a cache, and who waits there is another runner, asleep. The
@@ -62,7 +62,8 @@ the bits onto the sleeper's row (`settle_lost`) and the row closed as
 lost. A run closes it as ran. A rival fight the day roll drops is closed
 as dropped by `settle_day`, on whichever touch rolls that row: the
 runner's own command or reload, or another runner finding them asleep or
-answering them. No exp, no kill counted. The sleeper's signal, exp, and
+answering them; the nuke closes every open one the same way, since it
+clears the fight `settle_day` reads. No exp, no kill counted. The sleeper's signal, exp, and
 day are untouched.
 
 Two rows lock in one transaction, attacker first, so two runners
@@ -105,7 +106,12 @@ a fight is on the row. A lookout that fails to read is logged and
 counted (`lookout_failed`) and the session gets the empty one: the
 answer that landed is never reported failed for it. The road draws the
 lookout under the legend and the threat words come from
-`sim::odds_rival`.
+`sim::odds_rival`. The news is read once a connection: the session
+(`news_read`) remembers the fight it told of when the runner acts on the
+road (a step, the crossing, the answer, a draft) or goes back to the
+street, and strips that fight from every later lookout (`adopt`); a
+newer fight is news again, and so is the same one on the next
+connection. The token stays as long as the answer is owed.
 
 ## The wire and the beats
 

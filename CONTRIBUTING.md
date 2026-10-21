@@ -66,16 +66,16 @@ app/<domain>/
   input.rs      # key routing and mode guards
   ui.rs         # pure ratatui draw functions
   svc.rs        # async service — DB, broadcast, background tasks
-  model.rs      # DB-backed types (when domain-specific)
+  CONTEXT.md    # the domain's working context
 ```
 
 Not every domain needs every file — only add what you use. Sub-domains are fine
-(e.g. `chat/news/`, `games/minesweeper/`).
+(e.g. `chat/news/`, `arcade/minesweeper/`). SQL and DB types live in
+`late-core/src/models/`, never in `late-ssh`.
 
 ### How the pieces fit together
 
-The TUI runs a sync render loop at 15 fps. The boundary between sync and async
-is strict:
+The TUI renders synchronously. The boundary between sync and async is strict:
 
 1. **`svc.rs`** — async work. Owns the DB pool, spawns Tokio tasks, pushes
    results into `watch` (snapshots) and `broadcast` (events) channels.
@@ -87,9 +87,10 @@ is strict:
    service. The result arrives through the channel on a future tick.
 4. **`ui.rs`** — sync. Reads state, draws ratatui widgets. Pure rendering.
 
-The tick loop (`app/tick.rs`) calls `tick()` on all states every 66ms, then
-`render()` paints the frame. This is the heartbeat of the app — understand it
-and you understand late.sh.
+The tick (`app/tick.rs`) calls `tick()` on every state, then `render()` paints
+the frame, but only when something changed. The tick is adaptive: 66 ms right
+after input, up to 500 ms when idle (`late-ssh/CONTEXT.md`, Render loop). This
+is the heartbeat of the app — understand it and you understand late.sh.
 
 ### Snapshots and events
 
@@ -155,18 +156,17 @@ server). No crate has a `tests/` directory.
 This codebase was largely built with AI assistance and is set up for that
 workflow.
 
-[`CONTEXT.md`](CONTEXT.md) is the main file to feed your LLM. It contains
-architecture, invariants, test strategy, module layout, and current work
-context — everything an agent needs to make good decisions without reading every
-source file first. Think of it as a project brief written for LLMs.
+[`CONTEXT.md`](CONTEXT.md) is the first file to feed your LLM: the map of the
+workspace, the rules that cross domains, and the test policy. Each domain keeps
+its own `CONTEXT.md` next to its code; read the one for the area you change.
 
 If you use an editor with AI integration (Cursor, Claude Code, Copilot, etc.),
 point it at `CONTEXT.md` and `CONTRIBUTING.md` as initial context. The
 combination covers both the "what" (architecture, constraints) and the "how"
 (workflow, test rules, module patterns).
 
-When your AI-assisted changes alter behavior covered in `CONTEXT.md`, update
-that file too — it's a living document meant to stay in sync with the code.
+When your changes alter behavior a `CONTEXT.md` describes, update it in the
+same change. A context file says what is true now, not how it got there.
 
 ## Picking what to work on
 
@@ -178,8 +178,8 @@ that file too — it's a living document meant to stay in sync with the code.
   that way.
 - Always add tests. Even a small inline `#[cfg(test)]` block for a new state
   transition is valuable.
-- Look at existing domains like `sudoku` or `minesweeper` for patterns to
-  follow.
+- Look at existing domains like `arcade/sudoku` or `arcade/minesweeper` for
+  patterns to follow.
 
 ### Comfortable with Rust?
 

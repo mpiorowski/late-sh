@@ -1,11 +1,11 @@
 # Balancing the fight (late-ssh/src/app/deadchannel/fight)
 
-Parent: `../CONTEXT.md` §3c. Design and the reasons: `../GAME.md`. This
+Parent: `CONTEXT.md`. Design and the reasons: `../GAME.md`. This
 file is the manual for a balance pass: what balanced means here, the
 numbers that can move, the instruments that measure them, how to run a
 pass, and what the last one found. What is being balanced: the day's
 road of ten steps, five of them a round of cards, and the four drafts
-that change the deck on the way up (`../CONTEXT.md` §3c).
+that change the deck on the way up (`CONTEXT.md`).
 
 The rule of the house: **a balance problem is fixed with a number, not
 with a wall.** A gate (a tier a level, a cap on the purse, a hard lock)
@@ -29,7 +29,7 @@ ground, sever). The last two rows of the table hold every other deck.
 
 | Target | Band | Why |
 |---|---|---|
-| The Old Signal is reached (level 15 with the exp to leave it) | day 14 to 17, read sharp and on the key | the boss is on the screen after about two weeks of days played, whoever plays the cards (decided 2026-10-06: day 16 is right) |
+| The Old Signal is reached (level 15 with the exp to leave it) | day 14 to 17, read sharp and on the key | the boss is on the screen after about two weeks of days played, whoever plays the cards (decided: day 16 is right) |
 | Careful runner's first mark (reads the hand) | day 14 to 18 | GAME.md's two to three weeks, the near end |
 | Ambient runner's first mark (the key) | day 16 to 22, never ahead of careful, 3 drops at most | the floor finishes in about three weeks; one patch a day costs the key a day or two and a drop over the climb, and that is the price of the day being a budget |
 | Reckless runner's first mark (the key, careless) | day 18 to 28, never ahead of ambient, with 1 to 8 drops | carelessness costs, and does not lock |
@@ -341,34 +341,31 @@ What the tables say:
   them cost half a bar read sharp and a whole one on the key, before
   any bright glyph. With one patch a day that is a budget: the careful
   runner spends its patch on three days in five, and the fight it opens
-  at 40% signal is the one it reads twice. Before this pass the careful
-  runner patched before every fight for 3% of its bits and never ran,
-  dropped, or stepped down in fifteen days.
+  at 40% signal is the one it reads twice.
 - **The fight scales up.** The glyph's hit is 175% at level 1 and 217%
   at 15 (`HIT_RAMP_PERCENT`), and its noise throws one static card at
   level 4 and four at 15. The fair fight on the key is still 100% at
   every level with a kit level with the runner: the key is the floor,
-  and what it pays now is signal.
+  and what it pays is signal.
 - **The bright glyph is a fight all the way up.** On the key it goes
   down 48% of the time at its worst (level 9) and 60 to 84% at levels 7,
   11, 13 and 14, and it leaves about a third of the signal, which is
   the cost that matters under one patch. Read sharp it is 90 to 100% at
   a full bar; the sim's keen runner opens one on a full bar only, and
   at level 15 one read sharp still costs 72% of a bar. (At 60% signal
-  it was a drop: the seeded keen climb dropped twelve times before that
-  rule.) At level 1 to 2 it is 100% on the key, where the old rounding
-  made it 1%; the first bright is not a wall any more.
+  it is a drop: the seeded keen climb drops twelve times.) At level 1 to 2
+  it is 100% on the key, so the first bright is not a wall.
 - **Nobody holds the wall early.** The kit sits within half a tier of
   the level for the careful runner and the keen one alike, and both
   wear the top kit at level 15, because a piece above the level costs
   half as much again a tier (`PRICE_LEAD_PERCENT`) and the blade shop
-  asks two crystals more a tier past the level. Before this pass the
-  keen runner was four tiers over the level at level 9 and wore the top
-  kit at 11, and at four tiers over nothing on the road was a fight.
+  asks two crystals more a tier past the level. Without the lead price
+  the keen runner is four tiers over the level at level 9, and at four
+  tiers over nothing on the road is a fight.
 - **The key pays a few days for the budget.** The ambient runner marks
   on day 21 with two drops (day 17 with none before), the reckless one
-  on day 24 with three. The ambient band moved to day 16 to 22 and the
-  builds' to 15 to 25 by decision: that is the price of the day being a
+  on day 24 with three. The ambient band is day 16 to 22 and the
+  builds' 15 to 25 by decision: that is the price of the day being a
   budget, and the floor still finishes in about three weeks. The siphon
   at three quarters of a strike is what holds it there (half a strike
   put the key on day 24; `SIPHON_MEND_PERCENT`).

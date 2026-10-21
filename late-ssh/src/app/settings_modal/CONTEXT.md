@@ -1,8 +1,22 @@
 # Settings
 
-Seven tabs share `state.rs`, `input.rs`, and `ui.rs`. Keyboard bindings and
-Enter/Esc timing remain unchanged; Bio saves on Enter/Esc and its mouse Done
+`Ctrl+O` (or `/settings`) from anywhere but active Artboard editing. Seven
+tabs (Settings, Bio, Themes, Tweaks, Statusline, Account, RSS) share
+`state.rs`, `input.rs`, and `ui.rs`. Bio saves on Enter/Esc and its mouse Done
 control. Username, system fields, and feed URL editors have Save and Cancel.
+While a text field is being edited, `Ctrl+O`, `Ctrl+G`, `Ctrl+F` and `Ctrl+S`
+are ignored: each would close or reopen the modal and drop the typing.
+
+| Key | Action |
+|-----|--------|
+| `Tab` / `Shift+Tab` | Switch tabs |
+| `↑` / `↓` / `j` / `k` | Move within the tab |
+| `←` / `→` | Cycle the row's value (theme, toggles, cooldown, format) |
+| `Space` / `Enter` / `e` | Activate: edit a field, cycle, or open a chooser (country, timezone, language, interaction mode, screensaver) |
+| `Shift+↑` / `Shift+↓`, `[` / `]` | Statusline tab: move the segment; `Space` toggles it, `Enter` opens its options |
+| `a` / `d` / `r` | RSS tab: add, delete, refresh a feed |
+| `Alt+Enter` / `Ctrl+J` | Newline while editing the bio |
+| `?` | The guide on top, draft kept |
 
 Bio shows the saved Artboard avatar above the text with Set/Change avatar (`a`)
 and, when present, Remove avatar (`x`). Arrow keys and the wheel over the preview
@@ -82,14 +96,14 @@ account, so an older asynchronous write cannot overwrite the final choice.
 Chooser values show `…` two spaces after the current label. Width padding follows
 the hint so their hitboxes stay consistent across choices.
 
-Statusline keeps its existing split layout. Its compact list column fits the
+Statusline is a split layout. Its compact list column fits the
 widest `>[ ] Name [↑↓]` entry, with reorder controls aligned after the widest name
 and no gap between cursor and checkbox. Each half of `[↑↓]` independently moves
 the row in its arrow's direction, including in Sidebar panels. Option titles sit
 two cells from their controls; Label and component-specific options have
 directional arrows, while Brief/Auto-hide are
 simple toggles. Labels open options; checkboxes toggle. Pane offsets and wheel
-behavior stay independent. Responsive single-pane switching is deferred.
+behavior stay independent; there is no single-pane layout for narrow terminals.
 Theme labels apply, headings fold, stars favorite, and search filters.
 Country/timezone results apply and close; the shared profile Langs tag picker
 toggles clicked tags and Done returns them to its caller. RSS exposes Add,

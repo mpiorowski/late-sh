@@ -3,11 +3,10 @@
 This document cross-references common IRCv3 features with the current late.sh
 TUI chat feature set. It is an ideas document, not an implementation contract.
 
-The current IRC bridge is intentionally conservative: it exposes rooms and DMs
-as IRC channels/queries, advertises `UTF8ONLY` through ISUPPORT, returns an
-empty `CAP LS`, NAKs requested capabilities, and projects messages as plain
-`PRIVMSG`. This makes the bridge broadly compatible but leaves most structured
-late.sh chat features invisible to IRC clients.
+The bridge exposes rooms and DMs as IRC channels/queries and negotiates
+`message-tags`, `server-time`, `echo-message`, `batch`, `draft/chathistory` and
+`away-notify`, with `msgid`, `+reply` and `+draft/react` tags on top
+(`late-ssh/src/ircd/CONTEXT.md`). What follows is what is left.
 
 ## Current late.sh Chat Inventory
 
@@ -34,13 +33,13 @@ The TUI chat surface already has richer semantics than plain IRC:
 
 | IRCv3 feature                                 | late.sh feature                                   | Mapping idea                                                                                                                                                  | Fit        |
 |-----------------------------------------------|---------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|
-| `server-time`                                 | `chat_messages.created` / event timestamps        | Add `@time=` to outbound `PRIVMSG`, `NOTICE`, `TAGMSG`, and history replay once message tags exist.                                                           | High       |
-| `msgid`                                       | `chat_messages.id` UUID                           | Use a stable opaque message id derived from the chat message UUID. This unlocks replies, reactions, redaction, and future history behavior.                   | High       |
-| `message-tags`                                | structured message metadata                       | Foundation for `time`, `msgid`, account, reply, react, typing, and late.sh vendor tags.                                                                       | High       |
-| `echo-message`                                | current self-echo suppression / BNC-like behavior | Let clients opt into seeing their own accepted messages with final tags and ids. Keep suppression for clients that do not request it.                         | High       |
-| `+reply` client tag                           | `reply_to_message_id`                             | Map outbound replies to `@+reply=<parent msgid>` and inbound tagged replies to `reply_to_message_id` after validating the target message is in the same room. | High       |
-| `+draft/react` / `+draft/unreact` client tags | chat reactions                                    | Map inbound reaction TAGMSG/PRIVMSG to the existing reaction model and outbound reaction changes to tagged TAGMSG events. See dedicated section below.        | High       |
-| `chathistory` + `batch`                       | capped room tail, delta sync, DMs, unread cursors | Replay newest room tail or bounded before/after windows in IRC clients that request history. Use `batch` to group replayed messages.                          | Medium     |
+| `server-time`                                 | `chat_messages.created` / event timestamps        | Add `@time=` to outbound `PRIVMSG`, `NOTICE`, `TAGMSG`, and history replay once message tags exist.                                                           | Done       |
+| `msgid`                                       | `chat_messages.id` UUID                           | Use a stable opaque message id derived from the chat message UUID. This unlocks replies, reactions, redaction, and future history behavior.                   | Done       |
+| `message-tags`                                | structured message metadata                       | Foundation for `time`, `msgid`, account, reply, react, typing, and late.sh vendor tags.                                                                       | Done       |
+| `echo-message`                                | current self-echo suppression / BNC-like behavior | Let clients opt into seeing their own accepted messages with final tags and ids. Keep suppression for clients that do not request it.                         | Done       |
+| `+reply` client tag                           | `reply_to_message_id`                             | Map outbound replies to `@+reply=<parent msgid>` and inbound tagged replies to `reply_to_message_id` after validating the target message is in the same room. | Done       |
+| `+draft/react` / `+draft/unreact` client tags | chat reactions                                    | Map inbound reaction TAGMSG/PRIVMSG to the existing reaction model and outbound reaction changes to tagged TAGMSG events. See dedicated section below.        | Done       |
+| `chathistory` + `batch`                       | capped room tail, delta sync, DMs, unread cursors | Replay newest room tail or bounded before/after windows in IRC clients that request history. Use `batch` to group replayed messages.                          | Done       |
 | `away-notify`                                 | shared away state (`common/away.rs`)              | Built: AWAY lines for users sharing a joined channel, on the 30s presence poll. Inbound IRC `AWAY` sets and clears the connection's own away flag.            | Done       |
 | `account-tag`                                 | late.sh user identity                             | Tag messages with the sender's stable account/username. Useful for bots and bridges even though nicks are already locked to usernames.                        | Medium     |
 | `account-notify` / `extended-join`            | login/session presence and account identity       | Because every IRC-visible user is authenticated, these mostly reinforce identity on JOIN and state changes.                                                   | Low/Medium |
@@ -211,13 +210,11 @@ support history and read markers.
 
 ## Suggested Phasing
 
-1. Foundation caps: `message-tags`, `server-time`, `msgid`, and `echo-message`.
-2. Replies: inbound/outbound `+reply` mapped to `reply_to_message_id`.
-3. Reactions: `+draft/react` / `+draft/unreact` with a reaction delta event.
-4. Away: built (shared away state, `away-notify`).
-5. History: `chathistory` plus `batch` for bounded replay.
-6. Deletes: evaluate `message-redaction` after stable `msgid` and history exist.
-7. Nice-to-haves: `account-tag`, `extended-join`, `MONITOR`, `typing`, and
+Built: the foundation caps, replies, reactions, away and history. Open:
+
+1. Deletes: evaluate `message-redaction` now that stable `msgid` and history
+   exist.
+2. Nice-to-haves: `account-tag`, `extended-join`, `MONITOR`, `typing`, and
    vendor tags for late.sh-specific profile/chat flair.
 
 ## Source Pointers

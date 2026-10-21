@@ -984,7 +984,7 @@ pub fn poi_arrows(
         // coordinate delta is a real spatial relationship rather than an
         // accident of which block `derive_coords` laid down first. Anything
         // farther is dropped rather than pointed at with a meaningless
-        // direction (see CONTEXT.md §11); the camera could never pan there
+        // direction (see WORLDMAP.md); the camera could never pan there
         // anyway, since `MapCamera::pan` clamps to the same `PAN_LIMIT`.
         if (c.x - center.x).abs() > PAN_LIMIT || (c.y - center.y).abs() > PAN_LIMIT {
             continue;

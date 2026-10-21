@@ -268,7 +268,7 @@ resource "kubernetes_deployment_v1" "minecraft" {
           # the startup log and change nothing.
           env {
             name  = "RCON_CMDS_STARTUP"
-            value = "worldborder set 6000"
+            value = "worldborder set 10400"
           }
           env {
             name  = "ENABLE_RCON"

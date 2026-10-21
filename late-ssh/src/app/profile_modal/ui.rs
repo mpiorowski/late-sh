@@ -105,7 +105,7 @@ impl Segment {
 }
 
 /// `viewer_is_runner` gates the runner column: until the public flip
-/// (deadchannel CONTEXT.md), what happens on the row is shown only to
+/// (deadchannel/runner/CONTEXT.md), what happens on the row is shown only to
 /// people on it. One argument to drop at the flip.
 pub(crate) fn draw(
     frame: &mut Frame,

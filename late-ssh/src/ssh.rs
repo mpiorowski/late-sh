@@ -25,6 +25,7 @@ use tokio::task::JoinSet;
 use tokio::time::timeout;
 
 use crate::app::activity::event::ActivityEvent;
+use crate::app::files::terminal_image::terminal_name_for_log;
 use crate::app::{
     common::theme,
     state::{App, SessionConfig},
@@ -35,6 +36,7 @@ use crate::proxy_protocol;
 use crate::render_signal::RenderSignal;
 use crate::session_bootstrap::{ArcadeSessionPreloads, load_arcade_session_preloads};
 use crate::state::{ActiveSession, State};
+use crate::terminal_probe::{self, PROBE_QUERY, ProbeExpiry, ProbeTally, TerminalProbe, TripTally};
 use crate::terminal_size::clamp_terminal_size;
 use crate::usernames;
 
@@ -65,12 +67,31 @@ const OUTPUT_BUDGET_BYTES: u64 = 32 * 1024 * 1024;
 /// How long a session may stay over [`OUTPUT_BUDGET_BYTES`] before we
 /// disconnect it instead of waiting for SSH keepalive to reap it.
 const OUTPUT_STALL_DISCONNECT: Duration = Duration::from_secs(30);
+/// The window one `late_ssh_session_output_bytes_per_second` sample averages.
+const OUTPUT_RATE_WINDOW: Duration = Duration::from_secs(10);
+/// Longest a quitting session waits for its in-flight probe to be answered
+/// ([`settle_terminal_probe`]). Covers a slow link; a terminal that never
+/// answers costs its user this much on quit, only until the probe retires.
+const PROBE_SETTLE_MAX: Duration = Duration::from_millis(500);
+/// Most queued input messages one render pass hands to the app before it
+/// draws what it has ([`drain_input`]).
+const INPUT_DRAIN_MAX_MESSAGES: usize = 64;
+/// Wall time spent in `App::handle_input` after which one render pass stops
+/// draining and draws what it has. Checked between messages, so one slow
+/// message (a big paste) can run past it; a key flood then costs its own
+/// session a frame of lag instead of holding the tokio worker for the whole
+/// queue.
+const INPUT_DRAIN_MAX_TIME: Duration = Duration::from_millis(4);
+/// A pass that holds the app lock longer than the hot tick is one the user
+/// can feel; it is warned about, once per [`SLOW_PASS_WARN_EVERY`].
+const SLOW_PASS: Duration = crate::app::tick::HOT_TICK;
+const SLOW_PASS_WARN_EVERY: Duration = Duration::from_secs(60);
 
 /// Tracks bytes handed to russh for the app channel versus window credit the
 /// client sends back. russh queues writes beyond the client's SSH channel
 /// window in an uncapped internal buffer, so a client that stops reading
 /// turns the render loop into an unbounded memory sink unless we stop
-/// feeding it (2026-07-22 OOM, CONTEXT.md §10.5).
+/// feeding it (2026-07-22 OOM, `infra/RUNBOOK.md` incident log).
 struct OutputBudget {
     /// Bytes sent since the last proof that russh's pending queue was empty.
     outstanding: AtomicU64,
@@ -140,9 +161,18 @@ struct ClientHandler {
     /// render, so typed characters echo without waiting for the next world tick.
     render_signal: Option<Arc<RenderSignal>>,
     output_budget: Arc<OutputBudget>,
+    /// Set when the shell starts; the render loop sends its queries and
+    /// `data` feeds it the replies (`terminal_probe.rs`).
+    terminal_probe: Option<Arc<TerminalProbe>>,
     input_tx: Option<tokio::sync::mpsc::Sender<Vec<u8>>>,
     input_rx: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>,
     cli_mode: bool,
+    /// The connection ran the `late-cli-token-v1` exec: the native and
+    /// openssh CLI modes identify themselves this way and never send
+    /// `LATE_CLI_MODE`.
+    cli_token_served: bool,
+    /// `TERM` from the pty request, cleaned for the session wire summary.
+    term: Option<String>,
     terminal_env_hints: Vec<(String, String)>,
     session_token: Option<String>,
     session_rx: Option<tokio::sync::mpsc::Receiver<crate::session::SessionMessage>>,
@@ -441,9 +471,12 @@ impl Server {
             app: None,
             render_signal: None,
             output_budget: Arc::new(OutputBudget::new()),
+            terminal_probe: None,
             input_tx: None,
             input_rx: None,
             cli_mode: false,
+            cli_token_served: false,
+            term: None,
             terminal_env_hints: Vec::new(),
             session_token: None,
             session_rx: None,
@@ -561,6 +594,12 @@ impl ClientHandler {
         self.session_token = Some(session_token.clone());
         self.session_rx = Some(session_rx);
         Ok(session_token)
+    }
+
+    /// Settled by the time the shell starts: the token exec and the
+    /// `LATE_CLI_MODE` env request both arrive before the shell request.
+    fn session_client(&self) -> metrics::SessionClient {
+        session_client(self.cli_mode, self.cli_token_served)
     }
 
     fn track_active_session_token(&self, session_token: &str) {
@@ -772,6 +811,7 @@ impl russh::server::Handler for ClientHandler {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         tracing::debug!(term, col_width, row_height, "pty requested");
+        self.term = Some(terminal_name_for_log(term));
         let terminal_size = clamp_terminal_size(col_width, row_height);
         if terminal_size.clamped {
             tracing::warn!(
@@ -923,12 +963,8 @@ impl russh::server::Handler for ClientHandler {
             }
         };
         let (input_tx, input_rx) = tokio::sync::mpsc::channel(INPUT_QUEUE_CAP);
-        let first_contact_gate = crate::app::deadchannel::haunt::svc::bootstrap_gate(
-            &self.state,
-            permissions.can_moderate(),
-            user,
-        )
-        .await;
+        let first_contact_gate =
+            crate::app::deadchannel::haunt::svc::bootstrap_gate(&self.state, user).await;
         let mut app = crate::app::state::App::new(SessionConfig {
             // Terminal / layout
             cols: terminal_size.cols,
@@ -1203,6 +1239,7 @@ impl russh::server::Handler for ClientHandler {
         let preview: String = command.chars().take(128).collect();
         if command.trim() == CLI_TOKEN_REQUEST {
             tracing::info!("serving cli token exec request");
+            self.cli_token_served = true;
             match session.channel_success(channel) {
                 Ok(()) => tracing::debug!("exec token channel_success sent"),
                 Err(e) => tracing::error!(error = ?e, "exec token channel_success failed"),
@@ -1287,16 +1324,35 @@ impl russh::server::Handler for ClientHandler {
             let app = Arc::clone(app);
             let signal = Arc::new(RenderSignal::new());
             self.render_signal = Some(Arc::clone(&signal));
+            let probe = Arc::new(TerminalProbe::new(Instant::now()));
+            self.terminal_probe = Some(Arc::clone(&probe));
             let ctx = RenderContext {
                 handle,
                 channel_id,
                 frame_drop_log_every: self.state.config.frame_drop_log_every,
                 signal: Arc::clone(&signal),
                 budget: Arc::clone(&self.output_budget),
+                client: self.session_client(),
+                probe,
             };
             app.lock().await.set_repaint_signal(Arc::clone(&signal));
             let mut session_start = self.session_start.take();
+            let user = self
+                .user
+                .as_ref()
+                .expect("the app is built only for an authenticated user");
+            let who = SessionWho {
+                user_id: user.id,
+                username: user.username.clone(),
+                client: ctx.client,
+                term: self
+                    .term
+                    .clone()
+                    .expect("the app is built by the pty request, which records TERM"),
+            };
             tokio::spawn(async move {
+                let started = Instant::now();
+                let mut output = OutputTally::default();
                 let mut previous_render: Option<Instant> = None;
                 let mut input_pending = false;
                 let mut stalled_since: Option<Instant> = None;
@@ -1306,13 +1362,19 @@ impl russh::server::Handler for ClientHandler {
                 let mut stats_drawn: u64 = 0;
                 let mut stats_skipped: u64 = 0;
                 let mut stats_since = Instant::now();
+                // Bytes this session wrote since the window opened, for the
+                // per-session output rate.
+                let mut window_bytes: usize = 0;
+                let mut window_since = Instant::now();
+                // When this session last logged a slow render pass.
+                let mut slow_pass_warned_at: Option<Instant> = None;
                 // The world tick is adaptive: each pass reports how soon the
                 // next one is needed (`App::wake_hint`), so idle sessions
                 // sleep at the idle floor while animated screens keep the
                 // classic 66ms cadence. The first deadline is immediate so
                 // the session paints without waiting a tick.
                 let mut world_deadline = Instant::now();
-                loop {
+                let ended = loop {
                     let advance_world = match next_render_action(
                         world_deadline,
                         &ctx.signal,
@@ -1352,7 +1414,7 @@ impl russh::server::Handler for ClientHandler {
                             metrics::record_render_stall_disconnect();
                             let _ = ctx.handle.eof(ctx.channel_id).await;
                             let _ = ctx.handle.close(ctx.channel_id).await;
-                            break;
+                            break SessionEnd::Stalled;
                         }
                         // Re-poll the budget at the hot cadence; leaving the
                         // deadline in the past would spin the loop.
@@ -1368,6 +1430,17 @@ impl russh::server::Handler for ClientHandler {
                     match render_once(&app, &mut input_rx, &ctx, advance_world).await {
                         Ok(outcome) => {
                             previous_render = Some(Instant::now());
+                            if let Some(pass) = outcome.pass
+                                && slow_pass_due(pass.took, slow_pass_warned_at, Instant::now())
+                            {
+                                slow_pass_warned_at = Some(Instant::now());
+                                tracing::warn!(
+                                    username = %who.username,
+                                    screen = ?pass.screen,
+                                    pass_ms = pass.took.as_millis() as u64,
+                                    "slow render pass"
+                                );
+                            }
                             if outcome.drew
                                 && let Some(start) = session_start.take()
                             {
@@ -1388,11 +1461,27 @@ impl russh::server::Handler for ClientHandler {
                                 stats_skipped = 0;
                                 stats_since = Instant::now();
                             }
+                            output.bytes += outcome.bytes_sent as u64;
+                            if outcome.drew {
+                                output.frames += 1;
+                            }
+                            window_bytes += outcome.bytes_sent;
+                            let window = window_since.elapsed();
+                            if window >= OUTPUT_RATE_WINDOW {
+                                let rate = window_bytes as f64 / window.as_secs_f64();
+                                metrics::record_session_output_rate(ctx.client, rate);
+                                output.peak_bytes_per_second =
+                                    output.peak_bytes_per_second.max(rate);
+                                window_bytes = 0;
+                                window_since = Instant::now();
+                            }
                             if outcome.should_quit {
                                 tracing::debug!("app requested quit, closing connection");
+                                settle_terminal_probe(&ctx.probe).await;
                                 clean_disconnect(&ctx.handle, ctx.channel_id).await;
-                                break;
+                                break SessionEnd::Closed;
                             }
+                            drive_terminal_probe(&ctx, outcome.bytes_sent).await;
                             if advance_world {
                                 world_deadline = Instant::now() + outcome.wake_hint;
                             } else {
@@ -1413,10 +1502,19 @@ impl russh::server::Handler for ClientHandler {
                             .await;
                             let _ = ctx.handle.eof(ctx.channel_id).await;
                             let _ = ctx.handle.close(ctx.channel_id).await;
-                            break;
+                            break SessionEnd::Failed;
                         }
                     }
-                }
+                };
+                let terminal = app.lock().await.terminal_version().map(str::to_owned);
+                log_wire_summary(
+                    &who,
+                    ended,
+                    started.elapsed(),
+                    &output,
+                    ctx.probe.tally(),
+                    terminal.as_deref(),
+                );
             });
         }
         Ok(())
@@ -1452,9 +1550,23 @@ impl russh::server::Handler for ClientHandler {
         let Some(input_tx) = self.input_tx.as_ref() else {
             return Ok(());
         };
+        // Probe replies are the terminal talking, not the user: they never
+        // reach the input queue (`terminal_probe.rs`).
+        let (input, replies) = terminal_probe::strip_replies(data);
+        if replies > 0
+            && let Some(probe) = self.terminal_probe.as_ref()
+            && let Some(sample) = probe.answered(Instant::now())
+        {
+            let client = self.session_client();
+            metrics::record_terminal_probe(client, metrics::TerminalProbeOutcome::Answered);
+            metrics::record_terminal_rtt(client, sample.backlog, sample.rtt.as_secs_f64());
+        }
+        if input.is_empty() {
+            return Ok(());
+        }
         match input_tx.try_reserve() {
             Ok(permit) => {
-                permit.send(data.to_vec());
+                permit.send(input.into_owned());
             }
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
                 tracing::warn!(
@@ -1547,6 +1659,94 @@ impl russh::server::Handler for ClientHandler {
     }
 }
 
+/// Who a session's wire summary is about, settled when the shell starts.
+struct SessionWho {
+    user_id: uuid::Uuid,
+    username: String,
+    client: metrics::SessionClient,
+    term: String,
+}
+
+/// What a session's render loop wrote, for its wire summary.
+#[derive(Default)]
+struct OutputTally {
+    bytes: u64,
+    frames: u64,
+    /// The busiest [`OUTPUT_RATE_WINDOW`]; a session shorter than one
+    /// window reads 0.
+    peak_bytes_per_second: f64,
+}
+
+/// How a session's render loop ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionEnd {
+    /// The app quit: the user left, or the client closed the channel.
+    Closed,
+    /// The output backlog stayed over budget past [`OUTPUT_STALL_DISCONNECT`].
+    Stalled,
+    /// A frame could not be rendered or written.
+    Failed,
+}
+
+impl SessionEnd {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Closed => "closed",
+            Self::Stalled => "stalled",
+            Self::Failed => "failed",
+        }
+    }
+}
+
+/// One line per session at its end, so who lagged and why is a log query
+/// (SCALE.md, Pain Point 11). A slow `rtt_fastest_ms` is distance: the
+/// user's network. Trips fine at `none` but slow at `large` are bandwidth:
+/// our bytes outrun their link. A high `peak_bytes_per_sec` is a heavy
+/// screen. Lost or retired probes are a terminal that ignores DSR, or a link
+/// that stalled. Times are whole milliseconds; a bucket's avg and max read 0
+/// when its count is 0.
+fn log_wire_summary(
+    who: &SessionWho,
+    ended: SessionEnd,
+    lived: Duration,
+    output: &OutputTally,
+    probes: ProbeTally,
+    terminal: Option<&str>,
+) {
+    let whole_ms = |duration: Duration| duration.as_millis() as u64;
+    let avg_ms = |trips: TripTally| trips.mean().map_or(0, whole_ms);
+    tracing::info!(
+        user_id = %who.user_id,
+        username = %who.username,
+        client = who.client.label(),
+        term = %who.term,
+        terminal = terminal.unwrap_or("unknown"),
+        ended = ended.label(),
+        secs = lived.as_secs(),
+        bytes = output.bytes,
+        frames = output.frames,
+        mean_bytes_per_sec = (output.bytes as f64 / lived.as_secs_f64()) as u64,
+        peak_bytes_per_sec = output.peak_bytes_per_second as u64,
+        probes_answered = probes.answered(),
+        probes_lost = probes.lost,
+        probe_retired = probes.retired,
+        rtt_fastest_ms = probes.fastest().map_or(0, whole_ms),
+        rtt_none_n = probes.none.count,
+        rtt_none_avg_ms = avg_ms(probes.none),
+        rtt_none_max_ms = whole_ms(probes.none.slowest),
+        rtt_small_n = probes.small.count,
+        rtt_small_avg_ms = avg_ms(probes.small),
+        rtt_small_max_ms = whole_ms(probes.small.slowest),
+        rtt_medium_n = probes.medium.count,
+        rtt_medium_avg_ms = avg_ms(probes.medium),
+        rtt_medium_max_ms = whole_ms(probes.medium.slowest),
+        rtt_large_n = probes.large.count,
+        rtt_large_avg_ms = avg_ms(probes.large),
+        rtt_large_max_ms = whole_ms(probes.large.slowest),
+        "session wire summary"
+    );
+}
+
 /// What the render loop should do next.
 #[derive(Debug, PartialEq, Eq)]
 enum RenderAction {
@@ -1610,17 +1810,23 @@ struct RenderContext {
     frame_drop_log_every: u64,
     signal: Arc<RenderSignal>,
     budget: Arc<OutputBudget>,
+    client: metrics::SessionClient,
+    probe: Arc<TerminalProbe>,
 }
 
 /// What one render pass produced: whether the app asked to quit, how soon
 /// the next world tick is needed (`App::wake_hint` read under the same
-/// lock, after any draw, so it sees the slots the draw recorded), and
-/// whether the pass drew a frame or skipped clean (feeds the loop's debug
-/// stats line).
+/// lock, after any draw, so it sees the slots the draw recorded), whether
+/// the pass drew a frame or skipped clean (feeds the loop's debug stats
+/// line), the bytes it handed to the channel (frame plus terminal
+/// commands; feeds the output rate and the probe's backlog label), and how
+/// long it held the app lock (`None` on quit; feeds the slow-pass warning).
 struct RenderOutcome {
     should_quit: bool,
     wake_hint: Duration,
     drew: bool,
+    bytes_sent: usize,
+    pass: Option<RenderPass>,
 }
 
 impl RenderOutcome {
@@ -1630,6 +1836,93 @@ impl RenderOutcome {
             // Unused: the loop breaks on quit.
             wake_hint: crate::app::tick::IDLE_TICK,
             drew: false,
+            bytes_sent: 0,
+            pass: None,
+        }
+    }
+}
+
+/// How long one pass held the app lock (input drain, tick, draw) and the
+/// screen it ended on.
+#[derive(Debug, Clone, Copy)]
+struct RenderPass {
+    took: Duration,
+    screen: crate::app::common::primitives::Screen,
+}
+
+/// Where the session was when a pass drew, for attributing the bytes it
+/// sent (`late_ssh_output_bytes_total`).
+#[derive(Debug, Clone, Copy)]
+struct OutputSpot {
+    screen: crate::app::common::primitives::Screen,
+    place: metrics::Place,
+    presence: metrics::Presence,
+}
+
+impl OutputSpot {
+    fn record(self, kind: metrics::OutputKind, bytes: usize) {
+        metrics::record_output_bytes(self.screen, self.place, self.presence, kind, bytes);
+    }
+}
+
+/// Whether a pass this slow is worth a warning: it ran past [`SLOW_PASS`]
+/// and the session has not warned within [`SLOW_PASS_WARN_EVERY`].
+fn slow_pass_due(took: Duration, last_warned: Option<Instant>, now: Instant) -> bool {
+    if took <= SLOW_PASS {
+        return false;
+    }
+    match last_warned {
+        None => true,
+        Some(at) => now.duration_since(at) >= SLOW_PASS_WARN_EVERY,
+    }
+}
+
+/// How one pass's input drain ended.
+#[derive(Debug, PartialEq, Eq)]
+enum InputDrain {
+    /// Nothing was queued.
+    Empty,
+    /// Every queued message was handled.
+    Drained,
+    /// The budget ran out with input still queued. The signal is marked dirty
+    /// and woken, so the next pass picks the rest up after the render gap.
+    BudgetHit,
+    /// The app stopped running partway through.
+    Quit,
+}
+
+/// Hands queued input to `handle` until the queue runs dry, `handle` reports
+/// the app stopped (it returns whether the app is still running), or the
+/// pass's budget is spent: `max_messages` handled or `max_time` spent
+/// handling them, whichever comes first. At least one message is handled per
+/// call, so a pass always makes progress.
+fn drain_input(
+    input_rx: &mut tokio::sync::mpsc::Receiver<Vec<u8>>,
+    signal: &RenderSignal,
+    max_messages: usize,
+    max_time: Duration,
+    mut handle: impl FnMut(&[u8]) -> bool,
+) -> InputDrain {
+    let started = Instant::now();
+    let mut handled = 0;
+    loop {
+        let spent = handled >= max_messages || started.elapsed() >= max_time;
+        if handled > 0 && spent {
+            if input_rx.is_empty() {
+                return InputDrain::Drained;
+            }
+            signal.wake();
+            return InputDrain::BudgetHit;
+        }
+        let Ok(data) = input_rx.try_recv() else {
+            return match handled {
+                0 => InputDrain::Empty,
+                _ => InputDrain::Drained,
+            };
+        };
+        handled += 1;
+        if !handle(&data) {
+            return InputDrain::Quit;
         }
     }
 }
@@ -1640,8 +1933,13 @@ async fn render_once(
     ctx: &RenderContext,
     advance_world: bool,
 ) -> anyhow::Result<RenderOutcome> {
-    let (frame, terminal_commands, mut wake_hint) = {
+    let reason = match advance_world {
+        true => metrics::RenderReason::WorldTick,
+        false => metrics::RenderReason::Input,
+    };
+    let (frame, terminal_commands, mut wake_hint, pass, spot) = {
         let mut app = app.lock().await;
+        let locked_at = Instant::now();
         if !app.running {
             return Ok(RenderOutcome::quit());
         }
@@ -1650,12 +1948,24 @@ async fn render_once(
         // pass instead of being erased by this batch. Remember the old value:
         // it is one of the gate's changed sources.
         let mut changed = ctx.signal.dirty.swap(false, Ordering::AcqRel);
-        while let Ok(data) = input_rx.try_recv() {
-            changed = true;
-            app.handle_input(&data);
-            if !app.running {
-                return Ok(RenderOutcome::quit());
+        let drain = drain_input(
+            input_rx,
+            &ctx.signal,
+            INPUT_DRAIN_MAX_MESSAGES,
+            INPUT_DRAIN_MAX_TIME,
+            |data| {
+                app.handle_input(data);
+                app.running
+            },
+        );
+        match drain {
+            InputDrain::Empty => {}
+            InputDrain::Drained => changed = true,
+            InputDrain::BudgetHit => {
+                metrics::record_render_input_budget_hit();
+                changed = true;
             }
+            InputDrain::Quit => return Ok(RenderOutcome::quit()),
         }
         if advance_world {
             changed |= app.tick();
@@ -1665,24 +1975,38 @@ async fn render_once(
         // so the next real frame needs no forced repaint.
         if !changed {
             metrics::record_render_skipped_clean();
+            let pass = RenderPass {
+                took: locked_at.elapsed(),
+                screen: app.screen,
+            };
+            metrics::record_render_pass(reason, pass.screen, pass.took.as_secs_f64());
             return Ok(RenderOutcome {
                 should_quit: false,
                 wake_hint: app.wake_hint(),
                 drew: false,
+                bytes_sent: 0,
+                pass: Some(pass),
             });
         }
-        metrics::record_render(if advance_world {
-            metrics::RenderReason::WorldTick
-        } else {
-            metrics::RenderReason::Input
-        });
+        metrics::record_render(reason);
         let frame = app.render().context("rendering frame")?;
         let terminal_commands = std::mem::take(&mut app.pending_terminal_commands);
         let wake_hint = app.wake_hint();
-        (frame, terminal_commands, wake_hint)
+        let pass = RenderPass {
+            took: locked_at.elapsed(),
+            screen: app.screen,
+        };
+        metrics::record_render_pass(reason, pass.screen, pass.took.as_secs_f64());
+        let spot = OutputSpot {
+            screen: app.screen,
+            place: app.attention_place(),
+            presence: app.attention_presence(),
+        };
+        (frame, terminal_commands, wake_hint, pass, spot)
     };
 
     let frame_len = frame.len();
+    let mut bytes_sent = 0;
     let frame_sent = match timeout(
         Duration::from_millis(50),
         ctx.handle.data(ctx.channel_id, frame),
@@ -1691,6 +2015,9 @@ async fn render_once(
     {
         Ok(Ok(())) => {
             ctx.budget.record_sent(frame_len);
+            metrics::record_frame_bytes(reason, frame_len);
+            spot.record(metrics::OutputKind::Frame, frame_len);
+            bytes_sent += frame_len;
             true
         }
         Ok(Err(err)) => {
@@ -1732,6 +2059,8 @@ async fn render_once(
         {
             Ok(Ok(())) => {
                 ctx.budget.record_sent(command_len);
+                spot.record(metrics::OutputKind::Command, command_len);
+                bytes_sent += command_len;
             }
             Ok(Err(err)) => {
                 return Err(anyhow::anyhow!(
@@ -1766,7 +2095,62 @@ async fn render_once(
         should_quit: false,
         wake_hint,
         drew: true,
+        bytes_sent,
+        pass: Some(pass),
     })
+}
+
+/// Expires a lost probe, then sends the next one if it is due, labelled by
+/// what the session wrote in the second before it, this pass's
+/// `bytes_written` included (`terminal_probe.rs`). The probe only keeps
+/// time; its telemetry lives here and in the `data` handler.
+async fn drive_terminal_probe(ctx: &RenderContext, bytes_written: usize) {
+    let now = Instant::now();
+    match ctx.probe.expire(now) {
+        None => {}
+        Some(ProbeExpiry::Unanswered) => {
+            metrics::record_terminal_probe(ctx.client, metrics::TerminalProbeOutcome::Unanswered);
+        }
+        Some(ProbeExpiry::Retired) => {
+            metrics::record_terminal_probe(ctx.client, metrics::TerminalProbeOutcome::Unanswered);
+            tracing::info!("terminal never answered the round-trip probe; probing stopped");
+        }
+    }
+    if !ctx.probe.try_start(now, bytes_written) {
+        return;
+    }
+    match timeout(
+        Duration::from_millis(50),
+        ctx.handle.data(ctx.channel_id, PROBE_QUERY.to_vec()),
+    )
+    .await
+    {
+        Ok(Ok(())) => ctx.budget.record_sent(PROBE_QUERY.len()),
+        // A busy or closed channel: the query never left, so nothing is in
+        // flight. A closed one ends the loop on the next frame send.
+        Ok(Err(_)) | Err(_) => ctx.probe.cancel(Instant::now()),
+    }
+}
+
+/// A probe still in flight when the session quits would be answered after
+/// the user's ssh exits, and the answer would land in their shell as stray
+/// characters. Hold the goodbye until the answer is in, briefly.
+async fn settle_terminal_probe(probe: &TerminalProbe) {
+    let deadline = Instant::now() + PROBE_SETTLE_MAX;
+    while probe.in_flight() && Instant::now() < deadline {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+}
+
+/// What the session's terminal sits behind, for the `client` metric label.
+/// The old subprocess CLI mode announces itself with the `LATE_CLI_MODE` env;
+/// the native and openssh modes run the token exec instead. Either marks a
+/// CLI.
+pub(crate) fn session_client(cli_mode: bool, cli_token_served: bool) -> metrics::SessionClient {
+    match cli_mode || cli_token_served {
+        true => metrics::SessionClient::Cli,
+        false => metrics::SessionClient::Ssh,
+    }
 }
 
 async fn clean_disconnect(handle: &russh::server::Handle, channel_id: ChannelId) {

@@ -21,7 +21,7 @@ pub const VERSION: &str = "26.3";
 /// The `DIFFICULTY` env in `infra/minecraft.tf`.
 pub const DIFFICULTY: &str = "normal";
 /// `worldborder set` in `RCON_CMDS_STARTUP`, in blocks.
-pub const WORLD_BORDER: u32 = 6000;
+pub const WORLD_BORDER: u32 = 10400;
 
 pub fn draw_landing(frame: &mut Frame, area: Rect, scroll: u16) -> u16 {
     let inner = Layout::default()

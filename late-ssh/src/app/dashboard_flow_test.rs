@@ -557,7 +557,7 @@ async fn o_on_a_booth_track_that_left_the_booth_changes_nothing() {
 /// A link somebody shared to News goes up on the live strip, and `o` opens
 /// the article modal.
 #[tokio::test]
-async fn o_on_a_shared_article_opens_the_article_modal() {
+async fn o_on_a_shared_article_opens_the_reader() {
     use late_core::models::article::{Article, ArticleParams};
 
     let test_db = new_test_db().await;
@@ -591,10 +591,79 @@ async fn o_on_a_shared_article_opens_the_article_modal() {
 
     app.handle_input(b"o");
     assert_eq!(
-        app.chat.news_modal_url(),
+        app.chat.reader().map(|reader| reader.url()),
         Some("https://example.com/terminal-renaissance"),
         "o opens the article"
     );
+}
+
+/// In the News room `Enter` opens the reader on the selected card and `c`
+/// copies its link, in the room and in the reader alike. A share whose body
+/// has not landed reads as pending.
+#[tokio::test]
+async fn enter_on_a_news_card_opens_the_reader_and_c_copies_the_link() {
+    use late_core::models::article::{Article, ArticleParams};
+
+    let url = "https://example.com/terminal-renaissance";
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "news-reader-me").await;
+    let them = create_test_user(&test_db.db, "news-reader-them").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+    Article::create_by_user_id(
+        &client,
+        them.id,
+        ArticleParams {
+            user_id: them.id,
+            url: url.to_string(),
+            title: "The terminal renaissance".to_string(),
+            summary: "• terminals are back".to_string(),
+            ascii_art: "####\n####".to_string(),
+        },
+    )
+    .await
+    .expect("share an article");
+    let mut app = make_app(test_db.db.clone(), me.id, "news-reader-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "lounge").await;
+    app.chat.select_news();
+    wait_for_render_contains(&mut app, "@news-reader-them").await;
+
+    app.handle_input(b"c");
+    assert_eq!(
+        app.pending_clipboard.as_deref(),
+        Some(url),
+        "c copies the link"
+    );
+    assert!(app.chat.reader().is_none(), "c opens nothing");
+    app.pending_clipboard = None;
+
+    app.handle_input(b"\r");
+    assert_eq!(
+        app.chat.reader().map(|reader| reader.url()),
+        Some(url),
+        "Enter opens the reader"
+    );
+    wait_for_render_contains(&mut app, " Reading ").await;
+    wait_for_render_contains(&mut app, "Fetching the article").await;
+
+    app.handle_input(b"c");
+    assert_eq!(
+        app.pending_clipboard.as_deref(),
+        Some(url),
+        "c in the reader copies the story's link"
+    );
+    // A lone Esc lands on the tick after it (`flush_pending_escape`).
+    app.handle_input(b"\x1b");
+    wait_for_app(&mut app, "Esc to close the reader", |app| {
+        app.chat.reader().is_none()
+    })
+    .await;
 }
 
 /// Shares no longer post into #lounge, so the strip is where a link is
@@ -1101,11 +1170,11 @@ async fn opening_a_shares_modal_marks_that_article_read() {
 
     app.handle_input(b"s1");
     assert_eq!(
-        app.chat.news_modal_url(),
+        app.chat.reader().map(|reader| reader.url()),
         Some("https://example.com/beta"),
         "s1 opens the newer share"
     );
-    app.chat.close_news_modal();
+    app.chat.close_reader();
     let frame = render_plain(&mut app);
     assert!(
         !news_row(&frame, "s1").contains('\u{25cf}'),
@@ -1118,10 +1187,11 @@ async fn opening_a_shares_modal_marks_that_article_read() {
 
     crate::test_helpers::wait_until(
         || async {
-            ArticleRead::article_ids_for_user(&client, me.id)
+            ArticleRead::rows_for_user(&client, me.id)
                 .await
                 .expect("reads")
-                .contains(&newer.id)
+                .iter()
+                .any(|row| row.article_id == newer.id)
         },
         "the read is stored",
     )
@@ -1284,4 +1354,268 @@ async fn a_slash_after_the_live_prefix_is_swallowed() {
         "the slash never opens the composer"
     );
     assert!(!app.live_prefix_armed, "and the prefix is spent");
+}
+
+/// The video messages that reached the fake paired CLI, in order.
+fn video_messages(
+    rx: &mut tokio::sync::mpsc::Receiver<PairControlMessage>,
+) -> Vec<PairControlMessage> {
+    let mut messages = Vec::new();
+    while let Ok(message) = rx.try_recv() {
+        match message {
+            PairControlMessage::VideoPlay { .. }
+            | PairControlMessage::VideoPlace { .. }
+            | PairControlMessage::VideoControl { .. }
+            | PairControlMessage::VideoStop { .. } => messages.push(message),
+            _ => {}
+        }
+    }
+    messages
+}
+
+/// A paired CLI's report, as the pair socket would record it.
+fn report_paired_cli(
+    app: &crate::app::state::App,
+    token: &str,
+    capabilities: &[&str],
+    blockers: &[crate::app::audio::client_state::VideoBlocker],
+) {
+    use crate::app::audio::client_state::{
+        ClientAudioState, ClientKind, ClientPlatform, ClientSshMode,
+    };
+    app.paired_client_registry
+        .as_ref()
+        .expect("paired registry")
+        .update_state_and_enforce_mute_policy(
+            token,
+            1,
+            ClientAudioState {
+                client_kind: ClientKind::Cli,
+                ssh_mode: ClientSshMode::Native,
+                platform: ClientPlatform::Linux,
+                capabilities: capabilities.iter().map(|c| c.to_string()).collect(),
+                video_blockers: blockers.to_vec(),
+                muted: false,
+                volume_percent: 30,
+            },
+        )
+        .expect("paired entry");
+}
+
+/// A YouTube share in the News room, with this session's lounge joined.
+async fn news_room_with_a_video(
+    test_db: &late_core::test_utils::TestDb,
+    token: &str,
+) -> (
+    crate::app::state::App,
+    tokio::sync::mpsc::Receiver<PairControlMessage>,
+) {
+    use late_core::models::article::{Article, ArticleParams};
+
+    let me = create_test_user(&test_db.db, &format!("{token}-me")).await;
+    let them = create_test_user(&test_db.db, &format!("{token}-them")).await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+    Article::create_by_user_id(
+        &client,
+        them.id,
+        ArticleParams {
+            user_id: them.id,
+            url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ".to_string(),
+            title: "Never gonna give you up".to_string(),
+            summary: "• a song".to_string(),
+            ascii_art: String::new(),
+        },
+    )
+    .await
+    .expect("share a video");
+    let (mut app, rx) = make_app_with_paired_client(test_db.db.clone(), me.id, token);
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "lounge").await;
+    app.chat.select_news();
+    wait_for_render_contains(&mut app, "UTC - watch").await;
+    (app, rx)
+}
+
+/// With a paired CLI that advertises `video`, `w` on a YouTube card opens
+/// the player, and the CLI hears a play with the window's body, a place
+/// with the full-screen body on `f`, and a stop on Esc. Closing partway
+/// through leaves the position on the card and in the database, and the
+/// next `w` resumes three seconds before it.
+#[tokio::test]
+async fn w_on_a_video_plays_it_through_the_paired_cli() {
+    use crate::app::files::terminal_image::TerminalImageProtocol;
+
+    let token = "news-watch-play-flow-it";
+    let test_db = new_test_db().await;
+    let (mut app, mut rx) = news_room_with_a_video(&test_db, token).await;
+    report_paired_cli(&app, token, &["voice", "video"], &[]);
+    // WezTerm: the server draws its images as iTerm2, the CLI's `video`
+    // says the terminal takes Kitty graphics, and the CLI's word decides.
+    app.detected_image_protocol = Some(TerminalImageProtocol::Iterm2);
+    video_messages(&mut rx);
+
+    app.handle_input(b"w");
+    wait_for_render_contains(&mut app, " Watching ").await;
+    let played = video_messages(&mut rx);
+    let play_id = match played.as_slice() {
+        [
+            PairControlMessage::VideoPlay {
+                play_id,
+                url,
+                left,
+                top,
+                cols,
+                rows,
+                start_s: 0,
+            },
+        ] => {
+            assert_eq!(url, "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+            // 90 percent of 160x40 is 144x36, centered at (8, 2); the body
+            // sits inside the border below the two header rows.
+            assert_eq!((*left, *top, *cols, *rows), (9, 5, 142, 31));
+            *play_id
+        }
+        other => panic!("expected one video_play, got {other:?}"),
+    };
+
+    app.handle_input(b"f");
+    app.render().expect("render");
+    assert_eq!(
+        video_messages(&mut rx),
+        vec![PairControlMessage::VideoPlace {
+            play_id,
+            left: 0,
+            top: 0,
+            cols: 160,
+            rows: 39,
+        }]
+    );
+
+    crate::app::chat::news::watch::svc::apply_report(
+        &mut app,
+        play_id,
+        &crate::paired_clients::VideoReport::Playing {
+            position_s: 1394,
+            duration_s: Some(2910),
+        },
+    );
+    app.handle_input(b"\x1b");
+    wait_for_app(&mut app, "Esc to close the player", |app| {
+        !app.chat.has_watch()
+    })
+    .await;
+    app.render().expect("render");
+    assert_eq!(
+        video_messages(&mut rx),
+        vec![PairControlMessage::VideoStop { play_id }]
+    );
+    wait_for_render_contains(&mut app, "UTC - ▶ 23:14 / 48:30").await;
+    let client = test_db.db.get().await.expect("db client");
+    let me = app.user_id;
+    crate::test_helpers::wait_until(
+        || async {
+            late_core::models::article_read::ArticleRead::rows_for_user(&client, me)
+                .await
+                .expect("reads")
+                .iter()
+                .any(|row| {
+                    row.watch_position
+                        == Some(late_core::models::article_read::WatchPosition {
+                            position_s: 1394,
+                            duration_s: Some(2910),
+                        })
+                })
+        },
+        "the position is stored",
+    )
+    .await;
+
+    app.handle_input(b"w");
+    wait_for_render_contains(&mut app, "resuming from 23:14…").await;
+    match video_messages(&mut rx).as_slice() {
+        [
+            PairControlMessage::VideoPlay {
+                start_s,
+                play_id: resumed,
+                ..
+            },
+        ] => {
+            assert_eq!(*start_s, 1391, "three seconds before where it was left");
+            assert_ne!(*resumed, play_id, "a fresh play id");
+        }
+        other => panic!("expected one resumed video_play, got {other:?}"),
+    }
+}
+
+/// A video outlasts the idle limit without a key. The session goes away,
+/// but the screensaver waits for the player to close: mpv keeps painting
+/// its rectangle, so a screensaver drawn under it would fight the video
+/// for the screen, and the key that dismisses one would never reach the
+/// player.
+#[tokio::test]
+async fn a_video_playing_past_the_idle_limit_keeps_the_screen_and_the_keys() {
+    use crate::app::common::away::AWAY_AFTER;
+
+    let token = "news-watch-away-flow-it";
+    let test_db = new_test_db().await;
+    let (mut app, mut rx) = news_room_with_a_video(&test_db, token).await;
+    report_paired_cli(&app, token, &["voice", "video"], &[]);
+    app.handle_input(b"w");
+    wait_for_render_contains(&mut app, " Watching ").await;
+    let play_id = match video_messages(&mut rx).as_slice() {
+        [PairControlMessage::VideoPlay { play_id, .. }] => *play_id,
+        other => panic!("expected one video_play, got {other:?}"),
+    };
+    crate::app::chat::news::watch::svc::apply_report(
+        &mut app,
+        play_id,
+        &crate::paired_clients::VideoReport::Playing {
+            position_s: 1800,
+            duration_s: Some(2910),
+        },
+    );
+
+    app.last_active_at = std::time::Instant::now() - AWAY_AFTER;
+    assert!(app.sync_away(), "the session goes away as ever");
+    let frame = render_plain(&mut app);
+    assert!(frame.contains(" Watching "), "{frame}");
+
+    app.handle_input(b" ");
+    assert_eq!(
+        video_messages(&mut rx),
+        vec![PairControlMessage::VideoControl {
+            play_id,
+            control: crate::paired_clients::VideoControl::TogglePause,
+        }]
+    );
+}
+
+/// A paired CLI that is missing mpv: the card still reads `watch`, `w`
+/// opens the setup box with the mpv row failing and yt-dlp holding, and
+/// nothing reaches the CLI.
+#[tokio::test]
+async fn w_without_mpv_opens_the_setup_box_and_sends_nothing() {
+    use crate::app::audio::client_state::VideoBlocker;
+    use crate::app::files::terminal_image::TerminalImageProtocol;
+
+    let token = "news-watch-setup-flow-it";
+    let test_db = new_test_db().await;
+    let (mut app, mut rx) = news_room_with_a_video(&test_db, token).await;
+    report_paired_cli(&app, token, &["voice"], &[VideoBlocker::NoMpv]);
+    app.detected_image_protocol = Some(TerminalImageProtocol::Kitty);
+    video_messages(&mut rx);
+
+    app.handle_input(b"w");
+    wait_for_render_contains(&mut app, " Watch in the terminal ").await;
+    let frame = render_plain(&mut app);
+    assert!(frame.contains("✗ mpv 0.36 or newer"), "{frame}");
+    assert!(frame.contains("✓ yt-dlp"), "{frame}");
+    assert!(frame.contains("✓ the late CLI"), "{frame}");
+    assert_eq!(video_messages(&mut rx), Vec::new());
 }

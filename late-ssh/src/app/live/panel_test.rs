@@ -93,6 +93,7 @@ fn article(shared_by: &str, title: &str, shared_at: DateTime<Utc>) -> ArticleFee
             ascii_art: String::new(),
         },
         author_username: shared_by.to_string(),
+        body: late_core::models::article_body::BodyStatus::Pending,
     }
 }
 

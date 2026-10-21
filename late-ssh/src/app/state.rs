@@ -30,7 +30,8 @@ use crate::{
         TerminalImageProtocol, TerminalImageRenderState, da1_probe, iterm2_capabilities_probe,
         kitty_cleanup_commands, protocol_from_device_attributes, protocol_from_env_hint,
         protocol_from_term, protocol_from_terminal_features, protocol_from_xtversion,
-        term_disables_terminal_images, terminal_image_cleanup_commands, terminal_string_terminator,
+        term_disables_terminal_images, terminal_image_cleanup_commands, terminal_name_for_log,
+        terminal_string_terminator,
     },
     app::{
         chat,
@@ -1027,6 +1028,15 @@ pub struct App {
     /// Terminal images tweak on top.
     pub(crate) detected_image_protocol: Option<TerminalImageProtocol>,
     pub(crate) terminal_images_disabled: bool,
+    /// The session's `TERM` names tmux or screen, the same test that
+    /// disables terminal images; the watch setup box names the multiplexer.
+    pub(crate) multiplexer_term: bool,
+    /// The forwarded env said Windows Terminal (`WT_SESSION`): the watch
+    /// setup box offers the PowerShell installer.
+    pub(crate) windows_terminal: bool,
+    /// The terminal's own name for itself, from its XTVERSION reply; named
+    /// in the session's wire summary log (`ssh.rs`).
+    terminal_version: Option<String>,
     pub(crate) inline_image_symbol_mode: InlineImageSymbolMode,
     pub(crate) terminal_image_render_state: TerminalImageRenderState,
 
@@ -1123,33 +1133,53 @@ impl App {
                 away,
             );
         }
-        if let Some(playback) = self.screensaver_playback {
-            let trigger = match self.sent_away {
-                true => crate::metrics::ScreensaverTrigger::Brb,
-                false => crate::metrics::ScreensaverTrigger::Idle,
-            };
-            crate::metrics::record_screensaver(trigger, playback.selection(), playback.piece());
-        }
         true
     }
 
     /// The piece covering the screen while this session is away, `None`
-    /// while it is here or with the Tweak off (Settings, Tweaks,
-    /// `Screensaver`).
+    /// while it is here, while the News watch modal is up, or with the
+    /// Tweak off (Settings, Tweaks, `Screensaver`).
     pub(crate) fn screensaver(&self) -> Option<late_core::models::user::AsciiPiece> {
-        if !self.away {
+        if !self.screensaver_due() {
             return None;
         }
         let selection = self.profile_state.profile().screensaver.selection()?;
         super::ascii::playback::Playback::resolve(self.screensaver_playback, selection)
     }
 
+    /// Bring the screensaver up or down with `screensaver_due`, counting
+    /// each one put up: at the away edge, or on a later 1Hz sync once the
+    /// watch modal it waited for closes.
     pub(crate) fn sync_screensaver(&mut self, now: Instant, rng: &mut impl rand::Rng) -> bool {
         let selection = self
-            .away
+            .screensaver_due()
             .then(|| self.profile_state.profile().screensaver.selection())
             .flatten();
-        super::ascii::playback::Playback::sync(&mut self.screensaver_playback, selection, now, rng)
+        let was_up = self.screensaver_playback.is_some();
+        let changed = super::ascii::playback::Playback::sync(
+            &mut self.screensaver_playback,
+            selection,
+            now,
+            rng,
+        );
+        if !was_up && let Some(playback) = self.screensaver_playback {
+            let trigger = match self.sent_away {
+                true => crate::metrics::ScreensaverTrigger::Brb,
+                false => crate::metrics::ScreensaverTrigger::Idle,
+            };
+            crate::metrics::record_screensaver(trigger, playback.selection(), playback.piece());
+        }
+        changed
+    }
+
+    /// Away, and nothing on screen that the screensaver would fight: the
+    /// paired CLI's mpv paints the watch player's rectangle whatever the
+    /// TUI draws under it, and the key that drops a screensaver would never
+    /// reach the player. A video outlasts the idle limit without a key, so
+    /// the screensaver waits for the modal to close; the 1Hz sync brings it
+    /// up then.
+    fn screensaver_due(&self) -> bool {
+        self.away && !self.chat.has_watch()
     }
 
     /// The rail modes this session renders from: this device's stored layout if
@@ -1586,7 +1616,6 @@ impl App {
             LandingPage::Zen => Screen::Zen,
         };
         let haunt = crate::app::deadchannel::haunt::svc::arm(
-            config.permissions.can_moderate(),
             config.user_id,
             &config.username,
             config.first_contact,
@@ -1976,6 +2005,9 @@ impl App {
             pending_terminal_commands,
             detected_image_protocol,
             terminal_images_disabled,
+            multiplexer_term: terminal_images_disabled,
+            windows_terminal: false,
+            terminal_version: None,
             inline_image_symbol_mode,
             terminal_image_render_state: TerminalImageRenderState::default(),
             notifier,
@@ -2959,6 +2991,9 @@ impl App {
 
     pub(crate) fn apply_terminal_env_hint(&mut self, name: &str, value: &str) {
         self.apply_inline_image_symbol_mode(InlineImageSymbolMode::from_env_hint(name, value));
+        if matches!(name.trim(), "WT_SESSION" | "WT_PROFILE_ID") && !value.trim().is_empty() {
+            self.windows_terminal = true;
+        }
         if self.terminal_images_disabled {
             return;
         }
@@ -2974,6 +3009,7 @@ impl App {
             images_disabled = self.terminal_images_disabled,
             "terminal xtversion reply"
         );
+        self.terminal_version = Some(terminal_name_for_log(value));
         self.apply_inline_image_symbol_mode(InlineImageSymbolMode::from_identity(value));
         if self.terminal_images_disabled {
             return;
@@ -2981,6 +3017,11 @@ impl App {
         if let Some(protocol) = protocol_from_xtversion(value) {
             self.detected_image_protocol = Some(protocol);
         }
+    }
+
+    /// The terminal's XTVERSION name, when it answered the startup probe.
+    pub(crate) fn terminal_version(&self) -> Option<&str> {
+        self.terminal_version.as_deref()
     }
 
     pub(crate) fn apply_terminal_capabilities(&mut self, value: &str) {
@@ -3047,7 +3088,10 @@ impl App {
         self.size = (cols, rows);
         self.leaderboard_page.clear_hit_regions();
         if let Some(modal) = &self.paper.modal {
-            modal.invalidate_viewport();
+            modal.view.invalidate();
+        }
+        if let Some(reader) = self.chat.reader() {
+            reader.view().invalidate();
         }
         self.sync_aquarium_bounds();
         // We can't use `Terminal::resize()` here: since ratatui 0.30.2 its
@@ -4513,6 +4557,8 @@ impl Drop for App {
         if self.session_token.is_empty() {
             return;
         }
+        // No mpv outlives the session that asked for it.
+        crate::app::chat::news::watch::svc::end_session(self);
         // The paired registry keeps token-scoped state that outlives the
         // sockets (the once-per-session boot mute claim), so the session end
         // has to retire it or it accumulates a row per session forever.

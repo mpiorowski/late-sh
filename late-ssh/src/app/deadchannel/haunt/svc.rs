@@ -33,14 +33,7 @@ use crate::state::State;
 /// claim a screen for it in the background; the verdict lands on the row
 /// for the next session: filling your bio tonight means the static can
 /// find you tomorrow (GAME.md).
-///
-/// Staff only, by decision in code, the same rule `arm` applies: anyone
-/// else cannot be haunted, so the connect path spends nothing on them: no
-/// online-time round trip, no paid bio screen.
-pub(crate) async fn bootstrap_gate(state: &State, is_staff: bool, user: &User) -> FirstContactGate {
-    if !is_staff {
-        return FirstContactGate::closed();
-    }
+pub(crate) async fn bootstrap_gate(state: &State, user: &User) -> FirstContactGate {
     let online_milliseconds = async {
         let client = state.db.get().await?;
         late_core::models::leaderboard::total_online_milliseconds(&client, user.id).await
@@ -67,7 +60,6 @@ pub(crate) async fn bootstrap_gate(state: &State, is_staff: bool, user: &User) -
     tracing::info!(
         user_id = %user.id,
         username = %user.username,
-        is_staff,
         active_hours = gate.active_hours,
         touched_settings = gate.touched_settings,
         bio_chars = gate.bio_chars,
@@ -87,11 +79,9 @@ pub(crate) async fn bootstrap_gate(state: &State, is_staff: bool, user: &User) -
     gate
 }
 
-/// Build the session's haunting slot. Stage 1 arms for staff (admins and
-/// moderators, `Permissions::can_moderate`) and nobody else, by decision
-/// in code; stages 2-4 arm behind the gate, or for any staff member whose
-/// funnel already has a stage-2 hit (eligibility gates entering, never
-/// continuing).
+/// Build the session's haunting slot. Stage 1 arms for everyone; stages
+/// 2-4 arm behind the gate, or for anyone whose funnel already has a
+/// stage-2 hit (eligibility gates entering, never continuing).
 /// The chain order is the spec: three clock bursts open stage 2, the
 /// third name hit arms the stage-3 whisper (it fires on the next fresh
 /// connect, then once more on a later day), and a day after the last
@@ -100,42 +90,34 @@ pub(crate) async fn bootstrap_gate(state: &State, is_staff: bool, user: &User) -
 /// Dice are per session on purpose: the same person on two evenings, or
 /// two people side by side, roll differently.
 pub(crate) fn arm(
-    is_staff: bool,
     user_id: uuid::Uuid,
     username: &str,
     marks: FirstContactMarks,
     gate: FirstContactGate,
 ) -> HauntState {
-    let stage1 = is_staff;
-    let chosen = stage1 && (gate.passes() || marks.name_hits > 0);
+    let chosen = gate.passes() || marks.name_hits > 0;
     let whisper_armed =
         chosen && marks.name_hits >= NAME_TOTAL_CAP && marks.whisper_due(chrono::Utc::now());
-    // What this session can fire, for whom. Stage 1 off is the quiet
-    // default for everyone who is not staff, so only an armed session is
-    // worth a line.
-    if stage1 {
-        tracing::info!(
-            user_id = %user_id,
-            username = %username,
-            is_staff,
-            chosen,
-            whisper_armed,
-            glitch_hits = marks.glitch_hits,
-            name_hits = marks.name_hits,
-            whisper_hits = marks.whisper_hits,
-            "first contact armed"
-        );
-    }
+    // What this session can fire, for whom.
+    tracing::info!(
+        user_id = %user_id,
+        username = %username,
+        chosen,
+        whisper_armed,
+        glitch_hits = marks.glitch_hits,
+        name_hits = marks.name_hits,
+        whisper_hits = marks.whisper_hits,
+        "first contact armed"
+    );
     HauntState {
         whisper: whisper_armed.then(|| WhisperState::for_user(user_id, marks.whisper_hits)),
-        clock_glitch: stage1.then(|| ClockGlitch::new(session_seed(user_id), 0, marks.glitch_hits)),
+        clock_glitch: ClockGlitch::new(session_seed(user_id), 0, marks.glitch_hits),
         name_flicker: chosen.then(|| NameFlicker::new(session_seed(user_id), marks.name_hits)),
         breakthrough: chosen.then(|| Breakthrough::for_user(user_id)),
         pending_invitation: None,
         witness: None,
         marks,
         gate,
-        stage1,
         chosen,
         pending_claims: Vec::new(),
     }
@@ -190,25 +172,19 @@ fn tick_claims(app: &mut App) -> bool {
     for (stage, outcome) in answered {
         match (stage, outcome) {
             (HitStage::Glitch, Ok(FirstContactHitClaim::Won { hits })) => {
-                if let Some(glitch) = app.haunt.clock_glitch.as_mut() {
-                    glitch.start(tick, hits);
-                }
+                app.haunt.clock_glitch.start(tick, hits);
                 app.haunt.marks.glitch_hits = hits;
                 metrics::record_first_contact_beat(FirstContactBeat::GlitchBurst);
                 tracing::info!(user_id = %app.user_id, username = %app.username, hits, "first contact clock glitch burst");
                 changed = true;
             }
             (HitStage::Glitch, Ok(FirstContactHitClaim::Capped { hits })) => {
-                if let Some(glitch) = app.haunt.clock_glitch.as_mut() {
-                    glitch.claim_capped(tick, hits);
-                }
+                app.haunt.clock_glitch.claim_capped(tick, hits);
                 app.haunt.marks.glitch_hits = hits;
                 tracing::debug!(user_id = %app.user_id, username = %app.username, hits, "first contact clock glitch capped by the row");
             }
             (HitStage::Glitch, Err(error)) => {
-                if let Some(glitch) = app.haunt.clock_glitch.as_mut() {
-                    glitch.claim_failed(tick);
-                }
+                app.haunt.clock_glitch.claim_failed(tick);
                 tracing::warn!(user_id = %app.user_id, username = %app.username, error = ?error, "first contact clock glitch claim failed");
             }
             (
@@ -287,11 +263,8 @@ fn tick_splash_door(app: &mut App) -> bool {
 /// cost a repaint: render reads `corruption(marquee_tick)` in between,
 /// and the ~200ms hold spans the sidebar's ~132ms wake cadence on its own.
 fn tick_clock_glitch(app: &mut App) -> bool {
-    if app.haunt.clock_glitch.is_none() {
-        return false;
-    }
     let clock_visible = !app.show_splash && app.right_sidebar_visible();
-    let glitch = app.haunt.clock_glitch.as_mut().expect("checked above");
+    let glitch = &mut app.haunt.clock_glitch;
     match glitch.tick(app.marquee_tick, clock_visible) {
         GlitchTick::Due => {
             let rx = app
@@ -409,18 +382,11 @@ fn publish_name_hit(app: &App, message_id: uuid::Uuid, room_id: uuid::Uuid) {
 /// the name corrupts as the message arrives, then heals, on the seed that
 /// rode the wire.
 fn tick_witness(app: &mut App) -> bool {
-    // Drained even outside the audience, so a stale beat never waits
-    // around for a later `/haunt arm`.
     let landed = app.chat.take_witnessed_hit_landed();
     let changed = ActiveHit::tick(&mut app.haunt.witness, app.marquee_tick);
     let Some((message_id, seed)) = landed else {
         return changed;
     };
-    // The audience is exactly stage 1's: staff are haunted where only
-    // staff can see it.
-    if !app.haunt.stage1 {
-        return changed;
-    }
     // This session's own hit coming back off the wire: its own machine is
     // already painting it. A second device of the same person never
     // claimed, holds no live hit, and witnesses it like anyone else.
@@ -640,13 +606,11 @@ fn tick_commands(app: &mut App) -> bool {
                 true => "door armed",
                 false => "door idle",
             };
-            let glitch = match &app.haunt.clock_glitch {
-                None => "glitch idle".to_string(),
-                Some(_) if app.haunt.marks.glitch_hits >= GLITCH_TOTAL_CAP => {
-                    "glitch quiet (share spent)".to_string()
-                }
-                Some(glitch) => {
-                    let minutes = glitch.next_in_ticks(app.marquee_tick) * 66 / 60_000;
+            let glitch = match app.haunt.marks.glitch_hits >= GLITCH_TOTAL_CAP {
+                true => "glitch quiet (share spent)".to_string(),
+                false => {
+                    let minutes =
+                        app.haunt.clock_glitch.next_in_ticks(app.marquee_tick) * 66 / 60_000;
                     format!("glitch in ~{minutes}m")
                 }
             };
@@ -696,8 +660,7 @@ fn tick_commands(app: &mut App) -> bool {
                 None => "no runner sheet".to_string(),
             };
             app.banner = Some(Banner::info(&format!(
-                "Haunt stage1 {} · chosen {} (active {}h, settings {}, bio {}ch {}) · {glitch} · glitch hits {}/{GLITCH_TOTAL_CAP} · name hits {}/{NAME_TOTAL_CAP} · {witness} · {door} · {whisper} · {invite} · {sheet}",
-                on_off(app.haunt.stage1),
+                "Haunt chosen {} (active {}h, settings {}, bio {}ch {}) · {glitch} · glitch hits {}/{GLITCH_TOTAL_CAP} · name hits {}/{NAME_TOTAL_CAP} · {witness} · {door} · {whisper} · {invite} · {sheet}",
                 on_off(app.haunt.chosen),
                 gate.active_hours,
                 gate.touched_settings,
@@ -712,15 +675,7 @@ fn tick_commands(app: &mut App) -> bool {
             // this arms the repeatable machines so a beat is testable
             // without reconnecting or a passing bio.
             app.banner = Some(Banner::success("Haunt armed for this session"));
-            app.haunt.stage1 = true;
             app.haunt.chosen = true;
-            if app.haunt.clock_glitch.is_none() {
-                app.haunt.clock_glitch = Some(ClockGlitch::new(
-                    session_seed(app.user_id),
-                    app.marquee_tick,
-                    app.haunt.marks.glitch_hits,
-                ));
-            }
             if app.haunt.name_flicker.is_none() {
                 app.haunt.name_flicker = Some(NameFlicker::new(
                     session_seed(app.user_id),
@@ -731,15 +686,10 @@ fn tick_commands(app: &mut App) -> bool {
                 app.haunt.breakthrough = Some(Breakthrough::for_user(app.user_id));
             }
         }
-        HauntCommand::Glitch => match app.haunt.clock_glitch.as_mut() {
-            None => {
-                app.banner = Some(Banner::error("Glitch is not armed - /haunt arm first"));
-            }
-            Some(glitch) => {
-                glitch.fire_now(app.marquee_tick);
-                app.banner = Some(Banner::success("Glitch fires in ~7s - watch the clock"));
-            }
-        },
+        HauntCommand::Glitch => {
+            app.haunt.clock_glitch.fire_now(app.marquee_tick);
+            app.banner = Some(Banner::success("Glitch fires in ~7s - watch the clock"));
+        }
         HauntCommand::Name => match app.haunt.name_flicker.as_mut() {
             None => {
                 app.banner = Some(Banner::error(
@@ -784,9 +734,8 @@ fn tick_commands(app: &mut App) -> bool {
                 invited_at: None,
             };
             app.haunt.pending_claims.clear();
-            if let Some(glitch) = app.haunt.clock_glitch.as_mut() {
-                *glitch = ClockGlitch::new(session_seed(app.user_id), app.marquee_tick, 0);
-            }
+            app.haunt.clock_glitch =
+                ClockGlitch::new(session_seed(app.user_id), app.marquee_tick, 0);
             if let Some(flicker) = app.haunt.name_flicker.as_mut() {
                 *flicker = NameFlicker::new(session_seed(app.user_id), 0);
             }

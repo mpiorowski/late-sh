@@ -21,6 +21,7 @@
 //! imports from it; the cycle is fine and the alternative is a thousand lines
 //! of pool in the shared file, which is what the rule exists to prevent.
 
+use std::cell::{Cell, RefCell};
 use std::time::{Duration, Instant};
 
 use ratatui::layout::Rect;
@@ -30,9 +31,9 @@ use uuid::Uuid;
 
 use crate::app::common::primitives::Banner;
 use crate::app::games::pool_core::{
-    aim::{self, ShotLine},
+    aim::{self, ShotLine, Trace},
     ball::CUE,
-    cue::{MAX_SPEED, MISCUE_LIMIT, PowerBand, ShotMode, Strike},
+    cue::{MAX_SPEED, MISCUE_LIMIT, PULL_ROWS, PowerBand, ShotMode, Strike},
     cue_ui::PanelHit,
     rack, rules as pool_rules,
     shot::{BallFrame, RackState, Shot, Timeline},
@@ -81,6 +82,86 @@ pub struct PoolDetail {
     /// is presentation only: nothing here can become a move, and the shot
     /// itself still arrives as a reload like every other game's.
     pub watching: Option<PoolAimShare>,
+    /// Where the foul dialog drew its choices, for the click hit test. Set
+    /// by the renderer each frame it is up, cleared each frame it is not.
+    pub foul_hit: Cell<Option<FoulDialogHit>>,
+}
+
+/// The foul dialog's choices on screen: the first choice's top row, how many
+/// rows each takes, and how many there are, inside `area`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FoulDialogHit {
+    pub area: Rect,
+    pub first_row: u16,
+    pub rows_each: u16,
+    pub count: usize,
+}
+
+impl FoulDialogHit {
+    /// The choice under a click at row `y`, if any.
+    pub fn choice_at(&self, x: u16, y: u16) -> Option<usize> {
+        let inside = x >= self.area.x
+            && x < self.area.x + self.area.width
+            && y >= self.first_row
+            && y < self.first_row + self.rows_each * self.count as u16;
+        inside.then(|| ((y - self.first_row) / self.rows_each) as usize)
+    }
+}
+
+/// What the fouled player may do next in snooker, in the order the dialog
+/// lists them.
+///
+/// The choice is the *rule*, and most people sitting down at a snooker table
+/// here have never met it — so it is not a key in a legend but a dialog that
+/// has to be answered before the shot can be touched (`foul_dialog_open`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FoulChoice {
+    /// Take the shot from where the balls lie. Local: nothing is sent, the
+    /// dialog just stands aside.
+    PlayOn,
+    /// Make the offender play again from where the balls lie (`play_again`).
+    HandBack,
+    /// After a miss only: the balls go back and the offender plays again
+    /// (`put_back`).
+    PutBack,
+}
+
+impl FoulChoice {
+    /// The choices this foul offers.
+    pub fn offered(state: &DailyPoolState) -> Vec<Self> {
+        let mut choices = vec![Self::PlayOn, Self::HandBack];
+        if state.miss.is_some() {
+            choices.push(Self::PutBack);
+        }
+        choices
+    }
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::PlayOn => "Play from here",
+            Self::HandBack => "Make them play again",
+            Self::PutBack => "Put the balls back",
+        }
+    }
+
+    /// One line on what the choice does, naming the player who fouled.
+    pub fn explain(self, offender: &str) -> String {
+        match self {
+            Self::PlayOn => "You take the shot, from where the balls are now.".to_string(),
+            Self::HandBack => format!("{offender} shoots again, from where the balls are now."),
+            Self::PutBack => {
+                format!("The balls go back where they were; {offender} shoots again.")
+            }
+        }
+    }
+}
+
+/// The foul dialog's own state: where its cursor is, and the shot after
+/// which this player chose to play on, so it does not come straight back.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FoulDialog {
+    pub cursor: usize,
+    played_on_at: Option<usize>,
 }
 
 impl PoolDetail {
@@ -98,6 +179,7 @@ impl PoolDetail {
             queue: Vec::new(),
             replaying: false,
             watching: None,
+            foul_hit: Cell::new(None),
         }
     }
 
@@ -134,6 +216,9 @@ impl PoolDetail {
         self.queue = std::mem::take(&mut previous.queue);
         self.replaying = std::mem::take(&mut previous.replaying);
         self.watching = previous.watching.take();
+        // A choice to play on is keyed by the shot it answers, so carrying it
+        // across a reload can only ever keep a dialog closed that was closed.
+        self.draft.foul = previous.draft.foul;
     }
 
     /// The rack as it stood before the shot that is about to play, for the
@@ -256,11 +341,16 @@ pub struct PoolDraft {
     /// accumulated, so drawing back to the same place is always the same
     /// power, and pushing back *past* it is unambiguously a strike.
     stroke_origin: Option<u16>,
-    /// Furthest the cue was drawn back during this stroke. The strike uses
-    /// this rather than the pull at the moment of contact: on a real table the
-    /// backswing is what decides the power, not how the follow-through is
-    /// timed.
+    /// Furthest the cue was drawn back during this stroke. Not the power any
+    /// more — that is how fast the cue comes forward (`Push`) — but a stroke
+    /// still needs `MIN_BACKSWING` of it, or a twitch upward would fire.
     backswing: f64,
+    /// The forward half of a mouse stroke, timed: what the power is read off.
+    push: Push,
+    /// The last rebound traced, and what it was traced for (`rebound_trace`).
+    trace_cache: RefCell<Option<([u64; 6], Option<Trace>)>>,
+    /// Snooker: the dialog that asks the fouled player how to go on.
+    pub foul: FoulDialog,
 }
 
 /// The values a mode can change, snapshotted at arming time.
@@ -273,8 +363,81 @@ struct DraftRestore {
 }
 
 /// How far the cue must be drawn back before pushing forward counts as a
-/// stroke. Without it a twitch of the mouse in the wrong direction fires.
-const MIN_BACKSWING: f64 = 0.08;
+/// stroke: two rows. Without it a twitch of the mouse in the wrong direction
+/// fires, and with less there is no push to time.
+const MIN_BACKSWING: f64 = 2.0 / PULL_ROWS;
+
+// ── The push ──────────────────────────────────────────────────────────
+//
+// A mouse stroke is struck at the speed the cue comes *forward*, the way a
+// real one is: how far it was drawn back only has to be enough to push from.
+// The speed is read over the last `PUSH_WINDOW` of the push before it passes
+// the ball, so a slow start and a quick finish is a quick stroke — what the
+// tip is doing at contact is what counts.
+//
+// The clock is when each report *arrived*, and over SSH reports arrive in
+// bursts: a quick flick can land as one or two reports at once. Two guards
+// keep that from reading as infinite speed: the first sample of a push is
+// back-dated to the previous report (but no further than `PUSH_SEED`), and no
+// push is timed at under `PUSH_MIN_DT`.
+
+/// How far back the push speed is measured from the moment of contact.
+const PUSH_WINDOW: Duration = Duration::from_millis(120);
+/// Longest a push's first report is back-dated, for a push that starts after
+/// the cue has been resting at the bottom of the swing.
+const PUSH_SEED: Duration = Duration::from_millis(40);
+/// Shortest time a push is taken to have lasted, so a burst of reports that
+/// arrived together reads as fast rather than as infinitely fast.
+const PUSH_MIN_DT: f64 = 0.02;
+/// Push speeds, in terminal rows a second, at the bottom and the top of the
+/// armed band. Between them the push is read on a **log** scale: twice as fast
+/// is the same step up the band wherever you are on it, so a deliberate push
+/// lands mid-band and only a real crawl or a real flick reaches either end.
+/// Read linearly over 0-100 (the first cut), half the band sat in the first
+/// few rows a second and anything brisk hit the top: too easy both ways.
+const SLOW_PUSH_SPEED: f64 = 12.0;
+const FAST_PUSH_SPEED: f64 = 200.0;
+
+/// The forward half of a mouse stroke, timed.
+#[derive(Clone, Debug, Default)]
+struct Push {
+    /// Pointer rows, and when each arrived, oldest first, while the cue is
+    /// coming forward. Emptied whenever it is drawn back again.
+    samples: Vec<(Instant, f64)>,
+    /// When the stroke's last pointer report arrived.
+    last_at: Option<Instant>,
+    /// The push speed as a fraction of the band: the readout while the cue
+    /// comes forward, and the power once it passes the ball.
+    live: f64,
+    /// The power is the mouse's to set. False once a key nudges the pull,
+    /// which puts the keyboard's pull-is-power back in charge.
+    by_mouse: bool,
+}
+
+impl Push {
+    /// Push speed over the samples kept, in rows a second.
+    fn rows_per_second(&self) -> f64 {
+        let (Some(first), Some(last)) = (self.samples.first(), self.samples.last()) else {
+            return 0.0;
+        };
+        let rows = first.1 - last.1;
+        let dt = last
+            .0
+            .saturating_duration_since(first.0)
+            .as_secs_f64()
+            .max(PUSH_MIN_DT);
+        rows / dt
+    }
+
+    /// Push speed over the samples kept, as a fraction of the band.
+    fn fraction(&self) -> f64 {
+        let speed = self.rows_per_second();
+        if speed <= SLOW_PUSH_SPEED {
+            return 0.0;
+        }
+        ((speed / SLOW_PUSH_SPEED).ln() / (FAST_PUSH_SPEED / SLOW_PUSH_SPEED).ln()).clamp(0.0, 1.0)
+    }
+}
 
 /// What a pointer report did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -295,6 +458,8 @@ const AIM_FINE_STEP: f64 = 0.1 * std::f64::consts::PI / 180.0;
 const TIP_STEP: f64 = 0.05;
 /// Pull per keypress, for the keyboard-only path.
 const PULL_STEP: f64 = 0.05;
+/// Stroke speed per `j`/`k` press, in m/s: the readout's own last digit.
+const SPEED_STEP: f64 = 0.1;
 
 // ── Pointer sensitivity ───────────────────────────────────────────────
 //
@@ -313,49 +478,35 @@ const AIM_PER_COLUMN: f64 = 0.15 * std::f64::consts::PI / 180.0;
 /// instead of twice the movement.
 const TIP_PER_COLUMN: f64 = 0.02;
 const TIP_PER_ROW: f64 = 0.04;
-/// Rows of downward travel that draw the cue from nothing to a full pull.
-const PULL_ROWS: f64 = 14.0;
 
 /// How far one cell of pointer travel moves whatever is armed.
 ///
 /// A terminal cell is a coarse unit to aim in — one column is about a ball's
-/// width at a metre and a half — so the rates above are a compromise between
-/// sweeping the table and picking a thin cut, and neither end is well served.
-/// Holding a modifier while the pointer moves picks a gear instead, which is
-/// the same trade `h`/`l` against `H`/`L` makes on the keyboard.
+/// width at a metre and a half — so holding Ctrl while the pointer moves drops
+/// to a tenth of the travel, the same trade `h`/`l` against `H`/`L` makes on
+/// the keyboard.
 ///
-/// **Ctrl is the reliable one.** Shift is not: xterm and most of its
-/// descendants reserve Shift+mouse for the terminal's *own* selection, and
-/// swallow the report rather than sending it — so on those terminals a
-/// Shift-held sweep simply arrives as an ordinary one. Alt is read as coarse
-/// as well for exactly that reason: it is the fallback that works where Shift
-/// is eaten, and it costs nothing where Shift is not.
+/// There is no fast gear. There was one, on Shift (and Alt), but xterm and
+/// most of its descendants keep Shift+mouse for their own selection and never
+/// send the report, so on most terminals it did nothing at all; crossing the
+/// table is what a click on a ball or the re-grip is for.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum AimGear {
     /// Ctrl: a tenth of the step, for the last fraction of a degree.
     Fine,
     #[default]
     Normal,
-    /// Shift or Alt: four times the step, to cross the table in one sweep.
-    Coarse,
 }
 
 impl AimGear {
-    /// Ctrl wins a Ctrl+Shift sweep: asking for both is asking for precision
-    /// with a hand that has run out of desk, and the re-grip covers the rest.
-    pub fn of(fine: bool, coarse: bool) -> Self {
-        match (fine, coarse) {
-            (true, _) => Self::Fine,
-            (false, true) => Self::Coarse,
-            (false, false) => Self::Normal,
-        }
+    pub fn of(fine: bool) -> Self {
+        if fine { Self::Fine } else { Self::Normal }
     }
 
     pub fn scale(self) -> f64 {
         match self {
             Self::Fine => 0.1,
             Self::Normal => 1.0,
-            Self::Coarse => 4.0,
         }
     }
 }
@@ -387,9 +538,10 @@ impl PoolDraft {
             azimuth: default_aim(state, place, target),
             picked: target,
             tip: [0.0, 0.0],
-            // Two thirds drawn back: a player who arms a band and fires
-            // without touching the mouse plays an ordinary shot, not a tap.
-            pull: 0.66,
+            // Halfway up the band: a player who arms one and fires without
+            // touching the mouse plays an ordinary shot, not a tap — 1.7 m/s
+            // in `normal`, a natural rolling pot.
+            pull: 0.5,
             place,
             called_pocket: None,
             last_pointer: None,
@@ -397,15 +549,28 @@ impl PoolDraft {
             restore: None,
             stroke_origin: None,
             backswing: 0.0,
+            push: Push::default(),
+            trace_cache: RefCell::new(None),
+            foul: FoulDialog::default(),
         }
     }
 
-    /// Stroke speed as a fraction of `MAX_SPEED`: the pull, scaled into the
-    /// armed band. Unarmed, it reads as `normal` so the panel has something
-    /// honest to show before a band is picked.
+    /// Stroke speed as a fraction of `MAX_SPEED`, scaled into the armed band.
+    /// Unarmed, it reads as `normal` so the panel has something honest to
+    /// show before a band is picked.
+    ///
+    /// Two sources, one per input. On the keyboard the pull *is* the power:
+    /// there is no speed to a keypress. With the mouse it is how fast the cue
+    /// is coming forward (`Push`), so while it is being drawn back this reads
+    /// nought and climbs as it is pushed — the readout is a speedometer.
     pub fn power(&self) -> f64 {
         let band = self.mode.band().unwrap_or(PowerBand::Normal);
-        band.ceiling() * self.pull.clamp(0.0, 1.0)
+        let within = if self.push.by_mouse {
+            self.push.live
+        } else {
+            self.pull
+        };
+        band.speed_at(within)
     }
 
     /// Where the cue ball will be when the shot is struck: the pending
@@ -450,14 +615,48 @@ impl PoolDraft {
     pub fn line(&self, state: &DailyPoolState) -> Option<ShotLine> {
         let from = self.cue_ball(state)?;
         let spec = state.spec().ok()?;
-        Some(aim::shot_line(
+        let geom = spec.geometry();
+        Some(aim::shot_line_traced(
             spec,
-            &spec.geometry(),
+            &geom,
             &self.frames(state),
             from,
             self.azimuth,
             self.tip[0],
+            || self.rebound_trace(spec, &geom, from),
         ))
+    }
+
+    /// The simulator's own path for this shot off its first cushion
+    /// (`aim::trace_rebound`), at the speed the stroke is likely to be
+    /// played at, remembered until something it depends on changes.
+    ///
+    /// The speed is a guess for a mouse stroke, which is not decided until
+    /// the cue comes through, so it is the middle of the band. It matters
+    /// less than it sounds: how far off the rail the path bends grows with
+    /// the speed, but which way the ball is rolling once it has bent does not.
+    fn rebound_trace(&self, spec: &TableSpec, geom: &Geometry, from: [f64; 2]) -> Option<Trace> {
+        let band = self.mode.band().unwrap_or(PowerBand::Normal);
+        let within = if self.push.by_mouse { 0.5 } else { self.pull };
+        let speed = band.speed_at(within) * MAX_SPEED;
+        let key = [
+            from[0].to_bits(),
+            from[1].to_bits(),
+            self.azimuth.to_bits(),
+            self.tip[0].to_bits(),
+            self.tip[1].to_bits(),
+            speed.to_bits(),
+        ];
+        if let Some((cached, trace)) = *self.trace_cache.borrow()
+            && cached == key
+        {
+            return trace;
+        }
+        let trace = Strike::new(self.azimuth, self.tip[0], self.tip[1], speed)
+            .ok()
+            .and_then(|strike| aim::trace_rebound(spec, geom, from, &strike));
+        *self.trace_cache.borrow_mut() = Some((key, trace));
+        trace
     }
 
     /// The ball the aim is on, if the line runs near enough to one.
@@ -479,10 +678,33 @@ impl PoolDraft {
             place: self.place,
             azimuth: self.azimuth,
             tip: self.tip,
-            speed: self.power().clamp(0.05, 1.0) * MAX_SPEED,
+            speed: self.power().clamp(0.01, 1.0) * MAX_SPEED,
             called_pocket: self.called_pocket,
             play_again: false,
+            put_back: false,
         })
+    }
+
+    // ── The foul dialog ───────────────────────────────────────────────
+
+    /// The other player fouled and this one has not said how to go on yet.
+    /// While it is open nothing about the shot can be touched; the caller
+    /// still applies the turn gate.
+    pub fn foul_dialog_open(&self, state: &DailyPoolState) -> bool {
+        state.may_return && self.foul.played_on_at != Some(state.move_count())
+    }
+
+    /// Walk the dialog's cursor, stopping at both ends.
+    pub fn foul_step(&mut self, state: &DailyPoolState, delta: isize) {
+        let last = FoulChoice::offered(state).len().saturating_sub(1) as isize;
+        self.foul.cursor = (self.foul.cursor as isize + delta).clamp(0, last) as usize;
+    }
+
+    /// "Play from here": close the dialog for this foul. Nothing is sent —
+    /// taking the shot is what playing on *is*.
+    pub fn play_on(&mut self, state: &DailyPoolState) {
+        self.foul.played_on_at = Some(state.move_count());
+        self.foul.cursor = 0;
     }
 
     // ── Modes ─────────────────────────────────────────────────────────
@@ -511,6 +733,7 @@ impl PoolDraft {
         self.dragging = false;
         self.stroke_origin = None;
         self.backswing = 0.0;
+        self.push = Push::default();
     }
 
     /// Keep the adjustment and put the cue down. Returns whether anything was
@@ -523,6 +746,7 @@ impl PoolDraft {
         self.dragging = false;
         self.stroke_origin = None;
         self.backswing = 0.0;
+        self.push = Push::default();
         was_armed
     }
 
@@ -547,6 +771,7 @@ impl PoolDraft {
         self.dragging = false;
         self.stroke_origin = None;
         self.backswing = 0.0;
+        self.push = Push::default();
         was_armed
     }
 
@@ -580,6 +805,9 @@ impl PoolDraft {
             restore: None,
             stroke_origin: None,
             backswing: 0.0,
+            push: Push::default(),
+            trace_cache: RefCell::new(None),
+            foul: FoulDialog::default(),
         }
     }
 
@@ -643,6 +871,19 @@ impl PoolDraft {
         button_down: bool,
         gear: AimGear,
     ) -> PointerOutcome {
+        self.pointer_moved_at(x, y, button_down, gear, Instant::now())
+    }
+
+    /// `pointer_moved`, with the moment the report arrived given rather than
+    /// read, which the stroke times its push by. Tests drive this one.
+    pub fn pointer_moved_at(
+        &mut self,
+        x: u16,
+        y: u16,
+        button_down: bool,
+        gear: AimGear,
+        at: Instant,
+    ) -> PointerOutcome {
         if self.mode == ShotMode::Idle {
             self.last_pointer = None;
             return PointerOutcome::Ignored;
@@ -653,6 +894,7 @@ impl PoolDraft {
             // stroke it is also the ball, which the rest of the gesture is
             // measured against.
             self.stroke_origin = Some(y);
+            self.push.last_at = Some(at);
             return PointerOutcome::Ignored;
         };
         if (last_x, last_y) == (x, y) {
@@ -667,6 +909,8 @@ impl PoolDraft {
             // people already use for that has no other expression here.
             self.dragging = true;
             self.stroke_origin = Some(y);
+            self.push.samples.clear();
+            self.push.last_at = Some(at);
             return PointerOutcome::Ignored;
         }
         // The gear scales the *travel*, not the rate, so it applies to
@@ -699,7 +943,7 @@ impl PoolDraft {
                 // anywhere else genuinely means nothing here.
                 PointerOutcome::Ignored
             }
-            ShotMode::Stroke(_) => self.stroke_to(y),
+            ShotMode::Stroke(_) => self.stroke_to(y, last_y, at),
         }
     }
 
@@ -708,24 +952,63 @@ impl PoolDraft {
     /// Modelled on the real gesture rather than on a button, which is what the
     /// press-drag-release version got wrong — a stroke is one continuous
     /// motion, and the moment of contact is when the cue passes the ball, not
-    /// when a finger happens to lift.
-    fn stroke_to(&mut self, y: u16) -> PointerOutcome {
+    /// when a finger happens to lift. And like the real one it is struck at
+    /// the speed the cue comes through: the mouse is the cue, so how far it
+    /// was drawn back is only room to push from, and how fast it is pushed is
+    /// the power. (It used to be the backswing, which made a slow push off a
+    /// long draw hit hard and gave the hand nothing to feel.)
+    fn stroke_to(&mut self, y: u16, last_y: u16, at: Instant) -> PointerOutcome {
         let origin = *self.stroke_origin.get_or_insert(y);
         let delta = y as f64 - origin as f64;
-        if delta >= 0.0 {
-            // Behind the ball: drawing back.
+        let previous = self.push.last_at.replace(at);
+        self.push.by_mouse = true;
+        if y > last_y {
+            // Drawing back. Whatever push came before is over.
+            self.push.samples.clear();
+            self.push.live = 0.0;
             self.pull = (delta / PULL_ROWS).clamp(0.0, 1.0);
             self.backswing = self.backswing.max(self.pull);
+            return PointerOutcome::Changed;
+        }
+        if y == last_y {
+            return PointerOutcome::Changed;
+        }
+        // Coming forward. The push starts from the previous report, dated
+        // when it arrived but no earlier than `PUSH_SEED` ago.
+        if self.push.samples.is_empty() {
+            let floor = at.checked_sub(PUSH_SEED).unwrap_or(at);
+            let from = previous.map_or(floor, |previous| previous.max(floor));
+            self.push.samples.push((from, last_y as f64));
+        }
+        self.push.samples.push((at, y as f64));
+        // Keep one sample from before the window as its anchor, and nothing
+        // older.
+        if let Some(edge) = at.checked_sub(PUSH_WINDOW) {
+            while self.push.samples.len() > 2 && self.push.samples[1].0 <= edge {
+                self.push.samples.remove(0);
+            }
+        }
+        self.push.live = self.push.fraction();
+        if delta >= 0.0 {
+            self.pull = (delta / PULL_ROWS).clamp(0.0, 1.0);
             return PointerOutcome::Changed;
         }
         // Past the ball. Only a stroke if there was a backswing behind it —
         // otherwise nudging the mouse upward on an armed cue fires it.
         if self.backswing < MIN_BACKSWING {
             self.pull = 0.0;
+            self.push.samples.clear();
+            self.push.live = 0.0;
             return PointerOutcome::Changed;
         }
-        // The backswing is the power, not wherever the pointer ended up.
-        self.pull = self.backswing;
+        self.pull = self.push.live;
+        // The one number the push dials are tuned by, and nothing on screen
+        // shows it.
+        tracing::debug!(
+            rows_per_second = self.push.rows_per_second(),
+            within = self.push.live,
+            "pool stroke pushed through"
+        );
         PointerOutcome::Strike
     }
 
@@ -761,6 +1044,11 @@ impl PoolDraft {
     /// is the only thing there is to walk on an idle board. The steps live
     /// here beside the pointer rates so the two input paths are tuned as one.
     pub fn key_step(&mut self, state: &DailyPoolState, dx: isize, dy: isize) {
+        // The dialog takes the arrows while it is up: up is the choice above.
+        if self.foul_dialog_open(state) {
+            self.foul_step(state, -dy.signum());
+            return;
+        }
         match self.mode {
             ShotMode::Idle => self.cycle_target(state, dx.signum()),
             // Left and right turn the cue, like `h` and `l`. Up and down do
@@ -1044,7 +1332,29 @@ impl PoolDraft {
 
     /// Draw the cue back (positive) or push it in (negative), within the band.
     pub fn nudge_pull(&mut self, delta: f64) {
+        self.push.by_mouse = false;
         self.pull = (self.pull + delta).clamp(0.0, 1.0);
+    }
+
+    /// `k` / `j` in a stroke: the speed up or down to the next `SPEED_STEP`,
+    /// held inside the armed band. Snapped to the grid, so a speed the mouse
+    /// left at 1.73 steps to 1.8 or 1.7 and every press after lands on the
+    /// tenth the readout shows. Refused outside a stroke.
+    pub fn step_speed(&mut self, faster: bool) -> bool {
+        let Some(band) = self.mode.band() else {
+            return false;
+        };
+        // The slack absorbs the round trip through the band's log scale,
+        // which brings 1.8 back as 1.7999999.
+        let tenths = self.power() * MAX_SPEED / SPEED_STEP;
+        let next = if faster {
+            (tenths + 1e-3).floor() + 1.0
+        } else {
+            (tenths - 1e-3).ceil() - 1.0
+        };
+        self.push.by_mouse = false;
+        self.pull = band.within(next * SPEED_STEP / MAX_SPEED);
+        true
     }
 }
 

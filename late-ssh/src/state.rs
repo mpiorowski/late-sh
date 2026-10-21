@@ -95,7 +95,7 @@ pub fn online_human_ids(active_users: &HashMap<Uuid, ActiveUser>) -> HashSet<Uui
 /// which is what makes "nobody to buy for" a real refusal instead of a round
 /// bought for one. This is in-process presence, so on a second replica a round
 /// would only reach the buyer's own pod. That is the accepted single-replica
-/// assumption (root `CONTEXT.md`, multi-replica readiness), not an oversight:
+/// assumption (`SCALE.md`, Pain Point 2 ledger), not an oversight:
 /// the credits it grants are DB rows and are cashed from anywhere.
 pub fn online_human_ids_excluding(active_users: &ActiveUsers, buyer: Uuid) -> Vec<Uuid> {
     active_users

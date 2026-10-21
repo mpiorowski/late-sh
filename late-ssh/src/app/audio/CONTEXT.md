@@ -1,7 +1,7 @@
 # late-ssh Audio Context
 
 ## Metadata
-- Domain: late.sh audio — Icecast house radio, global YouTube queue, browser/CLI source arbitration, the equalizer (live CLI spectrum with an ambient fallback), and now-playing poller
+- Domain: late.sh audio — the radio station catalogue (house Icecast mounts and direct third-party streams), global YouTube queue, browser/CLI source arbitration, the equalizer (live CLI spectrum with an ambient fallback), and now-playing poller
 - Primary audience: LLM agents working in `late-ssh/src/app/audio` and the music/audio touchpoints it owns in `late-cli` and `late-web/src/pages/listen`
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`
@@ -11,22 +11,20 @@
 ## 1. Scope
 
 Owned by this domain:
-- Always-on Icecast house radio playback (the `<audio>` and CLI symphonia path).
+- Radio: the station catalogue (`late_core::radio`), user-pinned slots, the Stations modal, and per-provider now-playing metadata (`STATIONS.md`). Default source for an account that never picked one is radio on `chillsynth`.
 - Global, DB-backed YouTube queue: submission, persistence, single-playing invariant, server-driven track switching (per-browser playback timeline), fallback debounce.
 - Community Booth History: max 200 unique previously played YouTube tracks, ordered most recently played first, with requeue-from-history.
 - The singleton "YouTube fallback" stream that plays when the queue is empty.
-- Audio source selection for paired clients (`set_playback_source`). No arbitration: browser pairing is gone, so the source alone picks the surface.
-- The equalizer: the paired CLI's live spectrum, with the ambient band whenever no fresh spectrum arrives (§10).
+- Audio source selection for paired clients (`set_playback_source`). No arbitration: only the CLI pairs, so the source alone picks the surface.
+- The equalizer: the paired CLI's live spectrum, with the ambient band whenever no fresh spectrum arrives (`VIZ.md`).
 - Now-playing poller for the Icecast track title.
 - The `/audio` and `/audio fallback` SSH chat commands (staff-only).
-- Direct-client radio source for approved external stations, currently Nightride Chillsynth, Nightride, Datawave, Spacesynth, and Ambient (Nightride's `rektify.mp3`). This must not proxy/restream third-party audio through late.sh Icecast/Liquidsoap; the paired CLI and the public listen page connect directly to official station stream URLs.
+- Third-party stations are played by the paired CLI and the listen page straight from the station's own stream URL. late.sh never proxies or restreams third-party audio through Icecast/Liquidsoap; it fetches metadata only.
 
 Out of scope here (lives elsewhere):
 - LiveKit voice rooms, CLI microphone/remote voice playout, TUI voice controls/status, and pair-WS voice messages — see `../voice/CONTEXT.md`.
-- Liquidsoap playlist encoding and Icecast serving — configured in `infra/liquidsoap/`, not driven by `AudioService`.
-- Icecast HTTP serving — external service, see root `CONTEXT.md` §2.7.
+- Liquidsoap playlist encoding and Icecast serving — configured in `infra/liquidsoap/`, not driven by `AudioService`; the music library, its licensing and how it ships are in root `MUSIC.md`.
 - CLI Icecast decode/output (`late-cli/src/audio/`) — owned by the CLI crate; this file only documents the WS/control wiring.
-- Liquidsoap playlist/mount definitions and Icecast HTTP serving.
 
 ---
 
@@ -84,13 +82,13 @@ Cross-crate touchpoints:
 ## 3. Ownership Split
 
 - `svc.rs` is the async boundary. It owns the DB, both broadcast channels, the queue state mutex, the playback timer (which also drives the periodic `LoadVideo` heartbeat for the current item), the fallback debounce timer, and all transitions. **Nothing else in the codebase mutates `media_queue_items.status` or `media_sources`.**
-- `state.rs` is the per-session UI shim (62 lines). It clones the service, holds a per-user `AudioEvent` receiver, exposes `submit_trusted` / `set_youtube_fallback` for chat dispatch, and turns user-scoped events into banners during `tick()`.
+- `state.rs` is the per-session UI shim. It clones the service, holds a per-user `AudioEvent` receiver, exposes `submit_trusted` / `set_youtube_fallback` for chat dispatch, and turns user-scoped events into banners during `tick()`.
 - `client_state.rs` is type-only: the JSON shape clients send over `client_state` WS messages. No behavior.
 - `youtube.rs` is pure URL/HTTP — no DB, no channels, no service state.
 - `viz.rs` is pure render + signal smoothing. Lives in this domain because the data source (Icecast) is audio.
 - `now_playing/svc.rs` is independent of `AudioService` — separate channel, separate task, only shares a directory.
 - `radio_meta/svc.rs` is likewise independent: its own watch channel and one task (the Nightride SSE loop joined with the polled-feed loops), started once in `main.rs` next to the now-playing poller. It only fetches third-party metadata; it never proxies third-party audio.
-- Liquidsoap no longer has a telnet control path in this crate; house streams are always-on mounts.
+- This crate has no Liquidsoap control path; house streams are always-on mounts.
 
 Keep `mod.rs` declaration-only — no `pub use` re-exports.
 
@@ -103,31 +101,9 @@ Keep `mod.rs` declaration-only — no `pub use` re-exports.
 - `event_tx: broadcast::Sender<AudioEvent>` (cap 256) — per-user banners (success/failure on submit, fallback set, history requeue/delete). Consumed only by `AudioState`.
 - `state: Arc<Mutex<QueueState>>` — `{ mode: AudioMode, current_item_id, sequence, playback_cancel: Option<oneshot>, fallback_cancel: Option<oneshot> }`.
 
-### Constants (`svc.rs:15-21`)
-- `QUEUE_SNAPSHOT_LIMIT = 50`
-- `MAX_SUBMISSIONS_PER_WINDOW = 10` over `SUBMISSION_WINDOW = 5 minutes` — applies to un-trusted `submit_url`, which is the path reached by the Music Booth submit modal (`booth_submit_public_task`). Trusted/admin paths (`submit_trusted_url`) bypass.
-- `FALLBACK_DEBOUNCE = 10s`
-- `PLAYBACK_HEARTBEAT_INTERVAL = 10s` — periodic `LoadVideo` re-broadcast for the current item. Safety net: browsers already showing the right item no-op; stuck/disconnected/wrong-item browsers force-swap. Replaces the old `Seek`-based sync.
-- `RECONCILE_INTERVAL = 60s` — background DB reconcile safety net. If memory drifts from the singleton `playing` row (e.g. rollout overlap), the service adopts the DB current, cancels/re-arms timers, and republishes state.
-- `STREAM_CAP = 1h` — hard cap on any single playing row's wall-clock lifetime.
-- `SKIP_VOTE_FRACTION = 0.3` + `SKIP_VOTE_MIN = 2` — `skip_threshold(youtube_total) = max(ceil(0.3 * youtube_total), 2)`. **Denominator is active users whose persisted `users.settings.audio_source` is `youtube`**, not paired-client/browser presence. Floor of 2 means a lone active YouTube-pref user can't solo-skip; the 30% ceil kicks in above 6 active YouTube-pref users.
-- `HISTORY_LIMIT = 200` — community Booth History keeps at most 200 unique YouTube tracks.
+### Queue internals
 
-### Public API
-- `new(db, youtube_api_key)` — `main.rs:123`.
-- `start_background_task(shutdown)` — sweeps orphan `playing` rows, then resumes from DB, then idles. `main.rs:360`.
-- `subscribe_ws()` — `api.rs:237` (pair WS upgrade).
-- `subscribe_events()` — `app/audio/state.rs`.
-- `initial_ws_messages()` (`svc.rs:393-423`) — catch-up burst sent on every new pair-WS connect: `source_changed`, `queue_update`, and `load_video` for the current playing item or for the configured fallback.
-- `snapshot()` — returns `QueueSnapshot { mode, current, queue, history }`. Type exists but no HTTP route exposes it (see §14).
-- `submit_url` / `submit_url_task` — un-trusted, rate-limited, validates via YouTube Data API. **Called by `booth_submit_public_task`** (the in-TUI booth modal submit). Requires `LATE_YOUTUBE_API_KEY`; when unset, `booth_submit_enabled()` returns false and the modal disables the submit row. Inserted rows carry `title`, `channel`, `duration_ms`, and `is_stream` from the Data API — so booth-queued items render their `m:ss` duration in the queue list immediately.
-- `booth_submit_public_task` — wraps `submit_url` for the booth modal: emits `AudioEvent::BoothSubmit{Queued,Failed}` (user-scoped banners) and shows "Disabled" if the API key is missing. **This is the user-facing submit path.**
-- `submit_trusted_url` / `submit_trusted_url_task` — used by `/audio` (staff). Bypasses rate limit but still validates via YouTube Data API. Normal videos require a server-side duration; live streams set `is_stream=true` and use the 1h cap.
-- `set_trusted_youtube_fallback` / `set_trusted_youtube_fallback_task` — used by `/audio fallback`. Also validates via YouTube Data API before upserting the singleton `media_sources` row.
-- `report_player_state` / `report_player_state_task` — `api.rs:329`, ingress for browser `player_state` reports.
-- `requeue_history_item` — inserts a fresh `media_queue_items` row from stored validated history metadata. Live queue votes always start at 0.
-- `delete_history_item` — requires centralized `Caps::DELETE_AUDIO_TRACK` via `Permissions::can_delete_audio_track(false)`.
-- `toggle_unskippable` / `toggle_unskippable_task` — staff-only path that flips `media_queue_items.unskippable` only while the item is still `queued`; `u` in Booth Queue mode triggers it.
+In `QUEUE.md`: the constants, the public API, startup, the state machine, Booth History, timers, `playback_duration`, `player_state` ingress, and the queue reconciliation contract.
 
 ### The live strip and thumbnails
 Every track playing or queued is a candidate for the live strip (`../live/CONTEXT.md`), stamped with `QueueItemView::queued_at` (the row's `created`): a track is news when somebody brings it, and stops being a candidate when it leaves the booth. `booth/live.rs` paints it: the thumbnail in the picture column, then the title, `channel · 3:45`, and `mat queued it · up next`. `o` tunes a viewer on another source in to YouTube, and opens the booth for one already there.
@@ -171,57 +147,9 @@ submits, and a history re-queue cannot pay different amounts or forget to pay.
   `state.rs::submitted_line` drops the chips clause entirely when nothing was
   minted.
 
-### Startup lifecycle
-1. `sweep_orphan_playing` (`svc.rs:425-438`) marks any `status='playing'` row older than `now - 1h` as `failed` with `error = "orphan playing row swept at startup"`.
-2. `resume_from_db` (`svc.rs:440-460`) reads the lone `playing` row (if any). If `started_at + duration` still in the future, broadcasts a fresh `LoadVideo` with the correct `offset_ms` and re-arms the playback timer. Otherwise marks it `played` and advances.
-3. Service is then driven purely by inbound chat submissions, browser player_state reports, and timer fires.
-
-### State machine
-DB statuses: `queued → playing → {played | skipped | failed}`.
-
-All transitions go through `svc.rs`:
-- `queued → playing`: `mark_playing` conditional `UPDATE … WHERE id=$1 AND status='queued'`. Before promoting, `advance_to_next_with_guard` first checks for an existing DB `playing` row and adopts it. If `mark_playing` races the singleton index (`idx_media_queue_single_playing`), the service treats that as a reconcile signal instead of surfacing a submit failure.
-- `playing → played`: `finish_item_due_to_timer` via `mark_played` (`WHERE status='playing'`). Client `ended` reports no longer call this path. If zero rows changed, memory was stale; reconcile from DB instead of returning with the old `current_item_id`.
-- `playing → failed`: reserved for server-side cleanup/sweeps. Client `player_state: error` reports are informational and do **not** fail or advance the shared queue.
-- `playing → skipped`: staff `/audio skip` and threshold skip use `mark_skipped` (`WHERE status='playing'`). A stale pod cannot mutate an already-played row to `skipped`; zero-row updates reconcile and ask the caller to retry.
-
-`advance_to_next_with_guard` is the *only* advancer. It adopts a DB current first, otherwise picks `MediaQueueItem::first_queued()`, tries to flip it, on success broadcasts `SourceChanged: youtube` + `LoadVideo` + `QueueUpdate`. If the queue is empty it tries `publish_youtube_fallback_with_guard`; if no fallback row exists, `schedule_fallback` arms the 10s debounce, after which `finish_fallback_debounce` flips `mode = Icecast` (and re-checks `current_item_id.is_none()` to avoid races).
-
-### Booth History
-- History is community-wide and unique by `(media_kind, external_id)`, currently YouTube-only.
-- A track is recorded when `advance_to_next_with_guard` successfully promotes a queued row to `playing`. This is the moment it "lands" in history.
-- If the same YouTube video plays again, history updates `last_played_at`, `play_count`, and metadata on the existing row rather than inserting a second one.
-- History is ordered by `last_played_at DESC`, so the track that just started playing is always the first row. Requeueing an old track only moves it to the top once it actually reaches Now Playing, not when it is queued.
-- History pruning sorts the same way; rows after rank 200 are deleted. History is therefore a rolling window of the last 200 distinct videos: a track nobody replays eventually falls off no matter how well liked it was.
-- Requeueing from history uses stored validated metadata to create a new `media_queue_items` row. The fresh queue item starts with score 0 and competes normally.
-- Queue deletion and History deletion share one moderation-policy permission: `Caps::DELETE_AUDIO_TRACK`. Queue deletion passes `is_owner=true` for the submitter, so users can still delete their own queued rows; History deletion always passes `false`.
-- The booth modal switches between `Queue` and `History` lists. Queue mode keeps `+/-/0`, `s`, `d`, and staff `u`; History mode has no voting keys and uses `/` to filter, Enter to requeue, and permission-gated `d` to delete a history row. Ctrl+Y (`^y` in the footer) copies the watch link of the track the focus points at: the playing track from the submit row, the selected row in Queue or History. It is checked before any focus or the History filter, because every printable key in the booth is already submit text, filter text, or an action on the selected row; room search's Ctrl+Y copy is the same idea. Copying only lives in the booth and the Stations modal: there is no global copy key.
-- Under the current track sits its watch link (`youtube::watch_url`, the same `https://www.youtube.com/watch?v=<id>` form the CLI's MPRIS publishes) in plain text, so a terminal whose OSC 52 copy never reaches the clipboard can still select it by hand. The fallback stream gets no row: the snapshot carries no video for it, and Ctrl+Y from the submit row then reports there is nothing to copy.
-- The History list compares each row's `video_id` to `QueueSnapshot.current.video_id`; the matching row renders with a play marker and amber emphasis so users can see which historical track is live now.
-
-### Timers
-- **Playback timer** (`schedule_playback_timer`): one `tokio::select!` task per playing item. Sleeps `duration - elapsed` then calls `finish_item_due_to_timer`. Also re-broadcasts `LoadVideo` for the current item every `PLAYBACK_HEARTBEAT_INTERVAL = 10s` from inside the same task — the safety-net heartbeat. Browsers ignore the heartbeat when they're already showing the right item; otherwise they force-swap.
-- **Fallback debounce**: one task armed when the queue drains. Cancelled by any new submission via `cancel_fallback`.
-- **Periodic reconcile**: every 60s the service compares memory to the DB singleton `playing` row. Reconcile is a full transition: cancel stale timers, clear skip-votes if the current changed, schedule the DB current's timer, and republish queue/load events. If memory says current but DB has none, it clears stale state and advances/fallbacks.
-- Timers are owned via `oneshot` cancel handles on `QueueState`; dropping the sender cancels the task.
-
-### `playback_duration` rules (`svc.rs:1197-1205`)
-- `is_stream = true` → always `STREAM_CAP` (1h).
-- Non-stream with known `duration_ms >= 30s` → `min(duration_ms, STREAM_CAP)` — **1h is a hard cap on every item, not a fallback.** A 2h video plays its first hour, server timer fires, queue advances.
-- Non-stream with missing or implausibly short duration is rejected at submit time. Legacy rows in that shape are marked `failed` before promotion/adoption, so old client-backfilled bad durations cannot shorten the timer.
-- Client `ended`, `error`, and `duration_ms` reports are not used for advancement or timer scheduling. The server timer advances at `playback_duration`, so a 2h video is capped at 1h and a known 3min video advances at its server-validated duration even if the embedded player reports noisy startup/teardown states.
-
-### `player_state` ingress
-Routed by report `state` field:
-- `ended` → report-only. It does **not** advance the queue and does not backfill duration. Queue advancement is owned by the server playback timer.
-- `error` → warn-only. Client/player errors are not trusted as global queue truth because one surface can fail while another surface plays the item correctly.
-- `playing` / `paused` / `buffering` → logged only. `autoplay_blocked = true` logs at `warn!`.
-- `unstarted` / `cued` → accepted but report-only. The YouTube IFrame emits them around `loadVideoById`; they must never fail, advance, or backfill duration.
-- Unknown future player states parse as `Unknown` and are ignored.
-
 ### Invariants
 1. **Singleton playing row.** Enforced both by the partial unique index `idx_media_queue_single_playing` and by conditional `mark_playing` updates. Two racing advancers cannot both succeed; losers reconcile to the DB current.
-2. **Server owns track *changes*, not playback positions.** Server picks which item is `playing` and broadcasts `LoadVideo` on changes + every 10s as a heartbeat. Each browser plays its own timeline from wherever YT happens to start. No more wall-clock-offset sync — slow networks no longer audibly skip mid-track.
+2. **Server owns track *changes*, not playback positions.** Server picks which item is `playing` and broadcasts `LoadVideo` on changes + every 10s as a heartbeat. Each browser plays its own timeline from wherever YT happens to start. There is no wall-clock-offset sync, so slow networks never audibly skip mid-track.
 3. **Force-switch on heartbeat.** A browser receiving `LoadVideo` for a different `item_id` than what it's currently playing MUST swap, regardless of pause/buffer/error state. Same-`item_id` heartbeat with the right `video_id` loaded → no-op (respect a manual pause).
 4. **`ended` is not trusted for queue advancement.** Browsers and the CLI webview can report `ended`, but the server treats it as diagnostics only. The playback timer is the only normal `playing → played` path, which keeps embedded-webview startup/teardown state churn from skipping tracks.
 5. **Mode is server-managed.** Browser/CLI never write `mode`; they only receive `SourceChanged`.
@@ -234,7 +162,7 @@ Routed by report `state` field:
 
 ## 5. WebSocket Protocol (multiplexed on `/api/ws/pair`)
 
-`api.rs` `handle_socket` (`api.rs:231-382`) drives three sources per connection with `tokio::select!`:
+`api.rs` `handle_socket` (`api.rs`) drives three sources per connection with `tokio::select!`:
 - inbound `socket.recv()` — client → server
 - `control_rx` — `PairControlMessage` from `PairedClientRegistry` (mute/volume/source/clipboard)
 - `audio_rx` — `AudioWsMessage` from `AudioService::subscribe_ws()`
@@ -251,16 +179,16 @@ YouTube item without entering the switching/playback path.
 - `now_playing_update { mounts: { "<mount>": Track } }` — full per-mount icecast now-playing snapshot, pushed by `AudioService::start_meta_forward_task` whenever any mount's track changes; also sent once in the connect catch-up burst.
 - `radio_meta_update { stations: { "<station>": { artist, title } } }` — full radio station metadata snapshot (`svc::pair_radio_tracks`: Nightride, any enabled polled station, and the house mounts, which are radio stations to the client; a house track with no artist tag carries an empty artist), pushed on change (deduped, since the radio-meta watch ticks on every SSE event); a station is absent while its feed is down. House mounts are in this map so CLIs that only read radio tracks from it show the house track in MPRIS. Also in the catch-up burst. CLIs and the webview helper ignore both events.
 
-### Server → client `PairControlMessage` (`paired_clients.rs:22-30`)
+### Server → client `PairControlMessage` (`paired_clients.rs`)
 - `toggle_mute`, `volume_up`, `volume_down`, `request_clipboard_image`.
 - `set_playback_source { source: "icecast" | "youtube" | "radio", stream_url?, station? }` — sent immediately on pair-WS connect, after persisted `v+x` source changes, and when CLI presence changes. It carries no surface-policy flags: the CLI plays direct streams, the webview helper plays YouTube.
 
-### Client → server `WsPayload` (`api.rs:39-68`)
+### Client → server `WsPayload` (`api.rs`)
 - `heartbeat`
-- `viz { position_ms, bands[16], rms }`: the paired CLI's spectrum of what it plays (its native Icecast/radio output, or on Linux the captured YouTube helper stream); drives the equalizer (§10, §18). Older CLIs send `bands[8]`, which `api.rs::bands_from_wire` stretches to 16.
+- `viz { position_ms, bands[16], rms }`: the paired CLI's spectrum of what it plays (its native Icecast/radio output, or on Linux the captured YouTube helper stream); drives the equalizer (`VIZ.md`, §18). Older CLIs send `bands[8]`, which `api.rs::bands_from_wire` stretches to 16.
 - `client_state { client_kind, ssh_mode, platform, capabilities, muted, volume_percent }` — older CLIs also send `icecast_output_available`, which the server now ignores: it only ever gated the browser Icecast takeover.
 - `clipboard_image { … }`, `clipboard_image_failed { … }`
-- `player_state(PlayerStateReport)` — `{ item_id, state, offset_ms?, duration_ms?, autoplay_blocked, error? }` (`svc.rs:126-138`)
+- `player_state(PlayerStateReport)` — `{ item_id, state, offset_ms?, duration_ms?, autoplay_blocked, error? }` (`svc.rs`)
 
 There is **one global broadcast**, no room scoping. Every paired client on every token receives the same `load_video` / `source_changed` / `queue_update`.
 
@@ -268,7 +196,7 @@ There is **one global broadcast**, no room scoping. Every paired client on every
 
 ## 6. Source selection (single audible surface)
 
-Browser pairing is gone, so there is nothing left to arbitrate. The user's
+Only the CLI pairs, so there is nothing to arbitrate. The user's
 persisted `audio_source` alone decides who is audible, and `SetPlaybackSource`
 carries no surface-policy flags:
 
@@ -284,17 +212,14 @@ read-only follower of the same global state and pairs with nothing.
 Because the message depends only on the persisted source, **who else is paired
 cannot change what a client should be playing**. `client_state` therefore does
 not rebroadcast a source: the only sends are the pair-WS connect replay, a
-`v+x` source change, and unregistration. The old CLI-presence /
-`icecast_output_available` rebroadcast existed to flip the browser's Icecast
-takeover and was removed with it.
+`v+x` source change, and unregistration.
 
 Mechanics:
 - `PairControlMessage::SetPlaybackSource { source, stream_url, station }` is
   sent on pair-WS connect, on persisted `v+x` source changes, and when CLI
   presence changes for a token.
-- CLI stores `source_is_icecast` as the native-output gate; despite the legacy
-  name it is true for direct stream sources (`radio`, and the retired
-  `icecast`) and false for `youtube`. Output emits silence when the gate is false without touching the
+- CLI stores `source_is_icecast` as the native-output gate; despite the
+  name it is true for direct stream sources (`radio`, and `icecast`) and false for `youtube`. Output emits silence when the gate is false without touching the
   user `muted` flag.
 - CLI retargets the decoder thread on source changes. `icecast` restores the
   configured `LATE_AUDIO_BASE_URL`; `radio` uses the server-sent station URL
@@ -305,10 +230,9 @@ Mechanics:
   buffer to empty, and lets the decoder thread re-enable output only after it
   has opened the new URL and observed the output-flush acknowledgement. This
   prevents a brief old-stream bleed when moving from YouTube to Radio.
-- The native CLI spawns the webview helper whenever `source == Youtube`. There
-  is no longer a case where something else takes YouTube away from it, so if
-  the helper fails, YouTube is simply unavailable in the CLI and the user goes
-  to `/listen` (see §17).
+- The native CLI spawns the webview helper whenever `source == Youtube`. Nothing
+  else takes YouTube away from it, so if the helper fails, YouTube is simply unavailable in the CLI and the user goes
+  to `/listen` (see `late-webview/CONTEXT.md`).
 
 ### Skip-vote eligibility — YouTube source preference
 
@@ -317,7 +241,7 @@ Skip-vote uses the persisted preference cached on active users. If an active use
 Helpers used by the skip-vote path:
 - `User::audio_source(user_id)` — gates the caller: only users whose saved preference is `Youtube` can vote.
 - `ActiveUsers[*].audio_source` — cached from the user's settings on login and updated after `v+x`; feeds both the sidebar tags and skip threshold.
-- `PairedClientRegistry::set_audio_source(user_id, source)` — only mirrors the new preference to connected clients via `SetPlaybackSource`; it no longer defines listener counts.
+- `PairedClientRegistry::set_audio_source(user_id, source)` — only mirrors the new preference to connected clients via `SetPlaybackSource`; it does not define listener counts.
 
 Vote-strip on flip-away: when the DB value transitions from `Youtube` to `Icecast`, `AudioService::persist_audio_source` removes the user from `state.skip_votes` and runs `reevaluate_skip_threshold` (which may fire a skip if the threshold dropped to meet remaining votes).
 
@@ -384,7 +308,7 @@ Goal: the CLI tolerates everything new the audio domain added, plays direct stre
 
 ## 9. Public listen page
 
-File: `late-web/src/pages/listen/`. There is no browser pairing anymore. The
+File: `late-web/src/pages/listen/`. Browsers do not pair. The
 listen page is an anonymous, token-less follower of the same global state the
 TUI sees, and it holds no per-user server state at all.
 
@@ -406,98 +330,14 @@ TUI sees, and it holds no per-user server state at all.
   catalogue rows) and they are dropped from the response, rather than
   resolving to the Chillsynth default the way
   `RadioStation::from_settings_str` would.
-- **One audible surface.** Picking any source on the page stops the others.
-  Icecast mounts play through late-web's `/stream/{mount}` proxy, guest
-  stations from the `stream_url` in the response, YouTube through the official
-  IFrame player. The IFrame API script is only fetched once someone actually
-  picks YouTube.
-- **Source order is a product rule.** Guest stations first (one section per
-  provider, built by the page from each station's `provider` and
-  `provider_url`), then the community queue, then house radio last. Our own playlist is the fallback option, not
-  the headline. `listen_test.rs` asserts the ordering.
-- **Joining mid-track.** The page seeks in using `started_at_ms` rather than
-  restarting the current song. That is the same one-shot-seek idea the webview
-  helper uses, and it does not reintroduce drift correction: after the initial
-  seek each listener plays its own timeline.
-- **Attribution is load-bearing, not decoration.** Nightride's approval is
-  conditioned on visible artist credit, and the house tracks are CC-BY. The
-  page shows `artist - title` for both, a `streamed directly from` link to
-  each guest provider, a link to `MUSIC.md`, and `queued by <user>` for YouTube.
+- **The page's own rules** (one audible surface, source order, joining
+  mid-track, attribution) are `late-web/CONTEXT.md`, Listen page.
 
 ---
 
 ## 10. Visualizer (`viz.rs`)
 
-The equalizer draws what the paired CLI is actually playing whenever the CLI
-can hear it. The CLI decodes Icecast and radio itself, runs an FFT over its
-audible output (`late-cli/src/audio/analyzer.rs`), and sends 16 log-spaced
-bands plus RMS as pair-WS `viz` frames at ~15 Hz. `api.rs` routes them to the
-session as `SessionMessage::Viz`, and `tick()` folds each into
-`AudioState`'s `Spectrum` (`apply_viz_frame`). Frames never mark the app
-dirty: the eq already repaints on the anim_half edge while visible and picks
-up whatever landed since.
-
-The pair socket takes 16 bands (`late_core::audio::VIZ_BANDS`) or the 8 that
-CLIs from before the 16-band analyzer send; `api.rs::bands_from_wire` stretches
-8 to 16 at the parse, so everything past the socket handles one shape. An old
-server rejects a 16-band frame, so the server deploys before the CLI.
-`late_ssh_pair_viz_frames_total{bands="8"|"16"}` counts accepted frames by
-wire shape, so it shows how many paired CLIs still send 8.
-
-`Spectrum` is a pure state machine in `viz.rs`. Each frame is metered against
-a running level first (`Level`): a mean of the bands and their typical swing
-around it, settling over `LEVEL_SETTLE_SECS` (3s) of wall time. A band at the
-mean lands at `LEVEL_CENTER` (0.35) and each swing away moves it
-`LEVEL_SPREAD` (0.2), with the swing floored at `LEVEL_MIN_SWING` so a
-near-steady signal is not blown up into noise. That is what keeps the eq from
-reading flat: the CLI's dB meter holds steady music in a narrow band high up,
-and the level spreads it low with room above, lets a hit jump before the
-level catches up, keeps the spectrum's shape (a band above the mean still
-stands above one below), and meters a loud track and a quiet one alike once
-settled. The first frame of a run lands as-is, later ones ease toward the new
-bands (fast attack, slower release), and
-each band keeps a peak cap: a bar at or above the cap strikes it, the cap
-hangs there for `CAP_HOLD_SECS` (0.5s), then falls under `CAP_GRAVITY`
-(slow, then faster) until the bar catches it. Caps age on the frame's
-`Instant`, not on frame count, so the fall keeps its speed at any client
-cadence. The ambient band draws the same caps statelessly
-(`ambient_cap_unit`: the highest recent strike still falling, read off the
-wall tick). The renderer draws the air between a bar and its cap as the
-bar's ghost, a faint amber (`theme::EQ_GHOST`) that stays up where the bar
-struck and sinks back onto it; the bar's head cell carries the ghost behind
-its glyph only when the peak reaches past that cell (one cell holds one
-background, so a peak ending inside it would read a whole cell high, a third
-of the 3-row sidebar strip), and gap columns never do. Band values are clamped into 0..=1 at the boundary, since they come
-off the network. A spectrum not refreshed for 750ms is dropped
-(`expire_spectrum`, every tick), which is how every "no audio data" case falls
-back: the client muted, switched to YouTube, lost its socket, or is a CLI
-without the analyzer. The CLI sends nothing while silent, so no case needs an
-explicit off message.
-
-`viz::eq_state` is the single reading every eq surface (sidebar music stage,
-Zen music and visualizer tiles) draws. The bars and caps are one renderer,
-`viz::dance_lines`, at any height: the music stage and music tile at three
-rows, the visualizer tile at its full height:
-
-| `EqState` | When | Renders |
-|---|---|---|
-| `Live(LiveBands)` | paired, unmuted, fresh spectrum | the spectrum, bands interpolated across the bars, with peak caps |
-| `Ambient` | paired, unmuted, no fresh spectrum | the synthesized band, stateless from the wall tick |
-| `Muted` | paired and muted | a flat line, the meter at rest |
-| `Unpaired` | nothing paired at all | `no audio here yet` / `press ? to listen` |
-
-`Unpaired` is the raw-`ssh` case: the session has no audio surface, so a
-dancing band would be claiming playback that cannot exist. The strip points
-at the `?` guide instead, which is where both the CLI install and
-`late.sh/listen` live. The sibling volume row already rendered `—` here.
-
-YouTube plays inside a cross-origin iframe in the `late-webview` helper, where
-the page cannot read the samples. On Linux the CLI records the helper's own
-PipeWire stream instead and sends its spectrum as ordinary `viz` frames (§18),
-so nothing here tells YouTube apart from Icecast. Where that capture cannot
-run (Windows, macOS, a host without `pw-dump`/`pw-record`) YouTube stays
-`Ambient`. The pet's `music_playing` reads pairing and mute only, so `Live`
-and `Ambient` both count as music.
+In `VIZ.md`: the live CLI spectrum, the ambient fallback, smoothing, and each source's band origin. YouTube bands on Linux come from the helper capture (`late-webview/CONTEXT.md`, "YouTube spectrum").
 
 ---
 
@@ -509,121 +349,14 @@ and `Ambient` both count as music.
 - Independent of `AudioService` — does not subscribe to its channels.
 - Consumers:
   - `GET /api/now-playing?mount={chill|classical}` (`api.rs`) — `mount` is optional and defaults to `chill`, which keeps late-web's existing param-less fetch working unchanged. Response shape is unchanged.
-  - The sidebar music stage (§12), when the user's selected station is a house mount: `stations::station_now_playing` looks the mount up in the map and `sidebar.rs` receives the preformatted `radio_now_playing` text. When the mount has no entry yet, the track row shows the station label.
+  - The sidebar music stage (`STAGE.md`), when the user's selected station is a house mount: `stations::station_now_playing` looks the mount up in the map and `sidebar.rs` receives the preformatted `radio_now_playing` text. When the mount has no entry yet, the track row shows the station label.
   - The pair WS via `AudioService::start_meta_forward_task` (§5): per-mount snapshots are broadcast as `now_playing_update` whenever the watch changes, for paired clients.
 
 ---
 
 ## 12. Sidebar music-stage widget (`common/sidebar.rs`)
 
-Renders the audio domain into the right rail as a **fixed-height accordion**: a 3-row eq strip, then a dock that is always exactly `MUSIC_DOCK_HEIGHT = 12` rows (`MUSIC_STAGE_HEIGHT = 15` with the strip). The two sources sit in the fixed order radio → youtube (radio leads because it is the default source), and each source's rows sit directly under its own title bar. `v+x` toggles the source. Entry point: `draw_music_stage` (props bundled in `MusicStageProps`); the line builder is `music_stage_lines(width, props)`.
-
-**Product rules (user requirements):**
-1. **Both title bars always show their listener count.** That is the "what's everyone tuned to" board.
-2. **The YouTube track is always visible, the radio track only while on radio.** A radio listener wants to know whether the booth is playing something worth switching for; a YouTube listener does not care what the radio is playing, so radio collapses to its title bar there.
-3. **The stage height is constant.** Both sources fill exactly 12 dock rows, so the panels below never shift.
-4. **The stage never claims audio the session cannot produce.** With no client paired, the eq strip shows the guide pointer rather than dancing bars, matching the volume row's `—` (§10).
-
-### Layout (dock rows 0-11)
-
-| Row | On radio | On youtube |
-|-----|----------|------------|
-| 0   | Volume bar: `vol  ▰▰▰▰▰▱▱▱▱▱  60%` (`muted` when muted, `—` when no client is paired) | same |
-| 1   | `radio` title bar + count | `radio` title bar + count |
-| 2   | current station's track | `youtube` title bar + count |
-| 3   | heading: `darksynth · nightride` | youtube track |
-| 4-6 | pinned slot rows `v1`..`v3` | progress, skip meter, `next ⌄` |
-| 7-8 | pinned slot rows `v4`..`v5` | queue rows 1-2 |
-| 9   | `youtube` title bar + count | queue row 3 |
-| 10  | youtube track (dim) | queue row 4 |
-| 11  | footer `v+r tune  v+x source` | footer `v+v queue  v+x source` |
-
-Track rows (`dock_track_line`): the active source's track renders `TEXT_BRIGHT` bold, the youtube peek on radio `TEXT_DIM`. Track text per source:
-- **youtube**: `youtube_track_text(queue)`: `Channel - Title` for the current item (falls back to `by <submitter> - Title`, then bare title); `fallback stream` when nothing is submitted (the fallback is the steady state, never "queue empty").
-- **radio**: live `Artist - Title` (or a bare title) for the selected station from the `RadioMetaService` map (`radio_now_playing`); falls back to the station label while metadata is absent.
-
-Detail rows:
-- **YouTube** (`youtube_detail_lines`, padded to `MUSIC_YOUTUBE_DETAIL_HEIGHT = 7`): progress (`progress_line` when duration is known and not a stream, `elapsed_line` otherwise), skip meter or blank, `next ⌄` header, then up to `MUSIC_QUEUE_HEIGHT = 4` queue rows or `· fallback next`. With nothing submitted: `YouTube · 24/7` + `queue with v+v` hint.
-- **Radio heading** (`station_heading_line`): the current station's label in amber, then ` · ` and its provider's short name (`Provider::label()`) as the credit, both italic. On the 21-column rail the provider is cut with `…` before the station label ever is (`horrorsynth · nightr…`). Nightride's condition is artist credit, which the track row carries; the heading keeps the provider named as well.
-- **Radio** (`radio_detail_lines`, exactly `RADIO_SLOTS = 5`): one selector row per pinned slot (`v1`..`v5`; an empty slot reads `pin via v+r`). A station that is not pinned lights no slot row; the heading above still names it.
-
-Selector rows (`selector_row_line`): `●`/`○` state glyph, station label, right-aligned `v1`..`v5` key hint in `AMBER_DIM` bold. Selected: glyph `AMBER_GLOW`, name `TEXT`; unselected: glyph `BORDER_DIM`, name `TEXT_DIM`.
-
-### Active-source rule
-
-The expanded source = `paired_source` (`AudioSource::{Radio, Youtube}`). Pure preference-based. Does **not** gate on whether a client is paired. The saved preference (loaded from `users.settings.audio_source` during SSH bootstrap, mirrored on `App`) is the source of truth from the first frame; pairing completing does not change the visual state. Don't add a pairing guard back: waiting for the client read as a startup glitch.
-
-The volume row stays honest about pairing (`vol  —` when nothing paired), so users aren't misled about whether their preference is currently audible.
-
-The Stations modal's Ctrl+Y (`^y` in its footer) copies the highlighted station's track through the OSC 52 clipboard path: `Artist - Title` (or bare title), the same `App::station_now_playing` text its row shows. Radio has no per-track link, so text is all there is. A station with no metadata shows a banner and leaves the clipboard untouched.
-
-### Title-bar source tags
-
-Both title bars show the active users' saved source-preference count in the tag slot (`radio  ────  12` / `youtube  ────  5`). Active vs inactive is communicated by color/weight (amber bold vs italic faint), not by case (label is always lowercase) and not by tag presence. The counts come from `ActiveUsers[*].audio_source` via `AudioService::{youtube,radio}_source_count()` and ignore whether those users are currently paired/listening.
-
-### Fallback-not-empty semantics
-
-The widget treats "no submitted track" and "fallback playing" as the same state. When `queue.current.is_none()`:
-- Title tag still shows the YouTube source count (no separate "loop"/"fallback" badge anymore — the track row carries that information).
-- The track row renders `fallback stream`; the detail rows render `YouTube · 24/7` plus a `queue with v+v` hint.
-- When a track is playing but queue is otherwise empty, the trailing "next" row says `· fallback next`, not "queue ends".
-
-No copy anywhere reads "queue empty". The user has pushed back on that wording multiple times; in their product framing the fallback is the steady state, not a placeholder.
-
-### Data sources
-
-- `queue_snapshot: &QueueSnapshot`: from the `AudioState::queue_snapshot()` watch channel.
-- Source/station selection lives in `users.settings` (`audio_source`, `radio_station`, `radio_slots`), mirrored on `App` and threaded through `DrawContext` into `SidebarProps` as `paired_source` / `selected_radio_station` / `radio_slots`.
-- `paired_client: Option<&ClientAudioState>`: for `volume_percent` and `muted` (vol row only).
-- `youtube_source_count` / `radio_source_count`: counts from active users' cached `audio_source`. Pair presence is ignored; offline users are excluded.
-- `radio_now_playing: Option<&str>`: preformatted track text for the selected station from the `RadioMetaService` map or the house now-playing map, looked up in `app/render.rs` via `stations::station_now_playing`.
-
-### Internal helpers (all in `sidebar.rs`)
-
-- `music_stage_lines(width, props)`: the whole-dock line builder; unit tests assert directly against its output.
-- `stage_title_line(area_w, label, tag, active)`: shared title-bar renderer. Label is always lowercase. Active → amber bold label + amber-dim tag; inactive → italic faint label + tag.
-- `dock_track_line(width, track, active, tick)`: a track row (bright bold when active, dim when not), marquee-scrolled when longer than the rail.
-- `labeled_rule_line(width, label)`: the rule naming the current station.
-- `selector_row_line(width, name, key, selected)`: slot row with right-aligned key hint.
-- `youtube_track_text(queue)`: track-row text for youtube.
-- `volume_row_line`: the vol bar.
-- `keybind_row_line(width, &[(key, label), ...])`: adaptive hint renderer; drops trailing groups when the rail is too narrow rather than mid-word truncating.
-- `youtube_detail_lines` / `radio_detail_lines`: the per-source detail rows.
-- `skip_meter_spans(progress)`: includes a trailing `v+s` keybind hint inline.
-- `queue_next_line(idx, item, width, tick)`: number flush at column 0 (no leading indent) to maximize title width.
-- `sidebar_marquee_scrolling`: tells the render gate whether any marquee row is animating; it must mirror which track rows the current source renders.
-
-Tests (`sidebar_test.rs`): `music_stage_height_is_constant`, `on_radio_the_stage_reads_radio_then_its_stations_then_the_youtube_peek`, `on_youtube_radio_collapses_to_its_title_bar`, `both_title_bars_keep_their_listener_counts`, `an_off_slot_station_lights_no_slot_row_and_credits_its_own_provider`, `the_radio_track_row_prefers_live_metadata`.
-
-### Cross-cuts
-
-- Icecast stream rows are static selection rows; there is no genre-vote row.
-- `v+1`..`v+3` tune to the station pinned in that slot while Radio is the source (`input.rs::handle_music_suffix`); on YouTube the digit is swallowed. The choice persists to `users.settings.radio_station` and confirms with a `Station: <label>` banner.
-- `va`/`vb`/`vc` are reserved for active Home poll votes before music dispatch; numeric selectors must stay available even when a poll is visible.
-- v+x dispatch goes through `app/state.rs::toggle_paired_playback_source` → persists `paired_browser_source` via `AudioService::persist_audio_source`, which updates every paired registry entry for the user and broadcasts `PairControlMessage::SetPlaybackSource { source, stream_url, station }`. The preference is meaningful with only a CLI paired: Icecast mode plays the configured late.sh stream, YouTube mode silences native direct-stream output and starts the embedded webview helper on capable CLI builds, and Radio mode retargets direct-stream playback to the selected Nightride station.
-
-### Nightride direct-radio source
-
-Nightride FM approved inclusion as an optional direct-client source, with the main condition that late.sh show attribution for the artists playing when possible. The `radio` source is selected by `v+x`; within it, `v+1`..`v+5` pick between Chillsynth, Nightride, Datawave, Spacesynth, and Ambient (persisted as `users.settings.radio_station`; Ambient persists as `rektify`, matching its `/meta` station key even though its label is `ambient`). Users are never defaulted onto Nightride — icecast/chill stays the default source.
-
-Implementation constraints:
-- Do not route Nightride audio through Icecast or Liquidsoap. `radio_meta` fetches METADATA only; never proxy/restream Nightride audio.
-- Add a third source rather than overloading `Icecast`: clients connect directly to the Nightride stream.
-- The CLI decoder supports absolute stream URLs via `resolve_stream_url`; Icecast bases still get `/stream` appended.
-- Browser playback uses the existing `<audio>` element for the direct station URL, subject to browser codec support.
-- Sidebar attribution is done: the radio detail area keeps the `nightride.fm · live` credit row, and the radio dock row shows live `Artist - Title` (§12).
-
-Metadata: **implemented** as `radio_meta/svc.rs::RadioMetaService` — a background audio-domain service (never the render loop):
-- One `tokio::spawn` SSE loop per process, started in `main.rs` next to the now-playing poller, shut down via the shared `CancellationToken`.
-- Connects to `https://nightride.fm/meta` with `accept: text/event-stream`. Each event is one `data:` line containing a JSON array of station records (`station`, `artist`, `title`, plus fields we ignore: `album`, `comment`, sometimes `dj`). Stations observed include `chillsynth`, `nightride`, `datawave`, `spacesynth`, `rektify` (surfaced as the `ambient` station), `darksynth`, `horrorsynth`, and `ebsm`.
-- `parse_meta_line` skips records with an empty station/artist/title; valid records merge into the `watch<HashMap<String, ArtistTitle>>` via `send_modify` (merge, not replace, so a partial event doesn't blank other stations).
-- Reconnect with backoff: 1s doubling to 60s, reset after a received event. On disconnect the Nightride keys are cleared (`clear_nightride`, which keeps polled stations) so the UI falls back to station display names instead of showing stale tracks.
-- Polled providers (`radio_meta/polled.rs::PolledFeed`): Plaza (`https://api.plaza.one/status`, `song.artist`/`song.title`), Code Radio (AzuraCast `/api/nowplaying/coderadio`, `now_playing.song.artist`/`title`), Radio Paradise, one feed per channel (`https://api.radioparadise.com/api/now_playing?chan=N`, `artist`/`title`, a null `title` between tracks is `None` like FIP's programme blurb below; Main 0, Mellow 1, Rock 2, Globe 3, Beyond 5, KFAT 945; Serenity, 42, is not carried because it streams AAC only and the CLI decodes MP3 only) and FIP Jazz (`https://api.radiofrance.fr/livemeta/live/65/webrf_webradio_player`, `now.secondLine` as artist and `now.firstLine` as title; a `now` with a null `songUuid` is the programme blurb between songs: `parse` returns `None`, the key is removed, the poll counts as `outcome="no_track"` and the 15s pace is kept). Radio Swiss Jazz and Classic use the endpoint their sites poll (`https://api.radioswissjazz.ch/api/v1/rsj/en/current`, `https://api.radioswissclassic.ch/api/v1/rsc/en/current`; `channel.playingnow.current.metadata.artist`/`title`, where Classic's `artist` is the composer). `RadioMetaService::start_task` starts one `run_poll_loop` per `PolledFeed::ALL` entry; each fetches every 15s and writes the track under the feed's catalogue key; a track needs a title but may have an empty artist (shown as the bare title); a failed poll removes only that key and doubles the delay up to 60s. A loop does not start while its catalogue row is `enabled: false`, so a disabled station sends its provider nothing. Each poll counts into `late_ssh_radio_meta_polls_total{feed, outcome}` (`metrics::record_radio_meta_poll`).
-- Consumers: `app/render.rs` formats `Artist - Title` for the user's selected station and threads it to the sidebar as `radio_now_playing` (§12); the pair WS broadcasts the map, with the house mounts merged in (`svc::pair_radio_tracks`), as `radio_meta_update` via `AudioService::start_meta_forward_task` (§5, consumed by the CLI's MPRIS publisher); and `GET /api/radio-meta` (`api.rs`) exposes it over HTTP for non-paired consumers. A missing/absent entry falls back to the station display name.
-
-Stream URL notes:
-- We use the `/<station>.mp3` URLs directly. The site advertises `.m4a` URLs, but those are a 302 to `.mp3` (observed 2026-06-10, re-verified 2026-06-11), and the CLI decoder only aligns MP3 streams; pointing at `.mp3` removes the dependency on that redirect.
-- The server includes `Access-Control-Allow-Origin: *`, so browser direct playback should be viable.
+In `STAGE.md`: the fixed-height accordion, the active-source rule, title-bar source tags, fallback-not-empty semantics, data sources and helpers. The station table and the onboarding checklist for a new station are in `STATIONS.md`.
 
 ---
 
@@ -646,7 +379,7 @@ Stream URL notes:
 ### `media_history_items` (migrations `073`, `122`)
 - `media_history_items` stores community Booth History rows, unique by `(media_kind, external_id)`.
 - Columns mirror validated queue metadata (`title`, `channel`, `duration_ms`, `is_stream`) plus `first_played_at`, `last_played_at`, `play_count`, and nullable `last_submitter_id`.
-- `media_history_votes` was dropped by migration `122`. History has no votes; it is a pure recency list.
+- History has no votes; it is a pure recency list.
 - History is listed and pruned to `HISTORY_LIMIT = 200` rows by `last_played_at` descending, then `created` descending. `idx_media_history_last_played` covers that sort.
 
 Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
@@ -665,7 +398,7 @@ Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
 - **No public submit route.** Reading the queue is public via `/api/listen`; submitting still requires the SSH booth modal or the staff `/audio` command.
 - **Region locks / embedding disabled** may still be partly regional. `/audio` and booth both use the YouTube Data API now, so public/non-embeddable/upcoming/duration failures are caught at submit time. A client may still report `error`, but the server treats that as diagnostics only.
 - **`LATE_YOUTUBE_API_KEY` is optional in the dev profile and required in prod** (`config.rs` profiles), but YouTube submissions and fallback updates require it at runtime. Without it, booth submit is disabled and staff `/audio` fails validation.
-- **Queue state-drift / singleton-violation stuck state.** Took down prod once already (2026-05-19). The class of bug is non-atomic two-write transitions (DB row status + in-memory `state.current_item_id`); any divergence is unrecoverable without a pod restart. The reconciliation contract in §19 is the active fix — any new code that flips `media_queue_items.status` or mutates `current_item_id` must route through it.
+- **Queue state-drift / singleton-violation stuck state** (`infra/RUNBOOK.md` incident log). The class of bug is non-atomic two-write transitions (DB row status + in-memory `state.current_item_id`); outside the reconciliation contract (`QUEUE.md`) a divergence needs a pod restart to clear. Any new code that flips `media_queue_items.status` or mutates `current_item_id` must route through that contract.
 
 ---
 
@@ -689,7 +422,7 @@ Open work that's been deliberately punted past v1. Each line is a "we know it's 
 
 - **Public `POST /api/queue/submit` HTTP route.** Booth submit goes through the in-process service. Revive when there's a non-SSH submitter (web form, third-party). YouTube Data API validation path is already in code (un-trusted route in `AudioService::submit_url_task`).
 - **Expanded queue management outside Booth.** The sidebar music stage already shows current/fallback, skip progress, and up to four next YouTube items; richer queue actions remain Booth-only.
-- **Heartbeat cadence tuning.** 10s `LoadVideo` re-broadcast was carried over from the old `PLAYBACK_SYNC_INTERVAL`. Could be slower (30s) once we have confidence stuck browsers don't accumulate.
+- **Heartbeat cadence tuning.** The 10s `LoadVideo` re-broadcast has never been tuned against real drift. Could be slower (30s) once we have confidence stuck browsers don't accumulate.
 - **Region-lock partial failure UX.** Data API validation catches public/embeddable metadata but not every playback-region failure. Client errors are warn-only today because one surface can fail while another succeeds.
 - **Better admin feedback** when DB insert fails after local URL validation succeeds.
 - **Weighted votes by role** (admin/mod ≠ user) — currently 1 user = 1 vote.
@@ -699,247 +432,29 @@ Open work that's been deliberately punted past v1. Each line is a "we know it's 
 
 ## 17. CLI Embedded Webview for YouTube
 
-**Status: v1 wired into the normal `late-cli` build.** Goal: legal YouTube playback inside the `late` CLI without shelling out to mpv/yt-dlp/etc. The CLI hosts the official YouTube IFrame Player inside an embedded system webview; the player fetches and decodes audio identically to the `/listen` page (§9). late.sh still ships only `video_id` over the pair WS.
+The helper that plays YouTube for the paired CLI, its lifecycle, mute/volume, troubleshooting, and the Linux spectrum capture: `late-webview/CONTEXT.md` (repo root).
 
-### Process model
+## 18. YouTube spectrum
 
-- Native `late` remains the always-on SSH/audio control process.
-- Native `late` opens the normal pair WS as `client_kind = "cli"`.
-- Native `late` advertises `capabilities: ["clipboard_image", "youtube"]` on desktop platforms.
-- `set_playback_source: youtube` spawns a helper child (token on stdin). On Linux the helper is the standalone `late-webview` binary (resolved via `LATE_WEBVIEW_BIN`, then a sibling of the `late` executable, then `$PATH`); on Windows/macOS it is `late webview-pair`, the same binary re-executed with the webview compiled in.
-- The webview code lives in the `late-webview` crate. On Linux `late` must NOT link WebKitGTK/GTK — the whole point of the split is that a host without the webview libraries can still run the CLI. Missing helper binary or missing WebKitGTK/GStreamer libraries surface as helper start failures and land in the crash-loop guard below; the CLI session, radio, and icecast keep working.
-- Nothing displaces the helper anymore. If the embedded webview stack fails on a machine, YouTube is unavailable in that CLI and the user listens at `/listen` instead; there is no automatic handoff.
-- `set_playback_source: icecast` kills the helper and resumes native Icecast.
-- The helper opens its own pair WS and reports `client_kind = "webview"`.
-- The helper's pair WS reconnects on drops (2s delay, give up after 10 consecutive failures, counter reset once a connection has lived 60s) instead of exiting the process. Helper exits therefore mean a real crash or a persistent server outage, not a routine redeploy/network blip, and the window position plus mute/volume survive reconnects.
-- The parent also runs a 1s heartbeat watchdog (`WebviewPlaybackController::maintain_helper`): while the source is YouTube it reaps and respawns a dead helper, honoring the crash-loop backoff below. Do not rely on `set_playback_source` replays for respawn — the server can miss the helper's disconnect entirely on a half-open TCP drop and then never replays.
-
-This lazy lifecycle is intentional. A normal CLI run does not open a webview. A webview window exists only while the user's persisted playback source is YouTube, avoiding tiling-window-manager noise for Icecast and Radio users.
-
-### Source semantics
-
-`set_playback_source` is the user's per-user preference and is the only signal that starts/stops the helper. `source_changed` is global queue/server mode and must not spawn the helper by itself. A user pinned to Icecast can still receive `source_changed: youtube` because the shared queue/fallback is globally active.
-
-### Webview backend
-
-The `late-webview` crate uses `wry` + `tao` (a library embedded into `late` on Windows/macOS, a standalone binary on Linux):
-
-- Linux: WebKitGTK 4.1 dev/runtime packages plus GStreamer playback plugins. On Arch/EndeavourOS, `gst-plugins-good` is required for `autoaudiosink`; without it WebKit logs `GStreamer element autoaudiosink not found` and the YouTube iframe can remain black/unstarted even though pair/load events succeeded. `gst-libav` is also recommended for codec coverage.
-- macOS: WKWebView.
-- Windows: WebView2.
-
-The helper serves `late-webview/src/page.html` from a loopback-only ephemeral HTTP listener and loads it as `http://localhost:<port>/` in the webview. Do not switch this back to `WebViewBuilder::with_html`: Wry's HTML string path gives the page a null origin, and YouTube can reject the iframe with player error 153. Do not expose the page URL as `http://127.0.0.1:<port>/` either: a real incident with `r6L-GUOAhGo` showed YouTube IFrame error 150 / "Video unavailable / Watch on YouTube" from the CLI webview while the same controlled helper worked after changing the page URL to `localhost`. The server also sends `Referrer-Policy: strict-origin-when-cross-origin`, the page declares the same policy in a `<meta name="referrer">`, and the page passes `window.location.origin` into the IFrame Player `origin` parameter. The page posts `player_state` back through wry IPC, and Rust relays those events to `/api/ws/pair` while pushing `load_video` / `source_changed` into JS via `evaluate_script`. The helper window is 200x200, gives the iframe the full viewport, disables visible YouTube controls, and does not draw any app overlay on top of the player. The helper suppresses transient `unstarted`/`cued` reports and ignores `ended` until the current item has first reached `playing`, because the IFrame can emit startup/teardown states during rapid loads. Even a valid `ended` report does not advance the queue; the server timer does.
-
-The helper owns its own mute/volume state, starting at the same 30% default as native CLI Icecast. It registers as a browser with `ssh_mode = "webview"`, so pair-WS `toggle_mute`, `volume_up`, and `volume_down` controls must be applied inside `late-webview/src/pair.rs` and forwarded into `page.html`; changing only the native CLI Icecast atom is not enough because YouTube audio is emitted by WebKit/GStreamer.
-
-Helper mute is session-sticky across respawns and reconnects. At spawn the parent CLI passes its current mute/volume (its atomics track the same broadcast controls) via `LATE_WEBVIEW_INITIAL_MUTED` / `LATE_WEBVIEW_INITIAL_VOLUME`; the helper seeds its audio settings from them and pushes them into the page on the page's `ready` IPC event, before the first `load_video` plays. Server-side alignment is `api::align_paired_audio`; see below.
-
-### Mute and volume: one source of truth, stored per device
-
-`user_ssh_keys.settings` holds this device's `audio_muted` + `audio_volume_percent` (`late-core/src/models/user_ssh_key.rs`, `KeyAudio`), and that row **is** the mute and volume. Both live on the key rather than the account because they belong to the machine with the speakers: muting a laptop must not silence the desktop. Same store and same "account default, per-device override" shape as the home rails. There is deliberately no second control anywhere: the old `Start app with music muted` tweak row is gone, and `users.settings.start_with_music_muted` survives only as a **read-time seed** for a device that has never reported audio, so nobody lost the mute they had configured before this existed. Once a device reports once, that account value is never read again.
-
-The write path is one place: `api.rs`'s `client_state` handler persists what a paired client reports, with `api::PairAudioFlow` (pure, tested in `api_internal_test.rs`) deciding what each report means. The CLI re-sends `client_state` after applying any control (`late-cli/src/ws.rs`, `should_send_state`), so `m`, `+`/`-`, and a media key all land in the same write with no per-keybind plumbing and no special cases. Three classes of report are never persisted: anything from the webview helper (its volume-up clears mute while the CLI's does not, and the CLI is the surface of record, so a helper report must not overwrite it; `ClientKind::Unknown` is an older CLI and persists like one), reports *before* the alignment (the client is still on its own boot defaults, which is not intent), and the reports *echoing* the alignment itself (the client re-reports once per control applied; persisting those would write a transiently wrong value for a restore that changed nothing). `PairedClientRegistry::claim_audio_write` gates the rest, so the CLI's periodic heartbeats do not rewrite an unchanged row and a failed write retries on the next report; the DB write is awaited on the socket task so a token's writes land in report order.
-
-The connect-time read (`api::read_device_audio`) distinguishes a failed read from an empty one: on a DB error the whole connection runs with alignment and persistence off, so a transient failure can neither impose fresh-boot defaults on the session nor overwrite the stored row with them; the next connection retries. The read path aligns a connecting client to the stored value, and that alignment is claimed **once per SSH session token**, not once per WebSocket (`audio_alignment_pending` / `note_alignment_applied`, retired by `forget_session` from `Drop for App` and from `ClientHandler::drop` when no App was ever built). One token is one CLI process, which is the scope the stored value describes. A mid-session pair-WS reconnect (a network change, an ingress restart, a webview helper respawn) instead reports the state the session is already running with and is left alone; re-imposing the stored value there is how a muted session used to get unmuted behind the user's back.
-
-`api::align_paired_audio` is the pure decision and returns both halves of the push. **Order matters and is load-bearing: volume goes first, because a non-zero `SetVolume` also clears mute on the CLI and on the helper**, so the mute half is decided against the state *after* the volume write. Without that, restoring a stored (muted, 60%) would come back audible. A webview helper additionally prefers the live CLI entry's mute (`cli_muted`), since the CLI takes the same controls and is the session's surface of record while YouTube plays.
-
-Two consequences worth knowing. A session whose SSH key is unknown (`fingerprint_for` returns `None`) has no device identity, so its audio is memory-only for that session and nothing is stored. And two `late` processes on one machine share a fingerprint, so the last one to change mute or volume wins the row.
-
-The CLI holds up its end of this when the socket dies. Its pair-WS retry loop (`late-cli`'s `PairRetryPolicy`, §6 of `late-cli/CONTEXT.md`) may release its boot mute only when the server never registered the session at all; once the server has sent the session a frame (which it does right after `register`, before reading the buffered `client_state`), the running mute is the user's and a reconnect outage leaves it alone. A socket this handler accepts and then drops unread (the per-IP pair limit and the per-token capacity are both checked after the upgrade) never sends a frame, so the CLI still counts it as not established. Silence is the safe failure mode: unmuting because the socket dropped is how a muted session used to start playing music mid-SSH. The loop also never abandons pairing, it slows to a 60s retry, so a redeploy cannot strand a live session unpaired and uncontrollable, and a session that did release its boot mute still receives the stored value on the reconnect, since the once-per-token alignment was never claimed.
-
-### Runtime support / troubleshooting
-
-This feature is a real browser media stack inside a tiny helper process. Pair-WS protocol bugs show up in server logs; webview/browser/runtime bugs show up first in the per-user helper log (`$XDG_STATE_HOME/late/webview.log` or `~/.local/state/late/webview.log` on Unix, `%LOCALAPPDATA%\late\webview.log` on Windows). Interactive `late --verbose` parent logs go to the parent CLI log (`$XDG_STATE_HOME/late/late.log` or `~/.local/state/late/late.log`) so tracing does not corrupt the TUI; set `LATE_LOG_STDERR=1` for old stderr behavior.
-
-- **Manual fallback:** if the embedded webview fails on a machine, open `/listen` in any browser. That is a plain listener, not a handoff: the CLI does not learn about it and simply has no YouTube until the helper works again.
-- **Arch/EndeavourOS + Wayland/Hyprland is proven** with WebKitGTK 4.1 plus GStreamer plugins. Known host package set:
-  `sudo pacman -S --needed webkit2gtk-4.1 gst-plugins-good gst-libav`.
-- **DMABUF renderer failures:** the Linux helper now sets `WEBKIT_DISABLE_DMABUF_RENDERER=1` unless the user already provided a value. This is intentionally scoped to the helper process because some WebKitGTK/Wayland stacks fail or hang on the DMABUF renderer path.
-- **Crash loop guard:** if the helper exits or fails to start 3 times within 60 seconds, the native CLI disables embedded YouTube fallback for 5 minutes and logs the helper log path. This stops repeated open/close loops while preserving the normal browser connect fallback.
-- **Hyprland window routing.** The helper requests an undecorated 200x200 window, no initial focus, always-on-bottom placement, and initial top-right placement. Wayland compositors may ignore client-side positioning, so the app id/class is still `sh.late.youtube` for float/scratchpad rules:
-  `windowrulev2 = float, class:^(sh.late.youtube)$`,
-  `windowrulev2 = size 200 200, class:^(sh.late.youtube)$`,
-  `windowrulev2 = move 100%-200 0, class:^(sh.late.youtube)$`,
-  `windowrulev2 = workspace special:late silent, class:^(sh.late.youtube)$`,
-  plus a bind like `bind = SUPER, Y, togglespecialworkspace, late`.
-- **Linux X11** should be less fragile than Wayland because Wry's raw-handle path supports X11, but we still use the GTK builder on Linux so one code path covers both. WebKitGTK/GStreamer packages remain the main risk.
-- **Ubuntu/Debian/Fedora** are expected to work once package names and WebKitGTK versions line up. Older distros may not ship the WebKitGTK 4.1 stack this branch expects.
-- **NixOS** should use the flake package, not a random Linux binary. Required runtime/build inputs are `webkitgtk_4_1`, `pkg-config`, `glib-networking`, and GStreamer packages (`gstreamer.out`, `gst-plugins-base/good/bad/ugly`, `gst-libav`). The package builds `gst-plugins-bad` with `-Dlv2=disabled`, wraps `late` and `late-webview` with a fixed `GST_PLUGIN_SYSTEM_PATH_1_0`, `GST_PLUGIN_SCANNER`, `GIO_EXTRA_MODULES`, and `LATE_WEBKIT_GSTREAMER_SANDBOX_PATHS`, and the Linux helper adds those GStreamer paths to WebKitGTK's web-process sandbox before creating the webview. If this fails, the supported fallback is `late.sh/listen` in any browser; nothing takes over automatically.
-- **macOS** uses WKWebView and does not need GStreamer. Main risks are autoplay policy and ordinary macOS audio routing.
-- **Windows** uses WebView2. Modern Windows usually has the runtime; the Windows volume mixer may expose the helper as its own app stream.
-- **WSL/headless/container** are not supported unless there is a real desktop/webview runtime and working audio bridge.
-
-Failure signatures:
-
-- **No window:** check the per-user helper log. Past failures included Wayland raw-window-handle rejection and invalid GTK app id. Linux must use Wry's GTK build path (`build_gtk`) with Tao's `default_vbox()` container, and the GTK app id must remain valid reverse-DNS (`sh.late.youtube`).
-- **White/blank window with GTK warning about `GtkApplicationWindow` already containing `GtkBox`:** the webview was mounted into the GTK window instead of Tao's default vbox. Use `window.default_vbox()` as the GTK container.
-- **YouTube error 150 with "Video unavailable / Watch on YouTube" in CLI webview:** first verify the helper page URL is `http://localhost:<port>/`, not `127.0.0.1`, and that the response/meta referrer policy is `strict-origin-when-cross-origin` while `playerVars.origin = window.location.origin`. This fixed `r6L-GUOAhGo` on 2026-05-20. Some 150/101 failures are still true YouTube embed-policy rejections and will only work in the normal browser/YouTube surface.
-- **YouTube error 153:** the IFrame Player rejected embed identity. The page must load from loopback HTTP as `localhost`, pass `window.location.origin`, and keep the explicit referrer policy; do not use `with_html`.
-- **Black/unstarted player:** often missing GStreamer plugins. `GStreamer element autoaudiosink not found` means `gst-plugins-good` is absent.
-- **Video moves but no sound:** verify helper mute/volume handling first (`m`, `+`, `-` should hit `late-webview/src/pair.rs`, then `page.html`). If needed, click once inside the webview to satisfy an autoplay gesture. Also check the desktop mixer for a WebKit/late.sh stream.
-- **First run plays through laptop speakers:** PipeWire/WirePlumber may treat the helper as a new app stream. Moving it once to headphones in the mixer usually teaches the session manager for later launches.
-
-### Window UX
-
-Current v1 opens a small undecorated companion window. Hidden/offscreen mode is not the default because embedded browser engines can throttle or unload hidden/minimized views, and the YouTube iframe's ads/branding/autoplay posture is cleaner with a visible surface. On compositors such as Hyprland, prefer routing the helper to a special workspace over manually parking it fully off-screen. A future config can add `youtube_webview = "window" | "hidden" | "disabled"` once hidden-mode behavior is validated per platform.
-
-### What this does NOT change
-
-- Server queue state machine and YouTube `load_video` protocol.
-- `/listen` page behavior.
-- Native stream decoder path when `audio_source = radio`.
-- External-player shell-outs remain out of scope; do not revive mpv/yt-dlp handoff unless the product/legal posture changes explicitly.
-
----
-
-## 18. YouTube spectrum: OS capture of the helper's audio
-
-**Status: Linux implemented; Windows and macOS not started.** Icecast and radio get real bars from the CLI's own decoded output (§10). YouTube plays in the `late-webview` helper's cross-origin iframe, so the CLI captures the helper's audio at the OS layer and runs it through the same analyzer (`late-cli/src/audio/loopback.rs`). Frames go out on the CLI's existing pair socket as ordinary `viz` events. The server is unchanged.
-
-### Linux (PipeWire)
-
-1. **Tag at spawn.** `WebviewPlaybackController` spawns the helper with `PULSE_PROP` and `PIPEWIRE_PROPS` setting `application.id = sh.late.youtube` and `late.webview.owner = <late pid>`. WebKitGTK plays through its PulseAudio sink (via pipewire-pulse), and the tag lands on `WebKitWebProcess`'s stream props (verified on Arch, PipeWire 1.6).
-2. **Find.** A worker thread runs `pw-dump` once a second (about 11ms) and picks the `Stream/Output/Audio` node tagged with this owner: a running one before an idle one, then the newest `object.serial`. Re-reading every second is what picks up a stream WebKit replaces between videos.
-3. **Record.** `pw-record --target <serial> --raw` (mono f32 at 44.1 kHz, with `node.dont-reconnect` and `node.dont-fallback` so a vanished stream never falls back to the microphone) pipes into a ring feeding its own `spawn_playback_analyzer_thread` on the shared `analyzer_tx`.
-4. **Lifetime.** The capture lives in `RunningHelper` beside the helper `Child`, so it stops whenever the helper is stopped, dies, or is respawned.
-
-Why these choices:
-- **A tag, not PID matching.** For PulseAudio clients `pipewire.sec.pid` is `pipewire-pulse` itself, and `application.process.id` is client-reported (and namespaced if WebKit ever sandboxes its web process). The env tag is on the stream either way.
-- **An owner key.** Two `late` sessions on one desktop each tag their own helper; without the owner each could record the other's player.
-- **Shelling out to `pw-dump`/`pw-record`, not linking libpipewire.** Same rule as WebKitGTK: `late` must start on hosts without the library. Missing tools log one warning and the eq stays `Ambient`.
-- **The stream, not the sink monitor.** A monitor would also pick up everything else the user plays.
-- **A silence gate.** Chunks of exact digital zero (a paused or muted player) are dropped before analysis, so silence sends no frames and the TUI falls back instead of drawing flat live bars.
-
-### Windows and macOS
-
-Not started. The helper runs in-process there (`late webview-pair`), so candidates are per-process capture of `late` itself: WASAPI process loopback on Windows, ScreenCaptureKit audio filtered to the app on macOS (which prompts for permission). Until then YouTube uses the ambient band (§10) on those platforms.
+See `late-webview/CONTEXT.md`, "YouTube spectrum".
 
 ---
 
 ## 19. Queue state-drift hazards and reconciliation contract
 
-**Status: active and implemented.** Anything new that mutates queue state must follow this contract.
-
-### What went wrong (2026-05-19 incident)
-
-Production stuck for ~1h45m. One row sat at `status='playing'` in DB. Every booth submit returned `db error: duplicate key value violates unique constraint "idx_media_queue_single_playing"`. Users couldn't add tracks or vote-skip.
-
-Reconstruction from logs:
-
-1. Pod restart at 09:44 UTC. `resume_from_db` adopted the lone playing row (Cyberpunk theme, started 09:40). Within seconds the playback timer fired (track was within ~1min of its real end). `finish_item` marked it `played`, `advance_to_next_with_guard` promoted the next queued row. Fine so far.
-2. At some later point (logs don't pinpoint), `finish_item` was called for a row whose status was no longer `playing`. `mark_played`'s `WHERE status='playing'` returned 0 rows, and `finish_item` then early-returned `Ok(())` **without clearing `state.current_item_id`**. From this moment, `state.current_item_id` pointed at a row whose DB status had already moved on.
-3. At 10:18:34 staff ran `/audio skip`. `force_skip` read the stale id and called `MediaQueueItem::update_status(stale_id, 'skipped')`. `update_status` has no `WHERE status=…` filter, so it cheerfully mutated the row from `played` → `skipped`. `state.current_item_id` was then set to `None` and `advance` was called.
-4. From 10:19 onward, `state.current_item_id` was `None` in memory while the DB had `status='playing'` rows. Every `advance_to_next_with_guard` tried to promote a queued row via `mark_playing`, which violated the singleton index. Every booth submit failed.
-
-The pod kept running this way for ~1h45m until manually restarted.
-
-### Class of bug
-
-Every queue-state mutation is two writes — the DB row's `status`/`started_at` column plus the in-memory `state.current_item_id` — and the old code:
-
-- Issued the DB skip write *unconditionally* (`update_status` with no expected-old-status filter), so a stale id could quietly mutate the wrong row.
-- Issued the in-memory write *conditionally* on the DB write returning rows changed, but treated `changed == 0` as "no-op, return early" instead of "drift detected, resync".
-
-The current code makes those divergences recoverable without a pod restart.
-
-### Reconciliation contract
-
-The service now enforces these invariants. New code in this domain MUST follow them.
-
-1. **No raw `update_status` for queue transitions.** Use `MediaQueueItem::mark_skipped(client, id, ended_at) -> u64` with `WHERE id = $1 AND status = 'playing'`. `force_skip`, the skip-vote-fired branch in `cast_skip_vote`, and `reevaluate_skip_threshold` route through it. Each caller treats `changed == 0` as drift, not success.
-
-2. **`changed == 0` on any `mark_*` is drift, not a no-op.** `finish_item`, `fail_item`, `force_skip`, and the `mark_skipped` paths call the reconcile helper instead of returning early. That helper:
-   - Cancels the existing playback timer.
-   - Re-reads `MediaQueueItem::current_playing(&client)`.
-   - If `Some(row)`: sets `state.current_item_id`, clears `state.skip_votes` if the id changed, reschedules the playback timer, broadcasts `SourceChanged` / `LoadVideo` / `QueueUpdate`.
-   - If `None`: clears `state.current_item_id`, falls through to `advance_to_next_with_guard` (which may adopt or promote).
-
-3. **`advance_to_next_with_guard` checks DB current first.** Before promoting a queued row, look at `current_playing` in DB. If DB already has one, adopt it (same code path as reconcile's `Some` branch) instead of trying `mark_playing` and racing the singleton index. This eliminates the singleton-violation symptom entirely — the loser of any race against the DB just adopts what's there.
-
-4. **`mark_playing` unique-violation is recoverable.** Catch the constraint name `idx_media_queue_single_playing` in the Postgres error from `mark_playing`, treat it as "DB has a current we don't know about", route to reconcile. Never surface as a submit failure to the user.
-
-### Why this beats a leader lock (for now)
-
-A Postgres advisory-lock leader (§20) would prevent a *second pod* from also writing. The prod incident was a *single pod* corrupting its own state — a lock wouldn't have helped, and the next pod-after-handover would inherit the same bug class. The reconciliation contract makes every transition self-healing inside one pod; rule (4) also covers most of the rollout-overlap case for free (the loser of a `mark_playing` race reconciles instead of erroring at the user).
-
-### Regression coverage
-
-`late-ssh/src/app/audio/svc_test.rs` covers both prod shapes:
-1. DB has a `playing` row while the service memory is empty; a subsequent submit adopts the DB current instead of surfacing the singleton violation.
-2. Service memory points at an already-`played` row while DB has a different `playing` row; `/audio skip` reconciles and does not mutate the played row to `skipped`.
-
-### What this contract does NOT cover
-
-- **WS broadcast overlap during rolling deploys.** Two pods running for a few seconds during rollout will both broadcast `LoadVideo` / `QueueUpdate` to any browser that's connected to both. The browser receives duplicates and may visibly re-load. Cosmetic, not corrupting. If this becomes user-visible, escalate to §20.
-- **Crash mid-transaction leaving the DB row as `playing`.** The 1h `sweep_orphan_playing` at startup is the existing safety net; reconcile shortens the window from "1h sweep" to "next time anything calls reconcile."
-- **Multi-replica scale-up.** Still single-replica today. If we go multi-replica, the leader lock in §20 is the answer; the contract alone is not sufficient (followers would race on every advance and rely on the singleton index as the arbiter, which works but spams errors).
+In `QUEUE.md`. Any new code that flips `media_queue_items.status` follows that contract.
 
 ---
 
-## 20. Parked: Advisory-lock audio leader
+## 20. Voice Context Split
 
-**Status: parked.** The reconciliation contract in §19 is the active fix and covers the realistic failure modes for a single-replica deployment. This is the next-step option *if* rolling-deploy WS overlap becomes user-visible OR we scale `service-ssh` past one replica.
-
-### Idea
-
-`AudioService` acquires a Postgres session-level advisory lock on a fixed key at startup. Only the lock-holder is the audio leader: it owns timer scheduling, queue mutation, and WS broadcasting. Followers (other replicas, the draining-out pod) keep serving SSH sessions but reject every audio-mutating call with a typed `NotLeader` error that surfaces as "audio is moving — reconnect" in the booth/sidebar.
-
-```text
-pod with lock     = audio leader, can mutate queue/timers, broadcasts ws events
-pod without lock  = read-only follower; submit/skip/vote/advance return NotLeader
-draining old pod  = releases lock + cancels timers in begin_drain()
-new pod           = acquires lock + runs resume_from_db
-old user sessions = stay connected but audio actions are rejected until they
-                    reconnect to the new pod (k8s service routes new WS to leader)
-```
-
-### Sketch
-
-- Pin a single pool connection for the lock. `pg_advisory_lock` is session-scoped; if the connection dies the lock releases, which is exactly the recovery behavior we want.
-- Expose leader status as `watch::Receiver<bool>` so the sidebar/booth react to transitions, not just poll at action time. UI banner can react proactively rather than waiting for the user to press a key.
-- A `LeaderGuard` zero-cost token returned by `acquire_for_mutation()`, required by every mutating method's signature. The compiler enforces the check instead of human discipline; trivial to miss otherwise given the surface (see below).
-- `begin_drain()` releases the lock and cancels timers, letting the new pod take leadership before the old pod finishes draining its SSH sessions.
-
-### Mutation surface that has to honor the gate
-
-`submit_url`, `submit_trusted_url`, `submit_video`, `set_trusted_youtube_fallback`, `force_skip`, `cast_skip_vote`, `cast_vote`, `clear_vote`, `delete_queue_item`, `toggle_unskippable`, `report_player_state`, `finish_item`, plus all the `*_task` spawners that call them. A `LeaderGuard` parameter on the inner sync methods catches this at compile time.
-
-### Why not yet
-
-- The prod incident was single-pod state drift, not multi-pod contention. The reconciliation contract is the minimum viable fix; the lock is layered safety, not the bug fix.
-- Big audit surface (above). Easy to miss one, and the failure mode of missing one is a hard-to-debug "this one path bypasses leader" inconsistency. Worth doing only when we know we need it.
-- Leader-handover UX during rolling deploys needs design work (banner copy, reconnect timing, what the booth modal does when the lock moves mid-modal). Premature without the demand.
-
-### Reactivation criteria
-
-- The reconciliation contract in §19 is in place and stable.
-- We see real WS-broadcast overlap symptoms (browsers double-loading items during rollouts) OR we want to scale `service-ssh` past one replica.
-- We have a story for the "audio is moving" UX that's not just a banner the user sees mid-action.
-
-Until then: §19 is the contract; one replica is the deploy.
+Voice rooms (LiveKit grants, the pair-WS voice protocol, the CLI voice runtime, authenticated CLI-only joins) are `../voice/CONTEXT.md`; this file stays on music.
 
 ---
 
-## 21. Voice Context Split
+## 21. References
 
-Voice-room implementation and UX are no longer documented in this audio
-context. Read `../voice/CONTEXT.md` for:
-- LiveKit token grants and `VoiceService` snapshot ownership.
-- Pair-WS `voice_join` / `voice_leave` / `voice_set_muted` /
-  `voice_set_deafened` / `voice_state` protocol.
-- Native CLI `late-cli/src/voice.rs` media runtime.
-- Authenticated CLI-only voice joins.
-- Voice participant count/badge UX gaps.
-
-Keep this file focused on music/audio: Icecast, YouTube queue/fallback, Music
-Booth, paired audio source arbitration, now-playing, and visualizer behavior.
-
----
-
-## 22. References
-
-- Root context: `../../../../CONTEXT.md` — §2.7 (audio infra), §4.1 (paired-client WS).
+- Root context: `../../../../CONTEXT.md`; music library and Liquidsoap: root `MUSIC.md`; the pair WS shell: `late-ssh/CONTEXT.md`.
 - Voice context: `../voice/CONTEXT.md`.
 - Pair WS handler: `late-ssh/src/api.rs` (look for `handle_socket`).
 - Pair registry / mute policy: `late-ssh/src/paired_clients.rs`.
@@ -948,5 +463,3 @@ Booth, paired audio source arbitration, now-playing, and visualizer behavior.
 - YouTube IFrame Player API: https://developers.google.com/youtube/iframe_api_reference
 - YouTube Data API `videos.list`: https://developers.google.com/youtube/v3/docs/videos/list
 - Browser autoplay: https://developer.mozilla.org/en-US/docs/Web/Media/Guides/Autoplay
-- `wry` (webview): https://github.com/tauri-apps/wry
-- `tao` (windowing): https://github.com/tauri-apps/tao

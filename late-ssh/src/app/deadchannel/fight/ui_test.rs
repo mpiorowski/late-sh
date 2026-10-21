@@ -530,9 +530,15 @@ fn the_road_shows_a_bright_glyph_a_rest_and_a_cache_under_the_cursor() {
     assert!(rest.contains("[Enter] rest: clear the deck"), "{rest}");
     assert!(!rest.contains("mend"), "a rest no longer mends\n{rest}");
     assert!(rest.contains("[+]"), "{rest}");
+    let word = rest
+        .find("1 static card gone.")
+        .expect("the last step's word");
+    let ahead = rest
+        .find("▸ a doorway out of the rain")
+        .expect("the step ahead");
     assert!(
-        rest.contains("1 static card gone."),
-        "the last step's word\n{rest}"
+        word < ahead,
+        "the last step's word is behind the runner, above the step ahead\n{rest}"
     );
 
     let (at, picker) = before(&sheet, Node::Cache);

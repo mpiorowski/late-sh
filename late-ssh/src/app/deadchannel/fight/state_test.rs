@@ -2694,7 +2694,11 @@ fn the_answer_stakes_what_was_taken_out_of_hand_and_locker() {
             Uuid::nil(),
             Meeting::Answer { owed },
         );
-        assert_eq!((prey.carrying, prey.stake), (carrying, stake), "{bits} {stash} {owed}");
+        assert_eq!(
+            (prey.carrying, prey.stake),
+            (carrying, stake),
+            "{bits} {stash} {owed}"
+        );
         assert!(prey.rival.answer);
     }
 }
@@ -2872,7 +2876,11 @@ fn the_hand_earns_with_the_garnish_first_and_is_robbed_up_to_the_stake() {
     sheet.bits = 50;
     assert_eq!(sheet.robbed(200, Reach::HandAndLocker), 200);
     assert_eq!((sheet.bits, sheet.stash), (0, 150));
-    assert_eq!(sheet.robbed(500, Reach::HandAndLocker), 150, "what is there");
+    assert_eq!(
+        sheet.robbed(500, Reach::HandAndLocker),
+        150,
+        "what is there"
+    );
     assert_eq!((sheet.bits, sheet.stash), (0, 0));
 }
 

@@ -131,7 +131,7 @@ impl Default for GeneratedMapSpec {
             seed: 0,
             continents: 5,
             islands: 8,
-            territories: 160,
+            territories: 240,
             names: Vec::new(),
         }
     }

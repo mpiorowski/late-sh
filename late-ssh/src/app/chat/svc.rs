@@ -2972,23 +2972,9 @@ impl ChatService {
         let service = self.clone();
         tokio::spawn(
             async move {
-                if let Err(e) = service
-                    .send_message(SendMessageParams {
-                        user_id,
-                        room_id,
-                        room_slug: None,
-                        body,
-                        reply_to_message_id: None,
-                        reply_to_user_id,
-                        is_admin: false,
-                    })
-                    .await
-                {
-                    // A bot is a regular user to the room rules, so a mention
-                    // in a report-only room gets its reply refused there. The
-                    // banner has nobody to go to: a bot is not at a keyboard.
-                    account_send_error(SendPath::BotReply, &e);
-                }
+                service
+                    .send_bot_reply(user_id, room_id, body, reply_to_user_id)
+                    .await;
             }
             .instrument(info_span!(
                 "chat.send_bot_reply_task",
@@ -2996,6 +2982,42 @@ impl ChatService {
                 room_id = %room_id,
             )),
         );
+    }
+
+    /// [`Self::send_bot_reply_task`], awaited, handing back the row it
+    /// wrote. `None` when nothing landed: a body that trimmed to nothing,
+    /// or a send that did not land, accounted for here. For a bot that
+    /// needs to know what landed and when: @bartender remembers the
+    /// exchange off it.
+    #[tracing::instrument(skip(self, body), fields(user_id = %user_id, room_id = %room_id))]
+    pub async fn send_bot_reply(
+        &self,
+        user_id: Uuid,
+        room_id: Uuid,
+        body: String,
+        reply_to_user_id: Option<Uuid>,
+    ) -> Option<ChatMessage> {
+        let sent = self
+            .send_message_returning(SendMessageParams {
+                user_id,
+                room_id,
+                room_slug: None,
+                body,
+                reply_to_message_id: None,
+                reply_to_user_id,
+                is_admin: false,
+            })
+            .await;
+        match sent {
+            Ok(chat) => chat,
+            Err(e) => {
+                // A bot is a regular user to the room rules, so a mention
+                // in a report-only room gets its reply refused there. The
+                // banner has nobody to go to: a bot is not at a keyboard.
+                account_send_error(SendPath::BotReply, &e);
+                None
+            }
+        }
     }
 
     /// Ensure the game's first voice exists (GAME.md, First contact stage
@@ -3377,8 +3399,15 @@ impl ChatService {
         Ok(None)
     }
 
-    #[tracing::instrument(skip(self, params), fields(user_id = %params.user_id, room_id = %params.room_id, body_len = params.body.len()))]
     async fn send_message(&self, params: SendMessageParams) -> Result<(), SendError> {
+        self.send_message_returning(params).await.map(|_| ())
+    }
+
+    #[tracing::instrument(skip(self, params), fields(user_id = %params.user_id, room_id = %params.room_id, body_len = params.body.len()))]
+    async fn send_message_returning(
+        &self,
+        params: SendMessageParams,
+    ) -> Result<Option<ChatMessage>, SendError> {
         let SendMessageParams {
             user_id,
             room_id,
@@ -3390,7 +3419,7 @@ impl ChatService {
         } = params;
         let body = body.trim_start_matches('\n').trim_end();
         if body.is_empty() {
-            return Ok(());
+            return Ok(None);
         }
 
         if room_slug.as_deref() == Some("announcements") && !is_admin {
@@ -3500,7 +3529,7 @@ impl ChatService {
             .create_mentions_task(user_id, chat.id, room_id, body);
         self.pretranslate_for_author(&client, &chat).await;
         tracing::info!(chat_id = %chat.id, "message sent");
-        Ok(())
+        Ok(Some(chat))
     }
 
     /// Translate an opted-in author's message to English up front (send and

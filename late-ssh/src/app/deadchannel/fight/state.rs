@@ -1588,7 +1588,9 @@ impl Sheet {
     /// crossing took (`owed`) or the crossing's cut of the hand, whichever
     /// is more, and never more than hand and locker hold together.
     pub fn answer_stake(&self, owed: i64) -> i64 {
-        owed.max(self.crossing_stake()).min(self.bits + self.stash).max(0)
+        owed.max(self.crossing_stake())
+            .min(self.bits + self.stash)
+            .max(0)
     }
 
     /// Up to `stake` bits off this runner, as a win takes them: off the
@@ -2124,7 +2126,10 @@ impl Sheet {
                 applied: Applied::Refused(Refusal::Short {
                     by: bits - self.bits,
                 }),
-                lines: vec![format!("a pour is {bits} bits. you are {} short.", bits - self.bits)],
+                lines: vec![format!(
+                    "a pour is {bits} bits. you are {} short.",
+                    bits - self.bits
+                )],
             };
         }
         self.crystals -= crystals;

@@ -127,6 +127,8 @@ impl App {
             changed = true;
         }
 
+        changed |= crate::app::chat::news::watch::svc::tick(self, now, one_hz);
+
         self.sync_visible_chat_room();
         // Presence (`app/presence`): everyone's records into the tavern,
         // the stools and the street, and this session's record out: a send
@@ -401,6 +403,9 @@ impl App {
                 SessionMessage::ClipboardImageFailed { message } => {
                     self.chat.clear_pending_clipboard_image_upload();
                     self.banner = Some(crate::app::common::primitives::Banner::error(&message));
+                }
+                SessionMessage::VideoState { play_id, report } => {
+                    crate::app::chat::news::watch::svc::apply_report(self, play_id, &report);
                 }
                 SessionMessage::Toast { message, error } => {
                     self.banner = Some(if error {
@@ -1673,11 +1678,16 @@ impl App {
             self.attention_spot = spot;
             crate::metrics::record_place_visit(self.screen, place);
         }
-        let presence = match self.last_active_at.elapsed() < ATTENTION_ACTIVE_WINDOW {
+        crate::metrics::record_attention(self.screen, place, self.attention_presence(), seconds);
+    }
+
+    /// Whether a key landed within [`ATTENTION_ACTIVE_WINDOW`], or the
+    /// terminal is only left open.
+    pub(crate) fn attention_presence(&self) -> crate::metrics::Presence {
+        match self.last_active_at.elapsed() < ATTENTION_ACTIVE_WINDOW {
             true => crate::metrics::Presence::Active,
             false => crate::metrics::Presence::Idle,
-        };
-        crate::metrics::record_attention(self.screen, place, presence, seconds);
+        }
     }
 
     /// Where inside the current screen the user is, for the screens that

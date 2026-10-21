@@ -346,3 +346,116 @@ fn the_line_stops_on_a_jaw_tip_like_the_physics_does() {
         "and comes off it radially, the way a point bumper sends it: {normal:?}"
     );
 }
+
+// ── The traced rebound ────────────────────────────────────────────────
+
+/// The line for a shot struck at `speed` with `tip`, rebound traced.
+fn traced(
+    cue: [f64; 2],
+    azimuth: f64,
+    tip: [f64; 2],
+    speed: f64,
+    balls: &[BallFrame],
+) -> aim::ShotLine {
+    let geom = SPEC.geometry();
+    let strike = Strike::new(azimuth, tip[0], tip[1], speed).expect("valid strike");
+    aim::shot_line_traced(&SPEC, &geom, balls, cue, azimuth, tip[0], || {
+        aim::trace_rebound(&SPEC, &geom, cue, &strike)
+    })
+}
+
+#[test]
+fn the_traced_rebound_is_where_the_simulator_sends_the_cue_ball() {
+    // Centre ball, no english: the complaint was that even this was drawn
+    // wrong. The ball reaches the rail rolling, comes off with its spin
+    // pointing the old way, and bends; the trace is the simulator's own path,
+    // so wherever it says the ball is, a real shot passes.
+    let cue = [0.3, 0.5];
+    let azimuth = PI / 4.0;
+    let line = traced(cue, azimuth, [0.0, 0.0], 2.5, &[ball(CUE, cue)]);
+    let bend = line.bend.expect("the rebound is traced");
+    assert_eq!(line.rebound, bend.points().last().copied());
+
+    let strike = Strike::new(azimuth, 0.0, 0.0, 2.5).expect("valid strike");
+    let start = RackState {
+        balls: vec![Ball::resting(CUE, cue)],
+    };
+    let played = sim::simulate(&SPEC, &SPEC.geometry(), &start, &strike);
+    let path: Vec<[f64; 2]> = (0..2000)
+        .map(|k| {
+            played
+                .timeline
+                .sample(played.timeline.duration * k as f64 / 2000.0)[0]
+                .pos
+        })
+        .collect();
+    for point in bend.points() {
+        let nearest = path
+            .iter()
+            .map(|p| distance(*p, *point))
+            .fold(f64::INFINITY, f64::min);
+        assert!(
+            nearest < 0.01,
+            "{point:?} is {nearest} m off the played path"
+        );
+    }
+}
+
+#[test]
+fn follow_and_draw_bend_the_rebound_where_the_mirror_cannot() {
+    // The plain line has one answer for every vertical tip; the table has
+    // three. Follow carries on along the way it came, draw pulls back.
+    let cue = [0.3, 0.5];
+    let end = |vert: f64| {
+        traced(cue, PI / 4.0, [0.0, vert], 2.5, &[ball(CUE, cue)])
+            .rebound
+            .expect("a rail sends it back")
+    };
+    let (follow, draw) = (end(0.4), end(-0.4));
+    assert!(
+        distance(follow, draw) > 4.0 * SPEC.ball_radius,
+        "follow and draw end up in different places: {follow:?} {draw:?}"
+    );
+}
+
+#[test]
+fn the_traced_rebound_stops_at_the_first_ball_in_its_way() {
+    let cue = [0.3, 0.5];
+    let open = traced(cue, PI / 4.0, [0.0, 0.0], 2.5, &[ball(CUE, cue)]);
+    let bend = open.bend.expect("traced");
+    // Park a ball halfway along the bend.
+    let blocker = bend.points()[bend.points().len() / 2];
+    let blocked = traced(
+        cue,
+        PI / 4.0,
+        [0.0, 0.0],
+        2.5,
+        &[ball(CUE, cue), ball(3, blocker)],
+    );
+    let end = blocked.rebound.expect("still a rebound");
+    assert!(
+        (distance(end, blocker) - 2.0 * SPEC.ball_radius).abs() < 1e-6,
+        "it ends touching the ball: {end:?} vs {blocker:?}"
+    );
+}
+
+#[test]
+fn tracing_a_rebound_is_cheap_enough_to_redo_on_an_aim_change() {
+    // The draft caches it, but a sweep re-traces on every report.
+    let cue = [0.3, 0.5];
+    let started = std::time::Instant::now();
+    for k in 0..20 {
+        let _ = traced(
+            cue,
+            PI / 4.0 + k as f64 * 0.01,
+            [0.0, 0.0],
+            4.0,
+            &[ball(CUE, cue)],
+        );
+    }
+    let each = started.elapsed() / 20;
+    assert!(
+        each < std::time::Duration::from_millis(25),
+        "one traced rebound took {each:?}"
+    );
+}

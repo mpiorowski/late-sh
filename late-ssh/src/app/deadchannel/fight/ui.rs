@@ -1047,7 +1047,8 @@ pub(crate) struct PickerView<'a> {
     /// The city's animation clock: the bright nodes flicker on it.
     pub tick: u64,
     /// The last step's word (`FightSession::till`): what the rest cleared,
-    /// what the cache held, why the row refused.
+    /// what the cache held, why the row refused. Drawn dim with the news,
+    /// above the step ahead: what is behind the runner.
     pub word: Option<&'a str>,
 }
 
@@ -1255,7 +1256,9 @@ pub(crate) fn news_line(news: &Ambush) -> String {
 }
 
 /// The news and the answer owed, under the legend: at most two rows,
-/// and the key row's extra key when the answer can be given now.
+/// and the key row's extra key when the answer can be given now. The
+/// news is dim, behind the runner like the last step's word; the one
+/// lit block on the road is the step ahead.
 fn lookout_lines(lookout: &Lookout, picker: &Picker) -> (Vec<Line<'static>>, Vec<Span<'static>>) {
     let text = ink(INK);
     let dim_text = ink(INK_DIM);
@@ -1267,7 +1270,7 @@ fn lookout_lines(lookout: &Lookout, picker: &Picker) -> (Vec<Line<'static>>, Vec
             Span::styled("    ", text),
             Span::styled(
                 truncate(&news_line(news), INNER.saturating_sub(6)),
-                lit(Neon::Magenta),
+                dim(Neon::Magenta),
             ),
         ]));
     }
@@ -1712,14 +1715,16 @@ fn node_lines(
                     Span::styled("the crossing", lit(Neon::Magenta)),
                     Span::styled("   nobody is here tonight", dim_text),
                 ]),
+                // Two rows, the node's third included: one would run past
+                // the panel.
                 Line::from(vec![
                     Span::styled("      ", text),
-                    Span::styled(
-                        "every runner within two levels was crossed today, is off the wire, or could not answer you back.",
-                        muted,
-                    ),
+                    Span::styled("every runner within two levels was crossed today,", muted),
                 ]),
-                Line::default(),
+                Line::from(vec![
+                    Span::styled("      ", text),
+                    Span::styled("is off the wire, or could not answer you back.", muted),
+                ]),
             ],
         },
     };
@@ -1901,17 +1906,19 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
                 lines.push(Line::default());
             }
             lines.push(legend_rule());
+            // What is behind the runner, dim: the news of the last fight
+            // on them, the answer owed, the last step's word. Then the step
+            // ahead, lit, and the keys.
             let (notice, answer_keys) = lookout_lines(view.lookout, view.picker);
             lines.extend(notice);
-
-            let word = Line::from(match view.word {
+            lines.push(Line::from(match view.word {
                 Some(word) => [
                     vec![Span::styled("    ", text)],
-                    truncate_spans(card_marked(word, ink(INK_BRIGHT)), INNER.saturating_sub(6)),
+                    truncate_spans(card_marked(word, dim_text), INNER.saturating_sub(6)),
                 ]
                 .concat(),
                 None => Vec::new(),
-            });
+            }));
             let reason = shut_reason(sheet);
             let ahead = match reason {
                 Some(_) => None,
@@ -1921,7 +1928,6 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
                 (Some(draft), _) => {
                     let (detail, keys) = draft_lines(draft);
                     lines.extend(detail);
-                    lines.push(word);
                     lines.push(Line::from(keys));
                 }
                 (None, None) => {
@@ -1944,7 +1950,6 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
                         dim_text,
                     )));
                     lines.push(Line::default());
-                    lines.push(word);
                     let mut keys = Vec::new();
                     if !sheet.road.path.is_empty() {
                         keys.extend([
@@ -1964,7 +1969,6 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
                 (None, Some(node)) => {
                     let (detail, mut keys) = node_lines(sheet, view.picker, view.lookout, node);
                     lines.extend(detail);
-                    lines.push(word);
                     keys.extend(answer_keys);
                     lines.push(Line::from(keys));
                 }

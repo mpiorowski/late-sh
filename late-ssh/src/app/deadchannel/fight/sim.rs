@@ -321,7 +321,12 @@ pub fn crystal_players() -> Vec<(String, Player)> {
             Inks::Never,
         ),
         ("blades", Drinks::Never, Carts::Always, Inks::Never),
-        ("blades when short", Drinks::Never, Carts::WhenShort, Inks::Never),
+        (
+            "blades when short",
+            Drinks::Never,
+            Carts::WhenShort,
+            Inks::Never,
+        ),
         (
             "glass daily + blades",
             Drinks::Every(Drink::StaticOnIce),

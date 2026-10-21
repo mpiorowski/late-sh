@@ -1,6 +1,6 @@
 # late.sh Scale Notes
 
-This document records the current production capacity posture, what was discovered during the HN-spike investigations (June 2026 and the 2026-07-22 OOM, see CONTEXT.md §10.5), the DB query findings, the shipped render-cost program, and the roadmap toward roughly 1000 concurrent users.
+This document records the current production capacity posture, what was discovered during the HN-spike investigations (June 2026 and the 2026-07-22 OOM, see the incident log in `infra/RUNBOOK.md`), the DB query findings, the shipped render-cost program, and the roadmap toward roughly 1000 concurrent users.
 
 ## Current Infra Status
 
@@ -79,7 +79,7 @@ Operational note: changing the CNPG memory limit briefly removed the `postgres-r
 Applied 2026-07-22 (OOM incident):
 
 - Raised `service-ssh` memory limit from `4Gi` to `8Gi` and request from `512Mi` to `2Gi`, first via in-place pod resize (Kubernetes 1.34 `kubectl patch --subresource resize`, zero restart, zero dropped sessions), then persisted in Terraform
-- Shipped the SSH output-budget guard and pair-WS hardening (see Pain Point 1 and CONTEXT.md §10.5)
+- Shipped the SSH output-budget guard and pair-WS hardening (see Pain Point 1 and the `infra/RUNBOOK.md` incident log)
 - In-place resize caveat: it patches only the running pod; the Deployment template must come from Terraform or the next rollout reverts the limit
 
 ## Biggest Pain Points
@@ -95,7 +95,7 @@ The render-cost program (see its own section below) removed both the fixed tick 
 - The per-frame constant factors from the 2026-07-22 audit are fixed (run-length clubhouse spans instead of per-cell `String`s, 1 Hz presence cache instead of a per-render `active_users` lock).
 - The floor by product decision: a session with the right sidebar visible paints at ~7.5 fps and never settles fully clean. Two panels hold that edge: the bonsai sway (always) and the ambient equalizer (only while a client is paired and unmuted).
 
-The memory failure mode is also closed: the 2026-07-22 OOM (full writeup in CONTEXT.md §10.5) was frames rendered into russh's uncapped per-channel output queue for clients that had stopped reading. Shipped fix: a per-session `OutputBudget` in `late-ssh/src/ssh.rs`; over 32 MB outstanding the render loop pauses, and 30 s of sustained stall disconnects the session. Metrics: `late_ssh_render_stall_{skips,disconnects}_total`.
+The memory failure mode is also closed: the 2026-07-22 OOM (full writeup in the `infra/RUNBOOK.md` incident log) was frames rendered into russh's uncapped per-channel output queue for clients that had stopped reading. Shipped fix: a per-session `OutputBudget` in `late-ssh/src/ssh.rs`; over 32 MB outstanding the render loop pauses, and 30 s of sustained stall disconnects the session. Metrics: `late_ssh_render_stall_{skips,disconnects}_total`.
 
 Measured in prod 2026-07-24 (v0.41.0, single `service-ssh` pod, 60 live sessions):
 
@@ -116,7 +116,7 @@ Re-derived ceiling: at ~26.5 mcores/session, `service-ssh` reaches about **260 s
 
 **The input queue does overflow in prod, and it is fine.** 2,306 `session input queue full; dropping inbound ssh input` warnings (`ssh.rs:1299`, `queue_cap=256`) over the 7 days to 2026-08-18. Before reading that as input-latency regression: the events arrive **sub-millisecond apart** in 5 tight bursts (one hour held 1,511 of them), which is a paste bomb or an escape-sequence flood filling a 256-slot queue instantly, not a user losing keystrokes while typing. This is the bounded queue doing its job instead of growing without limit. Recorded so the next person who greps for it does not go hunting a latency bug. If it ever appears spread evenly across a session instead of bunched, that *would* be the real thing.
 
-Input latency (moved here from the retired CONTEXT.md §8.5): keystrokes land in a per-session bounded queue and the render loop wakes on input, so ordinary keystrokes never wait on the app mutex before being queued. The remaining risk under high fan-out is that `render_once` still holds the app lock across synchronous `app.tick()` + `app.render()`, so a slow tick delays that session's input-to-frame path; the input queue closed the cadence gap, not the lock-held-across-tick stall. Chat-specific row-cache, snapshot, unread-count, and scoped-loading performance notes live in `late-ssh/src/app/chat/CONTEXT.md`.
+Input latency: keystrokes land in a per-session bounded queue and the render loop wakes on input, so ordinary keystrokes never wait on the app mutex before being queued. The remaining risk under high fan-out is that `render_once` still holds the app lock across synchronous `app.tick()` + `app.render()`, so a slow tick delays that session's input-to-frame path; the input queue closed the cadence gap, not the lock-held-across-tick stall. Chat-specific row-cache, snapshot, unread-count, and scoped-loading performance notes live in `late-ssh/src/app/chat/CONTEXT.md`.
 
 ### 2. `service-ssh` cannot safely scale horizontally yet
 
@@ -140,12 +140,30 @@ Target shape for 1000 users: a handful of SSH pods after the render-cost program
 
 **The app half of the problem (started 2026-09-02).** Session ownership and pair-WS routing are the transport half; the list above is the app half, and it only shrinks if features stop adding to it. Two things now hold that line:
 
-- **The rule.** Root CONTEXT.md §0 "Multi-replica rule": every new feature is designed as if several `late-ssh` processes were already running. Truth lives in Postgres, once-only actions are conditional `UPDATE ... WHERE` claims or advisory locks, cross-session fan-out is `LISTEN/NOTIFY`, background work dedupes through the DB, switches are rows. Presence is the one named exception and may not grow. The rule is bounded by "Replica-ready, not over-engineered" in the same section: one user's sessions on different replicas need not sync live, and read-on-open counts as replica-ready.
-- **The per-user shape (2026-09-17).** Root CONTEXT.md §0 "Reference shape: per-user state": pure rules, one writer under the row lock, a per-session render mirror, and a notify that carries only the owner's user id. Bonsai is the first migrated domain (`late-ssh/src/app/bonsai`) and the template for the pet, the tank, and per-account settings. Its cost per change is one notify per replica plus one UUID compare per local session on an existing tick, so it is nowhere near the 1000-user budget; it is the wrong shape for high-frequency shared surfaces (Artboard, house tables), which need room- or table-scoped routing instead.
+- **The rule.** Root CONTEXT.md, "The multi-replica rule": every new feature is designed as if several `late-ssh` processes were already running. Truth lives in Postgres, once-only actions are conditional `UPDATE ... WHERE` claims or advisory locks, cross-session fan-out is `LISTEN/NOTIFY`, background work dedupes through the DB, switches are rows. Presence is the one named exception and may not grow. The rule is bounded by "Replica-ready, not over-engineered" in the same section: one user's sessions on different replicas need not sync live, and read-on-open counts as replica-ready.
+- **The per-user shape.** Root CONTEXT.md, "Per-user state", worked in `late-ssh/src/app/bonsai/CONTEXT.md`: pure rules, one writer under the row lock, a per-session render mirror, and a notify that carries only the owner's user id. Bonsai is the first migrated domain (`late-ssh/src/app/bonsai`) and the template for the pet, the tank, and per-account settings. Its cost per change is one notify per replica plus one UUID compare per local session on an existing tick, so it is nowhere near the 1000-user budget; it is the wrong shape for high-frequency shared surfaces (Artboard, house tables), which need room- or table-scoped routing instead.
 
 The first feature built under the rule is the first-contact haunting (`late-ssh/src/app/deadchannel/`): every daily and lifetime cap a claim on the user row, the once-ever stamps claims, the AI bio screen claimed per bio text. It is the template for the migration of the list above.
 
-What each remaining item needs is not the same, which is why "make it a row" is the wrong instinct for most of them (the per-row plan lives in root CONTEXT.md §7 "Multi-replica readiness"):
+The per-structure ledger. A design that cannot meet the multi-replica rule adds its row here; new features never do:
+
+| Structure | Location | Current | To externalize |
+|-----------|----------|---------|----------------|
+| `active_users` / `conn_counts` | `State` | In-memory counters | Shared store (Redis or DB) |
+| `SessionRegistry` | `session.rs` | In-memory `token → mpsc` | Stays local: sticky sessions route SSH + WS to same replica |
+| Chat/Article events + snapshots, Profile per-user snapshots | `broadcast` / `watch` channels | In-process only | Postgres `LISTEN/NOTIFY` or Redis pub/sub for cross-replica fan-out |
+| @bot + @graybeard chat | `GhostService` | Always-on presence + AI chat tasks; both are dedicated DB users with fixed fingerprints | Single-leader to avoid duplicate chat responses. During pod drain today, the old pod cancels bot tasks immediately. |
+| Leaderboard data | `LeaderboardService` | DB-backed `watch` channel, 300s refresh | Already DB-backed; each replica runs its own refresh loop: duplicate work but no write conflict |
+| Chat translation | `TranslationService` (`app/ai/translate.rs`) | DB-backed cache + in-memory single-flight set, daily call cap, and concurrency gate, all per replica | Cache is already shared through Postgres, so correctness holds across replicas; only the dedupe and the cap are per-process, meaning N replicas can each spend up to the cap and can duplicate one call for the same message. Both are acceptable at current scale; a shared counter would be the fix. |
+| `SharedScratchpadRegistry` | `scratchpad/registry.rs` | In-memory `/pair` intents + `user_id → pairing` | Stays local by design: `/pair` pairings are explicitly ephemeral, acceptable to drop on failover |
+| Drunk map | `clubhouse/drunk.rs` (`State.drunk_map`) | A per-process mirror of `user_drinks`, seeded from the table every 60s by each replica's ghost task and bumped on a local pour | Correct across replicas (the table is the truth); a pour on another replica shows here on the next seed, up to a minute late. A notify would make it instant. |
+| Nightcap `SharedWall` | `state.rs` (`State.nightcap_house`) | One process-global wall (TV captions, tab board, carvings) refreshed by one task per process; a carve updates it in place | A second replica shows a carve late until its next refresh (5 min), or needs the notify shape from root `CONTEXT.md` |
+| Bonsai | `app/bonsai` (`svc.rs`, `session.rs`) | Replica-clean: the row is the truth, every write runs under the row lock in `BonsaiService`, sessions mirror the row and refresh over `bonsai_changed`. The reference per-user shape (root `CONTEXT.md`). | Nothing. |
+| First-contact haunting | `app/deadchannel/haunt` | Replica-clean: staff only is a code rule, not a switch; every cap and stamp is a conditional claim on the user row, the bio screen is claimed per bio text. Only the per-session dice are local, by design. | Nothing. One accepted race: two devices playing a whisper in the same window both play it, one mark lands (claiming at arming would burn it on every dropped session). |
+| Presence (the tavern crowd, the Nightcap stools, the night city street) | `app/presence` (`svc.rs`, `state.rs`, `session.rs`), wire in `late-core` `models/presence.rs` | Replica-clean: one record per session (its tavern seat or cell, its stool, its street runner, its `lounge` flag for the deadchannel spawner); each replica's task batches its sessions' changed records onto `presence` (one notify per 200ms flush, a full heartbeat every 3s) and drops another replica's records 10s after its last heartbeat. Rooms derive from the records (`clubhouse/crowd.rs`, `clubhouse/nightcap/stools.rs`, `deadchannel/street/state.rs`); a session picks its own seat or stool, the earlier claim keeping a contested one. Counter `late_ssh_presence_total{beat}` (published, publish_failed, heard, rejected, expired) and gauge `late_ssh_presence_records{scope}` (local: a replica's own sessions; all: every record it holds, which should read the same on every replica), on the dashboard's Presence row. Nothing persisted. | Nothing. The bots' online flags in the tavern still read the local `active_users`, so on a replica without the ghost bots the bar reads empty of them. |
+| `StreamRegistry` | `app/stream/registry.rs` | In-memory live-stream registry: one stream per user, capability ids, watcher heartbeats | Stays local by design: a stream dies with the process (the room and its history are DB rows and survive); the streamer just runs `/golive` again |
+
+What each remaining item needs is not the same, which is why "make it a row" is the wrong instinct for most of them:
 
 - session registry, paired client registry: stay pod-local by design under sticky ownership (the transport half, item 8 below)
 - active user presence, clubhouse lobby, scratchpad pairings, stream registry: a shared presence store (Redis) or an explicit "pod-local, dies with the pod" decision per structure; the round's buyer roster is where a wrong answer is user-visible (the clubhouse frame no longer shows a headcount)
@@ -444,15 +462,212 @@ What would fix it, cheapest first:
 Shortening the grace period is not a fix: it trades this for cutting every
 draining SSH session sooner.
 
+### 11. Bytes on the wire become lag the server cannot see
+
+Every server-side number can be green while users feel lag. `render_once`
+hands a frame to russh in microseconds and counts it done; what the user waits
+for is the network round trip, plus every byte queued ahead of that frame
+divided by their bandwidth, plus their terminal parsing it. None of that shows
+in kube. Three ways bytes turn into lag:
+
+- **A keystroke's frame queues behind animation.** Frames leave in order, so
+  the frame answering a key waits for any animation frames still in the pipe.
+  Nothing paces frames to what the client absorbs: the `OutputBudget` guard
+  (Pain Point 1) acts at 32 MB outstanding, which protects memory, not
+  latency, and it cannot see most of the backlog anyway. russh queues only
+  once the SSH window is full; before that the bytes sit in the kernel and
+  in the edge HAProxy.
+- **Slow start after idle.** By default a connection that pauses longer than
+  its retransmit timeout drops back to slow start (about 14 KB per round
+  trip). Idle sessions tick every 500 ms and clean passes send nothing, so a
+  connection is often cold when the user switches screens, and a 30 to 60 KB
+  repaint then pays two or three extra round trips: 300 to 450 ms more for a
+  user 150 ms away.
+- **The terminal.** True-colour frames plus the backend's per-glyph cursor
+  moves (a bordered empty 160x40 frame is 3.5 KB against 1.9 KB stock,
+  `terminal_backend_test.rs`) cost real parse time in slower terminals.
+
+Measured 2026-10-20 at 33 sessions: `service-ssh` egress about 447 KB/s, so
+about 13.5 KB/s per session and about 7 KB per drawn frame (61 draws/s fleet
+wide). The averages are harmless; bursts and the screensaver pieces (up to
+200 KB/s each, `late-ssh/src/app/ascii/CONTEXT.md`) are where the theory
+would bite. The edge read `tcp_slow_start_after_idle = 1`, `cubic`,
+`tcp_notsent_lowat` unlimited.
+
+**What is measured** (dashboard row Wire & Latency):
+
+- `late_ssh_terminal_rtt_seconds{client,backlog}`: the server's own
+  end-to-end trip (`late-ssh/src/terminal_probe.rs`). Every 10 s the render
+  loop follows a pass with a DSR status query; the terminal answers only
+  after parsing everything before it, so the answer time is what a user
+  waits for a frame. `backlog` is what the session wrote in the second
+  before the query, the pass that carried it included, so animation frames
+  still in the pipe count (`none`, `small` up to 4 KiB, `medium` up to
+  32 KiB, `large`); a large backlog is probed as soon as the last probe is
+  2 s old, so big repaints and heavy animation get sampled.
+  `late_ssh_terminal_probes_total{client,outcome}` gives the answer rate.
+- `late_ssh_frame_bytes{reason}` per drawn frame, and
+  `late_ssh_session_output_bytes_per_second{client}`, one sample per session
+  per 10 s window.
+- `late_ssh_output_bytes_total{screen,place,presence,kind}`: every byte
+  handed to the channel, attributed to where the session was when the pass
+  drew (`place` and `presence` are the attention metrics' labels, so the two
+  divide cleanly) and whether it was a frame or a terminal command (images,
+  OSC). `presence="idle"` is bytes sent to a terminal nobody has touched in
+  five minutes, the away screensaver included. Panels: Output Bytes by
+  Place, and Output Bytes per Active Second (cost of one watching viewer).
+- One `session wire summary` log line per session when it ends, in
+  VictoriaLogs: user, client, `TERM`, the terminal's own name (its XTVERSION
+  reply), how the session ended (`closed`, `stalled`, `failed`), bytes,
+  frames, mean and peak output rate, probes answered and lost, and per
+  backlog bucket the trip count, average and slowest (`rtt_none_avg_ms`,
+  `rtt_large_max_ms`, ...). This is the per-user view the metrics leave out
+  on purpose. `_msg:"session wire summary" username:alice` finds one user;
+  `_time:24h _msg:"session wire summary" | sort by (rtt_large_max_ms desc) | limit 20`
+  lists the worst sessions of the day.
+- `late_ssh_cli_latency_seconds{kind,platform}`: the native `late` CLI splits
+  the same trip. `ssh_rtt` is an SSH keepalive round trip (transport only),
+  `terminal` is the query leaving the CLI to the answer coming back (the
+  terminal only). Sent over the pair WebSocket as `latency` events.
+- `late_ssh_render_pass_seconds{reason,screen}`: how long each render pass
+  held the app lock (input drain, tick, draw), the server-side half the
+  trip above cannot separate. One slow session pins a tokio worker while the
+  fleet's CPU average stays green; a pass over the hot tick (66 ms) also logs
+  `slow render pass` with the username and screen, once a minute per session.
+
+**Shipped against slow start:** the `ssh-edge` DaemonSet's `tcp-tuning` init
+container sets `net.ipv4.tcp_slow_start_after_idle=0` in `server-1`'s host
+network namespace (`infra/ssh-tcp.tf`). Verify after the infra apply with
+`kubectl exec -n kube-system ds/ssh-edge -- cat /proc/sys/net/ipv4/tcp_slow_start_after_idle`
+(expect `0`).
+
+How to pull every number above from a terminal, and the first readings, are
+in [User Latency: Checking It Fast](#user-latency-checking-it-fast).
+
+**How to read it, after about a week of data:**
+
+- `backlog="large"` p95 well above `backlog="none"` p95 (say 100 ms or more)
+  means bytes on the wire are what users feel. Do the fix below.
+- `none` already high means plain network distance. Nothing server-side
+  shortens that.
+- For CLI sessions, compare the whole trip with its halves. A large
+  `terminal` half means the terminal is the bottleneck, and smaller frames
+  help more than pacing.
+- For one user, read their summary lines. A slow `rtt_fastest_ms` is their
+  network distance. Fine `rtt_none_*` with slow `rtt_large_*` is a link our
+  bytes outrun. A high `peak_bytes_per_sec` is a heavy screen. Lost or
+  retired probes, or `ended=stalled`, are a terminal ignoring DSR or a link
+  that stopped reading.
+
+**Future fix, after monitoring confirms it: pace frames by acknowledgement,
+the way mosh does.** A frame that answers input always goes out at once. A
+world-tick frame (animation) waits while a probe is still unanswered, and
+while pacing is active every frame carries a probe, so the terminal's
+answers clock the session at exactly what its link and terminal absorb. A
+skipped frame costs nothing: the ratatui diff folds it into the next one.
+Fast links never wait, so they see no change; slow links stop building a
+queue, and a keystroke never waits behind animation. A terminal that does
+not answer DSR keeps today's behaviour (the probe retires after three
+losses). Pair it with `tcp_notsent_lowat` (about 16 KiB) on the edge, so the
+backlog sits in russh and HAProxy where late-ssh can see it rather than in
+the kernel's send buffer; on its own that setting only moves the queue. The
+`OutputBudget` memory guard stays as it is.
+
+## User Latency: Checking It Fast
+
+The runbook for Pain Point 11: what to run to answer "is user latency
+measured, what are the numbers, and what is sending the bytes", from a
+terminal with `kubectl` on context `late-sh-r`. Pain Point 11 says what each
+metric means and how to decide; this says how to read them.
+
+### Reach the data
+
+```sh
+kubectl get pods -n default | grep service-ssh          # pod age = how long the current code has been live
+kubectl port-forward -n monitoring svc/victoriametrics 18428:8428 &   # metrics
+kubectl port-forward -n monitoring svc/victorialogs 19428:9428 &      # logs
+curl -s --retry 15 --retry-connrefused --retry-delay 1 localhost:18428/health   # wait for the forward
+q() { curl -s 'localhost:18428/api/v1/query' --data-urlencode "query=$1" \
+  | jq -r '.data.result[] | "\(.metric | del(.__name__,.instance,.job,.otel_scope_name,.service_instance_id,.service_name,.telemetry_sdk_language,.telemetry_sdk_name,.telemetry_sdk_version))  \(.value[1])"'; }
+pkill -f 'kubectl port-forward -n monitoring'            # when done
+```
+
+Gotchas, each of which has cost a wrong answer once:
+
+- **Wait for the forward.** A query sent before the port-forward is up
+  returns nothing, which reads exactly like "the metric has no data".
+- **Check the exported name before trusting an empty panel.** The
+  collector's Prometheus translation (`monitoring/otel-collector-config.yaml`)
+  appends the OTel unit to the name. It dedupes `bytes` and `seconds`, but a
+  `By/s` unit on `late_ssh_session_output_bytes_per_second` came out as
+  `..._per_second_per_second_*` and left its panel empty, so that histogram
+  now has no unit. A new metric's real name:
+  `curl -s localhost:18428/api/v1/label/__name__/values | jq -r '.data[]' | grep <stem>`.
+- **Keep the range inside the pod's age** when judging a change; older
+  samples are the previous build.
+
+### The checks, in order
+
+1. **Is it measuring?** Every answered probe records one trip, so the two
+   totals match per client; an answer rate under ~99% is terminals without
+   DSR or stalled links.
+   `sum by (client, outcome) (increase(late_ssh_terminal_probes_total[12h]))`
+   against `sum by (client) (increase(late_ssh_terminal_rtt_seconds_count[12h]))`.
+2. **The trip.** `histogram_quantile(0.95, sum by (le, client) (increase(late_ssh_terminal_rtt_seconds_bucket[12h])))`,
+   then the same `by (le, client, backlog)`. The `none` row is the network
+   floor; `large` minus `none` is what our bytes add.
+3. **Where a CLI trip goes.** `histogram_quantile(0.5, sum by (le, kind) (increase(late_ssh_cli_latency_seconds_bucket[12h])))`:
+   `ssh_rtt` is transport, `terminal` the user's terminal.
+4. **Ambient or typing.** `sum by (reason) (increase(late_ssh_frame_bytes_sum[12h]))`:
+   `tick` is bytes nobody asked for, `input` the answers to keys.
+5. **What sends the bytes.**
+   `topk(15, sum by (screen, place, presence) (increase(late_ssh_output_bytes_total[12h])))`,
+   and per watching viewer
+   `topk(15, sum by (screen, place) (increase(late_ssh_output_bytes_total{presence="active"}[12h])) / (sum by (screen, place) (increase(late_ssh_attention_seconds_total{presence="active"}[12h])) >= 60))`.
+   Images and OSC alone: add `kind="command"`.
+6. **Who.** The per-session log line, heaviest first:
+   ```sh
+   curl -s localhost:19428/select/logsql/query --data-urlencode \
+     'query=_time:12h {service.name="late-ssh"} _msg:"session wire summary" | sort by (bytes desc) | limit 15 | fields username, client, terminal, secs, bytes, frames, mean_bytes_per_sec, peak_bytes_per_sec, rtt_none_avg_ms, rtt_large_avg_ms' | jq -c .
+   ```
+   Bytes over frames near a full screen (25 KB and up) on every tick is a
+   screen repainting whole instead of diffing.
+
+Cross-checks: `sum(increase(late_ssh_output_bytes_total[12h]))` should
+match `sum(increase(late_ssh_frame_bytes_sum[12h]))` plus the
+`kind="command"` share, and roughly ten times
+`sum(increase(late_ssh_session_output_bytes_per_second_sum[12h]))` (one
+sample per 10 s window).
+
+### First reading (2026-10-21, 11 h after the probe shipped, 15 live sessions)
+
+| | cli | ssh |
+|---|---|---|
+| probes answered / lost | 41,915 / 25 | 29,540 / 64 |
+| trip p50 / p95 / p99 | 152 / 480 / 962 ms | 171 / 592 / 942 ms |
+| p50 backlog `none` / `large` | 129 / 239 ms | 165 / 235 ms |
+| p95 backlog `none` / `large` | 275 / 487 ms | 638 / 695 ms |
+
+- CLI split p50: `ssh_rtt` 155 ms, `terminal` 2.8 ms (p95 479 / 166 ms).
+  The trip is the network; terminals parse fast.
+- `small` and `medium` backlogs match `none`; only `large` (over 32 KiB in
+  the second before, 23% of probes) adds about 70 to 100 ms at the median.
+  The ssh `none` p95 of 638 ms is network jitter that bytes do not explain.
+- Of 5.74 GB of frames, 79% were world-tick frames; terminal commands were
+  within noise of zero. Two plain-ssh kitty sessions ran at about 243 KB/s
+  for minutes at 27 to 34 KB a frame (full repaints every tick). The
+  per-place counter landed after this reading, so which screen did it is
+  the next thing to check.
+
 ## Render-Cost Program (shipped 2026-07-22/23)
 
-Consolidated from RENDER_COST.md (deleted). The canonical description of the gate contract and the adaptive tick lives in CONTEXT.md §2.6; this section keeps the scale-relevant summary, the rules that must not be violated, and the open follow-ups.
+Consolidated from RENDER_COST.md (deleted). The canonical description of the gate contract and the adaptive tick lives in `late-ssh/CONTEXT.md`, Render loop; this section keeps the scale-relevant summary, the rules that must not be violated, and the open follow-ups.
 
 ### What shipped
 
 - **Phase 0, per-frame constant factors (2026-07-22):** counter-validated chat row caches (`ChatRowsVersions`, see `late-ssh/src/app/chat/CONTEXT.md`), presence cached at 1 Hz, per-session `targeted_event_rx` for single-recipient chat events, 64 KB BufWriter frame path, run-length clubhouse spans, Arc-shared nonogram library, and the `OutputBudget` guard (32 MB unacked pause, 30 s disconnect).
 - **Phase 1, dirty gate (2026-07-22):** `App::tick() -> bool`; `render_once` (ssh.rs) computes `changed = signal.dirty.swap(false) | input drained | app.tick()` and skips `terminal.draw()` entirely when clean (ratatui's diff does not advance on skip, no forced repaint needed).
-- **Phase 1 tightening + domain sweep (2026-07-22/23):** every domain state exposes `tick() -> bool` under the dirty contract ("rule of three", CONTEXT.md §2.6): chat snapshot drains report real change via full compares, modals are event-driven, house tables and door games report their watch peeks and go quiet between rounds, the ultimate cooldown became minute-granularity riding the per-minute global frame. The FFT audio visualizer was replaced by a stateless synthetic ambient equalizer (`viz::render_eq`), so no audio state drives rendering at all.
+- **Phase 1 tightening + domain sweep (2026-07-22/23):** every domain state exposes `tick() -> bool` under the dirty contract ("rule of three", `late-ssh/CONTEXT.md`): chat snapshot drains report real change via full compares, modals are event-driven, house tables and door games report their watch peeks and go quiet between rounds, the ultimate cooldown became minute-granularity riding the per-minute global frame. The FFT audio visualizer was replaced by a stateless synthetic ambient equalizer (`viz::render_eq`), so no audio state drives rendering at all.
 - **Phase 2, adaptive world tick (2026-07-23):** the fixed 66 ms interval is gone. Each render pass returns `App::wake_hint() -> Duration` and the loop sleeps exactly that long unless input or a `RenderSignal` wake lands first. Tiers (`app/tick.rs` consts): `HOT_TICK` 66 ms (splash, 2 s post-input window, active ultimate effect, house tables, open arcade game, bonsai modals), `ANIM_HALF_TICK` 132 ms (Clubhouse, visible sidebar, pet), `ANIM_QUARTER_TICK` 264 ms (aquarium surfaces), `IDLE_TICK` 500 ms floor. Floor ticks only drain channels; worst-case latency for an unprompted event while idle is one floor interval. Enablers: `marquee_tick` is wall-clock-derived, every frame edge is a period-index compare, and bonsai passive growth was removed entirely (product decision) so no wall-time accumulator depends on tick cadence.
 
 Result: idle sessions cost 2 cheap clean ticks/sec and about 1 render/min. A sidebar-visible session holds ~7.5 fps (about 37 draws per 5 s) by product decision: the bonsai sway animates unconditionally, and the ambient eq animates while a client is paired and unmuted.
@@ -466,7 +681,7 @@ Gating the `anim_half` sidebar edge on a paired client is NOT the knob, and woul
 - Peek receivers BEFORE draining (`has_changed()` on watches, `!is_empty()` on mpsc/broadcast). Exception: fixed-cadence publishers (chat snapshot, audio queue) report real change from the drain itself. A watch that is only `borrow()`ed at render must be marked seen (`borrow_and_update`) by whoever peeks it, or the peek latches dirty forever.
 - Nothing paints at full rate. The ambient eq, pet, bonsai sway, and clubhouse ambience share the half-rate edge (`anim_half`, ~7.5 fps); aquarium steps on the quarter edge (~3.8 fps); everything else is slow/static. Marquee moves 3 columns/sec in 1 s steps so speed costs no extra frames.
 - `is_multiple_of` on the tick counter is a bug pattern under sparse ticking; every edge compares its period index against the previous tick's.
-- A blanket `changed = true` or fixed cadence needs a written justification at its call site (the current survivors are listed in CONTEXT.md §2.6).
+- A blanket `changed = true` or fixed cadence needs a written justification at its call site (the current survivors are listed in `late-ssh/CONTEXT.md`).
 
 ### Metrics and observability
 
@@ -591,7 +806,7 @@ Below this, nothing measured exceeds 0.2%. Re-rank after the deploy rather than 
 
 ## DB Investigation
 
-`pg_stat_statements` was not enabled during the first investigation; it is now preloaded and installed in prod (used during the 2026-07-22 investigation; query recipes live in CONTEXT.md §10.2.2).
+`pg_stat_statements` was not enabled during the first investigation; it is now preloaded and installed in prod (used during the 2026-07-22 investigation; query recipes live in `infra/RUNBOOK.md`).
 
 The first investigation used:
 
@@ -719,7 +934,7 @@ Started 2026-09-02. Nitpicks found while reviewing, none of them a problem at to
 | `start_notify_worker` in `app/hub/shop/svc.rs` and `app/hub/dailies/svc.rs` | Each worker handles its queue one notify at a time, and these two run a per-user query per notify (`chip_user_changed` fires on every chip move). Re-read-only workers (flags, news, runner looks) already collapse a burst into one read; crown and pot apply every payload in order by design. A chip-heavy burst lags only shop panels on that replica, never another domain, since each worker has its own queue. | Drain what is queued, dedupe by user id, then refresh once per distinct user. Local to each worker, no new infrastructure. |
 | Any listener for a stream-shaped table (chat messages, feeds, news, notifications) built during the Pain Point 2 app-half migration | The re-read-only listeners (news, daily matches) re-read their whole table on every notify. That shape does not transfer to tables that grow. | Carry the row id in the payload as a hint, fetch rows with id greater than the last one seen (UUID v7 orders by time), and run the same query after a reconnect. The payload stays untrusted; the table stays the truth. |
 | `late-core/src/models/marketplace.rs` (9 call sites), `quest.rs` (2), `crown.rs`, `pot.rs`, `chat_message_gild.rs`, `bonsai.rs` (`Tree::notify_changed`, one call site per write in `BonsaiService`) | App-side `SELECT pg_notify(...)` after the write. Migration 128 already records why this is fragile: a new write path forgets the notify and nobody notices until a replica is stale. Chips use a trigger instead. | Move each channel's notify into an `AFTER INSERT OR UPDATE` trigger as the model is touched, delete the app-side call, keep the channel name constant in the model. |
-| `late-ssh/src/app/deadchannel/haunt/svc.rs`, splash whisper | Two devices of one user on the held door in the same window both play the whisper; only one mark lands. Already in root CONTEXT.md §7. | Claim before play instead of after, at the cost of the door opening a round trip later. Only worth it if someone notices. |
+| `late-ssh/src/app/deadchannel/haunt/svc.rs`, splash whisper | Two devices of one user on the held door in the same window both play the whisper; only one mark lands. Already in the Pain Point 2 ledger. | Claim before play instead of after, at the cost of the door opening a round trip later. Only worth it if someone notices. |
 
 ### Root-file thinning (measured 2026-09-02)
 
@@ -848,7 +1063,7 @@ Fixed in code, pending deploy verification. See Pain Point 6 for the shape and t
 
 ### 6. `pg_stat_statements` tracking
 
-Done: preloaded and installed in prod; query recipes in CONTEXT.md §10.2.2. Keep watching top total execution time, top mean, top calls, top temp bytes, and top shared/local block reads after traffic events.
+Done: preloaded and installed in prod; query recipes in `infra/RUNBOOK.md`. Keep watching top total execution time, top mean, top calls, top temp bytes, and top shared/local block reads after traffic events.
 
 **Caveat learned 2026-08-18:** the window has never been reset, so cumulative shares are meaningless across a deploy that changes query shapes (see the warning at the top of DB Cost Ranking). Two workable habits: reset the window after any deploy that rewrites SQL, or rank by a **two-snapshot delta** rather than by cumulative totals. The delta method needs no reset, preserves history, and is what verified the 2026-07-26 fixes. `stats_since` also helps: it dates each entry's creation, which is enough to tell deploy generations of the same query apart.
 
@@ -868,7 +1083,7 @@ Minimum viable design:
 
 Do not scale `service-ssh` randomly before this exists. The proxy half already pays for itself at one replica: it closes Pain Point 10.
 
-The app half runs in parallel and is the longer job: work the root CONTEXT.md §7 "Multi-replica readiness" table row by row, in the order the transport design needs them (presence first, since sticky sessions alone do not make a round's roster right; ghost single-leader second, since duplicate bot replies are the first thing users would notice; the translation cap last). New features never add rows to that table (CONTEXT.md §0 rule); a switch still held in process memory becomes a row as it is touched (Pain Point 2).
+The app half runs in parallel and is the longer job: work the Pain Point 2 ledger row by row, in the order the transport design needs them (presence first, since sticky sessions alone do not make a round's roster right; ghost single-leader second, since duplicate bot replies are the first thing users would notice; the translation cap last). New features never add rows to that table (root CONTEXT.md, multi-replica rule); a switch still held in process memory becomes a row as it is touched (Pain Point 2).
 
 ### 9. Add PgBouncer
 
@@ -877,6 +1092,12 @@ Before increasing app replicas substantially:
 - keep Postgres `max_connections` sane
 - move app pools behind PgBouncer transaction pooling
 - avoid multiplying deadpool connections by replica count
+
+### 10. Pace frames by acknowledgement, once the latency data says so
+
+Read the Wire & Latency row after about a week, then decide. The criteria
+and the design are in Pain Point 11. Not before: the point is to find out
+whether bytes on the wire are what users feel, before building against it.
 
 ## 1000-User Target Architecture
 
@@ -889,7 +1110,7 @@ Suggested shape:
 - PgBouncer: DB connection smoothing
 - Postgres: durable state
 - Audio: dedicated scalable streaming path, not one small Icecast pod on the app node
-- Observability: dashboard for active sessions, per-pod session count, render frames/sec, frame drops, DB pool wait, Postgres top SQL, p95 input latency. Partially exists: the Rendering row (renders, clean skips, draws/session, stall guard), `late_ssh_sessions_active`, `late_ssh_render_frame_drops_total` (a flat ~909/min per stalled session is the stalled-client signature), and `late_ssh_render_stall_{skips,disconnects}_total`; DB pool wait as `late_db_checkout_seconds` (every `Db::get`, by outcome) with `late_db_pool_connections{state}`, `late_db_pool_waiters` and `late_ssh_chat_read_permits_in_use`, and session start as `late_ssh_session_start_seconds{stage,user}` (accept to first frame), all in the Operations row; traces in VictoriaTraces (Jaeger API on `monitoring/victoriatraces:10428`)
+- Observability: dashboard for active sessions, per-pod session count, render frames/sec, frame drops, DB pool wait, Postgres top SQL, p95 input latency. Partially exists: the Rendering row (renders, clean skips, draws/session, stall guard), `late_ssh_sessions_active`, `late_ssh_render_frame_drops_total` (a flat ~909/min per stalled session is the stalled-client signature), and `late_ssh_render_stall_{skips,disconnects}_total`; DB pool wait as `late_db_checkout_seconds` (every `Db::get`, by outcome) with `late_db_pool_connections{state}`, `late_db_pool_waiters` and `late_ssh_chat_read_permits_in_use`, and session start as `late_ssh_session_start_seconds{stage,user}` (accept to first frame), all in the Operations row; what a user waits to see a frame in the Wire & Latency row (terminal round trip by the second of output before it, frame size, per-session output rate, the native CLI's split of the trip, render pass time by screen; Pain Point 11); traces in VictoriaTraces (Jaeger API on `monitoring/victoriatraces:10428`)
 - Per-pod telemetry identity (prerequisite for the above once replicas > 1): each app pod now sets `OTEL_RESOURCE_ATTRIBUTES=service.instance.id=$(POD_NAME)` (downward-API pod name) in Terraform (`infra/service-ssh.tf`, `infra/service-web.tf`). The SDK's env resource detector picks it up and the collector's `resource_to_telemetry_conversion` turns it into a `service_instance_id`/`instance` metric label. Before this, every pod exported an identical otel series (e.g. `late_ssh_sessions_active`) and they clobbered each other on scrape (the 32h A/B window showed the gauge alternating between the two pods' values). Query per pod with `... by (instance)`.
 
 The goal is not "1000 pods". The goal is "N SSH pods, each owning a shard of sessions".

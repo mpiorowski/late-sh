@@ -25,7 +25,7 @@ use super::svc::{next_reset, reset_hour_label};
 use super::targets_ui::draw_targets_view;
 
 /// The world in the board header. A generated one has no name anybody knows,
-/// so it says what it is instead: "Uncharted · 5 continents · 8 islands · 160
+/// so it says what it is instead: "Uncharted · 5 continents · 8 islands · 240
 /// lands" tells a player what they are looking at before they have panned
 /// across it.
 fn map_label(detail: &super::state::RealmDetail) -> String {

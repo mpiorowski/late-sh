@@ -12,7 +12,7 @@ use super::*;
 use crate::app::games::pool_core::{
     cue::{MAX_SPEED, MISCUE_LIMIT, PowerBand, ShotMode},
     rules::{self, PoolRules},
-    rules_snooker::{BLACK, RED_FIRST, YELLOW},
+    rules_snooker::{BLACK, PINK, RED_FIRST, YELLOW},
     shot::{Pot, ShotOutcome},
 };
 
@@ -34,6 +34,7 @@ fn break_shot() -> Shot {
         speed: 7.0,
         called_pocket: None,
         play_again: false,
+        put_back: false,
     }
 }
 
@@ -566,7 +567,7 @@ fn nothing_is_called_when_nothing_is_being_called_for() {
 // `DailyPoolState`, so it is tested here where a state is a one-liner.
 
 use crate::app::games::pool_core::aim::Hit;
-use crate::app::lobby::daily::pool_draft::{AimGear, PointerOutcome, PoolDraft};
+use crate::app::lobby::daily::pool_draft::{AimGear, FoulChoice, PointerOutcome, PoolDraft};
 
 #[test]
 fn the_move_list_names_snooker_balls_and_numbers_pool_balls() {
@@ -1057,8 +1058,8 @@ fn the_band_scales_the_same_pull_into_a_different_shot() {
         "light < normal < strong: {speeds:?}"
     );
     assert!(
-        (speeds[2] - MAX_SPEED).abs() < 1e-9,
-        "a full pull in the top band is a real break"
+        (speeds[2] - PowerBand::Strong.ceiling() * MAX_SPEED).abs() < 1e-9,
+        "a full pull in the top band is the band's ceiling, a real break"
     );
 }
 
@@ -1099,24 +1100,90 @@ fn the_stroke_is_draw_back_then_push_through_the_ball() {
 }
 
 #[test]
-fn the_backswing_is_the_power_not_wherever_the_push_ended() {
-    // On a real table how far you drew back decides the power; how fast the
-    // follow-through is timed does not. Reading the pull at the instant of
-    // contact would make every shot a soft one.
-    let (_, mut draft) = drafted();
-    draft.toggle_mode(ShotMode::Stroke(PowerBand::Strong));
-    draft.pointer_moved(50, 20, false, AimGear::Normal);
-    draft.pointer_moved(50, 34, false, AimGear::Normal);
-    let deepest = draft.pull;
-    assert!(deepest > 0.5, "a long draw is a hard shot: {deepest}");
+fn the_push_speed_is_the_power_not_how_far_the_cue_was_drawn() {
+    // The mouse is the cue: the same push from a long draw and a short one
+    // plays the same shot, and a quicker push plays a harder one.
+    use std::time::{Duration, Instant};
+    let push = |draw: u16, push_ms: u64| {
+        let (_, mut draft) = drafted();
+        draft.toggle_mode(ShotMode::Stroke(PowerBand::Strong));
+        let t0 = Instant::now();
+        let ms = |n: u64| t0 + Duration::from_millis(n);
+        draft.pointer_moved_at(50, 20, false, AimGear::Normal, ms(0));
+        draft.pointer_moved_at(50, 20 + draw, false, AimGear::Normal, ms(300));
+        // Rest at the bottom, then push through in four even reports.
+        let rows = draw + 2;
+        let mut outcome = PointerOutcome::Ignored;
+        for step in 1..=4u64 {
+            let y = 20 + draw - (rows as u64 * step / 4) as u16;
+            outcome = draft.pointer_moved_at(
+                50,
+                y,
+                false,
+                AimGear::Normal,
+                ms(1000 + push_ms * step / 4),
+            );
+        }
+        assert_eq!(
+            outcome,
+            PointerOutcome::Strike,
+            "the push went through the ball"
+        );
+        draft.power()
+    };
+    let slow = push(10, 600);
+    let quick = push(10, 100);
+    assert!(
+        quick > slow + 0.25 * (PowerBand::Strong.ceiling() - PowerBand::Strong.floor()),
+        "a quicker push is a harder shot: {slow} then {quick}"
+    );
+    // And neither leaves the band: a strong stroke is never a roll.
+    for power in [slow, quick, push(10, 3000)] {
+        assert!(
+            (PowerBand::Strong.floor()..=PowerBand::Strong.ceiling()).contains(&power),
+            "{power}"
+        );
+    }
+    // The same speed from twice the draw: the same shot, give or take the
+    // rows the window sees.
+    let long = push(20, 200);
+    let short = push(10, 100);
+    assert!(
+        (long - short).abs() < short * 0.25,
+        "how far it was drawn is not the power: {short} and {long}"
+    );
+}
 
-    assert_eq!(
-        draft.pointer_moved(50, 10, false, AimGear::Normal),
-        PointerOutcome::Strike
+#[test]
+fn a_flick_that_arrives_in_one_report_is_fast_not_infinite() {
+    // Over SSH a quick push can land as a single report. It is dated from the
+    // report before it, no further back than the seed, and never timed at
+    // under the floor — so it is a hard shot, inside the band.
+    use std::time::{Duration, Instant};
+    let (_, mut draft) = drafted();
+    draft.toggle_mode(ShotMode::Stroke(PowerBand::Normal));
+    let t0 = Instant::now();
+    draft.pointer_moved_at(50, 20, false, AimGear::Normal, t0);
+    draft.pointer_moved_at(
+        50,
+        26,
+        false,
+        AimGear::Normal,
+        t0 + Duration::from_millis(500),
     );
     assert_eq!(
-        draft.pull, deepest,
-        "the shot is played at the backswing, not at the crossing"
+        draft.power(),
+        PowerBand::Normal.floor(),
+        "drawing back reads the band's floor: speed is power"
+    );
+    assert_eq!(
+        draft.pointer_moved_at(50, 14, false, AimGear::Normal, t0 + Duration::from_secs(3)),
+        PointerOutcome::Strike
+    );
+    let power = draft.power();
+    assert!(
+        power > 0.5 * PowerBand::Normal.ceiling() && power <= PowerBand::Normal.ceiling(),
+        "{power}"
     );
 }
 
@@ -1175,6 +1242,38 @@ fn the_pull_stays_inside_its_band_however_hard_it_is_pushed() {
             .is_ok(),
         "even a dead-stop pull must still send a playable stroke"
     );
+}
+
+#[test]
+fn j_and_k_step_the_stroke_a_tenth_of_a_metre_a_second_inside_its_band() {
+    let (state, mut draft) = drafted();
+    assert!(!draft.step_speed(true), "no stroke armed, nothing to step");
+    draft.toggle_mode(ShotMode::Stroke(PowerBand::Normal));
+    let speed = |draft: &PoolDraft| draft.shot(&state).expect("aimed").speed;
+    let on_grid = |v: f64| ((v * 10.0) - (v * 10.0).round()).abs() < 1e-6;
+
+    // Off the grid, as the mouse might leave it: the first press snaps up to
+    // the next tenth, and every press after is exactly one tenth.
+    draft.pull = 0.37;
+    let start = speed(&draft);
+    assert!(draft.step_speed(true));
+    let up = speed(&draft);
+    assert!(on_grid(up), "lands on a tenth: {up}");
+    assert!(up > start && up - start <= 0.1 + 1e-9, "{start} -> {up}");
+    draft.step_speed(true);
+    assert!((speed(&draft) - (up + 0.1)).abs() < 1e-6);
+    draft.step_speed(false);
+    assert!((speed(&draft) - up).abs() < 1e-6);
+
+    // Held down, it stops at the band's ends rather than leaving the band.
+    for _ in 0..100 {
+        draft.step_speed(true);
+    }
+    assert!((speed(&draft) - PowerBand::Normal.ceiling() * MAX_SPEED).abs() < 1e-6);
+    for _ in 0..100 {
+        draft.step_speed(false);
+    }
+    assert!((speed(&draft) - PowerBand::Normal.floor() * MAX_SPEED).abs() < 1e-6);
 }
 
 #[test]
@@ -1491,6 +1590,7 @@ fn a_reload_mid_shot_does_not_delete_the_shot() {
         queue: Vec::new(),
         replaying: false,
         watching: Some(PoolDraft::new(&state).share()),
+        foul_hit: Default::default(),
     };
     let mut fresh = PoolDetail {
         draft: PoolDraft::new(&state),
@@ -1500,6 +1600,7 @@ fn a_reload_mid_shot_does_not_delete_the_shot() {
         queue: Vec::new(),
         replaying: false,
         watching: None,
+        foul_hit: Default::default(),
     };
 
     fresh.adopt(&mut playing);
@@ -1941,8 +2042,8 @@ fn a_pocket_is_named_by_clicking_the_pocket_and_not_the_quarter_of_the_table_nea
 fn holding_a_modifier_gears_the_pointer() {
     // A terminal cell is a coarse unit to aim in — one column is about a
     // ball's width at a metre and a half — so a single rate is a compromise
-    // between sweeping the table and picking a thin cut. Ctrl and Shift are
-    // the mouse's answer to `h l` against `H L`.
+    // between sweeping the table and picking a thin cut. Ctrl is the mouse's
+    // answer to `H L`.
     let (state, _) = drafted();
     let swept = |gear: AimGear| {
         let mut draft = PoolDraft::new(&state);
@@ -1959,19 +2060,12 @@ fn holding_a_modifier_gears_the_pointer() {
     let normal = swept(AimGear::Normal);
     assert!(normal > 0.0, "a sweep to the right turns the cue clockwise");
     assert!(
-        (swept(AimGear::Coarse) - normal * 4.0).abs() < 1e-12,
-        "shift crosses the table in the sweep that used to walk a ball"
-    );
-    assert!(
         (swept(AimGear::Fine) - normal * 0.1).abs() < 1e-12,
         "ctrl buys the last fraction of a degree"
     );
 
-    // Ctrl wins when both are held: asking for both is asking for precision
-    // with a hand that has run out of desk, and the re-grip covers that.
-    assert_eq!(AimGear::of(true, true), AimGear::Fine);
-    assert_eq!(AimGear::of(false, true), AimGear::Coarse);
-    assert_eq!(AimGear::of(false, false), AimGear::Normal);
+    assert_eq!(AimGear::of(true), AimGear::Fine);
+    assert_eq!(AimGear::of(false), AimGear::Normal);
     assert_eq!(AimGear::default(), AimGear::Normal);
 
     // The same gear steers the tip, which is the other delta-steered mode and
@@ -1984,5 +2078,267 @@ fn holding_a_modifier_gears_the_pointer() {
         draft.tip[0]
     };
     assert!(tipped(AimGear::Fine).abs() < tipped(AimGear::Normal).abs());
-    assert!(tipped(AimGear::Normal).abs() < tipped(AimGear::Coarse).abs());
+}
+
+// ── Matches of several frames, and the snooker scoreboard ─────────────
+
+/// Strip the rack to the cue ball and `id`, lined up on a corner pocket a
+/// short, firm stroke away, and hand back the stroke that drops it. `keep`
+/// stays where it is racked, everything else goes down.
+fn lined_up(state: &mut DailyPoolState, id: u8, keep: &[u8]) -> Shot {
+    let spec = state.spec().expect("known table");
+    let pocket = spec
+        .geometry()
+        .pockets
+        .into_iter()
+        .find(|pocket| pocket.kind == table::PocketKind::Corner)
+        .expect("a table has corners");
+    let middle = [spec.length / 2.0, spec.width / 2.0];
+    let (dx, dy) = (middle[0] - pocket.center[0], middle[1] - pocket.center[1]);
+    let len = dx.hypot(dy);
+    let dir = [dx / len, dy / len];
+    let object = [
+        pocket.center[0] + dir[0] * 0.3,
+        pocket.center[1] + dir[1] * 0.3,
+    ];
+    let cue = [
+        pocket.center[0] + dir[0] * 0.6,
+        pocket.center[1] + dir[1] * 0.6,
+    ];
+    for ball in &mut state.rack.balls {
+        if ball.id == CUE {
+            ball.pos = cue;
+            ball.potted = None;
+        } else if ball.id == id {
+            ball.pos = object;
+            ball.potted = None;
+        } else if !keep.contains(&ball.id) {
+            ball.potted = Some(0);
+        }
+    }
+    state.ball_in_hand = None;
+    Shot {
+        place: None,
+        azimuth: (-dir[1]).atan2(-dir[0]),
+        // A touch of draw, so the cue ball stops short of following it in.
+        tip: [0.0, -0.2],
+        speed: 2.0,
+        called_pocket: None,
+        play_again: false,
+        put_back: false,
+    }
+}
+
+#[test]
+fn a_snooker_frame_is_called_on_the_black_with_more_than_seven_in_it() {
+    // Down to the black with eighteen in it: the player behind cannot win
+    // without being handed fouls, and the frame is over whether or not anyone
+    // bothers to pot the black. That is the real rule, and the only place
+    // the frame is called on points.
+    let out_of_reach = |scores: [i32; 2]| {
+        let mut state = state(PoolRules::Snooker);
+        let spec = state.spec().expect("known table");
+        for ball in &mut state.rack.balls {
+            ball.potted = match ball.id {
+                CUE | BLACK => None,
+                _ => Some(0),
+            };
+            if ball.id == CUE {
+                ball.pos = [spec.length * 0.1, spec.width * 0.5];
+            }
+        }
+        state.ball_in_hand = None;
+        state.scores = scores;
+        // Away from the black, gently: a miss, and seven to the other seat.
+        let miss = Shot {
+            azimuth: std::f64::consts::PI,
+            speed: 0.3,
+            ..break_shot()
+        };
+        let played = state.apply_shot(0, &miss).expect("a legal stroke");
+        (state, played)
+    };
+
+    let (state, played) = out_of_reach([30, 5]);
+    assert_eq!(state.scores, [30, 12], "the miss paid seven");
+    assert!(played.finished);
+    assert_eq!(played.winner, Some(0));
+    assert!(
+        played.label.contains("more than the black"),
+        "{}",
+        played.label
+    );
+
+    let (state, played) = out_of_reach([10, 5]);
+    assert_eq!(state.scores, [10, 12]);
+    assert!(
+        !played.finished,
+        "two behind with seven on is still a frame"
+    );
+    assert_eq!(state.points_remaining(), 7);
+}
+
+#[test]
+fn the_break_counts_a_visit_and_ends_with_it() {
+    let mut state = state(PoolRules::Snooker);
+    let shot = lined_up(&mut state, RED_FIRST, &[BLACK]);
+    state.apply_shot(0, &shot).expect("a legal shot");
+    assert_eq!(state.scores, [1, 0], "the red went down");
+    assert_eq!(state.current_break, 1);
+    assert_eq!(state.turn, 0, "and the striker stays on");
+    assert!(state.on_colour);
+    assert_eq!(
+        state.points_remaining(),
+        14,
+        "a black after the red, and the black itself"
+    );
+
+    // Miss the colour: the visit is over and so is the break.
+    let miss = Shot {
+        azimuth: shot.azimuth + std::f64::consts::PI,
+        speed: 0.3,
+        ..break_shot()
+    };
+    state.apply_shot(0, &miss).expect("a legal stroke");
+    assert_eq!(state.turn, 1);
+    assert_eq!(state.current_break, 0);
+}
+
+/// A snooker table stripped to the cue ball at the baulk end and `live` on
+/// their spots, with `scores` on the board and seat 0 to play.
+fn snooker_with(live: &[u8], scores: [i32; 2]) -> DailyPoolState {
+    let mut state = state(PoolRules::Snooker);
+    let spec = state.spec().expect("known table");
+    for ball in &mut state.rack.balls {
+        if ball.id == CUE {
+            ball.pos = [spec.length * 0.1, spec.width * 0.5];
+        } else if !live.contains(&ball.id) {
+            ball.potted = Some(0);
+        }
+    }
+    state.ball_in_hand = None;
+    state.scores = scores;
+    state
+}
+
+/// Gently away from everything: no contact, a foul on whatever is on.
+fn walk_away() -> Shot {
+    Shot {
+        azimuth: std::f64::consts::PI,
+        speed: 0.3,
+        ..break_shot()
+    }
+}
+
+#[test]
+fn snookers_are_left_to_play_for_until_the_black() {
+    // Pink and black left, thirty behind: the frame goes on, and the board
+    // says how many snookers it takes.
+    let mut state = snooker_with(&[PINK, BLACK], [40, 10]);
+    state.apply_shot(0, &walk_away()).expect("a legal stroke");
+    assert_eq!(state.scores, [40, 16], "the miss paid the pink");
+    assert!(!state.is_finished(), "snookers are still on");
+    assert_eq!(state.points_remaining(), 13);
+}
+
+#[test]
+fn a_miss_lets_the_fouled_player_put_the_balls_back() {
+    let mut state = snooker_with(&[RED_FIRST, BLACK], [0, 0]);
+    let struck = state.rack.clone();
+    let played = state.apply_shot(0, &walk_away()).expect("a legal stroke");
+    assert!(played.label.ends_with("and a miss"), "{}", played.label);
+    assert_eq!(state.scores, [0, 4]);
+    assert!(state.miss.is_some() && state.may_return);
+    assert_eq!(state.turn, 1);
+
+    // B, playing on, needs nothing; C is the hand-back; A is this.
+    let back = Shot {
+        put_back: true,
+        ..Shot::default()
+    };
+    state.apply_shot(1, &back).expect("the balls go back");
+    assert_eq!(
+        state.rack,
+        struck.rounded(PERSIST_DECIMALS),
+        "as they were struck"
+    );
+    assert_eq!(state.turn, 0, "and the offender is at the table again");
+    assert_eq!(state.scores, [0, 4], "the penalty stands");
+    assert!(state.miss.is_none() && !state.may_return);
+    assert!(
+        state.apply_shot(0, &back).is_err(),
+        "nothing to put back once it has been"
+    );
+
+    // Missing again is another miss, and the choice comes round again.
+    state.apply_shot(0, &walk_away()).expect("a legal stroke");
+    assert!(state.miss.is_some());
+    assert_eq!(state.scores, [0, 8]);
+}
+
+#[test]
+fn a_put_back_restores_what_the_offender_was_on() {
+    // On a colour after a red, and missing it: the put-back has them on a
+    // colour again, not on the yellow the foul left the table at.
+    let mut state = snooker_with(&[PINK, BLACK], [20, 20]);
+    state.on_colour = true;
+    state.apply_shot(0, &walk_away()).expect("a legal stroke");
+    assert!(!state.on_colour);
+    assert!(state.miss.is_some());
+    let back = Shot {
+        put_back: true,
+        ..Shot::default()
+    };
+    state.apply_shot(1, &back).expect("the balls go back");
+    assert!(state.on_colour);
+}
+
+#[test]
+fn no_miss_is_called_when_snookers_are_needed_or_on_the_black() {
+    // Thirty behind with fifteen on: the striker needs snookers, so a ball
+    // they fail to hit is their business, not the referee's.
+    let mut state = snooker_with(&[RED_FIRST, BLACK], [0, 30]);
+    let played = state.apply_shot(0, &walk_away()).expect("a legal stroke");
+    assert!(state.miss.is_none(), "{}", played.label);
+    assert!(
+        state.may_return,
+        "it was still a foul, and a hand-back is owed"
+    );
+
+    // Level, but only the black left: never a miss.
+    let mut state = snooker_with(&[BLACK], [10, 10]);
+    state.apply_shot(0, &walk_away()).expect("a legal stroke");
+    assert!(state.miss.is_none());
+}
+
+#[test]
+fn the_foul_dialog_offers_the_put_back_only_after_a_miss_and_closes_on_play_on() {
+    let mut state = snooker_with(&[RED_FIRST, BLACK], [0, 30]);
+    state.apply_shot(0, &walk_away()).expect("a legal stroke");
+    // A foul with snookers needed: no miss, so two choices.
+    assert_eq!(
+        FoulChoice::offered(&state),
+        vec![FoulChoice::PlayOn, FoulChoice::HandBack]
+    );
+    let mut draft = PoolDraft::new(&state);
+    assert!(draft.foul_dialog_open(&state));
+    assert_eq!(state.last_penalty, 4);
+
+    // The arrows walk it and stop at the ends.
+    draft.key_step(&state, 0, -1);
+    draft.key_step(&state, 0, -1);
+    assert_eq!(draft.foul.cursor, 1);
+    draft.key_step(&state, 0, 1);
+    assert_eq!(draft.foul.cursor, 0);
+
+    draft.play_on(&state);
+    assert!(!draft.foul_dialog_open(&state), "playing on closes it");
+
+    let mut state = snooker_with(&[RED_FIRST, BLACK], [0, 0]);
+    state.apply_shot(0, &walk_away()).expect("a legal stroke");
+    assert_eq!(
+        FoulChoice::offered(&state).last(),
+        Some(&FoulChoice::PutBack),
+        "a miss adds the put-back"
+    );
 }

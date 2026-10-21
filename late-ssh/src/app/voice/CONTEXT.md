@@ -12,7 +12,7 @@
 ## 1. Scope
 
 Owned by this domain:
-- Voice channels attached to chat rooms (the only target kind since the Rooms demolition dropped `target_kind='game_room'`).
+- Voice channels attached to chat rooms (`target_kind='chat_room'`, the only target kind).
 - Server-side LiveKit token minting for authenticated CLI participants.
 - TUI voice state: enabled/off, participant list, current-user joined/muted/deafened state, and room controls.
 - Pair WebSocket voice control messages: join, leave, mute, deafen, and client `voice_state` reports.
@@ -173,7 +173,7 @@ Current UX gaps worth addressing:
 Moderation revocation:
 - `/mod room-voice off` revokes every known/authorized participant for that voice channel and calls LiveKit `RemoveParticipant` for each identity.
 - Room kick/ban revokes the target user from that room's voice channel (all voice channels are chat-room-targeted, including game-surface ones). A *ban* additionally refuses future tickets for that channel (see `checked_join_ticket` in §3); a kick does not, so a kicked user may rejoin and speak again.
-- A stream room's owner can reach this without staff, through `/ban` in their own room. See `../stream/CONTEXT.md` §6.
+- A stream room's owner can reach this without staff, through `/ban` in their own room. See `../stream/MODERATION.md`.
 - Server kick/ban revokes the target user from whichever voice channel they are currently in or most recently ticketed for.
 - `/mod voice kick` is broader than room revocation: it is a runtime, server-wide voice block and is not persisted beyond restart.
 - LiveKit removal failures are logged after DB/audit state is committed; they should not roll back moderation state.
@@ -216,10 +216,10 @@ Events:
 
 Unsupported platforms:
 - CLI voice media is compiled only for Linux, macOS, and Windows.
-- Android/Termux and other platforms advertise no voice capability and `join` bails with `voice media is not supported on this platform`. There is no browser fallback for them: browser listen-only was removed for v1 private-room safety.
+- Android/Termux and other platforms advertise no voice capability and `join` bails with `voice media is not supported on this platform`. There is no browser fallback for them: there is no browser listen-only, for private-room safety.
 
 macOS link requirements:
-- The `late` binary must be linked with `-ObjC` and must embed `NSMicrophoneUsageDescription`; both come from `late-cli/build.rs` on `apple-darwin` targets. Without `-ObjC` the process aborts on an uncaught `NSException` (a dropped ObjC category in LiveKit's static `libwebrtc.a`) while LiveKit builds its video encoder factory during peer-connection setup, even though this runtime is audio-only. Without the plist section macOS aborts on first microphone access, bypassing raw-mode cleanup. Details and the upstream tracking issue are in `late-cli/CONTEXT.md` §9.
+- The `late` binary must be linked with `-ObjC` and must embed `NSMicrophoneUsageDescription`; both come from `late-cli/build.rs` on `apple-darwin` targets. Without `-ObjC` the process aborts on an uncaught `NSException` (a dropped ObjC category in LiveKit's static `libwebrtc.a`) while LiveKit builds its video encoder factory during peer-connection setup, even though this runtime is audio-only. Without the plist section macOS aborts on first microphone access, bypassing raw-mode cleanup. Details and the upstream tracking issue are in `late-cli/DISTRIBUTION.md`.
 
 Important audio-engine boundary:
 - Do not reintroduce a second manual CPAL/FIFO remote-track playout path. Earlier manual output could duplicate/stutter remote voice.
@@ -230,7 +230,7 @@ Important audio-engine boundary:
 
 ## 7. Browser Listen-Only and the Stream-Room Exception
 
-Browser listen-only support was removed for v1 as a *paired-client* surface.
+There is no browser listen-only *paired-client* surface.
 Voice tokens for actual voice participation are minted only for authenticated
 SSH sessions with a paired native CLI, after the server checks that the voice
 channel is enabled and the user is a member of the target chat/game room.
@@ -242,8 +242,7 @@ deliberately and narrowly:
   owner only, reached through a per-stream capability URL minted from the
   TUI. Publishing is restricted at the SFU grant level to
   `screen_share`/`screen_share_audio` only: no browser mic exists anywhere,
-  voice is CLI-only with zero exceptions (the former streamer-mic exception
-  was removed once macOS CLI voice landed; a streamer talks through CLI
+  voice is CLI-only with zero exceptions (a streamer talks through CLI
   voice like everyone else). Identity is `stream-{user_id}` so a CLI
   streamer in voice is not kicked by their own console connecting.
 - `stream_watch_ticket` — anonymous watch pages: `canPublish=false` enforced
@@ -323,7 +322,7 @@ Background tasks:
 - Add richer LiveKit health/metrics dashboards.
 - Reintroduce browser listening only with authenticated room-access checks.
 - Consider one CLI audio engine/mixer for music + voice once voice polish needs ducking/device unification.
-- Keep browser publishing, video, screen share, and recording out of the MVP until product scope changes — with the one shipped exception of the stream-room tickets in §7 (streamer console + anonymous watch pages, scoped to `app/stream`). Do not widen that exception into general browser voice without a real design pass.
+- Keep browser publishing, video, screen share, and recording out of the MVP until product scope changes, with one exception: the stream-room tickets in §7 (streamer console + anonymous watch pages, scoped to `app/stream`). Do not widen that exception into general browser voice without a real design pass.
 
 ---
 
@@ -336,7 +335,7 @@ Source-side unit tests are appropriate for pure logic only:
 
 Tests that need services, DB, API routes, pair-WS orchestration, or rate limiters go in adjacent `_test.rs` files beside the module they exercise, using `crate::test_helpers`.
 
-LLM agents must not run `cargo test`, `cargo nextest`, or `cargo clippy` in this repo. Note expected verification commands in handoff instead.
+Agents run targeted tests through `make test-llm ARGS="-p late-ssh -E 'test(voice)'"`; `make check` stays with the human owner.
 
 ---
 
