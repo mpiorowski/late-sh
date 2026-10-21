@@ -256,6 +256,11 @@ impl Draft {
         let Some(at) = self.canvas_at() else {
             return;
         };
+        // The panel draws the poster from its top left, cut to the body, and
+        // never scrolls. The editor scrolls its own origin when the keys walk
+        // the cursor past a cut-off body, so a click reads from the top left
+        // again or it lands on a cell the pointer is not over.
+        self.editor.viewport_origin = Pos { x: 0, y: 0 };
         self.editor.set_viewport(
             Viewport {
                 x: at.x,

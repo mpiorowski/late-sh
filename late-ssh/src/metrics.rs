@@ -341,15 +341,20 @@ pub enum TailorBeat {
     Failed,
 }
 
-/// A poster written at PRINTS (`app/deadchannel/poster`): `Saved` and
-/// `Burned` landed, `NoRunner` found no standing runner to hang it on or
-/// take it off, `Failed` is the write not landing.
+/// A poster at PRINTS (`app/deadchannel/poster`): `Saved` and `Burned`
+/// landed, `NoRunner` found no standing runner to hang it on or take it
+/// off, `Failed` is the write not landing. The read when the panel opens:
+/// `ReadFailed` is the wall not read (the panel cannot open on it),
+/// `Undecodable` a stored poster that is no canvas (the panel opens on a
+/// bare wall).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PosterBeat {
     Saved,
     Burned,
     NoRunner,
     Failed,
+    ReadFailed,
+    Undecodable,
 }
 
 /// What the presence wire did (`app/presence`): `Published` a notify
@@ -2050,6 +2055,8 @@ mod inner {
             PosterBeat::Burned => "burned",
             PosterBeat::NoRunner => "no_runner",
             PosterBeat::Failed => "failed",
+            PosterBeat::ReadFailed => "read_failed",
+            PosterBeat::Undecodable => "undecodable",
         }
     }
 

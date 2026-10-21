@@ -1744,7 +1744,7 @@ impl ModerationService {
         username: &str,
         reason: String,
     ) -> Result<Vec<String>> {
-        ensure_has(permissions, Caps::RESTORE_ARTBOARD)?;
+        ensure_has(permissions, Caps::REMOVE_DEADCHANNEL_POSTER)?;
         let mut client = self.db.get().await?;
         let target = find_user_by_mod_name(&client, username).await?;
         let tx = client.transaction().await?;

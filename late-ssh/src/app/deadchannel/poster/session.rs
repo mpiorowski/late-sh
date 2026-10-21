@@ -1,6 +1,7 @@
-//! A session's side of PRINTS: what the bench holds (shut, no runner, the
-//! wall being read, a draft), whether a poster hangs as far as this session
-//! knows, the printer's last word, and the one write that may be out.
+//! A session's side of PRINTS: what the bench holds (shut, no runner, a
+//! write to wait out, the wall being read, a draft), whether a poster
+//! hangs as far as this session knows, the printer's last word, and the
+//! one write that may be out.
 //! Decides nothing: a key press moves the draft, `save` and `burn` ask the
 //! service, and the answers set the word.
 
@@ -19,6 +20,12 @@ pub(crate) enum Bench {
     Shut,
     /// No standing runner in the directory: nothing to paint for.
     NoRunner,
+    /// A save or burn this session sent is still out: the wall is read
+    /// once it lands, so the draft opens on what the write left there and
+    /// never on a read that raced it.
+    Waiting {
+        marks: i32,
+    },
     /// The wall is being read; the brush will be cut to `marks`.
     Reading {
         marks: i32,
@@ -73,14 +80,18 @@ impl PosterSession {
     /// the draft opens on it a tick later.
     pub(crate) fn open(&mut self, runner: Option<RunnerEntry>) {
         self.word = None;
-        self.bench = match runner {
-            Some(entry) => {
-                self.svc
-                    .read_task(self.user_id, self.username.clone(), self.outcome_tx.clone());
-                Bench::Reading { marks: entry.marks }
-            }
-            None => Bench::NoRunner,
+        self.bench = match (runner, self.writing) {
+            (Some(entry), Some(Write::Save | Write::Burn)) => Bench::Waiting { marks: entry.marks },
+            (Some(entry), None) => self.read(entry.marks),
+            (None, _) => Bench::NoRunner,
         };
+    }
+
+    /// Ask for the wall; the draft opens on the answer.
+    fn read(&self, marks: i32) -> Bench {
+        self.svc
+            .read_task(self.user_id, self.username.clone(), self.outcome_tx.clone());
+        Bench::Reading { marks }
     }
 
     /// Back to the street. A draft not saved is dropped.
@@ -92,14 +103,22 @@ impl PosterSession {
     pub(crate) fn draft(&self) -> Option<&Draft> {
         match &self.bench {
             Bench::Open(draft) => Some(draft),
-            Bench::Shut | Bench::NoRunner | Bench::Reading { .. } | Bench::Unread => None,
+            Bench::Shut
+            | Bench::NoRunner
+            | Bench::Waiting { .. }
+            | Bench::Reading { .. }
+            | Bench::Unread => None,
         }
     }
 
     pub(crate) fn draft_mut(&mut self) -> Option<&mut Draft> {
         match &mut self.bench {
             Bench::Open(draft) => Some(draft),
-            Bench::Shut | Bench::NoRunner | Bench::Reading { .. } | Bench::Unread => None,
+            Bench::Shut
+            | Bench::NoRunner
+            | Bench::Waiting { .. }
+            | Bench::Reading { .. }
+            | Bench::Unread => None,
         }
     }
 
@@ -150,7 +169,7 @@ impl PosterSession {
                     }
                 }
                 PosterOutcome::Saved(canvas) => {
-                    self.writing = None;
+                    self.write_landed();
                     self.hung = true;
                     if let Some(draft) = self.draft_mut() {
                         draft.saved(canvas);
@@ -158,7 +177,7 @@ impl PosterSession {
                     self.word = Some("the press runs. it hangs on your profile now.".to_string());
                 }
                 PosterOutcome::Burned => {
-                    self.writing = None;
+                    self.write_landed();
                     self.hung = false;
                     if let Some(draft) = self.draft_mut() {
                         draft.burned();
@@ -166,16 +185,25 @@ impl PosterSession {
                     self.word = Some("it burns. the wall is bare.".to_string());
                 }
                 PosterOutcome::NoRunner => {
-                    self.writing = None;
+                    self.write_landed();
                     self.word = Some("the printer shrugs. you have no runner here.".to_string());
                 }
                 PosterOutcome::Failed => {
-                    self.writing = None;
+                    self.write_landed();
                     self.word = Some("the press jams. try again.".to_string());
                 }
             }
         }
         changed
+    }
+
+    /// The write's answer is in: a panel that opened while it was out
+    /// reads the wall now.
+    fn write_landed(&mut self) {
+        self.writing = None;
+        if let Bench::Waiting { marks } = self.bench {
+            self.bench = self.read(marks);
+        }
     }
 
     /// The wall read for the panel: the draft opens on it, unless the
@@ -188,3 +216,7 @@ impl PosterSession {
         self.bench = Bench::Open(Draft::new(stored, marks));
     }
 }
+
+#[cfg(test)]
+#[path = "session_test.rs"]
+mod session_test;

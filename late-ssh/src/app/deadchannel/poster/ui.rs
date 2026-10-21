@@ -96,7 +96,7 @@ pub(crate) fn panel_rows(view: &PosterView<'_>) -> Vec<Line<'static>> {
     let muted = ink(INK_MUTED);
     match view.bench {
         Bench::Open(_) => vec![Line::default(); POSTER_HEIGHT],
-        Bench::Reading { .. } => vec![Line::from(Span::styled(
+        Bench::Waiting { .. } | Bench::Reading { .. } => vec![Line::from(Span::styled(
             "the printer goes to find what hangs on your wall...",
             muted,
         ))],

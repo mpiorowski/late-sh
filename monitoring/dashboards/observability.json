@@ -4022,7 +4022,7 @@
     {
       "type": "bargauge",
       "title": "Tailor, Prints & the Door",
-      "description": "Looks worn at the tailor's mirror (worn, no_runner, failed), posters saved and burned at PRINTS (saved, burned, no_runner, failed), and runners leaving and returning to #deadchannel over the range.",
+      "description": "Looks worn at the tailor's mirror (worn, no_runner, failed), posters saved and burned at PRINTS (saved, burned, no_runner, failed; the read on open: read_failed, undecodable), and runners leaving and returning to #deadchannel over the range.",
       "datasource": {
         "uid": "victoriametrics",
         "type": "victoriametrics-metrics-datasource"

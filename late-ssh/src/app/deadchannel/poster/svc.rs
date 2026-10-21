@@ -63,13 +63,14 @@ impl PosterService {
                     Ok(Some(value)) => match serde_json::from_value::<Canvas>(value) {
                         Ok(canvas) => PosterOutcome::Hung(Some(canvas)),
                         Err(error) => {
+                            metrics::record_deadchannel_poster(PosterBeat::Undecodable);
                             tracing::error!(error = %error, "poster failed to decode; prints opens on a bare wall");
                             PosterOutcome::Hung(None)
                         }
                     },
                     Ok(None) => PosterOutcome::Hung(None),
                     Err(error) => {
-                        metrics::record_deadchannel_poster(PosterBeat::Failed);
+                        metrics::record_deadchannel_poster(PosterBeat::ReadFailed);
                         tracing::error!(error = ?error, "failed to read the runner poster");
                         PosterOutcome::Unread
                     }

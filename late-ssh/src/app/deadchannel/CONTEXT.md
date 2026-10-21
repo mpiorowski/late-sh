@@ -97,7 +97,8 @@ The haunting's own gotchas are in `haunt/CONTEXT.md`, the runner's in `runner/CO
   exchange `round` beat left out; the crossing's `crossed`, `answered`,
   `ambushed`, `downed` ride the same counter), the tailor, PRINTS
   (`late_ssh_deadchannel_poster_total{beat}`: saved, burned, no_runner,
-  failed; the read at open counts a failure only), and the door, Old Signal
+  failed for the writes; read_failed and undecodable for the read when
+  the panel opens), and the door, Old Signal
   payouts, and the lounge (`late_ssh_deadchannel_lounge_total{beat}`:
   spawned, hit, slain, slipped, paid, pay_left, pay_failed, hit_refused,
   hit_failed). The name is a log field only, never

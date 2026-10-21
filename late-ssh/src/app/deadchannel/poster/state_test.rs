@@ -208,3 +208,44 @@ fn a_stored_canvas_of_another_size_is_clipped_to_the_poster() {
     assert_eq!(draft.canvas, expected);
     assert!(!draft.dirty());
 }
+
+/// A panel too short for the whole poster: walking the cursor below the
+/// rows on screen must not move where the next click lands, since the
+/// panel always draws the poster from its top left.
+#[test]
+fn a_click_on_a_cut_off_poster_lands_on_the_cell_under_the_pointer() {
+    use dartboard_editor::{AppModifiers, AppPointerButton, AppPointerKind};
+
+    let mut draft = Draft::new(None, 0);
+    // A body six rows tall at frame cell (10, 4): the poster's top half.
+    draft.record_drawn_at(Rect {
+        x: 10,
+        y: 4,
+        width: 60,
+        height: 6,
+    });
+    let click = |draft: &mut Draft, column: u16, row: u16| {
+        for kind in [
+            AppPointerKind::Down(AppPointerButton::Left),
+            AppPointerKind::Up(AppPointerButton::Left),
+        ] {
+            draft.point(AppPointerEvent {
+                column,
+                row,
+                kind,
+                modifiers: AppModifiers::default(),
+            });
+        }
+    };
+
+    click(&mut draft, 12, 6);
+    for _ in 0..8 {
+        draft.edit(Edit::Move(MoveDir::Down));
+    }
+    click(&mut draft, 15, 5);
+    draft.edit(Edit::Type('X'));
+
+    let mut expected = blank();
+    expected.put_glyph_colored(Pos { x: 5, y: 1 }, 'X', tint_paint(Tint::White));
+    assert_eq!(draft.canvas, expected);
+}
