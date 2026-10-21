@@ -108,9 +108,11 @@ dropped with a warning when full) that the render task drains into
 `App::handle_input()` right before each pass, so ordinary input never takes
 the app mutex. Bursts of `input queue full` in prod are paste bombs, not lost
 typing. One pass hands over at most `INPUT_DRAIN_MAX_MESSAGES` (64) messages
-or `INPUT_DRAIN_MAX_TIME` (4 ms) of handling, whichever comes first, then
-draws and re-arms itself for the rest (`drain_input`): a key flood costs its
-own session a frame of lag, never the tokio worker the pass runs on.
+and stops early once `INPUT_DRAIN_MAX_TIME` (4 ms) of handling is spent, then
+draws and re-arms itself for the rest (`drain_input`). The time budget is
+checked between messages, so one slow message (a big paste) can run past it;
+a key flood costs its own session a frame of lag instead of holding the tokio
+worker for the whole queue.
 
 **Slow passes.** `late_ssh_render_pass_seconds{reason,screen}` times the
 locked part of every pass (input drain, tick, draw). A pass longer than
@@ -420,6 +422,8 @@ a no-op twin when built without `otel`.
   `late_ssh_renders_skipped_clean_total`, `late_ssh_render_frame_drops_total`
   (a flat ~909/min is one stalled client), `late_ssh_render_stall_*`,
   `late_ssh_frame_bytes{reason}`, `late_ssh_session_output_bytes_per_second`,
+  `late_ssh_output_bytes_total{screen,place,presence,kind}` (every sent byte,
+  attributed in `ssh.rs::render_once`),
   `late_ssh_render_pass_seconds{reason,screen}`,
   `late_ssh_render_input_budget_hits_total`.
 - Engagement: `late_ssh_attention_seconds_total{screen,place,presence}` and

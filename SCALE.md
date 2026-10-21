@@ -509,6 +509,13 @@ would bite. The edge read `tcp_slow_start_after_idle = 1`, `cubic`,
 - `late_ssh_frame_bytes{reason}` per drawn frame, and
   `late_ssh_session_output_bytes_per_second{client}`, one sample per session
   per 10 s window.
+- `late_ssh_output_bytes_total{screen,place,presence,kind}`: every byte
+  handed to the channel, attributed to where the session was when the pass
+  drew (`place` and `presence` are the attention metrics' labels, so the two
+  divide cleanly) and whether it was a frame or a terminal command (images,
+  OSC). `presence="idle"` is bytes sent to a terminal nobody has touched in
+  five minutes, the away screensaver included. Panels: Output Bytes by
+  Place, and Output Bytes per Active Second (cost of one watching viewer).
 - One `session wire summary` log line per session when it ends, in
   VictoriaLogs: user, client, `TERM`, the terminal's own name (its XTVERSION
   reply), how the session ended (`closed`, `stalled`, `failed`), bytes,
@@ -533,6 +540,9 @@ container sets `net.ipv4.tcp_slow_start_after_idle=0` in `server-1`'s host
 network namespace (`infra/ssh-tcp.tf`). Verify after the infra apply with
 `kubectl exec -n kube-system ds/ssh-edge -- cat /proc/sys/net/ipv4/tcp_slow_start_after_idle`
 (expect `0`).
+
+How to pull every number above from a terminal, and the first readings, are
+in [User Latency: Checking It Fast](#user-latency-checking-it-fast).
 
 **How to read it, after about a week of data:**
 
@@ -562,6 +572,92 @@ losses). Pair it with `tcp_notsent_lowat` (about 16 KiB) on the edge, so the
 backlog sits in russh and HAProxy where late-ssh can see it rather than in
 the kernel's send buffer; on its own that setting only moves the queue. The
 `OutputBudget` memory guard stays as it is.
+
+## User Latency: Checking It Fast
+
+The runbook for Pain Point 11: what to run to answer "is user latency
+measured, what are the numbers, and what is sending the bytes", from a
+terminal with `kubectl` on context `late-sh-r`. Pain Point 11 says what each
+metric means and how to decide; this says how to read them.
+
+### Reach the data
+
+```sh
+kubectl get pods -n default | grep service-ssh          # pod age = how long the current code has been live
+kubectl port-forward -n monitoring svc/victoriametrics 18428:8428 &   # metrics
+kubectl port-forward -n monitoring svc/victorialogs 19428:9428 &      # logs
+curl -s --retry 15 --retry-connrefused --retry-delay 1 localhost:18428/health   # wait for the forward
+q() { curl -s 'localhost:18428/api/v1/query' --data-urlencode "query=$1" \
+  | jq -r '.data.result[] | "\(.metric | del(.__name__,.instance,.job,.otel_scope_name,.service_instance_id,.service_name,.telemetry_sdk_language,.telemetry_sdk_name,.telemetry_sdk_version))  \(.value[1])"'; }
+pkill -f 'kubectl port-forward -n monitoring'            # when done
+```
+
+Gotchas, each of which has cost a wrong answer once:
+
+- **Wait for the forward.** A query sent before the port-forward is up
+  returns nothing, which reads exactly like "the metric has no data".
+- **Check the exported name before trusting an empty panel.** The
+  collector's Prometheus translation (`monitoring/otel-collector-config.yaml`)
+  appends the OTel unit to the name. It dedupes `bytes` and `seconds`, but a
+  `By/s` unit on `late_ssh_session_output_bytes_per_second` came out as
+  `..._per_second_per_second_*` and left its panel empty, so that histogram
+  now has no unit. A new metric's real name:
+  `curl -s localhost:18428/api/v1/label/__name__/values | jq -r '.data[]' | grep <stem>`.
+- **Keep the range inside the pod's age** when judging a change; older
+  samples are the previous build.
+
+### The checks, in order
+
+1. **Is it measuring?** Every answered probe records one trip, so the two
+   totals match per client; an answer rate under ~99% is terminals without
+   DSR or stalled links.
+   `sum by (client, outcome) (increase(late_ssh_terminal_probes_total[12h]))`
+   against `sum by (client) (increase(late_ssh_terminal_rtt_seconds_count[12h]))`.
+2. **The trip.** `histogram_quantile(0.95, sum by (le, client) (increase(late_ssh_terminal_rtt_seconds_bucket[12h])))`,
+   then the same `by (le, client, backlog)`. The `none` row is the network
+   floor; `large` minus `none` is what our bytes add.
+3. **Where a CLI trip goes.** `histogram_quantile(0.5, sum by (le, kind) (increase(late_ssh_cli_latency_seconds_bucket[12h])))`:
+   `ssh_rtt` is transport, `terminal` the user's terminal.
+4. **Ambient or typing.** `sum by (reason) (increase(late_ssh_frame_bytes_sum[12h]))`:
+   `tick` is bytes nobody asked for, `input` the answers to keys.
+5. **What sends the bytes.**
+   `topk(15, sum by (screen, place, presence) (increase(late_ssh_output_bytes_total[12h])))`,
+   and per watching viewer
+   `topk(15, sum by (screen, place) (increase(late_ssh_output_bytes_total{presence="active"}[12h])) / (sum by (screen, place) (increase(late_ssh_attention_seconds_total{presence="active"}[12h])) >= 60))`.
+   Images and OSC alone: add `kind="command"`.
+6. **Who.** The per-session log line, heaviest first:
+   ```sh
+   curl -s localhost:19428/select/logsql/query --data-urlencode \
+     'query=_time:12h {service.name="late-ssh"} _msg:"session wire summary" | sort by (bytes desc) | limit 15 | fields username, client, terminal, secs, bytes, frames, mean_bytes_per_sec, peak_bytes_per_sec, rtt_none_avg_ms, rtt_large_avg_ms' | jq -c .
+   ```
+   Bytes over frames near a full screen (25 KB and up) on every tick is a
+   screen repainting whole instead of diffing.
+
+Cross-checks: `sum(increase(late_ssh_output_bytes_total[12h]))` should
+match `sum(increase(late_ssh_frame_bytes_sum[12h]))` plus the
+`kind="command"` share, and roughly ten times
+`sum(increase(late_ssh_session_output_bytes_per_second_sum[12h]))` (one
+sample per 10 s window).
+
+### First reading (2026-10-21, 11 h after the probe shipped, 15 live sessions)
+
+| | cli | ssh |
+|---|---|---|
+| probes answered / lost | 41,915 / 25 | 29,540 / 64 |
+| trip p50 / p95 / p99 | 152 / 480 / 962 ms | 171 / 592 / 942 ms |
+| p50 backlog `none` / `large` | 129 / 239 ms | 165 / 235 ms |
+| p95 backlog `none` / `large` | 275 / 487 ms | 638 / 695 ms |
+
+- CLI split p50: `ssh_rtt` 155 ms, `terminal` 2.8 ms (p95 479 / 166 ms).
+  The trip is the network; terminals parse fast.
+- `small` and `medium` backlogs match `none`; only `large` (over 32 KiB in
+  the second before, 23% of probes) adds about 70 to 100 ms at the median.
+  The ssh `none` p95 of 638 ms is network jitter that bytes do not explain.
+- Of 5.74 GB of frames, 79% were world-tick frames; terminal commands were
+  within noise of zero. Two plain-ssh kitty sessions ran at about 243 KB/s
+  for minutes at 27 to 34 KB a frame (full repaints every tick). The
+  per-place counter landed after this reading, so which screen did it is
+  the next thing to check.
 
 ## Render-Cost Program (shipped 2026-07-22/23)
 

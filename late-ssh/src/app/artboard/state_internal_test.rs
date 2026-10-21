@@ -715,3 +715,60 @@ fn edits_beside_wide_glyphs_reach_the_other_half() {
     assert_eq!(state.editor.cursor, Pos { x: 10, y: 5 });
     assert_eq!(state.snapshot.canvas.get(Pos { x: 4, y: 5 }), 'x');
 }
+
+/// A brush stroke's reach is read off the editor's stroke anchor and last
+/// stamp. A press and a diagonal drag with a 2-wide brush stamp at both ends
+/// and between, cutting a wide glyph at each end; debug builds check every
+/// event against the whole-board diff, so a reach that misses a stamp fails
+/// here.
+#[test]
+fn brush_strokes_beside_wide_glyphs_reach_the_other_half() {
+    let mut state = test_state();
+    state.snapshot.canvas = Canvas::with_size(40, 20);
+    let _ = state.snapshot.canvas.put_glyph(Pos { x: 3, y: 2 }, '👍');
+    let _ = state.snapshot.canvas.put_glyph(Pos { x: 9, y: 5 }, '👍');
+    state.editor.set_viewport(
+        Viewport {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 20,
+        },
+        &state.snapshot.canvas,
+    );
+    state.editor.floating = Some(EditorFloatingSelection {
+        clipboard: Clipboard::new(
+            2,
+            1,
+            vec![Some(CellValue::Narrow('A')), Some(CellValue::Narrow('B'))],
+        ),
+        transparent: false,
+        source_index: None,
+    });
+    let pointer = |column, row, kind| AppPointerEvent {
+        column,
+        row,
+        kind,
+        modifiers: AppModifiers::default(),
+    };
+
+    let _ = state.handle_pointer_event(pointer(4, 2, AppPointerKind::Down(AppPointerButton::Left)));
+    let _ = state.handle_pointer_event(pointer(8, 5, AppPointerKind::Drag(AppPointerButton::Left)));
+    let _ = state.handle_pointer_event(pointer(8, 5, AppPointerKind::Up(AppPointerButton::Left)));
+
+    let color = state.active_user_color();
+    let mut expected = Canvas::with_size(40, 20);
+    for (x, y, ch) in [
+        (4, 2, 'A'),
+        (5, 2, 'B'),
+        (5, 3, 'A'),
+        (6, 3, 'B'),
+        (6, 4, 'A'),
+        (7, 4, 'B'),
+        (8, 5, 'A'),
+        (9, 5, 'B'),
+    ] {
+        let _ = expected.put_glyph_colored(Pos { x, y }, ch, color);
+    }
+    assert_eq!(state.snapshot.canvas, expected);
+}

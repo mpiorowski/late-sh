@@ -76,9 +76,11 @@ const PROBE_SETTLE_MAX: Duration = Duration::from_millis(500);
 /// Most queued input messages one render pass hands to the app before it
 /// draws what it has ([`drain_input`]).
 const INPUT_DRAIN_MAX_MESSAGES: usize = 64;
-/// Most wall time one render pass spends in `App::handle_input` before it
-/// draws what it has. A key flood then costs its own session a frame of lag,
-/// never the tokio worker the pass runs on.
+/// Wall time spent in `App::handle_input` after which one render pass stops
+/// draining and draws what it has. Checked between messages, so one slow
+/// message (a big paste) can run past it; a key flood then costs its own
+/// session a frame of lag instead of holding the tokio worker for the whole
+/// queue.
 const INPUT_DRAIN_MAX_TIME: Duration = Duration::from_millis(4);
 /// A pass that holds the app lock longer than the hot tick is one the user
 /// can feel; it is warned about, once per [`SLOW_PASS_WARN_EVERY`].
@@ -1852,6 +1854,21 @@ struct RenderPass {
     screen: crate::app::common::primitives::Screen,
 }
 
+/// Where the session was when a pass drew, for attributing the bytes it
+/// sent (`late_ssh_output_bytes_total`).
+#[derive(Debug, Clone, Copy)]
+struct OutputSpot {
+    screen: crate::app::common::primitives::Screen,
+    place: metrics::Place,
+    presence: metrics::Presence,
+}
+
+impl OutputSpot {
+    fn record(self, kind: metrics::OutputKind, bytes: usize) {
+        metrics::record_output_bytes(self.screen, self.place, self.presence, kind, bytes);
+    }
+}
+
 /// Whether a pass this slow is worth a warning: it ran past [`SLOW_PASS`]
 /// and the session has not warned within [`SLOW_PASS_WARN_EVERY`].
 fn slow_pass_due(took: Duration, last_warned: Option<Instant>, now: Instant) -> bool {
@@ -1924,7 +1941,7 @@ async fn render_once(
         true => metrics::RenderReason::WorldTick,
         false => metrics::RenderReason::Input,
     };
-    let (frame, terminal_commands, mut wake_hint, pass) = {
+    let (frame, terminal_commands, mut wake_hint, pass, spot) = {
         let mut app = app.lock().await;
         let locked_at = Instant::now();
         if !app.running {
@@ -1984,7 +2001,12 @@ async fn render_once(
             screen: app.screen,
         };
         metrics::record_render_pass(reason, pass.screen, pass.took.as_secs_f64());
-        (frame, terminal_commands, wake_hint, pass)
+        let spot = OutputSpot {
+            screen: app.screen,
+            place: app.attention_place(),
+            presence: app.attention_presence(),
+        };
+        (frame, terminal_commands, wake_hint, pass, spot)
     };
 
     let frame_len = frame.len();
@@ -1998,6 +2020,7 @@ async fn render_once(
         Ok(Ok(())) => {
             ctx.budget.record_sent(frame_len);
             metrics::record_frame_bytes(reason, frame_len);
+            spot.record(metrics::OutputKind::Frame, frame_len);
             bytes_sent += frame_len;
             true
         }
@@ -2040,6 +2063,7 @@ async fn render_once(
         {
             Ok(Ok(())) => {
                 ctx.budget.record_sent(command_len);
+                spot.record(metrics::OutputKind::Command, command_len);
                 bytes_sent += command_len;
             }
             Ok(Err(err)) => {

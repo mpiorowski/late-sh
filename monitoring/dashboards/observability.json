@@ -2916,6 +2916,128 @@
       }
     },
     {
+      "type": "bargauge",
+      "title": "Output Bytes by Place",
+      "description": "Bytes sent to users over the range, by the screen and place the session was on and whether anyone was at the keys (idle: no key in five minutes, so nobody is watching). Frames and terminal commands (images, OSC) together, top 15. Where the bandwidth goes: a popular screen ranks high even when each viewer is cheap.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(15, sum by (screen, place, presence) (increase(late_ssh_output_bytes_total[$__range])))",
+          "legendFormat": "{{screen}} / {{place}} / {{presence}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 1000000000.0
+              },
+              {
+                "color": "red",
+                "value": 10000000000.0
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "namePlacement": "left"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 243
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Output Bytes per Active Second",
+      "description": "Bytes sent per second of active attention, per screen and place with at least a minute of it in the range, top 15. What one watching viewer costs on that place, whatever its popularity: the animations worth slimming rank here.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "topk(15, sum by (screen, place) (increase(late_ssh_output_bytes_total{presence=\"active\"}[$__range])) / (sum by (screen, place) (increase(late_ssh_attention_seconds_total{presence=\"active\"}[$__range])) >= 60))",
+          "legendFormat": "{{screen}} / {{place}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "Bps",
+          "min": 0,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "yellow",
+                "value": 4096
+              },
+              {
+                "color": "red",
+                "value": 32768
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "displayMode": "gradient",
+        "orientation": "horizontal",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showUnfilled": true,
+        "namePlacement": "left"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 243
+      }
+    },
+    {
       "type": "row",
       "title": "Presence",
       "collapsed": false,
@@ -2928,7 +3050,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 243
+        "y": 251
       }
     },
     {
@@ -2963,7 +3085,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 244
+        "y": 252
       }
     },
     {
@@ -3002,7 +3124,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 244
+        "y": 252
       }
     },
     {
@@ -3052,7 +3174,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 244
+        "y": 252
       }
     },
     {
@@ -3068,7 +3190,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 252
+        "y": 260
       }
     },
     {
@@ -3125,7 +3247,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 253
+        "y": 261
       }
     },
     {
@@ -3212,7 +3334,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 253
+        "y": 261
       }
     },
     {
@@ -3269,7 +3391,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 253
+        "y": 261
       }
     },
     {
@@ -3285,7 +3407,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 261
+        "y": 269
       }
     },
     {
@@ -3342,7 +3464,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 262
+        "y": 270
       }
     },
     {
@@ -3399,7 +3521,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 262
+        "y": 270
       }
     },
     {
@@ -3456,7 +3578,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 262
+        "y": 270
       }
     },
     {
@@ -3509,7 +3631,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 270
+        "y": 278
       }
     },
     {
@@ -3646,7 +3768,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 278
+        "y": 286
       }
     },
     {
@@ -3732,7 +3854,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 287
+        "y": 295
       }
     },
     {
@@ -3764,7 +3886,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 297
+        "y": 305
       }
     },
     {
@@ -3821,7 +3943,7 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 309
+        "y": 317
       }
     },
     {
@@ -3884,7 +4006,7 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 309
+        "y": 317
       }
     },
     {
@@ -3941,7 +4063,7 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 309
+        "y": 317
       }
     },
     {
@@ -3998,7 +4120,7 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 309
+        "y": 317
       }
     }
   ]
