@@ -5,7 +5,7 @@
 - Subdomains and their docs:
   - `haunt/`: the first-contact haunting ladder (`haunt/CONTEXT.md`).
   - `runner/`: the character layer, the runner and its look (`runner/CONTEXT.md`).
-  - `city/`, `street/`, `tailor/`, `guide/`: the night city under the clubhouse on a second `0`, the shared street over `app/presence`, the mirror that edits the look, the undercity guide (`city/CONTEXT.md`).
+  - `city/`, `street/`, `tailor/`, `poster/`, `guide/`: the night city under the clubhouse on a second `0`, the shared street over `app/presence`, the mirror that edits the look, PRINTS (the poster on the profile), the undercity guide (`city/CONTEXT.md`).
   - `fight/`: the runner's sheet, the day's road, the round of cards, the wire's news, the shops, crystals, Dead Air (`fight/CONTEXT.md`, with `fight/MONEY.md`, `fight/BALANCE.md`, `fight/CRYSTALS.md`, `fight/CROSSING.md`).
   - `lounge/`: the spawns above #lounge's composer (`lounge/CONTEXT.md`).
 - Design sources in this directory: `GAME.md` (the game: thesis, first contact, the runner) and `DIGEST.md` (the feed budget and the welcome-back paper).
@@ -34,7 +34,7 @@ pieces, like the stage-2 wire, are delivery paths, never sources of truth.
 |---|---|
 | `haunt/` | The first-contact haunting: see `haunt/CONTEXT.md`. |
 | `runner/` | The runner: the look, the directory, the face in #deadchannel and on the profile: see `runner/CONTEXT.md`. |
-| `city/`, `street/`, `tailor/`, `guide/` | The night city, the shared street over `app/presence`, the mirror that edits the look, the undercity guide: see `city/CONTEXT.md`. |
+| `city/`, `street/`, `tailor/`, `poster/`, `guide/` | The night city, the shared street over `app/presence`, the mirror that edits the look, PRINTS (the 32 by 12 poster a runner paints and hangs on the profile), the undercity guide: see `city/CONTEXT.md`. |
 | `fight/` | The sheet, the road, the round, the shops, crystals, Dead Air: see `fight/CONTEXT.md`. |
 | `lounge/` | The lounge spawns: see `lounge/CONTEXT.md`. |
 | `glyphs.rs` | `GLYPH_ALPHABET`, the game's shared character vocabulary. Game-level: the haunting borrows it, stage-4-era spawns will render with it (the clock glitch is retroactive foreshadowing). Distinct from the static shades `░▒▓` (noise, not creatures). `MARK_ALPHABET` is what a runner can wear as a mark: the alphabet less the Signal's `╬`, which is the paragon count in the badge and nobody's for free. |
@@ -63,7 +63,7 @@ roles and seams are there too.
 
 ## 4. Persistence
 
-- `deadchannel_runners` (model `late-core/src/models/deadchannel_runner.rs`): one row per runner, the look and the sheet; columns, triggers, the nuke and the leave stamp in `runner/CONTEXT.md`, the sheet's writer in `fight/CONTEXT.md`.
+- `deadchannel_runners` (model `late-core/src/models/deadchannel_runner.rs`): one row per runner, the look, the sheet, and the poster (`poster`, migration 249, the serialized canvas PRINTS writes); columns, triggers, the nuke and the leave stamp in `runner/CONTEXT.md`, the sheet's writer in `fight/CONTEXT.md`.
 - The first-contact chain keys on `users.settings` and the table-less stage-2 wire: `haunt/CONTEXT.md`, Persistence.
 - `deadchannel_ambushes` (model `late-core/src/models/deadchannel_ambush.rs`): one row per fight between two runners, its unique partial indexes are the caps: `fight/CROSSING.md`.
 - `deadchannel_lounge_days` and `deadchannel_spawns` (model `late-core/src/models/deadchannel_spawn.rs`): the lounge's day budget and its spawns: `lounge/CONTEXT.md`.
@@ -95,7 +95,9 @@ The haunting's own gotchas are in `haunt/CONTEXT.md`, the runner's in `runner/CO
   presence's, `late_ssh_presence_total{beat}` (`late-ssh/CONTEXT.md`). The
   game's own counters sit under the same row: fights by beat (the per-
   exchange `round` beat left out; the crossing's `crossed`, `answered`,
-  `ambushed`, `downed` ride the same counter), the tailor and the door, Old Signal
+  `ambushed`, `downed` ride the same counter), the tailor, PRINTS
+  (`late_ssh_deadchannel_poster_total{beat}`: saved, burned, no_runner,
+  failed; the read at open counts a failure only), and the door, Old Signal
   payouts, and the lounge (`late_ssh_deadchannel_lounge_total{beat}`:
   spawned, hit, slain, slipped, paid, pay_left, pay_failed, hit_refused,
   hit_failed). The name is a log field only, never

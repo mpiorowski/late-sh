@@ -639,6 +639,7 @@ fn make_app_with_chat_service_and_permissions(
             chip_service.clone(),
         ),
         tailor_service: crate::app::deadchannel::tailor::svc::TailorService::new(db.clone()),
+        poster_service: crate::app::deadchannel::poster::svc::PosterService::new(db.clone()),
         guide_service: crate::app::deadchannel::guide::svc::GuideService::new(db.clone()),
         lounge_service: test_lounge_service(db.clone(), chat_service.clone(), chip_service.clone()),
         initial_bonsai_tree: None,
@@ -912,6 +913,7 @@ pub fn make_app_with_paired_client(
             chip_service.clone(),
         ),
         tailor_service: crate::app::deadchannel::tailor::svc::TailorService::new(db.clone()),
+        poster_service: crate::app::deadchannel::poster::svc::PosterService::new(db.clone()),
         guide_service: crate::app::deadchannel::guide::svc::GuideService::new(db.clone()),
         lounge_service: test_lounge_service(
             db.clone(),

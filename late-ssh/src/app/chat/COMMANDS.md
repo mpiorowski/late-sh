@@ -202,6 +202,7 @@ retains its usual colors, and help colors follow the active theme at render time
 - `artboard restore [YYYY-MM-DD] [reason...]`
 - `artboard remove <piece-id-prefix> [reason...]` (takes a gallery piece down; the first 13 characters of the id are printed on the key line of the piece's full-frame view, 8+ are needed, must match one piece)
 - `artboard feature <piece-id-prefix>` (pins a piece as today's Sliding Puzzle art at once, `ArtboardPiece::feature_now`; the day's previous holder returns to the queue; same prefix rule as remove)
+- `deadchannel remove-poster @name [reason...]` (takes a runner's poster from PRINTS off their terminal and web profiles, `DeadchannelRunner::clear_poster_any`, a leaver's too; the profile shows the test card again; same cap as artboard remove, audited as `deadchannel_remove_poster`)
 - `room-voice <#room> <on|off>`
 - `kick <server|voice|stream|#room> @name [reason...]`
 - `ban <server|#room|art|audio|stream> @name [duration] [reason...]`

@@ -100,7 +100,8 @@ TITLE = '╡ ▚ STATIC ROW ▞ ╞'
 # The landmark order is the popover priority; map.rs lists it the same way.
 LANDMARKS = ['Armorer', 'Tailor', 'Lockers', 'Bands', 'Bar', 'Screen', 'Repairs',
              'Board', 'Bits', 'Noodles', 'Umbrellas', 'Blades', 'Reader', 'Stairs', 'Wire',
-             'Ledge', 'Ink', 'Baths', 'Sleep', 'Shrine', 'Market', 'Coin', 'Vids', 'Pawn']
+             'Ledge', 'Ink', 'Prints', 'Baths', 'Sleep', 'Shrine', 'Market', 'Coin', 'Vids',
+             'Pawn']
 
 
 # ====================================================================== tiles
@@ -278,7 +279,15 @@ def layout_tiles():
 
     # =========================================================== leg one
     # ---- north side (south walls at row 16)
-    tenement(2, 9, 18, 16, door_y=16, windows_y=16)
+    # a market: two counters of food and drink, one seller. Not open yet.
+    room(2, 9, 18, 16, GREEN, doors=[(14, 16)], windows=[(16, 16), (10, 9)],
+         sign=(5, 16, 'MARKET'), closed='Market')
+    # The tenement that stood here threw one die for its door; the market
+    # throws it too, so every lot after it keeps the street it had.
+    rng.randrange(13)
+    put(5, 12, '=%=!=%=')
+    tile(9, 11, '@')
+    vents.append((6, 12))
     tag(3, 16, '▚', MAGENTA)
     tile(2, 18, '>', block=False)
     L['STAIRS'] = (2, 18)
@@ -287,12 +296,15 @@ def layout_tiles():
     alley(19, 21, 5, 16)
     tile(21, 6, 'c')
 
-    # a market: two counters of food and drink, one seller. Not open yet.
-    room(22, 10, 36, 16, GREEN, doors=[(33, 16)], windows=[(35, 16), (27, 10)],
-         sign=(24, 16, 'MARKET'), closed='Market')
-    put(24, 12, '=%=!=%=')
-    tile(28, 11, '@')
-    vents.append((25, 12))
+    # the print shop: two presses, stacks of paper, the printer behind the
+    # counter. PRINTS: the poster, 32 by 12, painted here and hung on the
+    # profile. Enter anywhere inside opens the panel.
+    room(22, 10, 36, 16, CYAN, doors=[(33, 16)], windows=[(35, 16), (27, 10)],
+         sign=(24, 16, 'PRINTS'), shop='Prints')
+    put(24, 11, '▓▓ ▓▓')
+    tile(32, 11, '▪'); tile(34, 11, '▪')
+    tile(29, 12, '@')
+    put(24, 13, '=' * 9)
 
     carve(37, 12, 37, 16); grate(37, 13)
 
@@ -1020,6 +1032,8 @@ pub enum Landmark {
     Ledge,
     /// INK: the needle. A draft inked for crystals, kept through a mark.
     Ink,
+    /// PRINTS: the poster, painted here and hung on the profile.
+    Prints,
     // The shops that are not open yet (`DARK_SIGNS`): Enter at the door
     // says so. Opening one gives it a panel in `city/state.rs`.
     Baths,
@@ -1033,7 +1047,7 @@ pub enum Landmark {
 
 impl Landmark {
     /// Every landmark, in popover priority order.
-    pub const ALL: [Landmark; 24] = [
+    pub const ALL: [Landmark; 25] = [
         Landmark::Armorer,
         Landmark::Tailor,
         Landmark::Lockers,
@@ -1051,6 +1065,7 @@ impl Landmark {
         Landmark::Wire,
         Landmark::Ledge,
         Landmark::Ink,
+        Landmark::Prints,
         Landmark::Baths,
         Landmark::Sleep,
         Landmark::Shrine,

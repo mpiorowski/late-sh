@@ -1042,6 +1042,9 @@ impl russh::server::Handler for ClientHandler {
             tailor_service: crate::app::deadchannel::tailor::svc::TailorService::new(
                 self.state.db.clone(),
             ),
+            poster_service: crate::app::deadchannel::poster::svc::PosterService::new(
+                self.state.db.clone(),
+            ),
             guide_service: crate::app::deadchannel::guide::svc::GuideService::new(
                 self.state.db.clone(),
             ),

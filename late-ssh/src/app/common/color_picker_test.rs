@@ -78,3 +78,33 @@ fn presets_wrap_and_track_the_working_color() {
     }
     assert_eq!(picker.preset, 3);
 }
+
+#[test]
+fn hit_reads_bars_and_presets() {
+    let area = Rect::new(0, 1, 80, 22);
+    let layout = layout(popup(area)).unwrap();
+    let green = channel_bar_rect(layout.channels[1]);
+    assert_eq!(
+        hit(area, green.x, green.y),
+        Some(Hit::Channel(Channel::Green, 0))
+    );
+    assert_eq!(
+        hit(area, green.right() - 1, green.y),
+        Some(Hit::Channel(Channel::Green, 255))
+    );
+    let preset = preset_rect(layout.presets, 7);
+    assert_eq!(hit(area, preset.x + 1, preset.y), Some(Hit::Preset(7)));
+    // The label column is dead.
+    assert_eq!(hit(area, layout.hex.x, layout.hex.y), None);
+}
+
+#[test]
+fn a_click_focuses_the_row_it_set() {
+    let mut picker = ColorPicker::open(PAINT_PALETTE[0]);
+    picker.click(Hit::Channel(Channel::Blue, 9));
+    assert_eq!(picker.row, PickerRow::Channel(Channel::Blue));
+    assert_eq!(picker.color.b, 9);
+    picker.click(Hit::Preset(3));
+    assert_eq!(picker.row, PickerRow::Presets);
+    assert_eq!(picker.color, PAINT_PALETTE[3]);
+}

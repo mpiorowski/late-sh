@@ -316,6 +316,7 @@ impl App {
         changed |= self.bonsai.tick();
         changed |= self.fight.tick();
         changed |= self.tailor.tick();
+        changed |= self.poster.tick();
         // The lounge spawns (`app/deadchannel/lounge`): the spawn copy, a
         // runner's `/hit`, the word it came back with, and the scene's
         // strike and countdown frames.
@@ -971,6 +972,7 @@ impl App {
                 if self.screen == Screen::City && !self.is_runner() {
                     self.fight.close();
                     self.tailor.close();
+                    self.poster.close();
                     self.guide.state.close();
                     self.set_screen(Screen::Clubhouse);
                     changed = true;

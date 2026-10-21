@@ -3,9 +3,10 @@ use dartboard_core::{Canvas, Pos};
 use super::*;
 use crate::app::artboard::{
     provenance::ArtboardProvenance,
-    state::{PAINT_PALETTE, State},
+    state::State,
     svc::{ArtboardSnapshotService, DartboardService, DartboardSnapshot},
 };
+use crate::app::common::color_picker::PAINT_PALETTE;
 
 #[test]
 fn view_mode_right_drag_reuses_editor_pan_behavior() {

@@ -72,6 +72,7 @@ fn command_help_uses_limited_grouped_surface() {
         [
             "======== Lounge ====================================================",
             "======== Artboard ==================================================",
+            "======== Deadchannel ===============================================",
             "======== Bans, kicks, etc. =========================================",
             "======== Help & Admin ==============================================",
             "====================================================================",
@@ -543,6 +544,31 @@ fn parses_artboard_gallery_commands() {
 }
 
 #[test]
+fn parses_deadchannel_remove_poster() {
+    assert_eq!(
+        parse_mod_command("deadchannel remove-poster @ann slur in the poster").unwrap(),
+        ModCommand::DeadchannelRemovePoster {
+            username: "ann".to_string(),
+            reason: "slur in the poster".to_string(),
+        }
+    );
+    assert_eq!(
+        parse_mod_command("/mod deadchannel remove-poster ann").unwrap(),
+        ModCommand::DeadchannelRemovePoster {
+            username: "ann".to_string(),
+            reason: String::new(),
+        }
+    );
+    assert!(parse_mod_command("deadchannel remove-poster").is_err());
+    assert!(parse_mod_command("deadchannel remove @ann").is_err());
+    assert!(parse_mod_command("deadchannel").is_err());
+    assert_eq!(
+        primary_username(&parse_mod_command("deadchannel remove-poster @ann").unwrap()),
+        "ann"
+    );
+}
+
+#[test]
 fn rejects_deferred_server_ip_commands() {
     assert!(parse_mod_command("server ban-ip 203.0.113.10 2h subnet abuse").is_err());
     assert!(parse_mod_command("server unban-ip 2001:db8::1").is_err());
@@ -653,6 +679,7 @@ fn primary_username(command: &ModCommand) -> &str {
         | ModCommand::Unslow { username, .. }
         | ModCommand::ServerUser { username, .. }
         | ModCommand::Artboard { username, .. }
+        | ModCommand::DeadchannelRemovePoster { username, .. }
         | ModCommand::Audio { username, .. }
         | ModCommand::Calendar { username, .. }
         | ModCommand::Voice { username, .. }

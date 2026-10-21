@@ -1,8 +1,8 @@
 use super::*;
-use crate::app::artboard::color_picker::Channel;
 use crate::app::artboard::gallery::svc::GalleryService;
 use crate::app::artboard::provenance::ArtboardProvenance;
 use crate::app::artboard::svc::{ArtboardSnapshotService, DartboardService, DartboardSnapshot};
+use crate::app::common::color_picker::Channel;
 use dartboard_core::{CanvasOp, CellValue, RgbColor};
 use dartboard_editor::Clipboard;
 

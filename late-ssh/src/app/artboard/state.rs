@@ -19,7 +19,6 @@ use tokio::sync::{
 };
 use uuid::Uuid;
 
-use super::color_picker::ColorPicker;
 use super::gallery::{
     frame::frame_piece,
     state::{Focus as GalleryFocus, GalleryState, HangFlow, RailRow},
@@ -31,28 +30,11 @@ use super::svc::{
     ArtboardSnapshotKind, ArtboardSnapshotService, DartboardEvent, DartboardService,
     DartboardSnapshot,
 };
+use crate::app::common::color_picker::{ColorPicker, PAINT_PALETTE};
 use crate::app::icon_picker::{self, catalog::IconCatalogData};
 
 const DOUBLE_CLICK_WINDOW_MS: u128 = 400;
 pub(crate) const PRIMARY_SWATCH_IDX: usize = 0;
-pub(crate) const PAINT_PALETTE: [RgbColor; 16] = [
-    RgbColor::new(255, 110, 64),
-    RgbColor::new(255, 236, 96),
-    RgbColor::new(255, 214, 102),
-    RgbColor::new(145, 226, 88),
-    RgbColor::new(188, 255, 128),
-    RgbColor::new(72, 220, 170),
-    RgbColor::new(86, 245, 214),
-    RgbColor::new(84, 196, 255),
-    RgbColor::new(96, 225, 255),
-    RgbColor::new(128, 163, 255),
-    RgbColor::new(164, 146, 255),
-    RgbColor::new(192, 132, 255),
-    RgbColor::new(224, 116, 255),
-    RgbColor::new(255, 124, 196),
-    RgbColor::new(255, 142, 158),
-    RgbColor::new(238, 242, 255),
-];
 
 pub struct State {
     pub snapshot: DartboardSnapshot,
