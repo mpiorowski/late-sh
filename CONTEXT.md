@@ -184,7 +184,7 @@ otherwise.
 | `late-ssh/src/ircd/CONTEXT.md` | Embedded IRC server: token auth, room/DM projection, IRCv3 caps, history, moderation |
 | `DESIGN_GUIDE.md` | TUI conventions: layout, spacing, text roles, palette, modals, forms, hit geometry |
 | `chat` | Rooms, DMs, composer, message actions, Showcase/Work feeds; the composer, every slash command and key in `COMMANDS.md`, rendering in `RENDERING.md`, read marks in `MARKS.md`, room data and the rail in `ROOMS.md` |
-| `ai` | The model calls: ghost bots (@bot, @graybeard, @bartender) and the round (`ROUND.md`), text screening, translation, `/summary` |
+| `ai` | The model calls: ghost bots (@bot, @graybeard, @bartender), the round (`ROUND.md`) and bartender memory (`MEMORY.md`), text screening, translation, `/summary` |
 | `chat/gild` | Gilds: chips paid to mark another user's message |
 | `chat/news` | Shared links, the News room, the reader, the YouTube watch player |
 | `chat/cyberspace` | The cyberspace.online client and its rail entry |

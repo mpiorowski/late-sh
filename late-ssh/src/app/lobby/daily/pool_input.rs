@@ -51,6 +51,7 @@ fn draft_mut(app: &mut App) -> Option<(&mut PoolDraft, &DailyPoolState)> {
 /// y           snooker: after a foul, make them play it again
 /// b           snooker: after a foul and a miss, put the balls back for them
 /// x  s  w     arm the stroke light / normal / strong, then draw and push
+/// j  k        with a stroke armed: 0.1 m/s slower / faster (`pool_priority_key`)
 /// h  l        turn the cue a degree; H/L a tenth of one
 /// r  R        watch the last shot again, or the whole of the last visit
 /// X           resign: asks first, `y` confirms, any other key backs out
@@ -144,6 +145,31 @@ pub(crate) fn pool_key(app: &mut App, byte: u8) -> bool {
             None => false,
         },
     }
+}
+
+/// The keys pool takes ahead of the match chat, which otherwise owns `i`,
+/// `j` and `k` on every board. Only while they mean something here: an open
+/// resign prompt answers to every key (anything but `y` closes it, or the `y`
+/// after a chat key would resign), a stroke armed steps the speed by 0.1 m/s
+/// on `j`/`k`, and the foul dialog walks its choices on them. Any other time
+/// they fall through to chat as usual.
+pub(crate) fn pool_priority_key(app: &mut App, byte: u8) -> bool {
+    if !is_pool_board(app) {
+        return false;
+    }
+    if resign_prompt_open(app) {
+        return pool_key(app, byte);
+    }
+    if !matches!(byte, b'j' | b'k') {
+        return false;
+    }
+    let Some((draft, state)) = draft_mut(app) else {
+        return false;
+    };
+    if draft.foul_dialog_open(state) {
+        return foul_dialog_key(app, byte);
+    }
+    draft.step_speed(byte == b'k')
 }
 
 /// The foul dialog, while it is up, owns the keyboard: a number picks a

@@ -136,16 +136,17 @@ pub(crate) fn draw(
     // One shot is drawn, and it is not always this player's. While the other
     // side is at the table their board broadcasts what they are lining up, and
     // drawing it is the only moment a correspondence game looks like the game
-    // it is modelling. The renderer takes a *share* either way, so the local
-    // and the remote path are the same code and cannot drift.
-    let shown = shown_shot(daily, board, detail, pool);
+    // it is modelling. Both are drawn by the same code, from a `PoolDraft`.
+    let mine =
+        !board.spectating && detail.is_active() && detail.row.turn_user_id == Some(daily.user_id());
+    let shown = shown_shot(pool, mine);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(table_border(daily, board, detail, pool));
     let table_area = block.inner(cols[0]);
     frame.render_widget(block, cols[0]);
-    draw_table(frame, table_area, spec, pool, &shown, board);
-    draw_panels(frame, cols[1], daily, board, detail, pool, &shown);
+    draw_table(frame, table_area, spec, pool, shown.draft(), board);
+    draw_panels(frame, cols[1], daily, board, detail, pool, shown.draft());
     if foul_dialog_shown(daily, board, detail, pool) {
         draw_foul_dialog(frame, table_area, board, pool);
     } else {
@@ -347,25 +348,37 @@ fn panel_width(width: u16) -> u16 {
     (width / 4).clamp(PANEL_WIDTH, MAX_PANEL_WIDTH)
 }
 
+/// The shot the board draws (`shown_shot`): the local draft itself, or one
+/// rebuilt from the other side's broadcast.
+pub(crate) enum ShownShot<'a> {
+    Local(&'a PoolDraft),
+    Shared(PoolDraft),
+}
+
+impl ShownShot<'_> {
+    pub(crate) fn draft(&self) -> &PoolDraft {
+        match self {
+            Self::Local(draft) => draft,
+            Self::Shared(draft) => draft,
+        }
+    }
+}
+
 /// The shot the board should be drawing: this player's own while it is their
 /// turn, otherwise whatever the other side last broadcast.
 ///
-/// Falls back to the local draft when nothing has arrived, so a board that
-/// nobody is composing on still shows a sensible cue rather than an empty
-/// panel. A spectator is neither player and gets the broadcast if there is one.
-fn shown_shot(
-    daily: &DailyState,
-    board: &DailyBoardState,
-    detail: &DailyMatchDetail,
-    pool: &PoolDetail,
-) -> PoolDraft {
-    let mine =
-        !board.spectating && detail.is_active() && detail.row.turn_user_id == Some(daily.user_id());
-    let share = match pool.watching {
-        Some(theirs) if !mine => theirs,
-        _ => pool.draft.share(),
-    };
-    PoolDraft::watching(share)
+/// The player's own is the draft itself, never a copy through a share: a
+/// share has no room for the push being timed, so a copy reads the power off
+/// the draw while the stroke plays the push, and it starts each frame with an
+/// empty rebound cache. Falls back to the local draft when nothing has
+/// arrived, so a board that nobody is composing on still shows a sensible cue
+/// rather than an empty panel. A spectator is neither player and gets the
+/// broadcast if there is one.
+pub(crate) fn shown_shot(pool: &PoolDetail, mine: bool) -> ShownShot<'_> {
+    match pool.watching {
+        Some(theirs) if !mine => ShownShot::Shared(PoolDraft::watching(theirs)),
+        _ => ShownShot::Local(&pool.draft),
+    }
 }
 
 fn draw_table(
@@ -566,8 +579,8 @@ pub(crate) const LEGEND: [[(&str, &str); 2]; 8] = [
     [("H L", "aim 0.1°"), ("'", "lowest ball")],
     [("a", "mouse aim"), ("m", "ball in hand")],
     // The mouse's answer to `H L`: hold Ctrl while it moves and the same
-    // sweep is worth a tenth as much.
-    [("ctrl", "fine aim"), ("", "")],
+    // sweep is worth a tenth as much. `j k` is the stroke's fine control.
+    [("ctrl", "fine aim"), ("j k", "±0.1 m/s")],
     [("e", "spin"), ("p", "call pocket")],
     [("x s w", "stroke"), ("v", "eye view")],
     [("c", "reset"), ("r R", "replay")],
@@ -651,20 +664,7 @@ fn info_lines(
                 .fg(theme::TEXT_BRIGHT())
                 .add_modifier(Modifier::BOLD),
         ),
-        // A match of several frames trades the table's name for the frame
-        // score, which is the line of this panel that matters more: the
-        // table never changes and the panel is as narrow as 34 columns.
-        Span::styled(
-            if state.best_of > 1 {
-                format!(
-                    " · best of {} · {}-{}",
-                    state.best_of, state.frames_won[0], state.frames_won[1]
-                )
-            } else {
-                format!(" · {}", state.table)
-            },
-            dim,
-        ),
+        Span::styled(format!(" · {}", state.table), dim),
     ])];
     // Snooker spends this row on the scoreboard below instead: it has two
     // lines to say there and the panel has eight rows.

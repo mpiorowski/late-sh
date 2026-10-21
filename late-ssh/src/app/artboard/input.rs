@@ -2,13 +2,11 @@ use dartboard_editor::{
     AppKey, AppKeyCode, AppModifiers, AppPointerButton, AppPointerEvent, AppPointerKind, HostEffect,
 };
 
+use crate::app::common::color_picker::{COARSE_STEP, ColorPicker, Edge, PickerRow};
 use crate::app::input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput};
 
-use super::color_picker::{COARSE_STEP, ColorPicker, Edge, PickerRow};
 use super::state::State;
-use super::ui::{
-    ColorPickerHit, SwatchHit, color_picker_hit, help_tab_hit, info_hit, palette_hit, swatch_hit,
-};
+use super::ui::{SwatchHit, color_picker_hit, help_tab_hit, info_hit, palette_hit, swatch_hit};
 
 pub enum InputAction {
     Ignored,
@@ -202,16 +200,8 @@ fn handle_color_picker_event(
             if matches!(mouse.kind, MouseEventKind::Down)
                 && matches!(mouse.button, Some(MouseButton::Left))
             {
-                match color_picker_hit(screen_size, state, mouse.x, mouse.y) {
-                    Some(ColorPickerHit::Channel(channel, value)) => {
-                        let picker = color_picker(state);
-                        picker.row = PickerRow::Channel(channel);
-                        picker.set_channel(channel, value);
-                    }
-                    Some(ColorPickerHit::Preset(index)) => {
-                        color_picker(state).select_preset(index);
-                    }
-                    None => {}
+                if let Some(hit) = color_picker_hit(screen_size, state, mouse.x, mouse.y) {
+                    color_picker(state).click(hit);
                 }
             }
             // The modal owns the mouse while it is up.

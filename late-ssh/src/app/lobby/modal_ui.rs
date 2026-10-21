@@ -395,7 +395,7 @@ fn finished_line(daily: &DailyState, item: &DailyFinishedItem, selected: bool) -
 /// payout gates existed carry nothing and say nothing.
 fn win_payout_phrase(item: &DailyFinishedItem) -> String {
     match item.win_payout {
-        Some(DailyWinPayout::Paid) => format!(" · +{}", item.win_chips),
+        Some(DailyWinPayout::Paid) => format!(" · +{}", item.game.win_payout()),
         Some(DailyWinPayout::Unplayed) => {
             format!(" · no chips, under {DAILY_WIN_MIN_MOVES} moves")
         }
@@ -405,12 +405,6 @@ fn win_payout_phrase(item: &DailyFinishedItem) -> String {
         Some(DailyWinPayout::Failed) => " · payout failed".to_string(),
         None => String::new(),
     }
-}
-
-/// Frames a seat needs to take a best-of-`best_of` match, which is also how
-/// many prizes the winner of one played out is paid.
-fn frames_to_win(best_of: u8) -> i64 {
-    best_of as i64 / 2 + 1
 }
 
 fn challenge_line(
@@ -441,29 +435,14 @@ fn challenge_line(
         col(challenge.game.label(), GAME_COL),
         Style::default().fg(theme::TEXT()),
     ));
-    // A match of several frames says so ahead of its age, and quotes what it
-    // pays played out: the prize once per frame won.
-    let posted = format_posted(challenge.created, Utc::now());
-    let (detail, prize) = if challenge.best_of > 1 {
-        (
-            format!(
-                "best of {} · {}",
-                challenge.best_of,
-                posted.trim_start_matches("posted ")
-            ),
-            format!(
-                "up to {} chips",
-                challenge.game.win_payout() * frames_to_win(challenge.best_of)
-            ),
-        )
-    } else {
-        (posted, format!("{} chips", challenge.game.win_payout()))
-    };
     spans.push(Span::styled(
-        col(&detail, DETAIL_COL),
+        col(&format_posted(challenge.created, Utc::now()), DETAIL_COL),
         Style::default().fg(theme::TEXT_DIM()),
     ));
-    spans.push(Span::styled(prize, Style::default().fg(theme::AMBER_DIM())));
+    spans.push(Span::styled(
+        format!("{} chips", challenge.game.win_payout()),
+        Style::default().fg(theme::AMBER_DIM()),
+    ));
     if mine {
         spans.push(Span::styled(
             "   yours · x cancel",
@@ -554,7 +533,7 @@ fn draw_status(frame: &mut Frame, area: Rect, lobby: &LobbyState, daily: &DailyS
 // The challenge picker overlay: a small modal over the Lobby list, one row
 // per roster game with its prize. The height follows the roster, so new
 // games grow the box instead of fighting the status line for width.
-const DRAFT_WIDTH: u16 = 52;
+const DRAFT_WIDTH: u16 = 48;
 
 fn draw_draft_overlay(frame: &mut Frame, popup: Rect, draft: &ChallengeDraft) {
     // A leading blank row + the body + a blank row before the key hints.
@@ -579,19 +558,6 @@ fn draw_draft_overlay(frame: &mut Frame, popup: Rect, draft: &ChallengeDraft) {
     let mut lines: Vec<Line<'static>> = vec![Line::raw("")];
     for (idx, game) in DailyGame::ALL.into_iter().enumerate() {
         let selected = idx == draft.selected;
-        // The cursor's cue game carries the match-length dial; every other
-        // row keeps the column blank so the prizes still line up.
-        let (length, frames) = if selected && game.is_pool() {
-            let best_of = draft.best_of();
-            let length = if best_of > 1 {
-                format!("‹ best of {best_of} ›")
-            } else {
-                "‹ one frame ›".to_string()
-            };
-            (length, frames_to_win(best_of))
-        } else {
-            (String::new(), 1)
-        };
         lines.push(Line::from(vec![
             Span::raw(" "),
             marker_span(selected),
@@ -604,11 +570,7 @@ fn draw_draft_overlay(frame: &mut Frame, popup: Rect, draft: &ChallengeDraft) {
                 }),
             ),
             Span::styled(
-                format!("{length:<15}"),
-                Style::default().fg(theme::AMBER_GLOW()),
-            ),
-            Span::styled(
-                format!("{:>4} chips", game.win_payout() * frames),
+                format!("{:>4} chips", game.win_payout()),
                 Style::default().fg(if selected {
                     theme::AMBER_DIM()
                 } else {
@@ -618,19 +580,17 @@ fn draw_draft_overlay(frame: &mut Frame, popup: Rect, draft: &ChallengeDraft) {
         ]));
     }
     lines.push(Line::raw(""));
-    let mut hints = vec![Span::raw(" "), key("j/k"), text(" choose")];
-    if draft.game().is_pool() {
-        hints.extend([gap(), key("h/l"), text(" frames")]);
-    }
-    hints.extend([
+    lines.push(Line::from(vec![
+        Span::raw(" "),
+        key("j/k"),
+        text(" choose"),
         gap(),
         key("enter"),
         text(" post"),
         gap(),
         key("esc"),
         text(" back"),
-    ]);
-    lines.push(Line::from(hints));
+    ]));
     frame.render_widget(Paragraph::new(lines), inner);
 }
 

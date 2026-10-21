@@ -6,6 +6,7 @@
 
 - `svc.rs`: `AiService`, the Gemini client: `generate_reply`/`generate_short_reply`/`generate_ungrounded` for text, `generate_json`/`generate_json_with_search` for schema-enforced JSON. Which path a caller picks (grounded with Google Search or cheap) is the call policy at the top of `ghost.rs`.
 - `ghost.rs`: the always-on chat characters (@bot, @graybeard, @bartender), their mention responders, the clubhouse tutorial's scripted @bartender welcome, and the bartender's order and round flow (`ROUND.md`). Each bot registers with `fingerprint: None`, so it stays out of the human headcount.
+- `bartender_memory.rs`: @bartender's memory of each patron, the terminal side: storing an exchange once its tail closes, and the prompt section that hands him what he remembers (`MEMORY.md`).
 - `ladder.rs`: escalating per-user, per-room mention cooldowns for @bot and @bartender, process-global; the composer reads it to warn at submit time. Graybeard keeps a flat cooldown in his own responder loop.
 - `screen.rs`: screening for text a player writes: the Shop's custom title and the profile bio.
 - `translate.rs`: `TranslationService` (Translation below).
@@ -16,6 +17,10 @@ Tests sit beside each file as `<file>_test.rs`; run them with `make test-llm ARG
 ## The Round
 
 A drink from @bartender is one floor-guarded `ChipMove::DrinkPurchase` debit and a `user_drinks` upsert in one transaction, the model's quoted price checked before anything is charged; a round is triggered by a literal phrase (`ROUND_PHRASES`), never by the model, settles ahead of the mention ladder, and leaves stacked per-patron credits behind it. Every purchase, price, pour, lock and line is in [`ROUND.md`](ROUND.md).
+
+## Bartender Memory
+
+@bartender keeps up to sixteen memories per patron, copied out of public rooms: the exchanges he answered, and what a patron asked him to keep with "@bartender remember ...". "forget me" wipes them. The rules and the SQL live in `late-core/src/models/bartender_memory.rs`; the kinds, the cap, the triggers, the prompt rules and the races are in [`MEMORY.md`](MEMORY.md).
 
 ## Translation
 

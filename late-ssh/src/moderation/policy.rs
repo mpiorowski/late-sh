@@ -54,6 +54,7 @@ bitflags! {
         const UNBAN_FROM_STREAM = 1 << 27;
         const BAN_FROM_CALENDAR = 1 << 28;
         const UNBAN_FROM_CALENDAR = 1 << 29;
+        const REMOVE_DEADCHANNEL_POSTER = 1 << 30;
     }
 }
 
@@ -113,7 +114,8 @@ const MODERATOR: Caps = Caps::EDIT_OTHER_MESSAGE
     .union(Caps::BAN_FROM_STREAM)
     .union(Caps::UNBAN_FROM_STREAM)
     .union(Caps::BAN_FROM_CALENDAR)
-    .union(Caps::UNBAN_FROM_CALENDAR);
+    .union(Caps::UNBAN_FROM_CALENDAR)
+    .union(Caps::REMOVE_DEADCHANNEL_POSTER);
 
 const ADMIN: Caps = Caps::all();
 

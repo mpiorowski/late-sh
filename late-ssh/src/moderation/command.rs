@@ -88,6 +88,11 @@ pub(crate) enum ModCommand {
     ArtboardFeaturePiece {
         id_prefix: String,
     },
+    /// Take a runner's poster (painted at PRINTS) off their profile.
+    DeadchannelRemovePoster {
+        username: String,
+        reason: String,
+    },
     Audio {
         action: AudioAction,
         username: String,
@@ -351,6 +356,7 @@ pub(crate) enum ModCommandHead {
     Slow,
     Unslow,
     Artboard,
+    Deadchannel,
     Admin,
 }
 
@@ -368,6 +374,7 @@ impl ModCommandHead {
             "slow" => Some(Self::Slow),
             "unslow" => Some(Self::Unslow),
             "artboard" => Some(Self::Artboard),
+            "deadchannel" => Some(Self::Deadchannel),
             "admin" => Some(Self::Admin),
             _ => None,
         }
@@ -408,6 +415,7 @@ pub(crate) fn parse_mod_command(input: &str) -> Result<ModCommand> {
         ModCommandHead::Slow => parse_slow_mod_command(&rest),
         ModCommandHead::Unslow => parse_unslow_mod_command(&rest),
         ModCommandHead::Artboard => parse_artboard_mod_command(&rest),
+        ModCommandHead::Deadchannel => parse_deadchannel_mod_command(&rest),
         ModCommandHead::Admin => parse_admin_mod_command(&rest),
     }
 }
@@ -852,6 +860,18 @@ fn parse_artboard_remove_mod_command(parts: &[&str]) -> Result<ModCommand> {
     Ok(ModCommand::ArtboardRemovePiece { id_prefix, reason })
 }
 
+fn parse_deadchannel_mod_command(parts: &[&str]) -> Result<ModCommand> {
+    const USAGE: &str = "usage: deadchannel remove-poster @name [reason...]";
+    match parts.first().copied() {
+        Some("remove-poster") => {
+            let username = required_username(parts.get(1).copied(), USAGE)?;
+            let reason = parts.get(2..).unwrap_or_default().join(" ");
+            Ok(ModCommand::DeadchannelRemovePoster { username, reason })
+        }
+        Some(_) | None => anyhow::bail!(USAGE),
+    }
+}
+
 fn parse_artboard_feature_mod_command(parts: &[&str]) -> Result<ModCommand> {
     const USAGE: &str = "usage: artboard feature <piece-id-prefix>";
     match parts {
@@ -1119,6 +1139,8 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "artboard restore [YYYY-MM-DD] [reason...]",
             "artboard remove  <piece-id-prefix> [reason...]",
             "artboard feature <piece-id-prefix>",
+            "======== Deadchannel ===============================================",
+            "deadchannel remove-poster @name [reason...]",
             "======== Bans, kicks, etc. =========================================",
             "kick   <server|voice|stream|#room> @name [reason...]",
             "ban    <server|#room|art|audio|calendar|stream> @name [duration] [reason...]",
@@ -1366,6 +1388,12 @@ pub(crate) fn mod_help_lines(topic: Option<&str>) -> Vec<String> {
             "date: optional daily snapshot date; defaults to previous UTC day.",
             "reason: optional audit text.",
             "Moderator or admin only. Writes a moderation audit entry and backs up the previous main row.",
+        ],
+        "deadchannel" | "deadchannel remove-poster" => &[
+            "deadchannel remove-poster @name [reason...]",
+            "Takes a runner's poster (the picture painted at PRINTS) off their terminal and web",
+            "profiles; the profile shows the test card again. Works on a runner who left too.",
+            "Same cap as artboard remove. Writes a moderation audit entry.",
         ],
         "admin" => &[
             "admin <grant|revoke> mod @name",

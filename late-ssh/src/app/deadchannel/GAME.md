@@ -823,8 +823,8 @@ something other people see without a number.
 |---|---|---|
 | chat author line | mark + level | everyone in the room |
 | clubhouse floor | mark | everyone on the floor |
-| profile card (`p`, `/profile @user`) | portrait + sheet | anyone who looks |
-| web `/profiles/{slug}` | portrait + sheet | the whole internet: the brag that leaves the terminal |
+| profile card (`p`, `/profile @user`) | badge + portrait + poster | anyone who looks |
+| web `/profiles/{slug}` | poster (the portrait is not drawn there) | the whole internet: the brag that leaves the terminal |
 | #deadchannel messages | portrait in a 3-row gutter beside every runner's message | runners only; the wire is the game's own room, so the face rides every message there (decided 2026-09-02) |
 | the wire | portrait as a three-line message | runners; printed by the game on a level gained and on an Old Signal kill, the two moments worth a picture |
 | the fight panel (later) | two portraits facing | whoever is watching |
@@ -892,16 +892,32 @@ What the sketches decided:
 
 - **One tint per piece, never per cell**, from a closed palette of about
   seven (static grey, amber, phosphor green, cyan, magenta, red, white),
-  opened by level. No earned tint: gold stays out of the palette. Two people in the same three
+  opened by level. No earned tint on the face: gold stays out of the
+  palette. **The Old Signal mark opens every colour on the poster, and
+  only there**: without a mark the poster's brush holds the seven tints
+  (all of them, whatever the level), with one it mixes any colour. The
+  face keeps its seven; a feat still earns a badge, never clothes. Two people in the same three
   pieces and different tints already look different, so the catalog
   multiplies without more art. The wire prints portraits in plain text
   (chat bodies carry no color and IRC would need color codes); the
   profile card, the #deadchannel gutter, and the fight panel paint them.
-- **"Build your own" means composing, never drawing.** No freehand cells.
-  A closed piece set is what makes a look legible ("that coat is season
-  one"), and it is also the only thing between the tailor and a room
-  full of ASCII dicks. Building is picking a hood, eyes, a coat, and a
-  tint for each. That is the whole editor.
+- **The face is composed, never drawn.** No freehand cells in a
+  portrait. A closed piece set is what makes a look legible ("that coat
+  is season one") at one cell and in a gutter beside every message, and
+  it is also the only thing between the tailor and a room full of ASCII
+  dicks. Building a face is picking a hood, eyes, a coat, and a tint for
+  each. That is the whole of the tailor's editor.
+- **The poster is the one free-painted surface.** A 32 by 12 picture,
+  painted at PRINTS (a shop on the street by the tailor, free) and hung
+  on the profile beside the face, in the terminal and on the web. It is
+  profile-sized and lives only there: never in the chat, the wire, the
+  street, or the fight, so the legibility rule above stays the face's.
+  It is moderated the way the Artboard is: a moderator takes one down
+  (`/mod deadchannel remove-poster`), and its owner burns it at PRINTS.
+  A runner without one shows the test card, seven bars in the seven
+  tints. The name is poster on purpose: never "mark" (taken twice),
+  "tag" (showcases wear hashtags on the same screen) or "card" (the
+  fight's word).
 - **Glyph width is the real risk.** Box drawing and block elements are
   single width everywhere; shapes like `◉ ◈ ◔ ◌` are ambiguous width
   and render double wide in some terminals and fonts, which would tear
@@ -953,11 +969,11 @@ single bounty exists.
 
 ### The sheet (what the profile card shows)
 
-For a runner, above the ordinary profile: the portrait; name, mark,
-level, band; signal as a bar; rations and charge left today; weapon and
-armor by name; marks and the title they earn; bits on hand (public on
-purpose: LORD's rankings showed gold, and visible wealth is what a bounty
-is placed on later). The stash stays private. For anyone who never
+For a runner, beside the ordinary profile: the badge (mark, level, and
+marks), the portrait wounded by the missing signal, and the poster. The
+rest of the sheet (signal, exp, bits, the kit, the tally) stays on the
+street, where the strip and the Night City card carry it for the runner
+themself; the stash stays private. For anyone who never
 joined, the card shows nothing game-related; civilians reading a
 runner's card see "ghost, level 7" and have no idea what it means,
 which is fine.

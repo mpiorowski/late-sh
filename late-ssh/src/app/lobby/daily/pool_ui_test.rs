@@ -559,3 +559,35 @@ fn the_scoreboard_says_who_needs_snookers_and_how_many() {
     state.scores = [20, 10];
     assert_eq!(snookers_needed(&state), None, "clearing the table wins it");
 }
+
+#[test]
+fn the_readout_follows_the_push_on_your_own_stroke() {
+    use std::time::{Duration, Instant};
+
+    use crate::app::games::pool_core::cue::{PowerBand, ShotMode};
+    use crate::app::lobby::daily::pool_draft::AimGear;
+
+    // A mouse stroke's power is how fast the cue comes forward, and the
+    // readout is the only place the player sees it before the ball does.
+    // Drawn back fourteen rows, pushed two in 40 ms: the push and the draw
+    // name different speeds, and the board must show the one that plays.
+    let mut pool = PoolDetail::new(pool_state());
+    pool.draft.toggle_mode(ShotMode::Stroke(PowerBand::Normal));
+    let t0 = Instant::now();
+    for (y, ms) in [(10, 0), (24, 100), (22, 300)] {
+        pool.draft.pointer_moved_at(
+            40,
+            y,
+            false,
+            AimGear::Normal,
+            t0 + Duration::from_millis(ms),
+        );
+    }
+    let played = pool.draft.power();
+    assert_ne!(
+        played,
+        PowerBand::Normal.speed_at(pool.draft.pull),
+        "the push and the draw agree here, so this proves nothing"
+    );
+    assert_eq!(shown_shot(&pool, true).draft().power(), played);
+}

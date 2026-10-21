@@ -2,8 +2,9 @@
 //! (arrows/wasd + Space/Enter, `r` resign, `p` piece graphics); clicks map
 //! through the geometry the last render recorded. The embedded match chat
 //! owns its keys first, exactly like the active-room split: `i`/`j`/`k`
-//! always route to chat, and the message-action keys route to chat while a
-//! match-chat message is selected.
+//! route to chat (except on a pool board while its resign prompt is open, or
+//! `j`/`k` while a stroke is armed or the foul dialog is up), and the
+//! message-action keys route to chat while a match-chat message is selected.
 
 use crate::app::games::chess_core::{board_ui, types::ChessPieceRenderMode};
 use crate::app::input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput};
@@ -34,6 +35,11 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
 pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
     if byte == b'`' {
         return crate::app::workspace::cycle::cycle_game_workspace(app);
+    }
+    // Pool's resign prompt, stroke speed and foul dialog borrow keys from
+    // the chat, but only while one of them is up.
+    if super::pool_input::pool_priority_key(app, byte) {
+        return true;
     }
     if let Some(chat_room_id) = app.daily.board_chat_room_id() {
         if byte == 0x1B

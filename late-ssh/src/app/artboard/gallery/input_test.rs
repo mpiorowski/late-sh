@@ -3,9 +3,9 @@ use ratatui::{Terminal, backend::TestBackend, layout::Rect};
 use super::*;
 use crate::app::artboard::{
     provenance::ArtboardProvenance,
-    state::PAINT_PALETTE,
     svc::{ArtboardSnapshotService, DartboardService, DartboardSnapshot},
 };
+use crate::app::common::color_picker::PAINT_PALETTE;
 
 fn test_state() -> State {
     let snapshot = DartboardSnapshot {

@@ -42,7 +42,7 @@ use super::{
     games::DailyGame,
     gin::{self, DailyGinState, GinMove},
     live::{LiveBoard, MatchSummary},
-    pool::{self, DailyPoolState, PoolAimShare},
+    pool::{DailyPoolState, PoolAimShare},
     reversi::DailyReversiState,
 };
 
@@ -91,8 +91,6 @@ pub struct DailySnapshot {
 pub struct DailyChallengeItem {
     pub id: Uuid,
     pub game: DailyGame,
-    /// Frames in the match; 1 for everything but a multi-frame pool match.
-    pub best_of: u8,
     pub created: DateTime<Utc>,
     pub challenger_id: Uuid,
     pub challenger_username: Option<String>,
@@ -137,9 +135,6 @@ pub struct DailyFinishedItem {
     /// What the winner's chips did; `None` for draws and for matches finished
     /// before the payout gates existed.
     pub win_payout: Option<DailyWinPayout>,
-    /// What a paid win came to (`win_chips`). Meaningless unless `win_payout`
-    /// says it was paid.
-    pub win_chips: i64,
     pub finished_at: DateTime<Utc>,
     /// How far the match got, read off the final state.
     pub move_count: usize,
@@ -247,8 +242,6 @@ pub enum DailyFinishOutcome {
     Won {
         user_id: Uuid,
         payout: DailyWinPayout,
-        /// What the win came to when it paid (`win_chips`).
-        chips: i64,
     },
     Draw,
 }
@@ -473,49 +466,15 @@ fn claim_chess_state(
     ))
 }
 
-/// How many times over a win pays the game's prize: once per frame the
-/// winner took, never less than once.
-///
-/// Per frame *won* rather than per frame on offer, which is what makes a long
-/// match fair both ways. Played out, a best of five pays three prizes — one
-/// per frame it took to win, close to the 4.1 frames such a match lasts on
-/// average between equal players. Resigned one frame in, it pays one, exactly
-/// what a single frame would: posting a long match and folding it at once
-/// cannot be worth more than posting a short one.
-///
-/// Only frames that ran to `pool::FRAME_MIN_SHOTS` count (`counted_frames`):
-/// an eight-ball frame can be thrown in one stroke, and a frame nobody played
-/// is not one to pay for.
-fn win_frames(row: &DailyMatch, game: DailyGame, winner: Uuid) -> i64 {
-    if !game.is_pool() || row.best_of <= 1 {
-        return 1;
-    }
-    DailyPoolState::parse(&row.state)
-        .ok()
-        .and_then(|state| {
-            let seat = state.seat_of(winner)?;
-            Some(state.counted_frames[seat as usize] as i64)
-        })
-        .unwrap_or(1)
-        .max(1)
-}
-
-/// The chips a win in this match pays, when it pays (`win_frames`).
-pub fn win_chips(row: &DailyMatch, game: DailyGame, winner: Uuid) -> i64 {
-    game.win_payout() * win_frames(row, game, winner)
-}
-
 /// The claim-time state for a pool game. `new` flips the coin for seat 0,
 /// who breaks (in pool that is the whole of the opening advantage), and
-/// rolls the rack seed. `best_of` comes off the challenge row.
+/// rolls the rack seed.
 fn claim_pool_state(
     rules: PoolRules,
     challenger_id: Uuid,
     claimer_id: Uuid,
-    best_of: i16,
 ) -> Result<(Value, Uuid)> {
-    let best_of = u8::try_from(best_of).unwrap_or(1);
-    let state = DailyPoolState::new_match(rules, challenger_id, claimer_id, best_of);
+    let state = DailyPoolState::new(rules, challenger_id, claimer_id);
     let first = state.turn_user();
     Ok((serde_json::to_value(state)?, first))
 }
@@ -626,10 +585,10 @@ impl DailyService {
         DailyMatch::delete_stale_chat_rooms(&client).await
     }
 
-    pub fn post_challenge_task(&self, user_id: Uuid, game: DailyGame, best_of: u8) {
+    pub fn post_challenge_task(&self, user_id: Uuid, game: DailyGame) {
         let svc = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = svc.post_challenge_best_of(user_id, game, best_of).await {
+            if let Err(e) = svc.post_challenge(user_id, game).await {
                 tracing::error!(error = ?e, %user_id, "failed to post daily challenge");
                 svc.send_error(user_id, &e);
             }
@@ -706,27 +665,9 @@ impl DailyService {
     }
 
     pub async fn post_challenge(&self, user_id: Uuid, game: DailyGame) -> Result<DailyMatch> {
-        self.post_challenge_best_of(user_id, game, 1).await
-    }
-
-    /// Post a challenge for a match of `best_of` frames. Only the cue games
-    /// have frames to count, and only the lengths on `BEST_OF`.
-    pub async fn post_challenge_best_of(
-        &self,
-        user_id: Uuid,
-        game: DailyGame,
-        best_of: u8,
-    ) -> Result<DailyMatch> {
-        ensure!(
-            best_of == 1 || (game.is_pool() && pool::BEST_OF.contains(&best_of)),
-            "a {} challenge cannot be best of {best_of}",
-            game.label()
-        );
         let client = self.db.get().await?;
         self.ensure_entry_capacity(&client, user_id).await?;
-        let row =
-            DailyMatch::create_challenge_best_of(&client, game.kind(), user_id, best_of as i16)
-                .await?;
+        let row = DailyMatch::create_challenge(&client, game.kind(), user_id).await?;
         let _ = self.event_tx.send(DailyEvent::ChallengePosted {
             match_id: row.id,
             game,
@@ -827,24 +768,15 @@ impl DailyService {
                 (serde_json::to_value(state)?, first)
             }
             // The pool games share one state type; the ruleset is a field.
-            DailyGame::EightBall => claim_pool_state(
-                PoolRules::EightBall,
-                challenge.challenger_id,
-                user_id,
-                challenge.best_of,
-            )?,
-            DailyGame::NineBall => claim_pool_state(
-                PoolRules::NineBall,
-                challenge.challenger_id,
-                user_id,
-                challenge.best_of,
-            )?,
-            DailyGame::Snooker => claim_pool_state(
-                PoolRules::Snooker,
-                challenge.challenger_id,
-                user_id,
-                challenge.best_of,
-            )?,
+            DailyGame::EightBall => {
+                claim_pool_state(PoolRules::EightBall, challenge.challenger_id, user_id)?
+            }
+            DailyGame::NineBall => {
+                claim_pool_state(PoolRules::NineBall, challenge.challenger_id, user_id)?
+            }
+            DailyGame::Snooker => {
+                claim_pool_state(PoolRules::Snooker, challenge.challenger_id, user_id)?
+            }
         };
         // Usernames for the voice channel label, loaded before the claim
         // transaction opens.
@@ -1917,13 +1849,6 @@ impl DailyService {
                     by_user_id: user_id,
                     label,
                 });
-                // The payout counts the frames off the state, so it is handed
-                // the state this shot wrote rather than the one it was played
-                // on, which is a frame short for the winner.
-                let row = DailyMatch {
-                    state: state_value,
-                    ..row
-                };
                 self.finish_events(&row, game, winner, result, revision)
                     .await;
             }
@@ -2087,7 +2012,6 @@ impl DailyService {
                 DailyFinishOutcome::Won {
                     user_id: winner,
                     payout,
-                    chips: win_chips(row, game, winner),
                 }
             }
             None => DailyFinishOutcome::Draw,
@@ -2140,13 +2064,12 @@ impl DailyService {
             let pair_day_key = format!("{loser}:{}", row.created.date_naive());
             match self
                 .chip_svc
-                .credit_per_event_pair_day_reward_template_times(
+                .credit_per_event_pair_day_reward_template(
                     winner,
                     game.reward_key(),
                     &row.id.to_string(),
                     &pair_day_key,
                     game.chip_move(),
-                    win_frames(row, game, winner),
                 )
                 .await
             {
@@ -2396,7 +2319,6 @@ fn challenge_item(
     Ok(DailyChallengeItem {
         id: row.id,
         game,
-        best_of: row.best_of.clamp(1, u8::MAX as i16) as u8,
         created: row.created,
         challenger_id: row.challenger_id,
         challenger_username: usernames.get(&row.challenger_id).cloned(),
@@ -2462,9 +2384,6 @@ fn finished_item(
             DailyWinPayout::from_db_str(value)
                 .expect("daily_matches.win_payout holds a checked spelling")
         }),
-        win_chips: row
-            .winner_user_id
-            .map_or(game.win_payout(), |winner| win_chips(&row, game, winner)),
         // `finish`/`forfeit_expired`/`set_win_payout` were the last writers,
         // so `updated` is the finish time.
         finished_at: row.updated,

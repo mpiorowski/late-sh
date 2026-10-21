@@ -97,6 +97,27 @@ pub enum SummaryResult {
     Failed,
 }
 
+/// How one write to @bartender's memory of a patron resolved
+/// (`app/ai/bartender_memory.rs`). The failures are the ones nobody else
+/// sees: an exchange is stored off the reply path, and a failed remember or
+/// wipe gets no line in the room.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BartenderMemoryWrite {
+    /// An exchange kept once the patron's tail closed.
+    ExchangeStored,
+    /// A "remember" request written down.
+    RequestedStored,
+    /// Either kind, turned away: the patron said "forget me" after it.
+    TurnedAway,
+    /// Either kind, already stored for that message.
+    AlreadyStored,
+    /// "forget me" landed, whether or not there was anything to wipe.
+    Wiped,
+    ExchangeFailed,
+    RequestedFailed,
+    WipeFailed,
+}
+
 /// How one page of The Late Edition (`app/paper`) came off the press.
 /// `Printed` is the variant that spent a model call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -318,6 +339,22 @@ pub enum TailorBeat {
     Worn,
     NoRunner,
     Failed,
+}
+
+/// A poster at PRINTS (`app/deadchannel/poster`): `Saved` and `Burned`
+/// landed, `NoRunner` found no standing runner to hang it on or take it
+/// off, `Failed` is the write not landing. The read when the panel opens:
+/// `ReadFailed` is the wall not read (the panel cannot open on it),
+/// `Undecodable` a stored poster that is no canvas (the panel opens on a
+/// bare wall).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PosterBeat {
+    Saved,
+    Burned,
+    NoRunner,
+    Failed,
+    ReadFailed,
+    Undecodable,
 }
 
 /// What the presence wire did (`app/presence`): `Published` a notify
@@ -629,7 +666,9 @@ mod inner {
 
     use crate::app::activity::event::GameFamily;
 
+    use super::BartenderMemoryWrite;
     use super::HomeRoom;
+    use super::PosterBeat;
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
@@ -1872,6 +1911,16 @@ mod inner {
         })
     }
 
+    fn deadchannel_poster_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_deadchannel_poster_total")
+                .with_description("deadchannel posters saved and burned at PRINTS, by beat")
+                .build()
+        })
+    }
+
     fn deadchannel_lounge_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -2010,6 +2059,21 @@ mod inner {
 
     pub fn record_deadchannel_tailor(beat: TailorBeat) {
         deadchannel_tailor_total().add(1, &[KeyValue::new("beat", tailor_beat_label(beat))]);
+    }
+
+    fn poster_beat_label(beat: PosterBeat) -> &'static str {
+        match beat {
+            PosterBeat::Saved => "saved",
+            PosterBeat::Burned => "burned",
+            PosterBeat::NoRunner => "no_runner",
+            PosterBeat::Failed => "failed",
+            PosterBeat::ReadFailed => "read_failed",
+            PosterBeat::Undecodable => "undecodable",
+        }
+    }
+
+    pub fn record_deadchannel_poster(beat: PosterBeat) {
+        deadchannel_poster_total().add(1, &[KeyValue::new("beat", poster_beat_label(beat))]);
     }
 
     fn lounge_beat_label(beat: LoungeBeat) -> &'static str {
@@ -3027,6 +3091,41 @@ mod inner {
         round_drinks_cashed_total().add(1, &[]);
     }
 
+    fn bartender_memory_write_label(write: BartenderMemoryWrite) -> &'static str {
+        match write {
+            BartenderMemoryWrite::ExchangeStored => "exchange_stored",
+            BartenderMemoryWrite::RequestedStored => "requested_stored",
+            BartenderMemoryWrite::TurnedAway => "turned_away",
+            BartenderMemoryWrite::AlreadyStored => "already_stored",
+            BartenderMemoryWrite::Wiped => "wiped",
+            BartenderMemoryWrite::ExchangeFailed => "exchange_failed",
+            BartenderMemoryWrite::RequestedFailed => "requested_failed",
+            BartenderMemoryWrite::WipeFailed => "wipe_failed",
+        }
+    }
+
+    fn bartender_memory_writes_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_bartender_memory_writes_total")
+                .with_description(
+                    "@bartender memory writes (kept exchanges, remember requests, forget-me wipes) by outcome",
+                )
+                .build()
+        })
+    }
+
+    pub fn record_bartender_memory(write: BartenderMemoryWrite) {
+        bartender_memory_writes_total().add(
+            1,
+            &[KeyValue::new(
+                "outcome",
+                bartender_memory_write_label(write),
+            )],
+        );
+    }
+
     /// The house's off-thread work at the Nightcap failed. Orders are counted
     /// under `record_nightcap_order`; this is what a healthy order counter
     /// cannot see: a quiet bar or a stale menu.
@@ -3721,6 +3820,8 @@ mod inner {
 mod inner {
     use late_core::models::user::{AsciiPiece, AsciiSelection};
 
+    use super::BartenderMemoryWrite;
+    use super::PosterBeat;
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
@@ -3759,6 +3860,7 @@ mod inner {
     pub fn record_deadchannel_fight(_beat: FightBeat) {}
     pub fn record_deadchannel_old_signal_payout(_payout: OldSignalPayout) {}
     pub fn record_deadchannel_tailor(_beat: TailorBeat) {}
+    pub fn record_deadchannel_poster(_beat: PosterBeat) {}
     pub fn record_deadchannel_lounge(_beat: LoungeBeat) {}
     pub fn record_presence(_beat: PresenceWire) {}
     pub fn record_presence_records(_scope: PresenceScope, _count: usize) {}
@@ -3849,6 +3951,7 @@ mod inner {
     pub fn record_nightcap_order(_result: NightcapOrderResult) {}
     pub fn record_nightcap_house_failure(_failure: NightcapHouseFailure) {}
     pub fn record_round_drink_cashed() {}
+    pub fn record_bartender_memory(_write: BartenderMemoryWrite) {}
     pub fn record_pot_tickets_bought(_tickets: i64, _chips: i64) {}
     pub fn record_pot_buy_refused(_refusal: PotRefusal) {}
     pub fn record_pot_drawn(_payout: i64, _tickets: i64) {}

@@ -27,6 +27,9 @@ mod article_save_test;
 mod article_test;
 pub mod asterion;
 pub mod audio_ban;
+pub mod bartender_memory;
+#[cfg(test)]
+mod bartender_memory_test;
 pub mod bashquest_graduate;
 #[cfg(test)]
 mod bashquest_graduate_test;

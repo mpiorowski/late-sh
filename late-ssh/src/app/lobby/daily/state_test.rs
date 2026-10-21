@@ -169,7 +169,6 @@ async fn a_finished_match_tells_the_pet_win_or_loss_and_a_draw_tells_it_nothing(
     let won_by = |user_id| DailyFinishOutcome::Won {
         user_id,
         payout: DailyWinPayout::Paid,
-        chips: DailyGame::Chess.win_payout(),
     };
 
     // Nothing finished: nothing to tell.
@@ -355,7 +354,7 @@ async fn a_claim_and_a_result_are_offered_to_the_strip_on_every_replica() {
 
 #[test]
 fn draft_picker_wraps_at_both_ends() {
-    let mut draft = ChallengeDraft::new(0);
+    let mut draft = ChallengeDraft { selected: 0 };
     let last = DailyGame::ALL.len() - 1;
 
     // Up from the first game lands on the last, and down from there comes back.
@@ -363,36 +362,6 @@ fn draft_picker_wraps_at_both_ends() {
     assert_eq!(draft.selected, last);
     draft.move_selection(1);
     assert_eq!(draft.selected, 0);
-}
-
-#[test]
-fn only_a_cue_game_is_offered_more_than_one_frame() {
-    let at = |game: DailyGame| {
-        DailyGame::ALL
-            .iter()
-            .position(|candidate| *candidate == game)
-            .expect("on the roster")
-    };
-    let mut draft = ChallengeDraft::new(at(DailyGame::Chess));
-    assert!(!draft.cycle_best_of(1), "chess has no frames to count");
-    assert_eq!(draft.best_of(), 1);
-
-    let mut draft = ChallengeDraft::new(at(DailyGame::Snooker));
-    assert!(draft.cycle_best_of(1));
-    assert_eq!(draft.best_of(), 3);
-    for _ in 0..5 {
-        draft.cycle_best_of(1);
-    }
-    assert_eq!(draft.best_of(), 7, "the dial stops at the longest match");
-    draft.cycle_best_of(-1);
-    assert_eq!(draft.best_of(), 5);
-
-    // The length rides along while the cursor moves, but posts only on a
-    // game that has frames.
-    draft.selected = at(DailyGame::Chess);
-    assert_eq!(draft.best_of(), 1);
-    draft.selected = at(DailyGame::EightBall);
-    assert_eq!(draft.best_of(), 5);
 }
 
 #[tokio::test]
@@ -862,7 +831,6 @@ async fn a_finish_waits_for_the_shot_still_playing_on_the_board() {
         outcome: DailyFinishOutcome::Won {
             user_id: watcher,
             payout: DailyWinPayout::Paid,
-            chips: DailyGame::EightBall.win_payout(),
         },
         result: DailyResult::Resign,
     });

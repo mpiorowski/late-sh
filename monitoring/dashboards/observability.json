@@ -3395,6 +3395,79 @@
       }
     },
     {
+      "type": "bargauge",
+      "title": "Bartender Memory",
+      "description": "Every write to @bartender's memory of a patron over the range, by outcome: exchange_stored and requested_stored (kept), turned_away (said before a \"forget me\"), already_stored, wiped (a \"forget me\" landed), and the three *_failed, which never show in the room: an exchange is stored off the reply path, and a failed remember or wipe gets no line.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (outcome) (increase(late_ssh_bartender_memory_writes_total[$__range]))",
+          "legendFormat": "{{outcome}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".*_failed"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 269
+      }
+    },
+    {
       "type": "row",
       "title": "deadchannel",
       "collapsed": false,
@@ -3407,7 +3480,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 269
+        "y": 277
       }
     },
     {
@@ -3464,7 +3537,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 270
+        "y": 278
       }
     },
     {
@@ -3521,7 +3594,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 270
+        "y": 278
       }
     },
     {
@@ -3578,7 +3651,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 270
+        "y": 278
       }
     },
     {
@@ -3631,7 +3704,7 @@
         "h": 8,
         "w": 24,
         "x": 0,
-        "y": 278
+        "y": 286
       }
     },
     {
@@ -3768,7 +3841,7 @@
         "h": 9,
         "w": 24,
         "x": 0,
-        "y": 286
+        "y": 294
       }
     },
     {
@@ -3854,7 +3927,7 @@
         "h": 10,
         "w": 24,
         "x": 0,
-        "y": 295
+        "y": 303
       }
     },
     {
@@ -3886,7 +3959,7 @@
         "h": 12,
         "w": 24,
         "x": 0,
-        "y": 305
+        "y": 313
       }
     },
     {
@@ -3943,13 +4016,13 @@
         "h": 8,
         "w": 6,
         "x": 0,
-        "y": 317
+        "y": 325
       }
     },
     {
       "type": "bargauge",
-      "title": "Tailor & the Door",
-      "description": "Looks worn at the tailor's mirror (worn, no_runner, failed) and runners leaving and returning to #deadchannel over the range.",
+      "title": "Tailor, Prints & the Door",
+      "description": "Looks worn at the tailor's mirror (worn, no_runner, failed), posters saved and burned at PRINTS (saved, burned, no_runner, failed; the read on open: read_failed, undecodable), and runners leaving and returning to #deadchannel over the range.",
       "datasource": {
         "uid": "victoriametrics",
         "type": "victoriametrics-metrics-datasource"
@@ -3965,6 +4038,12 @@
           "refId": "B",
           "expr": "sum by (direction) (increase(late_ssh_runner_door_total[$__range]))",
           "legendFormat": "door {{direction}}",
+          "instant": true
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (beat) (increase(late_ssh_deadchannel_poster_total[$__range]))",
+          "legendFormat": "poster {{beat}}",
           "instant": true
         }
       ],
@@ -4006,7 +4085,7 @@
         "h": 8,
         "w": 6,
         "x": 6,
-        "y": 317
+        "y": 325
       }
     },
     {
@@ -4063,7 +4142,7 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 317
+        "y": 325
       }
     },
     {
@@ -4120,7 +4199,7 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 317
+        "y": 325
       }
     }
   ]

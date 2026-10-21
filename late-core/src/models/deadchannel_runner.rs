@@ -38,6 +38,10 @@ pub const DEADCHANNEL_RUNNER_CHANGED_CHANNEL: &str = "deadchannel_runner_changed
 // is the drafts inked at INK, a JSON list of draft levels the app parses,
 // `None` with none bought; a mark and the ledge leave it, the nuke clears
 // it. A stored `fight` always has `piles` (the check of migration 228).
+// `poster` (migration 249) is the runner's picture from PRINTS, a
+// serialized `dartboard_core::Canvas` the app decodes where it draws it,
+// `None` with none hung; the trigger does not watch it and the nuke keeps
+// it.
 crate::model! {
     table = "deadchannel_runners";
     params = DeadchannelRunnerParams;
@@ -67,7 +71,8 @@ crate::model! {
         pub reset_generation: i32,
         pub road: Option<serde_json::Value>,
         pub cards: Option<serde_json::Value>,
-        pub inks: Option<serde_json::Value>;
+        pub inks: Option<serde_json::Value>,
+        pub poster: Option<serde_json::Value>;
 
         @data
         pub user_id: Uuid,
@@ -224,6 +229,78 @@ impl DeadchannelRunner {
         Ok(row.is_some())
     }
 
+    /// PRINTS: the standing runner's poster is `poster` from now on. One
+    /// statement, last write wins, the shape of `store_look`; no trigger
+    /// carries it (a profile reads the row when it opens). `false` when
+    /// there is no standing runner to hang it on.
+    pub async fn store_poster(
+        client: &Client,
+        user_id: Uuid,
+        poster: &serde_json::Value,
+    ) -> Result<bool> {
+        let row = client
+            .query_opt(
+                "UPDATE deadchannel_runners
+                 SET poster = $2, updated = current_timestamp
+                 WHERE user_id = $1 AND left_at IS NULL
+                 RETURNING id",
+                &[&user_id, poster],
+            )
+            .await
+            .context("storing deadchannel runner poster")?;
+        Ok(row.is_some())
+    }
+
+    /// PRINTS: the standing runner burns their own poster; the wall is bare
+    /// after it whether or not something hung there (another device may have
+    /// burned it first). `false` when there is no standing runner, the same
+    /// answer `store_poster` gives.
+    pub async fn clear_poster(client: &Client, user_id: Uuid) -> Result<bool> {
+        let row = client
+            .query_opt(
+                "UPDATE deadchannel_runners
+                 SET poster = NULL, updated = current_timestamp
+                 WHERE user_id = $1 AND left_at IS NULL
+                 RETURNING id",
+                &[&user_id],
+            )
+            .await
+            .context("clearing deadchannel runner poster")?;
+        Ok(row.is_some())
+    }
+
+    /// A moderator takes a poster down, whether or not its runner still
+    /// stands: a leaver's poster is still on their row and comes back with
+    /// them. `true` when there was one.
+    pub async fn clear_poster_any(client: &impl GenericClient, user_id: Uuid) -> Result<bool> {
+        let row = client
+            .query_opt(
+                "UPDATE deadchannel_runners
+                 SET poster = NULL, updated = current_timestamp
+                 WHERE user_id = $1 AND poster IS NOT NULL
+                 RETURNING id",
+                &[&user_id],
+            )
+            .await
+            .context("clearing deadchannel runner poster for moderation")?;
+        Ok(row.is_some())
+    }
+
+    /// The standing runner's poster as stored, for the web profile: `None`
+    /// with no poster, or no standing runner (a leaver's poster is not
+    /// shown).
+    pub async fn poster(client: &Client, user_id: Uuid) -> Result<Option<serde_json::Value>> {
+        let row = client
+            .query_opt(
+                "SELECT poster FROM deadchannel_runners
+                 WHERE user_id = $1 AND left_at IS NULL",
+                &[&user_id],
+            )
+            .await
+            .context("reading deadchannel runner poster")?;
+        Ok(row.and_then(|row| row.get("poster")))
+    }
+
     /// The first descent's claim: stamp the guide as seen, once. Conditional
     /// on the stamp being absent and the runner standing, so two devices
     /// coming down at once (on any replicas) open the guide on one of them
@@ -262,8 +339,9 @@ impl DeadchannelRunner {
     }
 
     /// Write the sheet back. Call it only while holding `lock_standing`.
-    /// The change trigger watches only `look` and `left_at` (migration
-    /// 199), so a sheet write wakes no look directory anywhere.
+    /// The change trigger watches only `look`, `left_at`, and `level`
+    /// (migration 202), so a sheet write that leaves the level alone wakes
+    /// no look directory anywhere.
     pub async fn store_sheet(client: &impl GenericClient, write: SheetWrite) -> Result<Self> {
         let row = client
             .query_one(

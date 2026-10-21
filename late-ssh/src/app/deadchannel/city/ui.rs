@@ -49,6 +49,7 @@ use crate::app::deadchannel::fight::ui as fight_ui;
 use crate::app::deadchannel::glyphs::GLYPH_ALPHABET;
 use crate::app::deadchannel::guide::state::State as GuideState;
 use crate::app::deadchannel::guide::ui as guide_ui;
+use crate::app::deadchannel::poster::ui as poster_ui;
 use crate::app::deadchannel::runner::state::{Look, Tint};
 use crate::app::deadchannel::tailor::ui as tailor_ui;
 
@@ -171,6 +172,8 @@ pub(crate) struct CityView<'a> {
     pub till: Option<&'a str>,
     /// The tailor's mirror (`tailor/session.rs`), for its panel.
     pub tailor: tailor_ui::MirrorView<'a>,
+    /// PRINTS's bench (`poster/session.rs`), for its panel.
+    pub poster: poster_ui::PosterView<'a>,
     /// The guide (`guide/state.rs`): drawn over everything when open.
     pub guide: &'a GuideState,
     /// This session's user, left out of `street`: your own runner is drawn
@@ -425,6 +428,7 @@ fn landmark_neon(landmark: Landmark) -> Neon {
         Landmark::Noodles => Neon::Amber,
         Landmark::Umbrellas => Neon::Cyan,
         Landmark::Blades => Neon::Cyan,
+        Landmark::Prints => Neon::Cyan,
         Landmark::Reader => Neon::Magenta,
         Landmark::Stairs => Neon::Red,
         Landmark::Ink
@@ -1688,6 +1692,7 @@ fn draw_panel(frame: &mut Frame, area: Rect, view: &CityView<'_>) {
     let neon = landmark_neon(landmark);
     let word = match landmark {
         Landmark::Tailor => view.tailor.word,
+        Landmark::Prints => view.poster.word,
         Landmark::Armorer
         | Landmark::Lockers
         | Landmark::Bands
@@ -1748,12 +1753,18 @@ fn draw_panel(frame: &mut Frame, area: Rect, view: &CityView<'_>) {
         ))
         .title_bottom(Span::styled(" Esc closes ", ink(INK_DIM)));
     frame.render_widget(Clear, rect);
-    draw_framed(frame, rect, block, body, word, PANEL_WORD_ROWS);
+    let body = draw_framed(frame, rect, block, body, word, PANEL_WORD_ROWS);
+    // PRINTS's poster is cells, not lines: its rows were sized above, and
+    // the poster and the column beside it are painted over them.
+    if landmark == Landmark::Prints {
+        poster_ui::draw(frame, body, &view.poster);
+    }
 }
 
 /// A framed box with a last word kept at its foot: `body` from the top,
 /// and `word` wrapped into the bottom `word_rows` of the inside, blank
 /// until there is one, so a word arriving never moves what is above it.
+/// Returns where the body went.
 pub(super) fn draw_framed(
     frame: &mut Frame,
     rect: Rect,
@@ -1761,7 +1772,7 @@ pub(super) fn draw_framed(
     body: Paragraph<'_>,
     word: Option<&str>,
     word_rows: u16,
-) {
+) -> Rect {
     let inner = block.inner(rect);
     frame.render_widget(block, rect);
     let word_rows = word_rows.min(inner.height);
@@ -1782,6 +1793,7 @@ pub(super) fn draw_framed(
             word_rect,
         );
     }
+    body_rect
 }
 
 /// What a shop's panel says. `short_by` is how many rows the screen is
@@ -1798,6 +1810,7 @@ fn panel_lines(landmark: Landmark, view: &CityView<'_>, short_by: usize) -> Vec<
     match landmark {
         Landmark::Armorer => lines.extend(armorer_lines(view, short_by)),
         Landmark::Tailor => lines.extend(tailor_ui::mirror_lines(&view.tailor)),
+        Landmark::Prints => lines.extend(poster_ui::panel_rows(&view.poster)),
         Landmark::Lockers => lines.extend(locker_lines(view)),
         Landmark::Bands => {
             for (i, band) in data::BANDS.iter().enumerate() {

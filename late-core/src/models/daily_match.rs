@@ -118,9 +118,6 @@ crate::model! {
         // `paid` / `unplayed` / `pair_day_capped` / `failed` once a decisive
         // finish has settled its chips; NULL for draws and pre-gate rows.
         pub win_payout: Option<String>,
-        // Frames in the match: 1, or 3 / 5 / 7 for a pool or snooker match
-        // raced to a majority. Set when the challenge is posted.
-        pub best_of: i16,
     }
 }
 
@@ -164,23 +161,12 @@ impl DailyMatch {
         game_kind: &str,
         challenger_id: Uuid,
     ) -> Result<Self> {
-        Self::create_challenge_best_of(client, game_kind, challenger_id, 1).await
-    }
-
-    /// An open challenge for a match of `best_of` frames. The column's CHECK
-    /// is the gate on the value; callers offer only what it accepts.
-    pub async fn create_challenge_best_of(
-        client: &Client,
-        game_kind: &str,
-        challenger_id: Uuid,
-        best_of: i16,
-    ) -> Result<Self> {
         let row = client
             .query_one(
-                "INSERT INTO daily_matches (game_kind, status, challenger_id, best_of)
-                 VALUES ($1, $2, $3, $4)
+                "INSERT INTO daily_matches (game_kind, status, challenger_id)
+                 VALUES ($1, $2, $3)
                  RETURNING *",
-                &[&game_kind, &Self::STATUS_OPEN, &challenger_id, &best_of],
+                &[&game_kind, &Self::STATUS_OPEN, &challenger_id],
             )
             .await?;
         Ok(Self::from(row))

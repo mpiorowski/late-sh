@@ -55,46 +55,11 @@ use super::{
 pub struct ChallengeDraft {
     /// Picker cursor into `DailyGame::ALL`.
     pub selected: usize,
-    /// Frames for a cue game, from `pool::BEST_OF`. Kept while the cursor
-    /// moves, so picking the length and then the variant works either way
-    /// round; it only applies when the game on the cursor has frames.
-    pub best_of: u8,
 }
 
 impl ChallengeDraft {
-    pub fn new(selected: usize) -> Self {
-        Self {
-            selected,
-            best_of: 1,
-        }
-    }
-
     pub fn game(&self) -> DailyGame {
         DailyGame::ALL[self.selected.min(DailyGame::ALL.len() - 1)]
-    }
-
-    /// The match length the post will ask for: the chosen one on a cue game,
-    /// a single game on everything else.
-    pub fn best_of(&self) -> u8 {
-        if self.game().is_pool() {
-            self.best_of
-        } else {
-            1
-        }
-    }
-
-    /// Step the match length, stopping at both ends: a dial, not a carousel,
-    /// so holding the key lands on the end rather than spinning past it.
-    /// Refused on a game with no frames to count.
-    pub fn cycle_best_of(&mut self, delta: isize) -> bool {
-        if !self.game().is_pool() {
-            return false;
-        }
-        let lengths = super::pool::BEST_OF;
-        let at = lengths.iter().position(|n| *n == self.best_of).unwrap_or(0) as isize;
-        let next = (at + delta).clamp(0, lengths.len() as isize - 1) as usize;
-        self.best_of = lengths[next];
-        true
     }
 
     /// Move the picker cursor, wrapping at both ends so up from the first
@@ -953,11 +918,7 @@ impl DailyState {
                 let playing = challenger_id == self.user_id || opponent_id == Some(self.user_id);
                 let (was_win, was_loss) = (self.own_win, self.own_loss);
                 let banner = match outcome {
-                    DailyFinishOutcome::Won {
-                        user_id,
-                        payout,
-                        chips,
-                    } if user_id == self.user_id => {
+                    DailyFinishOutcome::Won { user_id, payout } if user_id == self.user_id => {
                         self.own_win = true;
                         // The payout was settled before this event was sent,
                         // so the banner reports what the chips did.
@@ -965,7 +926,7 @@ impl DailyState {
                             DailyWinPayout::Paid => Banner::success(&format!(
                                 "Daily {}: you won the match (+{} chips)",
                                 game.label(),
-                                chips
+                                game.win_payout()
                             )),
                             DailyWinPayout::Unplayed => Banner::success(&format!(
                                 "Daily {}: you won the match (no chips: under {} moves)",
@@ -1303,8 +1264,8 @@ impl DailyState {
 
     // ── Modal actions ──────────────────────────────────────────
 
-    pub fn post_open_challenge(&self, game: DailyGame, best_of: u8) {
-        self.svc.post_challenge_task(self.user_id, game, best_of);
+    pub fn post_open_challenge(&self, game: DailyGame) {
+        self.svc.post_challenge_task(self.user_id, game);
     }
 
     /// `c` in the modal: open the challenge picker overlay.
@@ -1323,7 +1284,7 @@ impl DailyState {
             .iter()
             .position(|candidate| *candidate == game)
             .unwrap_or(0);
-        self.challenge_draft = Some(ChallengeDraft::new(selected));
+        self.challenge_draft = Some(ChallengeDraft { selected });
     }
 
     /// Move the picker cursor; see [`ChallengeDraft::move_selection`].
@@ -1333,19 +1294,12 @@ impl DailyState {
         }
     }
 
-    /// Left/right on the draft: lengthen or shorten a cue game's match.
-    pub fn draft_cycle_best_of(&mut self, delta: isize) {
-        if let Some(draft) = &mut self.challenge_draft {
-            draft.cycle_best_of(delta);
-        }
-    }
-
     /// Enter on the draft: post the picked game as an open challenge.
     pub fn draft_advance(&mut self) {
         let Some(draft) = self.challenge_draft.take() else {
             return;
         };
-        self.post_open_challenge(draft.game(), draft.best_of());
+        self.post_open_challenge(draft.game());
     }
 
     /// Esc on the draft: close the picker.
@@ -1483,7 +1437,6 @@ impl DailyState {
             opponent_result_seen_at: None,
             chat_room_id: None,
             win_payout: None,
-            best_of: 1,
         };
         let names = HashMap::from([
             (self.user_id, username.to_string()),
@@ -2459,9 +2412,9 @@ impl DailyState {
         detail.row.turn_user_id = Some(next);
     }
 
-    /// Esc while building a checkers path or a backgammon turn clears the
-    /// in-progress input instead of closing the board. Returns whether
-    /// anything was cleared.
+    /// Esc while a resign prompt is open, or while building a checkers path or
+    /// a backgammon turn, clears that instead of closing the board. Returns
+    /// whether anything was cleared.
     pub fn cancel_pending_move(&mut self) -> bool {
         let Some(board) = &mut self.board else {
             return false;

@@ -142,37 +142,22 @@ fn seat_name(item: &DailyMatchItem, seat0_id: Uuid, seat: usize) -> &Option<Stri
 }
 
 /// `Chess · move 12`, `Snooker · 34-12`, `Eight-Ball · shot 5`,
-/// `Backgammon · pips 167-160`, and a frame score after a pool game when the
-/// match has frames (`Snooker · 34-12 · frames 1-0`). Every pair reads
-/// challenger first, as the players do.
+/// `Backgammon · pips 167-160`. Every pair reads challenger first, as the
+/// players do.
 fn standing_text(view: &LiveView<'_>) -> String {
     let item = view.item;
     let game = item.game.display_name();
     match view.board {
         LiveBoard::Pool {
-            rules,
+            rules: PoolRules::Snooker,
             scores,
             seat0_id,
-            best_of,
-            frames_won,
             ..
         } => {
-            let standing = match rules {
-                PoolRules::Snooker => {
-                    let [a, b] = by_player(item, *seat0_id, *scores);
-                    format!("{game} · {a}-{b}")
-                }
-                PoolRules::EightBall | PoolRules::NineBall => {
-                    format!("{game} · shot {}", item.move_count)
-                }
-            };
-            if *best_of > 1 {
-                let [a, b] = by_player(item, *seat0_id, *frames_won);
-                format!("{standing} · frames {a}-{b}")
-            } else {
-                standing
-            }
+            let [a, b] = by_player(item, *seat0_id, *scores);
+            format!("{game} · {a}-{b}")
         }
+        LiveBoard::Pool { .. } => format!("{game} · shot {}", item.move_count),
         LiveBoard::Backgammon {
             white_id, board, ..
         } => {
