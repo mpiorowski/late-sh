@@ -187,6 +187,7 @@ otherwise.
 | `ai` | The model calls: ghost bots (@bot, @graybeard, @bartender), the round (`ROUND.md`) and bartender memory (`MEMORY.md`), text screening, translation, `/summary` |
 | `chat/gild` | Gilds: chips paid to mark another user's message |
 | `chat/news` | Shared links, the News room, the reader, the YouTube watch player |
+| `chat/video` | A YouTube link in chat played inside its thumbnail; the session's one play on the paired CLI, shared with the News player |
 | `chat/cyberspace` | The cyberspace.online client and its rail entry |
 | `crown` | The crown: one holder, the price ladder, the laureate |
 | `audio` | Radio, YouTube queue and booth, source selection, `/listen` snapshot; the queue service in `QUEUE.md`, the equalizer in `VIZ.md`, the sidebar stage in `STAGE.md`, the stations in `STATIONS.md` |

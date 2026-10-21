@@ -1,7 +1,9 @@
 //! The watch modal's orchestration: the gate deciding player or setup box,
-//! the pair sends to the paired CLI, and the one place a watch's story is
-//! logged and counted. The modal itself (`state.rs`) is pure; everything
-//! that leaves the session goes through here.
+//! the player's keys, and the one place a News watch's story is logged and
+//! counted. The modal itself (`state.rs`) is pure. The session's one play
+//! on the paired CLI (the sync after every draw, delivery, report routing)
+//! belongs to `chat/video/svc.rs`, which this player shares with chat's
+//! inline video.
 
 use std::time::Instant;
 
@@ -13,11 +15,11 @@ use crate::app::common::primitives::Banner;
 use crate::app::files::terminal_image::TerminalImageProtocol;
 use crate::app::state::App;
 use crate::metrics;
-use crate::paired_clients::{PairControlMessage, VideoControl, VideoReport};
+use crate::paired_clients::{VideoControl, VideoReport};
 
 /// Why a live play was given up on.
 #[derive(Clone, Copy, Debug)]
-enum LostCause {
+pub(crate) enum LostCause {
     /// No `video_state` for `WATCH_LOST_AFTER`.
     Silent,
     /// A send reached no paired CLI advertising `video`.
@@ -68,7 +70,7 @@ fn open_player(app: &mut App, article_id: Uuid) -> bool {
 /// already checked it, tmux included; the server's image detection maps
 /// WezTerm to iTerm2 and is no witness here), and the Tweaks "Terminal
 /// images" row not `Off`, the user's one way to keep graphics out.
-fn can_play(app: &App) -> bool {
+pub(crate) fn can_play(app: &App) -> bool {
     let video_cli = app
         .paired_client_registry
         .as_ref()
@@ -80,7 +82,7 @@ fn can_play(app: &App) -> bool {
     video_cli && images_on
 }
 
-fn setup_inputs(app: &App) -> SetupInputs {
+pub(crate) fn setup_inputs(app: &App) -> SetupInputs {
     let images = app.profile_state.profile().terminal_images;
     SetupInputs {
         cli: app
@@ -110,21 +112,7 @@ pub(crate) fn send_control(app: &mut App, control: VideoControl) {
     else {
         return;
     };
-    deliver(app, message);
-}
-
-/// After every draw: tell the CLI what the drawn player wants (a play, a
-/// move after `f` or a resize, a stop once it closed).
-pub(crate) fn sync(app: &mut App) {
-    for message in app.chat.news.video_sync() {
-        deliver(app, message);
-    }
-}
-
-/// The SSH session is ending: stop whatever the CLI is playing for it.
-pub(crate) fn end_session(app: &mut App) {
-    app.chat.news.close_watch();
-    sync(app);
+    crate::app::chat::video::svc::deliver(app, message);
 }
 
 /// One `video_state` from the paired CLI. A report for any play but the
@@ -177,14 +165,9 @@ pub(crate) fn tick(app: &mut App, now: Instant, one_hz: bool) -> bool {
     }
 }
 
-fn deliver(app: &mut App, message: PairControlMessage) {
-    let delivered = app
-        .paired_client_registry
-        .as_ref()
-        .is_some_and(|registry| registry.send_control_to_video_cli(&app.session_token, message));
-    if delivered {
-        return;
-    }
+/// A send reached no paired CLI with `video`: the open player's play, if
+/// it is live, is lost.
+pub(crate) fn lose_unreachable(app: &mut App) {
     let Some(player) = app.chat.news.player_mut() else {
         return;
     };

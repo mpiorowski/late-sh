@@ -1701,6 +1701,18 @@ mod inner {
         })
     }
 
+    fn chat_videos_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_chat_videos_total")
+                .with_description(
+                    "Inline chat video plays by step: opened (in its thumbnail), setup (the setup box instead), played, ended, failed, lost",
+                )
+                .build()
+        })
+    }
+
     fn news_share_chips_paid_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -2890,6 +2902,12 @@ mod inner {
         news_watches_total().add(1, &[KeyValue::new("outcome", news_watch_label(outcome))]);
     }
 
+    /// The same steps for a YouTube link played inside its chat thumbnail
+    /// (`app/chat/video/`), counted apart so the two surfaces compare.
+    pub(crate) fn record_chat_video(outcome: WatchOutcome) {
+        chat_videos_total().add(1, &[KeyValue::new("outcome", news_watch_label(outcome))]);
+    }
+
     /// Same shape as the News share: one counter for the submissions and one
     /// for the chips they minted, so the tracks that came in past the day's
     /// cap are visible beside the paid ones.
@@ -3864,6 +3882,7 @@ mod inner {
     pub fn record_news_body_fetch(_outcome: BodyFetchOutcome) {}
     pub fn record_news_reader_opened(_status: BodyStatus) {}
     pub(crate) fn record_news_watch(_outcome: WatchOutcome) {}
+    pub(crate) fn record_chat_video(_outcome: WatchOutcome) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
     pub fn record_booth_thumbnail(_outcome: ThumbnailFetch) {}
     pub fn record_radio_meta_poll(_feed: PolledFeed, _outcome: PollOutcome) {}

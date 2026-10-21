@@ -141,32 +141,246 @@ pub(crate) enum WatchMemory {
     Nothing,
 }
 
+/// One play on the paired CLI's mpv, as the CLI last reported it. The News
+/// player holds one, and so does chat's inline video (`chat/video/`): both
+/// ask for a play, relay keys to it, and settle it the same way.
 #[derive(Debug)]
-pub(crate) struct Player {
-    article_id: Uuid,
-    url: String,
-    title: String,
-    author: String,
-    shared_at: DateTime<Utc>,
-    size: WatchSize,
+pub(crate) struct Play {
     play_id: u64,
+    url: String,
     status: WatchStatus,
     /// Whether `Played` was already reported for this play.
     played: bool,
     last_state_at: Instant,
-    /// Where the reader left this video last time, if partway through.
+    /// Where the play was left last time, if partway through.
     resume_from: Option<WatchPosition>,
+    /// The last position the CLI reported, kept past a failure or a loss
+    /// so the close still saves it.
+    last_seen: Option<WatchPosition>,
+    /// While set and in the future, the status says the play was resumed.
+    resume_note_until: Option<Instant>,
+}
+
+impl Play {
+    /// A play of `url` the CLI has not heard of yet, resuming from
+    /// `resume_from` when it was left partway through.
+    pub(crate) fn new(
+        play_id: u64,
+        url: String,
+        now: Instant,
+        resume_from: Option<WatchPosition>,
+    ) -> Self {
+        Self {
+            play_id,
+            url,
+            status: WatchStatus::Starting,
+            played: false,
+            last_state_at: now,
+            resume_from,
+            last_seen: None,
+            resume_note_until: None,
+        }
+    }
+
+    pub(crate) fn play_id(&self) -> u64 {
+        self.play_id
+    }
+
+    pub(crate) fn url(&self) -> &str {
+        &self.url
+    }
+
+    pub(crate) fn status(&self) -> WatchStatus {
+        self.status
+    }
+
+    /// Whether mpv is (as far as the server knows) up on the CLI.
+    pub(crate) fn is_live(&self) -> bool {
+        self.status.is_live()
+    }
+
+    pub(crate) fn last_seen(&self) -> Option<WatchPosition> {
+        self.last_seen
+    }
+
+    pub(crate) fn resume_from(&self) -> Option<WatchPosition> {
+        self.resume_from
+    }
+
+    /// Where the CLI is told to begin: the saved position less the rewind,
+    /// zero for a fresh play.
+    pub(crate) fn start_s(&self) -> u64 {
+        match self.resume_from {
+            Some(position) => position.position_s.saturating_sub(WATCH_RESUME_REWIND_S),
+            None => 0,
+        }
+    }
+
+    /// The play the CLI should be running: this one, in `rect`, while mpv
+    /// is up and there is a rectangle to hold it.
+    pub(crate) fn wanted(&self, rect: Rect) -> Option<WantedPlay<'_>> {
+        match (self.status.is_live(), rect.is_empty()) {
+            (true, false) => Some(WantedPlay {
+                play_id: self.play_id,
+                url: &self.url,
+                rect,
+                start_s: self.start_s(),
+            }),
+            (true, true) | (false, _) => None,
+        }
+    }
+
+    /// The control message for a key, while mpv is up.
+    pub(crate) fn control(&self, control: VideoControl) -> Option<PairControlMessage> {
+        match self.status.is_live() {
+            true => Some(PairControlMessage::VideoControl {
+                play_id: self.play_id,
+                control,
+            }),
+            false => None,
+        }
+    }
+
+    /// One `video_state` from the CLI, already matched to this play.
+    /// `Ended`, `Failed` and `Lost` settle the play for good: a report
+    /// after any of them is late and changes nothing.
+    pub(crate) fn apply(&mut self, report: &VideoReport, now: Instant) -> Option<WatchOutcome> {
+        match self.status {
+            WatchStatus::Ended | WatchStatus::Failed | WatchStatus::Lost => return None,
+            WatchStatus::Starting | WatchStatus::Playing(_) | WatchStatus::Paused(_) => {}
+        }
+        self.last_state_at = now;
+        match report {
+            VideoReport::Starting => {
+                self.status = WatchStatus::Starting;
+                None
+            }
+            VideoReport::Playing {
+                position_s,
+                duration_s,
+            } => {
+                let position = WatchPosition {
+                    position_s: *position_s,
+                    duration_s: *duration_s,
+                };
+                self.status = WatchStatus::Playing(position);
+                self.last_seen = Some(position);
+                match self.played {
+                    true => None,
+                    false => {
+                        self.played = true;
+                        self.resume_note_until =
+                            self.resume_from.map(|_| now + WATCH_RESUME_NOTE_FOR);
+                        Some(WatchOutcome::Played)
+                    }
+                }
+            }
+            VideoReport::Paused {
+                position_s,
+                duration_s,
+            } => {
+                let position = WatchPosition {
+                    position_s: *position_s,
+                    duration_s: *duration_s,
+                };
+                self.status = WatchStatus::Paused(position);
+                self.last_seen = Some(position);
+                None
+            }
+            VideoReport::Ended => {
+                self.status = WatchStatus::Ended;
+                Some(WatchOutcome::Ended)
+            }
+            VideoReport::Failed { .. } => {
+                self.status = WatchStatus::Failed;
+                Some(WatchOutcome::Failed)
+            }
+            // Answers a stop the server sent; the play that asked is
+            // already gone or lost, and stays as it is.
+            VideoReport::Stopped => None,
+        }
+    }
+
+    /// A playing or paused play the CLI has gone quiet on for
+    /// [`WATCH_LOST_AFTER`]. A starting one waits for mpv however long it
+    /// takes; `Esc` is the way out of a start that never comes.
+    pub(crate) fn expire(&mut self, now: Instant) -> Option<WatchOutcome> {
+        let quiet = match self.status {
+            WatchStatus::Playing(_) | WatchStatus::Paused(_) => true,
+            WatchStatus::Starting
+            | WatchStatus::Ended
+            | WatchStatus::Failed
+            | WatchStatus::Lost => false,
+        };
+        match quiet && now.saturating_duration_since(self.last_state_at) >= WATCH_LOST_AFTER {
+            true => self.lose(),
+            false => None,
+        }
+    }
+
+    /// A send that reached no paired CLI: the play is lost at once.
+    pub(crate) fn lose(&mut self) -> Option<WatchOutcome> {
+        match self.status.is_live() {
+            true => {
+                self.status = WatchStatus::Lost;
+                Some(WatchOutcome::Lost)
+            }
+            false => None,
+        }
+    }
+
+    /// The play's state in a few words. A resumed play says so while it
+    /// starts and for [`WATCH_RESUME_NOTE_FOR`] once it plays.
+    pub(crate) fn status_text(&self, now: Instant) -> String {
+        let resumed = match self.resume_note_until {
+            Some(until) => until > now,
+            None => false,
+        };
+        match self.status {
+            WatchStatus::Starting => match self.resume_from {
+                Some(position) => format!("resuming from {}…", clock(position.position_s)),
+                None => "starting…".to_string(),
+            },
+            WatchStatus::Playing(position) => match resumed {
+                true => format!("▶ {} · resumed", position_label(position)),
+                false => format!("▶ {}", position_label(position)),
+            },
+            WatchStatus::Paused(position) => format!("⏸ {}", position_label(position)),
+            WatchStatus::Ended => "ended".to_string(),
+            WatchStatus::Failed => "couldn't play".to_string(),
+            WatchStatus::Lost => "lost the CLI".to_string(),
+        }
+    }
+
+    /// One line for where the video was when there is nothing to watch
+    /// here any more.
+    pub(crate) fn fallback_line(&self) -> Option<String> {
+        match self.status {
+            WatchStatus::Failed | WatchStatus::Lost => {
+                Some(format!("Watch on the web: {}", self.url))
+            }
+            WatchStatus::Starting
+            | WatchStatus::Playing(_)
+            | WatchStatus::Paused(_)
+            | WatchStatus::Ended => None,
+        }
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct Player {
+    article_id: Uuid,
+    title: String,
+    author: String,
+    shared_at: DateTime<Utc>,
+    size: WatchSize,
+    play: Play,
     /// Whether a position is stored for this video: the one it resumed
     /// from, or a checkpoint since. Taken back to the top, the close then
     /// has a position to clear.
     position_stored: bool,
-    /// The last position the CLI reported, kept past a failure or a loss
-    /// so the close still saves it.
-    last_seen: Option<WatchPosition>,
     /// When the position was last saved (`checkpoint`); opening counts.
     last_saved_at: Instant,
-    /// While set and in the future, the footer says the play was resumed.
-    resume_note_until: Option<Instant>,
     /// The layout the last draw produced: the `[x]` hit target and the
     /// rectangle `wanted` offers the CLI.
     drawn: Cell<WatchLayout>,
@@ -183,20 +397,13 @@ impl Player {
     ) -> Self {
         Self {
             article_id: item.article.id,
-            url: item.article.url.clone(),
             title: item.article.title.clone(),
             author: item.author_username.clone(),
             shared_at: item.article.created,
             size: WatchSize::Window,
-            play_id,
-            status: WatchStatus::Starting,
-            played: false,
-            last_state_at: now,
-            resume_from,
+            play: Play::new(play_id, item.article.url.clone(), now, resume_from),
             position_stored: resume_from.is_some(),
-            last_seen: None,
             last_saved_at: now,
-            resume_note_until: None,
             drawn: Cell::new(WatchLayout::default()),
         }
     }
@@ -205,17 +412,13 @@ impl Player {
         self.article_id
     }
 
-    /// Where the CLI is told to begin: the saved position less the rewind,
-    /// zero for a fresh play.
+    #[cfg(test)]
     pub(crate) fn start_s(&self) -> u64 {
-        match self.resume_from {
-            Some(position) => position.position_s.saturating_sub(WATCH_RESUME_REWIND_S),
-            None => 0,
-        }
+        self.play.start_s()
     }
 
     pub(crate) fn url(&self) -> &str {
-        &self.url
+        self.play.url()
     }
 
     pub(crate) fn title(&self) -> &str {
@@ -231,7 +434,7 @@ impl Player {
     }
 
     pub(crate) fn play_id(&self) -> u64 {
-        self.play_id
+        self.play.play_id()
     }
 
     pub(crate) fn size(&self) -> WatchSize {
@@ -240,7 +443,7 @@ impl Player {
 
     #[cfg(test)]
     pub(crate) fn status(&self) -> WatchStatus {
-        self.status
+        self.play.status()
     }
 
     /// `f`: Window and Full. The next draw's body differs, and `sync`
@@ -313,115 +516,28 @@ impl Player {
     /// The play the CLI should be running: this one, in the last drawn
     /// body, while mpv is up and there is a body to hold it.
     pub(crate) fn wanted(&self) -> Option<WantedPlay<'_>> {
-        let body = self.drawn.get().body;
-        match (self.status.is_live(), body.is_empty()) {
-            (true, false) => Some(WantedPlay {
-                play_id: self.play_id,
-                url: &self.url,
-                rect: body,
-                start_s: self.start_s(),
-            }),
-            (true, true) | (false, _) => None,
-        }
+        self.play.wanted(self.drawn.get().body)
     }
 
     /// The control message for a key, while mpv is up.
     pub(crate) fn control(&self, control: VideoControl) -> Option<PairControlMessage> {
-        match self.status.is_live() {
-            true => Some(PairControlMessage::VideoControl {
-                play_id: self.play_id,
-                control,
-            }),
-            false => None,
-        }
+        self.play.control(control)
     }
 
     /// One `video_state` from the CLI, already matched to this play.
-    /// `Ended`, `Failed` and `Lost` settle the play for good: a report
-    /// after any of them is late and changes nothing.
     pub(crate) fn apply(&mut self, report: &VideoReport, now: Instant) -> Option<WatchOutcome> {
-        match self.status {
-            WatchStatus::Ended | WatchStatus::Failed | WatchStatus::Lost => return None,
-            WatchStatus::Starting | WatchStatus::Playing(_) | WatchStatus::Paused(_) => {}
-        }
-        self.last_state_at = now;
-        match report {
-            VideoReport::Starting => {
-                self.status = WatchStatus::Starting;
-                None
-            }
-            VideoReport::Playing {
-                position_s,
-                duration_s,
-            } => {
-                let position = WatchPosition {
-                    position_s: *position_s,
-                    duration_s: *duration_s,
-                };
-                self.status = WatchStatus::Playing(position);
-                self.last_seen = Some(position);
-                match self.played {
-                    true => None,
-                    false => {
-                        self.played = true;
-                        self.resume_note_until =
-                            self.resume_from.map(|_| now + WATCH_RESUME_NOTE_FOR);
-                        Some(WatchOutcome::Played)
-                    }
-                }
-            }
-            VideoReport::Paused {
-                position_s,
-                duration_s,
-            } => {
-                let position = WatchPosition {
-                    position_s: *position_s,
-                    duration_s: *duration_s,
-                };
-                self.status = WatchStatus::Paused(position);
-                self.last_seen = Some(position);
-                None
-            }
-            VideoReport::Ended => {
-                self.status = WatchStatus::Ended;
-                Some(WatchOutcome::Ended)
-            }
-            VideoReport::Failed { .. } => {
-                self.status = WatchStatus::Failed;
-                Some(WatchOutcome::Failed)
-            }
-            // Answers a stop the server sent; the modal that asked is
-            // already gone or lost, and stays as it is.
-            VideoReport::Stopped => None,
-        }
+        self.play.apply(report, now)
     }
 
     /// A playing or paused play the CLI has gone quiet on for
-    /// [`WATCH_LOST_AFTER`]. A starting one waits for mpv however long it
-    /// takes; `Esc` is the way out of a start that never comes.
+    /// [`WATCH_LOST_AFTER`].
     pub(crate) fn expire(&mut self, now: Instant) -> Option<WatchOutcome> {
-        let quiet = match self.status {
-            WatchStatus::Playing(_) | WatchStatus::Paused(_) => true,
-            WatchStatus::Starting
-            | WatchStatus::Ended
-            | WatchStatus::Failed
-            | WatchStatus::Lost => false,
-        };
-        match quiet && now.saturating_duration_since(self.last_state_at) >= WATCH_LOST_AFTER {
-            true => self.lose(),
-            false => None,
-        }
+        self.play.expire(now)
     }
 
     /// A send that reached no paired CLI: the play is lost at once.
     pub(crate) fn lose(&mut self) -> Option<WatchOutcome> {
-        match self.status.is_live() {
-            true => {
-                self.status = WatchStatus::Lost;
-                Some(WatchOutcome::Lost)
-            }
-            false => None,
-        }
+        self.play.lose()
     }
 
     /// A position worth saving now: the last one reported, while the play
@@ -430,14 +546,14 @@ impl Player {
     /// report; most answer `None`. A play that is over is the close's to
     /// decide (`memory`).
     pub(crate) fn checkpoint(&mut self, now: Instant) -> Option<WatchPosition> {
-        match self.status {
+        match self.play.status() {
             WatchStatus::Playing(_) | WatchStatus::Paused(_) => {}
             WatchStatus::Starting
             | WatchStatus::Ended
             | WatchStatus::Failed
             | WatchStatus::Lost => return None,
         }
-        let position = self.last_seen?;
+        let position = self.play.last_seen()?;
         if position.position_s < WATCH_SAVE_MIN_S {
             return None;
         }
@@ -455,10 +571,10 @@ impl Player {
     /// nothing when no position ever came in or a play with nothing stored
     /// stopped at once.
     pub(crate) fn memory(&self) -> WatchMemory {
-        if self.status == WatchStatus::Ended {
+        if self.play.status() == WatchStatus::Ended {
             return WatchMemory::Clear;
         }
-        let Some(position) = self.last_seen else {
+        let Some(position) = self.play.last_seen() else {
             return WatchMemory::Nothing;
         };
         let near_the_end = match position.duration_s {
@@ -477,40 +593,14 @@ impl Player {
         WatchMemory::Save(position)
     }
 
-    /// The footer's right edge. A resumed play says so while it starts and
-    /// for [`WATCH_RESUME_NOTE_FOR`] once it plays.
+    /// The footer's right edge.
     pub(crate) fn status_text(&self, now: Instant) -> String {
-        let resumed = match self.resume_note_until {
-            Some(until) => until > now,
-            None => false,
-        };
-        match self.status {
-            WatchStatus::Starting => match self.resume_from {
-                Some(position) => format!("resuming from {}…", clock(position.position_s)),
-                None => "starting…".to_string(),
-            },
-            WatchStatus::Playing(position) => match resumed {
-                true => format!("▶ {} · resumed", position_label(position)),
-                false => format!("▶ {}", position_label(position)),
-            },
-            WatchStatus::Paused(position) => format!("⏸ {}", position_label(position)),
-            WatchStatus::Ended => "ended".to_string(),
-            WatchStatus::Failed => "couldn't play".to_string(),
-            WatchStatus::Lost => "lost the CLI".to_string(),
-        }
+        self.play.status_text(now)
     }
 
     /// The body's one line when there is nothing to watch here any more.
     pub(crate) fn fallback_line(&self) -> Option<String> {
-        match self.status {
-            WatchStatus::Failed | WatchStatus::Lost => {
-                Some(format!("Watch on the web: {}", self.url))
-            }
-            WatchStatus::Starting
-            | WatchStatus::Playing(_)
-            | WatchStatus::Paused(_)
-            | WatchStatus::Ended => None,
-        }
+        self.play.fallback_line()
     }
 
     /// `key hint` pairs in the order they drop off when the width runs

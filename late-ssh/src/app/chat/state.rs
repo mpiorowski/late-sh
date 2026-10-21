@@ -64,6 +64,7 @@ use super::{
         ProfileSection, ReportKind, RoomMemberListItem,
     },
     ui_text::parse_report_payload,
+    video::state::{InlineVideo, Step, YoutubeLink},
     work,
 };
 
@@ -1024,6 +1025,15 @@ pub struct ChatState {
     pub(crate) feeds_selected: bool,
     pub feeds: feeds::state::State,
     pub(crate) news: news::state::State,
+    /// The YouTube link playing inside its thumbnail in the chat
+    /// (`video/`). Never at the same time as a News player.
+    inline_video: Option<InlineVideo>,
+    /// What the paired CLI was last told to play, for the News player and
+    /// the inline video alike, kept past both so closing either still sends
+    /// the stop (`news::watch::state::sync`).
+    live_play: Option<news::watch::state::LivePlay>,
+    /// The last `play_id` handed out this session.
+    last_play_id: u64,
     pub(crate) cyberspace_selected: bool,
     /// Their notification list, the row beside `feeds`.
     pub(crate) cyberspace_notifications_selected: bool,
@@ -1409,6 +1419,9 @@ impl ChatState {
             feeds_selected: false,
             feeds: feeds::state::State::new(feed_service, article_service.clone(), user_id),
             news: news::state::State::new(article_service, user_id, permissions.is_admin()),
+            inline_video: None,
+            live_play: None,
+            last_play_id: 0,
             cyberspace_selected: false,
             cyberspace_notifications_selected: false,
             cyberspace_return_row: CyberspaceRow::Feeds,
@@ -2972,9 +2985,111 @@ impl ChatState {
 
     /// Open the watch player on a News video (`news/watch/svc.rs` decides
     /// that this session can play it). False when it is gone or no video.
+    /// A News play takes the CLI over from an inline one.
     pub(crate) fn open_watch_player(&mut self, article_id: Uuid, now: std::time::Instant) -> bool {
         self.reaction_leader_active = false;
-        self.news.open_watch_player(article_id, now)
+        let play_id = self.next_play_id();
+        let opened = self.news.open_watch_player(article_id, play_id, now);
+        if opened {
+            self.inline_video = None;
+        }
+        opened
+    }
+
+    /// A fresh `play_id`: one counter for the News player and the inline
+    /// video, so a late report can never be taken for the other's.
+    pub(crate) fn next_play_id(&mut self) -> u64 {
+        self.last_play_id += 1;
+        self.last_play_id
+    }
+
+    pub(crate) fn inline_video(&self) -> Option<&InlineVideo> {
+        self.inline_video.as_ref()
+    }
+
+    pub(crate) fn inline_video_mut(&mut self) -> Option<&mut InlineVideo> {
+        self.inline_video.as_mut()
+    }
+
+    /// Whether an inline video is playing or starting on the CLI.
+    pub(crate) fn has_live_inline_video(&self) -> bool {
+        self.inline_video.as_ref().is_some_and(InlineVideo::is_live)
+    }
+
+    /// Play `url` inside `message_id`'s thumbnail, in place of any inline
+    /// video before it. State only: the next draw finds the rectangle and
+    /// its sync sends the play.
+    pub(crate) fn start_inline_video(
+        &mut self,
+        message_id: Uuid,
+        url: String,
+        now: std::time::Instant,
+    ) {
+        self.reaction_leader_active = false;
+        let play_id = self.next_play_id();
+        self.inline_video = Some(InlineVideo::new(message_id, url, play_id, now));
+    }
+
+    /// Enter on an inline video that is over: play it again
+    /// (`InlineVideo::replayed`).
+    pub(crate) fn replay_inline_video(&mut self, now: std::time::Instant) {
+        let Some(video) = self.inline_video.take() else {
+            return;
+        };
+        let play_id = self.next_play_id();
+        self.inline_video = Some(video.replayed(play_id, now));
+    }
+
+    /// Closing is state only: the next draw's sync sends the stop. False
+    /// when there was none.
+    pub(crate) fn close_inline_video(&mut self) -> bool {
+        self.inline_video.take().is_some()
+    }
+
+    /// After a draw: apply what the frame showed of the inline video
+    /// (`InlineVideo::step`). The step taken, or `None` with no video.
+    pub(crate) fn settle_inline_video(&mut self, now: std::time::Instant) -> Option<Step> {
+        let video = self.inline_video.take()?;
+        let step = video.step();
+        self.inline_video = match step {
+            Step::Keep => Some(video),
+            Step::Close => None,
+            Step::Park => Some(video.parked()),
+            Step::Unpark => Some(video.unparked(self.next_play_id(), now)),
+        };
+        Some(step)
+    }
+
+    /// The pair messages that bring the CLI in line with the play that
+    /// wants it: the News player first, else the inline video. Called
+    /// after every draw, which records both rectangles.
+    pub(crate) fn video_sync(&mut self) -> Vec<crate::paired_clients::PairControlMessage> {
+        let wanted = match self.news.wanted_play() {
+            Some(wanted) => Some(wanted),
+            None => match &self.inline_video {
+                Some(video) => video.wanted(),
+                None => None,
+            },
+        };
+        news::watch::state::sync(&mut self.live_play, wanted)
+    }
+
+    /// The selected message in `room_id` when its preview is a YouTube
+    /// thumbnail: what Enter plays inline. An image in the same message
+    /// takes the preview, and Enter opens it instead.
+    pub(crate) fn selected_youtube_link_in_room(
+        &self,
+        room_id: Uuid,
+    ) -> Option<(Uuid, YoutubeLink)> {
+        let message = self.selected_message_in_room(room_id)?;
+        match inline_preview_source_in_body(&message.body) {
+            Some(InlinePreviewSource::Video(link)) => Some((message.id, link)),
+            Some(InlinePreviewSource::Image(_)) | None => None,
+        }
+    }
+
+    pub(crate) fn has_inline_preview(&self, message_id: Uuid) -> bool {
+        self.inline_image_cache.contains_key(&message_id)
     }
 
     /// Open the watch setup box on a News video this session cannot play.
@@ -5194,9 +5309,10 @@ impl ChatState {
             now,
         );
 
-        for (msg_id, url) in requests {
+        for (msg_id, source) in requests {
             self.inline_image_requested.insert(msg_id);
             self.track_inline_image_id(msg_id);
+            let url = source.fetch_url();
             if !url.is_empty() {
                 let tx_clone = tx.clone();
                 tokio::spawn(async move {
@@ -7344,13 +7460,41 @@ fn message_is_ignored_in(ignored: &HashSet<Uuid>, message: &ChatMessage) -> bool
             .is_some_and(|target| ignored.contains(&target))
 }
 
+/// What an inline preview is drawn from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum InlinePreviewSource {
+    /// An image link: the picture itself.
+    Image(String),
+    /// A YouTube link: its thumbnail, with the watch hint under it, where
+    /// the video then plays (`video/`).
+    Video(YoutubeLink),
+}
+
+impl InlinePreviewSource {
+    fn fetch_url(&self) -> String {
+        match self {
+            Self::Image(url) => url.clone(),
+            Self::Video(link) => link.thumbnail_url(),
+        }
+    }
+}
+
+/// A message's inline preview, if it gets one: an image link first, else
+/// a YouTube link's thumbnail.
+pub(crate) fn inline_preview_source_in_body(body: &str) -> Option<InlinePreviewSource> {
+    match inline_image_url_in_body(body) {
+        Some(url) => Some(InlinePreviewSource::Image(url)),
+        None => super::video::state::youtube_link_in_body(body).map(InlinePreviewSource::Video),
+    }
+}
+
 fn inline_image_request_candidates(
     messages: &[ChatMessage],
     requested: &HashSet<Uuid>,
     cached: &HashMap<Uuid, InlineImagePreview>,
     failures: &HashMap<Uuid, InlineImageFailure>,
     now: Instant,
-) -> Vec<(Uuid, String)> {
+) -> Vec<(Uuid, InlinePreviewSource)> {
     let mut requests = Vec::new();
     for msg in messages.iter().take(INLINE_IMAGE_SCAN_LIMIT) {
         if requested.contains(&msg.id) || cached.contains_key(&msg.id) {
@@ -7361,9 +7505,9 @@ fn inline_image_request_candidates(
         {
             continue;
         }
-        if let Some(url) = inline_image_url_in_body(&msg.body) {
-            tracing::trace!("found image url in chat: {}", url);
-            requests.push((msg.id, url));
+        if let Some(source) = inline_preview_source_in_body(&msg.body) {
+            tracing::trace!(?source, "found inline preview in chat");
+            requests.push((msg.id, source));
             if requests.len() >= INLINE_IMAGE_FETCHES_PER_TICK {
                 break;
             }

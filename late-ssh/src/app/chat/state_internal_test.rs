@@ -2155,8 +2155,49 @@ fn inline_image_request_candidates_scan_newest_messages_first() {
         requests,
         vec![(
             messages[0].id,
-            "https://files.example.com/newest.png".to_string()
+            InlinePreviewSource::Image("https://files.example.com/newest.png".to_string())
         )]
+    );
+}
+
+/// A YouTube link's preview is its thumbnail, fetched in the image's place;
+/// an image in the same message keeps the preview.
+#[test]
+fn inline_image_request_candidates_fetch_a_youtube_thumbnail() {
+    let now = Instant::now();
+    let mut video = make_msg(Uuid::from_u128(1));
+    video.body = "watch this https://youtu.be/dQw4w9WgXcQ?si=abc".to_string();
+    let mut both = make_msg(Uuid::from_u128(2));
+    both.body = "https://youtu.be/dQw4w9WgXcQ and https://files.example.com/cat.png".to_string();
+    let messages = vec![video.clone(), both.clone()];
+
+    let requests = inline_image_request_candidates(
+        &messages,
+        &HashSet::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+        now,
+    );
+
+    assert_eq!(
+        requests,
+        vec![
+            (
+                video.id,
+                InlinePreviewSource::Video(YoutubeLink {
+                    url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ".to_string(),
+                    video_id: "dQw4w9WgXcQ".to_string(),
+                })
+            ),
+            (
+                both.id,
+                InlinePreviewSource::Image("https://files.example.com/cat.png".to_string())
+            ),
+        ]
+    );
+    assert_eq!(
+        requests[0].1.fetch_url(),
+        "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg"
     );
 }
 
@@ -2202,7 +2243,7 @@ fn inline_image_request_candidates_respect_retry_backoff() {
         ),
         vec![(
             message.id,
-            "https://files.example.com/pending.png".to_string()
+            InlinePreviewSource::Image("https://files.example.com/pending.png".to_string())
         )]
     );
 

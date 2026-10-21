@@ -32,8 +32,7 @@ pub fn news_share_banner(lead: &str, reward: NewsShareReward) -> Banner {
 
 use super::reader::state::{ReaderBody, ReaderModal};
 use super::svc::{ArticleService, BodyLoad, BodyReply, is_youtube_url};
-use super::watch::state::{LivePlay, Player, SetupBox, SetupInputs, WatchMemory, WatchModal};
-use crate::paired_clients::PairControlMessage;
+use super::watch::state::{Player, SetupBox, SetupInputs, WantedPlay, WatchMemory, WatchModal};
 
 /// This session's news reads: the ids of the snapshot's articles the
 /// reader has read (`article_reads`), a visit to the News room reading
@@ -134,11 +133,6 @@ pub struct State {
     reader: Option<OpenReader>,
     /// Never up at the same time as the reader.
     watch: Option<WatchModal>,
-    /// What the paired CLI was last told to play, kept past the modal so
-    /// closing it still sends the stop (`watch::state::sync`).
-    live_play: Option<LivePlay>,
-    /// The last `play_id` handed out this session.
-    last_play_id: u64,
 }
 
 /// The reader on screen and its outstanding body request. They travel
@@ -175,8 +169,6 @@ impl State {
             current_task: None,
             reader: None,
             watch: None,
-            live_play: None,
-            last_play_id: 0,
         }
     }
 
@@ -513,20 +505,25 @@ impl State {
         self.watchable_item(article_id).is_some()
     }
 
-    /// Open the player on a snapshot video, a fresh `play_id` for it, and
-    /// mark it read. A video the reader left partway through resumes
-    /// there. False when it left the snapshot or is not a video.
-    pub(crate) fn open_watch_player(&mut self, article_id: Uuid, now: Instant) -> bool {
+    /// Open the player on a snapshot video under `play_id` (a fresh one,
+    /// from `ChatState::next_play_id`), and mark it read. A video the reader
+    /// left partway through resumes there. False when it left the snapshot
+    /// or is not a video.
+    pub(crate) fn open_watch_player(
+        &mut self,
+        article_id: Uuid,
+        play_id: u64,
+        now: Instant,
+    ) -> bool {
         let Some(item) = self.watchable_item(article_id).cloned() else {
             return false;
         };
         self.close_watch();
-        self.last_play_id += 1;
         self.reader = None;
         let resume_from = self.watch_positions.get(&article_id).copied();
         self.watch = Some(WatchModal::Player(Box::new(Player::new(
             &item,
-            self.last_play_id,
+            play_id,
             now,
             resume_from,
         ))));
@@ -537,14 +534,23 @@ impl State {
     /// Open the setup box for a snapshot video the user's setup cannot
     /// play. False when it left the snapshot or is not a video.
     pub(crate) fn open_watch_setup(&mut self, article_id: Uuid, inputs: &SetupInputs) -> bool {
-        let Some(item) = self.watchable_item(article_id) else {
+        let Some(url) = self
+            .watchable_item(article_id)
+            .map(|item| item.article.url.clone())
+        else {
             return false;
         };
-        let setup = SetupBox::decide(&item.article.url, inputs);
+        self.open_setup_box(&url, inputs);
+        true
+    }
+
+    /// The setup box for any video link: a News story's, or a chat
+    /// message's when its inline player cannot play here (`chat/video/`).
+    pub(crate) fn open_setup_box(&mut self, url: &str, inputs: &SetupInputs) {
+        let setup = SetupBox::decide(url, inputs);
         self.close_watch();
         self.reader = None;
         self.watch = Some(WatchModal::Setup(setup));
-        true
     }
 
     fn watchable_item(&self, article_id: Uuid) -> Option<&ArticleFeedItem> {
@@ -604,15 +610,14 @@ impl State {
             .save_watch_position_task(self.user_id, article_id, position);
     }
 
-    /// The pair messages that bring the CLI in line with the open player:
-    /// a play, a move, a stop. Called after every draw, which is what
-    /// records the player's body.
-    pub(crate) fn video_sync(&mut self) -> Vec<PairControlMessage> {
-        let wanted = match &self.watch {
+    /// The play the open player wants the CLI to be running, in the body
+    /// its last draw recorded. `ChatState::video_sync` turns it into the
+    /// pair messages, after every draw.
+    pub(crate) fn wanted_play(&self) -> Option<WantedPlay<'_>> {
+        match &self.watch {
             Some(WatchModal::Player(player)) => player.wanted(),
             Some(WatchModal::Setup(_)) | None => None,
-        };
-        super::watch::state::sync(&mut self.live_play, wanted)
+        }
     }
 
     pub fn submit_composer(&mut self) {

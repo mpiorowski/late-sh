@@ -40,16 +40,17 @@ use crate::app::hub::shop::svc::ActiveChatRoomEffect;
 use crate::usernames::UsernameLookup;
 
 use super::state::{
-    MatchPresence, MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot, RoomVisualOrderInput,
-    SelectedRoomSlotState, SelectionScroll, TranslationDisplay, compare_dm_rooms_for_nav,
-    dm_is_promoted_unread, dm_peer_is_ignored, is_chat_list_room, is_deadchannel_room,
-    is_selected_slot, synthetic_favorite_id, synthetic_slot_for_favorite_id,
-    visual_order_for_rooms,
+    InlinePreviewSource, MatchPresence, MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot,
+    RoomVisualOrderInput, SelectedRoomSlotState, SelectionScroll, TranslationDisplay,
+    compare_dm_rooms_for_nav, dm_is_promoted_unread, dm_peer_is_ignored,
+    inline_preview_source_in_body, is_chat_list_room, is_deadchannel_room, is_selected_slot,
+    synthetic_favorite_id, synthetic_slot_for_favorite_id, visual_order_for_rooms,
 };
 use super::ui_text::{
     AuthorTint, Gutter, WAVE_REACTION_KIND, is_nerd_font_glyph, reaction_label,
     without_nerd_font_glyphs, wrap_chat_entry_to_lines,
 };
+use super::video::state::InlineVideo;
 
 /// The picker's choices in paint order: the key to press and the reaction
 /// kind it toggles.
@@ -180,6 +181,9 @@ pub struct DashboardChatView<'a> {
     /// on any other day.
     pub board_day: Option<String>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
+    /// The YouTube link playing inside its thumbnail (`video/`), painted
+    /// over the rows it sits in.
+    pub(crate) inline_video: Option<&'a InlineVideo>,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
@@ -1363,6 +1367,15 @@ pub fn draw_dashboard_chat_card(
     }
     frame.render_widget(Paragraph::new(lines), messages_area);
     draw_room_page_effects(frame, messages_area, view.active_room_effects);
+    if let (Some(video), Some(hits)) = (view.inline_video, chat_hits.as_deref()) {
+        super::video::ui::draw(
+            frame,
+            messages_area,
+            hits,
+            video,
+            view.inline_images.get(&video.message_id()),
+        );
+    }
     // Only publish the chat-scroll hit layout when nothing is painted on
     // top of the messages (overlay or image modal) — those intercept
     // clicks via their own input paths, so a stale layout here would
@@ -2016,7 +2029,21 @@ fn ensure_chat_rows_cache(
             .filter(|_| is_continuation && left_app_here.is_none() && !afk_here);
 
         let row_start = all_rows.len();
-        let image_lines = ctx.inline_images.get(&msg.id).map(Vec::as_slice);
+        // A YouTube thumbnail gets the watch hint row under its picture,
+        // the row the inline video's caption takes (`video/`).
+        let video_preview = match (
+            ctx.inline_images.get(&msg.id),
+            inline_preview_source_in_body(&msg.body),
+        ) {
+            (Some(picture), Some(InlinePreviewSource::Video(_))) => {
+                Some(super::video::ui::with_watch_hint(picture))
+            }
+            (Some(_), Some(InlinePreviewSource::Image(_)) | None) | (None, _) => None,
+        };
+        let image_lines = match &video_preview {
+            Some(lines) => Some(lines.as_slice()),
+            None => ctx.inline_images.get(&msg.id).map(Vec::as_slice),
+        };
         let translation = ctx
             .translations
             .get(&msg.id)
@@ -3161,6 +3188,9 @@ pub struct ChatRenderInput<'a> {
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub message_gilds: &'a HashMap<Uuid, ChatMessageGildSummary>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
+    /// The YouTube link playing inside its thumbnail (`video/`), painted
+    /// over the rows it sits in.
+    pub(crate) inline_video: Option<&'a InlineVideo>,
     /// This session's AFK line per room; the `new messages` divider
     /// draws before the first message from someone else past it.
     pub afk_lines: &'a HashMap<Uuid, DateTime<Utc>>,
@@ -5628,6 +5658,15 @@ fn draw_selected_content(
         let messages_paragraph = Paragraph::new(message_lines);
         frame.render_widget(messages_paragraph, message_render_area);
         draw_room_page_effects(frame, message_render_area, selected_room_effects);
+        if let (Some(video), Some(hits)) = (view.inline_video, chat_hits.as_deref()) {
+            super::video::ui::draw(
+                frame,
+                message_render_area,
+                hits,
+                video,
+                view.inline_images.get(&video.message_id()),
+            );
+        }
         if let (Some(slot), Some(hits)) = (view.chat_hit_slot, chat_hits)
             && view.overlay.is_none()
             && view.image_modal.is_none()

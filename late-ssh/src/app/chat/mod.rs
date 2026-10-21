@@ -23,6 +23,7 @@ pub mod svc;
 mod svc_test;
 pub mod ui;
 pub(crate) mod ui_text;
+pub(crate) mod video;
 pub mod work;
 
 #[cfg(test)]

@@ -1174,10 +1174,11 @@ impl App {
     /// paired CLI's mpv paints the watch player's rectangle whatever the
     /// TUI draws under it, and the key that drops a screensaver would never
     /// reach the player. A video outlasts the idle limit without a key, so
-    /// the screensaver waits for the modal to close; the 1Hz sync brings it
+    /// the screensaver waits for the modal to close, or for an inline chat
+    /// video to stop playing (one drawn over parks); the 1Hz sync brings it
     /// up then.
     fn screensaver_due(&self) -> bool {
-        self.away && !self.chat.has_watch()
+        self.away && !self.chat.has_watch() && !self.chat.has_live_inline_video()
     }
 
     /// The rail modes this session renders from: this device's stored layout if
@@ -4481,7 +4482,7 @@ impl Drop for App {
             return;
         }
         // No mpv outlives the session that asked for it.
-        crate::app::chat::news::watch::svc::end_session(self);
+        crate::app::chat::video::svc::end_session(self);
         // The paired registry keeps token-scoped state that outlives the
         // sockets (the once-per-session boot mute claim), so the session end
         // has to retire it or it accumulates a row per session forever.

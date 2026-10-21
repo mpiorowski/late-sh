@@ -206,6 +206,10 @@ pub(super) fn wrap_message_to_lines(
     lines
 }
 
+/// Cells left of an inline preview in its chat rows: the gutter and a
+/// space. The inline video finds its picture there (`video::state`).
+pub(crate) const INLINE_PREVIEW_INDENT: u16 = 2;
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn wrap_chat_entry_to_lines(
     body: &str,
@@ -270,6 +274,7 @@ pub(super) fn wrap_chat_entry_to_lines(
     let image_line_range = if let Some(img_lines) = inline_image_lines.filter(|l| !l.is_empty()) {
         let start = lines.len();
         for img_line in img_lines {
+            // INLINE_PREVIEW_INDENT cells: the gutter and a space.
             let mut spans = vec![pad.clone(), Span::raw(" ")];
             spans.extend(img_line.spans.iter().cloned());
             lines.push(Line::from(spans));

@@ -2615,6 +2615,9 @@ fn dispatch_escape(app: &mut App) {
         app.chat.feeds.stop_processing();
         return;
     }
+    if ctx.screen == Screen::Dashboard && crate::app::chat::video::svc::stop(app) {
+        return;
+    }
     if ctx.screen == Screen::Dashboard && app.chat.selected_message_id.is_some() {
         app.chat.clear_message_selection();
     }
@@ -3322,7 +3325,9 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
         }
         ChatClickKind::Image { message_id } => {
             app.chat.select_message_by_id_in_room(room_id, message_id);
-            app.chat.open_selected_image_modal_in_room(room_id);
+            if !app.chat.open_selected_image_modal_in_room(room_id) {
+                crate::app::chat::video::svc::watch_selected(app, room_id);
+            }
         }
     }
 
