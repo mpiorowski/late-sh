@@ -211,9 +211,9 @@ one `session wire summary` line (`log_wire_summary`). How to read it:
   spaces ahead of the frame on transitions (modal closed, image swapped,
   overlay opened, screen changed, protocol changed). A timed-out side-channel
   write calls `force_full_repaint` and abandons the batch.
-- **News video never passes through the server:** the paired CLI's mpv draws
-  to the user's tty; the server paints the player black and sends the CLI the
-  rectangle (`app/chat/news/CONTEXT.md`).
+- **Video never passes through the server:** the paired CLI's mpv draws to
+  the user's tty; the server paints the player black and sends the CLI the
+  rectangle (`app/video/CONTEXT.md`).
 - **`GlyphIsolatingBackend`** (`app/terminal_backend.rs`): any cell that is not
   one ASCII byte gets an explicit cursor move after it (column-only after a
   single codepoint, full move after a multi-codepoint grapheme), and a wide cell

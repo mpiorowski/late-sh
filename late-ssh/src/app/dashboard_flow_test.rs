@@ -1552,7 +1552,7 @@ async fn w_on_a_video_plays_it_through_the_paired_cli() {
         }]
     );
 
-    crate::app::chat::news::watch::svc::apply_report(
+    crate::app::video::svc::apply_report(
         &mut app,
         play_id,
         &crate::paired_clients::VideoReport::Playing {
@@ -1562,7 +1562,7 @@ async fn w_on_a_video_plays_it_through_the_paired_cli() {
     );
     app.handle_input(b"\x1b");
     wait_for_app(&mut app, "Esc to close the player", |app| {
-        !app.chat.has_watch()
+        !app.video.is_open()
     })
     .await;
     app.render().expect("render");
@@ -1627,7 +1627,7 @@ async fn a_video_playing_past_the_idle_limit_keeps_the_screen_and_the_keys() {
         [PairControlMessage::VideoPlay { play_id, .. }] => *play_id,
         other => panic!("expected one video_play, got {other:?}"),
     };
-    crate::app::chat::news::watch::svc::apply_report(
+    crate::app::video::svc::apply_report(
         &mut app,
         play_id,
         &crate::paired_clients::VideoReport::Playing {
@@ -1673,4 +1673,90 @@ async fn w_without_mpv_opens_the_setup_box_and_sends_nothing() {
     assert!(frame.contains("✓ yt-dlp"), "{frame}");
     assert!(frame.contains("✓ the late CLI"), "{frame}");
     assert_eq!(video_messages(&mut rx), Vec::new());
+}
+
+/// A YouTube link in a chat message plays through the same player: Enter
+/// on the selected message opens it on the canonical watch link, Esc stops
+/// it, and the next Enter resumes three seconds before where it was left.
+/// A chat link has no row to keep that on, so it lasts the session.
+#[tokio::test]
+async fn enter_on_a_youtube_message_plays_it_and_resumes_within_the_session() {
+    let token = "chat-video-play-flow-it";
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, &format!("{token}-me")).await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: me.id,
+            body: "watch this https://youtu.be/dQw4w9WgXcQ?si=share".to_string(),
+        },
+    )
+    .await
+    .expect("create video message");
+    let (mut app, mut rx) = make_app_with_paired_client(test_db.db.clone(), me.id, token);
+    app.resize(160, 40).expect("resize test terminal");
+    report_paired_cli(&app, token, &["voice", "video"], &[]);
+    wait_for_render_contains(&mut app, "watch this").await;
+    video_messages(&mut rx);
+
+    app.handle_input(b"j");
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, " Watching ").await;
+    let play_id = match video_messages(&mut rx).as_slice() {
+        [
+            PairControlMessage::VideoPlay {
+                play_id,
+                url,
+                start_s: 0,
+                ..
+            },
+        ] => {
+            assert_eq!(url, "https://www.youtube.com/watch?v=dQw4w9WgXcQ");
+            *play_id
+        }
+        other => panic!("expected one video_play, got {other:?}"),
+    };
+
+    crate::app::video::svc::apply_report(
+        &mut app,
+        play_id,
+        &crate::paired_clients::VideoReport::Playing {
+            position_s: 600,
+            duration_s: Some(2910),
+        },
+    );
+    app.handle_input(b"\x1b");
+    wait_for_app(&mut app, "Esc to close the player", |app| {
+        !app.video.is_open()
+    })
+    .await;
+    app.render().expect("render");
+    assert_eq!(
+        video_messages(&mut rx),
+        vec![PairControlMessage::VideoStop { play_id }]
+    );
+
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "resuming from 10:00…").await;
+    match video_messages(&mut rx).as_slice() {
+        [
+            PairControlMessage::VideoPlay {
+                start_s,
+                play_id: resumed,
+                ..
+            },
+        ] => {
+            assert_eq!(*start_s, 597, "three seconds before where it was left");
+            assert_ne!(*resumed, play_id, "a fresh play id");
+        }
+        other => panic!("expected one resumed video_play, got {other:?}"),
+    }
 }

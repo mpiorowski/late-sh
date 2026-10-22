@@ -140,7 +140,8 @@ fn open_poll_modal(app: &mut App, room_id: Uuid) {
     app.show_quit_confirm = false;
     crate::app::input::close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_news_modals();
+    app.chat.close_reader();
+    crate::app::video::svc::close(app);
     app.pending_chat_profile_open = None;
     app.poll_modal_state.open(room_id);
     app.show_poll_modal = true;
@@ -160,7 +161,8 @@ fn open_gild_modal(app: &mut App, target: crate::app::chat::gild::state::GildTar
     app.show_quit_confirm = false;
     crate::app::input::close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_news_modals();
+    app.chat.close_reader();
+    crate::app::video::svc::close(app);
     app.gild_modal_state.open(target);
     app.show_gild_modal = true;
 }
@@ -574,9 +576,8 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
         b'\r' | b'\n' if app.chat.open_selected_image_modal_in_room(room_id) => {
             return true;
         }
-        // A YouTube link plays inside its thumbnail (`video/`); Enter again
-        // pauses it.
-        b'\r' | b'\n' if super::video::svc::watch_selected(app, room_id) => {
+        // A YouTube link opens the watch player (`app/video/`).
+        b'\r' | b'\n' if watch_selected_video(app, room_id) => {
             return true;
         }
         b'\r' | b'\n' if app.chat.try_jump_to_selected_reply_target_in_room(room_id) => {
@@ -630,6 +631,17 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
         }
         _ => false,
     }
+}
+
+/// Enter or a click on the selected message's YouTube thumbnail: the watch
+/// player, or the setup box naming what this session is missing. False
+/// when the message carries no YouTube video link.
+pub(crate) fn watch_selected_video(app: &mut App, room_id: Uuid) -> bool {
+    let Some(request) = app.chat.selected_video_in_room(room_id) else {
+        return false;
+    };
+    crate::app::video::svc::watch(app, request);
+    true
 }
 
 /// Arrow-key message navigation shared between screens.

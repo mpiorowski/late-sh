@@ -438,7 +438,7 @@ struct DrawContext<'a> {
     user_id: uuid::Uuid,
     pet_species: late_core::models::pet::PetSpecies,
     news_reader: Option<&'a chat::news::reader::state::ReaderModal>,
-    news_watch: Option<&'a chat::news::watch::state::WatchModal>,
+    video_modal: Option<&'a crate::app::video::state::WatchModal>,
     is_draining: bool,
     icon_picker_open: bool,
     icon_picker_state: &'a icon_picker::IconPickerState,
@@ -517,9 +517,6 @@ impl App {
         // and desync it from the widget's real (persistent) viewport whenever
         // the cursor moves up inside the visible window.
         self.chat.last_chat_hit_layout.set(None);
-        if let Some(video) = self.chat.inline_video() {
-            video.begin_frame();
-        }
         self.leaderboard_page.clear_hit_regions();
 
         // Init theme and layout sync — preview settings-modal draft live while open.
@@ -961,7 +958,6 @@ impl App {
                 None
             },
             inline_images: &self.chat.inline_image_cache,
-            inline_video: self.chat.inline_video(),
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
             composer_rect_slot: Some(&self.chat.last_composer_rect),
             composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -1018,8 +1014,7 @@ impl App {
         };
         let work_unread_count = self.chat.work.unread_count();
         let news_reader = self.chat.reader();
-        let news_watch = self.chat.watch();
-        let inline_video = self.chat.inline_video();
+        let video_modal = self.video.modal();
         let selected_image_message = self
             .chat
             .selected_room_id
@@ -1069,7 +1064,6 @@ impl App {
             message_reactions,
             message_gilds,
             inline_images: &self.chat.inline_image_cache,
-            inline_video: self.chat.inline_video(),
             afk_lines: &self.chat.afk_lines,
             device_left_at: self.chat.device_left_at(),
             unread_counts: &self.chat.unread_counts,
@@ -1619,7 +1613,7 @@ impl App {
             || self.show_splash
             || screensaver.is_some()
             || news_reader.is_some()
-            || news_watch.is_some()
+            || video_modal.is_some()
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
             || self.booth_modal_state.is_open()
@@ -1642,7 +1636,7 @@ impl App {
             || self.show_splash
             || screensaver.is_some()
             || news_reader.is_some()
-            || news_watch.is_some()
+            || video_modal.is_some()
             || self.icon_picker_open
             || self.room_search_modal_state.is_open()
             || self.booth_modal_state.is_open()
@@ -1903,7 +1897,7 @@ impl App {
                         user_id: self.user_id,
                         pet_species: self.pet_state.species,
                         news_reader,
-                        news_watch,
+                        video_modal,
                         is_draining: self.is_draining.load(std::sync::atomic::Ordering::Relaxed),
                         icon_picker_open: self.icon_picker_open,
                         icon_picker_state: &self.icon_picker_state,
@@ -1950,11 +1944,6 @@ impl App {
                 for effect in ultimate_effects {
                     crate::app::ultimates::apply_ultimate_postprocess(frame.buffer_mut(), effect);
                 }
-                // Last, once every layer is down: anything drawn over the
-                // inline video's rectangle parks it.
-                if let Some(video) = inline_video {
-                    chat::video::ui::check_clear(frame.buffer_mut(), video);
-                }
             })
             .context("failed to draw frame");
 
@@ -1968,10 +1957,9 @@ impl App {
         self.codekeep_state = codekeep_state_taken;
         self.zork_state = zork_state_taken;
         draw_result?;
-        // The draw recorded the watch player's body and the inline video's
-        // rectangle; the paired CLI hears about any play, move, park, or
-        // stop that implies.
-        chat::video::svc::sync(self);
+        // The draw recorded the watch player's body; the paired CLI hears
+        // about any play, move, or stop that implies.
+        crate::app::video::svc::sync(self);
 
         // Feed the modal's image capacity (recorded during draw) back into
         // chat state so the next frame's Sixel fetch encodes to fit.
@@ -2982,8 +2970,8 @@ impl App {
         }
 
         // Over the whole terminal, not the app frame: Full is every cell.
-        if let Some(watch) = ctx.news_watch {
-            chat::news::watch::ui::draw(frame, area, watch);
+        if let Some(modal) = ctx.video_modal {
+            crate::app::video::ui::draw(frame, area, modal);
         }
 
         if ctx.room_search_modal_open {
@@ -3126,7 +3114,7 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
         || ctx.show_help
         || ctx.show_ultimate_modal
         || ctx.news_reader.is_some()
-        || ctx.news_watch.is_some()
+        || ctx.video_modal.is_some()
         || ctx.room_search_modal_open
         || ctx.chat_state.history_modal.is_open()
         || ctx.booth_modal_open

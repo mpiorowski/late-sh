@@ -15,7 +15,6 @@ use crate::app::bonsai::state::BonsaiAction;
 use crate::app::bonsai::svc::BonsaiActionResult;
 use crate::app::calendar::svc::{CalendarAnnouncement, CalendarOp, CalendarWrite};
 use crate::app::chat::news::svc::{BodyFetchOutcome, NewsSaveOutcome, XMediaLookup};
-use crate::app::chat::news::watch::state::WatchOutcome;
 use crate::app::chat::svc::{GildRefusal, SendRefusal};
 use crate::app::clubhouse::nightcap::svc::{NightcapHouseFailure, NightcapOrderResult};
 use crate::app::common::primitives::Screen;
@@ -31,6 +30,7 @@ use crate::app::live::input::Origin as LiveOrigin;
 use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome, SnapshotRowError};
 use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
 use crate::app::referral::svc::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement};
+use crate::app::video::state::{WatchOutcome, WatchSource};
 use crate::ircd::conn::{IrcHistoryOutcome, IrcHistoryRequest};
 use crate::pg_listener::Refresh;
 use crate::terminal_probe::ProbeBacklog;
@@ -686,7 +686,7 @@ mod inner {
         SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason,
         SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
-    use super::{BodyFetchOutcome, BodyStatus, WatchOutcome};
+    use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
     use super::{
@@ -1706,25 +1706,13 @@ mod inner {
         })
     }
 
-    fn news_watches_total() -> &'static Counter<u64> {
+    fn video_watches_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
             meter()
-                .u64_counter("late_ssh_news_watches_total")
+                .u64_counter("late_ssh_video_watches_total")
                 .with_description(
-                    "News video watches by step: opened (the player), setup (the setup box instead), played, ended, failed, lost",
-                )
-                .build()
-        })
-    }
-
-    fn chat_videos_total() -> &'static Counter<u64> {
-        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
-        METRIC.get_or_init(|| {
-            meter()
-                .u64_counter("late_ssh_chat_videos_total")
-                .with_description(
-                    "Inline chat video plays by step: opened (in its thumbnail), setup (the setup box instead), played, ended, failed, lost",
+                    "Video watches by source (news, chat) and step: opened (the player), setup (the setup box instead), played, ended, failed, lost",
                 )
                 .build()
         })
@@ -2939,7 +2927,14 @@ mod inner {
         news_reader_opens_total().add(1, &[KeyValue::new("body", news_body_status_label(status))]);
     }
 
-    fn news_watch_label(outcome: WatchOutcome) -> &'static str {
+    fn video_watch_source_label(source: WatchSource) -> &'static str {
+        match source {
+            WatchSource::NewsArticle(_) => "news",
+            WatchSource::ChatLink => "chat",
+        }
+    }
+
+    fn video_watch_label(outcome: WatchOutcome) -> &'static str {
         match outcome {
             WatchOutcome::Opened => "opened",
             WatchOutcome::Setup => "setup",
@@ -2951,15 +2946,16 @@ mod inner {
     }
 
     /// Setup against opened is how many people want to watch and cannot;
-    /// a run of failed or lost is a CLI or mpv regression.
-    pub(crate) fn record_news_watch(outcome: WatchOutcome) {
-        news_watches_total().add(1, &[KeyValue::new("outcome", news_watch_label(outcome))]);
-    }
-
-    /// The same steps for a YouTube link played inside its chat thumbnail
-    /// (`app/chat/video/`), counted apart so the two surfaces compare.
-    pub(crate) fn record_chat_video(outcome: WatchOutcome) {
-        chat_videos_total().add(1, &[KeyValue::new("outcome", news_watch_label(outcome))]);
+    /// a run of failed or lost is a CLI or mpv regression. `source` is the
+    /// surface that asked: a News story or a YouTube link in chat.
+    pub(crate) fn record_video_watch(source: WatchSource, outcome: WatchOutcome) {
+        video_watches_total().add(
+            1,
+            &[
+                KeyValue::new("source", video_watch_source_label(source)),
+                KeyValue::new("outcome", video_watch_label(outcome)),
+            ],
+        );
     }
 
     fn news_save_label(outcome: NewsSaveOutcome) -> &'static str {
@@ -3857,7 +3853,7 @@ mod inner {
         SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason,
         SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
-    use super::{BodyFetchOutcome, BodyStatus, WatchOutcome};
+    use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
     use super::{
@@ -3951,8 +3947,7 @@ mod inner {
     pub fn record_news_x_media_lookup(_lookup: XMediaLookup) {}
     pub fn record_news_body_fetch(_outcome: BodyFetchOutcome) {}
     pub fn record_news_reader_opened(_status: BodyStatus) {}
-    pub(crate) fn record_news_watch(_outcome: WatchOutcome) {}
-    pub(crate) fn record_chat_video(_outcome: WatchOutcome) {}
+    pub(crate) fn record_video_watch(_source: WatchSource, _outcome: WatchOutcome) {}
     pub fn record_news_save(_outcome: NewsSaveOutcome) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
     pub fn record_booth_thumbnail(_outcome: ThumbnailFetch) {}

@@ -1,5 +1,6 @@
 use uuid::Uuid;
 
+use crate::app::video::svc::Watched;
 use crate::app::{chat::state::RoomSlot, common::primitives::Banner, state::App};
 
 pub fn handle_composer_input(app: &mut App, byte: u8) {
@@ -59,7 +60,7 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             let Some(article_id) = app.chat.news.selected_item().map(|item| item.article.id) else {
                 return false;
             };
-            super::watch::svc::watch_article(app, article_id)
+            watch_article(app, article_id)
         }
         b'c' | b'C' => {
             if let Some(url) = app.chat.news.selected_url() {
@@ -127,5 +128,38 @@ pub fn reply_in_lounge(app: &mut App, article_id: Uuid) -> bool {
             true
         }
         None => false,
+    }
+}
+
+/// `w` on a video story (the News room or the reader): the watch player
+/// (`app/video/`), or the setup box naming what this session is missing.
+/// Watching a story reads it; learning what watching takes does not.
+/// False when the story is gone or not a video.
+pub(crate) fn watch_article(app: &mut App, article_id: Uuid) -> bool {
+    let Some(request) = app.chat.news.watch_request(article_id) else {
+        return false;
+    };
+    match crate::app::video::svc::watch(app, request) {
+        Watched::Player => app.chat.news.mark_article_read(article_id),
+        Watched::Setup => {}
+    }
+    true
+}
+
+/// `o` on the live strip or a Live row: a video this session can play goes
+/// straight to the player; anything else opens the reader. `o` is "open",
+/// not "watch", so it never lands on the setup box.
+pub(crate) fn open_article(app: &mut App, article_id: Uuid) -> bool {
+    let request = match crate::app::video::svc::can_play(app) {
+        true => app.chat.news.watch_request(article_id),
+        false => None,
+    };
+    match request {
+        Some(request) => {
+            crate::app::video::svc::play(app, request);
+            app.chat.news.mark_article_read(article_id);
+            true
+        }
+        None => app.chat.open_reader_for_article(article_id),
     }
 }

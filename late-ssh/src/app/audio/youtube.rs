@@ -153,6 +153,12 @@ pub fn watch_url(video_id: &str) -> String {
     format!("https://www.youtube.com/watch?v={video_id}")
 }
 
+/// The video id in a YouTube watch, short, embed, shorts or live link: the
+/// shapes the booth takes. A channel, a playlist or another site has none.
+pub fn video_id(raw: &str) -> Option<String> {
+    extract_video_id(raw).ok()
+}
+
 fn extract_video_id(raw: &str) -> Result<String> {
     let url = Url::parse(raw.trim()).context("invalid URL")?;
     let host = url.host_str().unwrap_or_default().to_ascii_lowercase();

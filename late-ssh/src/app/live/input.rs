@@ -149,7 +149,7 @@ fn open(app: &mut App, source: LiveSource, origin: Origin) -> bool {
         // video this session can play. Gone between the frame and the key
         // (deleted): nothing to open.
         LiveSource::NewsArticle(article_id) => {
-            crate::app::chat::news::watch::svc::open_article(app, article_id)
+            crate::app::chat::news::input::open_article(app, article_id)
         }
         // The streamer's room on Home, as its rail row opens it: joined on
         // the first visit, and the visit counts as a named viewer. Its

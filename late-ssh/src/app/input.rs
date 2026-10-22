@@ -876,8 +876,8 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.chat.has_watch() {
-        chat::news::watch::input::handle_input(app, &event);
+    if app.video.is_open() {
+        crate::app::video::input::handle_input(app, &event);
         return;
     }
 
@@ -2343,8 +2343,8 @@ fn dispatch_escape(app: &mut App) {
         app.paper.close_modal();
         return;
     }
-    if app.chat.has_watch() {
-        app.chat.close_watch();
+    if app.video.is_open() {
+        crate::app::video::svc::close(app);
         return;
     }
     if app.chat.has_reader() {
@@ -2630,9 +2630,6 @@ fn dispatch_escape(app: &mut App) {
     }
     if ctx.screen == Screen::Dashboard && ctx.feeds_processing {
         app.chat.feeds.stop_processing();
-        return;
-    }
-    if ctx.screen == Screen::Dashboard && crate::app::chat::video::svc::stop(app) {
         return;
     }
     if ctx.screen == Screen::Dashboard && app.chat.selected_message_id.is_some() {
@@ -3343,7 +3340,7 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
         ChatClickKind::Image { message_id } => {
             app.chat.select_message_by_id_in_room(room_id, message_id);
             if !app.chat.open_selected_image_modal_in_room(room_id) {
-                crate::app::chat::video::svc::watch_selected(app, room_id);
+                crate::app::chat::input::watch_selected_video(app, room_id);
             }
         }
     }
@@ -3642,7 +3639,8 @@ fn reset_composers_for_page_change(app: &mut App) {
     app.chat.reset_composer();
     app.chat.feeds.stop_processing();
     app.chat.news.stop_composing();
-    app.chat.close_news_modals();
+    app.chat.close_reader();
+    crate::app::video::svc::close(app);
 }
 
 fn is_room_search_shortcut(event: &ParsedInput) -> bool {
@@ -3675,7 +3673,8 @@ fn close_overlays_for_modal(app: &mut App) {
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_news_modals();
+    app.chat.close_reader();
+    crate::app::video::svc::close(app);
     app.chat.cancel_room_jump();
     app.chat.message_search.clear();
 }
@@ -3713,7 +3712,8 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_news_modals();
+    app.chat.close_reader();
+    crate::app::video::svc::close(app);
     app.chat.cancel_room_jump();
     let device_rails = app.rail_modes();
     let device_artboard_disclaimer = app.artboard_disclaimer_enabled();
@@ -3747,7 +3747,8 @@ pub(crate) fn open_usermap_globally(app: &mut App) {
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_news_modals();
+    app.chat.close_reader();
+    crate::app::video::svc::close(app);
     app.chat.cancel_room_jump();
     app.set_screen(Screen::Profiles);
     app.directory_state
@@ -3771,7 +3772,8 @@ pub(crate) fn open_shop_modal_globally(app: &mut App) {
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_news_modals();
+    app.chat.close_reader();
+    crate::app::video::svc::close(app);
     app.chat.cancel_room_jump();
     app.show_hub_modal = true;
 }
@@ -3828,7 +3830,8 @@ fn open_bonsai_modal_globally(app: &mut App) {
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_news_modals();
+    app.chat.close_reader();
+    crate::app::video::svc::close(app);
     app.chat.cancel_room_jump();
     app.show_bonsai_modal = true;
 }
@@ -3851,7 +3854,8 @@ pub(crate) fn open_daily_modal_globally(app: &mut App) {
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_news_modals();
+    app.chat.close_reader();
+    crate::app::video::svc::close(app);
     app.chat.cancel_room_jump();
     app.lobby.mark_seen(&app.daily);
     app.show_lobby_modal = true;

@@ -94,7 +94,7 @@ Current v1 opens a small undecorated companion window. Hidden/offscreen mode is 
 - Server queue state machine and YouTube `load_video` protocol.
 - `/listen` page behavior.
 - Native stream decoder path when `audio_source = radio`.
-- Booth audio never shells out to an external player; the helper is how YouTube audio plays. Watching a News video is a separate feature that does run the user's own `mpv` and `yt-dlp` (`../late-cli/VIDEO.md`).
+- Booth audio never shells out to an external player; the helper is how YouTube audio plays. Watching a video (a News story or a YouTube link in chat) is a separate feature that does run the user's own `mpv` and `yt-dlp` (`../late-cli/VIDEO.md`).
 
 ---
 

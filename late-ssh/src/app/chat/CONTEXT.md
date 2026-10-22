@@ -5,7 +5,7 @@
 Chat in the SSH app: Home chat rooms, DMs, public/private topic rooms, game-backed room chat, the Home/Dashboard chat center and room rail, and the embedded game-chat surfaces (house tables, daily match boards, the door watch view). Also message actions, reactions, ignores, overlays, the service's refresh/tail/event contracts and the DB model constraints.
 
 - Synthetic chat entries: RSS, News, Mentions/Notifications, and Discover. Voice is not a synthetic room slot: the dedicated `#voice` room is a real, permanent, public chat room pinned at the bottom of Core (above Discover). Any voice-enabled chat/game room (including `#voice`) renders an embedded voice strip and exposes `/voice`/`/mute` controls while you are inside it. Showcase/Projects and Work/Profiles keep their feed services and state here, but their UI and their editor (`app/directory/editor`) live on Profiles page 5.
-- Companion docs here: `COMMANDS.md` (the composer, every slash command, the keys), `RENDERING.md` (the rows cache, message rendering, images, layout rules), `MARKS.md` (the AFK line and the left-app device mark). Sub-domains with their own context: `cyberspace/`, `gild/`, `news/`, `video/`, and `../crown/`; the round, translation and `/summary` are `../ai/CONTEXT.md`.
+- Companion docs here: `COMMANDS.md` (the composer, every slash command, the keys), `RENDERING.md` (the rows cache, message rendering, images, layout rules), `MARKS.md` (the AFK line and the left-app device mark). Sub-domains with their own context: `cyberspace/`, `gild/`, `news/`, and `../crown/`; the round, translation and `/summary` are `../ai/CONTEXT.md`. A YouTube link in a message opens the watch player, `../video/CONTEXT.md`.
 - The session shell, global keys and notifications are in `late-ssh/CONTEXT.md`; repo-wide rules in the root `CONTEXT.md`.
 
 ---
@@ -34,7 +34,6 @@ late-ssh/src/app/chat/
 |-- notifications/               # Synthetic Mentions entry: mention notifications
 |-- polls/                       # /poll modal state/input/UI
 |-- showcase/                    # Projects service/state/UI reused by Directory page 5
-|-- video/                       # A YouTube link played inside its thumbnail, and the session's one play on the paired CLI
 `-- work/                        # Profiles service/state/UI reused by Directory page 5
 ```
 
@@ -382,9 +381,8 @@ Repo-wide rule from the root context still applies:
 
 Where the coverage sits:
 - `svc_test.rs` is the DB-backed service suite (send, reactions, tails, ignores, discover, search scoping, gilds and each gild refusal); `svc_internal_test.rs` covers the pure service helpers (link detection and cooldown tiers, report kinds, poll copy).
-- `state_internal_test.rs` reaches `pub(crate)` `ChatState` internals (command parsing, autocomplete ranking, visual order, reply helpers, translation display); `state_test.rs` is a placeholder.
+- `state_internal_test.rs` reaches `pub(crate)` `ChatState` internals (command parsing, autocomplete ranking, visual order, reply helpers, translation display, inline preview links and YouTube link shapes); `state_test.rs` is a placeholder.
 - `commands_test.rs` pins the command registry and popup ranking; `ui_test.rs`/`ui_text_test.rs` the layout, wrapping and hit testing; `slur_test.rs` the drunk-text contract (§14 Drunk Text).
-- `video/state_test.rs` pins the YouTube link shapes, where the video sits among a frame's rows, and the park, return, and replay steps of the inline video.
 - Each synthetic entry (`news/`, `showcase/`, `work/`, ...) and `../ai/` carries its own `*_test.rs`, and the chat models' tests sit beside them in `late-core/src/models/`.
 
 Test gaps:

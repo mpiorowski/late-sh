@@ -1126,7 +1126,6 @@ fn chat_view<'a>(
         message_reactions,
         message_gilds: MESSAGE_GILDS.get_or_init(HashMap::new),
         inline_images: INLINE_IMAGES.get_or_init(HashMap::new),
-        inline_video: None,
         afk_lines: AFK_LINES.get_or_init(HashMap::new),
         device_left_at: None,
         unread_counts,

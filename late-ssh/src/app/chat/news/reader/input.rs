@@ -51,7 +51,7 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
         // is how a story in neither the snapshot nor the shelf is found.
         ParsedInput::Byte(b'w') | ParsedInput::Char('w') if modal.watchable() => {
             let article_id = modal.article_id();
-            chat::news::watch::svc::watch_article(app, article_id);
+            chat::news::input::watch_article(app, article_id);
             app.chat.close_reader();
         }
         ParsedInput::Byte(b'n' | b'N') | ParsedInput::Char('n' | 'N') => {

@@ -7,12 +7,12 @@ use crate::app::chat::list_ui::{draw_mine_only_status, filtered_list_areas};
 use crate::app::chat::news::reader::state::domain_label;
 use crate::app::chat::news::state::is_unread;
 use crate::app::chat::news::svc::is_youtube_url;
-use crate::app::chat::news::watch::state::position_label;
 use crate::app::chat::ui::truncate_cells;
 use crate::app::chat::ui_text::format_news_ascii_art_for_display;
 use crate::app::common::markdown::wrap_plain_line;
 use crate::app::common::primitives::format_relative_time_short;
 use crate::app::common::theme;
+use crate::app::video::state::position_label;
 use ratatui::{
     Frame,
     layout::Rect,

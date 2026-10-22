@@ -2135,6 +2135,32 @@ fn inline_image_url_in_body_accepts_image_url_with_query() {
     );
 }
 
+/// Every YouTube shape that names one video gets its thumbnail, trimmed
+/// the way image links are; channels, playlists and lookalikes do not.
+#[test]
+fn inline_preview_source_reads_one_video_from_youtube_links() {
+    let video = Some(InlinePreviewSource::Video {
+        video_id: "dQw4w9WgXcQ".to_string(),
+    });
+    for body in [
+        "look https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s",
+        "(https://youtu.be/dQw4w9WgXcQ?si=share).",
+        "https://youtube.com/shorts/dQw4w9WgXcQ!",
+        "https://m.youtube.com/embed/dQw4w9WgXcQ",
+    ] {
+        assert_eq!(inline_preview_source_in_body(body), video, "{body}");
+    }
+    for body in [
+        "https://www.youtube.com/@somechannel",
+        "https://www.youtube.com/playlist?list=PL123",
+        "https://youtu.be/tooshort",
+        "https://notyoutube.com/watch?v=dQw4w9WgXcQ",
+        "no link here",
+    ] {
+        assert_eq!(inline_preview_source_in_body(body), None, "{body}");
+    }
+}
+
 #[test]
 fn inline_image_request_candidates_scan_newest_messages_first() {
     let now = Instant::now();
@@ -2184,10 +2210,9 @@ fn inline_image_request_candidates_fetch_a_youtube_thumbnail() {
         vec![
             (
                 video.id,
-                InlinePreviewSource::Video(YoutubeLink {
-                    url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ".to_string(),
+                InlinePreviewSource::Video {
                     video_id: "dQw4w9WgXcQ".to_string(),
-                })
+                }
             ),
             (
                 both.id,
