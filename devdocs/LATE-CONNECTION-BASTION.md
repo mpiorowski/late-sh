@@ -1,14 +1,16 @@
 # late.sh SSH Bastion + WS Tunnel
 
-> **Status.** Chassis design locked; current PR adds upgrade-reconnect UX (this rev).
-> **Branch.** `mevanlc--connection-bastion` (off `main`).
+> **Status.** Bastion path implemented; production cutover awaits staging checks. Remaining review work is tracked in [§13](#13-remaining-review-follow-ups).
+> **Branch.** `mevanlc--bastion-redux`.
 > **New crate.** `late-bastion` (the SSH-facing process).
 
 Long-lived SSH frontend that keeps the user's `ssh late.sh` session alive across `late-ssh` (TUI backend) deploys by terminating SSH at a stable bastion process and tunneling the shell byte stream over a WebSocket to the backend, with explicit user agency over reconnect during upgrades.
 
-The backend tunnel listener is compiled into the `late-ssh` profile: port `4002` in `dev`/`dev2` (the API uses `4001`), and port `4001` in `prod` (the API uses `4000`). Production trusts bastion peers in `10.42.0.0/16`; dev profiles accept local Compose peers. `LATE_TUNNEL_SHARED_SECRET` is required in every profile. Compose maps the tunnel to host port `4002` for instance 1 and `4003` for instance 2, and maps bastion SSH to `5222`/`5223`. The bastion's configuration stays in `LATE_BASTION_*` environment variables.
+The backend tunnel listener is compiled into the `late-ssh` profile: port `4002` in `dev`/`dev2` (the API uses `4001`), and port `4001` in `prod` (the API uses `4000`). Production trusts bastion peers in `10.42.0.0/16`; dev profiles accept local Compose peers. Dev profiles require `LATE_TUNNEL_SHARED_SECRET`; an absent or blank production secret leaves the private listener off while direct SSH continues to start. Compose maps the tunnel to host port `4002` for instance 1 and `4003` for instance 2, and maps bastion SSH to `5222`/`5223`. The bastion's configuration stays in `LATE_BASTION_*` environment variables.
 
 Release tags ending in `-bastion` use `deploy_service.yml` to roll the bastion image. Terraform's `IMAGE_TAGS["bastion"]` seeds its initial image; subsequent infrastructure applies preserve the deployed image.
+
+First enablement follows the [infra bastion instructions](../infra/README.md#bastion): deploy the ssh image, configure the host-key and shared-secret GitHub environment secrets, enable bastion through an `-infra` release, then publish a `-bastion` release. The infra apply creates the manifest without waiting for the placeholder image; the bastion release installs the real image and waits for readiness.
 
 ---
 
@@ -393,3 +395,88 @@ Close-code dispatch, exponential backoff, plain-text reconnect message after gra
 - **All `1xxx` codes Terminal.** Considered as the maximum-simplicity option (one-line policy: `4100..=4199 ⇒ Retryable, _ ⇒ Terminal`). Rejected because it breaks the SIGKILL path: at end-of-grace-period, k8s sends SIGKILL → tunnel sessions see `1006` → all-1xxx-Terminal would drop them. Carving `1006` out as Retryable preserves the bastion's flagship feature (the dominant production reconnect path) at the cost of one extra match arm. Other `1xxx` codes are not emitted by the backend in our protocol and are treated as Terminal defensively.
 - **Always show the unified reconnect banner, including on `4100`.** Considered for further simplification. Rejected: the `4100` case is qualitatively different — the user **chose** to upgrade and deserves a clean upgrade-positive welcome, not a "something happened, sorry" hedge. One extra match arm; clearly worth it.
 - **Backend skipping splash/welcome on reconnect.** Considered; rejected for MVP. The reconnect banner is the only reconnect-aware UI; existing splash/welcome path is unchanged.
+
+---
+
+## 13. Remaining review follow-ups
+
+Finding numbers refer to the pre-merge review. These items remain open after
+the fixes through `29829d29`; documenting them does not establish production
+qualification.
+
+### #10 — Backend liveness and cleanup
+
+The backend does not initiate tunnel heartbeats or enforce a receive-idle
+deadline (`late-ssh/src/tunnel.rs`). If bastion disappears without closing its
+socket, session accounting can remain until a transport error or a later write
+failure. An indefinite leak has not been demonstrated; the output-write timeout
+only bounds a write that actually blocks.
+
+Before public rollout, test a silent network blackhole and establish a bounded
+cleanup deadline. Add backend liveness detection as needed, preserving startup
+and slow-client tolerances. Verify that active users, pairing routes, per-IP
+counts and global permits return to baseline, and that stale cleanup cannot
+retire a healthy replacement using the same session token.
+
+### #12 — TCP probes produce misleading warnings
+
+TCP health probes reaching a trusted PROXY listener close without sending a
+PROXY header. The accept loop logs those expected failures at WARN
+(`late-bastion/src/ssh.rs`). Provide a suitable probe endpoint or distinguish
+empty probe disconnects from malformed headers. Verify readiness/liveness still
+work and genuine PROXY failures remain diagnosable.
+
+### #13 — Bastion telemetry is not connected
+
+`late-bastion/src/main.rs` initializes plain tracing rather than the shared OTLP
+pipeline. The `otel` feature and collector environment variable alone do not
+enable export, and the bastion egress policy permits only DNS and backend port
+4001, excluding collector port 4317.
+
+Initialize telemetry, allow collector egress, and flush providers on shutdown.
+Add the reconnect, close-code, handshake and byte metrics listed in Phase 6.
+Verify collector receipt with `otel` enabled and retain a working build without
+that feature.
+
+### #14 — Define the protocol version-skew contract
+
+`ControlFrame` rejects unknown `t` tags; the backend closes unknown control
+frames with 4003. The protocol comment makes compatibility conditional on
+tolerance, rather than promising that tolerance already exists. A new variant
+alone does not break existing traffic; sending an unsupported message can.
+
+Document supported version combinations and deployment order before extending
+the wire vocabulary. Test mixed bastion/backend versions. Ignore unknown
+messages only where their semantics permit it; mandatory setup or control
+operations need an explicit compatibility strategy.
+
+### #15 — Remaining config and documentation cleanup
+
+- Align the bastion's 7200-second termination grace and its comment with the
+  actual SIGTERM behavior: active SSH connections are cancelled, rather than
+  retained for a two-hour drain.
+- Replace the stale "NGINX TCP entry" wording in `infra/variables.tf` with the
+  current `ssh-edge` HAProxy terminology.
+- Reconcile `BASTION-REDUX-REVIEW.md` references to the removed `deploy.yml`
+  workflow and `BASTION_TUNNEL_TRUSTED_CIDRS` variable with current code.
+- Correct the "changes remain uncommitted" narrative in
+  `BASTION-QUALIFICATION.md`, preserving its tested source snapshot, image IDs,
+  measurements and limits.
+
+### Deferred output-budget parity
+
+The scoped #4 fix aligns blocked output writes at 30 seconds and prevents
+client backpressure from triggering the backend watchdog. Tunnel rendering
+still uses `budget: None` with a bounded output queue; it does not reproduce
+direct SSH's 32-MiB backlog accounting and render-pause behavior. Exact parity
+remains separate follow-up scope, requiring slow-reader memory and recovery
+tests if pursued.
+
+### Packaged and live rollout verification
+
+The recorded packaged qualification campaign predates these review fixes;
+focused source regressions do not refresh that image-level evidence. Run fresh
+packaged checks, then the [remaining staging checks](BASTION-QUALIFICATION.md#limits-and-remaining-deployment-checks)
+before public-port cutover: Kubernetes endpoint replacement, PROXY source IP,
+NetworkPolicy including IRC, mounted secrets, pairing, terminal cleanup and the
+rollback route.
