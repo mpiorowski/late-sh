@@ -46,6 +46,18 @@ const WINDOW_MAX_WIDTH: u16 = 160;
 /// The window's header: title and meta on one row, then a rule.
 const WINDOW_HEADER_ROWS: u16 = 2;
 
+/// The video id in `url`, the one rule for what the player plays, from
+/// News and chat alike: a YouTube link to one video (the booth's parse,
+/// `audio::youtube::video_id`). A channel or a playlist page has none.
+pub(crate) fn youtube_video_id(url: &str) -> Option<String> {
+    crate::app::audio::youtube::video_id(url)
+}
+
+/// Whether the player can play `url` (`youtube_video_id`).
+pub(crate) fn is_watchable(url: &str) -> bool {
+    youtube_video_id(url).is_some()
+}
+
 /// The session's video: the modal on screen, what the paired CLI was last
 /// told, and where this session left the chat links it watched.
 #[derive(Debug, Default)]

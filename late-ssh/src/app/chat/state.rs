@@ -7346,7 +7346,7 @@ pub(crate) fn inline_preview_source_in_body(body: &str) -> Option<InlinePreviewS
     match inline_image_url_in_body(body) {
         Some(url) => Some(InlinePreviewSource::Image(url)),
         None => body_links(body)
-            .find_map(crate::app::audio::youtube::video_id)
+            .find_map(crate::app::video::state::youtube_video_id)
             .map(|video_id| InlinePreviewSource::Video { video_id }),
     }
 }

@@ -1604,7 +1604,7 @@ fn news_help_lines() -> Vec<String> {
             "  The feed shows the newest twenty stories; the selected story opens out with its link and summary.",
             "",
             "Watching",
-            "  A YouTube card reads \"watch\". w plays it right here, over the page.",
+            "  A YouTube video card reads \"watch\". w plays it right here, over the page.",
             "  Needs the late CLI, a Kitty-graphics terminal (kitty, Ghostty, WezTerm, Konsole, Rio),",
             "  no tmux or screen, and mpv 0.36+ with yt-dlp installed on your machine.",
             "  Missing something? w shows exactly what, and how to get it.",

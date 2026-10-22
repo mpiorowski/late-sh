@@ -2147,6 +2147,7 @@ fn inline_preview_source_reads_one_video_from_youtube_links() {
         "(https://youtu.be/dQw4w9WgXcQ?si=share).",
         "https://youtube.com/shorts/dQw4w9WgXcQ!",
         "https://m.youtube.com/embed/dQw4w9WgXcQ",
+        "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ",
     ] {
         assert_eq!(inline_preview_source_in_body(body), video, "{body}");
     }

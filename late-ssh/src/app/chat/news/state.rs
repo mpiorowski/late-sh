@@ -32,8 +32,8 @@ pub fn news_share_banner(lead: &str, reward: NewsShareReward) -> Banner {
 }
 
 use super::reader::state::{ReaderBody, ReaderModal};
-use super::svc::{ArticleService, BodyLoad, BodyReply, NewsSaveOutcome, ShelfStep, is_youtube_url};
-use crate::app::video::state::{WatchMemory, WatchRequest, WatchSource};
+use super::svc::{ArticleService, BodyLoad, BodyReply, NewsSaveOutcome, ShelfStep};
+use crate::app::video::state::{WatchMemory, WatchRequest, WatchSource, is_watchable};
 
 /// This session's news reads: the ids of the snapshot's articles the
 /// reader has read (`article_reads`), a visit to the News room reading
@@ -634,7 +634,7 @@ impl State {
     /// room is "watch" and not the global Bonsai shortcut.
     pub(crate) fn selected_card_is_watchable(&self) -> bool {
         self.selected_item()
-            .is_some_and(|item| is_youtube_url(&item.article.url))
+            .is_some_and(|item| is_watchable(&item.article.url))
     }
 
     /// What the watch player (`app/video/`) opens on for a known video
@@ -652,7 +652,7 @@ impl State {
 
     fn watchable_item(&self, article_id: Uuid) -> Option<&ArticleFeedItem> {
         self.find_article(article_id)
-            .filter(|item| is_youtube_url(&item.article.url))
+            .filter(|item| is_watchable(&item.article.url))
     }
 
     /// Where the reader left a video story, if partway through: the

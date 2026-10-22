@@ -16,7 +16,7 @@ use late_core::models::article_body::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use uuid::Uuid;
 
-use crate::app::chat::news::svc::is_youtube_url;
+use crate::app::video::state::is_watchable;
 use crate::app::chat::news::ui::split_summary_bullets;
 use crate::app::chat::ui_text::format_news_ascii_art_for_display;
 use crate::app::common::primitives::format_relative_time;
@@ -127,7 +127,7 @@ impl ReaderModal {
             ascii_art: item.article.ascii_art.clone(),
             author: item.author_username.clone(),
             shared_at: item.article.created,
-            watchable: is_youtube_url(&item.article.url),
+            watchable: is_watchable(&item.article.url),
             body,
             view: ScrollView::default(),
             layout: RefCell::new(None),

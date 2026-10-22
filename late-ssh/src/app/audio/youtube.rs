@@ -153,8 +153,9 @@ pub fn watch_url(video_id: &str) -> String {
     format!("https://www.youtube.com/watch?v={video_id}")
 }
 
-/// The video id in a YouTube watch, short, embed, shorts or live link: the
-/// shapes the booth takes. A channel, a playlist or another site has none.
+/// The video id in a YouTube watch, short, embed (no-cookie included),
+/// shorts or live link: the shapes the booth takes. A channel, a playlist
+/// or another site has none.
 pub fn video_id(raw: &str) -> Option<String> {
     extract_video_id(raw).ok()
 }
@@ -166,7 +167,11 @@ fn extract_video_id(raw: &str) -> Result<String> {
         url.path_segments()
             .and_then(|mut segments| segments.next())
             .map(str::to_string)
-    } else if host == "youtube.com" || host.ends_with(".youtube.com") {
+    } else if host == "youtube.com"
+        || host.ends_with(".youtube.com")
+        || host == "youtube-nocookie.com"
+        || host.ends_with(".youtube-nocookie.com")
+    {
         if url.path() == "/watch" {
             url.query_pairs()
                 .find(|(key, _)| key == "v")
