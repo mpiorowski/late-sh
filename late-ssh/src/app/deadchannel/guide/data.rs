@@ -232,6 +232,10 @@ pub const SECTIONS: &[Section] = &[
                     means: "your face, the rack opening with your level",
                 },
                 Figure {
+                    value: "prints",
+                    means: "a poster you paint, hung on your profile, free",
+                },
+                Figure {
                     value: "the ledge",
                     means: "the railing: start over at level 1, by choice",
                 },
@@ -701,6 +705,67 @@ pub const SECTIONS: &[Section] = &[
             ),
             Block::Rule(
                 "the face is on every message you post in #deadchannel and on your profile.",
+            ),
+        ],
+    },
+    Section {
+        title: "prints",
+        neon: Neon::Cyan,
+        blocks: &[
+            Block::Keys(&[
+                Key {
+                    key: "type",
+                    does: "{paint} at the cursor, in the brush's colour",
+                },
+                Key {
+                    key: "←↑↓→",
+                    does: "{move} the cursor",
+                },
+                Key {
+                    key: "shift+←↑↓→",
+                    does: "{select}: typing fills it, ⌫ clears it",
+                },
+                Key {
+                    key: "⌫/del",
+                    does: "{erase}",
+                },
+                Key {
+                    key: "enter",
+                    does: "{a row down}",
+                },
+                Key {
+                    key: "^c ^x ^v",
+                    does: "{copy}, {cut}, {paste} a piece of it",
+                },
+                Key {
+                    key: "^k",
+                    does: "{next tint}, or the colour picker once you hold a mark",
+                },
+                Key {
+                    key: "^]",
+                    does: "{glyphs}: the picker of every glyph",
+                },
+                Key {
+                    key: "^s",
+                    does: "{save it}: it hangs on your profile",
+                },
+                Key {
+                    key: "^d ^d",
+                    does: "{burn it}: the second press does it",
+                },
+                Key {
+                    key: "esc",
+                    does: "{back}: the picker, the selection, then the street. a poster not saved is dropped",
+                },
+            ]),
+            Block::Rule(
+                "the poster is *32 by 12*, free, and yours to paint. it hangs on your profile beside your face, in the terminal and on the web, for anyone who looks. without one your profile shows the test card.",
+            ),
+            Block::Rule(
+                "the brush starts on *the tailor's seven tints*, every one of them, whatever your level. *one Old Signal mark* opens every colour: `^k` opens the picker instead.",
+            ),
+            Block::Rule(
+                "at prints every key paints, `?` and the digits too: `esc` is the way out. a poster that breaks the rules of the house is taken down, like a piece on the artboard.",
             ),
         ],
     },

@@ -7,10 +7,11 @@
 //! `r`, Dead Air `s`, `d`, `t`, `f`, `u`, and `o` (a glass or a pour
 //! each), the blade shop `w` and `a`, INK up/down over the drafts and `i`
 //! to ink the picked one, the ledge `r` twice to step off; the tailor's
-//! hands every key to `tailor/input.rs`.
+//! hands every key to `tailor/input.rs`, and PRINTS every key to
+//! `poster/input.rs`.
 //! While the guide is open every key goes to `guide/input.rs` first, and
-//! `?` anywhere on the page opens it (the site guide's key, taken over
-//! down here: the street has its own). While the road or the fight scene
+//! `?` anywhere on the page but PRINTS opens it (the site guide's key,
+//! taken over down here: the street has its own; PRINTS paints it). While the road or the fight scene
 //! is open every key goes to `fight/input.rs`. Returns `false` for anything it
 //! does not own so global keys (page digits, Tab, `q`) keep working. While a panel is open, or the
 //! runner is looking over the ledge, every other typed key is swallowed:
@@ -36,6 +37,7 @@ pub fn descend(app: &mut App) {
     app.city.dismiss();
     app.fight.close();
     app.tailor.close();
+    app.poster.close();
     app.guide.state.close();
     // The descent is a touch: the sheet re-reads (and the day rolls if it
     // turned) before the strip shows it.
@@ -52,6 +54,10 @@ pub fn descend(app: &mut App) {
 pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     if app.guide.state.is_open() {
         return crate::app::deadchannel::guide::input::handle_event(app, event);
+    }
+    // PRINTS is a typing surface: `?` paints there like every other key.
+    if app.city.panel() == Some(Landmark::Prints) {
+        return crate::app::deadchannel::poster::input::handle_event(app, event);
     }
     if crate::app::deadchannel::guide::input::opens(event) {
         app.guide.state.open();
@@ -80,6 +86,10 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
                 if landmark == Landmark::Tailor {
                     let runner = app.runner_looks.get(&app.user_id).copied();
                     app.tailor.open(runner);
+                }
+                if landmark == Landmark::Prints {
+                    let runner = app.runner_looks.get(&app.user_id).copied();
+                    app.poster.open(runner);
                 }
             }
             Enter::Line(landmark) => {

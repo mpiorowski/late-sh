@@ -14,7 +14,7 @@ Naming note: `Artboard` is the user-facing name. Code and upstream crates still 
 - Settings → Tweaks → Artboard content disclaimer hides the entire page behind a double-bordered NSFW warning. It is **per device**: stored as `artboard_disclaimer` on the SSH key the session authenticated with (`user_ssh_keys.settings`), falling back to the account's `artboard_disclaimer` (default true) for a key that never chose; `App::artboard_disclaimer_enabled` resolves it in session and `DeviceState::shows_artboard_disclaimer` for the login splash, and a failed key read at login fails closed to on (root `CONTEXT.md`, Per-device settings). Its choices are View (`V`, current visit), Always View (`A`, view and persist the tweak off for this device only, outside the tour; the tweak off is also what lets the login splash show a gallery piece, see §Gallery), and Back to Chat (`B`/Esc, Home screen 1). Leaving resets one-visit consent. One all-yellow warning symbol sits on each side with five spaces to the wording, NSFW is red, and the choices start with yellow/red/green initials; explanations use theme text with dim parentheses. Superscript aside/footer use the theme faint text color and sit under the warning and above the bottom border. Choices are clickable except in keyboard-only mode. `disclaimer.rs` owns this gate, before gallery/editor input and without drawing art underneath; app modals keep priority. The dialog does not draw during the tour: the tour gate owns input at the Artboard stop, the page stays cleared, and the stop's tour box offers `S` (show, one-visit consent through the same `artboard_content_accepted`) or Enter (skip to Profiles); neither touches the tweak.
 - Shared canvas: `dartboard_core::Canvas`, canonical size `384 x 192`.
 - Server: one in-process `dartboard_local::ServerHandle` per `late-ssh` process.
-- Session connection: created by `App::sync_dartboard_connection` (`disclaimer.rs`) once the page may show: on entry with the disclaimer off, on `V`/`A`/tour `S`, or on the tick that lands a saved tweak; a visitor on the prompt holds no seat. Dropped when leaving Artboard. `q` on the prompt is the global quit; `1`–`7` and the clickable page numbers in the top bar keep working without granting consent or changing the preference, with `4` staying on the prompt.
+- Session connection: created by `App::sync_dartboard_connection` (`disclaimer.rs`) once the page may show: on entry with the disclaimer off, on `V`/`A`/tour `S`, or on the tick that lands a saved tweak; a visitor on the prompt holds no seat. Dropped when leaving Artboard. `q` on the prompt is the global quit; `1`–`7`, Tab/Shift+Tab, and the clickable page numbers in the top bar keep working without granting consent or changing the preference, with `4` staying on the prompt.
 - Initial mode: `view`; `i`, `I`, `Enter`, or canvas left-click enters active edit mode.
 - Persistence: JSONB rows in `artboard_snapshots` through `late_core::models::artboard::Snapshot`.
 - Public gallery: `late-web/src/pages/gallery/`, read-only over saved DB snapshots, not live server memory. It does not list pieces yet.
@@ -50,8 +50,8 @@ Local state:
 
 - `late-ssh/src/app/artboard/gallery/` (the gallery subdomain, same file roles; `gallery/CONTEXT.md`)
 
-- `late-ssh/src/app/artboard/color_picker.rs`
-  - Pure state machine for the paint colour picker (`Ctrl+K`): `ColorPicker { color, row, hex, preset }`, rows `Red` / `Green` / `Blue` / `Hex` / `Presets`, `move_row`, `adjust`, `jump`, `set_channel`, `select_preset`, `type_hex`, `hex_backspace`. Edits a working copy; `State::apply_color_picker` makes it the paint colour. Drawing and hit tests are in `ui.rs`, keys in `input.rs`.
+- `late-ssh/src/app/common/color_picker.rs` (shared with PRINTS in the undercity, `app/deadchannel/poster`)
+  - The paint colour picker (`Ctrl+K` here): the pure state machine `ColorPicker { color, row, hex, preset }`, rows `Red` / `Green` / `Blue` / `Hex` / `Presets`, `move_row`, `adjust`, `jump`, `set_channel`, `select_preset`, `type_hex`, `hex_backspace`, `click`; `PAINT_PALETTE`, the sixteen presets (the info block's palette rows too); the popup's `draw(frame, area, picker, title)` and `hit(area, col, row)`. Edits a working copy; `State::apply_color_picker` makes it the paint colour. The keys stay each host's: the Artboard's are in `input.rs`.
 
 - `late-ssh/src/app/artboard/data.rs`
   - Static help text for the Artboard help overlay.
@@ -101,7 +101,7 @@ Local state:
   - Converts `InputAction::Copy` into `app.pending_clipboard` and `InputAction::Leave` into edit-mode deactivation.
 
 - `late-ssh/src/app/artboard/ui.rs`
-  - Rendering for canvas, info sidebar, swatch strip, help overlay, glyph picker, the colour picker modal (`draw_color_picker`, `color_picker_hit`, `palette_hit` for the info block's palette rows), owner overlay, floating preview, and selection; `draw_game` lays the rail and the gallery pane around them in view mode.
+  - Rendering for canvas, info sidebar, swatch strip, help overlay, glyph picker, the colour picker modal (`common::color_picker::draw` over the page area; `color_picker_hit` reads a click through `common::color_picker::hit`), `palette_hit` for the info block's palette rows, owner overlay, floating preview, and selection; `draw_game` lays the rail and the gallery pane around them in view mode.
   - Uses `ratatui`, `dartboard_tui`, and app theme helpers.
   - `canvas_area_for_state(size, rail_visible)` must match the frame layout; hit tests and the editor viewport depend on it. The rail's visibility is published by the draw path (`GalleryState::set_rail_visible`), so input math follows the last frame.
   - `render_piece_canvas` draws any piece canvas in the board's style; every gallery surface goes through it.
@@ -245,12 +245,12 @@ Related tests:
 - `late-core/src/models/artboard_test.rs` covers snapshot upsert replacement, uniqueness, special/daily/monthly archive listing, insert-if-absent, prefix listing, and delete by board key.
 
 Inline module tests:
-- `color_picker.rs` (`color_picker_test.rs`): whole-state walks of the rows, hex typing and backspace, preset wrap and tracking.
+- `common/color_picker.rs` (`color_picker_test.rs`): whole-state walks of the rows, hex typing and backspace, preset wrap and tracking, the popup's hit tests and a click.
 - `provenance.rs`: paint/clear provenance and replace retagging.
 - `state.rs`: coordinate conversion, owner initials/colors, help scroll, floating/selection behavior, paste cursor logic, swatch/glyph behavior, the picker applying or discarding a colour, bounded edits and brush strokes reaching the other half of a wide glyph (`edits_beside_wide_glyphs_reach_the_other_half`, `brush_strokes_beside_wide_glyphs_reach_the_other_half`).
 - `input.rs`: mouse routing, raw control mapping, swatch interactions, double-click glyph brush, help/glyph picker routing, the colour picker keys and the palette click, selection, paste/stamp behavior.
 - `page.rs`: view-mode right-drag pan, non-canvas right-click handling, Alt-arrow pan.
-- `ui.rs`: canvas layout, info/sidebar layout, help tabs/hit tests, the colour picker's hit tests and rendered modal, the palette rows' hit test, swatch boxes, wide glyph cursor origin, the rail-aware board area.
+- `ui.rs`: canvas layout, info/sidebar layout, help tabs/hit tests, the colour picker over the page area and its rendered modal, the palette rows' hit test, swatch boxes, wide glyph cursor origin, the rail-aware board area.
 
 ## Key Invariants
 

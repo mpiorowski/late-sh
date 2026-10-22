@@ -4,6 +4,7 @@ use crate::app::common::qr::{Barcode, HalfBlock};
 use crate::app::common::username_effect::{CROWN_GLYPH, CROWN_LAUREATE_GLYPH};
 use late_core::models::{
     article::{NEWS_SHARE_MAX_PAID_PER_DAY, NEWS_SHARE_REWARD_CHIPS},
+    article_save::NEWS_SAVED_LIMIT,
     asterion::ASTERION_DAILY_ESCAPE_PAYOUT,
     chat_message_gild::GildTier,
     chips::{CHIP_FLOOR, Difficulty, INITIAL_CHIP_BALANCE},
@@ -1578,6 +1579,9 @@ fn news_help_lines() -> Vec<String> {
         "  Full chip rules live in the Chips tab.".to_string(),
         "".to_string(),
     ];
+    let saved_shelf_line = format!(
+        "  s keeps up to {NEWS_SAVED_LIMIT} stories on your own shelf, on any device you sign in from."
+    );
     lines.extend(
         [
             "How it works",
@@ -1588,10 +1592,17 @@ fn news_help_lines() -> Vec<String> {
             "  Enter in composer submit link",
             "  Esc               cancel URL entry",
             "  j / k             browse stories",
+            "  s                 save the selected story for later, or let it go",
             "  r                 reply in #lounge quoting the selected story",
             "  d                 delete your own story",
             "  /                 toggle filter to only your stories",
             "  o on now strip    open the reader on that story (a video plays, when it can)",
+            "",
+            "Saved for later",
+            saved_shelf_line.as_str(),
+            "  The shelf sits above the feed under a \"saved\" rule, newest save first, and a saved story",
+            "  stays readable after the feed has moved on. s on a saved story takes it off.",
+            "  The feed shows the newest twenty stories; the selected story opens out with its link and summary.",
             "",
             "Watching",
             "  A YouTube card reads \"watch\". w plays it right here, over the page.",
@@ -1621,6 +1632,7 @@ fn news_help_lines() -> Vec<String> {
             "  c                 copy the story's link",
             "  w                 watch it, on a YouTube story",
             "  r                 reply in #lounge quoting the story",
+            "  s                 save the story for later, or let it go",
             "  d                 delete your own story",
             "  N                 jump to News with story selected",
             "  Esc               close",

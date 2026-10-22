@@ -34,6 +34,9 @@ impl ScrollExtent {
 
 pub(crate) struct ProfileModalState {
     profile_service: ProfileService,
+    /// This session's user: the profile is their own when it is the one
+    /// viewed (the poster's hint is for its owner).
+    own_user_id: Uuid,
     /// The viewed user's own showcases, newest first, loaded with the
     /// profile rather than filtered out of the capped shared feed.
     showcases: Vec<Showcase>,
@@ -79,9 +82,10 @@ impl Drop for ProfileModalState {
 }
 
 impl ProfileModalState {
-    pub(crate) fn new(profile_service: ProfileService) -> Self {
+    pub(crate) fn new(profile_service: ProfileService, own_user_id: Uuid) -> Self {
         Self {
             profile_service,
+            own_user_id,
             showcases: Vec::new(),
             viewed_user_id: None,
             fallback_name: String::new(),
@@ -246,6 +250,11 @@ impl ProfileModalState {
 
     pub(crate) fn runner(&self) -> Option<&ProfileRunner> {
         self.runner.as_ref()
+    }
+
+    /// The profile on show is this session's own.
+    pub(crate) fn viewing_own(&self) -> bool {
+        self.viewed_user_id == Some(self.own_user_id)
     }
 
     pub(crate) fn aquarium_cell(&self) -> &RefCell<Option<AquariumState>> {

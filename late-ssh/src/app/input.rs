@@ -972,12 +972,24 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
     }
 
     if app.artboard_disclaimer_visible() {
-        // Page shortcuts leave without granting consent or entering the board.
+        // Page shortcuts and the Tab cycle leave without granting consent or
+        // entering the board.
         let byte = match event {
             ParsedInput::Byte(byte) => Some(byte),
             ParsedInput::Char(ch) if ch.is_ascii() => Some(ch as u8),
             _ => None,
         };
+        let cycled = match event {
+            ParsedInput::BackTab => Some(app.screen.prev()),
+            _ if byte == Some(b'\t') => Some(app.screen.next()),
+            _ => None,
+        };
+        if let Some(screen) = cycled {
+            reset_composers_for_page_change(app);
+            app.set_screen(screen);
+            app.chat.clear_message_selection();
+            return;
+        }
         if byte.is_some_and(|byte| handle_numbered_page_switch(app, byte)) {
             app.chat.clear_message_selection();
             return;
@@ -2552,7 +2564,8 @@ fn dispatch_escape(app: &mut App) {
     }
     // Esc in the city backs out one step at a time: the guide first, then
     // the fight picker, then the fight scene (a run while the fight is on,
-    // `fight/input.rs`), then an open shop panel or the ledge; on the bare
+    // `fight/input.rs`), then PRINTS's own steps (`poster/input.rs`), then
+    // an open shop panel or the ledge; on the bare
     // street it goes up to the chat with #lounge open (the wire and `0` go
     // to the clubhouse instead).
     if ctx.screen == Screen::City && app.guide.state.is_open() {
@@ -2565,6 +2578,10 @@ fn dispatch_escape(app: &mut App) {
     }
     if ctx.screen == Screen::City && app.fight.scene_open() {
         crate::app::deadchannel::fight::input::handle_escape(app);
+        return;
+    }
+    if crate::app::deadchannel::poster::input::holds_keys(app) {
+        crate::app::deadchannel::poster::input::handle_escape(app);
         return;
     }
     if ctx.screen == Screen::City && (app.city.panel().is_some() || app.city.at_ledge()) {
@@ -4226,7 +4243,8 @@ fn close_zen(app: &mut App) {
 }
 
 fn handle_voice_global_chord(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
-    if ctx.screen == Screen::Artboard {
+    // The boards paint: `^V` pastes there.
+    if ctx.screen == Screen::Artboard || crate::app::deadchannel::poster::input::holds_keys(app) {
         return false;
     }
 
@@ -4421,9 +4439,9 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         // The Live panel's prefix: Home only, where the panel draws its
         // row numbers, and not while a pane that spends `s` is selected
-        // (RSS shares its entry, Discover cycles its sort); on every other
-        // page `s` is the page's (the Directory's search, the Clubhouse's
-        // seat).
+        // (RSS shares its entry, Discover cycles its sort, News saves its
+        // story); on every other page `s` is the page's (the Directory's
+        // search, the Clubhouse's seat).
         b's' | b'S'
             if ctx.screen == Screen::Dashboard
                 && !ctx.chat_composing
@@ -4431,7 +4449,8 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && !ctx.news_composing
                 && !app.chat.room_jump_active
                 && !app.chat.feeds_selected
-                && !app.chat.discover_selected =>
+                && !app.chat.discover_selected
+                && !app.chat.news_selected =>
         {
             app.live_prefix_armed = true;
             true
@@ -4685,11 +4704,17 @@ pub(crate) fn try_open_icon_picker(app: &mut App) {
         };
         app.chat.start_composing_in_room(room_id);
     }
+    open_icon_picker(app, IconPickerTarget::Composer);
+}
+
+/// The glyph picker over the page, feeding `target`. The catalog loads
+/// once per session.
+pub(crate) fn open_icon_picker(app: &mut App, target: IconPickerTarget) {
     if app.icon_catalog.is_none() {
         app.icon_catalog = Some(icon_picker::catalog::IconCatalogData::load());
     }
     app.icon_picker_state = icon_picker::IconPickerState::default();
-    app.icon_picker_target = IconPickerTarget::Composer;
+    app.icon_picker_target = target;
     app.icon_picker_open = true;
 }
 
@@ -4703,15 +4728,13 @@ pub(crate) fn try_open_reaction_picker(app: &mut App, room_id: Uuid) -> bool {
         return false;
     };
     app.chat.cancel_reaction_leader();
-    if app.icon_catalog.is_none() {
-        app.icon_catalog = Some(icon_picker::catalog::IconCatalogData::load());
-    }
-    app.icon_picker_state = icon_picker::IconPickerState::default();
-    app.icon_picker_target = IconPickerTarget::Reaction {
-        room_id,
-        message_id,
-    };
-    app.icon_picker_open = true;
+    open_icon_picker(
+        app,
+        IconPickerTarget::Reaction {
+            room_id,
+            message_id,
+        },
+    );
     true
 }
 
@@ -4847,6 +4870,15 @@ fn apply_icon_selection(app: &mut App, keep_open: bool) {
             if app.chat.selected_message_id_in_room(room_id) == Some(message_id) {
                 let _ = app.chat.react_to_selected_message_in_room(room_id, icon);
             }
+        }
+        IconPickerTarget::Poster => {
+            let Some(icon) = selected_raw_icon(app, keep_open) else {
+                return;
+            };
+            if !keep_open {
+                close_icon_picker(app);
+            }
+            crate::app::deadchannel::poster::input::lay_glyph(app, &icon);
         }
     }
 }

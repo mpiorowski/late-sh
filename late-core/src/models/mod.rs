@@ -20,6 +20,9 @@ mod article_body_test;
 pub mod article_read;
 #[cfg(test)]
 mod article_read_test;
+pub mod article_save;
+#[cfg(test)]
+mod article_save_test;
 #[cfg(test)]
 mod article_test;
 pub mod asterion;

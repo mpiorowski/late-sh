@@ -4021,8 +4021,8 @@
     },
     {
       "type": "bargauge",
-      "title": "Tailor & the Door",
-      "description": "Looks worn at the tailor's mirror (worn, no_runner, failed) and runners leaving and returning to #deadchannel over the range.",
+      "title": "Tailor, Prints & the Door",
+      "description": "Looks worn at the tailor's mirror (worn, no_runner, failed), posters saved and burned at PRINTS (saved, burned, no_runner, failed; the read on open: read_failed, undecodable), and runners leaving and returning to #deadchannel over the range.",
       "datasource": {
         "uid": "victoriametrics",
         "type": "victoriametrics-metrics-datasource"
@@ -4038,6 +4038,12 @@
           "refId": "B",
           "expr": "sum by (direction) (increase(late_ssh_runner_door_total[$__range]))",
           "legendFormat": "door {{direction}}",
+          "instant": true
+        },
+        {
+          "refId": "C",
+          "expr": "sum by (beat) (increase(late_ssh_deadchannel_poster_total[$__range]))",
+          "legendFormat": "poster {{beat}}",
           "instant": true
         }
       ],

@@ -1,15 +1,16 @@
 use super::{
-    Reads, State, clamp_index, has_fresh_unread_from_others, is_unread, is_unread_at, move_index,
-    news_unread_label, unread_in_snapshot,
+    Reads, State, clamp_index, display_order, has_fresh_unread_from_others, is_unread,
+    is_unread_at, move_index, news_unread_label, unread_in_snapshot,
 };
 use crate::app::ai::svc::AiService;
-use crate::app::chat::news::svc::ArticleService;
+use crate::app::chat::news::svc::{ArticleService, NewsSaveOutcome};
 use crate::test_helpers::{new_test_db, wait_until};
 use chrono::{DateTime, Duration, Utc};
 use late_core::models::article::{
     Article, ArticleEvent, ArticleFeedItem, ArticleParams, NEWS_FEED_LIMIT,
 };
 use late_core::models::article_read::{ArticleReadRow, WatchPosition};
+use late_core::models::article_save::{ArticleSave, NEWS_SAVED_LIMIT};
 use late_core::test_utils::create_test_user;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
@@ -161,8 +162,8 @@ async fn a_load_landing_out_of_order_never_takes_a_read_back() {
 #[test]
 fn a_full_unread_snapshot_reads_as_a_floor() {
     assert_eq!(news_unread_label(3), "3");
-    assert_eq!(news_unread_label(NEWS_FEED_LIMIT - 1), "19");
-    assert_eq!(news_unread_label(NEWS_FEED_LIMIT), "20+");
+    assert_eq!(news_unread_label(NEWS_FEED_LIMIT - 1), "39");
+    assert_eq!(news_unread_label(NEWS_FEED_LIMIT), "40+");
 }
 
 #[test]
@@ -229,6 +230,265 @@ fn the_first_snapshot_a_session_sees_is_not_announced() {
         &read(&[]),
         READER
     ));
+}
+
+/// The shelf leads, newest save first, then the feed less what is on the
+/// shelf: a saved story appears once, and the feed's copy (the fresher
+/// body) is the one shown. Mine-only filters both parts.
+#[test]
+fn the_display_puts_the_shelf_over_the_feed_once_each() {
+    let feed = vec![
+        article(3, OTHER, 3),
+        article(2, READER, 2),
+        article(1, OTHER, 1),
+    ];
+    let mut saved_two = article(2, READER, 2);
+    saved_two.body = late_core::models::article_body::BodyStatus::Unavailable;
+    let saved = vec![saved_two, article(9, OTHER, -100)];
+
+    let (rows, saved_len) = display_order(&saved, &feed, None);
+    let ids: Vec<u128> = rows.iter().map(|item| item.article.id.as_u128()).collect();
+    assert_eq!(ids, vec![2, 9, 3, 1]);
+    assert_eq!(saved_len, 2);
+    assert_eq!(rows[0].body, feed[1].body, "the feed's copy is shown");
+
+    let (rows, saved_len) = display_order(&saved, &feed, Some(READER));
+    let ids: Vec<u128> = rows.iter().map(|item| item.article.id.as_u128()).collect();
+    assert_eq!(ids, vec![2]);
+    assert_eq!(saved_len, 1);
+
+    let (rows, saved_len) = display_order(&[], &feed, None);
+    assert_eq!(rows.len(), 3);
+    assert_eq!(saved_len, 0);
+}
+
+/// `s` on a feed story shelves it and hands the cursor to the story that
+/// came after it; on a full shelf it refuses and the cursor stays put.
+#[tokio::test]
+async fn a_save_moves_the_cursor_on_and_a_refused_one_leaves_it() {
+    let test_db = new_test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let sharer = create_test_user(&test_db.db, "shelf-cursor-sharer").await;
+    let reader = create_test_user(&test_db.db, "shelf-cursor-reader").await;
+    let mut stories = Vec::new();
+    for n in 0..NEWS_SAVED_LIMIT + 2 {
+        let params = ArticleParams {
+            user_id: sharer.id,
+            url: format!("https://example.com/shelf-cursor-{n}"),
+            title: "Title".to_string(),
+            summary: "Summary".to_string(),
+            ascii_art: "...".to_string(),
+        };
+        stories.push(
+            Article::create_by_user_id(&client, sharer.id, params)
+                .await
+                .expect("create story"),
+        );
+    }
+    // One short of full, so three stories sit in the feed under the shelf.
+    let shelf_len = NEWS_SAVED_LIMIT as usize - 1;
+    for story in stories.iter().take(shelf_len) {
+        ArticleSave::save(&mut client, reader.id, story.id)
+            .await
+            .expect("save");
+    }
+    let service = ArticleService::new(test_db.db.clone(), AiService::new(false, None));
+    let mut state = State::new(service, reader.id, false);
+    wait_until(
+        || {
+            state.tick();
+            std::future::ready(
+                state.all_articles().len() == stories.len() && state.saved_count() == shelf_len,
+            )
+        },
+        "the feed and the shelf load",
+    )
+    .await;
+    let feed_ids: Vec<Uuid> = state.displayed_articles()[shelf_len..]
+        .iter()
+        .map(|item| item.article.id)
+        .collect();
+    assert_eq!(feed_ids.len(), 3);
+    let selected_id = |state: &State| state.selected_item().map(|item| item.article.id);
+    state.select_article_by_id(feed_ids[0]);
+    assert_eq!(state.selected_index(), shelf_len);
+
+    assert_eq!(state.toggle_save_selected(), Some(NewsSaveOutcome::Saved));
+    assert_eq!(state.saved_count(), NEWS_SAVED_LIMIT as usize);
+    assert_eq!(
+        selected_id(&state),
+        Some(feed_ids[1]),
+        "the save hands the cursor on"
+    );
+
+    assert_eq!(state.toggle_save_selected(), Some(NewsSaveOutcome::Full));
+    assert_eq!(state.saved_count(), NEWS_SAVED_LIMIT as usize);
+    assert_eq!(
+        selected_id(&state),
+        Some(feed_ids[1]),
+        "a refused save moves nothing"
+    );
+}
+
+/// A saved story that has left the snapshot, open in the reader and
+/// unsaved there, is still the reader's to act on: `s` again puts it back.
+#[tokio::test]
+async fn the_reader_can_save_again_a_story_it_unsaved_past_the_snapshot() {
+    let test_db = new_test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let sharer = create_test_user(&test_db.db, "reader-undo-sharer").await;
+    let reader = create_test_user(&test_db.db, "reader-undo-reader").await;
+    let mut stories = Vec::new();
+    for n in 0..=NEWS_FEED_LIMIT {
+        let params = ArticleParams {
+            user_id: sharer.id,
+            url: format!("https://example.com/reader-undo-{n}"),
+            title: "Title".to_string(),
+            summary: "Summary".to_string(),
+            ascii_art: "...".to_string(),
+        };
+        stories.push(
+            Article::create_by_user_id(&client, sharer.id, params)
+                .await
+                .expect("create story"),
+        );
+    }
+    // The oldest story: on the shelf, out of the newest-first snapshot.
+    let oldest = stories[0].id;
+    ArticleSave::save(&mut client, reader.id, oldest)
+        .await
+        .expect("save");
+    let service = ArticleService::new(test_db.db.clone(), AiService::new(false, None));
+    let mut state = State::new(service, reader.id, false);
+    wait_until(
+        || {
+            state.tick();
+            std::future::ready(
+                state.all_articles().len() == NEWS_FEED_LIMIT as usize && state.saved_count() == 1,
+            )
+        },
+        "the feed and the shelf load",
+    )
+    .await;
+    assert!(
+        !state
+            .all_articles()
+            .iter()
+            .any(|item| item.article.id == oldest)
+    );
+    assert!(state.open_reader(oldest));
+
+    assert_eq!(state.toggle_save(oldest), Some(NewsSaveOutcome::Unsaved));
+    assert_eq!(state.saved_count(), 0);
+    assert_eq!(
+        state.toggle_save(oldest),
+        Some(NewsSaveOutcome::Saved),
+        "the story open in the reader can go back on the shelf"
+    );
+    assert_eq!(state.saved_count(), 1);
+}
+
+/// An unsave pressed while its save is still out lands after it. The save
+/// is held up on the shelf's lock; the reader's last press, the unsave, is
+/// what the shelf ends on, in the session and in the table.
+#[tokio::test]
+async fn an_unsave_pressed_while_its_save_is_out_lands_after_it() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let sharer = create_test_user(&test_db.db, "shelf-order-sharer").await;
+    let reader = create_test_user(&test_db.db, "shelf-order-reader").await;
+    let story = Article::create_by_user_id(
+        &client,
+        sharer.id,
+        ArticleParams {
+            user_id: sharer.id,
+            url: "https://example.com/shelf-order".to_string(),
+            title: "Title".to_string(),
+            summary: "Summary".to_string(),
+            ascii_art: "...".to_string(),
+        },
+    )
+    .await
+    .expect("create story");
+    let service = ArticleService::new(test_db.db.clone(), AiService::new(false, None));
+    // Subscribed ahead of the session, so the count holds its first load.
+    let mut events = service.subscribe_events();
+    let mut state = State::new(service, reader.id, false);
+    wait_until(
+        || {
+            state.tick();
+            std::future::ready(state.all_articles().len() == 1)
+        },
+        "the feed loads",
+    )
+    .await;
+
+    // Hold the lock `ArticleSave::save` takes, so the save waits on it.
+    let lock_key = "hashtextextended(concat_ws(':', 'news_save', ($1::uuid)::text), 0)";
+    let locker = test_db.db.get().await.expect("locker client");
+    locker
+        .execute(
+            &format!("SELECT pg_advisory_lock({lock_key})"),
+            &[&reader.id],
+        )
+        .await
+        .expect("take the shelf lock");
+    let locker_pid: i32 = locker
+        .query_one("SELECT pg_backend_pid()", &[])
+        .await
+        .expect("locker pid")
+        .get(0);
+
+    assert_eq!(state.toggle_save(story.id), Some(NewsSaveOutcome::Saved));
+    assert_eq!(state.toggle_save(story.id), Some(NewsSaveOutcome::Unsaved));
+    let locker_ref = &locker;
+    wait_until(
+        || async move {
+            locker_ref
+                .query_one(
+                    "SELECT EXISTS (
+                         SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))
+                     )",
+                    &[&locker_pid],
+                )
+                .await
+                .expect("blocked sessions")
+                .get::<_, bool>(0)
+        },
+        "the save waits on the shelf lock",
+    )
+    .await;
+    locker
+        .execute(
+            &format!("SELECT pg_advisory_unlock({lock_key})"),
+            &[&reader.id],
+        )
+        .await
+        .expect("release the shelf lock");
+
+    // Three shelves published: the session's first load, the save's, the
+    // unsave's.
+    let mut loads = 0;
+    wait_until(
+        || {
+            while let Ok(event) = events.try_recv() {
+                if matches!(event, ArticleEvent::SavesLoaded { user_id, .. } if user_id == reader.id)
+                {
+                    loads += 1;
+                }
+            }
+            state.tick();
+            std::future::ready(loads == 3)
+        },
+        "both writes land",
+    )
+    .await;
+
+    assert_eq!(state.saved_count(), 0, "the session ends on the last press");
+    let stored = ArticleSave::list_for_user(&client, reader.id)
+        .await
+        .expect("list saves");
+    assert!(stored.is_empty(), "the table ends on the last press");
 }
 
 #[test]

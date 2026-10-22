@@ -47,14 +47,13 @@ and hands the coat to the first row of a continuation right under it
 (none, or a divider between them, and it goes bare), anything taller
 wears the coat itself, so no message grows a row for its face). The blank separator above a block stays blank, so two faces
 stacked down the wire never touch. The profile modal grows a runner
-column beside the late.fetch grid for a standing runner (`ProfileSnapshot.runner`,
-loaded by `ProfileService::do_find_profile` from the row; no frame, its own
-heading carrying the level badge, the face wounded by the missing signal beside
-one key column: the signal and exp bars, the bits, the kit, the glyphs down), shown only when
-the viewer is a runner too (`profile_modal::ui::draw`'s
-`viewer_is_runner`, one argument to drop at the public flip;
-`late-ssh/src/app/profile_modal/CONTEXT.md`). Continuations and system lines carry
-no face; every other room renders without runner chrome.
+column beside the late.fetch grid for a standing runner, for every viewer
+(`ProfileSnapshot.runner`, loaded by `ProfileService::do_find_profile` from
+the row; no frame, its own heading carrying the badge, the face wounded by
+the missing signal at the top left and the poster from PRINTS beside it, the
+test card without one; `late-ssh/src/app/profile_modal/CONTEXT.md`).
+Continuations and system lines carry no face; every other room renders
+without runner chrome.
 
 ## Persistence
 
@@ -80,6 +79,14 @@ no face; every other room renders without runner chrome.
     "bulwark"]`, null with none taken), and `inks` (JSONB, the draft levels
     inked at INK in the order bought, `[3, 9]`, null with none; kept
     through a mark and the ledge).
+  - `poster` JSONB (migration 249): the runner's picture from PRINTS, a
+    serialized `dartboard_core::Canvas` (`{"width": 32, "height": 12,
+    "cells", "colors"}`), null with none. Written only by PRINTS
+    (`store_poster` / `clear_poster`, the standing runner only, last write
+    wins) and cleared by a moderator (`clear_poster_any`, whatever the leave
+    stamp). Read by the profile (`find_by_user`) and the web profile
+    (`poster`, standing runner only). The trigger does not watch it and the
+    nuke keeps it, as it keeps the look.
   - The tally: `kills` (ever), `kills_today`, `runs_today` (zeroed by the
     day roll; the last-ration line's numbers).
   - `reset_generation`, bumped by every nuke and by nothing else; the Old

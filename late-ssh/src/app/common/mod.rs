@@ -1,4 +1,5 @@
 pub mod away;
+pub mod color_picker;
 pub mod composer;
 pub(crate) mod emoji;
 pub mod markdown;

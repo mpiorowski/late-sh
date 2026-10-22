@@ -316,6 +316,7 @@ struct DrawContext<'a> {
     city_lookout: &'a crate::app::deadchannel::fight::state::Lookout,
     city_till: Option<&'a str>,
     city_tailor: crate::app::deadchannel::tailor::ui::MirrorView<'a>,
+    city_poster: crate::app::deadchannel::poster::ui::PosterView<'a>,
     city_guide: &'a crate::app::deadchannel::guide::state::State,
     /// The other runners on the shared street, their marks, and (through
     /// `usernames`) their names.
@@ -359,9 +360,6 @@ struct DrawContext<'a> {
     mod_modal_state: &'a mod_modal::state::ModModalState,
     show_profile_modal: bool,
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
-    /// `App::is_runner` for this session: the profile modal's runner
-    /// section shows only to runners until the public flip.
-    viewer_is_runner: bool,
     show_sheet_modal: bool,
     sheet_modal_state: &'a sheet_modal::state::SheetModalState,
     show_poll_modal: bool,
@@ -972,6 +970,8 @@ impl App {
         };
         let news_view = chat::news::ui::ArticleListView {
             articles: self.chat.news.displayed_articles(),
+            saved_len: self.chat.news.saved_len(),
+            saved_count: self.chat.news.saved_count(),
             selected_index: self.chat.news.selected_index(),
             marker: self.chat.news.marker(),
             watch_positions: self.chat.news.watch_positions(),
@@ -1796,6 +1796,12 @@ impl App {
                             changed: self.tailor.changed(),
                             saving: self.tailor.saving,
                         },
+                        city_poster: crate::app::deadchannel::poster::ui::PosterView {
+                            bench: &self.poster.bench,
+                            hung: self.poster.hung,
+                            writing: self.poster.writing,
+                            word: self.poster.word.as_deref(),
+                        },
                         city_guide: &self.guide.state,
                         city_street: &self.street.view,
                         city_own_user_id: self.user_id,
@@ -1830,7 +1836,6 @@ impl App {
                         mod_modal_state: &self.mod_modal_state,
                         show_profile_modal: self.show_profile_modal,
                         profile_modal_state: &self.profile_modal_state,
-                        viewer_is_runner: self.runner_looks.contains_key(&self.user_id),
                         show_sheet_modal: self.show_sheet_modal,
                         sheet_modal_state: &self.sheet_modal_state,
                         show_poll_modal: self.show_poll_modal,
@@ -2595,6 +2600,7 @@ impl App {
                     lookout: ctx.city_lookout,
                     till: ctx.city_till,
                     tailor: ctx.city_tailor,
+                    poster: ctx.city_poster,
                     guide: ctx.city_guide,
                     own_user_id: ctx.city_own_user_id,
                     street: ctx.city_street,
@@ -2846,13 +2852,7 @@ impl App {
         }
 
         if ctx.show_profile_modal {
-            profile_modal::ui::draw(
-                frame,
-                inner,
-                ctx.profile_modal_state,
-                ctx.marquee_tick,
-                ctx.viewer_is_runner,
-            );
+            profile_modal::ui::draw(frame, inner, ctx.profile_modal_state, ctx.marquee_tick);
         }
 
         if ctx.show_sheet_modal {

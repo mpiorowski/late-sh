@@ -174,9 +174,7 @@ fn build_selected_snapshot(snapshot: Snapshot) -> anyhow::Result<SelectedSnapsho
     let data = snapshot_data(&snapshot.board_key, &canvas, &provenance);
     let cell_count = data.cells.len();
     let author_count = data.authors.len();
-    let snapshot_json = serde_json::to_string(&data)
-        .context("failed to serialize gallery snapshot data")?
-        .replace("</", "<\\/");
+    let snapshot_json = script_json(&data)?;
 
     Ok(SelectedSnapshot {
         title: snapshot_title(&snapshot.board_key),
@@ -185,6 +183,19 @@ fn build_selected_snapshot(snapshot: Snapshot) -> anyhow::Result<SelectedSnapsho
         author_count,
         snapshot_json,
     })
+}
+
+/// An unattributed canvas (a runner's poster) as the same JSON `/gallery`
+/// draws from, for `/static/board.js`.
+pub(crate) fn canvas_json(canvas: &Canvas) -> anyhow::Result<String> {
+    script_json(&snapshot_data("", canvas, &GalleryProvenance::default()))
+}
+
+/// Board JSON that is safe inside a `<script>` element.
+fn script_json(data: &GallerySnapshotData) -> anyhow::Result<String> {
+    Ok(serde_json::to_string(data)
+        .context("failed to serialize board data")?
+        .replace("</", "<\\/"))
 }
 
 fn snapshot_data(

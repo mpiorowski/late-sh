@@ -12,6 +12,7 @@ use late_core::{
         chat_room::ChatRoom,
         chat_room_member::ChatRoomMember,
         chat_slow_mode::{ChatSlowMode, ChatSlowModeListItem},
+        deadchannel_runner::DeadchannelRunner,
         moderation_audit_log::{ModerationAuditLog, ModerationAuditLogListItem},
         room_ban::{RoomBan, RoomBanListItem},
         server_ban::{ServerBan, ServerBanActivation, ServerBanListItem},
@@ -287,6 +288,10 @@ impl ModerationService {
             }
             ModCommand::ArtboardFeaturePiece { id_prefix } => {
                 self.artboard_feature_piece(actor_user_id, permissions, id_prefix)
+                    .await
+            }
+            ModCommand::DeadchannelRemovePoster { username, reason } => {
+                self.deadchannel_remove_poster(actor_user_id, permissions, &username, reason)
                     .await
             }
             ModCommand::Calendar {
@@ -1725,6 +1730,38 @@ impl ModerationService {
             "took down gallery piece {piece_id} (\"{}\")",
             removed.title
         )])
+    }
+
+    /// Take a runner's poster down: the lever for a picture its owner will
+    /// not burn. Same cap as taking a gallery piece down. The row keeps the
+    /// runner; a leaver's poster comes down too, so it is not back on their
+    /// return. Open profiles read the row when they open, so nothing is
+    /// pushed: the next open shows the test card.
+    async fn deadchannel_remove_poster(
+        &self,
+        actor_user_id: Uuid,
+        permissions: Permissions,
+        username: &str,
+        reason: String,
+    ) -> Result<Vec<String>> {
+        ensure_has(permissions, Caps::REMOVE_DEADCHANNEL_POSTER)?;
+        let mut client = self.db.get().await?;
+        let target = find_user_by_mod_name(&client, username).await?;
+        let tx = client.transaction().await?;
+        if !DeadchannelRunner::clear_poster_any(&*tx, target.id).await? {
+            anyhow::bail!("@{} has no poster", target.username);
+        }
+        ModerationAuditLog::record(
+            &tx,
+            actor_user_id,
+            "deadchannel_remove_poster",
+            "user",
+            Some(target.id),
+            json!({ "reason": reason }),
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(vec![format!("removed @{}'s poster", target.username)])
     }
 
     /// Pin a piece as today's Sliding Puzzle art. Same lookup as a removal;

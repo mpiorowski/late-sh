@@ -1096,6 +1096,8 @@ fn chat_view<'a>(
         news_unread_count: 0,
         news_view: crate::app::chat::news::ui::ArticleListView {
             articles: &[],
+            saved_len: 0,
+            saved_count: 0,
             selected_index: 0,
             marker: NEWS_MARKER.get_or_init(HashSet::new),
             watch_positions: NEWS_WATCH_POSITIONS.get_or_init(HashMap::new),

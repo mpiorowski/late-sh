@@ -20,7 +20,7 @@ async fn artboard_disclaimer_hides_content_and_only_allows_the_current_visit() {
     assert!(!frame.contains("GALLERY"));
     assert!(!frame.contains("Mode       view"));
     assert!(!frame.contains("rail j/k"));
-    app.handle_input(b"i\r \t?");
+    app.handle_input(b"i\r ?");
     app.handle_input(b"\x1b[200~private drawing\x1b[201~");
     app.handle_input(b"\x1b[<0;3;6M");
     assert_eq!(app.screen, Screen::Artboard);
@@ -333,6 +333,29 @@ async fn artboard_disclaimer_allows_clicking_topbar_page_numbers_without_consent
         app.interaction_mode = InteractionMode::Hybrid;
         app.handle_input(click.as_bytes());
         assert_eq!(app.screen, screen, "column {column}");
+        assert!(!app.artboard_content_accepted);
+        assert!(app.dartboard_state.is_none());
+        assert!(app.artboard_disclaimer_enabled());
+    }
+}
+
+#[tokio::test]
+async fn artboard_disclaimer_lets_tab_and_shift_tab_cycle_pages_without_consent() {
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "art-tab-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "art-tab-flow-it");
+    for (keys, screen) in [
+        (&b"\t"[..], Screen::Profiles),
+        (&b"\x1b[Z"[..], Screen::Games),
+    ] {
+        app.set_screen(Screen::Artboard);
+        render_plain(&mut app);
+        assert!(app.artboard_disclaimer_visible());
+
+        app.handle_input(keys);
+        assert_eq!(app.screen, screen, "keys {keys:?}");
         assert!(!app.artboard_content_accepted);
         assert!(app.dartboard_state.is_none());
         assert!(app.artboard_disclaimer_enabled());
@@ -7399,4 +7422,44 @@ async fn the_usermap_pans_with_every_arrow() {
     app.handle_input(b"\x1b[D"); // left
     let left = app.usermap.view().expect("view");
     assert!(left.vx < right.vx, "left arrow should pan back west");
+}
+
+/// PRINTS end to end: a runner walks into the shop, paints (`?` and the
+/// digits paint here: the guide and the page keys keep out), saves, steps
+/// out with Esc, comes back, and the poster on the wall is what was
+/// painted.
+#[tokio::test]
+async fn a_runner_paints_a_poster_at_prints_and_finds_it_hung() {
+    use late_core::models::deadchannel_runner::DeadchannelRunner;
+
+    let (test_db, mut app, user_id) = runner_on_the_street("prints-it", 120, 40, |_| {}).await;
+    // Behind the press's counter, on the shop's floor.
+    app.city.player_x = 30;
+    app.city.player_y = 14;
+    wait_for_render_contains(&mut app, "the poster: 32 by 12").await;
+
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "nothing hangs yet: the test card shows").await;
+    app.handle_input(b"HI?0");
+    wait_for_render_contains(&mut app, "│HI?0").await;
+    wait_for_render_contains(&mut app, " Undercity ").await;
+
+    app.handle_input(b"\x13");
+    wait_for_render_contains(&mut app, "the press runs. it hangs on your profile now.").await;
+    let client = test_db.db.get().await.expect("db client");
+    assert!(
+        DeadchannelRunner::poster(&client, user_id)
+            .await
+            .expect("poster")
+            .is_some(),
+        "the row holds the poster"
+    );
+
+    // Out to the street, and back in: the wall is read again.
+    app.handle_input(b"\x1b");
+    wait_for_render_not_contains(&mut app, "the press runs").await;
+    wait_for_render_contains(&mut app, "the poster: 32 by 12").await;
+    app.handle_input(b"\r");
+    wait_for_render_contains(&mut app, "on your profile").await;
+    wait_for_render_contains(&mut app, "│HI?0").await;
 }
