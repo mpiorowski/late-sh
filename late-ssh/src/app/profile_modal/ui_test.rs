@@ -97,11 +97,17 @@ async fn fixture(slug: &str) -> Fixture {
     }
 }
 
-fn render(state: &ProfileModalState, width: u16, height: u16) -> Vec<String> {
+/// The modal drawn for a session whose user is a standing runner, or not.
+fn render(
+    state: &ProfileModalState,
+    viewer_is_runner: bool,
+    width: u16,
+    height: u16,
+) -> Vec<String> {
     let backend = TestBackend::new(width, height);
     let mut terminal = Terminal::new(backend).expect("terminal");
     terminal
-        .draw(|frame| draw(frame, frame.area(), state, 0))
+        .draw(|frame| draw(frame, frame.area(), state, viewer_is_runner, 0))
         .expect("draw");
     let buffer = terminal.backend().buffer();
     (0..buffer.area.height)
@@ -122,7 +128,7 @@ fn row_of(lines: &[String], needle: &str) -> Option<usize> {
 #[tokio::test]
 async fn a_wide_terminal_shows_every_section_in_order() {
     let fixture = fixture("wide").await;
-    let lines = render(&fixture.state, 130, 60);
+    let lines = render(&fixture.state, true, 130, 60);
     let text = lines.join("\n");
 
     // late.fetch: a heading over the grid naming the facts.
@@ -237,7 +243,7 @@ async fn a_runners_profile_hangs_the_face_and_the_poster() {
     };
 
     let fixture = fixture("runner").await;
-    let lines = render(&fixture.state, 130, 60);
+    let lines = render(&fixture.state, true, 130, 60);
     assert!(
         !lines
             .iter()
@@ -257,9 +263,19 @@ async fn a_runners_profile_hangs_the_face_and_the_poster() {
         .expect("runner row");
     let state = open_runner(&db, fixture.user_id, Uuid::nil()).await;
 
+    // A viewer who is no runner sees no column: the wire stays a secret
+    // from outside the door.
+    let lines = render(&state, false, 130, 60);
+    assert!(
+        row_of(&lines, &format!("runner {}1 ─", look.mark)).is_none(),
+        "no runner column for a civilian viewer:\n{}",
+        lines.join("\n")
+    );
+    assert!(row_of(&lines, "late.fetch ─").is_some());
+
     // Wide: the runner's heading shares the late.fetch heading's row, the
     // face and the test card run beside the grid, all of it above the bio.
-    let lines = render(&state, 130, 60);
+    let lines = render(&state, true, 130, 60);
     let text = lines.join("\n");
     let heading = row_of(&lines, &format!("runner {}1 ─", look.mark)).expect("runner heading");
     assert!(
@@ -304,7 +320,7 @@ async fn a_runners_profile_hangs_the_face_and_the_poster() {
     // The owner reads where a poster is made, under the card.
     // The modal centers on its height, so each render finds its heading.
     let state = open_runner(&db, fixture.user_id, fixture.user_id).await;
-    let lines = render(&state, 130, 60);
+    let lines = render(&state, true, 130, 60);
     let heading = row_of(&lines, &format!("runner {}1 ─", look.mark)).expect("runner heading");
     assert_eq!(
         row_of(&lines, HINT),
@@ -326,7 +342,7 @@ async fn a_runners_profile_hangs_the_face_and_the_poster() {
     .await
     .expect("store poster");
     let state = open_runner(&db, fixture.user_id, fixture.user_id).await;
-    let lines = render(&state, 130, 60);
+    let lines = render(&state, true, 130, 60);
     let text = lines.join("\n");
     let heading = row_of(&lines, &format!("runner {}1 ─", look.mark)).expect("runner heading");
     assert!(
@@ -337,7 +353,7 @@ async fn a_runners_profile_hangs_the_face_and_the_poster() {
     assert!(row_of(&lines, HINT).is_none(), "{text}");
 
     // Narrow: the same rows as a section under the grid, above the bio.
-    let lines = render(&state, 70, 80);
+    let lines = render(&state, true, 70, 80);
     let text = lines.join("\n");
     let langs = row_of(&lines, "langs     ").expect("last grid row");
     let heading = row_of(&lines, &format!("runner {}1 ─", look.mark)).expect("runner heading");
@@ -407,7 +423,7 @@ async fn a_pet_sits_beside_its_owners_reef() {
 
     // Wide: one heading row for both, the pet's rows inside the band's
     // eleven, and the reef stopping short of the pet's column.
-    let lines = render(&state, 130, 70);
+    let lines = render(&state, true, 130, 70);
     let text = lines.join("\n");
     let heading = row_of(&lines, "aquarium ─").expect("aquarium heading");
     let pet_col = col_of(&lines[heading], "pet ─").expect("pet heading on the reef's row");
@@ -440,7 +456,7 @@ async fn a_pet_sits_beside_its_owners_reef() {
     );
 
     // Narrow: two sections, the pet's above the reef's, one caption row.
-    let lines = render(&state, 70, 70);
+    let lines = render(&state, true, 70, 70);
     let text = lines.join("\n");
     let pet = row_of(&lines, "pet ─").expect("pet heading");
     let reef = row_of(&lines, "aquarium ─").expect("aquarium heading");
@@ -456,7 +472,7 @@ async fn a_narrow_terminal_scrolls_the_same_column() {
     let fixture = fixture("narrow").await;
     // Too short for the whole column: the top is late.fetch, and the ledger
     // is below the fold.
-    let top = render(&fixture.state, 70, 18);
+    let top = render(&fixture.state, true, 70, 18);
     assert!(
         row_of(&top, "narrow-viewed").is_some(),
         "{}",
@@ -475,7 +491,7 @@ async fn a_narrow_terminal_scrolls_the_same_column() {
 
     // `/chips` lands on the ledger heading as soon as the body is measured.
     fixture.state.jump_to_chips();
-    let jumped = render(&fixture.state, 70, 18);
+    let jumped = render(&fixture.state, true, 70, 18);
     let heading = row_of(&jumped, "chips ─").expect("chips heading in view");
     let border = row_of(&jumped, "profile ·").expect("title border");
     // Border, breathing row, the section's own blank row, then the heading.
@@ -494,14 +510,14 @@ async fn a_narrow_terminal_scrolls_the_same_column() {
     // Scrolling is clamped to the content: the bottom row is the last
     // ledger row, never blank space past it.
     fixture.state.scroll_by(500);
-    let bottom = render(&fixture.state, 70, 18);
+    let bottom = render(&fixture.state, true, 70, 18);
     assert!(
         row_of(&bottom, "starting chips").is_some(),
         "the stipend row closes the column:\n{}",
         bottom.join("\n")
     );
     fixture.state.scroll_to_top();
-    let again = render(&fixture.state, 70, 18);
+    let again = render(&fixture.state, true, 70, 18);
     assert_eq!(again, top, "g returns to the same first page");
     let _ = fixture.user_id;
 }

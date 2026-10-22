@@ -111,11 +111,17 @@ impl Segment {
     }
 }
 
-pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState, wall_tick: usize) {
+pub(crate) fn draw(
+    frame: &mut Frame,
+    area: Rect,
+    state: &ProfileModalState,
+    viewer_is_runner: bool,
+    wall_tick: usize,
+) {
     let width = area.width.saturating_sub(4).clamp(MIN_WIDTH, MAX_WIDTH);
     let body_width = width.saturating_sub(2 + SIDE_MARGIN * 2);
 
-    let (segments, chips_top) = build_segments(state, body_width, wall_tick);
+    let (segments, chips_top) = build_segments(state, viewer_is_runner, body_width, wall_tick);
     let content_height: u16 = segments.iter().map(Segment::height).sum();
 
     // As tall as the terminal allows, but no taller than the content needs:
@@ -188,6 +194,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState, wal
 /// Every section in order, plus the body row the chips section starts on.
 fn build_segments(
     state: &ProfileModalState,
+    viewer_is_runner: bool,
     width: u16,
     wall_tick: usize,
 ) -> (Vec<Segment>, Option<u16>) {
@@ -209,11 +216,16 @@ fn build_segments(
 
     // ── late.fetch, and the runner ──
     // The runner is a second column beside the grid, each under its own
-    // heading, for anyone looking at a standing runner. A narrow body makes
-    // it a section.
+    // heading, for a runner looking at a standing runner: a viewer who is
+    // no runner never learns the wire exists. A narrow body makes it a
+    // section.
     let grid = late_fetch_lines(state, profile);
     let own = state.viewing_own();
-    match state.runner() {
+    let runner = match viewer_is_runner {
+        true => state.runner(),
+        false => None,
+    };
+    match runner {
         None => {
             let mut lines = vec![section_heading("late.fetch", width_usize)];
             lines.extend(grid);

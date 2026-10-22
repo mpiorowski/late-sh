@@ -360,6 +360,9 @@ struct DrawContext<'a> {
     mod_modal_state: &'a mod_modal::state::ModModalState,
     show_profile_modal: bool,
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
+    /// This session's user is a standing runner: the profile's runner
+    /// column shows only to the wire's own.
+    is_runner: bool,
     show_sheet_modal: bool,
     sheet_modal_state: &'a sheet_modal::state::SheetModalState,
     show_poll_modal: bool,
@@ -1681,6 +1684,7 @@ impl App {
         let mut bashquest_state_taken = self.bashquest_state.take();
         let mut codekeep_state_taken = self.codekeep_state.take();
         let mut zork_state_taken = self.zork_state.take();
+        let is_runner = self.is_runner();
 
         let draw_result = terminal
             .draw(|frame| {
@@ -1835,6 +1839,7 @@ impl App {
                         mod_modal_state: &self.mod_modal_state,
                         show_profile_modal: self.show_profile_modal,
                         profile_modal_state: &self.profile_modal_state,
+                        is_runner,
                         show_sheet_modal: self.show_sheet_modal,
                         sheet_modal_state: &self.sheet_modal_state,
                         show_poll_modal: self.show_poll_modal,
@@ -2845,7 +2850,13 @@ impl App {
         }
 
         if ctx.show_profile_modal {
-            profile_modal::ui::draw(frame, inner, ctx.profile_modal_state, ctx.marquee_tick);
+            profile_modal::ui::draw(
+                frame,
+                inner,
+                ctx.profile_modal_state,
+                ctx.is_runner,
+                ctx.marquee_tick,
+            );
         }
 
         if ctx.show_sheet_modal {
