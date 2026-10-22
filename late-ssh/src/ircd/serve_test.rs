@@ -201,10 +201,13 @@ impl IrcClient {
     }
 
     async fn connect_with_proxy(addr: SocketAddr, token: &str, source_ip: IpAddr) -> Self {
-        let family = if source_ip.is_ipv4() { "TCP4" } else { "TCP6" };
+        let (family, destination) = if source_ip.is_ipv4() {
+            ("TCP4", "127.0.0.1")
+        } else {
+            ("TCP6", "::1")
+        };
         let proxy_line = format!(
-            "PROXY {family} {source_ip} {} 54321 {}\r\n",
-            addr.ip(),
+            "PROXY {family} {source_ip} {destination} 54321 {}\r\n",
             addr.port()
         );
         Self::connect_after_proxy_line(addr, token, &proxy_line).await
@@ -685,6 +688,163 @@ async fn trusted_proxy_without_header_is_accepted_without_transport_ip() {
     let active = active_users.get(&user.id).expect("active IRC user");
     assert_eq!(active.sessions.len(), 1);
     assert_eq!(active.sessions[0].peer_ip, None);
+}
+
+#[derive(Clone, Copy)]
+enum ModeratedProxyClient {
+    Known(IpAddr),
+    Unknown,
+    NoHeader,
+}
+
+impl ModeratedProxyClient {
+    async fn connect(self, addr: SocketAddr, token: &str) -> IrcClient {
+        match self {
+            Self::Known(ip) => IrcClient::connect_with_proxy(addr, token, ip).await,
+            Self::Unknown => IrcClient::connect_with_unknown_proxy(addr, token).await,
+            Self::NoHeader => IrcClient::connect(addr, token).await,
+        }
+    }
+}
+
+async fn client_ip_ban_isolation(address: ModeratedProxyClient) {
+    let server = IrcTestServer::start_with_proxy_protocol().await;
+    let alice = server.seed_user("irc_ip_alice").await;
+    let bob = server.seed_user("irc_ip_bob").await;
+    let actor = create_test_user(&server.state.db, "irc_ip_admin").await;
+    let expected_ip = match address {
+        ModeratedProxyClient::Known(ip) => Some(ip),
+        _ => None,
+    };
+    let bob_ip: IpAddr = if expected_ip.is_some_and(|ip| ip.is_ipv6()) {
+        "2001:db8::22"
+    } else {
+        "203.0.113.22"
+    }
+    .parse()
+    .unwrap();
+    let mut alice_client = address.connect(server.addr, &alice.token).await;
+    alice_client.read_until(" 001 ").await;
+    let mut bob_client = IrcClient::connect_with_proxy(server.addr, &bob.token, bob_ip).await;
+    bob_client.read_until(" 001 ").await;
+    wait_until(
+        || async {
+            let users = server.state.active_users.lock_recover();
+            users.contains_key(&alice.id) && users.contains_key(&bob.id)
+        },
+        "both proxied IRC accounts registered",
+    )
+    .await;
+    assert_eq!(
+        server.state.active_users.lock_recover()[&alice.id].sessions[0].peer_ip,
+        expected_ip
+    );
+
+    // Match production wiring: the command must terminate the actual IRC
+    // connection, not just update a synthetic ActiveSession or a ban row.
+    let moderation = server
+        .state
+        .chat_service
+        .clone()
+        .with_irc_registry(server.state.irc_registry.clone());
+    moderation
+        .run_mod_command(
+            actor.id,
+            crate::authz::Permissions::new(false, true),
+            &format!("kick server @{} client IP regression", alice.username),
+        )
+        .await
+        .unwrap();
+    alice_client.read_until("ERROR").await;
+    let db = server.state.db.get().await.unwrap();
+    assert!(
+        ServerBan::find_active_for_user_id(&db, alice.id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    wait_until(
+        || async {
+            !server
+                .state
+                .active_users
+                .lock_recover()
+                .contains_key(&alice.id)
+        },
+        "kicked IRC account retired",
+    )
+    .await;
+    alice_client = address.connect(server.addr, &alice.token).await;
+    alice_client.read_until(" 001 ").await;
+    wait_until(
+        || async {
+            server
+                .state
+                .active_users
+                .lock_recover()
+                .contains_key(&alice.id)
+        },
+        "IRC account reconnected after kick",
+    )
+    .await;
+    moderation
+        .run_mod_command(
+            actor.id,
+            crate::authz::Permissions::new(false, true),
+            &format!("ban server @{} 1h client IP regression", alice.username),
+        )
+        .await
+        .unwrap();
+    alice_client.read_until("ERROR").await;
+    let ban = ServerBan::find_active_for_user_id(&db, alice.id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(ban.ip_address, expected_ip.map(|ip| ip.to_string()));
+    assert!(
+        ServerBan::find_active_for_ip_address(&db, "127.0.0.1")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    bob_client.write_line("PING :still-here").await.unwrap();
+    bob_client.read_until("PONG").await;
+    let mut bob_reconnect = IrcClient::connect_with_proxy(server.addr, &bob.token, bob_ip).await;
+    bob_reconnect.read_until(" 001 ").await;
+    // Changing IP cannot evade the account ban.
+    let mut alice_reconnect =
+        IrcClient::connect_with_proxy(server.addr, &alice.token, bob_ip).await;
+    alice_reconnect.read_until(" 465 ").await;
+    let fresh = server.seed_user("irc_ip_fresh").await;
+    if let Some(ip) = expected_ip {
+        let mut fresh_client = IrcClient::connect_with_proxy(server.addr, &fresh.token, ip).await;
+        fresh_client.read_until(" 465 ").await;
+    } else {
+        let mut fresh_client =
+            IrcClient::connect_with_unknown_proxy(server.addr, &fresh.token).await;
+        fresh_client.read_until(" 001 ").await;
+    }
+}
+
+#[tokio::test]
+async fn client_ip_ban_isolates_proxied_ipv4_irc_users() {
+    client_ip_ban_isolation(ModeratedProxyClient::Known("203.0.113.21".parse().unwrap())).await;
+}
+
+#[tokio::test]
+async fn client_ip_ban_isolates_proxied_ipv6_irc_users() {
+    client_ip_ban_isolation(ModeratedProxyClient::Known("2001:db8::21".parse().unwrap())).await;
+}
+
+#[tokio::test]
+async fn client_ip_unknown_irc_ban_never_captures_transport_address() {
+    client_ip_ban_isolation(ModeratedProxyClient::Unknown).await;
+}
+
+#[tokio::test]
+async fn client_ip_missing_irc_header_ban_never_captures_transport_address() {
+    client_ip_ban_isolation(ModeratedProxyClient::NoHeader).await;
 }
 
 #[tokio::test]

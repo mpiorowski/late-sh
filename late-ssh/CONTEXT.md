@@ -63,6 +63,12 @@ sequenceDiagram
 - Admission runs before the SSH handshake (`Server::admit`): any refusal
   returns before `run_stream`, so a flood holds no permit, task or buffer.
   `late_ssh_connections_rejected_total{reason}` counts refusals.
+- Client IPs come from a direct socket or trusted PROXY metadata. SSH rejects
+  trusted `PROXY UNKNOWN`, missing and malformed headers before negotiation;
+  the proxy's address never replaces an unknown client address. Authenticated
+  tunnel metadata supplies the same per-IP limits and `ActiveSession.peer_ip`
+  used by server bans, including across redial. IRC may retain `None` during
+  ingress rollouts (its context describes the account-only behavior).
 - Only public-key auth is accepted. The pre-auth banner points plain `ssh`
   users at the CLI installer; native `late-cli` suppresses it.
 - The SSH login name is ignored except `invite-<code>` on the connect that

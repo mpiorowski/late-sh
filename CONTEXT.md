@@ -64,6 +64,15 @@ admission, chat sync consistency, pair-WS routing and state drift.
 
 ## 3. Rules that cross domains
 
+### Client addresses and moderation
+
+Admission, active-session IPs and server bans use a direct client address or
+verified forwarding metadata. A trusted proxy's transport address is not a
+fallback identity: SSH/bastion reject unknown PROXY sources; IRC retains an
+unknown client IP for account-only moderation. Network trust, resource
+protection and transport diagnostics keep their separate transport address.
+The full contract and HTTP follow-up are in `devdocs/LATE-CONNECTION-BASTION.md`.
+
 ### Sync render, async services
 
 Rendering and the tick never do I/O: services own the DB and publish `watch`

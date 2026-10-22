@@ -486,8 +486,8 @@ async fn tunnel_handler(
         .send(ActivityEvent::joined(user.id, user.username.clone()));
 
     tracing::info!(
-        peer_ip = %peer_addr.ip(),
-        asserted_ip = %handshake.peer_ip,
+        transport_peer_ip = %peer_addr.ip(),
+        client_ip = %handshake.peer_ip,
         username = %user.username,
         fingerprint = %handshake.fingerprint,
         reconnect_reason = ?handshake.reconnect_reason,

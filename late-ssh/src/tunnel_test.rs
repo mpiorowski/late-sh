@@ -21,7 +21,7 @@ use late_core::shutdown::CancellationToken;
 use late_core::test_utils::create_test_user;
 use late_core::tunnel_protocol::{ControlFrame, ENV_LATE_CLI_MODE};
 use late_core::tunnel_protocol::{TUNNEL_CLOSE_BANNED, TUNNEL_CLOSE_PROTOCOL_ERROR};
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -92,6 +92,72 @@ fn make_request(
     h.insert(HEADER_USERNAME, HeaderValue::from_str(username).unwrap());
     h.insert(HEADER_PEER_IP, HeaderValue::from_static("127.0.0.1"));
     req
+}
+
+async fn client_ip_admission_isolation(max_conns: usize, max_attempts: usize) {
+    let (addr, state, shutdown, server) = spawn_tunnel_with(loopback_cidr(), |config| {
+        config.max_conns_per_ip = max_conns;
+        config.ssh_max_attempts_per_ip = max_attempts;
+    })
+    .await;
+    let alice_ip: IpAddr = "203.0.113.31".parse().unwrap();
+    let bob_ip: IpAddr = "2001:db8::32".parse().unwrap();
+    let request = |ip: IpAddr| {
+        let mut request = make_request(addr, "ip-admission");
+        request.headers_mut().insert(
+            HEADER_PEER_IP,
+            HeaderValue::from_str(&ip.to_string()).unwrap(),
+        );
+        request
+    };
+    let (mut alice, _) = tokio_tungstenite::connect_async(request(alice_ip))
+        .await
+        .unwrap();
+    let rejection = tokio_tungstenite::connect_async(request(alice_ip))
+        .await
+        .unwrap_err();
+    match rejection {
+        tokio_tungstenite::tungstenite::Error::Http(response) => assert_eq!(response.status(), 429),
+        other => panic!("expected per-client HTTP rejection: {other:?}"),
+    }
+    // The same TCP transport must still admit a different asserted client IP.
+    let (mut bob, _) = tokio_tungstenite::connect_async(request(bob_ip))
+        .await
+        .unwrap();
+    {
+        let counts = state.conn_counts.lock_recover();
+        assert_eq!(counts.len(), 2);
+        assert_eq!(counts[&alice_ip], 1);
+        assert_eq!(counts[&bob_ip], 1);
+        assert!(!counts.contains_key(&addr.ip()));
+    }
+    alice.close(None).await.unwrap();
+    bob.close(None).await.unwrap();
+    drop((alice, bob));
+    timeout(Duration::from_secs(5), state.tunnel_sessions.wait_empty())
+        .await
+        .unwrap();
+    assert!(state.conn_counts.lock_recover().is_empty());
+    assert!(state.active_users.lock_recover().is_empty());
+    assert_eq!(
+        state.conn_limit.available_permits(),
+        state.config.max_conns_global
+    );
+    shutdown.cancel();
+    timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn tunnel_client_ip_connection_limits_do_not_group_by_bastion() {
+    client_ip_admission_isolation(1, 100).await;
+}
+
+#[tokio::test]
+async fn tunnel_client_ip_attempt_limits_do_not_group_by_bastion() {
+    client_ip_admission_isolation(100, 1).await;
 }
 
 async fn send_shell_start(ws: &mut WebSocketStream<MaybeTlsStream<TcpStream>>) {

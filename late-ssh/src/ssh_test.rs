@@ -47,6 +47,67 @@ async fn emits_ssh_banner_when_client_connects_over_tcp() {
 struct TestClient;
 
 #[tokio::test]
+async fn client_ip_unknown_proxy_is_rejected_before_admission() {
+    use late_core::MutexRecover;
+
+    let db = new_test_db().await;
+    let mut config = test_config(db.db.config().clone());
+    config.ssh_proxy_protocol = true;
+    config.ssh_proxy_trusted_cidrs = vec!["127.0.0.1/32".parse().unwrap()];
+    config.max_conns_global = 1;
+    config.max_conns_per_ip = 1;
+    let state = test_app_state(db.db.clone(), config);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server_state = state.clone();
+    let server = tokio::spawn(async move {
+        run_with_listener(listener, server_state, None)
+            .await
+            .unwrap();
+    });
+
+    for _ in 0..2 {
+        let mut tcp = TcpStream::connect(addr).await.unwrap();
+        tcp.write_all(b"PROXY UNKNOWN\r\n").await.unwrap();
+        let mut bytes = [0; 64];
+        let read = timeout(Duration::from_secs(2), tcp.read(&mut bytes))
+            .await
+            .expect("unknown client IP must be rejected promptly");
+        assert!(
+            matches!(read, Ok(0) | Err(_)),
+            "unknown client IP reached SSH negotiation: {read:?}"
+        );
+    }
+    assert!(state.active_users.lock_recover().is_empty());
+    assert!(state.conn_counts.lock_recover().is_empty());
+    assert_eq!(state.conn_limit.available_permits(), 1);
+
+    let mut tcp = connect_proxied_peer(addr, "203.0.113.77").await;
+    let mut bytes = [0; 64];
+    let n = timeout(Duration::from_secs(2), tcp.read(&mut bytes))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(bytes[..n].starts_with(b"SSH-2.0-"));
+    assert_eq!(
+        state
+            .conn_counts
+            .lock_recover()
+            .keys()
+            .copied()
+            .collect::<Vec<_>>(),
+        vec!["203.0.113.77".parse::<std::net::IpAddr>().unwrap()]
+    );
+    drop(tcp);
+    wait_until(
+        || async { state.conn_counts.lock_recover().is_empty() },
+        "client IP connection slot released",
+    )
+    .await;
+    server.abort();
+}
+
+#[tokio::test]
 async fn ssh_bootstrap_shows_gallery_splash_only_after_always_view() {
     use late_core::models::user::{User, UserParams};
     let test_db = new_test_db().await;

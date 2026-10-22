@@ -507,7 +507,12 @@ async fn resolve_proxied_client_addr(
         return Ok(None);
     }
 
-    proxy_protocol::read_v1_client_addr(stream, PROXY_HEADER_TIMEOUT).await
+    // UNKNOWN must not reach the transport-address fallback: a server ban
+    // would otherwise capture the shared proxy instead of the client.
+    let client_addr = proxy_protocol::read_v1_client_addr(stream, PROXY_HEADER_TIMEOUT)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("trusted proxy did not provide a client address"))?;
+    Ok(Some(client_addr))
 }
 
 fn is_trusted_proxy_peer(state: &State, ip: IpAddr) -> bool {

@@ -1,5 +1,36 @@
 use super::*;
 
+#[tokio::test]
+async fn client_ip_untrusted_proxy_header_is_not_consumed() {
+    use crate::test_helpers::{new_test_db, test_app_state, test_config};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let db = new_test_db().await;
+    let mut config = test_config(db.db.config().clone());
+    config.ssh_proxy_protocol = true;
+    config.ssh_proxy_trusted_cidrs = vec!["10.42.0.0/16".parse().unwrap()];
+    let state = test_app_state(db.db.clone(), config);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut client = TcpStream::connect(listener.local_addr().unwrap())
+        .await
+        .unwrap();
+    let header = b"PROXY TCP4 203.0.113.99 127.0.0.1 12345 2222\r\n";
+    client.write_all(header).await.unwrap();
+    let (mut stream, transport_peer) = listener.accept().await.unwrap();
+    assert_eq!(
+        resolve_proxied_client_addr(&state, &mut stream, transport_peer)
+            .await
+            .unwrap(),
+        None
+    );
+    let mut remaining = vec![0; header.len()];
+    tokio::time::timeout(Duration::from_secs(2), stream.read_exact(&mut remaining))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(remaining, header);
+}
+
 #[test]
 fn reject_publickey_only_advertises_only_publickey() {
     match reject_publickey_only() {

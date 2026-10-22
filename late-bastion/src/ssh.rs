@@ -235,7 +235,8 @@ pub fn is_trusted_proxy_peer(config: &Config, ip: IpAddr) -> bool {
 /// Errors here are fatal for the connection: a misconfigured upstream
 /// or a malformed header is far more likely than a benign client that
 /// happens to mimic the proxy header, so dropping the connection is
-/// the safe call.
+/// the safe call. `PROXY UNKNOWN` is also rejected: falling back to a
+/// trusted proxy's transport address would attribute every user to it.
 pub async fn resolve_proxied_client_addr(
     config: &Config,
     stream: &mut TcpStream,
@@ -247,7 +248,11 @@ pub async fn resolve_proxied_client_addr(
     if !is_trusted_proxy_peer(config, transport_peer_addr.ip()) {
         return Ok(None);
     }
-    late_core::proxy_protocol::read_proxy_v1_client_addr(stream, PROXY_HEADER_TIMEOUT).await
+    let client_addr =
+        late_core::proxy_protocol::read_proxy_v1_client_addr(stream, PROXY_HEADER_TIMEOUT)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("trusted proxy did not provide a client address"))?;
+    Ok(Some(client_addr))
 }
 
 impl russh::server::Handler for ClientHandler {
@@ -888,5 +893,31 @@ mod tests {
             &cfg,
             "2001:dead::1".parse::<IpAddr>().unwrap()
         ));
+    }
+
+    #[tokio::test]
+    async fn client_ip_untrusted_proxy_header_is_not_consumed() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let config = config_with(true, &["10.42.0.0/16"]);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let mut client = TcpStream::connect(listener.local_addr().unwrap())
+            .await
+            .unwrap();
+        let header = b"PROXY TCP4 203.0.113.99 127.0.0.1 12345 5222\r\n";
+        client.write_all(header).await.unwrap();
+        let (mut stream, transport_peer) = listener.accept().await.unwrap();
+        assert_eq!(
+            resolve_proxied_client_addr(&config, &mut stream, transport_peer)
+                .await
+                .unwrap(),
+            None
+        );
+        let mut remaining = vec![0; header.len()];
+        tokio::time::timeout(Duration::from_secs(2), stream.read_exact(&mut remaining))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(remaining, header);
     }
 }

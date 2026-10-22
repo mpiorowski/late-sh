@@ -78,6 +78,9 @@ Optional admission settings default to the direct-SSH limits:
 The global cap also bounds pending PROXY reads. Per-IP checks run after trusted
 PROXY resolution and before SSH negotiation. Disconnect, auth timeout and
 cancellation release the connection slot; reconnecting does not reset attempts.
+Trusted PROXY connections must supply a client address: missing, malformed or
+`PROXY UNKNOWN` headers are rejected before SSH negotiation. The proxy's own
+address is never substituted for an unknown client IP.
 
 ## Status
 

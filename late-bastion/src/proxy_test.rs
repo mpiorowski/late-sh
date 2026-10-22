@@ -2029,3 +2029,40 @@ async fn bastion_proxy_header_failures_are_bounded_and_do_not_poison_next_client
         "198.18.0.1"
     );
 }
+
+#[tokio::test]
+async fn bastion_client_ip_unknown_proxy_is_rejected_and_releases_capacity() {
+    let bastion = TestBastion::spawn_with_cap(
+        "ws://127.0.0.1:1/tunnel".into(),
+        true,
+        vec!["127.0.0.0/8".parse().unwrap()],
+        1,
+    )
+    .await
+    .unwrap();
+    for _ in 0..2 {
+        let mut tcp = TcpStream::connect(bastion.addr).await.unwrap();
+        tcp.write_all(b"PROXY UNKNOWN\r\n").await.unwrap();
+        let mut bytes = [0; 64];
+        let read = timeout(Duration::from_secs(2), tcp.read(&mut bytes))
+            .await
+            .expect("unknown client IP must be rejected promptly");
+        assert!(
+            matches!(read, Ok(0) | Err(_)),
+            "unknown client IP reached SSH negotiation: {read:?}"
+        );
+    }
+
+    // One global slot: successful admission proves the rejected proxy did not
+    // leave a permit behind or consume the real client's per-IP slot.
+    let mut tcp = TcpStream::connect(bastion.addr).await.unwrap();
+    tcp.write_all(b"PROXY TCP4 203.0.113.77 127.0.0.1 12345 5222\r\n")
+        .await
+        .unwrap();
+    let mut bytes = [0; 64];
+    let n = timeout(Duration::from_secs(2), tcp.read(&mut bytes))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(bytes[..n].starts_with(b"SSH-2.0-"));
+}

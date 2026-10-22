@@ -91,7 +91,7 @@ Bastion opens `GET /tunnel` with these headers:
 | `X-Late-Secret`           | Pre-shared secret. Constant-time compare. Rotated out-of-band.          |
 | `X-Late-Fingerprint`      | User's SSH pubkey fingerprint (authenticated by bastion).               |
 | `X-Late-Username`         | Optional hint; backend re-derives via DB lookup (fingerprint is authoritative). |
-| `X-Late-Peer-IP`          | Real client IP, captured by bastion from PROXY v1. Used by per-IP rate limiter. |
+| `X-Late-Peer-IP`          | Required client IP, resolved from trusted PROXY v1 or a direct connection. Used for admission, session bookkeeping and IP bans. |
 | `X-Late-Term`             | `$TERM` from `pty-req`.                                                 |
 | `X-Late-Cols` / `X-Late-Rows` | Initial PTY size.                                                   |
 | `X-Late-Session-Id`       | Bastion-minted UUIDv7, stable across reconnects (logs/metrics correlation). |
@@ -270,7 +270,7 @@ A future PR (depends on Cargo workspace version bumping in CI) will replace the 
 
 ### What's unchanged
 - Existing russh path on `:2222`. `late-cli` keeps using it directly.
-- Per-IP rate limiter (key by `X-Late-Peer-IP` for `/tunnel`, by transport peer addr for russh).
+- Per-IP rate limiter (key by authenticated `X-Late-Peer-IP` for `/tunnel`, by the trusted PROXY source or direct client address for russh).
 - Session state continues to live only in the backend process and DB.
 - The `Stay late. Code safe. ✨` farewell on `q`-driven disconnect.
 
@@ -290,6 +290,33 @@ Future (not v1): signed bastion identity (short-lived JWT) once we have >1 basti
 **The backend does NOT trust:** the user's SSH pubkey (never sees it), any auth claim on the WS not backed by Layers 1–3, `X-Late-Username` (hint only), `X-Late-Reconnect-Reason` for anything other than driving the cosmetic banner (it's untrusted display data).
 
 **The bastion does not inspect terminal bytes** — keeps it thin and decoupled from TUI versioning. **The bastion has no DB, no service deps, no per-user logic** — minimum surface for bugs that could force a bastion restart.
+
+### Client IP attribution
+
+Both SSH listeners require a usable source address when PROXY parsing is
+enabled for a trusted transport peer. Missing, malformed and `PROXY UNKNOWN`
+headers close the connection before SSH negotiation. A direct client uses its
+socket address; an untrusted peer cannot override that address with a header.
+
+After the backend validates the bastion's transport CIDR and shared secret,
+`X-Late-Peer-IP` supplies the per-client attempt and connection limits,
+`State.conn_counts` and `ActiveSession.peer_ip`. The latter supplies the IP
+snapshot persisted by a server-ban command. Redial preserves the original
+client IP; pairing does not replace it with the paired socket's address.
+Kicks terminate the target account's sessions without creating an IP ban.
+Existing bans on a genuinely shared client IP still apply to that IP.
+
+IRC retains its rollout behavior: a trusted proxy may omit metadata or send
+`PROXY UNKNOWN`, allowing account authentication with `peer_ip: None`. A
+server ban then stores no IP unless another session of that account has a
+known client address. IRC never substitutes its shared transport peer into
+that snapshot. Unknown-IP authentication throttling may still use the
+transport address as a network-protection key.
+
+Infrastructure addresses remain available for transport trust, capacity
+protection and diagnostics. Accepted tunnel logs label them
+`transport_peer_ip`, separately from `client_ip`; they are not moderation
+identity. Public IRC masks are unchanged.
 
 ---
 
@@ -468,6 +495,19 @@ still uses `budget: None` with a bounded output queue; it does not reproduce
 direct SSH's 32-MiB backlog accounting and render-pause behavior. Exact parity
 remains separate follow-up scope, requiring slow-reader memory and recovery
 tests if pursued.
+
+### Deferred IPv6 HTTP and pairing attribution
+
+`infra/ipv6-proxy.tf` forwards HTTP(S) over TCP without client-address metadata.
+That configuration can make ingress report the proxy address to the paired
+WebSocket endpoint's IP-based limits. HTTP pairing addresses do not supply
+`ActiveSession.peer_ip` or server-ban snapshots. Live deployment behavior has
+not been checked as part of this work.
+
+Preserving IPv6 HTTP client addresses requires a separate ingress design,
+deployment order and rollback plan, with trusted-header and per-client pairing
+limit tests. Keep that infrastructure change separate from the SSH/IRC
+moderation attribution contract.
 
 ### Packaged and live rollout verification
 
