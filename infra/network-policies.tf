@@ -9,7 +9,7 @@
 # Footgun reminder: as soon as ANY policy selects a pod for "Ingress",
 # the pod flips from default-allow to default-deny on ingress; only what
 # the policies explicitly allow gets through. This policy therefore must
-# also re-allow legitimate traffic to :2222 and :4000.
+# also re-allow legitimate SSH, HTTP API and IRC traffic.
 #
 # Policy semantics used below:
 #   - ingress block with `ports` and no `from` → allow from any source on
@@ -32,8 +32,8 @@ resource "kubernetes_network_policy_v1" "service_ssh_ingress" {
 
     policy_types = ["Ingress"]
 
-    # :2222 (SSH legacy path) and :4000 (HTTP API) — open to any source,
-    # matching the prior default-allow behavior.
+    # SSH legacy path, HTTP API and IRC — open to any source, matching the
+    # prior default-allow behavior, including traffic from another node.
     ingress {
       ports {
         port     = 2222
@@ -42,6 +42,11 @@ resource "kubernetes_network_policy_v1" "service_ssh_ingress" {
 
       ports {
         port     = 4000
+        protocol = "TCP"
+      }
+
+      ports {
+        port     = local.irc_port
         protocol = "TCP"
       }
     }
