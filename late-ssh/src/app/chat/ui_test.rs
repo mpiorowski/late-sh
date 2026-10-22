@@ -1051,7 +1051,7 @@ fn chat_view<'a>(
     composer: &'a TextArea<'static>,
     news_composer: &'a TextArea<'static>,
 ) -> ChatRenderInput<'a> {
-    static INLINE_IMAGES: OnceLock<HashMap<Uuid, InlineImagePreview>> = OnceLock::new();
+    static INLINE_IMAGES: OnceLock<HashMap<Uuid, InlinePreview>> = OnceLock::new();
     static NEWS_CARDS: OnceLock<HashMap<Uuid, late_core::models::article::ArticleFeedItem>> =
         OnceLock::new();
     static FRIEND_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
@@ -3757,4 +3757,21 @@ fn embedded_chat_voice_strip_is_padded_like_its_messages() {
             messages: Rect::new(11, 5, 38, 12),
         }
     );
+}
+
+/// The row under a YouTube thumbnail names the video when YouTube did,
+/// and never runs past the picture it sits under.
+#[test]
+fn watch_hint_names_the_video_inside_the_picture_width() {
+    assert_eq!(watch_hint_text(None, 40), "▶ YouTube · Enter to watch");
+    assert_eq!(
+        watch_hint_text(Some("Never Gonna Give You Up"), 96),
+        "▶ Never Gonna Give You Up · Enter to watch"
+    );
+    let cut = watch_hint_text(
+        Some("Keynote: After the AI Hype - What's Real, and What's Next - Richard Campbell - 2026"),
+        48,
+    );
+    assert_eq!(cut, "▶ Keynote: After the AI Hype -… · Enter to watch");
+    assert_eq!(UnicodeWidthStr::width(cut.as_str()), 48);
 }

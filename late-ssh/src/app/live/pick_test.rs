@@ -79,9 +79,7 @@ fn a_stream_going_live_queues_like_a_track_and_keeps_two_minutes() {
 #[test]
 fn an_entry_that_waited_too_long_is_dropped() {
     let track = |n: i64| LiveSource::BoothTrack(Uuid::from_u128(n as u128));
-    let candidates: Vec<LiveCandidate> = (0..7)
-        .map(|n| candidate(track(n), n * 10))
-        .collect();
+    let candidates: Vec<LiveCandidate> = (0..7).map(|n| candidate(track(n), n * 10)).collect();
     let pick = |secs| pick_queued(None, &candidates, at(secs));
 
     assert_eq!(pick(120), up(track(1), 120));

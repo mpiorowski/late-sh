@@ -202,7 +202,10 @@ fn a_lounge_card_is_the_story_beside_its_art() {
     let mut item = card(BodyStatus::Ready { reading_minutes: 7 });
     item.article.ascii_art = "aaaa\nbbbb\ncccc\ndddd\neeee\nffff".to_string();
     let text = |line: &ratatui::text::Line<'_>| -> String {
-        line.spans.iter().map(|span| span.content.as_ref()).collect()
+        line.spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect()
     };
 
     let rows: Vec<String> = lounge_card_lines(&item, 60).iter().map(text).collect();

@@ -589,7 +589,10 @@ async fn enter_on_a_lounge_card_opens_the_reader() {
     )
     .await
     .expect("share an article");
-    let chat = ChatService::new(test_db.db.clone(), NotificationService::new(test_db.db.clone()));
+    let chat = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
     ArticleService::new(test_db.db.clone(), AiService::new(false, None), chat)
         .post_lounge_card(&article)
         .await;
@@ -599,7 +602,10 @@ async fn enter_on_a_lounge_card_opens_the_reader() {
     let frame = render_plain(&mut app);
     assert!(frame.contains("The terminal renaissance"), "{frame}");
     assert!(frame.contains("• terminals are back"), "{frame}");
-    assert!(!frame.contains(url), "the card stands in for the raw line: {frame}");
+    assert!(
+        !frame.contains(url),
+        "the card stands in for the raw line: {frame}"
+    );
 
     app.handle_input(b"j");
     app.handle_input(b"\r");

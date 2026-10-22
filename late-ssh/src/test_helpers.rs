@@ -263,8 +263,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         crate::app::ai::summary::SummaryService::new(db.clone(), ai_service.clone());
     let paper_service = crate::app::paper::svc::PaperService::new(db.clone(), ai_service.clone());
     let jobs_service = crate::app::jobs::svc::JobsService::new(db.clone(), ai_service.clone());
-    let article_service =
-        ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
+    let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
     let feed_service = crate::app::chat::feeds::svc::FeedService::new(db.clone());
     let showcase_service = crate::app::chat::showcase::svc::ShowcaseService::new(db.clone());
     let work_service = crate::app::chat::work::svc::WorkService::new(db.clone());

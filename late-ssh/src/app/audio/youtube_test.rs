@@ -10,7 +10,8 @@ fn oembed_url_asks_for_the_canonical_watch_link_as_json() {
 
 #[test]
 fn oembed_title_reads_the_trimmed_title() {
-    let body = br#"{"title":"  Never Gonna Give You Up  ","author_name":"Rick Astley","type":"video"}"#;
+    let body =
+        br#"{"title":"  Never Gonna Give You Up  ","author_name":"Rick Astley","type":"video"}"#;
     assert_eq!(
         oembed_title(body).expect("title"),
         "Never Gonna Give You Up"

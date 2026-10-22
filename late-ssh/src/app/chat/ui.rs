@@ -40,11 +40,11 @@ use crate::app::hub::shop::svc::ActiveChatRoomEffect;
 use crate::usernames::UsernameLookup;
 
 use super::state::{
-    InlinePreviewSource, MatchPresence, MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot,
+    InlinePreview, MatchPresence, MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot,
     RoomVisualOrderInput, SelectedRoomSlotState, SelectionScroll, TranslationDisplay,
-    compare_dm_rooms_for_nav, dm_is_promoted_unread, dm_peer_is_ignored,
-    inline_preview_source_in_body, is_chat_list_room, is_deadchannel_room, is_selected_slot,
-    synthetic_favorite_id, synthetic_slot_for_favorite_id, visual_order_for_rooms,
+    compare_dm_rooms_for_nav, dm_is_promoted_unread, dm_peer_is_ignored, is_chat_list_room,
+    is_deadchannel_room, is_selected_slot, synthetic_favorite_id, synthetic_slot_for_favorite_id,
+    visual_order_for_rooms,
 };
 use super::ui_text::{
     AuthorTint, Gutter, WAVE_REACTION_KIND, is_nerd_font_glyph, reaction_label,
@@ -179,7 +179,7 @@ pub struct DashboardChatView<'a> {
     /// which take the #lounge topic row for the day. `None` elsewhere and
     /// on any other day.
     pub board_day: Option<String>,
-    pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
+    pub inline_images: &'a HashMap<Uuid, InlinePreview>,
     /// News shares' #lounge cards by message id: those messages draw as
     /// the card.
     pub news_cards: &'a HashMap<Uuid, ArticleFeedItem>,
@@ -203,7 +203,7 @@ pub struct DashboardChatView<'a> {
 pub struct ImageModalView<'a> {
     pub message_id: Uuid,
     pub url: &'a str,
-    pub preview: Option<&'a InlineImagePreview>,
+    pub preview: Option<&'a InlinePreview>,
     pub terminal_image: Option<&'a TerminalImageData>,
     pub terminal_image_protocol: Option<TerminalImageProtocol>,
 }
@@ -1429,7 +1429,7 @@ struct ChatRowsContext<'a> {
     profile_award_badges: &'a HashMap<Uuid, String>,
     message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     message_gilds: &'a HashMap<Uuid, ChatMessageGildSummary>,
-    inline_images: &'a HashMap<Uuid, InlineImagePreview>,
+    inline_images: &'a HashMap<Uuid, InlinePreview>,
     /// News shares' #lounge cards by message id (`news::State::lounge_cards`):
     /// those messages draw as the card.
     news_cards: &'a HashMap<Uuid, ArticleFeedItem>,
@@ -1738,16 +1738,46 @@ fn replies_to_user(
         == Some(user_id)
 }
 
-/// A YouTube thumbnail's rows in the chat: the picture, then the hint row.
-/// Built with the rows cache, so its colour follows the theme. Both are
-/// `Image` rows, so a click on either is the image click, which watches.
-fn with_watch_hint(picture: &InlineImagePreview) -> InlineImagePreview {
+/// A YouTube thumbnail's rows in the chat: the picture, then the hint row
+/// (`watch_hint_text`). Built with the rows cache, so its colour follows
+/// the theme. Both are `Image` rows, so a click on either is the image
+/// click, which watches.
+fn with_watch_hint(picture: &InlineImagePreview, title: Option<&str>) -> InlineImagePreview {
+    let picture_width = picture.iter().map(Line::width).max().unwrap_or(0);
     let mut lines = picture.clone();
     lines.push(Line::from(Span::styled(
-        "▶ YouTube · Enter to watch",
+        watch_hint_text(title, picture_width),
         Style::default().fg(theme::AMBER_DIM()),
     )));
     lines
+}
+
+/// The row under a YouTube thumbnail: the video's title when YouTube named
+/// it, cut with an ellipsis so the row stays inside the picture's
+/// `width`, else the plain `YouTube`.
+fn watch_hint_text(title: Option<&str>, width: usize) -> String {
+    const PLAY: &str = "▶ ";
+    const ACTION: &str = " · Enter to watch";
+    let Some(title) = title else {
+        return format!("{PLAY}YouTube{ACTION}");
+    };
+    let budget =
+        width.saturating_sub(UnicodeWidthStr::width(PLAY) + UnicodeWidthStr::width(ACTION));
+    if UnicodeWidthStr::width(title) <= budget {
+        return format!("{PLAY}{title}{ACTION}");
+    }
+    let mut cut = String::new();
+    let mut used = 0;
+    for ch in title.chars() {
+        let cells = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        // One cell stays free for the ellipsis.
+        if used + cells + 1 > budget {
+            break;
+        }
+        cut.push(ch);
+        used += cells;
+    }
+    format!("{PLAY}{}…{ACTION}", cut.trim_end())
 }
 
 fn ensure_chat_rows_cache(
@@ -2037,15 +2067,15 @@ fn ensure_chat_rows_cache(
         let row_start = all_rows.len();
         // A YouTube thumbnail gets the watch hint row under its picture.
         let video_preview = match ctx.inline_images.get(&msg.id) {
-            Some(picture) => match inline_preview_source_in_body(&msg.body) {
-                Some(InlinePreviewSource::Video { .. }) => Some(with_watch_hint(picture)),
-                Some(InlinePreviewSource::Image(_)) | None => None,
-            },
-            None => None,
+            Some(InlinePreview::Video { picture, title }) => {
+                Some(with_watch_hint(picture, title.as_deref()))
+            }
+            Some(InlinePreview::Image(_)) | None => None,
         };
-        let image_lines = match &video_preview {
-            Some(lines) => Some(lines.as_slice()),
-            None => ctx.inline_images.get(&msg.id).map(Vec::as_slice),
+        let image_lines = match (&video_preview, ctx.inline_images.get(&msg.id)) {
+            (Some(lines), _) => Some(lines.as_slice()),
+            (None, Some(preview)) => Some(preview.picture().as_slice()),
+            (None, None) => None,
         };
         let translation = ctx
             .translations
@@ -2519,7 +2549,7 @@ fn centered_rect_in(anchor: Rect, width: u16, height: u16) -> Rect {
 
 fn image_modal_fallback_lines(view: ImageModalView<'_>) -> Vec<Line<'static>> {
     if let Some(preview) = view.preview {
-        return preview.clone();
+        return preview.picture().clone();
     }
 
     vec![
@@ -3191,7 +3221,7 @@ pub struct ChatRenderInput<'a> {
     pub friend_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub message_gilds: &'a HashMap<Uuid, ChatMessageGildSummary>,
-    pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
+    pub inline_images: &'a HashMap<Uuid, InlinePreview>,
     /// News shares' #lounge cards by message id: those messages draw as
     /// the card.
     pub news_cards: &'a HashMap<Uuid, ArticleFeedItem>,
@@ -3385,7 +3415,7 @@ pub struct EmbeddedRoomChatView<'a> {
     pub live_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub message_gilds: &'a HashMap<Uuid, ChatMessageGildSummary>,
-    pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
+    pub inline_images: &'a HashMap<Uuid, InlinePreview>,
     /// News shares' #lounge cards by message id: those messages draw as
     /// the card.
     pub news_cards: &'a HashMap<Uuid, ArticleFeedItem>,

@@ -1617,6 +1617,8 @@ fn news_help_lines() -> Vec<String> {
             "  Esc               stop and close",
             "  Close partway through and the card reads where you left it; w resumes there.",
             "  A YouTube link in chat plays the same way: Enter (or a click) on its message.",
+            "  Its thumbnail carries the video's title. A reply quoting the link has no thumbnail:",
+            "  Enter on it jumps to the original message, and Enter again plays it.",
             "  Closed partway, Enter on it again picks up there until you log off.",
             "",
             "The reader",

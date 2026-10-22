@@ -254,9 +254,10 @@ pub(super) fn wrap_chat_entry_to_lines(
     // The translation block rides under the body of plain messages (and /me
     // actions) only: report cards and system lines have their own layouts
     // and are never translated.
-    let translation_slot = (system_text.is_none() && report_payload.is_none() && news_card.is_none())
-        .then_some(translation)
-        .flatten();
+    let translation_slot =
+        (system_text.is_none() && report_payload.is_none() && news_card.is_none())
+            .then_some(translation)
+            .flatten();
     let mut lines = if let Some(system) = system_text {
         wrap_system_to_lines(system, width)
     } else if let Some((kind, text)) = report_payload {

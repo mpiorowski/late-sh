@@ -14,7 +14,9 @@ use crate::app::audio::svc::ThumbnailFetch;
 use crate::app::bonsai::state::BonsaiAction;
 use crate::app::bonsai::svc::BonsaiActionResult;
 use crate::app::calendar::svc::{CalendarAnnouncement, CalendarOp, CalendarWrite};
-use crate::app::chat::news::svc::{BodyFetchOutcome, NewsCardOutcome, NewsSaveOutcome, XMediaLookup};
+use crate::app::chat::news::svc::{
+    BodyFetchOutcome, NewsCardOutcome, NewsSaveOutcome, XMediaLookup,
+};
 use crate::app::chat::svc::{GildRefusal, SendRefusal};
 use crate::app::clubhouse::nightcap::svc::{NightcapHouseFailure, NightcapOrderResult};
 use crate::app::common::primitives::Screen;

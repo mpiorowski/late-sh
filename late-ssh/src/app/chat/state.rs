@@ -102,7 +102,7 @@ pub(crate) type InlineImageRenderSettings =
 pub(crate) type InlineImageRenderResult = (
     Uuid,
     InlineImageRenderSettings,
-    Result<InlineImagePreview, String>,
+    Result<InlinePreview, String>,
 );
 pub(crate) type TerminalImageRenderResult = (
     Uuid,
@@ -1184,7 +1184,7 @@ pub struct ChatState {
     pub(crate) inline_image_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<InlineImageRenderResult>>,
     pub(crate) inline_image_tx: Option<tokio::sync::mpsc::UnboundedSender<InlineImageRenderResult>>,
-    pub(crate) inline_image_cache: HashMap<uuid::Uuid, InlineImagePreview>,
+    pub(crate) inline_image_cache: HashMap<uuid::Uuid, InlinePreview>,
     pub(crate) inline_image_requested: HashSet<uuid::Uuid>,
     inline_image_failures: HashMap<uuid::Uuid, InlineImageFailure>,
     inline_image_render_settings: InlineImageRenderSettings,
@@ -2969,10 +2969,20 @@ impl ChatState {
             Some(InlinePreviewSource::Video { video_id }) => video_id,
             Some(InlinePreviewSource::Image(_)) | None => return None,
         };
+        // The oEmbed title rides with the thumbnail; until it lands, or
+        // when YouTube would not name the video, the player says so plainly.
+        let title = match self.inline_image_cache.get(&message.id) {
+            Some(InlinePreview::Video {
+                title: Some(title), ..
+            }) => title.clone(),
+            Some(InlinePreview::Video { title: None, .. })
+            | Some(InlinePreview::Image(_))
+            | None => "YouTube video".to_string(),
+        };
         Some(WatchRequest {
             source: WatchSource::ChatLink,
             url: crate::app::audio::youtube::watch_url(&video_id),
-            title: "YouTube video".to_string(),
+            title,
             author: self.username_for(message.user_id),
             shared_at: message.created,
         })
@@ -5188,21 +5198,13 @@ impl ChatState {
         for (msg_id, source) in requests {
             self.inline_image_requested.insert(msg_id);
             self.track_inline_image_id(msg_id);
-            let url = source.fetch_url();
-            if !url.is_empty() {
-                let tx_clone = tx.clone();
-                tokio::spawn(async move {
-                    let result = crate::app::files::inline_image::fetch_and_render_image(
-                        url,
-                        INLINE_IMAGE_MAX_WIDTH,
-                        INLINE_IMAGE_MAX_ROWS,
-                        settings,
-                    )
+            let tx_clone = tx.clone();
+            tokio::spawn(async move {
+                let result = fetch_inline_preview(source, settings)
                     .await
                     .map_err(|e| e.to_string());
-                    let _ = tx_clone.send((msg_id, settings, result));
-                });
-            }
+                let _ = tx_clone.send((msg_id, settings, result));
+            });
         }
     }
 
@@ -7340,6 +7342,63 @@ fn message_is_ignored_in(ignored: &HashSet<Uuid>, message: &ChatMessage) -> bool
             .is_some_and(|target| ignored.contains(&target))
 }
 
+/// A message's rendered inline preview, cached by message id.
+#[derive(Clone, Debug)]
+pub enum InlinePreview {
+    /// An image link's picture.
+    Image(InlineImagePreview),
+    /// A YouTube link's thumbnail, and the video's title when YouTube's
+    /// oEmbed named it (a private or deleted video has none).
+    Video {
+        picture: InlineImagePreview,
+        title: Option<String>,
+    },
+}
+
+impl InlinePreview {
+    /// The picture rows, whichever kind of link drew them.
+    pub fn picture(&self) -> &InlineImagePreview {
+        match self {
+            Self::Image(picture) => picture,
+            Self::Video { picture, .. } => picture,
+        }
+    }
+}
+
+/// Fetch and render one message's preview. A video's thumbnail and title
+/// load together; the title is optional, so its failure only drops it.
+async fn fetch_inline_preview(
+    source: InlinePreviewSource,
+    settings: InlineImageRenderSettings,
+) -> anyhow::Result<InlinePreview> {
+    let picture = crate::app::files::inline_image::fetch_and_render_image(
+        source.fetch_url(),
+        INLINE_IMAGE_MAX_WIDTH,
+        INLINE_IMAGE_MAX_ROWS,
+        settings,
+    );
+    match source {
+        InlinePreviewSource::Image(_) => Ok(InlinePreview::Image(picture.await?)),
+        InlinePreviewSource::Video { video_id } => {
+            let (picture, title) = tokio::join!(
+                picture,
+                crate::app::audio::youtube::fetch_oembed_title(&video_id)
+            );
+            let title = match title {
+                Ok(title) => Some(title),
+                Err(error) => {
+                    tracing::trace!(video_id, error = ?error, "youtube title fetch failed");
+                    None
+                }
+            };
+            Ok(InlinePreview::Video {
+                picture: picture?,
+                title,
+            })
+        }
+    }
+}
+
 /// What an inline preview is drawn from.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum InlinePreviewSource {
@@ -7360,11 +7419,12 @@ impl InlinePreviewSource {
 }
 
 /// A message's inline preview, if it gets one: an image link first, else
-/// a YouTube video link's thumbnail.
+/// a YouTube video link's thumbnail. A reply's quote line is its parent's
+/// text, so a link there previews nothing (Enter jumps to the parent).
 pub(crate) fn inline_preview_source_in_body(body: &str) -> Option<InlinePreviewSource> {
     match inline_image_url_in_body(body) {
         Some(url) => Some(InlinePreviewSource::Image(url)),
-        None => body_links(body)
+        None => body_links(body_without_reply_quote(body))
             .find_map(crate::app::video::state::youtube_video_id)
             .map(|video_id| InlinePreviewSource::Video { video_id }),
     }
@@ -7373,7 +7433,7 @@ pub(crate) fn inline_preview_source_in_body(body: &str) -> Option<InlinePreviewS
 fn inline_image_request_candidates(
     messages: &[ChatMessage],
     requested: &HashSet<Uuid>,
-    cached: &HashMap<Uuid, InlineImagePreview>,
+    cached: &HashMap<Uuid, InlinePreview>,
     failures: &HashMap<Uuid, InlineImageFailure>,
     now: Instant,
 ) -> Vec<(Uuid, InlinePreviewSource)> {
@@ -7399,7 +7459,7 @@ fn inline_image_request_candidates(
 }
 
 fn inline_image_url_in_body(body: &str) -> Option<String> {
-    body_links(body)
+    body_links(body_without_reply_quote(body))
         .find(|url| is_inline_image_url(url))
         .map(str::to_string)
 }
@@ -8851,16 +8911,7 @@ fn reply_preview_text(body: &str) -> String {
         ));
     }
 
-    let body_without_reply_quote = match body.split_once('\n') {
-        Some((first_line, rest))
-            if first_line.trim().starts_with("> ") && !rest.trim().is_empty() =>
-        {
-            rest
-        }
-        _ => body,
-    };
-
-    let first_content_line = body_without_reply_quote
+    let first_content_line = body_without_reply_quote(body)
         .lines()
         .find_map(|line| {
             let trimmed = line.trim();
@@ -8874,6 +8925,20 @@ fn reply_preview_text(body: &str) -> String {
             .trim(),
     );
     truncate_reply_preview(&preview)
+}
+
+/// A message body without the `> @author: preview` line a reply carries
+/// on top (the composer prepends it on send): what the author wrote. A
+/// body that is only a quote keeps it, so it still has text to show.
+fn body_without_reply_quote(body: &str) -> &str {
+    match body.split_once('\n') {
+        Some((first_line, rest))
+            if first_line.trim().starts_with("> ") && !rest.trim().is_empty() =>
+        {
+            rest
+        }
+        _ => body,
+    }
 }
 
 pub(crate) fn new_chat_textarea() -> TextArea<'static> {

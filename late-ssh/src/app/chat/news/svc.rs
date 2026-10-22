@@ -691,7 +691,11 @@ impl ArticleService {
     /// nothing here can fail it: every outcome is counted and logged here.
     #[tracing::instrument(skip(self, article), fields(article_id = %article.id))]
     pub(crate) async fn post_lounge_card(&self, article: &Article) {
-        let title = article.title.split_whitespace().collect::<Vec<_>>().join(" ");
+        let title = article
+            .title
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ");
         let body = format!("📰 {title} {}", article.url);
         let posted = self
             .chat_service
