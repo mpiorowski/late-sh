@@ -678,17 +678,19 @@ async fn main() -> anyhow::Result<()> {
             .context("api server failed")
     });
 
-    let tunnel_state = state.clone();
-    let tunnel_shutdown = session_shutdown.clone();
-    tasks.spawn(async move {
-        tunnel::run_tunnel_server(
-            tunnel_state.config.tunnel_port,
-            tunnel_state,
-            Some(tunnel_shutdown),
-        )
-        .await
-        .context("tunnel server failed")
-    });
+    if state.config.tunnel_enabled() {
+        let tunnel_state = state.clone();
+        let tunnel_shutdown = session_shutdown.clone();
+        tasks.spawn(async move {
+            tunnel::run_tunnel_server(
+                tunnel_state.config.tunnel_port,
+                tunnel_state,
+                Some(tunnel_shutdown),
+            )
+            .await
+            .context("tunnel server failed")
+        });
+    }
 
     tasks.spawn(async move {
         let _ = leaderboard_service.start_refresh_loop().await;

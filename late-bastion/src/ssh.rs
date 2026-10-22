@@ -457,7 +457,7 @@ impl russh::server::Handler for ClientHandler {
         let ws_url = self.config.backend_tunnel_url.clone();
         let secret = self.config.backend_shared_secret.clone();
         let handle = session.handle();
-        let session_id = ctx.session_id.clone();
+        let session_log_id = late_core::tunnel_protocol::session_log_id(&ctx.session_id);
         let shutdown = self.shutdown.clone();
         let mut existing_tunnel = self.tunnel.take();
         if let Some(tunnel) = existing_tunnel.as_mut() {
@@ -466,7 +466,7 @@ impl russh::server::Handler for ClientHandler {
 
         tracing::info!(
             ?channel_id,
-            session_id = %ctx.session_id,
+            %session_log_id,
             username = %ctx.username,
             fingerprint = %ctx.fingerprint,
             peer_ip = %ctx.peer_ip,
@@ -482,7 +482,7 @@ impl russh::server::Handler for ClientHandler {
                 None => run_session(channel, ws_url, secret, ctx, input_rx, shutdown).await,
             };
             if let Err(e) = result {
-                tracing::warn!(error = ?e, session_id = %session_id, "tunnel proxy session failed");
+                tracing::warn!(error = ?e, %session_log_id, "tunnel proxy session failed");
             }
             // Either path (Ok or Err): drop the SSH channel by closing
             // it from the russh-handle side too, in case dropping the

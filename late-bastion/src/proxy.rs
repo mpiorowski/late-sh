@@ -147,7 +147,7 @@ impl TunnelConnection {
         ctx: HandshakeContext,
         shutdown: late_core::shutdown::CancellationToken,
     ) -> anyhow::Result<Self> {
-        let session_id = ctx.session_id.clone();
+        let session_log_id = late_core::tunnel_protocol::session_log_id(&ctx.session_id);
         let req =
             build_request(&ws_url, &secret, &ctx).context("failed to build /tunnel handshake")?;
         let (ws, response) = tokio::select! {
@@ -159,7 +159,7 @@ impl TunnelConnection {
             }
         };
         tracing::info!(
-            session_id = %session_id,
+            %session_log_id,
             status = %response.status(),
             reconnect_reason = ?ctx.reconnect_reason,
             "tunnel ws upgraded"
@@ -181,7 +181,7 @@ impl TunnelConnection {
         command: String,
         shutdown: late_core::shutdown::CancellationToken,
     ) -> anyhow::Result<ExecTunnelResponse> {
-        let session_id = self.ctx.session_id.clone();
+        let session_log_id = late_core::tunnel_protocol::session_log_id(&self.ctx.session_id);
         let exec_id = uuid::Uuid::now_v7().to_string();
         let frame = ControlFrame::ExecRequest {
             id: exec_id.clone(),
@@ -241,7 +241,7 @@ impl TunnelConnection {
         .await
         .context("timed out waiting for tunnel exec response")??;
 
-        tracing::debug!(session_id = %session_id, command = %command, "tunnel exec completed");
+        tracing::debug!(%session_log_id, command = %command, "tunnel exec completed");
         Ok(response)
     }
 
@@ -414,7 +414,7 @@ async fn run_shell_loop(
     shutdown: late_core::shutdown::CancellationToken,
     mut initial_ws: Option<TunnelWs>,
 ) -> anyhow::Result<()> {
-    let session_id = ctx.session_id.clone();
+    let session_log_id = late_core::tunnel_protocol::session_log_id(&ctx.session_id);
     let (read_half, write_half) = channel.split();
     drop(read_half);
     // Unlike Handle::data, ChannelTx obeys the remote SSH window. Blocking
@@ -493,7 +493,7 @@ async fn run_shell_loop(
                         retry_delay = delay;
                     }
                     Err(err) => {
-                        tracing::info!(?err, %session_id, "terminal tunnel dial failure");
+                        tracing::info!(?err, %session_log_id, "terminal tunnel dial failure");
                         break 'session;
                     }
                 }
@@ -636,7 +636,7 @@ async fn run_shell_loop(
         write_half.exit_status(exit_status),
     )
     .await;
-    finish(ssh_writer, &session_id, "proxy ended").await?;
+    finish(ssh_writer, &session_log_id, "proxy ended").await?;
     let _ = timeout(Duration::from_millis(250), write_half.close()).await;
     Ok(())
 }
@@ -645,11 +645,11 @@ async fn run_shell_loop(
 /// russh, terminating the user's channel cleanly) and log.
 async fn finish<W: AsyncWriteExt + Unpin>(
     mut ssh_writer: W,
-    session_id: &str,
+    session_log_id: &str,
     why: &'static str,
 ) -> anyhow::Result<()> {
     let _ = timeout(Duration::from_millis(250), ssh_writer.shutdown()).await;
-    tracing::info!(session_id = %session_id, reason = why, "tunnel proxy session ended");
+    tracing::info!(%session_log_id, reason = why, "tunnel proxy session ended");
     Ok(())
 }
 

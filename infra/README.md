@@ -306,11 +306,18 @@ secrets/variables for CI/CD).
 
 `BASTION_ENABLED=1` provisions the SSH frontend and an IPv4/IPv6 listener on
 port `5222` in `ssh-edge`, forwarding PROXY v1 metadata to the bastion; port `22`
-continues to reach `late-ssh` directly. Set `BASTION_HOST_KEY` when enabled and
-`BASTION_SHARED_SECRET` for the backend tunnel in every deployment. The shared
-secret is injected into both services. Backend listener ports and trusted
-CIDRs live in the `late-ssh` profiles. A `-bastion` release rolls only the
-bastion image through `deploy_service.yml`.
+continues to reach `late-ssh` directly. Both `BASTION_HOST_KEY` and
+`BASTION_SHARED_SECRET` are required when enabled. The shared secret is injected
+into both services; when absent or blank, the backend's private tunnel listener
+stays off and direct SSH still starts. Backend listener ports and trusted CIDRs
+live in the `late-ssh` profiles.
+
+For first enablement, deploy the ssh image, configure both GitHub environment
+secrets, set `BASTION_ENABLED=1`, and ship an `-infra` release. Terraform creates
+the bastion deployment without waiting for the placeholder image to become
+ready. Then publish a `-bastion` release, which installs the real image through
+`deploy_service.yml` and waits for rollout. Later infra applies preserve that
+image. Confirm the new port works before any public-port cutover.
 
 ### IRC
 

@@ -9,6 +9,7 @@
 //! stay in lockstep on the wire format.
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 /// HTTP headers sent by the bastion on the WS upgrade. Defined here so
 /// the backend (`late-ssh`) and client (`late-bastion`) reference the
@@ -32,6 +33,11 @@ pub const TUNNEL_CLOSE_RECONNECT_REQUESTED: u16 = 4100;
 pub const TUNNEL_CLOSE_ABNORMAL: u16 = 1006;
 
 pub const ENV_LATE_CLI_MODE: &str = "LATE_CLI_MODE";
+
+/// Correlate tunnel logs without exposing the session's pairing bearer token.
+pub fn session_log_id(session_id: &str) -> String {
+    hex::encode(&Sha256::digest(session_id.as_bytes())[..8])
+}
 
 /// Text-frame control message. Tagged on `t` so adding new variants is
 /// non-breaking as long as both ends are tolerant of unknown tags.
@@ -236,6 +242,15 @@ mod tests {
     fn unknown_tag_is_error() {
         let json = r#"{"t":"shrug","cols":80,"rows":24}"#;
         assert!(ControlFrame::from_json(json).is_err());
+    }
+
+    #[test]
+    fn session_log_id_hashes_even_short_tokens() {
+        assert_eq!(session_log_id("secret"), "2bb80d537b1da3e3"); // ggignore
+        assert_eq!(session_log_id("secret"), session_log_id("secret"));
+        assert_ne!(session_log_id("secret"), session_log_id("another-secret"));
+        assert_eq!(session_log_id("x").len(), 16);
+        assert!(!session_log_id("x").contains('x'));
     }
 
     #[test]

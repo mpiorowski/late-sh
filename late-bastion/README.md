@@ -129,6 +129,8 @@ Socket regressions live beside their implementations in `proxy_test.rs` and
 `late-ssh/src/bastion_test.rs`, using the production accept loop.
 
 Reconnects preserve identity, latest terminal dimensions and whitelisted env.
+Logs correlate sessions by a hash; the stable wire session ID is a pairing
+bearer token and is never logged in full.
 Repeated env names keep their latest value; each value is limited to 4 KiB.
 The app restarts: queued outage keystrokes and paste are discarded, including
 input before the replacement emits its first binary output. Backoff, stalled

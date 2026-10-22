@@ -96,8 +96,8 @@ variable "BASTION_SHARED_SECRET" {
   default     = ""
 
   validation {
-    condition     = length(trimspace(var.BASTION_SHARED_SECRET)) > 0
-    error_message = "BASTION_SHARED_SECRET must be non-empty for the late-ssh tunnel listener."
+    condition     = var.BASTION_ENABLED != "1" || length(trimspace(var.BASTION_SHARED_SECRET)) > 0
+    error_message = "BASTION_SHARED_SECRET must be non-empty when BASTION_ENABLED=1."
   }
 }
 

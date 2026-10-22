@@ -39,7 +39,7 @@ changing a domain.
 | `late-{nethack,dcss,brogue,usurper,dopewars,bashquest,codekeep,zork}` | Standalone door hosts, one pod each | the door's context under `late-ssh/src/app/door/` |
 | `infra/` | Terraform for the RKE2 cluster, Liquidsoap/Icecast config | `infra/README.md`, `infra/RUNBOOK.md` |
 
-`late-bastion` is the long-lived SSH frontend on port `5222` (`5223` in dev2), forwarding shell and CLI exec sessions through the backend `/tunnel` WebSocket. The backend profiles bind that listener on `4002` in dev/dev2 and `4001` in prod, with `LATE_TUNNEL_SHARED_SECRET` required and production peers restricted to `10.42.0.0/16`. Both direct SSH and tunneled shells use the same bootstrap and adaptive render loop; tunnel sessions support user-requested reconnect during backend drain.
+`late-bastion` is the long-lived SSH frontend on port `5222` (`5223` in dev2), forwarding shell and CLI exec sessions through the backend `/tunnel` WebSocket. The backend profiles bind that listener on `4002` in dev/dev2 and `4001` in prod, with production peers restricted to `10.42.0.0/16`. An absent or blank production `LATE_TUNNEL_SHARED_SECRET` leaves the private listener off so image-first deploys can precede secret installation; dev profiles require the secret. Both direct SSH and tunneled shells use the same bootstrap and adaptive render loop; tunnel sessions support user-requested reconnect during backend drain.
 
 Backing services: PostgreSQL (CloudNativePG), Icecast + Liquidsoap (house
 radio), LiveKit (voice and streams), the OTLP collector with

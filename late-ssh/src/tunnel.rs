@@ -491,7 +491,7 @@ async fn tunnel_handler(
         username = %user.username,
         fingerprint = %handshake.fingerprint,
         reconnect_reason = ?handshake.reconnect_reason,
-        session_id = ?handshake.session_id,
+        session_log_id = %late_core::tunnel_protocol::session_log_id(&session_token),
         is_new_user,
         "tunnel handshake accepted; running session"
     );

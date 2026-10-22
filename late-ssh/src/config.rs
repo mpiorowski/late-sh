@@ -116,6 +116,7 @@ pub struct Config {
     pub ws_pair_max_attempts_per_ip: usize,
     pub ws_pair_rate_limit_window_secs: u64,
     pub tunnel_port: u16,
+    /// Empty disables the private listener, allowing image-first secret rollout.
     pub tunnel_shared_secret: String,
     pub tunnel_trusted_cidrs: Vec<IpNet>,
     pub ai: AiConfig,
@@ -491,7 +492,7 @@ impl Config {
             ws_pair_max_attempts_per_ip: 30,
             ws_pair_rate_limit_window_secs: 60,
             tunnel_port: 4001,
-            tunnel_shared_secret: required_non_empty("LATE_TUNNEL_SHARED_SECRET")?,
+            tunnel_shared_secret: std::env::var("LATE_TUNNEL_SHARED_SECRET").unwrap_or_default(),
             tunnel_trusted_cidrs: parse_cidrs("tunnel trusted cidrs", "10.42.0.0/16")?,
             ai: AiConfig {
                 enabled: true,
@@ -602,12 +603,18 @@ impl Config {
                 anyhow::bail!("{name} is enabled without a shared secret");
             }
         }
-        validate_tunnel_security(
-            &self.tunnel_shared_secret,
-            &self.tunnel_trusted_cidrs,
-            self.env != Env::Prod,
-        )?;
+        if self.tunnel_enabled() {
+            validate_tunnel_security(
+                &self.tunnel_shared_secret,
+                &self.tunnel_trusted_cidrs,
+                self.env != Env::Prod,
+            )?;
+        }
         Ok(())
+    }
+
+    pub fn tunnel_enabled(&self) -> bool {
+        !self.tunnel_shared_secret.trim().is_empty()
     }
 
     /// Log the full configuration at startup with human-readable descriptions.
@@ -651,6 +658,7 @@ impl Config {
             "proxy: PROXY protocol for real client IP behind load balancer"
         );
         tracing::info!(
+            enabled = self.tunnel_enabled(),
             tunnel_port = self.tunnel_port,
             trusted_cidrs = ?self.tunnel_trusted_cidrs,
             secret_len = self.tunnel_shared_secret.len(),

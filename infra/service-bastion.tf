@@ -13,6 +13,10 @@
 resource "kubernetes_deployment_v1" "service_bastion" {
   count = var.BASTION_ENABLED == "1" ? 1 : 0
 
+  # First enable creates the manifest with a placeholder image. The subsequent
+  # -bastion release installs the real image and waits for its rollout.
+  wait_for_rollout = false
+
   metadata {
     name = "service-bastion"
   }

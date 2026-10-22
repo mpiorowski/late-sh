@@ -156,6 +156,15 @@ change to `late-web/src/config.rs` needs a `-web` release; an ssh release never
 applies infra drift. Prod env is `LATE_ENV=prod` plus secrets only, injected by
 `infra/service-ssh.tf` / `infra/service-web.tf`.
 
+**Bastion first enablement.** The ssh image tolerates an absent or blank
+`LATE_TUNNEL_SHARED_SECRET` by leaving its private tunnel listener off, so the
+image-first skew rule also works before the secret exists. Set the GitHub
+environment secrets `BASTION_SHARED_SECRET` and `BASTION_HOST_KEY`, set
+`BASTION_ENABLED=1`, then publish `-infra` and `-bastion` releases in that order.
+The infra apply creates the bastion manifest without waiting for its placeholder
+image; the bastion release installs the real image and waits for readiness.
+Check port `5222`, source IP and pairing before a public-port cutover.
+
 ## Monitoring gotchas
 
 - Provisioned Grafana dashboards reference the metrics datasource by its stable
