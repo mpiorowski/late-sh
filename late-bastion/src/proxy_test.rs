@@ -826,11 +826,15 @@ enum Behavior {
     /// no outbound). Used as the "second attempt succeeds" terminator
     /// for retry-and-recover tests.
     AcceptAndHold,
-    /// Complete the upgrade, then stop polling the WebSocket entirely
+    /// Emit initial output, then stop polling the WebSocket entirely
     /// for the given duration. Bastion-sent Pings accumulate in the
     /// TCP buffer with no auto-pong reply, so the bastion's silence
     /// detector should trip and treat the connection as dead.
-    AcceptThenStall(Duration),
+    OutputThenStall(Duration),
+    /// Simulate slow bootstrap before the first output and before polling pings.
+    DelayedOutput(Duration),
+    /// Fill a small SSH window, then resume processing pings after a pause.
+    OutputThenPause(Duration),
 }
 
 /// Mock backend that handles a *sequence* of connection attempts. Each
@@ -985,10 +989,23 @@ async fn handle_scripted(tcp: TcpStream, behavior: Behavior, tx: mpsc::Sender<He
             };
             drop(ws);
         }
-        Behavior::AcceptAndHold => {
-            let Some(ws) = accept_capture(tcp, &tx).await else {
+        Behavior::AcceptAndHold | Behavior::DelayedOutput(_) | Behavior::OutputThenPause(_) => {
+            let Some(mut ws) = accept_capture(tcp, &tx).await else {
                 return;
             };
+            match behavior {
+                Behavior::DelayedOutput(delay) => {
+                    tokio::time::sleep(delay).await;
+                    let _ = ws.send(WsMessage::Binary(b"ready".to_vec().into())).await;
+                }
+                Behavior::OutputThenPause(delay) => {
+                    let _ = ws
+                        .send(WsMessage::Binary(vec![b'x'; 4 * 1024 * 1024].into()))
+                        .await;
+                    tokio::time::sleep(delay).await;
+                }
+                _ => {}
+            }
             let (mut sink, mut stream) = ws.split();
             // Drain inbound until peer closes; don't send anything.
             while let Some(Ok(msg)) = stream.next().await {
@@ -998,10 +1015,11 @@ async fn handle_scripted(tcp: TcpStream, behavior: Behavior, tx: mpsc::Sender<He
             }
             let _ = sink.close().await;
         }
-        Behavior::AcceptThenStall(stall_for) => {
-            let Some(ws) = accept_capture(tcp, &tx).await else {
+        Behavior::OutputThenStall(stall_for) => {
+            let Some(mut ws) = accept_capture(tcp, &tx).await else {
                 return;
             };
+            let _ = ws.send(WsMessage::Binary(b"ready".to_vec().into())).await;
             // Hold the upgraded WebSocketStream alive but never poll
             // it. Bastion-sent Pings sit in the TCP recv buffer; no
             // pong is ever produced. The bastion's silence threshold
@@ -1162,12 +1180,12 @@ async fn bastion_reports_shell_exit_status_before_closing_the_channel() {
 
 #[tokio::test]
 async fn bastion_redials_when_backend_goes_silent() {
-    // First connection: backend accepts the upgrade then stalls. With
+    // First connection: backend emits initial output then stalls. With
     // no auto-pong reply, the bastion's silence detector trips at
     // SILENCE_THRESHOLD (5s) and breaks its pump. The reconnect loop
     // then redials, hitting the AcceptAndHold terminator.
     let mut backend = ScriptedBackend::spawn(vec![
-        Behavior::AcceptThenStall(Duration::from_secs(15)),
+        Behavior::OutputThenStall(Duration::from_secs(15)),
         Behavior::AcceptAndHold,
     ])
     .await
@@ -1199,6 +1217,78 @@ async fn bastion_redials_when_backend_goes_silent() {
         "silence-triggered redial should set X-Late-Reconnect-Reason=1006"
     );
 
+    backend.shutdown();
+    bastion.shutdown();
+}
+
+#[tokio::test]
+async fn bastion_waits_for_slow_startup_without_redialing() {
+    let mut backend = ScriptedBackend::spawn(vec![Behavior::DelayedOutput(Duration::from_secs(7))])
+        .await
+        .unwrap();
+    let bastion = TestBastion::spawn(backend.ws_url()).await.unwrap();
+    let (_session, channel) = open_user_session(bastion.addr).await;
+    backend.next_handshake().await.unwrap();
+    let mut reader = channel.into_stream();
+    let mut output = [0; 5];
+    timeout(Duration::from_secs(10), reader.read_exact(&mut output))
+        .await
+        .expect("slow startup should retain its original connection")
+        .unwrap();
+    assert_eq!(&output, b"ready");
+    backend.assert_no_redial(Duration::from_millis(250)).await;
+    backend.shutdown();
+    bastion.shutdown();
+}
+
+#[tokio::test]
+async fn bastion_slow_client_write_does_not_trigger_backend_redial() {
+    let mut backend =
+        ScriptedBackend::spawn(vec![Behavior::OutputThenPause(Duration::from_secs(9))])
+            .await
+            .unwrap();
+    let bastion = TestBastion::spawn(backend.ws_url()).await.unwrap();
+    let (_session, channel) = open_user_session_with_config(
+        bastion.addr,
+        russh_client::Config {
+            window_size: 1024,
+            ..Default::default()
+        },
+    )
+    .await;
+    backend.next_handshake().await.unwrap();
+    // Longer than the backend silence threshold, shorter than the SSH write bound.
+    tokio::time::sleep(Duration::from_secs(7)).await;
+    let mut reader = channel.into_stream();
+    let mut output = vec![0; 4 * 1024 * 1024];
+    timeout(Duration::from_secs(3), reader.read_exact(&mut output))
+        .await
+        .expect("output should resume when the client grants window credit")
+        .unwrap();
+    assert!(output.iter().all(|&byte| byte == b'x'));
+    backend.assert_no_redial(Duration::from_secs(4)).await;
+    backend.shutdown();
+    bastion.shutdown();
+}
+
+#[tokio::test]
+async fn bastion_unready_backend_cannot_extend_outage_budget() {
+    let backend = ScriptedBackend::spawn(vec![Behavior::AcceptAndHold])
+        .await
+        .unwrap();
+    let bastion = TestBastion::spawn(backend.ws_url()).await.unwrap();
+    let (_session, mut channel) = open_user_session(bastion.addr).await;
+    let started = tokio::time::Instant::now();
+    timeout(Duration::from_secs(34), async {
+        while let Some(message) = channel.wait().await {
+            if matches!(message, russh::ChannelMsg::Eof | russh::ChannelMsg::Close) {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("pongs without initial output extended the ready deadline");
+    assert!(started.elapsed() >= Duration::from_secs(29));
     backend.shutdown();
     bastion.shutdown();
 }

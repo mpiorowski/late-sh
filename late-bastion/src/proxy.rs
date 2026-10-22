@@ -105,14 +105,13 @@ const PING_INTERVAL: Duration = Duration::from_secs(2);
 /// redial against whatever pod the Service is now pointing to.
 ///
 /// Dimensioned for an in-cluster (bastion → service-ssh-internal) hop:
-/// healthy RTT is sub-ms, even hot-loop event-loop stalls won't hit
-/// 5s. The user's `ssh` ↔ bastion leg has its own SSH-level
-/// keepalive separately and isn't affected by this threshold.
+/// Applied after initial output, excluding time blocked writing to the SSH
+/// client. Startup has its own ready deadline and output its own stall bound.
 const SILENCE_THRESHOLD: Duration = Duration::from_secs(5);
 const EXEC_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
 const DIAL_TIMEOUT: Duration = Duration::from_secs(5);
 const WS_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
-const SSH_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+const SSH_WRITE_TIMEOUT: Duration = late_core::tunnel_protocol::TUNNEL_OUTPUT_STALL_TIMEOUT;
 
 type TunnelWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -329,8 +328,8 @@ fn initial_reconnect_message(reason: Option<u16>) -> &'static str {
 
 /// Exponential backoff bounded by a wall-clock budget.
 ///
-/// Schedule (from `BACKOFF_INITIAL` 100ms, `BACKOFF_MAX` 5s):
-///   100ms, 200ms, 400ms, 800ms, 1.6s, 3.2s, 5s, 5s, 5s, …
+/// The ceiling doubles from 100ms to 5s; each delay is randomized between
+/// half that ceiling and the ceiling to spread simultaneous reconnects.
 /// `next_delay()` returns `None` once the cumulative wall-clock time
 /// since construction exceeds `RECONNECT_BUDGET`. Reset by re-creating.
 struct ReconnectBackoff {
@@ -358,7 +357,10 @@ impl ReconnectBackoff {
             .unwrap_or(BACKOFF_MAX)
             .min(BACKOFF_MAX);
         self.attempt = self.attempt.saturating_add(1);
-        Some(scaled.min(self.budget.saturating_sub(self.started.elapsed())))
+        // Entropy failure falls back to the full delay, preserving the budget.
+        let sample = f64::from(getrandom::u32().unwrap_or(u32::MAX)) / f64::from(u32::MAX);
+        let jittered = scaled.mul_f64(0.5 + sample * 0.5);
+        Some(jittered.min(self.budget.saturating_sub(self.started.elapsed())))
     }
 }
 
@@ -564,6 +566,10 @@ async fn run_shell_loop(
                                 _ = shutdown.cancelled() => false,
                             };
                             if !sent { break PumpOutcome::SshClosed; }
+                            // The receive loop could not poll the backend while
+                            // the SSH window was full. Start a fresh liveness
+                            // interval after this successful output progress.
+                            last_inbound = Instant::now();
                         }
                         Some(Ok(WsMessage::Close(frame))) => {
                             if frame.as_ref().is_some_and(|frame| matches!(u16::from(frame.code), 1000 | TUNNEL_CLOSE_SESSION_ENDED)) {
@@ -594,7 +600,7 @@ async fn run_shell_loop(
                     if !sent { break PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL); }
                 }
                 _ = ping.tick() => {
-                    if last_inbound.elapsed() > SILENCE_THRESHOLD { break PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL); }
+                    if ready && last_inbound.elapsed() > SILENCE_THRESHOLD { break PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL); }
                     let sent = tokio::select! {
                         result = timeout(WS_WRITE_TIMEOUT, sink.send(WsMessage::Ping(Default::default()))) => matches!(result, Ok(Ok(()))),
                         _ = shutdown.cancelled() => break PumpOutcome::Terminal,
@@ -729,17 +735,13 @@ mod tests {
     }
 
     #[test]
-    fn backoff_schedule_doubles_then_caps() {
+    fn backoff_jitter_stays_within_doubling_then_capped_bounds() {
         let mut b = ReconnectBackoff::new(Duration::from_secs(60));
-        assert_eq!(b.next_delay(), Some(Duration::from_millis(100)));
-        assert_eq!(b.next_delay(), Some(Duration::from_millis(200)));
-        assert_eq!(b.next_delay(), Some(Duration::from_millis(400)));
-        assert_eq!(b.next_delay(), Some(Duration::from_millis(800)));
-        assert_eq!(b.next_delay(), Some(Duration::from_millis(1600)));
-        assert_eq!(b.next_delay(), Some(Duration::from_millis(3200)));
-        // Hits cap.
-        assert_eq!(b.next_delay(), Some(BACKOFF_MAX));
-        assert_eq!(b.next_delay(), Some(BACKOFF_MAX));
+        for ceiling_ms in [100, 200, 400, 800, 1600, 3200, 5000, 5000] {
+            let ceiling = Duration::from_millis(ceiling_ms);
+            let delay = b.next_delay().unwrap();
+            assert!((ceiling / 2..=ceiling).contains(&delay), "{delay:?}");
+        }
     }
 
     #[test]
@@ -756,6 +758,6 @@ mod tests {
         // Bump attempt high enough that 1u32 << attempt would panic.
         b.attempt = 40;
         // Doesn't panic; clamps at the cap.
-        assert_eq!(b.next_delay(), Some(BACKOFF_MAX));
+        assert!((BACKOFF_MAX / 2..=BACKOFF_MAX).contains(&b.next_delay().unwrap()));
     }
 }

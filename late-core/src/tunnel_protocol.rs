@@ -34,6 +34,9 @@ pub const TUNNEL_CLOSE_ABNORMAL: u16 = 1006;
 
 pub const ENV_LATE_CLI_MODE: &str = "LATE_CLI_MODE";
 
+/// Bound a blocked output write on either leg of a tunneled terminal session.
+pub const TUNNEL_OUTPUT_STALL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// Correlate tunnel logs without exposing the session's pairing bearer token.
 pub fn session_log_id(session_id: &str) -> String {
     hex::encode(&Sha256::digest(session_id.as_bytes())[..8])

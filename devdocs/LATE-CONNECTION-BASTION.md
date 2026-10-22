@@ -154,7 +154,11 @@ What it does:
 
 Each outage has one 30-second budget, including backoff, stalled handshakes and
 upgrades that close without output. A backend generation counts as ready only
-after binary output arrives. On redial, discard queued keystrokes and paste;
+after binary output arrives; the five-second silence watchdog applies only
+after that point and restarts after a successful SSH client write. Both output
+legs bound blocked writes at 30 seconds. Retry delays use 50–100% jitter within
+an exponentially increasing ceiling, without extending the outage budget.
+On redial, discard queued keystrokes and paste;
 retain the latest terminal size, term, whitelisted env, identity and session ID.
 Input typed before replacement output is also discarded. Application state
 restarts by design. Live bytes and resizes share an ordered, bounded FIFO;

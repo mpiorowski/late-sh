@@ -726,7 +726,11 @@ async fn handle_session(
         while let Some(msg) = out_rx.recv().await {
             let was_close = matches!(msg, Message::Close(_));
             if !matches!(
-                tokio::time::timeout(std::time::Duration::from_secs(5), ws_sink.send(msg)).await,
+                tokio::time::timeout(
+                    late_core::tunnel_protocol::TUNNEL_OUTPUT_STALL_TIMEOUT,
+                    ws_sink.send(msg),
+                )
+                .await,
                 Ok(Ok(()))
             ) {
                 tracing::debug!("tunnel ws send failed or timed out");
