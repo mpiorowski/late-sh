@@ -196,11 +196,15 @@ start-amd64: .env keys
 
 startm: .env keys
 	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up --build
+# `down` takes the containers away and keeps the database (the named
+# `postgres-data` volume); `remove` wipes the database too. Not `down -v`:
+# that also drops the cargo caches and forces a full rebuild.
 down:
 	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml down
 stop:
 	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml stop
 remove: down
+	docker volume rm -f "$$(docker compose -f docker-compose.yml config | sed -n 's/^name: //p')_postgres-data"
 
 # Stops every running container on this machine, not just this project's.
 .PHONY: stop-all
