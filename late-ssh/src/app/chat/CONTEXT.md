@@ -30,7 +30,7 @@ late-ssh/src/app/chat/
 |-- feeds/                       # Synthetic RSS entry: private per-user RSS/Atom inbox
 |-- gild/                        # Gild tier picker: state/input/ui for the `g` message action
 |-- history_modal/               # `/history` scroll-back modal: state/input/ui (§14 History Modal)
-|-- news/                        # Synthetic News entry: articles, the reader (`reader/`), body fetch (`body.rs`), live strip body (`live.rs`)
+|-- news/                        # Synthetic News entry: articles, the reader (`reader/`), body fetch (`body.rs`), the #lounge card (`ui.rs::lounge_card_lines`)
 |-- notifications/               # Synthetic Mentions entry: mention notifications
 |-- polls/                       # /poll modal state/input/UI
 |-- showcase/                    # Projects service/state/UI reused by Directory page 5
@@ -209,7 +209,7 @@ Ignores:
 - Ignore filtering applies to DMs too. An ignored peer's DM messages are filtered, and the DM room is hidden from the room rail/navigation while the peer is ignored (both mirrors skip DMs whose `dm_peer_id` is ignored: `visual_order_for_rooms` and the rail's own DM filter, via the shared `dm_peer_is_ignored`), so a new DM from the ignored user can't resurface the room or its unread badge. Unignoring restores the DM on the next render/snapshot.
 - `IgnoreListUpdated` refilters local messages in place (all rooms, including DMs and `reply_to_user_id` matches) with no DB refetch, then refreshes the Mentions list/unread count.
 - `unignore` does not retroactively restore already-filtered local messages until a future tail/snapshot naturally reloads them.
-- Ignores cover messages only. A News article is not a message: the News room and the #lounge live strip show every share, whoever shared it (§11 News).
+- Ignores cover messages only. A News article is not a message: the News room shows every share, whoever shared it. Its #lounge card is the sharer's own line, so ignoring the sharer hides the card like the rest of their lines (§11 News).
 
 ---
 
@@ -219,7 +219,7 @@ Synthetic entries are selected from the room list but are not normal `ChatRoom`s
 
 ### News
 
-Shared links, the News room, reader and live strip: `news/CONTEXT.md`.
+Shared links, their #lounge cards, the News room and the reader: `news/CONTEXT.md`.
 
 ### Showcase
 
@@ -411,6 +411,6 @@ Test gaps:
 - Room visual order must stay consistent between state and UI hit-testing/row-building.
 - Room-list mouse hit-testing reconstructs a temporary `ChatRoomListView` (`app/input.rs`); room-list layout changes must keep hit tests in sync.
 - Chat-scroll mouse hit-testing is driven by `ChatRowsCache` extras (`row_message`, `row_kind`, `header_segments`) and a per-frame `ChatHitLayout` published into `ChatState::last_chat_hit_layout`. If you change how author headers, inline images, or reaction footers contribute rows in `ensure_chat_rows_cache` / `wrap_chat_entry_to_lines`, update both the parallel `row_*` vectors and the segment math in `build_author_prefix_and_segments` so a click still resolves to the right message/segment.
-- Showcase, Work, and News posts do not create chat messages. A News share goes up on the #lounge live strip instead (§11 News).
+- Showcase and Work posts do not create chat messages. A News share posts one #lounge line as the sharer, which chat draws as the story's card (§11 News).
 - Game rooms must remain opt-in and `auto_join=false`.
 - Private `kind='game'` rooms (daily match chat) are membership-fixed at creation; no join path may admit a third user, and they stay hidden from the rail/Mentions/IRC like all game rooms. The daily sweeper hard-deletes them 30 days after the match ends.

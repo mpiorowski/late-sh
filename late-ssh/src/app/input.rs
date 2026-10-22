@@ -3159,8 +3159,9 @@ pub(crate) enum ChatClickKind {
     /// the Ultimates sub-store, where the ladder is sold. No double-click
     /// verb.
     StoreMilestone,
-    /// Click landed on an inline image preview row — selects the message
-    /// and opens the image viewer modal. No double-click verb.
+    /// Click landed on a preview row (a News card, an inline image, a
+    /// YouTube thumbnail): selects the message and opens what it previews.
+    /// No double-click verb.
     Image { message_id: Uuid },
 }
 
@@ -3339,7 +3340,9 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
         }
         ChatClickKind::Image { message_id } => {
             app.chat.select_message_by_id_in_room(room_id, message_id);
-            if !app.chat.open_selected_image_modal_in_room(room_id) {
+            if !app.chat.open_selected_card_in_room(room_id)
+                && !app.chat.open_selected_image_modal_in_room(room_id)
+            {
                 crate::app::chat::input::watch_selected_video(app, room_id);
             }
         }
@@ -4495,17 +4498,6 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && app.lounge_card_shown() =>
         {
             crate::app::live::input::open_from_key(app)
-        }
-        // With a message selected, `r` replies to it (chat's message keys).
-        b'r' | b'R'
-            if global_letter_keys
-                && !ctx.chat_composing
-                && !ctx.feeds_processing
-                && !ctx.news_composing
-                && app.lounge_card_shown()
-                && app.chat.selected_message_id.is_none() =>
-        {
-            crate::app::live::input::reply_from_key(app)
         }
         b'1'..=b'7' if !artboard_blocks_page_switch => handle_numbered_page_switch(app, byte),
         // `0` is the clubhouse. Pressed again on the clubhouse it goes

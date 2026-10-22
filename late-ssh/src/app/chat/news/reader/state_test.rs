@@ -16,6 +16,7 @@ fn story(body: BodyStatus) -> ArticleFeedItem {
             id: Uuid::from_u128(7),
             created: now,
             updated: now,
+            lounge_message_id: None,
             user_id: Uuid::from_u128(1),
             url: "https://www.example.com/listen-notify".to_string(),
             title: "Why LISTEN/NOTIFY stops scaling".to_string(),

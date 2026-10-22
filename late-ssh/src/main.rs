@@ -207,7 +207,7 @@ async fn main() -> anyhow::Result<()> {
         .with_username_directory(username_directory.clone())
         .with_session_registry(session_registry.clone())
         .with_irc_registry(irc_registry.clone());
-    let article_service = ArticleService::new(db.clone(), ai_service.clone());
+    let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
     let calendar_service = late_ssh::app::calendar::svc::CalendarService::new(db.clone())
         .with_activity(activity_publisher.clone());
     let _calendar_worker = calendar_service.start_notify_worker(

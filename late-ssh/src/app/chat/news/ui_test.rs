@@ -1,4 +1,7 @@
-use super::{ArticleListView, ascii_preview_if_fit, draw_article_list, lay_out, scroll_offset};
+use super::{
+    ArticleListView, ascii_preview_if_fit, draw_article_list, lay_out, lounge_card_lines,
+    scroll_offset,
+};
 use chrono::Utc;
 use late_core::models::article::{Article, ArticleFeedItem};
 use late_core::models::article_body::BodyStatus;
@@ -18,6 +21,7 @@ fn card_at(url: &str, body: BodyStatus) -> ArticleFeedItem {
             id: Uuid::now_v7(),
             created: now,
             updated: now,
+            lounge_message_id: None,
             user_id: Uuid::now_v7(),
             url: url.to_string(),
             title: "Why LISTEN/NOTIFY stops scaling".to_string(),
@@ -185,6 +189,51 @@ fn the_scroll_keeps_the_selected_story_in_view() {
     assert_eq!(scroll_offset(&(8..14), 10), 4);
     assert_eq!(scroll_offset(&(8..14), 3), 8);
     assert_eq!(scroll_offset(&(8..14), 0), 8);
+}
+
+/// A #lounge card is the story in six rows, the art down the right: the
+/// title, a row per bullet, where it is from and what it takes, and the line
+/// that sends the room to News. Too narrow for the art, every row keeps the
+/// whole width, and a row cut short ends in an ellipsis even where the
+/// width runs out exactly at the end of one of its parts (the meta row at 24
+/// would otherwise drop "Enter to open" without a mark).
+#[test]
+fn a_lounge_card_is_the_story_beside_its_art() {
+    let mut item = card(BodyStatus::Ready { reading_minutes: 7 });
+    item.article.ascii_art = "aaaa\nbbbb\ncccc\ndddd\neeee\nffff".to_string();
+    let text = |line: &ratatui::text::Line<'_>| -> String {
+        line.spans.iter().map(|span| span.content.as_ref()).collect()
+    };
+
+    let rows: Vec<String> = lounge_card_lines(&item, 60).iter().map(text).collect();
+    let beside = |words: &str, art: &str| {
+        let pad = 47 - unicode_width::UnicodeWidthStr::width(words);
+        format!("{words}{} {art}", " ".repeat(pad))
+    };
+    assert_eq!(
+        rows,
+        vec![
+            beside("📰 Why LISTEN/NOTIFY stops scaling", "aaaa"),
+            beside("• one", "bbbb"),
+            beside("• two", "cccc"),
+            beside("• three", "dddd"),
+            beside("example.com · 7 min read · Enter to open", "eeee"),
+            beside("share a link in News · +500 chips", "ffff"),
+        ]
+    );
+
+    let rows: Vec<String> = lounge_card_lines(&item, 24).iter().map(text).collect();
+    assert_eq!(
+        rows,
+        vec![
+            "📰 Why LISTEN/NOTIFY st…".to_string(),
+            "• one".to_string(),
+            "• two".to_string(),
+            "• three".to_string(),
+            "example.com · 7 min rea…".to_string(),
+            "share a link in News · …".to_string(),
+        ]
+    );
 }
 
 #[test]

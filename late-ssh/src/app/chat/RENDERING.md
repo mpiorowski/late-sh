@@ -33,6 +33,7 @@ Message rendering:
 - Proposed upstream path: build a tiny repro outside late.sh that renders rows with `🛡️ 🔨️ 🌼`, then shifts/swaps rows like chat scrolling or room switching; add a Ratatui regression test around wide VS16 glyph diff/backend output; then patch either `ratatui-crossterm` cursor accounting or `ratatui-core`'s VS16 trailing-cell strategy. The naive backend fix is to track printed width instead of cell count, but test it carefully because Ratatui's explicit trailing-cell update may also need adjustment. A failing test/repro first will make the PR easier to get accepted.
 - The small Markdown subset supports headings, bold, italic, inline code, blockquotes, and simple `- ` list items.
 - A YouTube thumbnail gets one more `Image` row under its picture at cache build, the watch hint (`ui::with_watch_hint`, so its colour follows the theme); a click on either row is the image click, which watches.
+- A News share's #lounge line draws as the story's card (`news::ui::lounge_card_lines`, passed in as `ChatRowsContext::news_cards`, the session's `news::State::lounge_cards`): the header, then the card rows as `Image` rows in place of the body, no link preview and no translation. A click on a card row is the image click, which opens the reader. A new card set bumps `ChatState::context_epoch`.
 
 Cache:
 - `ChatRowsCache` stores wrapped rows plus selected/highlighted row ranges.

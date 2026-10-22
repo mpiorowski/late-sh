@@ -86,6 +86,7 @@ fn article(shared_by: &str, title: &str, shared_at: DateTime<Utc>) -> ArticleFee
             id: Uuid::now_v7(),
             created: shared_at,
             updated: shared_at,
+            lounge_message_id: None,
             user_id: Uuid::now_v7(),
             url: format!("https://example.com/{title}"),
             title: title.to_string(),

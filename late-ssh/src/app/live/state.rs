@@ -5,7 +5,7 @@
 use std::{cell::Cell, time::Instant};
 
 use chrono::{DateTime, Utc};
-use late_core::models::{article::ArticleFeedItem, user::AudioSource};
+use late_core::models::user::AudioSource;
 use ratatui::{layout::Rect, text::Line};
 use std::sync::Arc;
 use uuid::Uuid;
@@ -20,7 +20,6 @@ use crate::app::{
         live::{self as event_live, EventStripView},
         state::CalendarState,
     },
-    chat::news::live::{self as news_live, ArticleStripView},
     door::{
         realm::{
             live::{self as realm_live, RealmStripView},
@@ -46,7 +45,6 @@ use crate::app::door::spectate::svc::LiveGamesService;
 pub enum LiveStripView<'a> {
     Match(MatchStripView<'a>),
     Track(TrackStripView),
-    Article(ArticleStripView),
     Stream(StreamStripView),
     DoorGame(DoorGameStripView),
     Event(EventStripView),
@@ -63,7 +61,6 @@ impl LiveStripView<'_> {
                 None => Some(LiveSource::DailyMatch(strip.view.item.id)),
             },
             Self::Track(track) => Some(LiveSource::BoothTrack(track.item.id)),
-            Self::Article(article) => Some(LiveSource::NewsArticle(article.item.article.id)),
             Self::Stream(strip) => Some(LiveSource::Stream(strip.stream.user_id)),
             Self::DoorGame(strip) => Some(LiveSource::DoorGame(strip.key)),
             Self::Event(strip) => Some(LiveSource::BoardEvent(strip.event.id)),
@@ -109,9 +106,8 @@ impl LiveState {
         Self::default()
     }
 
-    /// Read the sources and decide what the strip shows. `articles` is the
-    /// session's News snapshot and `streams` its copy of the stream
-    /// registry (`ChatState::live_streams`). `door_games` are the live games
+    /// Read the sources and decide what the strip shows. `streams` is the
+    /// session's copy of the stream registry (`ChatState::live_streams`). `door_games` are the live games
     /// on the watchable doors (`LiveGamesService::live_rows`), `calendar`
     /// the session's board mirror (its upcoming events, the viewer's own
     /// included). `reading` is whether the viewer has a message selected in
@@ -123,7 +119,6 @@ impl LiveState {
         &mut self,
         daily: &DailyState,
         audio: &AudioState,
-        articles: &[ArticleFeedItem],
         streams: &[LiveStreamView],
         door_games: &[LiveRow],
         calendar: &CalendarState,
@@ -135,7 +130,6 @@ impl LiveState {
         let mut candidates = daily.live_candidates();
         candidates.extend(realm_live::candidates(&realm.snapshot));
         candidates.extend(audio.live_candidates());
-        candidates.extend(news_live::candidates(articles));
         candidates.extend(stream_live::candidates(streams));
         candidates.extend(door_live::candidates(door_games));
         candidates.extend(event_live::candidates(&calendar.live_at(now_utc), now_utc));
@@ -204,7 +198,7 @@ impl LiveState {
         reading: bool,
     ) -> bool {
         self.queued = pick_queued(self.queued, candidates, now_utc);
-        let overlay = aim_overlay(self.queued, candidates, now);
+        let overlay = aim_overlay(candidates, now);
         let next = match overlay {
             Some(source) => Some(source),
             None => self.queued.map(|queued| queued.source),
@@ -247,8 +241,7 @@ impl LiveState {
 
     /// What the strip paints, if it is up. `listening_on` is the viewer's
     /// audio source, which decides what opening a booth track does;
-    /// `articles` is the session's News snapshot, `streams` its copy of the
-    /// stream registry, `door_games` the live games on the watchable
+    /// `streams` is the session's copy of the stream registry, `door_games` the live games on the watchable
     /// doors, and `calendar` the session's board mirror.
     #[allow(clippy::too_many_arguments)]
     pub fn view<'a>(
@@ -256,7 +249,6 @@ impl LiveState {
         daily: &'a DailyState,
         audio: &AudioState,
         listening_on: AudioSource,
-        articles: &[ArticleFeedItem],
         streams: &[LiveStreamView],
         door_games: &[LiveRow],
         live_games: &LiveGamesService,
@@ -279,9 +271,9 @@ impl LiveState {
                 booth_live::view(&audio.queue_snapshot(), item_id, listening_on, picture)
                     .map(LiveStripView::Track)
             }
-            LiveSource::NewsArticle(article_id) => {
-                news_live::view(articles, article_id).map(LiveStripView::Article)
-            }
+            // Never a candidate: a News share is its card in #lounge. The
+            // source is the Live panel's, whose News rows open the reader.
+            LiveSource::NewsArticle(_) => None,
             LiveSource::Stream(streamer_id) => {
                 stream_live::view(streams, streamer_id).map(LiveStripView::Stream)
             }

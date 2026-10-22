@@ -791,7 +791,6 @@ impl App {
                 &self.daily,
                 &self.audio,
                 self.paired_source,
-                self.chat.news.all_articles(),
                 &self.chat.live_streams,
                 &live_rows,
                 &self.live_games,
@@ -848,7 +847,6 @@ impl App {
                     &self.daily,
                     &self.audio,
                     self.paired_source,
-                    self.chat.news.all_articles(),
                     &self.chat.live_streams,
                     &live_rows,
                     &self.live_games,
@@ -958,6 +956,7 @@ impl App {
                 None
             },
             inline_images: &self.chat.inline_image_cache,
+            news_cards: self.chat.news.lounge_cards(),
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
             composer_rect_slot: Some(&self.chat.last_composer_rect),
             composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -1064,6 +1063,7 @@ impl App {
             message_reactions,
             message_gilds,
             inline_images: &self.chat.inline_image_cache,
+            news_cards: self.chat.news.lounge_cards(),
             afk_lines: &self.chat.afk_lines,
             device_left_at: self.chat.device_left_at(),
             unread_counts: &self.chat.unread_counts,
@@ -1148,6 +1148,7 @@ impl App {
                     message_reactions,
                     message_gilds,
                     inline_images: &self.chat.inline_image_cache,
+                    news_cards: self.chat.news.lounge_cards(),
                     dividers: crate::app::chat::ui::ChatDividers {
                         afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                         left_app: self.chat.device_left_at(),
@@ -1213,6 +1214,7 @@ impl App {
                     message_reactions,
                     message_gilds,
                     inline_images: &self.chat.inline_image_cache,
+                    news_cards: self.chat.news.lounge_cards(),
                     dividers: crate::app::chat::ui::ChatDividers {
                         afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                         left_app: self.chat.device_left_at(),
@@ -1283,6 +1285,7 @@ impl App {
                     message_reactions,
                     message_gilds,
                     inline_images: &self.chat.inline_image_cache,
+                    news_cards: self.chat.news.lounge_cards(),
                     dividers: crate::app::chat::ui::ChatDividers {
                         afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                         left_app: self.chat.device_left_at(),
@@ -1350,6 +1353,7 @@ impl App {
                 message_reactions,
                 message_gilds,
                 inline_images: &self.chat.inline_image_cache,
+                news_cards: self.chat.news.lounge_cards(),
                 dividers: crate::app::chat::ui::ChatDividers {
                     afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                     left_app: self.chat.device_left_at(),
@@ -1430,6 +1434,7 @@ impl App {
                     message_reactions,
                     message_gilds,
                     inline_images: &self.chat.inline_image_cache,
+                    news_cards: self.chat.news.lounge_cards(),
                     dividers: crate::app::chat::ui::ChatDividers {
                         afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                         left_app: self.chat.device_left_at(),

@@ -6,11 +6,13 @@ use ratatui::{
 };
 
 use crate::app::chat::action::parse_action_body;
+use crate::app::chat::news::ui::lounge_card_lines;
 use crate::app::chat::state::TranslationDisplay;
 use crate::app::chat::svc::ReportKind;
 use crate::app::common::username_effect::{NameStyle, char_color};
 use crate::app::common::{markdown::render_body_to_lines, theme};
 use late_core::models::{
+    article::ArticleFeedItem,
     chat_message_gild::{ChatMessageGildSummary, GildTier},
     chat_message_reaction::ChatMessageReactionSummary,
 };
@@ -219,12 +221,20 @@ pub(super) fn wrap_chat_entry_to_lines(
     continuation: bool,
     system_text: Option<&str>,
     inline_image_lines: Option<&[Line<'static>]>,
+    news_card: Option<&ArticleFeedItem>,
     reactions: &[ChatMessageReactionSummary],
     gild: Option<ChatMessageGildSummary>,
     translation: Option<&TranslationDisplay>,
 ) -> WrappedChatEntry {
     let gutter = Gutter::of(mentions_us, gild);
     let pad = gutter.span();
+    // A News share's #lounge card is drawn from its story in place of its
+    // line (`📰 Title url`), so the line itself shows nothing under the
+    // header, gets no link preview, and is never translated.
+    let body = match news_card {
+        Some(_) => "",
+        None => body,
+    };
     let report_payload = system_text
         .is_none()
         .then(|| parse_report_payload(body))
@@ -244,7 +254,7 @@ pub(super) fn wrap_chat_entry_to_lines(
     // The translation block rides under the body of plain messages (and /me
     // actions) only: report cards and system lines have their own layouts
     // and are never translated.
-    let translation_slot = (system_text.is_none() && report_payload.is_none())
+    let translation_slot = (system_text.is_none() && report_payload.is_none() && news_card.is_none())
         .then_some(translation)
         .flatten();
     let mut lines = if let Some(system) = system_text {
@@ -267,16 +277,26 @@ pub(super) fn wrap_chat_entry_to_lines(
         )
     };
 
-    let image_line_range = if let Some(img_lines) = inline_image_lines.filter(|l| !l.is_empty()) {
-        let start = lines.len();
-        for img_line in img_lines {
-            let mut spans = vec![pad.clone(), Span::raw(" ")];
-            spans.extend(img_line.spans.iter().cloned());
-            lines.push(Line::from(spans));
+    let image_line_range = match (news_card, inline_image_lines.filter(|l| !l.is_empty())) {
+        (Some(item), _) => {
+            let start = lines.len();
+            for card_line in lounge_card_lines(item, width.saturating_sub(1)) {
+                let mut spans = vec![pad.clone()];
+                spans.extend(card_line.spans);
+                lines.push(Line::from(spans));
+            }
+            Some((start, lines.len()))
         }
-        Some((start, lines.len()))
-    } else {
-        None
+        (None, Some(img_lines)) => {
+            let start = lines.len();
+            for img_line in img_lines {
+                let mut spans = vec![pad.clone(), Span::raw(" ")];
+                spans.extend(img_line.spans.iter().cloned());
+                lines.push(Line::from(spans));
+            }
+            Some((start, lines.len()))
+        }
+        (None, None) => None,
     };
 
     if let Some(translation) = translation_slot {
@@ -381,8 +401,9 @@ pub(super) struct WrappedChatEntry {
     /// for report cards (different layout) and for continuation messages
     /// (header intentionally omitted so a run reads as one block).
     pub header_line_index: Option<usize>,
-    /// Half-open range `[start, end)` of inline-image rows within `lines`.
-    /// `None` when the message has no inline image preview.
+    /// Half-open range `[start, end)` of preview rows within `lines`: a
+    /// News card, or an inline image or YouTube thumbnail. A click on one
+    /// opens what it previews. `None` when the message has no preview.
     pub image_line_range: Option<(usize, usize)>,
 }
 

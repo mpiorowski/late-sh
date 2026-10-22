@@ -2,6 +2,7 @@ use uuid::Uuid;
 
 use crate::{
     models::{
+        article::{Article, ArticleParams},
         chat_message::{ChatMessage, ChatMessageParams, HistoryDirection, escape_like_pattern},
         chat_message_reaction::{ChatMessageReaction, ChatMessageReactionAction},
         chat_room::ChatRoom,
@@ -716,6 +717,68 @@ async fn first_unread_after_finds_the_oldest_foreign_message_past_the_cutoff() {
             .await
             .unwrap();
     assert!(none.is_none());
+}
+
+/// The paper's room transcript leaves News shares' #lounge cards out (the
+/// paper prints shares on its own reading page) and keeps what people say
+/// about them.
+#[tokio::test]
+async fn list_public_room_between_leaves_out_news_cards() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    let sharer = create_test_user(&test_db.db, "paper-card-sharer").await;
+    let card = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: sharer.id,
+            body: "📰 Card story https://example.com/card".to_string(),
+        },
+    )
+    .await
+    .expect("post card");
+    let article = Article::create_by_user_id(
+        &client,
+        sharer.id,
+        ArticleParams {
+            user_id: sharer.id,
+            url: "https://example.com/card".to_string(),
+            title: "Card story".to_string(),
+            summary: "• one".to_string(),
+            ascii_art: String::new(),
+        },
+    )
+    .await
+    .expect("share");
+    Article::link_lounge_message(&client, article.id, card.id)
+        .await
+        .expect("link card");
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: sharer.id,
+            body: "worth a read".to_string(),
+        },
+    )
+    .await
+    .expect("say something");
+
+    let floor = chrono::Utc::now() - chrono::Duration::hours(1);
+    let ceiling = chrono::Utc::now() + chrono::Duration::minutes(1);
+    let transcript = ChatMessage::list_public_room_between(&client, lounge.id, floor, ceiling, 10)
+        .await
+        .expect("transcript");
+    assert_eq!(
+        transcript
+            .iter()
+            .map(|message| message.body.as_str())
+            .collect::<Vec<_>>(),
+        vec!["worth a read"]
+    );
 }
 
 #[tokio::test]

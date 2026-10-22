@@ -43,6 +43,7 @@ fn wrap_chat_entry_to_lines_renders_report_card() {
         false,
         None,
         None,
+        None,
         &[],
         None,
         None,
@@ -68,6 +69,7 @@ fn wrap_chat_entry_to_lines_renders_action_message() {
         Style::default(),
         false,
         false,
+        None,
         None,
         None,
         &[],
@@ -116,6 +118,7 @@ fn wrap_chat_entry_to_lines_appends_reaction_footer() {
         false,
         None,
         None,
+        None,
         &[
             ChatMessageReactionSummary {
                 icon: "🧡".to_string(),
@@ -152,6 +155,7 @@ fn wrap_chat_entry_to_lines_marks_a_gilded_message() {
         false,
         None,
         None,
+        None,
         &[],
         Some(ChatMessageGildSummary {
             top_tier: GildTier::Silver,
@@ -184,6 +188,7 @@ fn wrap_chat_entry_to_lines_marks_a_gilded_message() {
         Style::default(),
         false,
         false,
+        None,
         None,
         None,
         &[ChatMessageReactionSummary {
@@ -222,6 +227,7 @@ fn wrap_chat_entry_to_lines_renders_ready_translation_under_the_body() {
         false,
         None,
         None,
+        None,
         &[],
         None,
         Some(&translation),
@@ -248,6 +254,7 @@ fn wrap_chat_entry_to_lines_renders_no_translation_line_when_hidden() {
         Style::default(),
         false,
         false,
+        None,
         None,
         None,
         &[],

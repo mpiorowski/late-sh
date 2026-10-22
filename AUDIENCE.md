@@ -121,6 +121,24 @@ Web, 25 days: the landing page 535,000 views (bot traffic; treat as
 noise), gallery 4,400, profile pages 3,700 plus 1,400 index views, terms
 764, `/listen` 147, a live stream page 136.
 
+**The newcomer funnel**, from the referral clock (section 6): the 298
+accounts created 2026-10-02 to 2026-10-15, about 21 a day, followed for
+their first week. An active minute is a UTC minute with keyboard input.
+
+| | Accounts | Share |
+|---|---|---|
+| Typed anything on day one | 276 | 93% |
+| 5 or more active minutes on day one | 156 | 52% |
+| 20 or more active minutes on day one | 47 | 16% |
+| Typed anything on days 2 to 8 | 42 | 14% |
+| Typed on two or more of days 2 to 8 | 14 | 5% |
+| One day of 20 or more active minutes in days 2 to 8 | 17 | 6% |
+| Three such days | 7 | 2% |
+
+Median active minutes in the week after day one: 0. The 90th percentile:
+2. The per-day numbers are flat across the two weeks (0 to 3 returners a
+day out of 9 to 39 signups), so this is the shape, not a bad week.
+
 **deadchannel**, switched on 2026-10-21. In 25 days the first-contact gate
 was evaluated 1,154 times at connect: 800 passes, 174 bios too short, 159
 too few hours, 8 too few settings (counts per connect, not per person).
@@ -133,6 +151,15 @@ fight commands. Too early to read; what to watch is in section 5.
 
 ## 4. What the numbers say
 
+- **The first session is the leak.** Nine in ten newcomers type on day
+  one and half of them stay five minutes, then 86% never press a key
+  again and 94% never come back for a second day. The regulars were not
+  made by the current first session either: 298 signups in two weeks
+  produced 7 people with three active days. Arrivals are not the lever
+  until that changes; a launch post today pours 100 people into a 94%
+  leak, which is what July's Hacker News spike measured. The lever is
+  the first hour: what a newcomer sees, is handed, and has a reason to
+  return to tomorrow.
 - **late.sh is a terminal people leave open.** 81% of attention is idle,
   the night is as busy as the morning, and the longest-connected tenth of
   the crowd holds nearly half the connected time. Concurrency is weekly
@@ -203,6 +230,13 @@ fight commands. Too early to read; what to watch is in section 5.
 
 Live, in order of evidence behind them:
 
+- **The first hour, before anything else.** The funnel above says the
+  next ritual, surface or launch post lands on people who are gone by
+  day two. What a newcomer is handed on day one (the tour, the paper, an
+  invitation to come back tomorrow: a daily board started, a runner
+  promised, a seat kept) is the unmeasured half of this doc; measure the
+  first session by screen with the attention counter filtered to new
+  accounts before designing it.
 - **Daily boards are the proven ritual.** The Arcade's daily is the floor
   deadchannel's ration loop is built to copy. More of that shape (one
   shared object a day, finished in minutes, talked about in #lounge) beats
@@ -211,14 +245,60 @@ Live, in order of evidence behind them:
   only while the session is attached. A deadchannel beat that only a
   connected runner can take (a spawn, a crossing landing while you are on
   the wire) raises hours left open without a new surface.
-- **Put the daily paper and the gallery on the public web, then post
-  them.** The gallery and profiles are the only web pages with real
-  traffic; a public paper page with an RSS feed, and a bot account on the
-  Fediverse posting the day's Artboard snapshot and headline, give the
-  outside world a daily reason to look. Posting is one bearer token and
-  one HTTP call; federating profiles (ActivityPub, WebFinger, signed
-  fetches, inbound moderation) is weeks of work and sends the visibility
-  people want outward, away from the terminal. Post, do not federate.
+- **The front door on the web exists**: the paper page and its feed,
+  `rel="me"` on profile links so a member's Mastodon profile shows late.sh
+  verified, and preview cards that unfurl a profile into its poster and a
+  gallery link into its snapshot, drawn server-side as PNG
+  (`late-web/CONTEXT.md`). Post, do not federate: a bot account on an
+  existing instance is one bearer token and two HTTP calls; federating
+  profiles (ActivityPub, WebFinger, signed fetches, inbound moderation) is
+  weeks of work and sends the visibility people want outward, away from
+  the terminal.
+- **The herald: one picture a day on the Fediverse.** An ordinary account
+  on an existing Mastodon instance (fosstodon.org: FOSS-leaning, a local
+  timeline that gives a new account readers on day one, bots welcome
+  when marked), flagged as automated, `https://late.sh` in its profile
+  links, and an application token with `write:media` and
+  `write:statuses` only. The Fediverse is every server speaking
+  ActivityPub (Mastodon, Pixelfed, PeerTube, Lemmy, Threads in part);
+  one Mastodon account is addressable from all of it. Bluesky is a
+  different network and would be a second client, later.
+  - **What it posts.** One picture a day, rotating so the slot never
+    repeats: yesterday's Artboard snapshot (tagged #ASCIIart and
+    #MastoArt, the communities that boost strangers' art), a runner's
+    poster the day it is painted at PRINTS with the member's handle, the
+    day's best share card rendered as a picture with the `ssh late.sh`
+    footer, a frame of the tavern or the night city. Each with alt text,
+    a link to that day's `/paper` or the gallery, and the same four tags
+    (#tildeverse #pubnix #ssh #terminal). The rare headline events the
+    #lounge feed already treats as stories (the pot drawn, the crown
+    taken, the monthly awards) may take the slot. Every picture comes
+    through `late-web`'s cell renderer, so anything the terminal draws
+    can be posted.
+  - **What it never posts.** Chat. A frame of #lounge is people's
+    messages on the public web; the Artboard, posters and cards are
+    things people made to be seen, messages are not.
+  - **The rhythm.** One post a day, at most two when both are pictures.
+    A muted account never recovers; the variety above is so one slot
+    never repeats, not so there are more slots.
+  - **The shape.** A small late-ssh domain built like the paper's press:
+    a sweeper on every replica, a `herald_posts` row per UTC day claimed
+    by conditional insert so several replicas post exactly once, the
+    picture fetched from `late-web`'s image routes over `web_url`, a
+    media upload then a status call with an idempotency key so a retry
+    never double-posts, a `posted / skipped / failed` counter on the
+    Grafana board. Config off in dev and required in prod, so the first
+    prod deploy after it merges needs the token secret in place (wired
+    like `LATE_AI_API_KEY` in `infra/service-ssh.tf`) or the service
+    refuses to start.
+  - **The human half.** The account follows a few people, answers
+    replies, and boosts members who post their own profile or card. A
+    bot that only broadcasts gets muted; an account that posts once a
+    day and otherwise behaves like a person gets followed.
+  - **When.** It is an arrivals lever, and the funnel in section 3 says
+    arrivals leak at 94% on day two. Build it, flip it on once the first
+    hour has moved, so the first thing new followers find is a place
+    that holds them.
 - **Launch posts wait for the deadchannel public flip** (`GAME.md`, "The
   three surfaces"), which is the game's public launch. The Hacker News
   front page in July 2026 peaked at about 100 sessions and settled back to
@@ -272,6 +352,56 @@ curl -s http://127.0.0.1:19428/select/logsql/query \
 # session lengths (summaries are written for a subset of sessions)
 curl -s http://127.0.0.1:19428/select/logsql/query \
   --data-urlencode 'query=_time:7d "session wire summary" | stats by (client) count() n, quantile(0.5, secs) p50, quantile(0.9, secs) p90'
+```
+
+The newcomer funnel comes from the database, not the logs: the referral
+clock (`newcomer_activity_days`, `late-ssh/src/app/referral/CONTEXT.md`)
+records every account's first 60 days, invited or not, one row per UTC day
+with keyboard input, from 2026-10-02 on. Of the accounts created since the
+clock started and at least a week ago, how many came back on one, three
+and five separate days with 20 or more active minutes inside their first
+week (read-only, through `scripts/connect_db.sh`; widen the window to 14
+days once the table is a month older):
+
+```sql
+WITH cohort AS (
+  SELECT id, created::date AS joined FROM users
+  WHERE created >= '2026-10-02'
+    AND created <  now() - interval '7 days'
+), days AS (
+  SELECT c.id,
+         count(*) FILTER (WHERE a.active_minutes >= 20) AS good_days
+  FROM cohort c
+  LEFT JOIN newcomer_activity_days a
+    ON a.user_id = c.id AND a.day > c.joined AND a.day <= c.joined + 7
+  GROUP BY c.id
+)
+SELECT count(*) AS accounts,
+       count(*) FILTER (WHERE good_days >= 1) AS back_once,
+       count(*) FILTER (WHERE good_days >= 3) AS back_3_days,
+       count(*) FILTER (WHERE good_days >= 5) AS back_5_days
+FROM days;
+```
+
+What a newcomer does on day one is a metrics question: every engagement
+counter carries `tenure` (`day_one`, `first_week`, `regular`;
+`late-ssh/CONTEXT.md`, Telemetry), the first-visit tour counts each stop
+reached, and a session's end records the screen that was up. The Grafana
+"Newcomers" row shows all four; the same by hand:
+
+```bash
+# day-one active minutes by screen, last 7 days
+curl -s --data-urlencode 'query=sum by (screen) (increase(late_ssh_attention_seconds_total{tenure="day_one",presence="active"}[7d]))/60' \
+  http://127.0.0.1:18428/api/v1/query
+# the tour funnel: stops reached; the drop between two stops is where they leave
+curl -s --data-urlencode 'query=sum by (stop) (increase(late_ssh_tour_stops_total[7d]))' \
+  http://127.0.0.1:18428/api/v1/query
+# the last screen a first-day session saw
+curl -s --data-urlencode 'query=sum by (screen) (increase(late_ssh_session_ends_total{tenure="day_one"}[7d]))' \
+  http://127.0.0.1:18428/api/v1/query
+# sessions per day by tenure: first_week against day_one is the cheap return signal
+curl -s --data-urlencode 'query=sum by (tenure) (increase(late_ssh_session_start_seconds_count{stage="total"}[1d]))' \
+  http://127.0.0.1:18428/api/v1/query
 ```
 
 Gaps in what the telemetry can answer, by design (no per-person metric

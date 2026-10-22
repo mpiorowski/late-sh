@@ -2,16 +2,15 @@
 //! stamps every session and every replica shares, so two sessions looking at
 //! the same room see the same thing in the same order.
 //!
-//! Two lanes and one overlay:
-//! - **The queue.** Everything waits in one of two lanes, first come first
-//!   served: News, and Everything else. The strip takes from News first.
+//! One queue and one overlay:
+//! - **The queue.** Everything waits in one queue, first come first served.
 //!   Whatever is up stays at least its minimum (`min_for`); after that it
 //!   hands over as soon as anything is waiting, and with nothing waiting it
 //!   comes down `LIVE_MAX_UP` after it went up. Anything that waits longer
 //!   than `LIVE_MAX_WAIT` is dropped.
 //! - **The aim.** While a pool shooter moves the cue, that table is drawn
-//!   over whatever the queue has up, unless it is a link. The queue's clock
-//!   keeps running underneath.
+//!   over whatever the queue has up. The queue's clock keeps running
+//!   underneath.
 
 use std::time::{Duration, Instant};
 
@@ -20,8 +19,8 @@ use uuid::Uuid;
 
 use crate::app::door::spectate::state::LiveGameKey;
 
-/// What the live strip can show. Closed: a new source has to say which
-/// lane it waits in (`lane`), its minimum (`min_for`), what it looks like
+/// What the live strip and the sidebar's Live panel can point at. Closed:
+/// a new source has to say its minimum (`min_for`), what it looks like
 /// (`ui.rs`), and what the keys do to it (`input.rs`) before it builds. The
 /// order of the variants only breaks a tie between two stamps of the same
 /// instant.
@@ -34,7 +33,8 @@ pub enum LiveSource {
     DailyResult(Uuid),
     /// A track somebody put in the YouTube booth queue, by queue item id.
     BoothTrack(Uuid),
-    /// A link somebody shared to News, by article id.
+    /// A link somebody shared to News, by article id: a Live panel row only.
+    /// The strip never queues one, since a share is its card in #lounge.
     NewsArticle(Uuid),
     /// A stream that went live, by the streamer's user id (one stream per
     /// user).
@@ -50,26 +50,6 @@ pub enum LiveSource {
     /// The house's standing world, by game id: its last moment (a rise, an
     /// arrival, a take, a fall, the end), stamped by the write that made it.
     Realm(Uuid),
-}
-
-/// The two lanes of the queue. The strip always takes from `News` first.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Lane {
-    News,
-    Rest,
-}
-
-fn lane(source: LiveSource) -> Lane {
-    match source {
-        LiveSource::NewsArticle(_) => Lane::News,
-        LiveSource::DailyMatch(_)
-        | LiveSource::DailyResult(_)
-        | LiveSource::BoothTrack(_)
-        | LiveSource::Stream(_)
-        | LiveSource::DoorGame(_)
-        | LiveSource::BoardEvent(_)
-        | LiveSource::Realm(_) => Lane::Rest,
-    }
 }
 
 /// An aim older than this is a player who stopped, not one lining up.
@@ -88,14 +68,10 @@ pub const LIVE_DOOR_GAME_MIN: Duration = Duration::from_secs(2 * 60);
 /// A board event stays up at least this long, the same as a stream: long
 /// enough to read what it is and press the key.
 pub const LIVE_BOARD_EVENT_MIN: Duration = Duration::from_secs(2 * 60);
-/// A shared link stays up at least this long: a link takes longer to read
-/// than a board takes to glance at. It equals `LIVE_MAX_UP`, so a link is
-/// up exactly this long.
-pub const LIVE_NEWS_MIN: Duration = Duration::from_secs(5 * 60);
 /// With nothing waiting, whatever is up comes down this long after it went
 /// up: the strip is for what just happened.
 pub const LIVE_MAX_UP: Duration = Duration::from_secs(5 * 60);
-/// Anything that waited this long in its lane is old news and is dropped,
+/// Anything that waited this long in the queue is stale and is dropped,
 /// so a busy evening never builds a backlog the strip cannot catch up on.
 pub const LIVE_MAX_WAIT: Duration = Duration::from_secs(10 * 60);
 /// The oldest stamp the strip can still show: one that waited its longest,
@@ -118,7 +94,7 @@ fn min_for(source: LiveSource) -> chrono::Duration {
         LiveSource::Stream(_) => LIVE_STREAM_MIN,
         LiveSource::DoorGame(_) => LIVE_DOOR_GAME_MIN,
         LiveSource::BoardEvent(_) => LIVE_BOARD_EVENT_MIN,
-        LiveSource::NewsArticle(_) => LIVE_NEWS_MIN,
+        LiveSource::NewsArticle(_) => unreachable!("a News share never queues on the strip"),
     })
 }
 
@@ -126,9 +102,9 @@ fn min_for(source: LiveSource) -> chrono::Duration {
 #[derive(Clone, Copy, Debug)]
 pub struct LiveCandidate {
     pub source: LiveSource,
-    /// When it joined its lane: a match row's `updated` (the claim, every
+    /// When it joined the queue: a match row's `updated` (the claim, every
     /// move), when a match finished, when a track was queued, when a stream
-    /// went live, when a door game started, when a link was shared. A match that moves again joins
+    /// went live, when a door game started. A match that moves again joins
     /// again at the back.
     pub updated: DateTime<Utc>,
     /// When somebody last acted on it right now, if they have: a pool
@@ -175,17 +151,8 @@ pub fn pick_queued(
 }
 
 /// The table somebody is lining up a shot on, drawn over what the queue has
-/// up (`queued`), the freshest aim if several. Never over a link.
-pub fn aim_overlay(
-    queued: Option<Featured>,
-    candidates: &[LiveCandidate],
-    now: Instant,
-) -> Option<LiveSource> {
-    if let Some(queued) = queued
-        && lane(queued.source) == Lane::News
-    {
-        return None;
-    }
+/// up, the freshest aim if several.
+pub fn aim_overlay(candidates: &[LiveCandidate], now: Instant) -> Option<LiveSource> {
     candidates
         .iter()
         .filter(|candidate| {
@@ -201,12 +168,12 @@ pub fn aim_overlay(
 /// and every replica shares. Returns what is up and when it went up, or
 /// `None` when the strip is down.
 ///
-/// Walks from one moment that matters to the next: a stamp joining its
-/// lane, the end of the up source's minimum, the end of its `LIVE_MAX_UP`.
+/// Walks from one moment that matters to the next: a stamp joining the
+/// queue, the end of the up source's minimum, the end of its `LIVE_MAX_UP`.
 /// At each, waiting entries past `LIVE_MAX_WAIT` are dropped; when the up
 /// source may hand over (its minimum is done, or nothing is up) the oldest
-/// News entry goes up, else the oldest of the rest; with nothing waiting it
-/// stays until `LIVE_MAX_UP`, then the strip comes down.
+/// waiting entry goes up; with nothing waiting it stays until
+/// `LIVE_MAX_UP`, then the strip comes down.
 fn replay(
     candidates: &[LiveCandidate],
     now_utc: DateTime<Utc>,
@@ -232,8 +199,8 @@ fn replay(
             Some((source, since)) => at >= since + min_for(source),
             None => true,
         };
-        if may_hand_over && let Some(next) = take_next(&mut waiting) {
-            up = Some((next.source, at));
+        if may_hand_over && !waiting.is_empty() {
+            up = Some((waiting.remove(0).source, at));
         } else if let Some((_, since)) = up
             && waiting.is_empty()
             && at >= since + max_up
@@ -265,16 +232,6 @@ fn replay(
         at = next;
     }
     up
-}
-
-/// Take the entry that goes up next: the oldest link, else the oldest of the
-/// rest. `waiting` is in arrival order.
-fn take_next<'a>(waiting: &mut Vec<&'a LiveCandidate>) -> Option<&'a LiveCandidate> {
-    let index = waiting
-        .iter()
-        .position(|entry| lane(entry.source) == Lane::News)
-        .or_else(|| (!waiting.is_empty()).then_some(0))?;
-    Some(waiting.remove(index))
 }
 
 #[cfg(test)]

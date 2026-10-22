@@ -8,17 +8,15 @@ use crate::app::live::pick::LIVE_MAX_UP;
 
 /// One evening on the strip, from the stamps alone: a booth track and a
 /// daily move take turns in the order they happened, each for its minimum,
-/// the match's result joins the queue when it ends and opens nothing, a
-/// shared link goes up at the next handover for its five minutes, and the
-/// strip comes down when nothing is left.
+/// the match's result joins the queue when it ends and opens nothing, and
+/// the strip comes down when nothing is left.
 #[test]
-fn a_track_a_match_and_its_result_take_turns_and_a_link_cuts_in() {
+fn a_track_a_match_and_its_result_take_turns_then_the_strip_comes_down() {
     let start = Instant::now();
     let t0 = Utc.with_ymd_and_hms(2026, 9, 29, 21, 0, 0).unwrap();
     let track = LiveSource::BoothTrack(Uuid::from_u128(1));
     let chess = LiveSource::DailyMatch(Uuid::from_u128(2));
     let result = LiveSource::DailyResult(Uuid::from_u128(2));
-    let article = LiveSource::NewsArticle(Uuid::from_u128(3));
     let candidate = |source, secs: i64| LiveCandidate {
         source,
         updated: t0 + chrono::Duration::seconds(secs),
@@ -26,11 +24,6 @@ fn a_track_a_match_and_its_result_take_turns_and_a_link_cuts_in() {
     };
     let playing = [candidate(chess, 20), candidate(track, 0)];
     let finished = [candidate(result, 150), candidate(track, 0)];
-    let shared = [
-        candidate(result, 150),
-        candidate(track, 0),
-        candidate(article, 230),
-    ];
     let mut live = LiveState::new();
     let mut step = |candidates: &[LiveCandidate], secs: u64| {
         let changed = live.refresh(
@@ -62,17 +55,15 @@ fn a_track_a_match_and_its_result_take_turns_and_a_link_cuts_in() {
         (true, Some(result), None),
         "the match ends: its result takes its place and opens nothing"
     );
-    assert_eq!(step(&finished, 209), (false, Some(result), None));
     assert_eq!(
-        step(&shared, 230),
-        (true, Some(article), Some(article)),
-        "a shared link goes up at the next handover"
+        step(&finished, 449),
+        (false, Some(result), None),
+        "nothing waiting: it stays"
     );
-    assert_eq!(step(&shared, 529), (false, Some(article), Some(article)));
     assert_eq!(
-        step(&shared, 530),
+        step(&finished, 450),
         (true, None, None),
-        "the link's five minutes are up and nothing is waiting"
+        "five minutes up and nothing is waiting"
     );
 }
 

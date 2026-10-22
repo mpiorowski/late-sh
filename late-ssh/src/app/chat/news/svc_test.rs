@@ -1,17 +1,22 @@
 use crate::app::ai::svc::AiService;
 use crate::app::chat::news::svc::ArticleService;
+use crate::app::chat::notifications::svc::NotificationService;
+use crate::app::chat::svc::ChatService;
 use late_core::models::{
     article::{Article, ArticleEvent, ArticleParams},
+    chat_message::ChatMessage,
+    chat_room::ChatRoom,
     moderation_audit_log::ModerationAuditLog,
 };
 use tokio::time::{Duration, timeout};
 
-use crate::test_helpers::new_test_db;
+use crate::test_helpers::{new_test_db, wait_until};
 use late_core::test_utils::create_test_user;
 use uuid::Uuid;
 
 fn make_article_service(db: late_core::db::Db) -> ArticleService {
-    ArticleService::new(db, AiService::new(false, None))
+    let chat = ChatService::new(db.clone(), NotificationService::new(db.clone()));
+    ArticleService::new(db, AiService::new(false, None), chat)
 }
 
 fn article_params(user_id: Uuid, url: &str, title: &str) -> ArticleParams {
@@ -188,6 +193,58 @@ async fn process_url_emits_failed_event_for_duplicate_url() {
         }
         other => panic!("expected Failed event, got {other:?}"),
     }
+}
+
+/// A share's card goes into #lounge as the sharer's own line, `📰 Title
+/// url`, and the story points at it. Deleting the story, here by an admin,
+/// takes the card out of #lounge with it.
+#[tokio::test]
+async fn a_share_posts_its_lounge_card_and_a_delete_takes_it_out() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    let sharer = create_test_user(&test_db.db, "card-sharer").await;
+    let admin = create_test_user(&test_db.db, "card-admin").await;
+    let article = Article::create_by_user_id(
+        &client,
+        sharer.id,
+        article_params(sharer.id, "https://example.com/card", "Card  story\n"),
+    )
+    .await
+    .expect("seed article");
+    let service = make_article_service(test_db.db.clone());
+
+    service.post_lounge_card(&article).await;
+
+    let lounge_lines = ChatMessage::list_recent(&client, lounge.id, 10)
+        .await
+        .expect("list lounge");
+    assert_eq!(
+        lounge_lines
+            .iter()
+            .map(|message| (message.user_id, message.body.as_str()))
+            .collect::<Vec<_>>(),
+        vec![(sharer.id, "📰 Card story https://example.com/card")]
+    );
+    let linked = Article::get(&client, article.id)
+        .await
+        .expect("reload article")
+        .expect("article");
+    assert_eq!(linked.lounge_message_id, Some(lounge_lines[0].id));
+
+    service.delete_article(admin.id, article.id, true);
+    wait_until(
+        || async {
+            ChatMessage::list_recent(&client, lounge.id, 10)
+                .await
+                .expect("list lounge")
+                .is_empty()
+        },
+        "the card leaves #lounge with its story",
+    )
+    .await;
 }
 
 #[tokio::test]

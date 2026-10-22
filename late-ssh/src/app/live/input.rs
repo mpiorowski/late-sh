@@ -31,23 +31,6 @@ pub fn open_from_key(app: &mut App) -> bool {
     }
 }
 
-/// `r` on the #lounge card replies to what the strip is showing, when that
-/// is something a reply can quote: a shared article. Anything else falls
-/// through untouched.
-pub fn reply_from_key(app: &mut App) -> bool {
-    match app.live.showing() {
-        Some(LiveSource::NewsArticle(article_id)) => app.chat.begin_reply_to_article(article_id),
-        Some(LiveSource::DailyMatch(_))
-        | Some(LiveSource::DailyResult(_))
-        | Some(LiveSource::BoothTrack(_))
-        | Some(LiveSource::Stream(_))
-        | Some(LiveSource::DoorGame(_))
-        | Some(LiveSource::BoardEvent(_))
-        | Some(LiveSource::Realm(_))
-        | None => false,
-    }
-}
-
 /// A left-click on the strip, the mouse twin of the key. A rect is only
 /// recorded on frames where the strip drew something that opens.
 pub fn open_from_click(app: &mut App, x: u16, y: u16) -> bool {
@@ -145,9 +128,10 @@ fn open(app: &mut App, source: LiveSource, origin: Origin) -> bool {
             }
             false => false,
         },
-        // The News reader on the story, or the player straight away for a
-        // video this session can play. Gone between the frame and the key
-        // (deleted): nothing to open.
+        // A Live panel row (a share is never on the strip, it is its card
+        // in #lounge): the News reader on the story, or the player straight
+        // away for a video this session can play. Gone between the frame
+        // and the key (deleted): nothing to open.
         LiveSource::NewsArticle(article_id) => {
             crate::app::chat::news::input::open_article(app, article_id)
         }

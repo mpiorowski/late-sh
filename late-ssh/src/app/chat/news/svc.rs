@@ -1,10 +1,12 @@
 use super::body::{self, BodyFetchError, BodyFetchFailure, ReadableBody};
 use crate::app::ai::svc::AiService;
+use crate::app::chat::svc::{ChatService, SendError};
 use crate::metrics;
 use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 use anyhow::{Context, Result};
 use late_core::models::article::{
     ArticleEvent, ArticleFeedItem, ArticleSnapshot, FeedArticle, NEWS_FEED_LIMIT,
+    NEWS_LOUNGE_CARD_LIMIT,
 };
 use late_core::{
     db::Db,
@@ -21,6 +23,7 @@ use late_core::{
 use serde::Deserialize;
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
@@ -57,6 +60,8 @@ const ARTICLE_BODY_SWEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 pub struct ArticleService {
     db: Db,
     ai_service: AiService,
+    /// Posts a share's card into #lounge and takes it out with the story.
+    chat_service: ChatService,
     http_client: reqwest::Client,
     /// The reader's page fetch, public addresses only (`body.rs`).
     body_client: reqwest::Client,
@@ -66,13 +71,14 @@ pub struct ArticleService {
 }
 
 impl ArticleService {
-    pub fn new(db: Db, ai_service: AiService) -> Self {
+    pub fn new(db: Db, ai_service: AiService, chat_service: ChatService) -> Self {
         let (snapshot_tx, snapshot_rx) = watch::channel(ArticleSnapshot::default());
         let (evt_tx, _) = broadcast::channel(512);
 
         Self {
             db,
             ai_service,
+            chat_service,
             http_client: reqwest::Client::new(),
             body_client: body::http_client(),
             snapshot_tx,
@@ -268,10 +274,22 @@ impl ArticleService {
         let db_client = self.db.get().await?;
         let articles = Article::list_feed(&db_client, NEWS_FEED_LIMIT).await?;
         let articles = self.attach_sharers(&db_client, articles).await?;
+        let cards = Article::list_lounge_cards(&db_client, NEWS_LOUNGE_CARD_LIMIT).await?;
+        let lounge_cards = self
+            .attach_sharers(&db_client, cards)
+            .await?
+            .into_iter()
+            .filter_map(|item| {
+                item.article
+                    .lounge_message_id
+                    .map(|message_id| (message_id, item))
+            })
+            .collect::<HashMap<_, _>>();
 
         self.publish_snapshot(ArticleSnapshot {
             user_id: None, // Global feed
             articles,
+            lounge_cards: Arc::new(lounge_cards),
         })?;
 
         Ok(())
@@ -475,12 +493,29 @@ impl ArticleService {
                         json!({ "target_user_id": article.user_id, "url": article.url }),
                     )
                     .await?;
-                    Ok::<_, anyhow::Error>(())
+                    Ok::<_, anyhow::Error>(article.lounge_message_id)
                 }
                 .await;
 
                 match result {
-                    Ok(()) => service.publish_event(ArticleEvent::Deleted { user_id }),
+                    Ok(card) => {
+                        service.publish_event(ArticleEvent::Deleted { user_id });
+                        // The story is gone whatever happens to its card: a
+                        // card left behind reads as its plain line.
+                        if let Some(message_id) = card
+                            && let Err(e) = service
+                                .chat_service
+                                .delete_news_card(user_id, message_id)
+                                .await
+                        {
+                            late_core::error_span!(
+                                "news_card_delete_failed",
+                                error = ?e,
+                                message_id = %message_id,
+                                "failed to delete the story's lounge card"
+                            );
+                        }
+                    }
                     Err(e) => {
                         late_core::error_span!(
                             "article_delete_failed",
@@ -519,21 +554,23 @@ impl ArticleService {
 
                 match processing {
                     // The share is up and its `Created` is out, so nothing
-                    // past here can fail it: the body step logs its own. It
-                    // runs as its own task, out of reach of the abort handle
-                    // this task hands the session, so cancelling the composer
-                    // never cuts a fetch short.
+                    // past here can fail it: the card and the body steps log
+                    // their own. They run as their own task, out of reach of
+                    // the abort handle this task hands the session, so
+                    // cancelling the composer never cuts either short.
                     Ok(Ok(article)) => {
-                        let body_service = service.clone();
+                        let after_service = service.clone();
+                        let article_id = article.id;
                         tokio::spawn(
                             async move {
-                                body_service
+                                after_service.post_lounge_card(&article).await;
+                                after_service
                                     .store_body(article.id, &article.url, deadline)
                                     .await;
                             }
                             .instrument(info_span!(
-                                "article.store_body_task",
-                                article_id = %article.id
+                                "article.after_share_task",
+                                article_id = %article_id
                             )),
                         );
                     }
@@ -634,9 +671,8 @@ impl ArticleService {
         };
 
         // The insert fired `articles_changed`; every replica's listener,
-        // this one included, refreshes the shared snapshot from it, and the
-        // #lounge live strip features the article from there
-        // (`news/live.rs`). Nothing is posted into the chat.
+        // this one included, refreshes the shared snapshot from it. The
+        // card in #lounge is the next step (`post_lounge_card`).
 
         // 5. Publish Event
         tracing::info!(%url, "publishing ArticleEvent::Created");
@@ -647,6 +683,58 @@ impl ArticleService {
         });
 
         Ok(article)
+    }
+
+    /// The share's card in #lounge: the sharer's line, `📰 Title url`, which
+    /// is what IRC, search and the bartender read, then the story pointed at
+    /// it, which is what chat draws it as. Runs after the share is up, so
+    /// nothing here can fail it: every outcome is counted and logged here.
+    #[tracing::instrument(skip(self, article), fields(article_id = %article.id))]
+    pub(crate) async fn post_lounge_card(&self, article: &Article) {
+        let title = article.title.split_whitespace().collect::<Vec<_>>().join(" ");
+        let body = format!("📰 {title} {}", article.url);
+        let posted = self
+            .chat_service
+            .send_lounge_message_returning(article.user_id, body, true)
+            .await;
+        let message = match posted {
+            Ok(Some(message)) => message,
+            Ok(None) => unreachable!("a card's line always has its link"),
+            Err(SendError::Refused(refusal)) => {
+                metrics::record_news_card(NewsCardOutcome::Refused);
+                tracing::info!(refusal = ?refusal, "news card refused by room rules");
+                return;
+            }
+            Err(SendError::Failed(e)) => {
+                metrics::record_news_card(NewsCardOutcome::PostFailed);
+                late_core::error_span!(
+                    "news_card_post_failed",
+                    error = ?e,
+                    "failed to post the news card"
+                );
+                return;
+            }
+        };
+        let linked = async {
+            let client = self.db.get().await?;
+            Article::link_lounge_message(&client, article.id, message.id).await
+        }
+        .await;
+        match linked {
+            Ok(()) => {
+                metrics::record_news_card(NewsCardOutcome::Posted);
+                tracing::info!(message_id = %message.id, "news card posted");
+            }
+            Err(e) => {
+                metrics::record_news_card(NewsCardOutcome::LinkFailed);
+                late_core::error_span!(
+                    "news_card_link_failed",
+                    error = ?e,
+                    message_id = %message.id,
+                    "failed to point the story at its card"
+                );
+            }
+        }
     }
 
     /// The reader's body for a story that is already shared: fetched and
@@ -1244,6 +1332,21 @@ pub enum NewsSaveOutcome {
     Saved,
     Unsaved,
     Full,
+}
+
+/// How a share's card in #lounge went (`ArticleService::post_lounge_card`),
+/// what `metrics::record_news_card` counts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NewsCardOutcome {
+    /// Posted and pointed at: chat draws it as the card.
+    Posted,
+    /// The room's rules turned the line away (slow mode, a young account's
+    /// link cooldown, a ban): the story is in News only.
+    Refused,
+    PostFailed,
+    /// Posted, but the story does not point at it: it reads as its plain
+    /// line.
+    LinkFailed,
 }
 
 /// One step on a reader's shelf, run in its session's order by

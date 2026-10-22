@@ -14,7 +14,7 @@ use crate::app::audio::svc::ThumbnailFetch;
 use crate::app::bonsai::state::BonsaiAction;
 use crate::app::bonsai::svc::BonsaiActionResult;
 use crate::app::calendar::svc::{CalendarAnnouncement, CalendarOp, CalendarWrite};
-use crate::app::chat::news::svc::{BodyFetchOutcome, NewsSaveOutcome, XMediaLookup};
+use crate::app::chat::news::svc::{BodyFetchOutcome, NewsCardOutcome, NewsSaveOutcome, XMediaLookup};
 use crate::app::chat::svc::{GildRefusal, SendRefusal};
 use crate::app::clubhouse::nightcap::svc::{NightcapHouseFailure, NightcapOrderResult};
 use crate::app::common::primitives::Screen;
@@ -694,7 +694,7 @@ mod inner {
     };
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
-    use super::{NewsSaveOutcome, XMediaLookup};
+    use super::{NewsCardOutcome, NewsSaveOutcome, XMediaLookup};
     use super::{PollOutcome, PolledFeed};
     use super::{
         ZorkAction, ZorkCatalogueRead, ZorkEdition, ZorkSessionEnd, ZorkSuggestion,
@@ -1725,6 +1725,18 @@ mod inner {
                 .u64_counter("late_ssh_news_saves_total")
                 .with_description(
                     "News shelf saves by outcome: saved, unsaved, or full (the shelf refused an eleventh)",
+                )
+                .build()
+        })
+    }
+
+    fn news_cards_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_news_cards_total")
+                .with_description(
+                    "News share cards in #lounge by outcome: posted, refused (room rules), post_failed, link_failed (posted but not pointed at its story)",
                 )
                 .build()
         })
@@ -2972,6 +2984,21 @@ mod inner {
         news_saves_total().add(1, &[KeyValue::new("outcome", news_save_label(outcome))]);
     }
 
+    fn news_card_label(outcome: NewsCardOutcome) -> &'static str {
+        match outcome {
+            NewsCardOutcome::Posted => "posted",
+            NewsCardOutcome::Refused => "refused",
+            NewsCardOutcome::PostFailed => "post_failed",
+            NewsCardOutcome::LinkFailed => "link_failed",
+        }
+    }
+
+    /// Every share tries one card in #lounge; anything but posted is a
+    /// share people only find in News.
+    pub fn record_news_card(outcome: NewsCardOutcome) {
+        news_cards_total().add(1, &[KeyValue::new("outcome", news_card_label(outcome))]);
+    }
+
     /// Same shape as the News share: one counter for the submissions and one
     /// for the chips they minted, so the tracks that came in past the day's
     /// cap are visible beside the paid ones.
@@ -3861,7 +3888,7 @@ mod inner {
     };
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
-    use super::{NewsSaveOutcome, XMediaLookup};
+    use super::{NewsCardOutcome, NewsSaveOutcome, XMediaLookup};
     use super::{PollOutcome, PolledFeed};
     use super::{
         ZorkAction, ZorkCatalogueRead, ZorkEdition, ZorkSessionEnd, ZorkSuggestion,
@@ -3949,6 +3976,7 @@ mod inner {
     pub fn record_news_reader_opened(_status: BodyStatus) {}
     pub(crate) fn record_video_watch(_source: WatchSource, _outcome: WatchOutcome) {}
     pub fn record_news_save(_outcome: NewsSaveOutcome) {}
+    pub fn record_news_card(_outcome: NewsCardOutcome) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
     pub fn record_booth_thumbnail(_outcome: ThumbnailFetch) {}
     pub fn record_radio_meta_poll(_feed: PolledFeed, _outcome: PollOutcome) {}

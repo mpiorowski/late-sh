@@ -181,8 +181,8 @@ pub(crate) struct ReplyTarget {
 pub(crate) enum ReplyTo {
     /// A chat message, stored as the reply's `reply_to_message_id`.
     Message(Uuid),
-    /// A News article off the #lounge live strip. There is no message to
-    /// point at, so the reply carries only the quoted title.
+    /// A News article, from the News room or the reader. The reply points
+    /// at no message, so it carries only the quoted title.
     Article,
 }
 
@@ -2532,9 +2532,10 @@ impl ChatState {
         None
     }
 
-    /// Start a reply in #lounge to a News article, the one the live strip
-    /// features: the composer opens with `> @sharer: 📰 Title` to go on top.
-    /// False when the article left the snapshot or #lounge is not known yet.
+    /// Start a reply in #lounge to a News article (`r` in the News room or
+    /// the reader): the composer opens with `> @sharer: 📰 Title` to go on
+    /// top. False when the article left the snapshot or #lounge is not known
+    /// yet.
     pub(crate) fn begin_reply_to_article(&mut self, article_id: Uuid) -> bool {
         self.reaction_leader_active = false;
         let Some(lounge_id) = self.lounge_room_id() else {
@@ -2547,8 +2548,8 @@ impl ChatState {
             "" => short_user_id(item.article.user_id),
             name => name.to_string(),
         };
-        // The 📰 says what is quoted: with no card in the chat, a bare title
-        // would read as something the sharer said.
+        // The 📰 says what is quoted: a bare title would read as something
+        // the sharer said.
         self.reply_target = Some(ReplyTarget {
             to: ReplyTo::Article,
             author,
@@ -2936,12 +2937,26 @@ impl ChatState {
         composer::set_themed_textarea_cursor_visible(&mut self.composer, composing);
     }
 
-    /// Open the reader on a News article by id (a News card, the live
-    /// strip, the Live panel, a Zen Live tile), marking that article read.
-    /// False when it left the snapshot (deleted).
+    /// Open the reader on a News article by id (a News card, a #lounge
+    /// card, the Live panel, a Zen Live tile), marking that article read.
+    /// False when this session no longer knows it (deleted).
     pub(crate) fn open_reader_for_article(&mut self, article_id: Uuid) -> bool {
         self.reaction_leader_active = false;
         self.news.open_reader(article_id)
+    }
+
+    /// Enter or a click on the selected message in `room_id` when it is a
+    /// News share's #lounge card: the reader on its story. False for any
+    /// other message.
+    pub(crate) fn open_selected_card_in_room(&mut self, room_id: Uuid) -> bool {
+        let Some(article_id) = self
+            .selected_message_in_room(room_id)
+            .and_then(|message| self.news.lounge_card(message.id))
+            .map(|item| item.article.id)
+        else {
+            return false;
+        };
+        self.open_reader_for_article(article_id)
     }
 
     /// The selected message in `room_id` when its preview is a YouTube
@@ -5348,6 +5363,10 @@ impl ChatState {
         let moderation_banner = self.drain_moderation_events();
         let feeds_tick = self.feeds.tick();
         let news_tick = self.news.tick();
+        // A #lounge card is drawn from its story, so new cards are new rows.
+        if news_tick.cards_changed {
+            self.context_epoch += 1;
+        }
         let notif_tick = self.notifications.tick();
         let showcase_tick = self.showcase.tick();
         let work_tick = self.work.tick();

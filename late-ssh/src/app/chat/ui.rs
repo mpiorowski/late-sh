@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use late_core::models::article::NEWS_SHARE_REWARD_CHIPS;
+use late_core::models::article::{ArticleFeedItem, NEWS_SHARE_REWARD_CHIPS};
 use late_core::models::chat_message_gild::ChatMessageGildSummary;
 use late_core::models::chat_message_reaction::ChatMessageReactionSummary;
 use late_core::models::chat_poll::{ActiveChatPoll, ChatPollOptionSummary};
@@ -180,6 +180,9 @@ pub struct DashboardChatView<'a> {
     /// on any other day.
     pub board_day: Option<String>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
+    /// News shares' #lounge cards by message id: those messages draw as
+    /// the card.
+    pub news_cards: &'a HashMap<Uuid, ArticleFeedItem>,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
@@ -1332,6 +1335,7 @@ pub fn draw_dashboard_chat_card(
                 message_reactions: view.message_reactions,
                 message_gilds: view.message_gilds,
                 inline_images: view.inline_images,
+                news_cards: view.news_cards,
                 dividers: view.dividers,
                 drunk_levels: view.drunk_levels,
                 name_flair: view.name_flair,
@@ -1426,6 +1430,9 @@ struct ChatRowsContext<'a> {
     message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     message_gilds: &'a HashMap<Uuid, ChatMessageGildSummary>,
     inline_images: &'a HashMap<Uuid, InlineImagePreview>,
+    /// News shares' #lounge cards by message id (`news::State::lounge_cards`):
+    /// those messages draw as the card.
+    news_cards: &'a HashMap<Uuid, ArticleFeedItem>,
     dividers: ChatDividers,
     /// Per-author drunk levels (1-4) for the tavern glow under usernames.
     drunk_levels: &'a HashMap<Uuid, u8>,
@@ -2073,6 +2080,7 @@ fn ensure_chat_rows_cache(
             is_continuation,
             system_text,
             image_lines,
+            ctx.news_cards.get(&msg.id),
             reactions,
             gild,
             translation,
@@ -3184,6 +3192,9 @@ pub struct ChatRenderInput<'a> {
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub message_gilds: &'a HashMap<Uuid, ChatMessageGildSummary>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
+    /// News shares' #lounge cards by message id: those messages draw as
+    /// the card.
+    pub news_cards: &'a HashMap<Uuid, ArticleFeedItem>,
     /// This session's AFK line per room; the `new messages` divider
     /// draws before the first message from someone else past it.
     pub afk_lines: &'a HashMap<Uuid, DateTime<Utc>>,
@@ -3375,6 +3386,9 @@ pub struct EmbeddedRoomChatView<'a> {
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub message_gilds: &'a HashMap<Uuid, ChatMessageGildSummary>,
     pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
+    /// News shares' #lounge cards by message id: those messages draw as
+    /// the card.
+    pub news_cards: &'a HashMap<Uuid, ArticleFeedItem>,
     pub dividers: ChatDividers,
     pub current_user_id: Uuid,
     /// Voice channel for this view, drawn as a strip at the top when present.
@@ -3596,6 +3610,7 @@ fn draw_embedded_messages(
             message_reactions: view.message_reactions,
             message_gilds: view.message_gilds,
             inline_images: view.inline_images,
+            news_cards: view.news_cards,
             dividers: view.dividers,
             drunk_levels: view.drunk_levels,
             name_flair: view.name_flair,
@@ -5608,6 +5623,7 @@ fn draw_selected_content(
                     message_reactions: view.message_reactions,
                     message_gilds: view.message_gilds,
                     inline_images: view.inline_images,
+                    news_cards: view.news_cards,
                     dividers: ChatDividers {
                         afk_line: view.afk_lines.get(&room.id).copied(),
                         left_app: view.device_left_at,

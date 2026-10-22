@@ -3352,6 +3352,20 @@ impl ChatService {
         body: String,
         join_if_needed: bool,
     ) -> Result<(), SendError> {
+        self.send_lounge_message_returning(user_id, body, join_if_needed)
+            .await
+            .map(|_| ())
+    }
+
+    /// `send_lounge_message` handing back the row it wrote, `None` for an
+    /// empty body: for a caller that keeps a pointer to its line (a News
+    /// share's card).
+    pub(crate) async fn send_lounge_message_returning(
+        &self,
+        user_id: Uuid,
+        body: String,
+        join_if_needed: bool,
+    ) -> Result<Option<ChatMessage>, SendError> {
         let client = self.db.get().await?;
         let room = ChatRoom::find_lounge(&client)
             .await?
@@ -3361,7 +3375,7 @@ impl ChatService {
         }
         drop(client);
 
-        self.send_message(SendMessageParams {
+        self.send_message_returning(SendMessageParams {
             user_id,
             room_id: room.id,
             room_slug: Some("lounge".to_string()),
@@ -3371,6 +3385,25 @@ impl ChatService {
             is_admin: false,
         })
         .await
+    }
+
+    /// Take a News share's card out of #lounge with its story. The News
+    /// delete already decided who may delete the story and audited it, so
+    /// the row goes as the house's, and every session drops it. A card
+    /// already gone (its author deleted it first) is nothing to do.
+    pub(crate) async fn delete_news_card(&self, deleted_by: Uuid, message_id: Uuid) -> Result<()> {
+        let client = self.db.get().await?;
+        let room_id = match ChatMessage::get(&client, message_id).await? {
+            Some(message) => message.room_id,
+            None => return Ok(()),
+        };
+        ChatMessage::delete_by_admin(&client, message_id).await?;
+        let _ = self.evt_tx.send(ChatEvent::MessageDeleted {
+            user_id: deleted_by,
+            room_id,
+            message_id,
+        });
+        Ok(())
     }
 
     /// How much longer `user_id` must wait before posting another link, or `None`
