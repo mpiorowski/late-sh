@@ -1,8 +1,10 @@
 # Bastion qualification
 
-Local pre-deployment campaign, 2026-10-22, on `mevanlc--bastion-redux` at
-`ee492675` plus the working-tree repairs described below. The local campaign is
-complete. No deployment or push was performed; changes remain uncommitted.
+Initial local pre-deployment campaign, 2026-10-22, on
+`mevanlc--bastion-redux` at `ee492675` plus the working-tree repairs described
+below, subsequently committed in `04e56d36`. The later review fixes have a
+separate [verification record](#review-fix-verification). No deployment was
+performed by either campaign.
 
 ## Reproduce
 
@@ -149,6 +151,44 @@ final bastion sha256:4b09321a7dd3b91704a0c8cd08e1545a257e9737df7860fb8ebc2f69cd3
 The 45-minute campaign predates the final env-storage bound and shell exit-status
 repair. The ten-minute final-image campaign and final CLI checks exercise those
 changes; all other server lifecycle repairs are shared by both images.
+
+## Review-fix verification
+
+On 2026-10-22, rebuilt the release images from clean revision `a912f086`,
+including all review fixes through `29829d29`, and ran:
+
+```sh
+make bastion-test-images
+uv run scripts/test/bastion_qualification.py --clients 100 --duration 120 --faults 2
+```
+
+Both image builds passed with `--features otel`. All 100 original SSH
+connections survived a graceful backend replacement and a SIGKILL replacement.
+Pairing round trips passed before replacement and after each fault.
+
+| Check | Observed result |
+| --- | --- |
+| Graceful replacement, 100 recoveries | Maximum 2.461 s. |
+| SIGKILL replacement, 100 recoveries | Maximum 1.230 s. |
+| 180 input probes across 20 active clients | Median 31.6 ms, p95 51.6 ms, maximum 69.5 ms. |
+| After clients disconnected | Bastion: 11 FDs/two threads; active backend: 31 FDs/ten threads. |
+| Cleanup | Owned containers, networks, volumes and client private keys removed. |
+
+Evidence is retained under
+`target/bastion-qualification/20261022-144313-0e401f/`; the image build log is
+`target/bastion-review-images.log`. Image IDs:
+
+```text
+late-bastion sha256:6b96cd80ebc0f5c3d0292493d7370515f3e2951a8d81ce861a002336466f8c40
+late-ssh     sha256:da5eb3656608356cd206fdb0048e9b21ec63967ee33b503b95284c91c638eabc
+```
+
+This two-minute smoke refreshes packaged reconnect evidence for the review
+fixes; the longer soak and full workspace results above still describe their
+earlier snapshots. The fixture raises per-IP admission limits because synthetic
+clients share one source IP. The run does not establish production-default
+admission limits, OTLP export, silent-blackhole cleanup or the staging checks
+below.
 
 ## Limits and remaining deployment checks
 

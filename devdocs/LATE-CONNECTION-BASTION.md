@@ -459,9 +459,6 @@ operations need an explicit compatibility strategy.
   current `ssh-edge` HAProxy terminology.
 - Reconcile `BASTION-REDUX-REVIEW.md` references to the removed `deploy.yml`
   workflow and `BASTION_TUNNEL_TRUSTED_CIDRS` variable with current code.
-- Correct the "changes remain uncommitted" narrative in
-  `BASTION-QUALIFICATION.md`, preserving its tested source snapshot, image IDs,
-  measurements and limits.
 
 ### Deferred output-budget parity
 
@@ -474,9 +471,11 @@ tests if pursued.
 
 ### Packaged and live rollout verification
 
-The recorded packaged qualification campaign predates these review fixes;
-focused source regressions do not refresh that image-level evidence. Run fresh
-packaged checks, then the [remaining staging checks](BASTION-QUALIFICATION.md#limits-and-remaining-deployment-checks)
+A fresh [packaged smoke test](BASTION-QUALIFICATION.md#review-fix-verification)
+at `a912f086` passed with 100 clients and two backend replacements, using
+release images built with `otel`. The earlier long soak still predates these
+review fixes. Complete the
+[remaining staging checks](BASTION-QUALIFICATION.md#limits-and-remaining-deployment-checks)
 before public-port cutover: Kubernetes endpoint replacement, PROXY source IP,
 NetworkPolicy including IRC, mounted secrets, pairing, terminal cleanup and the
 rollback route.
