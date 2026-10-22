@@ -422,6 +422,7 @@ async fn run_shell_loop(
     // Unlike Handle::data, ChannelTx obeys the remote SSH window. Blocking
     // here bounds output memory; the timeout/cancellation bounds its lifetime.
     let mut ssh_writer: Pin<Box<dyn AsyncWrite + Send>> = Box::pin(write_half.make_writer());
+    let terminal_reset = format!("{}{TERMINAL_RESET}", late_core::terminal::RESET_MODES);
     let mut gap = ReconnectBackoff::new(RECONNECT_BUDGET);
     let mut is_redial = false;
     let mut retry_delay = Duration::ZERO;
@@ -464,7 +465,7 @@ async fn run_shell_loop(
                     tokio::select! {
                         biased;
                         _ = shutdown.cancelled() => {
-                            notice(&mut ssh_writer, &format!("{TERMINAL_RESET}{SHUTDOWN_MSG}")).await;
+                            notice(&mut ssh_writer, &format!("{terminal_reset}{SHUTDOWN_MSG}")).await;
                             break 'session;
                         }
                         _ = tokio::time::sleep_until(deadline) => break 'session,
@@ -476,7 +477,7 @@ async fn run_shell_loop(
                         _ = messages.tick(), if is_redial => {
                             let elapsed = gap.started.elapsed();
                             if !wrote_initial && elapsed >= initial_reconnect_message_delay(ctx.reconnect_reason) {
-                                notice(&mut ssh_writer, &format!("{TERMINAL_RESET}{}", initial_reconnect_message(ctx.reconnect_reason))).await;
+                                notice(&mut ssh_writer, &format!("{terminal_reset}{}", initial_reconnect_message(ctx.reconnect_reason))).await;
                                 wrote_initial = true;
                             }
                             if !wrote_escalation && elapsed >= ESCALATION_MESSAGE_DELAY {
@@ -540,7 +541,7 @@ async fn run_shell_loop(
         let outcome = loop {
             tokio::select! {
                 _ = shutdown.cancelled() => {
-                    notice(&mut ssh_writer, &format!("{TERMINAL_RESET}{SHUTDOWN_MSG}")).await;
+                    notice(&mut ssh_writer, &format!("{terminal_reset}{SHUTDOWN_MSG}")).await;
                     break PumpOutcome::Terminal;
                 }
                 _ = tokio::time::sleep_until(gap.started + gap.budget), if !ready => break PumpOutcome::Terminal,
@@ -654,6 +655,14 @@ async fn finish<W: AsyncWriteExt + Unpin>(
     session_log_id: &str,
     why: &'static str,
 ) -> anyhow::Result<()> {
+    // Restore modes even when the backend disappeared before it could send its
+    // own teardown. Do not clear the main screen or erase a farewell message.
+    let restore = format!("{}\x1b[?1049l", late_core::terminal::RESET_MODES);
+    let _ = timeout(
+        Duration::from_millis(250),
+        ssh_writer.write_all(restore.as_bytes()),
+    )
+    .await;
     let _ = timeout(Duration::from_millis(250), ssh_writer.shutdown()).await;
     tracing::info!(%session_log_id, reason = why, "tunnel proxy session ended");
     Ok(())

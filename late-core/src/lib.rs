@@ -21,6 +21,7 @@ pub mod rate_limit;
 mod rate_limit_test;
 pub mod shutdown;
 pub mod telemetry;
+pub mod terminal;
 pub mod tunnel_protocol;
 pub mod vocab;
 #[cfg(test)]

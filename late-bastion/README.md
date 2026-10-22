@@ -138,6 +138,9 @@ upgrades and repeated empty upgrades share one 30-second outage budget. Input
 and output waits are bounded, and a slow reader cannot prevent shutdown.
 Normal app quits send SSH exit status 0 before EOF/Close; kick and ban closes
 send status 1, including when the client uses OpenSSH ControlMaster.
+Bastion restores mouse, paste, color and cursor modes before reconnect notices
+and on final channel teardown, including when no backend cleanup arrived. Final
+cleanup preserves the main screen and any farewell text.
 
 See [BASTION-QUALIFICATION.md](../devdocs/BASTION-QUALIFICATION.md) for the
 campaign, observed results and remaining staging checks. Automated agents follow

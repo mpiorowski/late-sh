@@ -1179,6 +1179,32 @@ async fn bastion_reports_shell_exit_status_before_closing_the_channel() {
 }
 
 #[tokio::test]
+async fn bastion_restores_terminal_modes_when_the_backend_ends_the_session() {
+    let backend = ScriptedBackend::spawn(vec![Behavior::CloseWithCode(4002, "banned")])
+        .await
+        .unwrap();
+    let bastion = TestBastion::spawn(backend.ws_url()).await.unwrap();
+    let (_session, channel) = open_user_session(bastion.addr).await;
+    let mut output = Vec::new();
+    timeout(
+        Duration::from_secs(3),
+        channel.into_stream().read_to_end(&mut output),
+    )
+    .await
+    .expect("terminal close")
+    .unwrap();
+    let text = String::from_utf8(output).unwrap();
+    assert!(text.contains(late_core::terminal::RESET_MODES));
+    assert!(text.contains("\x1b[?1049l"));
+    assert!(
+        !text.contains("\x1b[2J"),
+        "final cleanup must preserve the main screen"
+    );
+    backend.shutdown();
+    bastion.shutdown();
+}
+
+#[tokio::test]
 async fn bastion_redials_when_backend_goes_silent() {
     // First connection: backend emits initial output then stalls. With
     // no auto-pong reply, the bastion's silence detector trips at
@@ -1362,6 +1388,7 @@ async fn bastion_writes_reconnect_message_during_long_outage() {
         text.contains("\x1b[2J"),
         "expected screen clear; got: {text:?}"
     );
+    assert!(text.contains(late_core::terminal::RESET_MODES));
 
     bastion.shutdown();
 }

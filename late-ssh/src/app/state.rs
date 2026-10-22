@@ -4552,13 +4552,7 @@ impl App {
 
     pub fn leave_alt_screen() -> Vec<u8> {
         let mut buf = Vec::new();
-        buf.extend_from_slice(terminal_string_terminator());
-        // 2004l = disable bracketed paste
-        // 1006l = disable SGR mouse tracking
-        // 1003l = disable any-event mouse tracking
-        // 1000l = disable basic mouse tracking
-        // OSC 111 = reset terminal background color
-        buf.extend_from_slice(b"\x1b[?2004l\x1b[?1006l\x1b[?1003l\x1b[?1000l\x1b]111\x1b\\");
+        buf.extend_from_slice(late_core::terminal::RESET_MODES.as_bytes());
         buf.extend_from_slice(POP_WINDOW_TITLE);
         for command in terminal_image_cleanup_commands() {
             buf.extend_from_slice(&command);

@@ -19,6 +19,7 @@ late-core/
     test_utils.rs      test_db(), create_test_user(), shared fixtures
     telemetry.rs       init_telemetry(), HTTP span middleware, TracedExt
     rate_limit.rs      sliding-window per-IP limiter
+    terminal.rs        terminal mode restoration shared by SSH and bastion
     radio.rs           station catalogue, RADIO_SLOTS (see app/audio/STATIONS.md)
     vocab.rs           the tag vocabulary (skills, langs)
     nonogram.rs        pack schema, clue derivation, daily selection
