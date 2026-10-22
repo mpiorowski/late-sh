@@ -1205,6 +1205,73 @@ async fn bastion_restores_terminal_modes_when_the_backend_ends_the_session() {
 }
 
 #[tokio::test]
+async fn bastion_explains_terminal_rejections_before_closing() {
+    for (behavior, message) in [
+        (
+            Behavior::HttpReject(StatusCode::UNAUTHORIZED),
+            "late.sh is unavailable",
+        ),
+        (
+            Behavior::HttpReject(StatusCode::FORBIDDEN),
+            "Access to late.sh was refused",
+        ),
+        (
+            Behavior::HttpReject(StatusCode::TOO_MANY_REQUESTS),
+            "Too many connections",
+        ),
+        (
+            Behavior::CloseWithCode(4002, "banned"),
+            "Your access to this late.sh session has ended",
+        ),
+    ] {
+        let backend = ScriptedBackend::spawn(vec![behavior]).await.unwrap();
+        let bastion = TestBastion::spawn(backend.ws_url()).await.unwrap();
+        let (_session, channel) = open_user_session(bastion.addr).await;
+        let mut output = Vec::new();
+        timeout(
+            Duration::from_secs(3),
+            channel.into_stream().read_to_end(&mut output),
+        )
+        .await
+        .expect("rejection close")
+        .unwrap();
+        assert!(
+            String::from_utf8_lossy(&output).contains(message),
+            "{output:?}"
+        );
+        backend.shutdown();
+        bastion.shutdown();
+    }
+}
+
+#[tokio::test]
+async fn bastion_shows_progress_during_an_initial_backend_outage() {
+    let backend = ScriptedBackend::spawn(vec![
+        Behavior::HttpReject(StatusCode::SERVICE_UNAVAILABLE);
+        16
+    ])
+    .await
+    .unwrap();
+    let bastion = TestBastion::spawn(backend.ws_url()).await.unwrap();
+    let (_session, channel) = open_user_session(bastion.addr).await;
+    let mut reader = channel.into_stream();
+    let mut output = Vec::new();
+    timeout(Duration::from_secs(3), async {
+        let mut bytes = [0; 1024];
+        while !String::from_utf8_lossy(&output).contains("connecting to late.sh") {
+            let count = reader.read(&mut bytes).await.unwrap();
+            assert_ne!(count, 0);
+            output.extend_from_slice(&bytes[..count]);
+        }
+    })
+    .await
+    .expect("initial outage should not leave a blank terminal");
+    assert!(!String::from_utf8_lossy(&output).contains("reconnecting"));
+    backend.shutdown();
+    bastion.shutdown();
+}
+
+#[tokio::test]
 async fn bastion_redials_when_backend_goes_silent() {
     // First connection: backend emits initial output then stalls. With
     // no auto-pong reply, the bastion's silence detector trips at
@@ -1256,12 +1323,18 @@ async fn bastion_waits_for_slow_startup_without_redialing() {
     let (_session, channel) = open_user_session(bastion.addr).await;
     backend.next_handshake().await.unwrap();
     let mut reader = channel.into_stream();
-    let mut output = [0; 5];
-    timeout(Duration::from_secs(10), reader.read_exact(&mut output))
-        .await
-        .expect("slow startup should retain its original connection")
-        .unwrap();
-    assert_eq!(&output, b"ready");
+    let mut output = Vec::new();
+    timeout(Duration::from_secs(10), async {
+        let mut bytes = [0; 1024];
+        while !output.ends_with(b"ready") {
+            let count = reader.read(&mut bytes).await.unwrap();
+            assert_ne!(count, 0, "startup connection closed");
+            output.extend_from_slice(&bytes[..count]);
+        }
+    })
+    .await
+    .expect("slow startup should retain its original connection");
+    assert!(String::from_utf8_lossy(&output).contains("connecting to late.sh"));
     backend.assert_no_redial(Duration::from_millis(250)).await;
     backend.shutdown();
     bastion.shutdown();

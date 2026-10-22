@@ -90,6 +90,14 @@ const RELOADING_UPDATE_MSG: &str = "waiting for updated late.sh...\r\n";
 
 /// Escalated reconnect message after `ESCALATION_MESSAGE_DELAY`.
 const STILL_RECONNECTING_MSG: &str = "still reconnecting\u{2026}\r\n";
+const CONNECTING_MSG: &str = "connecting to late.sh\u{2026}\r\n";
+const STILL_CONNECTING_MSG: &str = "still connecting\u{2026}\r\n";
+const UNAVAILABLE_MSG: &str = "late.sh is unavailable. Please try again shortly.\r\n";
+const SESSION_FAILED_MSG: &str =
+    "late.sh could not start your session. Please try again later.\r\n";
+const ACCESS_REFUSED_MSG: &str = "Access to late.sh was refused.\r\n";
+const ACCESS_ENDED_MSG: &str = "Your access to this late.sh session has ended.\r\n";
+const RATE_LIMITED_MSG: &str = "Too many connections to late.sh. Please try again shortly.\r\n";
 
 const SHUTDOWN_MSG: &str = "late.sh bastion is restarting; disconnecting.\r\n";
 
@@ -286,6 +294,26 @@ fn classify_dial_err(err: &tungstenite::Error) -> DialOutcome {
     }
 }
 
+fn terminal_dial_message(err: &tungstenite::Error) -> &'static str {
+    match err {
+        tungstenite::Error::Http(response) => match response.status().as_u16() {
+            401 => UNAVAILABLE_MSG,
+            403 => ACCESS_REFUSED_MSG,
+            429 => RATE_LIMITED_MSG,
+            _ => SESSION_FAILED_MSG,
+        },
+        _ => SESSION_FAILED_MSG,
+    }
+}
+
+fn terminal_close_message(code: u16) -> Option<&'static str> {
+    match code {
+        1000 | TUNNEL_CLOSE_SESSION_ENDED => None,
+        4001 | late_core::tunnel_protocol::TUNNEL_CLOSE_BANNED => Some(ACCESS_ENDED_MSG),
+        _ => Some(SESSION_FAILED_MSG),
+    }
+}
+
 /// How the inner pump loop ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PumpOutcome {
@@ -407,6 +435,50 @@ async fn notice(writer: &mut Pin<Box<dyn AsyncWrite + Send>>, message: &str) {
     .await;
 }
 
+#[derive(Default)]
+struct ConnectionNotices {
+    initial: bool,
+    escalation: bool,
+}
+
+impl ConnectionNotices {
+    async fn show(
+        &mut self,
+        writer: &mut Pin<Box<dyn AsyncWrite + Send>>,
+        reset: &str,
+        is_redial: bool,
+        reason: Option<u16>,
+        elapsed: Duration,
+    ) {
+        let delay = if is_redial {
+            initial_reconnect_message_delay(reason)
+        } else {
+            INITIAL_MESSAGE_DELAY
+        };
+        if !self.initial && elapsed >= delay {
+            let message = if is_redial {
+                initial_reconnect_message(reason)
+            } else {
+                CONNECTING_MSG
+            };
+            notice(writer, &format!("{reset}{message}")).await;
+            self.initial = true;
+        }
+        if !self.escalation && elapsed >= ESCALATION_MESSAGE_DELAY {
+            notice(
+                writer,
+                if is_redial {
+                    STILL_RECONNECTING_MSG
+                } else {
+                    STILL_CONNECTING_MSG
+                },
+            )
+            .await;
+            self.escalation = true;
+        }
+    }
+}
+
 async fn run_shell_loop(
     channel: Channel<Msg>,
     ws_url: String,
@@ -426,15 +498,16 @@ async fn run_shell_loop(
     let mut gap = ReconnectBackoff::new(RECONNECT_BUDGET);
     let mut is_redial = false;
     let mut retry_delay = Duration::ZERO;
-    let mut wrote_initial = false;
-    let mut wrote_escalation = false;
+    let mut notices = ConnectionNotices::default();
     let mut exit_status = 1;
+    let mut closing_message = Some(UNAVAILABLE_MSG);
 
     'session: loop {
         if is_redial {
             discard_stale_input(&mut input_rx, &mut ctx);
         }
         if input_rx.is_closed() && input_rx.is_empty() {
+            closing_message = None;
             break;
         }
         let ws = if let Some(ws) = initial_ws.take() {
@@ -466,24 +539,17 @@ async fn run_shell_loop(
                         biased;
                         _ = shutdown.cancelled() => {
                             notice(&mut ssh_writer, &format!("{terminal_reset}{SHUTDOWN_MSG}")).await;
+                            closing_message = None;
                             break 'session;
                         }
                         _ = tokio::time::sleep_until(deadline) => break 'session,
                         result = &mut dial => break result,
                         event = input_rx.recv() => match event {
                             Some(event) => remember_size(event, &mut ctx),
-                            None => break 'session,
+                            None => { closing_message = None; break 'session; },
                         },
-                        _ = messages.tick(), if is_redial => {
-                            let elapsed = gap.started.elapsed();
-                            if !wrote_initial && elapsed >= initial_reconnect_message_delay(ctx.reconnect_reason) {
-                                notice(&mut ssh_writer, &format!("{terminal_reset}{}", initial_reconnect_message(ctx.reconnect_reason))).await;
-                                wrote_initial = true;
-                            }
-                            if !wrote_escalation && elapsed >= ESCALATION_MESSAGE_DELAY {
-                                notice(&mut ssh_writer, STILL_RECONNECTING_MSG).await;
-                                wrote_escalation = true;
-                            }
+                        _ = messages.tick() => {
+                            notices.show(&mut ssh_writer, &terminal_reset, is_redial, ctx.reconnect_reason, gap.started.elapsed()).await;
                         }
                     }
                 };
@@ -496,7 +562,14 @@ async fn run_shell_loop(
                         retry_delay = delay;
                     }
                     Err(err) => {
-                        tracing::info!(?err, %session_log_id, "terminal tunnel dial failure");
+                        if let tungstenite::Error::Http(response) = &err
+                            && matches!(response.status().as_u16(), 401 | 403)
+                        {
+                            tracing::warn!(status = %response.status(), ?err, %session_log_id, "tunnel access rejected; check backend credentials and access configuration");
+                        } else {
+                            tracing::info!(?err, %session_log_id, "terminal tunnel dial failure");
+                        }
+                        closing_message = Some(terminal_dial_message(&err));
                         break 'session;
                     }
                 }
@@ -525,7 +598,7 @@ async fn run_shell_loop(
             );
             let sent = tokio::select! {
                 result = send => matches!(result, Ok(Ok(()))),
-                _ = shutdown.cancelled() => break 'session,
+                _ = shutdown.cancelled() => { closing_message = Some(SHUTDOWN_MSG); break 'session; },
             };
             if !sent {
                 ctx.reconnect_reason = Some(TUNNEL_CLOSE_ABNORMAL);
@@ -542,6 +615,7 @@ async fn run_shell_loop(
             tokio::select! {
                 _ = shutdown.cancelled() => {
                     notice(&mut ssh_writer, &format!("{terminal_reset}{SHUTDOWN_MSG}")).await;
+                    closing_message = None;
                     break PumpOutcome::Terminal;
                 }
                 _ = tokio::time::sleep_until(gap.started + gap.budget), if !ready => break PumpOutcome::Terminal,
@@ -573,6 +647,11 @@ async fn run_shell_loop(
                             last_inbound = Instant::now();
                         }
                         Some(Ok(WsMessage::Close(frame))) => {
+                            if let Some(frame) = frame.as_ref()
+                                && matches!(classify_close_code(frame.code.into()), PumpOutcome::Terminal)
+                            {
+                                closing_message = terminal_close_message(frame.code.into());
+                            }
                             if frame.as_ref().is_some_and(|frame| matches!(u16::from(frame.code), 1000 | TUNNEL_CLOSE_SESSION_ENDED)) {
                                 exit_status = 0;
                             }
@@ -596,15 +675,18 @@ async fn run_shell_loop(
                     };
                     let sent = tokio::select! {
                         result = timeout(WS_WRITE_TIMEOUT, sink.send(frame)) => matches!(result, Ok(Ok(()))),
-                        _ = shutdown.cancelled() => break PumpOutcome::Terminal,
+                        _ = shutdown.cancelled() => { closing_message = Some(SHUTDOWN_MSG); break PumpOutcome::Terminal; },
                     };
                     if !sent { break PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL); }
                 }
                 _ = ping.tick() => {
+                    if !ready {
+                        notices.show(&mut ssh_writer, &terminal_reset, is_redial, ctx.reconnect_reason, gap.started.elapsed()).await;
+                    }
                     if ready && last_inbound.elapsed() > SILENCE_THRESHOLD { break PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL); }
                     let sent = tokio::select! {
                         result = timeout(WS_WRITE_TIMEOUT, sink.send(WsMessage::Ping(Default::default()))) => matches!(result, Ok(Ok(()))),
-                        _ = shutdown.cancelled() => break PumpOutcome::Terminal,
+                        _ = shutdown.cancelled() => { closing_message = Some(SHUTDOWN_MSG); break PumpOutcome::Terminal; },
                     };
                     if !sent { break PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL); }
                 }
@@ -614,14 +696,14 @@ async fn run_shell_loop(
         match outcome {
             PumpOutcome::SshClosed => {
                 exit_status = 0;
+                closing_message = None;
                 break;
             }
             PumpOutcome::Terminal => break,
             PumpOutcome::Retryable(reason) => {
                 if ready {
                     gap = ReconnectBackoff::new(RECONNECT_BUDGET);
-                    wrote_initial = false;
-                    wrote_escalation = false;
+                    notices = ConnectionNotices::default();
                 }
                 ctx.reconnect_reason = Some(reason);
                 is_redial = true;
@@ -643,7 +725,7 @@ async fn run_shell_loop(
         write_half.exit_status(exit_status),
     )
     .await;
-    finish(ssh_writer, &session_log_id, "proxy ended").await?;
+    finish(ssh_writer, &session_log_id, "proxy ended", closing_message).await?;
     let _ = timeout(Duration::from_millis(250), write_half.close()).await;
     Ok(())
 }
@@ -654,10 +736,15 @@ async fn finish<W: AsyncWriteExt + Unpin>(
     mut ssh_writer: W,
     session_log_id: &str,
     why: &'static str,
+    message: Option<&str>,
 ) -> anyhow::Result<()> {
     // Restore modes even when the backend disappeared before it could send its
     // own teardown. Do not clear the main screen or erase a farewell message.
-    let restore = format!("{}\x1b[?1049l", late_core::terminal::RESET_MODES);
+    let restore = format!(
+        "{}\x1b[?1049l{}",
+        late_core::terminal::RESET_MODES,
+        message.unwrap_or_default()
+    );
     let _ = timeout(
         Duration::from_millis(250),
         ssh_writer.write_all(restore.as_bytes()),

@@ -149,6 +149,9 @@ What it does:
   - **`1006`** (transport): reconnect with backoff. If reconnect is fast (<500ms), say nothing. Otherwise write "reconnecting to late.sh…" after `INITIAL_MESSAGE_DELAY` (with terminal reset to exit alt-screen), escalate to "still reconnecting…" after `ESCALATION_MESSAGE_DELAY`.
   - **Anything else** (Terminal): write a friendly closing message, close the SSH session.
 - **On any redial**, send `X-Late-Reconnect-Reason: <numeric-code>` (the close code that triggered the redial; or `1006` if the previous pump ended on a transport error). Also `X-Late-Via: bastion` on every dial, fresh or redial.
+- First connections and bootstrap waits show connecting progress after 500ms
+  (bootstrap checks run on the ping cadence). Rejections and exhausted budgets
+  print a closing explanation; backend HTTP 401/403 failures are logged at WARN.
 - On SIGTERM: brief goodbye to all active SSH channels, close cleanly, exit. Single-replica means active sessions are dropped during bastion rollouts (acceptable per §1).
 - No persistent state beyond per-session "this SSH channel maps to this backend URL + session id + current PTY size + last-close-code."
 
