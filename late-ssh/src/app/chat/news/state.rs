@@ -74,7 +74,7 @@ pub(crate) fn unread_in_snapshot(articles: &[ArticleFeedItem], read_ids: &HashSe
 }
 
 /// Badge text for a news unread count: a full snapshot of unread articles
-/// reads as a floor ("20+"), since older unread ones sit past the snapshot.
+/// reads as a floor ("40+"), since older unread ones sit past the snapshot.
 pub(crate) fn news_unread_label(unread: i64) -> String {
     if unread >= NEWS_FEED_LIMIT {
         format!("{NEWS_FEED_LIMIT}+")

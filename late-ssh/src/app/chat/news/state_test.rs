@@ -162,8 +162,8 @@ async fn a_load_landing_out_of_order_never_takes_a_read_back() {
 #[test]
 fn a_full_unread_snapshot_reads_as_a_floor() {
     assert_eq!(news_unread_label(3), "3");
-    assert_eq!(news_unread_label(NEWS_FEED_LIMIT - 1), "19");
-    assert_eq!(news_unread_label(NEWS_FEED_LIMIT), "20+");
+    assert_eq!(news_unread_label(NEWS_FEED_LIMIT - 1), "39");
+    assert_eq!(news_unread_label(NEWS_FEED_LIMIT), "40+");
 }
 
 #[test]

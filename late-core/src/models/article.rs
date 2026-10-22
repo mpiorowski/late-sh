@@ -208,7 +208,7 @@ impl Article {
 
 /// How many articles the shared news snapshot holds. Each session counts its
 /// unread badge from that snapshot, so the badge saturates here.
-pub const NEWS_FEED_LIMIT: i64 = 20;
+pub const NEWS_FEED_LIMIT: i64 = 40;
 
 /// Cross-process refresh channel. Any write to `articles` fires it (migration
 /// 198 statement trigger, empty payload); every replica's listener re-reads

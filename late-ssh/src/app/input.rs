@@ -4422,9 +4422,9 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         }
         // The Live panel's prefix: Home only, where the panel draws its
         // row numbers, and not while a pane that spends `s` is selected
-        // (RSS shares its entry, Discover cycles its sort); on every other
-        // page `s` is the page's (the Directory's search, the Clubhouse's
-        // seat).
+        // (RSS shares its entry, Discover cycles its sort, News saves its
+        // story); on every other page `s` is the page's (the Directory's
+        // search, the Clubhouse's seat).
         b's' | b'S'
             if ctx.screen == Screen::Dashboard
                 && !ctx.chat_composing
@@ -4432,7 +4432,8 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && !ctx.news_composing
                 && !app.chat.room_jump_active
                 && !app.chat.feeds_selected
-                && !app.chat.discover_selected =>
+                && !app.chat.discover_selected
+                && !app.chat.news_selected =>
         {
             app.live_prefix_armed = true;
             true
