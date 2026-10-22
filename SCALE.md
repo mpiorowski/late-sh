@@ -693,7 +693,7 @@ Gating the `anim_half` sidebar edge on a paired client is NOT the knob, and woul
 
 - Any test driving `tick()` without `render()` leaves `pending_terminal_commands` queued and the gate correctly stays dirty; mirror the loop with a drain_frame (render + take commands). See `app/tick_test.rs`.
 - The settle tests (`idle_ticks_settle_clean_and_chat_send_marks_changed`, `open_settings_modal_settles_clean`) loop to 30 consecutive clean ticks; their failure panic dumps a state snapshot; extend that dump when debugging new dirt sources.
-- Never raw cargo test; `make test-llm ARGS="-p late-ssh -E 'test(...)'"`.
+- Never raw cargo test; `make test-llm ARGS="-p late-ssh --lib -E 'test(...)'"`.
 
 ### Open follow-ups (all optional tightening)
 

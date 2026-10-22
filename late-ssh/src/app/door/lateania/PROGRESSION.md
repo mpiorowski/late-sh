@@ -12,7 +12,7 @@ copy that goes stale. Change a land here, and nowhere else.
 Regenerate every measured number in this file with the atlas yardstick:
 
 ```
-make test-llm ARGS="-p late-ssh --run-ignored all --no-capture -E 'test(region_atlas_yardstick)'"
+make test-llm ARGS="-p late-ssh --lib --run-ignored all --no-capture -E 'test(region_atlas_yardstick)'"
 ```
 
 Combat mechanics (classes, abilities, the resist/weak pass, combat rules,
@@ -279,7 +279,7 @@ Regenerate the whole table with the atlas yardstick, which prints every
 region's rooms, level bands, median regular health and xp per point of it:
 
 ```
-make test-llm ARGS="-p late-ssh --run-ignored all --no-capture -E 'test(region_atlas_yardstick)'"
+make test-llm ARGS="-p late-ssh --lib --run-ignored all --no-capture -E 'test(region_atlas_yardstick)'"
 ```
 
 The Archipelago ladder, as the arena prints it ("Every boss as the engine

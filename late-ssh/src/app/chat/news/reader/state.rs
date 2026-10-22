@@ -16,11 +16,11 @@ use late_core::models::article_body::{
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use uuid::Uuid;
 
-use crate::app::video::state::is_watchable;
 use crate::app::chat::news::ui::split_summary_bullets;
 use crate::app::chat::ui_text::format_news_ascii_art_for_display;
 use crate::app::common::primitives::format_relative_time;
 use crate::app::common::scroll_view::ScrollView;
+use crate::app::video::state::is_watchable;
 
 /// The widest the article text runs, however wide the terminal.
 pub(crate) const READER_MAX_TEXT_WIDTH: usize = 80;

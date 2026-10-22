@@ -273,9 +273,12 @@ query gotchas: `infra/RUNBOOK.md`.
 - Fixtures: `make seed-artboard`, `seed-calendar`, `seed-paper`,
   `seed-irc-history`, `seed-leaderboard`, each described in its domain's
   context. Chips for a local account come from the admin `/grant` command.
-- **Agents run targeted tests only:** `make test-llm ARGS="-p <crate> -E
-  'test(<filter>)'"` starts the check DB and runs nextest in a memory-capped
-  scope. Never raw `cargo test`, `cargo nextest` or `cargo clippy`, and never a
+- **Agents run targeted tests only:** `make test-llm ARGS="-p <crate> --lib -E
+  'test(<filter>)'"` starts the check DB and runs nextest in a low-priority
+  scope capped to the memory free at launch (it refuses to start when too
+  little is). `--lib` is for a crate with both a lib and a main (`late-ssh`,
+  `late-web`, `late-core`, `late-webview`): without it the lib compiles twice.
+  A main-only crate (`late-cli`, the game doors) drops it. Never raw `cargo test`, `cargo nextest` or `cargo clippy`, and never a
   full suite. `cargo check`, `cargo build` and `cargo fmt` are fine.
 - **`make check` is the human gate:** `cargo fmt --check` on first-party
   packages only (never `cargo fmt --all`, which would reformat vendored crates),

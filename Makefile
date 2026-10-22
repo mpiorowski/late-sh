@@ -85,17 +85,34 @@ check-db-down:
 	$(CHECK_DB_STOP)
 
 # Targeted, memory-capped test run for LLM agents.
-# Usage: make test-llm ARGS="-p late-ssh -E 'test(chat)'"
-# MemoryHigh throttles the build before the desktop starves; MemoryMax kills
-# the scope outright instead of freezing a swapless machine.
-TEST_LLM_MEM_HIGH ?= 10G
-TEST_LLM_MEM_MAX ?= 12G
+# Usage: make test-llm ARGS="-p late-ssh --lib -E 'test(chat)'"
+# (`--lib` on a crate with a lib and a main: without it nextest builds the lib
+# a second time for the binary's empty test target, doubling the heaviest
+# compile.)
+# The run is a scope in background.slice, whose CPU weight (30, to app.slice's
+# 100) lets the browser, audio and other sessions win the CPU. Its memory cap
+# follows what is free at launch: MemAvailable less TEST_LLM_HEADROOM_G, never
+# above TEST_LLM_MEM_MAX_G. A fixed cap larger than what is free never trips
+# on a loaded swapless machine, and the global OOM killer takes the browser
+# instead. MemoryHigh throttles the build 2G below the cap; MemoryMax kills the
+# scope, not the desktop. Under TEST_LLM_MEM_MIN_G the run refuses to start.
+TEST_LLM_MEM_MAX_G ?= 12
+TEST_LLM_HEADROOM_G ?= 3
+TEST_LLM_MEM_MIN_G ?= 6
 .PHONY: test-llm
 test-llm: .env
 	@set -e; \
+	avail_g=$$(awk '/^MemAvailable:/ {print int($$2 / 1048576)}' /proc/meminfo); \
+	max_g=$$((avail_g - $(TEST_LLM_HEADROOM_G))); \
+	if [ $$max_g -gt $(TEST_LLM_MEM_MAX_G) ]; then max_g=$(TEST_LLM_MEM_MAX_G); fi; \
+	if [ $$max_g -lt $(TEST_LLM_MEM_MIN_G) ]; then \
+		echo "test-llm: $${avail_g}G free, needs $$(($(TEST_LLM_MEM_MIN_G) + $(TEST_LLM_HEADROOM_G)))G; free some memory and retry" >&2; \
+		exit 1; \
+	fi; \
+	echo "test-llm: memory cap $${max_g}G ($${avail_g}G free)"; \
 	trap 'status=$$?; $(CHECK_DB_STOP); exit $$status' EXIT; \
 	$(CHECK_DB_START); \
-	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) systemd-run --user --scope -q -p MemoryHigh=$(TEST_LLM_MEM_HIGH) -p MemoryMax=$(TEST_LLM_MEM_MAX) cargo nextest run --build-jobs $(CHECK_BUILD_JOBS) --no-fail-fast --failure-output final $(ARGS)
+	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) systemd-run --user --scope -q --slice=background.slice -p MemoryHigh=$$((max_g - 2))G -p MemoryMax=$${max_g}G cargo nextest run --build-jobs $(CHECK_BUILD_JOBS) --no-fail-fast --failure-output final $(ARGS)
 
 # The Lateania battle arena: every balance contract and both report parts
 # (late-ssh/target/lateania-arena*.md). Thousands of real engine fights, so
@@ -103,7 +120,7 @@ test-llm: .env
 # change. Serial (-j1): the report tests each need most of a CPU-minute budget.
 .PHONY: arena
 arena:
-	$(MAKE) test-llm ARGS="-p late-ssh --run-ignored all -j1 -E 'test(lateania::svc::arena)'"
+	$(MAKE) test-llm ARGS="-p late-ssh --lib --run-ignored all -j1 -E 'test(lateania::svc::arena)'"
 
 # The deadchannel balance arena (late-ssh/src/app/deadchannel/fight/BALANCE.md):
 # every contract plus the report, every table for the live rules, written to
@@ -111,21 +128,21 @@ arena:
 # rules change.
 .PHONY: deadchannel-arena
 deadchannel-arena:
-	$(MAKE) test-llm ARGS="-p late-ssh --run-ignored all --no-capture -E 'test(deadchannel::fight::arena) and not test(arena_sweep) and not test(arena_crystals)'"
+	$(MAKE) test-llm ARGS="-p late-ssh --lib --run-ignored all --no-capture -E 'test(deadchannel::fight::arena) and not test(arena_sweep) and not test(arena_crystals)'"
 
 # The balance sweep: one reading per candidate set of rules in
 # arena_test.rs::SWEEP, side by side, written to
 # late-ssh/target/deadchannel-sweep.md. Edit SWEEP, run this, read the table.
 .PHONY: deadchannel-sweep
 deadchannel-sweep:
-	$(MAKE) test-llm ARGS="-p late-ssh --run-ignored all --no-capture -E 'test(arena_sweep)'"
+	$(MAKE) test-llm ARGS="-p late-ssh --lib --run-ignored all --no-capture -E 'test(arena_sweep)'"
 
 # The crystal question (fight/BALANCE.md, "What a crystal buys"): the crystal
 # players side by side under the live rules and with pours priced in bits,
 # written to late-ssh/target/deadchannel-crystals.md.
 .PHONY: deadchannel-crystals
 deadchannel-crystals:
-	$(MAKE) test-llm ARGS="-p late-ssh --run-ignored all --no-capture -E 'test(arena_crystals)'"
+	$(MAKE) test-llm ARGS="-p late-ssh --lib --run-ignored all --no-capture -E 'test(arena_crystals)'"
 
 # Whole simulated runs, start to finish: one seeded climb a player from a
 # fresh row to the first mark, every shop visit, step, and turn, written to
@@ -133,7 +150,7 @@ deadchannel-crystals:
 # rules is like.
 .PHONY: deadchannel-run
 deadchannel-run:
-	$(MAKE) test-llm ARGS="-p late-ssh --run-ignored all --no-capture -E 'test(arena_run)'"
+	$(MAKE) test-llm ARGS="-p late-ssh --lib --run-ignored all --no-capture -E 'test(arena_run)'"
 
 # Full pre-merge sweep, and the only place the otel feature is exercised:
 # clippy + tests run the whole workspace WITH --features otel, so the real

@@ -377,7 +377,7 @@ Never load every room's history per session on a timer.
 
 Repo-wide rule from the root context still applies:
 - Every test, pure or DB-backed, lives beside the file it exercises as `<file>_test.rs`, wired with `#[cfg(test)] mod <file>_test;`. No inline test modules, no crate `tests/` folder.
-- Targeted runs go through `make test-llm ARGS="-p late-ssh -E 'test(chat)'"` (memory-capped `cargo nextest` with the check DB). The full sweep is `make check` and stays with the human owner.
+- Targeted runs go through `make test-llm ARGS="-p late-ssh --lib -E 'test(chat)'"` (memory-capped `cargo nextest` with the check DB). The full sweep is `make check` and stays with the human owner.
 
 Where the coverage sits:
 - `svc_test.rs` is the DB-backed service suite (send, reactions, tails, ignores, discover, search scoping, gilds and each gild refusal); `svc_internal_test.rs` covers the pure service helpers (link detection and cooldown tiers, report kinds, poll copy).
