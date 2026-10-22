@@ -40,11 +40,11 @@ use crate::app::hub::shop::svc::ActiveChatRoomEffect;
 use crate::usernames::UsernameLookup;
 
 use super::state::{
-    MatchPresence, MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot, RoomVisualOrderInput,
-    SelectedRoomSlotState, SelectionScroll, TranslationDisplay, compare_dm_rooms_for_nav,
-    dm_is_promoted_unread, dm_peer_is_ignored, is_chat_list_room, is_deadchannel_room,
-    is_selected_slot, synthetic_favorite_id, synthetic_slot_for_favorite_id,
-    visual_order_for_rooms,
+    InlinePreviewSource, MatchPresence, MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot,
+    RoomVisualOrderInput, SelectedRoomSlotState, SelectionScroll, TranslationDisplay,
+    compare_dm_rooms_for_nav, dm_is_promoted_unread, dm_peer_is_ignored,
+    inline_preview_source_in_body, is_chat_list_room, is_deadchannel_room, is_selected_slot,
+    synthetic_favorite_id, synthetic_slot_for_favorite_id, visual_order_for_rooms,
 };
 use super::ui_text::{
     AuthorTint, Gutter, WAVE_REACTION_KIND, is_nerd_font_glyph, reaction_label,
@@ -1731,6 +1731,18 @@ fn replies_to_user(
         == Some(user_id)
 }
 
+/// A YouTube thumbnail's rows in the chat: the picture, then the hint row.
+/// Built with the rows cache, so its colour follows the theme. Both are
+/// `Image` rows, so a click on either is the image click, which watches.
+fn with_watch_hint(picture: &InlineImagePreview) -> InlineImagePreview {
+    let mut lines = picture.clone();
+    lines.push(Line::from(Span::styled(
+        "▶ YouTube · Enter to watch",
+        Style::default().fg(theme::AMBER_DIM()),
+    )));
+    lines
+}
+
 fn ensure_chat_rows_cache(
     cache: &mut ChatRowsCache,
     messages: Vec<&ChatMessage>,
@@ -2016,7 +2028,18 @@ fn ensure_chat_rows_cache(
             .filter(|_| is_continuation && left_app_here.is_none() && !afk_here);
 
         let row_start = all_rows.len();
-        let image_lines = ctx.inline_images.get(&msg.id).map(Vec::as_slice);
+        // A YouTube thumbnail gets the watch hint row under its picture.
+        let video_preview = match ctx.inline_images.get(&msg.id) {
+            Some(picture) => match inline_preview_source_in_body(&msg.body) {
+                Some(InlinePreviewSource::Video { .. }) => Some(with_watch_hint(picture)),
+                Some(InlinePreviewSource::Image(_)) | None => None,
+            },
+            None => None,
+        };
+        let image_lines = match &video_preview {
+            Some(lines) => Some(lines.as_slice()),
+            None => ctx.inline_images.get(&msg.id).map(Vec::as_slice),
+        };
         let translation = ctx
             .translations
             .get(&msg.id)
@@ -5826,7 +5849,7 @@ fn draw_selected_content(
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(theme::BORDER()));
             let hint_text = Paragraph::new(Line::from(Span::styled(
-                " j/k navigate · Enter read · c copy link · r reply in #lounge · i paste URL · / filter mine",
+                " j/k navigate · Enter read · s save for later · c copy link · r reply in #lounge · i paste URL · / filter mine",
                 Style::default().fg(theme::TEXT_DIM()),
             )))
             .block(hint_block);

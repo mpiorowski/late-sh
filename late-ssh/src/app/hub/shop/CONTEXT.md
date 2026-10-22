@@ -15,7 +15,7 @@
 - `input.rs`: Shop-only item/category/buy input. `h`/`l` switch Shop categories/subtabs; `[`/`]` remain aliases. Mouse left-click on a category sub-tab or item row selects it; scroll wheel moves item selection. The custom-title prompt is checked first and swallows the whole event stream while open, because in a text field every printable key is content rather than a binding.
 - `ui.rs`: Shop tab rendering.
 
-Tests: `state_test.rs`, `svc_test.rs`, `ui_test.rs`, and `late-core`'s `marketplace_test.rs`. Run them scoped: `make test-llm ARGS="-p late-ssh -E 'test(shop)'"`.
+Tests: `state_test.rs`, `svc_test.rs`, `ui_test.rs`, and `late-core`'s `marketplace_test.rs`. Run them scoped: `make test-llm ARGS="-p late-ssh --lib -E 'test(shop)'"`.
 
 ## Marketplace
 

@@ -1,14 +1,14 @@
 //! The watch modal's orchestration: the gate deciding player or setup box,
-//! the pair sends to the paired CLI, and the one place a watch's story is
-//! logged and counted. The modal itself (`state.rs`) is pure; everything
-//! that leaves the session goes through here.
+//! the pair sends to the paired CLI, where each source's position comes
+//! from and goes back to, and the one place a watch's story is logged and
+//! counted. The modal itself (`state.rs`) is pure; everything that leaves
+//! the session goes through here.
 
 use std::time::Instant;
 
 use late_core::models::user::TerminalImagesMode;
-use uuid::Uuid;
 
-use super::state::{SetupInputs, WatchOutcome};
+use super::state::{SetupInputs, WatchOutcome, WatchRequest, WatchSource};
 use crate::app::common::primitives::Banner;
 use crate::app::files::terminal_image::TerminalImageProtocol;
 use crate::app::state::App;
@@ -24,51 +24,52 @@ enum LostCause {
     Unreachable,
 }
 
-/// `w` on a video story: the player when the paired CLI advertises
-/// `video` and the Tweaks row has terminal images on, the setup box naming
-/// what is missing otherwise. False when the story is not a video in the
-/// snapshot.
-pub(crate) fn watch_article(app: &mut App, article_id: Uuid) -> bool {
-    if !app.chat.news.is_watchable(article_id) {
-        return false;
-    }
+/// What a watch press opened.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Watched {
+    Player,
+    /// This session cannot play it: the setup box naming what is missing.
+    Setup,
+}
+
+/// A watch press (`w` on a News story, Enter or a click on a YouTube link
+/// in chat): the player when this session can play (`can_play`), the
+/// setup box naming what is missing otherwise.
+pub(crate) fn watch(app: &mut App, request: WatchRequest) -> Watched {
     match can_play(app) {
-        true => open_player(app, article_id),
+        true => {
+            play(app, request);
+            Watched::Player
+        }
         false => {
+            close(app);
             let inputs = setup_inputs(app);
-            let opened = app.chat.open_watch_setup(article_id, &inputs);
-            if opened {
-                record(app, None, WatchOutcome::Setup);
-            }
-            opened
+            app.video.open_setup(&request.url, &inputs);
+            record(app, request.source, None, WatchOutcome::Setup);
+            Watched::Setup
         }
     }
 }
 
-/// `o` on the live strip or a Live row: a video this session can play goes
-/// straight to the player; anything else opens the reader. `o` is "open",
-/// not "watch", so it never lands on the setup box.
-pub(crate) fn open_article(app: &mut App, article_id: Uuid) -> bool {
-    match app.chat.news.is_watchable(article_id) && can_play(app) {
-        true => open_player(app, article_id),
-        false => app.chat.open_reader_for_article(article_id),
-    }
-}
-
-fn open_player(app: &mut App, article_id: Uuid) -> bool {
-    let opened = app.chat.open_watch_player(article_id, Instant::now());
-    if opened {
-        let play_id = app.chat.news.player_mut().map(|player| player.play_id());
-        record(app, play_id, WatchOutcome::Opened);
-    }
-    opened
+/// Open the player on `request`, for a caller that checked `can_play`. It
+/// resumes where the video's source last left it: a News story on the
+/// reader's row, a chat link where this session left it.
+pub(crate) fn play(app: &mut App, request: WatchRequest) {
+    close(app);
+    let resume_from = match request.source {
+        WatchSource::NewsArticle(article_id) => app.chat.news.watch_position(article_id),
+        WatchSource::ChatLink => app.video.link_position(&request.url),
+    };
+    let source = request.source;
+    let play_id = app.video.open_player(request, resume_from, Instant::now());
+    record(app, source, Some(play_id), WatchOutcome::Opened);
 }
 
 /// Both gates: a paired CLI that can play (it sits in the terminal and
 /// already checked it, tmux included; the server's image detection maps
 /// WezTerm to iTerm2 and is no witness here), and the Tweaks "Terminal
 /// images" row not `Off`, the user's one way to keep graphics out.
-fn can_play(app: &App) -> bool {
+pub(crate) fn can_play(app: &App) -> bool {
     let video_cli = app
         .paired_client_registry
         .as_ref()
@@ -100,11 +101,26 @@ fn setup_inputs(app: &App) -> SetupInputs {
     }
 }
 
+/// Close the modal (Esc, `[x]`, a page change, another modal, the
+/// session's end). What a closing player leaves goes back to its source:
+/// News stores it on the reader's row, a chat link keeps it for the
+/// session. Closing is state only: the next draw's `sync` sends the stop.
+pub(crate) fn close(app: &mut App) {
+    let Some(closed) = app.video.close() else {
+        return;
+    };
+    match closed.source {
+        WatchSource::NewsArticle(article_id) => {
+            app.chat.news.remember_watch(article_id, closed.memory);
+        }
+        WatchSource::ChatLink => app.video.remember_link(closed.url, closed.memory),
+    }
+}
+
 /// A key in the player, relayed to mpv while it is up.
 pub(crate) fn send_control(app: &mut App, control: VideoControl) {
     let Some(message) = app
-        .chat
-        .news
+        .video
         .player_mut()
         .and_then(|player| player.control(control))
     else {
@@ -116,61 +132,70 @@ pub(crate) fn send_control(app: &mut App, control: VideoControl) {
 /// After every draw: tell the CLI what the drawn player wants (a play, a
 /// move after `f` or a resize, a stop once it closed).
 pub(crate) fn sync(app: &mut App) {
-    for message in app.chat.news.video_sync() {
+    for message in app.video.cli_messages() {
         deliver(app, message);
     }
 }
 
 /// The SSH session is ending: stop whatever the CLI is playing for it.
 pub(crate) fn end_session(app: &mut App) {
-    app.chat.news.close_watch();
+    close(app);
     sync(app);
 }
 
 /// One `video_state` from the paired CLI. A report for any play but the
-/// open one is late and dropped. Every fifteen seconds of play the
-/// position is saved (`news::State::checkpoint_watch`), so a session that
+/// open one is late and dropped. Every fifteen seconds of a News story's
+/// play the position is saved (`Player::checkpoint`), so a session that
 /// drops still resumes close to where it was.
 pub(crate) fn apply_report(app: &mut App, play_id: u64, report: &VideoReport) {
     let now = Instant::now();
     let Some(player) = app
-        .chat
-        .news
+        .video
         .player_mut()
         .filter(|player| player.play_id() == play_id)
     else {
         tracing::debug!(play_id, "dropping video state for a play no longer open");
         return;
     };
+    let source = player.source();
     let outcome = player.apply(report, now);
-    app.chat.news.checkpoint_watch(now);
+    match (source, player.checkpoint(now)) {
+        (WatchSource::NewsArticle(article_id), Some(position)) => {
+            app.chat.news.save_watch_position(article_id, position);
+        }
+        // A chat link's position lives as long as the session; the close
+        // keeps it.
+        (WatchSource::ChatLink, Some(_))
+        | (WatchSource::NewsArticle(_) | WatchSource::ChatLink, None) => {}
+    }
     let Some(outcome) = outcome else {
         return;
     };
     // The CLI's reason is for the log only, never shown raw.
     if let VideoReport::Failed { message } = report {
         late_core::error_span!(
-            "news_watch_failed",
+            "video_watch_failed",
             play_id,
+            ?source,
             message = %message,
-            "paired cli could not play the news video"
+            "paired cli could not play the video"
         );
     }
-    record(app, Some(play_id), outcome);
+    record(app, source, Some(play_id), outcome);
 }
 
 /// The world tick: a play the CLI went quiet on is lost. True while a
 /// player is up, once a second, so a status that changed outside a draw
 /// (a send that reached nobody) repaints.
 pub(crate) fn tick(app: &mut App, now: Instant, one_hz: bool) -> bool {
-    let Some(player) = app.chat.news.player_mut() else {
+    let Some(player) = app.video.player_mut() else {
         return false;
     };
-    let play_id = player.play_id();
+    let (source, play_id) = (player.source(), player.play_id());
     match player.expire(now) {
         Some(outcome) => {
-            lost(play_id, LostCause::Silent);
-            record(app, Some(play_id), outcome);
+            lost(source, play_id, LostCause::Silent);
+            record(app, source, Some(play_id), outcome);
             true
         }
         None => one_hz,
@@ -185,39 +210,41 @@ fn deliver(app: &mut App, message: PairControlMessage) {
     if delivered {
         return;
     }
-    let Some(player) = app.chat.news.player_mut() else {
+    let Some(player) = app.video.player_mut() else {
         return;
     };
-    let play_id = player.play_id();
+    let (source, play_id) = (player.source(), player.play_id());
     if let Some(outcome) = player.lose() {
-        lost(play_id, LostCause::Unreachable);
-        record(app, Some(play_id), outcome);
+        lost(source, play_id, LostCause::Unreachable);
+        record(app, source, Some(play_id), outcome);
     }
 }
 
-fn lost(play_id: u64, cause: LostCause) {
+fn lost(source: WatchSource, play_id: u64, cause: LostCause) {
     match cause {
         LostCause::Silent => late_core::error_span!(
-            "news_watch_lost",
+            "video_watch_lost",
             play_id,
+            ?source,
             "no video state from the paired cli for 10s"
         ),
         LostCause::Unreachable => late_core::error_span!(
-            "news_watch_lost",
+            "video_watch_lost",
             play_id,
-            "no paired cli with video took the news video control"
+            ?source,
+            "no paired cli with video took the video control"
         ),
     }
 }
 
 /// Count an outcome and log the ones without a cause of their own.
-fn record(app: &mut App, play_id: Option<u64>, outcome: WatchOutcome) {
-    metrics::record_news_watch(outcome);
+fn record(app: &mut App, source: WatchSource, play_id: Option<u64>, outcome: WatchOutcome) {
+    metrics::record_video_watch(source, outcome);
     match outcome {
-        WatchOutcome::Opened => tracing::info!(?play_id, "news video opened"),
-        WatchOutcome::Setup => tracing::info!("news watch opened the setup box"),
-        WatchOutcome::Played => tracing::info!(?play_id, "news video playing"),
-        WatchOutcome::Ended => tracing::info!(?play_id, "news video ended"),
+        WatchOutcome::Opened => tracing::info!(?play_id, ?source, "video opened"),
+        WatchOutcome::Setup => tracing::info!(?source, "video watch opened the setup box"),
+        WatchOutcome::Played => tracing::info!(?play_id, ?source, "video playing"),
+        WatchOutcome::Ended => tracing::info!(?play_id, ?source, "video ended"),
         // Logged with the CLI's reason by `apply_report`.
         WatchOutcome::Failed => {
             app.banner = Some(Banner::error("Couldn't play the video."));

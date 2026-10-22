@@ -255,7 +255,7 @@ fn every_piece_stays_under_the_wire_budget() {
 /// `a_slow_piece_moves_a_few_cells_a_second` are the contracts); run it
 /// when porting a piece or retuning a cadence and put the numbers in
 /// `CONTEXT.md`, Cost:
-/// `make test-llm ARGS="-p late-ssh --run-ignored all --no-capture -E 'test(the_cost_report)'"`.
+/// `make test-llm ARGS="-p late-ssh --lib --run-ignored all --no-capture -E 'test(the_cost_report)'"`.
 #[test]
 #[ignore]
 fn the_cost_report() {

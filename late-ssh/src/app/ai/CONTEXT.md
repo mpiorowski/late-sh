@@ -12,7 +12,7 @@
 - `translate.rs`: `TranslationService` (Translation below).
 - `summary.rs`: `SummaryService` (Summary below).
 
-Tests sit beside each file as `<file>_test.rs`; run them with `make test-llm ARGS="-p late-ssh -E 'test(app::ai::)'"`.
+Tests sit beside each file as `<file>_test.rs`; run them with `make test-llm ARGS="-p late-ssh --lib -E 'test(app::ai::)'"`.
 
 ## The Round
 

@@ -99,7 +99,7 @@ Steps:
 ## Tests
 
 ```bash
-make test-llm ARGS="-p late-ssh -E 'test(door::vintagestory)'"
-make test-llm ARGS="-p late-ssh -E 'test(door::hub) or test(help_modal)'"
+make test-llm ARGS="-p late-ssh --lib -E 'test(door::vintagestory)'"
+make test-llm ARGS="-p late-ssh --lib -E 'test(door::hub) or test(help_modal)'"
 bash docker/vintagestory/smoke.sh <arm64 image>    # on an arm64 host
 ```

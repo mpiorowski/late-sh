@@ -219,7 +219,7 @@ The rule: never compute per-user state for every registered user and publish it 
 What exists now:
 
 - **Work and Showcase:** no fan-out at all. The badge is read once at session start (`refresh_unread_count`) and zeroed on visiting Profiles page 5. It does not move live when someone else posts; these pages are visited rarely, so that was the accepted trade.
-- **News:** stays live and is replica-ready. Every `articles` write fires `articles_changed` (migration 198); each replica's `ArticleService::start_notify_worker` (fed by the one process listener) re-reads the newest 20 articles into its shared `watch`. Each session counts its own badge from that snapshot against its `article_reads` rows (`news::state::unread_in_snapshot`), so the badge saturates at `20+`. A write costs one list query per replica, independent of registered users and concurrent sessions.
+- **News:** stays live and is replica-ready. Every `articles` write fires `articles_changed` (migration 198); each replica's `ArticleService::start_notify_worker` (fed by the one process listener) re-reads the newest 40 articles into its shared `watch`. Each session counts its own badge from that snapshot against its `article_reads` rows (`news::state::unread_in_snapshot`), so the badge saturates at `40+`. A write costs one list query per replica, independent of registered users and concurrent sessions.
 - The remaining `Lagged` arms warn once per lag and keep draining instead of breaking.
 
 **Verify after deploy:** `stats by (_msg) count()` in VictoriaLogs over 48 h should show no `failed to receive work event` / `showcase event` / `article event` lines and no `event receiver lagged` warns.
@@ -693,7 +693,7 @@ Gating the `anim_half` sidebar edge on a paired client is NOT the knob, and woul
 
 - Any test driving `tick()` without `render()` leaves `pending_terminal_commands` queued and the gate correctly stays dirty; mirror the loop with a drain_frame (render + take commands). See `app/tick_test.rs`.
 - The settle tests (`idle_ticks_settle_clean_and_chat_send_marks_changed`, `open_settings_modal_settles_clean`) loop to 30 consecutive clean ticks; their failure panic dumps a state snapshot; extend that dump when debugging new dirt sources.
-- Never raw cargo test; `make test-llm ARGS="-p late-ssh -E 'test(...)'"`.
+- Never raw cargo test; `make test-llm ARGS="-p late-ssh --lib -E 'test(...)'"`.
 
 ### Open follow-ups (all optional tightening)
 

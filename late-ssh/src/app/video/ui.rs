@@ -14,7 +14,6 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use super::state::{Mark, Player, SetupBox, WatchModal, WatchSize, centered_rect, close_rect};
-use crate::app::chat::news::reader::state::domain_label;
 use crate::app::common::primitives::format_relative_time;
 use crate::app::common::theme;
 
@@ -83,12 +82,13 @@ fn draw_player(frame: &mut Frame, area: Rect, player: &Player) {
 
 fn draw_header(frame: &mut Frame, header: Rect, player: &Player) {
     let title = match player.title().trim() {
-        "" => "news update",
+        "" => "video",
         title => title,
     };
+    // Every video here is YouTube's, so the meta names who shared it, not
+    // the site.
     let meta = format!(
-        "{} · shared by @{} {}",
-        domain_label(player.url()),
+        "shared by @{} {}",
         player.author(),
         format_relative_time(player.shared_at())
     );

@@ -64,6 +64,7 @@ pub mod tick;
 mod tick_test;
 pub(crate) mod ultimates;
 pub mod usermap;
+pub(crate) mod video;
 pub mod voice;
 pub mod workspace;
 pub mod zen;

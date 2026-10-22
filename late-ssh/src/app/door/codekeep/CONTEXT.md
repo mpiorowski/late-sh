@@ -91,5 +91,5 @@ Focused checks:
 
 ```bash
 make test-llm ARGS="-p late-codekeep"
-make test-llm ARGS="-p late-ssh -E 'test(codekeep) | test(door_games_are_outside) | test(selection_clamps) | test(all_games_are_listed)'"
+make test-llm ARGS="-p late-ssh --lib -E 'test(codekeep) | test(door_games_are_outside) | test(selection_clamps) | test(all_games_are_listed)'"
 ```

@@ -1,15 +1,16 @@
-//! The News watch modal: a YouTube story played inside the user's own
-//! terminal by their paired CLI's `mpv`, or, when their setup cannot, the
-//! setup box naming what is missing. Pure state: the player holds the play
-//! as the CLI last reported it and the rectangle its last draw reserved;
-//! `sync` turns that into the pair messages the CLI needs, and `svc.rs`
-//! sends them. Not a frame of video passes through the server.
+//! The watch modal: a YouTube video (a News story, or a link in a chat
+//! message) played inside the user's own terminal by their paired CLI's
+//! `mpv`, or, when their setup cannot, the setup box naming what is
+//! missing. Pure state: the player holds the play as the CLI last reported
+//! it and the rectangle its last draw reserved; `sync` turns that into the
+//! pair messages the CLI needs, and `svc.rs` sends them. Not a frame of
+//! video passes through the server.
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
-use late_core::models::article::ArticleFeedItem;
 use late_core::models::article_read::WatchPosition;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use uuid::Uuid;
@@ -44,6 +45,145 @@ const WINDOW_HEIGHT_PERMILLE: u16 = 900;
 const WINDOW_MAX_WIDTH: u16 = 160;
 /// The window's header: title and meta on one row, then a rule.
 const WINDOW_HEADER_ROWS: u16 = 2;
+
+/// The video id in `url`, the one rule for what the player plays, from
+/// News and chat alike: a YouTube link to one video (the booth's parse,
+/// `audio::youtube::video_id`). A channel or a playlist page has none.
+pub(crate) fn youtube_video_id(url: &str) -> Option<String> {
+    crate::app::audio::youtube::video_id(url)
+}
+
+/// Whether the player can play `url` (`youtube_video_id`).
+pub(crate) fn is_watchable(url: &str) -> bool {
+    youtube_video_id(url).is_some()
+}
+
+/// The session's video: the modal on screen, what the paired CLI was last
+/// told, and where this session left the chat links it watched.
+#[derive(Debug, Default)]
+pub(crate) struct State {
+    modal: Option<WatchModal>,
+    /// What the CLI was last told to play, kept past the modal so closing
+    /// it still sends the stop (`sync`).
+    live_play: Option<LivePlay>,
+    /// The last `play_id` handed out this session.
+    last_play_id: u64,
+    /// Where each chat link was left partway through, by URL. Kept for the
+    /// session only: a chat link has no row to store it on.
+    link_positions: HashMap<String, WatchPosition>,
+}
+
+impl State {
+    pub(crate) fn modal(&self) -> Option<&WatchModal> {
+        self.modal.as_ref()
+    }
+
+    pub(crate) fn is_open(&self) -> bool {
+        self.modal.is_some()
+    }
+
+    pub(crate) fn player_mut(&mut self) -> Option<&mut Player> {
+        match &mut self.modal {
+            Some(WatchModal::Player(player)) => Some(player),
+            Some(WatchModal::Setup(_)) | None => None,
+        }
+    }
+
+    /// The player on `request` under a fresh `play_id`, in place of the
+    /// modal that was up (`svc` closes that first, so its position is
+    /// kept). It starts from `resume_from` when the video was left
+    /// partway through. Returns the play's id.
+    pub(crate) fn open_player(
+        &mut self,
+        request: WatchRequest,
+        resume_from: Option<WatchPosition>,
+        now: Instant,
+    ) -> u64 {
+        self.last_play_id += 1;
+        let player = Player::new(request, self.last_play_id, now, resume_from);
+        self.modal = Some(WatchModal::Player(Box::new(player)));
+        self.last_play_id
+    }
+
+    /// The setup box for `url`, in place of the modal that was up.
+    pub(crate) fn open_setup(&mut self, url: &str, inputs: &SetupInputs) {
+        self.modal = Some(WatchModal::Setup(SetupBox::decide(url, inputs)));
+    }
+
+    /// Close the modal. A closing player hands back what it leaves for the
+    /// next watch of its video (`Player::memory`); closing is state only,
+    /// the next draw's `cli_messages` sends the stop.
+    pub(crate) fn close(&mut self) -> Option<ClosedPlayer> {
+        match self.modal.take() {
+            Some(WatchModal::Player(player)) => Some(ClosedPlayer {
+                source: player.source,
+                memory: player.memory(),
+                url: player.url,
+            }),
+            Some(WatchModal::Setup(_)) | None => None,
+        }
+    }
+
+    /// Where this session left a chat link, if partway through.
+    pub(crate) fn link_position(&self, url: &str) -> Option<WatchPosition> {
+        self.link_positions.get(url).copied()
+    }
+
+    /// Keep what a closed chat link's player left, for its next watch.
+    pub(crate) fn remember_link(&mut self, url: String, memory: WatchMemory) {
+        match memory {
+            WatchMemory::Save(position) => {
+                self.link_positions.insert(url, position);
+            }
+            WatchMemory::Clear => {
+                self.link_positions.remove(&url);
+            }
+            WatchMemory::Nothing => {}
+        }
+    }
+
+    /// The pair messages that bring the CLI in line with the open player:
+    /// a play, a move, a stop. Called after every draw, which is what
+    /// records the player's body.
+    pub(crate) fn cli_messages(&mut self) -> Vec<PairControlMessage> {
+        let wanted = match &self.modal {
+            Some(WatchModal::Player(player)) => player.wanted(),
+            Some(WatchModal::Setup(_)) | None => None,
+        };
+        sync(&mut self.live_play, wanted)
+    }
+}
+
+/// Who asked for a video, and so who keeps its position between watches.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WatchSource {
+    /// A News story: the position lives on the reader's `article_reads` row
+    /// (`news::State::watch_position`).
+    NewsArticle(Uuid),
+    /// A YouTube link in a chat message: the position lives on this
+    /// session's `State` and goes with it.
+    ChatLink,
+}
+
+/// Everything the player needs to open on a video.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct WatchRequest {
+    pub source: WatchSource,
+    /// What mpv is handed.
+    pub url: String,
+    pub title: String,
+    /// Who shared it, for the header.
+    pub author: String,
+    pub shared_at: DateTime<Utc>,
+}
+
+/// What a closed player leaves for the next watch of its video.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct ClosedPlayer {
+    pub source: WatchSource,
+    pub url: String,
+    pub memory: WatchMemory,
+}
 
 #[derive(Debug)]
 pub(crate) enum WatchModal {
@@ -85,7 +225,7 @@ impl WatchStatus {
     }
 }
 
-/// How a watch went, for `metrics::record_news_watch`. Every watch press
+/// How a watch went, for `metrics::record_video_watch`. Every watch press
 /// ends in `Opened` or `Setup`; a player then reports `Played` at most
 /// once and one of `Ended`, `Failed`, `Lost` at most once.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -143,7 +283,7 @@ pub(crate) enum WatchMemory {
 
 #[derive(Debug)]
 pub(crate) struct Player {
-    article_id: Uuid,
+    source: WatchSource,
     url: String,
     title: String,
     author: String,
@@ -154,7 +294,7 @@ pub(crate) struct Player {
     /// Whether `Played` was already reported for this play.
     played: bool,
     last_state_at: Instant,
-    /// Where the reader left this video last time, if partway through.
+    /// Where this video was left last time, if partway through.
     resume_from: Option<WatchPosition>,
     /// Whether a position is stored for this video: the one it resumed
     /// from, or a checkpoint since. Taken back to the top, the close then
@@ -173,20 +313,20 @@ pub(crate) struct Player {
 }
 
 impl Player {
-    /// A player for `item`, resuming from `resume_from` when the reader
-    /// left it partway through last time.
+    /// A player for `request`, resuming from `resume_from` when the video
+    /// was left partway through last time.
     pub(crate) fn new(
-        item: &ArticleFeedItem,
+        request: WatchRequest,
         play_id: u64,
         now: Instant,
         resume_from: Option<WatchPosition>,
     ) -> Self {
         Self {
-            article_id: item.article.id,
-            url: item.article.url.clone(),
-            title: item.article.title.clone(),
-            author: item.author_username.clone(),
-            shared_at: item.article.created,
+            source: request.source,
+            url: request.url,
+            title: request.title,
+            author: request.author,
+            shared_at: request.shared_at,
             size: WatchSize::Window,
             play_id,
             status: WatchStatus::Starting,
@@ -201,8 +341,8 @@ impl Player {
         }
     }
 
-    pub(crate) fn article_id(&self) -> Uuid {
-        self.article_id
+    pub(crate) fn source(&self) -> WatchSource {
+        self.source
     }
 
     /// Where the CLI is told to begin: the saved position less the rewind,

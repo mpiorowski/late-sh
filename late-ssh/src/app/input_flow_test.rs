@@ -20,7 +20,7 @@ async fn artboard_disclaimer_hides_content_and_only_allows_the_current_visit() {
     assert!(!frame.contains("GALLERY"));
     assert!(!frame.contains("Mode       view"));
     assert!(!frame.contains("rail j/k"));
-    app.handle_input(b"i\r \t?");
+    app.handle_input(b"i\r ?");
     app.handle_input(b"\x1b[200~private drawing\x1b[201~");
     app.handle_input(b"\x1b[<0;3;6M");
     assert_eq!(app.screen, Screen::Artboard);
@@ -333,6 +333,29 @@ async fn artboard_disclaimer_allows_clicking_topbar_page_numbers_without_consent
         app.interaction_mode = InteractionMode::Hybrid;
         app.handle_input(click.as_bytes());
         assert_eq!(app.screen, screen, "column {column}");
+        assert!(!app.artboard_content_accepted);
+        assert!(app.dartboard_state.is_none());
+        assert!(app.artboard_disclaimer_enabled());
+    }
+}
+
+#[tokio::test]
+async fn artboard_disclaimer_lets_tab_and_shift_tab_cycle_pages_without_consent() {
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "art-tab-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "art-tab-flow-it");
+    for (keys, screen) in [
+        (&b"\t"[..], Screen::Profiles),
+        (&b"\x1b[Z"[..], Screen::Games),
+    ] {
+        app.set_screen(Screen::Artboard);
+        render_plain(&mut app);
+        assert!(app.artboard_disclaimer_visible());
+
+        app.handle_input(keys);
+        assert_eq!(app.screen, screen, "keys {keys:?}");
         assert!(!app.artboard_content_accepted);
         assert!(app.dartboard_state.is_none());
         assert!(app.artboard_disclaimer_enabled());

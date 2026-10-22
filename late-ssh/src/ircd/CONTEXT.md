@@ -277,7 +277,7 @@ Integration tests:
 - History regressions live beside `history.rs` and the core `irc_history.rs`, with capability/replay/DM/private-access TCP coverage in `serve_test.rs`.
 - Manual Halloy fixtures: `make seed-irc-history USERNAME=<local TUI username>` seeds numbered public/private channel and DM history, including more than one 300-message page. Reconnect and join `#history-lab` / `##history-lab`; fixture peers are `history_ada` / `history^lin`. Inserts are historical only and do not broadcast live events.
 
-Agents run targeted tests through the capped runner, `make test-llm ARGS="-p late-ssh -E 'test(ircd)'"`; `make check` stays with the human owner.
+Agents run targeted tests through the capped runner, `make test-llm ARGS="-p late-ssh --lib -E 'test(ircd)'"`; `make check` stays with the human owner.
 
 ---
 

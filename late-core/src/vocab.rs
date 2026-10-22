@@ -58,6 +58,7 @@ pub const VOCAB: &[(&str, Group, &[&str])] = &[
         &["javascript", "js", "es6", "ecmascript"],
     ),
     ("c", Group::Language, &["c", "clang", "ansi-c"]),
+    ("c3", Group::Language, &["c3"]),
     ("cpp", Group::Language, &["cpp", "c++", "cplusplus"]),
     (
         "csharp",
@@ -76,6 +77,8 @@ pub const VOCAB: &[(&str, Group, &[&str])] = &[
     ("zig", Group::Language, &["zig"]),
     ("nim", Group::Language, &["nim"]),
     ("lua", Group::Language, &["lua"]),
+    ("lisp", Group::Language, &["lisp", "common-lisp", "sbcl"]),
+    ("scheme", Group::Language, &["scheme", "racket", "guile"]),
     ("perl", Group::Language, &["perl"]),
     ("dart", Group::Language, &["dart"]),
     ("r", Group::Language, &["r", "rlang"]),

@@ -5,7 +5,7 @@
 Chat in the SSH app: Home chat rooms, DMs, public/private topic rooms, game-backed room chat, the Home/Dashboard chat center and room rail, and the embedded game-chat surfaces (house tables, daily match boards, the door watch view). Also message actions, reactions, ignores, overlays, the service's refresh/tail/event contracts and the DB model constraints.
 
 - Synthetic chat entries: RSS, News, Mentions/Notifications, and Discover. Voice is not a synthetic room slot: the dedicated `#voice` room is a real, permanent, public chat room pinned at the bottom of Core (above Discover). Any voice-enabled chat/game room (including `#voice`) renders an embedded voice strip and exposes `/voice`/`/mute` controls while you are inside it. Showcase/Projects and Work/Profiles keep their feed services and state here, but their UI and their editor (`app/directory/editor`) live on Profiles page 5.
-- Companion docs here: `COMMANDS.md` (the composer, every slash command, the keys), `RENDERING.md` (the rows cache, message rendering, images, layout rules), `MARKS.md` (the AFK line and the left-app device mark). Sub-domains with their own context: `cyberspace/`, `gild/`, `news/`, and `../crown/`; the round, translation and `/summary` are `../ai/CONTEXT.md`.
+- Companion docs here: `COMMANDS.md` (the composer, every slash command, the keys), `RENDERING.md` (the rows cache, message rendering, images, layout rules), `MARKS.md` (the AFK line and the left-app device mark). Sub-domains with their own context: `cyberspace/`, `gild/`, `news/`, and `../crown/`; the round, translation and `/summary` are `../ai/CONTEXT.md`. A YouTube link in a message opens the watch player, `../video/CONTEXT.md`.
 - The session shell, global keys and notifications are in `late-ssh/CONTEXT.md`; repo-wide rules in the root `CONTEXT.md`.
 
 ---
@@ -377,11 +377,11 @@ Never load every room's history per session on a timer.
 
 Repo-wide rule from the root context still applies:
 - Every test, pure or DB-backed, lives beside the file it exercises as `<file>_test.rs`, wired with `#[cfg(test)] mod <file>_test;`. No inline test modules, no crate `tests/` folder.
-- Targeted runs go through `make test-llm ARGS="-p late-ssh -E 'test(chat)'"` (memory-capped `cargo nextest` with the check DB). The full sweep is `make check` and stays with the human owner.
+- Targeted runs go through `make test-llm ARGS="-p late-ssh --lib -E 'test(chat)'"` (memory-capped `cargo nextest` with the check DB). The full sweep is `make check` and stays with the human owner.
 
 Where the coverage sits:
 - `svc_test.rs` is the DB-backed service suite (send, reactions, tails, ignores, discover, search scoping, gilds and each gild refusal); `svc_internal_test.rs` covers the pure service helpers (link detection and cooldown tiers, report kinds, poll copy).
-- `state_internal_test.rs` reaches `pub(crate)` `ChatState` internals (command parsing, autocomplete ranking, visual order, reply helpers, translation display); `state_test.rs` is a placeholder.
+- `state_internal_test.rs` reaches `pub(crate)` `ChatState` internals (command parsing, autocomplete ranking, visual order, reply helpers, translation display, inline preview links and YouTube link shapes); `state_test.rs` is a placeholder.
 - `commands_test.rs` pins the command registry and popup ranking; `ui_test.rs`/`ui_text_test.rs` the layout, wrapping and hit testing; `slur_test.rs` the drunk-text contract (§14 Drunk Text).
 - Each synthetic entry (`news/`, `showcase/`, `work/`, ...) and `../ai/` carries its own `*_test.rs`, and the chat models' tests sit beside them in `late-core/src/models/`.
 
@@ -409,7 +409,7 @@ Test gaps:
 - Poll create/vote tasks are async; `ChatEvent::PollUpdated` patches the local active-poll map and `ChatSnapshot.active_polls` refreshes authoritative visibility. Successful poll creation spawns a sleep-until-expiry finalizer that atomically claims the expired poll in Postgres, marks it inactive, and posts compact results into the room as the poll creator. `ChatService::start_poll_finalizer_recovery_task` runs a coarse 10-minute recovery scan for expired active polls so restarts/redeploys do not strand result posts; the DB claim is the cross-replica duplicate guard.
 - Poll vote shortcuts use `va/vb/vc` when the selected/visible real room has an active poll, leaving music `v1`..`v5` selectors available.
 - Room visual order must stay consistent between state and UI hit-testing/row-building.
-- Mouse hit-testing reconstructs a temporary `ChatRenderInput`; room-list layout changes must keep hit tests in sync.
+- Room-list mouse hit-testing reconstructs a temporary `ChatRoomListView` (`app/input.rs`); room-list layout changes must keep hit tests in sync.
 - Chat-scroll mouse hit-testing is driven by `ChatRowsCache` extras (`row_message`, `row_kind`, `header_segments`) and a per-frame `ChatHitLayout` published into `ChatState::last_chat_hit_layout`. If you change how author headers, inline images, or reaction footers contribute rows in `ensure_chat_rows_cache` / `wrap_chat_entry_to_lines`, update both the parallel `row_*` vectors and the segment math in `build_author_prefix_and_segments` so a click still resolves to the right message/segment.
 - Showcase, Work, and News posts do not create chat messages. A News share goes up on the #lounge live strip instead (§11 News).
 - Game rooms must remain opt-in and `auto_join=false`.

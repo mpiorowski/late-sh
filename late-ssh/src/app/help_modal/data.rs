@@ -4,6 +4,7 @@ use crate::app::common::qr::{Barcode, HalfBlock};
 use crate::app::common::username_effect::{CROWN_GLYPH, CROWN_LAUREATE_GLYPH};
 use late_core::models::{
     article::{NEWS_SHARE_MAX_PAID_PER_DAY, NEWS_SHARE_REWARD_CHIPS},
+    article_save::NEWS_SAVED_LIMIT,
     asterion::ASTERION_DAILY_ESCAPE_PAYOUT,
     chat_message_gild::GildTier,
     chips::{CHIP_FLOOR, Difficulty, INITIAL_CHIP_BALANCE},
@@ -695,7 +696,8 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  f then f          list reaction owners",
         "  Enter              jump to loaded original for selected reply",
         "  Enter              open selected image when present",
-        "  g                  jump to a reply's original even if it has an image",
+        "  Enter              watch selected YouTube link when present",
+        "  G                  jump to a reply's original even if it has an image or video",
         "  r                  reply to selected message",
         "  e                  edit selected message",
         "  dd                 delete selected message (press d twice)",
@@ -1180,7 +1182,7 @@ fn lobby_help_lines() -> Vec<String> {
         "  PageUp/PageDown   scroll embedded chat",
         "  r/e/d/p/c/f       reply, edit, delete, profile, copy, react selected chat message",
         "  t                 translate the selected chat message",
-        "  g                 jump to a reply's original even if it has an image",
+        "  G                 jump to a reply's original even if it has an image or video",
         "  Arrows            game gets first chance; otherwise embedded chat handles them",
         "",
         "Economy",
@@ -1576,6 +1578,9 @@ fn news_help_lines() -> Vec<String> {
         "  Full chip rules live in the Chips tab.".to_string(),
         "".to_string(),
     ];
+    let saved_shelf_line = format!(
+        "  s keeps up to {NEWS_SAVED_LIMIT} stories on your own shelf, on any device you sign in from."
+    );
     lines.extend(
         [
             "How it works",
@@ -1586,13 +1591,20 @@ fn news_help_lines() -> Vec<String> {
             "  Enter in composer submit link",
             "  Esc               cancel URL entry",
             "  j / k             browse stories",
+            "  s                 save the selected story for later, or let it go",
             "  r                 reply in #lounge quoting the selected story",
             "  d                 delete your own story",
             "  /                 toggle filter to only your stories",
             "  o on now strip    open the reader on that story (a video plays, when it can)",
             "",
+            "Saved for later",
+            saved_shelf_line.as_str(),
+            "  The shelf sits above the feed under a \"saved\" rule, newest save first, and a saved story",
+            "  stays readable after the feed has moved on. s on a saved story takes it off.",
+            "  The feed shows the newest twenty stories; the selected story opens out with its link and summary.",
+            "",
             "Watching",
-            "  A YouTube card reads \"watch\". w plays it right here, over the page.",
+            "  A YouTube video card reads \"watch\". w plays it right here, over the page.",
             "  Needs the late CLI, a Kitty-graphics terminal (kitty, Ghostty, WezTerm, Konsole, Rio),",
             "  no tmux or screen, and mpv 0.36+ with yt-dlp installed on your machine.",
             "  Missing something? w shows exactly what, and how to get it.",
@@ -1604,6 +1616,8 @@ fn news_help_lines() -> Vec<String> {
             "  f                 full screen / window",
             "  Esc               stop and close",
             "  Close partway through and the card reads where you left it; w resumes there.",
+            "  A YouTube link in chat plays the same way: Enter (or a click) on its message.",
+            "  Closed partway, Enter on it again picks up there until you log off.",
             "",
             "The reader",
             "  It shows the article's own text in the terminal once late.sh has fetched it.",
@@ -1617,6 +1631,7 @@ fn news_help_lines() -> Vec<String> {
             "  c                 copy the story's link",
             "  w                 watch it, on a YouTube story",
             "  r                 reply in #lounge quoting the story",
+            "  s                 save the story for later, or let it go",
             "  d                 delete your own story",
             "  N                 jump to News with story selected",
             "  Esc               close",

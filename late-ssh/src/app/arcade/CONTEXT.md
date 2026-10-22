@@ -72,7 +72,7 @@ Poker, Blackjack, Asterion, Tron and Super Snake are house tables (`app/lobby/ho
 
 ## Adding A New Arcade Game
 
-Decide the category first (high-score or daily puzzle), then follow the source shape, the model and wiring checklists, and the leaderboard roster step in [`GAMES.md`](GAMES.md), "Adding a new Arcade game". Agents run targeted tests through `make test-llm ARGS="-p late-ssh -E 'test(arcade)'"`; `make check` stays with the human owner.
+Decide the category first (high-score or daily puzzle), then follow the source shape, the model and wiring checklists, and the leaderboard roster step in [`GAMES.md`](GAMES.md), "Adding a new Arcade game". Agents run targeted tests through `make test-llm ARGS="-p late-ssh --lib -E 'test(arcade)'"`; `make check` stays with the human owner.
 
 ## Persistence And Services
 

@@ -335,7 +335,7 @@ Source-side unit tests are appropriate for pure logic only:
 
 Tests that need services, DB, API routes, pair-WS orchestration, or rate limiters go in adjacent `_test.rs` files beside the module they exercise, using `crate::test_helpers`.
 
-Agents run targeted tests through `make test-llm ARGS="-p late-ssh -E 'test(voice)'"`; `make check` stays with the human owner.
+Agents run targeted tests through `make test-llm ARGS="-p late-ssh --lib -E 'test(voice)'"`; `make check` stays with the human owner.
 
 ---
 

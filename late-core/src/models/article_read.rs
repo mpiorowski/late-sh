@@ -104,15 +104,21 @@ impl ArticleRead {
     }
 
     /// The reader's reads among the snapshot's articles, the newest
-    /// [`NEWS_FEED_LIMIT`]: the only ones a badge can count, so a long
-    /// reading history never rides a session's load. Each carries where
-    /// the reader left the video, when it is one they are partway through.
+    /// [`NEWS_FEED_LIMIT`], and the stories on their shelf (`article_saves`,
+    /// at most [`super::article_save::NEWS_SAVED_LIMIT`]): the only ones a
+    /// badge can count or a card can show, so a long reading history never
+    /// rides a session's load. Each carries where the reader left the
+    /// video, when it is one they are partway through; the shelf is in so
+    /// a saved video still resumes once it has left the snapshot.
     pub async fn rows_for_user(client: &Client, user_id: Uuid) -> Result<Vec<ArticleReadRow>> {
         let rows = client
             .query(
                 "SELECT article_id, watch_position_s, watch_duration_s FROM article_reads
                  WHERE user_id = $1
-                   AND article_id IN (SELECT id FROM articles ORDER BY created DESC LIMIT $2)",
+                   AND (
+                       article_id IN (SELECT id FROM articles ORDER BY created DESC LIMIT $2)
+                       OR article_id IN (SELECT article_id FROM article_saves WHERE user_id = $1)
+                   )",
                 &[&user_id, &NEWS_FEED_LIMIT],
             )
             .await?;

@@ -120,7 +120,7 @@ Sibling `_test.rs` files cover: host `cp437` (ASCII/ANSI passthrough, box art, f
 
 ```bash
 make test-llm ARGS="-p late-usurper"
-make test-llm ARGS="-p late-ssh -E 'test(usurper)'"
+make test-llm ARGS="-p late-ssh --lib -E 'test(usurper)'"
 ```
 
 The PTY bridge and russh loops are process/network-bound and not unit-tested; verify launch/play/quit manually against a real host (compose `service-usurper`).

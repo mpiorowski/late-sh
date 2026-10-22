@@ -131,4 +131,4 @@ Deliberate gaps:
 
 Pure modules are unit-tested in their `*_test.rs` siblings (combat, data,
 events, inn, tavern, commentary, model, persist, state's menu builders).
-Run them scoped: `make test-llm ARGS="-p late-ssh -E 'test(greendragon)'"`.
+Run them scoped: `make test-llm ARGS="-p late-ssh --lib -E 'test(greendragon)'"`.

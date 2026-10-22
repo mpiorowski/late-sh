@@ -69,7 +69,7 @@ Three-layer split, daily-domain style (no live actor per game, load-validate-per
 - Screens: `history_ui_test.rs` (the map painted from the day on screen, day one first, unpositioned days skipped, a half-read run not claiming its start, the slider's ends), `targets_ui_test.rs` (the selected row filled edge to edge).
 - Service (`svc_test.rs`, real `test_db`, plus inline tests in `svc.rs`): the season loop (one world at a time, Earth and drawn worlds alternating, another replica's opening left to it, the muster), joins and spawns, actions landing in the live log and the archive, the budget on the game's own hour, the sweeper's rollover, dissolve, payout settlement (and a failed payout paid once on retry), cross-replica events through a re-read, corrupt rows leaving the listing, each world's room and its 30-day reap, withdrawals, the lounge headlines and calls, the anti-alt pot.
 - App flow (`app/input_flow_test.rs`): the chat column, the board as a backtick stop, Esc peeling order.
-- Run them scoped: `make test-llm ARGS="-p late-ssh -E 'test(realm)'"`.
+- Run them scoped: `make test-llm ARGS="-p late-ssh --lib -E 'test(realm)'"`.
 
 ## 6. Deferred / future hooks
 

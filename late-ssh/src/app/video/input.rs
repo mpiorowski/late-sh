@@ -15,7 +15,7 @@ use crate::app::state::App;
 use crate::paired_clients::VideoControl;
 
 pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
-    let Some(modal) = app.chat.watch() else {
+    let Some(modal) = app.video.modal() else {
         return;
     };
     let close = match modal {
@@ -29,10 +29,10 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
     match event {
         ParsedInput::Mouse(mouse) => {
             if app.interaction_mode.mouse_enabled() && clicks_close(*mouse, close) {
-                app.chat.close_watch();
+                svc::close(app);
             }
         }
-        ParsedInput::Byte(0x1B) => app.chat.close_watch(),
+        ParsedInput::Byte(0x1B) => svc::close(app),
         ParsedInput::Byte(b'c') | ParsedInput::Char('c') => copy_link(app),
         ParsedInput::Byte(b' ') | ParsedInput::Char(' ') if player => {
             svc::send_control(app, VideoControl::TogglePause);
@@ -60,7 +60,7 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
             svc::send_control(app, VideoControl::ToggleMute);
         }
         ParsedInput::Byte(b'f') | ParsedInput::Char('f') => {
-            if let Some(player) = app.chat.news.player_mut() {
+            if let Some(player) = app.video.player_mut() {
                 player.toggle_size();
             }
         }
@@ -69,7 +69,7 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
 }
 
 fn copy_link(app: &mut App) {
-    let url = match app.chat.watch() {
+    let url = match app.video.modal() {
         Some(WatchModal::Player(player)) => player.url().to_owned(),
         Some(WatchModal::Setup(setup)) => setup.url().to_owned(),
         None => return,

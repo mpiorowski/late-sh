@@ -19,7 +19,7 @@ Part of Dead Channel (`../CONTEXT.md`; design in `../GAME.md`). The round and th
 | `fight/input.rs` | Keys while the road or a scene is open |
 | `fight/ui.rs` | `draw_picker` (the road) and `draw_scene` (a fight, the Old Signal's torn frame) |
 
-Every file with logic has a `*_test.rs` sibling. Detail per file: `MACHINE.md`, "Files in depth". Run the slice scoped: `make test-llm ARGS="-p late-ssh -E 'test(deadchannel::fight)'"`.
+Every file with logic has a `*_test.rs` sibling. Detail per file: `MACHINE.md`, "Files in depth". Run the slice scoped: `make test-llm ARGS="-p late-ssh --lib -E 'test(deadchannel::fight)'"`.
 
 ../GAME.md, "The road pass": the screen closing the street is where the
 day's road starts. Enter there (`Enter::Fight`) walks up to it: the road

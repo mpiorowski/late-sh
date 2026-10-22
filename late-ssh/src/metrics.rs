@@ -14,8 +14,7 @@ use crate::app::audio::svc::ThumbnailFetch;
 use crate::app::bonsai::state::BonsaiAction;
 use crate::app::bonsai::svc::BonsaiActionResult;
 use crate::app::calendar::svc::{CalendarAnnouncement, CalendarOp, CalendarWrite};
-use crate::app::chat::news::svc::{BodyFetchOutcome, XMediaLookup};
-use crate::app::chat::news::watch::state::WatchOutcome;
+use crate::app::chat::news::svc::{BodyFetchOutcome, NewsSaveOutcome, XMediaLookup};
 use crate::app::chat::svc::{GildRefusal, SendRefusal};
 use crate::app::clubhouse::nightcap::svc::{NightcapHouseFailure, NightcapOrderResult};
 use crate::app::common::primitives::Screen;
@@ -31,6 +30,7 @@ use crate::app::live::input::Origin as LiveOrigin;
 use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome, SnapshotRowError};
 use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
 use crate::app::referral::svc::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement};
+use crate::app::video::state::{WatchOutcome, WatchSource};
 use crate::ircd::conn::{IrcHistoryOutcome, IrcHistoryRequest};
 use crate::pg_listener::Refresh;
 use crate::terminal_probe::ProbeBacklog;
@@ -672,7 +672,6 @@ mod inner {
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
-    use super::XMediaLookup;
     use super::{
         ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, AwardAnnouncementOutcome,
         BioScreenOutcome, CrownRefusal, DailyPuzzle, DailyWinPayout, DoorGame, DoorWatchOutcome,
@@ -687,7 +686,7 @@ mod inner {
         SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason,
         SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
-    use super::{BodyFetchOutcome, BodyStatus, WatchOutcome};
+    use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
     use super::{
@@ -695,6 +694,7 @@ mod inner {
     };
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
+    use super::{NewsSaveOutcome, XMediaLookup};
     use super::{PollOutcome, PolledFeed};
     use super::{
         ZorkAction, ZorkCatalogueRead, ZorkEdition, ZorkSessionEnd, ZorkSuggestion,
@@ -1706,13 +1706,25 @@ mod inner {
         })
     }
 
-    fn news_watches_total() -> &'static Counter<u64> {
+    fn video_watches_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
             meter()
-                .u64_counter("late_ssh_news_watches_total")
+                .u64_counter("late_ssh_video_watches_total")
                 .with_description(
-                    "News video watches by step: opened (the player), setup (the setup box instead), played, ended, failed, lost",
+                    "Video watches by source (news, chat) and step: opened (the player), setup (the setup box instead), played, ended, failed, lost",
+                )
+                .build()
+        })
+    }
+
+    fn news_saves_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_news_saves_total")
+                .with_description(
+                    "News shelf saves by outcome: saved, unsaved, or full (the shelf refused an eleventh)",
                 )
                 .build()
         })
@@ -2915,7 +2927,14 @@ mod inner {
         news_reader_opens_total().add(1, &[KeyValue::new("body", news_body_status_label(status))]);
     }
 
-    fn news_watch_label(outcome: WatchOutcome) -> &'static str {
+    fn video_watch_source_label(source: WatchSource) -> &'static str {
+        match source {
+            WatchSource::NewsArticle(_) => "news",
+            WatchSource::ChatLink => "chat",
+        }
+    }
+
+    fn video_watch_label(outcome: WatchOutcome) -> &'static str {
         match outcome {
             WatchOutcome::Opened => "opened",
             WatchOutcome::Setup => "setup",
@@ -2927,9 +2946,30 @@ mod inner {
     }
 
     /// Setup against opened is how many people want to watch and cannot;
-    /// a run of failed or lost is a CLI or mpv regression.
-    pub(crate) fn record_news_watch(outcome: WatchOutcome) {
-        news_watches_total().add(1, &[KeyValue::new("outcome", news_watch_label(outcome))]);
+    /// a run of failed or lost is a CLI or mpv regression. `source` is the
+    /// surface that asked: a News story or a YouTube link in chat.
+    pub(crate) fn record_video_watch(source: WatchSource, outcome: WatchOutcome) {
+        video_watches_total().add(
+            1,
+            &[
+                KeyValue::new("source", video_watch_source_label(source)),
+                KeyValue::new("outcome", video_watch_label(outcome)),
+            ],
+        );
+    }
+
+    fn news_save_label(outcome: NewsSaveOutcome) -> &'static str {
+        match outcome {
+            NewsSaveOutcome::Saved => "saved",
+            NewsSaveOutcome::Unsaved => "unsaved",
+            NewsSaveOutcome::Full => "full",
+        }
+    }
+
+    /// Saved against unsaved is how much the shelf gets used; a run of
+    /// full is readers wanting a bigger one.
+    pub fn record_news_save(outcome: NewsSaveOutcome) {
+        news_saves_total().add(1, &[KeyValue::new("outcome", news_save_label(outcome))]);
     }
 
     /// Same shape as the News share: one counter for the submissions and one
@@ -3799,7 +3839,6 @@ mod inner {
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
-    use super::XMediaLookup;
     use super::{
         ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, AwardAnnouncementOutcome,
         BioScreenOutcome, CrownRefusal, DailyPuzzle, DailyWinPayout, DoorGame, DoorWatchOutcome,
@@ -3814,7 +3853,7 @@ mod inner {
         SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason,
         SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
-    use super::{BodyFetchOutcome, BodyStatus, WatchOutcome};
+    use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
     use super::{
@@ -3822,6 +3861,7 @@ mod inner {
     };
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
+    use super::{NewsSaveOutcome, XMediaLookup};
     use super::{PollOutcome, PolledFeed};
     use super::{
         ZorkAction, ZorkCatalogueRead, ZorkEdition, ZorkSessionEnd, ZorkSuggestion,
@@ -3907,7 +3947,8 @@ mod inner {
     pub fn record_news_x_media_lookup(_lookup: XMediaLookup) {}
     pub fn record_news_body_fetch(_outcome: BodyFetchOutcome) {}
     pub fn record_news_reader_opened(_status: BodyStatus) {}
-    pub(crate) fn record_news_watch(_outcome: WatchOutcome) {}
+    pub(crate) fn record_video_watch(_source: WatchSource, _outcome: WatchOutcome) {}
+    pub fn record_news_save(_outcome: NewsSaveOutcome) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
     pub fn record_booth_thumbnail(_outcome: ThumbnailFetch) {}
     pub fn record_radio_meta_poll(_feed: PolledFeed, _outcome: PollOutcome) {}

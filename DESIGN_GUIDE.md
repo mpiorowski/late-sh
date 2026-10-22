@@ -334,7 +334,7 @@ These are current outer-popup reference sizes, not app-wide requirements:
 | Profile | Width capped at 110 | [Profile](late-ssh/src/app/profile_modal/ui.rs) |
 | Paper | 90% of width and height, width capped at 160 | [Paper](late-ssh/src/app/paper/ui.rs) |
 | News reader | 90% of width and height, width capped at 120, text column at most 80 | [Reader](late-ssh/src/app/chat/news/reader/ui.rs) |
-| News watch | 90% of width and height, width capped at 160; full screen but the footer row on `f`; the setup box width capped at 72 | [Watch](late-ssh/src/app/chat/news/watch/ui.rs) |
+| Video watch | 90% of width and height, width capped at 160; full screen but the footer row on `f`; the setup box width capped at 72 | [Watch](late-ssh/src/app/video/ui.rs) |
 
 A common framing pattern clears the covered cells before drawing the popup.
 Clearing and painting the intended background are separate operations:

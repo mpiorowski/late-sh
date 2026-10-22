@@ -1,8 +1,8 @@
 # late-cli video watch
 
-A YouTube News story played in the user's own terminal through `mpv` (`src/video.rs`): the protocol, the mpv child, and what the CLI owns. Part of the CLI's pairing protocol (`PAIRING.md`); the server side is `late-ssh/src/app/chat/news/CONTEXT.md`.
+A YouTube News story, or a YouTube link in chat, played in the user's own terminal through `mpv` (`src/video.rs`): the protocol, the mpv child, and what the CLI owns. Part of the CLI's pairing protocol (`PAIRING.md`); the server side is `late-ssh/src/app/video/CONTEXT.md`, one player for both. The CLI cannot tell them apart: each is a rectangle and a URL.
 
-A YouTube story in News plays in the user's own terminal through their `mpv` (kitty graphics output, shared-memory frames) and the `yt-dlp` mpv's ytdl hook calls. No media crosses SSH. The TUI decides the rectangle, paints it black, and keeps every key; `src/video.rs` owns the mpv child and its IPC socket.
+A YouTube story in News, or a link in chat, plays in the user's own terminal through their `mpv` (kitty graphics output, shared-memory frames) and the `yt-dlp` mpv's ytdl hook calls. No media crosses SSH. The TUI decides the rectangle, paints it black, and keeps every key; `src/video.rs` owns the mpv child and its IPC socket.
 
 Server to client, only to a CLI that advertised `video` (`left`/`top` are 0-based cells, `cols`/`rows` the size, `start_s` where to begin: 0 for the top, the position the server saved for a resume, absent from a server that predates resumes; `control` is `toggle_pause`, `seek_back`, `seek_forward` (10 s), `seek_back_far`, `seek_forward_far` (60 s), `restart` (back to the top), or `toggle_mute`):
 

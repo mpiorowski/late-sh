@@ -2135,6 +2135,33 @@ fn inline_image_url_in_body_accepts_image_url_with_query() {
     );
 }
 
+/// Every YouTube shape that names one video gets its thumbnail, trimmed
+/// the way image links are; channels, playlists and lookalikes do not.
+#[test]
+fn inline_preview_source_reads_one_video_from_youtube_links() {
+    let video = Some(InlinePreviewSource::Video {
+        video_id: "dQw4w9WgXcQ".to_string(),
+    });
+    for body in [
+        "look https://www.youtube.com/watch?v=dQw4w9WgXcQ&t=42s",
+        "(https://youtu.be/dQw4w9WgXcQ?si=share).",
+        "https://youtube.com/shorts/dQw4w9WgXcQ!",
+        "https://m.youtube.com/embed/dQw4w9WgXcQ",
+        "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ",
+    ] {
+        assert_eq!(inline_preview_source_in_body(body), video, "{body}");
+    }
+    for body in [
+        "https://www.youtube.com/@somechannel",
+        "https://www.youtube.com/playlist?list=PL123",
+        "https://youtu.be/tooshort",
+        "https://notyoutube.com/watch?v=dQw4w9WgXcQ",
+        "no link here",
+    ] {
+        assert_eq!(inline_preview_source_in_body(body), None, "{body}");
+    }
+}
+
 #[test]
 fn inline_image_request_candidates_scan_newest_messages_first() {
     let now = Instant::now();
@@ -2155,8 +2182,48 @@ fn inline_image_request_candidates_scan_newest_messages_first() {
         requests,
         vec![(
             messages[0].id,
-            "https://files.example.com/newest.png".to_string()
+            InlinePreviewSource::Image("https://files.example.com/newest.png".to_string())
         )]
+    );
+}
+
+/// A YouTube link's preview is its thumbnail, fetched in the image's place;
+/// an image in the same message keeps the preview.
+#[test]
+fn inline_image_request_candidates_fetch_a_youtube_thumbnail() {
+    let now = Instant::now();
+    let mut video = make_msg(Uuid::from_u128(1));
+    video.body = "watch this https://youtu.be/dQw4w9WgXcQ?si=abc".to_string();
+    let mut both = make_msg(Uuid::from_u128(2));
+    both.body = "https://youtu.be/dQw4w9WgXcQ and https://files.example.com/cat.png".to_string();
+    let messages = vec![video.clone(), both.clone()];
+
+    let requests = inline_image_request_candidates(
+        &messages,
+        &HashSet::new(),
+        &HashMap::new(),
+        &HashMap::new(),
+        now,
+    );
+
+    assert_eq!(
+        requests,
+        vec![
+            (
+                video.id,
+                InlinePreviewSource::Video {
+                    video_id: "dQw4w9WgXcQ".to_string(),
+                }
+            ),
+            (
+                both.id,
+                InlinePreviewSource::Image("https://files.example.com/cat.png".to_string())
+            ),
+        ]
+    );
+    assert_eq!(
+        requests[0].1.fetch_url(),
+        "https://i.ytimg.com/vi/dQw4w9WgXcQ/mqdefault.jpg"
     );
 }
 
@@ -2202,7 +2269,7 @@ fn inline_image_request_candidates_respect_retry_backoff() {
         ),
         vec![(
             message.id,
-            "https://files.example.com/pending.png".to_string()
+            InlinePreviewSource::Image("https://files.example.com/pending.png".to_string())
         )]
     );
 

@@ -184,7 +184,7 @@ This endpoint is used by the `/listen` page and by local CLI workflows.
 
 ## 7. Testing And Verification [STABLE]
 
-Agents run targeted tests through `make test-llm ARGS="-p late-web -E 'test(<filter>)'"`; the full gate before merge is `make check`, run by the human owner.
+Agents run targeted tests through `make test-llm ARGS="-p late-web --lib -E 'test(<filter>)'"`; the full gate before merge is `make check`, run by the human owner.
 
 `late-web` test placement:
 

@@ -1,8 +1,6 @@
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use late_core::models::article::{Article, ArticleFeedItem};
-use late_core::models::article_body::BodyStatus;
 use late_core::models::article_read::WatchPosition;
 use ratatui::layout::Rect;
 use uuid::Uuid;
@@ -12,21 +10,13 @@ use crate::app::audio::client_state::{ClientKind, VideoBlocker};
 
 const URL: &str = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
 
-fn video() -> ArticleFeedItem {
-    let now = Utc::now();
-    ArticleFeedItem {
-        article: Article {
-            id: Uuid::now_v7(),
-            created: now,
-            updated: now,
-            user_id: Uuid::now_v7(),
-            url: URL.to_string(),
-            title: "Never gonna".to_string(),
-            summary: "• one".to_string(),
-            ascii_art: String::new(),
-        },
-        author_username: "mat".to_string(),
-        body: BodyStatus::Unavailable,
+fn video() -> WatchRequest {
+    WatchRequest {
+        source: WatchSource::NewsArticle(Uuid::now_v7()),
+        url: URL.to_string(),
+        title: "Never gonna".to_string(),
+        author: "mat".to_string(),
+        shared_at: Utc::now(),
     }
 }
 
@@ -37,7 +27,7 @@ fn drawn_player(now: Instant) -> Player {
 
 /// A player drawn over a 200x50 terminal, resuming from `resume_from`.
 fn drawn_resuming_player(now: Instant, resume_from: Option<WatchPosition>) -> Player {
-    let player = Player::new(&video(), 7, now, resume_from);
+    let player = Player::new(video(), 7, now, resume_from);
     player.set_drawn(Player::layout(player.size(), Rect::new(0, 0, 200, 50)));
     player
 }
@@ -102,7 +92,7 @@ fn full_layout_is_every_row_but_the_footer() {
 /// A terminal too small for a body reserves nothing, so nothing plays.
 #[test]
 fn a_tiny_terminal_has_no_body_and_wants_no_play() {
-    let player = Player::new(&video(), 1, Instant::now(), None);
+    let player = Player::new(video(), 1, Instant::now(), None);
     player.set_drawn(Player::layout(WatchSize::Window, Rect::new(0, 0, 10, 6)));
     assert!(player.drawn().body.is_empty());
     assert_eq!(player.wanted(), None);
@@ -404,7 +394,7 @@ fn a_resumed_play_starts_before_the_saved_position_and_says_so() {
         "▶ 23:11 / 48:30"
     );
 
-    let tiny = Player::new(&video(), 2, opened, Some(at(2, Some(90))));
+    let tiny = Player::new(video(), 2, opened, Some(at(2, Some(90))));
     assert_eq!(tiny.start_s(), 0, "a position inside the rewind is the top");
 }
 
@@ -598,6 +588,65 @@ fn a_finished_play_is_never_checkpointed() {
     lost.apply(&near_the_end, opened);
     lost.expire(opened + WATCH_LOST_AFTER);
     assert_eq!(lost.checkpoint(later), None, "lost");
+}
+
+/// A chat link has no row to keep its position on: the session's `State`
+/// keeps where a closed play left it, the next open resumes there under a
+/// fresh play id, and a play watched to the end forgets it.
+#[test]
+fn a_chat_link_resumes_within_the_session() {
+    let now = Instant::now();
+    let link = WatchRequest {
+        source: WatchSource::ChatLink,
+        ..video()
+    };
+    let mut state = State::default();
+
+    let first = state.open_player(link.clone(), state.link_position(URL), now);
+    let player = state.player_mut().expect("player");
+    player.set_drawn(Player::layout(player.size(), Rect::new(0, 0, 200, 50)));
+    player.apply(
+        &VideoReport::Playing {
+            position_s: 600,
+            duration_s: Some(2910),
+        },
+        now,
+    );
+    match state.cli_messages().as_slice() {
+        [
+            PairControlMessage::VideoPlay {
+                play_id,
+                start_s: 0,
+                ..
+            },
+        ] => assert_eq!(*play_id, first),
+        other => panic!("expected one fresh video_play, got {other:?}"),
+    }
+
+    let closed = state.close().expect("a player closed");
+    assert_eq!(
+        closed,
+        ClosedPlayer {
+            source: WatchSource::ChatLink,
+            url: URL.to_string(),
+            memory: WatchMemory::Save(at(600, Some(2910))),
+        }
+    );
+    assert_eq!(
+        state.cli_messages(),
+        vec![PairControlMessage::VideoStop { play_id: first }]
+    );
+    state.remember_link(closed.url, closed.memory);
+    assert_eq!(state.link_position(URL), Some(at(600, Some(2910))));
+
+    let second = state.open_player(link, state.link_position(URL), now);
+    assert_ne!(second, first, "a fresh play id");
+    let player = state.player_mut().expect("player");
+    assert_eq!(player.start_s(), 597, "three seconds before where it was");
+    player.apply(&VideoReport::Ended, now);
+    let closed = state.close().expect("a player closed");
+    state.remember_link(closed.url, closed.memory);
+    assert_eq!(state.link_position(URL), None, "watched to the end");
 }
 
 fn cli(capabilities: &[&str], blockers: &[VideoBlocker]) -> ClientAudioState {
