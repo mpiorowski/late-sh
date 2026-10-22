@@ -295,8 +295,8 @@ modals and the icon picker). Username profile-opens are debounced via
 
 | Entry | Keys |
 |-------|------|
-| News | `j/k` navigate, `i` paste URL, Enter open the reader (submit while composing), `c` copy URL, `r` reply in #lounge to the selected article, `d` delete own/admin article, `/` toggle filter to mine, `Esc` cancel |
-| News reader | `j/k`/arrows/wheel scroll, `Space`/`b` page, `g`/`G` top/bottom, `1`-`9` copy link `[n]`, `c` copy the story's link, `r` reply in #lounge, `d` delete own/admin, `N` select it in News, `Esc`/`[x]` close |
+| News | `j/k` navigate, `i` paste URL, Enter open the reader (submit while composing), `s` save for later or let go, `c` copy URL, `r` reply in #lounge to the selected article, `w` watch a video story, `d` delete own/admin article, `/` toggle filter to mine, `Esc` cancel |
+| News reader | `j/k`/arrows/wheel scroll, `Space`/`b` page, `g`/`G` top/bottom, `1`-`9` copy link `[n]`, `c` copy the story's link, `s` save for later or let go, `r` reply in #lounge, `w` watch a video story, `d` delete own/admin, `N` select it in News, `Esc`/`[x]` close |
 | Directory Projects | `j/k` navigate, `i` create, `e` edit own/admin, `d` delete own/admin, Enter copy/submit, Tab cycle fields while composing, `/` toggle filter to mine, `Esc` cancel |
 | Directory Profiles | `j/k` navigate, `i` create/edit own, `e` edit own/admin, `d` delete own/admin, Enter/`c` copy public profile link, Tab cycle fields while composing, `/` toggle filter to mine, `Esc` cancel |
 | Cyberspace feeds | `j/k` navigate, Enter open thread (or link modal when unlinked), `p` post, `c` copy entry link, `n` notifications, `r` refresh/reply, `b` back |
@@ -305,6 +305,6 @@ modals and the icon picker). Username profile-opens are debounced via
 | Mentions | `j/k` navigate, Enter open the Ctrl+/ single-message preview (Enter again jumps to the room) |
 | Discover | `j/k` navigate, Enter join selected public room, `/` open slug filter (type to narrow, Enter join, `Esc` clear) |
 
-Directory Projects and Profiles reshuffle their listing on page/tab entry. News keeps its chronological order — only mine-only filtering applies. The slash-command composer in `app/input.rs` skips itself when News is selected so `/` reaches the synthetic-entry handler; Directory page 5 routes `/` directly to Projects/Profiles filtering.
+Directory Projects and Profiles reshuffle their listing on page/tab entry. News lists the reader's saved stories first, then the feed in chronological order without them; only mine-only filtering applies (`news/CONTEXT.md`). The slash-command composer in `app/input.rs` skips itself when News is selected so `/` reaches the synthetic-entry handler; Directory page 5 routes `/` directly to Projects/Profiles filtering.
 
 When changing keybindings, follow the keybinding checklist in `late-ssh/CONTEXT.md`.

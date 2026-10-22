@@ -289,9 +289,8 @@ pub enum ArticleEvent {
     },
     /// A save the shelf refused: it already held
     /// [`super::article_save::NEWS_SAVED_LIMIT`] stories by the time the
-    /// write landed (another session of the user's filled it). The
-    /// `SavesLoaded` that follows takes the story back off the session's
-    /// shelf.
+    /// write landed (another session of the user's filled it). It follows
+    /// the `SavesLoaded` that took the story back off the session's shelf.
     SaveRefused {
         user_id: Uuid,
     },

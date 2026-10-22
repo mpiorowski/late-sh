@@ -1724,7 +1724,7 @@ mod inner {
             meter()
                 .u64_counter("late_ssh_news_saves_total")
                 .with_description(
-                    "News shelf writes by outcome: saved, unsaved, or full (the shelf refused an eleventh)",
+                    "News shelf saves by outcome: saved, unsaved, or full (the shelf refused an eleventh)",
                 )
                 .build()
         })

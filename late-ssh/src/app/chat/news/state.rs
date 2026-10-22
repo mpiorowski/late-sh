@@ -3,6 +3,7 @@ use std::time::Instant;
 
 use ratatui_textarea::{TextArea, WrapMode};
 use tokio::sync::{broadcast, oneshot, watch};
+use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use crate::app::common::{composer, primitives::Banner};
@@ -32,7 +33,7 @@ pub fn news_share_banner(lead: &str, reward: NewsShareReward) -> Banner {
 }
 
 use super::reader::state::{ReaderBody, ReaderModal};
-use super::svc::{ArticleService, BodyLoad, BodyReply, NewsSaveOutcome, is_youtube_url};
+use super::svc::{ArticleService, BodyLoad, BodyReply, NewsSaveOutcome, ShelfStep, is_youtube_url};
 use super::watch::state::{LivePlay, Player, SetupBox, SetupInputs, WatchMemory, WatchModal};
 use crate::paired_clients::PairControlMessage;
 
@@ -167,6 +168,10 @@ pub struct State {
     /// moves it at once, ahead of the write, so the story changes section
     /// under the key.
     saved_articles: Vec<ArticleFeedItem>,
+    /// The last shelf step this session asked for (`ArticleService::shelf_task`).
+    /// The next one waits on it, so the session's saves, unsaves and loads
+    /// land in the order they were asked for.
+    shelf_step: Option<JoinHandle<()>>,
     articles: Vec<ArticleFeedItem>,
     /// How many leading rows of `articles` are the shelf.
     saved_len: usize,
@@ -195,11 +200,15 @@ pub struct State {
     last_play_id: u64,
 }
 
-/// The reader on screen and its outstanding body request. They travel
-/// together: closing or reopening the reader drops the request with it, so
-/// an answer only ever lands on the reader that asked.
+/// The reader on screen, the story it is on, and its outstanding body
+/// request. They travel together: closing or reopening the reader drops
+/// the request with it, so an answer only ever lands on the reader that
+/// asked.
 struct OpenReader {
     modal: ReaderModal,
+    /// Kept so the reader's keys still find the story once it is in
+    /// neither the snapshot nor the shelf (`find_article`).
+    item: ArticleFeedItem,
     body_request: Option<oneshot::Receiver<BodyReply>>,
 }
 
@@ -209,13 +218,14 @@ impl State {
         let event_rx = article_service.subscribe_events();
         article_service.list_articles_task();
         article_service.load_reads_task(user_id);
-        article_service.load_saves_task(user_id);
+        let first_shelf_load = article_service.shelf_task(user_id, ShelfStep::Load, None);
         Self {
             article_service,
             user_id,
             is_admin,
             source_articles: Vec::new(),
             saved_articles: Vec::new(),
+            shelf_step: Some(first_shelf_load),
             articles: Vec::new(),
             saved_len: 0,
             mine_only: false,
@@ -268,13 +278,15 @@ impl State {
             .any(|item| item.article.id == article_id)
     }
 
-    /// A story this session knows: in the snapshot, or on the shelf once it
-    /// has left the snapshot. Every action on a story by id (the reader,
-    /// the watch, a reply, a delete) resolves it here.
+    /// A story this session knows: in the snapshot, on the shelf once it
+    /// has left the snapshot, or open in the reader once it has left both
+    /// (unsaved there). Every action on a story by id (the reader, the
+    /// watch, a reply, a delete) resolves it here.
     pub(crate) fn find_article(&self, article_id: Uuid) -> Option<&ArticleFeedItem> {
         self.source_articles
             .iter()
             .chain(self.saved_articles.iter())
+            .chain(self.reader.iter().map(|open| &open.item))
             .find(|item| item.article.id == article_id)
     }
 
@@ -285,9 +297,15 @@ impl State {
     /// A visit to the News room: the feed and the shelf are re-read, the
     /// shelf being replica-ready by refreshing when its page opens (a
     /// delete by an admin on another replica shows up here).
-    pub fn list_articles(&self) {
+    pub fn list_articles(&mut self) {
         self.article_service.list_articles_task();
-        self.article_service.load_saves_task(self.user_id);
+        self.queue_shelf_step(ShelfStep::Load);
+    }
+
+    /// Run a step on the shelf after the session's last one.
+    fn queue_shelf_step(&mut self, step: ShelfStep) {
+        let after = self.shelf_step.take();
+        self.shelf_step = Some(self.article_service.shelf_task(self.user_id, step, after));
     }
 
     pub fn mine_only(&self) -> bool {
@@ -561,24 +579,23 @@ impl State {
 
     /// Put a story on the shelf, or take it off: the session's own list
     /// moves now, so the story changes section under the key, and the
-    /// write goes out as a task whose load brings every session of the
-    /// reader's in line. A full shelf refuses here, before any write; one
-    /// another session filled meanwhile refuses in the service and comes
-    /// back as `SaveRefused`. None when the story is not known.
+    /// write goes out as a shelf step whose load brings every session of
+    /// the reader's in line. A full shelf refuses here, before any write;
+    /// one another session filled meanwhile refuses in the service and
+    /// comes back as `SaveRefused`. None when the story is not known.
     pub(crate) fn toggle_save(&mut self, article_id: Uuid) -> Option<NewsSaveOutcome> {
         let item = self.find_article(article_id)?.clone();
         let outcome = if self.is_saved(article_id) {
             self.saved_articles
                 .retain(|saved| saved.article.id != article_id);
-            self.article_service
-                .unsave_article_task(self.user_id, article_id);
+            self.queue_shelf_step(ShelfStep::Unsave(article_id));
             NewsSaveOutcome::Unsaved
         } else if self.saved_articles.len() >= NEWS_SAVED_LIMIT as usize {
+            self.article_service.record_refused_save();
             return Some(NewsSaveOutcome::Full);
         } else {
             self.saved_articles.insert(0, item);
-            self.article_service
-                .save_article_task(self.user_id, article_id);
+            self.queue_shelf_step(ShelfStep::Save(article_id));
             NewsSaveOutcome::Saved
         };
         self.rebuild_display();
@@ -601,10 +618,10 @@ impl State {
     /// marking it read and asking for its body. False when the story is
     /// gone (deleted).
     pub(crate) fn open_reader(&mut self, article_id: Uuid) -> bool {
-        let Some(item) = self.find_article(article_id) else {
+        let Some(item) = self.find_article(article_id).cloned() else {
             return false;
         };
-        let modal = ReaderModal::open(item);
+        let modal = ReaderModal::open(&item);
         self.close_watch();
         self.mark_article_read(article_id);
         let body_request =
@@ -612,6 +629,7 @@ impl State {
                 .load_body_task(self.user_id, article_id, BodyLoad::Open);
         self.reader = Some(OpenReader {
             modal,
+            item,
             body_request: Some(body_request),
         });
         true
@@ -881,7 +899,7 @@ impl State {
                     }
                     ArticleEvent::Deleted { user_id } if self.user_id == user_id => {
                         // The delete cascaded through the shelf; re-read it.
-                        self.article_service.load_saves_task(self.user_id);
+                        self.queue_shelf_step(ShelfStep::Load);
                         banner = Some(Banner::success("Article deleted."));
                     }
                     ArticleEvent::SavesLoaded { user_id, saved } if self.user_id == user_id => {

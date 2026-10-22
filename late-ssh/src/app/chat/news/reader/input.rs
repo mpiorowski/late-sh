@@ -47,10 +47,12 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
             copy_link(app, &url);
         }
         // A video: hand it to the watch modal, the player or the setup box.
+        // Each action here runs before the reader closes: the open reader
+        // is how a story in neither the snapshot nor the shelf is found.
         ParsedInput::Byte(b'w') | ParsedInput::Char('w') if modal.watchable() => {
             let article_id = modal.article_id();
-            app.chat.close_reader();
             chat::news::watch::svc::watch_article(app, article_id);
+            app.chat.close_reader();
         }
         ParsedInput::Byte(b'n' | b'N') | ParsedInput::Char('n' | 'N') => {
             app.chat.jump_to_reader_article();
@@ -60,15 +62,16 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
         // in the News room does, and take the user there to write it.
         ParsedInput::Byte(b'r') | ParsedInput::Char('r') => {
             let article_id = modal.article_id();
+            let replying = chat::news::input::reply_in_lounge(app, article_id);
             app.chat.close_reader();
-            if chat::news::input::reply_in_lounge(app, article_id) {
+            if replying {
                 app.set_screen(Screen::Dashboard);
             }
         }
         ParsedInput::Byte(b'd') | ParsedInput::Char('d') => {
             let article_id = modal.article_id();
-            app.chat.close_reader();
             app.chat.news.delete_article(article_id);
+            app.chat.close_reader();
         }
         // Keep the story for later, or let it go, without leaving it.
         ParsedInput::Byte(b's') | ParsedInput::Char('s') => {

@@ -268,7 +268,8 @@ fn story_rows(
     vec![title, Line::from(meta)]
 }
 
-/// `── label ───…` across the width, the way the sidebar heads its parts.
+/// `── label ───…` across the width: the sidebar's rule shape, in the News
+/// list's own colours (a bold dim amber label on `BORDER`).
 fn section_rule(label: &str, width: usize) -> ListRow {
     let lead = "── ";
     let used = UnicodeWidthStr::width(lead) + UnicodeWidthStr::width(label) + 1;

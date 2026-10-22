@@ -23,6 +23,7 @@ use serde_json::json;
 use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tokio::sync::{broadcast, mpsc, oneshot, watch};
+use tokio::task::JoinHandle;
 use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
@@ -197,65 +198,33 @@ impl ArticleService {
         });
     }
 
-    /// This reader's shelf, at session start and on a News room visit.
-    pub fn load_saves_task(&self, user_id: Uuid) {
+    /// Run one step on the reader's shelf once `after`, the session's
+    /// previous step, is done. Chained this way a session's steps land in
+    /// the order it asked for them: an unsave pressed while its save is
+    /// still out never reaches the table first, and a load never publishes
+    /// over a write asked for before it. Every step ends by republishing
+    /// the shelf, so every session of the reader's shows it.
+    pub fn shelf_task(
+        &self,
+        user_id: Uuid,
+        step: ShelfStep,
+        after: Option<JoinHandle<()>>,
+    ) -> JoinHandle<()> {
         let service = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = service.load_and_publish_saves(user_id).await {
-                late_core::error_span!(
-                    "article_saves_load_failed",
-                    error = ?e,
-                    user_id = %user_id,
-                    "failed to load saved articles"
-                );
+            if let Some(previous) = after {
+                // A step that panicked has nothing left to wait for.
+                let _ = previous.await;
             }
-        });
+            service.run_shelf_step(user_id, step).await;
+        })
     }
 
-    /// Put a story on the reader's shelf, then republish the shelf so every
-    /// session of theirs shows it. A shelf already full by the time the
-    /// write lands (another session filled it) raises `SaveRefused` ahead
-    /// of the reload that takes the story back off.
-    pub fn save_article_task(&self, user_id: Uuid, article_id: Uuid) {
-        let service = self.clone();
-        tokio::spawn(async move {
-            match service.save_and_publish(user_id, article_id).await {
-                Ok(SaveOutcome::Saved) => metrics::record_news_save(NewsSaveOutcome::Saved),
-                Ok(SaveOutcome::AlreadySaved) => {}
-                Ok(SaveOutcome::Full) => {
-                    metrics::record_news_save(NewsSaveOutcome::Full);
-                    service.publish_event(ArticleEvent::SaveRefused { user_id });
-                }
-                Err(e) => {
-                    late_core::error_span!(
-                        "article_save_failed",
-                        error = ?e,
-                        user_id = %user_id,
-                        article_id = %article_id,
-                        "failed to save the article"
-                    );
-                }
-            }
-        });
-    }
-
-    /// Take a story off the reader's shelf, then republish the shelf.
-    pub fn unsave_article_task(&self, user_id: Uuid, article_id: Uuid) {
-        let service = self.clone();
-        tokio::spawn(async move {
-            match service.unsave_and_publish(user_id, article_id).await {
-                Ok(()) => metrics::record_news_save(NewsSaveOutcome::Unsaved),
-                Err(e) => {
-                    late_core::error_span!(
-                        "article_unsave_failed",
-                        error = ?e,
-                        user_id = %user_id,
-                        article_id = %article_id,
-                        "failed to unsave the article"
-                    );
-                }
-            }
-        });
+    /// A save the session refused itself, its shelf already full, before
+    /// any write: counted here so `full` holds every refusal, not only the
+    /// ones the table made.
+    pub fn record_refused_save(&self) {
+        metrics::record_news_save(NewsSaveOutcome::Full);
     }
 
     pub fn list_articles_task(&self) {
@@ -334,6 +303,63 @@ impl ArticleService {
     async fn load_and_publish_reads(&self, user_id: Uuid) -> Result<()> {
         let db_client = self.db.get().await?;
         self.publish_reads(&db_client, user_id).await
+    }
+
+    /// A shelf already full by the time a save lands (another session
+    /// filled it) republishes the shelf, which takes the story back off,
+    /// then raises `SaveRefused` for the banner. A write that fails
+    /// re-reads the shelf, which takes back the session's own move, made
+    /// ahead of the write.
+    async fn run_shelf_step(&self, user_id: Uuid, step: ShelfStep) {
+        match step {
+            ShelfStep::Load => self.reload_saves(user_id).await,
+            ShelfStep::Save(article_id) => match self.save_and_publish(user_id, article_id).await {
+                Ok(SaveOutcome::Saved) => metrics::record_news_save(NewsSaveOutcome::Saved),
+                Ok(SaveOutcome::AlreadySaved) => {}
+                Ok(SaveOutcome::Full) => {
+                    metrics::record_news_save(NewsSaveOutcome::Full);
+                    self.publish_event(ArticleEvent::SaveRefused { user_id });
+                }
+                Err(e) => {
+                    late_core::error_span!(
+                        "article_save_failed",
+                        error = ?e,
+                        user_id = %user_id,
+                        article_id = %article_id,
+                        "failed to save the article"
+                    );
+                    self.reload_saves(user_id).await;
+                }
+            },
+            ShelfStep::Unsave(article_id) => {
+                match self.unsave_and_publish(user_id, article_id).await {
+                    Ok(()) => metrics::record_news_save(NewsSaveOutcome::Unsaved),
+                    Err(e) => {
+                        late_core::error_span!(
+                            "article_unsave_failed",
+                            error = ?e,
+                            user_id = %user_id,
+                            article_id = %article_id,
+                            "failed to unsave the article"
+                        );
+                        self.reload_saves(user_id).await;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Re-read the reader's shelf and publish it. Nobody waits on it, so a
+    /// failure is logged here.
+    async fn reload_saves(&self, user_id: Uuid) {
+        if let Err(e) = self.load_and_publish_saves(user_id).await {
+            late_core::error_span!(
+                "article_saves_load_failed",
+                error = ?e,
+                user_id = %user_id,
+                "failed to load saved articles"
+            );
+        }
     }
 
     async fn load_and_publish_saves(&self, user_id: Uuid) -> Result<()> {
@@ -1210,13 +1236,26 @@ pub enum XMediaLookup {
 }
 
 /// What a press of `s` did to the shelf: what `news::State::toggle_save`
-/// returns (and `news::state::save_banner` words), and what a write counts
-/// on `metrics::record_news_save`.
+/// returns (and `news::state::save_banner` words), and what
+/// `metrics::record_news_save` counts: a write's outcome, or the session's
+/// own refusal (`ArticleService::record_refused_save`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NewsSaveOutcome {
     Saved,
     Unsaved,
     Full,
+}
+
+/// One step on a reader's shelf, run in its session's order by
+/// `ArticleService::shelf_task`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShelfStep {
+    /// Re-read the shelf.
+    Load,
+    /// Put the story on it.
+    Save(Uuid),
+    /// Take the story off it.
+    Unsave(Uuid),
 }
 
 #[derive(Deserialize)]

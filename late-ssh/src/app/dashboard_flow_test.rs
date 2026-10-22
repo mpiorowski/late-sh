@@ -786,6 +786,61 @@ async fn r_on_a_news_story_replies_in_lounge_with_its_title_quoted() {
     );
 }
 
+/// `s` in the News room saves the selected story: the room keeps the key on
+/// Home, where it is otherwise the Live panel's row prefix.
+#[tokio::test]
+async fn s_in_the_news_room_saves_the_selected_story() {
+    use late_core::models::article::{Article, ArticleParams};
+    use late_core::models::article_save::ArticleSave;
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "news-save-me").await;
+    let them = create_test_user(&test_db.db, "news-save-them").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+    let story = Article::create_by_user_id(
+        &client,
+        them.id,
+        ArticleParams {
+            user_id: them.id,
+            url: "https://example.com/bouba-kiki".to_string(),
+            title: "Dogs agree bouba is round".to_string(),
+            summary: "• dogs and shapes".to_string(),
+            ascii_art: String::new(),
+        },
+    )
+    .await
+    .expect("share an article");
+    let mut app = make_app(test_db.db.clone(), me.id, "news-save-flow-it");
+    app.resize(160, 40).expect("resize");
+    wait_for_render_contains(&mut app, "lounge").await;
+    app.chat.select_news();
+    wait_for_render_contains(&mut app, "Dogs agree bouba is round").await;
+
+    app.handle_input(b"s");
+    assert!(!app.live_prefix_armed, "s must not arm the Live prefix");
+    wait_for_render_contains(&mut app, "saved · 1 of 10").await;
+    let (client_ref, me_id, story_id) = (&client, me.id, story.id);
+    crate::test_helpers::wait_until(
+        || async move {
+            ArticleSave::list_for_user(client_ref, me_id)
+                .await
+                .expect("list saves")
+                .iter()
+                .map(|row| row.article.id)
+                .collect::<Vec<_>>()
+                == vec![story_id]
+        },
+        "the save lands",
+    )
+    .await;
+}
+
 /// Somebody starts a DCSS game: it goes up on the live strip, `o` opens the
 /// watch on it (the game across the Games page, its chat beside it), and the
 /// watch is a stop on the backtick cycle, so `` ` `` toggles between it and
@@ -1438,7 +1493,7 @@ async fn news_room_with_a_video(
     app.resize(160, 40).expect("resize test terminal");
     wait_for_render_contains(&mut app, "lounge").await;
     app.chat.select_news();
-    wait_for_render_contains(&mut app, "UTC - watch").await;
+    wait_for_render_contains(&mut app, "youtube.com · watch").await;
     (app, rx)
 }
 
@@ -1515,7 +1570,7 @@ async fn w_on_a_video_plays_it_through_the_paired_cli() {
         video_messages(&mut rx),
         vec![PairControlMessage::VideoStop { play_id }]
     );
-    wait_for_render_contains(&mut app, "UTC - ▶ 23:14 / 48:30").await;
+    wait_for_render_contains(&mut app, "youtube.com · ▶ 23:14 / 48:30").await;
     let client = test_db.db.get().await.expect("db client");
     let me = app.user_id;
     crate::test_helpers::wait_until(
