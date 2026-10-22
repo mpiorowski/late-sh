@@ -1,0 +1,78 @@
+{% extends "pages/layout.html" %}
+{% import "pages/shared/meta.html" as meta %}
+
+{% block title %}The Late Edition, {{ edition }} - late.sh{% endblock %}
+{% block meta %}{% call meta::card(og_title, og_description, page_url, og_image, og_image_alt) %}{% endcall %}{% endblock %}
+
+{% block page %}
+<div class="max-w-2xl mx-auto pt-8 sm:pt-16 pb-24">
+
+    <div class="mb-12">
+        <a href="/" class="text-xs text-gray-400 hover:text-green-400 underline underline-offset-2 transition-colors">&larr;
+            late.sh</a>
+        <h1 class="text-2xl sm:text-3xl text-green-500 tracking-tight mt-4">The Late Edition</h1>
+        <p class="text-xs text-gray-400 mt-2">{{ dateline }}</p>
+        <p class="text-sm text-gray-300 mt-4 leading-relaxed">
+            late.sh's daily paper, printed once a day by @graybeard and read at every login.
+            The operator's word, what the clubhouse was reading, and a look outside.
+            <a href="/paper/feed.xml" class="text-gray-300 hover:text-green-400 underline underline-offset-2 transition-colors">RSS</a>
+        </p>
+    </div>
+
+    {% if !printed %}
+    <p class="text-sm text-gray-300 mb-12">Nothing printed for this day.</p>
+    {% endif %}
+
+    {% if !announcements.is_empty() %}
+    <div class="mb-12">
+        <div class="text-xs text-gray-400 mb-3"><span class="text-gray-500">#</span> announcements</div>
+        <div class="space-y-2">
+            {% for a in announcements %}
+            <div class="border border-gray-600 px-4 py-3 bg-gray-900/20">
+                <div class="text-xs text-gray-400 mb-1">@{{ a.author }} <span class="text-gray-500">·</span> {{ a.time }}</div>
+                {% for line in a.lines %}
+                <p class="text-sm text-gray-300 leading-relaxed">{{ line }}</p>
+                {% endfor %}
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+    {% endif %}
+
+    {% if !reading.is_empty() %}
+    <div class="mb-12">
+        <div class="text-xs text-gray-400 mb-3"><span class="text-gray-500">#</span> what we were reading</div>
+        {% for p in reading %}
+        <p class="text-sm text-gray-300 leading-relaxed mb-3">{{ p }}</p>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    {% if !outside.is_empty() %}
+    <div class="mb-12">
+        <div class="text-xs text-gray-400 mb-3"><span class="text-gray-500">#</span> outside</div>
+        {% for p in outside %}
+        <p class="text-sm text-gray-300 leading-relaxed mb-3">{{ p }}</p>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="flex items-center justify-between gap-4 text-xs text-gray-400 mb-12">
+        {% if let Some(earlier) = earlier %}
+        <a href="{{ earlier }}" class="hover:text-green-400 underline underline-offset-2 transition-colors">&larr; earlier</a>
+        {% else %}
+        <span></span>
+        {% endif %}
+        {% if let Some(later) = later %}
+        <a href="{{ later }}" class="hover:text-green-400 underline underline-offset-2 transition-colors">later &rarr;</a>
+        {% else %}
+        <span></span>
+        {% endif %}
+    </div>
+
+    <p class="text-xs text-gray-400 leading-relaxed">
+        The room columns print inside the clubhouse only:
+        <a href="/" class="text-gray-300 hover:text-green-400 transition-colors">ssh late.sh</a> and type /paper.
+    </p>
+</div>
+{% endblock %}

@@ -6,6 +6,7 @@ pub(crate) mod home;
 pub(crate) mod legal;
 pub(crate) mod listen;
 pub(crate) mod live;
+pub(crate) mod paper;
 pub(crate) mod profiles;
 pub(crate) mod shared;
 pub(crate) mod stream;
@@ -19,6 +20,7 @@ pub(crate) fn router() -> Router<AppState> {
         .merge(listen::router())
         .merge(live::router())
         .merge(gallery::router())
+        .merge(paper::router())
         .merge(profiles::router())
         .merge(legal::router())
         .merge(stream::router())

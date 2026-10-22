@@ -11,23 +11,16 @@
     <meta name="keywords" content="command line, terminal, ssh, computer people, terminal community, linux, art, coding, clubhouse, multiplayer games, arcade, music, chat, news, tui, rust">
     <meta name="author" content="late.sh">
     
-    <!-- Open Graph / Facebook -->
-    <meta property="og:type" content="website">
-    <meta property="og:url" content="https://late.sh/">
-    <meta property="og:title" content="late.sh">
-    <meta property="og:description" content="A cozy command-line clubhouse for computer people. Chat, music, games, art, coding, and tech news. Connect with any SSH client!">
-    <meta property="og:image" content="https://late.sh/static/og-image.png">
+    <!-- The preview card: Open Graph and Twitter. A page with a card of its own overrides this block. -->
+    {% import "pages/shared/meta.html" as meta %}
+    {% block meta %}
+    {% call meta::card("late.sh", "A cozy command-line clubhouse for computer people. Chat, music, games, art, coding, and tech news. Connect with any SSH client!", "https://late.sh/", "https://late.sh/static/og-image.png", "late.sh terminal clubhouse preview") %}{% endcall %}
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
-    <meta property="og:image:alt" content="late.sh terminal clubhouse preview">
+    {% endblock %}
 
-    <!-- Twitter -->
-    <meta property="twitter:card" content="summary_large_image">
-    <meta property="twitter:url" content="https://late.sh/">
-    <meta property="twitter:title" content="late.sh">
-    <meta property="twitter:description" content="A cozy command-line clubhouse for computer people. Chat, music, games, art, coding, and tech news. Connect with any SSH client!">
-    <meta property="twitter:image" content="https://late.sh/static/og-image.png">
-    <meta property="twitter:image:alt" content="late.sh terminal clubhouse preview">
+    <!-- The Late Edition's feed, found from any page -->
+    <link rel="alternate" type="application/rss+xml" title="The Late Edition" href="/paper/feed.xml">
 
     <!-- Favicons -->
     <link rel="icon" href="/static/favicon.svg" type="image/svg+xml" sizes="any">

@@ -94,13 +94,10 @@ pub fn edition_for(now: DateTime<Utc>) -> NaiveDate {
     now.date_naive()
 }
 
-/// The half-open window an edition covers: the whole UTC day before it.
+/// The half-open window an edition covers: the whole UTC day before it,
+/// the one rule in `PaperEdition::window`, shared with the public web.
 pub fn edition_window(edition: NaiveDate) -> (DateTime<Utc>, DateTime<Utc>) {
-    let ceiling = edition
-        .and_hms_opt(0, 0, 0)
-        .expect("midnight exists on every date")
-        .and_utc();
-    (ceiling - chrono::Duration::days(1), ceiling)
+    PaperEdition::window(edition)
 }
 
 /// Why a session asked for the paper. The login pop is claimed once per

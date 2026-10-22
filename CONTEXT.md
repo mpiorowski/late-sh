@@ -32,7 +32,7 @@ changing a domain.
 |-------|-----------|---------|
 | `late-ssh` | SSH server (russh, port 2222), the TUI, HTTP API (4000), embedded IRC (6667 dev, 6697 TLS prod) | `late-ssh/CONTEXT.md` |
 | `late-core` | Models, migrations, DB pool, shared helpers | `late-core/CONTEXT.md` |
-| `late-web` | Web pages (axum, port 3000): landing, `/listen`, gallery, profiles, `/stream` proxy, `/live` | `late-web/CONTEXT.md` |
+| `late-web` | Web pages (axum, port 3000): landing, `/listen`, gallery, profiles, The Late Edition (`/paper`, with RSS), `/stream` proxy, `/live` | `late-web/CONTEXT.md` |
 | `late-cli` | The `late` companion: launches SSH, plays audio locally, pairs over WS, voice | `late-cli/CONTEXT.md` |
 | `late-webview` | The CLI's YouTube helper process (keeps WebKitGTK out of `late`) | `late-webview/CONTEXT.md` |
 | `late-{nethack,dcss,brogue,usurper,dopewars,bashquest,codekeep,zork}` | Standalone door hosts, one pod each | the door's context under `late-ssh/src/app/door/` |

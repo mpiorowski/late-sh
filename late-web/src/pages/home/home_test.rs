@@ -20,6 +20,7 @@ async fn thanks_redirects_get_and_head_to_ko_fi() {
             port: 0,
             ssh_internal_url: "http://127.0.0.1:9".to_string(),
             audio_base_url: "http://127.0.0.1:9".to_string(),
+            public_base_url: "http://late.test".to_string(),
             db: db.clone(),
         },
         db: Db::new(&db).expect("lazy db"),

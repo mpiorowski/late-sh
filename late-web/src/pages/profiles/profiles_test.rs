@@ -1,6 +1,6 @@
 use late_core::models::work_profile::WorkStatus;
 
-use super::{dash_or, parse_contacts, render_markdown, split_paragraphs, status_label};
+use super::{dash_or, parse_contacts, render_markdown, status_label};
 
 /// `/profiles/{slug}` for `router`, as the page's HTML.
 async fn page(router: &axum::Router, slug: &str) -> String {
@@ -86,6 +86,7 @@ async fn a_runners_poster_hangs_on_their_web_profile() {
             port: 0,
             ssh_internal_url: "http://127.0.0.1:9".into(),
             audio_base_url: "http://127.0.0.1:9".into(),
+            public_base_url: "http://late.test".into(),
             db: DbConfig::default(),
         },
         db: test.db.clone(),
@@ -124,12 +125,6 @@ async fn a_runners_poster_hangs_on_their_web_profile() {
         .unwrap();
     let html = page(&router, "w_postertest01").await;
     assert!(!html.contains(r#"id="profile-poster""#));
-}
-
-#[test]
-fn paragraphs_drop_empty_and_trim() {
-    let para = split_paragraphs("hello\n\n  world  \n");
-    assert_eq!(para, vec!["hello", "world"]);
 }
 
 #[test]
@@ -189,4 +184,145 @@ fn parse_contacts_links_urls_but_not_bare_text() {
 fn parse_contacts_empty_input_yields_empty_list() {
     assert!(parse_contacts("").is_empty());
     assert!(parse_contacts("   ,  , ").is_empty());
+}
+
+/// `uri` through `router`: the status, the headers, the body bytes.
+async fn fetch(
+    router: &axum::Router,
+    uri: &str,
+) -> (axum::http::StatusCode, axum::http::HeaderMap, Vec<u8>) {
+    use axum::{
+        body::{Body, to_bytes},
+        http::Request,
+    };
+    use tower::ServiceExt;
+
+    let response = router
+        .clone()
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let headers = response.headers().clone();
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, headers, body.to_vec())
+}
+
+/// A PNG's width and height.
+fn png_size(png: &[u8]) -> (u32, u32) {
+    let reader = png::Decoder::new(std::io::Cursor::new(png))
+        .read_info()
+        .unwrap();
+    (reader.info().width, reader.info().height)
+}
+
+/// A profile's contact and links carry `rel="me"`, so a Mastodon profile
+/// that links back here shows the link verified. The page's preview card
+/// names the author and, for a standing runner, shows the poster, which
+/// `/profiles/{slug}/poster.png` serves as a PNG. A civilian's card falls
+/// back to the site's picture and their poster route is 404, as is a
+/// leaver's and an unknown slug's.
+#[tokio::test]
+async fn a_profile_verifies_its_links_and_unfurls_into_its_poster() {
+    use axum::http::StatusCode;
+    use dartboard_core::{Canvas, Pos, RgbColor};
+    use late_core::{
+        db::DbConfig,
+        models::{
+            deadchannel_runner::DeadchannelRunner,
+            work_profile::{WorkProfile, WorkProfileParams, WorkType},
+        },
+        test_utils::{create_test_user, test_db},
+    };
+
+    let test = test_db().await;
+    let client = test.db.get().await.unwrap();
+    let card = |user_id, slug: &str| WorkProfileParams {
+        user_id,
+        slug: slug.into(),
+        headline: "Terminal artist".into(),
+        status: WorkStatus::Open,
+        work_type: WorkType::Any,
+        location: "Melbourne".into(),
+        contact: "https://fosstodon.org/@late, hi@example.com".into(),
+        links: vec!["https://example.com".into()],
+        skills: vec![],
+        skills_tags: vec![],
+        summary: "Painted at the press.".into(),
+    };
+    let runner = create_test_user(&test.db, "web-card").await;
+    WorkProfile::create_by_user_id(&client, runner.id, card(runner.id, "w_cardtest0001"))
+        .await
+        .unwrap();
+    let civilian = create_test_user(&test.db, "web-plain").await;
+    WorkProfile::create_by_user_id(&client, civilian.id, card(civilian.id, "w_cardtest0002"))
+        .await
+        .unwrap();
+    DeadchannelRunner::ensure_for_user(&client, runner.id, &serde_json::json!({}))
+        .await
+        .unwrap();
+    let mut poster = Canvas::with_size(32, 12);
+    poster.put_glyph_colored(Pos { x: 0, y: 0 }, '█', RgbColor::new(255, 0, 80));
+    DeadchannelRunner::store_poster(&client, runner.id, &serde_json::to_value(&poster).unwrap())
+        .await
+        .unwrap();
+
+    let router = crate::app(crate::AppState {
+        config: crate::config::Config {
+            env: crate::config::Env::Dev,
+            port: 0,
+            ssh_internal_url: "http://127.0.0.1:9".into(),
+            audio_base_url: "http://127.0.0.1:9".into(),
+            public_base_url: "http://late.test".into(),
+            db: DbConfig::default(),
+        },
+        db: test.db.clone(),
+        http_client: reqwest::Client::new(),
+    });
+
+    let html = page(&router, "w_cardtest0001").await;
+    for needle in [
+        r#"<a href="https://fosstodon.org/@late" rel="me""#,
+        r#"<a href="mailto:hi@example.com" rel="me""#,
+        r#"<a href="https://example.com" target="_blank" rel="me noopener noreferrer""#,
+        r#"<meta property="og:url" content="http://late.test/profiles/w_cardtest0001">"#,
+        r#"<meta property="og:image" content="http://late.test/profiles/w_cardtest0001/poster.png">"#,
+        &format!(
+            r#"<meta property="og:title" content="@{} on late.sh">"#,
+            runner.username
+        ),
+        r#"<meta property="og:description" content="Terminal artist · open to work">"#,
+        r#"<meta property="twitter:card" content="summary_large_image">"#,
+    ] {
+        assert!(html.contains(needle), "{needle}");
+    }
+
+    let (status, headers, png) = fetch(&router, "/profiles/w_cardtest0001/poster.png").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["content-type"], "image/png");
+    assert_eq!(headers["cache-control"], "public, max-age=600");
+    assert_eq!(png_size(&png), (1536, 1152));
+
+    let html = page(&router, "w_cardtest0002").await;
+    assert!(
+        html.contains(
+            r#"<meta property="og:image" content="http://late.test/static/og-image.png">"#
+        )
+    );
+    let (status, _, _) = fetch(&router, "/profiles/w_cardtest0002/poster.png").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _, _) = fetch(&router, "/profiles/w_nobody/poster.png").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    DeadchannelRunner::mark_left(&client, runner.id)
+        .await
+        .unwrap();
+    let (status, _, _) = fetch(&router, "/profiles/w_cardtest0001/poster.png").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let html = page(&router, "w_cardtest0001").await;
+    assert!(
+        html.contains(
+            r#"<meta property="og:image" content="http://late.test/static/og-image.png">"#
+        )
+    );
 }

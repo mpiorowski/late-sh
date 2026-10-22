@@ -22,5 +22,7 @@
   "Someone said something good? Select it and press g to gild it: two thirds of what you pay lands in their balance, and the marker never comes off",
   "The crown costs 1.5x whatever the last holder paid, and it goes back to vacant every month",
   "The bottom statusline is yours: Ctrl+O, then the Statusline tab. Hide the shortcut hints or add a clock, quests, the pot, or who's online",
-  "A new realm rises within a day of the last one falling ~ page 3, Realm"
+  "A new realm rises within a day of the last one falling ~ page 3, Realm",
+  "Your work profile verifies on Mastodon: put your Mastodon address in its contact, and late.sh/profiles/<slug> in your Mastodon profile links",
+  "The Late Edition is on the web too: late.sh/paper, with an RSS feed at late.sh/paper/feed.xml"
 ]

@@ -1,6 +1,9 @@
 {% extends "pages/app.html" %}
 
+{% import "pages/shared/meta.html" as meta %}
+
 {% block title %}Artboard Gallery - late.sh{% endblock %}
+{% block meta %}{% call meta::card(og_title, og_description, page_url, og_image, og_image_alt) %}{% endcall %}{% endblock %}
 
 {% block content %}
 <link rel="stylesheet" href="/static/board.css">

@@ -38,6 +38,10 @@ It is also where the operator's word lands: every `#announcements` post from the
 - `/paper` shows an "at the press…" modal until the rows land; `Esc` on it drops the request (`awaiting` cleared), so a late answer never pops over something else. A dated `/paper YYYY-MM-DD` uses the same `PaperTrigger::Command` and the same modal.
 - Leafing (`←`/`→`, `svc::browse`) asks for the neighbour the issue on screen named, as `PaperTrigger::Browse` through `request_browse`, the dated read. The current edition stays up until the answer replaces it, with the scroll back at the top; closing the paper meanwhile drops the answer. At either end the issue names no neighbour, the key does nothing, and the footer offers only the ways that lead somewhere (`← Oct 3`, `Oct 5 →`). The spinner and a `/paper preview` carry no neighbours.
 
+## The public web
+
+`late-web` prints the same rows at `/paper` (the newest edition with a printed section), `/paper/YYYY-MM-DD` and the RSS feed `/paper/feed.xml` (`late-web/src/pages/paper/`): the announcements as written, WHAT WE WERE READING and OUTSIDE, and nothing else. Room pages never leave the clubhouse, NEW WORK and ELSEWHERE are per reader and stay in the modal. The web leafs by `PaperSectionRow::nearest_ready`, so a day with only a room page is stepped over there. The window (`PaperEdition::window`, which `edition_window` here delegates to) and the announcements limit (`ANNOUNCEMENTS_LIMIT`) are the model's, so both surfaces read one rule. Nothing is printed on demand for the web either: it reads what the press left.
+
 ## Reader controls
 
 The offset, the drawn geometry, the scrollbar thumb and its drag, and the mouse

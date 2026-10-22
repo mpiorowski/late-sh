@@ -19,12 +19,18 @@ use late_core::models::{
     work_profile::{WorkProfile, WorkStatus},
 };
 
-use crate::{AppState, error::AppError, metrics};
+use crate::{
+    AppState,
+    error::AppError,
+    metrics,
+    pages::shared::{board_png, text::split_paragraphs},
+};
 
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/profiles", get(index_handler))
         .route("/profiles/{slug}", get(handler))
+        .route("/profiles/{slug}/poster.png", get(poster_handler))
 }
 
 #[derive(Template)]
@@ -33,6 +39,13 @@ struct Page {
     /// The runner's poster, its cells drawn by `/static/board.js` like a
     /// gallery snapshot. `None` without a standing runner or a poster.
     poster_json: Option<String>,
+    /// The preview card a pasted link unfurls into (`shared/meta.html`):
+    /// the poster as its picture when there is one, the site's otherwise.
+    page_url: String,
+    og_title: String,
+    og_description: String,
+    og_image: String,
+    og_image_alt: String,
     headline: String,
     username: String,
     status_id: &'static str,
@@ -162,8 +175,28 @@ async fn handler(
         },
         None => None,
     };
+    let base = state.config.public_base_url.as_str();
+    let page_url = format!("{base}/profiles/{}", work.slug);
+    let (og_image, og_image_alt) = match poster_json {
+        Some(_) => (
+            format!("{page_url}/poster.png"),
+            format!(
+                "@{}'s poster, painted at PRINTS in the late.sh undercity",
+                user_profile.username
+            ),
+        ),
+        None => (
+            format!("{base}/static/og-image.png"),
+            "late.sh terminal clubhouse preview".to_string(),
+        ),
+    };
     let page = Page {
         poster_json,
+        og_title: format!("@{} on late.sh", user_profile.username),
+        og_description: format!("{} · {}", work.headline, status_label(work.status)),
+        page_url,
+        og_image,
+        og_image_alt,
         headline: work.headline,
         username: user_profile.username.clone(),
         status_id: work.status.as_str(),
@@ -199,6 +232,45 @@ async fn handler(
     };
 
     Ok(Html(page.render()?).into_response())
+}
+
+/// The runner's poster as the picture a profile link's preview card
+/// shows. No profile, no standing runner, no poster, or one that fails to
+/// decode: 404, and the card falls back to the site's own picture.
+#[tracing::instrument(skip(state))]
+async fn poster_handler(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+) -> Result<Response, AppError> {
+    metrics::record_page_view("profile_poster", false);
+
+    let client = state
+        .db
+        .get()
+        .await
+        .context("failed to get db client for profile poster")?;
+
+    let Some(work) = WorkProfile::find_by_slug(&client, &slug)
+        .await
+        .context("failed to load work profile by slug")?
+    else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    let Some(value) = DeadchannelRunner::poster(&client, work.user_id)
+        .await
+        .context("failed to load runner poster")?
+    else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    let canvas = match serde_json::from_value::<Canvas>(value) {
+        Ok(canvas) => canvas,
+        Err(error) => {
+            tracing::error!(error = %error, user_id = %work.user_id, "runner poster failed to decode; no poster image");
+            return Ok(StatusCode::NOT_FOUND.into_response());
+        }
+    };
+    let png = board_png::render(&canvas).context("failed to render runner poster")?;
+    Ok(board_png::response(png))
 }
 
 #[tracing::instrument(skip(state))]
@@ -271,14 +343,6 @@ fn status_label(status: WorkStatus) -> &'static str {
         WorkStatus::Casual => "casually listening",
         WorkStatus::NotLooking => "not looking",
     }
-}
-
-fn split_paragraphs(text: &str) -> Vec<String> {
-    text.split('\n')
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToString::to_string)
-        .collect()
 }
 
 /// Render a user-supplied markdown bio as HTML. Raw HTML in the source is

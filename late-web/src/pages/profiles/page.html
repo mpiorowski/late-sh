@@ -1,6 +1,9 @@
 {% extends "pages/app.html" %}
 
+{% import "pages/shared/meta.html" as meta %}
+
 {% block title %}@{{ username }} - {{ headline }} - late.sh{% endblock %}
+{% block meta %}{% call meta::card(og_title, og_description, page_url, og_image, og_image_alt) %}{% endcall %}{% endblock %}
 
 {% block content %}
 <style>
@@ -206,7 +209,7 @@
                 </div>
             </div>
             {% else %}
-            <a href="{{ c.href }}"
+            <a href="{{ c.href }}" rel="me"
                class="group block w-full text-left border border-gray-600 hover:border-green-700 px-4 py-3 transition-colors duration-200 bg-gray-900/20">
                 <div class="flex items-center justify-between gap-4">
                     <span class="text-sm text-gray-300 group-hover:text-green-400 transition-colors min-w-0 break-words">
@@ -226,7 +229,7 @@
         <div class="text-xs text-gray-400 mb-3"><span class="text-gray-500">#</span> links</div>
         <div class="space-y-2">
             {% for link in links %}
-            <a href="{{ link }}" target="_blank" rel="noopener noreferrer"
+            <a href="{{ link }}" target="_blank" rel="me noopener noreferrer"
                class="group block w-full text-left border border-gray-600 hover:border-green-700 px-4 py-3 transition-colors duration-200 bg-gray-900/20">
                 <div class="flex items-center justify-between gap-4">
                     <span class="text-sm text-gray-300 group-hover:text-green-400 transition-colors min-w-0 truncate">
