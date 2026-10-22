@@ -13,7 +13,8 @@ Long-lived SSH frontend for `late.sh`. Terminates user SSH connections, then tun
 **Bastion is intentionally minimal — "no smarter than it needs to be to connect the wires."**
 
 What it does:
-- russh server (user-facing). Pubkey auth, `pty-req` + `shell` + `window-change` only.
+- russh server (user-facing). Pubkey auth, PTY, shell, resize, whitelisted env,
+  and a bounded pre-shell exec for CLI token discovery.
 - One outbound WebSocket per shell channel; pure byte-pump in both directions.
 - Translates SSH `window-change` requests into WS `resize` text frames.
 - Plain-text "reconnecting…" messages written directly to the SSH channel during backend gaps.
@@ -78,7 +79,7 @@ Env-driven. See `src/config.rs` for the canonical list. Required vars:
 - ✅ **Phase 4** — reconnect loop + plain-text "reconnecting…" messages.
   - ✅ **4/1** — existing tunnel sessions ride out graceful drain; the backend does not emit a healthy-session close on SIGTERM.
   - ✅ **4/2** — bastion reconnect loop: abnormal transport drops (`1006`) and late-private retryable closes (`4100`-`4199`) plus HTTP 5xx → exponential backoff (100ms→5s, 30s budget) with `X-Late-Reconnect-Reason: <close-code>` and stable `X-Late-Session-Id`. Terminal closes (4000/4001/4002/4003) and HTTP 4xx end the session.
-  - ✅ **4/3** — plain-text "reconnecting to late.sh…" written into the SSH stream after a 500ms gap (escalates to "still reconnecting…" at 5s). Preceded by a terminal-reset prefix (`\x1b[?1049l\x1b[0m\x1b[2J\x1b[H`) so the previous TUI's alt-screen / styling is cleared. Suppressed on the *first* dial and on user-requested `4100` redials.
+  - ✅ **4/3** — plain-text "reconnecting to late.sh…" after a 500ms gap (escalates at 5s), preceded by a terminal reset. Suppressed on the first dial. User-requested `4100` redials show "waiting for updated late.sh..." immediately.
   - ✅ **4/4** — bastion sends a WS Ping every 2s; backend's tungstenite layer auto-pongs. >5s of silence (no inbound frame of any kind) is treated as a wedged backend and breaks the pump into the reconnect loop. In-cluster RTT is sub-ms, so the threshold has plenty of slack.
   - ✅ **4/5** — live integration validated manually: bouncing the `late-ssh` container shows the reconnect message on the SSH client; restarting it replays the welcome sequence and lands the user back in the UI.
 - ✅ **Ordering refactor** — both inbound paths (bastion handler, backend `/tunnel` receive loop) collapsed onto a single `mpsc<SshInputEvent>` (`Bytes` | `Resize`). Closes the prior `tokio::select!`-mux + eager-resize race that could surface `[A, R, B]` as `[R, AB]` to the app. Critical for coordinate-sensitive features (mouse SGR, paste, artboard). Validated manually against the artboard.
@@ -93,8 +94,7 @@ started by:
 make start
 ```
 
-This generates `.env` with dev defaults (see the `LATE_TUNNEL_*` and
-`LATE_BASTION_*` blocks in the `Makefile`), brings up `service-ssh`,
+This generates `.env` from `.env.dev`, brings up `service-ssh`,
 `service-bastion`, postgres, and the audio stack. The bastion's russh host
 key auto-generates on first boot at `/app/bastion_host_key` (gitignored,
 persists in the repo dir via the `.:/app` bind mount).
@@ -112,16 +112,31 @@ Either path lands you in the same `late-ssh` UI; the bastion path proves the
 end-to-end `/tunnel` plumbing. Bouncing the `late-ssh` container while
 connected via `:5222` exercises the reconnect loop (Phase 4).
 
-Override any var on the make line if needed, e.g.:
-
-```bash
-make start LATE_BASTION_SSH_PORT=2225 LATE_TUNNEL_SHARED_SECRET=hunter2
-```
-
 ## Tests
 
-Per the repo test policy ([`CONTEXT.md`](../CONTEXT.md) §Test Strategy):
+```bash
+make test-bastion CHECK_BUILD_JOBS=4 # real listener + DB-backed backend regressions
+make test-bastion-repeat            # five lifecycle regressions, 100 iterations each
+make test-bastion-stack             # packaged release images, 10 clients, two replacements
+make test-bastion-soak              # 45 minutes, 100 clients, ten replacements
+```
 
-- Pure-logic helpers (PROXY parsing, header construction, etc.) live as `#[cfg(test)] mod tests` blocks in their source file.
-- Anything that needs a russh server, sockets, or a backend WS goes under `late-bastion/tests/` once we have meaningful integration surface (Phase 3+).
-- LLM agents do not run `cargo test` / `cargo nextest` / `cargo clippy` here.
+The fixture uses disposable credentials, host keys, PostgreSQL and blue/green
+backends behind HAProxy; it never loads `.env` or `.env.local`. All published
+ports bind loopback and backend networks are internal. Reports survive under
+`target/bastion-qualification/`; containers and volumes are removed on exit.
+Socket regressions live beside their implementations in `proxy_test.rs` and
+`late-ssh/src/bastion_test.rs`, using the production accept loop.
+
+Reconnects preserve identity, latest terminal dimensions and whitelisted env.
+Repeated env names keep their latest value; each value is limited to 4 KiB.
+The app restarts: queued outage keystrokes and paste are discarded, including
+input before the replacement emits its first binary output. Backoff, stalled
+upgrades and repeated empty upgrades share one 30-second outage budget. Input
+and output waits are bounded, and a slow reader cannot prevent shutdown.
+Normal app quits send SSH exit status 0 before EOF/Close; kick and ban closes
+send status 1, including when the client uses OpenSSH ControlMaster.
+
+See [BASTION-QUALIFICATION.md](../devdocs/BASTION-QUALIFICATION.md) for the
+campaign, observed results and remaining staging checks. Automated agents follow
+the repository test policy unless the user explicitly authorizes a broader run.

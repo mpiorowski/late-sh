@@ -3,6 +3,8 @@ pub mod api;
 mod api_test;
 pub mod app;
 pub mod authz;
+#[cfg(test)]
+mod bastion_test;
 pub mod config;
 #[cfg(test)]
 mod config_test;

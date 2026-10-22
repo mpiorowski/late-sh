@@ -22,7 +22,6 @@
 //!   - On HTTP 4xx upgrade rejection (401), same: terminal, no redial.
 
 use crate::config::Config;
-use crate::ssh::{Server, load_or_generate_key};
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
 use getrandom::SysRng;
@@ -228,6 +227,7 @@ struct TestBastion {
     addr: SocketAddr,
     cancel: CancellationToken,
     _host_key_path: PathBuf,
+    join: tokio::task::JoinHandle<()>,
 }
 
 impl TestBastion {
@@ -244,6 +244,15 @@ impl TestBastion {
         proxy_protocol: bool,
         proxy_trusted_cidrs: Vec<ipnet::IpNet>,
     ) -> Result<Self> {
+        Self::spawn_with_cap(backend_url, proxy_protocol, proxy_trusted_cidrs, 16).await
+    }
+
+    async fn spawn_with_cap(
+        backend_url: String,
+        proxy_protocol: bool,
+        proxy_trusted_cidrs: Vec<ipnet::IpNet>,
+        cap: usize,
+    ) -> Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
 
@@ -255,68 +264,36 @@ impl TestBastion {
             ssh_idle_timeout: 60,
             backend_tunnel_url: backend_url,
             backend_shared_secret: TEST_SECRET.to_string(),
-            max_conns_global: 16,
+            max_conns_global: cap,
             proxy_protocol,
             proxy_trusted_cidrs,
         });
 
-        let host_key = load_or_generate_key(&config.host_key_path)?;
-        let russh_config = Arc::new(russh::server::Config {
-            inactivity_timeout: Some(Duration::from_secs(60)),
-            auth_rejection_time: Duration::from_secs(1),
-            keys: vec![host_key],
-            ..Default::default()
-        });
-
         let cancel = CancellationToken::new();
-        let server = Server::new(config.clone(), cancel.clone());
-        let cancel_clone = cancel.clone();
-
-        tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    accept = listener.accept() => {
-                        let (mut tcp, transport_peer_addr) = match accept {
-                            Ok(p) => p,
-                            Err(_) => continue,
-                        };
-                        let cfg = russh_config.clone();
-                        let server = server.clone();
-                        let config = Arc::clone(&config);
-                        tokio::spawn(async move {
-                            let proxied_addr = match crate::ssh::resolve_proxied_client_addr(
-                                &config,
-                                &mut tcp,
-                                transport_peer_addr,
-                            )
-                            .await
-                            {
-                                Ok(a) => a,
-                                Err(_) => return,
-                            };
-                            let handler = server.new_client_with_addrs(
-                                Some(transport_peer_addr),
-                                proxied_addr,
-                            );
-                            if let Ok(sess) = russh::server::run_stream(cfg, tcp, handler).await {
-                                let _ = sess.await;
-                            }
-                        });
-                    }
-                    _ = cancel_clone.cancelled() => break,
-                }
-            }
+        let task_cancel = cancel.clone();
+        let join = tokio::spawn(async move {
+            crate::ssh::run_with_listener(listener, config, task_cancel)
+                .await
+                .expect("bastion listener");
         });
 
         Ok(Self {
             addr,
             cancel,
             _host_key_path: host_key_path,
+            join,
         })
     }
 
     fn shutdown(&self) {
         self.cancel.cancel();
+    }
+}
+
+impl Drop for TestBastion {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+        let _ = std::fs::remove_file(&self._host_key_path);
     }
 }
 
@@ -466,9 +443,17 @@ async fn bastion_forwards_whitelisted_env_and_success_ignores_unknown_env() {
         .await
         .expect("unknown env success-ignored");
     channel
+        .set_env(true, "TERM_PROGRAM", "superseded")
+        .await
+        .unwrap();
+    channel
         .set_env(true, "TERM_PROGRAM", "iTerm.app")
         .await
         .expect("terminal hint env accepted");
+    channel
+        .set_env(true, "TERM_PROGRAM", "x".repeat(4097))
+        .await
+        .unwrap();
     channel
         .request_pty(true, "xterm-256color", 100, 30, 0, 0, &[])
         .await
@@ -1036,9 +1021,19 @@ async fn open_user_session(
     russh_client::Handle<AnyHostKey>,
     russh::Channel<russh::client::Msg>,
 ) {
+    open_user_session_with_config(bastion_addr, russh_client::Config::default()).await
+}
+
+async fn open_user_session_with_config(
+    bastion_addr: SocketAddr,
+    config: russh_client::Config,
+) -> (
+    russh_client::Handle<AnyHostKey>,
+    russh::Channel<russh::client::Msg>,
+) {
     let user_key =
         PrivateKey::random(&mut UnwrapErr(SysRng), russh::keys::Algorithm::Ed25519).expect("key");
-    let client_config = Arc::new(russh_client::Config::default());
+    let client_config = Arc::new(config);
     let mut session = russh_client::connect(client_config, bastion_addr, AnyHostKey)
         .await
         .expect("client connect");
@@ -1137,6 +1132,32 @@ async fn bastion_does_not_redial_after_terminal_close() {
 
     backend.shutdown();
     bastion.shutdown();
+}
+
+#[tokio::test]
+async fn bastion_reports_shell_exit_status_before_closing_the_channel() {
+    for (code, expected) in [(4000, 0), (4001, 1), (4002, 1)] {
+        let backend = ScriptedBackend::spawn(vec![Behavior::CloseWithCode(code, "ended")])
+            .await
+            .unwrap();
+        let bastion = TestBastion::spawn(backend.ws_url()).await.unwrap();
+        let (_session, mut channel) = open_user_session(bastion.addr).await;
+        let status = timeout(Duration::from_secs(3), async {
+            let mut status = None;
+            while let Some(message) = channel.wait().await {
+                match message {
+                    russh::ChannelMsg::ExitStatus { exit_status } => status = Some(exit_status),
+                    russh::ChannelMsg::Eof | russh::ChannelMsg::Close => return status,
+                    _ => {}
+                }
+            }
+            status
+        })
+        .await
+        .unwrap();
+        assert_eq!(status, Some(expected), "backend close {code}");
+        backend.shutdown();
+    }
 }
 
 #[tokio::test]
@@ -1334,4 +1355,384 @@ async fn bastion_does_not_redial_after_http_4xx_rejection() {
 
     backend.shutdown();
     bastion.shutdown();
+}
+
+#[tokio::test]
+async fn bastion_saturated_listener_closes_before_ssh_handshake_and_recovers() {
+    let bastion = TestBastion::spawn_with_cap("ws://127.0.0.1:1/tunnel".into(), false, vec![], 1)
+        .await
+        .unwrap();
+    let mut first = TcpStream::connect(bastion.addr).await.unwrap();
+    let mut banner = [0; 64];
+    assert!(
+        timeout(Duration::from_secs(2), first.read(&mut banner))
+            .await
+            .unwrap()
+            .unwrap()
+            > 0
+    );
+    let mut refused = TcpStream::connect(bastion.addr).await.unwrap();
+    assert_eq!(
+        timeout(Duration::from_secs(2), refused.read(&mut banner))
+            .await
+            .unwrap()
+            .unwrap(),
+        0,
+        "over-limit client received an SSH banner instead of immediate rejection"
+    );
+    drop(first);
+    // The next successful banner proves the original permit was reclaimed.
+    timeout(Duration::from_secs(2), async {
+        loop {
+            let mut next = TcpStream::connect(bastion.addr).await.unwrap();
+            if next.read(&mut banner).await.unwrap() > 0 {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test]
+async fn bastion_user_eof_cancels_a_stalled_upgrade() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let bastion = TestBastion::spawn(format!("ws://{}/tunnel", listener.local_addr().unwrap()))
+        .await
+        .unwrap();
+    let (_session, mut channel) = open_user_session(bastion.addr).await;
+    let (_stalled, _) = listener.accept().await.unwrap();
+    channel.eof().await.unwrap();
+    timeout(Duration::from_secs(2), async {
+        while let Some(msg) = channel.wait().await {
+            if matches!(msg, russh::ChannelMsg::Eof | russh::ChannelMsg::Close) {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("SSH EOF did not cancel the in-flight WebSocket upgrade");
+}
+
+#[tokio::test]
+async fn bastion_zero_window_client_does_not_block_shutdown_or_other_handshakes() {
+    let mut backend = MockBackend::spawn().await.unwrap();
+    let mut bastion = TestBastion::spawn(backend.ws_url()).await.unwrap();
+    let (_slow_session, _unread_channel) = open_user_session_with_config(
+        bastion.addr,
+        russh_client::Config {
+            window_size: 1024,
+            ..Default::default()
+        },
+    )
+    .await;
+    backend.wait_for_handshake().await;
+    backend.expect_setup_frames("xterm-256color", 80, 24).await;
+    backend
+        .send(WsMessage::Binary(vec![b'x'; 4 * 1024 * 1024].into()))
+        .await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    let (_healthy_session, _healthy_channel) =
+        timeout(Duration::from_secs(2), open_user_session(bastion.addr))
+            .await
+            .expect("slow reader blocked another SSH handshake");
+    bastion.shutdown();
+    // Observe the server task, since an unread client's own dispatcher can
+    // remain parked delivering queued data instead of observing disconnect.
+    timeout(Duration::from_secs(3), &mut bastion.join)
+        .await
+        .expect("zero SSH window held shutdown hostage")
+        .unwrap();
+}
+
+#[tokio::test]
+async fn bastion_unauthenticated_connection_expires_and_releases_capacity() {
+    let bastion = TestBastion::spawn_with_cap("ws://127.0.0.1:1/tunnel".into(), false, vec![], 1)
+        .await
+        .unwrap();
+    let session = russh_client::connect(
+        Arc::new(russh_client::Config::default()),
+        bastion.addr,
+        AnyHostKey,
+    )
+    .await
+    .unwrap();
+    timeout(Duration::from_secs(12), async {
+        while !session.is_closed() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("authentication deadline did not close SSH");
+    let _ = session
+        .disconnect(russh::Disconnect::ByApplication, "", "")
+        .await;
+    timeout(Duration::from_secs(2), open_user_session(bastion.addr))
+        .await
+        .expect("expired unauthenticated client retained its permit");
+}
+
+#[tokio::test]
+async fn bastion_shutdown_cancels_stalled_upgrade_and_unauthenticated_clients() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let bastion = TestBastion::spawn(format!("ws://{}/tunnel", listener.local_addr().unwrap()))
+        .await
+        .unwrap();
+    let (_session, mut channel) = open_user_session(bastion.addr).await;
+    let (_stalled, _) = listener.accept().await.unwrap();
+    let mut unauthenticated = TcpStream::connect(bastion.addr).await.unwrap();
+    let mut bytes = [0; 128];
+    assert!(unauthenticated.read(&mut bytes).await.unwrap() > 0);
+    bastion.shutdown();
+    timeout(Duration::from_secs(3), async {
+        while let Some(msg) = channel.wait().await {
+            if matches!(msg, russh::ChannelMsg::Eof | russh::ChannelMsg::Close) {
+                break;
+            }
+        }
+        assert_eq!(unauthenticated.read(&mut bytes).await.unwrap(), 0);
+    })
+    .await
+    .expect("shutdown stuck behind a stalled or unauthenticated client");
+}
+
+#[tokio::test]
+async fn bastion_outage_budget_includes_stalled_handshakes() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let bastion = TestBastion::spawn(format!("ws://{}/tunnel", listener.local_addr().unwrap()))
+        .await
+        .unwrap();
+    let (_session, mut channel) = open_user_session(bastion.addr).await;
+    let holding = tokio::spawn(async move {
+        let mut sockets = Vec::new();
+        while let Ok((tcp, _)) = listener.accept().await {
+            sockets.push(tcp);
+        }
+    });
+    timeout(Duration::from_secs(34), async {
+        while let Some(msg) = channel.wait().await {
+            if matches!(msg, russh::ChannelMsg::Eof | russh::ChannelMsg::Close) {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("stalled dial extended the 30-second retry budget");
+    holding.abort();
+}
+
+#[tokio::test]
+async fn bastion_empty_successful_upgrades_do_not_reset_outage_budget() {
+    let backend = ScriptedBackend::spawn(vec![Behavior::DropTransport; 64])
+        .await
+        .unwrap();
+    let bastion = TestBastion::spawn(backend.ws_url()).await.unwrap();
+    let (_session, mut channel) = open_user_session(bastion.addr).await;
+    let started = tokio::time::Instant::now();
+    timeout(Duration::from_secs(34), async {
+        while let Some(message) = channel.wait().await {
+            if matches!(message, russh::ChannelMsg::Eof | russh::ChannelMsg::Close) {
+                return;
+            }
+        }
+    })
+    .await
+    .expect("empty HTTP 101 upgrades kept the SSH session retrying forever");
+    assert!(started.elapsed() >= Duration::from_secs(29));
+    backend.shutdown();
+}
+
+#[tokio::test]
+async fn bastion_preserves_large_paste_bytes_without_interpreting_escape_sequences() {
+    let mut backend = MockBackend::spawn().await.unwrap();
+    let bastion = TestBastion::spawn(backend.ws_url()).await.unwrap();
+    let (_session, channel) = open_user_session(bastion.addr).await;
+    backend.wait_for_handshake().await;
+    backend.expect_setup_frames("xterm-256color", 80, 24).await;
+    let payload = "\x1b[200~α🦀\r\n\x1b[<0;2;3M\x1b[201~"
+        .repeat(40_000)
+        .into_bytes();
+    let receive = async {
+        let mut got = Vec::new();
+        while got.len() < payload.len() {
+            if let WsMessage::Binary(bytes) = backend.next_frame().await.expect("backend ended") {
+                got.extend_from_slice(&bytes);
+            }
+        }
+        assert_eq!(got, payload);
+    };
+    timeout(Duration::from_secs(10), async {
+        let (sent, ()) = tokio::join!(channel.data(payload.as_slice()), receive);
+        sent.unwrap();
+    })
+    .await
+    .expect("large paste stalled");
+}
+
+#[tokio::test]
+async fn bastion_discards_outage_input_but_replays_latest_size_and_identity() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let bastion = TestBastion::spawn(format!("ws://{}/tunnel", listener.local_addr().unwrap()))
+        .await
+        .unwrap();
+    let (headers_tx, mut headers_rx) = mpsc::channel(2);
+    let (outage_tx, outage_rx) = oneshot::channel();
+    let (recover_tx, recover_rx) = oneshot::channel();
+    let backend = tokio::spawn(async move {
+        let (tcp, _) = listener.accept().await.unwrap();
+        let mut first = accept_capture(tcp, &headers_tx).await.unwrap();
+        while let Some(Ok(frame)) = first.next().await {
+            if matches!(frame, WsMessage::Text(ref text) if ControlFrame::from_json(text).unwrap() == ControlFrame::ShellStart)
+            {
+                break;
+            }
+        }
+        first
+            .send(WsMessage::Binary(b"old-ready".to_vec().into()))
+            .await
+            .unwrap();
+        while let Some(Ok(frame)) = first.next().await {
+            if let WsMessage::Binary(bytes) = frame {
+                assert_eq!(bytes.as_ref(), b"disconnect-now");
+                break;
+            }
+        }
+        drop(first);
+        let (tcp, _) = listener.accept().await.unwrap();
+        outage_tx.send(()).unwrap();
+        recover_rx.await.unwrap();
+        let mut second = accept_capture(tcp, &headers_tx).await.unwrap();
+        let mut controls = Vec::new();
+        while let Some(Ok(frame)) = second.next().await {
+            match frame {
+                WsMessage::Text(text) => {
+                    let control = ControlFrame::from_json(&text).unwrap();
+                    let started = control == ControlFrame::ShellStart;
+                    controls.push(control);
+                    if started {
+                        break;
+                    }
+                }
+                WsMessage::Binary(bytes) => panic!("replayed stale bytes before ready: {bytes:?}"),
+                _ => {}
+            }
+        }
+        second
+            .send(WsMessage::Binary(b"recovered".to_vec().into()))
+            .await
+            .unwrap();
+        while let Some(Ok(frame)) = second.next().await {
+            if let WsMessage::Binary(bytes) = frame {
+                assert_eq!(
+                    bytes.as_ref(),
+                    b"fresh-input",
+                    "stale input reached replacement"
+                );
+                return controls;
+            }
+        }
+        panic!("fresh input never reached replacement");
+    });
+    let (_session, mut channel) = open_user_session(bastion.addr).await;
+    async fn wait_for(channel: &mut russh::Channel<russh::client::Msg>, needle: &[u8]) {
+        timeout(Duration::from_secs(5), async {
+            while let Some(message) = channel.wait().await {
+                if let russh::ChannelMsg::Data { data } = message
+                    && data.windows(needle.len()).any(|part| part == needle)
+                {
+                    return;
+                }
+            }
+            panic!("SSH ended before expected output");
+        })
+        .await
+        .unwrap();
+    }
+    wait_for(&mut channel, b"old-ready").await;
+    channel.data(&b"disconnect-now"[..]).await.unwrap();
+    timeout(Duration::from_secs(5), outage_rx)
+        .await
+        .unwrap()
+        .unwrap();
+    channel
+        .data(&b"\r\x1b[200~stale-paste\x1b[201~"[..])
+        .await
+        .unwrap();
+    channel.window_change(100, 30, 0, 0).await.unwrap();
+    channel.window_change(132, 50, 0, 0).await.unwrap();
+    // Give russh time to deliver the ordered events while the upgrade is held.
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    recover_tx.send(()).unwrap();
+    wait_for(&mut channel, b"recovered").await;
+    channel.data(&b"fresh-input"[..]).await.unwrap();
+    let controls = timeout(Duration::from_secs(5), backend)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(controls.contains(&ControlFrame::Pty {
+        term: "xterm-256color".into(),
+        cols: 132,
+        rows: 50,
+    }));
+    let first = headers_rx.recv().await.unwrap();
+    let second = headers_rx.recv().await.unwrap();
+    assert_eq!(first[HEADER_SESSION_ID], second[HEADER_SESSION_ID]);
+    assert_eq!(first[HEADER_FINGERPRINT], second[HEADER_FINGERPRINT]);
+    assert_eq!(second[HEADER_RECONNECT_REASON], "1006");
+}
+
+#[tokio::test]
+async fn bastion_proxy_header_failures_are_bounded_and_do_not_poison_next_client() {
+    let mut backend = MockBackend::spawn().await.unwrap();
+    let bastion =
+        TestBastion::spawn_with(backend.ws_url(), true, vec!["127.0.0.0/8".parse().unwrap()])
+            .await
+            .unwrap();
+    for header in [b"PROXY broken\r\n".as_slice(), b"PROXY TCP4 1.2".as_slice()] {
+        let mut tcp = TcpStream::connect(bastion.addr).await.unwrap();
+        tcp.write_all(header).await.unwrap();
+        let mut buf = [0; 32];
+        let read = timeout(Duration::from_secs(1), tcp.read(&mut buf))
+            .await
+            .unwrap();
+        assert!(
+            matches!(read, Ok(0) | Err(_)),
+            "malformed PROXY header got an SSH banner"
+        );
+    }
+    let mut tcp = TcpStream::connect(bastion.addr).await.unwrap();
+    for chunk in [
+        b"PROXY TCP4 198.".as_slice(),
+        b"18.0.1 127.0.0.1 1234 5222\r\n".as_slice(),
+    ] {
+        tcp.write_all(chunk).await.unwrap();
+        tokio::task::yield_now().await;
+    }
+    let mut session =
+        russh_client::connect_stream(Arc::new(russh_client::Config::default()), tcp, AnyHostKey)
+            .await
+            .unwrap();
+    let user_key =
+        PrivateKey::random(&mut UnwrapErr(SysRng), russh::keys::Algorithm::Ed25519).unwrap();
+    assert!(
+        session
+            .authenticate_publickey(
+                "alice",
+                PrivateKeyWithHashAlg::new(Arc::new(user_key), None)
+            )
+            .await
+            .unwrap()
+            .success()
+    );
+    let channel = session.channel_open_session().await.unwrap();
+    channel
+        .request_pty(true, "xterm-256color", 80, 24, 0, 0, &[])
+        .await
+        .unwrap();
+    channel.request_shell(true).await.unwrap();
+    assert_eq!(
+        backend.wait_for_handshake().await[HEADER_PEER_IP],
+        "198.18.0.1"
+    );
 }

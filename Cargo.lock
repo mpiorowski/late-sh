@@ -4005,6 +4005,7 @@ dependencies = [
  "ipnet",
  "irc-proto",
  "kdl",
+ "late-bastion",
  "late-core",
  "nix 0.29.0",
  "opentelemetry",

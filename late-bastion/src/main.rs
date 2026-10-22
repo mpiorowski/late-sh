@@ -20,13 +20,20 @@ async fn main() -> anyhow::Result<()> {
 
     let shutdown = CancellationToken::new();
 
-    let ssh_task = {
+    let mut ssh_task = {
         let config = Arc::clone(&config);
         let shutdown = shutdown.clone();
         tokio::spawn(async move { ssh::run(config, shutdown).await })
     };
 
-    wait_for_shutdown_signal().await;
+    tokio::select! {
+        _ = wait_for_shutdown_signal() => {},
+        result = &mut ssh_task => {
+            // Startup failures must fail the process, not leave an apparently
+            // alive container waiting forever for a signal with no listener.
+            return result?;
+        }
+    }
     tracing::info!("shutdown signal received");
     shutdown.cancel();
 

@@ -27,15 +27,16 @@ use anyhow::Context;
 use futures_util::{SinkExt, StreamExt};
 use late_core::tunnel_protocol::{
     ControlFrame, SshInputEvent, TUNNEL_CLOSE_ABNORMAL, TUNNEL_CLOSE_RECONNECT_REQUESTED,
+    TUNNEL_CLOSE_SESSION_ENDED,
 };
 use russh::Channel;
 use russh::server::Msg;
 use std::pin::Pin;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc;
-use tokio::time::{MissedTickBehavior, timeout};
+use tokio::time::{Instant, MissedTickBehavior, timeout};
 use tokio_tungstenite::tungstenite;
 use tokio_tungstenite::tungstenite::protocol::Message as WsMessage;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
@@ -56,7 +57,7 @@ const BACKOFF_INITIAL: Duration = Duration::from_millis(100);
 const BACKOFF_MAX: Duration = Duration::from_secs(5);
 
 /// Total time budget across all reconnect attempts within a single
-/// disconnection event. Reset on every successful upgrade.
+/// disconnection event. Reset only after actual backend output arrives.
 const RECONNECT_BUDGET: Duration = Duration::from_secs(30);
 
 /// How long a reconnect window has to stretch before the bastion
@@ -109,6 +110,9 @@ const PING_INTERVAL: Duration = Duration::from_secs(2);
 /// keepalive separately and isn't affected by this threshold.
 const SILENCE_THRESHOLD: Duration = Duration::from_secs(5);
 const EXEC_RESPONSE_TIMEOUT: Duration = Duration::from_secs(10);
+const DIAL_TIMEOUT: Duration = Duration::from_secs(5);
+const WS_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+const SSH_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
 type TunnelWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
 
@@ -147,8 +151,8 @@ impl TunnelConnection {
         let req =
             build_request(&ws_url, &secret, &ctx).context("failed to build /tunnel handshake")?;
         let (ws, response) = tokio::select! {
-            result = tokio_tungstenite::connect_async(req) => {
-                result.context("failed to connect tunnel websocket")?
+            result = timeout(DIAL_TIMEOUT, tokio_tungstenite::connect_async(req)) => {
+                result.context("tunnel websocket connect timed out")?.context("failed to connect tunnel websocket")?
             }
             _ = shutdown.cancelled() => {
                 anyhow::bail!("bastion shutdown before tunnel connected");
@@ -185,10 +189,12 @@ impl TunnelConnection {
         }
         .to_json()
         .context("failed to encode tunnel exec request")?;
-        self.ws
-            .send(WsMessage::Text(frame.into()))
-            .await
-            .context("failed to send tunnel exec request")?;
+        tokio::select! {
+            result = timeout(WS_WRITE_TIMEOUT, self.ws.send(WsMessage::Text(frame.into()))) => {
+                result.context("tunnel exec send timed out")?.context("failed to send tunnel exec request")?;
+            }
+            _ = shutdown.cancelled() => anyhow::bail!("bastion shutdown during exec send"),
+        }
 
         let response = timeout(EXEC_RESPONSE_TIMEOUT, async {
             loop {
@@ -352,7 +358,7 @@ impl ReconnectBackoff {
             .unwrap_or(BACKOFF_MAX)
             .min(BACKOFF_MAX);
         self.attempt = self.attempt.saturating_add(1);
-        Some(scaled)
+        Some(scaled.min(self.budget.saturating_sub(self.started.elapsed())))
     }
 }
 
@@ -376,6 +382,29 @@ pub async fn run_session(
     run_shell_loop(channel, ws_url, secret, ctx, input_rx, shutdown, None).await
 }
 
+/// Consume input from a disconnected TUI generation, keeping only its latest size.
+fn discard_stale_input(rx: &mut mpsc::Receiver<SshInputEvent>, ctx: &mut HandshakeContext) {
+    while let Ok(event) = rx.try_recv() {
+        remember_size(event, ctx);
+    }
+}
+
+fn remember_size(event: SshInputEvent, ctx: &mut HandshakeContext) {
+    if let SshInputEvent::Resize { cols, rows } = event {
+        ctx.cols = cols;
+        ctx.rows = rows;
+    }
+}
+
+async fn notice(writer: &mut Pin<Box<dyn AsyncWrite + Send>>, message: &str) {
+    // Notices must never hold teardown hostage to a client with a zero SSH window.
+    let _ = timeout(
+        Duration::from_millis(250),
+        writer.write_all(message.as_bytes()),
+    )
+    .await;
+}
+
 async fn run_shell_loop(
     channel: Channel<Msg>,
     ws_url: String,
@@ -386,314 +415,230 @@ async fn run_shell_loop(
     mut initial_ws: Option<TunnelWs>,
 ) -> anyhow::Result<()> {
     let session_id = ctx.session_id.clone();
-
-    // Split the channel into halves; we only keep the writer.
-    //
-    // Inbound bytes come through `input_rx`, which is fed by
-    // `Handler::data` in russh's per-connection task — the same task
-    // that fires `Handler::window_change_request` (which also feeds
-    // `input_rx`). russh dispatches both callbacks serially, so the
-    // queue carries data and resize in their original SSH wire order.
-    //
-    // Dropping the read half is safe: russh's internal `chan.send`
-    // for ChannelMsg::Data does `unwrap_or(())` on a closed receiver,
-    // so the channel queue stays empty and there's no flow-control
-    // stall. We were only using that path to read bytes, and
-    // `Handler::data` gives us the same bytes in better-defined order.
     let (read_half, write_half) = channel.split();
     drop(read_half);
-    // `make_writer()` returns `impl AsyncWrite + 'static`, but its
-    // poll_write keeps an in-flight permit future across yields, so
-    // it's not Unpin. Box::pin to satisfy the Unpin bound on
-    // AsyncWriteExt's helper methods.
-    let mut ssh_writer: Pin<Box<dyn AsyncWrite + Send + 'static>> =
-        Box::pin(write_half.make_writer());
-
-    // Becomes true after the first successful pump ends with a
-    // retryable close. Gates the plain-text reconnect message: a long
-    // gap on the *first* dial isn't a reconnect, so we don't talk
-    // about reconnecting then.
+    // Unlike Handle::data, ChannelTx obeys the remote SSH window. Blocking
+    // here bounds output memory; the timeout/cancellation bounds its lifetime.
+    let mut ssh_writer: Pin<Box<dyn AsyncWrite + Send>> = Box::pin(write_half.make_writer());
+    let mut gap = ReconnectBackoff::new(RECONNECT_BUDGET);
     let mut is_redial = false;
+    let mut retry_delay = Duration::ZERO;
+    let mut wrote_initial = false;
+    let mut wrote_escalation = false;
+    let mut exit_status = 1;
 
     'session: loop {
-        // === Dial with exponential backoff ===
-        let mut backoff = ReconnectBackoff::new(RECONNECT_BUDGET);
-        // Per-window flags so escalation only fires once per gap.
-        let mut wrote_initial_message = false;
-        let mut wrote_escalation_message = false;
-
-        let (mut ws_sink, mut ws_stream) = if let Some(ws) = initial_ws.take() {
-            tracing::info!(
-                session_id = %session_id,
-                "using existing tunnel ws for shell setup"
-            );
-            ws.split()
+        if is_redial {
+            discard_stale_input(&mut input_rx, &mut ctx);
+        }
+        if input_rx.is_closed() && input_rx.is_empty() {
+            break;
+        }
+        let ws = if let Some(ws) = initial_ws.take() {
+            ws
         } else {
-            'dial: loop {
-                let req = build_request(&ws_url, &secret, &ctx)
-                    .context("failed to build /tunnel handshake")?;
-
-                let dial = tokio::select! {
-                    result = tokio_tungstenite::connect_async(req) => result,
-                    _ = shutdown.cancelled() => {
-                        let payload = format!("{TERMINAL_RESET}{SHUTDOWN_MSG}");
-                        let _ = ssh_writer.write_all(payload.as_bytes()).await;
-                        let _ = ssh_writer.flush().await;
-                        return finish(ssh_writer, &session_id, "shutdown during dial").await;
+            loop {
+                // A stalled handshake, retry sleep, or peer that keeps accepting
+                // and dropping cannot extend the overall 30s outage budget.
+                let deadline = gap.started + gap.budget;
+                if Instant::now() >= deadline {
+                    break 'session;
+                }
+                let req = build_request(&ws_url, &secret, &ctx)?;
+                let dial = async move {
+                    tokio::time::sleep(retry_delay).await;
+                    timeout(DIAL_TIMEOUT, tokio_tungstenite::connect_async(req))
+                        .await
+                        .unwrap_or_else(|_| {
+                            Err(tungstenite::Error::Io(std::io::Error::new(
+                                std::io::ErrorKind::TimedOut,
+                                "tunnel dial timed out",
+                            )))
+                        })
+                };
+                tokio::pin!(dial);
+                let mut messages = tokio::time::interval(Duration::from_millis(100));
+                let result = loop {
+                    tokio::select! {
+                        biased;
+                        _ = shutdown.cancelled() => {
+                            notice(&mut ssh_writer, &format!("{TERMINAL_RESET}{SHUTDOWN_MSG}")).await;
+                            break 'session;
+                        }
+                        _ = tokio::time::sleep_until(deadline) => break 'session,
+                        result = &mut dial => break result,
+                        event = input_rx.recv() => match event {
+                            Some(event) => remember_size(event, &mut ctx),
+                            None => break 'session,
+                        },
+                        _ = messages.tick(), if is_redial => {
+                            let elapsed = gap.started.elapsed();
+                            if !wrote_initial && elapsed >= initial_reconnect_message_delay(ctx.reconnect_reason) {
+                                notice(&mut ssh_writer, &format!("{TERMINAL_RESET}{}", initial_reconnect_message(ctx.reconnect_reason))).await;
+                                wrote_initial = true;
+                            }
+                            if !wrote_escalation && elapsed >= ESCALATION_MESSAGE_DELAY {
+                                notice(&mut ssh_writer, STILL_RECONNECTING_MSG).await;
+                                wrote_escalation = true;
+                            }
+                        }
                     }
                 };
-
-                match dial {
-                    Ok((ws, response)) => {
-                        tracing::info!(
-                            session_id = %session_id,
-                            status = %response.status(),
-                            reconnect_reason = ?ctx.reconnect_reason,
-                            "tunnel ws upgraded"
-                        );
-                        break 'dial ws.split();
+                match result {
+                    Ok((ws, _)) => break ws,
+                    Err(err) if classify_dial_err(&err) == DialOutcome::Retryable => {
+                        let Some(delay) = gap.next_delay() else {
+                            break 'session;
+                        };
+                        retry_delay = delay;
                     }
-                    Err(e) => match classify_dial_err(&e) {
-                        DialOutcome::Terminal => {
-                            tracing::info!(
-                                error = ?e,
-                                session_id = %session_id,
-                                "tunnel dial: terminal error; ending session"
-                            );
-                            return finish(ssh_writer, &session_id, "dial terminal").await;
-                        }
-                        DialOutcome::Retryable => {
-                            // Once the gap stretches past the visibility
-                            // thresholds, write the user-facing message —
-                            // but only for *re*dials, not for the initial
-                            // dial (where there's no prior TUI to clear
-                            // and no continuity to explain).
-                            if is_redial {
-                                let elapsed = backoff.started.elapsed();
-                                if !wrote_initial_message
-                                    && elapsed
-                                        >= initial_reconnect_message_delay(ctx.reconnect_reason)
-                                {
-                                    let payload = format!(
-                                        "{TERMINAL_RESET}{}",
-                                        initial_reconnect_message(ctx.reconnect_reason)
-                                    );
-                                    let _ = ssh_writer.write_all(payload.as_bytes()).await;
-                                    let _ = ssh_writer.flush().await;
-                                    wrote_initial_message = true;
-                                }
-                                if !wrote_escalation_message && elapsed >= ESCALATION_MESSAGE_DELAY
-                                {
-                                    let _ = ssh_writer
-                                        .write_all(STILL_RECONNECTING_MSG.as_bytes())
-                                        .await;
-                                    let _ = ssh_writer.flush().await;
-                                    wrote_escalation_message = true;
-                                }
-                            }
-
-                            let Some(delay) = backoff.next_delay() else {
-                                tracing::warn!(
-                                    session_id = %session_id,
-                                    "tunnel reconnect budget exhausted; ending session"
-                                );
-                                return finish(ssh_writer, &session_id, "budget exhausted").await;
-                            };
-                            tracing::debug!(
-                                error = ?e,
-                                session_id = %session_id,
-                                delay_ms = delay.as_millis() as u64,
-                                "tunnel dial retryable; sleeping"
-                            );
-                            tokio::select! {
-                                _ = tokio::time::sleep(delay) => {}
-                                _ = shutdown.cancelled() => {
-                                    let payload = format!("{TERMINAL_RESET}{SHUTDOWN_MSG}");
-                                    let _ = ssh_writer.write_all(payload.as_bytes()).await;
-                                    let _ = ssh_writer.flush().await;
-                                    return finish(ssh_writer, &session_id, "shutdown during backoff").await;
-                                }
-                            }
-                        }
-                    },
+                    Err(err) => {
+                        tracing::info!(?err, %session_id, "terminal tunnel dial failure");
+                        break 'session;
+                    }
                 }
             }
         };
-
-        let mut setup_frames = Vec::with_capacity(ctx.env.len() + 2);
-        setup_frames.push(ControlFrame::Pty {
+        if is_redial {
+            discard_stale_input(&mut input_rx, &mut ctx);
+        }
+        let (mut sink, mut stream) = ws.split();
+        let mut setup = vec![ControlFrame::Pty {
             term: ctx.term.clone(),
             cols: ctx.cols,
             rows: ctx.rows,
-        });
-        setup_frames.extend(
+        }];
+        setup.extend(
             ctx.env
                 .iter()
                 .cloned()
                 .map(|(name, value)| ControlFrame::Env { name, value }),
         );
-        setup_frames.push(ControlFrame::ShellStart);
-
-        for frame in setup_frames {
-            let payload = frame
-                .to_json()
-                .context("failed to encode tunnel setup frame")?;
-            if let Err(e) = ws_sink.send(WsMessage::Text(payload.into())).await {
-                tracing::debug!(error = ?e, session_id = %session_id, "ws send (setup) failed; treating as retryable");
+        setup.push(ControlFrame::ShellStart);
+        for frame in setup {
+            let send = timeout(
+                WS_WRITE_TIMEOUT,
+                sink.send(WsMessage::Text(frame.to_json()?.into())),
+            );
+            let sent = tokio::select! {
+                result = send => matches!(result, Ok(Ok(()))),
+                _ = shutdown.cancelled() => break 'session,
+            };
+            if !sent {
                 ctx.reconnect_reason = Some(TUNNEL_CLOSE_ABNORMAL);
                 is_redial = true;
+                retry_delay = gap.next_delay().unwrap_or(Duration::ZERO);
                 continue 'session;
             }
         }
-
-        // === Pump bytes until either side ends ===
-        // Liveness tracking: any inbound WS frame counts as a sign the
-        // backend is alive. We also actively probe with WS Pings every
-        // PING_INTERVAL so a wedged backend (auto-pong loop stuck) is
-        // detectable even when the user is idle.
         let mut last_inbound = Instant::now();
-        let mut ping_interval = tokio::time::interval(PING_INTERVAL);
-        ping_interval.set_missed_tick_behavior(MissedTickBehavior::Delay);
-        // Don't pre-tick: the first tick fires immediately, sending a
-        // probe Ping to validate the connection is fully up.
-
+        let mut ready = false;
+        let mut ping = tokio::time::interval(PING_INTERVAL);
+        ping.set_missed_tick_behavior(MissedTickBehavior::Delay);
         let outcome = loop {
             tokio::select! {
                 _ = shutdown.cancelled() => {
-                    let payload = format!("{TERMINAL_RESET}{SHUTDOWN_MSG}");
-                    let _ = ssh_writer.write_all(payload.as_bytes()).await;
-                    let _ = ssh_writer.flush().await;
+                    notice(&mut ssh_writer, &format!("{TERMINAL_RESET}{SHUTDOWN_MSG}")).await;
                     break PumpOutcome::Terminal;
                 }
-
-                // SSH (user) → WS (backend). Single FIFO carrying
-                // both Bytes and Resize in russh's dispatch order;
-                // emitted as WS Binary or WS Text accordingly. WS
-                // frames preserve order on the wire (RFC 6455), so
-                // the backend reads them back in the same order.
-                event = input_rx.recv() => {
-                    let Some(event) = event else {
-                        tracing::debug!(session_id = %session_id, "ssh input channel closed");
-                        break PumpOutcome::SshClosed;
-                    };
-                    match event {
-                        SshInputEvent::Bytes(bytes) => {
-                            if let Err(e) = ws_sink
-                                .send(WsMessage::Binary(bytes.into()))
-                                .await
-                            {
-                                tracing::debug!(error = ?e, session_id = %session_id, "ws send (binary) failed; treating as retryable");
-                                break PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL);
-                            }
-                        }
-                        SshInputEvent::Resize { cols, rows } => {
-                            // Stash the latest dimensions on the
-                            // handshake context so the next reconnect
-                            // upgrades with the current PTY size.
-                            ctx.cols = cols;
-                            ctx.rows = rows;
-                            let frame = match (ControlFrame::Resize { cols, rows }).to_json() {
-                                Ok(s) => s,
-                                Err(e) => {
-                                    tracing::warn!(error = ?e, "encode resize");
-                                    continue;
-                                }
-                            };
-                            if let Err(e) = ws_sink.send(WsMessage::Text(frame.into())).await {
-                                tracing::debug!(error = ?e, session_id = %session_id, "ws send (resize) failed; treating as retryable");
-                                break PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL);
-                            }
-                        }
-                    }
-                }
-
-                // WS (backend) → SSH (user) — opaque binary; ignore text/ping.
-                msg = ws_stream.next() => {
-                    // Any successfully-parsed inbound frame (Pong,
-                    // Binary, Text, Ping, Frame) means the backend is
-                    // still talking; reset the silence countdown.
-                    if matches!(msg, Some(Ok(_))) {
-                        last_inbound = Instant::now();
-                    }
+                _ = tokio::time::sleep_until(gap.started + gap.budget), if !ready => break PumpOutcome::Terminal,
+                msg = stream.next() => {
+                    if matches!(msg, Some(Ok(_))) { last_inbound = Instant::now(); }
                     match msg {
-                        None => {
-                            tracing::debug!(session_id = %session_id, "ws stream ended without close frame");
-                            // 1006-equivalent: transport dropped us.
-                            break PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL);
-                        }
                         Some(Ok(WsMessage::Binary(bytes))) => {
-                            if let Err(e) = ssh_writer.write_all(&bytes).await {
-                                tracing::debug!(error = ?e, session_id = %session_id, "ssh write failed");
-                                break PumpOutcome::SshClosed;
+                            if !ready {
+                                if is_redial {
+                                    let before = (ctx.cols, ctx.rows);
+                                    discard_stale_input(&mut input_rx, &mut ctx);
+                                    if before != (ctx.cols, ctx.rows) {
+                                        let frame = ControlFrame::Resize { cols: ctx.cols, rows: ctx.rows }.to_json()?;
+                                        if !matches!(timeout(WS_WRITE_TIMEOUT, sink.send(WsMessage::Text(frame.into()))).await, Ok(Ok(()))) {
+                                            break PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL);
+                                        }
+                                    }
+                                }
+                                ready = true;
                             }
+                            let sent = tokio::select! {
+                                result = timeout(SSH_WRITE_TIMEOUT, ssh_writer.write_all(&bytes)) => matches!(result, Ok(Ok(()))),
+                                _ = shutdown.cancelled() => false,
+                            };
+                            if !sent { break PumpOutcome::SshClosed; }
                         }
                         Some(Ok(WsMessage::Close(frame))) => {
-                            let code = frame.as_ref().map(|f| u16::from(f.code));
-                            let outcome = match code {
-                                Some(c) => classify_close_code(c),
-                                None => PumpOutcome::Terminal,
-                            };
-                            tracing::info!(
-                                session_id = %session_id,
-                                code = ?code,
-                                reason = frame.as_ref().map(|f| f.reason.as_str()),
-                                ?outcome,
-                                "ws close received"
-                            );
-                            break outcome;
-                        }
-                        Some(Ok(WsMessage::Ping(_) | WsMessage::Pong(_) | WsMessage::Frame(_))) => {
-                            // tungstenite handles ping/pong automatically.
-                        }
-                        Some(Ok(WsMessage::Text(t))) => {
-                            // Backend → bastion text vocabulary is reserved for
-                            // future control frames; ignore unknown variants.
-                            tracing::debug!(session_id = %session_id, payload = %t.as_str(), "ws text frame ignored");
-                        }
-                        Some(Err(e)) => {
-                            tracing::debug!(error = ?e, session_id = %session_id, "ws recv error; treating as retryable");
-                            break PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL);
-                        }
+                            if frame.as_ref().is_some_and(|frame| matches!(u16::from(frame.code), 1000 | TUNNEL_CLOSE_SESSION_ENDED)) {
+                                exit_status = 0;
+                            }
+                            break frame.map_or(PumpOutcome::Terminal, |frame| classify_close_code(frame.code.into()));
+                        },
+                        None | Some(Err(_)) => break PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL),
+                        _ => {},
                     }
                 }
-
-                // Liveness probe + dead-backend detector.
-                _ = ping_interval.tick() => {
-                    if last_inbound.elapsed() > SILENCE_THRESHOLD {
-                        tracing::warn!(
-                            session_id = %session_id,
-                            silence_ms = last_inbound.elapsed().as_millis() as u64,
-                            "tunnel ws silent past threshold; treating as dead backend"
-                        );
-                        break PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL);
-                    }
-                    if let Err(e) = ws_sink.send(WsMessage::Ping(Default::default())).await {
-                        tracing::debug!(error = ?e, session_id = %session_id, "ws send (ping) failed; treating as retryable");
-                        break PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL);
-                    }
+                event = input_rx.recv() => {
+                    let Some(event) = event else { break PumpOutcome::SshClosed; };
+                    let frame = match event {
+                        SshInputEvent::Bytes(bytes) => {
+                            if is_redial && !ready { continue; }
+                            WsMessage::Binary(bytes.into())
+                        },
+                        SshInputEvent::Resize { cols, rows } => {
+                            ctx.cols = cols; ctx.rows = rows;
+                            WsMessage::Text(ControlFrame::Resize { cols, rows }.to_json()?.into())
+                        }
+                    };
+                    let sent = tokio::select! {
+                        result = timeout(WS_WRITE_TIMEOUT, sink.send(frame)) => matches!(result, Ok(Ok(()))),
+                        _ = shutdown.cancelled() => break PumpOutcome::Terminal,
+                    };
+                    if !sent { break PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL); }
+                }
+                _ = ping.tick() => {
+                    if last_inbound.elapsed() > SILENCE_THRESHOLD { break PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL); }
+                    let sent = tokio::select! {
+                        result = timeout(WS_WRITE_TIMEOUT, sink.send(WsMessage::Ping(Default::default()))) => matches!(result, Ok(Ok(()))),
+                        _ = shutdown.cancelled() => break PumpOutcome::Terminal,
+                    };
+                    if !sent { break PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL); }
                 }
             }
         };
-
-        // Tidy the WS halves regardless of outcome — both go out of
-        // scope with this iteration.
-        let _ = timeout(Duration::from_millis(500), ws_sink.close()).await;
-        drop(ws_stream);
-
+        let _ = timeout(Duration::from_millis(250), sink.close()).await;
         match outcome {
             PumpOutcome::SshClosed => {
-                return finish(ssh_writer, &session_id, "ssh closed").await;
+                exit_status = 0;
+                break;
             }
-            PumpOutcome::Terminal => {
-                return finish(ssh_writer, &session_id, "ws terminal close").await;
-            }
+            PumpOutcome::Terminal => break,
             PumpOutcome::Retryable(reason) => {
+                if ready {
+                    gap = ReconnectBackoff::new(RECONNECT_BUDGET);
+                    wrote_initial = false;
+                    wrote_escalation = false;
+                }
                 ctx.reconnect_reason = Some(reason);
                 is_redial = true;
-                continue 'session;
+                let Some(delay) = gap.next_delay() else {
+                    break;
+                };
+                retry_delay = if reason == TUNNEL_CLOSE_RECONNECT_REQUESTED {
+                    Duration::ZERO
+                } else {
+                    delay
+                };
             }
         }
     }
+    // OpenSSH (including ControlMaster clients) treats a missing exit-status
+    // as 255 even after a normal app quit. Send status before EOF and Close.
+    let _ = timeout(
+        Duration::from_millis(250),
+        write_half.exit_status(exit_status),
+    )
+    .await;
+    finish(ssh_writer, &session_id, "proxy ended").await?;
+    let _ = timeout(Duration::from_millis(250), write_half.close()).await;
+    Ok(())
 }
 
 /// Common cleanup: shut down the SSH writer half (sends EOF/Close to
@@ -703,7 +648,7 @@ async fn finish<W: AsyncWriteExt + Unpin>(
     session_id: &str,
     why: &'static str,
 ) -> anyhow::Result<()> {
-    let _ = ssh_writer.shutdown().await;
+    let _ = timeout(Duration::from_millis(250), ssh_writer.shutdown()).await;
     tracing::info!(session_id = %session_id, reason = why, "tunnel proxy session ended");
     Ok(())
 }

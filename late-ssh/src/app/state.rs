@@ -4603,15 +4603,25 @@ impl Drop for App {
         // The paired registry keeps token-scoped state that outlives the
         // sockets (the once-per-session boot mute claim), so the session end
         // has to retire it or it accumulates a row per session forever.
-        if let Some(paired) = &self.paired_client_registry {
-            paired.forget_session(&self.session_token);
-        }
+        // Close this generation's receiver before retiring its token. A new
+        // tunnel may already have registered the same stable bastion token.
+        self.session_rx.take();
         let Some(registry) = self.session_registry.clone() else {
+            if let Some(paired) = &self.paired_client_registry {
+                paired.forget_session(&self.session_token);
+            }
             return;
         };
         let token = self.session_token.clone();
+        let paired = self.paired_client_registry.clone();
         tokio::spawn(async move {
-            registry.unregister(&token).await;
+            registry
+                .retire_closed(&token, || {
+                    if let Some(paired) = paired {
+                        paired.forget_session(&token);
+                    }
+                })
+                .await;
         });
     }
 }

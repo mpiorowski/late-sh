@@ -102,8 +102,10 @@ Backend validates secret + IP allowlist, looks up user by fingerprint, allocates
 - **Binary frames**: raw PTY bytes, both directions. **No inspection, no escape-sequence parsing.**
 - **Text frames** (JSON control vocabulary, intentionally tiny):
   - `{"t":"resize","cols":N,"rows":M}` — bastion → backend on SSH `window-change`.
-  - `{"t":"hello"}` — backend → bastion (optional), confirms session ready.
-  - Anything else is out of scope for v1.
+  - `pty`, whitelisted `env`, then `shell_start` initialize each backend generation.
+  - Bounded `exec_request` / `exec_response` support CLI token discovery before
+    shell startup. Exec and shell reuse the same tunnel and stable session ID.
+  - The canonical wire vocabulary lives in `late-core/src/tunnel_protocol.rs`.
 - **Ping/pong**: WS control frames. Bastion pings every 2s; >5s of silence treated as a dead backend.
 
 ### Close codes — policy
@@ -133,7 +135,8 @@ The transport-error branch (tungstenite returns `Err` instead of a Close frame �
 Guiding principle: **the bastion is intentionally minimal.** No DB, no service deps, no protocol-aware logic over the byte stream.
 
 What it does:
-- Full SSH server (russh): pubkey auth, channel management, `pty-req` + `shell` + `window-change` only. Reject everything else cleanly.
+- Full SSH server (russh): pubkey auth, PTY, shell, resize, whitelisted env and
+  bounded pre-shell exec. Reject extra interactive channels and unsupported requests.
 - Host key via `load_or_generate_key` from a K8s Secret.
 - PROXY v1 parsing on `:5222` (parser shared via `late-core`).
 - One outbound WebSocket per open shell channel.
@@ -141,12 +144,28 @@ What it does:
 - Translate SSH `window-change` requests into `resize` text frames.
 - Single global connection-count semaphore (no per-IP enforcement; that stays at late-ssh).
 - **On WS close**, dispatch by code per §4:
-  - **`4100`–`4199`** (user-requested reconnect): redial immediately, no plain-text "reconnecting…" message — the user pressed `r` and expects an upgrade, any "reconnecting…" verbiage would be noise.
+  - **`4100`** (user-requested reconnect): redial immediately and show
+    "waiting for updated late.sh..." with a terminal reset.
   - **`1006`** (transport): reconnect with backoff. If reconnect is fast (<500ms), say nothing. Otherwise write "reconnecting to late.sh…" after `INITIAL_MESSAGE_DELAY` (with terminal reset to exit alt-screen), escalate to "still reconnecting…" after `ESCALATION_MESSAGE_DELAY`.
   - **Anything else** (Terminal): write a friendly closing message, close the SSH session.
 - **On any redial**, send `X-Late-Reconnect-Reason: <numeric-code>` (the close code that triggered the redial; or `1006` if the previous pump ended on a transport error). Also `X-Late-Via: bastion` on every dial, fresh or redial.
 - On SIGTERM: brief goodbye to all active SSH channels, close cleanly, exit. Single-replica means active sessions are dropped during bastion rollouts (acceptable per §1).
 - No persistent state beyond per-session "this SSH channel maps to this backend URL + session id + current PTY size + last-close-code."
+
+Each outage has one 30-second budget, including backoff, stalled handshakes and
+upgrades that close without output. A backend generation counts as ready only
+after binary output arrives. On redial, discard queued keystrokes and paste;
+retain the latest terminal size, term, whitelisted env, identity and session ID.
+Input typed before replacement output is also discarded. Application state
+restarts by design. Live bytes and resizes share an ordered, bounded FIFO;
+sustained input stalls close the connection instead of silently losing events.
+Output respects the remote SSH window and has bounded writes and shutdown.
+Normal app quits send SSH exit status 0 before EOF/Close; kick, ban and other
+error closes send status 1, so OpenSSH clients can distinguish normal exit.
+Whitelisted terminal env values are bounded to 4 KiB each, with latest value
+winning for repeated names.
+Admission covers clients before PROXY parsing and SSH authentication, with a
+10-second authentication deadline. Completed connection tasks are reaped.
 
 What it does **not** do:
 - No DB, no user-existence check, no ban check (late-ssh handles, replies with `4002`).
@@ -166,7 +185,11 @@ What it does **not** do:
 - Reads `X-Late-Reconnect-Reason` and threads the numeric value (or `None` if absent) into the App context. The TUI uses it to drive the post-reconnect banner; nothing else branches on it.
 
 ### Tunnel-session lifecycle on SIGTERM
-The current `tunnel.rs` has a `shutdown.cancelled() => emit close 1000` arm that fires when `session_shutdown` is cancelled. **Remove this arm.** With this change, late-ssh never explicitly closes a healthy tunnel WS at SIGTERM — existing tunnel sessions ride out the k8s grace period exactly like russh sessions do today, ending only on user action (`4000`/`4100`) or SIGKILL (TCP RST → bastion sees `1006`).
+Late-ssh does not close a healthy tunnel WS at SIGTERM. Existing tunnel sessions
+ride out the grace period, ending on user action (`4000`/`4100`) or transport loss
+at process exit (bastion sees `1006`). Pre-shell and exec-only disconnects release
+their registry entry and admission guards too. Old generations cannot unregister
+a live replacement sharing their stable token or erase its paired-client state.
 
 The /tunnel *acceptor* still stops accepting new connections at SIGTERM via axum's `with_graceful_shutdown`; this change is only about existing sessions.
 
@@ -311,13 +334,15 @@ Close-code dispatch, exponential backoff, plain-text reconnect message after gra
 ### Phase 4.5 — Upgrade-reconnect UX (this PR rev)
 - Add close code `4100` to the protocol; teach bastion's `classify_close_code` (only `1006` and `4100..=4199` Retryable).
 - Bastion sets `X-Late-Reconnect-Reason: <numeric-code>` and `X-Late-Via: bastion` on redials. Drop the prior `X-Late-Reconnect` boolean header (the reason header subsumes it).
-- Suppress the bastion-side "reconnecting…" plain-text message for `4100` redials (immediate redial, no noise).
+- Show "waiting for updated late.sh..." for `4100` redials (immediate redial).
 - `/tunnel` reads `X-Late-Reconnect-Reason`, threads `Option<u16>` into `App` context.
 - Remove the `shutdown.cancelled() => emit close 1000` arm from `late-ssh/src/tunnel.rs:520-536`. Existing tunnel sessions now ride out the grace period like russh; no late-ssh-emitted close on healthy sessions.
 - Modify the q-confirm dialog (§6) to render upgrade-aware copy when `is_draining`. `r` emits `4100`, `q` emits `4000`, Esc dismisses.
 - Update the draining banner copy (§6).
 - Post-reconnect banner in `render.rs` keyed on the relayed close code (only `4100` and `1006` are reachable in this PR scope).
-- Tests: protocol smoke test asserts `4100` is Retryable and the redial header is set; bastion test asserts `4100` skips the "reconnecting…" message; render-layer test asserts the upgrade dialog branches on `is_draining` and emits the right exit code per key.
+- Tests cover retry classification, stable identity, upgrade notices, stale input,
+  lifecycle cleanup and the real bastion/backend chain. See
+  [BASTION-QUALIFICATION.md](BASTION-QUALIFICATION.md) for the packaged campaign.
 
 ### Phase 5 — Production cutover
 - Soak window with both paths up.
@@ -329,13 +354,16 @@ Close-code dispatch, exponential backoff, plain-text reconnect message after gra
 - Metrics: reconnect count + duration, close-code distribution, handshake latency, bytes pumped.
 - `last_connected_version`-driven post-reconnect copy (separate PR — depends on Cargo workspace version bumping in CI).
 - Move per-IP rate limiting / abuse defense into the bastion if profiling justifies it.
-- `late-cli` migration through the bastion.
+- Additional platform-specific CLI media checks.
 
 ---
 
 ## 11. Open questions
 
-- **`late-cli` routing after `:22` cutover (Phase 5).** Default plan: expose late-ssh's russh on a separate public port (e.g. `:2223`) just for late-cli; late-cli changes default port. Alternatives (route through bastion, bastion-minted tokens) on the table. Decision needs to land before Phase 5 ships.
+- **`late-cli` routing after `:22` cutover (Phase 5).** CLI token discovery now
+  runs through the bastion's pre-shell exec, and pairing reuses its stable token
+  across backend replacements. The production port cutover remains a separate
+  infrastructure action, gated on staging checks.
 - **Tailored "what's new" welcome.** Deferred. Requires Cargo workspace version bumping in CI (current crates are pinned at `0.1.0` and never bumped). Tracked separately; Phase 4.5 lays the substrate (`X-Late-Reconnect-Reason` is the per-redial signal), but the version-aware copy is follow-up scope.
 
 ---

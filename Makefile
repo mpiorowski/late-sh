@@ -41,6 +41,35 @@ CHECK_DB_STOP = $(CHECK_COMPOSE) down -v --remove-orphans
 CHECK_DB_RESET = $(CHECK_DB_STOP) >/dev/null 2>&1 || true
 CHECK_DB_START = $(CHECK_DB_RESET); $(CHECK_COMPOSE) up -d --wait postgres
 
+# Isolated bastion qualification; never loads .env/.env.local. The database and
+# packaged stack are disposable, while evidence is retained under target/.
+BASTION_CHECK_INSTANCE ?= late-bastion-check
+BASTION_CHECK_PG_HOST_PORT ?= 55437
+BASTION_CHECK_COMPOSE = CHECK_PG_HOST_PORT=$(BASTION_CHECK_PG_HOST_PORT) docker compose --env-file /dev/null -p $(BASTION_CHECK_INSTANCE) -f docker-compose.check.yml
+BASTION_TEST_PLATFORM ?= linux/amd64
+BASTION_TEST_FILTER = package(late-bastion) or test(bastion_test::) or test(tunnel_test::) or test(session::session_test::) or test(migrator)
+
+.PHONY: test-bastion test-bastion-repeat bastion-test-images test-bastion-stack test-bastion-soak
+test-bastion:
+	@set -e; \
+	trap 'status=$$?; $(BASTION_CHECK_COMPOSE) down -v --remove-orphans; exit $$status' EXIT; \
+	$(BASTION_CHECK_COMPOSE) up -d --wait postgres; \
+	TEST_DATABASE_URL='host=127.0.0.1 port=$(BASTION_CHECK_PG_HOST_PORT) user=$(CHECK_PG_USER) password=$(CHECK_PG_USER) dbname=postgres' \
+	$(CHECK_CARGO_ENV) cargo nextest run --build-jobs $(CHECK_BUILD_JOBS) --test-threads 4 -p late-bastion -p late-ssh -p late-core --lib -E '$(BASTION_TEST_FILTER)' --failure-output final $(ARGS)
+
+test-bastion-repeat:
+	$(MAKE) test-bastion BASTION_TEST_FILTER='test(discards_outage) or test(tunnel_disconnect_before_shell) or test(tunnel_old_cleanup) or test(retire_closed) or test(bastion_chain_transport_loss)' ARGS='--stress-count 100'
+
+bastion-test-images:
+	docker build --platform $(BASTION_TEST_PLATFORM) --target runtime-bastion -t late-bastion:qualification .
+	docker build --platform $(BASTION_TEST_PLATFORM) --target runtime-ssh -t late-ssh:qualification .
+
+test-bastion-stack: bastion-test-images
+	uv run scripts/test/bastion_qualification.py --clients 10 --duration 60 --faults 2 $(ARGS)
+
+test-bastion-soak: bastion-test-images
+	uv run scripts/test/bastion_qualification.py --clients 100 --duration 2700 --faults 10 $(ARGS)
+
 .PHONY: .env-instance2
 .env-instance2:
 	@$(MAKE) .env ENV_TEMPLATE=.env.dev2
@@ -167,7 +196,7 @@ check: .env
 	$(CHECK_DB_START); \
 	cargo fmt $(CHECK_PACKAGES) -- --check; \
 	$(CHECK_CARGO_ENV) cargo clippy -j $(CHECK_BUILD_JOBS) --workspace --all-targets --features otel -- -D warnings; \
-	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) cargo nextest run --build-jobs $(CHECK_BUILD_JOBS) --workspace --all-targets --no-fail-fast --failure-output final
+	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) cargo nextest run --build-jobs $(CHECK_BUILD_JOBS) --workspace --all-targets --features otel --no-fail-fast --failure-output final
 
 start: .env keys
 	docker compose -f docker-compose.yml up --build

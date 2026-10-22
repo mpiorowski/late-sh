@@ -124,6 +124,23 @@ impl SessionRegistry {
         sessions.remove(token);
     }
 
+    /// Retire a disconnected receiver, without removing a replacement that
+    /// registered under the same bastion token. Run token-scoped cleanup while
+    /// holding the registry lock so it cannot race a new registration.
+    pub async fn retire_closed(&self, token: &str, cleanup: impl FnOnce()) -> bool {
+        let mut sessions = self.sessions.write().await;
+        if sessions
+            .get(token)
+            .is_some_and(|entry| entry.tx.is_closed())
+        {
+            sessions.remove(token);
+            cleanup();
+            true
+        } else {
+            false
+        }
+    }
+
     pub async fn has_session(&self, token: &str) -> bool {
         let sessions = self.sessions.read().await;
         sessions.contains_key(token)

@@ -36,6 +36,8 @@ use crate::proxy::{INPUT_QUEUE_CAP, TunnelConnection, run_session};
 /// How long to wait for an upstream proxy to finish writing its PROXY v1
 /// header. Mirrors the late-ssh `:2222` listener's value (250ms).
 pub const PROXY_HEADER_TIMEOUT: Duration = Duration::from_millis(250);
+const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_ENV_VALUE_BYTES: usize = 4096;
 
 /// Server-wide state shared across accepted connections.
 #[derive(Clone)]
@@ -67,6 +69,7 @@ impl Server {
 pub struct ClientHandler {
     config: Arc<Config>,
     shutdown: late_core::shutdown::CancellationToken,
+    authenticated: late_core::shutdown::CancellationToken,
     peer_addr: Option<SocketAddr>,
     login_username: Option<String>,
     fingerprint: Option<String>,
@@ -122,7 +125,8 @@ impl Server {
         let peer_addr = proxied_peer_addr.or(transport_peer_addr);
         ClientHandler {
             config: self.config.clone(),
-            shutdown: self.shutdown.clone(),
+            shutdown: self.shutdown.child_token(),
+            authenticated: late_core::shutdown::CancellationToken::new(),
             peer_addr,
             login_username: None,
             fingerprint: None,
@@ -156,6 +160,14 @@ impl ClientHandler {
             session_id: self.session_id.clone(),
             env: self.env.clone(),
         })
+    }
+}
+
+impl Drop for ClientHandler {
+    fn drop(&mut self) {
+        // A TCP disconnect must also stop a proxy that is dialing or blocked
+        // on transport output, rather than leaving it alive until a retry.
+        self.shutdown.cancel();
     }
 }
 
@@ -217,6 +229,7 @@ impl russh::server::Handler for ClientHandler {
         tracing::info!(user, %fingerprint, "auth_publickey accepted");
         self.login_username = Some(user.to_string());
         self.fingerprint = Some(fingerprint);
+        self.authenticated.cancel();
         Ok(Auth::Accept)
     }
 
@@ -284,9 +297,19 @@ impl russh::server::Handler for ClientHandler {
         session: &mut Session,
     ) -> Result<(), Self::Error> {
         if is_tunnel_env_allowed(variable_name) {
+            if variable_value.len() > MAX_ENV_VALUE_BYTES {
+                fail_channel_request(session, channel, "oversized env");
+                return Ok(());
+            }
             let variable_name = variable_name.trim();
-            self.env
-                .push((variable_name.to_string(), variable_value.to_string()));
+            // Store one bounded value per whitelisted name. Repeated pre-shell
+            // requests must not grow connection memory or replay stale hints.
+            if let Some((_, value)) = self.env.iter_mut().find(|(name, _)| name == variable_name) {
+                *value = variable_value.to_string();
+            } else {
+                self.env
+                    .push((variable_name.to_string(), variable_value.to_string()));
+            }
             tracing::debug!(variable_name, "stored whitelisted env request");
         } else {
             tracing::debug!(variable_name, "ignoring non-whitelisted env request");
@@ -518,12 +541,13 @@ impl russh::server::Handler for ClientHandler {
         self.rows = rows;
 
         if let Some(tx) = &self.input_tx {
-            // try_send: russh awaits this callback and we don't want
-            // to backpressure the russh task on a slow consumer.
-            // Resize traffic is sparse (a human dragging a window
-            // corner); contention is pathological, not steady-state.
-            if let Err(e) = tx.try_send(SshInputEvent::Resize { cols, rows }) {
-                tracing::debug!(error = ?e, cols, rows, "resize event dropped");
+            // Preserve byte/resize ordering under backpressure. A stalled
+            // consumer closes the connection rather than losing a resize.
+            tokio::select! {
+                result = tokio::time::timeout(Duration::from_secs(2), tx.send(SshInputEvent::Resize { cols, rows })) => {
+                    result.map_err(|_| anyhow::anyhow!("resize input stalled"))??;
+                }
+                _ = self.shutdown.cancelled() => {},
             }
         } else {
             // Resize landed before shell_request started the proxy.
@@ -563,8 +587,11 @@ impl russh::server::Handler for ClientHandler {
             }
             return Ok(());
         };
-        if let Err(e) = tx.send(SshInputEvent::Bytes(data.to_vec())).await {
-            tracing::warn!(error = ?e, len = data.len(), "input event dropped");
+        tokio::select! {
+            result = tokio::time::timeout(Duration::from_secs(2), tx.send(SshInputEvent::Bytes(data.to_vec()))) => {
+                result.map_err(|_| anyhow::anyhow!("byte input stalled"))??;
+            }
+            _ = self.shutdown.cancelled() => {},
         }
         Ok(())
     }
@@ -631,6 +658,16 @@ pub async fn run(
     shutdown: late_core::shutdown::CancellationToken,
 ) -> Result<()> {
     let listener = TcpListener::bind(("0.0.0.0", config.ssh_port)).await?;
+    run_with_listener(listener, config, shutdown).await
+}
+
+/// Run the production accept loop on an already-bound listener. Tests use
+/// ephemeral ports without replacing admission or shutdown handling.
+pub async fn run_with_listener(
+    listener: TcpListener,
+    config: Arc<Config>,
+    shutdown: late_core::shutdown::CancellationToken,
+) -> Result<()> {
     let host_key = load_or_generate_key(&config.host_key_path)?;
     let russh_config = Arc::new(russh::server::Config {
         inactivity_timeout: Some(Duration::from_secs(config.ssh_idle_timeout)),
@@ -679,6 +716,8 @@ pub async fn run(
                 let russh_config = Arc::clone(&russh_config);
                 let server = server.clone();
                 let config = Arc::clone(&config);
+                let mut handler = server.new_client_with_addrs(Some(transport_peer_addr), None);
+                if handler.over_limit { continue; }
                 tasks.spawn(async move {
                     let proxied_addr =
                         match resolve_proxied_client_addr(&config, &mut tcp, transport_peer_addr).await {
@@ -692,18 +731,38 @@ pub async fn run(
                                 return;
                             }
                         };
-                    let handler = server.new_client_with_addrs(Some(transport_peer_addr), proxied_addr);
-                    match russh::server::run_stream(russh_config, tcp, handler).await {
-                        Ok(session) => {
-                            if let Err(e) = session.await {
-                                tracing::debug!(error = ?e, ?transport_peer_addr, "ssh session ended with error");
-                            }
-                        }
-                        Err(e) => {
-                            tracing::debug!(error = ?e, ?transport_peer_addr, "ssh session init failed");
+                    handler.peer_addr = proxied_addr.or(Some(transport_peer_addr));
+                    let authenticated = handler.authenticated.clone();
+                    let connection_shutdown = handler.shutdown.clone();
+                    let auth_deadline = tokio::time::Instant::now() + AUTH_TIMEOUT;
+                    let mut session = tokio::select! {
+                        result = russh::server::run_stream(russh_config, tcp, handler) => match result {
+                            Ok(session) => session,
+                            Err(err) => { tracing::debug!(?err, "ssh session init failed"); return; }
+                        },
+                        _ = connection_shutdown.cancelled() => return,
+                        _ = tokio::time::sleep_until(auth_deadline) => return,
+                    };
+                    let handle = session.handle();
+                    tokio::select! {
+                        result = &mut session => { if let Err(err) = result { tracing::debug!(?err, "ssh session ended"); } return; },
+                        _ = authenticated.cancelled() => {},
+                        _ = connection_shutdown.cancelled() => {},
+                        _ = tokio::time::sleep_until(auth_deadline) => { tracing::debug!("ssh authentication timed out"); },
+                    }
+                    if authenticated.is_cancelled() && !connection_shutdown.is_cancelled() {
+                        tokio::select! {
+                            _ = &mut session => return,
+                            _ = connection_shutdown.cancelled() => {},
                         }
                     }
+                    connection_shutdown.cancel();
+                    let _ = tokio::time::timeout(Duration::from_secs(1), handle.disconnect(russh::Disconnect::ByApplication, "bastion connection ended".into(), "".into())).await;
+                    let _ = tokio::time::timeout(Duration::from_secs(1), session).await;
                 });
+            }
+            result = tasks.join_next(), if !tasks.is_empty() => {
+                if let Some(Err(err)) = result { tracing::debug!(?err, "bastion client task failed"); }
             }
             _ = shutdown.cancelled() => {
                 tracing::info!("bastion shutdown requested, stopping accept loop");

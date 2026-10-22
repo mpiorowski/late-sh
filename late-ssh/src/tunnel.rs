@@ -235,7 +235,15 @@ impl Drop for TunnelSessionGuard {
             let mut became_offline = false;
             if let Some(active) = active_users.get_mut(&user_id) {
                 if let Some(token) = self.active_session_token.as_ref() {
-                    active.sessions.retain(|session| session.token != *token);
+                    // Each physical tunnel owns one entry, including when a
+                    // reconnect overlaps the old connection's cleanup.
+                    if let Some(index) = active
+                        .sessions
+                        .iter()
+                        .position(|session| session.token == *token)
+                    {
+                        active.sessions.remove(index);
+                    }
                 }
                 if active.connection_count <= 1 {
                     active_users.remove(&user_id);
@@ -436,18 +444,12 @@ async fn tunnel_handler(
             active.fingerprint = Some(handshake.fingerprint.clone());
             active.audio_source = late_core::models::user::extract_audio_source(&user.settings);
             active.last_login_at = Instant::now();
-            if !active
-                .sessions
-                .iter()
-                .any(|session| session.token == session_token)
-            {
-                active.sessions.push(ActiveSession {
-                    token: session_token.clone(),
-                    fingerprint: Some(handshake.fingerprint.clone()),
-                    peer_ip: Some(handshake.peer_ip),
-                    away: false,
-                });
-            }
+            active.sessions.push(ActiveSession {
+                token: session_token.clone(),
+                fingerprint: Some(handshake.fingerprint.clone()),
+                peer_ip: Some(handshake.peer_ip),
+                away: false,
+            });
             false
         } else {
             active_users.insert(
@@ -635,23 +637,18 @@ async fn start_tunnel_shell(
     })
 }
 
-fn queue_input(shell: &TunnelShell, event: SshInputEvent) -> bool {
-    match shell.input_tx.try_reserve() {
-        Ok(permit) => {
+async fn queue_input(shell: &TunnelShell, event: SshInputEvent) -> bool {
+    match tokio::time::timeout(std::time::Duration::from_secs(1), shell.input_tx.reserve()).await {
+        Ok(Ok(permit)) => {
             permit.send(event);
             shell.signal.dirty.store(true, Ordering::Release);
             shell.signal.notify.notify_one();
             true
         }
-        Err(mpsc::error::TrySendError::Full(_)) => {
-            tracing::warn!(
-                queue_cap = INPUT_QUEUE_CAP,
-                "tunnel input queue full; dropping inbound event"
-            );
-            true
-        }
-        Err(mpsc::error::TrySendError::Closed(_)) => {
-            tracing::debug!("tunnel input queue closed; render loop ended");
+        _ => {
+            // Losing a byte or resize silently can turn the rest of a paste
+            // into commands or apply mouse coordinates to the wrong layout.
+            tracing::warn!("tunnel input stalled or closed; ending session");
             false
         }
     }
@@ -723,11 +720,16 @@ async fn handle_session(
     // its backpressure; capacity-saturated sends time out at 50ms and
     // surface as drops to the render loop.
     let (out_tx, mut out_rx) = mpsc::channel::<Message>(WS_OUT_BUFFER);
-    let writer = tokio::spawn(async move {
+    let writer_done = CancellationToken::new();
+    let writer_done_tx = writer_done.clone();
+    let mut writer = tokio::spawn(async move {
         while let Some(msg) = out_rx.recv().await {
             let was_close = matches!(msg, Message::Close(_));
-            if let Err(err) = ws_sink.send(msg).await {
-                tracing::debug!(error = ?err, "tunnel ws send failed");
+            if !matches!(
+                tokio::time::timeout(std::time::Duration::from_secs(5), ws_sink.send(msg)).await,
+                Ok(Ok(()))
+            ) {
+                tracing::debug!("tunnel ws send failed or timed out");
                 break;
             }
             if was_close {
@@ -735,7 +737,8 @@ async fn handle_session(
             }
         }
         // Best-effort flush.
-        let _ = ws_sink.close().await;
+        let _ = tokio::time::timeout(std::time::Duration::from_millis(500), ws_sink.close()).await;
+        writer_done_tx.cancel();
     });
 
     let mut pty: Option<TunnelPty> = None;
@@ -749,6 +752,7 @@ async fn handle_session(
     loop {
         tokio::select! {
             biased;
+            _ = writer_done.cancelled() => break,
             next = ws_stream.next() => {
                 let Some(msg) = next else { break; };
                 let msg = match msg {
@@ -766,7 +770,7 @@ async fn handle_session(
                             send_protocol_close(&out_tx, "binary before shell_start").await;
                             break;
                         };
-                        if !queue_input(shell, SshInputEvent::Bytes(bytes.into())) {
+                        if !queue_input(shell, SshInputEvent::Bytes(bytes.into())).await {
                             break;
                         }
                     }
@@ -835,7 +839,7 @@ async fn handle_session(
                         }
                         Ok(ControlFrame::Resize { cols, rows }) => {
                             if let Some(shell) = shell.as_ref() {
-                                if !queue_input(shell, SshInputEvent::Resize { cols, rows }) {
+                                if !queue_input(shell, SshInputEvent::Resize { cols, rows }).await {
                                     break;
                                 }
                             } else if let Some(pty) = pty.as_mut() {
@@ -890,8 +894,6 @@ async fn handle_session(
         }
     }
 
-    state.session_registry.unregister(&session_token).await;
-
     if let Some(shell) = shell {
         // Tell the render loop to stop, then drain the spawn handle. The
         // render loop calls `clean_disconnect`/`eof_close`, which sends a
@@ -905,7 +907,21 @@ async fn handle_session(
         shell.signal.notify.notify_one();
         let _ = shell.render.await;
     }
-    let _ = writer.await;
+    drop(session_rx);
+    drop(out_tx);
+    if tokio::time::timeout(std::time::Duration::from_secs(1), &mut writer)
+        .await
+        .is_err()
+    {
+        writer.abort();
+        let _ = writer.await;
+    }
+    state
+        .session_registry
+        .retire_closed(&session_token, || {
+            state.paired_client_registry.forget_session(&session_token);
+        })
+        .await;
 
     tracing::info!(
         peer_ip = %handshake.peer_ip,

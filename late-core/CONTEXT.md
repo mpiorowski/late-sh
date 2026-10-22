@@ -43,6 +43,10 @@ late-core/
   `SCALE.md`, Small Debts.
 - **Notify payloads carry ids, never state** (8000-byte cap, reorder and loss
   across a listener reconnect); the reader re-reads the committed row.
+- **Startup migrations serialize across replicas.** `Db::migrate` takes a
+  database-scoped session advisory lock before creating `_migrations`. Its
+  dedicated connection is detached from the pool and closed on return, error,
+  or cancellation, so the lock cannot remain on an idle pooled connection.
 
 ## 3. Shared tables
 

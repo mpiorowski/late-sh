@@ -125,7 +125,16 @@ impl Db {
     /// Creates a `_migrations` table to track applied migrations.
     /// Each migration runs in its own transaction.
     pub async fn migrate(&self) -> Result<()> {
-        let client = self.get().await?;
+        // Serialize replicas before even creating the tracking table. A
+        // session lock also covers migration SQL that manages transactions.
+        // Detach this startup-only connection: dropping it closes the socket
+        // and releases the lock on success, error, or cancellation. Returning
+        // a locked connection to the application pool would retain the lock.
+        let client = deadpool_postgres::Client::take(self.get().await?);
+        client
+            .query_one("SELECT pg_advisory_lock($1)", &[&0x6c61_7465_6d69_6772_i64])
+            .await
+            .context("failed to acquire migration lock")?;
 
         // Create migrations tracking table
         client

@@ -232,6 +232,102 @@ async fn tunnel_exec_request_returns_cli_token_response() {
 }
 
 #[tokio::test]
+async fn tunnel_disconnect_before_shell_releases_all_accounting() {
+    let (addr, state, shutdown, server) = spawn_tunnel(loopback_cidr()).await;
+    let permits = state.conn_limit.available_permits();
+    for exec in [false, true] {
+        let (mut ws, _) = tokio_tungstenite::connect_async(make_request(addr, "pre-shell"))
+            .await
+            .expect("connect");
+        if exec {
+            ws.send(Message::Text(
+                ControlFrame::ExecRequest {
+                    id: "token".into(),
+                    command: "late-cli-token-v1".into(),
+                }
+                .to_json()
+                .unwrap()
+                .into(),
+            ))
+            .await
+            .unwrap();
+            assert!(matches!(
+                timeout(Duration::from_secs(5), ws.next()).await.unwrap(),
+                Some(Ok(Message::Text(_)))
+            ));
+        }
+        ws.close(None).await.unwrap();
+        drop(ws);
+        timeout(Duration::from_secs(2), state.tunnel_sessions.wait_empty())
+            .await
+            .expect("pre-shell tunnel leaked its session guard");
+        assert!(state.active_users.lock_recover().is_empty());
+        assert!(state.conn_counts.lock_recover().is_empty());
+        assert_eq!(state.conn_limit.available_permits(), permits);
+    }
+    shutdown.cancel();
+    timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
+async fn tunnel_old_cleanup_does_not_unregister_a_replacement_session() {
+    let (addr, state, shutdown, server) = spawn_tunnel(loopback_cidr()).await;
+    let token = "stable-bastion-session";
+    let mut request = make_request(addr, "overlapping-reconnect");
+    request.headers_mut().insert(
+        crate::tunnel::HEADER_SESSION_ID,
+        HeaderValue::from_static(token),
+    );
+    let (mut old, _) = tokio_tungstenite::connect_async(request.clone())
+        .await
+        .unwrap();
+    start_shell_and_wait_first(&mut old).await;
+    request.headers_mut().insert(
+        crate::tunnel::HEADER_RECONNECT_REASON,
+        HeaderValue::from_static("1006"),
+    );
+    let (mut new, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+    start_shell_and_wait_first(&mut new).await;
+    old.close(None).await.unwrap();
+    drop(old);
+    timeout(Duration::from_secs(5), async {
+        while state.tunnel_sessions.active_count() != 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("old tunnel cleanup");
+    assert!(
+        state.session_registry.has_session(token).await,
+        "old cleanup removed the live registration"
+    );
+    {
+        let active = state.active_users.lock_recover();
+        let user = active.values().next().unwrap();
+        assert_eq!(user.connection_count, 1);
+        assert_eq!(
+            user.sessions.len(),
+            1,
+            "old cleanup removed the live session token"
+        );
+    }
+    new.close(None).await.unwrap();
+    drop(new);
+    timeout(Duration::from_secs(5), state.tunnel_sessions.wait_empty())
+        .await
+        .unwrap();
+    assert!(!state.session_registry.has_session(token).await);
+    shutdown.cancel();
+    timeout(Duration::from_secs(5), server)
+        .await
+        .unwrap()
+        .unwrap();
+}
+
+#[tokio::test]
 async fn tunnel_env_cli_mode_emits_scrapeable_session_token_before_alt_screen() {
     let (addr, _state, _shutdown, server) = spawn_tunnel(loopback_cidr()).await;
 

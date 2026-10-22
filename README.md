@@ -178,6 +178,12 @@ port `55433` and points DB-backed tests at it via `TEST_DATABASE_URL`.
 Override `CHECK_INSTANCE` or `CHECK_PG_HOST_PORT` if you need a parallel check
 database.
 
+For bastion changes, `make test-bastion` runs the protocol and real backend
+regressions against a disposable database. `make test-bastion-stack` builds
+release images and tests local backend replacements; `make test-bastion-soak`
+runs 100 sessions for 45 minutes with ten replacements. See the
+[qualification guide](devdocs/BASTION-QUALIFICATION.md) for scope and evidence.
+
 ## Contributing
 
 Contributions are welcome, but read the project policy first:
