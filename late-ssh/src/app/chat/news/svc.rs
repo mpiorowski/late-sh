@@ -1,6 +1,6 @@
 use super::body::{self, BodyFetchError, BodyFetchFailure, ReadableBody};
 use crate::app::ai::svc::AiService;
-use crate::app::chat::svc::{ChatService, SendError};
+use crate::app::chat::svc::{ChatService, SendError, Wording};
 use crate::metrics;
 use crate::pg_listener::{Channel, Refresh, Signal, read_until_ok};
 use anyhow::{Context, Result};
@@ -479,10 +479,10 @@ impl ArticleService {
                         anyhow::bail!("Article not owned by you");
                     }
 
-                    let count = Article::delete(&client, article_id).await?;
-                    if count == 0 {
+                    let Some(deleted) = Article::delete_returning(&client, article_id).await?
+                    else {
                         anyhow::bail!("Article already deleted");
-                    }
+                    };
                     ModerationAuditLog::record_if(
                         &client,
                         is_admin && article.user_id != user_id,
@@ -493,7 +493,7 @@ impl ArticleService {
                         json!({ "target_user_id": article.user_id, "url": article.url }),
                     )
                     .await?;
-                    Ok::<_, anyhow::Error>(article.lounge_message_id)
+                    Ok::<_, anyhow::Error>(deleted.lounge_message_id)
                 }
                 .await;
 
@@ -699,7 +699,7 @@ impl ArticleService {
         let body = format!("📰 {title} {}", article.url);
         let posted = self
             .chat_service
-            .send_lounge_message_returning(article.user_id, body, true)
+            .send_lounge_message_returning(article.user_id, body, true, Wording::Quoted)
             .await;
         let message = match posted {
             Ok(Some(message)) => message,
@@ -721,11 +721,33 @@ impl ArticleService {
         };
         let linked = async {
             let client = self.db.get().await?;
-            Article::link_lounge_message(&client, article.id, message.id).await
+            Article::link_lounge_message(&client, article.user_id, article.id, message.id).await
         }
         .await;
         match linked {
-            Ok(()) => {
+            // The story was deleted while its card went up, so its delete
+            // found no card to take: the card goes here instead.
+            Ok(0) => {
+                metrics::record_news_card(NewsCardOutcome::ShareGone);
+                match self
+                    .chat_service
+                    .delete_news_card(article.user_id, message.id)
+                    .await
+                {
+                    Ok(()) => {
+                        tracing::info!(message_id = %message.id, "news card withdrawn, its story is gone");
+                    }
+                    Err(e) => {
+                        late_core::error_span!(
+                            "news_card_withdraw_failed",
+                            error = ?e,
+                            message_id = %message.id,
+                            "failed to withdraw the card of a deleted story"
+                        );
+                    }
+                }
+            }
+            Ok(_) => {
                 metrics::record_news_card(NewsCardOutcome::Posted);
                 tracing::info!(message_id = %message.id, "news card posted");
             }
@@ -1351,6 +1373,9 @@ pub enum NewsCardOutcome {
     /// Posted, but the story does not point at it: it reads as its plain
     /// line.
     LinkFailed,
+    /// Posted, but the story was deleted before it could point at it: the
+    /// card is taken back out.
+    ShareGone,
 }
 
 /// One step on a reader's shelf, run in its session's order by

@@ -1,12 +1,13 @@
 use crate::app::ai::svc::AiService;
 use crate::app::chat::news::svc::ArticleService;
 use crate::app::chat::notifications::svc::NotificationService;
-use crate::app::chat::svc::ChatService;
+use crate::app::chat::svc::{ChatService, Wording};
 use late_core::models::{
     article::{Article, ArticleEvent, ArticleParams},
     chat_message::ChatMessage,
     chat_room::ChatRoom,
     moderation_audit_log::ModerationAuditLog,
+    notification::Notification,
 };
 use tokio::time::{Duration, timeout};
 
@@ -245,6 +246,113 @@ async fn a_share_posts_its_lounge_card_and_a_delete_takes_it_out() {
         "the card leaves #lounge with its story",
     )
     .await;
+}
+
+/// A story deleted while its card went up links nothing, so its delete
+/// never took the card: the card step takes it back out itself.
+#[tokio::test]
+async fn a_card_whose_story_is_gone_is_taken_back_out() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    let sharer = create_test_user(&test_db.db, "gone-sharer").await;
+    let article = Article::create_by_user_id(
+        &client,
+        sharer.id,
+        article_params(sharer.id, "https://example.com/gone", "Gone story"),
+    )
+    .await
+    .expect("seed article");
+    let service = make_article_service(test_db.db.clone());
+    service.delete_article(sharer.id, article.id, false);
+    wait_until(
+        || async {
+            Article::get(&client, article.id)
+                .await
+                .expect("reload article")
+                .is_none()
+        },
+        "the story is deleted",
+    )
+    .await;
+
+    service.post_lounge_card(&article).await;
+
+    let lounge_lines = ChatMessage::list_recent(&client, lounge.id, 10)
+        .await
+        .expect("list lounge");
+    assert_eq!(
+        lounge_lines
+            .iter()
+            .map(|message| message.body.as_str())
+            .collect::<Vec<_>>(),
+        Vec::<&str>::new()
+    );
+}
+
+/// A card's title is the page's words, not the sharer's: an `@name` in it
+/// notifies nobody. The sharer's own line after it still does, and is the
+/// one mention that lands.
+#[tokio::test]
+async fn a_cards_title_mentions_nobody() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    let sharer = create_test_user(&test_db.db, "title-sharer").await;
+    let named = create_test_user(&test_db.db, "title-named").await;
+    let article = Article::create_by_user_id(
+        &client,
+        sharer.id,
+        article_params(
+            sharer.id,
+            "https://example.com/named",
+            &format!("someone on X: @{} look at this", named.username),
+        ),
+    )
+    .await
+    .expect("seed article");
+    let service = make_article_service(test_db.db.clone());
+    let chat = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+
+    service.post_lounge_card(&article).await;
+    let typed = chat
+        .send_lounge_message_returning(
+            sharer.id,
+            format!("@{} read this", named.username),
+            true,
+            Wording::Typed,
+        )
+        .await
+        .expect("typed line")
+        .expect("typed row");
+
+    wait_until(
+        || async {
+            Notification::unread_count(&client, named.id)
+                .await
+                .expect("unread count")
+                > 0
+        },
+        "the typed mention lands",
+    )
+    .await;
+    let mentions = Notification::list_for_user(&client, named.id, 10)
+        .await
+        .expect("list mentions");
+    assert_eq!(
+        mentions
+            .iter()
+            .map(|mention| mention.message_id)
+            .collect::<Vec<_>>(),
+        vec![typed.id]
+    );
 }
 
 #[tokio::test]

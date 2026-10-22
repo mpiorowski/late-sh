@@ -140,7 +140,6 @@ impl LiveState {
                 .map(|thumbnail| (item_id, thumbnail)),
             Some(LiveSource::DailyMatch(_))
             | Some(LiveSource::DailyResult(_))
-            | Some(LiveSource::NewsArticle(_))
             | Some(LiveSource::Stream(_))
             | Some(LiveSource::DoorGame(_))
             | Some(LiveSource::BoardEvent(_))
@@ -271,9 +270,6 @@ impl LiveState {
                 booth_live::view(&audio.queue_snapshot(), item_id, listening_on, picture)
                     .map(LiveStripView::Track)
             }
-            // Never a candidate: a News share is its card in #lounge. The
-            // source is the Live panel's, whose News rows open the reader.
-            LiveSource::NewsArticle(_) => None,
             LiveSource::Stream(streamer_id) => {
                 stream_live::view(streams, streamer_id).map(LiveStripView::Stream)
             }
@@ -298,7 +294,6 @@ impl LiveState {
             LiveSource::DailyResult(_) => None,
             source @ (LiveSource::DailyMatch(_)
             | LiveSource::BoothTrack(_)
-            | LiveSource::NewsArticle(_)
             | LiveSource::Stream(_)
             | LiveSource::DoorGame(_)
             | LiveSource::BoardEvent(_)

@@ -501,7 +501,8 @@ impl App {
             Some(state) => self.live_games.watchers_of(state.key()),
             None => 0,
         };
-        let games_hub_roster = HubGame::roster(self.is_runner());
+        let is_runner = self.is_runner();
+        let games_hub_roster = HubGame::roster(is_runner);
         // Away with the Tweak on: the piece covers everything this frame.
         let screensaver = self.screensaver();
         let ascii_clock = crate::app::ascii::piece::clock_now();
@@ -877,7 +878,7 @@ impl App {
         };
         // The lounge's spawn (`deadchannel/lounge`) as the scene above the
         // #lounge card's composer, for a runner only.
-        let dashboard_lounge = if home_selected && self.is_runner() {
+        let dashboard_lounge = if home_selected && is_runner {
             let now_ms = crate::app::presence::svc::now_ms();
             self.lounge.showing(now_ms).map(|spawn| {
                 crate::app::deadchannel::lounge::ui::scene(
@@ -1684,7 +1685,6 @@ impl App {
         let mut bashquest_state_taken = self.bashquest_state.take();
         let mut codekeep_state_taken = self.codekeep_state.take();
         let mut zork_state_taken = self.zork_state.take();
-        let is_runner = self.is_runner();
 
         let draw_result = terminal
             .draw(|frame| {

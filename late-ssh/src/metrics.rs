@@ -2992,6 +2992,7 @@ mod inner {
             NewsCardOutcome::Refused => "refused",
             NewsCardOutcome::PostFailed => "post_failed",
             NewsCardOutcome::LinkFailed => "link_failed",
+            NewsCardOutcome::ShareGone => "share_gone",
         }
     }
 

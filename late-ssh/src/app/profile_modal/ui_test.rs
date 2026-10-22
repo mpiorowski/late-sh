@@ -213,8 +213,8 @@ async fn open_runner(db: &late_core::db::Db, user_id: Uuid, viewer: Uuid) -> Pro
 }
 
 /// A standing runner's profile grows a runner column beside the late.fetch
-/// grid for anyone looking: its own heading on the grid's heading row
-/// carrying the badge, the face at the top left and the poster beside it,
+/// grid for any runner looking (a civilian viewer sees none): its own
+/// heading on the grid's heading row carrying the badge, the face at the top left and the poster beside it,
 /// no frame anywhere. No poster is the test card, and its owner reads
 /// where posters are made. The rest of the sheet stays on the street. A
 /// narrow body makes the column a section under the grid, still above the
@@ -253,7 +253,7 @@ async fn a_runners_profile_hangs_the_face_and_the_poster() {
     );
 
     // The viewed user joins the row: the next open of their profile
-    // carries the runner, to anyone.
+    // carries the runner, to any runner.
     let db = fixture._test_db.db.clone();
     let client = db.get().await.expect("db client");
     let mut rng = StdRng::seed_from_u64(7);

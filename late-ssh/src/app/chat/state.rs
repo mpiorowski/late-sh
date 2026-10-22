@@ -2609,6 +2609,11 @@ impl ChatState {
         if !is_own && !self.permissions.can_moderate() {
             return Some(Banner::error("Can only edit your own messages"));
         }
+        // Drawn from its story, so its line is not what anyone here reads
+        // (`ChatService::edit_message` refuses it too).
+        if self.news.lounge_card(selected_id).is_some() {
+            return Some(Banner::error("A story's card can't be edited."));
+        }
         self.edited_message_id = Some(selected_id);
         self.composer = new_chat_textarea();
         self.composer.insert_str(body);

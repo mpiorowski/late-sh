@@ -14,6 +14,7 @@ use late_core::{
     MutexRecover,
     db::Db,
     models::{
+        article::Article,
         character_sheet::{CharacterSheet, CharacterSheetParams},
         chat_message::{ChatMessage, ChatMessageParams, HistoryDirection},
         chat_message_gild::{
@@ -374,6 +375,18 @@ struct SendMessageParams {
     reply_to_message_id: Option<Uuid>,
     reply_to_user_id: Option<Uuid>,
     is_admin: bool,
+    wording: Wording,
+}
+
+/// Whose words a line carries. The bar slurs a patron's own words and
+/// their `@name`s notify; a line the house builds for them out of text
+/// they never wrote (a News card's page title) gets neither.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Wording {
+    /// Typed by the author.
+    Typed,
+    /// Built by the house from someone else's text.
+    Quoted,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2955,6 +2968,7 @@ impl ChatService {
             reply_to_message_id: None,
             reply_to_user_id: None,
             is_admin: false,
+            wording: Wording::Typed,
         })
         .await
     }
@@ -3006,6 +3020,7 @@ impl ChatService {
                 reply_to_message_id: None,
                 reply_to_user_id,
                 is_admin: false,
+                wording: Wording::Typed,
             })
             .await;
         match sent {
@@ -3170,6 +3185,7 @@ impl ChatService {
                         reply_to_message_id: None,
                         reply_to_user_id: None,
                         is_admin: false,
+                        wording: Wording::Typed,
                     })
                     .await;
                 match sent {
@@ -3240,6 +3256,7 @@ impl ChatService {
                             reply_to_message_id: None,
                             reply_to_user_id: None,
                             is_admin: false,
+                            wording: Wording::Typed,
                         })
                         .await
                 }
@@ -3274,6 +3291,7 @@ impl ChatService {
                         reply_to_message_id,
                         reply_to_user_id: None,
                         is_admin,
+                        wording: Wording::Typed,
                     })
                     .await
                 {
@@ -3352,19 +3370,20 @@ impl ChatService {
         body: String,
         join_if_needed: bool,
     ) -> Result<(), SendError> {
-        self.send_lounge_message_returning(user_id, body, join_if_needed)
+        self.send_lounge_message_returning(user_id, body, join_if_needed, Wording::Typed)
             .await
             .map(|_| ())
     }
 
     /// `send_lounge_message` handing back the row it wrote, `None` for an
     /// empty body: for a caller that keeps a pointer to its line (a News
-    /// share's card).
+    /// share's card, whose title is `Wording::Quoted`).
     pub(crate) async fn send_lounge_message_returning(
         &self,
         user_id: Uuid,
         body: String,
         join_if_needed: bool,
+        wording: Wording,
     ) -> Result<Option<ChatMessage>, SendError> {
         let client = self.db.get().await?;
         let room = ChatRoom::find_lounge(&client)
@@ -3383,6 +3402,7 @@ impl ChatService {
             reply_to_message_id: None,
             reply_to_user_id: None,
             is_admin: false,
+            wording,
         })
         .await
     }
@@ -3449,6 +3469,7 @@ impl ChatService {
             reply_to_message_id,
             reply_to_user_id,
             is_admin,
+            wording,
         } = params;
         let body = body.trim_start_matches('\n').trim_end();
         if body.is_empty() {
@@ -3531,7 +3552,10 @@ impl ChatService {
         // Last thing before the row is written, so every check above (report
         // markers, link cooldown, slow mode) judged the sober text, and the
         // mention task below sees the same body the room will.
-        let body = self.slurred_body(&client, user_id, &room, body).await?;
+        let body = match wording {
+            Wording::Typed => self.slurred_body(&client, user_id, &room, body).await?,
+            Wording::Quoted => body.to_string(),
+        };
 
         let message = ChatMessageParams {
             room_id,
@@ -3558,8 +3582,15 @@ impl ChatService {
             author_profile_award_badges: author_metadata.profile_award_badges.remove(&user_id),
         });
         metrics::record_chat_message_sent();
-        self.notification_svc
-            .create_mentions_task(user_id, chat.id, room_id, body);
+        match wording {
+            Wording::Typed => {
+                self.notification_svc
+                    .create_mentions_task(user_id, chat.id, room_id, body);
+            }
+            // An `@name` the author never wrote notifies nobody in their
+            // name.
+            Wording::Quoted => {}
+        }
         self.pretranslate_for_author(&client, &chat).await;
         tracing::info!(chat_id = %chat.id, "message sent");
         Ok(Some(chat))
@@ -3647,6 +3678,8 @@ impl ChatService {
                             "Edited message cannot be empty."
                         } else if e.to_string().starts_with("report-only:") {
                             "Reports here must keep their marker; edit the text after it."
+                        } else if e.to_string().starts_with("news-card:") {
+                            "A story's card can't be edited."
                         } else {
                             "Could not edit message. Please try again."
                         };
@@ -3697,6 +3730,14 @@ impl ChatService {
             target_tier_for_user_id(&client, existing.user_id).await?
         };
         ensure_message_permission(permissions, is_owner, Caps::EDIT_OTHER_MESSAGE, target_tier)?;
+
+        // A News share's card is drawn from its story, not from its line, so
+        // an edit would change what IRC and search read while every TUI
+        // reader, moderators included, still saw the story. Nobody edits
+        // one; deleting the story takes it out.
+        if Article::is_lounge_card(&client, message_id).await? {
+            anyhow::bail!("news-card: a story's card is not edited");
+        }
 
         // Report-only rooms: a regular user's only messages there are their own
         // report cards, and an edit must not strip the marker — otherwise
@@ -5220,6 +5261,7 @@ impl ChatService {
             reply_to_message_id: None,
             reply_to_user_id: None,
             is_admin: false,
+            wording: Wording::Typed,
         })
         .await?;
         Ok(())

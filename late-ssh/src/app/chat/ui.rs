@@ -1739,7 +1739,7 @@ fn replies_to_user(
 }
 
 /// A YouTube thumbnail's rows in the chat: the video's title when YouTube
-/// named it (`video_title_text`), the picture, then the hint row. Built
+/// named it (cut to the picture's width), the picture, then the hint row. Built
 /// with the rows cache, so their colours follow the theme. All are `Image`
 /// rows, so a click on any is the image click, which watches.
 fn with_watch_hint(picture: &InlineImagePreview, title: Option<&str>) -> InlineImagePreview {
@@ -1747,7 +1747,7 @@ fn with_watch_hint(picture: &InlineImagePreview, title: Option<&str>) -> InlineI
     if let Some(title) = title {
         let picture_width = picture.iter().map(Line::width).max().unwrap_or(0);
         lines.push(Line::from(Span::styled(
-            video_title_text(title, picture_width),
+            truncate_cells(title, picture_width),
             Style::default()
                 .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
@@ -1759,26 +1759,6 @@ fn with_watch_hint(picture: &InlineImagePreview, title: Option<&str>) -> InlineI
         Style::default().fg(theme::AMBER_DIM()),
     )));
     lines
-}
-
-/// The title row over a YouTube thumbnail, cut with an ellipsis so it
-/// stays inside the picture's `width`.
-fn video_title_text(title: &str, width: usize) -> String {
-    if UnicodeWidthStr::width(title) <= width {
-        return title.to_string();
-    }
-    let mut cut = String::new();
-    let mut used = 0;
-    for ch in title.chars() {
-        let cells = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-        // One cell stays free for the ellipsis.
-        if used + cells + 1 > width {
-            break;
-        }
-        cut.push(ch);
-        used += cells;
-    }
-    format!("{}…", cut.trim_end())
 }
 
 fn ensure_chat_rows_cache(

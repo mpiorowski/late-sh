@@ -9,7 +9,8 @@
 //! bonsai's sides when the column is narrower than the canvas.
 //!
 //! Top to bottom: late.fetch (the fact grid, with the runner column
-//! beside it for a standing runner, each under its own heading), bio,
+//! beside it for a standing runner when the viewer is one too, each under
+//! its own heading), bio,
 //! showcases, the
 //! bonsai (the whole canvas at its true size), the aquarium with the pet
 //! beside it (each a full-width section when the other is not owned),

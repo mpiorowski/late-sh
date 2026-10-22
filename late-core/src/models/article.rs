@@ -111,19 +111,43 @@ impl Article {
         rows.into_iter().map(FeedArticle::from_row).collect()
     }
 
-    /// Point a share at its card in #lounge, the message the share posted.
+    /// Point the sharer's share at its card in #lounge, the message the
+    /// share posted. The count of rows linked: 0 when the share is gone,
+    /// deleted while its card went up.
     pub async fn link_lounge_message(
         client: &Client,
+        user_id: Uuid,
         article_id: Uuid,
         message_id: Uuid,
-    ) -> Result<()> {
-        client
+    ) -> Result<u64> {
+        let count = client
             .execute(
-                "UPDATE articles SET lounge_message_id = $2 WHERE id = $1",
-                &[&article_id, &message_id],
+                "UPDATE articles SET lounge_message_id = $3 WHERE id = $2 AND user_id = $1",
+                &[&user_id, &article_id, &message_id],
             )
             .await?;
-        Ok(())
+        Ok(count)
+    }
+
+    /// Whether `message_id` is a share's card in #lounge.
+    pub async fn is_lounge_card(client: &Client, message_id: Uuid) -> Result<bool> {
+        let row = client
+            .query_one(
+                "SELECT EXISTS (SELECT 1 FROM articles WHERE lounge_message_id = $1)",
+                &[&message_id],
+            )
+            .await?;
+        Ok(row.get(0))
+    }
+
+    /// Delete a share and hand back the row as it went, `None` when it was
+    /// already gone. The card pointer is read by the delete itself, so a
+    /// card linked while the delete ran is never missed.
+    pub async fn delete_returning(client: &Client, id: Uuid) -> Result<Option<Self>> {
+        let row = client
+            .query_opt("DELETE FROM articles WHERE id = $1 RETURNING *", &[&id])
+            .await?;
+        Ok(row.map(Self::from))
     }
 
     /// Articles shared inside `[floor, ceiling)` with the sharer's username,

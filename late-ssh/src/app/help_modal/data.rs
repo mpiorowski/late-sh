@@ -1595,7 +1595,7 @@ fn news_help_lines() -> Vec<String> {
             "  r                 reply in #lounge quoting the selected story",
             "  d                 delete your own story",
             "  /                 toggle filter to only your stories",
-            "  o on now strip    open the reader on that story (a video plays, when it can)",
+            "  Enter on a card   open the reader from a story's #lounge card",
             "",
             "Saved for later",
             saved_shelf_line.as_str(),

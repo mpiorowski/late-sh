@@ -245,15 +245,14 @@ Live, in order of evidence behind them:
   only while the session is attached. A deadchannel beat that only a
   connected runner can take (a spawn, a crossing landing while you are on
   the wire) raises hours left open without a new surface.
-- **The front door on the web exists**: the paper page and its feed,
-  `rel="me"` on profile links so a member's Mastodon profile shows late.sh
-  verified, and preview cards that unfurl a profile into its poster and a
-  gallery link into its snapshot, drawn server-side as PNG
-  (`late-web/CONTEXT.md`). Post, do not federate: a bot account on an
-  existing instance is one bearer token and two HTTP calls; federating
-  profiles (ActivityPub, WebFinger, signed fetches, inbound moderation) is
-  weeks of work and sends the visibility people want outward, away from
-  the terminal.
+- **Put a front door on the web, then post.** A public paper page and
+  its feed, `rel="me"` on profile links so a member's Mastodon profile
+  shows late.sh verified, and preview cards that unfurl a profile into
+  its poster and a gallery link into its snapshot, drawn server-side as
+  PNG. Post, do not federate: a bot account on an existing instance is
+  one bearer token and two HTTP calls; federating profiles (ActivityPub,
+  WebFinger, signed fetches, inbound moderation) is weeks of work and
+  sends the visibility people want outward, away from the terminal.
 - **The herald: one picture a day on the Fediverse.** An ordinary account
   on an existing Mastodon instance (fosstodon.org: FOSS-leaning, a local
   timeline that gives a new account readers on day one, bots welcome
@@ -273,8 +272,8 @@ Live, in order of evidence behind them:
     (#tildeverse #pubnix #ssh #terminal). The rare headline events the
     #lounge feed already treats as stories (the pot drawn, the crown
     taken, the monthly awards) may take the slot. Every picture comes
-    through `late-web`'s cell renderer, so anything the terminal draws
-    can be posted.
+    through the front door's cell renderer, so anything the terminal
+    draws can be posted.
   - **What it never posts.** Chat. A frame of #lounge is people's
     messages on the public web; the Artboard, posters and cards are
     things people made to be seen, messages are not.
@@ -284,7 +283,7 @@ Live, in order of evidence behind them:
   - **The shape.** A small late-ssh domain built like the paper's press:
     a sweeper on every replica, a `herald_posts` row per UTC day claimed
     by conditional insert so several replicas post exactly once, the
-    picture fetched from `late-web`'s image routes over `web_url`, a
+    picture fetched from the front door's image routes over `web_url`, a
     media upload then a status call with an idempotency key so a retry
     never double-posts, a `posted / skipped / failed` counter on the
     Grafana board. Config off in dev and required in prod, so the first
@@ -383,27 +382,6 @@ SELECT count(*) AS accounts,
 FROM days;
 ```
 
-What a newcomer does on day one is a metrics question: every engagement
-counter carries `tenure` (`day_one`, `first_week`, `regular`;
-`late-ssh/CONTEXT.md`, Telemetry), the first-visit tour counts each stop
-reached, and a session's end records the screen that was up. The Grafana
-"Newcomers" row shows all four; the same by hand:
-
-```bash
-# day-one active minutes by screen, last 7 days
-curl -s --data-urlencode 'query=sum by (screen) (increase(late_ssh_attention_seconds_total{tenure="day_one",presence="active"}[7d]))/60' \
-  http://127.0.0.1:18428/api/v1/query
-# the tour funnel: stops reached; the drop between two stops is where they leave
-curl -s --data-urlencode 'query=sum by (stop) (increase(late_ssh_tour_stops_total[7d]))' \
-  http://127.0.0.1:18428/api/v1/query
-# the last screen a first-day session saw
-curl -s --data-urlencode 'query=sum by (screen) (increase(late_ssh_session_ends_total{tenure="day_one"}[7d]))' \
-  http://127.0.0.1:18428/api/v1/query
-# sessions per day by tenure: first_week against day_one is the cheap return signal
-curl -s --data-urlencode 'query=sum by (tenure) (increase(late_ssh_session_start_seconds_count{stage="total"}[1d]))' \
-  http://127.0.0.1:18428/api/v1/query
-```
-
 Gaps in what the telemetry can answer, by design (no per-person metric
 labels, so the series count cannot grow with the crowd):
 
@@ -415,6 +393,12 @@ labels, so the series count cannot grow with the crowd):
   distribution (`total_milliseconds` per `user_id`); `chat_messages` by
   `room_id` and distinct `user_id` per day; `deadchannel_runners` rows
   with `left_at` null.
+- What a newcomer does on day one: no counter tells a newcomer from a
+  regular. Planned: a `tenure` label (`day_one`, `first_week`,
+  `regular`) on the engagement counters, a count of each first-visit
+  tour stop reached, and the screen that was up when a session ended,
+  on a Grafana "Newcomers" row. Until then the funnel above is the
+  database's answer.
 - Voice room usage: no counter.
 - Logs keep 7 days, so any per-person trend longer than a week comes from
   the database or from the weekly leaderboards.

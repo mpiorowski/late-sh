@@ -753,7 +753,7 @@ async fn list_public_room_between_leaves_out_news_cards() {
     )
     .await
     .expect("share");
-    Article::link_lounge_message(&client, article.id, card.id)
+    Article::link_lounge_message(&client, sharer.id, article.id, card.id)
         .await
         .expect("link card");
     ChatMessage::create(

@@ -19,7 +19,8 @@ use uuid::Uuid;
 
 use crate::app::door::spectate::state::LiveGameKey;
 
-/// What the live strip and the sidebar's Live panel can point at. Closed:
+/// What the live strip can show, and the panel rows it shares with the
+/// strip (a stream, a game, an event; `panel::PanelTarget`). Closed:
 /// a new source has to say its minimum (`min_for`), what it looks like
 /// (`ui.rs`), and what the keys do to it (`input.rs`) before it builds. The
 /// order of the variants only breaks a tie between two stamps of the same
@@ -33,9 +34,6 @@ pub enum LiveSource {
     DailyResult(Uuid),
     /// A track somebody put in the YouTube booth queue, by queue item id.
     BoothTrack(Uuid),
-    /// A link somebody shared to News, by article id: a Live panel row only.
-    /// The strip never queues one, since a share is its card in #lounge.
-    NewsArticle(Uuid),
     /// A stream that went live, by the streamer's user id (one stream per
     /// user).
     Stream(Uuid),
@@ -94,7 +92,6 @@ fn min_for(source: LiveSource) -> chrono::Duration {
         LiveSource::Stream(_) => LIVE_STREAM_MIN,
         LiveSource::DoorGame(_) => LIVE_DOOR_GAME_MIN,
         LiveSource::BoardEvent(_) => LIVE_BOARD_EVENT_MIN,
-        LiveSource::NewsArticle(_) => unreachable!("a News share never queues on the strip"),
     })
 }
 

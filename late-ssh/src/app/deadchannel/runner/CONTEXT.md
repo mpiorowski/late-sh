@@ -47,7 +47,9 @@ and hands the coat to the first row of a continuation right under it
 (none, or a divider between them, and it goes bare), anything taller
 wears the coat itself, so no message grows a row for its face). The blank separator above a block stays blank, so two faces
 stacked down the wire never touch. The profile modal grows a runner
-column beside the late.fetch grid for a standing runner, for every viewer
+column beside the late.fetch grid for a standing runner, shown only to a
+viewer who is a runner too (`App::is_runner`, passed to
+`profile_modal::ui::draw`; a civilian never learns the wire exists)
 (`ProfileSnapshot.runner`, loaded by `ProfileService::do_find_profile` from
 the row; no frame, its own heading carrying the badge, the face wounded by
 the missing signal at the top left and the poster from PRINTS beside it, the
