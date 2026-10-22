@@ -1,6 +1,6 @@
 use uuid::Uuid;
 
-use crate::app::audio::svc::{HistoryItemView, QueueItemView};
+use crate::app::audio::svc::{FavoriteItemView, HistoryItemView, QueueItemView};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub(crate) enum BoothFocus {
@@ -8,6 +8,64 @@ pub(crate) enum BoothFocus {
     Submit,
     Queue,
     History,
+}
+
+/// One row of the History list: the listener's favorites on top, then the
+/// community History without the tracks already shown as favorites.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum HistoryRow<'a> {
+    Favorite {
+        favorite: &'a FavoriteItemView,
+        /// The same track's History row, while it is still in the 200.
+        played: Option<&'a HistoryItemView>,
+    },
+    Played(&'a HistoryItemView),
+}
+
+impl<'a> HistoryRow<'a> {
+    pub(crate) fn video_id(&self) -> &'a str {
+        match self {
+            HistoryRow::Favorite { favorite, .. } => &favorite.video_id,
+            HistoryRow::Played(item) => &item.video_id,
+        }
+    }
+
+    pub(crate) fn title(&self) -> Option<&'a str> {
+        match self {
+            HistoryRow::Favorite { favorite, .. } => favorite.title.as_deref(),
+            HistoryRow::Played(item) => item.title.as_deref(),
+        }
+    }
+
+    pub(crate) fn channel(&self) -> Option<&'a str> {
+        match self {
+            HistoryRow::Favorite { favorite, .. } => favorite.channel.as_deref(),
+            HistoryRow::Played(item) => item.channel.as_deref(),
+        }
+    }
+
+    pub(crate) fn duration_ms(&self) -> Option<i32> {
+        match self {
+            HistoryRow::Favorite { favorite, .. } => favorite.duration_ms,
+            HistoryRow::Played(item) => item.duration_ms,
+        }
+    }
+
+    pub(crate) fn is_stream(&self) -> bool {
+        match self {
+            HistoryRow::Favorite { favorite, .. } => favorite.is_stream,
+            HistoryRow::Played(item) => item.is_stream,
+        }
+    }
+
+    /// How often the room has played it; unknown for a favorite that fell
+    /// out of History.
+    pub(crate) fn play_count(&self) -> Option<i32> {
+        match self {
+            HistoryRow::Favorite { played, .. } => played.map(|item| item.play_count),
+            HistoryRow::Played(item) => Some(item.play_count),
+        }
+    }
 }
 
 /// Upper bound on the history filter query, mirroring the rooms search cap.
@@ -140,45 +198,43 @@ impl BoothModalState {
         self.selected_item(queue).map(|item| item.id)
     }
 
-    /// The History rows visible under the current filter, in snapshot order.
-    /// When the query is empty this is every row.
-    pub(crate) fn filtered_history<'a>(
+    /// The History list rows visible under the current filter: favorites
+    /// newest first, then History in snapshot order without the tracks
+    /// already shown as favorites. When the query is empty this is every row.
+    pub(crate) fn history_rows<'a>(
         &self,
+        favorites: &'a [FavoriteItemView],
         history: &'a [HistoryItemView],
-    ) -> Vec<&'a HistoryItemView> {
+    ) -> Vec<HistoryRow<'a>> {
         let query = self.history_filter_query.trim().to_lowercase();
-        if query.is_empty() {
-            return history.iter().collect();
-        }
-        history
+        let favorite_rows = favorites.iter().map(|favorite| HistoryRow::Favorite {
+            favorite,
+            played: history
+                .iter()
+                .find(|item| item.video_id == favorite.video_id),
+        });
+        let played_rows = history
             .iter()
-            .filter(|item| history_item_matches(item, &query))
+            .filter(|item| {
+                !favorites
+                    .iter()
+                    .any(|favorite| favorite.video_id == item.video_id)
+            })
+            .map(HistoryRow::Played);
+        favorite_rows
+            .chain(played_rows)
+            .filter(|row| query.is_empty() || history_row_matches(row, &query))
             .collect()
     }
 
-    /// Number of History rows visible under the current filter.
-    pub(crate) fn filtered_history_len(&self, history: &[HistoryItemView]) -> usize {
-        if self.history_filter_query.trim().is_empty() {
-            return history.len();
-        }
-        let query = self.history_filter_query.trim().to_lowercase();
-        history
-            .iter()
-            .filter(|item| history_item_matches(item, &query))
-            .count()
-    }
-
-    pub(crate) fn selected_history_item<'a>(
+    pub(crate) fn selected_history_row<'a>(
         &self,
+        favorites: &'a [FavoriteItemView],
         history: &'a [HistoryItemView],
-    ) -> Option<&'a HistoryItemView> {
-        self.filtered_history(history)
+    ) -> Option<HistoryRow<'a>> {
+        self.history_rows(favorites, history)
             .into_iter()
             .nth(self.selected_history)
-    }
-
-    pub(crate) fn selected_history_item_id(&self, history: &[HistoryItemView]) -> Option<Uuid> {
-        self.selected_history_item(history).map(|item| item.id)
     }
 
     pub(crate) fn history_filter_active(&self) -> bool {
@@ -236,17 +292,15 @@ impl BoothModalState {
     }
 }
 
-/// Case-insensitive match of a history row against an already-lowercased query,
-/// checking the title, channel, and raw video id.
-fn history_item_matches(item: &HistoryItemView, query: &str) -> bool {
-    item.title
-        .as_deref()
+/// Case-insensitive match of a History list row against an already-lowercased
+/// query, checking the title, channel, and raw video id.
+fn history_row_matches(row: &HistoryRow<'_>, query: &str) -> bool {
+    row.title()
         .is_some_and(|title| title.to_lowercase().contains(query))
-        || item
-            .channel
-            .as_deref()
+        || row
+            .channel()
             .is_some_and(|channel| channel.to_lowercase().contains(query))
-        || item.video_id.to_lowercase().contains(query)
+        || row.video_id().to_lowercase().contains(query)
 }
 
 #[cfg(test)]

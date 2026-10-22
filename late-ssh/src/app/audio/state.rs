@@ -1,13 +1,19 @@
 use late_core::{
     audio::VizFrame,
-    models::user::{AudioSource, RadioStation},
+    models::{
+        media_favorite::BOOTH_FAVORITES_LIMIT,
+        user::{AudioSource, RadioStation},
+    },
 };
 use std::time::Instant;
 use tokio::sync::{broadcast, watch};
+use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use super::{
-    svc::{AudioEvent, AudioService, QueueSnapshot},
+    svc::{
+        AudioEvent, AudioService, FavoriteItemView, FavoritesStep, QueueSnapshot, RequeueSource,
+    },
     thumbnail::Thumbnail,
     viz::{LiveBands, Spectrum},
 };
@@ -15,8 +21,9 @@ use crate::app::{common::primitives::Banner, live::pick::LiveCandidate};
 
 pub struct AudioTick {
     pub banner: Option<Banner>,
-    /// True when the shared queue snapshot moved this tick: the booth modal
-    /// and the sidebar music stage draw straight from it.
+    /// True when the shared queue snapshot or the listener's favorites moved
+    /// this tick: the booth modal and the sidebar music stage draw straight
+    /// from them.
     pub changed: bool,
 }
 
@@ -28,6 +35,12 @@ pub struct AudioState {
     /// The paired client's latest spectrum; `None` while no client is
     /// streaming one.
     spectrum: Option<Spectrum>,
+    /// The listener's booth favorites, newest first, mirrored from
+    /// `AudioEvent::BoothFavoritesLoaded`. Empty until the booth first opens.
+    favorites: Vec<FavoriteItemView>,
+    /// The last favorites step this session asked for, which the next one
+    /// waits on so they land in order.
+    favorites_step: Option<JoinHandle<()>>,
 }
 
 impl AudioState {
@@ -40,6 +53,8 @@ impl AudioState {
             event_rx,
             snapshot_rx,
             spectrum: None,
+            favorites: Vec::new(),
+            favorites_step: None,
         }
     }
 
@@ -150,9 +165,19 @@ impl AudioState {
         self.service.toggle_unskippable_task(self.user_id, item_id);
     }
 
-    pub fn booth_history_requeue(&self, item_id: Uuid) {
-        self.service
-            .requeue_history_item_task(self.user_id, item_id);
+    pub fn booth_requeue(&self, source: RequeueSource) {
+        self.service.requeue_track_task(self.user_id, source);
+    }
+
+    pub fn booth_favorites(&self) -> &[FavoriteItemView] {
+        &self.favorites
+    }
+
+    /// Queue one favorites step behind the session's previous one; it ends
+    /// with `BoothFavoritesLoaded`, which `tick` folds into the mirror.
+    pub fn booth_favorites_step(&mut self, step: FavoritesStep) {
+        let after = self.favorites_step.take();
+        self.favorites_step = Some(self.service.favorites_task(self.user_id, step, after));
     }
 
     pub fn booth_history_delete(&self, item_id: Uuid) {
@@ -179,7 +204,7 @@ impl AudioState {
     pub fn tick(&mut self) -> AudioTick {
         // Mark the queue snapshot seen so the peek only fires once per
         // publish; renders keep reading it through `queue_snapshot()`.
-        let changed = self.snapshot_rx.has_changed().unwrap_or(false);
+        let mut changed = self.snapshot_rx.has_changed().unwrap_or(false);
         if changed {
             let _ = self.snapshot_rx.borrow_and_update();
         }
@@ -271,11 +296,16 @@ impl AudioState {
                 }
                 AudioEvent::BoothHistoryRequeued {
                     user_id,
+                    source,
                     position,
                     reward_chips,
                 } if user_id == self.user_id => {
+                    let verb = match source {
+                        RequeueSource::History(_) => "Queued from history",
+                        RequeueSource::Favorite(_) => "Queued from favorites",
+                    };
                     banner = Some(Banner::success(&submitted_line(
-                        "Queued from history",
+                        verb,
                         position,
                         reward_chips,
                     )));
@@ -291,6 +321,26 @@ impl AudioState {
                 AudioEvent::BoothHistoryItemDeleteFailed { user_id, message }
                     if user_id == self.user_id =>
                 {
+                    banner = Some(Banner::error(&message));
+                }
+                AudioEvent::BoothFavoritesLoaded { user_id, favorites }
+                    if user_id == self.user_id =>
+                {
+                    self.favorites = favorites;
+                    changed = true;
+                }
+                AudioEvent::BoothFavoriteAdded { user_id } if user_id == self.user_id => {
+                    banner = Some(Banner::success("Added to favorites"));
+                }
+                AudioEvent::BoothFavoriteRemoved { user_id } if user_id == self.user_id => {
+                    banner = Some(Banner::success("Removed from favorites"));
+                }
+                AudioEvent::BoothFavoritesFull { user_id } if user_id == self.user_id => {
+                    banner = Some(Banner::error(&format!(
+                        "Favorites full ({BOOTH_FAVORITES_LIMIT}) - unfavorite one first"
+                    )));
+                }
+                AudioEvent::BoothFavoriteFailed { user_id, message } if user_id == self.user_id => {
                     banner = Some(Banner::error(&message));
                 }
                 AudioEvent::AudioSourcePersistFailed { user_id, message }

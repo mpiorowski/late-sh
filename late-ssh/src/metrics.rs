@@ -10,7 +10,7 @@ use crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleArtLoad;
 use crate::app::audio::client_state::ClientPlatform;
 use crate::app::audio::radio_meta::polled::PolledFeed;
 use crate::app::audio::radio_meta::svc::PollOutcome;
-use crate::app::audio::svc::ThumbnailFetch;
+use crate::app::audio::svc::{BoothFavoriteOutcome, ThumbnailFetch};
 use crate::app::bonsai::state::BonsaiAction;
 use crate::app::bonsai::svc::BonsaiActionResult;
 use crate::app::calendar::svc::{CalendarAnnouncement, CalendarOp, CalendarWrite};
@@ -669,6 +669,7 @@ mod inner {
     use crate::app::activity::event::GameFamily;
 
     use super::BartenderMemoryWrite;
+    use super::BoothFavoriteOutcome;
     use super::HomeRoom;
     use super::PosterBeat;
     use super::ScreensaverTrigger;
@@ -1771,6 +1772,18 @@ mod inner {
                 .u64_counter("late_ssh_booth_thumbnails_total")
                 .with_description(
                     "YouTube thumbnail fetches for the live strip, once per track per replica",
+                )
+                .build()
+        })
+    }
+
+    fn booth_favorites_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_booth_favorites_total")
+                .with_description(
+                    "Booth favorites by outcome: added, removed, or full (a twenty-first refused)",
                 )
                 .build()
         })
@@ -3054,6 +3067,23 @@ mod inner {
         );
     }
 
+    fn booth_favorite_label(outcome: BoothFavoriteOutcome) -> &'static str {
+        match outcome {
+            BoothFavoriteOutcome::Added => "added",
+            BoothFavoriteOutcome::Removed => "removed",
+            BoothFavoriteOutcome::Full => "full",
+        }
+    }
+
+    /// Added against removed is how much favorites get used; a run of full
+    /// is listeners wanting a bigger list.
+    pub fn record_booth_favorite(outcome: BoothFavoriteOutcome) {
+        booth_favorites_total().add(
+            1,
+            &[KeyValue::new("outcome", booth_favorite_label(outcome))],
+        );
+    }
+
     pub fn record_song_queued(reward: SongQueueReward) {
         songs_queued_total().add(
             1,
@@ -3865,6 +3895,7 @@ mod inner {
     use late_core::models::user::{AsciiPiece, AsciiSelection};
 
     use super::BartenderMemoryWrite;
+    use super::BoothFavoriteOutcome;
     use super::PosterBeat;
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
@@ -3982,6 +4013,7 @@ mod inner {
     pub fn record_news_card(_outcome: NewsCardOutcome) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
     pub fn record_booth_thumbnail(_outcome: ThumbnailFetch) {}
+    pub fn record_booth_favorite(_outcome: BoothFavoriteOutcome) {}
     pub fn record_radio_meta_poll(_feed: PolledFeed, _outcome: PollOutcome) {}
     pub fn record_gild_bought(_tier: GildTier) {}
     pub fn record_gild_refused(_refusal: GildRefusal) {}

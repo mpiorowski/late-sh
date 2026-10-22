@@ -421,6 +421,7 @@ struct DrawContext<'a> {
     booth_modal_open: bool,
     booth_modal_state: &'a crate::app::audio::booth::state::BoothModalState,
     booth_snapshot: crate::app::audio::svc::QueueSnapshot,
+    booth_favorites: &'a [crate::app::audio::svc::FavoriteItemView],
     booth_submit_enabled: bool,
     stations_modal_open: bool,
     stations_modal_state: &'a crate::app::audio::stations_modal::state::StationsModalState,
@@ -1891,6 +1892,7 @@ impl App {
                         booth_modal_open: self.booth_modal_state.is_open(),
                         booth_modal_state: &self.booth_modal_state,
                         booth_snapshot: self.audio.queue_snapshot(),
+                        booth_favorites: self.audio.booth_favorites(),
                         booth_submit_enabled: self.audio.booth_submit_enabled(),
                         stations_modal_open: self.stations_modal_state.is_open(),
                         stations_modal_state: &self.stations_modal_state,
@@ -3046,6 +3048,7 @@ impl App {
                 inner,
                 ctx.booth_modal_state,
                 &ctx.booth_snapshot,
+                ctx.booth_favorites,
                 ctx.booth_submit_enabled,
                 ctx.is_admin || ctx.is_moderator,
             );
