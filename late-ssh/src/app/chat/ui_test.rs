@@ -3759,19 +3759,39 @@ fn embedded_chat_voice_strip_is_padded_like_its_messages() {
     );
 }
 
-/// The row under a YouTube thumbnail names the video when YouTube did,
-/// and never runs past the picture it sits under.
+/// A YouTube thumbnail gets the video's title on a row above it, cut to
+/// the picture's width, and the watch hint under it; without a title only
+/// the hint is added.
 #[test]
-fn watch_hint_names_the_video_inside_the_picture_width() {
-    assert_eq!(watch_hint_text(None, 40), "▶ YouTube · Enter to watch");
+fn video_preview_puts_the_title_above_the_picture() {
+    let picture: InlineImagePreview = vec![Line::from("x".repeat(48)); 2];
+    let texts = |lines: InlineImagePreview| -> Vec<String> {
+        lines.iter().map(|line| line.to_string()).collect()
+    };
+    let picture_row = "x".repeat(48);
+
     assert_eq!(
-        watch_hint_text(Some("Never Gonna Give You Up"), 96),
-        "▶ Never Gonna Give You Up · Enter to watch"
+        texts(with_watch_hint(&picture, Some("Never Gonna Give You Up"))),
+        vec![
+            "Never Gonna Give You Up".to_string(),
+            picture_row.clone(),
+            picture_row.clone(),
+            "▶ YouTube · Enter to watch".to_string(),
+        ]
     );
-    let cut = watch_hint_text(
+    let cut = texts(with_watch_hint(
+        &picture,
         Some("Keynote: After the AI Hype - What's Real, and What's Next - Richard Campbell - 2026"),
-        48,
-    );
-    assert_eq!(cut, "▶ Keynote: After the AI Hype -… · Enter to watch");
+    ))
+    .remove(0);
+    assert_eq!(cut, "Keynote: After the AI Hype - What's Real, and W…");
     assert_eq!(UnicodeWidthStr::width(cut.as_str()), 48);
+    assert_eq!(
+        texts(with_watch_hint(&picture, None)),
+        vec![
+            picture_row.clone(),
+            picture_row,
+            "▶ YouTube · Enter to watch".to_string(),
+        ]
+    );
 }
