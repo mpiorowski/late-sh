@@ -65,7 +65,8 @@ services:
       LATE_BASTION_BACKEND_TUNNEL_URL: ws://edge:4002/tunnel
       LATE_BASTION_SHARED_SECRET: qualification-only-shared-secret
       LATE_BASTION_MAX_CONNS_GLOBAL: 1000
-      # The load fixture deliberately puts every synthetic client behind one IP.
+      # Generous limits leave headroom for stress variants. The standard runner
+      # supplies a distinct PROXY source address for each synthetic client.
       LATE_BASTION_MAX_CONNS_PER_IP: 1000
       LATE_BASTION_MAX_ATTEMPTS_PER_IP: 10000
       LATE_BASTION_PROXY_PROTOCOL: 1

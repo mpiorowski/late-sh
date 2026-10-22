@@ -511,11 +511,13 @@ moderation attribution contract.
 
 ### Packaged and live rollout verification
 
-A fresh [packaged smoke test](BASTION-QUALIFICATION.md#review-fix-verification)
-at `a912f086` passed with 100 clients and two backend replacements, using
-release images built with `otel`. The earlier long soak still predates these
-review fixes. Complete the
+The [client-IP validation](BASTION-QUALIFICATION.md#client-ip-moderation-verification)
+at `be9f6721` passed 172 focused source tests and a fresh 100-client packaged
+campaign with two backend replacements, using release images built with `otel`.
+The earlier long soak still predates the review and attribution fixes. Complete
+the
 [remaining staging checks](BASTION-QUALIFICATION.md#limits-and-remaining-deployment-checks)
-before public-port cutover: Kubernetes endpoint replacement, PROXY source IP,
+before public-port cutover: Kubernetes endpoint replacement, actual IPv4/IPv6
+client IPs through HAProxy and TLS IRC,
 NetworkPolicy including IRC, mounted secrets, pairing, terminal cleanup and the
 rollback route.

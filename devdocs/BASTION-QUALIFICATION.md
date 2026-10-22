@@ -185,18 +185,84 @@ late-ssh     sha256:da5eb3656608356cd206fdb0048e9b21ec63967ee33b503b95284c91c638
 
 This two-minute smoke refreshes packaged reconnect evidence for the review
 fixes; the longer soak and full workspace results above still describe their
-earlier snapshots. The fixture raises per-IP admission limits because synthetic
-clients share one source IP. The run does not establish production-default
-admission limits, OTLP export, silent-blackhole cleanup or the staging checks
-below.
+earlier snapshots. The fixture uses elevated admission limits and supplies a
+distinct synthetic PROXY source address per client. The run does not establish
+production admission defaults, OTLP export, silent-blackhole cleanup or the
+staging checks below.
+
+## Client-IP moderation verification
+
+Verified clean revision `be9f6721` on 2026-10-22, including the upstream merge
+at `35f7c627` and the client-attribution fix.
+
+Before the listener fix, both new `PROXY UNKNOWN` regressions failed: bastion
+and direct SSH each sent a 22-byte SSH banner instead of dropping the
+connection. After the fix, all **172 focused tests passed with `otel` enabled**,
+covering the PROXY parsers, both SSH listeners, tunnel admission, IRC and server
+moderation. Commit hooks also passed formatting and strict Clippy.
+
+The real SSH → bastion → database-backed backend tests use separate client IPs
+through shared infrastructure. Actual kick and ban commands verify that the
+ban row captures the client's address, unrelated clients remain connected and
+can reconnect, kicks allow the target to return, account bans survive an IP
+change, and a fresh identity cannot evade an IP ban. IPv4 and IPv6 metadata are
+covered. Separate tests verify independent per-client attempt/connection limits,
+resource release after rejected metadata, and rejection of untrusted assertions.
+Backend replacement and a real paired WebSocket preserve the original session IP.
+
+IRC socket tests exercise the same moderation commands with known IPv4/IPv6
+addresses, `PROXY UNKNOWN`, and omitted metadata. Unknown-IP bans store SQL
+`NULL`, the target account remains banned, and other clients through the proxy
+remain usable. These tests use local IPv4 sockets with synthetic PROXY metadata
+and plaintext IRC; native IPv6 transport and production TLS remain staging checks.
+
+To repeat the attribution-specific cases from the larger focused run on Linux:
+
+```sh
+make test-llm ARGS="-p late-bastion -p late-ssh --lib --features otel -E 'test(client_ip) or test(bastion_chain_transport_loss)'"
+```
+
+Rebuilt both release images with `otel` and repeated the 100-client, 120-second,
+two-replacement campaign. All 100 original SSH connections survived; pairing
+passed before replacement and after each fault.
+
+| Check | Observed result |
+| --- | --- |
+| Graceful replacement, 100 recoveries | Maximum 2.373 s. |
+| SIGKILL replacement, 100 recoveries | Maximum 1.236 s. |
+| 180 input probes across 20 active clients | Median 26.9 ms, p95 38.0 ms, maximum 46.6 ms. |
+| Accepted-tunnel log audit | 400 handshakes: 200 fresh, 100 graceful redials, 100 abnormal redials. |
+| Client-IP attribution through HAProxy | All 100 synthetic client addresses preserved in every phase, stable per key and session; transport peer was separately recorded as `192.168.97.6`. |
+| After clients disconnected | Bastion: 11 FDs/two threads; active backend: 31 FDs/ten threads. |
+| Cleanup | Owned test databases, containers, networks, temporary checkout and client private keys removed. |
+
+Evidence:
+
+- Before-fix failures: `target/client-ip-before.log`.
+- Final source suite: `target/client-ip-focused.log`.
+- Release builds: `target/client-ip-image-build.log`.
+- Packaged campaign: `target/bastion-qualification/20261022-172905-2b4f3b/`,
+  including `summary.json` and `client-ip-attribution.json`.
+
+```text
+late-bastion sha256:a685e4a6e8f7bee2012ba268c1746703a668ab72d858324fe179753012be3d36
+late-ssh     sha256:145d24c11409f9a5abebceffba55b1301a2e063930c07cfbaa9bac74c871a83d
+```
+
+The moderation assertions are from the source integration tests; the packaged
+campaign validates forwarding, replacement and pairing with the actual HAProxy
+process. The earlier full-workspace and long-soak results describe older
+snapshots. IPv6 HTTP/pairing attribution remains the separate follow-up in the
+primary bastion document.
 
 ## Limits and remaining deployment checks
 
 Local HAProxy replacement does not prove real Kubernetes Service endpoint
-changes, NGINX PROXY handling, CNI NetworkPolicy enforcement, production Secret
+changes, HAProxy PROXY handling, CNI NetworkPolicy enforcement, production Secret
 mounts or ingress routing of paired clients. Before the port cutover, perform a
 controlled staging rollout through those actual components and verify identity,
-source IP, pairing, terminal cleanup and the existing rollback route. No live
+the known public client IP over both IPv4 and IPv6 (including TLS IRC), pairing,
+terminal cleanup and the existing rollback route. No live
 Terraform plan/apply or cluster changes were performed here.
 
 This campaign does not qualify external music, voice, video, clipboard hardware,
