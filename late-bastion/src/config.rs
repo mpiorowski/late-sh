@@ -31,10 +31,11 @@ pub struct Config {
     /// constant-time compares.
     pub backend_shared_secret: String,
 
-    /// Global cap on simultaneous SSH connections. OOM guard. No per-IP cap
-    /// at the bastion (per Q8 — that stays at late-ssh keyed on
-    /// `X-Late-Peer-IP`).
+    /// Global cap, including pending PROXY reads, to bound transport resources.
     pub max_conns_global: usize,
+    pub max_conns_per_ip: usize,
+    pub max_attempts_per_ip: usize,
+    pub rate_limit_window_secs: u64,
 
     /// Whether NGINX is fronting the bastion with PROXY v1. When true, the
     /// bastion reads the PROXY v1 header from each accepted TCP connection
@@ -76,6 +77,9 @@ impl Config {
             backend_tunnel_url,
             backend_shared_secret,
             max_conns_global,
+            max_conns_per_ip: optional_parse("LATE_BASTION_MAX_CONNS_PER_IP", 3)?,
+            max_attempts_per_ip: optional_parse("LATE_BASTION_MAX_ATTEMPTS_PER_IP", 30)?,
+            rate_limit_window_secs: optional_parse("LATE_BASTION_RATE_LIMIT_WINDOW_SECS", 60)?,
             proxy_protocol,
             proxy_trusted_cidrs,
         })
@@ -94,6 +98,9 @@ impl Config {
         );
         tracing::info!(
             max_global = self.max_conns_global,
+            max_per_ip = self.max_conns_per_ip,
+            max_attempts_per_ip = self.max_attempts_per_ip,
+            rate_limit_window_secs = self.rate_limit_window_secs,
             proxy_protocol = self.proxy_protocol,
             trusted_cidrs = ?self.proxy_trusted_cidrs,
             "bastion: limits and proxy config",
@@ -125,6 +132,19 @@ where
 fn required_bool(key: &str) -> anyhow::Result<bool> {
     let v = required(key)?;
     Ok(v == "1" || v.eq_ignore_ascii_case("true"))
+}
+
+fn optional_parse<T: std::str::FromStr>(key: &str, default: T) -> anyhow::Result<T>
+where
+    T::Err: std::fmt::Display,
+{
+    match std::env::var(key) {
+        Ok(value) => value
+            .parse()
+            .map_err(|error| anyhow::anyhow!("{key} invalid: {error}")),
+        Err(std::env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(error).with_context(|| format!("{key} invalid")),
+    }
 }
 
 fn optional_bool(key: &str) -> bool {

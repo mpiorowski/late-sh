@@ -18,10 +18,13 @@ What it does:
 - One outbound WebSocket per shell channel; pure byte-pump in both directions.
 - Translates SSH `window-change` requests into WS `resize` text frames.
 - Plain-text "reconnecting…" messages written directly to the SSH channel during backend gaps.
-- One global connection-count semaphore. PROXY v1 parsing on the listener (NGINX → bastion).
+- Global and per-IP connection caps plus a per-IP attempt limiter before SSH
+  negotiation. PROXY v1 parsing on the listener supplies the trusted client IP.
 
 What it does **not** do (deliberate):
-- No DB, no service deps, no per-user logic, no per-IP limits, no ban awareness, no token issuance, no inspection of the TUI's terminal byte stream. All of that lives at `late-ssh`.
+- No DB, no service deps, no per-user logic, no ban awareness, no token issuance,
+  no inspection of the TUI's terminal byte stream. Account admission stays at
+  `late-ssh`; bastion's limits protect its own pre-auth transport resources.
 
 ## Topology
 
@@ -65,6 +68,16 @@ Env-driven. See `src/config.rs` for the canonical list. Required vars:
 - `LATE_BASTION_MAX_CONNS_GLOBAL` — global connection cap.
 - `LATE_BASTION_PROXY_PROTOCOL` — `1` or `0`. Enable PROXY v1 parsing on the listener.
 - `LATE_BASTION_PROXY_TRUSTED_CIDRS` — comma-separated CIDRs allowed to send PROXY v1 headers.
+
+Optional admission settings default to the direct-SSH limits:
+
+- `LATE_BASTION_MAX_CONNS_PER_IP` — simultaneous connections per client IP (3).
+- `LATE_BASTION_MAX_ATTEMPTS_PER_IP` — connection attempts per window (30).
+- `LATE_BASTION_RATE_LIMIT_WINDOW_SECS` — attempt window (60 seconds).
+
+The global cap also bounds pending PROXY reads. Per-IP checks run after trusted
+PROXY resolution and before SSH negotiation. Disconnect, auth timeout and
+cancellation release the connection slot; reconnecting does not reset attempts.
 
 ## Status
 

@@ -253,21 +253,38 @@ impl TestBastion {
         proxy_trusted_cidrs: Vec<ipnet::IpNet>,
         cap: usize,
     ) -> Result<Self> {
+        Self::spawn_config(backend_url, proxy_protocol, proxy_trusted_cidrs, |config| {
+            config.max_conns_global = cap
+        })
+        .await
+    }
+
+    async fn spawn_config(
+        backend_url: String,
+        proxy_protocol: bool,
+        proxy_trusted_cidrs: Vec<ipnet::IpNet>,
+        tweak: impl FnOnce(&mut Config),
+    ) -> Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
 
         let host_key_path =
             std::env::temp_dir().join(format!("late-bastion-it-key-{}", uuid::Uuid::now_v7()));
-        let config = Arc::new(Config {
+        let mut config = Config {
             ssh_port: 0,
             host_key_path: host_key_path.clone(),
             ssh_idle_timeout: 60,
             backend_tunnel_url: backend_url,
             backend_shared_secret: TEST_SECRET.to_string(),
-            max_conns_global: cap,
+            max_conns_global: 16,
+            max_conns_per_ip: 16,
+            max_attempts_per_ip: 1000,
+            rate_limit_window_secs: 60,
             proxy_protocol,
             proxy_trusted_cidrs,
-        });
+        };
+        tweak(&mut config);
+        let config = Arc::new(config);
 
         let cancel = CancellationToken::new();
         let task_cancel = cancel.clone();
@@ -1583,6 +1600,92 @@ async fn bastion_saturated_listener_closes_before_ssh_handshake_and_recovers() {
     })
     .await
     .unwrap();
+}
+
+async fn raw_proxied_connection(addr: SocketAddr, source_ip: &str) -> TcpStream {
+    let mut tcp = TcpStream::connect(addr).await.unwrap();
+    tcp.write_all(format!("PROXY TCP4 {source_ip} 127.0.0.1 12345 5222\r\n").as_bytes())
+        .await
+        .unwrap();
+    tcp
+}
+
+async fn expect_ssh_banner(tcp: &mut TcpStream) {
+    let mut prefix = [0; 4];
+    timeout(Duration::from_secs(2), tcp.read_exact(&mut prefix))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(&prefix, b"SSH-");
+}
+
+async fn expect_no_ssh_banner(tcp: &mut TcpStream) {
+    let mut bytes = [0; 4];
+    let result = timeout(Duration::from_secs(2), tcp.read(&mut bytes))
+        .await
+        .unwrap();
+    assert!(
+        matches!(result, Ok(0)) || result.is_err(),
+        "rejected client received SSH data: {result:?}"
+    );
+}
+
+#[tokio::test]
+async fn bastion_pre_auth_ip_cap_uses_proxy_source_and_releases_slots() {
+    let bastion = TestBastion::spawn_config(
+        "ws://127.0.0.1:1/tunnel".into(),
+        true,
+        vec!["127.0.0.0/8".parse().unwrap()],
+        |config| {
+            config.max_conns_global = 2;
+            config.max_conns_per_ip = 1;
+        },
+    )
+    .await
+    .unwrap();
+    let mut first = raw_proxied_connection(bastion.addr, "203.0.113.1").await;
+    expect_ssh_banner(&mut first).await;
+    let mut refused = raw_proxied_connection(bastion.addr, "203.0.113.1").await;
+    expect_no_ssh_banner(&mut refused).await;
+    // Same transport proxy, different user IP: both limits must still allow it.
+    let mut other = raw_proxied_connection(bastion.addr, "203.0.113.2").await;
+    expect_ssh_banner(&mut other).await;
+    drop(first);
+    timeout(Duration::from_secs(3), async {
+        loop {
+            let mut replacement = raw_proxied_connection(bastion.addr, "203.0.113.1").await;
+            let mut bytes = [0; 4];
+            if replacement.read_exact(&mut bytes).await.is_ok() {
+                assert_eq!(&bytes, b"SSH-");
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("disconnect failed to release IP/global admission");
+    bastion.shutdown();
+}
+
+#[tokio::test]
+async fn bastion_pre_auth_attempt_limit_rejects_before_the_ssh_banner() {
+    let bastion = TestBastion::spawn_config(
+        "ws://127.0.0.1:1/tunnel".into(),
+        true,
+        vec!["127.0.0.0/8".parse().unwrap()],
+        |config| config.max_attempts_per_ip = 2,
+    )
+    .await
+    .unwrap();
+    let mut first = raw_proxied_connection(bastion.addr, "203.0.113.1").await;
+    expect_ssh_banner(&mut first).await;
+    let mut second = raw_proxied_connection(bastion.addr, "203.0.113.1").await;
+    expect_ssh_banner(&mut second).await;
+    let mut refused = raw_proxied_connection(bastion.addr, "203.0.113.1").await;
+    expect_no_ssh_banner(&mut refused).await;
+    let mut other = raw_proxied_connection(bastion.addr, "203.0.113.2").await;
+    expect_ssh_banner(&mut other).await;
+    bastion.shutdown();
 }
 
 #[tokio::test]

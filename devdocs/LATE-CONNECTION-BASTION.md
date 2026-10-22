@@ -31,7 +31,8 @@ Release tags ending in `-bastion` use `deploy_service.yml` to roll the bastion i
 - Mosh-style client-side reconnect — vanilla `ssh` is the contract.
 - Authenticating the user at the backend with their pubkey — bastion owns SSH-layer auth.
 - Routing `late-cli` through the bastion (see §11).
-- Per-user / per-IP / ban-aware logic in the bastion. **Bastion is intentionally minimal.**
+- Per-user / ban-aware logic in the bastion. Account decisions stay at late-ssh;
+  transport-level per-IP limits protect bastion's own SSH listener.
 - Tailored "what's new in this release" messaging. Deferred — depends on Cargo workspace version bumping in CI (see §11).
 
 ---
@@ -142,7 +143,9 @@ What it does:
 - One outbound WebSocket per open shell channel.
 - **Pure byte pump in both directions; no inspection of the shell byte stream.**
 - Translate SSH `window-change` requests into `resize` text frames.
-- Single global connection-count semaphore (no per-IP enforcement; that stays at late-ssh).
+- Global connection-count semaphore plus per-IP connection and attempt limits
+  before SSH negotiation, keyed on the trusted PROXY client IP. Backend account
+  admission remains independent.
 - **On WS close**, dispatch by code per §4:
   - **`4100`** (user-requested reconnect): redial immediately and show
     "waiting for updated late.sh..." with a terminal reset.
@@ -176,7 +179,8 @@ Admission covers clients before PROXY parsing and SSH authentication, with a
 
 What it does **not** do:
 - No DB, no user-existence check, no ban check (late-ssh handles, replies with `4002`).
-- No per-IP rate limiting (late-ssh keeps existing caps using `X-Late-Peer-IP`).
+- Bastion limits pre-auth connections and attempts per IP; late-ssh independently
+  retains its admission caps using `X-Late-Peer-IP`.
 - No interpretation of, or coupling to, the TUI's terminal output.
 
 ---
@@ -360,7 +364,6 @@ Close-code dispatch, exponential backoff, plain-text reconnect message after gra
 - Multi-replica bastion.
 - Metrics: reconnect count + duration, close-code distribution, handshake latency, bytes pumped.
 - `last_connected_version`-driven post-reconnect copy (separate PR — depends on Cargo workspace version bumping in CI).
-- Move per-IP rate limiting / abuse defense into the bastion if profiling justifies it.
 - Additional platform-specific CLI media checks.
 
 ---
@@ -382,7 +385,8 @@ Close-code dispatch, exponential backoff, plain-text reconnect message after gra
 - **`/tunnel` on existing public `:4000`.** Removes kernel-level isolation between public API and trust-the-headers tunnel. Footgun.
 - **Big-bang `:22` cutover.** Replaced by parallel-path rollout.
 - **Full SSH-in-SSH proxy** (bastion as russh server + russh client). Doubles SSH framing/crypto on the inner hop and forces exec-request gymnastics for identity passing.
-- **Bastion holding any per-user / per-IP / ban-aware state.** Maximum bastion uptime > convenience.
+- **Bastion holding per-user / ban-aware state.** Maximum bastion uptime > convenience;
+  the only per-IP state is bounded-lifetime transport admission accounting.
 - **Bastion-side text prompt on close 1000** (alternative to TUI dialog). Considered as the simplest way to give users a choice. Rejected: constrained to plain-text rendering, can't reuse the q-dialog pattern users already know, and pairs awkwardly with the post-reconnect banner. The TUI-side dialog uses the existing modal surface and pairs naturally with the banner.
 - **Second SIGTERM as reaper signal** (so late-ssh could distinguish "rode out grace period" from "transport blip" on auto-reconnects). Rejected: requires non-standard k8s configuration (preStop hook or sidecar timer) and a per-pod SIGTERM counter, with marginal benefit. The `last_connected_version` follow-up gives finer-grained welcome-vs-apology routing without the infra cost.
 - **Two reconnect headers (`X-Late-Reconnect: 1` + `X-Late-Reconnect-Reason: enum`).** Rejected for the simpler one-header form: `X-Late-Reconnect-Reason: <close-code>`, presence ⇒ reconnect, absence ⇒ fresh. The numeric close code is sufficient for both signals.

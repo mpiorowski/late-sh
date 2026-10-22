@@ -141,6 +141,9 @@ impl Stack {
             backend_tunnel_url: format!("ws://{}/tunnel", hop.addr),
             backend_shared_secret: "test-secret".into(),
             max_conns_global: 10,
+            max_conns_per_ip: 10,
+            max_attempts_per_ip: 1000,
+            rate_limit_window_secs: 60,
             proxy_protocol: true,
             proxy_trusted_cidrs: vec!["127.0.0.0/8".parse().unwrap()],
         });

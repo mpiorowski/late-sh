@@ -7,6 +7,9 @@
 //! See `BASTION.md` and `devdocs/LATE-CONNECTION-BASTION.md`
 //! for the full design.
 
+mod admission;
+#[cfg(test)]
+mod admission_test;
 pub mod config;
 pub mod handshake;
 pub mod proxy;

@@ -29,6 +29,7 @@ use tokio::sync::{OwnedSemaphorePermit, mpsc};
 use tokio::task::JoinSet;
 use uuid::Uuid;
 
+use crate::admission::{IpLimits, IpPermit};
 use crate::config::Config;
 use crate::handshake::HandshakeContext;
 use crate::proxy::{INPUT_QUEUE_CAP, TunnelConnection, run_session};
@@ -44,15 +45,22 @@ const MAX_ENV_VALUE_BYTES: usize = 4096;
 pub struct Server {
     config: Arc<Config>,
     conn_limit: Arc<tokio::sync::Semaphore>,
+    ip_limits: IpLimits,
     shutdown: late_core::shutdown::CancellationToken,
 }
 
 impl Server {
     pub fn new(config: Arc<Config>, shutdown: late_core::shutdown::CancellationToken) -> Self {
         let conn_limit = Arc::new(tokio::sync::Semaphore::new(config.max_conns_global));
+        let ip_limits = IpLimits::new(
+            config.max_conns_per_ip,
+            config.max_attempts_per_ip,
+            config.rate_limit_window_secs,
+        );
         Server {
             config,
             conn_limit,
+            ip_limits,
             shutdown,
         }
     }
@@ -60,9 +68,9 @@ impl Server {
 
 /// Per-connection handler.
 ///
-/// Bastion is intentionally minimal: no DB lookup, no per-IP
-/// enforcement, no protocol-aware logic on the byte stream. Late-ssh
-/// handles all of that downstream of the WS handshake. The state we
+/// Bastion has no DB lookup or protocol-aware logic on the byte stream.
+/// Transport admission runs before SSH negotiation; late-ssh handles account
+/// admission downstream of the WS handshake. The state we
 /// hold is just what's needed to compose a `HandshakeContext` once
 /// `shell_request` fires — gathered across the russh callbacks (auth,
 /// channel-open, pty, window-change) as they arrive.
@@ -84,6 +92,7 @@ pub struct ClientHandler {
     rows: u16,
     env: Vec<(String, String)>,
     over_limit: bool,
+    _ip_permit: Option<IpPermit>,
     _permit: Option<OwnedSemaphorePermit>,
     channel: Option<Channel<Msg>>,
     /// Sender feeding `proxy::run_session`'s ordered input-event
@@ -114,15 +123,41 @@ impl Server {
         transport_peer_addr: Option<SocketAddr>,
         proxied_peer_addr: Option<SocketAddr>,
     ) -> ClientHandler {
+        self.new_client_with_permit(
+            transport_peer_addr,
+            proxied_peer_addr,
+            self.try_global_permit(),
+        )
+    }
+
+    fn try_global_permit(&self) -> Option<OwnedSemaphorePermit> {
         let permit = self.conn_limit.clone().try_acquire_owned().ok();
-        let over_limit = permit.is_none();
-        if over_limit {
+        if permit.is_none() {
             tracing::warn!(
                 cap = self.config.max_conns_global,
                 "global connection cap reached; rejecting new client"
             );
         }
+        permit
+    }
+
+    fn new_client_with_permit(
+        &self,
+        transport_peer_addr: Option<SocketAddr>,
+        proxied_peer_addr: Option<SocketAddr>,
+        permit: Option<OwnedSemaphorePermit>,
+    ) -> ClientHandler {
         let peer_addr = proxied_peer_addr.or(transport_peer_addr);
+        let ip_permit = peer_addr.filter(|_| permit.is_some()).and_then(|peer| {
+            match self.ip_limits.admit(peer.ip()) {
+                Ok(permit) => Some(permit),
+                Err(reason) => {
+                    tracing::warn!(ip = %peer.ip(), ?reason, "bastion pre-auth admission rejected");
+                    None
+                }
+            }
+        });
+        let over_limit = permit.is_none() || ip_permit.is_none();
         ClientHandler {
             config: self.config.clone(),
             shutdown: self.shutdown.child_token(),
@@ -136,6 +171,7 @@ impl Server {
             rows: 0,
             env: Vec::new(),
             over_limit,
+            _ip_permit: ip_permit,
             _permit: permit,
             channel: None,
             input_tx: None,
@@ -697,6 +733,7 @@ pub async fn run_with_listener(
     }
 
     let mut tasks: JoinSet<()> = JoinSet::new();
+    let mut cleanup = tokio::time::interval(Duration::from_secs(60));
 
     loop {
         tokio::select! {
@@ -716,8 +753,8 @@ pub async fn run_with_listener(
                 let russh_config = Arc::clone(&russh_config);
                 let server = server.clone();
                 let config = Arc::clone(&config);
-                let mut handler = server.new_client_with_addrs(Some(transport_peer_addr), None);
-                if handler.over_limit { continue; }
+                // Bound even clients that never finish their PROXY header.
+                let Some(permit) = server.try_global_permit() else { continue; };
                 tasks.spawn(async move {
                     let proxied_addr =
                         match resolve_proxied_client_addr(&config, &mut tcp, transport_peer_addr).await {
@@ -731,7 +768,9 @@ pub async fn run_with_listener(
                                 return;
                             }
                         };
-                    handler.peer_addr = proxied_addr.or(Some(transport_peer_addr));
+                    let handler = server.new_client_with_permit(Some(transport_peer_addr), proxied_addr, Some(permit));
+                    // Reject before russh allocates handshake state or sends its banner.
+                    if handler.over_limit { return; }
                     let authenticated = handler.authenticated.clone();
                     let connection_shutdown = handler.shutdown.clone();
                     let auth_deadline = tokio::time::Instant::now() + AUTH_TIMEOUT;
@@ -761,6 +800,7 @@ pub async fn run_with_listener(
                     let _ = tokio::time::timeout(Duration::from_secs(1), session).await;
                 });
             }
+            _ = cleanup.tick() => server.ip_limits.cleanup(),
             result = tasks.join_next(), if !tasks.is_empty() => {
                 if let Some(Err(err)) = result { tracing::debug!(?err, "bastion client task failed"); }
             }
@@ -799,6 +839,9 @@ mod tests {
             backend_tunnel_url: "ws://localhost:0/tunnel".to_string(),
             backend_shared_secret: "x".to_string(),
             max_conns_global: 1,
+            max_conns_per_ip: 3,
+            max_attempts_per_ip: 30,
+            rate_limit_window_secs: 60,
             proxy_protocol,
             proxy_trusted_cidrs: cidrs
                 .iter()
