@@ -152,8 +152,7 @@ fn close_into_room(app: &mut App, slot: RoomSlot) {
     app.chat.reset_composer();
     app.chat.feeds.stop_processing();
     app.chat.news.stop_composing();
-    app.chat.close_reader();
-    crate::app::video::svc::close(app);
+    crate::app::input::close_reader_and_player(app);
     app.room_search_modal_state.close();
     // On Zen with a chat tile focused, a room pick is that tile's: it
     // rebinds the tile the way `[` `]` do and Home's selection stays put.

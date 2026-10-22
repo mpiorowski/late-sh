@@ -3639,8 +3639,7 @@ fn reset_composers_for_page_change(app: &mut App) {
     app.chat.reset_composer();
     app.chat.feeds.stop_processing();
     app.chat.news.stop_composing();
-    app.chat.close_reader();
-    crate::app::video::svc::close(app);
+    close_reader_and_player(app);
 }
 
 fn is_room_search_shortcut(event: &ParsedInput) -> bool {
@@ -3673,8 +3672,7 @@ fn close_overlays_for_modal(app: &mut App) {
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_reader();
-    crate::app::video::svc::close(app);
+    close_reader_and_player(app);
     app.chat.cancel_room_jump();
     app.chat.message_search.clear();
 }
@@ -3712,8 +3710,7 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_reader();
-    crate::app::video::svc::close(app);
+    close_reader_and_player(app);
     app.chat.cancel_room_jump();
     let device_rails = app.rail_modes();
     let device_artboard_disclaimer = app.artboard_disclaimer_enabled();
@@ -3747,8 +3744,7 @@ pub(crate) fn open_usermap_globally(app: &mut App) {
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_reader();
-    crate::app::video::svc::close(app);
+    close_reader_and_player(app);
     app.chat.cancel_room_jump();
     app.set_screen(Screen::Profiles);
     app.directory_state
@@ -3772,8 +3768,7 @@ pub(crate) fn open_shop_modal_globally(app: &mut App) {
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_reader();
-    crate::app::video::svc::close(app);
+    close_reader_and_player(app);
     app.chat.cancel_room_jump();
     app.show_hub_modal = true;
 }
@@ -3830,8 +3825,7 @@ fn open_bonsai_modal_globally(app: &mut App) {
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_reader();
-    crate::app::video::svc::close(app);
+    close_reader_and_player(app);
     app.chat.cancel_room_jump();
     app.show_bonsai_modal = true;
 }
@@ -3854,8 +3848,7 @@ pub(crate) fn open_daily_modal_globally(app: &mut App) {
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_reader();
-    crate::app::video::svc::close(app);
+    close_reader_and_player(app);
     app.chat.cancel_room_jump();
     app.lobby.mark_seen(&app.daily);
     app.show_lobby_modal = true;
@@ -4725,6 +4718,13 @@ pub(crate) fn open_icon_picker(app: &mut App, target: IconPickerTarget) {
 pub(crate) fn close_icon_picker(app: &mut App) {
     app.icon_picker_open = false;
     app.icon_picker_target = IconPickerTarget::Composer;
+}
+
+/// The News reader and the watch player (`app/video/`), for a page change
+/// or another modal opening. A closing player keeps its position.
+pub(crate) fn close_reader_and_player(app: &mut App) {
+    app.chat.close_reader();
+    crate::app::video::svc::close(app);
 }
 
 pub(crate) fn try_open_reaction_picker(app: &mut App, room_id: Uuid) -> bool {

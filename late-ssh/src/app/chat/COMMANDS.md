@@ -47,7 +47,7 @@ Reply mode:
 - Enters compose mode and clears edit.
 - On submit, stores `reply_to_message_id` and prefixes the stored body with a visible quote line for backward-compatible rendering.
 - Enter on a selected reply jumps only if the target is already loaded in the current room tail.
-- `G` on a selected reply also jumps to the loaded target. Enter is overloaded (the image modal takes precedence), so a reply that contains an inline image can only be followed with `G`, not Enter. Lowercase `g` is the gild key.
+- `G` on a selected reply also jumps to the loaded target. Enter is overloaded (an inline image opens first, then a YouTube link plays), so a reply that contains either can only be followed with `G`, not Enter. Lowercase `g` is the gild key.
 
 Edit mode:
 - Allowed for the message author or admins.
@@ -233,7 +233,7 @@ and `permanent` is also accepted for `perma` slow-mode duration.
 | `i` | Start composing in selected room, or start News composer when selected |
 | `/` | Start command composer in selected room |
 | `Enter` | Submit composer; jump reply target; open the reader in News; join Discover; jump Mention; on a selected message, open its image, else watch its YouTube link (`../video/CONTEXT.md`) |
-| `G` | Jump a selected reply to its loaded original, even when the reply contains an inline image (Enter opens the image instead) |
+| `G` | Jump a selected reply to its loaded original, even when the reply contains an inline image or a YouTube link (Enter opens the image or watches the video instead) |
 | `Alt+Enter` / `Ctrl+J` | Insert newline in main chat composer |
 | `Ctrl+R` | Redo in the main chat composer (ratatui-textarea's keymap via `ctrl_byte_to_input`). An open composer takes it ahead of the global repaint chord in `app/input.rs::handle_reserved_global_chord`; `/redraw` repaints from inside one |
 | `Alt+S` | Submit main chat composer and keep it open. Dropped (no-op) while the `keep_composer_focused` Tweaks setting is on; Enter then owns send-and-stay. |

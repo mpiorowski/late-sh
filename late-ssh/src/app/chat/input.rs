@@ -140,8 +140,7 @@ fn open_poll_modal(app: &mut App, room_id: Uuid) {
     app.show_quit_confirm = false;
     crate::app::input::close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_reader();
-    crate::app::video::svc::close(app);
+    crate::app::input::close_reader_and_player(app);
     app.pending_chat_profile_open = None;
     app.poll_modal_state.open(room_id);
     app.show_poll_modal = true;
@@ -161,8 +160,7 @@ fn open_gild_modal(app: &mut App, target: crate::app::chat::gild::state::GildTar
     app.show_quit_confirm = false;
     crate::app::input::close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_reader();
-    crate::app::video::svc::close(app);
+    crate::app::input::close_reader_and_player(app);
     app.gild_modal_state.open(target);
     app.show_gild_modal = true;
 }
@@ -567,9 +565,9 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
             return true;
         }
         // `G` always jumps to a reply's referenced message. Enter is overloaded
-        // (the image modal takes precedence), so a reply that contains an image
-        // can't be followed with Enter alone; `G` reaches the parent regardless.
-        // Lowercase `g` is the gild key above.
+        // (an image, then a YouTube link, take precedence), so a reply that
+        // contains either can't be followed with Enter alone; `G` reaches the
+        // parent regardless. Lowercase `g` is the gild key above.
         b'G' if app.chat.try_jump_to_selected_reply_target_in_room(room_id) => {
             return true;
         }
