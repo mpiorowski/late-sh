@@ -77,6 +77,7 @@ fn door_game(game: SpectateGame, playname: &str, minutes_in: u64, status: &str) 
             watchers: 0,
             status: status.to_string(),
         },
+        username: None,
     }
 }
 

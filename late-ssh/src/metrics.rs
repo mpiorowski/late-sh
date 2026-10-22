@@ -3657,6 +3657,22 @@ mod inner {
         door_watch_chat_room_failures_total().add(1, &[KeyValue::new("game", game.key())]);
     }
 
+    fn door_watch_username_failures_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_door_watch_username_failures_total")
+                .with_description(
+                    "Failures to look up the usernames behind a live-game roster block's handles, by game",
+                )
+                .build()
+        })
+    }
+
+    pub fn record_door_watch_username_failure(game: WatchDoor) {
+        door_watch_username_failures_total().add(1, &[KeyValue::new("game", game.key())]);
+    }
+
     fn zork_launches_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -3987,6 +4003,7 @@ mod inner {
     pub fn record_door_watch_stream(_game: WatchDoor, _outcome: DoorWatchOutcome) {}
     pub fn record_door_watch_roster_failure(_game: WatchDoor) {}
     pub fn record_door_watch_chat_room_failure(_game: WatchDoor) {}
+    pub fn record_door_watch_username_failure(_game: WatchDoor) {}
     pub fn record_zork_launch(_edition: ZorkEdition, _action: ZorkAction) {}
     pub fn record_zork_session_end(_edition: ZorkEdition, _end: ZorkSessionEnd) {}
     pub fn record_zork_switch(_result: ZorkSwitchResult) {}

@@ -8,6 +8,8 @@
 // NULL on user deletion) so a dead account's handle can never be re-claimed to
 // open its saves.
 
+use std::collections::HashMap;
+
 use anyhow::Result;
 use uuid::Uuid;
 
@@ -84,6 +86,32 @@ impl ArcadeHandle {
             )
             .await?;
         Ok(row.and_then(|r| r.get("user_id")))
+    }
+
+    /// The late.sh usernames behind `handles`, keyed by the handle
+    /// lowercased (handles match case-insensitively). A handle with no live
+    /// account (a graveyard row, a name nobody claimed) is absent.
+    pub async fn usernames_by_handles(
+        client: &impl deadpool_postgres::GenericClient,
+        handles: &[String],
+    ) -> Result<HashMap<String, String>> {
+        if handles.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let lowered: Vec<String> = handles.iter().map(|h| h.to_ascii_lowercase()).collect();
+        let rows = client
+            .query(
+                "SELECT lower(a.handle) AS handle, u.username
+                 FROM arcade_handles a
+                 JOIN users u ON u.id = a.user_id
+                 WHERE lower(a.handle) = ANY($1) AND u.username <> ''",
+                &[&lowered],
+            )
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get("handle"), row.get("username")))
+            .collect())
     }
 
     /// The account's claimed handle, if any.

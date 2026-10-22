@@ -17,6 +17,7 @@ fn row_of(game: SpectateGame, playname: &str, status: &str) -> LiveRow {
             watchers: 0,
             status: status.to_string(),
         },
+        username: None,
     }
 }
 
@@ -71,6 +72,24 @@ fn the_body_names_the_door_where_they_are_who_watches_and_the_key() {
     assert_eq!(words[3], "mat is playing");
     assert_eq!(text(&body.hint), "o or click to watch");
     assert!(body.glow);
+    assert_eq!(text(&compact_spans(60, &strip)), "dcss mat · XL3 Lair:2");
+}
+
+/// The strip names the person, not the arcade handle the game knows them by.
+#[test]
+fn the_strip_names_the_player_by_their_username() {
+    let mut playing = row("Wormsong", "XL3 Lair:2");
+    playing.username = Some("mat".to_string());
+    let live = [playing];
+    let strip = view(&live, key("Wormsong"), 0).expect("a listed game has a view");
+
+    let words: Vec<String> = body(60, &strip)
+        .words
+        .iter()
+        .map(|spans| text(spans))
+        .collect();
+
+    assert_eq!(words[3], "mat is playing");
     assert_eq!(text(&compact_spans(60, &strip)), "dcss mat · XL3 Lair:2");
 }
 

@@ -2,7 +2,9 @@
 // door whose host serves watch sessions (spawned from main.rs), following the
 // host's `list` stream and publishing each block as a snapshot every session
 // reads. The roster drives the live rows on the hub's rail and the live
-// strip's target.
+// strip's target. Each block is published as rows that carry the players'
+// late.sh usernames, looked up by handle before the block goes out, so every
+// live surface names the person rather than their arcade handle.
 //
 // While the stream is down the published roster is empty, never stale: a
 // list of games nobody can open is worse than no list.
@@ -25,6 +27,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use late_core::db::Db;
+use late_core::models::arcade_handle::ArcadeHandle;
 use late_core::models::chat_room::ChatRoom;
 use late_core::shutdown::CancellationToken;
 use tokio::sync::{mpsc, watch};
@@ -38,7 +41,7 @@ use crate::render_signal::RenderSignal;
 /// blips). Short: the hub shows nobody playing until it reconnects.
 const RETRY_DELAY: Duration = Duration::from_secs(10);
 
-type Roster = Arc<Vec<LiveGame>>;
+type Roster = Arc<Vec<LiveRow>>;
 
 /// Where a player's watch-chat room stands in the process-wide cache.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -253,29 +256,22 @@ impl LiveGamesService {
     }
 
     /// Every live game across the watchable doors, in the order the Games
-    /// hub's rail lists them: door by door, oldest game first. This is the
-    /// boundary for the hosts' playnames: a roster line whose name is not a
-    /// handle (`LiveGameKey::new`) is no row, so nothing downstream can hold
-    /// a game it cannot key.
+    /// hub's rail lists them: door by door, oldest game first.
     pub fn live_rows(&self) -> Vec<LiveRow> {
         SpectateGame::ALL
             .into_iter()
-            .flat_map(|game| {
-                let roster = self.roster(game);
-                (0..roster.len()).filter_map(move |index| {
-                    let entry = roster[index].clone();
-                    let key = LiveGameKey::new(game, &entry.playname)?;
-                    Some(LiveRow { key, entry })
-                })
-            })
+            .flat_map(|game| self.roster(game).as_ref().clone())
             .collect()
     }
 
     /// Publish `roster` as `game`'s live games, as the roster task does for
-    /// a block from the host, so app flows can be driven without a door host.
+    /// a block from the host whose usernames could not be looked up, so app
+    /// flows can be driven without a door host.
     #[cfg(test)]
     pub(crate) fn publish_roster_for_tests(&self, game: SpectateGame, roster: Vec<LiveGame>) {
-        self.feed(game).tx.send_replace(Arc::new(roster));
+        self.feed(game)
+            .tx
+            .send_replace(Arc::new(live_rows_of(game, roster, &HashMap::new())));
     }
 
     /// Publish `room_id` as the resolved watch-chat room of `playname`'s
@@ -305,9 +301,11 @@ impl LiveGamesService {
         dcss || nethack || brogue || zork
     }
 
-    /// Spawn `game`'s roster loop: connect, follow, publish; on any end
-    /// (host rollout, network drop, broken stream) publish an empty roster
-    /// and reconnect after [`RETRY_DELAY`].
+    /// Spawn `game`'s roster loop: connect, follow, look up each block's
+    /// usernames, publish; on any end (host rollout, network drop, broken
+    /// stream) publish an empty roster and reconnect after [`RETRY_DELAY`].
+    /// A failed username lookup still publishes the block, its rows naming
+    /// the handles, and the next block tries again.
     pub fn start_task(
         &self,
         game: SpectateGame,
@@ -315,12 +313,27 @@ impl LiveGamesService {
         shutdown: CancellationToken,
     ) -> tokio::task::JoinHandle<()> {
         let publish = self.feed(game).tx.clone();
+        let db = self.db.clone();
         tokio::spawn(async move {
             loop {
                 let (tx, mut rx) = mpsc::channel::<Vec<LiveGame>>(8);
                 let follow = async {
                     while let Some(roster) = rx.recv().await {
-                        publish.send_replace(Arc::new(roster));
+                        let usernames = match roster_usernames(&db, &roster).await {
+                            Ok(usernames) => usernames,
+                            Err(e) => {
+                                tracing::warn!(
+                                    error = ?e,
+                                    game = game.watch_door().key(),
+                                    "failed to look up live players' usernames"
+                                );
+                                crate::metrics::record_door_watch_username_failure(
+                                    game.watch_door(),
+                                );
+                                HashMap::new()
+                            }
+                        };
+                        publish.send_replace(Arc::new(live_rows_of(game, roster, &usernames)));
                     }
                 };
                 let result = tokio::select! {
@@ -349,6 +362,39 @@ impl LiveGamesService {
             }
         })
     }
+}
+
+/// `game`'s roster block as rows. This is the boundary for the hosts'
+/// playnames: a roster line whose name is not a handle (`LiveGameKey::new`)
+/// is no row, so nothing downstream can hold a game it cannot key.
+/// `usernames` is keyed by the handle lowercased
+/// (`ArcadeHandle::usernames_by_handles`).
+pub(crate) fn live_rows_of(
+    game: SpectateGame,
+    roster: Vec<LiveGame>,
+    usernames: &HashMap<String, String>,
+) -> Vec<LiveRow> {
+    roster
+        .into_iter()
+        .filter_map(|entry| {
+            let key = LiveGameKey::new(game, &entry.playname)?;
+            let username = usernames.get(&entry.playname.to_ascii_lowercase()).cloned();
+            Some(LiveRow {
+                key,
+                entry,
+                username,
+            })
+        })
+        .collect()
+}
+
+/// The late.sh usernames behind a roster block's playnames.
+async fn roster_usernames(db: &Db, roster: &[LiveGame]) -> Result<HashMap<String, String>> {
+    let handles: Vec<String> = roster.iter().map(|game| game.playname.clone()).collect();
+    let client = db.get().await.context("getting db client")?;
+    ArcadeHandle::usernames_by_handles(&client, &handles)
+        .await
+        .context("looking up usernames by handle")
 }
 
 /// The id of the watch-chat room for `playname`'s runs of `game`, creating

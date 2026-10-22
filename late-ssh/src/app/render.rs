@@ -2259,9 +2259,9 @@ impl App {
                         content_area,
                         &crate::app::door::spectate::ui::SpectateView {
                             state,
-                            entry: state
+                            row: state
                                 .row_in(&ctx.live_rows)
-                                .map(|index| &ctx.live_rows[index].entry),
+                                .map(|index| &ctx.live_rows[index]),
                             watchers: ctx.held_watchers,
                         },
                         crate::app::door::spectate::ui::WatchPane::Open(
@@ -2331,7 +2331,7 @@ impl App {
                         pane,
                         &crate::app::door::spectate::ui::SpectateView {
                             state,
-                            entry: live_selected.map(|index| &ctx.live_rows[index].entry),
+                            row: live_selected.map(|index| &ctx.live_rows[index]),
                             watchers: ctx.held_watchers,
                         },
                         crate::app::door::spectate::ui::WatchPane::Preview,

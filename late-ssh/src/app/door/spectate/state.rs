@@ -137,13 +137,28 @@ impl LiveGameKey {
 }
 
 /// One live game on the Games hub's rail: its key (the door and the
-/// player's handle) and the host's roster entry for it. Built only from a
-/// roster line whose playname is a handle (`LiveGamesService::live_rows`), so
-/// every row, and every watch started on one, has a key.
+/// player's handle), the host's roster entry for it, and the player's
+/// late.sh username. Built only from a roster line whose playname is a
+/// handle (`LiveGamesService::start_task`), so every row, and every watch
+/// started on one, has a key.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LiveRow {
     pub key: LiveGameKey,
     pub entry: LiveGame,
+    /// The late.sh username behind the handle; `None` while the roster task
+    /// could not look it up, or for a handle no live account holds.
+    pub username: Option<String>,
+}
+
+impl LiveRow {
+    /// Who is playing, as every live surface names them: the late.sh
+    /// username, the handle only when there is none.
+    pub fn player(&self) -> &str {
+        match &self.username {
+            Some(username) => username,
+            None => self.key.playname(),
+        }
+    }
 }
 
 /// One session's link to a player's watch-chat room: the room is resolved

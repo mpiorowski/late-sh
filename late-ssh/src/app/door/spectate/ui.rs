@@ -28,8 +28,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use super::chat::WatchLine;
-use super::proxy::{LiveGame, WatchStatus};
-use super::state::{SpectateGame, State, WatchMode};
+use super::proxy::WatchStatus;
+use super::state::{LiveRow, SpectateGame, State, WatchMode};
 use crate::app::chat::ui::{EmbeddedRoomChatView, draw_embedded_room_chat};
 use crate::app::common::theme;
 use crate::app::door::rebels::render::blit_screen_from;
@@ -131,9 +131,9 @@ fn dock_areas(body: Rect, dock: ChatDock) -> (Rect, Option<(Rect, Rect)>) {
 
 pub struct SpectateView<'a> {
     pub state: &'a State,
-    /// The watched game's roster entry, for where the player is and how
-    /// long they have run; `None` once the roster no longer lists it.
-    pub entry: Option<&'a LiveGame>,
+    /// The watched game's live row, for who is playing, where they are and
+    /// how long they have run; `None` once the roster no longer lists it.
+    pub row: Option<&'a LiveRow>,
     /// People with this watch open, this session's user included
     /// (`LiveGamesService::watchers_of`), for the docked chat's header row.
     pub watchers: usize,
@@ -270,24 +270,22 @@ fn draw_header(
     cropped: Option<(u16, u16)>,
     dock: ChatDock,
 ) {
-    let playname = view.state.playname();
     let dim = Style::default().fg(theme::TEXT_DIM());
     let faint = Style::default().fg(theme::TEXT_FAINT());
     let lead = match view.state.mode() {
         WatchMode::Preview => " ",
         WatchMode::Open => " watching ",
     };
-    let mut spans = vec![
-        Span::styled(lead, dim),
-        Span::styled(
-            playname.to_string(),
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::styled(format!(" \u{b7} {}", view.state.game().label()), dim),
-    ];
-    if let Some(game) = view.entry {
+    let mut spans = vec![Span::styled(lead, dim)];
+    spans.extend(player_spans(
+        view.state.playname(),
+        view.row.and_then(|row| row.username.as_deref()),
+    ));
+    spans.push(Span::styled(
+        format!(" \u{b7} {}", view.state.game().label()),
+        dim,
+    ));
+    if let Some(game) = view.row.map(|row| &row.entry) {
         if !game.status.is_empty() {
             spans.push(Span::styled(format!(" \u{b7} {}", game.status), dim));
         }
@@ -321,6 +319,28 @@ fn draw_header(
         Paragraph::new(Line::from(Span::styled(keys, faint))).alignment(Alignment::Right),
         area,
     );
+}
+
+/// Who is playing, in the header: `mat (Wormsong)`, the late.sh username in
+/// amber and the arcade handle the game knows them by after it. The handle
+/// alone while the row has no username (`LiveRow::username`), or once the
+/// roster no longer lists the game; the username alone when the two only
+/// differ in case.
+pub(crate) fn player_spans(handle: &str, username: Option<&str>) -> Vec<Span<'static>> {
+    let name = Style::default()
+        .fg(theme::AMBER_GLOW())
+        .add_modifier(Modifier::BOLD);
+    match username {
+        Some(username) if !username.eq_ignore_ascii_case(handle) => vec![
+            Span::styled(username.to_string(), name),
+            Span::styled(
+                format!(" ({handle})"),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+        ],
+        Some(username) => vec![Span::styled(username.to_string(), name)],
+        None => vec![Span::styled(handle.to_string(), name)],
+    }
 }
 
 /// Where the composer block's top and bottom borders run into a rule beside
