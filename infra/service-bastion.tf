@@ -6,8 +6,8 @@
 # to be to connect the wires" principle. Rolling updates here drop every
 # active SSH session, so this Deployment is expected to update rarely.
 #
-# Ports: 5222 (russh; user-facing during dual-path rollout). Cutover to
-# :22 (post Phase 5) is a one-line edit in infra/ssh-tcp.tf.
+# The bastion listens on its internal service port (5222 by default); ssh-edge
+# forwards public :22 here when BASTION_ENABLED=1.
 # =============================================================================
 
 resource "kubernetes_deployment_v1" "service_bastion" {

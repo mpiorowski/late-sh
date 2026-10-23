@@ -29,20 +29,23 @@ What it does **not** do (deliberate):
 ## Topology
 
 ```
-ssh late.sh   ──▶  NGINX :22  TCP-passthrough  ──▶  service-ssh-sv:2222   (legacy, unchanged)
-ssh -p 5222   ──▶  NGINX :5222 TCP-passthrough  ──▶  service-bastion-sv:5222
-                                                          │
-                                                          ▼
-                                                   late-bastion (this crate)
-                                                          │
-                                                          ▼  ws://service-ssh-internal:4001/tunnel
-                                                   late-ssh /tunnel handler
-                                                          │
-                                                          ▼  in-proc
-                                                   App::new(SessionConfig)
+ssh late.sh   ──▶  ssh-edge :22 (PROXY v1) ──▶ service-bastion-sv:5222
+                                                  │
+                                                  ▼
+                                           late-bastion (this crate)
+                                                  │
+                                                  ▼  ws://service-ssh-internal:4001/tunnel
+                                           late-ssh /tunnel handler
+                                                  │
+                                                  ▼  in-proc
+                                           App::new(SessionConfig)
 ```
 
-Both NGINX TCP entries run in parallel through Phase 4, gated on which port the user dials. Production cutover (Phase 5) is a one-line TF change in `infra/ssh-tcp.tf`.
+This is the topology after the one-time maintenance cutover. Before it,
+`BASTION_ENABLED=0` routes public `:22` from `ssh-edge` to direct
+`service-ssh-sv:2222`. Setting it to `1` routes the same public port to the
+bastion; there is no public dogfood port. See the
+[cutover runbook](../infra/RUNBOOK.md#first-bastion-and-ipv6-http-cutover).
 
 ## Implementation phases
 
@@ -60,7 +63,7 @@ Phase numbers track [`devdocs/LATE-CONNECTION-BASTION.md`](../devdocs/LATE-CONNE
 
 Env-driven. See `src/config.rs` for the canonical list. Required vars:
 
-- `LATE_BASTION_SSH_PORT` — listener port (`5222` during dual-path rollout).
+- `LATE_BASTION_SSH_PORT` — internal listener port (`5222` by default; public SSH remains `:22`).
 - `LATE_BASTION_HOST_KEY_PATH` — file path for the bastion's russh host key.
 - `LATE_BASTION_SSH_IDLE_TIMEOUT` — russh inactivity timeout, in seconds.
 - `LATE_BASTION_BACKEND_TUNNEL_URL` — `ws://service-ssh-internal:4001/tunnel`.
@@ -88,10 +91,10 @@ address is never substituted for an unknown client IP.
 - ✅ **Phase 1** — PROXY v1 parser lifted to `late_core::proxy_protocol`.
 - ✅ **Phase 2a** — `/tunnel` listener exists in `late-ssh` (`src/tunnel.rs`). Validates CIDR allowlist, pre-shared secret, and required handshake headers.
 - ✅ **Phase 2 (protocol)** — `late_core::tunnel_protocol::ControlFrame::Resize { cols, rows }` wire schema for `window-change` forwarding. Header constants (`HEADER_*`) live alongside `ControlFrame` so both ends of the wire reference one source of truth.
-- ✅ **Infra TF skeleton** — `service-ssh-internal-sv` ClusterIP for `:4001`, bastion Deployment/Service, NetworkPolicy, dual NGINX TCP entries (`:22` legacy, `:5222` bastion). Bastion side gated by `BASTION_ENABLED` (default `0`) until live cutover.
+- ✅ **Infra TF skeleton** — `service-ssh-internal-sv` ClusterIP for `:4001`, bastion Deployment/Service and NetworkPolicy. `ssh-edge` switches public `:22` to the bastion when `BASTION_ENABLED=1` (default `0` until the maintenance cutover).
 - ✅ **Phase 2b** — I/O seam refactor in `late-ssh` so `App::new(SessionConfig)` runs on either a russh `Channel` or a WS pair (`FrameSink` trait).
 - ✅ **Phase 2c** — `/tunnel` constructs `SessionConfig` and runs the render loop over the WS streams; hand-written WS smoke client; full caller-side parity with `shell_request` (conn limits, active_users, activity feed, metrics).
-- ✅ **Phase 3** — bastion proxy logic: dial `/tunnel`, pump bytes, forward `resize`, close SSH on WS close. Includes PROXY v1 parsing on the listener (CIDR-trusted) so `X-Late-Peer-IP` reflects the real client IP behind NGINX.
+- ✅ **Phase 3** — bastion proxy logic: dial `/tunnel`, pump bytes, forward `resize`, close SSH on WS close. Includes PROXY v1 parsing on the listener (CIDR-trusted) so `X-Late-Peer-IP` reflects the real client IP behind `ssh-edge`.
 - ✅ **Phase 4** — reconnect loop + plain-text "reconnecting…" messages.
   - ✅ **4/1** — existing tunnel sessions ride out graceful drain; the backend does not emit a healthy-session close on SIGTERM.
   - ✅ **4/2** — bastion reconnect loop: abnormal transport drops (`1006`) and late-private retryable closes (`4100`-`4199`) plus HTTP 5xx → exponential backoff (100ms→5s ceiling, each delay jittered to 50–100% of its ceiling, 30s budget) with `X-Late-Reconnect-Reason: <close-code>` and stable `X-Late-Session-Id`. Terminal closes (4000/4001/4002/4003) and HTTP 4xx end the session.
@@ -99,7 +102,7 @@ address is never substituted for an unknown client IP.
   - ✅ **4/4** — bastion sends a WS Ping every 2s; backend's tungstenite layer auto-pongs. After first output, >5s of silence is treated as a wedged backend and starts reconnect. Bootstrap uses the 30s ready deadline instead; a successful client write restarts the silence interval so SSH backpressure is not mistaken for backend failure. Both output legs allow a blocked write up to 30s.
   - ✅ **4/5** — live integration validated manually: bouncing the `late-ssh` container shows the reconnect message on the SSH client; restarting it replays the welcome sequence and lands the user back in the UI.
 - ✅ **Ordering refactor** — both inbound paths (bastion handler, backend `/tunnel` receive loop) collapsed onto a single `mpsc<SshInputEvent>` (`Bytes` | `Resize`). Closes the prior `tokio::select!`-mux + eager-resize race that could surface `[A, R, B]` as `[R, AB]` to the app. Critical for coordinate-sensitive features (mouse SGR, paste, artboard). Validated manually against the artboard.
-- ⏳ **Phase 5** — production cutover (`:22` swing).
+- ⏳ **Phase 5** — production maintenance cutover (`:22` swing and IPv6 HTTP ingress handoff).
 
 ## Running locally
 
@@ -118,9 +121,9 @@ persists in the repo dir via the `.:/app` bind mount).
 Then in another shell:
 
 ```bash
-# bastion path (new):
+# bastion path:
 ssh -p 5222 -o StrictHostKeyChecking=no localhost
-# legacy path (still up during dual-rollout):
+# direct backend path for local comparison:
 ssh -p 2222 -o StrictHostKeyChecking=no localhost
 ```
 

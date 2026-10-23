@@ -252,8 +252,9 @@ late-ssh     sha256:145d24c11409f9a5abebceffba55b1301a2e063930c07cfbaa9bac74c871
 The moderation assertions are from the source integration tests; the packaged
 campaign validates forwarding, replacement and pairing with the actual HAProxy
 process. The earlier full-workspace and long-soak results describe older
-snapshots. IPv6 HTTP/pairing attribution remains the separate follow-up in the
-primary bastion document.
+snapshots. Native IPv6 HTTP ingress and pairing attribution are prepared for
+the maintenance cutover; their live checks are in the
+[runbook](../infra/RUNBOOK.md#first-bastion-and-ipv6-http-cutover).
 
 ## Limits and remaining deployment checks
 

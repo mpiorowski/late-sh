@@ -47,32 +47,11 @@ variable "SSH_HOST_KEY" {
 }
 
 # =============================================================================
-# IPv6 edge proxy
-# =============================================================================
-
-variable "IPV6_PROXY_ENABLED" {
-  description = "Deploy a host-network IPv6-only TCP proxy in front of the IPv4-only cluster ingress."
-  type        = bool
-  default     = true
-}
-
-variable "IPV6_PROXY_ADDRESS" {
-  description = "Public IPv6 address to bind for the IPv6 edge proxy."
-  type        = string
-  default     = "2a01:4f9:c013:2ae1::1"
-}
-
-variable "IPV6_PROXY_IMAGE" {
-  description = "HAProxy image used by the IPv6 edge proxy."
-  type        = string
-  default     = "haproxy:2.9-alpine"
-}
-
 # Bastion (late-bastion)
 # =============================================================================
 
 variable "BASTION_ENABLED" {
-  description = "\"1\" to deploy the late-bastion pod and the :5222 NGINX TCP entry alongside direct SSH."
+  description = "\"1\" to deploy late-bastion and route public SSH :22 to it through ssh-edge; \"0\" leaves :22 on direct late-ssh. Change during a maintenance window."
   type        = string
   default     = "0"
 }

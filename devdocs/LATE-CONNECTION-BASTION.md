@@ -1,6 +1,6 @@
 # late.sh SSH Bastion + WS Tunnel
 
-> **Status.** Bastion path implemented; production cutover awaits staging checks. Remaining review work is tracked in [§13](#13-remaining-review-follow-ups).
+> **Status.** Bastion path and maintenance-window cutover configuration are implemented; production cutover awaits staging checks. Remaining review work is tracked in [§13](#13-remaining-review-follow-ups).
 > **Branch.** `mevanlc--bastion-redux`.
 > **New crate.** `late-bastion` (the SSH-facing process).
 
@@ -10,7 +10,7 @@ The backend tunnel listener is compiled into the `late-ssh` profile: port `4002`
 
 Release tags ending in `-bastion` use `deploy_service.yml` to roll the bastion image. Terraform's `IMAGE_TAGS["bastion"]` seeds its initial image; subsequent infrastructure applies preserve the deployed image.
 
-First enablement follows the [infra bastion instructions](../infra/README.md#bastion): deploy the ssh image, configure the host-key and shared-secret GitHub environment secrets, enable bastion through an `-infra` release, then publish a `-bastion` release. The infra apply creates the manifest without waiting for the placeholder image; the bastion release installs the real image and waits for readiness.
+First enablement follows the [maintenance runbook](../infra/RUNBOOK.md#first-bastion-and-ipv6-http-cutover): deploy the compatible ssh image, configure the host-key and shared-secret GitHub environment secrets, and switch public `:22` during the agreed outage. The infra apply creates the bastion manifest without waiting for its initial image; the `-bastion` release installs the real image and waits for readiness.
 
 ---
 
@@ -45,32 +45,27 @@ First enablement follows the [infra bastion instructions](../infra/README.md#bas
 
 ---
 
-## 3. Topology (parallel paths during rollout)
+## 3. Topology after cutover
 
 ```
-ssh late.sh                                    ssh -p 5222 late.sh
-    │                                                │
-    │   HAProxy TCP passthrough (PROXY v1)           │   HAProxy TCP passthrough (PROXY v1)
-    ▼   :22  →  service-ssh-sv:2222                  ▼   :5222  →  service-bastion-sv:5222
-    │                                                │
-    ▼                                                ▼
-late-ssh pod :2222 (russh)                  late-bastion pod :5222 (russh)
-    │  in-proc                                       │
-    │                                                │  ws://service-ssh-internal:4001/tunnel
-    ▼                                                ▼
-TUI render loop  ◀──── same App::new(SessionConfig) ────▶  late-ssh pod :4001 (axum /tunnel)
-                                                                                │
-                                                                                ▼ in-proc
-                                                                            TUI render loop
+ssh late.sh
+    │
+    ▼  ssh-edge :22 (PROXY v1 preserves the client IP)
+late-bastion pod :5222 (russh)
+    │  ws://service-ssh-internal:4001/tunnel
+    ▼
+late-ssh pod :4001 (axum /tunnel)
+    │
+    ▼  App::new(SessionConfig) → TUI render loop
 ```
 
-Both listeners live in the `ssh-edge` HAProxy configuration in `infra/ssh-tcp.tf`, on IPv4 and IPv6. `BASTION_ENABLED=1` enables the dogfood listener. Cut `:22` over by changing its `default_backend` from `service_ssh` to `service_bastion` when confident; rollback restores that value.
+`infra/ssh-tcp.tf` binds public `:22` on IPv4 and IPv6. `BASTION_ENABLED=0` routes it to direct `late-ssh`; `1` routes it to the bastion. The first switch requires a maintenance window because established direct SSH sessions cannot move into the bastion. Future `late-ssh` upgrades use the reconnect path above.
 
 **Late-ssh exposes three listeners after this work:**
 
 | Port  | Visibility              | Purpose                                                 |
 | ----- | ----------------------- | ------------------------------------------------------- |
-| 2222  | HAProxy `:22` (legacy)  | russh — direct SSH path; eventual ClusterIP-only.       |
+| 2222  | ClusterIP, or HAProxy `:22` when bastion is disabled | russh — direct SSH path for `late-cli` and cutover rollback. |
 | 4000  | `api.late.sh` ingress   | Public HTTP API — paired clients, etc. Unchanged.       |
 | 4001  | ClusterIP-only (new)    | axum `/tunnel` WebSocket — bastion's only entry point.  |
 
@@ -324,7 +319,7 @@ identity. Public IRC masks are unchanged.
 
 ### Infra delta (`infra/`)
 - **`infra/service-bastion.tf` (new)** — Deployment + Service for `late-bastion`, mirrors `service-ssh.tf`. Modest resources.
-- **`infra/ssh-tcp.tf` (modify)** — Add the gated HAProxy `:5222` listener and `service_bastion` backend with `send-proxy` alongside the existing `:22` listener.
+- **`infra/ssh-tcp.tf` (modify)** — Route public `:22` to the `service_bastion` backend with `send-proxy` when `BASTION_ENABLED=1`; keep the direct `service_ssh` backend for rollback.
 - **`infra/service-ssh.tf` (modify)** — Add container port `:4001` and a new `service-ssh-internal-sv` ClusterIP Service exposing only `:4001`.
 - **NetworkPolicy** — allow ingress to `service-ssh-sv:4001` only from pods labeled `app=service-bastion`.
 - **Secrets** — `BASTION_SHARED_SECRET` mounted into both pods; `BASTION_HOST_KEY` for the bastion's russh host key.
@@ -342,22 +337,26 @@ Rare. Plan for low-traffic hours; multi-replica is a future enhancement.
 
 ## 9. Migration strategy
 
-Two paths run in parallel, controlled by which port the user dials.
+The repo owner approved a full out-of-service window for the first cutover.
+Everyone's old direct SSH session is disconnected in that window. There is no
+simultaneous public `:22` and `:5222` population to reconcile.
 
-| Phase | `:22`                          | `:5222`                        | Audience                                         |
-| ----- | ------------------------------ | ------------------------------ | ------------------------------------------------ |
-| 0     | → `service-ssh-sv:2222`        | (does not exist)              | All users.                                       |
-| 1     | → `service-ssh-sv:2222`        | → `service-bastion-sv:5222`   | Default users on `:22`. Dogfooders on `:5222`.   |
-| 2     | → `service-bastion-sv:5222`    | → `service-bastion-sv:5222`   | All users go through bastion. `:5222` is escape. |
-| 3     | → `service-bastion-sv:5222`    | (removed)                      | Steady state.                                    |
+| Stage | Public `:22` | Client sessions |
+| --- | --- | --- |
+| Before window (`BASTION_ENABLED=0`) | `service-ssh-sv:2222` | Direct, existing sessions. |
+| Window (`BASTION_ENABLED=1`) | `service-bastion-sv:5222` | Block public traffic until bastion, backend, IP attribution and pairing checks pass. |
+| After reopening | `service-bastion-sv:5222` | Backend replacements reconnect through bastion. |
+| Rollback (`BASTION_ENABLED=0`) | `service-ssh-sv:2222` | New SSH sessions are direct again; bastion sessions disconnect. |
 
-`:22 → bastion` cutover is a one-line TF change. Rollback is the same line in reverse. `late-cli` continues to dial `service-ssh-sv:2222` directly until we choose to migrate it (see §11).
+`late-cli` continues to dial `service-ssh-sv:2222` directly by design. The
+[runbook](../infra/RUNBOOK.md#first-bastion-and-ipv6-http-cutover) gives the
+ordered HTTP/IPv6 port handoff and rollback steps.
 
 ---
 
 ## 10. Phased implementation
 
-Phases 1–4 are the chassis (largely done / in-flight on this branch). Phase 4.5 is the fit-and-finish work this PR rev adds. Phase 5 is the cutover.
+Phases 1–4 are the chassis (largely done / in-flight on this branch). Phase 4.5 is the fit-and-finish work this PR rev adds. Phase 5 is the one-time maintenance cutover.
 
 ### Phase 1 — Crate scaffold ✅
 Workspace + russh skeleton + PROXY v1 parser lifted to `late-core`.
@@ -366,7 +365,7 @@ Workspace + russh skeleton + PROXY v1 parser lifted to `late-core`.
 `:4001` axum listener, `/tunnel` WS handler, session bootstrap refactored to share between russh and `/tunnel`.
 
 ### Phase 3 — Bastion proxy logic ✅
-Full byte pump end-to-end via `ssh -p 5222 late.sh`.
+Full byte pump end-to-end via the local Compose bastion port `5222`.
 
 ### Phase 4 — Reconnect loop ✅
 Close-code dispatch, exponential backoff, plain-text reconnect message after grace.
@@ -385,9 +384,11 @@ Close-code dispatch, exponential backoff, plain-text reconnect message after gra
   [BASTION-QUALIFICATION.md](BASTION-QUALIFICATION.md) for the packaged campaign.
 
 ### Phase 5 — Production cutover
-- Soak window with both paths up.
-- Decide and ship `late-cli`'s post-cutover routing (see §11).
-- Flip `:22` TF entry to `service-bastion-sv:5222`. Observe; rollback in-place if needed.
+- Enter the approved maintenance window and disconnect old direct sessions.
+- Retire the IPv6 HTTP proxy, enable native dual-stack ingress, and set
+  `BASTION_ENABLED=1` in the infrastructure release.
+- Deploy the bastion image, verify the public edges from IPv4 and IPv6 clients,
+  then reopen traffic. Roll back during the window if checks fail.
 
 ### Phase 6 — Nice-to-haves (future)
 - Multi-replica bastion.
@@ -399,10 +400,9 @@ Close-code dispatch, exponential backoff, plain-text reconnect message after gra
 
 ## 11. Open questions
 
-- **`late-cli` routing after `:22` cutover (Phase 5).** CLI token discovery now
-  runs through the bastion's pre-shell exec, and pairing reuses its stable token
-  across backend replacements. The production port cutover remains a separate
-  infrastructure action, gated on staging checks.
+- **`late-cli` transport.** CLI token discovery and pairing work through the
+  bastion's pre-shell exec, but production `late-cli` still dials the direct
+  ClusterIP SSH service. Moving that transport is optional future scope.
 - **Tailored "what's new" welcome.** Deferred. Requires Cargo workspace version bumping in CI (current crates are pinned at `0.1.0` and never bumped). Tracked separately; Phase 4.5 lays the substrate (`X-Late-Reconnect-Reason` is the per-redial signal), but the version-aware copy is follow-up scope.
 
 ---
@@ -412,7 +412,8 @@ Close-code dispatch, exponential backoff, plain-text reconnect message after gra
 - **Telnet between bastion and backend.** IAC byte-stuffing requires data-stream inspection — contradicts the bastion's "thin / opaque pump" property.
 - **Raw TCP with bespoke framing.** Reinvents WebSocket badly.
 - **`/tunnel` on existing public `:4000`.** Removes kernel-level isolation between public API and trust-the-headers tunnel. Footgun.
-- **Big-bang `:22` cutover.** Replaced by parallel-path rollout.
+- **Parallel public `:5222` rollout.** Replaced by the approved one-time
+  maintenance cutover; it avoids mixed direct/bastion client populations.
 - **Full SSH-in-SSH proxy** (bastion as russh server + russh client). Doubles SSH framing/crypto on the inner hop and forces exec-request gymnastics for identity passing.
 - **Bastion holding per-user / ban-aware state.** Maximum bastion uptime > convenience;
   the only per-IP state is bounded-lifetime transport admission accounting.
@@ -482,8 +483,6 @@ operations need an explicit compatibility strategy.
 - Align the bastion's 7200-second termination grace and its comment with the
   actual SIGTERM behavior: active SSH connections are cancelled, rather than
   retained for a two-hour drain.
-- Replace the stale "NGINX TCP entry" wording in `infra/variables.tf` with the
-  current `ssh-edge` HAProxy terminology.
 - Reconcile `BASTION-REDUX-REVIEW.md` references to the removed `deploy.yml`
   workflow and `BASTION_TUNNEL_TRUSTED_CIDRS` variable with current code.
 
@@ -496,25 +495,22 @@ direct SSH's 32-MiB backlog accounting and render-pause behavior. Exact parity
 remains separate follow-up scope, requiring slow-reader memory and recovery
 tests if pursued.
 
-### Deferred IPv6 HTTP and pairing attribution
+### IPv6 HTTP and pairing attribution: edge fix prepared
 
-`infra/ipv6-proxy.tf` forwards HTTP(S) over TCP without client-address metadata.
-That configuration can make ingress report the proxy address to the paired
-WebSocket endpoint's IP-based limits. HTTP pairing addresses do not supply
-`ActiveSession.peer_ip` or server-ban snapshots. Live deployment behavior has
-not been checked as part of this work.
-
-Preserving IPv6 HTTP client addresses requires a separate ingress design,
-deployment order and rollback plan, with trusted-header and per-client pairing
-limit tests. Keep that infrastructure change separate from the SSH/IRC
-moderation attribution contract.
+The former IPv6-only TCP proxy forwarded HTTP(S) without client-address
+metadata, collapsing IPv6 pairing clients onto one proxy address. The
+maintenance cutover retires it and runs ingress-nginx on the node network for
+both IPv4 and IPv6. With incoming forwarded headers disabled, ingress derives
+`X-Forwarded-For` from the real socket peer for the backend's trusted-ingress
+address resolver. HTTP pairing addresses do not supply `ActiveSession.peer_ip`
+or server-ban snapshots; those use the separately validated SSH/IRC paths.
 
 Pairing API regressions exercise distinct IPv4/IPv6 addresses forwarded by one
 trusted ingress, independent attempt and socket limits, slot cleanup, and
-rejection of address overrides from an untrusted peer. These tests verify the
-application's use of metadata; the HTTP edge still loses the original IPv6
-address. The ingress implementation awaits the repo owner's decision on whether
-a maintenance cutover is available. No maintenance cutover is assumed.
+rejection of address overrides from an untrusted peer. These verify the
+application's use of metadata. Live verification of the actual RKE2 ingress,
+dual-stack bindings and header behavior remains a cutover gate in the
+[runbook](../infra/RUNBOOK.md#first-bastion-and-ipv6-http-cutover).
 
 ### Packaged and live rollout verification
 
@@ -525,6 +521,6 @@ The earlier long soak still predates the review and attribution fixes. Complete
 the
 [remaining staging checks](BASTION-QUALIFICATION.md#limits-and-remaining-deployment-checks)
 before public-port cutover: Kubernetes endpoint replacement, actual IPv4/IPv6
-client IPs through HAProxy and TLS IRC,
+client IPs through HAProxy, TLS IRC and native HTTP ingress,
 NetworkPolicy including IRC, mounted secrets, pairing, terminal cleanup and the
 rollback route.

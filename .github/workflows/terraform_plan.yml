@@ -125,6 +125,7 @@ jobs:
           terraform show -json plan.out > plan.json
 
           deletes=$(jq -r '[.resource_changes[]? | select(.change.actions | index("delete")) | .address] | .[]' plan.json)
+          forgets=$(jq -r '[.resource_changes[]? | select(.change.actions | index("forget")) | .address] | .[]' plan.json)
           moves=$(jq -r '[.resource_changes[]? | select(.previous_address != null) | "\(.previous_address) -> \(.address)"] | .[]' plan.json)
           adds=$(jq '[.resource_changes[]? | select(.change.actions == ["create"])] | length' plan.json)
           changes=$(jq '[.resource_changes[]? | select(.change.actions == ["update"])] | length' plan.json)
@@ -134,6 +135,13 @@ jobs:
             echo ""
             echo "- create: $adds"
             echo "- update in place: $changes"
+            if [ -n "$forgets" ]; then
+              echo ""
+              echo "### state removals (live resources retained)"
+              echo '```'
+              echo "$forgets"
+              echo '```'
+            fi
             if [ -n "$moves" ]; then
               echo ""
               echo "### moves"

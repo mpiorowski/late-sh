@@ -62,10 +62,10 @@ late.sh      → <server-ip>
 *.late.sh    → <server-ip>
 ```
 
-For IPv6, configure matching AAAA records to the node IPv6 address. The
-Terraform-managed `ipv6-proxy` DaemonSet binds only that IPv6 address and
-forwards HTTP(S) into the existing IPv4 ingress path; SSH and IRC bind both
-address families on `ssh-edge` (see below).
+For IPv6, configure matching AAAA records to the node IPv6 address.
+Ingress-nginx binds HTTP(S) directly on the node's IPv4 and IPv6 interfaces;
+SSH and IRC bind both address families on `ssh-edge` (see below). The first
+switch from the old IPv6 HTTP proxy is a [maintenance cutover](RUNBOOK.md#first-bastion-and-ipv6-http-cutover).
 
 This enables:
 
@@ -161,7 +161,7 @@ treating the rollout as failed.
 
 | Node       | RKE2 role                    | Placement                                   | Runs                                                                                                                                                   |
 | ---------- | ---------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `server-1` | server (control plane, etcd) | untainted                                   | service-ssh, redis, doors, ingress-nginx, ipv6-proxy, ssh-edge, LiveKit, Postgres                                                                      |
+| `server-1` | server (control plane, etcd) | untainted                                   | service-ssh, redis, doors, ingress-nginx, ssh-edge, LiveKit, Postgres                                                                      |
 | `agent-1`  | agent                        | label and `NoSchedule` taint `role=support` | service-web, Icecast, Liquidsoap, otel-collector, vmagent, kube-state-metrics, VictoriaMetrics/Logs/Traces, Grafana, Minecraft, second CoreDNS replica |
 | `agent-2`  | agent (arm64)                | label and `NoSchedule` taint `role=games`   | Vintage Story                                                                                                                                          |
 
@@ -304,20 +304,22 @@ secrets/variables for CI/CD).
 
 ### Bastion
 
-`BASTION_ENABLED=1` provisions the SSH frontend and an IPv4/IPv6 listener on
-port `5222` in `ssh-edge`, forwarding PROXY v1 metadata to the bastion; port `22`
-continues to reach `late-ssh` directly. Both `BASTION_HOST_KEY` and
+`BASTION_ENABLED=1` provisions the SSH frontend and routes public IPv4/IPv6
+port `22` through `ssh-edge` to the bastion with PROXY v1 client metadata.
+With `BASTION_ENABLED=0`, port `22` reaches `late-ssh` directly. Both `BASTION_HOST_KEY` and
 `BASTION_SHARED_SECRET` are required when enabled. The shared secret is injected
 into both services; when absent or blank, the backend's private tunnel listener
 stays off and direct SSH still starts. Backend listener ports and trusted CIDRs
 live in the `late-ssh` profiles.
 
-For first enablement, deploy the ssh image, configure both GitHub environment
-secrets, set `BASTION_ENABLED=1`, and ship an `-infra` release. Terraform creates
-the bastion deployment without waiting for the placeholder image to become
-ready. Then publish a `-bastion` release, which installs the real image through
-`deploy_service.yml` and waits for rollout. Later infra applies preserve that
-image. Confirm the new port works before any public-port cutover.
+For first enablement, use the [maintenance cutover
+runbook](RUNBOOK.md#first-bastion-and-ipv6-http-cutover): deploy the compatible
+ssh image, configure both GitHub environment secrets, then set
+`BASTION_ENABLED=1` and ship an `-infra` release in the outage. Terraform
+creates the bastion deployment without waiting for the placeholder image.
+Publish a `-bastion` release to install the real image and wait for rollout.
+Later infra applies preserve that image. Reopen public traffic after the edge,
+IP attribution and pairing checks pass.
 
 ### IRC
 
@@ -336,14 +338,6 @@ deploy-time rollout step: deploy a parser-capable image first, then set the
 GitHub environment variable `IRC_PROXY_EMIT=1` and run a subsequent
 infrastructure deployment. Rollback reverses the order. The prod profile always
 accepts PROXY headers, so there is no accept-side toggle.
-
-### IPv6 edge proxy
-
-| Variable             | Description                                          |
-| -------------------- | ---------------------------------------------------- |
-| `IPV6_PROXY_ENABLED` | Deploy the host-network IPv6-only HAProxy edge proxy |
-| `IPV6_PROXY_ADDRESS` | Public IPv6 address for the proxy to bind            |
-| `IPV6_PROXY_IMAGE`   | HAProxy image used by the proxy                      |
 
 ### Secrets injected into late-ssh
 

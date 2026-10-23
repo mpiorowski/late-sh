@@ -80,7 +80,7 @@ locals {
   # (/etc/rancher/rke2/config.yaml on the node, infra/README.md), so a
   # workload lands there only when it carries both the node selector and the
   # toleration. Everything without them stays on server-1: service-ssh, redis,
-  # the doors, ingress-nginx, ipv6-proxy, ssh-edge, LiveKit's media hostPorts,
+  # the doors, ingress-nginx, ssh-edge, LiveKit's media hostPorts,
   # and every workload whose local-path volume is still pinned to server-1
   # (the Postgres instances). Moving one of those needs a fresh volume on
   # agent-1, not just these two fields.

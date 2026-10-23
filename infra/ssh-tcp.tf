@@ -2,12 +2,12 @@
 # SSH and IRC edge: host-network HAProxy on public :22 and :6697
 # =============================================================================
 # Owns the public SSH and IRC ports on IPv4 and IPv6 and forwards raw TCP to
-# service-ssh-sv, prepending PROXY v1 so late-ssh and its ircd resolve real
-# client IPs. HAProxy reaches the pod from the node address, which the prod
+# the SSH or IRC Service, prepending PROXY v1 so late-ssh and its ircd resolve
+# real client IPs. HAProxy reaches the pod from the node address, which the prod
 # profile trusts (late-ssh/src/config.rs). This enables: ssh late.sh and
 # irc.late.sh.
 #
-# Deliberately not on ingress-nginx or ipv6-proxy: Ingress edits,
+# Deliberately not on ingress-nginx: Ingress edits,
 # cert-manager HTTP-01 solvers and controller rollouts reload or restart
 # those, and nginx kills whatever its old workers hold 240 s after every
 # reload (SCALE.md, Pain Point 9). This config only changes when SSH/IRC
@@ -19,9 +19,9 @@
 # refused sockets on the spot, so 4096 is headroom that also keeps a flood
 # inside the memory limit below.
 #
-# During the bastion rollout, BASTION_ENABLED=1 adds a parallel dogfood
-# listener on :5222 to service-bastion-sv; public :22 stays on late-ssh.
-# Cutover changes the :22 default_backend to service_bastion.
+# The first bastion enablement is a scheduled maintenance cutover. While
+# BASTION_ENABLED=0, public :22 uses direct SSH; setting it to 1 switches :22
+# to the bastion. There is no parallel public dogfood port.
 # =============================================================================
 
 locals {
@@ -41,16 +41,11 @@ locals {
     frontend ssh
       bind :22
       bind [::]:22 v6only
-      default_backend service_ssh
+      default_backend ${var.BASTION_ENABLED == "1" ? "service_bastion" : "service_ssh"}
 
     backend service_ssh
       server service_ssh service-ssh-sv.default.svc.cluster.local:2222 send-proxy
     %{if var.BASTION_ENABLED == "1"}
-    frontend bastion
-      bind :5222
-      bind [::]:5222 v6only
-      default_backend service_bastion
-
     backend service_bastion
       server service_bastion service-bastion-sv.default.svc.cluster.local:${var.BASTION_SSH_PORT} send-proxy
     %{endif}
@@ -78,6 +73,10 @@ resource "kubernetes_config_map_v1" "ssh_edge" {
 }
 
 resource "kubernetes_daemon_set_v1" "ssh_edge" {
+  # HAProxy must resolve this Service when BASTION_ENABLED switches :22. The
+  # Service may be created in the same maintenance-window Terraform apply.
+  depends_on = [kubernetes_service_v1.service_bastion_sv]
+
   metadata {
     name      = "ssh-edge"
     namespace = "kube-system"
@@ -122,7 +121,7 @@ resource "kubernetes_daemon_set_v1" "ssh_edge" {
         # the next big frame (a screen switch, a resize) waits extra round
         # trips to reach the user. Host network puts this pod in the node's
         # network namespace, so the setting covers every client-facing
-        # socket on the node (this HAProxy, ipv6-proxy, LiveKit); the kernel
+        # socket on the node (this HAProxy, ingress-nginx, LiveKit); the kernel
         # reads it live, so open connections get it too. SCALE.md, Pain
         # Point 11.
         init_container {
