@@ -4201,6 +4201,235 @@
         "x": 18,
         "y": 325
       }
+    },
+    {
+      "type": "row",
+      "title": "Newcomers",
+      "collapsed": false,
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 333
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Day-One Active Minutes by Screen",
+      "description": "Minutes with a key press behind them, from accounts in their first 24 hours, by screen, over the selected range. Counters are per-pod and reset on restart, so this sums each pod's high-water mark.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (screen) (max_over_time(late_ssh_attention_seconds_total{tenure=\"day_one\",presence=\"active\"}[$__range])) / 60",
+          "legendFormat": "{{screen}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 334
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Tour Stops Reached",
+      "description": "First-visit tour stops reached over the selected range. Each stop is one Enter past the one before, so the drop between two bars is where newcomers leave the route. The welcome box itself is every new-account session start.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (stop) (max_over_time(late_ssh_tour_stops_total[$__range]))",
+          "legendFormat": "{{stop}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 334
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Where Day-One Sessions End",
+      "description": "The screen that was up when a first-day account's session ended, over the selected range: the last thing a newcomer saw.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (screen) (max_over_time(late_ssh_session_ends_total{tenure=\"day_one\"}[$__range]))",
+          "legendFormat": "{{screen}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 334
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Sessions by Tenure",
+      "description": "Sessions started per day from accounts on their first day, in their first week, and older. First-week sessions against first-day ones is the cheapest view of whether newcomers come back; the per-person funnel is the AUDIENCE.md query.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (tenure) (increase(late_ssh_session_start_seconds_count{stage=\"total\"}[1d]))",
+          "legendFormat": "{{tenure}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 342
+      }
     }
   ]
 }

@@ -426,14 +426,28 @@ a no-op twin when built without `otel`.
   attributed in `ssh.rs::render_once`),
   `late_ssh_render_pass_seconds{reason,screen}`,
   `late_ssh_render_input_budget_hits_total`.
-- Engagement: `late_ssh_attention_seconds_total{screen,place,presence}` and
-  `late_ssh_place_visits_total{screen,place}`, fed on the 1 Hz edge by
+- Engagement: `late_ssh_attention_seconds_total{screen,place,presence,tenure}` and
+  `late_ssh_place_visits_total{screen,place,tenure}`, fed on the 1 Hz edge by
   `tick.rs::record_attention`. `place` is `none` except where a screen holds
   several (Home's room kind, the Arcade board, the house game, the People
-  section, Artboard canvas or gallery); never a room id.
+  section, Artboard canvas or gallery); never a room id. `tenure` is the
+  account's age in three buckets (`day_one`, `first_week`, `regular`;
+  `metrics::Tenure::of`, from `App::account_created`), the newcomer split
+  every engagement counter carries so "what does a newcomer do on day one"
+  is a Grafana question, not a database one.
+- Newcomers: `late_ssh_tour_stops_total{stop}` (a first-visit tour stop
+  reached by an Enter at the one before, recorded in `input.rs::tour_advance`;
+  the drop between two stops is where they leave the tour, and the welcome
+  box itself is every `user="new"` session start) and
+  `late_ssh_session_ends_total{tenure,screen}` (the screen that was up when
+  a session ended: the last thing a newcomer saw). The Grafana "Newcomers"
+  row (`monitoring/dashboards/observability.json`) reads these plus the
+  day-one slice of the attention counter.
 - Connections: `late_ssh_connections_total`,
   `late_ssh_connections_rejected_total{reason}`, `late_ssh_sessions_active`,
-  `late_ssh_session_start_seconds{stage,user}`.
+  `late_ssh_session_start_seconds{stage,user,tenure}` (`user` is whether the
+  connect created the account; `tenure` the account's age bucket, so the
+  `_count` by tenure is sessions from accounts in their first week).
 
 ## 13. Tests
 

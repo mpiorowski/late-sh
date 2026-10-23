@@ -3970,6 +3970,9 @@ fn tour_advance(app: &mut App) {
         TourMove::Zen => toggle_zen_globally(app),
         TourMove::Finished => app.persist_clubhouse_tutorial_done(),
     }
+    // The stop just reached; the welcome box is every first visit, which
+    // the session start counter already counts as `user="new"`.
+    crate::metrics::record_tour_stop(app.clubhouse.tutorial);
 }
 
 /// Hold open the real modal the current stop pitches, and close it once the

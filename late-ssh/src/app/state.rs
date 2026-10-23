@@ -447,6 +447,9 @@ pub struct SessionConfig {
     /// Turns this session's input into active minutes while the account is
     /// young. Built from the account's creation time; inert in test apps.
     pub newcomer_clock: crate::app::referral::state::NewcomerClock,
+    /// When the account was created: `App::tenure` reads it on every
+    /// attention edge and at the session's end.
+    pub(crate) account_created: chrono::DateTime<chrono::Utc>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub user_id: Uuid,
     pub permissions: Permissions,
@@ -663,6 +666,9 @@ pub struct App {
     pub(super) pot_service: Option<crate::app::pot::svc::PotService>,
     pub(super) referral_service: crate::app::referral::svc::ReferralService,
     pub(super) newcomer_clock: crate::app::referral::state::NewcomerClock,
+    /// When the account was created, for `App::tenure` (the newcomer
+    /// split on the attention and session counters).
+    pub(super) account_created: chrono::DateTime<chrono::Utc>,
     /// The process-shared pot, read on the ~1s edge into `pot_view` so no
     /// render ever queries for it.
     pub(super) pot_snapshot_rx: Option<watch::Receiver<Arc<crate::app::pot::svc::PotSnapshot>>>,
@@ -1780,6 +1786,7 @@ impl App {
             pot_service: config.pot_service,
             referral_service: config.referral_service.clone(),
             newcomer_clock: config.newcomer_clock,
+            account_created: config.account_created,
             pot_view: crate::app::pot::state::PotView::default(),
             active_users: active_users.clone(),
             username_directory: config.username_directory,

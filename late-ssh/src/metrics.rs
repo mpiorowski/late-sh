@@ -17,6 +17,7 @@ use crate::app::calendar::svc::{CalendarAnnouncement, CalendarOp, CalendarWrite}
 use crate::app::chat::news::svc::{BodyFetchOutcome, NewsSaveOutcome, XMediaLookup};
 use crate::app::chat::svc::{GildRefusal, SendRefusal};
 use crate::app::clubhouse::nightcap::svc::{NightcapHouseFailure, NightcapOrderResult};
+use crate::app::clubhouse::state::Tutorial;
 use crate::app::common::primitives::Screen;
 use crate::app::crown::svc::CrownRefusal;
 use crate::app::deadchannel::haunt::state::GateVerdict;
@@ -477,6 +478,29 @@ pub enum Presence {
     Idle,
 }
 
+/// How long the account behind a session has existed, for the counters
+/// that split newcomers from regulars: its first day, its first week, or
+/// older. Three buckets, so the series count stays fixed; the per-person
+/// funnel stays a database question (`AUDIENCE.md`, Measuring).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tenure {
+    DayOne,
+    FirstWeek,
+    Regular,
+}
+
+impl Tenure {
+    /// The bucket an account created at `created` sits in at `now`.
+    pub fn of(created: chrono::DateTime<chrono::Utc>, now: chrono::DateTime<chrono::Utc>) -> Self {
+        let age = now.signed_duration_since(created);
+        match age {
+            age if age < chrono::Duration::days(1) => Self::DayOne,
+            age if age < chrono::Duration::days(7) => Self::FirstWeek,
+            _ => Self::Regular,
+        }
+    }
+}
+
 /// Where inside a screen a session's attention landed. Most screens are one
 /// place (`Whole`); Home splits by what the chat pane shows, the Arcade and
 /// the House Table by open game, Profiles by shelf, the Artboard by what
@@ -696,6 +720,7 @@ mod inner {
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{NewsSaveOutcome, XMediaLookup};
     use super::{PollOutcome, PolledFeed};
+    use super::{Tenure, Tutorial};
     use super::{
         ZorkAction, ZorkCatalogueRead, ZorkEdition, ZorkSessionEnd, ZorkSuggestion,
         ZorkSwitchResult,
@@ -2405,12 +2430,18 @@ mod inner {
         }
     }
 
-    pub fn record_session_start(stage: SessionStartStage, user: SessionUser, seconds: f64) {
+    pub fn record_session_start(
+        stage: SessionStartStage,
+        user: SessionUser,
+        tenure: Tenure,
+        seconds: f64,
+    ) {
         session_start_seconds().record(
             seconds,
             &[
                 KeyValue::new("stage", session_start_stage_label(stage)),
                 KeyValue::new("user", session_user_label(user)),
+                KeyValue::new("tenure", tenure_label(tenure)),
             ],
         );
     }
@@ -2578,13 +2609,28 @@ mod inner {
         }
     }
 
-    pub fn record_attention(screen: Screen, place: Place, presence: Presence, seconds: f64) {
+    fn tenure_label(tenure: Tenure) -> &'static str {
+        match tenure {
+            Tenure::DayOne => "day_one",
+            Tenure::FirstWeek => "first_week",
+            Tenure::Regular => "regular",
+        }
+    }
+
+    pub fn record_attention(
+        screen: Screen,
+        place: Place,
+        presence: Presence,
+        tenure: Tenure,
+        seconds: f64,
+    ) {
         attention_seconds_total().add(
             seconds,
             &[
                 KeyValue::new("screen", screen_label(screen)),
                 KeyValue::new("place", place_label(place)),
                 KeyValue::new("presence", presence_label(presence)),
+                KeyValue::new("tenure", tenure_label(tenure)),
             ],
         );
     }
@@ -2601,12 +2647,78 @@ mod inner {
         })
     }
 
-    pub fn record_place_visit(screen: Screen, place: Place) {
+    pub fn record_place_visit(screen: Screen, place: Place, tenure: Tenure) {
         place_visits_total().add(
             1,
             &[
                 KeyValue::new("screen", screen_label(screen)),
                 KeyValue::new("place", place_label(place)),
+                KeyValue::new("tenure", tenure_label(tenure)),
+            ],
+        );
+    }
+
+    fn tour_stop_label(stop: Tutorial) -> &'static str {
+        match stop {
+            Tutorial::Off => "off",
+            Tutorial::Pending => "pending",
+            Tutorial::Welcome => "welcome",
+            Tutorial::VisitChat => "chat",
+            Tutorial::VisitMusic => "music",
+            Tutorial::VisitArcade => "arcade",
+            Tutorial::VisitLobby => "lobby",
+            Tutorial::VisitTable => "table",
+            Tutorial::VisitGames => "games",
+            Tutorial::VisitDungeon => "dungeon",
+            Tutorial::VisitArtboard => "artboard",
+            Tutorial::VisitMap => "map",
+            Tutorial::VisitProfiles => "profiles",
+            Tutorial::VisitJobs => "jobs",
+            Tutorial::VisitLeaderboard => "leaderboard",
+            Tutorial::VisitCalendar => "calendar",
+            Tutorial::VisitZen => "zen",
+            Tutorial::Homecoming => "homecoming",
+            Tutorial::Done => "done",
+        }
+    }
+
+    fn tour_stops_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_tour_stops_total")
+                .with_description(
+                    "First-visit tour stops reached by an Enter at the one before; the drop between two stops is where newcomers leave the tour",
+                )
+                .build()
+        })
+    }
+
+    /// A tour stop reached. Every stop is one Enter past the one before, so
+    /// the count at each stop against the count at the next is the drop.
+    pub fn record_tour_stop(stop: Tutorial) {
+        tour_stops_total().add(1, &[KeyValue::new("stop", tour_stop_label(stop))]);
+    }
+
+    fn session_ends_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_session_ends_total")
+                .with_description(
+                    "Sessions ended, by the account's tenure and the screen that was up: where a newcomer was when they left",
+                )
+                .build()
+        })
+    }
+
+    /// A session ended on `screen`: the last thing the person saw.
+    pub fn record_session_end(tenure: Tenure, screen: Screen) {
+        session_ends_total().add(
+            1,
+            &[
+                KeyValue::new("tenure", tenure_label(tenure)),
+                KeyValue::new("screen", screen_label(screen)),
             ],
         );
     }
@@ -3863,6 +3975,7 @@ mod inner {
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
     use super::{NewsSaveOutcome, XMediaLookup};
     use super::{PollOutcome, PolledFeed};
+    use super::{Tenure, Tutorial};
     use super::{
         ZorkAction, ZorkCatalogueRead, ZorkEdition, ZorkSessionEnd, ZorkSuggestion,
         ZorkSwitchResult,
@@ -3910,7 +4023,13 @@ mod inner {
     pub fn record_chat_message_sent() {}
     pub fn record_chat_message_edited() {}
     pub fn record_game_win(_game: ActivityGame) {}
-    pub fn record_session_start(_stage: SessionStartStage, _user: SessionUser, _seconds: f64) {}
+    pub fn record_session_start(
+        _stage: SessionStartStage,
+        _user: SessionUser,
+        _tenure: Tenure,
+        _seconds: f64,
+    ) {
+    }
     pub fn record_pg_refresh(_refresh: Refresh, _outcome: RefreshOutcome, _seconds: f64) {}
     pub fn observe_chat_read_permits(
         _permits: std::sync::Arc<tokio::sync::Semaphore>,
@@ -3924,8 +4043,17 @@ mod inner {
         _finish: ArcadeFinish,
     ) {
     }
-    pub fn record_attention(_screen: Screen, _place: Place, _presence: Presence, _seconds: f64) {}
-    pub fn record_place_visit(_screen: Screen, _place: Place) {}
+    pub fn record_attention(
+        _screen: Screen,
+        _place: Place,
+        _presence: Presence,
+        _tenure: Tenure,
+        _seconds: f64,
+    ) {
+    }
+    pub fn record_place_visit(_screen: Screen, _place: Place, _tenure: Tenure) {}
+    pub fn record_tour_stop(_stop: Tutorial) {}
+    pub fn record_session_end(_tenure: Tenure, _screen: Screen) {}
     pub fn record_screensaver(
         _trigger: ScreensaverTrigger,
         _selection: AsciiSelection,

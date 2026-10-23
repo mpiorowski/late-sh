@@ -744,6 +744,8 @@ fn make_app_with_chat_service_and_permissions(
         pot_service: None,
         referral_service: crate::app::referral::svc::ReferralService::new(db.clone()),
         newcomer_clock: crate::app::referral::state::NewcomerClock::inert(),
+        // A regular: the newcomer counters are no-ops in tests either way.
+        account_created: chrono::DateTime::UNIX_EPOCH,
         activity_feed_rx: None,
         is_new_user: world.is_new_user,
         landing_page: match world.landing_page {
@@ -1022,6 +1024,8 @@ pub fn make_app_with_paired_client(
         pot_service: None,
         referral_service: crate::app::referral::svc::ReferralService::new(db.clone()),
         newcomer_clock: crate::app::referral::state::NewcomerClock::inert(),
+        // A regular: the newcomer counters are no-ops in tests either way.
+        account_created: chrono::DateTime::UNIX_EPOCH,
         activity_feed_rx: None,
         is_new_user: false,
         landing_page: late_core::models::user::LandingPage::Clubhouse,

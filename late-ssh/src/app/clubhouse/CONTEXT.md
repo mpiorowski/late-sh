@@ -184,7 +184,11 @@ room is the chat surface, and the full history lives in #lounge on Home.
   the tour, the gate keeps every other key, and no choice saves a preference.
   `State::tutorial_advance` is the only thing that moves the stage; it
   returns a `TourMove` telling the gate where the next stop lives.
-  `Homecoming`'s Enter finishes the tour in place and frees input.
+  `Homecoming`'s Enter finishes the tour in place and frees input. Every
+  stop reached counts once on `late_ssh_tour_stops_total{stop}` (from
+  `app/input.rs::tour_advance`, never from this state machine), so the
+  drop between two stops is where newcomers leave the route;
+  `late-ssh/CONTEXT.md`, Telemetry.
 - **Every stop is one `ui::TourHeader`,** drawn one way: a title, the
   pitch, a blank row, then a breaker with the stop's keys flush right, two columns in
   from the frame (`TOUR_SIDE_PADDING`) with a breathing row above and

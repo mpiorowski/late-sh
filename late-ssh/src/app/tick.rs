@@ -1667,12 +1667,25 @@ impl App {
         let seconds = now.duration_since(self.attention_mark).as_secs_f64();
         self.attention_mark = now;
         let place = self.attention_place();
+        let tenure = self.tenure();
         let spot = Some((self.screen, place));
         if self.attention_spot != spot {
             self.attention_spot = spot;
-            crate::metrics::record_place_visit(self.screen, place);
+            crate::metrics::record_place_visit(self.screen, place, tenure);
         }
-        crate::metrics::record_attention(self.screen, place, self.attention_presence(), seconds);
+        crate::metrics::record_attention(
+            self.screen,
+            place,
+            self.attention_presence(),
+            tenure,
+            seconds,
+        );
+    }
+
+    /// How old the account behind this session is right now, for the
+    /// counters that split newcomers from regulars.
+    pub(crate) fn tenure(&self) -> crate::metrics::Tenure {
+        crate::metrics::Tenure::of(self.account_created, chrono::Utc::now())
     }
 
     /// Whether a key landed within [`ATTENTION_ACTIVE_WINDOW`], or the

@@ -611,6 +611,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             user.created,
             chrono::Utc::now(),
         ),
+        account_created: user.created,
         activity_feed_rx,
         user_id,
         permissions,
