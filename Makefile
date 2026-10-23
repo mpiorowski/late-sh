@@ -28,7 +28,11 @@ CHECK_PACKAGES = -p late-cli -p late-core -p late-ssh -p late-web -p late-webvie
 # it to build scripts, and tikv-jemalloc-sys's nested make then parses ARGS'
 # words as targets and dies on a fresh build. Cargo gives build scripts its
 # own jobserver, so dropping make's costs no parallelism.
-CHECK_CARGO_ENV = env -u MAKEFLAGS -u MFLAGS CARGO_INCREMENTAL=0 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
+# Incremental, since a check or a test-llm run is usually a rerun after a
+# small edit: a warm late-ssh test rebuild after a one-line edit takes about
+# 25s and 5G, a cold one about 70s and 7.5G. CI runs cargo itself, without
+# incremental.
+CHECK_CARGO_ENV = env -u MAKEFLAGS -u MFLAGS CARGO_INCREMENTAL=1 CARGO_PROFILE_DEV_DEBUG=0 CARGO_PROFILE_TEST_DEBUG=0
 # Cap parallel compile/link jobs locally; 16-way builds spike past RAM on a
 # swapless machine and freeze the desktop. CI overrides via CHECK_BUILD_JOBS.
 CHECK_BUILD_JOBS ?= 8
@@ -89,16 +93,23 @@ check-db-down:
 # (`--lib` on a crate with a lib and a main: without it nextest builds the lib
 # a second time for the binary's empty test target, doubling the heaviest
 # compile.)
+# Each `-p` set builds its own late-ssh test binary with its own incremental
+# cache, so a set the machine has not built yet starts cold. The cold peak is
+# rustc's frontend holding the whole late-ssh crate: 4 build jobs instead of 8
+# saves under 0.5G of it.
 # The run is a scope in background.slice, whose CPU weight (30, to app.slice's
 # 100) lets the browser, audio and other sessions win the CPU. Its memory cap
 # follows what is free at launch: MemAvailable less TEST_LLM_HEADROOM_G, never
 # above TEST_LLM_MEM_MAX_G. A fixed cap larger than what is free never trips
 # on a loaded swapless machine, and the global OOM killer takes the browser
-# instead. MemoryHigh throttles the build 2G below the cap; MemoryMax kills the
-# scope, not the desktop. Under TEST_LLM_MEM_MIN_G the run refuses to start.
+# instead. MemoryMax kills inside the scope, not the desktop, and systemd then
+# stops the whole scope (exit 143, which test-llm names). There is no
+# MemoryHigh: with no swap a build over it cannot be reclaimed, only
+# throttled, and it stalls for half an hour instead of failing. Under
+# TEST_LLM_MEM_MIN_G the run refuses to start, since a cold build needs it.
 TEST_LLM_MEM_MAX_G ?= 12
 TEST_LLM_HEADROOM_G ?= 3
-TEST_LLM_MEM_MIN_G ?= 6
+TEST_LLM_MEM_MIN_G ?= 9
 .PHONY: test-llm
 test-llm: .env
 	@set -e; \
@@ -112,7 +123,8 @@ test-llm: .env
 	echo "test-llm: memory cap $${max_g}G ($${avail_g}G free)"; \
 	trap 'status=$$?; $(CHECK_DB_STOP); exit $$status' EXIT; \
 	$(CHECK_DB_START); \
-	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) systemd-run --user --scope -q --slice=background.slice -p MemoryHigh=$$((max_g - 2))G -p MemoryMax=$${max_g}G cargo nextest run --build-jobs $(CHECK_BUILD_JOBS) --no-fail-fast --failure-output final $(ARGS)
+	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) systemd-run --user --scope -q --slice=background.slice -p MemoryMax=$${max_g}G cargo nextest run --build-jobs $(CHECK_BUILD_JOBS) --no-fail-fast --failure-output final $(ARGS) \
+		|| { status=$$?; case $$status in 137|143) echo "test-llm: killed at the $${max_g}G memory cap; free some memory and retry" >&2;; esac; exit $$status; }
 
 # The Lateania battle arena: every balance contract and both report parts
 # (late-ssh/target/lateania-arena*.md). Thousands of real engine fights, so
@@ -152,9 +164,10 @@ deadchannel-crystals:
 deadchannel-run:
 	$(MAKE) test-llm ARGS="-p late-ssh --lib --run-ignored all --no-capture -E 'test(arena_run)'"
 
-# Full pre-merge sweep, and the only place the otel feature is exercised:
-# clippy + tests run the whole workspace WITH --features otel, so the real
+# Full pre-merge sweep, and the only place the otel feature is compiled:
+# clippy lints the whole workspace WITH --features otel, so the real
 # telemetry/metrics code (the config prod ships) is compiled and linted here.
+# The tests run without it.
 # CI deliberately skips otel to stay cheap (see .github/workflows/ci.yml), so
 # this is where otel breakage is caught before release. fmt stays scoped to
 # first-party packages: `cargo fmt --all` also reaches vendored path deps like
@@ -196,11 +209,15 @@ start-amd64: .env keys
 
 startm: .env keys
 	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up --build
+# `down` takes the containers away and keeps the database (the named
+# `postgres-data` volume); `remove` wipes the database too. Not `down -v`:
+# that also drops the cargo caches and forces a full rebuild.
 down:
 	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml down
 stop:
 	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml stop
 remove: down
+	docker volume rm -f "$$(docker compose -f docker-compose.yml config | sed -n 's/^name: //p')_postgres-data"
 
 # Stops every running container on this machine, not just this project's.
 .PHONY: stop-all

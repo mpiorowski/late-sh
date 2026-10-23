@@ -10,11 +10,13 @@ use crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleArtLoad;
 use crate::app::audio::client_state::ClientPlatform;
 use crate::app::audio::radio_meta::polled::PolledFeed;
 use crate::app::audio::radio_meta::svc::PollOutcome;
-use crate::app::audio::svc::ThumbnailFetch;
+use crate::app::audio::svc::{BoothFavoriteOutcome, ThumbnailFetch};
 use crate::app::bonsai::state::BonsaiAction;
 use crate::app::bonsai::svc::BonsaiActionResult;
 use crate::app::calendar::svc::{CalendarAnnouncement, CalendarOp, CalendarWrite};
-use crate::app::chat::news::svc::{BodyFetchOutcome, NewsSaveOutcome, XMediaLookup};
+use crate::app::chat::news::svc::{
+    BodyFetchOutcome, NewsCardOutcome, NewsSaveOutcome, XMediaLookup,
+};
 use crate::app::chat::svc::{GildRefusal, SendRefusal};
 use crate::app::clubhouse::nightcap::svc::{NightcapHouseFailure, NightcapOrderResult};
 use crate::app::clubhouse::state::Tutorial;
@@ -691,6 +693,7 @@ mod inner {
     use crate::app::activity::event::GameFamily;
 
     use super::BartenderMemoryWrite;
+    use super::BoothFavoriteOutcome;
     use super::HomeRoom;
     use super::PosterBeat;
     use super::ScreensaverTrigger;
@@ -718,7 +721,7 @@ mod inner {
     };
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
-    use super::{NewsSaveOutcome, XMediaLookup};
+    use super::{NewsCardOutcome, NewsSaveOutcome, XMediaLookup};
     use super::{PollOutcome, PolledFeed};
     use super::{Tenure, Tutorial};
     use super::{
@@ -1755,6 +1758,18 @@ mod inner {
         })
     }
 
+    fn news_cards_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_news_cards_total")
+                .with_description(
+                    "News share cards in #lounge by outcome: posted, refused (room rules), post_failed, link_failed (posted but not pointed at its story)",
+                )
+                .build()
+        })
+    }
+
     fn news_share_chips_paid_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -1782,6 +1797,18 @@ mod inner {
                 .u64_counter("late_ssh_booth_thumbnails_total")
                 .with_description(
                     "YouTube thumbnail fetches for the live strip, once per track per replica",
+                )
+                .build()
+        })
+    }
+
+    fn booth_favorites_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_booth_favorites_total")
+                .with_description(
+                    "Booth favorites steps by step (load, add, remove) and outcome; load counts every read, the one each write ends on included",
                 )
                 .build()
         })
@@ -3084,6 +3111,22 @@ mod inner {
         news_saves_total().add(1, &[KeyValue::new("outcome", news_save_label(outcome))]);
     }
 
+    fn news_card_label(outcome: NewsCardOutcome) -> &'static str {
+        match outcome {
+            NewsCardOutcome::Posted => "posted",
+            NewsCardOutcome::Refused => "refused",
+            NewsCardOutcome::PostFailed => "post_failed",
+            NewsCardOutcome::LinkFailed => "link_failed",
+            NewsCardOutcome::ShareGone => "share_gone",
+        }
+    }
+
+    /// Every share tries one card in #lounge; anything but posted is a
+    /// share people only find in News.
+    pub fn record_news_card(outcome: NewsCardOutcome) {
+        news_cards_total().add(1, &[KeyValue::new("outcome", news_card_label(outcome))]);
+    }
+
     /// Same shape as the News share: one counter for the submissions and one
     /// for the chips they minted, so the tracks that came in past the day's
     /// cap are visible beside the paid ones.
@@ -3133,6 +3176,45 @@ mod inner {
         booth_thumbnails_total().add(
             1,
             &[KeyValue::new("outcome", thumbnail_fetch_label(outcome))],
+        );
+    }
+
+    fn booth_favorite_step_label(outcome: BoothFavoriteOutcome) -> &'static str {
+        match outcome {
+            BoothFavoriteOutcome::Loaded | BoothFavoriteOutcome::LoadFailed => "load",
+            BoothFavoriteOutcome::Added
+            | BoothFavoriteOutcome::AlreadyFavorite
+            | BoothFavoriteOutcome::Full
+            | BoothFavoriteOutcome::AddFailed => "add",
+            BoothFavoriteOutcome::Removed
+            | BoothFavoriteOutcome::AlreadyGone
+            | BoothFavoriteOutcome::RemoveFailed => "remove",
+        }
+    }
+
+    fn booth_favorite_outcome_label(outcome: BoothFavoriteOutcome) -> &'static str {
+        match outcome {
+            BoothFavoriteOutcome::Loaded => "loaded",
+            BoothFavoriteOutcome::Added => "added",
+            BoothFavoriteOutcome::AlreadyFavorite => "already_favorite",
+            BoothFavoriteOutcome::Full => "full",
+            BoothFavoriteOutcome::Removed => "removed",
+            BoothFavoriteOutcome::AlreadyGone => "already_gone",
+            BoothFavoriteOutcome::LoadFailed
+            | BoothFavoriteOutcome::AddFailed
+            | BoothFavoriteOutcome::RemoveFailed => "failed",
+        }
+    }
+
+    /// Added against removed is how much favorites get used; a run of full
+    /// is listeners wanting a bigger list; failed by step is the error rate.
+    pub fn record_booth_favorite(outcome: BoothFavoriteOutcome) {
+        booth_favorites_total().add(
+            1,
+            &[
+                KeyValue::new("step", booth_favorite_step_label(outcome)),
+                KeyValue::new("outcome", booth_favorite_outcome_label(outcome)),
+            ],
         );
     }
 
@@ -3783,6 +3865,22 @@ mod inner {
         door_watch_chat_room_failures_total().add(1, &[KeyValue::new("game", game.key())]);
     }
 
+    fn door_watch_username_failures_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_door_watch_username_failures_total")
+                .with_description(
+                    "Failures to look up the usernames behind a live-game roster block's handles, by game",
+                )
+                .build()
+        })
+    }
+
+    pub fn record_door_watch_username_failure(game: WatchDoor) {
+        door_watch_username_failures_total().add(1, &[KeyValue::new("game", game.key())]);
+    }
+
     fn zork_launches_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -3947,6 +4045,7 @@ mod inner {
     use late_core::models::user::{AsciiPiece, AsciiSelection};
 
     use super::BartenderMemoryWrite;
+    use super::BoothFavoriteOutcome;
     use super::PosterBeat;
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
@@ -3973,7 +4072,7 @@ mod inner {
     };
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
-    use super::{NewsSaveOutcome, XMediaLookup};
+    use super::{NewsCardOutcome, NewsSaveOutcome, XMediaLookup};
     use super::{PollOutcome, PolledFeed};
     use super::{Tenure, Tutorial};
     use super::{
@@ -4077,8 +4176,10 @@ mod inner {
     pub fn record_news_reader_opened(_status: BodyStatus) {}
     pub(crate) fn record_video_watch(_source: WatchSource, _outcome: WatchOutcome) {}
     pub fn record_news_save(_outcome: NewsSaveOutcome) {}
+    pub fn record_news_card(_outcome: NewsCardOutcome) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
     pub fn record_booth_thumbnail(_outcome: ThumbnailFetch) {}
+    pub fn record_booth_favorite(_outcome: BoothFavoriteOutcome) {}
     pub fn record_radio_meta_poll(_feed: PolledFeed, _outcome: PollOutcome) {}
     pub fn record_gild_bought(_tier: GildTier) {}
     pub fn record_gild_refused(_refusal: GildRefusal) {}
@@ -4129,6 +4230,7 @@ mod inner {
     pub fn record_door_watch_stream(_game: WatchDoor, _outcome: DoorWatchOutcome) {}
     pub fn record_door_watch_roster_failure(_game: WatchDoor) {}
     pub fn record_door_watch_chat_room_failure(_game: WatchDoor) {}
+    pub fn record_door_watch_username_failure(_game: WatchDoor) {}
     pub fn record_zork_launch(_edition: ZorkEdition, _action: ZorkAction) {}
     pub fn record_zork_session_end(_edition: ZorkEdition, _end: ZorkSessionEnd) {}
     pub fn record_zork_switch(_result: ZorkSwitchResult) {}

@@ -14,8 +14,8 @@ changing a domain.
   entries, no "used to", "no longer", "since <date>": git log says when. The
   one running log is the incident log in `infra/RUNBOOK.md`.
 - Ideas, roadmaps and parked designs go to a design doc (`SCALE.md`,
-  `devdocs/`, a domain's own design file such as `deadchannel/GAME.md`), never
-  to a context file. An open gap is a fact ("X does not do Y").
+  `AUDIENCE.md`, `devdocs/`, a domain's own design file such as
+  `deadchannel/GAME.md`), never to a context file. An open gap is a fact ("X does not do Y").
 - A change that makes a doc wrong updates it in the same change. Update the
   local context for behavior inside a domain; update this file when a page,
   a domain, a cross-domain rule or a command changes. If code and a doc
@@ -218,7 +218,7 @@ otherwise.
 | `clubhouse` | The tavern: crowd, seating, bubbles, the tour, the floor plan |
 | `clubhouse/nightcap` | The Nightcap bar out back |
 | `scratchpad` | `/pair` shared scratchpad |
-| `deadchannel` | The character game: the map of its slices, persistence; design in `GAME.md`, `DIGEST.md` |
+| `deadchannel` | The character game: the map of its slices, persistence; design in `GAME.md`; the diagnosis it rests on in the root `AUDIENCE.md`, the #lounge valve it waits on in `devdocs/FEED-BUDGET.md` |
 | `deadchannel/runner` | The runner: the look, the directory, the face in #deadchannel, the runner row |
 | `deadchannel/haunt` | First contact: the haunting ladder that brings staff in, `/haunt` |
 | `deadchannel/city` | The night city under `0`: map, shops, panels, art |
@@ -242,14 +242,16 @@ small modals.
 
 - `SCALE.md`: capacity, measured costs, the multi-replica ledger and the
   scaling plan, small debts.
+- `AUDIENCE.md`: who comes and what they do, measured: where attention goes,
+  what the numbers say, the ideas that follow, and how to query it.
 - `infra/README.md`: cluster setup, nodes, game servers, Terraform variables.
   `infra/RUNBOOK.md`: prod DB access, triage, deploys, the incident log.
 - `MUSIC.md`: the house music library and its licenses (linked from `/listen`).
 - `THEME.md`: adding a theme. `CONTRIBUTING.md`, `LICENSING.md`: for
   contributors.
-- `devdocs/`: research and design notes (door candidates, the IRC design and
-  IRCv3 ideas, the parked audio leader, the CLI YouTube backend plan, the
-  permissions matrix).
+- `devdocs/`: research and design notes (door candidates, the parked feed
+  budget, the IRC design and IRCv3 ideas, the parked audio leader, the CLI
+  YouTube backend plan, the permissions matrix).
 
 ## 7. Telemetry
 
@@ -276,14 +278,19 @@ query gotchas: `infra/RUNBOOK.md`.
 - **Agents run targeted tests only:** `make test-llm ARGS="-p <crate> --lib -E
   'test(<filter>)'"` starts the check DB and runs nextest in a low-priority
   scope capped to the memory free at launch (it refuses to start when too
-  little is). `--lib` is for a crate with both a lib and a main (`late-ssh`,
-  `late-web`, `late-core`, `late-webview`): without it the lib compiles twice.
+  little is). It builds incrementally, so a rerun after a small edit takes
+  about 25s; keep the `-p` set the same between runs, since a new set
+  rebuilds `late-ssh` cold. `--lib` is for a crate with both a lib and a main
+  (`late-ssh`, `late-web`, `late-core`, `late-webview`): without it the lib
+  compiles twice.
   A main-only crate (`late-cli`, the game doors) drops it. Never raw `cargo test`, `cargo nextest` or `cargo clippy`, and never a
   full suite. `cargo check`, `cargo build` and `cargo fmt` are fine.
 - **`make check` is the human gate:** `cargo fmt --check` on first-party
   packages only (never `cargo fmt --all`, which would reformat vendored crates),
-  then clippy and nextest over the workspace with `--features otel`, the only
-  place the otel build is compiled. It runs its own Postgres from
+  then clippy over the workspace with `--features otel` (the only place the
+  otel build is compiled) and nextest over the workspace without it. Like
+  `test-llm` it builds incrementally, so a rerun after a fix is mostly warm.
+  It runs its own Postgres from
   `docker-compose.check.yml` (`late-check`, port 55433), never the app's.
 - Tests live next to the code they test (`foo_test.rs` beside `foo.rs`, or a
   small inline `mod tests`); no crate has a `tests/` directory. Harnesses:

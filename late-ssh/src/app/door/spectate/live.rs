@@ -28,6 +28,8 @@ use super::ui::{duration_label, minutes_since};
 pub struct DoorGameStripView {
     pub key: LiveGameKey,
     pub entry: LiveGame,
+    /// Who is playing (`LiveRow::player`): their late.sh username.
+    pub player: String,
     /// People with this game's watch open (`LiveGamesService::watchers_of`).
     pub watching: usize,
 }
@@ -64,6 +66,7 @@ pub(crate) fn view(
         .map(|row| DoorGameStripView {
             key,
             entry: row.entry.clone(),
+            player: row.player().to_string(),
             watching,
         })
 }
@@ -88,7 +91,7 @@ pub(crate) fn glow() -> bool {
 /// `dcss mat · XL3 Lair:2`, after the rule label.
 pub(crate) fn compact_spans(rest: u16, strip: &DoorGameStripView) -> Vec<Span<'static>> {
     let rest = usize::from(rest);
-    let lead = format!("{} {} · ", strip.key.game().slug(), strip.key.playname());
+    let lead = format!("{} {} · ", strip.key.game().slug(), strip.player);
     let lead = truncate_chars(&lead, rest);
     let left = rest.saturating_sub(lead.chars().count());
     vec![
@@ -262,7 +265,7 @@ fn word_rows(budget: usize, strip: &DoorGameStripView) -> Vec<Vec<Span<'static>>
 
 /// `mat is playing`, the player in amber.
 fn player_spans(budget: usize, strip: &DoorGameStripView) -> Vec<Span<'static>> {
-    let name = truncate_chars(strip.key.playname(), budget);
+    let name = truncate_chars(&strip.player, budget);
     let left = budget.saturating_sub(name.chars().count());
     vec![
         Span::styled(

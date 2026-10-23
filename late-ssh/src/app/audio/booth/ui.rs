@@ -11,13 +11,13 @@ use late_core::models::media_queue_item::{SONG_QUEUE_MAX_PAID_PER_DAY, SONG_QUEU
 
 use crate::app::{
     audio::{
-        svc::{AudioMode, HistoryItemView, QueueItemView, QueueSnapshot, SkipProgress},
+        svc::{AudioMode, FavoriteItemView, QueueItemView, QueueSnapshot, SkipProgress},
         youtube::watch_url,
     },
     common::theme,
 };
 
-use super::state::{BoothFocus, BoothModalState};
+use super::state::{BoothFocus, BoothModalState, HistoryRow};
 
 const MODAL_WIDTH: u16 = 120;
 const MODAL_HEIGHT: u16 = 40;
@@ -27,6 +27,7 @@ pub(crate) fn draw(
     area: Rect,
     state: &BoothModalState,
     snapshot: &QueueSnapshot,
+    favorites: &[FavoriteItemView],
     submit_enabled: bool,
     is_staff: bool,
 ) {
@@ -100,7 +101,7 @@ pub(crate) fn draw(
             frame,
             layout[12],
             state,
-            &snapshot.history,
+            state.history_rows(favorites, &snapshot.history),
             snapshot.current.as_ref().map(|item| item.video_id.as_str()),
         ),
         _ => draw_queue(frame, layout[12], state, &snapshot.queue),
@@ -298,14 +299,15 @@ fn draw_queue(frame: &mut Frame, area: Rect, state: &BoothModalState, queue: &[Q
     frame.render_widget(Paragraph::new(lines), area);
 }
 
+/// `rows` is already filtered: favorites on top, then History.
 fn draw_history(
     frame: &mut Frame,
     area: Rect,
     state: &BoothModalState,
-    history: &[HistoryItemView],
+    rows: Vec<HistoryRow<'_>>,
     current_video_id: Option<&str>,
 ) {
-    if history.is_empty() {
+    if rows.is_empty() && !state.history_filter_engaged() {
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::raw("   "),
@@ -335,8 +337,7 @@ fn draw_history(
         area
     };
 
-    let filtered = state.filtered_history(history);
-    if filtered.is_empty() {
+    if rows.is_empty() {
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::raw("   "),
@@ -350,9 +351,7 @@ fn draw_history(
         return;
     }
 
-    let selected = state
-        .selected_history()
-        .min(filtered.len().saturating_sub(1));
+    let selected = state.selected_history().min(rows.len().saturating_sub(1));
     let height = list_area.height as usize;
     if height == 0 {
         return;
@@ -360,17 +359,17 @@ fn draw_history(
     let width = list_area.width as usize;
     let start = selected
         .saturating_sub(height.saturating_sub(1))
-        .min(filtered.len().saturating_sub(height.min(filtered.len())));
+        .min(rows.len().saturating_sub(height.min(rows.len())));
 
-    let lines: Vec<Line<'static>> = filtered
+    let lines: Vec<Line<'static>> = rows
         .iter()
         .enumerate()
         .skip(start)
         .take(height)
-        .map(|(index, item)| {
+        .map(|(index, row)| {
             let active = focused && index == selected;
-            let currently_playing = current_video_id == Some(item.video_id.as_str());
-            history_line(item, active, currently_playing, width)
+            let currently_playing = current_video_id == Some(row.video_id());
+            history_line(row, active, currently_playing, width)
         })
         .collect();
 
@@ -504,7 +503,7 @@ fn queue_line(item: &QueueItemView, active: bool, width: usize) -> Line<'static>
 }
 
 fn history_line(
-    item: &HistoryItemView,
+    row: &HistoryRow<'_>,
     active: bool,
     currently_playing: bool,
     width: usize,
@@ -552,12 +551,19 @@ fn history_line(
     } else {
         Style::default()
     };
-    let title = item
-        .title
-        .clone()
-        .unwrap_or_else(|| format!("yt:{}", item.video_id));
-    let duration_text = format_history_duration(item);
-    let plays = format!("{}x", item.play_count.max(1));
+    let title = row
+        .title()
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("yt:{}", row.video_id()));
+    let title = match row {
+        HistoryRow::Favorite { .. } => format!("★ {title}"),
+        HistoryRow::Played(_) => title,
+    };
+    let duration_text = format_history_duration(row);
+    let plays = match row.play_count() {
+        Some(count) => format!("{}x", count.max(1)),
+        None => String::new(),
+    };
     let prefix = format!(" {marker} ");
     let prefix_w = prefix.chars().count();
     const RIGHT_PAD: usize = 3;
@@ -605,11 +611,11 @@ pub(super) fn format_queue_duration(item: &QueueItemView) -> String {
     format!("{minutes}:{seconds:02}")
 }
 
-fn format_history_duration(item: &HistoryItemView) -> String {
-    if item.is_stream {
+fn format_history_duration(row: &HistoryRow<'_>) -> String {
+    if row.is_stream() {
         return "live".to_string();
     }
-    let Some(ms) = item.duration_ms else {
+    let Some(ms) = row.duration_ms() else {
         return String::new();
     };
     if ms <= 0 {
@@ -645,6 +651,11 @@ fn draw_footer(
         spans.push(Span::styled("↵", Style::default().fg(theme::AMBER_DIM())));
         spans.push(Span::styled(
             " queue  ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+        spans.push(Span::styled("f", Style::default().fg(theme::AMBER_DIM())));
+        spans.push(Span::styled(
+            " favorite  ",
             Style::default().fg(theme::TEXT_DIM()),
         ));
         spans.push(Span::styled("/", Style::default().fg(theme::AMBER_DIM())));

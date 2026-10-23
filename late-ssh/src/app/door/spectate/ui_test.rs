@@ -1,5 +1,21 @@
 use super::*;
 
+fn player_text(handle: &str, username: Option<&str>) -> String {
+    player_spans(handle, username)
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+/// The watch header names the person and, after them, the arcade handle the
+/// game itself shows (crawl's `Wormsong the Trooper`), so the two tie up.
+#[test]
+fn the_header_names_the_username_then_the_handle() {
+    assert_eq!(player_text("Wormsong", Some("mat")), "mat (Wormsong)");
+    assert_eq!(player_text("Mat", Some("mat")), "mat");
+    assert_eq!(player_text("Wormsong", None), "Wormsong");
+}
+
 #[test]
 fn a_smaller_screen_is_drawn_whole() {
     assert_eq!(fit_axis(80, 100, 40), AxisFit { src: 0, len: 80 });

@@ -130,7 +130,7 @@ pub fn open_live_game(app: &mut App, key: LiveGameKey) -> bool {
         .live_games
         .roster(key.game())
         .iter()
-        .any(|game| game.playname == key.playname());
+        .any(|row| row.key == key);
     if !listed {
         return false;
     }

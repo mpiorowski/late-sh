@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use ratatui_textarea::{TextArea, WrapMode};
 use tokio::sync::{broadcast, oneshot, watch};
@@ -108,6 +109,8 @@ pub(crate) fn has_fresh_unread_from_others(
 pub struct NewsTick {
     pub banner: Option<Banner>,
     pub changed: bool,
+    /// The #lounge cards were replaced: chat's rows draw them.
+    pub cards_changed: bool,
 }
 
 /// The banner for an `s`, from what it did to the shelf. Both `s` surfaces
@@ -161,6 +164,9 @@ pub struct State {
     user_id: Uuid,
     is_admin: bool,
     source_articles: Vec<ArticleFeedItem>,
+    /// The snapshot's #lounge cards, by the card's message id: what chat
+    /// draws those messages as.
+    lounge_cards: Arc<HashMap<Uuid, ArticleFeedItem>>,
     /// The reader's shelf (`article_saves`), newest save first, at most
     /// `NEWS_SAVED_LIMIT`. Replaced by every load; a save or an unsave
     /// moves it at once, ahead of the write, so the story changes section
@@ -215,6 +221,7 @@ impl State {
             user_id,
             is_admin,
             source_articles: Vec::new(),
+            lounge_cards: Arc::default(),
             saved_articles: Vec::new(),
             shelf_step: Some(first_shelf_load),
             articles: Vec::new(),
@@ -236,7 +243,7 @@ impl State {
     }
 
     /// The shared snapshot, ignoring the shelf and any mine-only filter:
-    /// what the live strip, the Zen headlines and the paper read. The shelf
+    /// what the Live panel, the Zen headlines and the paper read. The shelf
     /// is the reader's own and never rides these.
     pub fn all_articles(&self) -> &[ArticleFeedItem] {
         &self.source_articles
@@ -267,15 +274,26 @@ impl State {
     }
 
     /// A story this session knows: in the snapshot, on the shelf once it
-    /// has left the snapshot, or open in the reader once it has left both
-    /// (unsaved there). Every action on a story by id (the reader, the
-    /// watch, a reply, a delete) resolves it here.
+    /// has left the snapshot, behind a #lounge card, or open in the reader
+    /// once it has left all three (unsaved there). Every action on a story
+    /// by id (the reader, the watch, a reply, a delete) resolves it here.
     pub(crate) fn find_article(&self, article_id: Uuid) -> Option<&ArticleFeedItem> {
         self.source_articles
             .iter()
             .chain(self.saved_articles.iter())
+            .chain(self.lounge_cards.values())
             .chain(self.reader.iter().map(|open| &open.item))
             .find(|item| item.article.id == article_id)
+    }
+
+    /// Every #lounge card this session knows, by the card's message id.
+    pub(crate) fn lounge_cards(&self) -> &HashMap<Uuid, ArticleFeedItem> {
+        &self.lounge_cards
+    }
+
+    /// The story a #lounge message is the card of, if it is one.
+    pub(crate) fn lounge_card(&self, message_id: Uuid) -> Option<&ArticleFeedItem> {
+        self.lounge_cards.get(&message_id)
     }
 
     pub fn set_is_admin(&mut self, is_admin: bool) {
@@ -700,12 +718,14 @@ impl State {
         // Peek before draining: anything queued may change the rendered tab
         // (badge counts, article list), so it counts as changed.
         let changed = self.snapshot_rx.has_changed().unwrap_or(false) || !self.event_rx.is_empty();
+        let cards_before = Arc::clone(&self.lounge_cards);
         let snapshot_banner = self.drain_snapshot();
         let event_banner = self.drain_events();
         let body = self.drain_reader_body();
         NewsTick {
             banner: event_banner.or(body.banner).or(snapshot_banner),
             changed: changed || body.changed,
+            cards_changed: !Arc::ptr_eq(&cards_before, &self.lounge_cards),
         }
     }
 
@@ -724,6 +744,7 @@ impl State {
             ),
         };
         self.source_articles = snapshot.articles;
+        self.lounge_cards = snapshot.lounge_cards;
         self.rebuild_display();
         self.reload_pending_reader();
         if !announce {
@@ -767,6 +788,7 @@ impl State {
         let quiet = NewsTick {
             banner: None,
             changed: false,
+            cards_changed: false,
         };
         let Some(open) = &mut self.reader else {
             return quiet;
@@ -788,6 +810,7 @@ impl State {
                 NewsTick {
                     banner: None,
                     changed: true,
+                    cards_changed: false,
                 }
             }
             BodyReply::Failed => {
@@ -795,6 +818,7 @@ impl State {
                 NewsTick {
                     banner: Some(Banner::error("Couldn't load the article text.")),
                     changed: true,
+                    cards_changed: false,
                 }
             }
         };

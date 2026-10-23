@@ -360,6 +360,9 @@ struct DrawContext<'a> {
     mod_modal_state: &'a mod_modal::state::ModModalState,
     show_profile_modal: bool,
     profile_modal_state: &'a profile_modal::state::ProfileModalState,
+    /// This session's user is a standing runner: the profile's runner
+    /// column shows only to the wire's own.
+    is_runner: bool,
     show_sheet_modal: bool,
     sheet_modal_state: &'a sheet_modal::state::SheetModalState,
     show_poll_modal: bool,
@@ -418,6 +421,7 @@ struct DrawContext<'a> {
     booth_modal_open: bool,
     booth_modal_state: &'a crate::app::audio::booth::state::BoothModalState,
     booth_snapshot: crate::app::audio::svc::QueueSnapshot,
+    booth_favorites: &'a [crate::app::audio::svc::FavoriteItemView],
     booth_submit_enabled: bool,
     stations_modal_open: bool,
     stations_modal_state: &'a crate::app::audio::stations_modal::state::StationsModalState,
@@ -498,7 +502,8 @@ impl App {
             Some(state) => self.live_games.watchers_of(state.key()),
             None => 0,
         };
-        let games_hub_roster = HubGame::roster(self.is_runner());
+        let is_runner = self.is_runner();
+        let games_hub_roster = HubGame::roster(is_runner);
         // Away with the Tweak on: the piece covers everything this frame.
         let screensaver = self.screensaver();
         let ascii_clock = crate::app::ascii::piece::clock_now();
@@ -791,7 +796,6 @@ impl App {
                 &self.daily,
                 &self.audio,
                 self.paired_source,
-                self.chat.news.all_articles(),
                 &self.chat.live_streams,
                 &live_rows,
                 &self.live_games,
@@ -848,7 +852,6 @@ impl App {
                     &self.daily,
                     &self.audio,
                     self.paired_source,
-                    self.chat.news.all_articles(),
                     &self.chat.live_streams,
                     &live_rows,
                     &self.live_games,
@@ -876,7 +879,7 @@ impl App {
         };
         // The lounge's spawn (`deadchannel/lounge`) as the scene above the
         // #lounge card's composer, for a runner only.
-        let dashboard_lounge = if home_selected && self.is_runner() {
+        let dashboard_lounge = if home_selected && is_runner {
             let now_ms = crate::app::presence::svc::now_ms();
             self.lounge.showing(now_ms).map(|spawn| {
                 crate::app::deadchannel::lounge::ui::scene(
@@ -958,6 +961,7 @@ impl App {
                 None
             },
             inline_images: &self.chat.inline_image_cache,
+            news_cards: self.chat.news.lounge_cards(),
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
             composer_rect_slot: Some(&self.chat.last_composer_rect),
             composer_viewport_top_slot: Some(&self.chat.last_composer_viewport_top),
@@ -1064,6 +1068,7 @@ impl App {
             message_reactions,
             message_gilds,
             inline_images: &self.chat.inline_image_cache,
+            news_cards: self.chat.news.lounge_cards(),
             afk_lines: &self.chat.afk_lines,
             device_left_at: self.chat.device_left_at(),
             unread_counts: &self.chat.unread_counts,
@@ -1148,6 +1153,7 @@ impl App {
                     message_reactions,
                     message_gilds,
                     inline_images: &self.chat.inline_image_cache,
+                    news_cards: self.chat.news.lounge_cards(),
                     dividers: crate::app::chat::ui::ChatDividers {
                         afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                         left_app: self.chat.device_left_at(),
@@ -1213,6 +1219,7 @@ impl App {
                     message_reactions,
                     message_gilds,
                     inline_images: &self.chat.inline_image_cache,
+                    news_cards: self.chat.news.lounge_cards(),
                     dividers: crate::app::chat::ui::ChatDividers {
                         afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                         left_app: self.chat.device_left_at(),
@@ -1283,6 +1290,7 @@ impl App {
                     message_reactions,
                     message_gilds,
                     inline_images: &self.chat.inline_image_cache,
+                    news_cards: self.chat.news.lounge_cards(),
                     dividers: crate::app::chat::ui::ChatDividers {
                         afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                         left_app: self.chat.device_left_at(),
@@ -1350,6 +1358,7 @@ impl App {
                 message_reactions,
                 message_gilds,
                 inline_images: &self.chat.inline_image_cache,
+                news_cards: self.chat.news.lounge_cards(),
                 dividers: crate::app::chat::ui::ChatDividers {
                     afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                     left_app: self.chat.device_left_at(),
@@ -1430,6 +1439,7 @@ impl App {
                     message_reactions,
                     message_gilds,
                     inline_images: &self.chat.inline_image_cache,
+                    news_cards: self.chat.news.lounge_cards(),
                     dividers: crate::app::chat::ui::ChatDividers {
                         afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
                         left_app: self.chat.device_left_at(),
@@ -1830,6 +1840,7 @@ impl App {
                         mod_modal_state: &self.mod_modal_state,
                         show_profile_modal: self.show_profile_modal,
                         profile_modal_state: &self.profile_modal_state,
+                        is_runner,
                         show_sheet_modal: self.show_sheet_modal,
                         sheet_modal_state: &self.sheet_modal_state,
                         show_poll_modal: self.show_poll_modal,
@@ -1881,6 +1892,7 @@ impl App {
                         booth_modal_open: self.booth_modal_state.is_open(),
                         booth_modal_state: &self.booth_modal_state,
                         booth_snapshot: self.audio.queue_snapshot(),
+                        booth_favorites: self.audio.booth_favorites(),
                         booth_submit_enabled: self.audio.booth_submit_enabled(),
                         stations_modal_open: self.stations_modal_state.is_open(),
                         stations_modal_state: &self.stations_modal_state,
@@ -2259,9 +2271,9 @@ impl App {
                         content_area,
                         &crate::app::door::spectate::ui::SpectateView {
                             state,
-                            entry: state
+                            row: state
                                 .row_in(&ctx.live_rows)
-                                .map(|index| &ctx.live_rows[index].entry),
+                                .map(|index| &ctx.live_rows[index]),
                             watchers: ctx.held_watchers,
                         },
                         crate::app::door::spectate::ui::WatchPane::Open(
@@ -2331,7 +2343,7 @@ impl App {
                         pane,
                         &crate::app::door::spectate::ui::SpectateView {
                             state,
-                            entry: live_selected.map(|index| &ctx.live_rows[index].entry),
+                            row: live_selected.map(|index| &ctx.live_rows[index]),
                             watchers: ctx.held_watchers,
                         },
                         crate::app::door::spectate::ui::WatchPane::Preview,
@@ -2840,7 +2852,13 @@ impl App {
         }
 
         if ctx.show_profile_modal {
-            profile_modal::ui::draw(frame, inner, ctx.profile_modal_state, ctx.marquee_tick);
+            profile_modal::ui::draw(
+                frame,
+                inner,
+                ctx.profile_modal_state,
+                ctx.is_runner,
+                ctx.marquee_tick,
+            );
         }
 
         if ctx.show_sheet_modal {
@@ -3030,6 +3048,7 @@ impl App {
                 inner,
                 ctx.booth_modal_state,
                 &ctx.booth_snapshot,
+                ctx.booth_favorites,
                 ctx.booth_submit_enabled,
                 ctx.is_admin || ctx.is_moderator,
             );

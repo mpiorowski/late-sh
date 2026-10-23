@@ -554,15 +554,21 @@ async fn o_on_a_booth_track_that_left_the_booth_changes_nothing() {
     assert!(!app.booth_modal_state.is_open());
 }
 
-/// A link somebody shared to News goes up on the live strip, and `o` opens
-/// the article modal.
+/// A share's card in #lounge: the sharer's line draws as the story (its
+/// title, its bullets, the line that sends the room to News) instead of the
+/// raw link, and Enter on it opens the reader on the story.
 #[tokio::test]
-async fn o_on_a_shared_article_opens_the_reader() {
+async fn enter_on_a_lounge_card_opens_the_reader() {
+    use crate::app::ai::svc::AiService;
+    use crate::app::chat::news::svc::ArticleService;
+    use crate::app::chat::notifications::svc::NotificationService;
+    use crate::app::chat::svc::ChatService;
     use late_core::models::article::{Article, ArticleParams};
 
+    let url = "https://example.com/terminal-renaissance";
     let test_db = new_test_db().await;
-    let me = create_test_user(&test_db.db, "strip-news-me").await;
-    let them = create_test_user(&test_db.db, "strip-news-them").await;
+    let me = create_test_user(&test_db.db, "lounge-card-me").await;
+    let them = create_test_user(&test_db.db, "lounge-card-them").await;
     let client = test_db.db.get().await.expect("db client");
     let lounge = ChatRoom::ensure_lounge(&client)
         .await
@@ -570,12 +576,12 @@ async fn o_on_a_shared_article_opens_the_reader() {
     ChatRoomMember::join(&client, lounge.id, me.id)
         .await
         .expect("join lounge room");
-    Article::create_by_user_id(
+    let article = Article::create_by_user_id(
         &client,
         them.id,
         ArticleParams {
             user_id: them.id,
-            url: "https://example.com/terminal-renaissance".to_string(),
+            url: url.to_string(),
             title: "The terminal renaissance".to_string(),
             summary: "• terminals are back".to_string(),
             ascii_art: "############\n#  late.sh #\n############".to_string(),
@@ -583,17 +589,115 @@ async fn o_on_a_shared_article_opens_the_reader() {
     )
     .await
     .expect("share an article");
-    let mut app = make_app(test_db.db.clone(), me.id, "strip-news-flow-it");
-    app.resize(160, 40)
-        .expect("resize to a card the full strip fits");
-    wait_for_render_contains(&mut app, "strip-news-them shared it").await;
-    wait_for_render_contains(&mut app, "o read \u{b7} r reply").await;
+    let chat = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    ArticleService::new(test_db.db.clone(), AiService::new(false, None), chat)
+        .post_lounge_card(&article)
+        .await;
+    let mut app = make_app(test_db.db.clone(), me.id, "lounge-card-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "share a link in News").await;
+    let frame = render_plain(&mut app);
+    assert!(frame.contains("The terminal renaissance"), "{frame}");
+    assert!(frame.contains("• terminals are back"), "{frame}");
+    assert!(
+        !frame.contains(url),
+        "the card stands in for the raw line: {frame}"
+    );
 
-    app.handle_input(b"o");
+    app.handle_input(b"j");
+    app.handle_input(b"\r");
     assert_eq!(
         app.chat.reader().map(|reader| reader.url()),
-        Some("https://example.com/terminal-renaissance"),
-        "o opens the article"
+        Some(url),
+        "Enter opens the story"
+    );
+}
+
+/// `r` in the reader on a story with a #lounge card is `r` on the card: the
+/// reply quotes the card's first line and points at it, so Enter on it jumps
+/// back to the card.
+#[tokio::test]
+async fn r_in_the_reader_replies_to_the_storys_lounge_card() {
+    use crate::app::ai::svc::AiService;
+    use crate::app::chat::news::svc::ArticleService;
+    use crate::app::chat::notifications::svc::NotificationService;
+    use crate::app::chat::svc::ChatService;
+    use late_core::models::article::{Article, ArticleParams};
+
+    let url = "https://example.com/terminal-renaissance";
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "card-reply-me").await;
+    let them = create_test_user(&test_db.db, "card-reply-them").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+    let article = Article::create_by_user_id(
+        &client,
+        them.id,
+        ArticleParams {
+            user_id: them.id,
+            url: url.to_string(),
+            title: "The terminal renaissance".to_string(),
+            summary: "• terminals are back".to_string(),
+            ascii_art: "############\n#  late.sh #\n############".to_string(),
+        },
+    )
+    .await
+    .expect("share an article");
+    let chat = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    ArticleService::new(test_db.db.clone(), AiService::new(false, None), chat)
+        .post_lounge_card(&article)
+        .await;
+    let card = ChatMessage::list_recent(&client, lounge.id, 1)
+        .await
+        .expect("list lounge")
+        .remove(0);
+    let mut app = make_app(test_db.db.clone(), me.id, "card-reply-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "share a link in News").await;
+
+    app.handle_input(b"j");
+    app.handle_input(b"\r");
+    assert_eq!(
+        app.chat.reader().map(|reader| reader.url()),
+        Some(url),
+        "Enter on the card opens the story"
+    );
+    // One reply only: its quote carries the card's link, and a fresh
+    // account's link cooldown refuses a second link for half an hour.
+    app.handle_input(b"r");
+    app.handle_input(b"from the reader\r");
+    wait_for_render_contains(&mut app, "from the reader").await;
+
+    let reply = ChatMessage::list_recent(&client, lounge.id, 1)
+        .await
+        .expect("list lounge")
+        .remove(0);
+    assert_eq!(
+        (reply.body.as_str(), reply.reply_to_message_id),
+        (
+            "> @card-reply-them: 📰 The terminal renaissance https://example.com/t...\nfrom the reader",
+            Some(card.id)
+        ),
+        "the reader's reply quotes the card and points at it"
+    );
+
+    app.handle_input(b"j");
+    app.handle_input(b"\r");
+    assert_eq!(
+        app.chat.selected_message_id,
+        Some(card.id),
+        "Enter on the reader's reply jumps to the card"
     );
 }
 
@@ -666,63 +770,8 @@ async fn enter_on_a_news_card_opens_the_reader_and_c_copies_the_link() {
     .await;
 }
 
-/// Shares no longer post into #lounge, so the strip is where a link is
-/// answered: `r` opens the lounge composer replying to the article, and the
-/// sent message quotes its title.
-#[tokio::test]
-async fn r_on_a_shared_article_replies_with_its_title_quoted() {
-    use late_core::models::article::{Article, ArticleParams};
-
-    let test_db = new_test_db().await;
-    let me = create_test_user(&test_db.db, "strip-reply-me").await;
-    let them = create_test_user(&test_db.db, "strip-reply-them").await;
-    let client = test_db.db.get().await.expect("db client");
-    let lounge = ChatRoom::ensure_lounge(&client)
-        .await
-        .expect("ensure lounge room");
-    ChatRoomMember::join(&client, lounge.id, me.id)
-        .await
-        .expect("join lounge room");
-    Article::create_by_user_id(
-        &client,
-        them.id,
-        ArticleParams {
-            user_id: them.id,
-            url: "https://example.com/terminal-renaissance".to_string(),
-            title: "The terminal renaissance".to_string(),
-            summary: "• terminals are back".to_string(),
-            ascii_art: "############\n#  late.sh #\n############".to_string(),
-        },
-    )
-    .await
-    .expect("share an article");
-    let mut app = make_app(test_db.db.clone(), me.id, "strip-reply-flow-it");
-    app.resize(160, 40)
-        .expect("resize to a card the full strip fits");
-    wait_for_render_contains(&mut app, "o read \u{b7} r reply").await;
-
-    app.handle_input(b"r");
-    assert!(app.chat.is_composing(), "r opens the lounge composer");
-    app.handle_input(b"worth a read\r");
-    wait_for_render_contains(&mut app, "worth a read").await;
-
-    let sent = ChatMessage::list_recent(&client, lounge.id, 1)
-        .await
-        .expect("list lounge");
-    assert_eq!(
-        sent.iter()
-            .map(|message| (message.body.as_str(), message.reply_to_message_id))
-            .collect::<Vec<_>>(),
-        vec![(
-            "> @strip-reply-them: 📰 The terminal renaissance\nworth a read",
-            None
-        )],
-        "the reply quotes the article, with no message to point at"
-    );
-}
-
-/// The same reply from the News room: `r` on the selected story takes you
-/// to #lounge with the composer replying to it, quoting its title.
+/// `r` on the selected story in the News room takes you to #lounge with
+/// the composer replying to it, quoting its title.
 #[tokio::test]
 async fn r_on_a_news_story_replies_in_lounge_with_its_title_quoted() {
     use crate::app::chat::state::RoomSlot;
@@ -753,7 +802,7 @@ async fn r_on_a_news_story_replies_in_lounge_with_its_title_quoted() {
     .expect("share an article");
     let mut app = make_app(test_db.db.clone(), me.id, "news-reply-flow-it");
     app.resize(160, 40).expect("resize");
-    wait_for_render_contains(&mut app, "o read \u{b7} r reply").await;
+    wait_for_render_contains(&mut app, "lounge").await;
     app.chat.select_room_slot(RoomSlot::News);
     app.sync_visible_chat_room();
     wait_for_render_contains(&mut app, "r reply in #lounge").await;

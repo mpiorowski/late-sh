@@ -236,7 +236,7 @@ pub(crate) fn bartender_app_context() -> String {
     - Tab / Shift+Tab cycles screens; number keys 0-7 jump straight to one.\n\
     - Ctrl+F opens Zen from anywhere and the same chord hands you back (Esc does not leave it): Rice, your bonsai, the reef (live for everyone, fish once the Shop unlocks them), pet, the room Home has selected, music, a clock, and the lobby as tiles you arrange yourself: Tab and the arrows focus, space opens the tile picker for a tile, S splits, X closes, < > change width and { } height, F flips, z zooms it over the whole screen, b g t restyle borders, gaps, and titles, R resets, ? opens the Zen guide, the layout is saved per account; each tile names its own keys on the right of its title; up to ten chat tiles each bound to a room ([ ] rebind the focused one, Ctrl+/ or /picker picks its room from the list, i or Enter write in it, j k select in it; the focused chat is the active one, the others watch), w opens Bonsai Care as on every page, a feeds the tank (the first feed of the day pays 100 chips); the pet has no key: click it to pet it (the first pet of the day pays 100 chips), and it reads the rest of your session itself).\n\
     - Ctrl+O opens Settings from anywhere. Ctrl+G opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake). Ctrl+S opens the Shop (active games, profile/job editors, and Artboard input keep their local binding); /shop is its typed fallback.\n\
-    - The top of the #lounge chat on Home is the now strip (its `── now ──` rule), up whenever something just happened in the house; it cannot be turned off. Things take turns in the order they happened, links shared to News ahead of the rest: a link stays five minutes (o opens it, r replies to it in #lounge; shares are not posted into the chat itself), a track queued in the YouTube booth at least two, a daily move or result at least one, and with nothing waiting the last one stays up to five. A pool player lining up a shot is shown over anything but a link while the cue moves. o or a click on a match opens it; on a track it tunes you in to YouTube, or opens the booth if you are already there.\n\
+    - The top of the #lounge chat on Home is the now strip (its `── now ──` rule), up whenever something just happened in the house; it cannot be turned off. Things take turns in the order they happened: a track queued in the YouTube booth stays at least two minutes, a daily move or result at least one, and with nothing waiting the last one stays up to five. A pool player lining up a shot is shown over whatever is up while the cue moves. A link shared to News is not on the strip: it goes into #lounge as the sharer's own line, drawn as a card with the story's title, summary points and art, and Enter on the card opens the story. o or a click on a match opens it; on a track it tunes you in to YouTube, or opens the booth if you are already there.\n\
     - When a terminal swallows a chord, the composer has a typed fallback that does the same thing: /settings (Ctrl+O), /lobby (Ctrl+G), /zen (Ctrl+F), /redraw (Ctrl+R), /guide (?).\n\
     - Ctrl+/ opens jump search across rooms and DMs (/picker types it); typing ?query searches messages.\n\
     - Home's room rail also holds RSS, News, Cyberspace, Voice, Mentions, and Discover. When a patron asks where their mentions are: press 1, pick Mentions in the rail, or click the \"unread N\" counter in the bottom-left border, right of the key hints.\n\
@@ -890,7 +890,7 @@ fn social_help_lines() -> Vec<String> {
         "  s                 share selected entry through News processing",
         "  d                 dismiss selected entry",
         "  r                 refresh RSS now",
-        "  After sharing, the URL becomes a public News article and goes up on the #lounge now strip.",
+        "  After sharing, the URL becomes a public News article and its card goes up in #lounge.",
         "",
         "Cyberspace",
         "  cyberspace.online is a small, human social network like ours; late.sh",
@@ -1122,16 +1122,16 @@ fn lobby_help_lines() -> Vec<String> {
         "  i                 type into it while it is shown; a clicked message takes the message keys until Esc lets it go",
         "",
         "The now strip heads #lounge on Home with one thing happening in the house:",
-        "  a link shared to News, a daily match move or result (yours included), or a track queued in the YouTube booth",
-        "  things take turns in the order they happened, links ahead of the rest",
-        "  a link stays five minutes, a track at least two, a move or a result (with the final board) at least one",
+        "  a daily match move or result (yours included), or a track queued in the YouTube booth",
+        "  things take turns in the order they happened",
+        "  a track stays at least two minutes, a move or a result (with the final board) at least one",
         "  with nothing waiting the last one stays up to five minutes, then the strip goes away on its own",
         "  anything that waited ten minutes for its turn is dropped",
-        "  a pool player lining up a shot is shown over anything but a link (you see their cue move)",
+        "  a pool player lining up a shot is shown over whatever is up (you see their cue move)",
         "  o                 open what it is showing (a click on it does the same):",
-        "                    read the link, watch the match, or tune in to YouTube (already there, it opens the booth)",
+        "                    watch the match, or tune in to YouTube (already there, it opens the booth)",
         "                    a result opens nothing",
-        "  r                 reply in #lounge to the link it is showing (shares are not posted into the chat)",
+        "  a link shared to News is never on the strip: it is its card in #lounge (Enter on it reads the story)",
         "",
         "Daily matches",
         "  c                 post an open chess, chess960, battleship, connect4, reversi, checkers, backgammon, briscola, cribbage, gin, 8ball, 9ball, or snooker challenge",
@@ -1600,13 +1600,13 @@ fn news_help_lines() -> Vec<String> {
             "  r                 reply in #lounge quoting the selected story",
             "  d                 delete your own story",
             "  /                 toggle filter to only your stories",
-            "  o on now strip    open the reader on that story (a video plays, when it can)",
+            "  Enter on a card   open the reader from a story's #lounge card",
             "",
             "Saved for later",
             saved_shelf_line.as_str(),
             "  The shelf sits above the feed under a \"saved\" rule, newest save first, and a saved story",
             "  stays readable after the feed has moved on. s on a saved story takes it off.",
-            "  The feed shows the newest twenty stories; the selected story opens out with its link and summary.",
+            "  The feed shows the newest forty stories, each with its link and summary.",
             "",
             "Watching",
             "  A YouTube video card reads \"watch\". w plays it right here, over the page.",
@@ -1622,6 +1622,8 @@ fn news_help_lines() -> Vec<String> {
             "  Esc               stop and close",
             "  Close partway through and the card reads where you left it; w resumes there.",
             "  A YouTube link in chat plays the same way: Enter (or a click) on its message.",
+            "  Its thumbnail carries the video's title. A reply quoting the link has no thumbnail:",
+            "  Enter on it jumps to the original message, and Enter again plays it.",
             "  Closed partway, Enter on it again picks up there until you log off.",
             "",
             "The reader",
@@ -1645,7 +1647,7 @@ fn news_help_lines() -> Vec<String> {
             "  1. AI researches the link and writes a compact summary",
             "  2. ASCII art / preview is generated when possible",
             "  3. the story lands in the shared feed for everyone",
-            "  4. it heads the #lounge chat on Home as the now strip for five minutes (o reads it, r replies)",
+            "  4. its card goes up in #lounge as your line: title, summary, art (Enter on it opens the story)",
             "  5. the chips land in your balance",
             "  6. late.sh fetches the page's text for the reader (not for videos or X posts)",
             "",
@@ -1657,7 +1659,7 @@ fn news_help_lines() -> Vec<String> {
             "  RSS is a private inbox in the Home room rail.",
             "  RSS/Atom subscriptions are managed in Settings > RSS.",
             "  Sharing an RSS entry sends its URL through this News pipeline.",
-            "  Only shared entries become public News articles and go up on the #lounge now strip.",
+            "  Only shared entries become public News articles and post a card in #lounge.",
             "",
             "Notes",
             "  summaries are intentionally compact for terminal reading",
@@ -1862,7 +1864,7 @@ fn settings_help_lines() -> Vec<String> {
             .to_string(),
         "  Care counts the bonsai, tank, and pet still waiting on today's care; click it for Zen."
             .to_string(),
-        "  Now reads what the #lounge now strip shows (a stream, a match, a booth track, a shared link); click it to open that."
+        "  Now reads what the #lounge now strip shows (a stream, a match, a booth track, a board event); click it to open that."
             .to_string(),
         "  Status segments with a destination are clickable and jump to what they count."
             .to_string(),
@@ -2267,6 +2269,7 @@ Music Booth (v then v)
     PageUp/PageDown jump 8 rows
     /               filter the list
     Enter           queue selected track fresh
+    f               favorite the selected track, or unfavorite a starred one
     d               delete selected track (staff)
 
   Under Now Playing sits the track's YouTube link, so you can select it by hand if your terminal doesn't pass the copy through.
@@ -2274,6 +2277,7 @@ Music Booth (v then v)
   Bringing a track pays you 100 chips, whether you submit a URL or queue one from History, repeats included: at most 5 a day (UTC), and past that it still queues, it just pays nothing.
   The queue is ordered by score, so upvotes pull tracks toward the front. You can't vote on the track that's already playing, but you can skip-vote it.
   History keeps up to 200 unique played tracks, most recently played first, so whatever is playing right now sits at the top. There are no history votes. Requeued history tracks start with 0 live queue votes.
+  Your favorites (up to 20, yours alone, starred) sit on top of History and never fall off it, even once the track leaves the 200; unfavorite one with f to make room.
 
 Skip the current track
   v then s          add your vote to skip. The track skips once enough active YouTube-source users agree.

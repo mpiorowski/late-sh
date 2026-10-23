@@ -210,9 +210,8 @@ services:
       POSTGRES_DB: postgres
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
-    # The database lives in a named volume. Without one it lives in the
-    # container's own layer, where `docker compose down` — an ordinary thing
-    # to type — destroys every account, room and game on the dev stack.
+    # The database lives in a named volume, so `make down` keeps it and
+    # `make remove` wipes it (Makefile).
     volumes:
       - postgres-data:/var/lib/postgresql
     # Docker's default 64MB of shared memory is not enough for postgres under
