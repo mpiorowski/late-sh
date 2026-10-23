@@ -15,7 +15,6 @@ use late_core::models::{
     deadchannel_runner::DeadchannelRunner,
     profile::Profile,
     showcase::Showcase,
-    user::User,
     work_profile::{WorkProfile, WorkStatus},
 };
 
@@ -111,7 +110,8 @@ struct IndexItem {
     work_type: String,
     location: String,
     skills: Vec<String>,
-    updated: String,
+    /// The author's last login, the index's sort key.
+    last_seen: String,
 }
 
 const PROFILE_LIST_LIMIT: i64 = 100;
@@ -283,8 +283,7 @@ async fn index_handler(State(state): State<AppState>) -> Result<Response, AppErr
         .await
         .context("failed to get db client for profiles index")?;
 
-    // Open first, then casual, then not looking, freshest first inside each:
-    // the model sorts by the status enum's rank.
+    // Whoever logged in last, first: the model sorts by `users.last_seen`.
     let profiles = WorkProfile::list_index(&client, PROFILE_LIST_LIMIT)
         .await
         .context("failed to list work profiles")?;
@@ -295,9 +294,9 @@ async fn index_handler(State(state): State<AppState>) -> Result<Response, AppErr
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
-    let usernames = User::list_usernames_by_ids(&client, &user_ids)
+    let authors = Profile::list_by_user_ids(&client, &user_ids)
         .await
-        .context("failed to load author usernames")?;
+        .context("failed to load author profiles")?;
 
     let mut open_count = 0;
     let mut casual_count = 0;
@@ -310,17 +309,21 @@ async fn index_handler(State(state): State<AppState>) -> Result<Response, AppErr
                 WorkStatus::Casual => casual_count += 1,
                 WorkStatus::NotLooking => closed_count += 1,
             }
+            let author = authors.get(&p.user_id);
             IndexItem {
-                username: usernames
-                    .get(&p.user_id)
-                    .cloned()
-                    .unwrap_or_else(|| p.user_id.to_string()[..8].to_string()),
+                username: match author {
+                    Some(author) if !author.username.is_empty() => author.username.clone(),
+                    _ => p.user_id.to_string()[..8].to_string(),
+                },
                 status_id: p.status.as_str(),
                 status_label: status_label(p.status),
                 work_type: p.work_type.label().to_string(),
                 location: p.location,
                 skills: p.skills.into_iter().take(INDEX_ROW_TAGS).collect(),
-                updated: format_date(p.updated),
+                last_seen: match author.and_then(|author| author.last_seen) {
+                    Some(last_seen) => format_date(last_seen),
+                    None => "—".to_string(),
+                },
                 headline: p.headline,
                 slug: p.slug,
             }

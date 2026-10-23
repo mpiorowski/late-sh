@@ -32,9 +32,11 @@ cleared on visiting this page; nothing moves them live.
   `w your profile · i add project` on the right. The page opens on Map.
 - **Profiles list:** connected people first under an `online` rule, everyone
   else under `offline` (no rules while nobody is connected), each group by
-  latest activity; the cursor follows its person when a login or logout
-  regroups the rows. Each row is three fixed lines: name, status dot and age;
-  headline or newest project; five tags and the project count.
+  last login, newest first (`users.last_seen`, stamped at connect and not
+  moved during a session); the cursor follows its person when a login or
+  logout regroups the rows. Each row is three fixed lines: name, status dot
+  and time since last login; headline or newest project; five tags and the
+  project count.
 - **Detail:** beside the list from 100 columns, stacked under it below that
   (`l`/`Enter` opens it over the list, `h`/`Esc` returns). Sections: header
   (`@user · status · type · location`), CARD, ABOUT (bio), PROJECTS, then

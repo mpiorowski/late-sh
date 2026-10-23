@@ -5,9 +5,18 @@ use uuid::Uuid;
 use super::state::{DirectoryState, PersonFocus, Shelf, person_entries, person_row};
 use crate::app::chat::{showcase::svc::ShowcaseFeedItem, work::svc::WorkFeedItem};
 use late_core::models::{
+    profile::Profile,
     showcase::Showcase,
     work_profile::{WorkProfile, WorkStatus, WorkType},
 };
+
+/// An author who last logged in `age_minutes` ago.
+fn author(age_minutes: i64) -> Option<Profile> {
+    Some(Profile {
+        last_seen: Some(Utc::now() - Duration::minutes(age_minutes)),
+        ..Profile::default()
+    })
+}
 
 fn project(user_id: Uuid, title: &str, age_minutes: i64) -> ShowcaseFeedItem {
     let now = Utc::now();
@@ -23,7 +32,7 @@ fn project(user_id: Uuid, title: &str, age_minutes: i64) -> ShowcaseFeedItem {
             updated: now - Duration::minutes(age_minutes),
         },
         author_username: "builder".to_string(),
-        author_profile: None,
+        author_profile: author(age_minutes),
     }
 }
 
@@ -47,7 +56,7 @@ fn person(user_id: Uuid, headline: &str, age_minutes: i64) -> WorkFeedItem {
             updated: now - Duration::minutes(age_minutes),
         },
         author_username: "worker".to_string(),
-        author_profile: None,
+        author_profile: author(age_minutes),
     }
 }
 
@@ -84,32 +93,31 @@ fn one_row_per_person_regardless_of_what_they_brought() {
 }
 
 #[test]
-fn people_sort_by_latest_activity() {
-    let stale_card = Uuid::now_v7();
-    let fresh_project = Uuid::now_v7();
-    let projects = vec![project(fresh_project, "fresh", 5)];
-    let people = vec![person(stale_card, "stale", 60)];
+fn people_sort_by_last_login() {
+    let stale = Uuid::now_v7();
+    let fresh = Uuid::now_v7();
+    let projects = vec![project(fresh, "fresh", 5)];
+    let people = vec![person(stale, "stale", 60)];
 
-    let entries = person_entries(&projects, &people, false, stale_card, "", &HashSet::new());
-    assert_eq!(entries[0].user_id, fresh_project);
-    assert_eq!(entries[1].user_id, stale_card);
+    let entries = person_entries(&projects, &people, false, stale, "", &HashSet::new());
+    assert_eq!(entries[0].user_id, fresh);
+    assert_eq!(entries[1].user_id, stale);
 }
 
 #[test]
-fn a_fresh_project_bumps_a_person_with_an_old_card() {
-    let user = Uuid::now_v7();
-    let other = Uuid::now_v7();
-    let projects = vec![project(user, "brand-new", 1)];
-    let people = vec![
-        person(user, "old card", 600),
-        person(other, "newer card", 30),
-    ];
+fn a_recent_login_outranks_a_freshly_edited_card() {
+    let regular = Uuid::now_v7();
+    let idle = Uuid::now_v7();
+    let mut old_card = person(regular, "old card", 600);
+    old_card.author_profile = author(5);
+    let mut new_card = person(idle, "new card", 1);
+    new_card.author_profile = author(600);
 
-    let entries = person_entries(&projects, &people, false, user, "", &HashSet::new());
-    assert_eq!(
-        entries[0].user_id, user,
-        "latest project counts as activity"
-    );
+    let people = vec![new_card, old_card];
+
+    let entries = person_entries(&[], &people, false, regular, "", &HashSet::new());
+    let order: Vec<Uuid> = entries.iter().map(|entry| entry.user_id).collect();
+    assert_eq!(order, vec![regular, idle], "last login decides, not card edits");
 }
 
 #[test]

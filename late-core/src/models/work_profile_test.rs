@@ -63,11 +63,11 @@ async fn typed_fields_round_trip_through_the_text_columns() {
 }
 
 #[tokio::test]
-async fn index_order_is_open_then_casual_then_not_looking() {
+async fn index_order_is_last_login_first_whatever_the_status() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
-    let closed = create_test_user(&test_db.db, "work-idx-closed").await;
-    let open = create_test_user(&test_db.db, "work-idx-open").await;
+    let mut closed = create_test_user(&test_db.db, "work-idx-closed").await;
+    let mut open = create_test_user(&test_db.db, "work-idx-open").await;
     let casual = create_test_user(&test_db.db, "work-idx-casual").await;
 
     for (user, slug, status) in [
@@ -83,13 +83,12 @@ async fn index_order_is_open_then_casual_then_not_looking() {
         .await
         .expect("create");
     }
+    open.update_last_seen(&client).await.expect("open logs in");
+    closed.update_last_seen(&client).await.expect("closed logs in");
 
     let index = WorkProfile::list_index(&client, 10).await.expect("index");
-    let statuses: Vec<WorkStatus> = index.iter().map(|card| card.status).collect();
-    assert_eq!(
-        statuses,
-        vec![WorkStatus::Open, WorkStatus::Casual, WorkStatus::NotLooking]
-    );
+    let order: Vec<Uuid> = index.iter().map(|card| card.user_id).collect();
+    assert_eq!(order, vec![closed.id, open.id, casual.id]);
 
     // The feed keeps its own order: whoever moved last, first.
     let recent = WorkProfile::list_recent(&client, 10).await.expect("recent");

@@ -45,15 +45,6 @@ impl WorkStatus {
         }
     }
 
-    /// Open first, then casual, then not looking: the web index order.
-    pub const fn rank(self) -> u8 {
-        match self {
-            Self::Open => 0,
-            Self::Casual => 1,
-            Self::NotLooking => 2,
-        }
-    }
-
     pub const fn next(self) -> Self {
         match self {
             Self::Open => Self::Casual,
@@ -188,19 +179,14 @@ impl WorkProfile {
         Ok(rows.into_iter().map(Self::from).collect())
     }
 
-    /// Every card in the web index's order: open, then casual, then not
-    /// looking, freshest first inside each. The order is the enum's
-    /// [`WorkStatus::rank`], spelled out so the database sorts it.
+    /// Every card in the web index's order: whoever logged in last
+    /// (`users.last_seen`), first.
     pub async fn list_index(client: &Client, limit: i64) -> Result<Vec<Self>> {
         let rows = client
             .query(
-                "SELECT * FROM work_profiles
-                 ORDER BY CASE status
-                     WHEN 'open' THEN 0
-                     WHEN 'casual' THEN 1
-                     WHEN 'not-looking' THEN 2
-                     ELSE 3
-                 END, updated DESC, created DESC, id DESC
+                "SELECT wp.* FROM work_profiles wp
+                 JOIN users u ON u.id = wp.user_id
+                 ORDER BY u.last_seen DESC, wp.updated DESC, wp.id DESC
                  LIMIT $1",
                 &[&limit],
             )

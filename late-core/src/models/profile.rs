@@ -28,6 +28,9 @@ use super::user::{
 #[derive(Clone, Debug)]
 pub struct Profile {
     pub created_at: Option<DateTime<Utc>>,
+    /// The user's last login (`users.last_seen`); stamped at connect, not
+    /// moved during a session.
+    pub last_seen: Option<DateTime<Utc>>,
     pub username: String,
     pub bio: String,
     pub country: Option<String>,
@@ -101,6 +104,7 @@ impl Default for Profile {
     fn default() -> Self {
         Self {
             created_at: None,
+            last_seen: None,
             username: String::new(),
             bio: String::new(),
             country: None,
@@ -393,6 +397,7 @@ impl Profile {
     fn from_user(user: &User) -> Self {
         Self {
             created_at: Some(user.created),
+            last_seen: Some(user.last_seen),
             username: user.username.clone(),
             bio: extract_bio(&user.settings),
             country: extract_country(&user.settings),
