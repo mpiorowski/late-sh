@@ -178,7 +178,7 @@ fn paint_color_cycle_wraps() {
 }
 
 #[test]
-fn paste_bytes_lays_out_multiline_text_with_wrap() {
+fn paste_bytes_activates_floating_preview_before_stamping() {
     let mut state = test_state();
 
     for _ in 0..2 {
@@ -188,11 +188,80 @@ fn paste_bytes_lays_out_multiline_text_with_wrap() {
 
     state.paste_bytes(b"hello\nworld", (80, 24));
 
+    assert!(state.has_floating());
+    assert!(state.floating_is_transparent());
+    let floating = state.floating_view().expect("floating preview");
+    assert_eq!(floating.anchor, Pos { x: 2, y: 1 });
+    assert_eq!(floating.width, 5);
+    assert_eq!(floating.height, 2);
+    assert_eq!(state.snapshot.canvas.get(Pos { x: 2, y: 1 }), ' ');
+
+    state.move_right((80, 24));
+    state.move_down((80, 24));
+    let dispatch = state.handle_app_key(AppKey {
+        code: dartboard_editor::AppKeyCode::Enter,
+        modifiers: Default::default(),
+    });
+    assert!(dispatch.handled);
+    assert!(state.has_floating());
+
     let canvas = &state.snapshot.canvas;
-    assert_eq!(canvas.get(Pos { x: 2, y: 1 }), 'h');
-    assert_eq!(canvas.get(Pos { x: 6, y: 1 }), 'o');
-    assert_eq!(canvas.get(Pos { x: 2, y: 2 }), 'w');
-    assert_eq!(canvas.get(Pos { x: 6, y: 2 }), 'd');
+    assert_eq!(canvas.get(Pos { x: 3, y: 2 }), 'h');
+    assert_eq!(canvas.get(Pos { x: 7, y: 2 }), 'o');
+    assert_eq!(canvas.get(Pos { x: 3, y: 3 }), 'w');
+    assert_eq!(canvas.get(Pos { x: 7, y: 3 }), 'd');
+}
+
+#[test]
+fn paste_bytes_preserves_wide_glyph_cells_and_dismiss_leaves_canvas_clean() {
+    let mut state = test_state();
+    state.paste_bytes("A👍\r\n B".as_bytes(), (80, 24));
+
+    let floating = state.floating_view().expect("floating preview");
+    assert_eq!(floating.width, 3);
+    assert_eq!(floating.height, 2);
+    assert_eq!(
+        floating.cells,
+        &[
+            Some(CellValue::Narrow('A')),
+            Some(CellValue::Wide('👍')),
+            Some(CellValue::WideCont),
+            None,
+            Some(CellValue::Narrow('B')),
+            None,
+        ]
+    );
+
+    assert!(state.dismiss_floating());
+    assert!(!state.has_floating());
+    assert_eq!(state.snapshot.canvas.get(Pos { x: 0, y: 0 }), ' ');
+}
+
+#[test]
+fn paste_bytes_ignores_whitespace_only_and_caps_to_canvas_dimensions() {
+    let mut state = test_state();
+    state.snapshot.canvas = Canvas::with_size(4, 2);
+
+    state.paste_bytes(b"   \r\n  ", (80, 24));
+    assert!(!state.has_floating());
+
+    state.paste_bytes("ABC👍\n123456\n789".as_bytes(), (80, 24));
+    let floating = state.floating_view().expect("capped floating preview");
+    assert_eq!(floating.width, 4);
+    assert_eq!(floating.height, 2);
+    assert_eq!(
+        floating.cells,
+        &[
+            Some(CellValue::Narrow('A')),
+            Some(CellValue::Narrow('B')),
+            Some(CellValue::Narrow('C')),
+            None,
+            Some(CellValue::Narrow('1')),
+            Some(CellValue::Narrow('2')),
+            Some(CellValue::Narrow('3')),
+            Some(CellValue::Narrow('4')),
+        ]
+    );
 }
 
 #[test]

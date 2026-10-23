@@ -207,6 +207,7 @@ Keyboard reference:
 | Shape ops | `Ctrl+T`, `Ctrl+B`, `Ctrl+Space` | Flip selection corner, draw border, smart-fill |
 | Copy / cut to swatch | `Ctrl+C`, `Ctrl+X` | Fills swatch strip; does not sync to peers |
 | Activate swatch brush | click swatch, `Ctrl+A/S/D/F/G` | Slots 1-5 on home row |
+| Paste from system clipboard | Terminal paste | Arms a transparent floating preview at the cursor (`Enter` / `Ctrl+V` stamps, `Esc` / `Space` dismisses) |
 | Stamp floating brush | `Enter`, `Ctrl+V` | Brush stays active |
 | Stroke floating brush | `Ctrl+Shift+arrows` | Repeated stamps while moving |
 | Toggle brush transparency | activate same swatch again | Floating preview reflects transparency |
@@ -238,7 +239,7 @@ Mouse-specific extras:
 Primary DB-backed tests (adjacent `_test.rs` files in this directory):
 - `test_support.rs` contains shared cfg(test) helpers.
 - `svc_test.rs` covers shared canvas sync, provenance attribution, peer join/leave, overflow rejection, unknown/system replace provenance resync, persistent save/restore, explicit flush, daily prune, and monthly rollover blanking.
-- `state_test.rs` covers multiline paste and the archive browser: keys list newest first without canvases, the cursor loads one board, read-only, the cache on the way back, Esc versus the Board row, curated names.
+- `state_test.rs` covers floating multiline paste and the archive browser: keys list newest first without canvases, the cursor loads one board, read-only, the cache on the way back, Esc versus the Board row, curated names.
 
 Related tests:
 - `late-ssh/src/app/input_flow_test.rs` covers Artboard screen switching, the rail landing, active-mode global hotkey blocking, `Ctrl+C` copy behavior, local help routing, active `?` drawing behavior, and `artboard_archives_time_travel_from_the_rail` (Daily from the rail, the key lands on the board, Tab and the Board row bring live back).
@@ -247,7 +248,7 @@ Related tests:
 Inline module tests:
 - `common/color_picker.rs` (`color_picker_test.rs`): whole-state walks of the rows, hex typing and backspace, preset wrap and tracking, the popup's hit tests and a click.
 - `provenance.rs`: paint/clear provenance and replace retagging.
-- `state.rs`: coordinate conversion, owner initials/colors, help scroll, floating/selection behavior, paste cursor logic, swatch/glyph behavior, the picker applying or discarding a colour, bounded edits and brush strokes reaching the other half of a wide glyph (`edits_beside_wide_glyphs_reach_the_other_half`, `brush_strokes_beside_wide_glyphs_reach_the_other_half`).
+- `state.rs`: coordinate conversion, owner initials/colors, help scroll, floating/selection behavior, floating system paste preview/stamp/dismiss, swatch/glyph behavior, the picker applying or discarding a colour, bounded edits and brush strokes reaching the other half of a wide glyph (`edits_beside_wide_glyphs_reach_the_other_half`, `brush_strokes_beside_wide_glyphs_reach_the_other_half`).
 - `input.rs`: mouse routing, raw control mapping, swatch interactions, double-click glyph brush, help/glyph picker routing, the colour picker keys and the palette click, selection, paste/stamp behavior.
 - `page.rs`: view-mode right-drag pan, non-canvas right-click handling, Alt-arrow pan.
 - `ui.rs`: canvas layout, info/sidebar layout, help tabs/hit tests, the colour picker over the page area and its rendered modal, the palette rows' hit test, swatch boxes, wide glyph cursor origin, the rail-aware board area.

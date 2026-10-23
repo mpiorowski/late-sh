@@ -47,7 +47,7 @@ async fn artboard_disclaimer_hides_content_and_only_allows_the_current_visit() {
         "V must not also activate editing"
     );
     app.handle_input(b"i");
-    app.handle_input(b"\x1b[200~PRIVATEART\x1b[201~");
+    app.handle_input(b"\x1b[200~PRIVATEART\x1b[201~\r");
     wait_for_render_contains(&mut app, "PRIVATEART").await;
     app.set_screen(Screen::Dashboard);
     // Tab and the top-bar mouse shortcut enter through the same prompt.
@@ -434,7 +434,14 @@ async fn artboard_topbar_clicks_leave_framing_and_title_entry() {
         wait_for_render_contains(&mut app, "Mode       view").await;
         if naming {
             app.handle_input(b"i");
-            app.handle_input(b"\x1b[200~##########\n##########\n##########\n##########\x1b[201~");
+            app.handle_input(b"\x1b[200~##########\n##########\n##########\n##########\x1b[201~\r");
+            app.handle_input(b"\x1b");
+            wait_for_esc_effect(
+                &mut app,
+                |app| !app.dartboard_state.as_ref().unwrap().has_floating(),
+                "dismiss floating paste",
+            )
+            .await;
             app.handle_input(b"\x1b");
             wait_for_render_contains(&mut app, "Mode       view").await;
         }
@@ -4802,7 +4809,14 @@ async fn artboard_gallery_hangs_a_framed_piece_from_the_rail() {
     // Paint a 10x4 block: forty glyphs, the floor for a piece.
     app.handle_input(b"i");
     wait_for_render_contains(&mut app, "Mode       active").await;
-    app.handle_input(b"\x1b[200~##########\n##########\n##########\n##########\x1b[201~");
+    app.handle_input(b"\x1b[200~##########\n##########\n##########\n##########\x1b[201~\r");
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(
+        &mut app,
+        |app| !app.dartboard_state.as_ref().unwrap().has_floating(),
+        "dismiss floating paste",
+    )
+    .await;
     app.handle_input(b"\x1b");
     wait_for_render_contains(&mut app, "Mode       view").await;
 

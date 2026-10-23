@@ -12,7 +12,7 @@ use super::test_support::{connected_service, shared_provenance, test_color, wait
 use crate::test_helpers::new_test_db;
 
 #[test]
-fn paste_bytes_lays_out_multiline_text_with_wrap() {
+fn paste_bytes_activates_floating_preview_and_stamps_on_commit() {
     let server = dartboard::spawn_server();
     let shared = shared_provenance();
     let svc = connected_service(server, "painter", shared.clone());
@@ -31,7 +31,6 @@ fn paste_bytes_lays_out_multiline_text_with_wrap() {
     );
     state.tick(); // drain the initial snapshot into local state
 
-    // Start paste from (2, 1) so the wrap column is x=2 on the second line.
     state.set_viewport_for_screen((80, 24));
     for _ in 0..2 {
         state.move_right((80, 24));
@@ -39,6 +38,14 @@ fn paste_bytes_lays_out_multiline_text_with_wrap() {
     state.move_down((80, 24));
 
     state.paste_bytes(b"hello\nworld", (80, 24));
+
+    assert!(state.has_floating());
+    assert_eq!(state.snapshot.canvas.get(Pos { x: 2, y: 1 }), ' ');
+    let floating = state.floating_view().expect("floating preview");
+    assert_eq!(floating.width, 5);
+    assert_eq!(floating.height, 2);
+
+    assert!(state.commit_floating());
 
     let canvas = &state.snapshot.canvas;
     assert_eq!(canvas.get(Pos { x: 2, y: 1 }), 'h');

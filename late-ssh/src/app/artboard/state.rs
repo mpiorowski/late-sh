@@ -382,23 +382,31 @@ impl State {
 
     pub fn paste_bytes(&mut self, bytes: &[u8], screen_size: (u16, u16)) {
         self.set_viewport_for_screen(screen_size);
-        let text = match std::str::from_utf8(bytes) {
-            Ok(text) => text,
-            Err(_) => return,
+        if self.is_archive_view_active() {
+            return;
+        }
+        let Ok(text) = std::str::from_utf8(bytes) else {
+            return;
         };
-
-        let start = self.editor.cursor;
-        let reach = EditReach::Within(text_block_bounds(start, text));
-        let _ = self.edit_canvas(reach, |editor, canvas, color| {
-            paste_text_block(editor, canvas, text, color)
-        });
-        self.editor.cursor = paste_cursor_end(
-            start,
+        let Some(clipboard) = clipboard_from_text(
             text,
             self.snapshot.canvas.width,
             self.snapshot.canvas.height,
-        );
-        self.editor.scroll_viewport_to_cursor(&self.snapshot.canvas);
+        ) else {
+            return;
+        };
+
+        self.editor.clear_selection();
+        self.active_brush = None;
+        self.drag_brush = None;
+        self.editor.floating = Some(EditorFloatingSelection {
+            clipboard,
+            transparent: true,
+            source_index: None,
+        });
+        self.floating_source_selection = None;
+        self.floating_source_bounds = None;
+        self.suppress_swatch_preview = false;
     }
 
     pub fn move_to_screen_point(&mut self, screen_size: (u16, u16), x: u16, y: u16) -> bool {
@@ -1937,6 +1945,76 @@ fn backspace_bounds(cursor: Pos) -> Bounds {
     )
 }
 
+fn clipboard_from_text(text: &str, max_width: usize, max_height: usize) -> Option<Clipboard> {
+    if max_width == 0 || max_height == 0 {
+        return None;
+    }
+    let mut rows: Vec<Vec<Option<CellValue>>> = Vec::new();
+    let mut current_row: Vec<Option<CellValue>> = Vec::new();
+    let mut width = 0;
+    let mut has_glyph = false;
+    let mut chars = text.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\r' => {
+                if matches!(chars.peek(), Some('\n')) {
+                    chars.next();
+                }
+                width = width.max(current_row.len());
+                rows.push(std::mem::take(&mut current_row));
+                if rows.len() >= max_height {
+                    break;
+                }
+            }
+            '\n' => {
+                width = width.max(current_row.len());
+                rows.push(std::mem::take(&mut current_row));
+                if rows.len() >= max_height {
+                    break;
+                }
+            }
+            ch if ch.is_control() => {}
+            ' ' => {
+                if current_row.len() < max_width {
+                    current_row.push(None);
+                }
+            }
+            ch => match Canvas::display_width(ch) {
+                0 => {}
+                2 => {
+                    if current_row.len() + 2 <= max_width {
+                        has_glyph = true;
+                        current_row.push(Some(CellValue::Wide(ch)));
+                        current_row.push(Some(CellValue::WideCont));
+                    }
+                }
+                _ => {
+                    if current_row.len() < max_width {
+                        has_glyph = true;
+                        current_row.push(Some(CellValue::Narrow(ch)));
+                    }
+                }
+            },
+        }
+    }
+    if rows.len() < max_height {
+        width = width.max(current_row.len());
+        rows.push(current_row);
+    }
+
+    if width == 0 || !has_glyph {
+        return None;
+    }
+
+    let height = rows.len();
+    let mut cells = Vec::with_capacity(width * height);
+    for mut row in rows {
+        row.resize(width, None);
+        cells.extend(row);
+    }
+    Some(Clipboard::new(width, height, cells))
+}
 /// The cells `paste_text_block` writes when `text` lands at `start`: one row
 /// per line, as wide as the widest line in display cells.
 fn text_block_bounds(start: Pos, text: &str) -> Bounds {
