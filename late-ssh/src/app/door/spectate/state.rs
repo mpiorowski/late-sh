@@ -139,7 +139,7 @@ impl LiveGameKey {
 /// One live game on the Games hub's rail: its key (the door and the
 /// player's handle), the host's roster entry for it, and the player's
 /// late.sh username. Built only from a roster line whose playname is a
-/// handle (`LiveGamesService::start_task`), so every row, and every watch
+/// handle (`svc::live_rows_of`), so every row, and every watch
 /// started on one, has a key.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LiveRow {

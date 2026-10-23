@@ -326,7 +326,7 @@ fn draw_header(
 /// alone while the row has no username (`LiveRow::username`), or once the
 /// roster no longer lists the game; the username alone when the two only
 /// differ in case.
-pub(crate) fn player_spans(handle: &str, username: Option<&str>) -> Vec<Span<'static>> {
+fn player_spans(handle: &str, username: Option<&str>) -> Vec<Span<'static>> {
     let name = Style::default()
         .fg(theme::AMBER_GLOW())
         .add_modifier(Modifier::BOLD);

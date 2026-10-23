@@ -260,7 +260,7 @@ impl LiveGamesService {
     pub fn live_rows(&self) -> Vec<LiveRow> {
         SpectateGame::ALL
             .into_iter()
-            .flat_map(|game| self.roster(game).as_ref().clone())
+            .flat_map(|game| self.roster(game).to_vec())
             .collect()
     }
 
@@ -369,7 +369,7 @@ impl LiveGamesService {
 /// is no row, so nothing downstream can hold a game it cannot key.
 /// `usernames` is keyed by the handle lowercased
 /// (`ArcadeHandle::usernames_by_handles`).
-pub(crate) fn live_rows_of(
+fn live_rows_of(
     game: SpectateGame,
     roster: Vec<LiveGame>,
     usernames: &HashMap<String, String>,
