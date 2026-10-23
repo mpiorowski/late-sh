@@ -509,6 +509,13 @@ deployment order and rollback plan, with trusted-header and per-client pairing
 limit tests. Keep that infrastructure change separate from the SSH/IRC
 moderation attribution contract.
 
+Pairing API regressions exercise distinct IPv4/IPv6 addresses forwarded by one
+trusted ingress, independent attempt and socket limits, slot cleanup, and
+rejection of address overrides from an untrusted peer. These tests verify the
+application's use of metadata; the HTTP edge still loses the original IPv6
+address. The ingress implementation awaits the repo owner's decision on whether
+a maintenance cutover is available. No maintenance cutover is assumed.
+
 ### Packaged and live rollout verification
 
 The [client-IP validation](BASTION-QUALIFICATION.md#client-ip-moderation-verification)
