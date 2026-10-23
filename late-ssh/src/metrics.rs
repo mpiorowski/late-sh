@@ -1783,7 +1783,7 @@ mod inner {
             meter()
                 .u64_counter("late_ssh_booth_favorites_total")
                 .with_description(
-                    "Booth favorites by outcome: added, removed, or full (a twenty-first refused)",
+                    "Booth favorites steps by step (load, add, remove) and outcome; load counts every read, the one each write ends on included",
                 )
                 .build()
         })
@@ -3067,20 +3067,42 @@ mod inner {
         );
     }
 
-    fn booth_favorite_label(outcome: BoothFavoriteOutcome) -> &'static str {
+    fn booth_favorite_step_label(outcome: BoothFavoriteOutcome) -> &'static str {
         match outcome {
+            BoothFavoriteOutcome::Loaded | BoothFavoriteOutcome::LoadFailed => "load",
+            BoothFavoriteOutcome::Added
+            | BoothFavoriteOutcome::AlreadyFavorite
+            | BoothFavoriteOutcome::Full
+            | BoothFavoriteOutcome::AddFailed => "add",
+            BoothFavoriteOutcome::Removed
+            | BoothFavoriteOutcome::AlreadyGone
+            | BoothFavoriteOutcome::RemoveFailed => "remove",
+        }
+    }
+
+    fn booth_favorite_outcome_label(outcome: BoothFavoriteOutcome) -> &'static str {
+        match outcome {
+            BoothFavoriteOutcome::Loaded => "loaded",
             BoothFavoriteOutcome::Added => "added",
-            BoothFavoriteOutcome::Removed => "removed",
+            BoothFavoriteOutcome::AlreadyFavorite => "already_favorite",
             BoothFavoriteOutcome::Full => "full",
+            BoothFavoriteOutcome::Removed => "removed",
+            BoothFavoriteOutcome::AlreadyGone => "already_gone",
+            BoothFavoriteOutcome::LoadFailed
+            | BoothFavoriteOutcome::AddFailed
+            | BoothFavoriteOutcome::RemoveFailed => "failed",
         }
     }
 
     /// Added against removed is how much favorites get used; a run of full
-    /// is listeners wanting a bigger list.
+    /// is listeners wanting a bigger list; failed by step is the error rate.
     pub fn record_booth_favorite(outcome: BoothFavoriteOutcome) {
         booth_favorites_total().add(
             1,
-            &[KeyValue::new("outcome", booth_favorite_label(outcome))],
+            &[
+                KeyValue::new("step", booth_favorite_step_label(outcome)),
+                KeyValue::new("outcome", booth_favorite_outcome_label(outcome)),
+            ],
         );
     }
 

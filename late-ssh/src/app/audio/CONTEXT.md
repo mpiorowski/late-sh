@@ -393,7 +393,7 @@ Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
 - `MediaQueueItem::{insert_youtube, find_by_id, list_snapshot, queued_before_count, recent_submission_count, first_queued, current_playing, mark_playing, mark_played, mark_failed, mark_skipped, sweep_orphan_playing}`. Status/kind constants: `STATUS_QUEUED`, `STATUS_PLAYING`, `STATUS_PLAYED`, `STATUS_SKIPPED`, `STATUS_FAILED`, `KIND_YOUTUBE`.
 - `MediaSource::{youtube_fallback, upsert_youtube_fallback}`. Constants: `KIND_YOUTUBE_FALLBACK`, `MEDIA_KIND_YOUTUBE`.
 - `MediaHistoryItem::{record_play_from_queue_item, list_recent, prune_to_limit, delete_by_id, find_by_id}`.
-- `MediaFavorite::{add_from_history, remove, list_for_user, get_by_user_id}` (`media_favorite.rs`), every one scoped by `user_id` in SQL.
+- `MediaFavorite::{add_from_history, list_for_user, get_by_user_id, delete_by_user_id}` (`media_favorite.rs`), every one scoped by `user_id` in SQL. `add_from_history` takes the id the session already shows the favorite under.
 
 ---
 

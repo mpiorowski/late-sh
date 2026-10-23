@@ -1,6 +1,7 @@
 use crate::app::{
     audio::{
-        svc::{FavoritesStep, RequeueSource},
+        state::{FavoriteMove, favorites_full_banner},
+        svc::RequeueSource,
         youtube::watch_url,
     },
     common::primitives::Banner,
@@ -16,7 +17,7 @@ use super::state::{BoothFocus, HistoryRow};
 pub(crate) fn open(app: &mut App) {
     let submit_enabled = app.audio.booth_submit_enabled();
     app.booth_modal_state.open(submit_enabled);
-    app.audio.booth_favorites_step(FavoritesStep::Load);
+    app.audio.booth_load_favorites();
 }
 
 pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
@@ -283,18 +284,44 @@ fn delete_selected_history(app: &mut App) {
     }
 }
 
-/// `f`: a History row becomes a favorite, a favorite is let go.
+/// `f`: a History row becomes a favorite, a favorite is let go. The row
+/// changes section at once, and the cursor stays where it is in the list
+/// rather than following the track: the row that came next is what is under
+/// it now, so `f` reads as "keep this, move on", the way News's `s` does.
+/// With nothing after it, the cursor follows the track; a refused add moves
+/// nothing.
 fn toggle_selected_favorite(app: &mut App) {
     let snapshot = app.audio.queue_snapshot();
-    let step = match app
+    let rows = app
         .booth_modal_state
-        .selected_history_row(app.audio.booth_favorites(), &snapshot.history)
-    {
-        Some(HistoryRow::Favorite { favorite, .. }) => FavoritesStep::Remove(favorite.id),
-        Some(HistoryRow::Played(item)) => FavoritesStep::Add(item.id),
-        None => return,
+        .history_rows(app.audio.booth_favorites(), &snapshot.history);
+    let index = app.booth_modal_state.selected_history();
+    let Some(row) = rows.get(index).copied() else {
+        return;
     };
-    app.audio.booth_favorites_step(step);
+    let landing = match rows.get(index + 1) {
+        Some(next) => next.video_id().to_string(),
+        None => row.video_id().to_string(),
+    };
+    let moved = match row {
+        HistoryRow::Favorite { favorite, .. } => {
+            let favorite_id = favorite.id;
+            app.audio.booth_remove_favorite(favorite_id);
+            FavoriteMove::Moved
+        }
+        HistoryRow::Played(item) => {
+            let played = item.clone();
+            app.audio.booth_add_favorite(&played)
+        }
+    };
+    match moved {
+        FavoriteMove::Moved => app.booth_modal_state.select_history_track(
+            app.audio.booth_favorites(),
+            &snapshot.history,
+            &landing,
+        ),
+        FavoriteMove::Full => app.banner = Some(favorites_full_banner()),
+    }
 }
 
 #[cfg(test)]

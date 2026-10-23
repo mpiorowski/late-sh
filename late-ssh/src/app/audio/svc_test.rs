@@ -195,7 +195,7 @@ async fn a_favorite_requeues_after_its_history_row_is_gone_for_its_owner_only() 
         .expect("history");
     assert_eq!(
         service
-            .add_favorite(owner.id, history[0].id)
+            .add_favorite(owner.id, history[0].id, uuid::Uuid::now_v7())
             .await
             .expect("add favorite"),
         FavoriteOutcome::Added

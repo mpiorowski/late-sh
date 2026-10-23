@@ -11,7 +11,9 @@ pub const BOOTH_FAVORITES_LIMIT: i64 = 20;
 
 // A Booth track a listener keeps: one `media_favorites` row, with its own
 // copy of the validated metadata so it outlives the History row it came
-// from. Every read and write is scoped to the owner.
+// from. Every read and write is scoped to the owner; a favorite is let go
+// with the macro's `delete_by_user_id`, whose count tells a remove from one
+// already gone.
 crate::user_scoped_model! {
     table = "media_favorites";
     user_field = user_id;
@@ -40,12 +42,15 @@ pub enum FavoriteOutcome {
 }
 
 impl MediaFavorite {
-    /// Keep a History track. The check and the insert run in one
-    /// transaction under a per-listener advisory lock, so two sessions
-    /// adding together cannot both read nineteen and keep a twenty-first.
+    /// Keep a History track as the favorite `id`. The check and the insert
+    /// run in one transaction under a per-listener advisory lock, so two
+    /// sessions adding together cannot both read nineteen and keep a
+    /// twenty-first. The caller names the id: the session shows the row
+    /// before the write lands, and this is the row it showed.
     pub async fn add_from_history(
         client: &mut Client,
         user_id: Uuid,
+        id: Uuid,
         track: &MediaHistoryItem,
     ) -> Result<FavoriteOutcome> {
         let tx = client.transaction().await?;
@@ -76,9 +81,10 @@ impl MediaFavorite {
         } else {
             tx.execute(
                 "INSERT INTO media_favorites
-                    (user_id, media_kind, external_id, title, channel, duration_ms, is_stream)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                    (id, user_id, media_kind, external_id, title, channel, duration_ms, is_stream)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
                 &[
+                    &id,
                     &user_id,
                     &track.media_kind,
                     &track.external_id,
@@ -94,18 +100,6 @@ impl MediaFavorite {
         };
         tx.commit().await?;
         Ok(outcome)
-    }
-
-    /// Let a favorite go. One that is not the listener's, or is already
-    /// gone, is a no-op.
-    pub async fn remove(client: &Client, user_id: Uuid, id: Uuid) -> Result<()> {
-        client
-            .execute(
-                "DELETE FROM media_favorites WHERE user_id = $1 AND id = $2",
-                &[&user_id, &id],
-            )
-            .await?;
-        Ok(())
     }
 
     /// The listener's favorites, newest first.

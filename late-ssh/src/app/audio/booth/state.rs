@@ -237,6 +237,24 @@ impl BoothModalState {
             .nth(self.selected_history)
     }
 
+    /// Put the History cursor on a track, by video id, wherever the list
+    /// shows it now. A track the list no longer shows leaves the cursor
+    /// where it is.
+    pub(crate) fn select_history_track(
+        &mut self,
+        favorites: &[FavoriteItemView],
+        history: &[HistoryItemView],
+        video_id: &str,
+    ) {
+        if let Some(index) = self
+            .history_rows(favorites, history)
+            .iter()
+            .position(|row| row.video_id() == video_id)
+        {
+            self.selected_history = index;
+        }
+    }
+
     pub(crate) fn history_filter_active(&self) -> bool {
         self.history_filter_active
     }

@@ -51,8 +51,9 @@ async fn favorites(client: &Client, user_id: Uuid) -> Vec<String> {
         .collect()
 }
 
-/// A favorite is the listener's alone, adding twice is one favorite, the
-/// list is newest first, and a remove by somebody else's id is a no-op.
+/// A favorite is the listener's alone, kept under the id the caller named,
+/// adding twice is one favorite, the list is newest first, and a remove by
+/// somebody else, or of one already gone, deletes nothing.
 #[tokio::test]
 async fn favorites_are_per_listener_newest_first_and_removes_are_owner_scoped() {
     let test_db = test_db().await;
@@ -61,13 +62,14 @@ async fn favorites_are_per_listener_newest_first_and_removes_are_owner_scoped() 
     let other = create_test_user(&test_db.db, "favorite-other").await;
     let first = play(&mut client, listener.id, "fav-first").await;
     let second = play(&mut client, listener.id, "fav-second").await;
+    let second_id = Uuid::now_v7();
 
-    for (track, expected) in [
-        (&first, FavoriteOutcome::Added),
-        (&first, FavoriteOutcome::AlreadyFavorite),
-        (&second, FavoriteOutcome::Added),
+    for (track, id, expected) in [
+        (&first, Uuid::now_v7(), FavoriteOutcome::Added),
+        (&first, Uuid::now_v7(), FavoriteOutcome::AlreadyFavorite),
+        (&second, second_id, FavoriteOutcome::Added),
     ] {
-        let outcome = MediaFavorite::add_from_history(&mut client, listener.id, track)
+        let outcome = MediaFavorite::add_from_history(&mut client, listener.id, id, track)
             .await
             .expect("add favorite");
         assert_eq!(outcome, expected, "{}", track.external_id);
@@ -77,21 +79,17 @@ async fn favorites_are_per_listener_newest_first_and_removes_are_owner_scoped() 
         vec!["fav-second", "fav-first"]
     );
     assert!(favorites(&client, other.id).await.is_empty());
-
     let kept = MediaFavorite::list_for_user(&client, listener.id)
         .await
         .expect("favorites");
-    MediaFavorite::remove(&client, other.id, kept[0].id)
-        .await
-        .expect("foreign remove");
-    assert_eq!(
-        favorites(&client, listener.id).await,
-        vec!["fav-second", "fav-first"]
-    );
+    assert_eq!(kept[0].id, second_id);
 
-    MediaFavorite::remove(&client, listener.id, kept[0].id)
-        .await
-        .expect("remove");
+    for (user_id, expected) in [(other.id, 0), (listener.id, 1), (listener.id, 0)] {
+        let deleted = MediaFavorite::delete_by_user_id(&client, user_id, second_id)
+            .await
+            .expect("remove");
+        assert_eq!(deleted, expected, "{user_id}");
+    }
     assert_eq!(favorites(&client, listener.id).await, vec!["fav-first"]);
 }
 
@@ -104,14 +102,15 @@ async fn favorites_cap_at_the_limit_and_outlive_their_history_row() {
     let listener = create_test_user(&test_db.db, "favorite-cap").await;
     for index in 0..BOOTH_FAVORITES_LIMIT {
         let track = play(&mut client, listener.id, &format!("fav-cap-{index}")).await;
-        let outcome = MediaFavorite::add_from_history(&mut client, listener.id, &track)
-            .await
-            .expect("add favorite");
+        let outcome =
+            MediaFavorite::add_from_history(&mut client, listener.id, Uuid::now_v7(), &track)
+                .await
+                .expect("add favorite");
         assert_eq!(outcome, FavoriteOutcome::Added);
     }
     let extra = play(&mut client, listener.id, "fav-cap-extra").await;
 
-    let outcome = MediaFavorite::add_from_history(&mut client, listener.id, &extra)
+    let outcome = MediaFavorite::add_from_history(&mut client, listener.id, Uuid::now_v7(), &extra)
         .await
         .expect("add past the cap");
 
