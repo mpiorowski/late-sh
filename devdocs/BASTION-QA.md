@@ -1,10 +1,12 @@
 # Bastion qualification
 
-Initial local pre-deployment campaign, 2026-10-22, on
+Local pre-deployment evidence, beginning 2026-10-22, on
 `mevanlc--bastion-redux` at `ee492675` plus the working-tree repairs described
 below, subsequently committed in `04e56d36`. The later review fixes have a
-separate [verification record](#review-fix-verification). No deployment was
-performed by either campaign.
+separate [verification record](#review-fix-verification). The later client-IP
+and disposable ingress checks are recorded below. None of these checks was a
+production deployment; live cutover gates are in the
+[deployment guide](BASTION-DEPLOY-GUIDE.md).
 
 ## Reproduce
 
@@ -254,17 +256,33 @@ campaign validates forwarding, replacement and pairing with the actual HAProxy
 process. The earlier full-workspace and long-soak results describe older
 snapshots. Native IPv6 HTTP ingress and pairing attribution are prepared for
 the maintenance cutover; their live checks are in the
-[runbook](../infra/RUNBOOK.md#first-bastion-and-ipv6-http-cutover).
+[deployment guide](BASTION-DEPLOY-GUIDE.md).
+
+## Disposable dual-stack ingress check
+
+On 2026-10-23, a disposable Kind cluster ran ingress-nginx chart 4.15.1 with
+host networking on, hostPort off, and forwarded-header trust disabled. IPv6
+clients `::101` and `::102` and IPv4 client `192.168.117.101` arrived at the
+fixture backend with distinct socket-derived forwarding addresses. A forged
+client `X-Forwarded-For` was overwritten. HTTPS on IPv6 succeeded; an HTTPS
+WebSocket upgrade returned `101` and delivered IPv6 client `::104` to the
+backend. The fixture closed that socket immediately, so this did not test a
+sustained paired session or pairing limits. The cluster and fixtures were
+removed; the machine's built-in Kubernetes environment was not changed.
+This verifies the ingress configuration in Kind, not the production RKE2
+chart, CNI, node listeners or deployed pairing path.
 
 ## Limits and remaining deployment checks
 
-Local HAProxy replacement does not prove real Kubernetes Service endpoint
-changes, HAProxy PROXY handling, CNI NetworkPolicy enforcement, production Secret
-mounts or ingress routing of paired clients. Before the port cutover, perform a
-controlled staging rollout through those actual components and verify identity,
-the known public client IP over both IPv4 and IPv6 (including TLS IRC), pairing,
-terminal cleanup and the existing rollback route. No live
-Terraform plan/apply or cluster changes were performed here.
+Local HAProxy replacement and the disposable Kind check do not prove real
+Kubernetes Service endpoint changes, HAProxy PROXY handling, CNI NetworkPolicy
+enforcement, production Secret mounts or ingress routing of paired clients.
+During the blocked maintenance window, verify those components, the known
+public client IP over both IPv4 and IPv6 (including TLS IRC), pairing,
+terminal cleanup and the rollback route before reopening traffic. A silent
+network-blackhole cleanup check remains a pre-cutover item in the
+[feature doc](BASTION-FEATURE.md#open-work). No production Terraform plan/apply
+or cluster changes were performed here.
 
 This campaign does not qualify external music, voice, video, clipboard hardware,
 door services, platform-specific terminals or restoration of application state.

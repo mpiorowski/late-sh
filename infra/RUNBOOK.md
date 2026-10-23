@@ -11,8 +11,8 @@ capacity findings and the scaling plan are in `SCALE.md`.
   on `server-1`), which forwards raw TCP with PROXY v1 to `service-ssh-sv` or,
   when `BASTION_ENABLED=1`, SSH to `service-bastion-sv` (IRC sends PROXY v1 only
   when `IRC_PROXY_EMIT` is on). The backend sees the node address
-  `46.62.210.86` as the transport peer and the PROXY address as the user IP.
-  Never put these ports back on
+  `46.62.210.86` as the transport peer and, when present, the PROXY address
+  as the user IP. Never put these ports back on
   ingress-nginx: nginx kills what its old workers hold 240 s after every reload
   (`SCALE.md`, Pain Point 9). An `ssh-edge` rollout drains instead of cutting:
   the new pod binds beside the old one (SO_REUSEPORT) and the old one soft-stops
@@ -161,74 +161,9 @@ applies infra drift. Prod env is `LATE_ENV=prod` plus secrets only, injected by
 
 ## First bastion and IPv6 HTTP cutover
 
-The repo owner approved a **full out-of-service maintenance window for this
-first switch**. Existing direct SSH sessions cannot migrate into bastion; they
-are disconnected once during the window. Later `late-ssh` replacements can
-reconnect through the stable bastion. Do not publish an `-infra` release from
-the cutover commit before entering maintenance: that release also changes the
-HTTP listener and retires the old IPv6 proxy from Terraform state.
-
-**Prepare before the window.** Ship the compatible `late-ssh` image first; it
-tolerates an absent/blank `LATE_TUNNEL_SHARED_SECRET` by leaving its private
-listener off. Build and have the matching `late-bastion` image ready. Configure
-the production GitHub environment secrets `BASTION_SHARED_SECRET` and
-`BASTION_HOST_KEY`, and confirm `BASTION_ENABLED` is still `0`. Save the live
-`kube-system/rke2-ingress-nginx` HelmChart and HelmChartConfig, the Terraform
-state, and the prior working infra release/tag in a secure operator location.
-Inspect the actual RKE2 chart version and the intended Terraform plan; confirm
-it forgets `kubernetes_daemon_set_v1.ipv6_proxy` and
-`kubernetes_config_map_v1.ipv6_proxy` **without destroying them**, changes the
-ingress controller to host networking, and has no unrelated destroys. Confirm
-the node owns the public IPv4/IPv6 addresses and that no process besides the
-incumbent ingress/proxy binds 80/443. Check the chart's other host-network
-listener ports, including health and admission, for conflicts. Keep an
-out-of-band or allowlisted management route during the outage; the public SSH
-port may also be the operator's access route.
-
-**During the window:**
-
-1. Block new public SSH, IRC and HTTP(S) connections at the external firewall,
-   while retaining management access and a way to allowlist test clients.
-   Force-delete the old `service-ssh` pods to end every direct SSH/IRC session
-   rather than waiting for their six-hour drain (`kubectl -n default delete pod -l
-   app=service-ssh --grace-period=0 --force`). The Deployment replaces them.
-2. Delete `kube-system/ipv6-proxy` DaemonSet, wait until its pod is gone and
-   IPv6 80/443 are unbound, then delete its ConfigMap. The Terraform `removed`
-   blocks intentionally only forget these objects from state; they do not
-   delete live objects or release ports.
-3. Set production `BASTION_ENABLED=1` and publish the reviewed `-infra`
-   release. This creates the bastion Service before `ssh-edge` resolves its
-   name, switches public `:22` to that Service, and rolls ingress-nginx onto
-   direct IPv4/IPv6 host networking. The bastion Deployment may initially
-   contain a placeholder image and need not become ready at this step.
-4. Publish the matching `-bastion` release, wait for the Deployment and the
-   backend's private `/tunnel` endpoint to be ready. Check the rendered
-   ingress-nginx pod has `hostNetwork: true`, `hostPort` disabled, and actual
-   IPv4/IPv6 listeners; check the old proxy is absent. Check `ssh-edge` :22
-   resolves the bastion Service and passes PROXY v1.
-5. Allowlist test clients and exercise public IPv4 and IPv6 SSH, TLS IRC,
-   HTTPS, HTTP-to-HTTPS redirects, API, pairing WebSockets and cert-manager
-   HTTP-01 routing. Compare each known external client address against the
-   ingress and backend resolved address. Send a deliberately false
-   `X-Forwarded-For` from an external client; it must not become the pairing
-   address. Confirm two distinct IPv6 clients receive independent pairing
-   socket/attempt limits, and that bans/kicks use the actual SSH/IRC user IP.
-   Include a backend replacement and terminal/pairing cleanup check.
-6. Reopen public traffic only after these checks pass. Watch connection,
-   readiness, error and rate-limit metrics through the agreed observation
-   period. Keep the production `BASTION_ENABLED=1` environment variable set
-   for subsequent infra releases; its missing/default value is `0` and would
-   route new SSH sessions back to the direct backend.
-
-**Rollback while traffic stays blocked.** Set `BASTION_ENABLED=0` and restore
-the saved pre-cutover HelmChartConfig to return ingress to the old hostPort
-layout. Wait for IPv4 80/443 to answer and for host-network listeners to exit.
-Apply the prior approved infra ref with `BASTION_ENABLED=0`; because the new
-`removed` blocks forgot the IPv6 proxy from state, the old configuration will
-recreate its DaemonSet and ConfigMap. Wait for IPv6 80/443 and direct SSH/IRC
-to pass the same client-IP and TLS checks, then reopen traffic. If an apply
-fails partway, inspect the live listeners and Terraform plan before retrying;
-never start the proxy alongside host-network ingress on the same IPv6 ports.
+The repo owner approved an out-of-service window for this first switch. The
+ordered preflight, port handoff, public-edge checks and rollback are in the
+[bastion deployment guide](../devdocs/BASTION-DEPLOY-GUIDE.md).
 
 ## Monitoring gotchas
 

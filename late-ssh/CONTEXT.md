@@ -13,6 +13,7 @@ notify, presence, the help modal, the ghost bots, the sidebar). Root
 late-ssh/src/
   main.rs              starts SSH + API + background loops; subscribes LISTEN channels
   ssh.rs               russh server: admission, auth, the per-session render task
+  tunnel.rs            private bastion WebSocket listener and tunnel sessions
   session_bootstrap.rs per-session service wiring at login
   api.rs               /api/* routes and /api/ws/pair
   session.rs           SessionRegistry: token -> mpsc (WS -> session, inbound)

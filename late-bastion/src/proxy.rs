@@ -21,7 +21,7 @@
 //! 30-second total budget. Terminal close codes and HTTP 4xx responses end
 //! the session.
 //!
-//! See `devdocs/LATE-CONNECTION-BASTION.md` §4–§5.
+//! See `devdocs/BASTION-FEATURE.md` for the current contract.
 
 use anyhow::Context;
 use futures_util::{SinkExt, StreamExt};
@@ -79,7 +79,7 @@ const ESCALATION_MESSAGE_DELAY: Duration = Duration::from_secs(5);
 ///   message lands in a known-clean spot.
 ///
 /// This is the *only* point at which the bastion writes its own bytes
-/// to the user's terminal (per devdocs/LATE-CONNECTION-BASTION.md §5).
+/// to the user's terminal; see devdocs/BASTION-FEATURE.md.
 const TERMINAL_RESET: &str = "\x1b[?1049l\x1b[0m\x1b[2J\x1b[H";
 
 /// Initial reconnect message; constants for tunability.
@@ -327,7 +327,7 @@ enum PumpOutcome {
 }
 
 fn classify_close_code(code: u16) -> PumpOutcome {
-    // Per devdocs/LATE-CONNECTION-BASTION.md §4 close-codes table.
+    // Per the close-code policy in devdocs/BASTION-FEATURE.md.
     match code {
         TUNNEL_CLOSE_ABNORMAL => PumpOutcome::Retryable(TUNNEL_CLOSE_ABNORMAL),
         4100..=4199 => PumpOutcome::Retryable(code),

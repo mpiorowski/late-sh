@@ -71,7 +71,7 @@ verified forwarding metadata. A trusted proxy's transport address is not a
 fallback identity: SSH/bastion reject unknown PROXY sources; IRC retains an
 unknown client IP for account-only moderation. Network trust, resource
 protection and transport diagnostics keep their separate transport address.
-The full contract and HTTP follow-up are in `devdocs/LATE-CONNECTION-BASTION.md`.
+The SSH, IRC and HTTP trust boundaries are in `devdocs/BASTION-FEATURE.md`.
 
 ### Sync render, async services
 

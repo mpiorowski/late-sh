@@ -14,7 +14,7 @@
 //!   - SSH `window-change` shows up as a `ControlFrame::Resize` text
 //!     frame on the backend.
 //!
-//! Phase 4 additions (`ScriptedBackend`):
+//! Reconnect and close handling (`ScriptedBackend`):
 //!   - On retryable WS close (4100), the bastion redials with the same
 //!     `X-Late-Session-Id` and `X-Late-Reconnect-Reason: 4100`.
 //!   - On terminal WS close (4001), the bastion ends the session

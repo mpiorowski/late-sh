@@ -2,10 +2,11 @@
 # SSH and IRC edge: host-network HAProxy on public :22 and :6697
 # =============================================================================
 # Owns the public SSH and IRC ports on IPv4 and IPv6 and forwards raw TCP to
-# the SSH or IRC Service, prepending PROXY v1 so late-ssh and its ircd resolve
-# real client IPs. HAProxy reaches the pod from the node address, which the prod
-# profile trusts (late-ssh/src/config.rs). This enables: ssh late.sh and
-# irc.late.sh.
+# the SSH or IRC Service, prepending PROXY v1 for SSH and, when
+# IRC_PROXY_EMIT=1, IRC. Bastion or late-ssh then resolves the real client IP.
+# HAProxy reaches the pod from the node address trusted by their prod configs
+# (late-bastion/src/config.rs and late-ssh/src/config.rs). This enables
+# ssh late.sh and irc.late.sh.
 #
 # Deliberately not on ingress-nginx: Ingress edits,
 # cert-manager HTTP-01 solvers and controller rollouts reload or restart
@@ -15,9 +16,9 @@
 # pod surges in next to the old one (HAProxy binds with SO_REUSEPORT, so both
 # hold the ports), then the old one soft-stops and keeps its open sessions.
 #
-# maxconn: late-ssh admits at most 1000 SSH and 200 IRC sessions and closes
-# refused sockets on the spot, so 4096 is headroom that also keeps a flood
-# inside the memory limit below.
+# maxconn: 4096 caps edge sockets and keeps a flood within the memory limit
+# below. Direct late-ssh admits at most 1000 SSH and 200 IRC sessions;
+# bastion has its own admission cap when enabled.
 #
 # The first bastion enablement is a scheduled maintenance cutover. While
 # BASTION_ENABLED=0, public :22 uses direct SSH; setting it to 1 switches :22

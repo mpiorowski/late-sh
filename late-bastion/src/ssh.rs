@@ -1,15 +1,12 @@
 //! russh server for `late-bastion`.
 //!
-//! Phase 3: on `pty-req` + `shell`, hand the SSH channel to a per-shell
+//! On `pty-req` + `shell`, hand the SSH channel to a per-shell
 //! proxy task that dials late-ssh `/tunnel` and pumps bytes between the
 //! two transports. The russh callback layer here is responsible only
 //! for stashing handshake-relevant state across SSH protocol events
 //! (auth → channel open → pty → shell → window-change), not for any
-//! protocol-aware byte handling.
-//!
-//! Subsequent phase (per `devdocs/LATE-CONNECTION-BASTION.md` §10):
-//!   - Phase 4: detect WS close codes, draw plain-text "reconnecting…"
-//!     message into the SSH channel, redial with backoff.
+//! protocol-aware byte handling. Bounded pre-shell exec and reconnects
+//! reuse this SSH connection; see `devdocs/BASTION-FEATURE.md`.
 
 use anyhow::Result;
 use getrandom::SysRng;

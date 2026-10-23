@@ -2,9 +2,8 @@
 # late-bastion: thin SSH frontend that tunnels to late-ssh /tunnel over WS.
 #
 # Intentionally minimal — no DB, no per-user state, no ban logic. See
-# devdocs/LATE-CONNECTION-BASTION.md §5 for the "no smarter than it needs
-# to be to connect the wires" principle. Rolling updates here drop every
-# active SSH session, so this Deployment is expected to update rarely.
+# devdocs/BASTION-FEATURE.md for the current design. Rolling updates here
+# drop every active SSH session, so this Deployment is expected to update rarely.
 #
 # The bastion listens on its internal service port (5222 by default); ssh-edge
 # forwards public :22 here when BASTION_ENABLED=1.
@@ -46,8 +45,8 @@ resource "kubernetes_deployment_v1" "service_bastion" {
       }
 
       spec {
-        # Bastion upgrades drop sessions; give existing sessions time to
-        # observe and reconnect to a new pod cleanly.
+        # Bastion SIGTERM closes active SSH sessions. The long grace period
+        # does not keep them alive; revisit this duration separately.
         termination_grace_period_seconds = 7200
 
         container {

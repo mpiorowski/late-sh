@@ -1,7 +1,6 @@
 //! Wire protocol for the bastion ⇄ late-ssh `/tunnel` WebSocket.
 //!
-//! Per `devdocs/LATE-CONNECTION-BASTION.md` §4 and
-//! `devdocs/EXEC-TUNNELING.md`: binary frames carry opaque PTY bytes once
+//! Per `devdocs/BASTION-FEATURE.md`: binary frames carry opaque PTY bytes once
 //! the shell is running; text frames carry a small JSON control vocabulary
 //! for ordered setup, exec, and resize events.
 //!

@@ -1,14 +1,14 @@
 //! `/tunnel` listener — bastion-only WebSocket entry point.
 //!
-//! Phase 2c: bind the private listener, validate handshake (IP allowlist,
+//! Bind the private listener, validate handshake (IP allowlist,
 //! pre-shared secret, required headers), look up the user, build a
 //! `SessionConfig`, and run the same `App::new` + `run_session` render
 //! loop that the russh path uses. The transport difference is confined
 //! to the `WsFrameSink` (output) and the receive loop below (input +
 //! resize control frames).
 //!
-//! The `:4001` listener is intentionally separate from the public `:4000`
-//! API listener (per `devdocs/LATE-CONNECTION-BASTION.md` §3): mixing trust
+//! The production `:4001` listener is separate from the public `:4000`
+//! API listener (per `devdocs/BASTION-FEATURE.md`): mixing trust
 //! domains on one socket is a known footgun, and a separate bind gives
 //! kernel-level isolation in addition to the in-app checks below.
 
@@ -312,7 +312,7 @@ async fn tunnel_handler(
     let is_reconnect = handshake.reconnect_reason.is_some();
 
     // Per-IP rate limiter, keyed on the bastion-asserted client IP per
-    // devdocs/LATE-CONNECTION-BASTION.md §6 (bastion is intentionally
+    // devdocs/BASTION-FEATURE.md (bastion is intentionally
     // ignorant of per-IP state; backend keys on X-Late-Peer-IP instead
     // of the transport peer, which is always the bastion pod).
     //

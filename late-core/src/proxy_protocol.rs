@@ -1,8 +1,9 @@
 //! HAProxy PROXY protocol v1 parsing.
 //!
-//! Used by `late-ssh` (today) and `late-bastion` (Phase 3) to recover the
-//! real client IP when fronted by NGINX TCP passthrough. v1 is the textual
-//! variant terminated by `\r\n` and capped at 108 bytes per the spec.
+//! Used by `late-bastion` to recover the real client IP from `ssh-edge`.
+//! `late-ssh` has its own parser for direct SSH and optional IRC headers.
+//! v1 is the textual variant terminated by `\r\n` and capped at 108 bytes
+//! per the spec.
 
 use anyhow::{Context, Result};
 use std::net::{IpAddr, SocketAddr};

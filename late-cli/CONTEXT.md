@@ -46,8 +46,10 @@ Highest-risk areas:
 
 ```mermaid
 flowchart LR
-    CLI["late CLI"] -->|"SSH interactive session"| SSH["late-ssh<br/>russh server"]
-    CLI -->|"GET /api/ws/pair?token=..."| API["late-ssh HTTP API"]
+    CLI["late CLI"] -->|"SSH token exec + shell"| EDGE["ssh-edge :22"]
+    EDGE -->|"PROXY v1"| BASTION["late-bastion"]
+    BASTION -->|"private /tunnel"| SSH["late-ssh TUI"]
+    CLI -->|"HTTPS /api/ws/pair?token=..."| API["late-ssh HTTP API"]
     CLI -->|"MP3 stream"| AUDIO["audio.late.sh<br/>or late-web /stream"]
     AUDIO --> DEC["symphonia decoder"]
     DEC --> OUT["cpal output"]
@@ -67,7 +69,7 @@ Runtime flow:
 6. Connect `/api/ws/pair?token=...` and send visualizer frames plus client state.
 7. Apply paired control messages by muting/unmuting or changing local volume.
 
-OpenSSH mode differs slightly: it authenticates and fetches the token first through a ControlMaster, starts audio and WebSocket pairing, then opens the interactive shell through the same master connection.
+OpenSSH mode differs slightly: it authenticates and fetches the token first through a ControlMaster, starts audio and WebSocket pairing, then opens the interactive shell through the same master connection. The default public `late.sh:22` target follows the bastion after cutover; local `:2222` can still reach the backend directly. The pair WebSocket is a separate HTTPS connection and retries while a replacement backend becomes ready. See the [bastion design](../devdocs/BASTION-FEATURE.md).
 
 ---
 
@@ -99,7 +101,7 @@ OpenSSH mode differs slightly: it authenticates and fetches the token first thro
 
 Config resolution order is built-in defaults, then the optional config file, then env vars, then explicit CLI args.
 
-The config file path defaults to `$XDG_CONFIG_HOME/late/config.toml` or `~/.config/late/config.toml`; `--config <path>` overrides it. Missing default config files are ignored. Missing explicit config files and parse errors print a warning and continue with lower-precedence values. Supported config-file keys are flat TOML keys matching the main CLI flags: `ssh-target`, `ssh-port`, `ssh-user`, `ssh-mode`, `key`, `audio-base-url`, `api-base-url`, `audio-output-device`, and `verbose`. TUI keybinds, themes, room/sidebar settings, and other in-app preferences are server-side user settings and do not belong in the CLI config file.
+The config file path defaults to `$XDG_CONFIG_HOME/late/config.toml` or `~/.config/late/config.toml`; `--config <path>` overrides it. A missing default file is ignored; default-file read/parse errors warn and continue. An explicit `--config` read/parse error stops startup, so an invalid local destination cannot silently fall back to the public service. Supported config-file keys are flat TOML keys matching the main CLI flags: `ssh-target`, `ssh-port`, `ssh-user`, `ssh-mode`, `key`, `audio-base-url`, `api-base-url`, `audio-output-device`, and `verbose`. TUI keybinds, themes, room/sidebar settings, and other in-app preferences are server-side user settings and do not belong in the CLI config file.
 
 Defaults in `src/config.rs`:
 - `--config <path>`: optional config file override; no env var

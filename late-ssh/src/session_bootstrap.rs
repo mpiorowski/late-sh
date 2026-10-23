@@ -7,7 +7,7 @@
 //! per-session state-loading.
 //!
 //! Caller-side concerns intentionally NOT done here, per the split in
-//! `devdocs/LATE-CONNECTION-BASTION.md`:
+//! `devdocs/BASTION-FEATURE.md`:
 //!   - authentication (pubkey on russh / pre-shared secret + handshake
 //!     headers on `/tunnel`)
 //!   - per-IP rate limiting

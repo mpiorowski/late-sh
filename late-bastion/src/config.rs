@@ -7,12 +7,11 @@ const DEV_TUNNEL_SECRET: &str = "dev-only-not-a-real-secret";
 /// Runtime configuration for `late-bastion`.
 ///
 /// Kept intentionally lean — the bastion has no DB, no service deps, no
-/// per-user state, and no ban logic. See `devdocs/LATE-CONNECTION-BASTION.md`
-/// §5 for the "intentionally minimal" principle.
+/// per-user state, and no ban logic. See `devdocs/BASTION-FEATURE.md`.
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// SSH listener port (default 5222 during dual-path rollout; eventually
-    /// fronts NGINX `:22` after cutover).
+    /// SSH listener port (default 5222); ssh-edge forwards public :22 here
+    /// when bastion routing is enabled.
     pub ssh_port: u16,
 
     /// SSH host key path. Loaded via `load_or_generate_key`; persisted to
