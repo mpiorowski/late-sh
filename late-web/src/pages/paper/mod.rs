@@ -239,7 +239,7 @@ async fn read_page(client: &PooledClient, base: &str, edition: NaiveDate) -> any
         og_title: format!("The Late Edition, {}", edition.format("%-d %B %Y")),
         og_description,
         og_image: format!("{base}/static/og-image.png"),
-        og_image_alt: "late.sh terminal clubhouse preview".to_string(),
+        og_image_alt: "A steaming coffee cup drawn in braille dots beside the prompt: ssh late.sh".to_string(),
     })
 }
 

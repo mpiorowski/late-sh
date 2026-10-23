@@ -187,7 +187,7 @@ async fn handler(
         ),
         None => (
             format!("{base}/static/og-image.png"),
-            "late.sh terminal clubhouse preview".to_string(),
+            "A steaming coffee cup drawn in braille dots beside the prompt: ssh late.sh".to_string(),
         ),
     };
     let page = Page {

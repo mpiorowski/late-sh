@@ -144,7 +144,7 @@ async fn handler(
         og_title: "The late.sh Artboard".to_string(),
         og_description: "The shared ASCII canvas, drawn cell by cell over SSH.".to_string(),
         og_image: format!("{base}/static/og-image.png"),
-        og_image_alt: "late.sh terminal clubhouse preview".to_string(),
+        og_image_alt: "A steaming coffee cup drawn in braille dots beside the prompt: ssh late.sh".to_string(),
         live_items,
         daily_items,
         monthly_items,
