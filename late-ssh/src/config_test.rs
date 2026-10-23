@@ -129,3 +129,66 @@ fn dev_ai_without_key_is_disabled() {
     assert!(!ai.enabled);
     assert!(ai.api_key.is_none());
 }
+
+#[test]
+fn herald_enabled_without_token_or_instance_is_rejected() {
+    let mut config = valid_config();
+    config.herald.enabled = true;
+    config.herald.instance = "https://fosstodon.org".to_string();
+    config.herald.token = None;
+    let error = config.validate().expect_err("must reject");
+    assert!(
+        error
+            .to_string()
+            .contains("herald is enabled without a token")
+    );
+
+    config.herald.token = Some("token".to_string());
+    config.herald.instance = "fosstodon.org".to_string();
+    let error = config.validate().expect_err("must reject");
+    assert!(
+        error
+            .to_string()
+            .contains("herald is enabled without an instance url")
+    );
+
+    config.herald.instance = "https://fosstodon.org".to_string();
+    config.validate().expect("a token and an instance url pass");
+}
+
+#[test]
+fn dev_herald_with_both_values_posts_unlisted() {
+    let herald = crate::config::dev_herald(
+        Some("https://instance.test/".to_string()),
+        Some("token".to_string()),
+        3000,
+    )
+    .expect("must accept");
+    assert!(herald.enabled);
+    assert_eq!(herald.instance, "https://instance.test");
+    assert_eq!(herald.token.as_deref(), Some("token"));
+    assert_eq!(herald.web_internal_url, "http://service-web:3000");
+    assert_eq!(herald.visibility, crate::config::HeraldVisibility::Unlisted);
+}
+
+#[test]
+fn dev_herald_without_values_is_off_and_half_set_is_rejected() {
+    let herald = crate::config::dev_herald(None, None, 3000).expect("must accept");
+    assert!(!herald.enabled);
+    assert!(herald.token.is_none());
+
+    let error = crate::config::dev_herald(Some("https://instance.test".to_string()), None, 3000)
+        .expect_err("must reject");
+    assert!(
+        error
+            .to_string()
+            .contains("LATE_HERALD_INSTANCE is set without")
+    );
+    let error =
+        crate::config::dev_herald(None, Some("token".to_string()), 3000).expect_err("must reject");
+    assert!(
+        error
+            .to_string()
+            .contains("LATE_HERALD_TOKEN is set without")
+    );
+}

@@ -53,6 +53,38 @@ pub struct AiConfig {
     pub api_key: Option<String>,
 }
 
+/// How the herald addresses a post. Public in prod; unlisted in dev, so a
+/// test post from a laptop never lands on the instance's timelines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeraldVisibility {
+    Public,
+    Unlisted,
+}
+
+impl HeraldVisibility {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Public => "public",
+            Self::Unlisted => "unlisted",
+        }
+    }
+}
+
+/// The herald's Fediverse account (`app/herald`): the instance it posts
+/// to, the token it posts with, and where it fetches its pictures from.
+#[derive(Clone, Debug)]
+pub struct HeraldConfig {
+    pub enabled: bool,
+    /// The Mastodon instance the account lives on, `https://host`, no
+    /// trailing slash.
+    pub instance: String,
+    /// An application token with `write:media` and `write:statuses`.
+    pub token: Option<String>,
+    /// late-web as this process reaches it, for the PNG routes.
+    pub web_internal_url: String,
+    pub visibility: HeraldVisibility,
+}
+
 /// Embedded ircd settings; see devdocs/FRD-IRCD.md.
 #[derive(Clone, Debug)]
 pub struct IrcConfig {
@@ -111,6 +143,7 @@ pub struct Config {
     pub ws_pair_max_attempts_per_ip: usize,
     pub ws_pair_rate_limit_window_secs: u64,
     pub ai: AiConfig,
+    pub herald: HeraldConfig,
     pub youtube_api_key: Option<String>,
     pub voice: VoiceConfig,
     pub irc: IrcConfig,
@@ -209,6 +242,40 @@ pub(crate) fn dev_ai(api_key: Option<String>) -> AiConfig {
             enabled: false,
             api_key: None,
         },
+    }
+}
+
+/// Dev opt-in for the herald: an instance and a token together switch it
+/// on, posting unlisted; neither leaves it off; one without the other is
+/// a typo worth refusing to start on. Pictures come from the compose web
+/// service.
+pub(crate) fn dev_herald(
+    instance: Option<String>,
+    token: Option<String>,
+    web_port: u16,
+) -> anyhow::Result<HeraldConfig> {
+    let web_internal_url = format!("http://service-web:{web_port}");
+    match (instance, token) {
+        (Some(instance), Some(token)) => Ok(HeraldConfig {
+            enabled: true,
+            instance: instance.trim_end_matches('/').to_string(),
+            token: Some(token),
+            web_internal_url,
+            visibility: HeraldVisibility::Unlisted,
+        }),
+        (None, None) => Ok(HeraldConfig {
+            enabled: false,
+            instance: String::new(),
+            token: None,
+            web_internal_url,
+            visibility: HeraldVisibility::Unlisted,
+        }),
+        (Some(_), None) => {
+            anyhow::bail!("LATE_HERALD_INSTANCE is set without LATE_HERALD_TOKEN")
+        }
+        (None, Some(_)) => {
+            anyhow::bail!("LATE_HERALD_TOKEN is set without LATE_HERALD_INSTANCE")
+        }
     }
 }
 
@@ -325,6 +392,13 @@ impl Config {
             ws_pair_rate_limit_window_secs: 60,
             // Personal opt-in: AI features stay off without a key.
             ai: dev_ai(optional("LATE_AI_API_KEY")),
+            // Personal opt-in: the herald posts only with an instance and a
+            // token, and then unlisted.
+            herald: dev_herald(
+                optional("LATE_HERALD_INSTANCE"),
+                optional("LATE_HERALD_TOKEN"),
+                instance.web_port,
+            )?,
             // Personal opt-in: link validation stays off without a key.
             youtube_api_key: optional("LATE_YOUTUBE_API_KEY"),
             voice: VoiceConfig::enabled(
@@ -437,6 +511,14 @@ impl Config {
                 enabled: true,
                 api_key: Some(required("LATE_AI_API_KEY")?),
             },
+            herald: HeraldConfig {
+                enabled: true,
+                instance: "https://fosstodon.org".to_string(),
+                token: Some(required("LATE_HERALD_TOKEN")?),
+                // The cluster service in front of service-web (port 80).
+                web_internal_url: "http://service-web-sv".to_string(),
+                visibility: HeraldVisibility::Public,
+            },
             youtube_api_key: Some(required("LATE_YOUTUBE_API_KEY")?),
             voice: VoiceConfig::enabled(
                 // Client-facing: the public signaling endpoint through ingress.
@@ -526,6 +608,16 @@ impl Config {
         if self.ai.enabled && self.ai.api_key.as_deref().is_none_or(str::is_empty) {
             anyhow::bail!("ai is enabled without an api key");
         }
+        if self.herald.enabled {
+            if self.herald.token.as_deref().is_none_or(str::is_empty) {
+                anyhow::bail!("herald is enabled without a token");
+            }
+            if !self.herald.instance.starts_with("https://")
+                && !self.herald.instance.starts_with("http://")
+            {
+                anyhow::bail!("herald is enabled without an instance url");
+            }
+        }
         let door_secrets = [
             ("rebels", self.rebels_enabled, &self.rebels_secret),
             ("nethack", self.nethack_enabled, &self.nethack_secret),
@@ -594,6 +686,14 @@ impl Config {
             ai_model = crate::app::ai::svc::AI_MODEL,
             has_key = self.ai.api_key.is_some(),
             "ai: @bot chat responder model and status"
+        );
+        tracing::info!(
+            herald_enabled = self.herald.enabled,
+            instance = %self.herald.instance,
+            has_token = self.herald.token.is_some(),
+            visibility = self.herald.visibility.as_str(),
+            web_internal_url = %self.herald.web_internal_url,
+            "herald: the Fediverse account's instance, token status, post visibility, picture source"
         );
         tracing::info!(
             has_key = self.youtube_api_key.is_some(),

@@ -83,6 +83,22 @@ resource "kubernetes_secret_v1" "youtube_credentials" {
 }
 
 # =============================================================================
+# The herald (Mastodon application token)
+# =============================================================================
+
+resource "kubernetes_secret_v1" "herald_credentials" {
+  metadata {
+    name = "herald-credentials"
+  }
+
+  data = {
+    token = var.HERALD_TOKEN
+  }
+
+  type = "Opaque"
+}
+
+# =============================================================================
 # Rebels in the Sky Identity Seed
 # =============================================================================
 

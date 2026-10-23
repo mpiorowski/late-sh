@@ -306,7 +306,9 @@ Keyless sessions (ghost bots, tests) apply a change for the session only.
 error). The only other env reads are secrets (DB, LiveKit, door secrets) and
 dev opt-ins keyed on presence: `LATE_AI_API_KEY`, the R2 pair
 `LATE_FILES_S3_ACCESS_KEY_ID`/`..._SECRET_ACCESS_KEY` (half set is an error),
-`LATE_YOUTUBE_API_KEY`. `Config::validate()` checks cross-field invariants at
+`LATE_YOUTUBE_API_KEY`, the herald pair `LATE_HERALD_INSTANCE`/`LATE_HERALD_TOKEN`
+(half set is an error; prod pins the instance and requires the token).
+`Config::validate()` checks cross-field invariants at
 boot. Tests in `config_test.rs`. Dev profiles pin compose hostnames, so the
 apps only run inside `docker compose`. Shipping a config change that adds or
 removes a required secret follows the deploy skew rule in `infra/RUNBOOK.md`.

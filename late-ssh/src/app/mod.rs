@@ -21,6 +21,7 @@ pub mod door;
 pub mod files;
 pub mod games;
 pub(crate) mod help_modal;
+pub mod herald;
 pub(crate) mod hub;
 pub(crate) mod icon_picker;
 pub mod input;

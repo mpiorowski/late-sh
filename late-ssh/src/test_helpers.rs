@@ -28,7 +28,7 @@ use crate::app::state::{App, SessionConfig};
 use crate::app::voice::svc::{VoiceConfig, VoiceService};
 use crate::app::{LeaderboardService, QuestService, ShopService};
 use crate::authz::Permissions;
-use crate::config::{AiConfig, Config};
+use crate::config::{AiConfig, Config, HeraldConfig, HeraldVisibility};
 use crate::paired_clients::{PairControlMessage, PairedClientRegistry};
 use crate::session::SessionRegistry;
 use crate::state::State;
@@ -178,6 +178,13 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
         ai: AiConfig {
             enabled: false,
             api_key: None,
+        },
+        herald: HeraldConfig {
+            enabled: false,
+            instance: String::new(),
+            token: None,
+            web_internal_url: "http://localhost:3000".to_string(),
+            visibility: HeraldVisibility::Unlisted,
         },
         youtube_api_key: None,
         voice: VoiceConfig::disabled(),

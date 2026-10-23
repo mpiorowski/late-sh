@@ -84,6 +84,12 @@ variable "YOUTUBE_API_KEY" {
   sensitive   = true
 }
 
+variable "HERALD_TOKEN" {
+  description = "Mastodon application token for the herald (write:media, write:statuses)."
+  type        = string
+  sensitive   = true
+}
+
 # =============================================================================
 # Voice / LiveKit
 # =============================================================================

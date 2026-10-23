@@ -294,6 +294,17 @@ resource "kubernetes_deployment_v1" "service_ssh" {
               }
             }
           }
+          # --- The herald (Mastodon; instance and visibility are prod-profile
+          # literals in late-ssh/src/config.rs) ---
+          env {
+            name = "LATE_HERALD_TOKEN"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.herald_credentials.metadata[0].name
+                key  = "token"
+              }
+            }
+          }
 
           # --- Voice / LiveKit (credentials only; both URLs and the room name
           # are prod-profile literals in late-ssh/src/config.rs, including the

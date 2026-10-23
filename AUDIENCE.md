@@ -261,54 +261,55 @@ Live, in order of evidence behind them:
   one bearer token and two HTTP calls; federating profiles (ActivityPub,
   WebFinger, signed fetches, inbound moderation) is weeks of work and
   sends the visibility people want outward, away from the terminal.
-- **The herald: one picture a day on the Fediverse.** An ordinary account
-  on an existing Mastodon instance (fosstodon.org: FOSS-leaning, a local
-  timeline that gives a new account readers on day one, bots welcome
-  when marked), flagged as automated, `https://late.sh` in its profile
-  links, and an application token with `write:media` and
-  `write:statuses` only. The Fediverse is every server speaking
-  ActivityPub (Mastodon, Pixelfed, PeerTube, Lemmy, Threads in part);
-  one Mastodon account is addressable from all of it. Bluesky is a
-  different network and would be a second client, later.
-  - **What it posts.** One picture a day, rotating so the slot never
-    repeats: yesterday's Artboard snapshot (tagged #ASCIIart and
-    #MastoArt, the communities that boost strangers' art), a runner's
-    poster the day it is painted at PRINTS with the member's handle, the
-    day's best share card rendered as a picture with the `ssh late.sh`
-    footer, a frame of the tavern or the night city. Each with alt text,
-    a link to that day's `/paper` or the gallery, and the same four tags
-    (#tildeverse #pubnix #ssh #terminal). The rare headline events the
-    #lounge feed already treats as stories (the pot drawn, the crown
-    taken, the monthly awards) may take the slot. Every picture comes
-    through the front door's cell renderer
-    (`late-web/src/pages/shared/board_png.rs`), so anything the terminal
-    draws can be posted once it has a route; today only the poster and
-    the gallery snapshot have one.
+- **The herald: one picture a day on the Fediverse.** Built
+  (`late-ssh/src/app/herald/CONTEXT.md`) and shipped dark: the
+  `herald_enabled` row starts off. An ordinary account on an existing
+  Mastodon instance (fosstodon.org: FOSS-leaning, a local timeline that
+  gives a new account readers on day one; invite-only, and its rule for
+  automated accounts is that an active member runs them and answers
+  replies), flagged as automated, `https://late.sh` in its profile links,
+  and an application token with `write:media` and `write:statuses` only.
+  The Fediverse is every server speaking ActivityPub (Mastodon, Pixelfed,
+  PeerTube, Lemmy, Threads in part); one Mastodon account is addressable
+  from all of it. Bluesky is a different network and would be a second
+  client, later.
+  - **What it posts.** One picture a day at 16:00 UTC, alternating: a
+    standing runner's poster from PRINTS with the member credited
+    (`~name`, never `@name`), linking their profile, each poster once;
+    and yesterday's daily Artboard snapshot (tagged #ASCIIart and
+    #MastoArt, the communities that boost strangers' art), linking the
+    gallery, once it has enough ink to be a picture. Each with alt text
+    and four tags. Still to come, each needing a PNG route on the front
+    door first (`late-web/src/pages/shared/board_png.rs`): the day's best
+    share card with the `ssh late.sh` footer, a frame of the tavern or
+    the night city, and the rare headline events the #lounge feed treats
+    as stories (the pot drawn, the crown taken, the monthly awards).
   - **What it never posts.** Chat. A frame of #lounge is people's
     messages on the public web; the Artboard, posters and cards are
     things people made to be seen, messages are not.
-  - **The rhythm.** One post a day, at most two when both are pictures.
-    A muted account never recovers; the variety above is so one slot
-    never repeats, not so there are more slots.
-  - **The shape.** A small late-ssh domain built like the paper's press:
-    a sweeper on every replica, a `herald_posts` row per UTC day claimed
-    by conditional insert so several replicas post exactly once, the
-    picture fetched over `web_url` from the front door's PNG routes
-    (`/profiles/{slug}/poster.png`, `/gallery/{key}/image.png`), a
-    media upload then a status call with an idempotency key so a retry
-    never double-posts, a `posted / skipped / failed` counter on the
-    Grafana board. Config off in dev and required in prod, so the first
-    prod deploy after it merges needs the token secret in place (wired
-    like `LATE_AI_API_KEY` in `infra/service-ssh.tf`) or the service
-    refuses to start.
+  - **The rhythm.** One post a day, never two. A muted account never
+    recovers; the rotation is so one slot never repeats, not so there are
+    more slots.
+  - **The shape.** A late-ssh domain built like the paper's press: a
+    checker on every replica, a `herald_posts` row per UTC day claimed by
+    conditional insert so several replicas post exactly once, the picture
+    fetched from the front door's PNG routes over the cluster service, a
+    media upload then a status call carrying the row's id as the
+    idempotency key so a retry never double-posts, a
+    `late_ssh_herald_posts_total` counter (posted, skipped, lost, failed)
+    on the Grafana board's Herald row. Prod requires `LATE_HERALD_TOKEN`
+    (`infra/service-ssh.tf`, from the `HERALD_TOKEN` GitHub secret), so
+    the `-infra` release that injects it ships before the ssh image that
+    needs it; dev posts unlisted, and only with `LATE_HERALD_INSTANCE`
+    and `LATE_HERALD_TOKEN` in `.env.local`.
   - **The human half.** The account follows a few people, answers
     replies, and boosts members who post their own profile or card. A
     bot that only broadcasts gets muted; an account that posts once a
     day and otherwise behaves like a person gets followed.
   - **When.** It is an arrivals lever, and the funnel in section 3 says
-    arrivals leak at 94% on day two. Build it, flip it on once the first
-    hour has moved, so the first thing new followers find is a place
-    that holds them.
+    arrivals leak at 94% on day two. Flip the row on once the first hour
+    has moved, so the first thing new followers find is a place that
+    holds them. Not measured yet beyond the counter.
 - **Launch posts wait for the deadchannel public flip** (`GAME.md`, "The
   three surfaces"), which is the game's public launch. The Hacker News
   front page in July 2026 peaked at about 100 sessions and settled back to

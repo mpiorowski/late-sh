@@ -4430,6 +4430,79 @@
         "x": 0,
         "y": 342
       }
+    },
+    {
+      "type": "row",
+      "title": "Herald",
+      "collapsed": false,
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [],
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 350
+      }
+    },
+    {
+      "type": "bargauge",
+      "title": "Daily Posts by Result",
+      "description": "The herald's one post a day on the Fediverse (late-ssh app/herald) over the range: posted, skipped (nothing worth posting), lost (another replica had the day), failed (retried up to three times, then the day rests). One 'posted' or 'skipped' a day is the healthy line; a 'failed' with no 'posted' after it is a day missed.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (result) (increase(late_ssh_herald_posts_total[$__range]))",
+          "legendFormat": "{{result}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 351
+      }
     }
   ]
 }

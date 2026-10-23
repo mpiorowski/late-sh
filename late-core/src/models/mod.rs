@@ -1,4 +1,7 @@
 pub mod account_link;
+pub mod app_flag;
+#[cfg(test)]
+mod app_flag_test;
 pub mod aquarium_care;
 #[cfg(test)]
 mod aquarium_care_test;
@@ -98,6 +101,9 @@ pub mod greendragon_clan;
 pub mod greendragon_commentary;
 pub mod greendragon_news;
 pub mod greendragon_setting;
+pub mod herald;
+#[cfg(test)]
+mod herald_test;
 pub mod irc_history;
 #[cfg(test)]
 mod irc_history_test;
