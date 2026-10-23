@@ -70,19 +70,44 @@ impl HeraldVisibility {
     }
 }
 
-/// The herald's Fediverse account (`app/herald`): the instance it posts
-/// to, the token it posts with, and where it fetches its pictures from.
+/// The Mastodon account the herald posts through: any server speaking
+/// the Mastodon API.
 #[derive(Clone, Debug)]
-pub struct HeraldConfig {
-    pub enabled: bool,
-    /// The Mastodon instance the account lives on, `https://host`, no
-    /// trailing slash.
+pub struct MastodonConfig {
+    /// `https://host`, no trailing slash.
     pub instance: String,
     /// An application token with `write:media` and `write:statuses`.
-    pub token: Option<String>,
+    pub token: String,
+}
+
+/// The Bluesky account the herald posts through.
+#[derive(Clone, Debug)]
+pub struct BlueskyConfig {
+    /// The account's PDS, `https://host`, no trailing slash.
+    pub pds: String,
+    /// The account's handle.
+    pub identifier: String,
+    /// An app password minted for the herald.
+    pub app_password: String,
+}
+
+/// The herald's accounts (`app/herald`): each network it delivers to, and
+/// where it fetches its pictures from. No network configured is the
+/// herald off.
+#[derive(Clone, Debug)]
+pub struct HeraldConfig {
+    pub mastodon: Option<MastodonConfig>,
+    pub bluesky: Option<BlueskyConfig>,
     /// late-web as this process reaches it, for the PNG routes.
     pub web_internal_url: String,
+    /// Mastodon only; Bluesky has no unlisted post.
     pub visibility: HeraldVisibility,
+}
+
+impl HeraldConfig {
+    pub fn enabled(&self) -> bool {
+        self.mastodon.is_some() || self.bluesky.is_some()
+    }
 }
 
 /// Embedded ircd settings; see devdocs/FRD-IRCD.md.
@@ -208,6 +233,14 @@ fn required(key: &str) -> anyhow::Result<String> {
     value.with_context(|| format!("{key} must be set"))
 }
 
+/// `http://` or `https://` with something after it.
+fn is_http_url(value: &str) -> bool {
+    value
+        .strip_prefix("https://")
+        .or_else(|| value.strip_prefix("http://"))
+        .is_some_and(|rest| !rest.is_empty())
+}
+
 /// Read an optional env value; empty or whitespace-only counts as unset.
 /// Used only for personal dev keys that opt optional integrations in.
 fn optional(key: &str) -> Option<String> {
@@ -245,38 +278,56 @@ pub(crate) fn dev_ai(api_key: Option<String>) -> AiConfig {
     }
 }
 
-/// Dev opt-in for the herald: an instance and a token together switch it
-/// on, posting unlisted; neither leaves it off; one without the other is
-/// a typo worth refusing to start on. Pictures come from the compose web
-/// service.
+/// The PDS every Bluesky account made at bsky.app lives on.
+pub const BLUESKY_PDS: &str = "https://bsky.social";
+
+/// Dev opt-in for the herald, one pair per network: both values switch
+/// the network on, neither leaves it off, one without the other is a typo
+/// worth refusing to start on. Mastodon posts unlisted in dev; Bluesky
+/// has no such thing, so a dev post there is public. Pictures come from
+/// the compose web service.
 pub(crate) fn dev_herald(
-    instance: Option<String>,
-    token: Option<String>,
+    mastodon: (Option<String>, Option<String>),
+    bluesky: (Option<String>, Option<String>),
     web_port: u16,
 ) -> anyhow::Result<HeraldConfig> {
-    let web_internal_url = format!("http://service-web:{web_port}");
-    match (instance, token) {
-        (Some(instance), Some(token)) => Ok(HeraldConfig {
-            enabled: true,
+    let mastodon = match mastodon {
+        (Some(instance), Some(token)) => Some(MastodonConfig {
             instance: instance.trim_end_matches('/').to_string(),
-            token: Some(token),
-            web_internal_url,
-            visibility: HeraldVisibility::Unlisted,
+            token,
         }),
-        (None, None) => Ok(HeraldConfig {
-            enabled: false,
-            instance: String::new(),
-            token: None,
-            web_internal_url,
-            visibility: HeraldVisibility::Unlisted,
-        }),
+        (None, None) => None,
         (Some(_), None) => {
-            anyhow::bail!("LATE_HERALD_INSTANCE is set without LATE_HERALD_TOKEN")
+            anyhow::bail!("LATE_HERALD_MASTODON_INSTANCE is set without LATE_HERALD_MASTODON_TOKEN")
         }
         (None, Some(_)) => {
-            anyhow::bail!("LATE_HERALD_TOKEN is set without LATE_HERALD_INSTANCE")
+            anyhow::bail!("LATE_HERALD_MASTODON_TOKEN is set without LATE_HERALD_MASTODON_INSTANCE")
         }
-    }
+    };
+    let bluesky = match bluesky {
+        (Some(identifier), Some(app_password)) => Some(BlueskyConfig {
+            pds: BLUESKY_PDS.to_string(),
+            identifier,
+            app_password,
+        }),
+        (None, None) => None,
+        (Some(_), None) => {
+            anyhow::bail!(
+                "LATE_HERALD_BLUESKY_IDENTIFIER is set without LATE_HERALD_BLUESKY_PASSWORD"
+            )
+        }
+        (None, Some(_)) => {
+            anyhow::bail!(
+                "LATE_HERALD_BLUESKY_PASSWORD is set without LATE_HERALD_BLUESKY_IDENTIFIER"
+            )
+        }
+    };
+    Ok(HeraldConfig {
+        mastodon,
+        bluesky,
+        web_internal_url: format!("http://service-web:{web_port}"),
+        visibility: HeraldVisibility::Unlisted,
+    })
 }
 
 /// Dev opt-in for uploads: both credentials present enables the prod bucket,
@@ -392,11 +443,17 @@ impl Config {
             ws_pair_rate_limit_window_secs: 60,
             // Personal opt-in: AI features stay off without a key.
             ai: dev_ai(optional("LATE_AI_API_KEY")),
-            // Personal opt-in: the herald posts only with an instance and a
-            // token, and then unlisted.
+            // Personal opt-in: a network posts only with its pair set, and
+            // Mastodon then unlisted.
             herald: dev_herald(
-                optional("LATE_HERALD_INSTANCE"),
-                optional("LATE_HERALD_TOKEN"),
+                (
+                    optional("LATE_HERALD_MASTODON_INSTANCE"),
+                    optional("LATE_HERALD_MASTODON_TOKEN"),
+                ),
+                (
+                    optional("LATE_HERALD_BLUESKY_IDENTIFIER"),
+                    optional("LATE_HERALD_BLUESKY_PASSWORD"),
+                ),
                 instance.web_port,
             )?,
             // Personal opt-in: link validation stays off without a key.
@@ -512,9 +569,13 @@ impl Config {
                 api_key: Some(required("LATE_AI_API_KEY")?),
             },
             herald: HeraldConfig {
-                enabled: true,
-                instance: "https://fosstodon.org".to_string(),
-                token: Some(required("LATE_HERALD_TOKEN")?),
+                // Neither account exists yet (AUDIENCE.md, the herald). Going
+                // live on a network is a profile change: pin the instance or
+                // the handle here, read its secret with `required`, and ship
+                // the infra release that injects it first (infra/RUNBOOK.md,
+                // deploy skew rule).
+                mastodon: None,
+                bluesky: None,
                 // The cluster service in front of service-web (port 80).
                 web_internal_url: "http://service-web-sv".to_string(),
                 visibility: HeraldVisibility::Public,
@@ -608,14 +669,22 @@ impl Config {
         if self.ai.enabled && self.ai.api_key.as_deref().is_none_or(str::is_empty) {
             anyhow::bail!("ai is enabled without an api key");
         }
-        if self.herald.enabled {
-            if self.herald.token.as_deref().is_none_or(str::is_empty) {
-                anyhow::bail!("herald is enabled without a token");
+        if let Some(mastodon) = &self.herald.mastodon {
+            if mastodon.token.is_empty() {
+                anyhow::bail!("herald mastodon is configured without a token");
             }
-            if !self.herald.instance.starts_with("https://")
-                && !self.herald.instance.starts_with("http://")
-            {
-                anyhow::bail!("herald is enabled without an instance url");
+            if !is_http_url(&mastodon.instance) {
+                anyhow::bail!("herald mastodon is configured without an instance url");
+            }
+        }
+        if let Some(bluesky) = &self.herald.bluesky {
+            if bluesky.identifier.is_empty() || bluesky.app_password.is_empty() {
+                anyhow::bail!(
+                    "herald bluesky is configured without an identifier and an app password"
+                );
+            }
+            if !is_http_url(&bluesky.pds) {
+                anyhow::bail!("herald bluesky is configured without a pds url");
             }
         }
         let door_secrets = [
@@ -688,12 +757,12 @@ impl Config {
             "ai: @bot chat responder model and status"
         );
         tracing::info!(
-            herald_enabled = self.herald.enabled,
-            instance = %self.herald.instance,
-            has_token = self.herald.token.is_some(),
+            herald_enabled = self.herald.enabled(),
+            mastodon_instance = self.herald.mastodon.as_ref().map(|m| m.instance.as_str()),
+            bluesky_identifier = self.herald.bluesky.as_ref().map(|b| b.identifier.as_str()),
             visibility = self.herald.visibility.as_str(),
             web_internal_url = %self.herald.web_internal_url,
-            "herald: the Fediverse account's instance, token status, post visibility, picture source"
+            "herald: the networks it posts to, mastodon visibility, picture source"
         );
         tracing::info!(
             has_key = self.youtube_api_key.is_some(),

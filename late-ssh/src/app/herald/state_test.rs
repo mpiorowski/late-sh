@@ -4,8 +4,8 @@ use late_core::models::herald::{HeraldKind, PosterCandidate};
 use uuid::Uuid;
 
 use super::state::{
-    BOARD_MIN_INK, BoardCandidate, Picture, alt_text, board_key, ink_cells, pick_picture,
-    post_due_day, shown_day, status_text,
+    BOARD_MIN_INK, BoardCandidate, Picture, TEXT_LIMIT, alt_text, board_key, ink_cells,
+    pick_picture, post_due_day, shown_day, status_text,
 };
 
 fn day(d: u32) -> NaiveDate {
@@ -72,11 +72,17 @@ fn the_rotation_alternates_and_falls_back() {
 }
 
 /// Each picture knows its route, its page, its subject, and its words:
-/// under the instance's limit, no bare `@`, the page linked, four tags.
+/// under the tightest network's limit, no bare `@`, the page linked, four
+/// tags; and it round-trips through the row.
 #[test]
 fn the_words_fit_and_never_mention_anyone() {
     let painter = poster("a_long_username_of_thirty_chars");
     let picture = Picture::Poster(painter.clone());
+    let stored = serde_json::to_value(&picture).expect("serialize");
+    assert_eq!(
+        serde_json::from_value::<Picture>(stored).expect("deserialize"),
+        picture
+    );
     assert_eq!(picture.kind(), HeraldKind::Poster);
     assert_eq!(picture.subject(), painter.user_id.to_string());
     assert_eq!(
@@ -85,7 +91,7 @@ fn the_words_fit_and_never_mention_anyone() {
     );
     assert_eq!(picture.page_path(), "/profiles/w_heraldstate1");
     let text = status_text(&picture, "https://late.sh");
-    assert!(text.chars().count() < 500, "{text}");
+    assert!(text.chars().count() < TEXT_LIMIT, "{text}");
     assert!(text.contains("~a_long_username_of_thirty_chars"));
     assert!(
         !text.contains('@'),
@@ -106,7 +112,7 @@ fn the_words_fit_and_never_mention_anyone() {
     );
     assert_eq!(picture.page_path(), "/gallery?key=daily:2026-10-22");
     let text = status_text(&picture, "https://late.sh");
-    assert!(text.chars().count() < 500, "{text}");
+    assert!(text.chars().count() < TEXT_LIMIT, "{text}");
     assert!(text.contains("22 October 2026"));
     assert!(text.contains("https://late.sh/gallery?key=daily:2026-10-22"));
     assert_eq!(text.matches('#').count(), 4);

@@ -2,7 +2,7 @@ use chrono::{Duration, NaiveDate, Utc};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use super::{HeraldKind, HeraldPost, HeraldPosted};
+use super::herald::{HeraldDelivery, HeraldKind, HeraldNetwork, HeraldPost, HeraldPosted};
 use crate::db::Db;
 use crate::models::deadchannel_runner::DeadchannelRunner;
 use crate::models::work_profile::{WorkProfile, WorkProfileParams, WorkStatus, WorkType};
@@ -21,11 +21,43 @@ fn fresh() -> chrono::DateTime<Utc> {
     Utc::now() - Duration::minutes(20)
 }
 
-fn posted(kind: HeraldKind, subject: &str) -> HeraldPosted {
-    HeraldPosted {
+/// Store the pick and settle the day as posted on Mastodon.
+async fn post(client: &Client, day: NaiveDate, kind: HeraldKind, subject: &str) {
+    HeraldPost::store_picture(
+        client,
+        day,
         kind,
-        subject: subject.to_string(),
-        status_url: "https://instance.example/@late/1".to_string(),
+        subject,
+        &serde_json::json!({"pick": subject}),
+    )
+    .await
+    .expect("store pick");
+    HeraldPost::record_delivery(
+        client,
+        day,
+        HeraldNetwork::Mastodon,
+        "https://instance.example/@late/1",
+    )
+    .await
+    .expect("record delivery");
+    HeraldPost::finish_posted(client, day)
+        .await
+        .expect("finish");
+}
+
+fn profile(user_id: Uuid, slug: &str) -> WorkProfileParams {
+    WorkProfileParams {
+        user_id,
+        slug: slug.into(),
+        headline: "Terminal artist".into(),
+        status: WorkStatus::Open,
+        work_type: WorkType::Any,
+        location: String::new(),
+        contact: String::new(),
+        links: vec![],
+        skills: vec![],
+        skills_tags: vec![],
+        summary: String::new(),
     }
 }
 
@@ -38,25 +70,9 @@ async fn runner_with_poster(client: &Client, db: &Db, name: &str, slug: &str) ->
     DeadchannelRunner::store_poster(client, user.id, &serde_json::json!({"cells": []}))
         .await
         .expect("store poster");
-    WorkProfile::create_by_user_id(
-        client,
-        user.id,
-        WorkProfileParams {
-            user_id: user.id,
-            slug: slug.into(),
-            headline: "Terminal artist".into(),
-            status: WorkStatus::Open,
-            work_type: WorkType::Any,
-            location: String::new(),
-            contact: String::new(),
-            links: vec![],
-            skills: vec![],
-            skills_tags: vec![],
-            summary: String::new(),
-        },
-    )
-    .await
-    .expect("create work profile");
+    WorkProfile::create_by_user_id(client, user.id, profile(user.id, slug))
+        .await
+        .expect("create work profile");
     user.id
 }
 
@@ -85,13 +101,7 @@ async fn a_day_is_claimed_once_and_settles() {
         "held is not finished"
     );
 
-    HeraldPost::finish_posted(
-        &client,
-        DAY,
-        &posted(HeraldKind::Artboard, "daily:2026-10-22"),
-    )
-    .await
-    .expect("finish");
+    post(&client, DAY, HeraldKind::Artboard, "daily:2026-10-22").await;
     assert!(
         HeraldPost::is_finished(&client, DAY, MAX_ATTEMPTS)
             .await
@@ -108,7 +118,23 @@ async fn a_day_is_claimed_once_and_settles() {
         .await
         .expect("read")
         .expect("posted");
-    assert_eq!(record, posted(HeraldKind::Artboard, "daily:2026-10-22"));
+    assert_eq!(
+        record,
+        HeraldPosted {
+            kind: HeraldKind::Artboard,
+            subject: "daily:2026-10-22".to_string(),
+            deliveries: vec![HeraldDelivery {
+                network: HeraldNetwork::Mastodon,
+                url: "https://instance.example/@late/1".to_string(),
+            }],
+        }
+    );
+    assert_eq!(
+        HeraldPost::stored_picture(&client, DAY)
+            .await
+            .expect("read"),
+        Some(serde_json::json!({"pick": "daily:2026-10-22"}))
+    );
     assert_eq!(
         HeraldPost::last_posted_kind(&client, DAY + Duration::days(1))
             .await
@@ -123,12 +149,29 @@ async fn a_day_is_claimed_once_and_settles() {
         "the rotation reads days before the one in hand"
     );
 
-    // The key is the first claim's and never changes.
+    // The key is the first claim's and never changes; a pick and a
+    // delivery that landed before the day failed survive the retry, and
+    // a second record of the same network is ignored.
     let later = DAY + Duration::days(1);
     let first = HeraldPost::claim(&client, later, fresh(), MAX_ATTEMPTS)
         .await
         .expect("claim")
         .expect("wins");
+    HeraldPost::store_picture(
+        &client,
+        later,
+        HeraldKind::Poster,
+        "someone",
+        &serde_json::json!({}),
+    )
+    .await
+    .expect("store pick");
+    HeraldPost::record_delivery(&client, later, HeraldNetwork::Bluesky, "https://bsky.app/1")
+        .await
+        .expect("record delivery");
+    HeraldPost::record_delivery(&client, later, HeraldNetwork::Bluesky, "https://bsky.app/2")
+        .await
+        .expect("record delivery again");
     HeraldPost::mark_failed(&client, later).await.expect("fail");
     let retry = HeraldPost::claim(&client, later, fresh(), MAX_ATTEMPTS)
         .await
@@ -136,10 +179,28 @@ async fn a_day_is_claimed_once_and_settles() {
         .expect("a failed day under the cap is claimed again");
     assert_eq!(retry, first, "the idempotency key survives a retry");
     assert_ne!(key, first, "each day has its own key");
+    assert_eq!(
+        HeraldPost::stored_picture(&client, later)
+            .await
+            .expect("read"),
+        Some(serde_json::json!({}))
+    );
+    assert_eq!(
+        HeraldPost::deliveries(&client, later).await.expect("read"),
+        vec![HeraldDelivery {
+            network: HeraldNetwork::Bluesky,
+            url: "https://bsky.app/1".to_string(),
+        }]
+    );
+    assert_eq!(
+        HeraldPost::posted_on(&client, later).await.expect("read"),
+        None,
+        "a delivery is not a posted day"
+    );
 }
 
 /// A failed day is retried up to the cap and then rests; a claim nobody
-/// settled is taken over once stale.
+/// settled is taken over once stale; a skipped day is finished.
 #[tokio::test]
 async fn failures_retry_to_the_cap_and_stale_claims_are_taken_over() {
     let test_db = test_db().await;
@@ -227,25 +288,9 @@ async fn poster_candidates_are_standing_public_and_unposted() {
     DeadchannelRunner::ensure_for_user(&client, bare.id, &serde_json::json!({}))
         .await
         .expect("runner");
-    WorkProfile::create_by_user_id(
-        &client,
-        bare.id,
-        WorkProfileParams {
-            user_id: bare.id,
-            slug: "w_heraldbare01".into(),
-            headline: String::new(),
-            status: WorkStatus::Open,
-            work_type: WorkType::Any,
-            location: String::new(),
-            contact: String::new(),
-            links: vec![],
-            skills: vec![],
-            skills_tags: vec![],
-            summary: String::new(),
-        },
-    )
-    .await
-    .expect("profile");
+    WorkProfile::create_by_user_id(&client, bare.id, profile(bare.id, "w_heraldbare01"))
+        .await
+        .expect("profile");
     assert_eq!(
         HeraldPost::next_poster_candidate(&client)
             .await
@@ -271,17 +316,31 @@ async fn poster_candidates_are_standing_public_and_unposted() {
     assert_eq!(first.username, "h_newer");
     assert_eq!(first.slug, "w_heraldnew001");
 
-    // Posted: the next candidate is the other one.
+    // A pick on a day that failed does not spend the poster.
     HeraldPost::claim(&client, DAY, fresh(), MAX_ATTEMPTS)
         .await
         .expect("claim");
-    HeraldPost::finish_posted(
+    HeraldPost::store_picture(
         &client,
         DAY,
-        &posted(HeraldKind::Poster, &newer.to_string()),
+        HeraldKind::Poster,
+        &newer.to_string(),
+        &serde_json::json!({}),
     )
     .await
-    .expect("finish");
+    .expect("store pick");
+    HeraldPost::mark_failed(&client, DAY).await.expect("fail");
+    assert_eq!(
+        HeraldPost::next_poster_candidate(&client)
+            .await
+            .expect("read")
+            .expect("a candidate")
+            .user_id,
+        newer
+    );
+
+    // Posted: the next candidate is the other one.
+    post(&client, DAY, HeraldKind::Poster, &newer.to_string()).await;
     let second = HeraldPost::next_poster_candidate(&client)
         .await
         .expect("read")

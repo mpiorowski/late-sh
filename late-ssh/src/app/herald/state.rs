@@ -6,6 +6,7 @@ use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Utc};
 use dartboard_core::{Canvas, CellValue};
 use late_core::models::artboard::Snapshot;
 use late_core::models::herald::{HeraldKind, PosterCandidate};
+use serde::{Deserialize, Serialize};
 
 /// When in the UTC day the post goes out: late afternoon in Europe, noon
 /// on the US east coast, the hours the Fediverse reads. Long after the
@@ -26,6 +27,11 @@ pub const BOARD_MIN_INK: usize = 200;
 /// art tags are the communities that boost strangers' pictures.
 const BOARD_TAGS: &str = "#ASCIIart #MastoArt #tildeverse #ssh";
 const POSTER_TAGS: &str = "#ASCIIart #tildeverse #ssh #terminal";
+
+/// The shortest limit among the networks: Bluesky's 300 graphemes
+/// (Mastodon allows 500). One text goes to every network, so it fits the
+/// tightest; `state_test` holds it there.
+pub const TEXT_LIMIT: usize = 300;
 
 /// The day whose post is due right now: today once the post time has
 /// passed, yesterday before it. A replica that was down at the hour
@@ -63,7 +69,7 @@ pub fn ink_cells(canvas: &Canvas) -> usize {
 }
 
 /// Yesterday's board, once it has passed the ink bar.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BoardCandidate {
     /// The snapshot's key, `daily:YYYY-MM-DD`.
     pub key: String,
@@ -71,8 +77,9 @@ pub struct BoardCandidate {
     pub shown: NaiveDate,
 }
 
-/// What the day's post shows.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// What the day's post shows. Serialized onto the day's row once picked,
+/// so a retry delivers the same picture to the networks still missing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Picture {
     Poster(PosterCandidate),
     Board(BoardCandidate),
@@ -130,9 +137,10 @@ pub fn pick_picture(
     }
 }
 
-/// The words under the picture, well under Mastodon's 500 characters: a
-/// line of plain speech, the page, the tags. The runner is named `~name`,
-/// never `@name`, since a bare `@` is a mention on the instance.
+/// The words under the picture, the same on every network and under
+/// `TEXT_LIMIT`: a line of plain speech, the page, the tags. The runner
+/// is named `~name`, never `@name`, since a bare `@` is a mention on the
+/// instance.
 pub fn status_text(picture: &Picture, web_url: &str) -> String {
     let page = format!("{web_url}{}", picture.page_path());
     match picture {

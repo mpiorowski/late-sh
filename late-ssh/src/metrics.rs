@@ -134,6 +134,13 @@ pub enum HeraldPostResult {
     Failed,
 }
 
+/// How one network's leg of the herald's post went.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeraldDeliveryResult {
+    Delivered,
+    Failed,
+}
+
 /// How one page of The Late Edition (`app/paper`) came off the press.
 /// `Printed` is the variant that spent a model call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -717,12 +724,12 @@ mod inner {
         BioScreenOutcome, CrownRefusal, DailyPuzzle, DailyWinPayout, DoorGame, DoorWatchOutcome,
         FightBeat, FirstContactBeat, GalleryApplauseResult, GalleryHangResult,
         GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
-        HeraldPostResult, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
-        LoungeBeat, NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
-        OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult, Place,
-        PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire,
-        RealmChatRoomAttach, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh,
-        RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SendRefusal,
+        HeraldDeliveryResult, HeraldPostResult, JobsFetchResult, JobsPostResult, JobsPressResult,
+        JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
+        OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult,
+        Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope,
+        PresenceWire, RealmChatRoomAttach, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError,
+        Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SendRefusal,
         SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason,
         SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
@@ -3585,6 +3592,36 @@ mod inner {
         );
     }
 
+    fn herald_delivery_result_label(result: HeraldDeliveryResult) -> &'static str {
+        match result {
+            HeraldDeliveryResult::Delivered => "delivered",
+            HeraldDeliveryResult::Failed => "failed",
+        }
+    }
+
+    fn herald_deliveries_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_herald_deliveries_total")
+                .with_description("The herald's post landing on each network, by result")
+                .build()
+        })
+    }
+
+    pub fn record_herald_delivery(
+        network: late_core::models::herald::HeraldNetwork,
+        result: HeraldDeliveryResult,
+    ) {
+        herald_deliveries_total().add(
+            1,
+            &[
+                KeyValue::new("network", network.as_str()),
+                KeyValue::new("result", herald_delivery_result_label(result)),
+            ],
+        );
+    }
+
     fn jobs_fetch_result_label(result: JobsFetchResult) -> &'static str {
         match result {
             JobsFetchResult::Fetched => "fetched",
@@ -4096,12 +4133,12 @@ mod inner {
         BioScreenOutcome, CrownRefusal, DailyPuzzle, DailyWinPayout, DoorGame, DoorWatchOutcome,
         FightBeat, FirstContactBeat, GalleryApplauseResult, GalleryHangResult,
         GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
-        HeraldPostResult, JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult,
-        LoungeBeat, NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
-        OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult, Place,
-        PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire,
-        RealmChatRoomAttach, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh,
-        RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SendRefusal,
+        HeraldDeliveryResult, HeraldPostResult, JobsFetchResult, JobsPostResult, JobsPressResult,
+        JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
+        OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult,
+        Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope,
+        PresenceWire, RealmChatRoomAttach, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError,
+        Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SendRefusal,
         SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason,
         SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
@@ -4254,6 +4291,11 @@ mod inner {
     pub fn record_paper_print(_result: PaperPrintResult) {}
     pub fn record_paper_open(_result: PaperOpenResult) {}
     pub fn record_herald_post(_result: HeraldPostResult) {}
+    pub fn record_herald_delivery(
+        _network: late_core::models::herald::HeraldNetwork,
+        _result: HeraldDeliveryResult,
+    ) {
+    }
     pub fn record_jobs_fetch(
         _source: late_core::models::job_posting::JobSource,
         _result: JobsFetchResult,

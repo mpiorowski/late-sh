@@ -131,64 +131,124 @@ fn dev_ai_without_key_is_disabled() {
 }
 
 #[test]
-fn herald_enabled_without_token_or_instance_is_rejected() {
+fn herald_networks_need_their_credentials_and_urls() {
     let mut config = valid_config();
-    config.herald.enabled = true;
-    config.herald.instance = "https://fosstodon.org".to_string();
-    config.herald.token = None;
+    config.herald.mastodon = Some(crate::config::MastodonConfig {
+        instance: "https://fosstodon.org".to_string(),
+        token: String::new(),
+    });
     let error = config.validate().expect_err("must reject");
     assert!(
         error
             .to_string()
-            .contains("herald is enabled without a token")
+            .contains("mastodon is configured without a token")
     );
 
-    config.herald.token = Some("token".to_string());
-    config.herald.instance = "fosstodon.org".to_string();
+    config.herald.mastodon = Some(crate::config::MastodonConfig {
+        instance: "fosstodon.org".to_string(),
+        token: "token".to_string(),
+    });
     let error = config.validate().expect_err("must reject");
-    assert!(
-        error
-            .to_string()
-            .contains("herald is enabled without an instance url")
-    );
+    assert!(error.to_string().contains("without an instance url"));
 
-    config.herald.instance = "https://fosstodon.org".to_string();
-    config.validate().expect("a token and an instance url pass");
+    config.herald.mastodon = Some(crate::config::MastodonConfig {
+        instance: "https://fosstodon.org".to_string(),
+        token: "token".to_string(),
+    });
+    config.herald.bluesky = Some(crate::config::BlueskyConfig {
+        pds: crate::config::BLUESKY_PDS.to_string(),
+        identifier: "late.sh".to_string(),
+        app_password: String::new(),
+    });
+    let error = config.validate().expect_err("must reject");
+    assert!(error.to_string().contains("bluesky is configured without"));
+
+    config.herald.bluesky = Some(crate::config::BlueskyConfig {
+        pds: "bsky.social".to_string(),
+        identifier: "late.sh".to_string(),
+        app_password: "pass".to_string(),
+    });
+    let error = config.validate().expect_err("must reject");
+    assert!(error.to_string().contains("without a pds url"));
+
+    config.herald.bluesky = Some(crate::config::BlueskyConfig {
+        pds: crate::config::BLUESKY_PDS.to_string(),
+        identifier: "late.sh".to_string(),
+        app_password: "pass".to_string(),
+    });
+    config.validate().expect("both networks pass");
+    assert!(config.herald.enabled());
 }
 
 #[test]
-fn dev_herald_with_both_values_posts_unlisted() {
-    let herald = crate::config::dev_herald(
-        Some("https://instance.test/".to_string()),
-        Some("token".to_string()),
+fn dev_herald_switches_each_network_on_by_its_pair() {
+    let both = crate::config::dev_herald(
+        (
+            Some("https://instance.test/".to_string()),
+            Some("token".to_string()),
+        ),
+        (Some("late.test".to_string()), Some("pass".to_string())),
         3000,
     )
     .expect("must accept");
-    assert!(herald.enabled);
-    assert_eq!(herald.instance, "https://instance.test");
-    assert_eq!(herald.token.as_deref(), Some("token"));
-    assert_eq!(herald.web_internal_url, "http://service-web:3000");
-    assert_eq!(herald.visibility, crate::config::HeraldVisibility::Unlisted);
+    assert!(both.enabled());
+    let mastodon = both.mastodon.expect("mastodon");
+    assert_eq!(mastodon.instance, "https://instance.test");
+    assert_eq!(mastodon.token, "token");
+    let bluesky = both.bluesky.expect("bluesky");
+    assert_eq!(bluesky.pds, crate::config::BLUESKY_PDS);
+    assert_eq!(bluesky.identifier, "late.test");
+    assert_eq!(bluesky.app_password, "pass");
+    assert_eq!(both.web_internal_url, "http://service-web:3000");
+    assert_eq!(both.visibility, crate::config::HeraldVisibility::Unlisted);
+
+    let one = crate::config::dev_herald(
+        (None, None),
+        (Some("late.test".to_string()), Some("pass".to_string())),
+        3000,
+    )
+    .expect("must accept");
+    assert!(one.mastodon.is_none());
+    assert!(one.bluesky.is_some());
+    assert!(one.enabled());
+
+    let none = crate::config::dev_herald((None, None), (None, None), 3000).expect("must accept");
+    assert!(!none.enabled());
 }
 
 #[test]
-fn dev_herald_without_values_is_off_and_half_set_is_rejected() {
-    let herald = crate::config::dev_herald(None, None, 3000).expect("must accept");
-    assert!(!herald.enabled);
-    assert!(herald.token.is_none());
-
-    let error = crate::config::dev_herald(Some("https://instance.test".to_string()), None, 3000)
+fn dev_herald_half_set_pairs_are_rejected() {
+    let error = crate::config::dev_herald(
+        (Some("https://instance.test".to_string()), None),
+        (None, None),
+        3000,
+    )
+    .expect_err("must reject");
+    assert!(
+        error
+            .to_string()
+            .contains("LATE_HERALD_MASTODON_INSTANCE is set without")
+    );
+    let error = crate::config::dev_herald((None, Some("token".to_string())), (None, None), 3000)
         .expect_err("must reject");
     assert!(
         error
             .to_string()
-            .contains("LATE_HERALD_INSTANCE is set without")
+            .contains("LATE_HERALD_MASTODON_TOKEN is set without")
     );
     let error =
-        crate::config::dev_herald(None, Some("token".to_string()), 3000).expect_err("must reject");
+        crate::config::dev_herald((None, None), (Some("late.test".to_string()), None), 3000)
+            .expect_err("must reject");
     assert!(
         error
             .to_string()
-            .contains("LATE_HERALD_TOKEN is set without")
+            .contains("LATE_HERALD_BLUESKY_IDENTIFIER is set without")
+    );
+    let error = crate::config::dev_herald((None, None), (None, Some("pass".to_string())), 3000)
+        .expect_err("must reject");
+    assert!(
+        error
+            .to_string()
+            .contains("LATE_HERALD_BLUESKY_PASSWORD is set without")
     );
 }

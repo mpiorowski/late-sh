@@ -261,18 +261,22 @@ Live, in order of evidence behind them:
   one bearer token and two HTTP calls; federating profiles (ActivityPub,
   WebFinger, signed fetches, inbound moderation) is weeks of work and
   sends the visibility people want outward, away from the terminal.
-- **The herald: one picture a day on the Fediverse.** Built
-  (`late-ssh/src/app/herald/CONTEXT.md`) and shipped dark: the
-  `herald_enabled` row starts off. An ordinary account on an existing
-  Mastodon instance (fosstodon.org: FOSS-leaning, a local timeline that
-  gives a new account readers on day one; invite-only, and its rule for
-  automated accounts is that an active member runs them and answers
-  replies), flagged as automated, `https://late.sh` in its profile links,
-  and an application token with `write:media` and `write:statuses` only.
-  The Fediverse is every server speaking ActivityPub (Mastodon, Pixelfed,
-  PeerTube, Lemmy, Threads in part); one Mastodon account is addressable
-  from all of it. Bluesky is a different network and would be a second
-  client, later.
+- **The herald: one picture a day on the Fediverse and Bluesky.** Built
+  (`late-ssh/src/app/herald/CONTEXT.md`) and shipped dark: neither
+  account exists yet, and the `herald_enabled` row starts off. One post
+  a day, delivered to every network the herald has an account on. The
+  Fediverse: an ordinary account on an existing Mastodon instance
+  (fosstodon.org: FOSS-leaning, a local timeline that gives a new account
+  readers on day one; invite-only, and its rule for automated accounts
+  is that an active member runs them and answers replies), flagged as
+  automated, `https://late.sh` in its profile links, and an application
+  token with `write:media` and `write:statuses` only. The Fediverse is
+  every server speaking ActivityPub (Mastodon, Pixelfed, PeerTube, Lemmy,
+  Threads in part); one Mastodon account is addressable from all of it.
+  Bluesky: a different network, so its own account, flagged with the
+  `bot` self-label, posting through an app password; it asks that a bot
+  never likes, reposts or replies unprompted, so the human half there is
+  done from a person's own account.
   - **What it posts.** One picture a day at 16:00 UTC, alternating: a
     standing runner's poster from PRINTS with the member credited
     (`~name`, never `@name`), linking their profile, each poster once;
@@ -293,15 +297,19 @@ Live, in order of evidence behind them:
   - **The shape.** A late-ssh domain built like the paper's press: a
     checker on every replica, a `herald_posts` row per UTC day claimed by
     conditional insert so several replicas post exactly once, the picture
-    fetched from the front door's PNG routes over the cluster service, a
-    media upload then a status call carrying the row's id as the
-    idempotency key so a retry never double-posts, a
-    `late_ssh_herald_posts_total` counter (posted, skipped, lost, failed)
-    on the Grafana board's Herald row. Prod requires `LATE_HERALD_TOKEN`
-    (`infra/service-ssh.tf`, from the `HERALD_TOKEN` GitHub secret), so
-    the `-infra` release that injects it ships before the ssh image that
-    needs it; dev posts unlisted, and only with `LATE_HERALD_INSTANCE`
-    and `LATE_HERALD_TOKEN` in `.env.local`.
+    picked once and stored on the row, fetched from the front door's PNG
+    routes over the cluster service, then one delivery per network
+    recorded as it lands (a retry sends only to the networks still
+    missing). On Mastodon the status call carries the row's id as its
+    idempotency key; on Bluesky the record key is derived from it, so a
+    retry never double-posts on either. Counters
+    `late_ssh_herald_posts_total` (posted, skipped, lost, failed) and
+    `late_ssh_herald_deliveries_total` by network, on the Grafana board's
+    Herald row. Going live on a network is a profile change: pin the
+    instance or the handle, require its secret, ship the `-infra` release
+    that injects it before the ssh image that needs it. Dev posts only
+    with a network's pair in `.env.local`, unlisted on Mastodon (Bluesky
+    has no unlisted).
   - **The human half.** The account follows a few people, answers
     replies, and boosts members who post their own profile or card. A
     bot that only broadcasts gets muted; an account that posts once a
@@ -310,6 +318,52 @@ Live, in order of evidence behind them:
     arrivals leak at 94% on day two. Flip the row on once the first hour
     has moved, so the first thing new followers find is a place that
     holds them. Not measured yet beyond the counter.
+  - **Where it stands, what is left.** The code is written, in the
+    working tree, uncommitted: the domain
+    (`late-ssh/src/app/herald/`: `svc.rs`, `state.rs`, `mastodon.rs`,
+    `bluesky.rs`, their tests, `CONTEXT.md`), migration 252 with the
+    `herald_posts` and `herald_deliveries` tables and the
+    `herald_enabled` row, `late-core/src/models/herald.rs` and
+    `app_flag.rs` with tests, `Config::herald` in
+    `late-ssh/src/config.rs`, the two counters in `metrics.rs`, the
+    Grafana Herald row, the `.env.dev` templates, the context docs, and a
+    corrected skew rule in `infra/RUNBOOK.md`. The targeted tests have
+    never run green: the last compile stopped on test-only errors that
+    were fixed afterwards, and nothing has been verified since. In order:
+    1. Run `make test-llm ARGS="-p late-core -p late-ssh --lib -E
+       'test(herald) | test(app_flag) | test(config_test)'"` (it wants
+       12 GB free; `TEST_LLM_HEADROOM_G=2` lowers the bar by one) and fix
+       what it says; then `make check`, commit, PR.
+    2. Accounts, by hand. Mastodon: Fosstodon is invite-only (an existing
+       member mints an invite under Preferences, Invite people), the
+       fallback is mastodon.social with an account move later; tick "This
+       is an automated account", put `https://late.sh` in the profile
+       links, mint an application under Development with `write:media`
+       and `write:statuses`. Bluesky: an account at bsky.app, an app
+       password under Settings, Privacy and security, and the `bot`
+       self-label on the profile record (no setting in the app; a one-off
+       `putRecord` of `app.bsky.actor.profile` with
+       `labels.values: [{val: "bot"}]`).
+    3. A local post from the dev stack with the real values in
+       `.env.local` (`LATE_HERALD_MASTODON_INSTANCE` and `..._TOKEN`,
+       `LATE_HERALD_BLUESKY_IDENTIFIER` and `..._PASSWORD`), the
+       `herald_enabled` row flipped on in the dev database, one check
+       past 16:00 UTC; Mastodon lands unlisted, Bluesky public.
+    4. Going live, one network at a time: in the prod profile replace the
+       `None` with the pinned instance URL or handle and
+       `required("LATE_HERALD_MASTODON_TOKEN")` or
+       `required("LATE_HERALD_BLUESKY_PASSWORD")`; add the Terraform
+       variable, the Kubernetes secret, the env on `service-ssh` and the
+       line in both terraform workflows, like `LATE_YOUTUBE_API_KEY`; the
+       GitHub secret before the plan runs; the `-infra` release before
+       the ssh image.
+    5. Flip the row in prod (`UPDATE app_flags SET enabled = true WHERE
+       key = 'herald_enabled'` through `scripts/connect_db.sh`) when the
+       first hour has moved; then the human half, daily.
+    6. Later, each behind a PNG route on the front door: share cards, a
+       tavern or night city frame, the headline events. A `rel="me"` link
+       from the landing page back to the Mastodon account once its handle
+       exists, so the profile link shows verified.
 - **Launch posts wait for the deadchannel public flip** (`GAME.md`, "The
   three surfaces"), which is the game's public launch. The Hacker News
   front page in July 2026 peaked at about 100 sessions and settled back to

@@ -180,9 +180,8 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
             api_key: None,
         },
         herald: HeraldConfig {
-            enabled: false,
-            instance: String::new(),
-            token: None,
+            mastodon: None,
+            bluesky: None,
             web_internal_url: "http://localhost:3000".to_string(),
             visibility: HeraldVisibility::Unlisted,
         },

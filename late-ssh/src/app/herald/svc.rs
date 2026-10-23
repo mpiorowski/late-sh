@@ -1,18 +1,20 @@
-//! The herald: one picture a day on the Fediverse (AUDIENCE.md, "The
-//! herald"). `HeraldService` runs on every replica and checks every
-//! `HERALD_CHECK_INTERVAL`; once the day's post time
+//! The herald: one picture a day on the Fediverse and Bluesky
+//! (AUDIENCE.md, "The herald"). `HeraldService` runs on every replica and
+//! checks every `HERALD_CHECK_INTERVAL`; once the day's post time
 //! (`state::HERALD_POST_TIME`) has passed, the `herald_posts` row for the
 //! day is the claim (root CONTEXT.md, multi-replica rule), so one replica
 //! posts. A claimed day is: pick the picture (`state::pick_picture` over
-//! what the last post carried, the waiting poster, yesterday's board),
-//! fetch it from late-web's PNG route, upload it to the instance, post
-//! the status with the row's id as the idempotency key, settle the row. A
-//! failed day marks its row and the next check claims it again, up to
-//! `HERALD_MAX_ATTEMPTS`; a claim whose replica died is taken over after
-//! `HERALD_STALE_CLAIM`.
+//! what the last post carried, the waiting poster, yesterday's board) and
+//! store it on the row, fetch it from late-web's PNG route, deliver it to
+//! every configured network that has no delivery yet (`mastodon.rs`,
+//! `bluesky.rs`), settle the row once all have one. A failed day marks
+//! its row and the next check claims it again, up to
+//! `HERALD_MAX_ATTEMPTS`, reusing the stored pick and skipping the
+//! networks already delivered; a claim whose replica died is taken over
+//! after `HERALD_STALE_CLAIM`.
 //!
-//! Two switches gate it: `Config::herald.enabled` (off in dev without a
-//! token, on in prod) and the `herald_enabled` row (`AppFlag`), the
+//! Two switches gate it: `Config::herald` (a network configured, off in
+//! dev without its pair) and the `herald_enabled` row (`AppFlag`), the
 //! operator's, read at every check so a flip needs no deploy.
 //!
 //! This is the orchestration layer: every failure is logged and counted
@@ -25,43 +27,31 @@ use chrono::{DateTime, NaiveDate, Utc};
 use late_core::db::Db;
 use late_core::models::app_flag::AppFlag;
 use late_core::models::artboard::Snapshot;
-use late_core::models::herald::{HeraldPost, HeraldPosted};
-use late_core::telemetry::TracedExt;
-use serde::{Deserialize, Serialize};
+use late_core::models::herald::{HeraldNetwork, HeraldPost, HeraldPosted};
 use tracing::Instrument;
 use uuid::Uuid;
 
 use super::state::{self, BoardCandidate, Picture};
+use super::{bluesky, mastodon};
 use crate::config::HeraldConfig;
-use crate::metrics::{self, HeraldPostResult};
+use crate::metrics::{self, HeraldDeliveryResult, HeraldPostResult};
 
 /// How often each replica asks whether the day's post is due and
 /// unclaimed. The steady state is one flag read per check.
 pub const HERALD_CHECK_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 /// A `posting` claim older than this belongs to a replica that died
-/// mid-call and is taken over. Well past the three HTTP calls with their
+/// mid-call and is taken over. Well past every network's calls with their
 /// timeouts and the media polling.
 pub const HERALD_STALE_CLAIM: chrono::Duration = chrono::Duration::minutes(20);
 
 /// How many times one day is claimed before a failing post is left alone.
-/// Three checks is fifteen minutes of retries; an instance outage or a
+/// Three checks is fifteen minutes of retries; a network outage or a
 /// revoked token should not turn into a day-long retry storm.
 pub const HERALD_MAX_ATTEMPTS: i32 = 3;
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const USER_AGENT: &str = "late.sh herald (+https://late.sh)";
-
-/// An upload the instance answered 202 to is polled this often, this
-/// many times, before the day fails. Images are processed in seconds.
-const MEDIA_POLL_INTERVAL: Duration = Duration::from_secs(2);
-const MEDIA_POLL_TRIES: u32 = 15;
-
-/// The file name the upload carries; the instance keeps its own.
-const UPLOAD_FILE_NAME: &str = "late-sh.png";
-
-/// How much of an error body a log line keeps.
-const BODY_EXCERPT: usize = 200;
 
 /// What a claimed day came to.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -76,28 +66,8 @@ pub struct HeraldService {
     db: Db,
     http: reqwest::Client,
     config: HeraldConfig,
-    /// The public web, for the page the status links to.
+    /// The public web, for the page the post links to.
     web_url: String,
-}
-
-/// `POST /api/v1/statuses` as the instance reads it.
-#[derive(Serialize)]
-struct StatusBody<'a> {
-    status: &'a str,
-    media_ids: Vec<&'a str>,
-    visibility: &'a str,
-    language: &'a str,
-}
-
-#[derive(Deserialize)]
-struct MediaResponse {
-    id: String,
-}
-
-#[derive(Deserialize)]
-struct StatusResponse {
-    id: String,
-    url: Option<String>,
 }
 
 impl HeraldService {
@@ -111,7 +81,6 @@ impl HeraldService {
             db,
             http,
             config: HeraldConfig {
-                instance: config.instance.trim_end_matches('/').to_string(),
                 web_internal_url: config.web_internal_url.trim_end_matches('/').to_string(),
                 ..config
             },
@@ -137,11 +106,11 @@ impl HeraldService {
     }
 
     /// One check at `now`: is the herald on, is the due day unclaimed, is
-    /// it ours. Returns whether this replica settled the day (posted,
+    /// it ours. Returns whether this replica worked the day (posted,
     /// skipped, or failed trying). `finished_for` memoizes a day this
     /// replica saw finished, so the rest of that day costs nothing.
     pub async fn check(&self, now: DateTime<Utc>, finished_for: &mut Option<NaiveDate>) -> bool {
-        if !self.config.enabled {
+        if !self.config.enabled() {
             return false;
         }
         let day = state::post_due_day(now);
@@ -183,7 +152,7 @@ impl HeraldService {
                 return false;
             }
         };
-        match self.post_claimed(day, key).await {
+        match self.post_claimed(day, key, now).await {
             Ok(Outcome::Posted(posted)) => {
                 *finished_for = Some(day);
                 metrics::record_herald_post(HeraldPostResult::Posted);
@@ -191,7 +160,7 @@ impl HeraldService {
                     %day,
                     kind = posted.kind.as_str(),
                     subject = %posted.subject,
-                    url = %posted.status_url,
+                    urls = ?posted.deliveries.iter().map(|d| d.url.as_str()).collect::<Vec<_>>(),
                     "the herald posted"
                 );
             }
@@ -233,11 +202,16 @@ impl HeraldService {
     /// row failed for the next check and is passed up for the one log
     /// line in `check`. Clients are scoped to each query; nothing holds a
     /// pooled connection across an HTTP call.
-    async fn post_claimed(&self, day: NaiveDate, key: Uuid) -> anyhow::Result<Outcome> {
-        match self.post_day(day, key).await {
+    async fn post_claimed(
+        &self,
+        day: NaiveDate,
+        key: Uuid,
+        now: DateTime<Utc>,
+    ) -> anyhow::Result<Outcome> {
+        match self.post_day(day, key, now).await {
             Ok(Outcome::Posted(posted)) => {
                 let client = self.db.get().await?;
-                HeraldPost::finish_posted(&client, day, &posted).await?;
+                HeraldPost::finish_posted(&client, day).await?;
                 Ok(Outcome::Posted(posted))
             }
             Ok(Outcome::Skipped) => {
@@ -261,31 +235,157 @@ impl HeraldService {
         }
     }
 
-    /// Pick, fetch, upload, post.
-    async fn post_day(&self, day: NaiveDate, key: Uuid) -> anyhow::Result<Outcome> {
-        let Some(picture) = self.pick(day).await? else {
+    /// Pick (or reuse the stored pick), fetch, deliver to every network
+    /// still missing. Each network's failure is logged and counted here,
+    /// once; the day fails when any did, with the ones that landed kept.
+    async fn post_day(
+        &self,
+        day: NaiveDate,
+        key: Uuid,
+        now: DateTime<Utc>,
+    ) -> anyhow::Result<Outcome> {
+        let Some(picture) = self.picture_for(day).await? else {
             return Ok(Outcome::Skipped);
         };
         let png = self.fetch_picture(&picture).await?;
-        let media_id = self.upload_media(png, &state::alt_text(&picture)).await?;
-        let status_url = self
-            .post_status(key, &state::status_text(&picture, &self.web_url), &media_id)
-            .await?;
+        let text = state::status_text(&picture, &self.web_url);
+        let alt = state::alt_text(&picture);
+        let delivered: Vec<HeraldNetwork> = {
+            let client = self.db.get().await?;
+            HeraldPost::deliveries(&client, day)
+                .await?
+                .into_iter()
+                .map(|delivery| delivery.network)
+                .collect()
+        };
+
+        let mut failed = 0;
+        if let Some(config) = &self.config.mastodon {
+            if !delivered.contains(&HeraldNetwork::Mastodon) {
+                let sent = mastodon::deliver(
+                    &self.http,
+                    config,
+                    mastodon::Post {
+                        key,
+                        png: &png,
+                        text: &text,
+                        alt: &alt,
+                        visibility: self.config.visibility,
+                    },
+                )
+                .await;
+                failed += self.note_delivery(day, HeraldNetwork::Mastodon, sent).await;
+            }
+        }
+        if let Some(config) = &self.config.bluesky {
+            if !delivered.contains(&HeraldNetwork::Bluesky) {
+                let sent = bluesky::deliver(
+                    &self.http,
+                    config,
+                    bluesky::Post {
+                        key,
+                        png: &png,
+                        text: &text,
+                        alt: &alt,
+                        created_at: now,
+                    },
+                )
+                .await;
+                failed += self.note_delivery(day, HeraldNetwork::Bluesky, sent).await;
+            }
+        }
+        if failed > 0 {
+            bail!("{failed} delivery(ies) failed");
+        }
+        let client = self.db.get().await?;
         Ok(Outcome::Posted(HeraldPosted {
             kind: picture.kind(),
             subject: picture.subject(),
-            status_url,
+            deliveries: HeraldPost::deliveries(&client, day).await?,
         }))
     }
 
-    /// The rotation's inputs, then the rule.
-    async fn pick(&self, day: NaiveDate) -> anyhow::Result<Option<Picture>> {
+    /// Record a network's answer: the delivery row and the counter on
+    /// success, the counter and the one log line on failure. Returns how
+    /// many failed (0 or 1) for the day's tally. A delivery that landed
+    /// but could not be recorded counts as failed too: the retry sends it
+    /// again under the same key, which the network dedupes.
+    async fn note_delivery(
+        &self,
+        day: NaiveDate,
+        network: HeraldNetwork,
+        sent: anyhow::Result<String>,
+    ) -> u32 {
+        match sent {
+            Ok(url) => {
+                let recorded = async {
+                    let client = self.db.get().await?;
+                    HeraldPost::record_delivery(&client, day, network, &url).await
+                }
+                .await;
+                match recorded {
+                    Ok(()) => {
+                        metrics::record_herald_delivery(network, HeraldDeliveryResult::Delivered);
+                        tracing::info!(%day, network = network.as_str(), %url, "the herald delivered");
+                        0
+                    }
+                    Err(error) => {
+                        metrics::record_herald_delivery(network, HeraldDeliveryResult::Failed);
+                        late_core::error_span!(
+                            "herald_delivery_failed",
+                            error = ?error,
+                            %day,
+                            network = network.as_str(),
+                            %url,
+                            "the herald delivered but could not record it"
+                        );
+                        1
+                    }
+                }
+            }
+            Err(error) => {
+                metrics::record_herald_delivery(network, HeraldDeliveryResult::Failed);
+                late_core::error_span!(
+                    "herald_delivery_failed",
+                    error = ?error,
+                    %day,
+                    network = network.as_str(),
+                    "the herald's delivery failed"
+                );
+                1
+            }
+        }
+    }
+
+    /// The day's picture: the one an earlier claim stored, else a fresh
+    /// pick stored now. `None` is a day with nothing worth posting.
+    async fn picture_for(&self, day: NaiveDate) -> anyhow::Result<Option<Picture>> {
         let client = self.db.get().await?;
-        let last = HeraldPost::last_posted_kind(&client, day).await?;
-        let poster = HeraldPost::next_poster_candidate(&client).await?;
+        if let Some(stored) = HeraldPost::stored_picture(&client, day).await? {
+            let picture: Picture =
+                serde_json::from_value(stored).context("decoding the stored picture")?;
+            return Ok(Some(picture));
+        }
+        let Some(picture) = self.pick(&client, day).await? else {
+            return Ok(None);
+        };
+        let stored = serde_json::to_value(&picture).context("encoding the picture")?;
+        HeraldPost::store_picture(&client, day, picture.kind(), &picture.subject(), &stored)
+            .await?;
+        Ok(Some(picture))
+    }
+
+    /// The rotation's inputs, then the rule.
+    async fn pick(
+        &self,
+        client: &tokio_postgres::Client,
+        day: NaiveDate,
+    ) -> anyhow::Result<Option<Picture>> {
+        let last = HeraldPost::last_posted_kind(client, day).await?;
+        let poster = HeraldPost::next_poster_candidate(client).await?;
         let shown = state::shown_day(day);
         let key = state::board_key(shown);
-        let board = match Snapshot::find_by_board_key(&client, &key).await? {
+        let board = match Snapshot::find_by_board_key(client, &key).await? {
             Some(snapshot) => {
                 let canvas: dartboard_core::Canvas = serde_json::from_value(snapshot.canvas)
                     .with_context(|| format!("decoding artboard snapshot {key}"))?;
@@ -302,6 +402,7 @@ impl HeraldService {
 
     /// The picture from late-web's PNG route, as bytes.
     async fn fetch_picture(&self, picture: &Picture) -> anyhow::Result<Vec<u8>> {
+        use late_core::telemetry::TracedExt;
         let url = format!("{}{}", self.config.web_internal_url, picture.picture_path());
         let response = self
             .http
@@ -319,119 +420,4 @@ impl HeraldService {
             .with_context(|| format!("reading {url}"))?;
         Ok(bytes.to_vec())
     }
-
-    /// `POST /api/v2/media`: the picture with its alt text. The instance
-    /// answers 200 with the attachment ready, or 202 while it processes
-    /// one, polled until it is.
-    async fn upload_media(&self, png: Vec<u8>, alt: &str) -> anyhow::Result<String> {
-        let part = reqwest::multipart::Part::bytes(png)
-            .file_name(UPLOAD_FILE_NAME)
-            .mime_str("image/png")
-            .context("building the png part")?;
-        let form = reqwest::multipart::Form::new()
-            .part("file", part)
-            .text("description", alt.to_string());
-        let url = format!("{}/api/v2/media", self.config.instance);
-        let response = self
-            .http
-            .post(&url)
-            .bearer_auth(self.token())
-            .multipart(form)
-            .send_traced()
-            .await
-            .with_context(|| format!("posting {url}"))?;
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .with_context(|| format!("reading {url}"))?;
-        match status.as_u16() {
-            200 => Ok(parse_media(&body)?.id),
-            202 => {
-                let id = parse_media(&body)?.id;
-                self.await_media(&id).await?;
-                Ok(id)
-            }
-            _ => bail!("{url} answered {status}: {}", excerpt(&body)),
-        }
-    }
-
-    /// `GET /api/v1/media/{id}` until the instance answers 200 (206 while
-    /// it is still processing).
-    async fn await_media(&self, id: &str) -> anyhow::Result<()> {
-        let url = format!("{}/api/v1/media/{id}", self.config.instance);
-        for _ in 0..MEDIA_POLL_TRIES {
-            tokio::time::sleep(MEDIA_POLL_INTERVAL).await;
-            let response = self
-                .http
-                .get(&url)
-                .bearer_auth(self.token())
-                .send_traced()
-                .await
-                .with_context(|| format!("getting {url}"))?;
-            let status = response.status();
-            match status.as_u16() {
-                200 => return Ok(()),
-                206 => continue,
-                _ => {
-                    let body = response.text().await.unwrap_or_default();
-                    bail!("{url} answered {status}: {}", excerpt(&body));
-                }
-            }
-        }
-        bail!("media {id} was still processing after {MEDIA_POLL_TRIES} polls")
-    }
-
-    /// `POST /api/v1/statuses` with the day's key as `Idempotency-Key`: a
-    /// retry after a lost answer gets the status the instance already made
-    /// instead of a second one. The status's public URL comes back.
-    async fn post_status(&self, key: Uuid, text: &str, media_id: &str) -> anyhow::Result<String> {
-        let url = format!("{}/api/v1/statuses", self.config.instance);
-        let body = StatusBody {
-            status: text,
-            media_ids: vec![media_id],
-            visibility: self.config.visibility.as_str(),
-            language: "en",
-        };
-        let response = self
-            .http
-            .post(&url)
-            .bearer_auth(self.token())
-            .header("Idempotency-Key", key.to_string())
-            .json(&body)
-            .send_traced()
-            .await
-            .with_context(|| format!("posting {url}"))?;
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .with_context(|| format!("reading {url}"))?;
-        if !status.is_success() {
-            bail!("{url} answered {status}: {}", excerpt(&body));
-        }
-        let posted: StatusResponse =
-            serde_json::from_str(&body).context("decoding the status answer")?;
-        match posted.url {
-            Some(url) => Ok(url),
-            None => bail!("status {} came back without a url", posted.id),
-        }
-    }
-
-    /// `Config::validate` refuses an enabled herald without a token, and
-    /// nothing here runs disabled.
-    fn token(&self) -> &str {
-        self.config
-            .token
-            .as_deref()
-            .expect("an enabled herald carries a token (Config::validate)")
-    }
-}
-
-fn parse_media(body: &str) -> anyhow::Result<MediaResponse> {
-    serde_json::from_str(body).context("decoding the media answer")
-}
-
-fn excerpt(body: &str) -> String {
-    body.chars().take(BODY_EXCERPT).collect()
 }

@@ -1,20 +1,23 @@
-//! The herald's daily post (`herald_posts`, migration 252): every read and
-//! write of the table, and the two reads that feed the rotation (what
-//! went out the day before, which poster is waiting).
+//! The herald's daily post (`herald_posts`, `herald_deliveries`, migration
+//! 252): every read and write of both tables, and the two reads that feed
+//! the rotation (what went out last, which poster is waiting).
 //!
 //! A row is a claim. The sweeper in late-ssh `app/herald/svc.rs` inserts
-//! a `posting` row before it spends the instance's calls, so two replicas
-//! checking the same minute cannot both post; the winner settles the row
-//! to `posted` or `skipped`, a loser finds nothing to insert. A post that
-//! fails flips its row to `failed` and keeps the attempt count: the next
-//! check claims it again until the caller's cap, after which the day
-//! rests. A `posting` row nobody settled (a replica died mid-call) is
-//! reclaimed once it is older than the caller's stale bound. The row's
-//! `id` is minted at the first claim and survives every reclaim: it is the
-//! idempotency key the status call carries.
+//! a `posting` row before it spends any network's calls, so two replicas
+//! checking the same minute cannot both post; the winner stores its pick,
+//! records a delivery per network as each lands, and settles the row to
+//! `posted` once every network has one, or to `skipped`. A day that fails
+//! flips its row to `failed` and keeps the attempt count: the next check
+//! claims it again until the caller's cap, reuses the stored pick, and
+//! sends only to the networks without a delivery. A `posting` row nobody
+//! settled (a replica died mid-call) is reclaimed once it is older than
+//! the caller's stale bound. The row's `id` is minted at the first claim
+//! and survives every reclaim: it is the idempotency key the networks see.
 
 use anyhow::{Result, bail};
 use chrono::{DateTime, NaiveDate, Utc};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -45,9 +48,33 @@ impl HeraldKind {
     }
 }
 
+/// A network the herald delivers to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeraldNetwork {
+    Mastodon,
+    Bluesky,
+}
+
+impl HeraldNetwork {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Mastodon => "mastodon",
+            Self::Bluesky => "bluesky",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "mastodon" => Ok(Self::Mastodon),
+            "bluesky" => Ok(Self::Bluesky),
+            other => bail!("unknown herald network {other:?}"),
+        }
+    }
+}
+
 /// A standing runner's poster the herald has not posted: the member to
 /// credit and the public page the picture hangs on.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PosterCandidate {
     pub user_id: Uuid,
     pub username: String,
@@ -55,12 +82,19 @@ pub struct PosterCandidate {
     pub slug: String,
 }
 
-/// What a settled day says went out.
+/// Where a day's picture landed on one network.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeraldDelivery {
+    pub network: HeraldNetwork,
+    pub url: String,
+}
+
+/// What a settled day says went out, and where.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeraldPosted {
     pub kind: HeraldKind,
     pub subject: String,
-    pub status_url: String,
+    pub deliveries: Vec<HeraldDelivery>,
 }
 
 /// The daily claim and its record.
@@ -68,8 +102,8 @@ pub struct HeraldPost;
 
 impl HeraldPost {
     /// Take the day: a new row, a stale `posting` one, or a `failed` one
-    /// under the cap. The row's id (the status call's idempotency key),
-    /// or `None` when another replica has the day or the day is settled.
+    /// under the cap. The row's id (the networks' idempotency key), or
+    /// `None` when another replica has the day or the day is settled.
     pub async fn claim(
         client: &Client,
         day: NaiveDate,
@@ -116,24 +150,80 @@ impl HeraldPost {
         })
     }
 
-    /// The claimed day went out: what, about whom, and where it landed.
-    pub async fn finish_posted(
+    /// The claimed day's pick, written before the first network call so a
+    /// retry delivers the same picture.
+    pub async fn store_picture(
         client: &Client,
         day: NaiveDate,
-        posted: &HeraldPosted,
+        kind: HeraldKind,
+        subject: &str,
+        picture: &Value,
     ) -> Result<()> {
         client
             .execute(
+                "UPDATE herald_posts SET kind = $2, subject = $3, picture = $4 WHERE day = $1",
+                &[&day, &kind.as_str(), &subject, picture],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// The pick an earlier claim of the day stored, if any.
+    pub async fn stored_picture(client: &Client, day: NaiveDate) -> Result<Option<Value>> {
+        let row = client
+            .query_opt(
+                "SELECT picture FROM herald_posts WHERE day = $1 AND picture IS NOT NULL",
+                &[&day],
+            )
+            .await?;
+        Ok(row.map(|row| row.get("picture")))
+    }
+
+    /// One network has the day's picture. A second record of the same
+    /// network is ignored.
+    pub async fn record_delivery(
+        client: &Client,
+        day: NaiveDate,
+        network: HeraldNetwork,
+        url: &str,
+    ) -> Result<()> {
+        client
+            .execute(
+                "INSERT INTO herald_deliveries (day, network, url)
+                 VALUES ($1, $2, $3)
+                 ON CONFLICT (day, network) DO NOTHING",
+                &[&day, &network.as_str(), &url],
+            )
+            .await?;
+        Ok(())
+    }
+
+    pub async fn deliveries(client: &Client, day: NaiveDate) -> Result<Vec<HeraldDelivery>> {
+        let rows = client
+            .query(
+                "SELECT network, url FROM herald_deliveries WHERE day = $1 ORDER BY network",
+                &[&day],
+            )
+            .await?;
+        rows.into_iter()
+            .map(|row| {
+                let network: String = row.get("network");
+                Ok(HeraldDelivery {
+                    network: HeraldNetwork::parse(&network)?,
+                    url: row.get("url"),
+                })
+            })
+            .collect()
+    }
+
+    /// Every configured network delivered.
+    pub async fn finish_posted(client: &Client, day: NaiveDate) -> Result<()> {
+        client
+            .execute(
                 "UPDATE herald_posts
-                 SET status = 'posted', kind = $2, subject = $3, status_url = $4,
-                     finished_at = current_timestamp
+                 SET status = 'posted', finished_at = current_timestamp
                  WHERE day = $1",
-                &[
-                    &day,
-                    &posted.kind.as_str(),
-                    &posted.subject,
-                    &posted.status_url,
-                ],
+                &[&day],
             )
             .await?;
         Ok(())
@@ -163,8 +253,8 @@ impl HeraldPost {
         Ok(())
     }
 
-    /// What the newest post before `day` carried, for the rotation. `None`
-    /// before the first post ever.
+    /// What the newest posted day before `day` carried, for the rotation.
+    /// `None` before the first post ever.
     pub async fn last_posted_kind(client: &Client, day: NaiveDate) -> Result<Option<HeraldKind>> {
         let row = client
             .query_opt(
@@ -184,11 +274,12 @@ impl HeraldPost {
         }
     }
 
-    /// The day's row as settled, for the admin's reading and the tests.
+    /// The day as settled, with where it landed, for the operator's
+    /// reading and the tests.
     pub async fn posted_on(client: &Client, day: NaiveDate) -> Result<Option<HeraldPosted>> {
         let row = client
             .query_opt(
-                "SELECT kind, subject, status_url FROM herald_posts
+                "SELECT kind, subject FROM herald_posts
                  WHERE day = $1 AND status = 'posted'",
                 &[&day],
             )
@@ -199,7 +290,7 @@ impl HeraldPost {
                 Ok(Some(HeraldPosted {
                     kind: HeraldKind::parse(&kind)?,
                     subject: row.get("subject"),
-                    status_url: row.get("status_url"),
+                    deliveries: Self::deliveries(client, day).await?,
                 }))
             }
             None => Ok(None),
@@ -207,9 +298,10 @@ impl HeraldPost {
     }
 
     /// The next poster to post: a standing runner (`left_at` null) with a
-    /// poster and a public work profile, never posted by the herald. The
-    /// member seen most recently first, so the credit lands on someone
-    /// around to see it.
+    /// poster and a public work profile, never posted by the herald (a
+    /// pick on a day that failed for good does not count). The member
+    /// seen most recently first, so the credit lands on someone around to
+    /// see it.
     pub async fn next_poster_candidate(client: &Client) -> Result<Option<PosterCandidate>> {
         let row = client
             .query_opt(
@@ -221,7 +313,9 @@ impl HeraldPost {
                    AND r.left_at IS NULL
                    AND NOT EXISTS (
                        SELECT 1 FROM herald_posts h
-                       WHERE h.kind = 'poster' AND h.subject = r.user_id::text)
+                       WHERE h.status = 'posted'
+                         AND h.kind = 'poster'
+                         AND h.subject = r.user_id::text)
                  ORDER BY u.last_seen DESC, r.user_id
                  LIMIT 1",
                 &[],

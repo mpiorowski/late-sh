@@ -4449,8 +4449,8 @@
     },
     {
       "type": "bargauge",
-      "title": "Daily Posts by Result",
-      "description": "The herald's one post a day on the Fediverse (late-ssh app/herald) over the range: posted, skipped (nothing worth posting), lost (another replica had the day), failed (retried up to three times, then the day rests). One 'posted' or 'skipped' a day is the healthy line; a 'failed' with no 'posted' after it is a day missed.",
+      "title": "Daily Posts and Deliveries",
+      "description": "The herald's one post a day (late-ssh app/herald) over the range: posted, skipped (nothing worth posting), lost (another replica had the day), failed (retried up to three times, then the day rests); and each network's leg of it, delivered or failed. One 'posted' or 'skipped' a day is the healthy line; a 'failed' with no 'posted' after it is a day missed, and the network rows say which leg.",
       "datasource": {
         "uid": "victoriametrics",
         "type": "victoriametrics-metrics-datasource"
@@ -4460,6 +4460,12 @@
           "refId": "A",
           "expr": "sum by (result) (increase(late_ssh_herald_posts_total[$__range]))",
           "legendFormat": "{{result}}",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (network, result) (increase(late_ssh_herald_deliveries_total[$__range]))",
+          "legendFormat": "{{network}} {{result}}",
           "instant": true
         }
       ],

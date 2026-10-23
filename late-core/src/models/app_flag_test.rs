@@ -1,4 +1,4 @@
-use super::AppFlag;
+use super::app_flag::AppFlag;
 use crate::test_utils::test_db;
 
 /// The herald's switch is seeded off and reads back whatever was last
