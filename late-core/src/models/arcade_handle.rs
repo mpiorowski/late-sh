@@ -88,9 +88,10 @@ impl ArcadeHandle {
         Ok(row.and_then(|r| r.get("user_id")))
     }
 
-    /// The late.sh usernames behind `handles`, keyed by the handle
-    /// lowercased (handles match case-insensitively). A handle with no live
-    /// account (a graveyard row, a name nobody claimed) is absent.
+    /// The late.sh usernames behind `handles`, keyed by each handle as given
+    /// (matched case-insensitively, like [`Self::find_user_by_handle`]). A
+    /// handle with no live account (a graveyard row, a name nobody claimed)
+    /// is absent.
     pub async fn usernames_by_handles(
         client: &impl deadpool_postgres::GenericClient,
         handles: &[String],
@@ -98,14 +99,14 @@ impl ArcadeHandle {
         if handles.is_empty() {
             return Ok(HashMap::new());
         }
-        let lowered: Vec<String> = handles.iter().map(|h| h.to_ascii_lowercase()).collect();
         let rows = client
             .query(
-                "SELECT lower(a.handle) AS handle, u.username
-                 FROM arcade_handles a
+                "SELECT given.handle, u.username
+                 FROM unnest($1::text[]) AS given(handle)
+                 JOIN arcade_handles a ON lower(a.handle) = lower(given.handle)
                  JOIN users u ON u.id = a.user_id
-                 WHERE lower(a.handle) = ANY($1) AND u.username <> ''",
-                &[&lowered],
+                 WHERE u.username <> ''",
+                &[&handles],
             )
             .await?;
         Ok(rows

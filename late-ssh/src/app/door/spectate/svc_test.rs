@@ -14,11 +14,11 @@ fn listed(playname: &str) -> LiveGame {
 }
 
 /// A roster block becomes rows: a name outside the handle shape is no row,
-/// and each handle carries the username looked up for it, matched however
-/// the host cased it, or none when the lookup had nothing.
+/// and each handle carries the username looked up for it, or none when the
+/// lookup had nothing.
 #[test]
 fn roster_rows_drop_non_handles_and_carry_usernames() {
-    let usernames = HashMap::from([("wormsong".to_string(), "mat".to_string())]);
+    let usernames = HashMap::from([("Wormsong".to_string(), "mat".to_string())]);
 
     let rows = live_rows_of(
         SpectateGame::Dcss,

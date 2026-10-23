@@ -25,7 +25,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use late_core::db::Db;
 use late_core::models::arcade_handle::ArcadeHandle;
 use late_core::models::chat_room::ChatRoom;
@@ -40,6 +40,11 @@ use crate::render_signal::RenderSignal;
 /// Backoff between roster-stream attempts (host restarts, rollouts, network
 /// blips). Short: the hub shows nobody playing until it reconnects.
 const RETRY_DELAY: Duration = Duration::from_secs(10);
+
+/// Longest the roster task waits on a block's usernames. It publishes
+/// nothing meanwhile, so a stuck query would otherwise hold the roster, and
+/// the reconnect once the stream ends, behind it.
+const USERNAME_LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 
 type Roster = Arc<Vec<LiveRow>>;
 
@@ -304,8 +309,8 @@ impl LiveGamesService {
     /// Spawn `game`'s roster loop: connect, follow, look up each block's
     /// usernames, publish; on any end (host rollout, network drop, broken
     /// stream) publish an empty roster and reconnect after [`RETRY_DELAY`].
-    /// A failed username lookup still publishes the block, its rows naming
-    /// the handles, and the next block tries again.
+    /// A failed or timed-out username lookup still publishes the block, its
+    /// rows naming the handles, and the next block tries again.
     pub fn start_task(
         &self,
         game: SpectateGame,
@@ -367,8 +372,7 @@ impl LiveGamesService {
 /// `game`'s roster block as rows. This is the boundary for the hosts'
 /// playnames: a roster line whose name is not a handle (`LiveGameKey::new`)
 /// is no row, so nothing downstream can hold a game it cannot key.
-/// `usernames` is keyed by the handle lowercased
-/// (`ArcadeHandle::usernames_by_handles`).
+/// `usernames` is keyed by playname (`ArcadeHandle::usernames_by_handles`).
 fn live_rows_of(
     game: SpectateGame,
     roster: Vec<LiveGame>,
@@ -378,7 +382,7 @@ fn live_rows_of(
         .into_iter()
         .filter_map(|entry| {
             let key = LiveGameKey::new(game, &entry.playname)?;
-            let username = usernames.get(&entry.playname.to_ascii_lowercase()).cloned();
+            let username = usernames.get(&entry.playname).cloned();
             Some(LiveRow {
                 key,
                 entry,
@@ -388,13 +392,22 @@ fn live_rows_of(
         .collect()
 }
 
-/// The late.sh usernames behind a roster block's playnames.
+/// The late.sh usernames behind a roster block's playnames, given up after
+/// [`USERNAME_LOOKUP_TIMEOUT`].
 async fn roster_usernames(db: &Db, roster: &[LiveGame]) -> Result<HashMap<String, String>> {
     let handles: Vec<String> = roster.iter().map(|game| game.playname.clone()).collect();
-    let client = db.get().await.context("getting db client")?;
-    ArcadeHandle::usernames_by_handles(&client, &handles)
-        .await
-        .context("looking up usernames by handle")
+    let lookup = async {
+        let client = db.get().await.context("getting db client")?;
+        ArcadeHandle::usernames_by_handles(&client, &handles)
+            .await
+            .context("looking up usernames by handle")
+    };
+    match tokio::time::timeout(USERNAME_LOOKUP_TIMEOUT, lookup).await {
+        Ok(usernames) => usernames,
+        Err(_elapsed) => Err(anyhow!(
+            "username lookup timed out after {USERNAME_LOOKUP_TIMEOUT:?}"
+        )),
+    }
 }
 
 /// The id of the watch-chat room for `playname`'s runs of `game`, creating

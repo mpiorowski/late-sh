@@ -41,8 +41,8 @@ fn reserved_blocks_fallback_and_hash_shapes() {
 }
 
 /// The live strip and the watch show the late.sh username behind a handle:
-/// matched case-insensitively and keyed lowercased, while a handle whose
-/// account is gone, or that nobody claimed, has none.
+/// matched case-insensitively and keyed as the caller spelled it, while a
+/// handle whose account is gone, or that nobody claimed, has none.
 #[tokio::test]
 async fn usernames_by_handles_maps_live_accounts_only() {
     let test_db = test_db().await;
@@ -72,6 +72,6 @@ async fn usernames_by_handles_maps_live_accounts_only() {
 
     assert_eq!(
         usernames,
-        HashMap::from([("wormsong".to_string(), alive.username.clone())])
+        HashMap::from([("WORMSONG".to_string(), alive.username.clone())])
     );
 }
