@@ -98,6 +98,31 @@ pub(crate) fn render(canvas: &Canvas) -> anyhow::Result<Vec<u8>> {
     image.encode()
 }
 
+/// One render at a time. `service-web`'s CPU limit leaves tokio a single
+/// worker (`available_parallelism` reads the cgroup quota), so a render
+/// inline would hold every page and `/stream` proxy on the pod for the
+/// whole raster; and one permit keeps a burst of unfurls from holding a
+/// full raster each at once.
+static RENDER_PERMIT: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+
+/// [`render`] for a request handler: on the blocking pool, one at a time.
+/// The permit rides into the blocking task, so a client that hangs up
+/// mid-render does not let the next one start beside it.
+pub(crate) async fn render_blocking(canvas: Canvas) -> anyhow::Result<Vec<u8>> {
+    let permit = RENDER_PERMIT
+        .acquire()
+        .await
+        .expect("the render permit is never closed");
+    let task = tokio::task::spawn_blocking(move || {
+        let _permit = permit;
+        render(&canvas)
+    });
+    match task.await {
+        Ok(rendered) => rendered,
+        Err(error) => Err(anyhow::Error::new(error).context("render task failed")),
+    }
+}
+
 /// `png` as the response an `og:image` fetch gets: ten minutes of cache,
 /// so a link pasted into a busy room renders once, not once per server
 /// that unfurls it.

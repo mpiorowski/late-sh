@@ -412,8 +412,9 @@ labels, so the series count cannot grow with the crowd):
   with `left_at` null.
 - What a newcomer does on day one, per person. The counters split it by
   tenure (`day_one`, `first_week`, `regular` on the attention, visit and
-  session-start series), count each first-visit tour stop reached
-  (`late_ssh_tour_stops_total{stop}`) and the screen that was up when a
+  session-start series), count each first-visit tour stop reached, the
+  welcome box included (`late_ssh_tour_stops_total{stop}`; `/onboard`
+  reruns are left out) and the screen that was up when a
   session ended (`late_ssh_session_ends_total{tenure,screen}`), read on
   the Grafana "Newcomers" row. What they cannot say is whether twenty
   active minutes were one person or twenty; that is the funnel above and

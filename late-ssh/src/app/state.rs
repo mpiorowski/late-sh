@@ -2054,9 +2054,7 @@ impl App {
         // below for all three). Zen: focus the first chat tile and size the
         // reef to its tile, as `Ctrl+F` would.
         match landing {
-            LandingPage::Clubhouse => app
-                .clubhouse
-                .enter_screen(crate::app::presence::svc::now_ms()),
+            LandingPage::Clubhouse => app.enter_clubhouse(),
             LandingPage::Home => app.chat.request_list(),
             LandingPage::Zen => {
                 app.zen.note_opened();
@@ -2587,6 +2585,17 @@ impl App {
         }
     }
 
+    /// The clubhouse's entry hook. An entry that begins a first visit's
+    /// tour counts its welcome box, the newcomer tour funnel's first stop.
+    fn enter_clubhouse(&mut self) {
+        if self
+            .clubhouse
+            .enter_screen(crate::app::presence::svc::now_ms())
+        {
+            crate::metrics::record_tour_stop(crate::app::clubhouse::state::Tutorial::Welcome);
+        }
+    }
+
     pub(crate) fn enter_directory(&mut self) {
         self.chat.work.list();
         self.chat.showcase.list();
@@ -2907,8 +2916,7 @@ impl App {
             self.enter_directory();
         }
         if self.screen == Screen::Clubhouse {
-            self.clubhouse
-                .enter_screen(crate::app::presence::svc::now_ms());
+            self.enter_clubhouse();
         }
         self.sync_visible_chat_room();
     }

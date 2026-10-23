@@ -33,7 +33,10 @@ use crate::{
     AppState,
     error::AppError,
     metrics,
-    pages::shared::text::{escape_html, split_paragraphs},
+    pages::shared::{
+        meta,
+        text::{escape_html, split_paragraphs},
+    },
 };
 
 pub(crate) fn router() -> Router<AppState> {
@@ -226,6 +229,7 @@ async fn read_page(client: &PooledClient, base: &str, edition: NaiveDate) -> any
         .or(reading.first())
         .cloned()
         .unwrap_or_else(|| "late.sh's daily paper, printed once a day.".to_string());
+    let (og_image, og_image_alt) = meta::site_image(base);
     Ok(Page {
         edition: edition.to_string(),
         dateline: edition.format("%A, %-d %B %Y").to_string(),
@@ -238,8 +242,8 @@ async fn read_page(client: &PooledClient, base: &str, edition: NaiveDate) -> any
         page_url: format!("{base}{}", edition_path(edition)),
         og_title: format!("The Late Edition, {}", edition.format("%-d %B %Y")),
         og_description,
-        og_image: format!("{base}/static/og-image.png"),
-        og_image_alt: "A steaming coffee cup drawn in braille dots beside the prompt: ssh late.sh".to_string(),
+        og_image,
+        og_image_alt,
     })
 }
 

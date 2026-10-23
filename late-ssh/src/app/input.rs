@@ -3940,7 +3940,7 @@ pub(crate) fn start_tour(app: &mut App) {
 
 /// Enter at a tour stop: walk the newcomer to wherever the next one lives.
 fn tour_advance(app: &mut App) {
-    use crate::app::clubhouse::state::TourMove;
+    use crate::app::clubhouse::state::{TourMove, TourStart};
 
     match app.clubhouse.tutorial_advance() {
         TourMove::Stay => {}
@@ -3970,9 +3970,13 @@ fn tour_advance(app: &mut App) {
         TourMove::Zen => toggle_zen_globally(app),
         TourMove::Finished => app.persist_clubhouse_tutorial_done(),
     }
-    // The stop just reached; the welcome box is every first visit, which
-    // the session start counter already counts as `user="new"`.
-    crate::metrics::record_tour_stop(app.clubhouse.tutorial);
+    // The stop just reached, on a first visit's tour only (its welcome box
+    // is counted where the tour began, `App::enter_clubhouse`): a rerun is
+    // a regular walking the route again, not a newcomer leaving it.
+    match app.clubhouse.tour_start() {
+        TourStart::FirstVisit => crate::metrics::record_tour_stop(app.clubhouse.tutorial),
+        TourStart::Rerun => {}
+    }
 }
 
 /// Hold open the real modal the current stop pitches, and close it once the

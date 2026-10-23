@@ -4221,7 +4221,7 @@
     {
       "type": "bargauge",
       "title": "Day-One Active Minutes by Screen",
-      "description": "Minutes with a key press behind them, from accounts in their first 24 hours, by screen, over the selected range. Counters are per-pod and reset on restart, so this sums each pod's high-water mark.",
+      "description": "Minutes with a key press behind them, from accounts in their first 24 hours, by screen, over the selected range.",
       "datasource": {
         "uid": "victoriametrics",
         "type": "victoriametrics-metrics-datasource"
@@ -4229,7 +4229,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (screen) (max_over_time(late_ssh_attention_seconds_total{tenure=\"day_one\",presence=\"active\"}[$__range])) / 60",
+          "expr": "sum by (screen) (increase(late_ssh_attention_seconds_total{tenure=\"day_one\",presence=\"active\"}[$__range])) / 60",
           "legendFormat": "{{screen}}",
           "instant": true
         }
@@ -4278,7 +4278,7 @@
     {
       "type": "bargauge",
       "title": "Tour Stops Reached",
-      "description": "First-visit tour stops reached over the selected range. Each stop is one Enter past the one before, so the drop between two bars is where newcomers leave the route. The welcome box itself is every new-account session start.",
+      "description": "First-visit tour stops reached over the selected range, from the welcome box at the door on. Each stop is one Enter past the one before, so the drop between two bars is where newcomers leave the route. A newcomer who leaves mid-tour starts over at the welcome box next session, a new attempt; /onboard reruns are not counted.",
       "datasource": {
         "uid": "victoriametrics",
         "type": "victoriametrics-metrics-datasource"
@@ -4286,7 +4286,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (stop) (max_over_time(late_ssh_tour_stops_total[$__range]))",
+          "expr": "sum by (stop) (increase(late_ssh_tour_stops_total[$__range]))",
           "legendFormat": "{{stop}}",
           "instant": true
         }
@@ -4343,7 +4343,7 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (screen) (max_over_time(late_ssh_session_ends_total{tenure=\"day_one\"}[$__range]))",
+          "expr": "sum by (screen) (increase(late_ssh_session_ends_total{tenure=\"day_one\"}[$__range]))",
           "legendFormat": "{{screen}}",
           "instant": true
         }

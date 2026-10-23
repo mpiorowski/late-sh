@@ -2715,14 +2715,16 @@ mod inner {
             meter()
                 .u64_counter("late_ssh_tour_stops_total")
                 .with_description(
-                    "First-visit tour stops reached by an Enter at the one before; the drop between two stops is where newcomers leave the tour",
+                    "First-visit tour stops reached, the welcome box at the door included; the drop between two stops is where newcomers leave the tour",
                 )
                 .build()
         })
     }
 
-    /// A tour stop reached. Every stop is one Enter past the one before, so
-    /// the count at each stop against the count at the next is the drop.
+    /// A first visit's tour stop reached: the welcome box when the tour
+    /// begins, then every stop one Enter past the one before, so the count
+    /// at each stop against the count at the next is the drop. `/onboard`
+    /// reruns are not recorded.
     pub fn record_tour_stop(stop: Tutorial) {
         tour_stops_total().add(1, &[KeyValue::new("stop", tour_stop_label(stop))]);
     }

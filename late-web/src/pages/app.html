@@ -14,7 +14,8 @@
     <!-- The preview card: Open Graph and Twitter. A page with a card of its own overrides this block. -->
     {% import "pages/shared/meta.html" as meta %}
     {% block meta %}
-    {% call meta::card("late.sh", "A cozy command-line clubhouse for computer people. Chat, music, games, art, coding, and tech news. Connect with any SSH client!", "https://late.sh/", "https://late.sh/static/og-image.png", "A steaming coffee cup drawn in braille dots beside the prompt: ssh late.sh") %}{% endcall %}
+    {#- The shell has no config to read, so its card names the production host; a page's own card is built from `public_base_url`. -#}
+    {% call meta::card("late.sh", "A cozy command-line clubhouse for computer people. Chat, music, games, art, coding, and tech news. Connect with any SSH client!", "https://late.sh/", "https://late.sh" ~ crate::pages::shared::meta::SITE_IMAGE_PATH, crate::pages::shared::meta::SITE_IMAGE_ALT) %}{% endcall %}
     <meta property="og:image:width" content="1200">
     <meta property="og:image:height" content="630">
     {% endblock %}

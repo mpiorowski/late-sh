@@ -350,6 +350,39 @@ fn a_tour_rerun_never_pours_or_glows_for_a_returning_user() {
     assert!(!state.welcome_pour_due());
 }
 
+/// The newcomer tour funnel counts a first visit's tour from the welcome
+/// box on and leaves `/onboard` reruns out: entering reports the one entry
+/// that began a first visit, and the tour says how it began.
+#[test]
+fn only_a_first_visit_counts_toward_the_newcomer_tour() {
+    let mut newcomer = state_with_lobby(true);
+    assert!(
+        newcomer.enter_screen(NOW),
+        "the first entry begins the tour"
+    );
+    assert!(
+        !newcomer.enter_screen(NOW),
+        "coming back mid-tour begins nothing"
+    );
+    assert_eq!(newcomer.tour_start(), TourStart::FirstVisit);
+
+    // Walked to the end and rerun the same day: a rerun, not a newcomer.
+    while newcomer.tutorial != Tutorial::Done {
+        newcomer.tutorial_advance();
+    }
+    newcomer.begin_tutorial(NOW, TourStart::Rerun);
+    assert_eq!(newcomer.tour_start(), TourStart::Rerun);
+
+    let mut regular = state_with_lobby(false);
+    assert!(!regular.enter_screen(NOW), "no tour is due");
+    regular.begin_tutorial(NOW, TourStart::Rerun);
+    assert_eq!(regular.tour_start(), TourStart::Rerun);
+    assert!(
+        !regular.enter_screen(NOW),
+        "a rerun under way begins nothing more"
+    );
+}
+
 const BARTENDER: u128 = 9;
 
 fn lounge_msg(n: u128, author: u128, created: chrono::DateTime<chrono::Utc>) -> ChatMessage {

@@ -436,9 +436,11 @@ a no-op twin when built without `otel`.
   every engagement counter carries so "what does a newcomer do on day one"
   is a Grafana question, not a database one.
 - Newcomers: `late_ssh_tour_stops_total{stop}` (a first-visit tour stop
-  reached by an Enter at the one before, recorded in `input.rs::tour_advance`;
-  the drop between two stops is where they leave the tour, and the welcome
-  box itself is every `user="new"` session start) and
+  reached: the welcome box when the tour begins, `App::enter_clubhouse`,
+  then each stop an Enter at the one before reaches, `input.rs::tour_advance`;
+  the drop between two stops is where they leave the tour. A tour left
+  midway starts over at the welcome box next session, a new attempt;
+  `/onboard` reruns are not counted) and
   `late_ssh_session_ends_total{tenure,screen}` (the screen that was up when
   a session ended: the last thing a newcomer saw). The Grafana "Newcomers"
   row (`monitoring/dashboards/observability.json`) reads these plus the

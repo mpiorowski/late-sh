@@ -13,7 +13,12 @@ use dartboard_core::{Canvas, CellValue, Pos};
 use late_core::models::artboard::{Snapshot, SnapshotSummary};
 use serde::{Deserialize, Serialize};
 
-use crate::{AppState, error::AppError, metrics, pages::shared::board_png};
+use crate::{
+    AppState,
+    error::AppError,
+    metrics,
+    pages::shared::{board_png, meta},
+};
 
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
@@ -139,12 +144,13 @@ async fn handler(
     let show_monthly_empty = monthly_items.is_empty();
     let show_curated_empty = curated_items.is_empty();
     let base = state.config.public_base_url.as_str();
+    let (og_image, og_image_alt) = meta::site_image(base);
     let mut page = Page {
         page_url: format!("{base}/gallery"),
         og_title: "The late.sh Artboard".to_string(),
         og_description: "The shared ASCII canvas, drawn cell by cell over SSH.".to_string(),
-        og_image: format!("{base}/static/og-image.png"),
-        og_image_alt: "A steaming coffee cup drawn in braille dots beside the prompt: ssh late.sh".to_string(),
+        og_image,
+        og_image_alt,
         live_items,
         daily_items,
         monthly_items,
@@ -205,7 +211,9 @@ async fn image_handler(
     };
     let canvas: Canvas =
         serde_json::from_value(snapshot.canvas).context("failed to decode artboard canvas")?;
-    let png = board_png::render(&canvas).context("failed to render artboard snapshot")?;
+    let png = board_png::render_blocking(canvas)
+        .await
+        .context("failed to render artboard snapshot")?;
     Ok(board_png::response(png))
 }
 

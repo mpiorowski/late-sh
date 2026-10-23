@@ -57,11 +57,11 @@ pub fn create_pool(cfg: &DbConfig) -> Result<Pool, CreatePoolError> {
     pool_cfg.create_pool(Some(Runtime::Tokio1), NoTls)
 }
 
-/// Wrapper around the connection pool with helper methods.
 /// A connection checked out of the pool, as `Db::get` hands it out:
 /// the type a caller names when it passes one on.
 pub type PooledClient = deadpool_postgres::Client;
 
+/// Wrapper around the connection pool with helper methods.
 #[derive(Clone)]
 pub struct Db {
     pool: Pool,

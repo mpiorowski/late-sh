@@ -22,7 +22,7 @@ use crate::{
     AppState,
     error::AppError,
     metrics,
-    pages::shared::{board_png, text::split_paragraphs},
+    pages::shared::{board_png, meta, text::split_paragraphs},
 };
 
 pub(crate) fn router() -> Router<AppState> {
@@ -185,10 +185,7 @@ async fn handler(
                 user_profile.username
             ),
         ),
-        None => (
-            format!("{base}/static/og-image.png"),
-            "A steaming coffee cup drawn in braille dots beside the prompt: ssh late.sh".to_string(),
-        ),
+        None => meta::site_image(base),
     };
     let page = Page {
         poster_json,
@@ -269,7 +266,9 @@ async fn poster_handler(
             return Ok(StatusCode::NOT_FOUND.into_response());
         }
     };
-    let png = board_png::render(&canvas).context("failed to render runner poster")?;
+    let png = board_png::render_blocking(canvas)
+        .await
+        .context("failed to render runner poster")?;
     Ok(board_png::response(png))
 }
 
