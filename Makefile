@@ -95,10 +95,12 @@ check-db-down:
 # above TEST_LLM_MEM_MAX_G. A fixed cap larger than what is free never trips
 # on a loaded swapless machine, and the global OOM killer takes the browser
 # instead. MemoryHigh throttles the build 2G below the cap; MemoryMax kills the
-# scope, not the desktop. Under TEST_LLM_MEM_MIN_G the run refuses to start.
+# scope, not the desktop. Under TEST_LLM_MEM_MIN_G the run refuses to start:
+# the late-ssh test build's rustc passes 8G, and with no swap a MemoryHigh
+# under that stalls it for hours instead of failing.
 TEST_LLM_MEM_MAX_G ?= 12
 TEST_LLM_HEADROOM_G ?= 3
-TEST_LLM_MEM_MIN_G ?= 6
+TEST_LLM_MEM_MIN_G ?= 11
 .PHONY: test-llm
 test-llm: .env
 	@set -e; \
