@@ -44,8 +44,10 @@ counts measure reconnects, not visits.
 ## 2. Where the time goes
 
 Attention is counted once a second per session, split by screen and by
-place inside it, and marked active (a key within the recent window) or
-idle. 2026-09-27 to 2026-10-22, about 13,900 session-hours in all.
+place inside it, marked active (a key within the recent window) or idle,
+and tagged with the account's tenure (its first day, its first week,
+older). 2026-09-27 to 2026-10-22, about 13,900 session-hours in all, every
+tenure together.
 Places inside Home and Zen are labeled from 2026-10-02; the earlier 1,800
 Home hours and 360 Zen hours sit in an unlabeled bucket.
 
@@ -234,9 +236,11 @@ Live, in order of evidence behind them:
   next ritual, surface or launch post lands on people who are gone by
   day two. What a newcomer is handed on day one (the tour, the paper, an
   invitation to come back tomorrow: a daily board started, a runner
-  promised, a seat kept) is the unmeasured half of this doc; measure the
-  first session by screen with the attention counter filtered to new
-  accounts before designing it.
+  promised, a seat kept) is the unmeasured half of this doc. The Grafana
+  "Newcomers" row (section 6) is where to read it: day-one active minutes
+  by screen, the tour stop where newcomers leave, and the screen that was
+  up when a day-one session ended. Read a week of it before designing
+  anything.
 - **Daily boards are the proven ritual.** The Arcade's daily is the floor
   deadchannel's ration loop is built to copy. More of that shape (one
   shared object a day, finished in minutes, talked about in #lounge) beats
@@ -245,11 +249,15 @@ Live, in order of evidence behind them:
   only while the session is attached. A deadchannel beat that only a
   connected runner can take (a spawn, a crossing landing while you are on
   the wire) raises hours left open without a new surface.
-- **Put a front door on the web, then post.** A public paper page and
-  its feed, `rel="me"` on profile links so a member's Mastodon profile
-  shows late.sh verified, and preview cards that unfurl a profile into
-  its poster and a gallery link into its snapshot, drawn server-side as
-  PNG. Post, do not federate: a bot account on an existing instance is
+- **The front door is on the web; what is left is to post.** The paper
+  is public at `/paper`, with dated back issues and an RSS feed (the
+  announcements, WHAT WE WERE READING and OUTSIDE; room pages stay in the
+  clubhouse), profile contact and links carry `rel="me"` so a member's
+  Mastodon profile shows late.sh verified, and every page unfurls into a
+  preview card: a profile into its runner's poster, a gallery link into
+  its snapshot, both drawn server-side as PNG (`late-web/CONTEXT.md`).
+  None of it is measured yet beyond page views. Post, do not federate: a
+  bot account on an existing instance is
   one bearer token and two HTTP calls; federating profiles (ActivityPub,
   WebFinger, signed fetches, inbound moderation) is weeks of work and
   sends the visibility people want outward, away from the terminal.
@@ -272,8 +280,10 @@ Live, in order of evidence behind them:
     (#tildeverse #pubnix #ssh #terminal). The rare headline events the
     #lounge feed already treats as stories (the pot drawn, the crown
     taken, the monthly awards) may take the slot. Every picture comes
-    through the front door's cell renderer, so anything the terminal
-    draws can be posted.
+    through the front door's cell renderer
+    (`late-web/src/pages/shared/board_png.rs`), so anything the terminal
+    draws can be posted once it has a route; today only the poster and
+    the gallery snapshot have one.
   - **What it never posts.** Chat. A frame of #lounge is people's
     messages on the public web; the Artboard, posters and cards are
     things people made to be seen, messages are not.
@@ -283,7 +293,8 @@ Live, in order of evidence behind them:
   - **The shape.** A small late-ssh domain built like the paper's press:
     a sweeper on every replica, a `herald_posts` row per UTC day claimed
     by conditional insert so several replicas post exactly once, the
-    picture fetched from the front door's image routes over `web_url`, a
+    picture fetched over `web_url` from the front door's PNG routes
+    (`/profiles/{slug}/poster.png`, `/gallery/{key}/image.png`), a
     media upload then a status call with an idempotency key so a retry
     never double-posts, a `posted / skipped / failed` counter on the
     Grafana board. Config off in dev and required in prod, so the first
@@ -343,6 +354,12 @@ curl -s --data-urlencode 'query=sum by (place) (increase(late_ssh_attention_seco
 # arrivals per screen
 curl -s --data-urlencode 'query=sum by (screen,place) (increase(late_ssh_place_visits_total[25d]))' \
   http://127.0.0.1:18428/api/v1/query
+# the first session: day-one active hours by screen
+curl -s --data-urlencode 'query=sum by (screen) (increase(late_ssh_attention_seconds_total{tenure="day_one",presence="active"}[7d]))/3600' \
+  http://127.0.0.1:18428/api/v1/query
+# where the tour loses people: stops reached, the drop between two is the leak
+curl -s --data-urlencode 'query=sum by (stop) (increase(late_ssh_tour_stops_total[7d]))' \
+  http://127.0.0.1:18428/api/v1/query
 # distinct people per day, and sessions per person (logs, 7 days)
 curl -s http://127.0.0.1:19428/select/logsql/query \
   --data-urlencode 'query=_time:7d "user connected" | stats by (_time:1d) count_uniq(username) u'
@@ -393,12 +410,14 @@ labels, so the series count cannot grow with the crowd):
   distribution (`total_milliseconds` per `user_id`); `chat_messages` by
   `room_id` and distinct `user_id` per day; `deadchannel_runners` rows
   with `left_at` null.
-- What a newcomer does on day one: no counter tells a newcomer from a
-  regular. Planned: a `tenure` label (`day_one`, `first_week`,
-  `regular`) on the engagement counters, a count of each first-visit
-  tour stop reached, and the screen that was up when a session ended,
-  on a Grafana "Newcomers" row. Until then the funnel above is the
-  database's answer.
+- What a newcomer does on day one, per person. The counters split it by
+  tenure (`day_one`, `first_week`, `regular` on the attention, visit and
+  session-start series), count each first-visit tour stop reached
+  (`late_ssh_tour_stops_total{stop}`) and the screen that was up when a
+  session ended (`late_ssh_session_ends_total{tenure,screen}`), read on
+  the Grafana "Newcomers" row. What they cannot say is whether twenty
+  active minutes were one person or twenty; that is the funnel above and
+  stays a database question.
 - Voice room usage: no counter.
 - Logs keep 7 days, so any per-person trend longer than a week comes from
   the database or from the weekly leaderboards.
