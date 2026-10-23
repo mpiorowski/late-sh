@@ -118,7 +118,7 @@ Rules for when seasonal events return:
 
 - Pure state/input/layout helpers can have inline unit tests.
 - DB/service behavior belongs in adjacent `_test.rs` files beside the module it exercises, using `crate::test_helpers::new_test_db`.
-- Agents run targeted tests through `make test-llm ARGS="-p late-ssh -E 'test(hub)'"`; `make check` stays with the human owner.
+- Agents run targeted tests through `make test-llm ARGS="-p late-ssh --lib -E 'test(hub)'"`; `make check` stays with the human owner.
 
 ## Known Gaps
 

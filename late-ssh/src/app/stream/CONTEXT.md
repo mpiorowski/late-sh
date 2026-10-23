@@ -346,7 +346,7 @@ Cross-domain touchpoints:
 - `late-cli/src/voice_test.rs`: the `keep_remote_audio` policy: other
   users' mics play; `stream-*` publishers (any source label) and all
   program audio never do.
-- LLM agents run targeted tests via `make test-llm ARGS="-p late-ssh -E
+- LLM agents run targeted tests via `make test-llm ARGS="-p late-ssh --lib -E
   'test(stream)'"`; never raw cargo test.
 
 ## 6. Moderation

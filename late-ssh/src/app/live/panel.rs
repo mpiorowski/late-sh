@@ -1,16 +1,17 @@
 //! The right sidebar's Live panel: what the house can watch or read right
-//! now, one row per thing, four rows, under its `── live ──` rule. Three
+//! now, one row per thing, four rows, under its `── live ──` rule. Four
 //! kinds today: a stream that has gone live (who, the title, how many are
 //! watching), a live game on a watchable door (which game, where its
 //! player is or how long they have been in, how many have the watch open;
 //! who is playing is the watch's to say, a handle is long and the row is
-//! not), and a News share still fresh (the title, and a dot while it is
-//! unread), which is the one piece of news the room has no other way to
-//! catch up on. Every
-//! row says what it is in its first column, `stream`, the game's name, or
-//! `news`, each kind in its own color, so a glance tells the rows apart.
+//! not), a timed board event from an hour before its start (the time, the
+//! title, how many are in), and a News share still fresh (the title, and a
+//! dot while it is unread), still in view after its card in #lounge has
+//! scrolled away. Every row says what it is in its first column, `stream`,
+//! the game's name, `event` or `news`, each kind in its own color, so a
+//! glance tells the rows apart.
 //! A deadchannel run or fight lands here as a new [`LivePanelRow`] variant
-//! with its own row text and its own `LiveSource` for the click.
+//! with its own row text and its own [`PanelTarget`] for the click.
 //!
 //! The four rows are shared by the floor rule (`arrange`): every kind with
 //! something gets one row first, then the leftover goes by priority,
@@ -25,7 +26,7 @@
 //! draws `v1` to `v5`: `s` then the digit opens it from the keyboard
 //! (`input::open_from_prefix`), and a click on the row
 //! opens it the way the strip's click does (`input::open_from_panel_click`),
-//! both off the sources the draw records in `LiveState::panel_hit`.
+//! both off the targets the draw records in `LiveState::panel_hit`.
 
 use std::cell::Cell;
 
@@ -40,7 +41,6 @@ use ratatui::{
 };
 use uuid::Uuid;
 
-use super::pick::LiveSource;
 use super::ui::truncate_chars;
 use crate::app::calendar::live::PanelEvent;
 use crate::app::chat::news::state::{Reads, is_unread_at};
@@ -56,9 +56,9 @@ use crate::app::stream::registry::LiveStreamView;
 pub(crate) const LIVE_PANEL_HEIGHT: u16 = 4;
 pub(crate) const LIVE_PANEL_ROWS: usize = LIVE_PANEL_HEIGHT as usize;
 
-/// Where the panel drew this frame and the source on each of its rows,
+/// Where the panel drew this frame and the target on each of its rows,
 /// render-recorded for the click that opens one.
-pub(crate) type LivePanelHit = Cell<Option<(Rect, [Option<LiveSource>; LIVE_PANEL_ROWS])>>;
+pub(crate) type LivePanelHit = Cell<Option<(Rect, [Option<PanelTarget>; LIVE_PANEL_ROWS])>>;
 /// How long a News share stays on the panel: reading it is still possible
 /// long after, but after an hour it is the News room's, not the room's.
 pub(crate) const NEWS_LIFETIME: Duration = Duration::hours(1);
@@ -126,21 +126,33 @@ impl LivePanelRow {
     }
 
     /// What a click on the row opens.
-    pub fn source(&self) -> LiveSource {
+    pub fn target(&self) -> PanelTarget {
         match self {
-            LivePanelRow::Stream { user_id, .. } => LiveSource::Stream(*user_id),
-            LivePanelRow::DoorGame { key, .. } => LiveSource::DoorGame(*key),
-            LivePanelRow::Event { event_id, .. } => LiveSource::BoardEvent(*event_id),
-            LivePanelRow::News { article_id, .. } => LiveSource::NewsArticle(*article_id),
+            LivePanelRow::Stream { user_id, .. } => PanelTarget::Stream(*user_id),
+            LivePanelRow::DoorGame { key, .. } => PanelTarget::DoorGame(*key),
+            LivePanelRow::Event { event_id, .. } => PanelTarget::BoardEvent(*event_id),
+            LivePanelRow::News { article_id, .. } => PanelTarget::News(*article_id),
         }
     }
+}
+
+/// What a panel row opens, one per [`LivePanelRow`] kind. The first three
+/// are things the strip can show too and open the way the strip opens
+/// them; a News share is the panel's alone, since the strip never shows
+/// one (a share is its card in #lounge).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PanelTarget {
+    Stream(Uuid),
+    DoorGame(LiveGameKey),
+    BoardEvent(Uuid),
+    News(Uuid),
 }
 
 /// What the panel draws this frame: its rows, in panel order, and where it
 /// records the click targets.
 pub(crate) struct LivePanelProps<'a> {
     pub rows: &'a [LivePanelRow],
-    /// Written by the draw: the body rect and the source on each of its
+    /// Written by the draw: the body rect and the target on each of its
     /// rows (`None` for a blank slot or the `+N more` row).
     pub hit: &'a LivePanelHit,
     pub now: DateTime<Utc>,
@@ -260,17 +272,17 @@ pub(crate) fn draw_live_inline(frame: &mut Frame, area: Rect, props: &LivePanelP
     }
     let lines = panel_lines(area.width, props.rows, props.now);
     frame.render_widget(Paragraph::new(lines), area);
-    props.hit.set(Some((area, hit_sources(props.rows))));
+    props.hit.set(Some((area, hit_targets(props.rows))));
 }
 
-/// The source behind each of the four slots: a row's where one is drawn,
+/// The target behind each of the four slots: a row's where one is drawn,
 /// none under `+N more`, a blank slot, or `nobody playing`.
-fn hit_sources(rows: &[LivePanelRow]) -> [Option<LiveSource>; LIVE_PANEL_ROWS] {
-    let mut sources = [None; LIVE_PANEL_ROWS];
+fn hit_targets(rows: &[LivePanelRow]) -> [Option<PanelTarget>; LIVE_PANEL_ROWS] {
+    let mut targets = [None; LIVE_PANEL_ROWS];
     for (slot, row) in rows.iter().take(shown_rows(rows.len())).enumerate() {
-        sources[slot] = Some(row.source());
+        targets[slot] = Some(row.target());
     }
-    sources
+    targets
 }
 
 /// How many rows draw as rows: all of them when they fit, else one fewer

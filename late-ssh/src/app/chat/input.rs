@@ -140,7 +140,7 @@ fn open_poll_modal(app: &mut App, room_id: Uuid) {
     app.show_quit_confirm = false;
     crate::app::input::close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_news_modals();
+    crate::app::input::close_reader_and_player(app);
     app.pending_chat_profile_open = None;
     app.poll_modal_state.open(room_id);
     app.show_poll_modal = true;
@@ -160,7 +160,7 @@ fn open_gild_modal(app: &mut App, target: crate::app::chat::gild::state::GildTar
     app.show_quit_confirm = false;
     crate::app::input::close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_news_modals();
+    crate::app::input::close_reader_and_player(app);
     app.gild_modal_state.open(target);
     app.show_gild_modal = true;
 }
@@ -565,13 +565,23 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
             return true;
         }
         // `G` always jumps to a reply's referenced message. Enter is overloaded
-        // (the image modal takes precedence), so a reply that contains an image
-        // can't be followed with Enter alone; `G` reaches the parent regardless.
-        // Lowercase `g` is the gild key above.
+        // (a News card, an image, then a YouTube link, take precedence), so a
+        // reply that contains any of them can't be followed with Enter alone;
+        // `G` reaches the parent regardless. Lowercase `g` is the gild key
+        // above.
         b'G' if app.chat.try_jump_to_selected_reply_target_in_room(room_id) => {
             return true;
         }
+        // A News share's #lounge card opens the reader on its story, ahead
+        // of the preview its link would otherwise get.
+        b'\r' | b'\n' if app.chat.open_selected_card_in_room(room_id) => {
+            return true;
+        }
         b'\r' | b'\n' if app.chat.open_selected_image_modal_in_room(room_id) => {
+            return true;
+        }
+        // A YouTube link opens the watch player (`app/video/`).
+        b'\r' | b'\n' if watch_selected_video(app, room_id) => {
             return true;
         }
         b'\r' | b'\n' if app.chat.try_jump_to_selected_reply_target_in_room(room_id) => {
@@ -625,6 +635,17 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
         }
         _ => false,
     }
+}
+
+/// Enter or a click on the selected message's YouTube thumbnail: the watch
+/// player, or the setup box naming what this session is missing. False
+/// when the message carries no YouTube video link.
+pub(crate) fn watch_selected_video(app: &mut App, room_id: Uuid) -> bool {
+    let Some(request) = app.chat.selected_video_in_room(room_id) else {
+        return false;
+    };
+    crate::app::video::svc::watch(app, request);
+    true
 }
 
 /// Arrow-key message navigation shared between screens.

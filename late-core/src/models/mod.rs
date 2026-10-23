@@ -114,6 +114,9 @@ mod leaderboard_test;
 pub mod marketplace;
 #[cfg(test)]
 mod marketplace_test;
+pub mod media_favorite;
+#[cfg(test)]
+mod media_favorite_test;
 pub mod media_history_item;
 #[cfg(test)]
 mod media_history_item_test;

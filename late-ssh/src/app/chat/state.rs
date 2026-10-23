@@ -42,6 +42,7 @@ use crate::app::common::{
 use crate::app::crown::svc::CrownBid;
 use crate::app::help_modal::data::HelpTopic;
 use crate::app::notify::{Notification, Notifier};
+use crate::app::video::state::{WatchRequest, WatchSource};
 use crate::authz::Permissions;
 use crate::metrics::HomeRoom;
 use crate::moderation::{
@@ -101,7 +102,7 @@ pub(crate) type InlineImageRenderSettings =
 pub(crate) type InlineImageRenderResult = (
     Uuid,
     InlineImageRenderSettings,
-    Result<InlineImagePreview, String>,
+    Result<InlinePreview, String>,
 );
 pub(crate) type TerminalImageRenderResult = (
     Uuid,
@@ -180,8 +181,8 @@ pub(crate) struct ReplyTarget {
 pub(crate) enum ReplyTo {
     /// A chat message, stored as the reply's `reply_to_message_id`.
     Message(Uuid),
-    /// A News article off the #lounge live strip. There is no message to
-    /// point at, so the reply carries only the quoted title.
+    /// A News article, from the News room or the reader. The reply points
+    /// at no message, so it carries only the quoted title.
     Article,
 }
 
@@ -1183,7 +1184,7 @@ pub struct ChatState {
     pub(crate) inline_image_rx:
         Option<tokio::sync::mpsc::UnboundedReceiver<InlineImageRenderResult>>,
     pub(crate) inline_image_tx: Option<tokio::sync::mpsc::UnboundedSender<InlineImageRenderResult>>,
-    pub(crate) inline_image_cache: HashMap<uuid::Uuid, InlineImagePreview>,
+    pub(crate) inline_image_cache: HashMap<uuid::Uuid, InlinePreview>,
     pub(crate) inline_image_requested: HashSet<uuid::Uuid>,
     inline_image_failures: HashMap<uuid::Uuid, InlineImageFailure>,
     inline_image_render_settings: InlineImageRenderSettings,
@@ -2082,27 +2083,6 @@ impl ChatState {
         self.news.close_reader();
     }
 
-    /// The News watch modal, owned by `news::State` like the reader.
-    pub(crate) fn watch(&self) -> Option<&news::watch::state::WatchModal> {
-        self.news.watch()
-    }
-
-    pub(crate) fn has_watch(&self) -> bool {
-        self.news.watch().is_some()
-    }
-
-    /// Closing is state only: the next draw's sync sends the stop.
-    pub(crate) fn close_watch(&mut self) {
-        self.news.close_watch();
-    }
-
-    /// The reader and the watch modal, for the glue that clears modals on
-    /// a page change or before another modal opens.
-    pub(crate) fn close_news_modals(&mut self) {
-        self.news.close_reader();
-        self.news.close_watch();
-    }
-
     pub(crate) fn image_modal(&self) -> Option<&ImageModalState> {
         self.image_modal.as_ref()
     }
@@ -2552,9 +2532,10 @@ impl ChatState {
         None
     }
 
-    /// Start a reply in #lounge to a News article, the one the live strip
-    /// features: the composer opens with `> @sharer: 📰 Title` to go on top.
-    /// False when the article left the snapshot or #lounge is not known yet.
+    /// Start a reply in #lounge to a News article (`r` in the News room or
+    /// the reader): the composer opens with `> @sharer: 📰 Title` to go on
+    /// top. False when the article left the snapshot or #lounge is not known
+    /// yet.
     pub(crate) fn begin_reply_to_article(&mut self, article_id: Uuid) -> bool {
         self.reaction_leader_active = false;
         let Some(lounge_id) = self.lounge_room_id() else {
@@ -2567,8 +2548,8 @@ impl ChatState {
             "" => short_user_id(item.article.user_id),
             name => name.to_string(),
         };
-        // The 📰 says what is quoted: with no card in the chat, a bare title
-        // would read as something the sharer said.
+        // The 📰 says what is quoted: a bare title would read as something
+        // the sharer said.
         self.reply_target = Some(ReplyTarget {
             to: ReplyTo::Article,
             author,
@@ -2627,6 +2608,11 @@ impl ChatState {
         let is_own = message_user_id == self.user_id;
         if !is_own && !self.permissions.can_moderate() {
             return Some(Banner::error("Can only edit your own messages"));
+        }
+        // Drawn from its story, so its line is not what anyone here reads
+        // (`ChatService::edit_message` refuses it too).
+        if self.news.lounge_card(selected_id).is_some() {
+            return Some(Banner::error("A story's card can't be edited."));
         }
         self.edited_message_id = Some(selected_id);
         self.composer = new_chat_textarea();
@@ -2956,29 +2942,55 @@ impl ChatState {
         composer::set_themed_textarea_cursor_visible(&mut self.composer, composing);
     }
 
-    /// Open the reader on a News article by id (a News card, the live
-    /// strip, the Live panel, a Zen Live tile), marking that article read.
-    /// False when it left the snapshot (deleted).
+    /// Open the reader on a News article by id (a News card, a #lounge
+    /// card, the Live panel, a Zen Live tile), marking that article read.
+    /// False when this session no longer knows it (deleted).
     pub(crate) fn open_reader_for_article(&mut self, article_id: Uuid) -> bool {
         self.reaction_leader_active = false;
         self.news.open_reader(article_id)
     }
 
-    /// Open the watch player on a News video (`news/watch/svc.rs` decides
-    /// that this session can play it). False when it is gone or no video.
-    pub(crate) fn open_watch_player(&mut self, article_id: Uuid, now: std::time::Instant) -> bool {
-        self.reaction_leader_active = false;
-        self.news.open_watch_player(article_id, now)
+    /// Enter or a click on the selected message in `room_id` when it is a
+    /// News share's #lounge card: the reader on its story. False for any
+    /// other message.
+    pub(crate) fn open_selected_card_in_room(&mut self, room_id: Uuid) -> bool {
+        let Some(article_id) = self
+            .selected_message_in_room(room_id)
+            .and_then(|message| self.news.lounge_card(message.id))
+            .map(|item| item.article.id)
+        else {
+            return false;
+        };
+        self.open_reader_for_article(article_id)
     }
 
-    /// Open the watch setup box on a News video this session cannot play.
-    pub(crate) fn open_watch_setup(
-        &mut self,
-        article_id: Uuid,
-        inputs: &news::watch::state::SetupInputs,
-    ) -> bool {
-        self.reaction_leader_active = false;
-        self.news.open_watch_setup(article_id, inputs)
+    /// The selected message in `room_id` when its preview is a YouTube
+    /// thumbnail: what Enter or a click on it watches (`app/video/`). An
+    /// image in the same message takes the preview, and Enter opens it
+    /// instead.
+    pub(crate) fn selected_video_in_room(&self, room_id: Uuid) -> Option<WatchRequest> {
+        let message = self.selected_message_in_room(room_id)?;
+        let video_id = match inline_preview_source_in_body(&message.body) {
+            Some(InlinePreviewSource::Video { video_id }) => video_id,
+            Some(InlinePreviewSource::Image(_)) | None => return None,
+        };
+        // The oEmbed title rides with the thumbnail; until it lands, or
+        // when YouTube would not name the video, the player says so plainly.
+        let title = match self.inline_image_cache.get(&message.id) {
+            Some(InlinePreview::Video {
+                title: Some(title), ..
+            }) => title.clone(),
+            Some(InlinePreview::Video { title: None, .. })
+            | Some(InlinePreview::Image(_))
+            | None => "YouTube video".to_string(),
+        };
+        Some(WatchRequest {
+            source: WatchSource::ChatLink,
+            url: crate::app::audio::youtube::watch_url(&video_id),
+            title,
+            author: self.username_for(message.user_id),
+            shared_at: message.created,
+        })
     }
 
     pub fn open_selected_image_modal_in_room(&mut self, room_id: Uuid) -> bool {
@@ -5188,23 +5200,16 @@ impl ChatState {
             now,
         );
 
-        for (msg_id, url) in requests {
+        for (msg_id, source) in requests {
             self.inline_image_requested.insert(msg_id);
             self.track_inline_image_id(msg_id);
-            if !url.is_empty() {
-                let tx_clone = tx.clone();
-                tokio::spawn(async move {
-                    let result = crate::app::files::inline_image::fetch_and_render_image(
-                        url,
-                        INLINE_IMAGE_MAX_WIDTH,
-                        INLINE_IMAGE_MAX_ROWS,
-                        settings,
-                    )
+            let tx_clone = tx.clone();
+            tokio::spawn(async move {
+                let result = fetch_inline_preview(source, settings)
                     .await
                     .map_err(|e| e.to_string());
-                    let _ = tx_clone.send((msg_id, settings, result));
-                });
-            }
+                let _ = tx_clone.send((msg_id, settings, result));
+            });
         }
     }
 
@@ -5365,6 +5370,10 @@ impl ChatState {
         let moderation_banner = self.drain_moderation_events();
         let feeds_tick = self.feeds.tick();
         let news_tick = self.news.tick();
+        // A #lounge card is drawn from its story, so new cards are new rows.
+        if news_tick.cards_changed {
+            self.context_epoch += 1;
+        }
         let notif_tick = self.notifications.tick();
         let showcase_tick = self.showcase.tick();
         let work_tick = self.work.tick();
@@ -7338,13 +7347,101 @@ fn message_is_ignored_in(ignored: &HashSet<Uuid>, message: &ChatMessage) -> bool
             .is_some_and(|target| ignored.contains(&target))
 }
 
+/// A message's rendered inline preview, cached by message id.
+#[derive(Clone, Debug)]
+pub enum InlinePreview {
+    /// An image link's picture.
+    Image(InlineImagePreview),
+    /// A YouTube link's thumbnail, and the video's title when YouTube's
+    /// oEmbed named it (a private or deleted video has none).
+    Video {
+        picture: InlineImagePreview,
+        title: Option<String>,
+    },
+}
+
+impl InlinePreview {
+    /// The picture rows, whichever kind of link drew them.
+    pub fn picture(&self) -> &InlineImagePreview {
+        match self {
+            Self::Image(picture) => picture,
+            Self::Video { picture, .. } => picture,
+        }
+    }
+}
+
+/// Fetch and render one message's preview. A video's thumbnail and title
+/// load together; the title is optional, so its failure only drops it.
+async fn fetch_inline_preview(
+    source: InlinePreviewSource,
+    settings: InlineImageRenderSettings,
+) -> anyhow::Result<InlinePreview> {
+    let picture = crate::app::files::inline_image::fetch_and_render_image(
+        source.fetch_url(),
+        INLINE_IMAGE_MAX_WIDTH,
+        INLINE_IMAGE_MAX_ROWS,
+        settings,
+    );
+    match source {
+        InlinePreviewSource::Image(_) => Ok(InlinePreview::Image(picture.await?)),
+        InlinePreviewSource::Video { video_id } => {
+            let (picture, title) = tokio::join!(
+                picture,
+                crate::app::audio::youtube::fetch_oembed_title(&video_id)
+            );
+            let title = match title {
+                Ok(title) => Some(title),
+                Err(error) => {
+                    tracing::trace!(video_id, error = ?error, "youtube title fetch failed");
+                    None
+                }
+            };
+            Ok(InlinePreview::Video {
+                picture: picture?,
+                title,
+            })
+        }
+    }
+}
+
+/// What an inline preview is drawn from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum InlinePreviewSource {
+    /// An image link: the picture itself.
+    Image(String),
+    /// A YouTube video link: its thumbnail, with the watch hint under it.
+    /// Enter or a click opens the watch player (`app/video/`).
+    Video { video_id: String },
+}
+
+impl InlinePreviewSource {
+    fn fetch_url(&self) -> String {
+        match self {
+            Self::Image(url) => url.clone(),
+            Self::Video { video_id } => crate::app::audio::thumbnail::thumbnail_url(video_id),
+        }
+    }
+}
+
+/// A message's inline preview, if it gets one: an image link first, else
+/// a YouTube video link's thumbnail. A reply's quote line is its parent's
+/// text, so a link there previews nothing (Enter jumps to the parent).
+pub(crate) fn inline_preview_source_in_body(body: &str) -> Option<InlinePreviewSource> {
+    match inline_image_url_in_body(body) {
+        Some(url) => Some(InlinePreviewSource::Image(url)),
+        None => body_links(body_without_reply_quote(body))
+            .find_map(crate::app::video::state::youtube_video_id)
+            .map(|video_id| InlinePreviewSource::Video { video_id }),
+    }
+}
+
 fn inline_image_request_candidates(
     messages: &[ChatMessage],
     requested: &HashSet<Uuid>,
-    cached: &HashMap<Uuid, InlineImagePreview>,
+    cached: &HashMap<Uuid, InlinePreview>,
     failures: &HashMap<Uuid, InlineImageFailure>,
     now: Instant,
-) -> Vec<(Uuid, String)> {
+) -> Vec<(Uuid, InlinePreviewSource)> {
     let mut requests = Vec::new();
     for msg in messages.iter().take(INLINE_IMAGE_SCAN_LIMIT) {
         if requested.contains(&msg.id) || cached.contains_key(&msg.id) {
@@ -7355,9 +7452,9 @@ fn inline_image_request_candidates(
         {
             continue;
         }
-        if let Some(url) = inline_image_url_in_body(&msg.body) {
-            tracing::trace!("found image url in chat: {}", url);
-            requests.push((msg.id, url));
+        if let Some(source) = inline_preview_source_in_body(&msg.body) {
+            tracing::trace!(?source, "found inline preview in chat");
+            requests.push((msg.id, source));
             if requests.len() >= INLINE_IMAGE_FETCHES_PER_TICK {
                 break;
             }
@@ -7367,8 +7464,18 @@ fn inline_image_request_candidates(
 }
 
 fn inline_image_url_in_body(body: &str) -> Option<String> {
+    body_links(body_without_reply_quote(body))
+        .find(|url| is_inline_image_url(url))
+        .map(str::to_string)
+}
+
+/// Every `http` link in a message body, in order: each cut at whitespace
+/// or a closing bracket and stripped of trailing punctuation. A candidate
+/// starts at every `http`, so a link inside another is still found.
+fn body_links(body: &str) -> impl Iterator<Item = &str> {
     let mut rest = body;
-    while let Some(url_start) = rest.find("http") {
+    std::iter::from_fn(move || {
+        let url_start = rest.find("http")?;
         let url_str = &rest[url_start..];
         let end_idx = url_str
             .find(|c: char| c.is_ascii_whitespace() || c == ')' || c == ']' || c == '}')
@@ -7382,14 +7489,9 @@ fn inline_image_url_in_body(body: &str) -> Option<String> {
         {
             url = &url[..url.len() - 1];
         }
-
-        if is_inline_image_url(url) {
-            return Some(url.to_string());
-        }
-
         rest = &url_str["http".len()..];
-    }
-    None
+        Some(url)
+    })
 }
 
 fn is_inline_image_url(url: &str) -> bool {
@@ -8814,16 +8916,7 @@ fn reply_preview_text(body: &str) -> String {
         ));
     }
 
-    let body_without_reply_quote = match body.split_once('\n') {
-        Some((first_line, rest))
-            if first_line.trim().starts_with("> ") && !rest.trim().is_empty() =>
-        {
-            rest
-        }
-        _ => body,
-    };
-
-    let first_content_line = body_without_reply_quote
+    let first_content_line = body_without_reply_quote(body)
         .lines()
         .find_map(|line| {
             let trimmed = line.trim();
@@ -8837,6 +8930,20 @@ fn reply_preview_text(body: &str) -> String {
             .trim(),
     );
     truncate_reply_preview(&preview)
+}
+
+/// A message body without the `> @author: preview` line a reply carries
+/// on top (the composer prepends it on send): what the author wrote. A
+/// body that is only a quote keeps it, so it still has text to show.
+fn body_without_reply_quote(body: &str) -> &str {
+    match body.split_once('\n') {
+        Some((first_line, rest))
+            if first_line.trim().starts_with("> ") && !rest.trim().is_empty() =>
+        {
+            rest
+        }
+        _ => body,
+    }
 }
 
 pub(crate) fn new_chat_textarea() -> TextArea<'static> {

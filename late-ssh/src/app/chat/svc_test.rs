@@ -1250,6 +1250,84 @@ async fn fill_room_task_rejects_private_room() {
 
 // --- delete message: regression tests for user_id on MessageDeleted ---
 
+/// A News share's card is drawn from its story, so nobody edits its line:
+/// the edit fails with its banner and the line stays what IRC reads.
+#[tokio::test]
+async fn editing_a_news_card_is_refused() {
+    use crate::app::ai::svc::AiService;
+    use crate::app::chat::news::svc::ArticleService;
+    use late_core::models::article::{Article, ArticleParams};
+
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    let sharer = create_test_user(&test_db.db, "card-editor").await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let news = ArticleService::new(
+        test_db.db.clone(),
+        AiService::new(false, None),
+        service.clone(),
+    );
+    let article = Article::create_by_user_id(
+        &client,
+        sharer.id,
+        ArticleParams {
+            user_id: sharer.id,
+            url: "https://example.com/edit".to_string(),
+            title: "Edit story".to_string(),
+            summary: "• one".to_string(),
+            ascii_art: String::new(),
+        },
+    )
+    .await
+    .expect("share");
+    news.post_lounge_card(&article).await;
+    let card = ChatMessage::list_recent(&client, lounge.id, 10)
+        .await
+        .expect("list lounge")
+        .into_iter()
+        .next()
+        .expect("the card");
+    let mut events = service.subscribe_events();
+    let request_id = Uuid::now_v7();
+
+    service.edit_message_task(
+        sharer.id,
+        card.id,
+        "now it says something else".to_string(),
+        request_id,
+        Permissions::default(),
+    );
+
+    let refusal = loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event timeout")
+            .expect("event");
+        match event {
+            ChatEvent::EditFailed {
+                request_id: got_request,
+                message,
+                ..
+            } if got_request == request_id => break message,
+            ChatEvent::EditSucceeded {
+                request_id: got_request,
+                ..
+            } if got_request == request_id => panic!("the card's edit went through"),
+            _ => {}
+        }
+    };
+    assert_eq!(refusal, "A story's card can't be edited.");
+    let stored = ChatMessage::get(&client, card.id)
+        .await
+        .expect("reload card")
+        .expect("card");
+    assert_eq!(stored.body, "📰 Edit story https://example.com/edit");
+}
+
 #[tokio::test]
 async fn message_deleted_event_carries_deleter_user_id() {
     let test_db = new_test_db().await;

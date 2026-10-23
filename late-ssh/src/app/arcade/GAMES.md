@@ -76,4 +76,4 @@ Leaderboard/Hub checklist:
 Testing guidance:
 - Pure rules and key-routing helpers get inline unit tests in `state.rs` or `input.rs`.
 - DB/service coverage lives in the adjacent `svc_test.rs` beside each game's `svc.rs` (wired with `#[cfg(test)] mod svc_test;`), using `crate::test_helpers::new_test_db`.
-- Agents run targeted tests through `make test-llm ARGS="-p late-ssh -E 'test(arcade)'"`; `make check` stays with the human owner.
+- Agents run targeted tests through `make test-llm ARGS="-p late-ssh --lib -E 'test(arcade)'"`; `make check` stays with the human owner.

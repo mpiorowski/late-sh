@@ -876,8 +876,8 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.chat.has_watch() {
-        chat::news::watch::input::handle_input(app, &event);
+    if app.video.is_open() {
+        crate::app::video::input::handle_input(app, &event);
         return;
     }
 
@@ -2343,8 +2343,8 @@ fn dispatch_escape(app: &mut App) {
         app.paper.close_modal();
         return;
     }
-    if app.chat.has_watch() {
-        app.chat.close_watch();
+    if app.video.is_open() {
+        crate::app::video::svc::close(app);
         return;
     }
     if app.chat.has_reader() {
@@ -3159,8 +3159,9 @@ pub(crate) enum ChatClickKind {
     /// the Ultimates sub-store, where the ladder is sold. No double-click
     /// verb.
     StoreMilestone,
-    /// Click landed on an inline image preview row — selects the message
-    /// and opens the image viewer modal. No double-click verb.
+    /// Click landed on a preview row (a News card, an inline image, a
+    /// YouTube thumbnail): selects the message and opens what it previews.
+    /// No double-click verb.
     Image { message_id: Uuid },
 }
 
@@ -3339,7 +3340,11 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
         }
         ChatClickKind::Image { message_id } => {
             app.chat.select_message_by_id_in_room(room_id, message_id);
-            app.chat.open_selected_image_modal_in_room(room_id);
+            if !app.chat.open_selected_card_in_room(room_id)
+                && !app.chat.open_selected_image_modal_in_room(room_id)
+            {
+                crate::app::chat::input::watch_selected_video(app, room_id);
+            }
         }
     }
 
@@ -3409,10 +3414,7 @@ fn handle_status_bar_click(app: &mut App, mouse: MouseEvent) -> bool {
         }
         StatusClick::Shop => open_shop_modal_globally(app),
         StatusClick::Lobby => open_daily_modal_globally(app),
-        StatusClick::Booth => {
-            let submit_enabled = app.audio.booth_submit_enabled();
-            app.booth_modal_state.open(submit_enabled);
-        }
+        StatusClick::Booth => crate::app::audio::booth::input::open(app),
         StatusClick::Arcade => app.set_screen(Screen::Arcade),
         StatusClick::Profiles => app.set_screen(Screen::Profiles),
         // Care on Zen's own row: the companions are already on the page,
@@ -3637,7 +3639,7 @@ fn reset_composers_for_page_change(app: &mut App) {
     app.chat.reset_composer();
     app.chat.feeds.stop_processing();
     app.chat.news.stop_composing();
-    app.chat.close_news_modals();
+    close_reader_and_player(app);
 }
 
 fn is_room_search_shortcut(event: &ParsedInput) -> bool {
@@ -3670,7 +3672,7 @@ fn close_overlays_for_modal(app: &mut App) {
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_news_modals();
+    close_reader_and_player(app);
     app.chat.cancel_room_jump();
     app.chat.message_search.clear();
 }
@@ -3708,7 +3710,7 @@ fn open_settings_modal_globally(app: &mut App) {
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_news_modals();
+    close_reader_and_player(app);
     app.chat.cancel_room_jump();
     let device_rails = app.rail_modes();
     let device_artboard_disclaimer = app.artboard_disclaimer_enabled();
@@ -3742,7 +3744,7 @@ pub(crate) fn open_usermap_globally(app: &mut App) {
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_news_modals();
+    close_reader_and_player(app);
     app.chat.cancel_room_jump();
     app.set_screen(Screen::Profiles);
     app.directory_state
@@ -3766,7 +3768,7 @@ pub(crate) fn open_shop_modal_globally(app: &mut App) {
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_news_modals();
+    close_reader_and_player(app);
     app.chat.cancel_room_jump();
     app.show_hub_modal = true;
 }
@@ -3823,7 +3825,7 @@ fn open_bonsai_modal_globally(app: &mut App) {
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_news_modals();
+    close_reader_and_player(app);
     app.chat.cancel_room_jump();
     app.show_bonsai_modal = true;
 }
@@ -3846,7 +3848,7 @@ pub(crate) fn open_daily_modal_globally(app: &mut App) {
     app.show_quit_confirm = false;
     close_icon_picker(app);
     app.chat.close_overlay();
-    app.chat.close_news_modals();
+    close_reader_and_player(app);
     app.chat.cancel_room_jump();
     app.lobby.mark_seen(&app.daily);
     app.show_lobby_modal = true;
@@ -4494,17 +4496,6 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
         {
             crate::app::live::input::open_from_key(app)
         }
-        // With a message selected, `r` replies to it (chat's message keys).
-        b'r' | b'R'
-            if global_letter_keys
-                && !ctx.chat_composing
-                && !ctx.feeds_processing
-                && !ctx.news_composing
-                && app.lounge_card_shown()
-                && app.chat.selected_message_id.is_none() =>
-        {
-            crate::app::live::input::reply_from_key(app)
-        }
         b'1'..=b'7' if !artboard_blocks_page_switch => handle_numbered_page_switch(app, byte),
         // `0` is the clubhouse. Pressed again on the clubhouse it goes
         // down to the undercity (deadchannel's street), runners only;
@@ -4716,6 +4707,13 @@ pub(crate) fn open_icon_picker(app: &mut App, target: IconPickerTarget) {
 pub(crate) fn close_icon_picker(app: &mut App) {
     app.icon_picker_open = false;
     app.icon_picker_target = IconPickerTarget::Composer;
+}
+
+/// The News reader and the watch player (`app/video/`), for a page change
+/// or another modal opening. A closing player keeps its position.
+pub(crate) fn close_reader_and_player(app: &mut App) {
+    app.chat.close_reader();
+    crate::app::video::svc::close(app);
 }
 
 pub(crate) fn try_open_reaction_picker(app: &mut App, room_id: Uuid) -> bool {

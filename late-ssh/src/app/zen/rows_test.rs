@@ -176,6 +176,7 @@ fn headlines_merge_news_and_rss_newest_first_and_a_shared_entry_lists_once() {
             id: Uuid::now_v7(),
             created: at(10),
             updated: at(10),
+            lounge_message_id: None,
             user_id: Uuid::now_v7(),
             url: "https://a.example/one".to_string(),
             title: "Big news".to_string(),

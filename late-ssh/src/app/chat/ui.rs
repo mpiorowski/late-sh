@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use late_core::models::article::NEWS_SHARE_REWARD_CHIPS;
+use late_core::models::article::{ArticleFeedItem, NEWS_SHARE_REWARD_CHIPS};
 use late_core::models::chat_message_gild::ChatMessageGildSummary;
 use late_core::models::chat_message_reaction::ChatMessageReactionSummary;
 use late_core::models::chat_poll::{ActiveChatPoll, ChatPollOptionSummary};
@@ -40,10 +40,10 @@ use crate::app::hub::shop::svc::ActiveChatRoomEffect;
 use crate::usernames::UsernameLookup;
 
 use super::state::{
-    MatchPresence, MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot, RoomVisualOrderInput,
-    SelectedRoomSlotState, SelectionScroll, TranslationDisplay, compare_dm_rooms_for_nav,
-    dm_is_promoted_unread, dm_peer_is_ignored, is_chat_list_room, is_deadchannel_room,
-    is_selected_slot, synthetic_favorite_id, synthetic_slot_for_favorite_id,
+    InlinePreview, MatchPresence, MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot,
+    RoomVisualOrderInput, SelectedRoomSlotState, SelectionScroll, TranslationDisplay,
+    compare_dm_rooms_for_nav, dm_is_promoted_unread, dm_peer_is_ignored, is_chat_list_room,
+    is_deadchannel_room, is_selected_slot, synthetic_favorite_id, synthetic_slot_for_favorite_id,
     visual_order_for_rooms,
 };
 use super::ui_text::{
@@ -179,7 +179,10 @@ pub struct DashboardChatView<'a> {
     /// which take the #lounge topic row for the day. `None` elsewhere and
     /// on any other day.
     pub board_day: Option<String>,
-    pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
+    pub inline_images: &'a HashMap<Uuid, InlinePreview>,
+    /// News shares' #lounge cards by message id: those messages draw as
+    /// the card.
+    pub news_cards: &'a HashMap<Uuid, ArticleFeedItem>,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
@@ -200,7 +203,7 @@ pub struct DashboardChatView<'a> {
 pub struct ImageModalView<'a> {
     pub message_id: Uuid,
     pub url: &'a str,
-    pub preview: Option<&'a InlineImagePreview>,
+    pub preview: Option<&'a InlinePreview>,
     pub terminal_image: Option<&'a TerminalImageData>,
     pub terminal_image_protocol: Option<TerminalImageProtocol>,
 }
@@ -1332,6 +1335,7 @@ pub fn draw_dashboard_chat_card(
                 message_reactions: view.message_reactions,
                 message_gilds: view.message_gilds,
                 inline_images: view.inline_images,
+                news_cards: view.news_cards,
                 dividers: view.dividers,
                 drunk_levels: view.drunk_levels,
                 name_flair: view.name_flair,
@@ -1425,7 +1429,10 @@ struct ChatRowsContext<'a> {
     profile_award_badges: &'a HashMap<Uuid, String>,
     message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     message_gilds: &'a HashMap<Uuid, ChatMessageGildSummary>,
-    inline_images: &'a HashMap<Uuid, InlineImagePreview>,
+    inline_images: &'a HashMap<Uuid, InlinePreview>,
+    /// News shares' #lounge cards by message id (`news::State::lounge_cards`):
+    /// those messages draw as the card.
+    news_cards: &'a HashMap<Uuid, ArticleFeedItem>,
     dividers: ChatDividers,
     /// Per-author drunk levels (1-4) for the tavern glow under usernames.
     drunk_levels: &'a HashMap<Uuid, u8>,
@@ -1731,6 +1738,29 @@ fn replies_to_user(
         == Some(user_id)
 }
 
+/// A YouTube thumbnail's rows in the chat: the video's title when YouTube
+/// named it (cut to the picture's width), the picture, then the hint row. Built
+/// with the rows cache, so their colours follow the theme. All are `Image`
+/// rows, so a click on any is the image click, which watches.
+fn with_watch_hint(picture: &InlineImagePreview, title: Option<&str>) -> InlineImagePreview {
+    let mut lines = Vec::with_capacity(picture.len() + 2);
+    if let Some(title) = title {
+        let picture_width = picture.iter().map(Line::width).max().unwrap_or(0);
+        lines.push(Line::from(Span::styled(
+            truncate_cells(title, picture_width),
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
+    lines.extend(picture.iter().cloned());
+    lines.push(Line::from(Span::styled(
+        "▶ YouTube · Enter to watch",
+        Style::default().fg(theme::AMBER_DIM()),
+    )));
+    lines
+}
+
 fn ensure_chat_rows_cache(
     cache: &mut ChatRowsCache,
     messages: Vec<&ChatMessage>,
@@ -2016,7 +2046,18 @@ fn ensure_chat_rows_cache(
             .filter(|_| is_continuation && left_app_here.is_none() && !afk_here);
 
         let row_start = all_rows.len();
-        let image_lines = ctx.inline_images.get(&msg.id).map(Vec::as_slice);
+        // A YouTube thumbnail gets the watch hint row under its picture.
+        let video_preview = match ctx.inline_images.get(&msg.id) {
+            Some(InlinePreview::Video { picture, title }) => {
+                Some(with_watch_hint(picture, title.as_deref()))
+            }
+            Some(InlinePreview::Image(_)) | None => None,
+        };
+        let image_lines = match (&video_preview, ctx.inline_images.get(&msg.id)) {
+            (Some(lines), _) => Some(lines.as_slice()),
+            (None, Some(preview)) => Some(preview.picture().as_slice()),
+            (None, None) => None,
+        };
         let translation = ctx
             .translations
             .get(&msg.id)
@@ -2050,6 +2091,7 @@ fn ensure_chat_rows_cache(
             is_continuation,
             system_text,
             image_lines,
+            ctx.news_cards.get(&msg.id),
             reactions,
             gild,
             translation,
@@ -2488,7 +2530,7 @@ fn centered_rect_in(anchor: Rect, width: u16, height: u16) -> Rect {
 
 fn image_modal_fallback_lines(view: ImageModalView<'_>) -> Vec<Line<'static>> {
     if let Some(preview) = view.preview {
-        return preview.clone();
+        return preview.picture().clone();
     }
 
     vec![
@@ -3160,7 +3202,10 @@ pub struct ChatRenderInput<'a> {
     pub friend_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub message_gilds: &'a HashMap<Uuid, ChatMessageGildSummary>,
-    pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
+    pub inline_images: &'a HashMap<Uuid, InlinePreview>,
+    /// News shares' #lounge cards by message id: those messages draw as
+    /// the card.
+    pub news_cards: &'a HashMap<Uuid, ArticleFeedItem>,
     /// This session's AFK line per room; the `new messages` divider
     /// draws before the first message from someone else past it.
     pub afk_lines: &'a HashMap<Uuid, DateTime<Utc>>,
@@ -3351,7 +3396,10 @@ pub struct EmbeddedRoomChatView<'a> {
     pub live_user_ids: &'a HashSet<Uuid>,
     pub message_reactions: &'a HashMap<Uuid, Vec<ChatMessageReactionSummary>>,
     pub message_gilds: &'a HashMap<Uuid, ChatMessageGildSummary>,
-    pub inline_images: &'a HashMap<Uuid, InlineImagePreview>,
+    pub inline_images: &'a HashMap<Uuid, InlinePreview>,
+    /// News shares' #lounge cards by message id: those messages draw as
+    /// the card.
+    pub news_cards: &'a HashMap<Uuid, ArticleFeedItem>,
     pub dividers: ChatDividers,
     pub current_user_id: Uuid,
     /// Voice channel for this view, drawn as a strip at the top when present.
@@ -3573,6 +3621,7 @@ fn draw_embedded_messages(
             message_reactions: view.message_reactions,
             message_gilds: view.message_gilds,
             inline_images: view.inline_images,
+            news_cards: view.news_cards,
             dividers: view.dividers,
             drunk_levels: view.drunk_levels,
             name_flair: view.name_flair,
@@ -5585,6 +5634,7 @@ fn draw_selected_content(
                     message_reactions: view.message_reactions,
                     message_gilds: view.message_gilds,
                     inline_images: view.inline_images,
+                    news_cards: view.news_cards,
                     dividers: ChatDividers {
                         afk_line: view.afk_lines.get(&room.id).copied(),
                         left_app: view.device_left_at,

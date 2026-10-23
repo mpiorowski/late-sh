@@ -6,6 +6,10 @@ use super::thumbnail::{THUMBNAIL_MAX_BYTES, shrink, thumbnail_url};
 
 const MIN_DURATION_MS: i32 = 30_000;
 const THUMBNAIL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+const OEMBED_ENDPOINT: &str = "https://www.youtube.com/oembed";
+const OEMBED_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// An oEmbed answer is under a kilobyte; anything near this is not one.
+const OEMBED_MAX_BYTES: usize = 16 * 1024;
 
 #[derive(Clone)]
 pub struct YoutubeClient {
@@ -153,6 +157,47 @@ pub fn watch_url(video_id: &str) -> String {
     format!("https://www.youtube.com/watch?v={video_id}")
 }
 
+/// YouTube's public oEmbed endpoint for a video id: its title, no API key.
+fn oembed_url(video_id: &str) -> String {
+    let mut url = Url::parse(OEMBED_ENDPOINT).expect("the oEmbed endpoint is a valid URL");
+    url.query_pairs_mut()
+        .append_pair("url", &watch_url(video_id))
+        .append_pair("format", "json");
+    url.to_string()
+}
+
+/// The video's title from YouTube's oEmbed endpoint, fetched through the
+/// shared public-only downloader. Errs on a private, deleted or
+/// unembeddable video (oEmbed answers 401 or 404) and on an empty title.
+pub async fn fetch_oembed_title(video_id: &str) -> Result<String> {
+    let bytes = crate::app::files::image_upload::download_url_bytes(
+        &oembed_url(video_id),
+        OEMBED_TIMEOUT,
+        OEMBED_MAX_BYTES,
+    )
+    .await
+    .context("fetching youtube oembed")?;
+    oembed_title(&bytes)
+}
+
+/// The trimmed title out of an oEmbed JSON body.
+fn oembed_title(body: &[u8]) -> Result<String> {
+    let payload: OEmbedResponse =
+        serde_json::from_slice(body).context("decoding youtube oembed")?;
+    let title = payload.title.trim();
+    if title.is_empty() {
+        anyhow::bail!("youtube oembed title is empty");
+    }
+    Ok(title.to_string())
+}
+
+/// The video id in a YouTube watch, short, embed (no-cookie included),
+/// shorts or live link: the shapes the booth takes. A channel, a playlist
+/// or another site has none.
+pub fn video_id(raw: &str) -> Option<String> {
+    extract_video_id(raw).ok()
+}
+
 fn extract_video_id(raw: &str) -> Result<String> {
     let url = Url::parse(raw.trim()).context("invalid URL")?;
     let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
@@ -160,7 +205,11 @@ fn extract_video_id(raw: &str) -> Result<String> {
         url.path_segments()
             .and_then(|mut segments| segments.next())
             .map(str::to_string)
-    } else if host == "youtube.com" || host.ends_with(".youtube.com") {
+    } else if host == "youtube.com"
+        || host.ends_with(".youtube.com")
+        || host == "youtube-nocookie.com"
+        || host.ends_with(".youtube-nocookie.com")
+    {
         if url.path() == "/watch" {
             url.query_pairs()
                 .find(|(key, _)| key == "v")
@@ -272,3 +321,12 @@ struct VideoStatus {
     #[serde(rename = "privacyStatus")]
     privacy_status: Option<String>,
 }
+
+#[derive(Debug, Deserialize)]
+struct OEmbedResponse {
+    title: String,
+}
+
+#[cfg(test)]
+#[path = "youtube_test.rs"]
+mod youtube_test;

@@ -10,12 +10,13 @@ use crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleArtLoad;
 use crate::app::audio::client_state::ClientPlatform;
 use crate::app::audio::radio_meta::polled::PolledFeed;
 use crate::app::audio::radio_meta::svc::PollOutcome;
-use crate::app::audio::svc::ThumbnailFetch;
+use crate::app::audio::svc::{BoothFavoriteOutcome, ThumbnailFetch};
 use crate::app::bonsai::state::BonsaiAction;
 use crate::app::bonsai::svc::BonsaiActionResult;
 use crate::app::calendar::svc::{CalendarAnnouncement, CalendarOp, CalendarWrite};
-use crate::app::chat::news::svc::{BodyFetchOutcome, NewsSaveOutcome, XMediaLookup};
-use crate::app::chat::news::watch::state::WatchOutcome;
+use crate::app::chat::news::svc::{
+    BodyFetchOutcome, NewsCardOutcome, NewsSaveOutcome, XMediaLookup,
+};
 use crate::app::chat::svc::{GildRefusal, SendRefusal};
 use crate::app::clubhouse::nightcap::svc::{NightcapHouseFailure, NightcapOrderResult};
 use crate::app::common::primitives::Screen;
@@ -31,6 +32,7 @@ use crate::app::live::input::Origin as LiveOrigin;
 use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome, SnapshotRowError};
 use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
 use crate::app::referral::svc::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement};
+use crate::app::video::state::{WatchOutcome, WatchSource};
 use crate::ircd::conn::{IrcHistoryOutcome, IrcHistoryRequest};
 use crate::pg_listener::Refresh;
 use crate::terminal_probe::ProbeBacklog;
@@ -667,6 +669,7 @@ mod inner {
     use crate::app::activity::event::GameFamily;
 
     use super::BartenderMemoryWrite;
+    use super::BoothFavoriteOutcome;
     use super::HomeRoom;
     use super::PosterBeat;
     use super::ScreensaverTrigger;
@@ -686,7 +689,7 @@ mod inner {
         SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason,
         SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
-    use super::{BodyFetchOutcome, BodyStatus, WatchOutcome};
+    use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
     use super::{
@@ -694,7 +697,7 @@ mod inner {
     };
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
-    use super::{NewsSaveOutcome, XMediaLookup};
+    use super::{NewsCardOutcome, NewsSaveOutcome, XMediaLookup};
     use super::{PollOutcome, PolledFeed};
     use super::{
         ZorkAction, ZorkCatalogueRead, ZorkEdition, ZorkSessionEnd, ZorkSuggestion,
@@ -1706,13 +1709,13 @@ mod inner {
         })
     }
 
-    fn news_watches_total() -> &'static Counter<u64> {
+    fn video_watches_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
             meter()
-                .u64_counter("late_ssh_news_watches_total")
+                .u64_counter("late_ssh_video_watches_total")
                 .with_description(
-                    "News video watches by step: opened (the player), setup (the setup box instead), played, ended, failed, lost",
+                    "Video watches by source (news, chat) and step: opened (the player), setup (the setup box instead), played, ended, failed, lost",
                 )
                 .build()
         })
@@ -1725,6 +1728,18 @@ mod inner {
                 .u64_counter("late_ssh_news_saves_total")
                 .with_description(
                     "News shelf saves by outcome: saved, unsaved, or full (the shelf refused an eleventh)",
+                )
+                .build()
+        })
+    }
+
+    fn news_cards_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_news_cards_total")
+                .with_description(
+                    "News share cards in #lounge by outcome: posted, refused (room rules), post_failed, link_failed (posted but not pointed at its story)",
                 )
                 .build()
         })
@@ -1757,6 +1772,18 @@ mod inner {
                 .u64_counter("late_ssh_booth_thumbnails_total")
                 .with_description(
                     "YouTube thumbnail fetches for the live strip, once per track per replica",
+                )
+                .build()
+        })
+    }
+
+    fn booth_favorites_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_booth_favorites_total")
+                .with_description(
+                    "Booth favorites steps by step (load, add, remove) and outcome; load counts every read, the one each write ends on included",
                 )
                 .build()
         })
@@ -2927,7 +2954,14 @@ mod inner {
         news_reader_opens_total().add(1, &[KeyValue::new("body", news_body_status_label(status))]);
     }
 
-    fn news_watch_label(outcome: WatchOutcome) -> &'static str {
+    fn video_watch_source_label(source: WatchSource) -> &'static str {
+        match source {
+            WatchSource::NewsArticle(_) => "news",
+            WatchSource::ChatLink => "chat",
+        }
+    }
+
+    fn video_watch_label(outcome: WatchOutcome) -> &'static str {
         match outcome {
             WatchOutcome::Opened => "opened",
             WatchOutcome::Setup => "setup",
@@ -2939,9 +2973,16 @@ mod inner {
     }
 
     /// Setup against opened is how many people want to watch and cannot;
-    /// a run of failed or lost is a CLI or mpv regression.
-    pub(crate) fn record_news_watch(outcome: WatchOutcome) {
-        news_watches_total().add(1, &[KeyValue::new("outcome", news_watch_label(outcome))]);
+    /// a run of failed or lost is a CLI or mpv regression. `source` is the
+    /// surface that asked: a News story or a YouTube link in chat.
+    pub(crate) fn record_video_watch(source: WatchSource, outcome: WatchOutcome) {
+        video_watches_total().add(
+            1,
+            &[
+                KeyValue::new("source", video_watch_source_label(source)),
+                KeyValue::new("outcome", video_watch_label(outcome)),
+            ],
+        );
     }
 
     fn news_save_label(outcome: NewsSaveOutcome) -> &'static str {
@@ -2956,6 +2997,22 @@ mod inner {
     /// full is readers wanting a bigger one.
     pub fn record_news_save(outcome: NewsSaveOutcome) {
         news_saves_total().add(1, &[KeyValue::new("outcome", news_save_label(outcome))]);
+    }
+
+    fn news_card_label(outcome: NewsCardOutcome) -> &'static str {
+        match outcome {
+            NewsCardOutcome::Posted => "posted",
+            NewsCardOutcome::Refused => "refused",
+            NewsCardOutcome::PostFailed => "post_failed",
+            NewsCardOutcome::LinkFailed => "link_failed",
+            NewsCardOutcome::ShareGone => "share_gone",
+        }
+    }
+
+    /// Every share tries one card in #lounge; anything but posted is a
+    /// share people only find in News.
+    pub fn record_news_card(outcome: NewsCardOutcome) {
+        news_cards_total().add(1, &[KeyValue::new("outcome", news_card_label(outcome))]);
     }
 
     /// Same shape as the News share: one counter for the submissions and one
@@ -3007,6 +3064,45 @@ mod inner {
         booth_thumbnails_total().add(
             1,
             &[KeyValue::new("outcome", thumbnail_fetch_label(outcome))],
+        );
+    }
+
+    fn booth_favorite_step_label(outcome: BoothFavoriteOutcome) -> &'static str {
+        match outcome {
+            BoothFavoriteOutcome::Loaded | BoothFavoriteOutcome::LoadFailed => "load",
+            BoothFavoriteOutcome::Added
+            | BoothFavoriteOutcome::AlreadyFavorite
+            | BoothFavoriteOutcome::Full
+            | BoothFavoriteOutcome::AddFailed => "add",
+            BoothFavoriteOutcome::Removed
+            | BoothFavoriteOutcome::AlreadyGone
+            | BoothFavoriteOutcome::RemoveFailed => "remove",
+        }
+    }
+
+    fn booth_favorite_outcome_label(outcome: BoothFavoriteOutcome) -> &'static str {
+        match outcome {
+            BoothFavoriteOutcome::Loaded => "loaded",
+            BoothFavoriteOutcome::Added => "added",
+            BoothFavoriteOutcome::AlreadyFavorite => "already_favorite",
+            BoothFavoriteOutcome::Full => "full",
+            BoothFavoriteOutcome::Removed => "removed",
+            BoothFavoriteOutcome::AlreadyGone => "already_gone",
+            BoothFavoriteOutcome::LoadFailed
+            | BoothFavoriteOutcome::AddFailed
+            | BoothFavoriteOutcome::RemoveFailed => "failed",
+        }
+    }
+
+    /// Added against removed is how much favorites get used; a run of full
+    /// is listeners wanting a bigger list; failed by step is the error rate.
+    pub fn record_booth_favorite(outcome: BoothFavoriteOutcome) {
+        booth_favorites_total().add(
+            1,
+            &[
+                KeyValue::new("step", booth_favorite_step_label(outcome)),
+                KeyValue::new("outcome", booth_favorite_outcome_label(outcome)),
+            ],
         );
     }
 
@@ -3837,6 +3933,7 @@ mod inner {
     use late_core::models::user::{AsciiPiece, AsciiSelection};
 
     use super::BartenderMemoryWrite;
+    use super::BoothFavoriteOutcome;
     use super::PosterBeat;
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
@@ -3855,7 +3952,7 @@ mod inner {
         SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason,
         SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
-    use super::{BodyFetchOutcome, BodyStatus, WatchOutcome};
+    use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
     use super::{
@@ -3863,7 +3960,7 @@ mod inner {
     };
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
-    use super::{NewsSaveOutcome, XMediaLookup};
+    use super::{NewsCardOutcome, NewsSaveOutcome, XMediaLookup};
     use super::{PollOutcome, PolledFeed};
     use super::{
         ZorkAction, ZorkCatalogueRead, ZorkEdition, ZorkSessionEnd, ZorkSuggestion,
@@ -3949,10 +4046,12 @@ mod inner {
     pub fn record_news_x_media_lookup(_lookup: XMediaLookup) {}
     pub fn record_news_body_fetch(_outcome: BodyFetchOutcome) {}
     pub fn record_news_reader_opened(_status: BodyStatus) {}
-    pub(crate) fn record_news_watch(_outcome: WatchOutcome) {}
+    pub(crate) fn record_video_watch(_source: WatchSource, _outcome: WatchOutcome) {}
     pub fn record_news_save(_outcome: NewsSaveOutcome) {}
+    pub fn record_news_card(_outcome: NewsCardOutcome) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
     pub fn record_booth_thumbnail(_outcome: ThumbnailFetch) {}
+    pub fn record_booth_favorite(_outcome: BoothFavoriteOutcome) {}
     pub fn record_radio_meta_poll(_feed: PolledFeed, _outcome: PollOutcome) {}
     pub fn record_gild_bought(_tier: GildTier) {}
     pub fn record_gild_refused(_refusal: GildRefusal) {}

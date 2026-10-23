@@ -263,7 +263,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         crate::app::ai::summary::SummaryService::new(db.clone(), ai_service.clone());
     let paper_service = crate::app::paper::svc::PaperService::new(db.clone(), ai_service.clone());
     let jobs_service = crate::app::jobs::svc::JobsService::new(db.clone(), ai_service.clone());
-    let article_service = ArticleService::new(db.clone(), ai_service.clone());
+    let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
     let feed_service = crate::app::chat::feeds::svc::FeedService::new(db.clone());
     let showcase_service = crate::app::chat::showcase::svc::ShowcaseService::new(db.clone());
     let work_service = crate::app::chat::work::svc::WorkService::new(db.clone());
@@ -552,7 +552,11 @@ fn make_app_with_chat_service_and_permissions(
             AiService::new(false, None),
         ),
         notification_service: notification_service.clone(),
-        article_service: ArticleService::new(db.clone(), AiService::new(false, None)),
+        article_service: ArticleService::new(
+            db.clone(),
+            AiService::new(false, None),
+            chat_service.clone(),
+        ),
         calendar_service: crate::app::calendar::svc::CalendarService::new(db.clone()),
         feed_service: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
         cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(
@@ -795,6 +799,7 @@ pub fn make_app_with_paired_client(
     // One shared instance between ChatService and SessionConfig, mirroring
     // main.rs (see make_app_with_chat_service_and_permissions).
     let notification_service = NotificationService::new(db.clone());
+    let chat_service = ChatService::new(db.clone(), notification_service.clone());
 
     let mut app = App::new(SessionConfig {
         cols: 100,
@@ -808,7 +813,7 @@ pub fn make_app_with_paired_client(
         ),
         voice_service: VoiceService::new(VoiceConfig::disabled()),
         stream_service: test_stream_service(db.clone(), activity_tx.clone()),
-        chat_service: ChatService::new(db.clone(), notification_service.clone()),
+        chat_service: chat_service.clone(),
         translation_service: crate::app::ai::translate::TranslationService::new(
             db.clone(),
             AiService::new(false, None),
@@ -826,7 +831,11 @@ pub fn make_app_with_paired_client(
             AiService::new(false, None),
         ),
         notification_service: notification_service.clone(),
-        article_service: ArticleService::new(db.clone(), AiService::new(false, None)),
+        article_service: ArticleService::new(
+            db.clone(),
+            AiService::new(false, None),
+            chat_service.clone(),
+        ),
         calendar_service: crate::app::calendar::svc::CalendarService::new(db.clone()),
         feed_service: crate::app::chat::feeds::svc::FeedService::new(db.clone()),
         cyberspace_service: crate::app::chat::cyberspace::svc::CyberspaceService::new(

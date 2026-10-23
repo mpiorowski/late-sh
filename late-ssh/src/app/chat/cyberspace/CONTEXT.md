@@ -152,7 +152,7 @@ In `CIRC.md`. A linked account gets a `cyberspace` rail section (`RoomSection::C
 
 ## 10. Testing Guidance
 
-Run via `ARGS="-p late-ssh -E 'test(cyberspace)'" make test-llm`.
+Run via `ARGS="-p late-ssh --lib -E 'test(cyberspace)'" make test-llm`.
 
 - `api_test.rs`: envelope parsing (data/error/neither), `parse_void` on bodyless 2xx, error mapping, notification `post_id()` target shapes.
 - `state_test.rs`: topic parsing, `feed_reload_due`/`unread_poll_due` gating, modal validation, stale-thread drop, notification dedupe, the reset on re-entering the pane, the unread-entry count and the badge sum, and the marks surviving the visit that clears the count.

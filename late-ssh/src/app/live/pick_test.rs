@@ -29,19 +29,17 @@ fn up(source: LiveSource, secs: i64) -> Option<Featured> {
 }
 
 /// One busy stretch from the stamps alone, as a session that just connected
-/// sees it at each moment: a link jumps the Rest lane at the next handover,
-/// every source keeps its minimum, and the last one up comes down
-/// `LIVE_MAX_UP` after it went up.
+/// sees it at each moment: each source goes up in the order it happened,
+/// keeps its minimum, and the last one up comes down `LIVE_MAX_UP` after it
+/// went up.
 #[test]
-fn the_lanes_hand_over_at_each_minimum_and_news_goes_first() {
+fn the_queue_hands_over_at_each_minimum_oldest_first() {
     let track = LiveSource::BoothTrack(Uuid::from_u128(1));
     let chess = LiveSource::DailyMatch(Uuid::from_u128(2));
     let pool = LiveSource::DailyMatch(Uuid::from_u128(3));
-    let link = LiveSource::NewsArticle(Uuid::from_u128(4));
     let candidates = [
         candidate(track, 0),
         candidate(chess, 30),
-        candidate(link, 50),
         candidate(pool, 100),
     ];
     let pick = |secs| pick_queued(None, &candidates, at(secs));
@@ -49,15 +47,14 @@ fn the_lanes_hand_over_at_each_minimum_and_news_goes_first() {
     assert_eq!(pick(-1), None, "nothing has happened yet");
     assert_eq!(pick(0), up(track, 0));
     assert_eq!(pick(119), up(track, 0), "the track keeps its two minutes");
-    assert_eq!(pick(120), up(link, 120), "the link goes ahead of the move");
-    assert_eq!(pick(419), up(link, 120), "and stays its five minutes");
-    assert_eq!(pick(420), up(chess, 420), "then the rest, oldest first");
-    assert_eq!(pick(480), up(pool, 480));
-    assert_eq!(pick(779), up(pool, 480), "nothing waiting: it stays");
-    assert_eq!(pick(780), None, "five minutes up, and the strip comes down");
+    assert_eq!(pick(120), up(chess, 120), "then the move, oldest first");
+    assert_eq!(pick(179), up(chess, 120), "which keeps its minute");
+    assert_eq!(pick(180), up(pool, 180));
+    assert_eq!(pick(479), up(pool, 180), "nothing waiting: it stays");
+    assert_eq!(pick(480), None, "five minutes up, and the strip comes down");
 }
 
-/// A stream that goes live waits its turn in the Rest lane like a booth
+/// A stream that goes live waits its turn in the queue like a booth
 /// track, then keeps its own two minutes before handing over.
 #[test]
 fn a_stream_going_live_queues_like_a_track_and_keeps_two_minutes() {
@@ -77,30 +74,26 @@ fn a_stream_going_live_queues_like_a_track_and_keeps_two_minutes() {
     assert_eq!(pick(240), up(chess, 240));
 }
 
-/// A burst of links: each gets its five minutes in turn, and one that would
-/// have waited past `LIVE_MAX_WAIT` is dropped rather than shown late.
+/// A burst of booth tracks: each gets its two minutes in turn, and one that
+/// would have waited past `LIVE_MAX_WAIT` is dropped rather than shown late.
 #[test]
 fn an_entry_that_waited_too_long_is_dropped() {
-    let link = |n: u128| LiveSource::NewsArticle(Uuid::from_u128(n));
-    let candidates = [
-        candidate(link(1), 0),
-        candidate(link(2), 10),
-        candidate(link(3), 20),
-        candidate(link(4), 30),
-    ];
+    let track = |n: i64| LiveSource::BoothTrack(Uuid::from_u128(n as u128));
+    let candidates: Vec<LiveCandidate> = (0..7).map(|n| candidate(track(n), n * 10)).collect();
     let pick = |secs| pick_queued(None, &candidates, at(secs));
 
-    assert_eq!(pick(300), up(link(2), 300));
+    assert_eq!(pick(120), up(track(1), 120));
     assert_eq!(
         pick(600),
-        up(link(3), 600),
-        "waited 580s, under ten minutes"
+        up(track(5), 600),
+        "waited 550s, under ten minutes"
     );
     assert_eq!(
-        pick(900),
-        None,
-        "the fourth waited past ten minutes: dropped"
+        pick(720),
+        up(track(5), 600),
+        "the seventh waited past ten minutes: dropped, so nothing takes over"
     );
+    assert_eq!(pick(900), None);
 }
 
 /// The replay reads only each candidate's latest stamp, so a match that
@@ -134,16 +127,13 @@ fn a_session_keeps_its_minimum_when_a_match_moves_again() {
     assert_eq!(pick_queued(showing, &[candidate(b, 10)], at(20)), up(b, 20));
 }
 
-/// A cue being lined up is drawn over the Rest lane or an empty strip, the
-/// freshest aim first, but never over a link.
+/// A cue being lined up is drawn over whatever is up, or over an empty
+/// strip, the freshest aim first.
 #[test]
-fn an_aim_draws_over_everything_but_a_link() {
+fn an_aim_draws_over_whatever_is_up() {
     let start = Instant::now();
-    let (chess, pool) = (
-        LiveSource::DailyMatch(Uuid::from_u128(1)),
-        LiveSource::DailyMatch(Uuid::from_u128(2)),
-    );
-    let link = LiveSource::NewsArticle(Uuid::from_u128(3));
+    let pool = LiveSource::DailyMatch(Uuid::from_u128(2));
+    let chess = LiveSource::DailyMatch(Uuid::from_u128(1));
     let candidates = [
         candidate(chess, 0),
         LiveCandidate {
@@ -153,19 +143,9 @@ fn an_aim_draws_over_everything_but_a_link() {
         },
     ];
 
+    assert_eq!(aim_overlay(&candidates, start), Some(pool));
     assert_eq!(
-        aim_overlay(up(chess, 0), &candidates, start),
-        Some(pool),
-        "over a move"
-    );
-    assert_eq!(
-        aim_overlay(None, &candidates, start),
-        Some(pool),
-        "over an empty strip"
-    );
-    assert_eq!(aim_overlay(up(link, 0), &candidates, start), None);
-    assert_eq!(
-        aim_overlay(up(chess, 0), &candidates, start + LIVE_AIM_WINDOW),
+        aim_overlay(&candidates, start + LIVE_AIM_WINDOW),
         None,
         "an aim past its window is a player who stopped"
     );

@@ -87,6 +87,7 @@ fn article(shared_by: &str, title: &str, shared_at: DateTime<Utc>) -> ArticleFee
             id: Uuid::now_v7(),
             created: shared_at,
             updated: shared_at,
+            lounge_message_id: None,
             user_id: Uuid::now_v7(),
             url: format!("https://example.com/{title}"),
             title: title.to_string(),
@@ -145,9 +146,9 @@ fn more_rows_than_slots_fold_the_rest_into_the_last_row() {
     let lines = texts(&rows);
     assert_eq!(lines[2], "dcss    XL1 D:1    s3");
     assert_eq!(lines[3], "+3 more");
-    let sources = hit_sources(&rows);
-    assert_eq!(sources[2], Some(rows[2].source()));
-    assert_eq!(sources[3], None);
+    let targets = hit_targets(&rows);
+    assert_eq!(targets[2], Some(rows[2].target()));
+    assert_eq!(targets[3], None);
 }
 
 /// Each kind is newest first and the kinds are grouped, streams, games,
@@ -194,11 +195,8 @@ fn each_kind_is_newest_first_and_stale_or_pending_things_are_not_listed() {
             "news    the fre… \u{25cf} s4".to_string(),
         ]
     );
-    assert_eq!(rows[0].source(), LiveSource::Stream(streams[0].user_id));
-    assert_eq!(
-        rows[3].source(),
-        LiveSource::NewsArticle(articles[1].article.id)
-    );
+    assert_eq!(rows[0].target(), PanelTarget::Stream(streams[0].user_id));
+    assert_eq!(rows[3].target(), PanelTarget::News(articles[1].article.id));
 }
 
 /// The dot follows the News badge's rule: a share the reader has read
@@ -347,7 +345,7 @@ fn nobody_playing_says_so_in_the_first_slot_alone() {
             String::new()
         ]
     );
-    assert_eq!(hit_sources(&[]), [None; LIVE_PANEL_ROWS]);
+    assert_eq!(hit_targets(&[]), [None; LIVE_PANEL_ROWS]);
 }
 
 /// A board post takes a row of its own kind in the order given, saying
@@ -373,5 +371,8 @@ fn an_event_row_says_the_time_and_how_many_are_in() {
             String::new(),
         ]
     );
-    assert_eq!(rows[0].source(), LiveSource::BoardEvent(Uuid::from_u128(1)));
+    assert_eq!(
+        rows[0].target(),
+        PanelTarget::BoardEvent(Uuid::from_u128(1))
+    );
 }

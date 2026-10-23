@@ -127,7 +127,7 @@ impl App {
             changed = true;
         }
 
-        changed |= crate::app::chat::news::watch::svc::tick(self, now, one_hz);
+        changed |= crate::app::video::svc::tick(self, now, one_hz);
 
         self.sync_visible_chat_room();
         // Presence (`app/presence`): everyone's records into the tavern,
@@ -402,7 +402,7 @@ impl App {
                     self.banner = Some(crate::app::common::primitives::Banner::error(&message));
                 }
                 SessionMessage::VideoState { play_id, report } => {
-                    crate::app::chat::news::watch::svc::apply_report(self, play_id, &report);
+                    crate::app::video::svc::apply_report(self, play_id, &report);
                 }
                 SessionMessage::Toast { message, error } => {
                     self.banner = Some(if error {
@@ -522,7 +522,6 @@ impl App {
         changed |= self.live.tick(
             &self.daily,
             &self.audio,
-            self.chat.news.all_articles(),
             &self.chat.live_streams,
             &self.live_games.live_rows(),
             &self.calendar,

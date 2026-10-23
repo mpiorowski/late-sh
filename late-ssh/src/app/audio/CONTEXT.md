@@ -14,6 +14,7 @@ Owned by this domain:
 - Radio: the station catalogue (`late_core::radio`), user-pinned slots, the Stations modal, and per-provider now-playing metadata (`STATIONS.md`). Default source for an account that never picked one is radio on `chillsynth`.
 - Global, DB-backed YouTube queue: submission, persistence, single-playing invariant, server-driven track switching (per-browser playback timeline), fallback debounce.
 - Community Booth History: max 200 unique previously played YouTube tracks, ordered most recently played first, with requeue-from-history.
+- Booth favorites: per listener, at most 20, on top of that listener's History list, kept outside the 200 so they never fall off.
 - The singleton "YouTube fallback" stream that plays when the queue is empty.
 - Audio source selection for paired clients (`set_playback_source`). No arbitration: only the CLI pairs, so the source alone picks the surface.
 - The equalizer: the paired CLI's live spectrum, with the ambient band whenever no fresh spectrum arrives (`VIZ.md`).
@@ -43,9 +44,9 @@ late-ssh/src/app/audio/
 ├── thumbnail.rs            # pure: a fetched thumbnail shrunk to what the live strip's picture column uses (168x96 pixels)
 ├── booth/
 │   ├── mod.rs
-│   ├── state.rs            # BoothModalState: open flag, submit input, queue/history selections, focus
-│   ├── input.rs            # modal-open key dispatch (submit/queue focus, +/- vote, s skip, Ctrl+Y copy, history focus, Enter requeue)
-│   ├── ui.rs               # ratatui modal: submit row, current track + watch link, queue list with duration + score, history list with duration + play count
+│   ├── state.rs            # BoothModalState: open flag, submit input, queue/history selections, focus; HistoryRow (favorites on top of History)
+│   ├── input.rs            # open (every door into the booth), modal-open key dispatch (submit/queue focus, +/- vote, s skip, Ctrl+Y copy, history focus, Enter requeue, f favorite)
+│   ├── ui.rs               # ratatui modal: submit row, current track + watch link, queue list with duration + score, history list (starred favorites first) with duration + play count
 │   └── live.rs             # a booth track on the live strip (app/live/): candidates, view, render_picture (chafa), words
 ├── stations_modal/
 │   ├── mod.rs
@@ -63,13 +64,14 @@ late-ssh/src/app/audio/
 
 Cross-crate touchpoints:
 - `late-core/src/models/media_queue_item.rs`, `media_source.rs`,
-  `media_queue_vote.rs`, `media_history_item.rs` — DB models.
+  `media_queue_vote.rs`, `media_history_item.rs`, `media_favorite.rs` — DB models.
 - `late-core/migrations/047_create_media_queue_items.sql`,
   `048_create_media_sources.sql`,
   `049_create_media_queue_votes.sql`,
   `073_create_media_history.sql`,
   `122_drop_media_history_votes.sql`,
-  `123_media_queue_unique_active_track.sql`.
+  `123_media_queue_unique_active_track.sql`,
+  `251_media_favorites.sql`.
 - `late-core/src/audio.rs`: `VizFrame { bands[VIZ_BANDS], rms, track_pos_ms }` (`VIZ_BANDS` = 16) shared between server and CLI.
 - `late-ssh/src/paired_clients.rs` — `PairedClientRegistry`, `PairControlMessage::SetPlaybackSource`, source/surface policy.
 - `late-ssh/src/api.rs` — `/api/ws/pair` multiplexes `AudioWsMessage` + `PairControlMessage`; `/api/now-playing`.
@@ -98,7 +100,7 @@ Keep `mod.rs` declaration-only — no `pub use` re-exports.
 
 ### Channels and state
 - `ws_tx: broadcast::Sender<AudioWsMessage>` (cap 512) — server-authoritative pair-WS events, fanned out to every paired client.
-- `event_tx: broadcast::Sender<AudioEvent>` (cap 256) — per-user banners (success/failure on submit, fallback set, history requeue/delete). Consumed only by `AudioState`.
+- `event_tx: broadcast::Sender<AudioEvent>` (cap 256) — per-user banners (success/failure on submit, fallback set, history requeue/delete, favorites) and the listener's favorites list (`BoothFavoritesLoaded`). Consumed only by `AudioState`.
 - `state: Arc<Mutex<QueueState>>` — `{ mode: AudioMode, current_item_id, sequence, playback_cancel: Option<oneshot>, fallback_cancel: Option<oneshot> }`.
 
 ### Queue internals
@@ -156,7 +158,7 @@ submits, and a history re-queue cannot pay different amounts or forget to pay.
 6. **Sequence monotonicity.** `state.sequence` is bumped before every `QueueUpdate` so clients can drop stale ones.
 7. **Banners are user-scoped.** `AudioEvent` carries `user_id` and `AudioState::tick` filters on it; one user's submission failure does not leak to others.
 8. **DB beats memory on drift.** Any zero-row terminal transition (`mark_played` / `mark_skipped`) or singleton conflict routes through reconcile. Reconcile never blindly clears `current_item_id` while DB still has a `playing` row.
-9. **One active row per track.** The partial unique index `idx_media_queue_active_track` on `(media_kind, external_id) WHERE status IN ('queued','playing')` holds the playlist to one copy of a video. Every insert path (`submit_video` for booth + `/audio`, `requeue_history_item`) checks `MediaQueueItem::youtube_is_active` first and bails with `"track is already in the queue"`, so the user sees "Already in the queue" rather than a raw constraint error; a submission that loses the race gets the same banner from the violation text. A finished track (`played`/`skipped`/`failed`) leaves the active set and can be submitted or requeued again.
+9. **One active row per track.** The partial unique index `idx_media_queue_active_track` on `(media_kind, external_id) WHERE status IN ('queued','playing')` holds the playlist to one copy of a video. Every insert path (`submit_video` for booth + `/audio`, `requeue_track` for History and favorites) checks `MediaQueueItem::youtube_is_active` first and bails with `"track is already in the queue"`, so the user sees "Already in the queue" rather than a raw constraint error; a submission that loses the race gets the same banner from the violation text. A finished track (`played`/`skipped`/`failed`) leaves the active set and can be submitted or requeued again.
 
 ---
 
@@ -382,10 +384,16 @@ In `STAGE.md`: the fixed-height accordion, the active-source rule, title-bar sou
 - History has no votes; it is a pure recency list.
 - History is listed and pruned to `HISTORY_LIMIT = 200` rows by `last_played_at` descending, then `created` descending. `idx_media_history_last_played` covers that sort.
 
+### `media_favorites` (migration `251`)
+- One row per listener per track, unique by `(user_id, media_kind, external_id)`, `ON DELETE CASCADE` from `users`.
+- Carries its own copy of the validated metadata (`title`, `channel`, `duration_ms`, `is_stream`), with no reference to `media_history_items`, so the History prune and a staff History delete never take a favorite with it.
+- At most `BOOTH_FAVORITES_LIMIT = 20` per listener, enforced in `MediaFavorite::add_from_history` under a per-listener advisory lock, never by the schema.
+
 Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
 - `MediaQueueItem::{insert_youtube, find_by_id, list_snapshot, queued_before_count, recent_submission_count, first_queued, current_playing, mark_playing, mark_played, mark_failed, mark_skipped, sweep_orphan_playing}`. Status/kind constants: `STATUS_QUEUED`, `STATUS_PLAYING`, `STATUS_PLAYED`, `STATUS_SKIPPED`, `STATUS_FAILED`, `KIND_YOUTUBE`.
 - `MediaSource::{youtube_fallback, upsert_youtube_fallback}`. Constants: `KIND_YOUTUBE_FALLBACK`, `MEDIA_KIND_YOUTUBE`.
 - `MediaHistoryItem::{record_play_from_queue_item, list_recent, prune_to_limit, delete_by_id, find_by_id}`.
+- `MediaFavorite::{add_from_history, list_for_user, get_by_user_id, delete_by_user_id}` (`media_favorite.rs`), every one scoped by `user_id` in SQL. `add_from_history` takes the id the session already shows the favorite under.
 
 ---
 

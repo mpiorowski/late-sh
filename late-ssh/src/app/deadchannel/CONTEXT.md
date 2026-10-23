@@ -8,7 +8,7 @@
   - `city/`, `street/`, `tailor/`, `poster/`, `guide/`: the night city under the clubhouse on a second `0`, the shared street over `app/presence`, the mirror that edits the look, PRINTS (the poster on the profile), the undercity guide (`city/CONTEXT.md`).
   - `fight/`: the runner's sheet, the day's road, the round of cards, the wire's news, the shops, crystals, Dead Air (`fight/CONTEXT.md`, with `fight/MONEY.md`, `fight/BALANCE.md`, `fight/CRYSTALS.md`, `fight/CROSSING.md`).
   - `lounge/`: the spawns above #lounge's composer (`lounge/CONTEXT.md`).
-- Design sources in this directory: `GAME.md` (the game: thesis, first contact, the runner) and `DIGEST.md` (the feed budget and the welcome-back paper).
+- Design sources: `GAME.md` in this directory (the game: first contact, the runner, the city, the road, the lounge); the root `AUDIENCE.md` (the diagnosis the game answers); `devdocs/FEED-BUDGET.md` (the #lounge valve the public flip waits on).
 - Status: Active. Parent context: `../../../../CONTEXT.md`.
 
 ## 1. Summary

@@ -8,17 +8,20 @@
 //! section takes exactly the rows it needs, and nothing is ever cut but the
 //! bonsai's sides when the column is narrower than the canvas.
 //!
-//! Top to bottom: late.fetch (the fact grid, with the runner column
-//! beside it for a standing runner, each under its own heading), bio,
+//! Top to bottom: late.fetch (the fact grid, with a column beside it for
+//! a standing runner, each under its own heading: the runner's face and
+//! poster when the viewer is a runner too, the poster alone to anyone else
+//! once it is painted), bio,
 //! showcases, the
 //! bonsai (the whole canvas at its true size), the aquarium with the pet
 //! beside it (each a full-width section when the other is not owned),
-//! badges (all of them, always), and the chips ledger. The same order on
-//! every screen; the only reflow is a pair of columns (grid and runner,
-//! reef and pet) stacking into sections when the body is too narrow for
-//! both.
+//! badges (all of them, always), and the chips ledger. The same order and
+//! the same columns on every screen: nothing stacks. A narrow body wraps
+//! the grid beside the runner, squeezes the reef beside the pet, and cuts
+//! the bonsai.
 
 use chrono::Utc;
+use dartboard_core::Canvas;
 use late_core::models::chat_message_gild::{GildCounts, GildTier};
 use late_core::models::pet::PET_NAME_MAX_CHARS;
 use late_core::models::showcase::Showcase;
@@ -35,11 +38,15 @@ use ratatui::{
 
 use crate::app::{
     bonsai::render::{apply_sway, canvas_lines_in},
-    common::{markdown::render_body_to_lines, theme, time::timezone_current_time},
+    common::{
+        markdown::{render_body_to_lines, wrap_spans},
+        theme,
+        time::timezone_current_time,
+    },
     deadchannel::{
         fight::ui as fight_ui,
         poster::{
-            state::{POSTER_WIDTH, test_card},
+            state::{POSTER_WIDTH, has_ink, test_card},
             ui as poster_ui,
         },
         runner::state::PORTRAIT_WIDTH,
@@ -74,10 +81,10 @@ const PORTRAIT_GAP: usize = 2;
 const POSTER_HINT: &str = "PRINTS, west end, past the tailor.";
 /// Columns between two columns that sit side by side.
 const COLUMN_GAP: u16 = 3;
-/// Two columns sit side by side when the body is at least this wide. Beside
-/// the runner the grid keeps 48 columns, enough for every fact but a long
-/// free-text one; beside the pet the reef keeps 63.
-const BESIDE_MIN_WIDTH: u16 = 90;
+/// A grid row's key column, padded so the values line up.
+const FETCH_KEY_WIDTH: usize = 10;
+/// Narrower than this beside the key, a value goes under its key instead.
+const FETCH_VALUE_MIN_WIDTH: usize = 12;
 /// The pet column beside the reef: the longest name a pet can carry.
 const PET_WIDTH: u16 = PET_NAME_MAX_CHARS as u16;
 
@@ -111,11 +118,21 @@ impl Segment {
     }
 }
 
-pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState, wall_tick: usize) {
-    let width = area.width.saturating_sub(4).clamp(MIN_WIDTH, MAX_WIDTH);
+pub(crate) fn draw(
+    frame: &mut Frame,
+    area: Rect,
+    state: &ProfileModalState,
+    viewer_is_runner: bool,
+    wall_tick: usize,
+) {
+    let min_width = match side_column(state, viewer_is_runner) {
+        Some(column) => column.modal_min_width(),
+        None => MIN_WIDTH,
+    };
+    let width = area.width.saturating_sub(4).clamp(min_width, MAX_WIDTH);
     let body_width = width.saturating_sub(2 + SIDE_MARGIN * 2);
 
-    let (segments, chips_top) = build_segments(state, body_width, wall_tick);
+    let (segments, chips_top) = build_segments(state, viewer_is_runner, body_width, wall_tick);
     let content_height: u16 = segments.iter().map(Segment::height).sum();
 
     // As tall as the terminal allows, but no taller than the content needs:
@@ -147,9 +164,11 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState, wal
         Constraint::Length(1), // footer hints
     ])
     .split(inner);
+    // A terminal narrower than the modal's minimum cuts the body's right
+    // edge rather than drawing over the border.
     let viewport = Rect {
         x: rows[1].x + SIDE_MARGIN,
-        width: body_width,
+        width: body_width.min(rows[1].width.saturating_sub(SIDE_MARGIN * 2)),
         ..rows[1]
     };
 
@@ -188,6 +207,7 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &ProfileModalState, wal
 /// Every section in order, plus the body row the chips section starts on.
 fn build_segments(
     state: &ProfileModalState,
+    viewer_is_runner: bool,
     width: u16,
     wall_tick: usize,
 ) -> (Vec<Segment>, Option<u16>) {
@@ -208,36 +228,39 @@ fn build_segments(
     let mut segments = Vec::new();
 
     // ── late.fetch, and the runner ──
-    // The runner is a second column beside the grid, each under its own
-    // heading, for anyone looking at a standing runner. A narrow body makes
-    // it a section.
-    let grid = late_fetch_lines(state, profile);
-    let own = state.viewing_own();
-    match state.runner() {
+    // A standing runner gets a second column beside the grid, each under
+    // its own heading: the runner itself to a runner looking, the painted
+    // poster alone to anyone else, so the street's art is public and the
+    // wire stays a secret from outside the door. The column always keeps
+    // the right side; a narrow body wraps the grid into what is left.
+    match side_column(state, viewer_is_runner) {
         None => {
             let mut lines = vec![section_heading("late.fetch", width_usize)];
-            lines.extend(grid);
+            lines.extend(late_fetch_lines(state, profile, width_usize));
             segments.push(Segment::Text(lines));
         }
-        Some(runner) if width >= BESIDE_MIN_WIDTH => {
-            let left_width = usize::from(width - RUNNER_WIDTH - COLUMN_GAP);
+        Some(column) => {
+            let right_width = column.width();
+            let left_width = usize::from(width - right_width - COLUMN_GAP);
             let mut left = vec![section_heading("late.fetch", left_width)];
-            left.extend(grid);
-            let mut right = vec![runner_heading(runner, usize::from(RUNNER_WIDTH))];
-            right.extend(runner_lines(runner, own));
+            left.extend(late_fetch_lines(state, profile, left_width));
+            let right = match column {
+                SideColumn::Runner(runner) => {
+                    let mut lines = vec![runner_heading(runner, usize::from(right_width))];
+                    lines.extend(runner_lines(runner, state.viewing_own()));
+                    lines
+                }
+                SideColumn::Poster(canvas) => {
+                    let mut lines = vec![section_heading("poster", usize::from(right_width))];
+                    lines.extend(poster_ui::canvas_lines(canvas, None, None));
+                    lines
+                }
+            };
             segments.push(Segment::Beside {
                 left,
                 right,
-                right_width: RUNNER_WIDTH,
+                right_width,
             });
-        }
-        Some(runner) => {
-            let mut lines = vec![section_heading("late.fetch", width_usize)];
-            lines.extend(grid);
-            lines.push(Line::from(""));
-            lines.push(runner_heading(runner, width_usize));
-            lines.extend(runner_lines(runner, own));
-            segments.push(Segment::Text(lines));
         }
     }
 
@@ -284,10 +307,10 @@ fn build_segments(
     // The pet's mood is the one the owner's session last wrote: a readout
     // of how their night is going, honest because they never set it. With
     // a tank too, the pet sits in a column beside the reef, each under its
-    // own heading; alone, or on a narrow body, each is a section.
+    // own heading, at any width; alone, each is a section.
     let has_fish = !state.aquarium_fish().is_empty();
-    match state.pet() {
-        Some(pet) if has_fish && width >= BESIDE_MIN_WIDTH => {
+    match (state.pet(), has_fish) {
+        (Some(pet), true) => {
             let reef_width = usize::from(width - PET_WIDTH - COLUMN_GAP);
             let mut heading = section_heading("aquarium", reef_width).spans;
             heading.push(Span::raw(" ".repeat(usize::from(COLUMN_GAP))));
@@ -306,21 +329,20 @@ fn build_segments(
                 right_width: PET_WIDTH,
             });
         }
-        pet => {
-            if let Some(pet) = pet {
-                let mut lines = section_lines("pet", width_usize);
-                lines.extend(pet_portrait_lines(pet.species, pet.mood, wall_tick));
-                lines.push(Line::from(vec![
-                    pet_name_span(pet),
-                    Span::styled(format!(" · {}", pet.mood.as_str()), dim),
-                ]));
-                segments.push(Segment::Text(lines));
-            }
-            if has_fish {
-                segments.push(Segment::Text(section_lines("aquarium", width_usize)));
-                segments.push(Segment::Aquarium);
-            }
+        (Some(pet), false) => {
+            let mut lines = section_lines("pet", width_usize);
+            lines.extend(pet_portrait_lines(pet.species, pet.mood, wall_tick));
+            lines.push(Line::from(vec![
+                pet_name_span(pet),
+                Span::styled(format!(" · {}", pet.mood.as_str()), dim),
+            ]));
+            segments.push(Segment::Text(lines));
         }
+        (None, true) => {
+            segments.push(Segment::Text(section_lines("aquarium", width_usize)));
+            segments.push(Segment::Aquarium);
+        }
+        (None, false) => {}
     }
 
     // ── badges: every one, wrapped, never folded ──
@@ -488,6 +510,43 @@ fn draw_footer(frame: &mut Frame, area: Rect, scrollable: bool) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
+/// The column beside the grid for a standing runner, by who is looking.
+enum SideColumn<'a> {
+    /// A runner looking: the face, the badge, and the poster or the test
+    /// card.
+    Runner(&'a ProfileRunner),
+    /// Anyone else looking at a painted poster: the poster alone, no face,
+    /// no badge, nothing of the wire.
+    Poster(&'a Canvas),
+}
+
+impl SideColumn<'_> {
+    fn width(&self) -> u16 {
+        match self {
+            SideColumn::Runner(_) => RUNNER_WIDTH,
+            SideColumn::Poster(_) => POSTER_WIDTH as u16,
+        }
+    }
+
+    /// The narrowest modal holding the column: the grid beside it keeps at
+    /// least a key's width, so the column never leaves the right side.
+    fn modal_min_width(&self) -> u16 {
+        2 + SIDE_MARGIN * 2 + FETCH_KEY_WIDTH as u16 + COLUMN_GAP + self.width()
+    }
+}
+
+/// The viewed user's side column: the runner to a runner, the poster to
+/// anyone else once it carries ink. No poster (the test card) or a bare
+/// one shows a civilian nothing.
+fn side_column(state: &ProfileModalState, viewer_is_runner: bool) -> Option<SideColumn<'_>> {
+    let runner = state.runner()?;
+    match (viewer_is_runner, &runner.poster) {
+        (true, _) => Some(SideColumn::Runner(runner)),
+        (false, Some(canvas)) if has_ink(canvas) => Some(SideColumn::Poster(canvas)),
+        (false, _) => None,
+    }
+}
+
 /// The runner's heading: `runner`, then the wire's own badge (`▚7`,
 /// `▚7╬2`) in the level's band color, then the rule.
 fn runner_heading(runner: &ProfileRunner, width: usize) -> Line<'static> {
@@ -515,9 +574,9 @@ fn runner_heading(runner: &ProfileRunner, width: usize) -> Line<'static> {
 /// top left, losing cells to static in proportion to the missing signal
 /// (`fight::ui::corrupt`, the fight scene's wound), and the poster beside
 /// it, 32 by 12 on its own paper (`poster::ui::canvas_lines`, the street's
-/// drawing). A runner with no poster shows the test card, seeded by the
-/// runner so it is the same on every open, and its owner is told where
-/// posters are made. The level and the marks are the heading's badge; the
+/// drawing). A runner with no poster, or a bare one, shows the test card,
+/// seeded by the runner so it is the same on every open, and its owner is
+/// told where posters are made. The level and the marks are the heading's badge; the
 /// rest of the sheet stays on the street.
 fn runner_lines(runner: &ProfileRunner, own: bool) -> Vec<Line<'static>> {
     let dim = Style::default().fg(theme::TEXT_DIM());
@@ -541,7 +600,12 @@ fn runner_lines(runner: &ProfileRunner, own: bool) -> Vec<Line<'static>> {
             .collect::<Vec<Span<'static>>>()
     });
 
-    let poster = match &runner.poster {
+    // A poster erased to bare paper is no poster: the test card again.
+    let painted = match &runner.poster {
+        Some(canvas) if has_ink(canvas) => Some(canvas),
+        _ => None,
+    };
+    let poster = match painted {
         Some(canvas) => poster_ui::canvas_lines(canvas, None, None),
         None => poster_ui::canvas_lines(&test_card(seed), None, None),
     };
@@ -562,7 +626,7 @@ fn runner_lines(runner: &ProfileRunner, own: bool) -> Vec<Line<'static>> {
         })
         .collect();
     // From the column's edge: the hint is wider than the poster.
-    if runner.poster.is_none() && own {
+    if painted.is_none() && own {
         lines.push(Line::from(Span::styled(POSTER_HINT, dim)));
     }
     lines
@@ -617,30 +681,26 @@ fn bonsai_lines(state: &ProfileModalState, width: usize, wall_tick: usize) -> Ve
 }
 
 /// The neofetch column: one `key   value` row per fact (the name is already
-/// the modal's title). Unset values are dim rather than absent, so every
-/// profile has the same shape.
+/// the modal's title), wrapped to `width`. Unset values are dim rather than
+/// absent, so every profile has the same shape.
 fn late_fetch_lines(
     state: &ProfileModalState,
     profile: &late_core::models::profile::Profile,
+    width: usize,
 ) -> Vec<Line<'static>> {
     let dim = Style::default().fg(theme::TEXT_DIM());
-    let key = Style::default().fg(theme::AMBER_DIM());
     let value = Style::default().fg(theme::TEXT());
     let bright = Style::default().fg(theme::TEXT_BRIGHT());
 
     let mut lines = Vec::new();
 
-    let row = |label: &str, spans: Vec<Span<'static>>| {
-        let mut out = vec![Span::styled(format!("{label:<10}"), key)];
-        out.extend(spans);
-        Line::from(out)
-    };
+    let row = |label: &str, spans: Vec<Span<'static>>| fetch_row(label, spans, width);
     let set_or = |text: Option<String>| match text {
         Some(text) if !text.trim().is_empty() => Span::styled(text, value),
         _ => Span::styled("not set".to_string(), dim),
     };
 
-    lines.push(row(
+    lines.extend(row(
         "country",
         vec![Span::styled(
             country_label(profile.country.as_deref()),
@@ -648,7 +708,7 @@ fn late_fetch_lines(
         )],
     ));
     if let Some(time) = timezone_current_time(Utc::now(), profile.timezone.as_deref()) {
-        lines.push(row("local", vec![Span::styled(time, value)]));
+        lines.extend(row("local", vec![Span::styled(time, value)]));
     }
     // Balance only; the month's earned and net figures head the chips
     // section below.
@@ -656,15 +716,15 @@ fn late_fetch_lines(
         Some(balance) => Span::styled(ledger::thousands(balance), bright),
         None => Span::styled("…".to_string(), dim),
     };
-    lines.push(row("chips", vec![chips]));
+    lines.extend(row("chips", vec![chips]));
 
     let gilds = gild_spans(state.gild_counts());
     if !gilds.is_empty() {
-        lines.push(row("gilds", gilds));
+        lines.extend(row("gilds", gilds));
     }
     let gallery = state.gallery_counts();
     if gallery.pieces > 0 {
-        lines.push(row(
+        lines.extend(row(
             "gallery",
             vec![
                 Span::styled(
@@ -685,7 +745,7 @@ fn late_fetch_lines(
     }
 
     if !state.profile_awards().is_empty() {
-        lines.push(row(
+        lines.extend(row(
             "badges",
             vec![Span::styled(
                 state.profile_awards().len().to_string(),
@@ -693,7 +753,7 @@ fn late_fetch_lines(
             )],
         ));
     }
-    lines.push(row(
+    lines.extend(row(
         "created",
         vec![set_or(
             profile
@@ -710,26 +770,56 @@ fn late_fetch_lines(
             2..=59 => format!("{days} days"),
             _ => format!("{} months", days / 30),
         };
-        lines.push(row("member", vec![Span::styled(member, value)]));
+        lines.extend(row("member", vec![Span::styled(member, value)]));
     }
-    lines.push(row("ide", vec![set_or(profile.ide.clone())]));
-    lines.push(row("os", vec![set_or(profile.os.clone())]));
-    lines.push(row("terminal", vec![set_or(profile.terminal.clone())]));
+    lines.extend(row("ide", vec![set_or(profile.ide.clone())]));
+    lines.extend(row("os", vec![set_or(profile.os.clone())]));
+    lines.extend(row("terminal", vec![set_or(profile.terminal.clone())]));
     let theme_id = profile.theme_id.as_deref().unwrap_or(theme::DEFAULT_ID);
-    lines.push(row(
+    lines.extend(row(
         "theme",
         vec![Span::styled(
             theme::label_for_id(theme_id).to_string(),
             value,
         )],
     ));
-    lines.push(row(
+    lines.extend(row(
         "langs",
         vec![set_or(
             (!profile.langs.is_empty()).then(|| profile.langs.join(", ")),
         )],
     ));
     lines
+}
+
+/// One fact `width` wide: the key, then the value wrapped beside it under a
+/// hanging indent. Too narrow for both, the key takes a row of its own and
+/// the value wraps under it.
+fn fetch_row(label: &str, value: Vec<Span<'static>>, width: usize) -> Vec<Line<'static>> {
+    let key = Style::default().fg(theme::AMBER_DIM());
+    match width >= FETCH_KEY_WIDTH + FETCH_VALUE_MIN_WIDTH {
+        true => {
+            let value_width = width - FETCH_KEY_WIDTH;
+            wrap_spans(&value, value_width, value_width)
+                .into_iter()
+                .enumerate()
+                .map(|(index, row)| {
+                    let lead = match index {
+                        0 => Span::styled(format!("{label:<FETCH_KEY_WIDTH$}"), key),
+                        _ => Span::raw(" ".repeat(FETCH_KEY_WIDTH)),
+                    };
+                    let mut spans = vec![lead];
+                    spans.extend(row);
+                    Line::from(spans)
+                })
+                .collect()
+        }
+        false => {
+            let mut lines = vec![Line::from(Span::styled(label.to_string(), key))];
+            lines.extend(wrap_spans(&value, width, width).into_iter().map(Line::from));
+            lines
+        }
+    }
 }
 
 /// Gilds received as `● x2  ○ x5`, each tier in its own colour. Empty when

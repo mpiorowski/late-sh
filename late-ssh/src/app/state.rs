@@ -547,6 +547,9 @@ pub struct App {
     pub(crate) ultimate_cooldown_was_running: bool,
     /// The Late Edition: its modal, the login pop, and the `/paper` drain.
     pub(crate) paper: crate::app::paper::state::PaperState,
+    /// The watch player and setup box, and the session's one play on the
+    /// paired CLI (`app/video/`).
+    pub(crate) video: crate::app::video::state::State,
     /// The Jobs shelf: the replica's active postings, the selection, and
     /// the `/jobs` drain.
     pub(crate) jobs: crate::app::jobs::state::JobsState,
@@ -1145,7 +1148,7 @@ impl App {
     }
 
     /// The piece covering the screen while this session is away, `None`
-    /// while it is here, while the News watch modal is up, or with the
+    /// while it is here, while the watch modal is up, or with the
     /// Tweak off (Settings, Tweaks, `Screensaver`).
     pub(crate) fn screensaver(&self) -> Option<late_core::models::user::AsciiPiece> {
         if !self.screensaver_due() {
@@ -1187,7 +1190,7 @@ impl App {
     /// the screensaver waits for the modal to close; the 1Hz sync brings it
     /// up then.
     fn screensaver_due(&self) -> bool {
-        self.away && !self.chat.has_watch()
+        self.away && !self.video.is_open()
     }
 
     /// The rail modes this session renders from: this device's stored layout if
@@ -1682,6 +1685,7 @@ impl App {
                 config.paper_service,
                 config.paper_at_login,
             ),
+            video: crate::app::video::state::State::default(),
             jobs: crate::app::jobs::state::JobsState::new(config.jobs_service),
             help_modal_state: help_modal::state::HelpModalState::new(),
             leaderboard_page: crate::app::leaderboard::state::LeaderboardPageState::new(),
@@ -4498,7 +4502,7 @@ impl Drop for App {
             return;
         }
         // No mpv outlives the session that asked for it.
-        crate::app::chat::news::watch::svc::end_session(self);
+        crate::app::video::svc::end_session(self);
         // The paired registry keeps token-scoped state that outlives the
         // sockets (the once-per-session boot mute claim), so the session end
         // has to retire it or it accumulates a row per session forever.

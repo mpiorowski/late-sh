@@ -14,8 +14,8 @@ changing a domain.
   entries, no "used to", "no longer", "since <date>": git log says when. The
   one running log is the incident log in `infra/RUNBOOK.md`.
 - Ideas, roadmaps and parked designs go to a design doc (`SCALE.md`,
-  `devdocs/`, a domain's own design file such as `deadchannel/GAME.md`), never
-  to a context file. An open gap is a fact ("X does not do Y").
+  `AUDIENCE.md`, `devdocs/`, a domain's own design file such as
+  `deadchannel/GAME.md`), never to a context file. An open gap is a fact ("X does not do Y").
 - A change that makes a doc wrong updates it in the same change. Update the
   local context for behavior inside a domain; update this file when a page,
   a domain, a cross-domain rule or a command changes. If code and a doc
@@ -186,9 +186,10 @@ otherwise.
 | `chat` | Rooms, DMs, composer, message actions, Showcase/Work feeds; the composer, every slash command and key in `COMMANDS.md`, rendering in `RENDERING.md`, read marks in `MARKS.md`, room data and the rail in `ROOMS.md` |
 | `ai` | The model calls: ghost bots (@bot, @graybeard, @bartender), the round (`ROUND.md`) and bartender memory (`MEMORY.md`), text screening, translation, `/summary` |
 | `chat/gild` | Gilds: chips paid to mark another user's message |
-| `chat/news` | Shared links, the News room, the reader, the YouTube watch player |
+| `chat/news` | Shared links, the News room, the reader, where a story's watch position is kept |
 | `chat/cyberspace` | The cyberspace.online client and its rail entry |
 | `crown` | The crown: one holder, the price ladder, the laureate |
+| `video` | The watch player: a News story or a chat YouTube link played in the terminal by the paired CLI's mpv, the setup box, the session's one play on the CLI |
 | `audio` | Radio, YouTube queue and booth, source selection, `/listen` snapshot; the queue service in `QUEUE.md`, the equalizer in `VIZ.md`, the sidebar stage in `STAGE.md`, the stations in `STATIONS.md` |
 | `voice` | LiveKit voice rooms, TUI voice controls, pair-WS voice messages |
 | `stream` | `/golive` and `/watch` streams, the stream registry, the late-web live pages (staff and streamer tools in `MODERATION.md`) |
@@ -217,7 +218,7 @@ otherwise.
 | `clubhouse` | The tavern: crowd, seating, bubbles, the tour, the floor plan |
 | `clubhouse/nightcap` | The Nightcap bar out back |
 | `scratchpad` | `/pair` shared scratchpad |
-| `deadchannel` | The character game: the map of its slices, persistence; design in `GAME.md`, `DIGEST.md` |
+| `deadchannel` | The character game: the map of its slices, persistence; design in `GAME.md`; the diagnosis it rests on in the root `AUDIENCE.md`, the #lounge valve it waits on in `devdocs/FEED-BUDGET.md` |
 | `deadchannel/runner` | The runner: the look, the directory, the face in #deadchannel, the runner row |
 | `deadchannel/haunt` | First contact: the haunting ladder that brings staff in, `/haunt` |
 | `deadchannel/city` | The night city under `0`: map, shops, panels, art |
@@ -241,14 +242,16 @@ small modals.
 
 - `SCALE.md`: capacity, measured costs, the multi-replica ledger and the
   scaling plan, small debts.
+- `AUDIENCE.md`: who comes and what they do, measured: where attention goes,
+  what the numbers say, the ideas that follow, and how to query it.
 - `infra/README.md`: cluster setup, nodes, game servers, Terraform variables.
   `infra/RUNBOOK.md`: prod DB access, triage, deploys, the incident log.
 - `MUSIC.md`: the house music library and its licenses (linked from `/listen`).
 - `THEME.md`: adding a theme. `CONTRIBUTING.md`, `LICENSING.md`: for
   contributors.
-- `devdocs/`: research and design notes (door candidates, the IRC design and
-  IRCv3 ideas, the parked audio leader, the CLI YouTube backend plan, the
-  permissions matrix).
+- `devdocs/`: research and design notes (door candidates, the parked feed
+  budget, the IRC design and IRCv3 ideas, the parked audio leader, the CLI
+  YouTube backend plan, the permissions matrix).
 
 ## 7. Telemetry
 
@@ -272,9 +275,12 @@ query gotchas: `infra/RUNBOOK.md`.
 - Fixtures: `make seed-artboard`, `seed-calendar`, `seed-paper`,
   `seed-irc-history`, `seed-leaderboard`, each described in its domain's
   context. Chips for a local account come from the admin `/grant` command.
-- **Agents run targeted tests only:** `make test-llm ARGS="-p <crate> -E
-  'test(<filter>)'"` starts the check DB and runs nextest in a memory-capped
-  scope. Never raw `cargo test`, `cargo nextest` or `cargo clippy`, and never a
+- **Agents run targeted tests only:** `make test-llm ARGS="-p <crate> --lib -E
+  'test(<filter>)'"` starts the check DB and runs nextest in a low-priority
+  scope capped to the memory free at launch (it refuses to start when too
+  little is). `--lib` is for a crate with both a lib and a main (`late-ssh`,
+  `late-web`, `late-core`, `late-webview`): without it the lib compiles twice.
+  A main-only crate (`late-cli`, the game doors) drops it. Never raw `cargo test`, `cargo nextest` or `cargo clippy`, and never a
   full suite. `cargo check`, `cargo build` and `cargo fmt` are fine.
 - **`make check` is the human gate:** `cargo fmt --check` on first-party
   packages only (never `cargo fmt --all`, which would reformat vendored crates),

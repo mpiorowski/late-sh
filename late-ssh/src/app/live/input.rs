@@ -11,6 +11,7 @@ use crate::app::{
 };
 use crate::metrics;
 
+use super::panel::PanelTarget;
 use super::pick::LiveSource;
 
 /// Which surface an open came from, for the one source that counts it
@@ -31,23 +32,6 @@ pub fn open_from_key(app: &mut App) -> bool {
     }
 }
 
-/// `r` on the #lounge card replies to what the strip is showing, when that
-/// is something a reply can quote: a shared article. Anything else falls
-/// through untouched.
-pub fn reply_from_key(app: &mut App) -> bool {
-    match app.live.showing() {
-        Some(LiveSource::NewsArticle(article_id)) => app.chat.begin_reply_to_article(article_id),
-        Some(LiveSource::DailyMatch(_))
-        | Some(LiveSource::DailyResult(_))
-        | Some(LiveSource::BoothTrack(_))
-        | Some(LiveSource::Stream(_))
-        | Some(LiveSource::DoorGame(_))
-        | Some(LiveSource::BoardEvent(_))
-        | Some(LiveSource::Realm(_))
-        | None => false,
-    }
-}
-
 /// A left-click on the strip, the mouse twin of the key. A rect is only
 /// recorded on frames where the strip drew something that opens.
 pub fn open_from_click(app: &mut App, x: u16, y: u16) -> bool {
@@ -63,21 +47,21 @@ pub fn open_from_click(app: &mut App, x: u16, y: u16) -> bool {
 /// lists, as the strip's click does. A blank slot or the `+N more` row
 /// opens nothing.
 pub fn open_from_panel_click(app: &mut App, x: u16, y: u16) -> bool {
-    let Some((rect, sources)) = app.live.panel_hit.get() else {
+    let Some((rect, targets)) = app.live.panel_hit.get() else {
         return false;
     };
     if !rect.contains(Position { x, y }) {
         return false;
     }
-    match sources.get(usize::from(y - rect.y)) {
-        Some(Some(source)) => open(app, *source, Origin::Panel),
+    match targets.get(usize::from(y - rect.y)) {
+        Some(Some(target)) => open_panel(app, *target),
         Some(None) | None => false,
     }
 }
 
 /// `s` then `1`-`4` on Home, or on Zen with a Live tile on the page, opens
 /// that row of the Live panel (the sidebar's, or the tile's, which draws
-/// the same rows), by the number the row shows: the sources are the ones
+/// the same rows), by the number the row shows: the targets are the ones
 /// the last frame drew, so the key and the eye agree. Nothing opens for a
 /// blank slot, the `+N more` row, a panel that is not drawn, or any other
 /// suffix.
@@ -86,12 +70,32 @@ pub fn open_from_prefix(app: &mut App, byte: u8) -> bool {
         b'1'..=b'4' => usize::from(byte - b'1'),
         _ => return false,
     };
-    let Some((_, sources)) = app.live.panel_hit.get() else {
+    let Some((_, targets)) = app.live.panel_hit.get() else {
         return false;
     };
-    match sources[slot] {
-        Some(source) => open(app, source, Origin::Panel),
+    match targets[slot] {
+        Some(target) => open_panel(app, target),
         None => false,
+    }
+}
+
+/// A panel row's open: a stream, a game or an event the way the strip
+/// opens it, a News share in the reader.
+fn open_panel(app: &mut App, target: PanelTarget) -> bool {
+    match target {
+        PanelTarget::Stream(streamer_id) => {
+            open(app, LiveSource::Stream(streamer_id), Origin::Panel)
+        }
+        PanelTarget::DoorGame(key) => open(app, LiveSource::DoorGame(key), Origin::Panel),
+        PanelTarget::BoardEvent(event_id) => {
+            open(app, LiveSource::BoardEvent(event_id), Origin::Panel)
+        }
+        // The News reader on the story, or the player straight away for a
+        // video this session can play. Gone between the frame and the key
+        // (deleted): nothing to open.
+        PanelTarget::News(article_id) => {
+            crate::app::chat::news::input::open_article(app, article_id)
+        }
     }
 }
 
@@ -132,10 +136,7 @@ fn open(app: &mut App, source: LiveSource, origin: Origin) -> bool {
         LiveSource::BoothTrack(item_id) => match app.audio.in_booth(item_id) {
             true => {
                 match app.paired_source {
-                    AudioSource::Youtube => {
-                        let submit_enabled = app.audio.booth_submit_enabled();
-                        app.booth_modal_state.open(submit_enabled);
-                    }
+                    AudioSource::Youtube => crate::app::audio::booth::input::open(app),
                     AudioSource::Radio => {
                         app.set_paired_playback_source(AudioSource::Youtube);
                         app.banner = Some(Banner::success("Audio source: YouTube"));
@@ -145,12 +146,6 @@ fn open(app: &mut App, source: LiveSource, origin: Origin) -> bool {
             }
             false => false,
         },
-        // The News reader on the story, or the player straight away for a
-        // video this session can play. Gone between the frame and the key
-        // (deleted): nothing to open.
-        LiveSource::NewsArticle(article_id) => {
-            crate::app::chat::news::watch::svc::open_article(app, article_id)
-        }
         // The streamer's room on Home, as its rail row opens it: joined on
         // the first visit, and the visit counts as a named viewer. Its
         // header carries the watch link. Gone between the frame and the key

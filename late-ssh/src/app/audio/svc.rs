@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use late_core::radio::Provider;
 use late_core::{
@@ -12,6 +12,7 @@ use late_core::{
     db::Db,
     models::{
         audio_ban::AudioBan,
+        media_favorite::{FavoriteOutcome, MediaFavorite},
         media_history_item::MediaHistoryItem,
         media_queue_item::MediaQueueItem,
         media_queue_vote::{CastVoteOutcome, MediaQueueVote},
@@ -21,6 +22,8 @@ use late_core::{
 };
 use serde::{Deserialize, Serialize};
 use tokio::sync::{Mutex, broadcast, oneshot, watch};
+use tokio::task::JoinHandle;
+use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
 use super::{thumbnail::Thumbnail, youtube::YoutubeClient};
@@ -68,6 +71,54 @@ enum ThumbnailSlot {
 pub enum ThumbnailFetch {
     Fetched,
     Failed,
+}
+
+/// What one favorites step did, as `metrics::record_booth_favorite` counts
+/// it. Each variant belongs to one step (load, add or remove), so the
+/// metric's step and outcome labels come from one closed set: a load is
+/// never counted full.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoothFavoriteOutcome {
+    /// The listener's favorites were read and published; every step ends
+    /// on one.
+    Loaded,
+    LoadFailed,
+    Added,
+    /// It already was a favorite; nothing written.
+    AlreadyFavorite,
+    /// The listener already keeps `BOOTH_FAVORITES_LIMIT`; nothing written.
+    /// The session's own refusals count here too.
+    Full,
+    AddFailed,
+    Removed,
+    /// Another session let it go first; nothing deleted.
+    AlreadyGone,
+    RemoveFailed,
+}
+
+/// One step on a listener's favorites, run in its session's order by
+/// `AudioService::favorites_task`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FavoritesStep {
+    /// Re-read the favorites.
+    Load,
+    /// Keep a History row as the favorite `favorite_id`: the session names
+    /// the id, since it shows the row before the write lands.
+    Add {
+        history_item_id: Uuid,
+        favorite_id: Uuid,
+    },
+    /// Let a favorite go, by its id.
+    Remove(Uuid),
+}
+
+/// Where a booth re-queue takes its stored, already validated track from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RequeueSource {
+    /// A community History row, by its id.
+    History(Uuid),
+    /// One of the listener's own favorites, by its id.
+    Favorite(Uuid),
 }
 
 #[derive(Default)]
@@ -245,6 +296,7 @@ pub enum AudioEvent {
     },
     BoothHistoryRequeued {
         user_id: Uuid,
+        source: RequeueSource,
         position: i64,
         reward_chips: i64,
     },
@@ -256,6 +308,26 @@ pub enum AudioEvent {
         user_id: Uuid,
     },
     BoothHistoryItemDeleteFailed {
+        user_id: Uuid,
+        message: String,
+    },
+    /// The listener's favorites as the table holds them now, newest first:
+    /// every favorites step ends with one, so each of the listener's
+    /// sessions on this replica shows the same list.
+    BoothFavoritesLoaded {
+        user_id: Uuid,
+        favorites: Vec<FavoriteItemView>,
+    },
+    BoothFavoriteAdded {
+        user_id: Uuid,
+    },
+    BoothFavoriteRemoved {
+        user_id: Uuid,
+    },
+    BoothFavoritesFull {
+        user_id: Uuid,
+    },
+    BoothFavoriteFailed {
         user_id: Uuid,
         message: String,
     },
@@ -325,6 +397,18 @@ pub struct HistoryItemView {
     pub is_stream: bool,
     pub play_count: i32,
     pub last_played_at_ms: i64,
+}
+
+/// One of a listener's favorites. Per listener, so it never rides the shared
+/// `QueueSnapshot`; `AudioState` mirrors it from `BoothFavoritesLoaded`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FavoriteItemView {
+    pub id: Uuid,
+    pub video_id: String,
+    pub title: Option<String>,
+    pub channel: Option<String>,
+    pub duration_ms: Option<i32>,
+    pub is_stream: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -911,10 +995,13 @@ impl AudioService {
         Ok(score)
     }
 
-    pub async fn requeue_history_item(
+    /// Re-queue a stored track: a History row, or one of the listener's
+    /// favorites. Either way the metadata was validated when the track was
+    /// first submitted, so no YouTube call is made.
+    pub async fn requeue_track(
         &self,
         user_id: Uuid,
-        history_item_id: Uuid,
+        source: RequeueSource,
     ) -> Result<SubmitQueueResponse> {
         let mut state = self.state.lock().await;
         let (item, reward) = {
@@ -927,20 +1014,43 @@ impl AudioService {
             if recent >= MAX_SUBMISSIONS_PER_WINDOW {
                 anyhow::bail!("submission rate limit exceeded");
             }
-            let history = MediaHistoryItem::find_by_id(&client, history_item_id)
-                .await?
-                .ok_or_else(|| anyhow::anyhow!("history item not found"))?;
-            if MediaQueueItem::youtube_is_active(&client, &history.external_id).await? {
+            let track = match source {
+                RequeueSource::History(history_item_id) => {
+                    let history = MediaHistoryItem::find_by_id(&client, history_item_id)
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("history item not found"))?;
+                    StoredTrack {
+                        external_id: history.external_id,
+                        title: history.title,
+                        channel: history.channel,
+                        duration_ms: history.duration_ms,
+                        is_stream: history.is_stream,
+                    }
+                }
+                RequeueSource::Favorite(favorite_id) => {
+                    let favorite = MediaFavorite::get_by_user_id(&client, user_id, favorite_id)
+                        .await?
+                        .ok_or_else(|| anyhow::anyhow!("favorite not found"))?;
+                    StoredTrack {
+                        external_id: favorite.external_id,
+                        title: favorite.title,
+                        channel: favorite.channel,
+                        duration_ms: favorite.duration_ms,
+                        is_stream: favorite.is_stream,
+                    }
+                }
+            };
+            if MediaQueueItem::youtube_is_active(&client, &track.external_id).await? {
                 anyhow::bail!("track is already in the queue");
             }
             MediaQueueItem::insert_youtube(
                 &mut client,
                 user_id,
-                &history.external_id,
-                history.title.as_deref(),
-                history.channel.as_deref(),
-                history.duration_ms,
-                history.is_stream,
+                &track.external_id,
+                track.title.as_deref(),
+                track.channel.as_deref(),
+                track.duration_ms,
+                track.is_stream,
             )
             .await?
         };
@@ -950,7 +1060,8 @@ impl AudioService {
             item_id = %item.id,
             external_id = %item.external_id,
             reward_chips = reward.chips(),
-            "re-queued a youtube track from history"
+            source = ?source,
+            "re-queued a stored youtube track"
         );
 
         self.cancel_fallback(&mut state);
@@ -1147,13 +1258,14 @@ impl AudioService {
         });
     }
 
-    pub fn requeue_history_item_task(&self, user_id: Uuid, history_item_id: Uuid) {
+    pub fn requeue_track_task(&self, user_id: Uuid, source: RequeueSource) {
         let service = self.clone();
         tokio::spawn(async move {
-            match service.requeue_history_item(user_id, history_item_id).await {
+            match service.requeue_track(user_id, source).await {
                 Ok(response) => {
                     service.publish_event(AudioEvent::BoothHistoryRequeued {
                         user_id,
+                        source,
                         position: response.position_in_queue,
                         reward_chips: response.reward_chips,
                     });
@@ -1166,6 +1278,165 @@ impl AudioService {
                 }
             }
         });
+    }
+
+    /// Run one step on the listener's favorites once `after`, the session's
+    /// previous step, is done. Chained this way a session's steps land in
+    /// the order it asked for them: a load never publishes over a write
+    /// asked for before it. Every step ends by republishing the favorites.
+    pub fn favorites_task(
+        &self,
+        user_id: Uuid,
+        step: FavoritesStep,
+        after: Option<JoinHandle<()>>,
+    ) -> JoinHandle<()> {
+        let service = self.clone();
+        let span = info_span!("audio.favorites_task", user_id = %user_id, step = ?step);
+        tokio::spawn(async move {
+            if let Some(previous) = after {
+                // A step that panicked has nothing left to wait for.
+                let _ = previous.await;
+            }
+            service
+                .run_favorites_step(user_id, step)
+                .instrument(span)
+                .await;
+        })
+    }
+
+    /// Nobody waits on a favorites step, so its outcomes are counted and
+    /// its failures logged here. Every step ends on the table's list,
+    /// whatever its write did: that load confirms the move the session made
+    /// ahead of the write, or takes it back, and a load that fails is its
+    /// own failure, never the write's.
+    async fn run_favorites_step(&self, user_id: Uuid, step: FavoritesStep) {
+        match step {
+            // The load every step ends on is the whole of it.
+            FavoritesStep::Load => {}
+            FavoritesStep::Add {
+                history_item_id,
+                favorite_id,
+            } => match self
+                .add_favorite(user_id, history_item_id, favorite_id)
+                .await
+            {
+                Ok(FavoriteOutcome::Added) => {
+                    metrics::record_booth_favorite(BoothFavoriteOutcome::Added);
+                    self.publish_event(AudioEvent::BoothFavoriteAdded { user_id });
+                }
+                Ok(FavoriteOutcome::AlreadyFavorite) => {
+                    metrics::record_booth_favorite(BoothFavoriteOutcome::AlreadyFavorite);
+                }
+                Ok(FavoriteOutcome::Full) => {
+                    metrics::record_booth_favorite(BoothFavoriteOutcome::Full);
+                    self.publish_event(AudioEvent::BoothFavoritesFull { user_id });
+                }
+                Err(err) => {
+                    metrics::record_booth_favorite(BoothFavoriteOutcome::AddFailed);
+                    late_core::error_span!(
+                        "booth_favorite_add_failed",
+                        error = ?err,
+                        user_id = %user_id,
+                        history_item_id = %history_item_id,
+                        favorite_id = %favorite_id,
+                        "failed to add a booth favorite"
+                    );
+                    self.publish_event(AudioEvent::BoothFavoriteFailed {
+                        user_id,
+                        message: booth_favorite_error_message(&err),
+                    });
+                }
+            },
+            FavoritesStep::Remove(favorite_id) => {
+                match self.remove_favorite(user_id, favorite_id).await {
+                    // Another session let it go first: what the listener
+                    // asked for holds all the same.
+                    Ok(0) => {
+                        metrics::record_booth_favorite(BoothFavoriteOutcome::AlreadyGone);
+                        self.publish_event(AudioEvent::BoothFavoriteRemoved { user_id });
+                    }
+                    Ok(_) => {
+                        metrics::record_booth_favorite(BoothFavoriteOutcome::Removed);
+                        self.publish_event(AudioEvent::BoothFavoriteRemoved { user_id });
+                    }
+                    Err(err) => {
+                        metrics::record_booth_favorite(BoothFavoriteOutcome::RemoveFailed);
+                        late_core::error_span!(
+                            "booth_favorite_remove_failed",
+                            error = ?err,
+                            user_id = %user_id,
+                            favorite_id = %favorite_id,
+                            "failed to remove a booth favorite"
+                        );
+                        self.publish_event(AudioEvent::BoothFavoriteFailed {
+                            user_id,
+                            message: "Failed to remove favorite".to_string(),
+                        });
+                    }
+                }
+            }
+        }
+        self.reload_favorites(user_id).await;
+    }
+
+    async fn reload_favorites(&self, user_id: Uuid) {
+        match self.load_and_publish_favorites(user_id).await {
+            Ok(()) => metrics::record_booth_favorite(BoothFavoriteOutcome::Loaded),
+            Err(err) => {
+                metrics::record_booth_favorite(BoothFavoriteOutcome::LoadFailed);
+                late_core::error_span!(
+                    "booth_favorites_load_failed",
+                    error = ?err,
+                    user_id = %user_id,
+                    "failed to load booth favorites"
+                );
+            }
+        }
+    }
+
+    async fn load_and_publish_favorites(&self, user_id: Uuid) -> Result<()> {
+        let client = self.db.get().await?;
+        let favorites = MediaFavorite::list_for_user(&client, user_id)
+            .await
+            .context("loading booth favorites")?;
+        self.publish_event(AudioEvent::BoothFavoritesLoaded {
+            user_id,
+            favorites: favorites.into_iter().map(favorite_item_view).collect(),
+        });
+        Ok(())
+    }
+
+    /// Keep a History row as the favorite `favorite_id`. Only the write:
+    /// publishing the list is the step's job.
+    pub async fn add_favorite(
+        &self,
+        user_id: Uuid,
+        history_item_id: Uuid,
+        favorite_id: Uuid,
+    ) -> Result<FavoriteOutcome> {
+        let mut client = self.db.get().await?;
+        let track = MediaHistoryItem::find_by_id(&client, history_item_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("history item not found"))?;
+        MediaFavorite::add_from_history(&mut client, user_id, favorite_id, &track)
+            .await
+            .context("adding the favorite")
+    }
+
+    /// Let a favorite go: the rows deleted, 0 when it was gone already or
+    /// is not the listener's. Only the write, like `add_favorite`.
+    pub async fn remove_favorite(&self, user_id: Uuid, favorite_id: Uuid) -> Result<u64> {
+        let client = self.db.get().await?;
+        MediaFavorite::delete_by_user_id(&client, user_id, favorite_id)
+            .await
+            .context("removing the favorite")
+    }
+
+    /// An add the session refused itself, its favorites already full,
+    /// before any write: counted here so `full` holds every refusal, not
+    /// only the ones the table made.
+    pub fn record_refused_favorite(&self) {
+        metrics::record_booth_favorite(BoothFavoriteOutcome::Full);
     }
 
     pub fn delete_history_item_task(&self, user_id: Uuid, history_item_id: Uuid) {
@@ -2278,8 +2549,19 @@ fn booth_history_error_message(err: &anyhow::Error) -> String {
         "Slow down - too many submissions".to_string()
     } else if text.contains("history item not found") {
         "Track is no longer in history".to_string()
+    } else if text.contains("favorite not found") {
+        "Track is no longer in your favorites".to_string()
     } else {
         "History action failed".to_string()
+    }
+}
+
+fn booth_favorite_error_message(err: &anyhow::Error) -> String {
+    let text = format!("{err:#}").to_ascii_lowercase();
+    if text.contains("history item not found") {
+        "Track is no longer in history".to_string()
+    } else {
+        "Failed to add favorite".to_string()
     }
 }
 
@@ -2384,6 +2666,27 @@ fn queue_item_view(
         submitter_id: item.submitter_id,
         vote_score,
         unskippable: item.unskippable,
+    }
+}
+
+/// The validated metadata a re-queue copies into a fresh queue row, from
+/// History or from a favorite.
+struct StoredTrack {
+    external_id: String,
+    title: Option<String>,
+    channel: Option<String>,
+    duration_ms: Option<i32>,
+    is_stream: bool,
+}
+
+fn favorite_item_view(item: MediaFavorite) -> FavoriteItemView {
+    FavoriteItemView {
+        id: item.id,
+        video_id: item.external_id,
+        title: item.title,
+        channel: item.channel,
+        duration_ms: item.duration_ms,
+        is_stream: item.is_stream,
     }
 }
 

@@ -324,6 +324,15 @@ pub fn fit(stored: &Canvas) -> Canvas {
     canvas
 }
 
+/// Any glyph on the poster but a space: a poster erased to nothing still
+/// stores, and bare paper is no picture.
+pub fn has_ink(canvas: &Canvas) -> bool {
+    canvas.iter().any(|(_, cell)| match cell {
+        CellValue::Narrow(ch) | CellValue::Wide(ch) => !ch.is_whitespace(),
+        CellValue::WideCont => false,
+    })
+}
+
 /// The poster a runner without one shows: seven bars in the seven tints,
 /// a broadcast's test card, with a little static the seed scatters (the
 /// user, so a runner's card is the same on every open).
