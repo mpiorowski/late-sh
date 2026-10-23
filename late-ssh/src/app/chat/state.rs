@@ -2510,7 +2510,19 @@ impl ChatState {
 
     pub fn begin_reply_to_selected_in_room(&mut self, room_id: Uuid) -> Option<Banner> {
         self.reaction_leader_active = false;
-        let message = self.selected_message_in_room(room_id)?;
+        let message_id = self.selected_message_id?;
+        self.begin_reply_to_message_in_room(room_id, message_id);
+        None
+    }
+
+    /// Open the composer in `room_id` replying to `message_id`, quoting its
+    /// author and first line: `r` on a selected message, and on a News
+    /// story whose #lounge card is loaded. False when the message is not
+    /// loaded in `room_id`.
+    fn begin_reply_to_message_in_room(&mut self, room_id: Uuid, message_id: Uuid) -> bool {
+        let Some(message) = self.find_message_in_room(room_id, message_id) else {
+            return false;
+        };
         let message_user_id = message.user_id;
         let message_body = message.body.clone();
         let author = self
@@ -2521,7 +2533,7 @@ impl ChatState {
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| short_user_id(message_user_id));
         self.reply_target = Some(ReplyTarget {
-            to: ReplyTo::Message(message.id),
+            to: ReplyTo::Message(message_id),
             author,
             preview: reply_preview_text(&message_body),
         });
@@ -2529,13 +2541,15 @@ impl ChatState {
         self.composer_room_id = Some(room_id);
         self.edited_message_id = None;
         composer::set_themed_textarea_cursor_visible(&mut self.composer, true);
-        None
+        true
     }
 
     /// Start a reply in #lounge to a News article (`r` in the News room or
-    /// the reader): the composer opens with `> @sharer: 📰 Title` to go on
-    /// top. False when the article left the snapshot or #lounge is not known
-    /// yet.
+    /// the reader). A story whose card is loaded in #lounge is replied to as
+    /// the card, exactly as `r` on the card: the reply points at it, so
+    /// Enter on the reply jumps there. Any other story's reply points at
+    /// nothing and opens with `> @sharer: 📰 Title` to go on top. False when
+    /// the article left the snapshot or #lounge is not known yet.
     pub(crate) fn begin_reply_to_article(&mut self, article_id: Uuid) -> bool {
         self.reaction_leader_active = false;
         let Some(lounge_id) = self.lounge_room_id() else {
@@ -2544,6 +2558,11 @@ impl ChatState {
         let Some(item) = self.news.find_article(article_id).cloned() else {
             return false;
         };
+        if let Some(card_id) = item.article.lounge_message_id
+            && self.begin_reply_to_message_in_room(lounge_id, card_id)
+        {
+            return true;
+        }
         let author = match item.author_username.trim() {
             "" => short_user_id(item.article.user_id),
             name => name.to_string(),

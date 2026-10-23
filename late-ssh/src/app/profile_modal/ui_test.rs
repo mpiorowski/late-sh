@@ -213,12 +213,13 @@ async fn open_runner(db: &late_core::db::Db, user_id: Uuid, viewer: Uuid) -> Pro
 }
 
 /// A standing runner's profile grows a runner column beside the late.fetch
-/// grid for any runner looking (a civilian viewer sees none): its own
-/// heading on the grid's heading row carrying the badge, the face at the top left and the poster beside it,
+/// grid for any runner looking: its own heading on the grid's heading row
+/// carrying the badge, the face at the top left and the poster beside it,
 /// no frame anywhere. No poster is the test card, and its owner reads
 /// where posters are made. The rest of the sheet stays on the street. A
-/// narrow body makes the column a section under the grid, still above the
-/// bio.
+/// narrow body keeps the column on the right and wraps the grid beside it,
+/// each key over its value. A civilian sees nothing of it until a poster
+/// with ink hangs, and then the poster alone: no face, no badge.
 #[tokio::test]
 async fn a_runners_profile_hangs_the_face_and_the_poster() {
     use crate::app::deadchannel::poster::state::blank;
@@ -263,12 +264,13 @@ async fn a_runners_profile_hangs_the_face_and_the_poster() {
         .expect("runner row");
     let state = open_runner(&db, fixture.user_id, Uuid::nil()).await;
 
-    // A viewer who is no runner sees no column: the wire stays a secret
-    // from outside the door.
+    // A viewer who is no runner sees no column, not even the test card:
+    // the wire stays a secret from outside the door.
     let lines = render(&state, false, 130, 60);
     assert!(
-        row_of(&lines, &format!("runner {}1 ─", look.mark)).is_none(),
-        "no runner column for a civilian viewer:\n{}",
+        row_of(&lines, &format!("runner {}1 ─", look.mark)).is_none()
+            && row_of(&lines, "poster ─").is_none(),
+        "no column for a civilian viewer:\n{}",
         lines.join("\n")
     );
     assert!(row_of(&lines, "late.fetch ─").is_some());
@@ -352,25 +354,94 @@ async fn a_runners_profile_hangs_the_face_and_the_poster() {
     assert_eq!(bars(&lines, heading, heading + 5), 0, "bare paper:\n{text}");
     assert!(row_of(&lines, HINT).is_none(), "{text}");
 
-    // Narrow: the same rows as a section under the grid, above the bio.
-    let lines = render(&state, true, 70, 80);
+    // A phone: still one row, two headings, the poster whole beside the
+    // face. The grid wraps into what is left, each key over its value.
+    let lines = render(&state, true, 60, 80);
     let text = lines.join("\n");
-    let langs = row_of(&lines, "langs     ").expect("last grid row");
     let heading = row_of(&lines, &format!("runner {}1 ─", look.mark)).expect("runner heading");
-    let bio = row_of(&lines, "bio ─").expect("bio heading");
     assert!(
-        langs < heading && heading < bio,
-        "grid, runner, bio:\n{text}"
+        lines[heading].contains("late.fetch"),
+        "one row, two headings:\n{text}"
     );
     assert!(
         lines[heading + 1].contains(&format!("{}  HELLO", face[0])),
-        "{text}"
+        "the poster beside the face:\n{text}"
+    );
+    let langs = row_of(&lines, "langs ").expect("last grid key");
+    assert!(
+        !lines[langs].contains("not set") && lines[langs + 1].contains("not set"),
+        "the key over its value:\n{text}"
+    );
+    assert!(
+        langs < row_of(&lines, "bio ─").expect("bio heading"),
+        "the grid, then bio:\n{text}"
+    );
+
+    // A civilian sees a painted poster, alone under its own heading on the
+    // late.fetch row, on a wide terminal and a phone alike. Nothing of the
+    // runner comes with it.
+    let state = open_runner(&db, fixture.user_id, Uuid::nil()).await;
+    for width in [130, 52] {
+        let lines = render(&state, false, width, 80);
+        let text = lines.join("\n");
+        let heading = row_of(&lines, "poster ─").expect("poster heading");
+        assert!(
+            lines[heading].contains("late.fetch"),
+            "one row, two headings:\n{text}"
+        );
+        assert!(lines[heading + 1].contains("HELLO"), "the poster:\n{text}");
+        assert!(
+            row_of(&lines, &format!("runner {}1", look.mark)).is_none(),
+            "no badge:\n{text}"
+        );
+        for row in &face {
+            assert!(row_of(&lines, row).is_none(), "no face:\n{text}");
+        }
+    }
+
+    // A poster erased to bare paper still hangs, but it is no poster: a
+    // civilian sees nothing, a runner the test card again, and its owner
+    // the hint.
+    DeadchannelRunner::store_poster(
+        &client,
+        fixture.user_id,
+        &serde_json::to_value(blank()).expect("poster json"),
+    )
+    .await
+    .expect("store poster");
+    let state = open_runner(&db, fixture.user_id, Uuid::nil()).await;
+    let lines = render(&state, false, 130, 60);
+    assert!(
+        row_of(&lines, "poster ─").is_none(),
+        "bare paper stays off the profile:\n{}",
+        lines.join("\n")
+    );
+    let lines = render(&state, true, 130, 60);
+    let text = lines.join("\n");
+    let heading = row_of(&lines, &format!("runner {}1 ─", look.mark)).expect("runner heading");
+    assert_eq!(
+        bars(&lines, heading, heading + 1),
+        32,
+        "the test card:\n{text}"
+    );
+    assert!(
+        row_of(&lines, HINT).is_none(),
+        "the hint is the owner's:\n{text}"
+    );
+    let state = open_runner(&db, fixture.user_id, fixture.user_id).await;
+    let lines = render(&state, true, 130, 60);
+    let heading = row_of(&lines, &format!("runner {}1 ─", look.mark)).expect("runner heading");
+    assert_eq!(
+        row_of(&lines, HINT),
+        Some(heading + 13),
+        "{}",
+        lines.join("\n")
     );
 }
 
-/// A profile with a tank and a pet draws them as one row on a wide body:
+/// A profile with a tank and a pet draws them as one row at any width:
 /// the reef under its heading, the pet under its own beside it, name and
-/// mood on a row each. A narrow body keeps them two sections, pet first.
+/// mood on a row each.
 #[tokio::test]
 async fn a_pet_sits_beside_its_owners_reef() {
     use late_core::models::marketplace::{
@@ -421,50 +492,42 @@ async fn a_pet_sits_beside_its_owners_reef() {
         line.chars().skip(from).take(len).collect()
     };
 
-    // Wide: one heading row for both, the pet's rows inside the band's
-    // eleven, and the reef stopping short of the pet's column.
-    let lines = render(&state, true, 130, 70);
-    let text = lines.join("\n");
-    let heading = row_of(&lines, "aquarium ─").expect("aquarium heading");
-    let pet_col = col_of(&lines[heading], "pet ─").expect("pet heading on the reef's row");
-    assert_eq!(
-        lines.iter().filter(|line| line.contains("pet ─")).count(),
-        1,
-        "{text}"
-    );
-    let band = &lines[heading + 1..heading + 12];
-    let name = band
-        .iter()
-        .position(|line| cells(line, pet_col, species.len() + 1).trim_end() == species)
-        .unwrap_or_else(|| panic!("the pet's name under its heading:\n{text}"));
-    assert_eq!(
-        cells(&band[name + 1], pet_col, mood.len() + 1).trim_end(),
-        mood,
-        "the mood under the name:\n{text}"
-    );
-    assert!(name >= 3, "three art rows above the name:\n{text}");
-    for row in band {
+    // Wide or a phone, one layout: one heading row for both, the pet's
+    // rows inside the band's eleven, and the reef stopping short of the
+    // pet's column.
+    for width in [130, 52] {
+        let lines = render(&state, true, width, 70);
+        let text = lines.join("\n");
+        let heading = row_of(&lines, "aquarium ─").expect("aquarium heading");
+        let pet_col = col_of(&lines[heading], "pet ─").expect("pet heading on the reef's row");
         assert_eq!(
-            cells(row, pet_col - 3, 3),
-            "   ",
-            "the reef keeps out of the gap:\n{text}"
+            lines.iter().filter(|line| line.contains("pet ─")).count(),
+            1,
+            "{text}"
+        );
+        let band = &lines[heading + 1..heading + 12];
+        let name = band
+            .iter()
+            .position(|line| cells(line, pet_col, species.len() + 1).trim_end() == species)
+            .unwrap_or_else(|| panic!("the pet's name under its heading:\n{text}"));
+        assert_eq!(
+            cells(&band[name + 1], pet_col, mood.len() + 1).trim_end(),
+            mood,
+            "the mood under the name:\n{text}"
+        );
+        assert!(name >= 3, "three art rows above the name:\n{text}");
+        for row in band {
+            assert_eq!(
+                cells(row, pet_col - 3, 3),
+                "   ",
+                "the reef keeps out of the gap:\n{text}"
+            );
+        }
+        assert!(
+            !cells(&band[0], pet_col - 10, 7).trim().is_empty(),
+            "the reef's surface runs up to the gap:\n{text}"
         );
     }
-    assert!(
-        !cells(&band[0], pet_col - 10, 7).trim().is_empty(),
-        "the reef's surface runs up to the gap:\n{text}"
-    );
-
-    // Narrow: two sections, the pet's above the reef's, one caption row.
-    let lines = render(&state, true, 70, 70);
-    let text = lines.join("\n");
-    let pet = row_of(&lines, "pet ─").expect("pet heading");
-    let reef = row_of(&lines, "aquarium ─").expect("aquarium heading");
-    assert!(pet < reef, "pet, then aquarium:\n{text}");
-    assert!(
-        lines[pet + 4].contains(&format!("{species} · {mood}")),
-        "{text}"
-    );
 }
 
 #[tokio::test]

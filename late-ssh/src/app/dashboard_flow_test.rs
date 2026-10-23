@@ -616,6 +616,91 @@ async fn enter_on_a_lounge_card_opens_the_reader() {
     );
 }
 
+/// `r` in the reader on a story with a #lounge card is `r` on the card: the
+/// reply quotes the card's first line and points at it, so Enter on it jumps
+/// back to the card.
+#[tokio::test]
+async fn r_in_the_reader_replies_to_the_storys_lounge_card() {
+    use crate::app::ai::svc::AiService;
+    use crate::app::chat::news::svc::ArticleService;
+    use crate::app::chat::notifications::svc::NotificationService;
+    use crate::app::chat::svc::ChatService;
+    use late_core::models::article::{Article, ArticleParams};
+
+    let url = "https://example.com/terminal-renaissance";
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "card-reply-me").await;
+    let them = create_test_user(&test_db.db, "card-reply-them").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, me.id)
+        .await
+        .expect("join lounge room");
+    let article = Article::create_by_user_id(
+        &client,
+        them.id,
+        ArticleParams {
+            user_id: them.id,
+            url: url.to_string(),
+            title: "The terminal renaissance".to_string(),
+            summary: "• terminals are back".to_string(),
+            ascii_art: "############\n#  late.sh #\n############".to_string(),
+        },
+    )
+    .await
+    .expect("share an article");
+    let chat = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    ArticleService::new(test_db.db.clone(), AiService::new(false, None), chat)
+        .post_lounge_card(&article)
+        .await;
+    let card = ChatMessage::list_recent(&client, lounge.id, 1)
+        .await
+        .expect("list lounge")
+        .remove(0);
+    let mut app = make_app(test_db.db.clone(), me.id, "card-reply-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "share a link in News").await;
+
+    app.handle_input(b"j");
+    app.handle_input(b"\r");
+    assert_eq!(
+        app.chat.reader().map(|reader| reader.url()),
+        Some(url),
+        "Enter on the card opens the story"
+    );
+    // One reply only: its quote carries the card's link, and a fresh
+    // account's link cooldown refuses a second link for half an hour.
+    app.handle_input(b"r");
+    app.handle_input(b"from the reader\r");
+    wait_for_render_contains(&mut app, "from the reader").await;
+
+    let reply = ChatMessage::list_recent(&client, lounge.id, 1)
+        .await
+        .expect("list lounge")
+        .remove(0);
+    assert_eq!(
+        (reply.body.as_str(), reply.reply_to_message_id),
+        (
+            "> @card-reply-them: 📰 The terminal renaissance https://example.com/t...\nfrom the reader",
+            Some(card.id)
+        ),
+        "the reader's reply quotes the card and points at it"
+    );
+
+    app.handle_input(b"j");
+    app.handle_input(b"\r");
+    assert_eq!(
+        app.chat.selected_message_id,
+        Some(card.id),
+        "Enter on the reader's reply jumps to the card"
+    );
+}
+
 /// In the News room `Enter` opens the reader on the selected card and `c`
 /// copies its link, in the room and in the reader alike. A share whose body
 /// has not landed reads as pending.

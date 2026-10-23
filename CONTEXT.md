@@ -290,14 +290,19 @@ query gotchas: `infra/RUNBOOK.md`.
 - **Agents run targeted tests only:** `make test-llm ARGS="-p <crate> --lib -E
   'test(<filter>)'"` starts the check DB and runs nextest in a low-priority
   scope capped to the memory free at launch (it refuses to start when too
-  little is). `--lib` is for a crate with both a lib and a main (`late-ssh`,
-  `late-web`, `late-core`, `late-webview`): without it the lib compiles twice.
+  little is). It builds incrementally, so a rerun after a small edit takes
+  about 25s; keep the `-p` set the same between runs, since a new set
+  rebuilds `late-ssh` cold. `--lib` is for a crate with both a lib and a main
+  (`late-ssh`, `late-web`, `late-core`, `late-webview`): without it the lib
+  compiles twice.
   A main-only crate (`late-cli`, the game doors) drops it. Never raw `cargo test`, `cargo nextest` or `cargo clippy`, and never a
   full suite. `cargo check`, `cargo build` and `cargo fmt` are fine.
 - **`make check` is the human gate:** `cargo fmt --check` on first-party
   packages only (never `cargo fmt --all`, which would reformat vendored crates),
-  then clippy and nextest over the workspace with `--features otel`, the only
-  place the otel build is compiled. It runs its own Postgres from
+  then clippy over the workspace with `--features otel` (the only place the
+  otel build is compiled) and nextest over the workspace without it. Like
+  `test-llm` it builds incrementally, so a rerun after a fix is mostly warm.
+  It runs its own Postgres from
   `docker-compose.check.yml` (`late-check`, port 55433), never the app's.
 - Tests live next to the code they test (`foo_test.rs` beside `foo.rs`, or a
   small inline `mod tests`); no crate has a `tests/` directory. Harnesses:

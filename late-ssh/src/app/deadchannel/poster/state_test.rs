@@ -192,6 +192,21 @@ fn the_test_card_is_seven_bars_across_the_whole_poster() {
     assert_ne!(test_card(8), card);
 }
 
+/// Ink is any glyph but a space: bare paper and typed spaces are none, a
+/// single letter or the test card is.
+#[test]
+fn ink_is_any_glyph_but_a_space() {
+    let mut spaces = blank();
+    spaces.put_glyph(Pos { x: 3, y: 2 }, ' ');
+    let mut letter = blank();
+    letter.put_glyph(Pos { x: 31, y: 11 }, 'x');
+
+    assert!(!has_ink(&blank()), "bare paper");
+    assert!(!has_ink(&spaces), "typed spaces");
+    assert!(has_ink(&letter), "one letter in the corner");
+    assert!(has_ink(&test_card(7)), "the test card");
+}
+
 #[test]
 fn a_stored_canvas_of_another_size_is_clipped_to_the_poster() {
     let mut stored = Canvas::with_size(40, 20);

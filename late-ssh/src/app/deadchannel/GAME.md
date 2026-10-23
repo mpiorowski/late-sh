@@ -189,7 +189,9 @@ IRC, nothing in scrollback; the truth lives on the wire. Details:
   talking about". The half-conversation IS the story shipped into
   #lounge, written by humans, better than any generated line. The
   confusion is the marketing, and the only cure for it is the funnel:
-  fill your bio, wait for the static, get invited.
+  fill your bio, wait for the static, get invited. The one thing that
+  leaves the door is a runner's painted poster on their profile: art,
+  hung alone, with no face, badge, or word of the wire beside it.
 - **The visuals are a setting.** A runner can switch off the clubhouse
   overlay ("hide the static") and remain fully in the game: rations
   tick, wire and city work, they just keep their chat pure chat. Plenty
@@ -953,14 +955,15 @@ single bounty exists.
 
 ### The sheet (what the profile card shows)
 
-For a runner, beside the ordinary profile: the badge (mark, level, and
-marks), the portrait wounded by the missing signal, and the poster. The
-rest of the sheet (signal, exp, bits, the kit, the tally) stays on the
-street, where the strip and the Night City card carry it for the runner
-themself; the stash stays private. For anyone who never
-joined, the card shows nothing game-related; civilians reading a
-runner's card see "ghost, level 7" and have no idea what it means,
-which is fine.
+For a runner reading a runner's card, beside the ordinary profile: the
+badge (mark, level, and marks), the portrait wounded by the missing
+signal, and the poster. The rest of the sheet (signal, exp, bits, the
+kit, the tally) stays on the street, where the strip and the Night City
+card carry it for the runner themself; the stash stays private. A
+civilian reading a runner's card sees nothing game-related but the
+poster, and only once one with ink hangs: the picture alone under a
+plain `poster` heading, no face, no badge. The test card never leaves
+the door.
 
 Titles by marks (LoGD's dragon-kill titles, one neutral name per rung,
 build-time content) live on the sheet and in wire lines, **never in the

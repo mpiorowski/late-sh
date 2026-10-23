@@ -621,7 +621,7 @@ fn live_row_line(row: LiveSectionRow, width: usize, view: &HubView) -> Line<'sta
         LiveSectionRow::Nobody => Line::from(Span::styled("  nobody playing", faint)),
         LiveSectionRow::Name(i) => {
             let pad = width.saturating_sub(2);
-            let name = fit(&view.live[i].entry.playname, pad);
+            let name = fit(view.live[i].player(), pad);
             let style = match view.live_selected == Some(i) {
                 true => selected_row_style(),
                 false => Style::default().fg(theme::TEXT_DIM()),

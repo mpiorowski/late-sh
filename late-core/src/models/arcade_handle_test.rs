@@ -1,4 +1,8 @@
+use std::collections::HashMap;
+
 use crate::models::arcade_handle::*;
+use crate::models::user::User;
+use crate::test_utils::{create_test_user, test_db};
 
 #[test]
 fn shape_accepts_plain_handles() {
@@ -34,4 +38,40 @@ fn reserved_blocks_fallback_and_hash_shapes() {
     // Names merely containing or resembling it stay claimable.
     assert!(!handle_reserved("latecomer"));
     assert!(!handle_reserved("chocolate"));
+}
+
+/// The live strip and the watch show the late.sh username behind a handle:
+/// matched case-insensitively and keyed as the caller spelled it, while a
+/// handle whose account is gone, or that nobody claimed, has none.
+#[tokio::test]
+async fn usernames_by_handles_maps_live_accounts_only() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("client");
+    let alive = create_test_user(&test_db.db, "handle-alive").await;
+    let gone = create_test_user(&test_db.db, "handle-gone").await;
+    for (user_id, handle) in [(alive.id, "Wormsong"), (gone.id, "Ghostly")] {
+        let outcome = ArcadeHandle::claim(&client, user_id, handle)
+            .await
+            .expect("claim handle");
+        assert_eq!(outcome, ClaimOutcome::Claimed);
+    }
+    User::delete_by_id(&client, gone.id)
+        .await
+        .expect("delete user");
+
+    let usernames = ArcadeHandle::usernames_by_handles(
+        &client,
+        &[
+            "WORMSONG".to_string(),
+            "Ghostly".to_string(),
+            "Unclaimed".to_string(),
+        ],
+    )
+    .await
+    .expect("usernames by handles");
+
+    assert_eq!(
+        usernames,
+        HashMap::from([("WORMSONG".to_string(), alive.username.clone())])
+    );
 }
