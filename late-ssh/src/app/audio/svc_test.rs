@@ -166,6 +166,69 @@ async fn submitting_a_track_already_in_the_queue_is_rejected() {
     assert_eq!(snapshot.len(), 2);
 }
 
+/// A favorite outlives its History row and still re-queues, for its owner
+/// only: another listener asking for it by id finds nothing.
+#[tokio::test]
+async fn a_favorite_requeues_after_its_history_row_is_gone_for_its_owner_only() {
+    use crate::app::audio::svc::RequeueSource;
+    use late_core::models::{
+        media_favorite::{FavoriteOutcome, MediaFavorite},
+        media_history_item::MediaHistoryItem,
+    };
+
+    let test = test_db().await;
+    let owner = create_test_user(&test.db, "audio_favorite_owner").await;
+    let other = create_test_user(&test.db, "audio_favorite_other").await;
+    let service = AudioService::new(
+        test.db.clone(),
+        None,
+        PairedClientRegistry::new("https://audio.late.sh"),
+        std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+    );
+    service
+        .submit_validated_video(owner.id, test_video("ggggggggggg", "kept"))
+        .await
+        .expect("play the track");
+    let client = test.db.get().await.expect("db client");
+    let history = MediaHistoryItem::list_recent(&client, 200)
+        .await
+        .expect("history");
+    assert_eq!(
+        service
+            .add_favorite(owner.id, history[0].id, uuid::Uuid::now_v7())
+            .await
+            .expect("add favorite"),
+        FavoriteOutcome::Added
+    );
+    service.force_skip().await.expect("end the track");
+    MediaHistoryItem::delete_by_id(&client, history[0].id)
+        .await
+        .expect("delete history row");
+    let favorite = MediaFavorite::list_for_user(&client, owner.id)
+        .await
+        .expect("favorites")
+        .remove(0);
+
+    let foreign = service
+        .requeue_track(other.id, RequeueSource::Favorite(favorite.id))
+        .await
+        .expect_err("another listener's favorite");
+    assert!(format!("{foreign:#}").contains("favorite not found"));
+
+    let response = service
+        .requeue_track(owner.id, RequeueSource::Favorite(favorite.id))
+        .await
+        .expect("requeue the favorite");
+    assert_eq!(response.position_in_queue, 0);
+    assert_eq!(response.title.as_deref(), Some("kept"));
+    let current = MediaQueueItem::current_playing(&client)
+        .await
+        .expect("current")
+        .expect("playing");
+    assert_eq!(current.external_id, "ggggggggggg");
+    assert_eq!(current.submitter_id, owner.id);
+}
+
 fn test_video(video_id: &str, title: &str) -> YoutubeVideo {
     YoutubeVideo {
         video_id: video_id.to_string(),

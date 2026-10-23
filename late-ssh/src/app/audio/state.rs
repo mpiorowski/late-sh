@@ -1,13 +1,20 @@
 use late_core::{
     audio::VizFrame,
-    models::user::{AudioSource, RadioStation},
+    models::{
+        media_favorite::BOOTH_FAVORITES_LIMIT,
+        user::{AudioSource, RadioStation},
+    },
 };
 use std::time::Instant;
 use tokio::sync::{broadcast, watch};
+use tokio::task::JoinHandle;
 use uuid::Uuid;
 
 use super::{
-    svc::{AudioEvent, AudioService, QueueSnapshot},
+    svc::{
+        AudioEvent, AudioService, FavoriteItemView, FavoritesStep, HistoryItemView, QueueSnapshot,
+        RequeueSource,
+    },
     thumbnail::Thumbnail,
     viz::{LiveBands, Spectrum},
 };
@@ -15,9 +22,21 @@ use crate::app::{common::primitives::Banner, live::pick::LiveCandidate};
 
 pub struct AudioTick {
     pub banner: Option<Banner>,
-    /// True when the shared queue snapshot moved this tick: the booth modal
-    /// and the sidebar music stage draw straight from it.
+    /// True when the shared queue snapshot or the listener's favorites moved
+    /// this tick: the booth modal and the sidebar music stage draw straight
+    /// from them.
     pub changed: bool,
+}
+
+/// What `f` on a History row did to the session's own favorites, before
+/// any write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FavoriteMove {
+    /// The track joined the favorites; the write is queued.
+    Moved,
+    /// The favorites already hold `BOOTH_FAVORITES_LIMIT`: nothing moved,
+    /// nothing written.
+    Full,
 }
 
 pub struct AudioState {
@@ -28,6 +47,13 @@ pub struct AudioState {
     /// The paired client's latest spectrum; `None` while no client is
     /// streaming one.
     spectrum: Option<Spectrum>,
+    /// The listener's booth favorites, newest first, mirrored from
+    /// `AudioEvent::BoothFavoritesLoaded` and moved by the session's own
+    /// `f` ahead of the write. Empty until the booth first opens.
+    favorites: Vec<FavoriteItemView>,
+    /// The last favorites step this session asked for, which the next one
+    /// waits on so they land in order.
+    favorites_step: Option<JoinHandle<()>>,
 }
 
 impl AudioState {
@@ -40,6 +66,8 @@ impl AudioState {
             event_rx,
             snapshot_rx,
             spectrum: None,
+            favorites: Vec::new(),
+            favorites_step: None,
         }
     }
 
@@ -150,9 +178,60 @@ impl AudioState {
         self.service.toggle_unskippable_task(self.user_id, item_id);
     }
 
-    pub fn booth_history_requeue(&self, item_id: Uuid) {
-        self.service
-            .requeue_history_item_task(self.user_id, item_id);
+    pub fn booth_requeue(&self, source: RequeueSource) {
+        self.service.requeue_track_task(self.user_id, source);
+    }
+
+    pub fn booth_favorites(&self) -> &[FavoriteItemView] {
+        &self.favorites
+    }
+
+    /// Re-read the listener's favorites, which `tick` folds into the mirror.
+    pub fn booth_load_favorites(&mut self) {
+        self.queue_favorites_step(FavoritesStep::Load);
+    }
+
+    /// Keep a History track as a favorite: the session's own list moves
+    /// now, so the row changes section under the key, and the write goes
+    /// out as a favorites step whose load brings every session of the
+    /// listener's in line. The session names the favorite's id, so the row
+    /// it shows now is the one the table keeps. A full list refuses here,
+    /// before any write; one another session filled meanwhile refuses in
+    /// the service and comes back as `BoothFavoritesFull`.
+    pub fn booth_add_favorite(&mut self, played: &HistoryItemView) -> FavoriteMove {
+        if self.favorites.len() as i64 >= BOOTH_FAVORITES_LIMIT {
+            self.service.record_refused_favorite();
+            return FavoriteMove::Full;
+        }
+        let favorite = FavoriteItemView {
+            id: Uuid::now_v7(),
+            video_id: played.video_id.clone(),
+            title: played.title.clone(),
+            channel: played.channel.clone(),
+            duration_ms: played.duration_ms,
+            is_stream: played.is_stream,
+        };
+        let step = FavoritesStep::Add {
+            history_item_id: played.id,
+            favorite_id: favorite.id,
+        };
+        self.favorites.insert(0, favorite);
+        self.queue_favorites_step(step);
+        FavoriteMove::Moved
+    }
+
+    /// Let a favorite go, the session's own list first, the way
+    /// `booth_add_favorite` keeps one.
+    pub fn booth_remove_favorite(&mut self, favorite_id: Uuid) {
+        self.favorites.retain(|favorite| favorite.id != favorite_id);
+        self.queue_favorites_step(FavoritesStep::Remove(favorite_id));
+    }
+
+    /// Queue one favorites step behind the session's previous one; it ends
+    /// with `BoothFavoritesLoaded`, which `tick` folds into the mirror.
+    fn queue_favorites_step(&mut self, step: FavoritesStep) {
+        let after = self.favorites_step.take();
+        self.favorites_step = Some(self.service.favorites_task(self.user_id, step, after));
     }
 
     pub fn booth_history_delete(&self, item_id: Uuid) {
@@ -179,7 +258,7 @@ impl AudioState {
     pub fn tick(&mut self) -> AudioTick {
         // Mark the queue snapshot seen so the peek only fires once per
         // publish; renders keep reading it through `queue_snapshot()`.
-        let changed = self.snapshot_rx.has_changed().unwrap_or(false);
+        let mut changed = self.snapshot_rx.has_changed().unwrap_or(false);
         if changed {
             let _ = self.snapshot_rx.borrow_and_update();
         }
@@ -271,11 +350,16 @@ impl AudioState {
                 }
                 AudioEvent::BoothHistoryRequeued {
                     user_id,
+                    source,
                     position,
                     reward_chips,
                 } if user_id == self.user_id => {
+                    let verb = match source {
+                        RequeueSource::History(_) => "Queued from history",
+                        RequeueSource::Favorite(_) => "Queued from favorites",
+                    };
                     banner = Some(Banner::success(&submitted_line(
-                        "Queued from history",
+                        verb,
                         position,
                         reward_chips,
                     )));
@@ -293,6 +377,24 @@ impl AudioState {
                 {
                     banner = Some(Banner::error(&message));
                 }
+                AudioEvent::BoothFavoritesLoaded { user_id, favorites }
+                    if user_id == self.user_id =>
+                {
+                    self.favorites = favorites;
+                    changed = true;
+                }
+                AudioEvent::BoothFavoriteAdded { user_id } if user_id == self.user_id => {
+                    banner = Some(Banner::success("Added to favorites"));
+                }
+                AudioEvent::BoothFavoriteRemoved { user_id } if user_id == self.user_id => {
+                    banner = Some(Banner::success("Removed from favorites"));
+                }
+                AudioEvent::BoothFavoritesFull { user_id } if user_id == self.user_id => {
+                    banner = Some(favorites_full_banner());
+                }
+                AudioEvent::BoothFavoriteFailed { user_id, message } if user_id == self.user_id => {
+                    banner = Some(Banner::error(&message));
+                }
                 AudioEvent::AudioSourcePersistFailed { user_id, message }
                     if user_id == self.user_id =>
                 {
@@ -303,6 +405,14 @@ impl AudioState {
         }
         AudioTick { banner, changed }
     }
+}
+
+/// The banner for an add past `BOOTH_FAVORITES_LIMIT`, whether the session
+/// refused it or the table did.
+pub(crate) fn favorites_full_banner() -> Banner {
+    Banner::error(&format!(
+        "Favorites full ({BOOTH_FAVORITES_LIMIT}) - unfavorite one first"
+    ))
 }
 
 /// The banner a submission gets: where it landed in the queue, and what

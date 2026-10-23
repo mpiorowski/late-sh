@@ -136,10 +136,7 @@ fn open(app: &mut App, source: LiveSource, origin: Origin) -> bool {
         LiveSource::BoothTrack(item_id) => match app.audio.in_booth(item_id) {
             true => {
                 match app.paired_source {
-                    AudioSource::Youtube => {
-                        let submit_enabled = app.audio.booth_submit_enabled();
-                        app.booth_modal_state.open(submit_enabled);
-                    }
+                    AudioSource::Youtube => crate::app::audio::booth::input::open(app),
                     AudioSource::Radio => {
                         app.set_paired_playback_source(AudioSource::Youtube);
                         app.banner = Some(Banner::success("Audio source: YouTube"));

@@ -13,6 +13,21 @@ fn item(video_id: &str, title: Option<&str>, channel: Option<&str>) -> HistoryIt
     }
 }
 
+fn favorite(video_id: &str, title: &str) -> FavoriteItemView {
+    FavoriteItemView {
+        id: Uuid::nil(),
+        video_id: video_id.to_string(),
+        title: Some(title.to_string()),
+        channel: None,
+        duration_ms: None,
+        is_stream: false,
+    }
+}
+
+fn video_ids<'a>(rows: &[HistoryRow<'a>]) -> Vec<&'a str> {
+    rows.iter().map(HistoryRow::video_id).collect()
+}
+
 fn history() -> Vec<HistoryItemView> {
     vec![
         item("aaa", Some("Lofi Beats"), Some("ChillHop")),
@@ -26,8 +41,7 @@ fn history() -> Vec<HistoryItemView> {
 fn empty_query_matches_every_row() {
     let state = BoothModalState::default();
     let history = history();
-    assert_eq!(state.filtered_history(&history).len(), history.len());
-    assert_eq!(state.filtered_history_len(&history), history.len());
+    assert_eq!(state.history_rows(&[], &history).len(), history.len());
 }
 
 #[test]
@@ -38,20 +52,16 @@ fn filter_matches_title_channel_and_video_id_case_insensitively() {
         state.push_history_filter(ch);
     }
     let history = history();
-    let filtered = state.filtered_history(&history);
+    let filtered = state.history_rows(&[], &history);
     // "Lofi Beats" (title) and "Lofi Radio" (channel) both match.
-    assert_eq!(filtered.len(), 2);
-    assert_eq!(state.filtered_history_len(&history), 2);
-    assert_eq!(filtered[0].video_id, "aaa");
-    assert_eq!(filtered[1].video_id, "ccc");
+    assert_eq!(video_ids(&filtered), vec!["aaa", "ccc"]);
 
     state.clear_history_filter_query();
     for ch in "DDD".chars() {
         state.push_history_filter(ch);
     }
-    let filtered = state.filtered_history(&history);
-    assert_eq!(filtered.len(), 1);
-    assert_eq!(filtered[0].video_id, "ddd");
+    let filtered = state.history_rows(&[], &history);
+    assert_eq!(video_ids(&filtered), vec!["ddd"]);
 }
 
 #[test]
@@ -64,10 +74,9 @@ fn selected_history_item_indexes_into_filtered_list() {
     }
     let history = history();
     // Move to the second filtered row.
-    state.move_selection(1, state.filtered_history_len(&history));
-    assert_eq!(state.selected_history_item_id(&history), Some(Uuid::nil()));
-    let item = state.selected_history_item(&history).unwrap();
-    assert_eq!(item.video_id, "ccc");
+    state.move_selection(1, state.history_rows(&[], &history).len());
+    let row = state.selected_history_row(&[], &history).unwrap();
+    assert_eq!(row.video_id(), "ccc");
 }
 
 #[test]
@@ -95,5 +104,45 @@ fn filter_query_is_length_capped() {
     assert_eq!(
         state.history_filter_query().chars().count(),
         HISTORY_FILTER_MAX_LEN
+    );
+}
+
+/// Favorites lead the list, a favorite still in History is not listed twice,
+/// and the filter reaches favorites too, so selection indexes the same rows
+/// the list draws.
+#[test]
+fn favorites_lead_the_list_once_each_and_the_filter_covers_them() {
+    let mut state = BoothModalState::default();
+    state.set_focus(BoothFocus::History);
+    let history = history();
+    let favorites = vec![
+        favorite("zzz", "Lofi Forever"),
+        favorite("bbb", "Jazz Night"),
+    ];
+
+    let rows = state.history_rows(&favorites, &history);
+    assert_eq!(video_ids(&rows), vec!["zzz", "bbb", "aaa", "ccc", "ddd"]);
+    assert!(matches!(
+        rows[1],
+        HistoryRow::Favorite {
+            played: Some(_),
+            ..
+        }
+    ));
+    assert!(matches!(rows[0], HistoryRow::Favorite { played: None, .. }));
+    assert_eq!(rows[0].play_count(), None);
+
+    state.enter_history_filter();
+    for ch in "lofi".chars() {
+        state.push_history_filter(ch);
+    }
+    let rows = state.history_rows(&favorites, &history);
+    assert_eq!(video_ids(&rows), vec!["zzz", "aaa", "ccc"]);
+    state.move_selection(1, rows.len());
+    assert_eq!(
+        state
+            .selected_history_row(&favorites, &history)
+            .map(|row| row.video_id()),
+        Some("aaa")
     );
 }

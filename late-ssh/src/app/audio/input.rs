@@ -18,8 +18,7 @@ pub fn handle_music_suffix(app: &mut App, byte: u8, allow_poll_vote: bool) -> bo
             true
         }
         b'v' | b'V' => {
-            let submit_enabled = app.audio.booth_submit_enabled();
-            app.booth_modal_state.open(submit_enabled);
+            super::booth::input::open(app);
             true
         }
         b's' | b'S' => {

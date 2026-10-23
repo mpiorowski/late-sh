@@ -69,10 +69,7 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
             }
             b'\r' | b'\n' => {
                 match app.clubhouse.nearby() {
-                    Some(Interactive::Jukebox) => {
-                        let submit_enabled = app.audio.booth_submit_enabled();
-                        app.booth_modal_state.open(submit_enabled);
-                    }
+                    Some(Interactive::Jukebox) => crate::app::audio::booth::input::open(app),
                     Some(Interactive::Bartender) => {
                         if let Some(lounge_id) = app.chat.lounge_room_id() {
                             app.chat.insert_mention_in_room(lounge_id, "bartender");

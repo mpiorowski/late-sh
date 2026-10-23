@@ -3414,10 +3414,7 @@ fn handle_status_bar_click(app: &mut App, mouse: MouseEvent) -> bool {
         }
         StatusClick::Shop => open_shop_modal_globally(app),
         StatusClick::Lobby => open_daily_modal_globally(app),
-        StatusClick::Booth => {
-            let submit_enabled = app.audio.booth_submit_enabled();
-            app.booth_modal_state.open(submit_enabled);
-        }
+        StatusClick::Booth => crate::app::audio::booth::input::open(app),
         StatusClick::Arcade => app.set_screen(Screen::Arcade),
         StatusClick::Profiles => app.set_screen(Screen::Profiles),
         // Care on Zen's own row: the companions are already on the page,

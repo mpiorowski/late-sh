@@ -2264,6 +2264,7 @@ Music Booth (v then v)
     PageUp/PageDown jump 8 rows
     /               filter the list
     Enter           queue selected track fresh
+    f               favorite the selected track, or unfavorite a starred one
     d               delete selected track (staff)
 
   Under Now Playing sits the track's YouTube link, so you can select it by hand if your terminal doesn't pass the copy through.
@@ -2271,6 +2272,7 @@ Music Booth (v then v)
   Bringing a track pays you 100 chips, whether you submit a URL or queue one from History, repeats included: at most 5 a day (UTC), and past that it still queues, it just pays nothing.
   The queue is ordered by score, so upvotes pull tracks toward the front. You can't vote on the track that's already playing, but you can skip-vote it.
   History keeps up to 200 unique played tracks, most recently played first, so whatever is playing right now sits at the top. There are no history votes. Requeued history tracks start with 0 live queue votes.
+  Your favorites (up to 20, yours alone, starred) sit on top of History and never fall off it, even once the track leaves the 200; unfavorite one with f to make room.
 
 Skip the current track
   v then s          add your vote to skip. The track skips once enough active YouTube-source users agree.
