@@ -7,7 +7,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 
 use late_core::models::leaderboard::LeaderboardData;
@@ -27,6 +27,11 @@ use super::{
     room_search_modal, settings_modal, sheet_modal,
     state::App,
 };
+const DRAIN_TOAST_MESSAGE: &str =
+    "⚠️  Update available! Press q then r to get the late-est features!";
+const DIRECT_DRAIN_TOAST_MESSAGE: &str =
+    "⚠️ Server updating! Press 'q' to quit, then reconnect to join the new pod.";
+
 use crate::app::door::game::DoorGame;
 use crate::app::files::terminal_image::TerminalImageFrame;
 
@@ -398,6 +403,7 @@ struct DrawContext<'a> {
     ascii_clock: u64,
     splash_ticks: usize,
     splash_hint: &'a str,
+    reconnect_banner: Option<&'a Banner>,
     /// The day's wall piece, hung over the splash when it fits; the
     /// coffee cup otherwise, and always once the account has seen the
     /// day's piece.
@@ -444,6 +450,7 @@ struct DrawContext<'a> {
     news_reader: Option<&'a chat::news::reader::state::ReaderModal>,
     video_modal: Option<&'a crate::app::video::state::WatchModal>,
     is_draining: bool,
+    supports_reconnect_on_drain: bool,
     icon_picker_open: bool,
     icon_picker_state: &'a icon_picker::IconPickerState,
     icon_catalog: Option<&'a icon_picker::catalog::IconCatalogData>,
@@ -693,6 +700,7 @@ impl App {
         // cadence (tick.rs), where its pointer-compare also bumps the row
         // cache epoch; renders read the stored Arc only.
         let username_directory_snapshot = self.last_username_directory.clone();
+        let reconnect_banner = self.active_reconnect_banner();
         let render_usernames = crate::usernames::UsernameLookup::new(
             self.chat.usernames(),
             username_directory_snapshot.as_deref(),
@@ -1870,6 +1878,7 @@ impl App {
                         ascii_clock,
                         splash_ticks: self.splash_ticks,
                         splash_hint: &self.splash_hint,
+                        reconnect_banner: reconnect_banner.as_ref(),
                         splash_piece: self.splash_piece.as_ref(),
                         whisper: crate::app::deadchannel::haunt::ui::whisper_frame_for(
                             &self.haunt,
@@ -1911,6 +1920,7 @@ impl App {
                         news_reader,
                         video_modal,
                         is_draining: self.is_draining.load(std::sync::atomic::Ordering::Relaxed),
+                        supports_reconnect_on_drain: self.supports_reconnect_on_drain,
                         icon_picker_open: self.icon_picker_open,
                         icon_picker_state: &self.icon_picker_state,
                         icon_catalog: self.icon_catalog.as_ref(),
@@ -2005,6 +2015,12 @@ impl App {
 
     fn active_banner(&self) -> Option<&Banner> {
         self.banner.as_ref().filter(|b| b.is_active())
+    }
+
+    fn active_reconnect_banner(&self) -> Option<Banner> {
+        self.reconnect_notice
+            .filter(|notice| notice.is_active())
+            .map(|notice| notice.as_banner())
     }
 
     fn draw(
@@ -2133,6 +2149,9 @@ impl App {
                     ctx.splash_ticks,
                 );
             }
+            if let Some(banner) = current_toast_banner(&ctx) {
+                draw_toast_banner(frame, area, &banner);
+            }
             return;
         }
 
@@ -2195,6 +2214,7 @@ impl App {
         } else {
             app_content_and_sidebar_areas(inner, ctx.show_right_sidebar)
         };
+        let toast_banner = current_toast_banner(&ctx);
         let foreground_overlay_open = foreground_terminal_overlay_open(&ctx);
         // The tour stops that write into a real surface: the two modals take
         // the header themselves, the practice table and the dungeon fight
@@ -2785,40 +2805,8 @@ impl App {
             );
         }
 
-        // Toast banner overlay at top of content area
-        let banner = if ctx.is_draining {
-            Some(Banner {
-                message:
-                    "⚠️ Server updating! Press 'q' to quit, then reconnect to join the new pod."
-                        .to_string(),
-                kind: BannerKind::Error,
-                created_at: std::time::Instant::now(),
-            })
-        } else {
-            ctx.banner.cloned()
-        };
-
-        if let Some(banner) = banner {
-            let color = match banner.kind {
-                BannerKind::Success => theme::SUCCESS(),
-                BannerKind::Error => theme::ERROR(),
-                BannerKind::Info => theme::AMBER(),
-            };
-            // leading space (1) + icon (2) + message + border padding (4)
-            let msg_w = (banner.message.len() as u16) + 7;
-            let toast_w = msg_w.max(20).min(inner.width);
-            // Centred, not right-aligned: screens with a right-hand info rail
-            // (the realm board's territory/points panel, for one) had their
-            // most important column covered by every toast.
-            let toast_x = inner.x + inner.width.saturating_sub(toast_w) / 2;
-            let toast_area = Rect::new(toast_x, inner.y, toast_w, 3);
-            frame.render_widget(Clear, toast_area);
-            let notif_block = Block::default()
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(color));
-            let notif_inner = notif_block.inner(toast_area);
-            frame.render_widget(notif_block, toast_area);
-            draw_banner(frame, notif_inner, &banner);
+        if let Some(banner) = toast_banner {
+            draw_toast_banner(frame, inner, &banner);
         }
 
         crate::app::calendar::ui::draw_modal(frame, inner, ctx.calendar);
@@ -2975,7 +2963,11 @@ impl App {
         }
 
         if ctx.show_quit_confirm {
-            quit_confirm::ui::draw(frame, inner);
+            quit_confirm::ui::draw(
+                frame,
+                inner,
+                ctx.is_draining && ctx.supports_reconnect_on_drain,
+            );
             push_quit_confirm_sayonara_placement(
                 inner,
                 ctx.terminal_image_protocol,
@@ -3114,6 +3106,71 @@ impl App {
             crate::app::deadchannel::haunt::ui::draw_breakthrough(frame, area, breakthrough);
         }
     }
+}
+
+fn current_toast_banner(ctx: &DrawContext<'_>) -> Option<Banner> {
+    if ctx.is_draining {
+        let message = if ctx.supports_reconnect_on_drain {
+            DRAIN_TOAST_MESSAGE
+        } else {
+            DIRECT_DRAIN_TOAST_MESSAGE
+        };
+        Some(Banner {
+            message: message.to_string(),
+            kind: BannerKind::Error,
+            created_at: std::time::Instant::now(),
+        })
+    } else {
+        ctx.reconnect_banner
+            .cloned()
+            .or_else(|| ctx.banner.cloned())
+    }
+}
+
+fn draw_toast_banner(frame: &mut Frame, area: Rect, banner: &Banner) {
+    let color = match banner.kind {
+        BannerKind::Success => theme::SUCCESS(),
+        BannerKind::Error => theme::ERROR(),
+        BannerKind::Info => theme::AMBER_GLOW(),
+    };
+    // leading space (1) + icon (2) + message + border padding (4)
+    let msg_w = Line::raw(banner.message.as_str())
+        .width()
+        .saturating_add(7)
+        .min(usize::from(u16::MAX)) as u16;
+    let toast_w = msg_w.max(20).min(area.width);
+    // Centre toasts so they do not cover the right-hand info rail on screens
+    // such as the Realm board.
+    let toast_x = area.x + area.width.saturating_sub(toast_w) / 2;
+    let toast_area = Rect::new(toast_x, area.y, toast_w, 3);
+    frame.render_widget(Clear, toast_area);
+    let notif_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(color));
+    let notif_inner = notif_block.inner(toast_area);
+    frame.render_widget(notif_block, toast_area);
+    if banner.message == DRAIN_TOAST_MESSAGE {
+        draw_drain_toast_banner(frame, notif_inner, color);
+    } else {
+        draw_banner(frame, notif_inner, banner);
+    }
+}
+
+fn draw_drain_toast_banner(frame: &mut Frame, area: Rect, color: ratatui::style::Color) {
+    let key_style = Style::default()
+        .fg(theme::AMBER_GLOW())
+        .add_modifier(Modifier::BOLD);
+    let text_style = Style::default().fg(color);
+    let content = Paragraph::new(Line::from(vec![
+        Span::styled(" ✗ ", text_style),
+        Span::styled("⚠️  Update available! Press ", text_style),
+        Span::styled("q", key_style),
+        Span::styled(" then ", text_style),
+        Span::styled("r", key_style),
+        Span::styled(" to get the late-est features!", text_style),
+    ]));
+
+    frame.render_widget(content, area);
 }
 
 fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {

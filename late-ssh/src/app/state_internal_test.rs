@@ -150,3 +150,22 @@ fn enter_alt_screen_withholds_mouse_tracking_in_keyboard_mode() {
     assert!(has(&with_mouse, b"\x1b[?2004h"));
     assert!(has(&no_mouse, b"\x1b[?2004h"));
 }
+
+#[test]
+fn reconnect_notice_renders_as_six_second_success_banner() {
+    let notice = ReconnectNotice::new(ReconnectNoticeKind::Transport);
+    let banner = notice.as_banner();
+
+    assert!(notice.is_active());
+    assert_eq!(
+        banner.message,
+        "Reconnected after an update or network problem. Welcome back!"
+    );
+    assert!(matches!(banner.kind, BannerKind::Success));
+
+    let expired = ReconnectNotice {
+        kind: ReconnectNoticeKind::Updated,
+        created_at: Instant::now() - Duration::from_secs(7),
+    };
+    assert!(!expired.is_active());
+}

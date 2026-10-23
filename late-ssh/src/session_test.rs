@@ -1,6 +1,44 @@
 use super::*;
 
 #[tokio::test]
+async fn retire_closed_cleans_once_and_preserves_a_live_replacement() {
+    let registry = SessionRegistry::new();
+    let (old_tx, old_rx) = tokio::sync::mpsc::channel(1);
+    registry
+        .register("stable".into(), old_tx, Uuid::now_v7(), None)
+        .await;
+    drop(old_rx);
+    let (new_tx, mut new_rx) = tokio::sync::mpsc::channel(1);
+    let user = Uuid::now_v7();
+    registry.register("stable".into(), new_tx, user, None).await;
+    assert!(
+        !registry
+            .retire_closed("stable", || panic!("removed replacement"))
+            .await
+    );
+    assert_eq!(registry.user_for("stable").await, Some(user));
+    assert!(
+        registry
+            .send_message("stable", SessionMessage::Heartbeat)
+            .await
+    );
+    assert!(matches!(
+        new_rx.recv().await,
+        Some(SessionMessage::Heartbeat)
+    ));
+    drop(new_rx);
+    let mut cleaned = false;
+    assert!(registry.retire_closed("stable", || cleaned = true).await);
+    assert!(cleaned);
+    assert!(!registry.has_session("stable").await);
+    assert!(
+        !registry
+            .retire_closed("stable", || panic!("cleaned twice"))
+            .await
+    );
+}
+
+#[tokio::test]
 async fn register_and_send() {
     let registry = SessionRegistry::new();
     let (tx, mut rx) = tokio::sync::mpsc::channel(10);

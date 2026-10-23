@@ -30,6 +30,7 @@ changing a domain.
 
 | Crate | What it is | Context |
 |-------|-----------|---------|
+| `late-bastion` | Long-lived SSH frontend (ports 5222/5223 dev), forwarding shell and CLI exec sessions over the backend `/tunnel` WebSocket | `late-bastion/README.md` |
 | `late-ssh` | SSH server (russh, port 2222), the TUI, HTTP API (4000), embedded IRC (6667 dev, 6697 TLS prod) | `late-ssh/CONTEXT.md` |
 | `late-core` | Models, migrations, DB pool, shared helpers | `late-core/CONTEXT.md` |
 | `late-web` | Web pages (axum, port 3000): landing, `/listen`, gallery, profiles, `/stream` proxy, `/live` | `late-web/CONTEXT.md` |
@@ -37,6 +38,8 @@ changing a domain.
 | `late-webview` | The CLI's YouTube helper process (keeps WebKitGTK out of `late`) | `late-webview/CONTEXT.md` |
 | `late-{nethack,dcss,brogue,usurper,dopewars,bashquest,codekeep,zork}` | Standalone door hosts, one pod each | the door's context under `late-ssh/src/app/door/` |
 | `infra/` | Terraform for the RKE2 cluster, Liquidsoap/Icecast config | `infra/README.md`, `infra/RUNBOOK.md` |
+
+`late-bastion` is the long-lived SSH frontend on port `5222` (`5223` in dev2), forwarding shell and CLI exec sessions through the backend `/tunnel` WebSocket. The backend profiles bind that listener on `4002` in dev/dev2 and `4001` in prod, with production peers restricted to `10.42.0.0/16`. An absent or blank production `LATE_TUNNEL_SHARED_SECRET` leaves the private listener off so image-first deploys can precede secret installation; dev profiles require the secret. Both direct SSH and tunneled shells use the same bootstrap and adaptive render loop; tunnel sessions support user-requested reconnect during backend drain.
 
 Backing services: PostgreSQL (CloudNativePG), Icecast + Liquidsoap (house
 radio), LiveKit (voice and streams), the OTLP collector with
@@ -60,6 +63,15 @@ Highest-risk areas: the SSH render loop under backpressure, connection
 admission, chat sync consistency, pair-WS routing and state drift.
 
 ## 3. Rules that cross domains
+
+### Client addresses and moderation
+
+Admission, active-session IPs and server bans use a direct client address or
+verified forwarding metadata. A trusted proxy's transport address is not a
+fallback identity: SSH/bastion reject unknown PROXY sources; IRC retains an
+unknown client IP for account-only moderation. Network trust, resource
+protection and transport diagnostics keep their separate transport address.
+The SSH, IRC and HTTP trust boundaries are in `devdocs/BASTION-FEATURE.md`.
 
 ### Sync render, async services
 

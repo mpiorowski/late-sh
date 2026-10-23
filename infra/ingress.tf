@@ -118,8 +118,8 @@ resource "kubernetes_ingress_v1" "icecast" {
 # RKE2 ingress-nginx controller: HTTP(S) only
 # =============================================================================
 # No TCP services: public SSH and IRC go through ssh-edge (ssh-tcp.tf), so an
-# nginx reload never touches them. depends_on hands port 22 over in order: the
-# chart drops nginx's hostPort DNAT only once ssh-edge is up to take it.
+# nginx reload never touches them. Native host networking keeps the client
+# socket address on both IPv4 and IPv6; the former IPv6 TCP proxy lost it.
 
 moved {
   from = kubernetes_manifest.nginx_tcp_config
@@ -137,6 +137,23 @@ resource "kubernetes_manifest" "ingress_nginx_config" {
     spec = {
       valuesContent = yamlencode({
         controller = {
+          # During the first maintenance cutover, delete the old IPv6 proxy
+          # before this pod starts: both need the node's public IPv6 :80/:443.
+          # hostPort through Canal only exposed the IPv4 side.
+          hostNetwork = true
+          dnsPolicy   = "ClusterFirstWithHostNet"
+          hostPort = {
+            enabled = false
+          }
+          config = {
+            # The ingress is directly internet-facing. Ignore client-supplied
+            # forwarding headers and forward its observed socket address.
+            "use-forwarded-headers"      = "false"
+            "enable-real-ip"             = "false"
+            "use-proxy-protocol"         = "false"
+            "compute-full-forwarded-for" = "false"
+            "disable-ipv6"               = "false"
+          }
           # 2026-09-03: a port-22 connection flood pushed nginx to ~5 cores,
           # the controller's healthz could not answer inside the chart's 1 s
           # probe timeout, kubelet killed it, and the 300 s graceful drain

@@ -57,6 +57,11 @@ jobs:
     env:
       TF_VAR_LOG_LEVEL: ${{ vars.LOG_LEVEL }}
       TF_VAR_GRAFANA_URL: ${{ vars.GRAFANA_URL }}
+      TF_VAR_BASTION_ENABLED: ${{ vars.BASTION_ENABLED || '0' }}
+      TF_VAR_BASTION_HOST_KEY: ${{ secrets.BASTION_HOST_KEY }}
+      TF_VAR_BASTION_SHARED_SECRET: ${{ secrets.BASTION_SHARED_SECRET }}
+      TF_VAR_BASTION_MAX_CONNS_GLOBAL: ${{ vars.BASTION_MAX_CONNS_GLOBAL || '10000' }}
+      TF_VAR_BASTION_SSH_IDLE_TIMEOUT: ${{ vars.BASTION_SSH_IDLE_TIMEOUT || '3600' }}
       TF_VAR_DOCKER_CONFIG_JSON: ${{ secrets.DOCKER_CONFIG_JSON }}
       TF_VAR_SSH_HOST_KEY: ${{ secrets.SSH_HOST_KEY }}
       TF_VAR_AI_API_KEY: ${{ secrets.AI_API_KEY }}
@@ -120,6 +125,7 @@ jobs:
           terraform show -json plan.out > plan.json
 
           deletes=$(jq -r '[.resource_changes[]? | select(.change.actions | index("delete")) | .address] | .[]' plan.json)
+          forgets=$(jq -r '[.resource_changes[]? | select(.change.actions | index("forget")) | .address] | .[]' plan.json)
           moves=$(jq -r '[.resource_changes[]? | select(.previous_address != null) | "\(.previous_address) -> \(.address)"] | .[]' plan.json)
           adds=$(jq '[.resource_changes[]? | select(.change.actions == ["create"])] | length' plan.json)
           changes=$(jq '[.resource_changes[]? | select(.change.actions == ["update"])] | length' plan.json)
@@ -129,6 +135,13 @@ jobs:
             echo ""
             echo "- create: $adds"
             echo "- update in place: $changes"
+            if [ -n "$forgets" ]; then
+              echo ""
+              echo "### state removals (live resources retained)"
+              echo '```'
+              echo "$forgets"
+              echo '```'
+            fi
             if [ -n "$moves" ]; then
               echo ""
               echo "### moves"

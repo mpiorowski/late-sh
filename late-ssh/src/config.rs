@@ -9,7 +9,12 @@
 use anyhow::Context;
 use ipnet::IpNet;
 use late_core::db::DbConfig;
-use std::path::PathBuf;
+use std::{
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    path::PathBuf,
+};
+
+const DEV_TUNNEL_SECRET: &str = "dev-only-not-a-real-secret";
 
 use crate::app::voice::svc::VoiceConfig;
 
@@ -110,6 +115,10 @@ pub struct Config {
     pub ssh_proxy_trusted_cidrs: Vec<IpNet>,
     pub ws_pair_max_attempts_per_ip: usize,
     pub ws_pair_rate_limit_window_secs: u64,
+    pub tunnel_port: u16,
+    /// Empty disables the private listener, allowing image-first secret rollout.
+    pub tunnel_shared_secret: String,
+    pub tunnel_trusted_cidrs: Vec<IpNet>,
     pub ai: AiConfig,
     pub youtube_api_key: Option<String>,
     pub voice: VoiceConfig,
@@ -173,6 +182,20 @@ fn required(key: &str) -> anyhow::Result<String> {
         .map(|v| v.trim().to_string())
         .filter(|v| !v.is_empty());
     value.with_context(|| format!("{key} must be set"))
+}
+
+fn required_non_empty(key: &str) -> anyhow::Result<String> {
+    non_empty_value(
+        key,
+        std::env::var(key).with_context(|| format!("{key} must be set"))?,
+    )
+}
+
+fn non_empty_value(key: &str, value: String) -> anyhow::Result<String> {
+    if value.trim().is_empty() {
+        anyhow::bail!("{key} must not be empty");
+    }
+    Ok(value)
 }
 
 /// Read an optional env value; empty or whitespace-only counts as unset.
@@ -249,6 +272,38 @@ fn parse_cidrs(label: &str, value: &str) -> anyhow::Result<Vec<IpNet>> {
         .collect()
 }
 
+fn validate_tunnel_security(
+    secret: &str,
+    cidrs: &[IpNet],
+    allow_insecure_dev: bool,
+) -> anyhow::Result<()> {
+    if allow_insecure_dev {
+        return Ok(());
+    }
+    if secret == DEV_TUNNEL_SECRET {
+        anyhow::bail!(
+            "LATE_TUNNEL_SHARED_SECRET uses the dev-only default; use an explicit dev profile only for local compose"
+        );
+    }
+    if cidrs
+        .iter()
+        .any(|cidr| cidr.contains(&IpAddr::from(Ipv4Addr::UNSPECIFIED)) && cidr.prefix_len() == 0)
+    {
+        anyhow::bail!(
+            "LATE_TUNNEL_TRUSTED_CIDRS contains 0.0.0.0/0; use an explicit dev profile only for local compose"
+        );
+    }
+    if cidrs
+        .iter()
+        .any(|cidr| cidr.contains(&IpAddr::from(Ipv6Addr::UNSPECIFIED)) && cidr.prefix_len() == 0)
+    {
+        anyhow::bail!(
+            "LATE_TUNNEL_TRUSTED_CIDRS contains ::/0; use an explicit dev profile only for local compose"
+        );
+    }
+    Ok(())
+}
+
 /// Ports that differ between the two local compose instances; everything else
 /// in the dev profile is identical. The compose-side half (host port mapping)
 /// lives in the root .env.dev / .env.dev2 templates and must stay in sync.
@@ -323,6 +378,9 @@ impl Config {
             ssh_proxy_trusted_cidrs: Vec::new(),
             ws_pair_max_attempts_per_ip: 30,
             ws_pair_rate_limit_window_secs: 60,
+            tunnel_port: 4002,
+            tunnel_shared_secret: required_non_empty("LATE_TUNNEL_SHARED_SECRET")?,
+            tunnel_trusted_cidrs: parse_cidrs("tunnel trusted cidrs", "0.0.0.0/0")?,
             // Personal opt-in: AI features stay off without a key.
             ai: dev_ai(optional("LATE_AI_API_KEY")),
             // Personal opt-in: link validation stays off without a key.
@@ -433,6 +491,9 @@ impl Config {
             )?,
             ws_pair_max_attempts_per_ip: 30,
             ws_pair_rate_limit_window_secs: 60,
+            tunnel_port: 4001,
+            tunnel_shared_secret: std::env::var("LATE_TUNNEL_SHARED_SECRET").unwrap_or_default(),
+            tunnel_trusted_cidrs: parse_cidrs("tunnel trusted cidrs", "10.42.0.0/16")?,
             ai: AiConfig {
                 enabled: true,
                 api_key: Some(required("LATE_AI_API_KEY")?),
@@ -542,7 +603,18 @@ impl Config {
                 anyhow::bail!("{name} is enabled without a shared secret");
             }
         }
+        if self.tunnel_enabled() {
+            validate_tunnel_security(
+                &self.tunnel_shared_secret,
+                &self.tunnel_trusted_cidrs,
+                self.env != Env::Prod,
+            )?;
+        }
         Ok(())
+    }
+
+    pub fn tunnel_enabled(&self) -> bool {
+        !self.tunnel_shared_secret.trim().is_empty()
     }
 
     /// Log the full configuration at startup with human-readable descriptions.
@@ -584,6 +656,13 @@ impl Config {
             proxy_protocol = self.ssh_proxy_protocol,
             trusted_cidrs = ?self.ssh_proxy_trusted_cidrs,
             "proxy: PROXY protocol for real client IP behind load balancer"
+        );
+        tracing::info!(
+            enabled = self.tunnel_enabled(),
+            tunnel_port = self.tunnel_port,
+            trusted_cidrs = ?self.tunnel_trusted_cidrs,
+            secret_len = self.tunnel_shared_secret.len(),
+            "tunnel: bastion-only /tunnel WS listener (ClusterIP)"
         );
         tracing::info!(
             frame_drop_log_every = self.frame_drop_log_every,
@@ -686,5 +765,36 @@ impl Config {
             has_secret = !self.zork_secret.is_empty(),
             "zork: trilogy door-game host (late-zork) target and status"
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn non_empty_value_rejects_empty_and_whitespace() {
+        assert!(non_empty_value("SECRET", String::new()).is_err());
+        assert!(non_empty_value("SECRET", "   ".to_string()).is_err());
+    }
+
+    #[test]
+    fn non_empty_value_preserves_original_secret() {
+        let value = non_empty_value("SECRET", "  padded  ".to_string()).unwrap();
+        assert_eq!(value, "  padded  ");
+    }
+
+    #[test]
+    fn tunnel_security_rejects_dev_secret_without_dev_opt_in() {
+        let cidrs = vec!["10.42.0.0/16".parse().unwrap()];
+        let err = validate_tunnel_security(DEV_TUNNEL_SECRET, &cidrs, false).unwrap_err();
+        assert!(format!("{err:#}").contains("dev-only default"));
+    }
+
+    #[test]
+    fn tunnel_security_rejects_world_open_cidr_without_dev_opt_in() {
+        let cidrs = vec!["0.0.0.0/0".parse().unwrap()];
+        let err = validate_tunnel_security("real-secret", &cidrs, false).unwrap_err();
+        assert!(format!("{err:#}").contains("0.0.0.0/0"));
     }
 }

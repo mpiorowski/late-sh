@@ -1,3 +1,24 @@
+//! Shared per-session bootstrap. Loads user-state from the DB and
+//! assembles a `SessionConfig` for `App::new`.
+//!
+//! Used by both the russh `pty_request` callback and the `/tunnel` WS
+//! handler so each transport spends its own code only on its own concerns
+//! (authentication, transport-shape inputs) and shares the heavy
+//! per-session state-loading.
+//!
+//! Caller-side concerns intentionally NOT done here, per the split in
+//! `devdocs/BASTION-FEATURE.md`:
+//!   - authentication (pubkey on russh / pre-shared secret + handshake
+//!     headers on `/tunnel`)
+//!   - per-IP rate limiting
+//!   - per-IP / global connection-count semaphores
+//!   - ban / unknown-user rejection (caller closes with the appropriate
+//!     close code / russh disconnect)
+//!
+//! The helper trusts `inputs.user` to be a fully authenticated, ready-to-play
+//! user and trusts the caller to have passed the appropriate transport-shaped
+//! session token and receivers.
+
 use chrono::{DateTime, Utc};
 use late_core::models::user_ssh_key::{
     KeyLayout, UserSshKey, extract_key_artboard_disclaimer, extract_key_layout,
@@ -25,8 +46,18 @@ pub struct SessionBootstrapInputs {
     pub rows: u16,
     pub term: String,
     pub session_token: String,
+    /// Browser-pair channel. `Some` when the transport opened a paired
+    /// CLI/web session for this user; `None` for transports that don't
+    /// support pairing.
     pub session_rx: Option<mpsc::Receiver<SessionMessage>>,
+    /// Activity-feed subscription. The caller subscribes so it can drop the
+    /// receiver cleanly on connection teardown without this helper holding
+    /// transport state.
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
+    /// True when the transport can request backend-controlled reconnect by
+    /// closing with TUNNEL_CLOSE_RECONNECT_REQUESTED.
+    pub supports_reconnect_on_drain: bool,
+    pub reconnect_reason: Option<u16>,
     /// Fingerprint of the SSH key this session authenticated with, for
     /// per-device settings. `None` for sessions without a key of their own.
     pub key_fingerprint: Option<String>,
@@ -333,6 +364,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         session_token,
         session_rx,
         activity_feed_rx,
+        supports_reconnect_on_drain,
+        reconnect_reason,
         key_fingerprint,
     } = inputs;
 
@@ -627,5 +660,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_radio_station: late_core::models::user::extract_radio_station(&user.settings),
         initial_radio_slots: late_core::models::user::extract_radio_slots(&user.settings),
         is_draining: state.is_draining.clone(),
+        supports_reconnect_on_drain,
+        reconnect_reason,
     }
 }

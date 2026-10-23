@@ -14,12 +14,15 @@ pub mod model;
 pub mod model_test;
 pub mod models;
 pub mod nonogram;
+pub mod proxy_protocol;
 pub mod radio;
 pub mod rate_limit;
 #[cfg(test)]
 mod rate_limit_test;
 pub mod shutdown;
 pub mod telemetry;
+pub mod terminal;
+pub mod tunnel_protocol;
 pub mod vocab;
 #[cfg(test)]
 mod vocab_test;

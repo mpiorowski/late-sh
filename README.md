@@ -45,10 +45,11 @@ Private membership and room bans apply to history as well as live chat.
 
 ## Workspace
 
-The Rust workspace contains the main apps and standalone door hosts:
+This is a Rust workspace with shared services, client tooling, and door-game hosts:
 
 | Crate | Role |
 |-------|------|
+| `late-bastion` | Long-lived SSH frontend that reconnects terminal sessions across backend updates |
 | `late-cli` | Companion CLI for local audio playback, paired controls, and visualizer sync |
 | `late-core` | Shared domain code, database layer, migrations, and infrastructure helpers |
 | `late-ssh` | SSH server and terminal UI application |
@@ -176,6 +177,12 @@ The local check starts a dedicated Compose Postgres project (`late-check`) on
 port `55433` and points DB-backed tests at it via `TEST_DATABASE_URL`.
 Override `CHECK_INSTANCE` or `CHECK_PG_HOST_PORT` if you need a parallel check
 database.
+
+For bastion changes, `make test-bastion` runs the protocol and real backend
+regressions against a disposable database. `make test-bastion-stack` builds
+release images and tests local backend replacements; `make test-bastion-soak`
+runs 100 sessions for 45 minutes with ten replacements. See the
+[QA record](devdocs/BASTION-QA.md) for scope and evidence.
 
 ## Contributing
 

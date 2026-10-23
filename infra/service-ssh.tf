@@ -1,6 +1,6 @@
 # =============================================================================
-# late-ssh: SSH TUI server + HTTP API
-# Ports: 2222 (SSH), 4000 (HTTP API)
+# late-ssh: SSH TUI server + HTTP API + bastion /tunnel
+# Ports: 2222 (SSH), 4000 (HTTP API, public), 4001 (/tunnel, ClusterIP-only)
 # =============================================================================
 
 resource "kubernetes_deployment_v1" "service_ssh" {
@@ -52,6 +52,11 @@ resource "kubernetes_deployment_v1" "service_ssh" {
           port {
             container_port = 4000
             name           = "api"
+          }
+
+          port {
+            container_port = 4001
+            name           = "tunnel"
           }
 
           dynamic "port" {
@@ -132,6 +137,15 @@ resource "kubernetes_deployment_v1" "service_ssh" {
           env {
             name  = "LATE_ENV"
             value = "prod"
+          }
+          env {
+            name = "LATE_TUNNEL_SHARED_SECRET"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.bastion_shared_secret.metadata[0].name
+                key  = "secret"
+              }
+            }
           }
 
           # --- Database (CloudNativePG operator-generated credentials) ---
@@ -409,6 +423,32 @@ resource "kubernetes_service_v1" "service_ssh_sv" {
         port        = local.irc_port
         target_port = "irc"
       }
+    }
+  }
+}
+
+# Internal-only Service for the bastion's /tunnel endpoint. Kept on a
+# separate Service from the public service-ssh-sv so trust domains stay
+# split at the kernel level (no Ingress, no NodePort, no NGINX exposure).
+# Reachability is further constrained by the NetworkPolicy in
+# infra/network-policies.tf — only pods labeled app=service-bastion may
+# reach it.
+resource "kubernetes_service_v1" "service_ssh_internal_sv" {
+  metadata {
+    name = "service-ssh-internal-sv"
+  }
+
+  spec {
+    type = "ClusterIP"
+
+    selector = {
+      app = "service-ssh"
+    }
+
+    port {
+      name        = "tunnel"
+      port        = 4001
+      target_port = "tunnel"
     }
   }
 }

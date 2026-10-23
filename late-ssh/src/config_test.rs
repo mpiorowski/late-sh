@@ -79,6 +79,25 @@ fn zork_secret_is_required_only_when_entry_is_enabled() {
 }
 
 #[test]
+fn prod_tunnel_is_disabled_until_its_secret_is_installed() {
+    let mut config = valid_config();
+    config.env = crate::config::Env::Prod;
+    for secret in ["", " \t\n"] {
+        config.tunnel_shared_secret = secret.to_string();
+        assert!(!config.tunnel_enabled());
+        config
+            .validate()
+            .expect("direct SSH can start without the tunnel");
+    }
+    config.tunnel_shared_secret = "production-secret".to_string();
+    config.tunnel_trusted_cidrs = vec!["10.42.0.0/16".parse().unwrap()];
+    assert!(config.tunnel_enabled());
+    config.validate().expect("configured tunnel is secure");
+    config.tunnel_trusted_cidrs = vec!["0.0.0.0/0".parse().unwrap()];
+    assert!(config.validate().is_err());
+}
+
+#[test]
 fn dev_files_with_both_credentials_uses_the_prod_bucket() {
     let files = crate::config::dev_files(Some("key".to_string()), Some("secret".to_string()))
         .expect("must accept")

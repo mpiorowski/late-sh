@@ -4,7 +4,13 @@ use crossterm::{
     cursor,
     terminal::{self, ClearType},
 };
-use late_core::{MutexRecover, api_types::NowPlaying};
+use late_core::{
+    MutexRecover,
+    api_types::NowPlaying,
+    tunnel_protocol::{
+        TUNNEL_CLOSE_ABNORMAL, TUNNEL_CLOSE_RECONNECT_REQUESTED, TUNNEL_CLOSE_SESSION_ENDED,
+    },
+};
 use ratatui::{Terminal, TerminalOptions, Viewport, layout::Rect};
 
 use super::terminal_backend::GlyphIsolatingBackend;
@@ -12,7 +18,7 @@ use std::{
     collections::{HashMap, HashSet},
     io::{self, Write},
     sync::{Arc, Mutex},
-    time::Instant,
+    time::{Duration, Instant},
 };
 use tokio::sync::{broadcast, mpsc, watch};
 use uuid::Uuid;
@@ -38,7 +44,7 @@ use crate::{
         chat::news::svc::ArticleService,
         chat::notifications::svc::NotificationService,
         chat::svc::ChatService,
-        common::primitives::{Banner, Screen},
+        common::primitives::{Banner, BannerKind, Screen},
         help_modal, hub, mod_modal, profile,
         profile::svc::ProfileService,
         profile_modal, settings_modal, sheet_modal,
@@ -103,6 +109,50 @@ fn voice_toggle_intent(
         (Some(joined), Some(active)) if joined != active => VoiceToggleIntent::JoinOrSwitch,
         (Some(_), _) => VoiceToggleIntent::Leave,
         (None, _) => VoiceToggleIntent::JoinOrSwitch,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ReconnectNoticeKind {
+    Updated,
+    Transport,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ReconnectNotice {
+    kind: ReconnectNoticeKind,
+    created_at: Instant,
+}
+
+impl ReconnectNotice {
+    const DISPLAY_DURATION: Duration = Duration::from_secs(6);
+
+    pub(crate) fn new(kind: ReconnectNoticeKind) -> Self {
+        Self {
+            kind,
+            created_at: Instant::now(),
+        }
+    }
+
+    pub(crate) fn is_active(&self) -> bool {
+        self.created_at.elapsed() < Self::DISPLAY_DURATION
+    }
+
+    pub(crate) fn as_banner(&self) -> Banner {
+        Banner {
+            message: self.message().to_string(),
+            kind: BannerKind::Success,
+            created_at: self.created_at,
+        }
+    }
+
+    fn message(&self) -> &'static str {
+        match self.kind {
+            ReconnectNoticeKind::Updated => "Welcome to the updated late.sh! Enjoy.",
+            ReconnectNoticeKind::Transport => {
+                "Reconnected after an update or network problem. Welcome back!"
+            }
+        }
     }
 }
 
@@ -478,6 +528,8 @@ pub struct SessionConfig {
 
     /// Server state
     pub is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub supports_reconnect_on_drain: bool,
+    pub reconnect_reason: Option<u16>,
 }
 
 /// Main application state
@@ -1069,6 +1121,9 @@ pub struct App {
 
     /// Server state
     pub(crate) is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) supports_reconnect_on_drain: bool,
+    pub(crate) requested_close_code: u16,
+    pub(crate) reconnect_notice: Option<ReconnectNotice>,
 
     /// Emoji + Nerd Font picker
     pub(crate) icon_picker_open: bool,
@@ -1120,6 +1175,23 @@ impl App {
 
     pub fn is_running(&self) -> bool {
         self.running
+    }
+
+    pub(crate) fn close_code(&self) -> u16 {
+        self.requested_close_code
+    }
+
+    pub(crate) fn request_close(&mut self, close_code: u16) {
+        self.requested_close_code = close_code;
+        self.running = false;
+    }
+
+    pub(crate) fn is_draining(&self) -> bool {
+        self.is_draining.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub(crate) fn can_reconnect_on_drain(&self) -> bool {
+        self.supports_reconnect_on_drain && self.is_draining()
     }
 
     /// Recompute this session's away flag (`common/away.rs`) and write it to
@@ -1258,6 +1330,19 @@ impl App {
         // that and drives flows from Home, so tests start there.
         self.screen = Screen::Dashboard;
         self.sync_visible_chat_room();
+    }
+
+    pub fn set_draining_for_tests(&mut self, draining: bool) {
+        self.is_draining
+            .store(draining, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn set_supports_reconnect_on_drain_for_tests(&mut self, supported: bool) {
+        self.supports_reconnect_on_drain = supported;
+    }
+
+    pub fn close_code_for_tests(&self) -> u16 {
+        self.requested_close_code
     }
 
     fn current_visible_chat_room_id(&self) -> Option<Uuid> {
@@ -1598,6 +1683,15 @@ impl App {
         let voice_service = config.voice_service.clone();
         let (voice_join_tx, voice_join_rx) = mpsc::unbounded_channel();
         let splash_hint = super::common::splash_tips::choose_splash_hint(config.is_new_user);
+        let reconnect_notice = match config.reconnect_reason {
+            Some(TUNNEL_CLOSE_RECONNECT_REQUESTED) => {
+                Some(ReconnectNotice::new(ReconnectNoticeKind::Updated))
+            }
+            Some(TUNNEL_CLOSE_ABNORMAL) => {
+                Some(ReconnectNotice::new(ReconnectNoticeKind::Transport))
+            }
+            _ => None,
+        };
         let initial_profile = Profile {
             theme_id: Some(config.initial_theme_id.clone()),
             ..Profile::default()
@@ -1646,6 +1740,7 @@ impl App {
             crate::app::presence::session::PresenceSession::new(&config.presence, session_id);
         let mut app = Self {
             running: true,
+            requested_close_code: TUNNEL_CLOSE_SESSION_ENDED,
             size: (cols, rows),
             screen: landing_screen,
             calendar: crate::app::calendar::state::CalendarState::new(
@@ -2032,6 +2127,8 @@ impl App {
             sent_away: false,
             away: false,
             is_draining: config.is_draining,
+            supports_reconnect_on_drain: config.supports_reconnect_on_drain,
+            reconnect_notice,
             icon_picker_open: false,
             icon_picker_state: super::icon_picker::IconPickerState::default(),
             icon_catalog: None,
@@ -4455,13 +4552,7 @@ impl App {
 
     pub fn leave_alt_screen() -> Vec<u8> {
         let mut buf = Vec::new();
-        buf.extend_from_slice(terminal_string_terminator());
-        // 2004l = disable bracketed paste
-        // 1006l = disable SGR mouse tracking
-        // 1003l = disable any-event mouse tracking
-        // 1000l = disable basic mouse tracking
-        // OSC 111 = reset terminal background color
-        buf.extend_from_slice(b"\x1b[?2004l\x1b[?1006l\x1b[?1003l\x1b[?1000l\x1b]111\x1b\\");
+        buf.extend_from_slice(late_core::terminal::RESET_MODES.as_bytes());
         buf.extend_from_slice(POP_WINDOW_TITLE);
         for command in terminal_image_cleanup_commands() {
             buf.extend_from_slice(&command);
@@ -4506,15 +4597,25 @@ impl Drop for App {
         // The paired registry keeps token-scoped state that outlives the
         // sockets (the once-per-session boot mute claim), so the session end
         // has to retire it or it accumulates a row per session forever.
-        if let Some(paired) = &self.paired_client_registry {
-            paired.forget_session(&self.session_token);
-        }
+        // Close this generation's receiver before retiring its token. A new
+        // tunnel may already have registered the same stable bastion token.
+        self.session_rx.take();
         let Some(registry) = self.session_registry.clone() else {
+            if let Some(paired) = &self.paired_client_registry {
+                paired.forget_session(&self.session_token);
+            }
             return;
         };
         let token = self.session_token.clone();
+        let paired = self.paired_client_registry.clone();
         tokio::spawn(async move {
-            registry.unregister(&token).await;
+            registry
+                .retire_closed(&token, || {
+                    if let Some(paired) = paired {
+                        paired.forget_session(&token);
+                    }
+                })
+                .await;
         });
     }
 }
