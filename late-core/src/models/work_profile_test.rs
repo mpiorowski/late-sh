@@ -84,7 +84,10 @@ async fn index_order_is_last_login_first_whatever_the_status() {
         .expect("create");
     }
     open.update_last_seen(&client).await.expect("open logs in");
-    closed.update_last_seen(&client).await.expect("closed logs in");
+    closed
+        .update_last_seen(&client)
+        .await
+        .expect("closed logs in");
 
     let index = WorkProfile::list_index(&client, 10).await.expect("index");
     let order: Vec<Uuid> = index.iter().map(|card| card.user_id).collect();

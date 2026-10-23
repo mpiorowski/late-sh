@@ -117,7 +117,11 @@ fn a_recent_login_outranks_a_freshly_edited_card() {
 
     let entries = person_entries(&[], &people, false, regular, "", &HashSet::new());
     let order: Vec<Uuid> = entries.iter().map(|entry| entry.user_id).collect();
-    assert_eq!(order, vec![regular, idle], "last login decides, not card edits");
+    assert_eq!(
+        order,
+        vec![regular, idle],
+        "last login decides, not card edits"
+    );
 }
 
 #[test]
