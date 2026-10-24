@@ -352,50 +352,16 @@ Live, in order of evidence behind them:
     arrivals leak at 94% on day two. Flip the row on once the first hour
     has moved, so the first thing new followers find is a place that
     holds them. Not measured yet beyond the counter.
-  - **Where it stands, what is left.** The code is written, in the
-    working tree, uncommitted: the domain
-    (`late-ssh/src/app/herald/`: `svc.rs`, `state.rs`, `mastodon.rs`,
-    `bluesky.rs`, their tests, `CONTEXT.md`), migration 252 with the
-    `herald_posts`, `herald_deliveries` and `herald_settings` tables,
-    `late-core/src/models/herald.rs` with tests, `Config::herald` in
-    `late-ssh/src/config.rs`, the two counters in `metrics.rs`, the
-    Grafana Herald row, the `.env.dev` templates, the context docs, and a
-    corrected skew rule in `infra/RUNBOOK.md`; migration 253 narrows the
-    kind to the board. The herald and config
-    tests pass (`make test-llm ARGS="-p late-core -p late-ssh --lib -E
-    'test(herald) | test(config_test)'"`; it wants 12 GB free,
-    `TEST_LLM_HEADROOM_G=2` lowers the bar by one). Both accounts exist
-    and both took the same post from the dev stack (the seeded board of
-    23 October 2026, with a localhost link, dev's `web_url`): Bluesky
-    `late.sh` (the `_atproto.late.sh` TXT record in Cloudflare, an app
-    password), Fosstodon `@late` (flagged automated, an application with
-    `write:media` and `write:statuses`; dev posts there unlisted). Both
-    pairs are in `.env.local`, and the dev row is off again after each
-    test, so a dev stack left running does not post from a laptop. The
-    prod profile pins both accounts and requires both secrets; the
-    Terraform variable, the `herald-credentials` keys, the env on
-    `service-ssh` and both workflow lines are in place. In order:
-    1. `make check`, commit, PR.
-    2. GitHub secrets `HERALD_MASTODON_TOKEN` (a second application
-       token minted for prod, or the same one) and
-       `HERALD_BLUESKY_PASSWORD` (a second app password named for prod),
-       before any Terraform plan runs on the merged code.
-    3. The `-infra` release, then the ssh image that requires the two
-       env vars (`infra/RUNBOOK.md`, deploy skew rule). The image with
-       the pins crash-loops on `must be set` if it lands first.
-    4. `/herald on` in chat as an admin. The first post is the next
-       16:00 UTC, and only if yesterday's production board has 200 drawn
-       cells; a bare board is a skipped day. `/herald preview` shows what
-       would go out; `/herald post` sends today's picture at once, so
-       the first post need not wait for the hour. Then the human half,
-       daily.
-    5. Bluesky's `bot` self-label on the profile record: no setting in
-       the app; a one-off `putRecord` of `app.bsky.actor.profile` with
-       `labels.values: [{val: "bot"}]`, keeping the display name, bio
-       and avatar the record already holds.
-    6. The future work above, pieces first. A `rel="me"` link from the
-       landing page to `https://fosstodon.org/@late`, so the profile's
-       `https://late.sh` link shows verified.
+  - **What is left.** The herald is built and documented in
+    `late-ssh/src/app/herald/CONTEXT.md` (the post, the switches, the
+    account setup by hand, the telemetry); the rollout of its two secrets
+    follows the deploy skew rule in `infra/RUNBOOK.md`. Open: Bluesky's
+    `bot` self-label on the profile record (no setting in the app; a
+    one-off `putRecord` of `app.bsky.actor.profile` with `labels.values:
+    [{val: "bot"}]`), a `rel="me"` link from the landing page to
+    `https://fosstodon.org/@late` so the profile's `https://late.sh` link
+    shows verified, the vision check before member pieces go out, and the
+    human half above, daily.
 - **Launch posts wait for the deadchannel public flip** (`GAME.md`, "The
   three surfaces"), which is the game's public launch. The Hacker News
   front page in July 2026 peaked at about 100 sessions and settled back to

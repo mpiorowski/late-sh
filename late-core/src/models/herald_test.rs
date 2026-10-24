@@ -2,7 +2,8 @@ use chrono::{Duration, NaiveDate, Utc};
 use tokio_postgres::Client;
 
 use super::herald::{
-    HeraldDelivery, HeraldKind, HeraldNetwork, HeraldPost, HeraldPosted, HeraldSwitch,
+    HeraldDayStatus, HeraldDelivery, HeraldKind, HeraldNetwork, HeraldPost, HeraldPosted,
+    HeraldSwitch,
 };
 use crate::test_utils::test_db;
 
@@ -11,12 +12,17 @@ const DAY: NaiveDate = match NaiveDate::from_ymd_opt(2026, 10, 23) {
     None => unreachable!(),
 };
 
-/// The sweeper's attempt cap, as the tests here drive it.
+/// The checker's attempt cap, as the tests here drive it.
 const MAX_ATTEMPTS: i32 = 3;
 
 /// A stale bound in the past: nothing claimed during the test is stale.
 fn fresh() -> chrono::DateTime<Utc> {
     Utc::now() - Duration::minutes(20)
+}
+
+/// The window's start: every first claim made during the test is inside.
+fn window() -> chrono::DateTime<Utc> {
+    Utc::now() - Duration::minutes(50)
 }
 
 /// Store the pick and settle the day as posted on Mastodon.
@@ -50,19 +56,19 @@ async fn a_day_is_claimed_once_and_settles() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
 
-    let key = HeraldPost::claim(&client, DAY, fresh(), MAX_ATTEMPTS)
+    let key = HeraldPost::claim(&client, DAY, fresh(), window(), MAX_ATTEMPTS)
         .await
         .expect("claim")
         .expect("first claim wins");
     assert_eq!(
-        HeraldPost::claim(&client, DAY, fresh(), MAX_ATTEMPTS)
+        HeraldPost::claim(&client, DAY, fresh(), window(), MAX_ATTEMPTS)
             .await
             .expect("claim"),
         None,
         "a posting day is held"
     );
     assert!(
-        !HeraldPost::is_finished(&client, DAY, MAX_ATTEMPTS)
+        !HeraldPost::is_finished(&client, DAY, window(), MAX_ATTEMPTS)
             .await
             .expect("read"),
         "held is not finished"
@@ -70,14 +76,20 @@ async fn a_day_is_claimed_once_and_settles() {
 
     post(&client, DAY, HeraldKind::Artboard, "daily:2026-10-22").await;
     assert!(
-        HeraldPost::is_finished(&client, DAY, MAX_ATTEMPTS)
+        HeraldPost::is_finished(&client, DAY, window(), MAX_ATTEMPTS)
             .await
             .expect("read")
     );
     assert_eq!(
-        HeraldPost::claim(&client, DAY, Utc::now() + Duration::hours(1), MAX_ATTEMPTS)
-            .await
-            .expect("claim"),
+        HeraldPost::claim(
+            &client,
+            DAY,
+            Utc::now() + Duration::hours(1),
+            window(),
+            MAX_ATTEMPTS
+        )
+        .await
+        .expect("claim"),
         None,
         "a posted day is never reclaimed, however old"
     );
@@ -107,7 +119,7 @@ async fn a_day_is_claimed_once_and_settles() {
     // delivery that landed before the day failed survive the retry, and
     // a second record of the same network is ignored.
     let later = DAY + Duration::days(1);
-    let first = HeraldPost::claim(&client, later, fresh(), MAX_ATTEMPTS)
+    let first = HeraldPost::claim(&client, later, fresh(), window(), MAX_ATTEMPTS)
         .await
         .expect("claim")
         .expect("wins");
@@ -127,7 +139,7 @@ async fn a_day_is_claimed_once_and_settles() {
         .await
         .expect("record delivery again");
     HeraldPost::mark_failed(&client, later).await.expect("fail");
-    let retry = HeraldPost::claim(&client, later, fresh(), MAX_ATTEMPTS)
+    let retry = HeraldPost::claim(&client, later, fresh(), window(), MAX_ATTEMPTS)
         .await
         .expect("claim")
         .expect("a failed day under the cap is claimed again");
@@ -161,48 +173,54 @@ async fn failures_retry_to_the_cap_and_stale_claims_are_taken_over() {
     let client = test_db.db.get().await.expect("db client");
 
     for attempt in 1..=MAX_ATTEMPTS {
-        HeraldPost::claim(&client, DAY, fresh(), MAX_ATTEMPTS)
+        HeraldPost::claim(&client, DAY, fresh(), window(), MAX_ATTEMPTS)
             .await
             .expect("claim")
             .unwrap_or_else(|| panic!("attempt {attempt} claims"));
         HeraldPost::mark_failed(&client, DAY).await.expect("fail");
     }
     assert_eq!(
-        HeraldPost::claim(&client, DAY, fresh(), MAX_ATTEMPTS)
+        HeraldPost::claim(&client, DAY, fresh(), window(), MAX_ATTEMPTS)
             .await
             .expect("claim"),
         None,
         "at the cap the day rests"
     );
     assert!(
-        HeraldPost::is_finished(&client, DAY, MAX_ATTEMPTS)
+        HeraldPost::is_finished(&client, DAY, window(), MAX_ATTEMPTS)
             .await
             .expect("read")
     );
 
     let stuck = DAY + Duration::days(1);
-    HeraldPost::claim(&client, stuck, fresh(), MAX_ATTEMPTS)
+    HeraldPost::claim(&client, stuck, fresh(), window(), MAX_ATTEMPTS)
         .await
         .expect("claim")
         .expect("wins");
     assert_eq!(
-        HeraldPost::claim(&client, stuck, fresh(), MAX_ATTEMPTS)
+        HeraldPost::claim(&client, stuck, fresh(), window(), MAX_ATTEMPTS)
             .await
             .expect("claim"),
         None,
         "a live claim is held"
     );
     let stale_bound_in_the_future = Utc::now() + Duration::minutes(1);
-    HeraldPost::claim(&client, stuck, stale_bound_in_the_future, MAX_ATTEMPTS)
-        .await
-        .expect("claim")
-        .expect("a stale claim is taken over");
+    HeraldPost::claim(
+        &client,
+        stuck,
+        stale_bound_in_the_future,
+        window(),
+        MAX_ATTEMPTS,
+    )
+    .await
+    .expect("claim")
+    .expect("a stale claim is taken over");
 
     HeraldPost::finish_skipped(&client, stuck)
         .await
         .expect("skip");
     assert!(
-        HeraldPost::is_finished(&client, stuck, MAX_ATTEMPTS)
+        HeraldPost::is_finished(&client, stuck, window(), MAX_ATTEMPTS)
             .await
             .expect("read"),
         "a skipped day is finished"
@@ -231,5 +249,93 @@ async fn the_switch_is_seeded_off_and_flips() {
         HeraldSwitch::is_on(&client)
             .await
             .expect("read flipped switch")
+    );
+}
+
+/// A claim older than the window is never taken again, whatever the
+/// attempt count says: a stale `posting` row past it rests as failed.
+#[tokio::test]
+async fn a_claim_past_the_window_rests_as_failed() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    HeraldPost::claim(&client, DAY, fresh(), window(), MAX_ATTEMPTS)
+        .await
+        .expect("claim")
+        .expect("wins");
+    // The replica died an hour ago, mid-call.
+    client
+        .execute(
+            "UPDATE herald_posts SET claimed_at = $2, first_claimed_at = $2 WHERE day = $1",
+            &[&DAY, &(Utc::now() - Duration::hours(1))],
+        )
+        .await
+        .expect("age the claim");
+    assert_eq!(
+        HeraldPost::claim(&client, DAY, fresh(), window(), MAX_ATTEMPTS)
+            .await
+            .expect("claim"),
+        None,
+        "past the window the day is not taken over"
+    );
+    assert!(
+        HeraldPost::is_finished(&client, DAY, window(), MAX_ATTEMPTS)
+            .await
+            .expect("read")
+    );
+    let day = HeraldPost::day(&client, DAY)
+        .await
+        .expect("read")
+        .expect("row");
+    assert_eq!(day.status, HeraldDayStatus::Failed);
+    assert_eq!(day.attempts, 1, "no attempt was spent");
+}
+
+/// `/herald on` settles a day nobody claimed as skipped, never to be
+/// claimed; a day with a row is left alone.
+#[tokio::test]
+async fn an_unclaimed_day_is_settled_unposted() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    assert!(
+        HeraldPost::settle_unclaimed(&client, DAY)
+            .await
+            .expect("settle")
+    );
+    assert!(
+        !HeraldPost::settle_unclaimed(&client, DAY)
+            .await
+            .expect("settle again"),
+        "a row is left alone"
+    );
+    assert!(
+        HeraldPost::is_finished(&client, DAY, window(), MAX_ATTEMPTS)
+            .await
+            .expect("read")
+    );
+    assert_eq!(
+        HeraldPost::claim(&client, DAY, fresh(), window(), MAX_ATTEMPTS)
+            .await
+            .expect("claim"),
+        None
+    );
+    let day = HeraldPost::day(&client, DAY)
+        .await
+        .expect("read")
+        .expect("row");
+    assert_eq!(day.status, HeraldDayStatus::Skipped);
+    assert_eq!(day.attempts, 0);
+
+    let claimed = DAY + Duration::days(1);
+    HeraldPost::claim(&client, claimed, fresh(), window(), MAX_ATTEMPTS)
+        .await
+        .expect("claim")
+        .expect("wins");
+    assert!(
+        !HeraldPost::settle_unclaimed(&client, claimed)
+            .await
+            .expect("settle"),
+        "a claimed day is not touched"
     );
 }

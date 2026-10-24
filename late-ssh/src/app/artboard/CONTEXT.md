@@ -146,7 +146,7 @@ Runtime behavior in `late-ssh/src/dartboard.rs`:
 - Failed saves mark the state dirty again and retry.
 
 Archive behavior:
-- Daily key: `daily:YYYY-MM-DD`.
+- Daily key: `daily:YYYY-MM-DD`, built by `Snapshot::daily_key` (the rollover, moderation and the herald all call it).
 - Daily rollover wakes at each UTC day boundary and archives the previous UTC day.
 - Daily retention keeps the newest 7 daily snapshots.
 - Monthly key: `monthly:YYYY-MM`.

@@ -1,10 +1,11 @@
 use chrono::{NaiveDate, TimeZone, Utc};
 use dartboard_core::{Canvas, Pos};
+use late_core::models::artboard::Snapshot;
 use late_core::models::herald::HeraldKind;
 
 use super::state::{
-    BOARD_MIN_INK, BoardCandidate, BoardLook, HeraldCommand, Picture, alt_text, board_key,
-    ink_cells, parse_herald_command, post_due_day, shown_day, status_text,
+    BOARD_MIN_INK, BoardCandidate, BoardLook, HeraldCommand, Picture, alt_text, ink_cells,
+    parse_herald_command, post_due_day, shown_day, status_text,
 };
 
 /// The shortest limit among the networks: Bluesky's 300 graphemes
@@ -18,7 +19,7 @@ fn day(d: u32) -> NaiveDate {
 
 fn board() -> BoardCandidate {
     BoardCandidate {
-        key: board_key(day(22)),
+        key: Snapshot::daily_key(day(22)),
         shown: day(22),
     }
 }
@@ -34,7 +35,6 @@ fn the_post_is_due_at_sixteen_utc_and_catches_up_after_it() {
     assert_eq!(post_due_day(late), day(23));
     // The post dated the 23rd shows the 22nd's board.
     assert_eq!(shown_day(day(23)), day(22));
-    assert_eq!(board_key(day(22)), "daily:2026-10-22");
 }
 
 /// The picture knows its route, its page, its subject, and its words:
@@ -54,7 +54,7 @@ fn the_words_fit_and_never_mention_anyone() {
         picture.picture_path(),
         "/gallery/daily:2026-10-22/image.png"
     );
-    assert_eq!(picture.page_path(), "/gallery?key=daily:2026-10-22");
+    assert_eq!(picture.page_path(), "/gallery");
     let text = status_text(&picture, "https://late.sh");
     assert!(text.chars().count() < TEXT_LIMIT, "{text}");
     assert!(text.contains("22 October 2026"));
@@ -62,7 +62,7 @@ fn the_words_fit_and_never_mention_anyone() {
         !text.contains('@'),
         "a bare @ would ping a stranger: {text}"
     );
-    assert!(text.contains("https://late.sh/gallery?key=daily:2026-10-22"));
+    assert!(text.contains("https://late.sh/gallery\n"), "{text}");
     assert_eq!(text.matches('#').count(), 4);
     let alt = alt_text(&picture);
     assert!(alt.contains("22 October 2026"));
@@ -74,7 +74,7 @@ fn the_words_fit_and_never_mention_anyone() {
 #[test]
 fn the_look_decides_by_the_ink_bar() {
     let look = |ink| BoardLook {
-        key: board_key(day(22)),
+        key: Snapshot::daily_key(day(22)),
         shown: day(22),
         ink,
     };

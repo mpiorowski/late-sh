@@ -18,8 +18,10 @@ use uuid::Uuid;
 
 use super::bluesky::tid_for;
 use super::bluesky_test::png;
-use super::state::{BOARD_MIN_INK, BoardLook, HeraldCommand, board_key, shown_day};
-use super::svc::{CommandOutcome, DayWorked, HERALD_MAX_ATTEMPTS, HeraldService};
+use super::state::{BOARD_MIN_INK, BoardLook, HeraldCommand, post_due_day, shown_day};
+use super::svc::{
+    CommandOutcome, DayWorked, HERALD_CLAIM_WINDOW, HERALD_MAX_ATTEMPTS, HeraldService, NextPost,
+};
 use crate::config::{BlueskyConfig, HeraldConfig, HeraldVisibility, MastodonConfig};
 use crate::test_helpers::new_test_db;
 
@@ -207,7 +209,7 @@ async fn daily_board(client: &Client, shown: NaiveDate, ink: usize) {
     }
     Snapshot::upsert(
         client,
-        &board_key(shown),
+        &Snapshot::daily_key(shown),
         serde_json::to_value(&canvas).expect("canvas json"),
         serde_json::json!({"cells": []}),
     )
@@ -301,10 +303,7 @@ async fn the_herald_posts_the_board_and_rests_on_a_bare_one() {
         assert_eq!(status["language"], "en");
         let text = status["status"].as_str().expect("text");
         assert!(text.contains("The Artboard yesterday"), "{text}");
-        assert!(
-            text.contains("https://late.sh/gallery?key=daily:2026-10-22"),
-            "{text}"
-        );
+        assert!(text.contains("https://late.sh/gallery\n"), "{text}");
         assert!(text.contains("#MastoArt"), "{text}");
 
         assert_eq!(log.sessions[0]["identifier"], "late.test");
@@ -357,10 +356,7 @@ async fn the_herald_posts_the_board_and_rests_on_a_bare_one() {
         assert_eq!(log.picture_paths[1], "/gallery/daily:2026-10-23/image.png");
         assert!(log.media_uploads[1].1.contains("23 October 2026"));
         let text = log.statuses[1].2["status"].as_str().expect("text");
-        assert!(
-            text.contains("https://late.sh/gallery?key=daily:2026-10-23"),
-            "{text}"
-        );
+        assert!(text.contains("https://late.sh/gallery\n"), "{text}");
         assert_eq!(log.records[1].1["record"]["text"], text);
     }
 
@@ -374,9 +370,14 @@ async fn the_herald_posts_the_board_and_rests_on_a_bare_one() {
         None
     );
     assert!(
-        HeraldPost::is_finished(&client, day_three, HERALD_MAX_ATTEMPTS)
-            .await
-            .expect("read"),
+        HeraldPost::is_finished(
+            &client,
+            day_three,
+            Utc::now() - HERALD_CLAIM_WINDOW,
+            HERALD_MAX_ATTEMPTS
+        )
+        .await
+        .expect("read"),
         "a skipped day is settled"
     );
     let log = log.lock().expect("log");
@@ -487,7 +488,8 @@ async fn the_commands_flip_read_and_post_today_by_hand() {
 
     assert_eq!(
         herald.run_command(HeraldCommand::On, now).await,
-        CommandOutcome::SwitchedOn
+        CommandOutcome::SwitchedOn(NextPost::AtHourAfterSkipping(post_due_day(now))),
+        "yesterday was due while off and stays unposted"
     );
     assert!(HeraldSwitch::is_on(&client).await.expect("read"));
     assert_eq!(
@@ -563,4 +565,66 @@ async fn the_commands_flip_read_and_post_today_by_hand() {
     let log = log.lock().expect("log");
     assert_eq!(log.statuses.len(), 1);
     assert_eq!(log.records.len(), 1);
+}
+
+/// Switching on in the morning does not catch up the day the switch
+/// slept through: that day is settled unposted and the first post is
+/// today's, at 16:00. After the hour, an unposted today goes out at the
+/// next check.
+#[tokio::test]
+async fn switching_on_waits_for_the_hour() {
+    let test_db = new_test_db().await;
+    let db = test_db.db.clone();
+    let client = db.get().await.expect("db client");
+    let (base, log) = fake_servers().await;
+    let herald = service(db.clone(), &base);
+    let morning = Utc.with_ymd_and_hms(2026, 10, 23, 10, 0, 0).unwrap();
+    let today = morning.date_naive();
+    let slept = post_due_day(morning);
+    daily_board(&client, shown_day(slept), BOARD_MIN_INK).await;
+    daily_board(&client, shown_day(today), BOARD_MIN_INK).await;
+
+    assert_eq!(
+        herald.run_command(HeraldCommand::On, morning).await,
+        CommandOutcome::SwitchedOn(NextPost::AtHourAfterSkipping(slept))
+    );
+    assert_eq!(row(&client, slept).await.1, "skipped");
+
+    let mut finished = None;
+    assert!(
+        !herald
+            .check(morning + Duration::minutes(5), &mut finished)
+            .await
+    );
+    assert_eq!(finished, Some(slept));
+    assert!(
+        log.lock().expect("log").statuses.is_empty(),
+        "nothing goes out before the hour"
+    );
+
+    let hour = Utc.with_ymd_and_hms(2026, 10, 23, 16, 5, 0).unwrap();
+    assert!(herald.check(hour, &mut finished).await);
+    assert_eq!(finished, Some(today));
+    assert_eq!(row(&client, today).await.1, "posted");
+    {
+        let log = log.lock().expect("log");
+        assert_eq!(log.statuses.len(), 1);
+        assert_eq!(
+            log.picture_paths,
+            vec!["/gallery/daily:2026-10-22/image.png"],
+            "today's board, not the one the switch slept through"
+        );
+    }
+    assert_eq!(
+        herald.run_command(HeraldCommand::On, hour).await,
+        CommandOutcome::SwitchedOn(NextPost::AtHour),
+        "today has its row"
+    );
+
+    // The next evening with nothing posted yet: on means the next check.
+    let evening = Utc.with_ymd_and_hms(2026, 10, 24, 17, 0, 0).unwrap();
+    assert_eq!(
+        herald.run_command(HeraldCommand::On, evening).await,
+        CommandOutcome::SwitchedOn(NextPost::NextCheck)
+    );
 }

@@ -11,7 +11,8 @@
 //! its row and the next check claims it again, up to
 //! `HERALD_MAX_ATTEMPTS`, reusing the stored pick and skipping the
 //! networks already delivered; a claim whose replica died is taken over
-//! after `HERALD_STALE_CLAIM`.
+//! after `HERALD_STALE_CLAIM`, and never after `HERALD_CLAIM_WINDOW` from
+//! the day's first claim, the hour Mastodon honours the idempotency key.
 //!
 //! Two switches gate the checker: `Config::herald` (a network configured,
 //! off in dev without its pair) and the `herald_settings` row
@@ -30,7 +31,9 @@ use anyhow::{Context, bail};
 use chrono::{DateTime, NaiveDate, Utc};
 use late_core::db::Db;
 use late_core::models::artboard::Snapshot;
-use late_core::models::herald::{HeraldDay, HeraldNetwork, HeraldPost, HeraldPosted, HeraldSwitch};
+use late_core::models::herald::{
+    HeraldDay, HeraldDayStatus, HeraldNetwork, HeraldPost, HeraldPosted, HeraldSwitch,
+};
 use tokio::sync::broadcast;
 use tracing::Instrument;
 use uuid::Uuid;
@@ -55,6 +58,12 @@ pub const HERALD_STALE_CLAIM: chrono::Duration = chrono::Duration::minutes(20);
 /// Three checks is fifteen minutes of retries; a network outage or a
 /// revoked token should not turn into a day-long retry storm.
 pub const HERALD_MAX_ATTEMPTS: i32 = 3;
+
+/// How long after a day's first claim it may be claimed again at all.
+/// Mastodon keeps an `Idempotency-Key` for about an hour; a retry outside
+/// it would be a second status, so past this a stale claim rests as
+/// failed. Three claims twenty minutes apart fit inside.
+pub const HERALD_CLAIM_WINDOW: chrono::Duration = chrono::Duration::minutes(50);
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const USER_AGENT: &str = "late.sh herald (+https://late.sh)";
@@ -81,10 +90,21 @@ pub(crate) enum DayWorked {
     Failed,
 }
 
+/// When the first post after `/herald on` goes out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NextPost {
+    /// Today's day is due and unclaimed: the next check posts it.
+    NextCheck,
+    /// Today is not due yet, or already has its row.
+    AtHour,
+    /// Yesterday was due while the switch was off; it stays unposted.
+    AtHourAfterSkipping(NaiveDate),
+}
+
 /// The answer to an admin's `/herald` command.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum CommandOutcome {
-    SwitchedOn,
+    SwitchedOn(NextPost),
     SwitchedOff,
     /// The row and today's day as they stand.
     Status {
@@ -229,9 +249,26 @@ impl HeraldService {
         let result: anyhow::Result<CommandOutcome> = async {
             match command {
                 HeraldCommand::On => {
+                    // The day the switch slept through is settled before the
+                    // row flips, or the next check would catch it up with a
+                    // two-day-old board and post again at 16:00.
                     let client = self.db.get().await?;
+                    let due = state::post_due_day(now);
+                    let next = if due < today {
+                        if HeraldPost::settle_unclaimed(&client, due).await? {
+                            tracing::info!(day = %due, "the herald left the day it slept through unposted");
+                            NextPost::AtHourAfterSkipping(due)
+                        } else {
+                            NextPost::AtHour
+                        }
+                    } else {
+                        match HeraldPost::day(&client, today).await? {
+                            None => NextPost::NextCheck,
+                            Some(_) => NextPost::AtHour,
+                        }
+                    };
                     HeraldSwitch::set(&client, true).await?;
-                    Ok(CommandOutcome::SwitchedOn)
+                    Ok(CommandOutcome::SwitchedOn(next))
                 }
                 HeraldCommand::Off => {
                     let client = self.db.get().await?;
@@ -302,13 +339,26 @@ impl HeraldService {
 
     async fn claim(&self, day: NaiveDate) -> anyhow::Result<Option<Uuid>> {
         let client = self.db.get().await?;
-        let stale_before = Utc::now() - HERALD_STALE_CLAIM;
-        HeraldPost::claim(&client, day, stale_before, HERALD_MAX_ATTEMPTS).await
+        let now = Utc::now();
+        HeraldPost::claim(
+            &client,
+            day,
+            now - HERALD_STALE_CLAIM,
+            now - HERALD_CLAIM_WINDOW,
+            HERALD_MAX_ATTEMPTS,
+        )
+        .await
     }
 
     async fn finished(&self, day: NaiveDate) -> anyhow::Result<bool> {
         let client = self.db.get().await?;
-        HeraldPost::is_finished(&client, day, HERALD_MAX_ATTEMPTS).await
+        HeraldPost::is_finished(
+            &client,
+            day,
+            Utc::now() - HERALD_CLAIM_WINDOW,
+            HERALD_MAX_ATTEMPTS,
+        )
+        .await
     }
 
     /// Claim the day and post it. Every outcome is counted and logged
@@ -317,10 +367,12 @@ impl HeraldService {
         let key = match self.claim(day).await {
             Ok(Some(key)) => key,
             Ok(None) => {
-                metrics::record_herald_post(HeraldPostResult::Lost);
                 return match self.finished(day).await {
                     Ok(true) => DayWorked::Finished,
-                    Ok(false) => DayWorked::Held,
+                    Ok(false) => {
+                        metrics::record_herald_post(HeraldPostResult::Lost);
+                        DayWorked::Held
+                    }
                     Err(error) => {
                         tracing::warn!(error = ?error, %day, "failed to read the herald's day");
                         DayWorked::Held
@@ -328,6 +380,7 @@ impl HeraldService {
                 };
             }
             Err(error) => {
+                metrics::record_herald_post(HeraldPostResult::Failed);
                 late_core::error_span!(
                     "herald_claim_failed",
                     error = ?error,
@@ -551,7 +604,7 @@ impl HeraldService {
         day: NaiveDate,
     ) -> anyhow::Result<BoardLook> {
         let shown = state::shown_day(day);
-        let key = state::board_key(shown);
+        let key = Snapshot::daily_key(shown);
         let ink = match Snapshot::find_by_board_key(client, &key).await? {
             Some(snapshot) => {
                 let canvas: dartboard_core::Canvas = serde_json::from_value(snapshot.canvas)
@@ -637,11 +690,41 @@ fn names(networks: &[HeraldNetwork]) -> String {
         .join(", ")
 }
 
+/// Today's row in one clause, for `/herald status`.
+fn describe_day(day: &HeraldDay) -> String {
+    match day.status {
+        HeraldDayStatus::Posting => "posting right now".to_string(),
+        HeraldDayStatus::Posted => format!(
+            "posted to {}",
+            names(
+                &day.deliveries
+                    .iter()
+                    .map(|delivery| delivery.network)
+                    .collect::<Vec<_>>()
+            )
+        ),
+        HeraldDayStatus::Skipped => "skipped, nothing worth posting".to_string(),
+        HeraldDayStatus::Failed => format!(
+            "failed after {} attempt(s), {} delivered",
+            day.attempts,
+            day.deliveries.len()
+        ),
+    }
+}
+
 /// One line per outcome, the admin's whole answer.
 fn banner_for(outcome: CommandOutcome) -> Banner {
     match outcome {
-        CommandOutcome::SwitchedOn => {
+        CommandOutcome::SwitchedOn(NextPost::NextCheck) => Banner::success(
+            "The herald is on: today's post goes out at the next check, within 5 minutes",
+        ),
+        CommandOutcome::SwitchedOn(NextPost::AtHour) => {
             Banner::success("The herald is on: the next post goes out at 16:00 UTC")
+        }
+        CommandOutcome::SwitchedOn(NextPost::AtHourAfterSkipping(day)) => {
+            Banner::success(&format!(
+                "The herald is on: {day} was due while it was off and stays unposted; the next post goes out at 16:00 UTC"
+            ))
         }
         CommandOutcome::SwitchedOff => {
             Banner::success("The herald is off: nothing posts until /herald on")
@@ -650,7 +733,7 @@ fn banner_for(outcome: CommandOutcome) -> Banner {
             let switch = if on { "on" } else { "off" };
             let state = match today {
                 None => "no post yet".to_string(),
-                Some(row) => row.describe(),
+                Some(row) => describe_day(&row),
             };
             Banner::info(&format!("Herald {switch}. Today, {day}: {state}"))
         }

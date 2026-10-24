@@ -4,7 +4,6 @@
 
 use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Utc};
 use dartboard_core::{Canvas, CellValue};
-use late_core::models::artboard::Snapshot;
 use late_core::models::herald::HeraldKind;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
@@ -47,11 +46,6 @@ pub(crate) fn post_due_day(now: DateTime<Utc>) -> NaiveDate {
 /// the Artboard's rollover archived at midnight.
 pub(crate) fn shown_day(day: NaiveDate) -> NaiveDate {
     day - Duration::days(1)
-}
-
-/// The Artboard key for the board as it stood at the end of `shown`.
-pub(crate) fn board_key(shown: NaiveDate) -> String {
-    format!("{}{}", Snapshot::DAILY_PREFIX, shown.format("%Y-%m-%d"))
 }
 
 /// Cells carrying a glyph that is not whitespace.
@@ -136,10 +130,12 @@ impl Picture {
         }
     }
 
-    /// The page the post links to, on late-web.
+    /// The page the post links to, on late-web. The gallery itself, not
+    /// the day's snapshot: the Artboard keeps only the newest seven dailies
+    /// (`app/artboard/CONTEXT.md`), and a post outlives that by years.
     pub(crate) fn page_path(&self) -> String {
         match self {
-            Self::Board(board) => format!("/gallery?key={}", board.key),
+            Self::Board(_) => "/gallery".to_string(),
         }
     }
 }
@@ -173,7 +169,8 @@ pub(crate) fn alt_text(picture: &Picture) -> String {
 /// a banner for anyone else.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum HeraldCommand {
-    /// `/herald on`: the row on; the next 16:00 UTC check posts.
+    /// `/herald on`: the row on, after a due day the switch slept through
+    /// is settled unposted; the next 16:00 UTC check posts.
     On,
     /// `/herald off`: the row off; the next check does nothing.
     Off,

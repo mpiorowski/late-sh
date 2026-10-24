@@ -179,11 +179,7 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
             enabled: false,
             api_key: None,
         },
-        herald: HeraldConfig {
-            mastodon: None,
-            bluesky: None,
-            web_internal_url: "http://localhost:3000".to_string(),
-        },
+        herald: HeraldConfig::disabled("http://localhost:3000".to_string()),
         youtube_api_key: None,
         voice: VoiceConfig::disabled(),
         irc: test_irc_config(),
@@ -560,11 +556,7 @@ fn make_app_with_chat_service_and_permissions(
         ),
         herald_service: crate::app::herald::svc::HeraldService::new(
             db.clone(),
-            HeraldConfig {
-                mastodon: None,
-                bluesky: None,
-                web_internal_url: "http://localhost:3000".to_string(),
-            },
+            HeraldConfig::disabled("http://localhost:3000".to_string()),
             "http://localhost:3000".to_string(),
         ),
         jobs_service: crate::app::jobs::svc::JobsService::new(
@@ -850,11 +842,7 @@ pub fn make_app_with_paired_client(
         ),
         herald_service: crate::app::herald::svc::HeraldService::new(
             db.clone(),
-            HeraldConfig {
-                mastodon: None,
-                bluesky: None,
-                web_internal_url: "http://localhost:3000".to_string(),
-            },
+            HeraldConfig::disabled("http://localhost:3000".to_string()),
             "http://localhost:3000".to_string(),
         ),
         jobs_service: crate::app::jobs::svc::JobsService::new(

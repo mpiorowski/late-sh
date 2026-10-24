@@ -2,7 +2,7 @@
 //! `herald_settings`, migration 252): every read and write of the three
 //! tables.
 //!
-//! A row is a claim. The sweeper in late-ssh `app/herald/svc.rs` inserts
+//! A row is a claim. The checker in late-ssh `app/herald/svc.rs` inserts
 //! a `posting` row before it spends any network's calls, so two replicas
 //! checking the same minute cannot both post; the winner stores its pick,
 //! records a delivery per network as each lands, and settles the row to
@@ -11,8 +11,12 @@
 //! claims it again until the caller's cap, reuses the stored pick, and
 //! sends only to the networks without a delivery. A `posting` row nobody
 //! settled (a replica died mid-call) is reclaimed once it is older than
-//! the caller's stale bound. The row's `id` is minted at the first claim
-//! and survives every reclaim: it is the idempotency key the networks see.
+//! the caller's stale bound. Every reclaim stays inside the caller's window
+//! from the day's first claim (`first_claimed_at`), the hour Mastodon keeps
+//! an idempotency key: past it a stale `posting` row rests as `failed` and
+//! a `failed` one is left alone. The row's `id` is minted at the first
+//! claim and survives every reclaim: it is the idempotency key the networks
+//! see.
 
 use anyhow::{Result, bail};
 use chrono::{DateTime, NaiveDate, Utc};
@@ -105,29 +109,6 @@ pub struct HeraldDay {
     pub deliveries: Vec<HeraldDelivery>,
 }
 
-impl HeraldDay {
-    /// One clause for a banner.
-    pub fn describe(&self) -> String {
-        match self.status {
-            HeraldDayStatus::Posting => "posting right now".to_string(),
-            HeraldDayStatus::Posted => format!(
-                "posted to {}",
-                self.deliveries
-                    .iter()
-                    .map(|delivery| delivery.network.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ),
-            HeraldDayStatus::Skipped => "skipped, nothing worth posting".to_string(),
-            HeraldDayStatus::Failed => format!(
-                "failed after {} attempt(s), {} delivered",
-                self.attempts,
-                self.deliveries.len()
-            ),
-        }
-    }
-}
-
 /// What a settled day says went out, and where.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeraldPosted {
@@ -140,40 +121,67 @@ pub struct HeraldPosted {
 pub struct HeraldPost;
 
 impl HeraldPost {
-    /// Take the day: a new row, a stale `posting` one, or a `failed` one
-    /// under the cap. The row's id (the networks' idempotency key), or
-    /// `None` when another replica has the day or the day is settled.
+    /// Take the day: a new row, or a stale `posting` or `failed` one that
+    /// is under the cap and whose first claim is after `window_start`. A
+    /// stale `posting` row past the window rests as `failed` instead. The
+    /// row's id (the networks' idempotency key), or `None` when another
+    /// replica has the day or the day is settled.
     pub async fn claim(
         client: &Client,
         day: NaiveDate,
         stale_before: DateTime<Utc>,
+        window_start: DateTime<Utc>,
         max_attempts: i32,
     ) -> Result<Option<Uuid>> {
+        client
+            .execute(
+                "UPDATE herald_posts SET status = 'failed'
+                 WHERE day = $1
+                   AND status = 'posting'
+                   AND claimed_at < $2
+                   AND first_claimed_at < $3",
+                &[&day, &stale_before, &window_start],
+            )
+            .await?;
         let row = client
             .query_opt(
-                "INSERT INTO herald_posts (day, id, status, attempts, claimed_at)
-                 VALUES ($1, $2, 'posting', 1, current_timestamp)
+                "INSERT INTO herald_posts
+                    (day, id, status, attempts, claimed_at, first_claimed_at)
+                 VALUES ($1, $2, 'posting', 1, current_timestamp, current_timestamp)
                  ON CONFLICT (day) DO UPDATE
                     SET status = 'posting',
                         claimed_at = current_timestamp,
                         attempts = herald_posts.attempts + 1
-                    WHERE (herald_posts.status = 'posting'
-                           AND herald_posts.claimed_at < $3)
-                       OR (herald_posts.status = 'failed'
-                           AND herald_posts.attempts < $4)
+                    WHERE herald_posts.attempts < $4
+                      AND herald_posts.first_claimed_at >= $3
+                      AND ((herald_posts.status = 'posting'
+                            AND herald_posts.claimed_at < $5)
+                           OR herald_posts.status = 'failed')
                  RETURNING id",
-                &[&day, &Uuid::now_v7(), &stale_before, &max_attempts],
+                &[
+                    &day,
+                    &Uuid::now_v7(),
+                    &window_start,
+                    &max_attempts,
+                    &stale_before,
+                ],
             )
             .await?;
         Ok(row.map(|row| row.get("id")))
     }
 
     /// Whether the day is over for good: posted, skipped, or failed at
-    /// the cap. A replica that reads `true` stops asking for that day.
-    pub async fn is_finished(client: &Client, day: NaiveDate, max_attempts: i32) -> Result<bool> {
+    /// the cap or past the window since its first claim. A replica that
+    /// reads `true` stops asking for that day.
+    pub async fn is_finished(
+        client: &Client,
+        day: NaiveDate,
+        window_start: DateTime<Utc>,
+        max_attempts: i32,
+    ) -> Result<bool> {
         let row = client
             .query_opt(
-                "SELECT status, attempts FROM herald_posts WHERE day = $1",
+                "SELECT status, attempts, first_claimed_at FROM herald_posts WHERE day = $1",
                 &[&day],
             )
             .await?;
@@ -181,14 +189,34 @@ impl HeraldPost {
             Some(row) => {
                 let status: String = row.get("status");
                 let attempts: i32 = row.get("attempts");
+                let first_claimed_at: DateTime<Utc> = row.get("first_claimed_at");
                 Ok(match HeraldDayStatus::parse(&status)? {
                     HeraldDayStatus::Posted | HeraldDayStatus::Skipped => true,
-                    HeraldDayStatus::Failed => attempts >= max_attempts,
+                    HeraldDayStatus::Failed => {
+                        attempts >= max_attempts || first_claimed_at < window_start
+                    }
                     HeraldDayStatus::Posting => false,
                 })
             }
             None => Ok(false),
         }
+    }
+
+    /// Settle a day nobody claimed as `skipped`, for `/herald on`: the day
+    /// the switch slept through stays unposted instead of being caught up.
+    /// `false` when the day already has a row, which is left alone.
+    pub async fn settle_unclaimed(client: &Client, day: NaiveDate) -> Result<bool> {
+        let inserted = client
+            .execute(
+                "INSERT INTO herald_posts
+                    (day, id, status, attempts, claimed_at, first_claimed_at, finished_at)
+                 VALUES ($1, $2, 'skipped', 0, current_timestamp, current_timestamp,
+                         current_timestamp)
+                 ON CONFLICT (day) DO NOTHING",
+                &[&day, &Uuid::now_v7()],
+            )
+            .await?;
+        Ok(inserted == 1)
     }
 
     /// The claimed day's pick, written before the first network call so a

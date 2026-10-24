@@ -1,5 +1,5 @@
 use anyhow::Result;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use deadpool_postgres::GenericClient;
 use serde_json::Value;
 use tokio_postgres::Client;
@@ -26,6 +26,13 @@ impl Snapshot {
     pub const DAILY_PREFIX: &'static str = "daily:";
     pub const MONTHLY_PREFIX: &'static str = "monthly:";
     pub const CURATED_PREFIX: &'static str = "curated:";
+
+    /// The key of the board as it stood at the end of `date`, as the
+    /// midnight rollover archives it: `daily:YYYY-MM-DD`. The one spelling
+    /// the rollover, moderation and the herald share.
+    pub fn daily_key(date: NaiveDate) -> String {
+        format!("{}{date}", Self::DAILY_PREFIX)
+    }
 
     pub async fn find_by_board_key(client: &Client, board_key: &str) -> Result<Option<Self>> {
         let row = client

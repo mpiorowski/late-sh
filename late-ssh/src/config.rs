@@ -108,6 +108,15 @@ impl HeraldConfig {
     pub fn enabled(&self) -> bool {
         self.mastodon.is_some() || self.bluesky.is_some()
     }
+
+    /// No network: the herald off, for test fixtures.
+    pub fn disabled(web_internal_url: String) -> Self {
+        Self {
+            mastodon: None,
+            bluesky: None,
+            web_internal_url,
+        }
+    }
 }
 
 /// Embedded ircd settings; see devdocs/FRD-IRCD.md.
