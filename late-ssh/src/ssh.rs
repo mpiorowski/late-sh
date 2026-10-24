@@ -2,15 +2,15 @@ use anyhow::{Context, Result};
 use getrandom::SysRng;
 use late_core::MutexRecover;
 use late_core::models::{
-    artboard_ban::ArtboardBan,
     article_read::ArticleRead,
     server_ban::ServerBan,
-    user::{User, UserParams, extract_theme_id},
+    user::{User, UserParams},
 };
+use late_core::tunnel_protocol::{SshInputEvent, TUNNEL_CLOSE_SESSION_ENDED};
 use russh::keys::{PrivateKey, signature::rand_core::UnwrapErr};
 use russh::server::{Auth, Msg, Session};
 use russh::{Channel, ChannelId, MethodKind, MethodSet, keys};
-use serde_json::{Value, json};
+use serde_json::json;
 #[cfg(unix)]
 use std::fs::Permissions;
 use std::net::{IpAddr, SocketAddr};
@@ -26,15 +26,12 @@ use tokio::time::timeout;
 
 use crate::app::activity::event::ActivityEvent;
 use crate::app::files::terminal_image::terminal_name_for_log;
-use crate::app::{
-    common::theme,
-    state::{App, SessionConfig},
-};
-use crate::authz::Permissions as AuthzPermissions;
+use crate::app::state::App;
 use crate::metrics::{self, SshRejectReason};
 use crate::proxy_protocol;
-use crate::render_signal::RenderSignal;
-use crate::session_bootstrap::{ArcadeSessionPreloads, load_arcade_session_preloads};
+pub(crate) use crate::render_signal::RenderSignal;
+use crate::session_bootstrap::{SessionBootstrapInputs, build_session_config};
+use crate::session_io::{FrameSink, RusshFrameSink};
 use crate::state::{ActiveSession, State};
 use crate::terminal_probe::{self, PROBE_QUERY, ProbeExpiry, ProbeTally, TerminalProbe, TripTally};
 use crate::terminal_size::clamp_terminal_size;
@@ -44,7 +41,6 @@ static FRAME_DROP_COUNT: AtomicU64 = AtomicU64::new(0);
 use crate::config::PROXY_HEADER_TIMEOUT;
 const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
-const CLI_TOKEN_REQUEST: &str = "late-cli-token-v1";
 const AUTH_SETUP_BANNER: &str = "\r\nlate.sh requires SSH public-key auth.\r\n\
 New here? Install the companion CLI:\r\n\
   curl -fsSL https://cli.late.sh/install.sh | bash\r\n\
@@ -53,7 +49,7 @@ Or create a key manually with:\r\n\
   ssh-keygen -t ed25519 -C late.sh\r\n\
   ssh late.sh\r\n";
 const EXIT_MESSAGE: &str = "\r\nStay late. Code safe. ✨\r\n";
-const INPUT_QUEUE_CAP: usize = 256;
+pub(crate) const INPUT_QUEUE_CAP: usize = 256;
 
 /// Minimum wall-clock gap between any two consecutive renders. Bounds the
 /// per-session render rate so that keystroke floods or other signal sources
@@ -164,8 +160,8 @@ struct ClientHandler {
     /// Set when the shell starts; the render loop sends its queries and
     /// `data` feeds it the replies (`terminal_probe.rs`).
     terminal_probe: Option<Arc<TerminalProbe>>,
-    input_tx: Option<tokio::sync::mpsc::Sender<Vec<u8>>>,
-    input_rx: Option<tokio::sync::mpsc::Receiver<Vec<u8>>>,
+    input_tx: Option<tokio::sync::mpsc::Sender<SshInputEvent>>,
+    input_rx: Option<tokio::sync::mpsc::Receiver<SshInputEvent>>,
     cli_mode: bool,
     /// The connection ran the `late-cli-token-v1` exec: the native and
     /// openssh CLI modes identify themselves this way and never send
@@ -512,7 +508,12 @@ async fn resolve_proxied_client_addr(
         return Ok(None);
     }
 
-    proxy_protocol::read_v1_client_addr(stream, PROXY_HEADER_TIMEOUT).await
+    // UNKNOWN must not reach the transport-address fallback: a server ban
+    // would otherwise capture the shared proxy instead of the client.
+    let client_addr = proxy_protocol::read_v1_client_addr(stream, PROXY_HEADER_TIMEOUT)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("trusted proxy did not provide a client address"))?;
+    Ok(Some(client_addr))
 }
 
 fn is_trusted_proxy_peer(state: &State, ip: IpAddr) -> bool {
@@ -641,20 +642,14 @@ impl russh::server::Handler for ClientHandler {
         key: &russh::keys::PublicKey,
     ) -> Result<Auth, Self::Error> {
         tracing::debug!("public key auth accepted");
-        if !self.state.config.open_access {
-            tracing::debug!("open access disabled, rejecting public key auth");
-            return Ok(reject_publickey_only());
-        }
         let fingerprint = key.fingerprint(keys::HashAlg::Sha256).to_string();
-        let client = match self.state.db.get().await {
-            Ok(client) => client,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to check server ban, rejecting auth");
+        match check_ssh_admission(&self.state, &fingerprint, self.peer_ip).await {
+            Ok(()) => {}
+            Err(AdmissionReject::ClosedAccess) => {
+                tracing::debug!("open access disabled, rejecting public key auth");
                 return Ok(reject_publickey_only());
             }
-        };
-        match has_active_server_ban_before_user_lookup(&client, &fingerprint, self.peer_ip).await {
-            Ok(true) => {
+            Err(AdmissionReject::Banned) => {
                 tracing::warn!(
                     fingerprint = %fingerprint,
                     peer_ip = ?self.peer_ip,
@@ -662,38 +657,11 @@ impl russh::server::Handler for ClientHandler {
                 );
                 return Ok(reject_publickey_only());
             }
-            Ok(false) => {}
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to check server ban, rejecting auth");
+            Err(AdmissionReject::Infrastructure) => {
+                tracing::warn!("failed to check server ban, rejecting auth");
                 return Ok(reject_publickey_only());
             }
         }
-        match User::find_by_fingerprint(&client, &fingerprint).await {
-            Ok(Some(existing_user)) => {
-                match ServerBan::find_active_for_user_id(&client, existing_user.id).await {
-                    Ok(Some(_)) => {
-                        tracing::warn!(
-                            username = %existing_user.username,
-                            fingerprint = %fingerprint,
-                            peer_ip = ?self.peer_ip,
-                            "active server ban rejected SSH auth"
-                        );
-                        return Ok(reject_publickey_only());
-                    }
-                    Ok(None) => {}
-                    Err(e) => {
-                        tracing::warn!(error = ?e, "failed to check server ban, rejecting auth");
-                        return Ok(reject_publickey_only());
-                    }
-                }
-            }
-            Ok(None) => {}
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to look up user before ban check, rejecting auth");
-                return Ok(reject_publickey_only());
-            }
-        }
-        drop(client);
         let (user, is_new_user) = match crate::ssh::ensure_user(&self.state, &fingerprint).await {
             Ok(pair) => pair,
             Err(e) => {
@@ -831,349 +799,31 @@ impl russh::server::Handler for ClientHandler {
             .take()
             .ok_or_else(|| anyhow::anyhow!("cli session receiver missing during pty request"))?;
 
-        let article_service = self.state.article_service.clone();
-        let chat_service = self.state.chat_service.clone();
-        let profile_service = self.state.profile_service.clone();
-        let twenty_forty_eight_service = self.state.twenty_forty_eight_service.clone();
-        let le_word_service = self.state.le_word_service.clone();
-        let sudoku_service = self.state.sudoku_service.clone();
-        let nonogram_service = self.state.nonogram_service.clone();
-        let solitaire_service = self.state.solitaire_service.clone();
-        let nonogram_library = self.state.nonogram_library.clone();
+        let user = self.user.clone().ok_or_else(|| {
+            tracing::error!("pty request without authenticated user");
+            anyhow::anyhow!("unauthenticated pty request")
+        })?;
 
-        let user = match self.user.as_ref() {
-            Some(user) => user,
-            None => {
-                tracing::error!("pty request without authenticated user");
-                return Err(anyhow::anyhow!("unauthenticated pty request"));
-            }
-        };
-
-        let user_id = user.id;
-        let permissions = AuthzPermissions::new(
-            user.is_admin || self.state.config.force_admin,
-            user.is_moderator,
-        );
-
-        let ArcadeSessionPreloads {
-            initial_2048_game,
-            initial_2048_high_score,
-            initial_tetris_game,
-            initial_tetris_high_score,
-            initial_snake_game,
-            initial_snake_high_score,
-            initial_traffic_track_scores,
-            initial_traffic_high_score,
-            initial_le_word_daily_word,
-            initial_le_word_game,
-            initial_rubiks_cube_game,
-            initial_sliding_puzzle_games,
-            initial_sudoku_games,
-            initial_nonogram_games,
-            initial_solitaire_games,
-            initial_minesweeper_games,
-        } = load_arcade_session_preloads(&self.state, user_id).await;
-        let initial_bonsai_tree = match self.state.bonsai_service.ensure_tree(user_id).await {
-            Ok(tree) => Some(tree),
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load/create bonsai tree");
-                None
-            }
-        };
-        let initial_bonsai_decay_protection =
-            match self.state.bonsai_service.decay_protection(user_id).await {
-                Ok(protection) => protection,
-                Err(e) => {
-                    tracing::warn!(error = ?e, "failed to load bonsai decay protection");
-                    None
-                }
-            };
-        let shop_snapshot_rx = self.state.shop_service.subscribe_snapshot(user_id);
-        // Primes the per-user snapshot channel subscribed above; the session
-        // reads everything it needs from that channel.
-        if let Err(e) = self.state.shop_service.refresh_user(user_id).await {
-            tracing::warn!(error = ?e, "failed to refresh shop snapshot");
-        }
-        let initial_pet = match self.state.pet_service.ensure_pet(user_id).await {
-            Ok(pet) => Some(pet),
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load/create pet companion");
-                None
-            }
-        };
-        let initial_aquarium_care = match self.state.aquarium_service.bootstrap(user_id).await {
-            Ok(care) => care,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load aquarium care");
-                Default::default()
-            }
-        };
-
-        // Ensure the user's chip balance row exists.
-        let initial_chip_balance = match self.state.chip_service.ensure_chips(user_id).await {
-            Ok(chips) => chips.balance,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to ensure chip balance");
-                0
-            }
-        };
-        let quest_snapshot_rx = self.state.quest_service.subscribe_snapshot(user_id);
-        if let Err(e) = self.state.quest_service.refresh_user(user_id).await {
-            tracing::warn!(error = ?e, "failed to refresh quest snapshot");
-        }
-        let initial_ultimate_cooldowns =
-            match self.state.ultimate_service.list_cooldowns(user_id).await {
-                Ok(cooldowns) => cooldowns,
-                Err(e) => {
-                    tracing::warn!(error = ?e, "failed to load ultimate cooldowns");
-                    Vec::new()
-                }
-            };
-        let artboard_ban = match self.state.db.get().await {
-            Ok(client) => match ArtboardBan::find_active_for_user(&client, user_id).await {
-                Ok(ban) => ban,
-                Err(e) => {
-                    tracing::warn!(error = ?e, "failed to check artboard ban status");
-                    None
-                }
-            },
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to get db client for artboard ban check");
-                None
-            }
-        };
-        let key_fingerprint = self.auth_fingerprint.clone();
-        let device = crate::session_bootstrap::load_device_state(
+        let (input_tx, input_rx) = tokio::sync::mpsc::channel(INPUT_QUEUE_CAP);
+        let session_config = build_session_config(
             &self.state,
-            user_id,
-            key_fingerprint.as_deref(),
+            SessionBootstrapInputs {
+                user,
+                is_new_user: self.is_new_user,
+                cols: terminal_size.cols,
+                rows: terminal_size.rows,
+                term: term.to_string(),
+                session_token,
+                session_rx: Some(session_rx),
+                activity_feed_rx: self.activity_feed_rx.take(),
+                key_fingerprint: self.auth_fingerprint.clone(),
+                supports_reconnect_on_drain: false,
+                reconnect_reason: None,
+            },
         )
         .await;
-        // The door: the day's wall piece for those who chose Always View on
-        // the Artboard content disclaimer (on this device), else the cup.
-        let splash_piece = self
-            .state
-            .gallery_service
-            .splash_piece_for_login(device.shows_artboard_disclaimer(user))
-            .await;
-        let initial_door_rcs = match self.state.door_rc_service.list(user_id).await {
-            Ok(rcs) => rcs,
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load door rc files");
-                Vec::new()
-            }
-        };
-        let (input_tx, input_rx) = tokio::sync::mpsc::channel(INPUT_QUEUE_CAP);
-        let first_contact_gate =
-            crate::app::deadchannel::haunt::svc::bootstrap_gate(&self.state, user).await;
-        let mut app = crate::app::state::App::new(SessionConfig {
-            // Terminal / layout
-            cols: terminal_size.cols,
-            rows: terminal_size.rows,
-            term: term.to_string(),
-
-            // Services / data sources
-            audio_service: self.state.audio_service.clone(),
-            voice_service: self.state.voice_service.clone(),
-            stream_service: self.state.stream_service.clone(),
-            chat_service,
-            translation_service: self.state.translation_service.clone(),
-            summary_service: self.state.summary_service.clone(),
-            paper_service: self.state.paper_service.clone(),
-            jobs_service: self.state.jobs_service.clone(),
-            notification_service: self.state.notification_service.clone(),
-            article_service,
-            calendar_service: self.state.calendar_service.clone(),
-            feed_service: self.state.feed_service.clone(),
-            cyberspace_service: self.state.cyberspace_service.clone(),
-            showcase_service: self.state.showcase_service.clone(),
-            work_service: self.state.work_service.clone(),
-            profile_service,
-            twenty_forty_eight_service,
-            initial_2048_game,
-            initial_2048_high_score,
-            tetris_service: self.state.tetris_service.clone(),
-            snake_service: self.state.snake_service.clone(),
-            traffic_service: self.state.traffic_service.clone(),
-            rubiks_cube_service: self.state.rubiks_cube_service.clone(),
-            initial_rubiks_cube_game,
-            sliding_puzzle_service: self.state.sliding_puzzle_service.clone(),
-            initial_sliding_puzzle_games,
-            initial_tetris_game,
-            initial_snake_game,
-            initial_tetris_high_score,
-            initial_snake_high_score,
-            initial_traffic_track_scores,
-            initial_traffic_high_score,
-            le_word_service,
-            initial_le_word_daily_word,
-            initial_le_word_game,
-            sudoku_service,
-            initial_sudoku_games,
-            nonogram_service,
-            initial_nonogram_games,
-            solitaire_service,
-            initial_solitaire_games,
-            minesweeper_service: self.state.minesweeper_service.clone(),
-            initial_minesweeper_games,
-            lateania_service: self.state.lateania_service.clone(),
-            greendragon_service: self.state.greendragon_service.clone(),
-            darkroom_service: self.state.darkroom_service.clone(),
-            arcade_handle_service: self.state.arcade_handle_service.clone(),
-            live_games: self.state.live_games.clone(),
-            door_rc_service: self.state.door_rc_service.clone(),
-            initial_door_rcs,
-            daily_service: self.state.daily_service.clone(),
-            realm_service: self.state.realm_service.clone(),
-            house_registry: self.state.house_registry.clone(),
-            dartboard_server: self.state.dartboard_server.clone(),
-            dartboard_provenance: self.state.dartboard_provenance.clone(),
-            artboard_snapshot_service: crate::app::artboard::svc::ArtboardSnapshotService::new(
-                self.state.db.clone(),
-            ),
-            gallery_service: self.state.gallery_service.clone(),
-            splash_piece,
-            username: user.username.clone(),
-            bonsai_service: self.state.bonsai_service.clone(),
-            fight_service: crate::app::deadchannel::fight::svc::FightService::new(
-                self.state.db.clone(),
-                self.state.chat_service.clone(),
-                self.state.chip_service.clone(),
-            ),
-            tailor_service: crate::app::deadchannel::tailor::svc::TailorService::new(
-                self.state.db.clone(),
-            ),
-            poster_service: crate::app::deadchannel::poster::svc::PosterService::new(
-                self.state.db.clone(),
-            ),
-            guide_service: crate::app::deadchannel::guide::svc::GuideService::new(
-                self.state.db.clone(),
-            ),
-            lounge_service: self.state.lounge_service.clone(),
-            initial_bonsai_tree,
-            initial_bonsai_decay_protection,
-            pet_service: self.state.pet_service.clone(),
-            initial_pet,
-            aquarium_service: self.state.aquarium_service.clone(),
-            initial_aquarium_care,
-            quest_service: self.state.quest_service.clone(),
-            quest_snapshot_rx,
-            shop_service: self.state.shop_service.clone(),
-            shop_snapshot_rx,
-            ultimate_service: self.state.ultimate_service.clone(),
-            initial_ultimate_cooldowns,
-            nonogram_library,
-            chip_service: self.state.chip_service.clone(),
-            initial_chip_balance,
-            leaderboard_rx: Some(self.state.leaderboard_service.subscribe()),
-
-            // Session / connection
-            web_url: self.state.config.web_url.clone(),
-            rebels_enabled: self.state.config.rebels_enabled,
-            rebels_host: self.state.config.rebels_host.clone(),
-            rebels_port: self.state.config.rebels_port,
-            rebels_secret: self.state.config.rebels_secret.clone(),
-            nethack_enabled: self.state.config.nethack_enabled,
-            nethack_host: self.state.config.nethack_host.clone(),
-            nethack_port: self.state.config.nethack_port,
-            nethack_secret: self.state.config.nethack_secret.clone(),
-            nethack_activity: Some(
-                crate::app::activity::publisher::ActivityPublisher::new(
-                    self.state.db.clone(),
-                    self.state.activity_feed.clone(),
-                )
-                .with_username_directory(self.state.username_directory.clone()),
-            ),
-            dcss_enabled: self.state.config.dcss_enabled,
-            dcss_host: self.state.config.dcss_host.clone(),
-            dcss_port: self.state.config.dcss_port,
-            dcss_secret: self.state.config.dcss_secret.clone(),
-            brogue_enabled: self.state.config.brogue_enabled,
-            brogue_host: self.state.config.brogue_host.clone(),
-            brogue_port: self.state.config.brogue_port,
-            brogue_secret: self.state.config.brogue_secret.clone(),
-            usurper_enabled: self.state.config.usurper_enabled,
-            usurper_host: self.state.config.usurper_host.clone(),
-            usurper_port: self.state.config.usurper_port,
-            usurper_secret: self.state.config.usurper_secret.clone(),
-            dopewars_enabled: self.state.config.dopewars_enabled,
-            dopewars_host: self.state.config.dopewars_host.clone(),
-            dopewars_port: self.state.config.dopewars_port,
-            dopewars_secret: self.state.config.dopewars_secret.clone(),
-            bashquest_enabled: self.state.config.bashquest_enabled,
-            bashquest_host: self.state.config.bashquest_host.clone(),
-            bashquest_port: self.state.config.bashquest_port,
-            bashquest_secret: self.state.config.bashquest_secret.clone(),
-            bashquest_awards: Some(crate::app::door::bashquest::graduate::BashquestAwards::new(
-                self.state.db.clone(),
-            )),
-            codekeep_enabled: self.state.config.codekeep_enabled,
-            codekeep_host: self.state.config.codekeep_host.clone(),
-            codekeep_port: self.state.config.codekeep_port,
-            codekeep_secret: self.state.config.codekeep_secret.clone(),
-            zork_enabled: self.state.config.zork_enabled,
-            zork_host: self.state.config.zork_host.clone(),
-            zork_port: self.state.config.zork_port,
-            zork_secret: self.state.config.zork_secret.clone(),
-            session_token,
-            session_registry: Some(self.state.session_registry.clone()),
-            paired_client_registry: Some(self.state.paired_client_registry.clone()),
-            session_rx: Some(session_rx),
-            now_playing_rx: Some(self.state.now_playing_rx.clone()),
-            radio_meta_rx: Some(self.state.radio_meta_rx.clone()),
-            active_users: Some(self.state.active_users.clone()),
-            drunk_map: self.state.drunk_map.clone(),
-            nightcap_house: Some(self.state.nightcap_house.clone()),
-            mention_ladders: self.state.mention_ladders.clone(),
-            files: self.state.config.files.clone(),
-            scratchpad_registry: Some(self.state.scratchpad_registry.clone()),
-            clubhouse_tutorial_done: late_core::models::user::extract_clubhouse_tutorial_done(
-                &user.settings,
-            ),
-            first_contact: crate::app::deadchannel::haunt::state::FirstContactMarks::from_settings(
-                &user.settings,
-            ),
-            first_contact_gate,
-            runner_looks_rx: self.state.runner_looks.subscribe(),
-            presence: self.state.presence.clone(),
-            zen_layout: late_core::models::user::extract_zen_layout(&user.settings),
-            key_fingerprint,
-            key_layout: device.layout,
-            key_artboard_disclaimer: device.artboard_disclaimer,
-            key_left_at: device.left_at,
-            username_directory: Some(self.state.username_directory.clone()),
-            flair_directory: Some(self.state.flair_directory.clone()),
-            crown_service: Some(self.state.crown_service.clone()),
-            pot_service: Some(self.state.pot_service.clone()),
-            referral_service: self.state.referral_service.clone(),
-            newcomer_clock: crate::app::referral::state::NewcomerClock::new(
-                user.created,
-                chrono::Utc::now(),
-            ),
-            account_created: user.created,
-            activity_feed_rx: self.activity_feed_rx.take(),
-            user_id,
-            permissions,
-            artboard_banned: artboard_ban.is_some(),
-            artboard_ban_expires_at: artboard_ban.and_then(|ban| ban.expires_at),
-
-            is_new_user: self.is_new_user,
-            landing_page: late_core::models::user::extract_landing_page(&user.settings),
-            paper_at_login: late_core::models::user::extract_paper_at_login(&user.settings),
-
-            // Display config
-            initial_theme_id: late_ssh_theme_id(&user.settings),
-            initial_interaction_mode: late_core::models::user::extract_interaction_mode(
-                &user.settings,
-            ),
-            initial_audio_source: late_core::models::user::extract_audio_source(&user.settings),
-            initial_radio_station: late_core::models::user::extract_radio_station(&user.settings),
-            initial_radio_slots: late_core::models::user::extract_radio_slots(&user.settings),
-
-            // Server state
-            is_draining: self.state.is_draining.clone(),
-        })
-        .context("failed to initialize app for PTY session")?;
+        let mut app = crate::app::state::App::new(session_config)
+            .context("failed to initialize app for PTY session")?;
         for (name, value) in &self.terminal_env_hints {
             app.apply_terminal_env_hint(name, value);
         }
@@ -1244,7 +894,7 @@ impl russh::server::Handler for ClientHandler {
     ) -> Result<(), Self::Error> {
         let command = String::from_utf8_lossy(data);
         let preview: String = command.chars().take(128).collect();
-        if command.trim() == CLI_TOKEN_REQUEST {
+        if command.trim() == crate::exec::CLI_TOKEN_REQUEST {
             tracing::info!("serving cli token exec request");
             self.cli_token_served = true;
             match session.channel_success(channel) {
@@ -1253,8 +903,8 @@ impl russh::server::Handler for ClientHandler {
             }
 
             let token = self.ensure_cli_session().await?;
-            let payload = serde_json::to_vec(&json!({ "session_token": token }))
-                .context("failed to encode cli token exec response")?;
+            let response = crate::exec::handle_exec_command(command.trim(), &token)?;
+            let payload = response.stdout.into_bytes();
 
             if let Some(chan) = self.channel.take() {
                 // `channel_open_session` populates `self.channel` immediately before this
@@ -1262,7 +912,7 @@ impl russh::server::Handler for ClientHandler {
                 // channel we are replying on. The fallback below writes via `Session` if that
                 // invariant ever stops holding.
                 chan.data(payload.as_slice()).await?;
-                let _ = chan.exit_status(0).await;
+                let _ = chan.exit_status(response.exit_status).await;
                 let _ = chan.eof().await;
                 let _ = chan.close().await;
             } else {
@@ -1304,7 +954,7 @@ impl russh::server::Handler for ClientHandler {
             Err(e) => tracing::error!(error = ?e, "shell channel_success failed"),
         }
         if let (Some(chan), Some(app)) = (self.channel.take(), self.app.as_ref()) {
-            let mut input_rx = self.input_rx.take().ok_or_else(|| {
+            let input_rx = self.input_rx.take().ok_or_else(|| {
                 anyhow::anyhow!("session input receiver missing during shell request")
             })?;
             let channel_id = chan.id();
@@ -1333,17 +983,7 @@ impl russh::server::Handler for ClientHandler {
             self.render_signal = Some(Arc::clone(&signal));
             let probe = Arc::new(TerminalProbe::new(Instant::now()));
             self.terminal_probe = Some(Arc::clone(&probe));
-            let ctx = RenderContext {
-                handle,
-                channel_id,
-                frame_drop_log_every: self.state.config.frame_drop_log_every,
-                signal: Arc::clone(&signal),
-                budget: Arc::clone(&self.output_budget),
-                client: self.session_client(),
-                probe,
-            };
-            app.lock().await.set_repaint_signal(Arc::clone(&signal));
-            let mut session_start = self.session_start.take();
+            let client = self.session_client();
             let user = self
                 .user
                 .as_ref()
@@ -1351,186 +991,26 @@ impl russh::server::Handler for ClientHandler {
             let who = SessionWho {
                 user_id: user.id,
                 username: user.username.clone(),
-                client: ctx.client,
+                client,
                 term: self
                     .term
                     .clone()
                     .expect("the app is built by the pty request, which records TERM"),
             };
-            tokio::spawn(async move {
-                let started = Instant::now();
-                let mut output = OutputTally::default();
-                let mut previous_render: Option<Instant> = None;
-                let mut input_pending = false;
-                let mut stalled_since: Option<Instant> = None;
-                // Local skip-ratio feel: drawn vs skipped-clean passes,
-                // debug-logged every 5s (RUST_LOG=late_ssh=debug). The OTel
-                // counters carry the same split in prod.
-                let mut stats_drawn: u64 = 0;
-                let mut stats_skipped: u64 = 0;
-                let mut stats_since = Instant::now();
-                // Bytes this session wrote since the window opened, for the
-                // per-session output rate.
-                let mut window_bytes: usize = 0;
-                let mut window_since = Instant::now();
-                // When this session last logged a slow render pass.
-                let mut slow_pass_warned_at: Option<Instant> = None;
-                // The world tick is adaptive: each pass reports how soon the
-                // next one is needed (`App::wake_hint`), so idle sessions
-                // sleep at the idle floor while animated screens keep the
-                // classic 66ms cadence. The first deadline is immediate so
-                // the session paints without waiting a tick.
-                let mut world_deadline = Instant::now();
-                let ended = loop {
-                    let advance_world = match next_render_action(
-                        world_deadline,
-                        &ctx.signal,
-                        &mut input_pending,
-                        previous_render,
-                    )
-                    .await
-                    {
-                        RenderAction::AdvanceWorld => true,
-                        RenderAction::Render => false,
-                        RenderAction::Skip => continue,
-                    };
-                    // Output-budget guard: while the client sits on more
-                    // unacked bytes than the budget, rendering pauses
-                    // entirely. Ratatui's diff state does not advance during
-                    // the pause, so resuming needs no forced repaint.
-                    if ctx.budget.over_budget() {
-                        let since = match stalled_since {
-                            Some(since) => since,
-                            None => {
-                                let now = Instant::now();
-                                stalled_since = Some(now);
-                                tracing::warn!(
-                                    outstanding = ctx.budget.outstanding(),
-                                    "pausing renders, ssh output backlog over budget"
-                                );
-                                now
-                            }
-                        };
-                        metrics::record_render_stall_skip();
-                        if since.elapsed() >= OUTPUT_STALL_DISCONNECT {
-                            tracing::warn!(
-                                outstanding = ctx.budget.outstanding(),
-                                stalled_secs = since.elapsed().as_secs(),
-                                "disconnecting session, ssh output stalled past budget"
-                            );
-                            metrics::record_render_stall_disconnect();
-                            let _ = ctx.handle.eof(ctx.channel_id).await;
-                            let _ = ctx.handle.close(ctx.channel_id).await;
-                            break SessionEnd::Stalled;
-                        }
-                        // Re-poll the budget at the hot cadence; leaving the
-                        // deadline in the past would spin the loop.
-                        world_deadline = Instant::now() + crate::app::tick::HOT_TICK;
-                        continue;
-                    }
-                    if let Some(since) = stalled_since.take() {
-                        tracing::info!(
-                            stalled_ms = since.elapsed().as_millis() as u64,
-                            "ssh output backlog cleared, resuming renders"
-                        );
-                    }
-                    match render_once(&app, &mut input_rx, &ctx, advance_world).await {
-                        Ok(outcome) => {
-                            previous_render = Some(Instant::now());
-                            if let Some(pass) = outcome.pass
-                                && slow_pass_due(pass.took, slow_pass_warned_at, Instant::now())
-                            {
-                                slow_pass_warned_at = Some(Instant::now());
-                                tracing::warn!(
-                                    username = %who.username,
-                                    screen = ?pass.screen,
-                                    pass_ms = pass.took.as_millis() as u64,
-                                    "slow render pass"
-                                );
-                            }
-                            if outcome.drew
-                                && let Some(start) = session_start.take()
-                            {
-                                start.record_first_frame();
-                            }
-                            if outcome.drew {
-                                stats_drawn += 1;
-                            } else {
-                                stats_skipped += 1;
-                            }
-                            if stats_since.elapsed() >= Duration::from_secs(5) {
-                                tracing::debug!(
-                                    drawn = stats_drawn,
-                                    skipped_clean = stats_skipped,
-                                    "render stats, last 5s"
-                                );
-                                stats_drawn = 0;
-                                stats_skipped = 0;
-                                stats_since = Instant::now();
-                            }
-                            output.bytes += outcome.bytes_sent as u64;
-                            if outcome.drew {
-                                output.frames += 1;
-                            }
-                            window_bytes += outcome.bytes_sent;
-                            let window = window_since.elapsed();
-                            if window >= OUTPUT_RATE_WINDOW {
-                                let rate = window_bytes as f64 / window.as_secs_f64();
-                                metrics::record_session_output_rate(ctx.client, rate);
-                                output.peak_bytes_per_second =
-                                    output.peak_bytes_per_second.max(rate);
-                                window_bytes = 0;
-                                window_since = Instant::now();
-                            }
-                            if outcome.should_quit {
-                                tracing::debug!("app requested quit, closing connection");
-                                settle_terminal_probe(&ctx.probe).await;
-                                clean_disconnect(&ctx.handle, ctx.channel_id).await;
-                                break SessionEnd::Closed;
-                            }
-                            drive_terminal_probe(&ctx, outcome.bytes_sent).await;
-                            if advance_world {
-                                world_deadline = Instant::now() + outcome.wake_hint;
-                            } else {
-                                // An input render can shrink the cadence
-                                // (post-input hot window) but never delays a
-                                // world tick that was already due sooner.
-                                world_deadline =
-                                    world_deadline.min(Instant::now() + outcome.wake_hint);
-                            }
-                        }
-                        Err(err) => {
-                            tracing::debug!(error = ?err, "error rendering frame, stopping render loop");
-                            let exit = App::leave_alt_screen();
-                            let _ = timeout(
-                                Duration::from_millis(50),
-                                ctx.handle.data(ctx.channel_id, exit),
-                            )
-                            .await;
-                            let _ = ctx.handle.eof(ctx.channel_id).await;
-                            let _ = ctx.handle.close(ctx.channel_id).await;
-                            break SessionEnd::Failed;
-                        }
-                    }
-                };
-                let (terminal, screen, tenure) = {
-                    let app = app.lock().await;
-                    (
-                        app.terminal_version().map(str::to_owned),
-                        app.screen,
-                        app.tenure(),
-                    )
-                };
-                metrics::record_session_end(tenure, screen);
-                log_wire_summary(
-                    &who,
-                    ended,
-                    started.elapsed(),
-                    &output,
-                    ctx.probe.tally(),
-                    terminal.as_deref(),
-                );
-            });
+            tokio::spawn(run_session_with_context(
+                app,
+                input_rx,
+                RenderContext {
+                    sink: RusshFrameSink::new(handle, channel_id),
+                    frame_drop_log_every: self.state.config.frame_drop_log_every,
+                    signal,
+                    budget: Some(Arc::clone(&self.output_budget)),
+                    client,
+                    probe: Some(probe),
+                },
+                self.session_start.take(),
+                Some(who),
+            ));
         }
         Ok(())
     }
@@ -1581,7 +1061,7 @@ impl russh::server::Handler for ClientHandler {
         }
         match input_tx.try_reserve() {
             Ok(permit) => {
-                permit.send(input.into_owned());
+                permit.send(SshInputEvent::Bytes(input.into_owned()));
             }
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
                 tracing::warn!(
@@ -1612,6 +1092,7 @@ impl russh::server::Handler for ClientHandler {
             && let Some(app) = self.app.as_ref()
         {
             let mut app = app.lock().await;
+            // Peer already closed; no backend close-code signal remains to send.
             app.running = false;
         }
         Ok(())
@@ -1628,6 +1109,7 @@ impl russh::server::Handler for ClientHandler {
             && let Some(app) = self.app.as_ref()
         {
             let mut app = app.lock().await;
+            // Peer already closed; no backend close-code signal remains to send.
             app.running = false;
             self.app_channel_id = None;
         }
@@ -1655,22 +1137,252 @@ impl russh::server::Handler for ClientHandler {
                 "clamped oversized window resize"
             );
         }
-        let Some(app) = self.app.as_ref() else {
+        // Resize is queued on the same input mpsc as data so the
+        // render loop applies it in the SSH wire order, not in
+        // app-lock-acquisition order. Dropping resize on a full queue
+        // would leave the TUI on a stale viewport, but the queue cap
+        // is 256 and resize events are sparse, so contention is
+        // pathological — log and move on.
+        let Some(input_tx) = self.input_tx.as_ref() else {
             return Ok(());
         };
-        {
-            let mut app = app.lock().await;
-            if let Err(e) = app.resize(terminal_size.cols, terminal_size.rows) {
-                tracing::error!(error = ?e, "error resizing app");
+        let event = SshInputEvent::Resize {
+            cols: terminal_size.cols,
+            rows: terminal_size.rows,
+        };
+        match input_tx.try_reserve() {
+            Ok(permit) => permit.send(event),
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
+                tracing::warn!(
+                    queue_cap = INPUT_QUEUE_CAP,
+                    col_width,
+                    row_height,
+                    "session input queue full; dropping resize event"
+                );
+                return Ok(());
             }
-            if let Some(signal) = self.render_signal.as_ref() {
-                signal.dirty.store(true, Ordering::Release);
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_)) => {
+                tracing::debug!("session input queue closed; dropping resize event");
+                return Ok(());
             }
         }
         if let Some(signal) = self.render_signal.as_ref() {
-            signal.notify.notify_one();
+            signal.wake();
         }
         Ok(())
+    }
+}
+
+/// Per-session render driver. Spawned from `shell_request` (russh path)
+/// and from the `/tunnel` handler in Phase 2c (WS path). Generic over
+/// `FrameSink` so both paths share this loop unchanged.
+pub(crate) async fn run_session<S: FrameSink>(
+    app: Arc<TokioMutex<crate::app::state::App>>,
+    input_rx: tokio::sync::mpsc::Receiver<SshInputEvent>,
+    sink: S,
+    frame_drop_log_every: u64,
+    signal: Arc<RenderSignal>,
+) {
+    run_session_with_context(
+        app,
+        input_rx,
+        RenderContext {
+            sink,
+            frame_drop_log_every,
+            signal,
+            budget: None,
+            client: metrics::SessionClient::Ssh,
+            probe: None,
+        },
+        None,
+        None,
+    )
+    .await;
+}
+
+async fn run_session_with_context<S: FrameSink>(
+    app: Arc<TokioMutex<crate::app::state::App>>,
+    mut input_rx: tokio::sync::mpsc::Receiver<SshInputEvent>,
+    ctx: RenderContext<S>,
+    mut session_start: Option<SessionStart>,
+    who: Option<SessionWho>,
+) {
+    let username = {
+        let mut app = app.lock().await;
+        app.set_repaint_signal(Arc::clone(&ctx.signal));
+        app.username.clone()
+    };
+    let started = Instant::now();
+    let mut output = OutputTally::default();
+    let mut previous_render: Option<Instant> = None;
+    let mut input_pending = false;
+    let mut stalled_since: Option<Instant> = None;
+    // Local skip-ratio feel: drawn vs skipped-clean passes,
+    // debug-logged every 5s (RUST_LOG=late_ssh=debug). The OTel
+    // counters carry the same split in prod.
+    let mut stats_drawn: u64 = 0;
+    let mut stats_skipped: u64 = 0;
+    let mut stats_since = Instant::now();
+    // Bytes this session wrote since the window opened, for the
+    // per-session output rate.
+    let mut window_bytes: usize = 0;
+    let mut window_since = Instant::now();
+    // When this session last logged a slow render pass.
+    let mut slow_pass_warned_at: Option<Instant> = None;
+    // The world tick is adaptive: each pass reports how soon the
+    // next one is needed (`App::wake_hint`), so idle sessions
+    // sleep at the idle floor while animated screens keep the
+    // classic 66ms cadence. The first deadline is immediate so
+    // the session paints without waiting a tick.
+    let mut world_deadline = Instant::now();
+    let ended = loop {
+        let advance_world = match next_render_action(
+            world_deadline,
+            &ctx.signal,
+            &mut input_pending,
+            previous_render,
+        )
+        .await
+        {
+            RenderAction::AdvanceWorld => true,
+            RenderAction::Render => false,
+            RenderAction::Skip => continue,
+        };
+        // Output-budget guard: while the client sits on more
+        // unacked bytes than the budget, rendering pauses
+        // entirely. Ratatui's diff state does not advance during
+        // the pause, so resuming needs no forced repaint.
+        if ctx
+            .budget
+            .as_ref()
+            .is_some_and(|budget| budget.over_budget())
+        {
+            let since = match stalled_since {
+                Some(since) => since,
+                None => {
+                    let now = Instant::now();
+                    stalled_since = Some(now);
+                    tracing::warn!(
+                        outstanding = ctx.budget.as_ref().map_or(0, |budget| budget.outstanding()),
+                        "pausing renders, ssh output backlog over budget"
+                    );
+                    now
+                }
+            };
+            metrics::record_render_stall_skip();
+            if since.elapsed() >= OUTPUT_STALL_DISCONNECT {
+                tracing::warn!(
+                    outstanding = ctx.budget.as_ref().map_or(0, |budget| budget.outstanding()),
+                    stalled_secs = since.elapsed().as_secs(),
+                    "disconnecting session, ssh output stalled past budget"
+                );
+                metrics::record_render_stall_disconnect();
+                ctx.sink.eof_close(TUNNEL_CLOSE_SESSION_ENDED).await;
+                break SessionEnd::Stalled;
+            }
+            // Re-poll the budget at the hot cadence; leaving the
+            // deadline in the past would spin the loop.
+            world_deadline = Instant::now() + crate::app::tick::HOT_TICK;
+            continue;
+        }
+        if let Some(since) = stalled_since.take() {
+            tracing::info!(
+                stalled_ms = since.elapsed().as_millis() as u64,
+                "ssh output backlog cleared, resuming renders"
+            );
+        }
+        match render_once(&app, &mut input_rx, &ctx, advance_world).await {
+            Ok(outcome) => {
+                previous_render = Some(Instant::now());
+                if let Some(pass) = outcome.pass
+                    && slow_pass_due(pass.took, slow_pass_warned_at, Instant::now())
+                {
+                    slow_pass_warned_at = Some(Instant::now());
+                    tracing::warn!(
+                        username = %username,
+                        screen = ?pass.screen,
+                        pass_ms = pass.took.as_millis() as u64,
+                        "slow render pass"
+                    );
+                }
+                if outcome.drew
+                    && let Some(start) = session_start.take()
+                {
+                    start.record_first_frame();
+                }
+                if outcome.drew {
+                    stats_drawn += 1;
+                } else {
+                    stats_skipped += 1;
+                }
+                if stats_since.elapsed() >= Duration::from_secs(5) {
+                    tracing::debug!(
+                        drawn = stats_drawn,
+                        skipped_clean = stats_skipped,
+                        "render stats, last 5s"
+                    );
+                    stats_drawn = 0;
+                    stats_skipped = 0;
+                    stats_since = Instant::now();
+                }
+                output.bytes += outcome.bytes_sent as u64;
+                if outcome.drew {
+                    output.frames += 1;
+                }
+                window_bytes += outcome.bytes_sent;
+                let window = window_since.elapsed();
+                if window >= OUTPUT_RATE_WINDOW {
+                    let rate = window_bytes as f64 / window.as_secs_f64();
+                    metrics::record_session_output_rate(ctx.client, rate);
+                    output.peak_bytes_per_second = output.peak_bytes_per_second.max(rate);
+                    window_bytes = 0;
+                    window_since = Instant::now();
+                }
+                if outcome.should_quit {
+                    tracing::debug!("app requested quit, closing connection");
+                    if let Some(probe) = ctx.probe.as_ref() {
+                        settle_terminal_probe(probe).await;
+                    }
+                    let close_code = app.lock().await.close_code();
+                    clean_disconnect(&ctx.sink, close_code).await;
+                    break SessionEnd::Closed;
+                }
+                drive_terminal_probe(&ctx, outcome.bytes_sent).await;
+                if advance_world {
+                    world_deadline = Instant::now() + outcome.wake_hint;
+                } else {
+                    // An input render can shrink the cadence
+                    // (post-input hot window) but never delays a
+                    // world tick that was already due sooner.
+                    world_deadline = world_deadline.min(Instant::now() + outcome.wake_hint);
+                }
+            }
+            Err(err) => {
+                tracing::debug!(error = ?err, "error rendering frame, stopping render loop");
+                let _ = ctx.sink.send_frame(App::leave_alt_screen()).await;
+                ctx.sink.eof_close(TUNNEL_CLOSE_SESSION_ENDED).await;
+                break SessionEnd::Failed;
+            }
+        }
+    };
+    let (terminal, screen, tenure) = {
+        let app = app.lock().await;
+        (
+            app.terminal_version().map(str::to_owned),
+            app.screen,
+            app.tenure(),
+        )
+    };
+    metrics::record_session_end(tenure, screen);
+    if let (Some(who), Some(probe)) = (who.as_ref(), ctx.probe.as_ref()) {
+        log_wire_summary(
+            who,
+            ended,
+            started.elapsed(),
+            &output,
+            probe.tally(),
+            terminal.as_deref(),
+        );
     }
 }
 
@@ -1761,7 +1473,6 @@ fn log_wire_summary(
         "session wire summary"
     );
 }
-
 /// What the render loop should do next.
 #[derive(Debug, PartialEq, Eq)]
 enum RenderAction {
@@ -1819,14 +1530,13 @@ async fn next_render_action(
 
 /// Everything about a session's output channel that stays fixed for the
 /// lifetime of its render loop.
-struct RenderContext {
-    handle: russh::server::Handle,
-    channel_id: ChannelId,
+struct RenderContext<S> {
+    sink: S,
     frame_drop_log_every: u64,
     signal: Arc<RenderSignal>,
-    budget: Arc<OutputBudget>,
+    budget: Option<Arc<OutputBudget>>,
     client: metrics::SessionClient,
-    probe: Arc<TerminalProbe>,
+    probe: Option<Arc<TerminalProbe>>,
 }
 
 /// What one render pass produced: whether the app asked to quit, how soon
@@ -1911,12 +1621,12 @@ enum InputDrain {
 /// pass's budget is spent: `max_messages` handled or `max_time` spent
 /// handling them, whichever comes first. At least one message is handled per
 /// call, so a pass always makes progress.
-fn drain_input(
-    input_rx: &mut tokio::sync::mpsc::Receiver<Vec<u8>>,
+fn drain_input<T>(
+    input_rx: &mut tokio::sync::mpsc::Receiver<T>,
     signal: &RenderSignal,
     max_messages: usize,
     max_time: Duration,
-    mut handle: impl FnMut(&[u8]) -> bool,
+    mut handle: impl FnMut(T) -> bool,
 ) -> InputDrain {
     let started = Instant::now();
     let mut handled = 0;
@@ -1936,16 +1646,16 @@ fn drain_input(
             };
         };
         handled += 1;
-        if !handle(&data) {
+        if !handle(data) {
             return InputDrain::Quit;
         }
     }
 }
 
-async fn render_once(
+async fn render_once<S: FrameSink>(
     app: &Arc<TokioMutex<crate::app::state::App>>,
-    input_rx: &mut tokio::sync::mpsc::Receiver<Vec<u8>>,
-    ctx: &RenderContext,
+    input_rx: &mut tokio::sync::mpsc::Receiver<SshInputEvent>,
+    ctx: &RenderContext<S>,
     advance_world: bool,
 ) -> anyhow::Result<RenderOutcome> {
     let reason = match advance_world {
@@ -1960,16 +1670,28 @@ async fn render_once(
         }
         // Clear `dirty` before draining the queued input so any input arriving
         // during this render flips it back to `true` and schedules another
-        // pass instead of being erased by this batch. Remember the old value:
-        // it is one of the gate's changed sources.
+        // pass instead of being erased by this batch.
+        //
+        // Bytes and Resize are drained from the same FIFO under one
+        // lock-hold so the app sees them in SSH-wire order — the
+        // whole point of routing resize through input_tx instead of
+        // taking the app lock from the handler callback.
         let mut changed = ctx.signal.dirty.swap(false, Ordering::AcqRel);
         let drain = drain_input(
             input_rx,
             &ctx.signal,
             INPUT_DRAIN_MAX_MESSAGES,
             INPUT_DRAIN_MAX_TIME,
-            |data| {
-                app.handle_input(data);
+            |event| {
+                match event {
+                    SshInputEvent::Bytes(data) => app.handle_input(&data),
+                    SshInputEvent::Resize { cols, rows } => {
+                        let size = clamp_terminal_size(u32::from(cols), u32::from(rows));
+                        if let Err(e) = app.resize(size.cols, size.rows) {
+                            tracing::error!(error = ?e, cols, rows, "error resizing app");
+                        }
+                    }
+                }
                 app.running
             },
         );
@@ -2022,26 +1744,17 @@ async fn render_once(
 
     let frame_len = frame.len();
     let mut bytes_sent = 0;
-    let frame_sent = match timeout(
-        Duration::from_millis(50),
-        ctx.handle.data(ctx.channel_id, frame),
-    )
-    .await
-    {
-        Ok(Ok(())) => {
-            ctx.budget.record_sent(frame_len);
+    let frame_sent = match ctx.sink.send_frame(frame).await {
+        Ok(true) => {
+            if let Some(budget) = &ctx.budget {
+                budget.record_sent(frame_len);
+            }
             metrics::record_frame_bytes(reason, frame_len);
             spot.record(metrics::OutputKind::Frame, frame_len);
             bytes_sent += frame_len;
             true
         }
-        Ok(Err(err)) => {
-            return Err(anyhow::anyhow!(
-                "render_once: handle send failed: {:?}",
-                err
-            ));
-        }
-        Err(_) => {
+        Ok(false) => {
             let drops = FRAME_DROP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
             metrics::record_render_frame_drop();
             if drops.is_multiple_of(ctx.frame_drop_log_every) {
@@ -2049,6 +1762,7 @@ async fn render_once(
             }
             false
         }
+        Err(err) => return Err(err.context("render_once: frame send failed")),
     };
 
     if !frame_sent {
@@ -2066,24 +1780,15 @@ async fn render_once(
 
     for command in terminal_commands {
         let command_len = command.len();
-        match timeout(
-            Duration::from_millis(50),
-            ctx.handle.data(ctx.channel_id, command),
-        )
-        .await
-        {
-            Ok(Ok(())) => {
-                ctx.budget.record_sent(command_len);
+        match ctx.sink.send_frame(command).await {
+            Ok(true) => {
+                if let Some(budget) = &ctx.budget {
+                    budget.record_sent(command_len);
+                }
                 spot.record(metrics::OutputKind::Command, command_len);
                 bytes_sent += command_len;
             }
-            Ok(Err(err)) => {
-                return Err(anyhow::anyhow!(
-                    "render_once: terminal command send failed: {:?}",
-                    err
-                ));
-            }
-            Err(_) => {
+            Ok(false) => {
                 let drops = FRAME_DROP_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
                 metrics::record_render_frame_drop();
                 if drops.is_multiple_of(ctx.frame_drop_log_every) {
@@ -2103,6 +1808,7 @@ async fn render_once(
                 wake_hint = crate::app::tick::HOT_TICK;
                 break;
             }
+            Err(err) => return Err(err.context("render_once: terminal command send failed")),
         }
     }
 
@@ -2119,9 +1825,12 @@ async fn render_once(
 /// what the session wrote in the second before it, this pass's
 /// `bytes_written` included (`terminal_probe.rs`). The probe only keeps
 /// time; its telemetry lives here and in the `data` handler.
-async fn drive_terminal_probe(ctx: &RenderContext, bytes_written: usize) {
+async fn drive_terminal_probe<S: FrameSink>(ctx: &RenderContext<S>, bytes_written: usize) {
+    let Some(probe) = ctx.probe.as_ref() else {
+        return;
+    };
     let now = Instant::now();
-    match ctx.probe.expire(now) {
+    match probe.expire(now) {
         None => {}
         Some(ProbeExpiry::Unanswered) => {
             metrics::record_terminal_probe(ctx.client, metrics::TerminalProbeOutcome::Unanswered);
@@ -2131,19 +1840,18 @@ async fn drive_terminal_probe(ctx: &RenderContext, bytes_written: usize) {
             tracing::info!("terminal never answered the round-trip probe; probing stopped");
         }
     }
-    if !ctx.probe.try_start(now, bytes_written) {
+    if !probe.try_start(now, bytes_written) {
         return;
     }
-    match timeout(
-        Duration::from_millis(50),
-        ctx.handle.data(ctx.channel_id, PROBE_QUERY.to_vec()),
-    )
-    .await
-    {
-        Ok(Ok(())) => ctx.budget.record_sent(PROBE_QUERY.len()),
+    match ctx.sink.send_frame(PROBE_QUERY.to_vec()).await {
+        Ok(true) => {
+            if let Some(budget) = &ctx.budget {
+                budget.record_sent(PROBE_QUERY.len());
+            }
+        }
         // A busy or closed channel: the query never left, so nothing is in
         // flight. A closed one ends the loop on the next frame send.
-        Ok(Err(_)) | Err(_) => ctx.probe.cancel(Instant::now()),
+        Ok(false) | Err(_) => probe.cancel(Instant::now()),
     }
 }
 
@@ -2168,21 +1876,17 @@ pub(crate) fn session_client(cli_mode: bool, cli_token_served: bool) -> metrics:
     }
 }
 
-async fn clean_disconnect(handle: &russh::server::Handle, channel_id: ChannelId) {
-    let exit = App::leave_alt_screen();
-    let _ = timeout(Duration::from_millis(50), handle.data(channel_id, exit)).await;
-    let _ = timeout(
-        Duration::from_millis(50),
-        handle.data(channel_id, EXIT_MESSAGE.as_bytes().to_vec()),
-    )
-    .await;
-    let _ = handle.eof(channel_id).await;
-    let _ = handle.close(channel_id).await;
+async fn clean_disconnect<S: FrameSink>(sink: &S, close_code: u16) {
+    let _ = sink.send_frame(App::leave_alt_screen()).await;
+    if close_code == TUNNEL_CLOSE_SESSION_ENDED {
+        let _ = sink.send_frame(EXIT_MESSAGE.as_bytes().to_vec()).await;
+    }
+    sink.eof_close(close_code).await;
 }
 
 // Updated helper to take State
 /// Returns `(user, is_new)` — `is_new` is true when the user was just created.
-async fn ensure_user(state: &State, fingerprint: &str) -> Result<(User, bool)> {
+pub(crate) async fn ensure_user(state: &State, fingerprint: &str) -> Result<(User, bool)> {
     tracing::debug!(fingerprint, "ensuring user exists");
     let client = state.db.get().await?;
     let row = User::find_by_fingerprint(&client, fingerprint).await?;
@@ -2266,6 +1970,51 @@ async fn ensure_user(state: &State, fingerprint: &str) -> Result<(User, bool)> {
     Ok((user, is_new_user))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AdmissionReject {
+    ClosedAccess,
+    Banned,
+    Infrastructure,
+}
+
+pub(crate) async fn check_ssh_admission(
+    state: &State,
+    fingerprint: &str,
+    peer_ip: Option<IpAddr>,
+) -> Result<(), AdmissionReject> {
+    if !state.config.open_access {
+        return Err(AdmissionReject::ClosedAccess);
+    }
+
+    let client = state
+        .db
+        .get()
+        .await
+        .map_err(|_| AdmissionReject::Infrastructure)?;
+    if has_active_server_ban_before_user_lookup(&client, fingerprint, peer_ip)
+        .await
+        .map_err(|_| AdmissionReject::Infrastructure)?
+    {
+        return Err(AdmissionReject::Banned);
+    }
+
+    match User::find_by_fingerprint(&client, fingerprint).await {
+        Ok(Some(existing_user)) => {
+            if ServerBan::find_active_for_user_id(&client, existing_user.id)
+                .await
+                .map_err(|_| AdmissionReject::Infrastructure)?
+                .is_some()
+            {
+                return Err(AdmissionReject::Banned);
+            }
+        }
+        Ok(None) => {}
+        Err(_) => return Err(AdmissionReject::Infrastructure),
+    }
+
+    Ok(())
+}
+
 fn is_username_unique_violation(error: &anyhow::Error) -> bool {
     error.chain().any(|cause| {
         cause
@@ -2293,10 +2042,6 @@ async fn has_active_server_ban_before_user_lookup(
     Ok(ServerBan::find_active_for_fingerprint(client, fingerprint)
         .await?
         .is_some())
-}
-
-fn late_ssh_theme_id(settings: &Value) -> String {
-    extract_theme_id(settings).unwrap_or_else(|| theme::DEFAULT_ID.to_string())
 }
 
 fn reject_publickey_only() -> Auth {

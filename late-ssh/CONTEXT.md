@@ -13,6 +13,7 @@ notify, presence, the help modal, the ghost bots, the sidebar). Root
 late-ssh/src/
   main.rs              starts SSH + API + background loops; subscribes LISTEN channels
   ssh.rs               russh server: admission, auth, the per-session render task
+  tunnel.rs            private bastion WebSocket listener and tunnel sessions
   session_bootstrap.rs per-session service wiring at login
   api.rs               /api/* routes and /api/ws/pair
   session.rs           SessionRegistry: token -> mpsc (WS -> session, inbound)
@@ -63,6 +64,12 @@ sequenceDiagram
 - Admission runs before the SSH handshake (`Server::admit`): any refusal
   returns before `run_stream`, so a flood holds no permit, task or buffer.
   `late_ssh_connections_rejected_total{reason}` counts refusals.
+- Client IPs come from a direct socket or trusted PROXY metadata. SSH rejects
+  trusted `PROXY UNKNOWN`, missing and malformed headers before negotiation;
+  the proxy's address never replaces an unknown client address. Authenticated
+  tunnel metadata supplies the same per-IP limits and `ActiveSession.peer_ip`
+  used by server bans, including across redial. IRC may retain `None` during
+  ingress rollouts (its context describes the account-only behavior).
 - Only public-key auth is accepted. The pre-auth banner points plain `ssh`
   users at the CLI installer; native `late-cli` suppresses it.
 - The SSH login name is ignored except `invite-<code>` on the connect that
@@ -103,11 +110,13 @@ Each session spawns one render task (`ssh.rs`) with two triggers:
   resize, a render that does not advance world time. Door proxies push-wake
   the same path for remote output.
 
-Keystrokes land in a bounded per-session queue (`INPUT_QUEUE_CAP` 256, input
-dropped with a warning when full) that the render task drains into
-`App::handle_input()` right before each pass, so ordinary input never takes
-the app mutex. Bursts of `input queue full` in prod are paste bombs, not lost
-typing. One pass hands over at most `INPUT_DRAIN_MAX_MESSAGES` (64) messages
+Keystrokes and resize events share a bounded per-session queue
+(`INPUT_QUEUE_CAP` 256). The tunnel path waits up to one second for capacity,
+then ends the session rather than silently dropping bytes or resizes. Direct
+SSH retains its existing drop-with-warning policy. The render
+task applies them in arrival order right before each pass, so neither input
+nor resize takes the app mutex in a transport callback. Direct SSH and bastion
+tunnels use the same loop. One pass handles at most `INPUT_DRAIN_MAX_MESSAGES` (64) events
 and stops early once `INPUT_DRAIN_MAX_TIME` (4 ms) of handling is spent, then
 draws and re-arms itself for the rest (`drain_input`). The time budget is
 checked between messages, so one slow message (a big paste) can run past it;
@@ -261,6 +270,10 @@ messages owned by `app/audio`, `app/voice` and `late-cli`.
 Pairing flow:
 
 1. The PTY request creates a session token and its `SessionRegistry` route.
+   Bastion exec can allocate the route before PTY/shell startup. Exec-only and
+   pre-shell disconnects must close that receiver and release admission guards.
+   Reconnects reuse the token; `retire_closed` removes only a closed route under
+   the registry write lock, preserving a live replacement and its paired state.
 2. The client connects to `/api/ws/pair`; the API registers an outbound slot in
    `PairedClientRegistry` (latest registration wins per token).
 3. `client_state` updates the slot and persists mute/volume to this device's

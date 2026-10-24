@@ -66,7 +66,7 @@ impl Config {
     pub(super) fn from_args(args: impl IntoIterator<Item = String>) -> Result<Self> {
         let args = args.into_iter().collect::<Vec<_>>();
         let (config_path, arg_layer) = parse_arg_layer(args)?;
-        let file_layer = load_config_layer(config_path.as_deref());
+        let file_layer = load_config_layer(config_path.as_deref())?;
         let env_layer = env_config_layer()?;
         Ok(resolve_config(file_layer, env_layer, arg_layer))
     }
@@ -231,25 +231,30 @@ fn env_config_layer() -> Result<ConfigLayer> {
     })
 }
 
-fn load_config_layer(explicit_path: Option<&Path>) -> ConfigLayer {
-    let (path, explicit) = match explicit_path {
-        Some(path) => (path.to_path_buf(), true),
-        None => (default_config_path(), false),
-    };
+fn load_config_layer(explicit_path: Option<&Path>) -> Result<ConfigLayer> {
+    if let Some(path) = explicit_path {
+        // An explicit destination override must never fall back to the public
+        // service when its file is missing or malformed.
+        let text = fs::read_to_string(path)
+            .with_context(|| format!("could not read config {}", path.display()))?;
+        return parse_config_layer(&text)
+            .with_context(|| format!("could not parse config {}", path.display()));
+    }
+    let path = default_config_path();
     let text = match fs::read_to_string(&path) {
         Ok(text) => text,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound && !explicit => {
-            return ConfigLayer::default();
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(ConfigLayer::default());
         }
         Err(err) => {
             eprintln!(
                 "late config warning: could not read {}: {err}",
                 path.display()
             );
-            return ConfigLayer::default();
+            return Ok(ConfigLayer::default());
         }
     };
-    match parse_config_layer(&text) {
+    Ok(match parse_config_layer(&text) {
         Ok(layer) => layer,
         Err(err) => {
             eprintln!(
@@ -258,7 +263,7 @@ fn load_config_layer(explicit_path: Option<&Path>) -> ConfigLayer {
             );
             ConfigLayer::default()
         }
-    }
+    })
 }
 
 pub(super) fn init_logging(verbose: bool) -> Result<Option<PathBuf>> {

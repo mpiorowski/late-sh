@@ -3821,6 +3821,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "late-bastion"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "futures-util",
+ "getrandom 0.4.3",
+ "ipnet",
+ "late-core",
+ "opentelemetry",
+ "opentelemetry-http",
+ "pkcs5",
+ "rand_core 0.6.4",
+ "russh",
+ "serde",
+ "serde_json",
+ "tikv-jemallocator",
+ "tokio",
+ "tokio-tungstenite 0.28.0",
+ "tracing",
+ "tracing-opentelemetry",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "late-brogue"
 version = "0.1.0"
 dependencies = [
@@ -3996,6 +4021,7 @@ dependencies = [
  "ipnet",
  "irc-proto",
  "kdl",
+ "late-bastion",
  "late-core",
  "nix 0.29.0",
  "opentelemetry",
@@ -4020,6 +4046,7 @@ dependencies = [
  "tokio",
  "tokio-postgres",
  "tokio-rustls",
+ "tokio-tungstenite 0.28.0",
  "tokio-util",
  "tower-http",
  "tracing",

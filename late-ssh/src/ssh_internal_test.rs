@@ -1,5 +1,36 @@
 use super::*;
 
+#[tokio::test]
+async fn client_ip_untrusted_proxy_header_is_not_consumed() {
+    use crate::test_helpers::{new_test_db, test_app_state, test_config};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let db = new_test_db().await;
+    let mut config = test_config(db.db.config().clone());
+    config.ssh_proxy_protocol = true;
+    config.ssh_proxy_trusted_cidrs = vec!["10.42.0.0/16".parse().unwrap()];
+    let state = test_app_state(db.db.clone(), config);
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let mut client = TcpStream::connect(listener.local_addr().unwrap())
+        .await
+        .unwrap();
+    let header = b"PROXY TCP4 203.0.113.99 127.0.0.1 12345 2222\r\n";
+    client.write_all(header).await.unwrap();
+    let (mut stream, transport_peer) = listener.accept().await.unwrap();
+    assert_eq!(
+        resolve_proxied_client_addr(&state, &mut stream, transport_peer)
+            .await
+            .unwrap(),
+        None
+    );
+    let mut remaining = vec![0; header.len()];
+    tokio::time::timeout(Duration::from_secs(2), stream.read_exact(&mut remaining))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(remaining, header);
+}
+
 #[test]
 fn reject_publickey_only_advertises_only_publickey() {
     match reject_publickey_only() {
@@ -288,4 +319,55 @@ fn slow_pass_warns_once_a_minute_and_only_past_the_hot_tick() {
         slow_pass_due(slow, Some(now), now + SLOW_PASS_WARN_EVERY),
         "a minute later it warns again"
     );
+}
+
+#[tokio::test]
+async fn render_pass_bounds_mixed_input_and_rearms_until_drained() {
+    use crate::session_io::WsFrameSink;
+    use crate::test_helpers::{make_app, new_test_db};
+    use late_core::test_utils::create_test_user;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "bounded-input").await;
+    let app = Arc::new(TokioMutex::new(make_app(
+        test_db.db.clone(),
+        user.id,
+        "bounded-input-session",
+    )));
+    let (input_tx, mut input_rx) = tokio::sync::mpsc::channel(INPUT_QUEUE_CAP);
+    for index in 0..200u16 {
+        let event = match index % 2 {
+            0 => SshInputEvent::Bytes(Vec::new()),
+            _ => SshInputEvent::Resize {
+                cols: 80 + index % 20,
+                rows: 24,
+            },
+        };
+        input_tx.try_send(event).expect("queue has room");
+    }
+    let (output_tx, mut output_rx) = tokio::sync::mpsc::channel(INPUT_QUEUE_CAP);
+    let ctx = RenderContext {
+        sink: WsFrameSink::new(output_tx),
+        frame_drop_log_every: 1,
+        signal: Arc::new(RenderSignal::new()),
+        budget: None,
+        client: metrics::SessionClient::Ssh,
+        probe: None,
+    };
+
+    let mut remaining = input_rx.len();
+    while remaining > 0 {
+        let outcome = render_once(&app, &mut input_rx, &ctx, false)
+            .await
+            .expect("render pass");
+        assert!(outcome.drew && !outcome.should_quit);
+        assert!(outcome.pass.is_some());
+        assert!(output_rx.try_recv().is_ok(), "pass sends its frame");
+        let next_remaining = input_rx.len();
+        assert!(next_remaining < remaining, "each pass makes progress");
+        assert!(remaining - next_remaining <= INPUT_DRAIN_MAX_MESSAGES);
+        assert_eq!(ctx.signal.dirty.load(Ordering::Acquire), next_remaining > 0);
+        remaining = next_remaining;
+        while output_rx.try_recv().is_ok() {}
+    }
 }

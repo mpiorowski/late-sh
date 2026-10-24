@@ -19,6 +19,9 @@ late-core/
     test_utils.rs      test_db(), create_test_user(), shared fixtures
     telemetry.rs       init_telemetry(), HTTP span middleware, TracedExt
     rate_limit.rs      sliding-window per-IP limiter
+    proxy_protocol.rs  PROXY v1 line parser used by bastion
+    tunnel_protocol.rs shared bastion/backend control frames and headers
+    terminal.rs        terminal mode restoration shared by SSH and bastion
     radio.rs           station catalogue, RADIO_SLOTS (see app/audio/STATIONS.md)
     vocab.rs           the tag vocabulary (skills, langs)
     nonogram.rs        pack schema, clue derivation, daily selection
@@ -43,6 +46,10 @@ late-core/
   `SCALE.md`, Small Debts.
 - **Notify payloads carry ids, never state** (8000-byte cap, reorder and loss
   across a listener reconnect); the reader re-reads the committed row.
+- **Startup migrations serialize across replicas.** `Db::migrate` takes a
+  database-scoped session advisory lock before creating `_migrations`. Its
+  dedicated connection is detached from the pool and closed on return, error,
+  or cancellation, so the lock cannot remain on an idle pooled connection.
 
 ## 3. Shared tables
 
