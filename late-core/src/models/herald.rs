@@ -1,6 +1,7 @@
-//! The herald's daily post (`herald_posts`, `herald_deliveries`, migration
-//! 252): every read and write of both tables, and the two reads that feed
-//! the rotation (what went out last, which poster is waiting).
+//! The herald's daily post (`herald_posts`, `herald_deliveries`,
+//! `herald_settings`, migration 252): every read and write of the three
+//! tables, and the two reads that feed the rotation (what went out last,
+//! which poster is waiting).
 //!
 //! A row is a claim. The sweeper in late-ssh `app/herald/svc.rs` inserts
 //! a `posting` row before it spends any network's calls, so two replicas
@@ -326,5 +327,47 @@ impl HeraldPost {
             username: row.get("username"),
             slug: row.get("slug"),
         }))
+    }
+}
+
+/// The operator's switch (`herald_settings`, key `posting`): one row,
+/// seeded off by migration 252, so a flip on one replica is a flip on
+/// every replica and survives a restart. A missing row is an error, never
+/// a default: nobody ships an off-state by accident.
+///
+/// Flipping it is a statement, not a key: `UPDATE herald_settings SET
+/// enabled = true WHERE key = 'posting'` through `scripts/connect_db.sh`.
+pub struct HeraldSwitch;
+
+impl HeraldSwitch {
+    const KEY: &'static str = "posting";
+
+    /// The switch as it stands. An error for a row the seed never wrote.
+    pub async fn is_on(client: &Client) -> Result<bool> {
+        let row = client
+            .query_opt(
+                "SELECT enabled FROM herald_settings WHERE key = $1",
+                &[&Self::KEY],
+            )
+            .await?;
+        match row {
+            Some(row) => Ok(row.get("enabled")),
+            None => bail!("herald setting {} has no row", Self::KEY),
+        }
+    }
+
+    /// Flip the switch. For tests and the operator's tooling; the app
+    /// itself only reads.
+    pub async fn set(client: &Client, enabled: bool) -> Result<()> {
+        let updated = client
+            .execute(
+                "UPDATE herald_settings SET enabled = $2, updated = current_timestamp WHERE key = $1",
+                &[&Self::KEY, &enabled],
+            )
+            .await?;
+        if updated != 1 {
+            bail!("herald setting {} has no row", Self::KEY);
+        }
+        Ok(())
     }
 }

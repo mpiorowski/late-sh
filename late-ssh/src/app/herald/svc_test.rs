@@ -8,10 +8,9 @@ use axum::response::IntoResponse;
 use axum::routing::{get, post};
 use chrono::{Duration, NaiveDate, TimeZone, Utc};
 use dartboard_core::{Canvas, Pos};
-use late_core::models::app_flag::AppFlag;
 use late_core::models::artboard::Snapshot;
 use late_core::models::deadchannel_runner::DeadchannelRunner;
-use late_core::models::herald::{HeraldKind, HeraldNetwork, HeraldPost};
+use late_core::models::herald::{HeraldKind, HeraldNetwork, HeraldPost, HeraldSwitch};
 use late_core::models::work_profile::{WorkProfile, WorkProfileParams, WorkStatus, WorkType};
 use late_core::test_utils::create_test_user;
 use tokio::net::TcpListener;
@@ -220,12 +219,12 @@ async fn runner_with_poster(
             headline: "Terminal artist".into(),
             status: WorkStatus::Open,
             work_type: WorkType::Any,
-            location: String::new(),
+            location: "The night city".into(),
             contact: String::new(),
-            links: vec![],
+            links: vec!["https://late.sh".into()],
             skills: vec![],
             skills_tags: vec![],
-            summary: String::new(),
+            summary: "Paints posters at PRINTS.".into(),
         },
     )
     .await
@@ -275,10 +274,7 @@ async fn the_herald_posts_a_poster_then_the_board_then_rests() {
     let db = test_db.db.clone();
     let client = db.get().await.expect("db client");
     let (base, log) = fake_servers().await;
-    AppFlag::HeraldEnabled
-        .set(&client, true)
-        .await
-        .expect("switch on");
+    HeraldSwitch::set(&client, true).await.expect("switch on");
 
     let painter = runner_with_poster(&client, &db, "h_painter", "w_heraldsvc001").await;
     let now = Utc.with_ymd_and_hms(2026, 10, 23, 16, 30, 0).unwrap();
@@ -465,10 +461,7 @@ async fn a_failed_network_is_retried_alone_under_the_same_key() {
     let db = test_db.db.clone();
     let client = db.get().await.expect("db client");
     let (base, log) = fake_servers().await;
-    AppFlag::HeraldEnabled
-        .set(&client, true)
-        .await
-        .expect("switch on");
+    HeraldSwitch::set(&client, true).await.expect("switch on");
     let painter = runner_with_poster(&client, &db, "h_retry", "w_heraldsvc003").await;
     log.lock().expect("log").fail_bluesky = true;
 

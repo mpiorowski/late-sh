@@ -14,8 +14,8 @@
 //! after `HERALD_STALE_CLAIM`.
 //!
 //! Two switches gate it: `Config::herald` (a network configured, off in
-//! dev without its pair) and the `herald_enabled` row (`AppFlag`), the
-//! operator's, read at every check so a flip needs no deploy.
+//! dev without its pair) and the `herald_settings` row (`HeraldSwitch`),
+//! the operator's, read at every check so a flip needs no deploy.
 //!
 //! This is the orchestration layer: every failure is logged and counted
 //! here, and nothing below it logs.
@@ -25,9 +25,8 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use chrono::{DateTime, NaiveDate, Utc};
 use late_core::db::Db;
-use late_core::models::app_flag::AppFlag;
 use late_core::models::artboard::Snapshot;
-use late_core::models::herald::{HeraldNetwork, HeraldPost, HeraldPosted};
+use late_core::models::herald::{HeraldNetwork, HeraldPost, HeraldPosted, HeraldSwitch};
 use tracing::Instrument;
 use uuid::Uuid;
 
@@ -184,7 +183,7 @@ impl HeraldService {
 
     async fn switch_on(&self) -> anyhow::Result<bool> {
         let client = self.db.get().await?;
-        AppFlag::HeraldEnabled.is_enabled(&client).await
+        HeraldSwitch::is_on(&client).await
     }
 
     async fn claim(&self, day: NaiveDate) -> anyhow::Result<Option<Uuid>> {

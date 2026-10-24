@@ -2,7 +2,9 @@ use chrono::{Duration, NaiveDate, Utc};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use super::herald::{HeraldDelivery, HeraldKind, HeraldNetwork, HeraldPost, HeraldPosted};
+use super::herald::{
+    HeraldDelivery, HeraldKind, HeraldNetwork, HeraldPost, HeraldPosted, HeraldSwitch,
+};
 use crate::db::Db;
 use crate::models::deadchannel_runner::DeadchannelRunner;
 use crate::models::work_profile::{WorkProfile, WorkProfileParams, WorkStatus, WorkType};
@@ -52,12 +54,12 @@ fn profile(user_id: Uuid, slug: &str) -> WorkProfileParams {
         headline: "Terminal artist".into(),
         status: WorkStatus::Open,
         work_type: WorkType::Any,
-        location: String::new(),
+        location: "The night city".into(),
         contact: String::new(),
-        links: vec![],
+        links: vec!["https://late.sh".into()],
         skills: vec![],
         skills_tags: vec![],
-        summary: String::new(),
+        summary: "Paints posters at PRINTS.".into(),
     }
 }
 
@@ -356,5 +358,26 @@ async fn poster_candidates_are_standing_public_and_unposted() {
             .await
             .expect("read"),
         None
+    );
+}
+
+/// The switch is seeded off and reads back whatever was last written to
+/// its row.
+#[tokio::test]
+async fn the_switch_is_seeded_off_and_flips() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    assert!(
+        !HeraldSwitch::is_on(&client)
+            .await
+            .expect("read seeded switch")
+    );
+
+    HeraldSwitch::set(&client, true).await.expect("flip on");
+    assert!(
+        HeraldSwitch::is_on(&client)
+            .await
+            .expect("read flipped switch")
     );
 }

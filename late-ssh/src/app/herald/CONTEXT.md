@@ -2,7 +2,7 @@
 
 ## Metadata
 - Domain: late.sh's social accounts. One picture a day, posted by the server through an ordinary account on each network it is on (Mastodon, Bluesky), so the things members make to be seen (posters, the Artboard) are seen outside the terminal.
-- Status: Active, shipped dark. Neither account exists yet (prod pins no network), and the `herald_enabled` row starts off; the operator flips both (below).
+- Status: Active, shipped dark. Neither account exists yet (prod pins no network), and the `herald_settings` row starts off; the operator flips both (below).
 
 ## What it is
 
@@ -21,7 +21,7 @@ An arrivals lever built to the shape in `AUDIENCE.md` ("The herald"): post, do n
 
 - `herald_posts` (model `late-core/src/models/herald.rs`, migration 252): one row per UTC day, the claim. `id` is minted at the first claim and never changes: Mastodon sees it as the `Idempotency-Key`, Bluesky as the record key derived from it. `posting` is held while the calls run; `kind`, `subject` (the runner's user id, or the board's `daily:YYYY-MM-DD` key) and `picture` (the serialized `Picture`) are written at pick time, before the first call, so a retry delivers the same thing; `posted` means every configured network delivered; `skipped` is a day with nothing worth posting; `failed` keeps `attempts`. Claim semantics as `job_press_runs` and the paper's rows: a stale `posting` (older than `HERALD_STALE_CLAIM`, 20 minutes) is taken over, a `failed` row is claimed again under `HERALD_MAX_ATTEMPTS` (3), then the day rests.
 - `herald_deliveries`: one row per network a day's picture landed on, written as each call succeeds; a retry sends only to the networks without one. A pick on a day that failed for good does not count as that poster posted: the candidate query looks at `posted` rows only.
-- `app_flags.herald_enabled` (model `late-core/src/models/app_flag.rs`): the operator's switch, read at every check, seeded off by migration 252. The first row in that table with a reader; the other seeded keys (`haunt_*`, `paper_*`, `jobs_enabled`) have none.
+- `herald_settings` (`HeraldSwitch` in the same model): the operator's switch, one row keyed `posting`, read at every check, seeded off by migration 252. Herald-owned like `greendragon_settings`; the process-wide `app_flags` table was dropped in migration 219 and stays dropped.
 - Reads of other domains, through model surfaces only: the poster candidate query in the herald model joins `deadchannel_runners` (`poster`, `left_at`), `work_profiles` (`slug`) and `users` (`username`, `last_seen`); the board comes from `Snapshot::find_by_board_key` and is decoded with `dartboard_core::Canvas` to count ink.
 
 ## The post
@@ -37,7 +37,7 @@ An arrivals lever built to the shape in `AUDIENCE.md` ("The herald"): post, do n
 ## Config and switches
 
 - `Config::herald` (`HeraldConfig` in `late-ssh/src/config.rs`): `mastodon: Option<MastodonConfig>` (instance, token), `bluesky: Option<BlueskyConfig>` (pds, identifier, app password), `web_internal_url`, `visibility`. A network configured is the herald on (`enabled()`); none is off. Prod pins neither network yet: going live on one is a profile change (pin the instance URL or the handle as a literal, read the secret with `required`, add its Terraform variable, Kubernetes secret, env on `service-ssh` and the two workflow lines like `LATE_YOUTUBE_API_KEY`) shipped as an `-infra` release before the ssh image that needs it (`infra/RUNBOOK.md`, deploy skew rule). Dev: each network on only with its pair in `.env.local` (`LATE_HERALD_MASTODON_INSTANCE` + `..._TOKEN`, `LATE_HERALD_BLUESKY_IDENTIFIER` + `..._PASSWORD`; half a pair refuses to start), `web_internal_url` the compose web service, Mastodon unlisted. `Config::validate` refuses a configured network with an empty credential or a non-HTTP URL.
-- The row: `UPDATE app_flags SET enabled = true WHERE key = 'herald_enabled'` through `scripts/connect_db.sh`; `false` stops the next check, no deploy. The config is the deployment's switch; the row is the operator's.
+- The row: `UPDATE herald_settings SET enabled = true WHERE key = 'posting'` through `scripts/connect_db.sh`; `false` stops the next check, no deploy. The config is the deployment's switch; the row is the operator's.
 - Account setup is by hand: Mastodon's bot flag and profile links in its web settings, the application with `write:media` and `write:statuses` under Development; Bluesky's app password under Settings, Privacy and security, and its `bot` self-label on the profile record (no setting in the app; any client that edits profile labels, or a one-off `putRecord` of `app.bsky.actor.profile` with `labels.values: [{val: "bot"}]`).
 
 ## Telemetry
@@ -55,7 +55,7 @@ An arrivals lever built to the shape in `AUDIENCE.md` ("The herald"): post, do n
 
 ## Testing
 
-- `late-core/src/models/herald_test.rs`: the claim (once per day, stale takeover, failed retry to the cap, the key surviving a retry), the stored pick and deliveries surviving a failure, the settle, the rotation reads, the poster candidate query (standing, public, unposted, a failed day's pick not spent, most recently seen first). `app_flag_test.rs`: the seeded switch flips.
+- `late-core/src/models/herald_test.rs`: the claim (once per day, stale takeover, failed retry to the cap, the key surviving a retry), the stored pick and deliveries surviving a failure, the settle, the rotation reads, the poster candidate query (standing, public, unposted, a failed day's pick not spent, most recently seen first), the seeded switch flipping.
 - `state_test.rs`: the due day, the rotation's arms, the words (under `TEXT_LIMIT`, no bare `@`, the page linked, four tags, the picture round-tripping through JSON), the ink count. `bluesky_test.rs`: the TID's shape, determinism and order, a big picture shrunk under the cap, the facets' byte ranges.
 - `svc_test.rs`: fake late-web, Mastodon and Bluesky endpoints on one local port. Three days end to end on both networks (poster, board, skipped), the row id as idempotency key and record key, the same text and alt on both, the picture fetched once, the switch off posting nothing, one network down leaving the day failed with the other's delivery kept and retried alone.
-- Run: `make test-llm ARGS="-p late-core -p late-ssh --lib -E 'test(herald) | test(app_flag)'"`.
+- Run: `make test-llm ARGS="-p late-core -p late-ssh --lib -E 'test(herald)'"`.

@@ -46,8 +46,15 @@ CREATE TABLE herald_deliveries (
     PRIMARY KEY (day, network)
 );
 
--- The switch starts off: the code ships dark, and the operator flips it
--- once an account exists and the first hour holds (AUDIENCE.md, the
--- herald). The first switch in this table with a reader
--- (`models/app_flag.rs`).
-INSERT INTO app_flags (key, enabled) VALUES ('herald_enabled', false);
+-- The operator's switch, a herald-owned row like `greendragon_settings`
+-- (the process-wide `app_flags` table went in migration 219). It starts
+-- off: the code ships dark, and the operator flips it once an account
+-- exists and the first hour holds (AUDIENCE.md, the herald). `false`
+-- stops the next check without a deploy.
+CREATE TABLE herald_settings (
+    key TEXT PRIMARY KEY,
+    enabled BOOLEAN NOT NULL,
+    updated TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
+);
+
+INSERT INTO herald_settings (key, enabled) VALUES ('posting', false);

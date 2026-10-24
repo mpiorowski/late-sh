@@ -263,7 +263,7 @@ Live, in order of evidence behind them:
   sends the visibility people want outward, away from the terminal.
 - **The herald: one picture a day on the Fediverse and Bluesky.** Built
   (`late-ssh/src/app/herald/CONTEXT.md`) and shipped dark: neither
-  account exists yet, and the `herald_enabled` row starts off. One post
+  account exists yet, and the `herald_settings` row starts off. One post
   a day, delivered to every network the herald has an account on. The
   Fediverse: an ordinary account on an existing Mastodon instance
   (fosstodon.org: FOSS-leaning, a local timeline that gives a new account
@@ -322,18 +322,15 @@ Live, in order of evidence behind them:
     working tree, uncommitted: the domain
     (`late-ssh/src/app/herald/`: `svc.rs`, `state.rs`, `mastodon.rs`,
     `bluesky.rs`, their tests, `CONTEXT.md`), migration 252 with the
-    `herald_posts` and `herald_deliveries` tables and the
-    `herald_enabled` row, `late-core/src/models/herald.rs` and
-    `app_flag.rs` with tests, `Config::herald` in
+    `herald_posts`, `herald_deliveries` and `herald_settings` tables,
+    `late-core/src/models/herald.rs` with tests, `Config::herald` in
     `late-ssh/src/config.rs`, the two counters in `metrics.rs`, the
     Grafana Herald row, the `.env.dev` templates, the context docs, and a
-    corrected skew rule in `infra/RUNBOOK.md`. The targeted tests have
-    never run green: the last compile stopped on test-only errors that
-    were fixed afterwards, and nothing has been verified since. In order:
+    corrected skew rule in `infra/RUNBOOK.md`. In order:
     1. Run `make test-llm ARGS="-p late-core -p late-ssh --lib -E
-       'test(herald) | test(app_flag) | test(config_test)'"` (it wants
-       12 GB free; `TEST_LLM_HEADROOM_G=2` lowers the bar by one) and fix
-       what it says; then `make check`, commit, PR.
+       'test(herald) | test(config_test)'"` (it wants 12 GB free;
+       `TEST_LLM_HEADROOM_G=2` lowers the bar by one) and fix what it
+       says; then `make check`, commit, PR.
     2. Accounts, by hand. Mastodon: Fosstodon is invite-only (an existing
        member mints an invite under Preferences, Invite people), the
        fallback is mastodon.social with an account move later; tick "This
@@ -347,7 +344,7 @@ Live, in order of evidence behind them:
     3. A local post from the dev stack with the real values in
        `.env.local` (`LATE_HERALD_MASTODON_INSTANCE` and `..._TOKEN`,
        `LATE_HERALD_BLUESKY_IDENTIFIER` and `..._PASSWORD`), the
-       `herald_enabled` row flipped on in the dev database, one check
+       `herald_settings` row flipped on in the dev database, one check
        past 16:00 UTC; Mastodon lands unlisted, Bluesky public.
     4. Going live, one network at a time: in the prod profile replace the
        `None` with the pinned instance URL or handle and
@@ -357,8 +354,8 @@ Live, in order of evidence behind them:
        line in both terraform workflows, like `LATE_YOUTUBE_API_KEY`; the
        GitHub secret before the plan runs; the `-infra` release before
        the ssh image.
-    5. Flip the row in prod (`UPDATE app_flags SET enabled = true WHERE
-       key = 'herald_enabled'` through `scripts/connect_db.sh`) when the
+    5. Flip the row in prod (`UPDATE herald_settings SET enabled = true
+       WHERE key = 'posting'` through `scripts/connect_db.sh`) when the
        first hour has moved; then the human half, daily.
     6. Later, each behind a PNG route on the front door: share cards, a
        tavern or night city frame, the headline events. A `rel="me"` link
