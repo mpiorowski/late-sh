@@ -247,13 +247,13 @@ pub(crate) fn facets(text: &str) -> Vec<Value> {
                 "index": { "byteStart": start, "byteEnd": index },
                 "features": [{ "$type": "app.bsky.richtext.facet#link", "uri": word }],
             }));
-        } else if let Some(tag) = word.strip_prefix('#') {
-            if !tag.is_empty() {
-                facets.push(json!({
-                    "index": { "byteStart": start, "byteEnd": index },
-                    "features": [{ "$type": "app.bsky.richtext.facet#tag", "tag": tag }],
-                }));
-            }
+        } else if let Some(tag) = word.strip_prefix('#')
+            && !tag.is_empty()
+        {
+            facets.push(json!({
+                "index": { "byteStart": start, "byteEnd": index },
+                "features": [{ "$type": "app.bsky.richtext.facet#tag", "tag": tag }],
+            }));
         }
         start = index + ch.len_utf8();
     }
