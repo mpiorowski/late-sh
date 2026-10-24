@@ -249,6 +249,9 @@ impl HeraldService {
                     })
                 }
                 HeraldCommand::Preview => {
+                    if !self.config.enabled() {
+                        return Ok(CommandOutcome::Unconfigured);
+                    }
                     let client = self.db.get().await?;
                     let look = self.look(&client, today).await?;
                     Ok(CommandOutcome::Preview {
@@ -426,39 +429,38 @@ impl HeraldService {
         };
 
         let mut failed = 0;
-        if let Some(config) = &self.config.mastodon {
-            if !delivered.contains(&HeraldNetwork::Mastodon) {
-                let sent = mastodon::deliver(
-                    &self.http,
-                    config,
-                    mastodon::Post {
-                        key,
-                        png: &png,
-                        text: &text,
-                        alt: &alt,
-                        visibility: self.config.visibility,
-                    },
-                )
-                .await;
-                failed += self.note_delivery(day, HeraldNetwork::Mastodon, sent).await;
-            }
+        if let Some(config) = &self.config.mastodon
+            && !delivered.contains(&HeraldNetwork::Mastodon)
+        {
+            let sent = mastodon::deliver(
+                &self.http,
+                config,
+                mastodon::Post {
+                    key,
+                    png: &png,
+                    text: &text,
+                    alt: &alt,
+                },
+            )
+            .await;
+            failed += self.note_delivery(day, HeraldNetwork::Mastodon, sent).await;
         }
-        if let Some(config) = &self.config.bluesky {
-            if !delivered.contains(&HeraldNetwork::Bluesky) {
-                let sent = bluesky::deliver(
-                    &self.http,
-                    config,
-                    bluesky::Post {
-                        key,
-                        png: &png,
-                        text: &text,
-                        alt: &alt,
-                        created_at: now,
-                    },
-                )
-                .await;
-                failed += self.note_delivery(day, HeraldNetwork::Bluesky, sent).await;
-            }
+        if let Some(config) = &self.config.bluesky
+            && !delivered.contains(&HeraldNetwork::Bluesky)
+        {
+            let sent = bluesky::deliver(
+                &self.http,
+                config,
+                bluesky::Post {
+                    key,
+                    png: &png,
+                    text: &text,
+                    alt: &alt,
+                    created_at: now,
+                },
+            )
+            .await;
+            failed += self.note_delivery(day, HeraldNetwork::Bluesky, sent).await;
         }
         if failed > 0 {
             bail!("{failed} delivery(ies) failed");
@@ -565,17 +567,12 @@ impl HeraldService {
     async fn fetch_picture(&self, picture: &Picture) -> anyhow::Result<Vec<u8>> {
         use late_core::telemetry::TracedExt;
         let url = format!("{}{}", self.config.web_internal_url, picture.picture_path());
-        let response = self
+        let bytes = self
             .http
             .get(&url)
             .send_traced()
             .await
-            .with_context(|| format!("getting {url}"))?;
-        let status = response.status();
-        if !status.is_success() {
-            bail!("{url} answered {status}");
-        }
-        let bytes = response
+            .with_context(|| format!("getting {url}"))?
             .bytes()
             .await
             .with_context(|| format!("reading {url}"))?;
@@ -661,20 +658,15 @@ fn banner_for(outcome: CommandOutcome) -> Banner {
             day,
             look,
             networks,
-        } => {
-            if networks.is_empty() {
-                return Banner::error("No network is configured here");
-            }
-            match look.picture() {
-                Some(picture) => Banner::info(&format!(
-                    "Would post {} ({} drawn cells) to {} for {day}",
-                    picture.subject(),
-                    look.ink.unwrap_or(0),
-                    names(&networks),
-                )),
-                None => Banner::info(&format!("Nothing to post for {day}: {}", look.describe())),
-            }
-        }
+        } => match look.picture() {
+            Some(picture) => Banner::info(&format!(
+                "Would post {} ({} drawn cells) to {} for {day}",
+                picture.subject(),
+                look.ink.unwrap_or(0),
+                names(&networks),
+            )),
+            None => Banner::info(&format!("Nothing to post for {day}: {}", look.describe())),
+        },
         CommandOutcome::Worked(DayWorked::Posted(posted)) => Banner::success(&format!(
             "Posted {} to {}",
             posted.subject,

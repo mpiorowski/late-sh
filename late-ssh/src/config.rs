@@ -78,6 +78,8 @@ pub struct MastodonConfig {
     pub instance: String,
     /// An application token with `write:media` and `write:statuses`.
     pub token: String,
+    /// Bluesky has no unlisted post, so only Mastodon carries this.
+    pub visibility: HeraldVisibility,
 }
 
 /// The Bluesky account the herald posts through.
@@ -100,8 +102,6 @@ pub struct HeraldConfig {
     pub bluesky: Option<BlueskyConfig>,
     /// late-web as this process reaches it, for the PNG routes.
     pub web_internal_url: String,
-    /// Mastodon only; Bluesky has no unlisted post.
-    pub visibility: HeraldVisibility,
 }
 
 impl HeraldConfig {
@@ -295,6 +295,7 @@ pub(crate) fn dev_herald(
         (Some(instance), Some(token)) => Some(MastodonConfig {
             instance: instance.trim_end_matches('/').to_string(),
             token,
+            visibility: HeraldVisibility::Unlisted,
         }),
         (None, None) => None,
         (Some(_), None) => {
@@ -326,7 +327,6 @@ pub(crate) fn dev_herald(
         mastodon,
         bluesky,
         web_internal_url: format!("http://service-web:{web_port}"),
-        visibility: HeraldVisibility::Unlisted,
     })
 }
 
@@ -577,6 +577,7 @@ impl Config {
                 mastodon: Some(MastodonConfig {
                     instance: "https://fosstodon.org".to_string(),
                     token: required("LATE_HERALD_MASTODON_TOKEN")?,
+                    visibility: HeraldVisibility::Public,
                 }),
                 bluesky: Some(BlueskyConfig {
                     pds: BLUESKY_PDS.to_string(),
@@ -585,7 +586,6 @@ impl Config {
                 }),
                 // The cluster service in front of service-web (port 80).
                 web_internal_url: "http://service-web-sv".to_string(),
-                visibility: HeraldVisibility::Public,
             },
             youtube_api_key: Some(required("LATE_YOUTUBE_API_KEY")?),
             voice: VoiceConfig::enabled(
@@ -766,8 +766,8 @@ impl Config {
         tracing::info!(
             herald_enabled = self.herald.enabled(),
             mastodon_instance = self.herald.mastodon.as_ref().map(|m| m.instance.as_str()),
+            mastodon_visibility = self.herald.mastodon.as_ref().map(|m| m.visibility.as_str()),
             bluesky_identifier = self.herald.bluesky.as_ref().map(|b| b.identifier.as_str()),
-            visibility = self.herald.visibility.as_str(),
             web_internal_url = %self.herald.web_internal_url,
             "herald: the networks it posts to, mastodon visibility, picture source"
         );

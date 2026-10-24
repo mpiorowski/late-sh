@@ -28,7 +28,7 @@ use crate::app::state::{App, SessionConfig};
 use crate::app::voice::svc::{VoiceConfig, VoiceService};
 use crate::app::{LeaderboardService, QuestService, ShopService};
 use crate::authz::Permissions;
-use crate::config::{AiConfig, Config, HeraldConfig, HeraldVisibility};
+use crate::config::{AiConfig, Config, HeraldConfig};
 use crate::paired_clients::{PairControlMessage, PairedClientRegistry};
 use crate::session::SessionRegistry;
 use crate::state::State;
@@ -183,7 +183,6 @@ pub fn test_config(db_config: late_core::db::DbConfig) -> Config {
             mastodon: None,
             bluesky: None,
             web_internal_url: "http://localhost:3000".to_string(),
-            visibility: HeraldVisibility::Unlisted,
         },
         youtube_api_key: None,
         voice: VoiceConfig::disabled(),
@@ -565,7 +564,6 @@ fn make_app_with_chat_service_and_permissions(
                 mastodon: None,
                 bluesky: None,
                 web_internal_url: "http://localhost:3000".to_string(),
-                visibility: HeraldVisibility::Unlisted,
             },
             "http://localhost:3000".to_string(),
         ),
@@ -856,7 +854,6 @@ pub fn make_app_with_paired_client(
                 mastodon: None,
                 bluesky: None,
                 web_internal_url: "http://localhost:3000".to_string(),
-                visibility: HeraldVisibility::Unlisted,
             },
             "http://localhost:3000".to_string(),
         ),

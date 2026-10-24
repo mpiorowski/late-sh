@@ -126,8 +126,7 @@ pub enum BartenderMemoryWrite {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HeraldPostResult {
     Posted,
-    /// Nothing worth posting that day: no waiting poster, no board with
-    /// enough ink.
+    /// Nothing worth posting that day: no board with enough ink.
     Skipped,
     /// Another replica held the day's claim.
     Lost,
@@ -3580,7 +3579,7 @@ mod inner {
         METRIC.get_or_init(|| {
             meter()
                 .u64_counter("late_ssh_herald_posts_total")
-                .with_description("The herald's daily Fediverse post by result")
+                .with_description("The herald's daily post by result")
                 .build()
         })
     }

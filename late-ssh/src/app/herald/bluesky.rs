@@ -9,7 +9,7 @@ use std::io::Cursor;
 
 use anyhow::{Context, bail};
 use image::imageops::FilterType;
-use image::{DynamicImage, ImageFormat, ImageReader};
+use image::{ImageFormat, ImageReader};
 use late_core::telemetry::TracedExt;
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -30,9 +30,6 @@ const MIN_WIDTH: u32 = 320;
 /// The record key alphabet: base32-sortable, as the AT Protocol's TIDs
 /// spell it.
 const TID_ALPHABET: &[u8; 32] = b"234567abcdefghijklmnopqrstuvwxyz";
-
-/// How much of an error body an error message keeps.
-const BODY_EXCERPT: usize = 200;
 
 /// What goes out with the picture.
 pub(crate) struct Post<'a> {
@@ -73,14 +70,17 @@ pub(crate) struct Fitted {
     pub(crate) height: u32,
 }
 
-/// Session, blob, record. The post's URL on bsky.app comes back.
+/// Fit, session, blob, record. The post's URL on bsky.app comes back. The
+/// fit is image work, so it runs on the blocking pool, and first: a
+/// picture that cannot fit spends no login.
 pub(crate) async fn deliver(
     http: &reqwest::Client,
     config: &BlueskyConfig,
     post: Post<'_>,
 ) -> anyhow::Result<String> {
+    let png = post.png.to_vec();
+    let fitted = tokio::task::spawn_blocking(move || fit_under(&png, BLOB_MAX_BYTES)).await??;
     let session = create_session(http, config).await?;
-    let fitted = fit_under(post.png, BLOB_MAX_BYTES)?;
     let blob = upload_blob(http, config, &session, fitted.png).await?;
     let rkey = tid_for(post.key);
     let record = json!({
@@ -109,24 +109,17 @@ pub(crate) async fn deliver(
 /// password.
 async fn create_session(http: &reqwest::Client, config: &BlueskyConfig) -> anyhow::Result<Session> {
     let url = format!("{}/xrpc/com.atproto.server.createSession", config.pds);
-    let response = http
-        .post(&url)
+    http.post(&url)
         .json(&json!({
             "identifier": config.identifier,
             "password": config.app_password,
         }))
         .send_traced()
         .await
-        .with_context(|| format!("posting {url}"))?;
-    let status = response.status();
-    let body = response
-        .text()
+        .with_context(|| format!("posting {url}"))?
+        .json()
         .await
-        .with_context(|| format!("reading {url}"))?;
-    if !status.is_success() {
-        bail!("{url} answered {status}: {}", excerpt(&body));
-    }
-    serde_json::from_str(&body).context("decoding the session answer")
+        .context("decoding the session answer")
 }
 
 /// `com.atproto.repo.uploadBlob`: the PNG bytes, the blob reference back.
@@ -137,23 +130,17 @@ async fn upload_blob(
     png: Vec<u8>,
 ) -> anyhow::Result<Value> {
     let url = format!("{}/xrpc/com.atproto.repo.uploadBlob", config.pds);
-    let response = http
+    let uploaded: Uploaded = http
         .post(&url)
         .bearer_auth(&session.access_jwt)
         .header("Content-Type", "image/png")
         .body(png)
         .send_traced()
         .await
-        .with_context(|| format!("posting {url}"))?;
-    let status = response.status();
-    let body = response
-        .text()
+        .with_context(|| format!("posting {url}"))?
+        .json()
         .await
-        .with_context(|| format!("reading {url}"))?;
-    if !status.is_success() {
-        bail!("{url} answered {status}: {}", excerpt(&body));
-    }
-    let uploaded: Uploaded = serde_json::from_str(&body).context("decoding the blob answer")?;
+        .context("decoding the blob answer")?;
     Ok(uploaded.blob)
 }
 
@@ -167,7 +154,7 @@ async fn put_record(
     record: Value,
 ) -> anyhow::Result<String> {
     let url = format!("{}/xrpc/com.atproto.repo.putRecord", config.pds);
-    let response = http
+    let put: PutRecord = http
         .post(&url)
         .bearer_auth(&session.access_jwt)
         .json(&json!({
@@ -178,16 +165,10 @@ async fn put_record(
         }))
         .send_traced()
         .await
-        .with_context(|| format!("posting {url}"))?;
-    let status = response.status();
-    let body = response
-        .text()
+        .with_context(|| format!("posting {url}"))?
+        .json()
         .await
-        .with_context(|| format!("reading {url}"))?;
-    if !status.is_success() {
-        bail!("{url} answered {status}: {}", excerpt(&body));
-    }
-    let put: PutRecord = serde_json::from_str(&body).context("decoding the record answer")?;
+        .context("decoding the record answer")?;
     Ok(put.uri)
 }
 
@@ -214,28 +195,25 @@ pub(crate) fn tid_for(key: Uuid) -> String {
 /// The picture under `max_bytes`: as it came when it already is, else
 /// shrunk by `SHRINK_STEP` a side per pass and re-encoded until it fits.
 pub(crate) fn fit_under(png: &[u8], max_bytes: usize) -> anyhow::Result<Fitted> {
-    let decoded = ImageReader::with_format(Cursor::new(png), ImageFormat::Png)
-        .decode()
-        .context("decoding the picture")?;
+    let reader = ImageReader::with_format(Cursor::new(png), ImageFormat::Png);
     if png.len() <= max_bytes {
+        let (width, height) = reader
+            .into_dimensions()
+            .context("reading the picture's size")?;
         return Ok(Fitted {
             png: png.to_vec(),
-            width: decoded.width(),
-            height: decoded.height(),
+            width,
+            height,
         });
     }
-    let mut image = decoded;
+    let mut image = reader.decode().context("decoding the picture")?;
     loop {
         let width = (f64::from(image.width()) * SHRINK_STEP).round() as u32;
         let height = (f64::from(image.height()) * SHRINK_STEP).round() as u32;
         if width < MIN_WIDTH {
             bail!("the picture does not fit under {max_bytes} bytes above {MIN_WIDTH} pixels wide");
         }
-        image = DynamicImage::ImageRgba8(
-            image
-                .resize_exact(width, height, FilterType::Triangle)
-                .to_rgba8(),
-        );
+        image = image.resize_exact(width, height, FilterType::Triangle);
         let mut encoded = Vec::new();
         image
             .write_to(&mut Cursor::new(&mut encoded), ImageFormat::Png)
@@ -280,8 +258,4 @@ pub(crate) fn facets(text: &str) -> Vec<Value> {
         start = index + ch.len_utf8();
     }
     facets
-}
-
-fn excerpt(body: &str) -> String {
-    body.chars().take(BODY_EXCERPT).collect()
 }

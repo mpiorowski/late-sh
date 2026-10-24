@@ -177,16 +177,18 @@ impl HeraldPost {
                 &[&day],
             )
             .await?;
-        Ok(match row {
+        match row {
             Some(row) => {
                 let status: String = row.get("status");
                 let attempts: i32 = row.get("attempts");
-                status == "posted"
-                    || status == "skipped"
-                    || (status == "failed" && attempts >= max_attempts)
+                Ok(match HeraldDayStatus::parse(&status)? {
+                    HeraldDayStatus::Posted | HeraldDayStatus::Skipped => true,
+                    HeraldDayStatus::Failed => attempts >= max_attempts,
+                    HeraldDayStatus::Posting => false,
+                })
             }
-            None => false,
-        })
+            None => Ok(false),
+        }
     }
 
     /// The claimed day's pick, written before the first network call so a
@@ -343,8 +345,9 @@ impl HeraldPost {
 /// every replica and survives a restart. A missing row is an error, never
 /// a default: nobody ships an off-state by accident.
 ///
-/// Flipping it is a statement, not a key: `UPDATE herald_settings SET
-/// enabled = true WHERE key = 'posting'` through `scripts/connect_db.sh`.
+/// An admin flips it with `/herald on|off`; the same statement through
+/// `scripts/connect_db.sh` works too: `UPDATE herald_settings SET enabled =
+/// true WHERE key = 'posting'`.
 pub struct HeraldSwitch;
 
 impl HeraldSwitch {
@@ -364,8 +367,7 @@ impl HeraldSwitch {
         }
     }
 
-    /// Flip the switch. For tests and the operator's tooling; the app
-    /// itself only reads.
+    /// Flip the switch, for an admin's `/herald on|off`.
     pub async fn set(client: &Client, enabled: bool) -> Result<()> {
         let updated = client
             .execute(

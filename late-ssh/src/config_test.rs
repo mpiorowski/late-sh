@@ -136,6 +136,7 @@ fn herald_networks_need_their_credentials_and_urls() {
     config.herald.mastodon = Some(crate::config::MastodonConfig {
         instance: "https://fosstodon.org".to_string(),
         token: String::new(),
+        visibility: crate::config::HeraldVisibility::Public,
     });
     let error = config.validate().expect_err("must reject");
     assert!(
@@ -147,6 +148,7 @@ fn herald_networks_need_their_credentials_and_urls() {
     config.herald.mastodon = Some(crate::config::MastodonConfig {
         instance: "fosstodon.org".to_string(),
         token: "token".to_string(),
+        visibility: crate::config::HeraldVisibility::Public,
     });
     let error = config.validate().expect_err("must reject");
     assert!(error.to_string().contains("without an instance url"));
@@ -154,6 +156,7 @@ fn herald_networks_need_their_credentials_and_urls() {
     config.herald.mastodon = Some(crate::config::MastodonConfig {
         instance: "https://fosstodon.org".to_string(),
         token: "token".to_string(),
+        visibility: crate::config::HeraldVisibility::Public,
     });
     config.herald.bluesky = Some(crate::config::BlueskyConfig {
         pds: crate::config::BLUESKY_PDS.to_string(),
@@ -195,12 +198,15 @@ fn dev_herald_switches_each_network_on_by_its_pair() {
     let mastodon = both.mastodon.expect("mastodon");
     assert_eq!(mastodon.instance, "https://instance.test");
     assert_eq!(mastodon.token, "token");
+    assert_eq!(
+        mastodon.visibility,
+        crate::config::HeraldVisibility::Unlisted
+    );
     let bluesky = both.bluesky.expect("bluesky");
     assert_eq!(bluesky.pds, crate::config::BLUESKY_PDS);
     assert_eq!(bluesky.identifier, "late.test");
     assert_eq!(bluesky.app_password, "pass");
     assert_eq!(both.web_internal_url, "http://service-web:3000");
-    assert_eq!(both.visibility, crate::config::HeraldVisibility::Unlisted);
 
     let one = crate::config::dev_herald(
         (None, None),

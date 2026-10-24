@@ -180,6 +180,7 @@ fn service(db: late_core::db::Db, base: &str) -> HeraldService {
             mastodon: Some(MastodonConfig {
                 instance: base.to_string(),
                 token: "secret-token".to_string(),
+                visibility: HeraldVisibility::Unlisted,
             }),
             bluesky: Some(BlueskyConfig {
                 pds: base.to_string(),
@@ -187,7 +188,6 @@ fn service(db: late_core::db::Db, base: &str) -> HeraldService {
                 app_password: "app-pass".to_string(),
             }),
             web_internal_url: format!("{base}/"),
-            visibility: HeraldVisibility::Unlisted,
         },
         "https://late.sh/".to_string(),
     )

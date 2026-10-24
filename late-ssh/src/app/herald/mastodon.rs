@@ -9,7 +9,7 @@ use late_core::telemetry::TracedExt;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::config::{HeraldVisibility, MastodonConfig};
+use crate::config::MastodonConfig;
 
 /// An upload the instance answered 202 to is polled this often, this
 /// many times, before the delivery fails. Images are processed in
@@ -20,9 +20,6 @@ const MEDIA_POLL_TRIES: u32 = 15;
 /// The file name the upload carries; the instance keeps its own.
 const UPLOAD_FILE_NAME: &str = "late-sh.png";
 
-/// How much of an error body an error message keeps.
-const BODY_EXCERPT: usize = 200;
-
 /// What goes out with the picture.
 pub(crate) struct Post<'a> {
     /// The day's key: the `Idempotency-Key` on the status call, so a retry
@@ -31,7 +28,6 @@ pub(crate) struct Post<'a> {
     pub(crate) png: &'a [u8],
     pub(crate) text: &'a str,
     pub(crate) alt: &'a str,
-    pub(crate) visibility: HeraldVisibility,
 }
 
 /// `POST /api/v1/statuses` as the instance reads it.
@@ -90,18 +86,14 @@ async fn upload_media(
         .await
         .with_context(|| format!("posting {url}"))?;
     let status = response.status();
-    let body = response
-        .text()
-        .await
-        .with_context(|| format!("reading {url}"))?;
     match status.as_u16() {
-        200 => Ok(parse_media(&body)?.id),
+        200 => Ok(parse_media(response).await?.id),
         202 => {
-            let id = parse_media(&body)?.id;
+            let id = parse_media(response).await?.id;
             await_media(http, config, &id).await?;
             Ok(id)
         }
-        _ => bail!("{url} answered {status}: {}", excerpt(&body)),
+        _ => bail!("{url} answered {status}"),
     }
 }
 
@@ -125,10 +117,7 @@ async fn await_media(
         match status.as_u16() {
             200 => return Ok(()),
             206 => continue,
-            _ => {
-                let body = response.text().await.unwrap_or_default();
-                bail!("{url} answered {status}: {}", excerpt(&body));
-            }
+            _ => bail!("{url} answered {status}"),
         }
     }
     bail!("media {id} was still processing after {MEDIA_POLL_TRIES} polls")
@@ -145,37 +134,26 @@ async fn post_status(
     let body = StatusBody {
         status: post.text,
         media_ids: vec![media_id],
-        visibility: post.visibility.as_str(),
+        visibility: config.visibility.as_str(),
         language: "en",
     };
-    let response = http
+    let posted: StatusResponse = http
         .post(&url)
         .bearer_auth(&config.token)
         .header("Idempotency-Key", post.key.to_string())
         .json(&body)
         .send_traced()
         .await
-        .with_context(|| format!("posting {url}"))?;
-    let status = response.status();
-    let body = response
-        .text()
+        .with_context(|| format!("posting {url}"))?
+        .json()
         .await
-        .with_context(|| format!("reading {url}"))?;
-    if !status.is_success() {
-        bail!("{url} answered {status}: {}", excerpt(&body));
-    }
-    let posted: StatusResponse =
-        serde_json::from_str(&body).context("decoding the status answer")?;
+        .context("decoding the status answer")?;
     match posted.url {
         Some(url) => Ok(url),
         None => bail!("status {} came back without a url", posted.id),
     }
 }
 
-fn parse_media(body: &str) -> anyhow::Result<MediaResponse> {
-    serde_json::from_str(body).context("decoding the media answer")
-}
-
-fn excerpt(body: &str) -> String {
-    body.chars().take(BODY_EXCERPT).collect()
+async fn parse_media(response: reqwest::Response) -> anyhow::Result<MediaResponse> {
+    response.json().await.context("decoding the media answer")
 }
