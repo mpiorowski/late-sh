@@ -61,9 +61,6 @@ pub mod chat_slow_mode;
 pub mod chips;
 #[cfg(test)]
 mod chips_test;
-pub mod crown;
-#[cfg(test)]
-mod crown_test;
 pub mod cyberspace_account;
 pub mod daily_match;
 #[cfg(test)]

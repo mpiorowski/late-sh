@@ -278,8 +278,8 @@ Live, in order of evidence behind them:
     footer, a frame of the tavern or the night city. Each with alt text,
     a link to that day's `/paper` or the gallery, and the same four tags
     (#tildeverse #pubnix #ssh #terminal). The rare headline events the
-    #lounge feed already treats as stories (the pot drawn, the crown
-    taken, the monthly awards) may take the slot. Every picture comes
+    #lounge feed already treats as stories (the pot drawn, the monthly
+    awards) may take the slot. Every picture comes
     through the front door's cell renderer
     (`late-web/src/pages/shared/board_png.rs`), so anything the terminal
     draws can be posted once it has a route; today only the poster and

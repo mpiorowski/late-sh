@@ -48,34 +48,37 @@ async fn next_signal(rx: &mut tokio::sync::mpsc::UnboundedReceiver<Signal>) -> S
 
 /// One connection serves every domain: each subscriber hears a resync once
 /// the LISTEN is live, then only the channels it asked for. The pot notify
-/// is sent before the crown one on the same connection, so if the crown
-/// subscriber were handed pot traffic it would arrive first.
+/// is sent before the articles one on the same connection, so if the
+/// articles subscriber were handed pot traffic it would arrive first.
 #[tokio::test]
 async fn each_subscriber_resyncs_then_hears_only_its_own_channels() {
     let test_db = new_test_db().await;
     let client = test_db.db.get().await.expect("db client");
 
     let mut listener = PgListener::new();
-    let mut crown_rx = listener.subscribe(&[Channel::CrownChanged]);
+    let mut articles_rx = listener.subscribe(&[Channel::ArticlesChanged]);
     let mut pot_rx = listener.subscribe(&[Channel::PotChanged]);
     let _task = listener.start(test_db.db.config().clone());
 
-    assert_eq!(next_signal(&mut crown_rx).await, Signal::Resync);
+    assert_eq!(next_signal(&mut articles_rx).await, Signal::Resync);
     assert_eq!(next_signal(&mut pot_rx).await, Signal::Resync);
 
     client
         .execute(
-            "SELECT pg_notify($1, 'drawn'), pg_notify($2, 'taken')",
-            &[&Channel::PotChanged.name(), &Channel::CrownChanged.name()],
+            "SELECT pg_notify($1, 'drawn'), pg_notify($2, 'changed')",
+            &[
+                &Channel::PotChanged.name(),
+                &Channel::ArticlesChanged.name(),
+            ],
         )
         .await
         .expect("notify");
 
     assert_eq!(
-        next_signal(&mut crown_rx).await,
+        next_signal(&mut articles_rx).await,
         Signal::Notify {
-            channel: Channel::CrownChanged,
-            payload: "taken".to_string(),
+            channel: Channel::ArticlesChanged,
+            payload: "changed".to_string(),
         }
     );
     assert_eq!(

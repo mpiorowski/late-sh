@@ -5,7 +5,7 @@
 Chat in the SSH app: Home chat rooms, DMs, public/private topic rooms, game-backed room chat, the Home/Dashboard chat center and room rail, and the embedded game-chat surfaces (house tables, daily match boards, the door watch view). Also message actions, reactions, ignores, overlays, the service's refresh/tail/event contracts and the DB model constraints.
 
 - Synthetic chat entries: RSS, News, Mentions/Notifications, and Discover. Voice is not a synthetic room slot: the dedicated `#voice` room is a real, permanent, public chat room pinned at the bottom of Core (above Discover). Any voice-enabled chat/game room (including `#voice`) renders an embedded voice strip and exposes `/voice`/`/mute` controls while you are inside it. Showcase/Projects and Work/Profiles keep their feed services and state here, but their UI and their editor (`app/directory/editor`) live on Profiles page 5.
-- Companion docs here: `COMMANDS.md` (the composer, every slash command, the keys), `RENDERING.md` (the rows cache, message rendering, images, layout rules), `MARKS.md` (the AFK line and the left-app device mark). Sub-domains with their own context: `cyberspace/`, `gild/`, `news/`, and `../crown/`; the round, translation and `/summary` are `../ai/CONTEXT.md`. A YouTube link in a message opens the watch player, `../video/CONTEXT.md`.
+- Companion docs here: `COMMANDS.md` (the composer, every slash command, the keys), `RENDERING.md` (the rows cache, message rendering, images, layout rules), `MARKS.md` (the AFK line and the left-app device mark). Sub-domains with their own context: `cyberspace/`, `gild/`, and `news/`; the round, translation and `/summary` are `../ai/CONTEXT.md`. A YouTube link in a message opens the watch player, `../video/CONTEXT.md`.
 - The session shell, global keys and notifications are in `late-ssh/CONTEXT.md`; repo-wide rules in the root `CONTEXT.md`.
 
 ---
@@ -48,7 +48,7 @@ Tests live beside the file they exercise as `<file>_test.rs`, wired with
 
 Core models used by chat live in `late-core/src/models/`:
 `chat_room.rs`, `chat_room_member.rs`, `chat_message.rs`, `chat_message_reaction.rs`,
-`chat_message_gild.rs`, `crown.rs`,
+`chat_message_gild.rs`,
 `notification.rs`, `rss_feed.rs`, `rss_entry.rs`, `article.rs`, `article_read.rs`, `cyberspace_account.rs`, `showcase.rs`,
 `showcase_feed_read.rs`, `work_profile.rs`, `work_feed_read.rs`, and `chat_poll.rs`.
 Chat-owned moderation commands also use `room_ban.rs`,
@@ -179,10 +179,9 @@ Selection deltas are message-based, not row-based. Positive means older, negativ
 
 ---
 
-## 9b. Gilds, the Crown, the Round
+## 9b. Gilds, the Round
 
 - Gilds, the paid name colour for a public message: `gild/CONTEXT.md`.
-- The Crown, the one-holder 💎 slot bought with `/crown take`: `../crown/CONTEXT.md`. Chat owns only the command and the glyph.
 - The Round, a drink or a whole-bar round from @bartender (the chips, the pour, the drunk points, the trigger phrase): `../ai/ROUND.md`, beside the bartender that runs it.
 
 ## 9e. Bartender Memory

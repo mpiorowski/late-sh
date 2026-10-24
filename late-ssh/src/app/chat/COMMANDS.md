@@ -88,7 +88,6 @@ User commands:
 - `/dm @user` opens/creates a DM.
 - `/exit` opens quit confirm.
 - `/golive [title]` registers this user's "watch me" stream (`/golive stop` ends it) and `/watch @user` opens a live stream. Both are parsed in `submit_composer` (`parse_golive_command` / `parse_user_command`) and drained by `App::tick_stream`, which owns the stream service, the publisher URL modal, and the paired-CLI `open_url` control; the domain contract is `late-ssh/src/app/stream/CONTEXT.md`.
-- `/crown` prints who wears the crown, how long they have, and what taking it costs; `/crown take` buys it at that price, `/crown take N` bids N (at least the price). Parsed in `submit_composer` (`parse_crown_command`) and drained by `App::tick_crown`, which owns the crown service and both banners. See `../crown/CONTEXT.md`.
 - `/pot` prints the weekly pot's size, the tickets in it, what you hold and what it cost, how many more you may buy today, and the time to the draw; `/pot buy N` buys N tickets. Parsed in `submit_composer` (`parse_pot_command`, which is also the boundary that rejects any count outside `1..=10`, the daily cap) and drained by `App::tick_pot`, which owns the pot service and the banners. The status line is answered straight from the process-shared snapshot, so `/pot` costs no query; the domain contract is `late-ssh/src/app/pot/CONTEXT.md`.
 - `/icons` opens the icon picker (same as `Ctrl+]`).
 - `/picker` opens the room picker (same as `Ctrl+/`); drained via `take_requested_room_picker` into `open_room_search_modal_globally`. On Zen with a chat tile focused, the pick binds that tile (see the Zen CONTEXT).
@@ -168,7 +167,7 @@ Admin commands:
   directory, look and level per standing runner): a runner's author
   header opens its badge stack with the level badge (`▚7`, the mark and
   the level, `AuthorPrefixInput.runner_badge`, painted in the level's
-  band through `AuthorTint.runner`, adjacent to the name, crown, and
+  band through `AuthorTint.runner`, adjacent to the name and
   title so the same painter tints it), the wire wraps every entry six cells short and seats the
   author's three-row portrait in that gutter beside a block-opening
   message: the hood level with the header, the eyes and the coat on the

@@ -127,9 +127,8 @@ pub enum RoundRefusal {
     InsufficientChips { patrons: i64, total: i64 },
 }
 
-/// A round that did not pay: a rule said no, or the database did. Same split
-/// as the crown's, and for the same reason: only one of the two is the
-/// patron's business.
+/// A round that did not pay: a rule said no, or the database did. Only one
+/// of the two is the patron's business.
 #[derive(Debug)]
 pub enum RoundError {
     Refused(RoundRefusal),

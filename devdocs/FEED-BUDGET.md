@@ -38,7 +38,7 @@ below depends on the paper.
 - **Two classes, from the closed `ActivityKind` roster, mapped
   exhaustively** so a new kind must choose or the build breaks:
   - **Headline class ships always.** The rare, once-ish events that are
-    the product: pot drawn, crown taken, boss slain, went live, burn
+    the product: pot drawn, boss slain, went live, burn
     milestones. Already self-limiting; a budget that delays the pot draw
     is a bug.
   - **Texture class ships while the hour has room.** Joins, sit-downs,

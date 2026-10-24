@@ -80,54 +80,7 @@ fn parse_pot_command_only_admits_a_buyable_count() {
     // Not a pot command at all: a longer command that merely starts the same
     // way must fall through to its own parser.
     assert_eq!(parse_pot_command("/potato"), None);
-    assert_eq!(parse_pot_command("/crown take"), None);
     assert_eq!(parse_pot_command("hello"), None);
-}
-
-/// The crown's composer boundary: a bare take pays the ladder, a number is a
-/// bid, and only a positive whole number gets through. Whether the bid beats
-/// the price is not decided here: the price can move before the take lands.
-#[test]
-fn parse_crown_command_admits_a_ladder_take_or_a_positive_bid() {
-    use crate::app::crown::svc::CrownBid;
-
-    assert_eq!(
-        parse_crown_command("/crown"),
-        Some(Some(CrownCommand::Status))
-    );
-    assert_eq!(
-        parse_crown_command("  /crown take  "),
-        Some(Some(CrownCommand::Take {
-            bid: CrownBid::AtPrice
-        }))
-    );
-    assert_eq!(
-        parse_crown_command("/crown take 5000"),
-        Some(Some(CrownCommand::Take {
-            bid: CrownBid::Offer(5_000)
-        }))
-    );
-    assert_eq!(
-        parse_crown_command("/crown take   1"),
-        Some(Some(CrownCommand::Take {
-            bid: CrownBid::Offer(1)
-        }))
-    );
-
-    for junk in [
-        "/crown take 0",
-        "/crown take -500",
-        "/crown take lots",
-        "/crown take 5k",
-        "/crown take 1.5",
-        "/crown take 99999999999999999999",
-        "/crown give",
-    ] {
-        assert_eq!(parse_crown_command(junk), Some(None), "{junk}");
-    }
-
-    assert_eq!(parse_crown_command("/crowns"), None);
-    assert_eq!(parse_crown_command("/pot buy 5"), None);
 }
 
 #[test]

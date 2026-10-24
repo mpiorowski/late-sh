@@ -140,10 +140,6 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
         // construction (once per message, at the threshold gild only) and the
         // line points at a room worth reading.
         ActivityKind::MessageGilded { .. } => true,
-        // One slot, one holder, and every takeover names both players. Rare
-        // by price (each take is 1.5x the last), so this is the story the
-        // crown exists to ship.
-        ActivityKind::CrownTaken { .. } => true,
         // The pot's draw: once a week. The size itself rides the status HUD
         // all week; the only nudge before the draw is the one last call below.
         ActivityKind::PotDrawn { .. } => true,
@@ -197,36 +193,13 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
 /// rare, public, everyone-cares moments. The body carries no
 /// `SYSTEM_LINE_PREFIX`, which is exactly what keeps it out of the ticker
 /// diversion and in the message list. Every name in a headline is written as
-/// an `@mention` so the people it is about get a notification: the winner and
-/// the deposed holder are exactly the ones most likely to have been offline
-/// for it. The ticker line keeps its bare names. Same shape as
-/// `lounge_includes`: every kind is matched, so a new event has to decide
-/// here whether it headlines.
+/// an `@mention` so the people it is about get a notification: the winner is
+/// exactly the one most likely to have been offline for it. The ticker line
+/// keeps its bare names. Same shape as `lounge_includes`: every kind is
+/// matched, so a new event has to decide here whether it headlines.
 pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
     use crate::app::common::primitives::thousands;
-    use crate::app::common::username_effect::CROWN_GLYPH;
     match &event.kind {
-        // One slot changed hands in public. Both names, what it cost, and
-        // what unseating the new holder costs now: the whole contest in one
-        // line, for the people who were not watching the ticker.
-        ActivityKind::CrownTaken {
-            price,
-            next_price,
-            from,
-            ..
-        } => {
-            let taker = &event.username;
-            let paid = thousands(*price);
-            let next = thousands(*next_price);
-            Some(match from {
-                Some(from) => format!(
-                    "{CROWN_GLYPH} @{taker} stole the crown from @{from} for {paid} chips. Next price: {next} chips."
-                ),
-                None => format!(
-                    "{CROWN_GLYPH} @{taker} claimed the vacant crown for {paid} chips. Next price: {next} chips."
-                ),
-            })
-        }
         // Once a day, and the one person it matters most to is the one most
         // likely to have been offline for it. A ticker line is gone by the
         // time they reconnect; a headline is a row in #lounge history they

@@ -897,9 +897,9 @@ fn hidden_award_categories_keep_only_real_badges() {
     use crate::models::user::extract_hidden_award_categories;
     assert_eq!(
         extract_hidden_award_categories(&json!({
-            "hidden_award_categories": ["crown", "not_a_badge", 7, "lateania_archdemon"]
+            "hidden_award_categories": ["late_time", "not_a_badge", 7, "lateania_archdemon"]
         })),
-        vec!["crown".to_string(), "lateania_archdemon".to_string()]
+        vec!["late_time".to_string(), "lateania_archdemon".to_string()]
     );
     assert!(extract_hidden_award_categories(&json!({})).is_empty());
 }

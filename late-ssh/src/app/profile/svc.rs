@@ -6,7 +6,6 @@ use late_core::models::bonsai::Tree;
 use late_core::models::bonsai_decay_protection::BonsaiDecayProtection;
 use late_core::models::chat_message_gild::{ChatMessageGild, GildCounts};
 use late_core::models::chips::{MonthChips, PROFILE_LEDGER_ROWS, UserChips};
-use late_core::models::crown::CrownReign;
 use late_core::models::deadchannel_runner::DeadchannelRunner;
 use late_core::models::drink_round::{DrinkCredit, DrinkRound};
 use late_core::models::game_payout::GamePayout;
@@ -443,7 +442,6 @@ impl ProfileService {
         let refs = ledger::refs(&chip_ledger);
         let gilds = ChatMessageGild::parties_for_refs(&client, &refs.gilds).await?;
         let payouts = GamePayout::sources_for_ids(&client, &refs.payouts).await?;
-        let deposed = CrownReign::deposed_for_reigns(&client, &refs.reigns).await?;
         let pots = Pot::find_by_ids(&**client, &refs.pots).await?;
         let quests = quest::assignment_titles(&**client, &refs.quests).await?;
         let awards = find_profile_awards_by_ids(&client, &refs.awards).await?;
@@ -451,14 +449,13 @@ impl ProfileService {
         let gift_recipients =
             DrinkCredit::recipients_for_rounds(&client, &refs.gift_rounds).await?;
         let songs = MediaQueueItem::titles_for_video_ids(&client, &refs.videos).await?;
-        let named_ids = ledger::named_user_ids(&refs, &gilds, &deposed, &gift_recipients);
+        let named_ids = ledger::named_user_ids(&refs, &gilds, &gift_recipients);
         let usernames = User::list_usernames_by_ids(&client, &named_ids).await?;
         let chip_ledger = ledger::resolve(
             chip_ledger,
             &LedgerSources {
                 gilds,
                 payouts,
-                deposed,
                 pots,
                 quests,
                 awards,

@@ -67,10 +67,6 @@ fn every_detail_has_copy() {
         }),
         "minesweeper · daily win hard"
     );
-    assert_eq!(
-        detail(&LedgerDetail::CrownFrom { username: alice() }),
-        "from @alice"
-    );
     assert_eq!(detail(&LedgerDetail::PotTickets { count: 1 }), "1 ticket");
     assert_eq!(detail(&LedgerDetail::PotTickets { count: 3 }), "3 tickets");
     assert_eq!(

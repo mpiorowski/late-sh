@@ -21,8 +21,7 @@ use tokio_postgres::{GenericClient, Row, Transaction};
 use uuid::Uuid;
 
 /// Cross-process refresh channel. A buy or a draw lands on one replica; every
-/// other replica learns about it here and re-reads the pot. Same shape as
-/// `crown_changed`.
+/// other replica learns about it here and re-reads the pot.
 pub const POT_CHANGED_CHANNEL: &str = "pot_changed";
 
 /// What one ticket costs. Decided 2026-08-27: cheap
@@ -290,7 +289,7 @@ impl Pot {
     /// The advisory lock is what makes opening a pot exact: when none is
     /// open there is no row to take `FOR UPDATE`, so without it two replicas
     /// sweeping at the same second would both insert and one would die on the
-    /// partial unique index. Same reasoning as `CrownReign::lock_open`.
+    /// partial unique index.
     pub async fn lock_open(tx: &Transaction<'_>) -> Result<Option<Self>> {
         tx.query_one(
             "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",

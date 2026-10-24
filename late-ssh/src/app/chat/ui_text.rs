@@ -33,7 +33,6 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 #[derive(Clone, Copy, Debug)]
 pub(super) struct AuthorTint {
     pub range: (usize, usize),
-    pub crown_range: Option<(usize, usize)>,
     pub title_range: Option<(usize, usize)>,
     pub runner: Option<((usize, usize), Color)>,
     pub word: Option<(&'static str, Color)>,
@@ -51,8 +50,8 @@ fn drunk_word_span(word: &str, color: Color) -> Span<'static> {
 }
 
 /// The author header's prefix spans: one span when untinted (byte-identical
-/// to the historical output), split when a drunk tint, a username effect, a
-/// crown, or a rented title paints part of it. Falls back to the single span
+/// to the historical output), split when a drunk tint, a username effect, or
+/// a rented title paints part of it. Falls back to the single span
 /// on any out-of-bounds range.
 ///
 /// A username effect emits one span per character so gradients and shimmer
@@ -95,8 +94,8 @@ fn push_author_prefix_spans(
         None => spans.push(Span::styled(name.to_string(), author_style)),
     }
 
-    // The crown, the rented title, and the runner badge trail the name
-    // directly, in that order, each painted in its own color so none takes
+    // The rented title and the runner badge trail the name directly, in
+    // that order, each painted in its own color so none takes
     // the name's effect. A range that does not sit exactly where the
     // builder put it is left to the tail rather than trusted.
     let mut cursor = end;
@@ -105,7 +104,6 @@ fn push_author_prefix_spans(
         None => (None, Style::default()),
     };
     for (range, style) in [
-        (tint.crown_range, Style::default().fg(theme::AMBER_GLOW())),
         (tint.title_range, Style::default().fg(theme::TEXT_DIM())),
         (runner_range, runner_style),
     ] {

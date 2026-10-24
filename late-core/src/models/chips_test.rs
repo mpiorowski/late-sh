@@ -321,8 +321,8 @@ async fn transfer_gift_rows_name_the_counterparty() {
 }
 
 /// Every ledger row says what it paid for: an empty ref is refused before
-/// anything is written, and the retired shared table reasons cannot be
-/// written at all.
+/// anything is written, and the retired reasons (the shared table ones and
+/// the crown's) cannot be written at all.
 #[tokio::test]
 async fn apply_refuses_empty_refs_and_retired_reasons() {
     let test_db = test_db().await;
@@ -333,7 +333,11 @@ async fn apply_refuses_empty_refs_and_retired_reasons() {
     let empty = UserChips::apply(&**client, user.id, ChipMove::SongQueued, 100, "").await;
     assert!(empty.is_err(), "an empty source_ref is not a source");
 
-    for retired in [ChipMove::LegacyTableCredit, ChipMove::LegacyTableDebit] {
+    for retired in [
+        ChipMove::LegacyTableCredit,
+        ChipMove::LegacyTableDebit,
+        ChipMove::CrownTaken,
+    ] {
         let written = UserChips::apply(&**client, user.id, retired, 100, "old-table").await;
         assert!(written.is_err(), "{retired:?} is retired");
     }

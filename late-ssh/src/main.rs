@@ -398,14 +398,6 @@ async fn main() -> anyhow::Result<()> {
         pg_listener.subscribe(late_ssh::app::deadchannel::lounge::svc::LoungeService::CHANNELS),
     );
     let _lounge_spawner_task = lounge_service.start_spawner_task();
-    // The crown's glyph crosses replicas over Postgres, not over any
-    // in-process broadcast; the listener also seeds this replica's holder on
-    // every (re)connect. See `app/crown/svc.rs`.
-    let crown_service = late_ssh::app::crown::svc::CrownService::new(db.clone())
-        .with_activity(activity_publisher.clone());
-    let _crown_notify_task = crown_service.start_notify_worker(
-        pg_listener.subscribe(late_ssh::app::crown::svc::CrownService::CHANNELS),
-    );
     // The pot's panel and its winner banner cross replicas over Postgres,
     // and the draw is settled by a status transition so exactly one replica
     // pays however many are sweeping. See `app/pot/svc.rs`.
@@ -535,7 +527,6 @@ async fn main() -> anyhow::Result<()> {
         scratchpad_registry,
         username_directory: username_directory.clone(),
         flair_directory: flair_directory.clone(),
-        crown_service: crown_service.clone(),
         pot_service: pot_service.clone(),
         referral_service: referral_service.clone(),
         activity_feed: activity_tx,

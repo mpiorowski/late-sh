@@ -5,7 +5,7 @@
 //! process-shared snapshot the status HUD badge reads;
 //! `late_core::models::pot` owns the tables and the money math underneath it.
 //!
-//! Distribution is the crown's shape: a `watch` for the state every session
+//! Distribution is three channels: a `watch` for the state every session
 //! reads once a second, a `broadcast` for the answers that belong to one
 //! session each, and a `pot_changed` Postgres notify so a buy or a draw on
 //! one replica reaches every other one. The draw itself is guarded by a
@@ -197,7 +197,7 @@ pub struct PotStatus {
 
 impl PotStatus {
     /// The single banner line `/pot` prints. One line rather than an
-    /// overlay: the pot is four facts, and the command reads like `/crown`.
+    /// overlay: the pot is four facts.
     pub fn line(&self) -> String {
         let Some(secs) = self.draws_in_secs else {
             return "The pot has not opened yet.".to_string();

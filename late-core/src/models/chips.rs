@@ -144,9 +144,10 @@ chip_moves!(
     /// has no ledger row at all: that gap is the burn. Same `source_ref` as
     /// [`ChipMove::GildSent`].
     GildReceived,
-    /// Chips paid to take the crown. Floor-guarded, and burned whole: there
-    /// is no matching credit anywhere, so every take shrinks the supply by
-    /// the full price. `source_ref` is the reign id.
+    /// Retired: chips paid to take the crown, a feature that no longer
+    /// exists. Rows with it still exist (the ledger has to keep summing to
+    /// the balance), so the variant stays to keep them off the Top Chips
+    /// board; [`UserChips::apply`] refuses to write it.
     CrownTaken,
     /// Chips paid for pot tickets. Floor-guarded like a gift; `source_ref` is
     /// the pot id, and one row per buy rather than per ticket.
@@ -176,7 +177,7 @@ chip_moves!(
     /// (see [`crate::models::media_queue_item::MediaQueueItem::insert_youtube`]).
     SongQueued,
     /// Chips paid to buy the house a round: one price per credit the round
-    /// actually granted, floor-guarded, and burned whole like the crown.
+    /// actually granted, floor-guarded, and burned whole.
     /// Nothing is credited to the patrons, who get a
     /// [`crate::models::drink_round::DrinkCredit`] rather than chips.
     /// `source_ref` is the round id.
@@ -391,7 +392,9 @@ impl ChipMove {
 
     pub const fn direction(self) -> ChipDirection {
         match self {
-            Self::LegacyTableCredit | Self::LegacyTableDebit => ChipDirection::Retired,
+            Self::LegacyTableCredit | Self::LegacyTableDebit | Self::CrownTaken => {
+                ChipDirection::Retired
+            }
             Self::BlackjackPayout
             | Self::PokerPayout
             | Self::BonsaiWatered
@@ -446,7 +449,6 @@ impl ChipMove {
             }
             Self::GiftSent
             | Self::GildSent
-            | Self::CrownTaken
             | Self::PotTicket
             | Self::RoundPurchase
             | Self::DrinkGift
@@ -459,9 +461,9 @@ impl ChipMove {
     /// permanent monthly award snapshot.
     ///
     /// The board ranks what a player earned, so only credits can count and
-    /// a debit never does: spending (the Shop, the bar, the pot, the crown,
-    /// a gild) costs nobody their place, and an arena visit that ended in
-    /// the red is simply not an earning. Of the credits, three stay out:
+    /// a debit never does: spending (the Shop, the bar, the pot, a gild)
+    /// costs nobody their place, and an arena visit that ended in the red
+    /// is simply not an earning. Of the credits, three stay out:
     /// the two house tables, because a table can fold every hand to one
     /// seat and walk it up the board; gifts, because a group can funnel
     /// chips into one player at no cost to the board; and the starting

@@ -24,7 +24,6 @@ use late_core::models::{
     bonsai::BONSAI_CHANGED_CHANNEL,
     chat_message_gild::CHAT_MESSAGE_GILDED_CHANNEL,
     chips::CHIP_USER_CHANGED_CHANNEL,
-    crown::CROWN_CHANGED_CHANNEL,
     daily_match::DAILY_MATCH_CHANGED_CHANNEL,
     deadchannel_name_hit::DEADCHANNEL_NAME_HIT_CHANNEL,
     deadchannel_runner::DEADCHANNEL_RUNNER_CHANGED_CHANNEL,
@@ -51,7 +50,6 @@ const RETRY_DELAY: Duration = Duration::from_secs(5);
 pub enum Refresh {
     RunnerLooks,
     LoungeSpawn,
-    CrownHolder,
     DailyMatches,
     Pot,
     Articles,
@@ -67,7 +65,6 @@ impl Refresh {
         match self {
             Refresh::RunnerLooks => "runner looks",
             Refresh::LoungeSpawn => "lounge spawn",
-            Refresh::CrownHolder => "crown holder",
             Refresh::DailyMatches => "daily matches",
             Refresh::Pot => "pot",
             Refresh::Articles => "articles",
@@ -119,7 +116,6 @@ pub enum Channel {
     BonsaiChanged,
     ChatMessageGilded,
     ChipUserChanged,
-    CrownChanged,
     DailyMatchChanged,
     DeadchannelNameHit,
     DeadchannelRunnerChanged,
@@ -134,13 +130,12 @@ pub enum Channel {
 }
 
 impl Channel {
-    pub const ALL: [Channel; 17] = [
+    pub const ALL: [Channel; 16] = [
         Channel::CalendarChanged,
         Channel::ArticlesChanged,
         Channel::BonsaiChanged,
         Channel::ChatMessageGilded,
         Channel::ChipUserChanged,
-        Channel::CrownChanged,
         Channel::DailyMatchChanged,
         Channel::DeadchannelNameHit,
         Channel::DeadchannelRunnerChanged,
@@ -162,7 +157,6 @@ impl Channel {
             Channel::BonsaiChanged => BONSAI_CHANGED_CHANNEL,
             Channel::ChatMessageGilded => CHAT_MESSAGE_GILDED_CHANNEL,
             Channel::ChipUserChanged => CHIP_USER_CHANGED_CHANNEL,
-            Channel::CrownChanged => CROWN_CHANGED_CHANNEL,
             Channel::DailyMatchChanged => DAILY_MATCH_CHANGED_CHANNEL,
             Channel::DeadchannelNameHit => DEADCHANNEL_NAME_HIT_CHANNEL,
             Channel::DeadchannelRunnerChanged => DEADCHANNEL_RUNNER_CHANGED_CHANNEL,

@@ -239,26 +239,6 @@ impl ActivityPublisher {
         });
     }
 
-    /// `from` is the deposed holder's username, already resolved by the
-    /// crown service: it reads the previous reign inside the take
-    /// transaction, so there is nothing left here to look up.
-    pub fn crown_taken_task(
-        &self,
-        taker_id: Uuid,
-        reign_id: Uuid,
-        price: i64,
-        next_price: i64,
-        from: Option<String>,
-    ) {
-        let publisher = self.clone();
-        tokio::spawn(async move {
-            let username = publisher.username_for(taker_id).await;
-            let _ = publisher.tx.send(ActivityEvent::crown_taken(
-                taker_id, username, reign_id, price, next_price, from,
-            ));
-        });
-    }
-
     /// The pot drew. `winner_id` is resolved to a username here like every
     /// other line; the odds come from the draw, which already counted them.
     pub fn pot_drawn_task(

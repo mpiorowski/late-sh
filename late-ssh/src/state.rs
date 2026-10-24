@@ -179,7 +179,6 @@ pub struct State {
     /// Live 24h username effects (snapshot-swap; seeded and written by
     /// `ShopService`, resolved per session in the tick loop).
     pub flair_directory: crate::app::common::username_effect::NameFlairDirectory,
-    pub crown_service: crate::app::crown::svc::CrownService,
     pub pot_service: crate::app::pot::svc::PotService,
     pub referral_service: crate::app::referral::svc::ReferralService,
     pub activity_feed: broadcast::Sender<ActivityEvent>,

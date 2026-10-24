@@ -386,26 +386,6 @@ pub async fn roll_artboard_pieces_back_a_month(client: &tokio_postgres::Client) 
         .expect("roll artboard pieces back a month");
 }
 
-/// Test-only clock control: move every crown reign back one UTC month, as if
-/// the month had rolled over under it. The reign stays open on purpose: the
-/// crown emptying at the boundary is a read-time rule with no sweeper behind
-/// it, and this is what lets a test stand on the far side of the rollover.
-pub async fn roll_crown_reigns_back_a_month(client: &tokio_postgres::Client) {
-    let updated = client
-        .execute(
-            "UPDATE crown_reigns
-             SET month = (month - interval '1 month')::date,
-                 taken_at = taken_at - interval '1 month'",
-            &[],
-        )
-        .await
-        .expect("roll crown reigns back a month");
-    assert!(
-        updated > 0,
-        "roll_crown_reigns_back_a_month matched no reign"
-    );
-}
-
 /// Test-only clock control: move every drink logged so far back one UTC
 /// month, as if those drinks were taken last month.
 pub async fn roll_drink_pours_back_a_month(client: &tokio_postgres::Client) {

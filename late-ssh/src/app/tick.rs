@@ -312,7 +312,6 @@ impl App {
         changed |= self.voice.tick();
         changed |= self.drain_voice_join_results();
         changed |= self.tick_stream();
-        changed |= self.tick_crown();
         changed |= self.bonsai.tick();
         changed |= self.fight.tick();
         changed |= self.tailor.tick();
@@ -933,19 +932,8 @@ impl App {
             if let Some(directory) = &self.flair_directory {
                 let now = chrono::Utc::now();
                 let phase = crate::app::common::username_effect::shimmer_phase(self.marquee_tick);
-                // The crown rides the same map, and lapses the same way: an
-                // entry from a finished UTC month resolves to nobody, which
-                // is what empties the slot at the rollover with no sweeper,
-                // and the same rollover hands the laureate's crown on.
-                let crown_wearers = match self.crown_wearers_rx.as_mut() {
-                    Some(rx) => *rx.borrow_and_update(),
-                    // Only a test harness builds an app without the crown.
-                    None => crate::app::crown::svc::CrownWearers::default(),
-                };
                 let name_flair = crate::app::common::username_effect::resolve_all(
                     &crate::app::common::username_effect::snapshot(directory),
-                    crown_wearers.holder(now),
-                    crown_wearers.laureate(now),
                     phase,
                     now,
                 );

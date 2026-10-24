@@ -11,10 +11,10 @@ use late_core::models::leaderboard::{
     LeaderboardData, OnlineTimeIncrement, apply_online_time_batch, fetch_leaderboard_data,
 };
 use late_core::models::profile_award::{
-    AwardRoll, AwardRollEntry, CROWN_AWARD_CATEGORY, GALLERY_AWARD_CATEGORY,
-    LATE_TIME_AWARD_CATEGORY, TOP_DRINKERS_AWARD_CATEGORY, all_award_categories,
-    award_category_label, claim_previous_month_award_announcement, format_score_value,
-    gallery_prize_chips, is_milestone_award, snapshot_previous_month_profile_awards,
+    AwardRoll, AwardRollEntry, GALLERY_AWARD_CATEGORY, LATE_TIME_AWARD_CATEGORY,
+    TOP_DRINKERS_AWARD_CATEGORY, all_award_categories, award_category_label,
+    claim_previous_month_award_announcement, format_score_value, gallery_prize_chips,
+    is_milestone_award, snapshot_previous_month_profile_awards,
 };
 use late_core::models::user::User;
 use tokio::sync::{Notify, watch};
@@ -23,7 +23,6 @@ use uuid::Uuid;
 use crate::app::activity::lounge::SYSTEM_FINGERPRINT;
 use crate::app::chat::svc::ChatService;
 use crate::app::common::primitives::thousands;
-use crate::app::common::username_effect::CROWN_LAUREATE_GLYPH;
 use crate::metrics;
 
 /// How often the leaderboard is rebuilt from the DB while at least one session
@@ -360,12 +359,6 @@ fn award_roll_placement(entry: &AwardRollEntry) -> String {
     let value = entry.score_value;
     let medal = award_roll_medal(entry.rank);
     match entry.category.as_str() {
-        CROWN_AWARD_CATEGORY => {
-            format!(
-                "{CROWN_LAUREATE_GLYPH} @{name} took it last for {} chips",
-                thousands(value)
-            )
-        }
         LATE_TIME_AWARD_CATEGORY => format!(
             "\u{1F319} @{name} with {}",
             format_score_value(LATE_TIME_AWARD_CATEGORY, value)

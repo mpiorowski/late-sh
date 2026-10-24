@@ -30,7 +30,7 @@ late-ssh/src/
   app/
     state.rs input.rs tick.rs render.rs   root glue: hold domain state, delegate
     terminal_backend.rs                   GlyphIsolatingBackend
-    activity/ notify/ presence/ help_modal/ ai/ common/ pet/ profile/ crown/ ...
+    activity/ notify/ presence/ help_modal/ ai/ common/ pet/ profile/ pot/ ...
 ```
 
 Root glue rule: a root file holds a domain's state and delegates to it. The

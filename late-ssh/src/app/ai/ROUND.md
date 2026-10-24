@@ -21,8 +21,8 @@ and the spend, never the buzz or its decay clock. Drunk levels print a
 `(word)` label on chat author headers from level 1 and slur public-room text
 (`../chat/CONTEXT.md` §14 Drunk Text).
 
-One patron buys everyone at the bar a drink. The chips are burned like the
-crown's; what the room gets is a #lounge line and a free drink each.
+One patron buys everyone at the bar a drink. The chips are burned; what the
+room gets is a #lounge line and a free drink each.
 The same credit also serves a one-person gift: `@bartender buy @user a drink`
 or another entry on the closed `GIFT_PHRASES` list (a verb, the name and what
 is bought: "get @user a beer", "send @user a round", "pour @user one"; what is
@@ -121,7 +121,7 @@ reads a chat message, and `chat/slur.rs` has to leave that phrase alone.
   landed, never for the heads counted: the grant's own `RETURNING` is what
   the charge is computed from, in the same transaction, so two rounds racing
   cannot both bill for the same patron. `ChipMove::RoundPurchase`,
-  floor-guarded, burned whole, out of Top Chips like the crown.
+  floor-guarded, burned whole, out of Top Chips like any spend.
 - **Presence is `state::online_human_ids_excluding`**, the in-process
   `active_users` roster minus the bots and the buyer. Single-replica by
   choice: there is no presence table (`users.last_seen` is written at connect

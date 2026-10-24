@@ -573,7 +573,7 @@ async fn top_chips_counts_earnings_and_never_spending() {
         .await
         .expect("fund accounts");
 
-    // Spender: 3,200 earned, 12,300 spent, plus every excluded credit.
+    // Spender: 3,200 earned, 11,300 spent, plus every excluded credit.
     apply(spender.id, ChipMove::DailyPuzzleWin, 500)
         .await
         .expect("puzzle win")
@@ -609,10 +609,6 @@ async fn top_chips_counts_earnings_and_never_spending() {
     apply(spender.id, ChipMove::GildSent, 500)
         .await
         .expect("gild sent")
-        .expect("affordable");
-    apply(spender.id, ChipMove::CrownTaken, 1_000)
-        .await
-        .expect("crown")
         .expect("affordable");
     apply(spender.id, ChipMove::SsnakeArenaLost, 100)
         .await
@@ -658,8 +654,8 @@ async fn top_chips_counts_earnings_and_never_spending() {
         month.earned, 3_200,
         "the profile figure is the board figure"
     );
-    // 1,000 stipend + 18,200 credited - 12,300 spent.
-    assert_eq!(month.net, 6_900, "the net is every row");
+    // 1,000 stipend + 18,200 credited - 11,300 spent.
+    assert_eq!(month.net, 7_900, "the net is every row");
 }
 
 /// A best score belongs to the month it was set in. Playing again without

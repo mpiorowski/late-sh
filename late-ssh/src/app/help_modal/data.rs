@@ -1,14 +1,12 @@
 use crate::app::ai::ghost::GRAYBEARD_MENTION_COOLDOWN;
 use crate::app::common::primitives::thousands;
 use crate::app::common::qr::{Barcode, HalfBlock};
-use crate::app::common::username_effect::{CROWN_GLYPH, CROWN_LAUREATE_GLYPH};
 use late_core::models::{
     article::{NEWS_SHARE_MAX_PAID_PER_DAY, NEWS_SHARE_REWARD_CHIPS},
     article_save::NEWS_SAVED_LIMIT,
     asterion::ASTERION_DAILY_ESCAPE_PAYOUT,
     chat_message_gild::GildTier,
     chips::{CHIP_FLOOR, Difficulty, INITIAL_CHIP_BALANCE},
-    crown::CROWN_MIN_PRICE,
     media_queue_item::{SONG_QUEUE_MAX_PAID_PER_DAY, SONG_QUEUE_REWARD_CHIPS},
     pot::{POT_MAX_TICKETS_PER_DAY, POT_TICKET_PRICE},
     quest::{DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL},
@@ -189,7 +187,7 @@ pub(crate) fn bot_app_context() -> String {
     let mut out = String::from(
         "APP CONTEXT:\n\
         CRITICAL FACTS:\n\
-        - Chat username badges render in this order: bracketed last-month leaderboard awards, special role badges, bonsai stage, chat badge, chat flag, burn milestone, then the LIVE tag and the away glyph (\u{1F4A4}), which shows on its own after 30 quiet minutes across every session, or at once with /brb. The crown prints immediately after the name, and a rented title after that, ahead of the whole stack, as \"name \u{1F451}, the night clerk\".\n\
+        - Chat username badges render in this order: bracketed last-month leaderboard awards, special role badges, bonsai stage, chat badge, chat flag, burn milestone, then the LIVE tag and the away glyph (\u{1F4A4}), which shows on its own after 30 quiet minutes across every session, or at once with /brb. A rented title prints immediately after the name, ahead of the whole stack, as \"name, the night clerk\".\n\
         - The Clubhouse (page 0, the Late Lounge tavern) is the landing screen: a walkable ASCII room where everyone online is present. Arrows/hjkl walk, i says something (it floats over your head and lands in #lounge), w waves, x dances, Enter interacts with a landmark. This is where you (@bartender) keep the bar. Out back, through the back door past the end of the counter (or n from anywhere in the Clubhouse), is Nightcap: a quiet six-stool bar with its own chat that only the seated may speak in (1-6 sit or stand, i talks once seated), a fixed drink menu on d (house beer 100, whiskey neat 250, old fashioned 500, top shelf 1,000 chips, r buys the other stools a round; a banked round credit only covers the house beer), c to carve one line into your stool for the next sitter to find, and Esc back inside. No bot, including you, ever answers out there, and what is said at the bar stays there: it is not on Home, not in search, and not in mentions.\n\
         - @bartender pours drinks for Late Chips: mention him (or press t at the bar) to order. There is no fixed menu; he invents each drink's name and prices it 100-1000 chips, never more than the patron can spend while keeping a 100-chip floor untouched. A brand-new patron's first-ever drink is free. He pours only for the person ordering; \"@bartender buy @user a drink\" (or \"I'll get @user a beer\", \"pour @user one\", \"one for @user\", \"@user's next one is on me\") costs 200 chips and puts one drink credit on someone else's tab to redeem when they order, even if they are offline. It expires after 24 hours; a patron can hold at most three. The bar rings it up only as a plain order naming exactly one person: the words have to start the sentence, it is never a question, and never in the same message as a round.\n\
         - @bartender remembers up to sixteen things about each patron from public rooms, copied so they outlast the chat log: recent exchanges (the order, his answer, and what the patron said right after), and anything the patron asked him to remember. Starting a message with \"@bartender remember\" and then the thing (\"@bartender remember I don't drink\") only writes it down: it never orders, pours or charges, and the newest eight of those stick ahead of everything else. \"@bartender forget me\", exactly that and nothing else, wipes everything he remembers about you.\n\
@@ -516,23 +514,7 @@ fn chips_help_lines() -> Vec<String> {
         "  Every track pays, repeats included: putting a song on again is worth the same as putting on one nobody has heard.".to_string(),
         format!("  At most {SONG_QUEUE_MAX_PAID_PER_DAY} tracks a day (UTC) are paid, and that is the only limit there is. Tracks past that still queue, for nothing."),
         "".to_string(),
-        "9. The crown".to_string(),
-        format!("  One slot, one holder, one {CROWN_GLYPH} after their name in every message they send."),
-        "  /crown shows who wears it and what taking it costs. /crown take buys it at that price.".to_string(),
-        format!("  A vacant crown costs {}. After that it costs 1.5x whatever the holder paid, rounded up,", thousands(CROWN_MIN_PRICE)),
-        "  so the price ratchets on its own and nobody sets it.".to_string(),
-        "  /crown take N bids N chips instead, any amount at or above the price. You pay all of it,".to_string(),
-        "  and the next price is 1.5x your bid: overpay to put the crown out of a rival's reach.".to_string(),
-        "  A bid that the price has climbed past by the time it lands is refused, and nothing is charged.".to_string(),
-        "  Every chip is destroyed: the crown pays nobody, and none of it comes back into the economy.".to_string(),
-        "  There is no cooldown: anyone can take it off you the moment you have it, at 1.5x. You cannot take a crown you already wear.".to_string(),
-        "  It empties at the end of every UTC month: the crown goes back to vacant, and whoever wore it".to_string(),
-        format!("  when the month ended wears a {CROWN_LAUREATE_GLYPH} before their name in chat all the next month,"),
-        "  and keeps the permanent [CRWN] badge for that month on their profile.".to_string(),
-        "  Every takeover posts to #lounge, naming both players.".to_string(),
-        "  Like Shop spending, the crown does not count against Top Chips.".to_string(),
-        "".to_string(),
-        "10. Burn milestones".to_string(),
+        "9. Burn milestones".to_string(),
         format!("  Three permanent badges in the Shop's Ultimates tab: Wick {} \u{1F56F}\u{FE0F}, Fuse {} \u{1F9E8}, Furnace {} \u{1F30B}.",
             thousands(50_000),
             thousands(150_000),
@@ -541,9 +523,9 @@ fn chips_help_lines() -> Vec<String> {
         "  A milestone never expires and is never equipped: it shows on top of whatever badge and flag you are renting,".to_string(),
         "  so nothing you rent can hide one. Own two and the dearer one shows.".to_string(),
         "  Each unlock posts to #lounge, naming the price.".to_string(),
-        "  Like the crown and Shop spending, they do not count against Top Chips.".to_string(),
+        "  Like Shop spending, they do not count against Top Chips.".to_string(),
         "".to_string(),
-        "11. The pot".to_string(),
+        "10. The pot".to_string(),
         format!("  A raffle, drawn once a week, Monday 21:00 UTC. Tickets cost {} chips each.", thousands(POT_TICKET_PRICE)),
         "  /pot shows the pot, the tickets in it, what you hold and paid, how many more you can buy today, and how long is left.".to_string(),
         "  /pot buy N buys N tickets.".to_string(),
@@ -554,12 +536,12 @@ fn chips_help_lines() -> Vec<String> {
         "  The winner is announced in #lounge, so you can read it when you get back.".to_string(),
         "  The pot you win counts toward Top Chips; the tickets you buy, like any other spend, do not.".to_string(),
         "".to_string(),
-        "12. Gifts".to_string(),
+        "11. Gifts".to_string(),
         "  /gift @user <n>    send chips to someone, with an optional note after the amount".to_string(),
         format!("  A gift only goes through while it leaves you at or above {floor} chips."),
         "  Gifts move chips between players; they do not create new ones.".to_string(),
         "".to_string(),
-        "13. Inviting friends".to_string(),
+        "12. Inviting friends".to_string(),
         "  Settings (Ctrl+O) > Account > Invites shows your own command: ssh invite-<code>@late.sh".to_string(),
         "  A friend who joins with it is yours. Joined without it? Type the code there in your first week.".to_string(),
         format!(
@@ -586,7 +568,6 @@ fn chips_help_lines() -> Vec<String> {
         "  Poker and Blackjack bets.".to_string(),
         "  Gifts you send.".to_string(),
         "  Gilds you buy on other people's messages.".to_string(),
-        "  The crown (/crown take), which burns the whole price.".to_string(),
         format!("  Pot tickets (/pot buy N) at {} chips each, of which a fifth is burned at the draw.", thousands(POT_TICKET_PRICE)),
         "  Burn milestones and the two ultimate spells (1,000,000 each), the top of the Shop.".to_string(),
         "  Monthly Top Chips counts what you earned: dailies, quests, doors, the arena, prizes, the pot, gilds received. Table bets and wins, gifts, invite rewards, the starting chips, and every kind of spending stay off it.".to_string(),
@@ -635,7 +616,6 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /active            list active users",
         "  /map               where people are, on a world map: the Map section of People",
         "  /gift @user <n>    send chips, with an optional note after the amount",
-        "  /crown             who wears the crown; /crown take buys it",
         "  /pot               the weekly pot; /pot buy N buys N tickets",
         "  /friends           list friends",
         "  /friend [@user]    list friends, or mark a user as a friend",
@@ -1069,10 +1049,8 @@ fn arcade_help_lines() -> Vec<String> {
         "  [LA]      Lateris (Tetris)",
         "  [24#]     2048",
         "  [SN]      Snake",
-        "  [CRWN]    The Crown, to whoever wore it when the month ended.",
-        "            Profile only: in chat the winner wears a crown before their name.",
         "  [LATE]    Late Time, to whoever spent the most time online that month.",
-        "            First place only, so no rank digit either.",
+        "            First place only, so no rank digit.",
         "  [DRNK]    Top Drinkers, to whoever took the most buzz from drinks that month.",
         "            First place only, no rank digit, no chips.",
         "  [ART]     Artboard Gallery: your most applauded piece of the month. Top 3 by best piece,",

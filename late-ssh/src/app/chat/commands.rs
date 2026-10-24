@@ -107,7 +107,6 @@ const COMMANDS: &[Command] = &[
     global("bug", "report a bug to #bugs (/bug <what broke>)"),
     global("chips", "chip ledger (/chips @user; bare = you)"),
     global("coffee", "post coffee cup"),
-    global("crown", "the crown (/crown; /crown take to buy it)"),
     global("cs", "cyberspace (/cs post, chat, link, unlink)"),
     global("cyberspace", "open the cyberspace tab (alias /cs)"),
     global("dm", "open a DM (/dm @user)"),

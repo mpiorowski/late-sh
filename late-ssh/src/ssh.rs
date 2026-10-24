@@ -1143,7 +1143,6 @@ impl russh::server::Handler for ClientHandler {
             key_left_at: device.left_at,
             username_directory: Some(self.state.username_directory.clone()),
             flair_directory: Some(self.state.flair_directory.clone()),
-            crown_service: Some(self.state.crown_service.clone()),
             pot_service: Some(self.state.pot_service.clone()),
             referral_service: self.state.referral_service.clone(),
             newcomer_clock: crate::app::referral::state::NewcomerClock::new(

@@ -103,7 +103,6 @@ pub(crate) fn detail(detail: &LedgerDetail) -> String {
         LedgerDetail::GamePayout { game, payout_kind } => {
             format!("{} · {}", humanize(game), humanize(payout_kind))
         }
-        LedgerDetail::CrownFrom { username } => format!("from @{username}"),
         LedgerDetail::PotTickets { count } => plural(*count, "ticket"),
         LedgerDetail::PotWon { tickets } => format!("of {}", plural(*tickets, "ticket")),
         LedgerDetail::Quest { title } => title.clone(),

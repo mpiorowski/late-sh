@@ -81,7 +81,7 @@ behind sticky sessions:
   per user or per world (a DM, a payout, a paid API call) wins a conditional
   `UPDATE ... WHERE <not yet> RETURNING` or a `pg_advisory_xact_lock` first and
   acts only on the win. Copy `User::claim_first_contact_invitation`,
-  `Pot::lock_open`, the crown take, `GamePayout::grant_multi`.
+  `Pot::lock_open`, `GamePayout::grant_multi`.
 - **Cross-session fan-out goes through `LISTEN/NOTIFY`.** One LISTEN
   connection per process (`late-ssh/src/pg_listener.rs`): add the channel to
   its closed `Channel` enum, subscribe it in `main.rs`, run
@@ -89,7 +89,7 @@ behind sticky sessions:
   the LISTEN is live (re-read there: it is the seed and the reconnect
   catch-up) and `Signal::Notify` per notify, and re-reads into a
   process-shared `watch`. Never open a domain-owned LISTEN connection. Copy news
-  and daily matches (re-read only), crown and pot (payload applied in order),
+  and daily matches (re-read only), the pot (payload applied in order),
   shop (several channels). Payloads carry ids, never state.
 - **Background work dedupes through the DB**: claim a row first, or be
   idempotent and cheap enough to run on every replica.
@@ -101,7 +101,7 @@ behind sticky sessions:
 Replica-ready, not over-engineered: one user's sessions on two replicas need
 not sync live; a list that refreshes when its page opens is replica-ready;
 only surfaces people sit and watch while others change them (News, chat, the
-crown, the pot) get a NOTIFY-fed shared `watch`. Pick the cheapest correct
+pot) get a NOTIFY-fed shared `watch`. Pick the cheapest correct
 shape: read on open, then a notify, then anything more.
 
 **Per-user state** (the bonsai, the pet, the tank, per-account settings)
@@ -143,7 +143,7 @@ Every chip movement is a `ChipMove` variant written through
 `app/leaderboard/CONTEXT.md` what counts on Top Chips,
 `app/door/ingest/CONTEXT.md` the door milestone prizes, `app/hub/CONTEXT.md` the quest amounts, `app/hub/shop/CONTEXT.md`
 the Shop prices, and each mechanic's own context its numbers (gilds, the
-crown, the round, the pot, invites).
+round, the pot, invites).
 
 ## 4. Pages
 
@@ -188,7 +188,6 @@ otherwise.
 | `chat/gild` | Gilds: chips paid to mark another user's message |
 | `chat/news` | Shared links, the News room, the reader, where a story's watch position is kept |
 | `chat/cyberspace` | The cyberspace.online client and its rail entry |
-| `crown` | The crown: one holder, the price ladder, the laureate |
 | `video` | The watch player: a News story or a chat YouTube link played in the terminal by the paired CLI's mpv, the setup box, the session's one play on the CLI |
 | `audio` | Radio, YouTube queue and booth, source selection, `/listen` snapshot; the queue service in `QUEUE.md`, the equalizer in `VIZ.md`, the sidebar stage in `STAGE.md`, the stations in `STATIONS.md` |
 | `voice` | LiveKit voice rooms, TUI voice controls, pair-WS voice messages |
