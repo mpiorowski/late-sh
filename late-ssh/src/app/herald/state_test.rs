@@ -4,9 +4,14 @@ use late_core::models::herald::{HeraldKind, PosterCandidate};
 use uuid::Uuid;
 
 use super::state::{
-    BOARD_MIN_INK, BoardCandidate, Picture, TEXT_LIMIT, alt_text, board_key, ink_cells,
-    pick_picture, post_due_day, shown_day, status_text,
+    BOARD_MIN_INK, BoardCandidate, Picture, alt_text, board_key, ink_cells, pick_picture,
+    post_due_day, shown_day, status_text,
 };
+
+/// The shortest limit among the networks: Bluesky's 300 graphemes
+/// (Mastodon allows 500). One text goes to every network, so it fits the
+/// tightest.
+const TEXT_LIMIT: usize = 300;
 
 fn day(d: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(2026, 10, d).unwrap()

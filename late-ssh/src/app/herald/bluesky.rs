@@ -19,7 +19,7 @@ use crate::config::BlueskyConfig;
 
 /// The PDS refuses a blob over a megabyte; stay under with room for the
 /// container's own bytes.
-pub const BLOB_MAX_BYTES: usize = 950_000;
+pub(crate) const BLOB_MAX_BYTES: usize = 950_000;
 
 /// Each pass shrinks the picture's sides by this much until it fits.
 const SHRINK_STEP: f64 = 0.8;
@@ -35,15 +35,15 @@ const TID_ALPHABET: &[u8; 32] = b"234567abcdefghijklmnopqrstuvwxyz";
 const BODY_EXCERPT: usize = 200;
 
 /// What goes out with the picture.
-pub struct Post<'a> {
+pub(crate) struct Post<'a> {
     /// The day's key: the record key is derived from it, so a retry puts
     /// the same record again instead of a second post.
-    pub key: Uuid,
-    pub png: &'a [u8],
-    pub text: &'a str,
-    pub alt: &'a str,
+    pub(crate) key: Uuid,
+    pub(crate) png: &'a [u8],
+    pub(crate) text: &'a str,
+    pub(crate) alt: &'a str,
     /// When the post says it was made.
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub(crate) created_at: chrono::DateTime<chrono::Utc>,
 }
 
 #[derive(Deserialize)]
@@ -67,14 +67,14 @@ struct PutRecord {
 /// The picture as it goes up: under the cap, with its size for the
 /// embed's aspect ratio.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Fitted {
-    pub png: Vec<u8>,
-    pub width: u32,
-    pub height: u32,
+pub(crate) struct Fitted {
+    pub(crate) png: Vec<u8>,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
 }
 
 /// Session, blob, record. The post's URL on bsky.app comes back.
-pub async fn deliver(
+pub(crate) async fn deliver(
     http: &reqwest::Client,
     config: &BlueskyConfig,
     post: Post<'_>,
@@ -195,7 +195,7 @@ async fn put_record(
 /// 13 characters of base32-sortable) built from the UUID v7's millisecond
 /// timestamp and ten bits of its randomness. Deterministic per key, so a
 /// retried day puts the same record.
-pub fn tid_for(key: Uuid) -> String {
+pub(crate) fn tid_for(key: Uuid) -> String {
     let bytes = key.as_bytes();
     let millis = u64::from_be_bytes([
         0, 0, bytes[0], bytes[1], bytes[2], bytes[3], bytes[4], bytes[5],
@@ -213,7 +213,7 @@ pub fn tid_for(key: Uuid) -> String {
 
 /// The picture under `max_bytes`: as it came when it already is, else
 /// shrunk by `SHRINK_STEP` a side per pass and re-encoded until it fits.
-pub fn fit_under(png: &[u8], max_bytes: usize) -> anyhow::Result<Fitted> {
+pub(crate) fn fit_under(png: &[u8], max_bytes: usize) -> anyhow::Result<Fitted> {
     let decoded = ImageReader::with_format(Cursor::new(png), ImageFormat::Png)
         .decode()
         .context("decoding the picture")?;
@@ -253,7 +253,7 @@ pub fn fit_under(png: &[u8], max_bytes: usize) -> anyhow::Result<Fitted> {
 /// The rich-text facets: every `http(s)://` word a link, every `#word` a
 /// tag, by UTF-8 byte range as the protocol counts them. Our own text, so
 /// a word is whatever sits between whitespace.
-pub fn facets(text: &str) -> Vec<Value> {
+pub(crate) fn facets(text: &str) -> Vec<Value> {
     let mut facets = Vec::new();
     let mut start = 0;
     for (index, ch) in text

@@ -24,14 +24,14 @@ const UPLOAD_FILE_NAME: &str = "late-sh.png";
 const BODY_EXCERPT: usize = 200;
 
 /// What goes out with the picture.
-pub struct Post<'a> {
+pub(crate) struct Post<'a> {
     /// The day's key: the `Idempotency-Key` on the status call, so a retry
     /// after a lost answer gets the status the instance already made.
-    pub key: Uuid,
-    pub png: &'a [u8],
-    pub text: &'a str,
-    pub alt: &'a str,
-    pub visibility: HeraldVisibility,
+    pub(crate) key: Uuid,
+    pub(crate) png: &'a [u8],
+    pub(crate) text: &'a str,
+    pub(crate) alt: &'a str,
+    pub(crate) visibility: HeraldVisibility,
 }
 
 /// `POST /api/v1/statuses` as the instance reads it.
@@ -56,7 +56,7 @@ struct StatusResponse {
 
 /// Upload the picture, then post the status carrying it. The status's
 /// public URL comes back.
-pub async fn deliver(
+pub(crate) async fn deliver(
     http: &reqwest::Client,
     config: &MastodonConfig,
     post: Post<'_>,

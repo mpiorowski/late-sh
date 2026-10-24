@@ -326,26 +326,33 @@ Live, in order of evidence behind them:
     `late-core/src/models/herald.rs` with tests, `Config::herald` in
     `late-ssh/src/config.rs`, the two counters in `metrics.rs`, the
     Grafana Herald row, the `.env.dev` templates, the context docs, and a
-    corrected skew rule in `infra/RUNBOOK.md`. In order:
-    1. Run `make test-llm ARGS="-p late-core -p late-ssh --lib -E
-       'test(herald) | test(config_test)'"` (it wants 12 GB free;
-       `TEST_LLM_HEADROOM_G=2` lowers the bar by one) and fix what it
-       says; then `make check`, commit, PR.
-    2. Accounts, by hand. Mastodon: Fosstodon is invite-only (an existing
-       member mints an invite under Preferences, Invite people), the
-       fallback is mastodon.social with an account move later; tick "This
-       is an automated account", put `https://late.sh` in the profile
-       links, mint an application under Development with `write:media`
-       and `write:statuses`. Bluesky: an account at bsky.app, an app
-       password under Settings, Privacy and security, and the `bot`
-       self-label on the profile record (no setting in the app; a one-off
-       `putRecord` of `app.bsky.actor.profile` with
-       `labels.values: [{val: "bot"}]`).
-    3. A local post from the dev stack with the real values in
-       `.env.local` (`LATE_HERALD_MASTODON_INSTANCE` and `..._TOKEN`,
-       `LATE_HERALD_BLUESKY_IDENTIFIER` and `..._PASSWORD`), the
-       `herald_settings` row flipped on in the dev database, one check
-       past 16:00 UTC; Mastodon lands unlisted, Bluesky public.
+    corrected skew rule in `infra/RUNBOOK.md`. The herald and config
+    tests pass (`make test-llm ARGS="-p late-core -p late-ssh --lib -E
+    'test(herald) | test(config_test)'"`; it wants 12 GB free,
+    `TEST_LLM_HEADROOM_G=2` lowers the bar by one). The Bluesky account
+    exists, handle `late.sh` (the `_atproto.late.sh` TXT record in
+    Cloudflare), app password in `.env.local`, and the first post went
+    out from the dev stack: the seeded daily board of 23 October 2026,
+    text, link, four tags, alt text and picture all as designed, at
+    `https://bsky.app/profile/late.sh/post/3mynblow2z2r4` (its link
+    points at localhost, dev's `web_url`; delete it or leave it). In
+    order:
+    1. `make check`, commit, PR.
+    2. Bluesky's `bot` self-label on the profile record: no setting in
+       the app; a one-off `putRecord` of `app.bsky.actor.profile` with
+       `labels.values: [{val: "bot"}]`, keeping the display name, bio
+       and avatar the record already holds.
+    3. Mastodon, by hand, once an instance is in: Fosstodon is
+       invite-only (an existing member mints an invite under Preferences,
+       Invite people), the fallback is mastodon.social with an account
+       move later; tick "This is an automated account", put
+       `https://late.sh` in the profile links, mint an application under
+       Development with `write:media` and `write:statuses`; then a local
+       post like Bluesky's (`LATE_HERALD_MASTODON_INSTANCE` and
+       `..._TOKEN` in `.env.local`, the `herald_settings` row flipped on
+       in the dev database, one check past 16:00 UTC; Mastodon lands
+       unlisted in dev). The dev row is off again after a test, so a dev
+       stack left running does not post from a laptop.
     4. Going live, one network at a time: in the prod profile replace the
        `None` with the pinned instance URL or handle and
        `required("LATE_HERALD_MASTODON_TOKEN")` or
