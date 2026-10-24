@@ -1,11 +1,10 @@
 use chrono::{NaiveDate, TimeZone, Utc};
 use dartboard_core::{Canvas, Pos};
-use late_core::models::herald::{HeraldKind, PosterCandidate};
-use uuid::Uuid;
+use late_core::models::herald::HeraldKind;
 
 use super::state::{
-    BOARD_MIN_INK, BoardCandidate, Picture, alt_text, board_key, ink_cells, pick_picture,
-    post_due_day, shown_day, status_text,
+    BOARD_MIN_INK, BoardCandidate, BoardLook, HeraldCommand, Picture, alt_text, board_key,
+    ink_cells, parse_herald_command, post_due_day, shown_day, status_text,
 };
 
 /// The shortest limit among the networks: Bluesky's 300 graphemes
@@ -15,14 +14,6 @@ const TEXT_LIMIT: usize = 300;
 
 fn day(d: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(2026, 10, d).unwrap()
-}
-
-fn poster(username: &str) -> PosterCandidate {
-    PosterCandidate {
-        user_id: Uuid::now_v7(),
-        username: username.to_string(),
-        slug: "w_heraldstate1".to_string(),
-    }
 }
 
 fn board() -> BoardCandidate {
@@ -46,69 +37,17 @@ fn the_post_is_due_at_sixteen_utc_and_catches_up_after_it() {
     assert_eq!(board_key(day(22)), "daily:2026-10-22");
 }
 
-/// A poster and the board alternate; whichever is missing, the other
-/// goes; nothing goes when both are.
-#[test]
-fn the_rotation_alternates_and_falls_back() {
-    let painter = poster("painter");
-    let picks = |last| pick_picture(last, Some(painter.clone()), Some(board()));
-    assert_eq!(picks(None), Some(Picture::Poster(painter.clone())));
-    assert_eq!(
-        picks(Some(HeraldKind::Artboard)),
-        Some(Picture::Poster(painter.clone()))
-    );
-    assert_eq!(
-        picks(Some(HeraldKind::Poster)),
-        Some(Picture::Board(board()))
-    );
-
-    // A poster after a poster when the board is too bare.
-    assert_eq!(
-        pick_picture(Some(HeraldKind::Poster), Some(painter.clone()), None),
-        Some(Picture::Poster(painter.clone()))
-    );
-    // The board after the board when no poster waits.
-    assert_eq!(
-        pick_picture(Some(HeraldKind::Artboard), None, Some(board())),
-        Some(Picture::Board(board()))
-    );
-    assert_eq!(pick_picture(Some(HeraldKind::Artboard), None, None), None);
-    assert_eq!(pick_picture(None, None, None), None);
-}
-
-/// Each picture knows its route, its page, its subject, and its words:
+/// The picture knows its route, its page, its subject, and its words:
 /// under the tightest network's limit, no bare `@`, the page linked, four
 /// tags; and it round-trips through the row.
 #[test]
 fn the_words_fit_and_never_mention_anyone() {
-    let painter = poster("a_long_username_of_thirty_chars");
-    let picture = Picture::Poster(painter.clone());
+    let picture = Picture::Board(board());
     let stored = serde_json::to_value(&picture).expect("serialize");
     assert_eq!(
         serde_json::from_value::<Picture>(stored).expect("deserialize"),
         picture
     );
-    assert_eq!(picture.kind(), HeraldKind::Poster);
-    assert_eq!(picture.subject(), painter.user_id.to_string());
-    assert_eq!(
-        picture.picture_path(),
-        "/profiles/w_heraldstate1/poster.png"
-    );
-    assert_eq!(picture.page_path(), "/profiles/w_heraldstate1");
-    let text = status_text(&picture, "https://late.sh");
-    assert!(text.chars().count() < TEXT_LIMIT, "{text}");
-    assert!(text.contains("~a_long_username_of_thirty_chars"));
-    assert!(
-        !text.contains('@'),
-        "a bare @ would ping a stranger: {text}"
-    );
-    assert!(text.contains("https://late.sh/profiles/w_heraldstate1"));
-    assert_eq!(text.matches('#').count(), 4);
-    let alt = alt_text(&picture);
-    assert!(alt.contains("~a_long_username_of_thirty_chars"));
-    assert!(!alt.contains('@'));
-
-    let picture = Picture::Board(board());
     assert_eq!(picture.kind(), HeraldKind::Artboard);
     assert_eq!(picture.subject(), "daily:2026-10-22");
     assert_eq!(
@@ -119,9 +58,37 @@ fn the_words_fit_and_never_mention_anyone() {
     let text = status_text(&picture, "https://late.sh");
     assert!(text.chars().count() < TEXT_LIMIT, "{text}");
     assert!(text.contains("22 October 2026"));
+    assert!(
+        !text.contains('@'),
+        "a bare @ would ping a stranger: {text}"
+    );
     assert!(text.contains("https://late.sh/gallery?key=daily:2026-10-22"));
     assert_eq!(text.matches('#').count(), 4);
-    assert!(alt_text(&picture).contains("22 October 2026"));
+    let alt = alt_text(&picture);
+    assert!(alt.contains("22 October 2026"));
+    assert!(!alt.contains('@'));
+}
+
+/// A board is a post at the ink bar and not under it; a missing one
+/// says so.
+#[test]
+fn the_look_decides_by_the_ink_bar() {
+    let look = |ink| BoardLook {
+        key: board_key(day(22)),
+        shown: day(22),
+        ink,
+    };
+    assert_eq!(
+        look(Some(BOARD_MIN_INK)).picture(),
+        Some(Picture::Board(board()))
+    );
+    assert_eq!(look(Some(BOARD_MIN_INK - 1)).picture(), None);
+    assert_eq!(look(None).picture(), None);
+    assert_eq!(
+        look(Some(7)).describe(),
+        "daily:2026-10-22 has 7 drawn cells, needs 200"
+    );
+    assert_eq!(look(None).describe(), "no board archived for 2026-10-22");
 }
 
 #[test]
@@ -139,4 +106,35 @@ fn ink_counts_glyphs_and_ignores_whitespace() {
     }
     canvas.set(Pos { x: 79, y: 23 }, ' ');
     assert_eq!(ink_cells(&canvas), BOARD_MIN_INK);
+}
+
+#[test]
+fn herald_commands_parse_and_everything_else_falls_through() {
+    assert_eq!(
+        parse_herald_command("/herald on"),
+        Some(Some(HeraldCommand::On))
+    );
+    assert_eq!(
+        parse_herald_command("  /herald off  "),
+        Some(Some(HeraldCommand::Off))
+    );
+    assert_eq!(
+        parse_herald_command("/herald status"),
+        Some(Some(HeraldCommand::Status))
+    );
+    assert_eq!(
+        parse_herald_command("/herald preview"),
+        Some(Some(HeraldCommand::Preview))
+    );
+    assert_eq!(
+        parse_herald_command("/herald post"),
+        Some(Some(HeraldCommand::Post))
+    );
+    // Bare, or junk after it, is a usage banner, not a chat line.
+    assert_eq!(parse_herald_command("/herald"), Some(None));
+    assert_eq!(parse_herald_command("/herald print"), Some(None));
+    assert_eq!(parse_herald_command("/herald on now"), Some(None));
+    // Other words and other commands fall through to chat.
+    assert_eq!(parse_herald_command("/heraldry"), None);
+    assert_eq!(parse_herald_command("the herald posted"), None);
 }

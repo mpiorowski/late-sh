@@ -569,13 +569,20 @@ impl Config {
                 api_key: Some(required("LATE_AI_API_KEY")?),
             },
             herald: HeraldConfig {
-                // Neither account exists yet (AUDIENCE.md, the herald). Going
-                // live on a network is a profile change: pin the instance or
-                // the handle here, read its secret with `required`, and ship
-                // the infra release that injects it first (infra/RUNBOOK.md,
-                // deploy skew rule).
-                mastodon: None,
-                bluesky: None,
+                // The accounts (AUDIENCE.md, the herald): @late on Fosstodon
+                // and the domain handle on Bluesky. Each secret is injected by
+                // infra/service-ssh.tf from `herald-credentials`; a new
+                // network is pinned here and ships its infra release first
+                // (infra/RUNBOOK.md, deploy skew rule).
+                mastodon: Some(MastodonConfig {
+                    instance: "https://fosstodon.org".to_string(),
+                    token: required("LATE_HERALD_MASTODON_TOKEN")?,
+                }),
+                bluesky: Some(BlueskyConfig {
+                    pds: BLUESKY_PDS.to_string(),
+                    identifier: "late.sh".to_string(),
+                    app_password: required("LATE_HERALD_BLUESKY_PASSWORD")?,
+                }),
                 // The cluster service in front of service-web (port 80).
                 web_internal_url: "http://service-web-sv".to_string(),
                 visibility: HeraldVisibility::Public,

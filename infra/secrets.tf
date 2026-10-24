@@ -83,7 +83,7 @@ resource "kubernetes_secret_v1" "youtube_credentials" {
 }
 
 # =============================================================================
-# The herald (Mastodon application token)
+# The herald (one credential per network it posts to)
 # =============================================================================
 
 resource "kubernetes_secret_v1" "herald_credentials" {
@@ -92,7 +92,8 @@ resource "kubernetes_secret_v1" "herald_credentials" {
   }
 
   data = {
-    token = var.HERALD_TOKEN
+    mastodon_token   = var.HERALD_MASTODON_TOKEN
+    bluesky_password = var.HERALD_BLUESKY_PASSWORD
   }
 
   type = "Opaque"

@@ -672,6 +672,8 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "                     j/k, ↑/↓ or wheel scroll; drag the scrollbar or click",
         "                     its track to page. Esc/q/Enter or [x] closes the paper.",
         "                     admins: /paper print, preview, reset",
+        "  /herald            admins: the social accounts' switch and press. on / off flip the",
+        "                     daily post; status, preview; post sends today's picture now",
         "",
         "Global chat keys",
         "  Ctrl+O             open your settings modal anywhere",

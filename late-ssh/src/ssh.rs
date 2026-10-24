@@ -980,6 +980,7 @@ impl russh::server::Handler for ClientHandler {
             translation_service: self.state.translation_service.clone(),
             summary_service: self.state.summary_service.clone(),
             paper_service: self.state.paper_service.clone(),
+            herald_service: self.state.herald_service.clone(),
             jobs_service: self.state.jobs_service.clone(),
             notification_service: self.state.notification_service.clone(),
             article_service,

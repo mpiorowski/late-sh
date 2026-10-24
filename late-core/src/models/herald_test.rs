@@ -1,14 +1,10 @@
 use chrono::{Duration, NaiveDate, Utc};
 use tokio_postgres::Client;
-use uuid::Uuid;
 
 use super::herald::{
     HeraldDelivery, HeraldKind, HeraldNetwork, HeraldPost, HeraldPosted, HeraldSwitch,
 };
-use crate::db::Db;
-use crate::models::deadchannel_runner::DeadchannelRunner;
-use crate::models::work_profile::{WorkProfile, WorkProfileParams, WorkStatus, WorkType};
-use crate::test_utils::{create_test_user, test_db};
+use crate::test_utils::test_db;
 
 const DAY: NaiveDate = match NaiveDate::from_ymd_opt(2026, 10, 23) {
     Some(date) => date,
@@ -45,37 +41,6 @@ async fn post(client: &Client, day: NaiveDate, kind: HeraldKind, subject: &str) 
     HeraldPost::finish_posted(client, day)
         .await
         .expect("finish");
-}
-
-fn profile(user_id: Uuid, slug: &str) -> WorkProfileParams {
-    WorkProfileParams {
-        user_id,
-        slug: slug.into(),
-        headline: "Terminal artist".into(),
-        status: WorkStatus::Open,
-        work_type: WorkType::Any,
-        location: "The night city".into(),
-        contact: String::new(),
-        links: vec!["https://late.sh".into()],
-        skills: vec![],
-        skills_tags: vec![],
-        summary: "Paints posters at PRINTS.".into(),
-    }
-}
-
-/// A standing runner with a poster and a public profile under `slug`.
-async fn runner_with_poster(client: &Client, db: &Db, name: &str, slug: &str) -> Uuid {
-    let user = create_test_user(db, name).await;
-    DeadchannelRunner::ensure_for_user(client, user.id, &serde_json::json!({}))
-        .await
-        .expect("create runner");
-    DeadchannelRunner::store_poster(client, user.id, &serde_json::json!({"cells": []}))
-        .await
-        .expect("store poster");
-    WorkProfile::create_by_user_id(client, user.id, profile(user.id, slug))
-        .await
-        .expect("create work profile");
-    user.id
 }
 
 /// One replica takes the day and keeps its key; a second finds nothing;
@@ -137,19 +102,6 @@ async fn a_day_is_claimed_once_and_settles() {
             .expect("read"),
         Some(serde_json::json!({"pick": "daily:2026-10-22"}))
     );
-    assert_eq!(
-        HeraldPost::last_posted_kind(&client, DAY + Duration::days(1))
-            .await
-            .expect("read"),
-        Some(HeraldKind::Artboard)
-    );
-    assert_eq!(
-        HeraldPost::last_posted_kind(&client, DAY)
-            .await
-            .expect("read"),
-        None,
-        "the rotation reads days before the one in hand"
-    );
 
     // The key is the first claim's and never changes; a pick and a
     // delivery that landed before the day failed survive the retry, and
@@ -162,8 +114,8 @@ async fn a_day_is_claimed_once_and_settles() {
     HeraldPost::store_picture(
         &client,
         later,
-        HeraldKind::Poster,
-        "someone",
+        HeraldKind::Artboard,
+        "daily:2026-10-23",
         &serde_json::json!({}),
     )
     .await
@@ -257,106 +209,6 @@ async fn failures_retry_to_the_cap_and_stale_claims_are_taken_over() {
     );
     assert_eq!(
         HeraldPost::posted_on(&client, stuck).await.expect("read"),
-        None
-    );
-}
-
-/// Only a standing runner with a poster and a public profile is a
-/// candidate, each once; the member seen last comes first.
-#[tokio::test]
-async fn poster_candidates_are_standing_public_and_unposted() {
-    let test_db = test_db().await;
-    let db = test_db.db.clone();
-    let client = db.get().await.expect("db client");
-
-    assert_eq!(
-        HeraldPost::next_poster_candidate(&client)
-            .await
-            .expect("read"),
-        None,
-        "nobody yet"
-    );
-
-    // A runner with a poster but no profile: no public page to link.
-    let private = create_test_user(&db, "h_private").await;
-    DeadchannelRunner::ensure_for_user(&client, private.id, &serde_json::json!({}))
-        .await
-        .expect("runner");
-    DeadchannelRunner::store_poster(&client, private.id, &serde_json::json!({"cells": []}))
-        .await
-        .expect("poster");
-    // A profile with a runner but no poster.
-    let bare = create_test_user(&db, "h_bare").await;
-    DeadchannelRunner::ensure_for_user(&client, bare.id, &serde_json::json!({}))
-        .await
-        .expect("runner");
-    WorkProfile::create_by_user_id(&client, bare.id, profile(bare.id, "w_heraldbare01"))
-        .await
-        .expect("profile");
-    assert_eq!(
-        HeraldPost::next_poster_candidate(&client)
-            .await
-            .expect("read"),
-        None
-    );
-
-    let older = runner_with_poster(&client, &db, "h_older", "w_heraldold001").await;
-    let newer = runner_with_poster(&client, &db, "h_newer", "w_heraldnew001").await;
-    client
-        .execute(
-            "UPDATE users SET last_seen = current_timestamp - interval '1 day' WHERE id = $1",
-            &[&older],
-        )
-        .await
-        .expect("age the older member");
-
-    let first = HeraldPost::next_poster_candidate(&client)
-        .await
-        .expect("read")
-        .expect("a candidate");
-    assert_eq!(first.user_id, newer);
-    assert_eq!(first.username, "h_newer");
-    assert_eq!(first.slug, "w_heraldnew001");
-
-    // A pick on a day that failed does not spend the poster.
-    HeraldPost::claim(&client, DAY, fresh(), MAX_ATTEMPTS)
-        .await
-        .expect("claim");
-    HeraldPost::store_picture(
-        &client,
-        DAY,
-        HeraldKind::Poster,
-        &newer.to_string(),
-        &serde_json::json!({}),
-    )
-    .await
-    .expect("store pick");
-    HeraldPost::mark_failed(&client, DAY).await.expect("fail");
-    assert_eq!(
-        HeraldPost::next_poster_candidate(&client)
-            .await
-            .expect("read")
-            .expect("a candidate")
-            .user_id,
-        newer
-    );
-
-    // Posted: the next candidate is the other one.
-    post(&client, DAY, HeraldKind::Poster, &newer.to_string()).await;
-    let second = HeraldPost::next_poster_candidate(&client)
-        .await
-        .expect("read")
-        .expect("a candidate");
-    assert_eq!(second.user_id, older);
-
-    // A runner who left takes their poster off the list.
-    DeadchannelRunner::mark_left(&client, older)
-        .await
-        .expect("leave");
-    assert_eq!(
-        HeraldPost::next_poster_candidate(&client)
-            .await
-            .expect("read"),
         None
     );
 }

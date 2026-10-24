@@ -268,6 +268,11 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let summary_service =
         crate::app::ai::summary::SummaryService::new(db.clone(), ai_service.clone());
     let paper_service = crate::app::paper::svc::PaperService::new(db.clone(), ai_service.clone());
+    let herald_service = crate::app::herald::svc::HeraldService::new(
+        db.clone(),
+        config.herald.clone(),
+        config.web_url.clone(),
+    );
     let jobs_service = crate::app::jobs::svc::JobsService::new(db.clone(), ai_service.clone());
     let article_service = ArticleService::new(db.clone(), ai_service.clone(), chat_service.clone());
     let feed_service = crate::app::chat::feeds::svc::FeedService::new(db.clone());
@@ -356,6 +361,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         translation_service,
         summary_service,
         paper_service,
+        herald_service,
         jobs_service,
         article_service,
         calendar_service: crate::app::calendar::svc::CalendarService::new(db.clone()),
@@ -552,6 +558,16 @@ fn make_app_with_chat_service_and_permissions(
         paper_service: crate::app::paper::svc::PaperService::new(
             db.clone(),
             AiService::new(false, None),
+        ),
+        herald_service: crate::app::herald::svc::HeraldService::new(
+            db.clone(),
+            HeraldConfig {
+                mastodon: None,
+                bluesky: None,
+                web_internal_url: "http://localhost:3000".to_string(),
+                visibility: HeraldVisibility::Unlisted,
+            },
+            "http://localhost:3000".to_string(),
         ),
         jobs_service: crate::app::jobs::svc::JobsService::new(
             db.clone(),
@@ -833,6 +849,16 @@ pub fn make_app_with_paired_client(
         paper_service: crate::app::paper::svc::PaperService::new(
             db.clone(),
             AiService::new(false, None),
+        ),
+        herald_service: crate::app::herald::svc::HeraldService::new(
+            db.clone(),
+            HeraldConfig {
+                mastodon: None,
+                bluesky: None,
+                web_internal_url: "http://localhost:3000".to_string(),
+                visibility: HeraldVisibility::Unlisted,
+            },
+            "http://localhost:3000".to_string(),
         ),
         jobs_service: crate::app::jobs::svc::JobsService::new(
             db.clone(),

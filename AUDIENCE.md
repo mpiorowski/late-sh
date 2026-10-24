@@ -262,8 +262,8 @@ Live, in order of evidence behind them:
   WebFinger, signed fetches, inbound moderation) is weeks of work and
   sends the visibility people want outward, away from the terminal.
 - **The herald: one picture a day on the Fediverse and Bluesky.** Built
-  (`late-ssh/src/app/herald/CONTEXT.md`) and shipped dark: neither
-  account exists yet, and the `herald_settings` row starts off. One post
+  (`late-ssh/src/app/herald/CONTEXT.md`) and shipped dark: both
+  accounts exist, and the `herald_settings` row starts off. One post
   a day, delivered to every network the herald has an account on. The
   Fediverse: an ordinary account on an existing Mastodon instance
   (fosstodon.org: FOSS-leaning, a local timeline that gives a new account
@@ -277,17 +277,51 @@ Live, in order of evidence behind them:
   `bot` self-label, posting through an app password; it asks that a bot
   never likes, reposts or replies unprompted, so the human half there is
   done from a person's own account.
-  - **What it posts.** One picture a day at 16:00 UTC, alternating: a
-    standing runner's poster from PRINTS with the member credited
-    (`~name`, never `@name`), linking their profile, each poster once;
-    and yesterday's daily Artboard snapshot (tagged #ASCIIart and
-    #MastoArt, the communities that boost strangers' art), linking the
-    gallery, once it has enough ink to be a picture. Each with alt text
-    and four tags. Still to come, each needing a PNG route on the front
-    door first (`late-web/src/pages/shared/board_png.rs`): the day's best
-    share card with the `ssh late.sh` footer, a frame of the tavern or
-    the night city, and the rare headline events the #lounge feed treats
-    as stories (the pot drawn, the crown taken, the monthly awards).
+  - **What it posts.** One picture a day at 16:00 UTC: yesterday's daily
+    Artboard snapshot (tagged #ASCIIart and #MastoArt, the communities
+    that boost strangers' art), linking the gallery, once it has enough
+    ink to be a picture; nothing on a bare day. Alt text and four tags.
+    The first design alternated it with members' PRINTS posters, each
+    once; dropped before launch, since a few new posters a month cannot
+    carry a slot.
+  - **Future work, in this order.** Each kind is one PNG route on the
+    front door (`late-web/src/pages/shared/board_png.rs`), one candidate
+    query, one text, and one more variant of the herald's picture, which
+    breaks the build until every match knows it. Before any of them, the
+    crop: the live board is 384 cells wide, so the board kind posts a
+    thin strip of whatever was drawn; crop the PNG to the drawn area, in
+    the herald, before it goes out.
+    1. **Gallery pieces.** A piece is a real picture a member made and
+       chose to hang, immutable, credited, with applause: the best supply
+       of art the server has, and the only kind with no model in the
+       path. Each piece goes out once, newest unposted first, one a day
+       when several wait, credited `~name`. Needs a piece PNG route and a
+       piece page on the web (the gallery shows snapshot lanes, no pieces
+       yet). Pieces are checked before posting: the rendered PNG goes to
+       a vision model with one question, is this fit to post from a
+       community art account, and a no skips the piece. The check gates;
+       it does not replace a moderator's removal.
+    2. **Game wins, weekly.** A Sunday scoreboard card, one line per
+       game with the week's best and `~name`, from the arcade's score
+       ledger (`game_score_events`, every arcade game in one table) and
+       the doors' own tables. The one kind that shows the whole shelf of
+       games; weekly so it never reads as a daily brag feed.
+    3. **The paper, on quiet days.** An edition exists every day the room
+       talked and is public on the web with a feed, so posting its front
+       page gives nothing away: a rendered masthead with the headlines,
+       linking the edition. The post text quotes masthead and headlines
+       only and drops `#MastoArt` (art communities dislike model-written
+       text); the "what we were reading" links stay inside the picture,
+       never in the text, since a list of links is what instance rules
+       call spam.
+    The rotation then reads: a waiting piece, else the scoreboard on
+    Sundays, else yesterday's board when it has ink, else the paper's
+    front page, else nothing. Ruled out: room summaries (a model's
+    account of what people said in a room they took for a clubhouse,
+    pointed outward) and a card of new profile slugs (dull, a handful a
+    month). Further out, each behind a PNG route: share cards with the
+    `ssh late.sh` footer, a frame of the tavern or the night city, the
+    rare headline events the #lounge feed treats as stories.
   - **What it never posts.** Chat. A frame of #lounge is people's
     messages on the public web; the Artboard, posters and cards are
     things people made to be seen, messages are not.
@@ -326,48 +360,42 @@ Live, in order of evidence behind them:
     `late-core/src/models/herald.rs` with tests, `Config::herald` in
     `late-ssh/src/config.rs`, the two counters in `metrics.rs`, the
     Grafana Herald row, the `.env.dev` templates, the context docs, and a
-    corrected skew rule in `infra/RUNBOOK.md`. The herald and config
+    corrected skew rule in `infra/RUNBOOK.md`; migration 253 narrows the
+    kind to the board. The herald and config
     tests pass (`make test-llm ARGS="-p late-core -p late-ssh --lib -E
     'test(herald) | test(config_test)'"`; it wants 12 GB free,
-    `TEST_LLM_HEADROOM_G=2` lowers the bar by one). The Bluesky account
-    exists, handle `late.sh` (the `_atproto.late.sh` TXT record in
-    Cloudflare), app password in `.env.local`, and the first post went
-    out from the dev stack: the seeded daily board of 23 October 2026,
-    text, link, four tags, alt text and picture all as designed, at
-    `https://bsky.app/profile/late.sh/post/3mynblow2z2r4` (its link
-    points at localhost, dev's `web_url`; delete it or leave it). In
-    order:
+    `TEST_LLM_HEADROOM_G=2` lowers the bar by one). Both accounts exist
+    and both took the same post from the dev stack (the seeded board of
+    23 October 2026, with a localhost link, dev's `web_url`): Bluesky
+    `late.sh` (the `_atproto.late.sh` TXT record in Cloudflare, an app
+    password), Fosstodon `@late` (flagged automated, an application with
+    `write:media` and `write:statuses`; dev posts there unlisted). Both
+    pairs are in `.env.local`, and the dev row is off again after each
+    test, so a dev stack left running does not post from a laptop. The
+    prod profile pins both accounts and requires both secrets; the
+    Terraform variable, the `herald-credentials` keys, the env on
+    `service-ssh` and both workflow lines are in place. In order:
     1. `make check`, commit, PR.
-    2. Bluesky's `bot` self-label on the profile record: no setting in
+    2. GitHub secrets `HERALD_MASTODON_TOKEN` (a second application
+       token minted for prod, or the same one) and
+       `HERALD_BLUESKY_PASSWORD` (a second app password named for prod),
+       before any Terraform plan runs on the merged code.
+    3. The `-infra` release, then the ssh image that requires the two
+       env vars (`infra/RUNBOOK.md`, deploy skew rule). The image with
+       the pins crash-loops on `must be set` if it lands first.
+    4. `/herald on` in chat as an admin. The first post is the next
+       16:00 UTC, and only if yesterday's production board has 200 drawn
+       cells; a bare board is a skipped day. `/herald preview` shows what
+       would go out; `/herald post` sends today's picture at once, so
+       the first post need not wait for the hour. Then the human half,
+       daily.
+    5. Bluesky's `bot` self-label on the profile record: no setting in
        the app; a one-off `putRecord` of `app.bsky.actor.profile` with
        `labels.values: [{val: "bot"}]`, keeping the display name, bio
        and avatar the record already holds.
-    3. Mastodon, by hand, once an instance is in: Fosstodon is
-       invite-only (an existing member mints an invite under Preferences,
-       Invite people), the fallback is mastodon.social with an account
-       move later; tick "This is an automated account", put
-       `https://late.sh` in the profile links, mint an application under
-       Development with `write:media` and `write:statuses`; then a local
-       post like Bluesky's (`LATE_HERALD_MASTODON_INSTANCE` and
-       `..._TOKEN` in `.env.local`, the `herald_settings` row flipped on
-       in the dev database, one check past 16:00 UTC; Mastodon lands
-       unlisted in dev). The dev row is off again after a test, so a dev
-       stack left running does not post from a laptop.
-    4. Going live, one network at a time: in the prod profile replace the
-       `None` with the pinned instance URL or handle and
-       `required("LATE_HERALD_MASTODON_TOKEN")` or
-       `required("LATE_HERALD_BLUESKY_PASSWORD")`; add the Terraform
-       variable, the Kubernetes secret, the env on `service-ssh` and the
-       line in both terraform workflows, like `LATE_YOUTUBE_API_KEY`; the
-       GitHub secret before the plan runs; the `-infra` release before
-       the ssh image.
-    5. Flip the row in prod (`UPDATE herald_settings SET enabled = true
-       WHERE key = 'posting'` through `scripts/connect_db.sh`) when the
-       first hour has moved; then the human half, daily.
-    6. Later, each behind a PNG route on the front door: share cards, a
-       tavern or night city frame, the headline events. A `rel="me"` link
-       from the landing page back to the Mastodon account once its handle
-       exists, so the profile link shows verified.
+    6. The future work above, pieces first. A `rel="me"` link from the
+       landing page to `https://fosstodon.org/@late`, so the profile's
+       `https://late.sh` link shows verified.
 - **Launch posts wait for the deadchannel public flip** (`GAME.md`, "The
   three surfaces"), which is the game's public launch. The Hacker News
   front page in July 2026 peaked at about 100 sessions and settled back to

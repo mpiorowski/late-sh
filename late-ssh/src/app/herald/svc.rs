@@ -3,9 +3,9 @@
 //! checks every `HERALD_CHECK_INTERVAL`; once the day's post time
 //! (`state::HERALD_POST_TIME`) has passed, the `herald_posts` row for the
 //! day is the claim (root CONTEXT.md, multi-replica rule), so one replica
-//! posts. A claimed day is: pick the picture (`state::pick_picture` over
-//! what the last post carried, the waiting poster, yesterday's board) and
-//! store it on the row, fetch it from late-web's PNG route, deliver it to
+//! posts. A claimed day is: pick the picture (yesterday's board, once it
+//! has `state::BOARD_MIN_INK` drawn cells; nothing otherwise) and store
+//! it on the row, fetch it from late-web's PNG route, deliver it to
 //! every configured network that has no delivery yet (`mastodon.rs`,
 //! `bluesky.rs`), settle the row once all have one. A failed day marks
 //! its row and the next check claims it again, up to
@@ -13,9 +13,13 @@
 //! networks already delivered; a claim whose replica died is taken over
 //! after `HERALD_STALE_CLAIM`.
 //!
-//! Two switches gate it: `Config::herald` (a network configured, off in
-//! dev without its pair) and the `herald_settings` row (`HeraldSwitch`),
-//! the operator's, read at every check so a flip needs no deploy.
+//! Two switches gate the checker: `Config::herald` (a network configured,
+//! off in dev without its pair) and the `herald_settings` row
+//! (`HeraldSwitch`), the operator's, read at every check so a flip needs
+//! no deploy. An admin flips the row and runs the day by hand from chat
+//! (`/herald`, parsed in `state.rs`): `request` runs the command off the
+//! session and answers over a broadcast channel that `tick` drains into a
+//! banner, the shape of the paper's press hooks.
 //!
 //! This is the orchestration layer: every failure is logged and counted
 //! here, and nothing below it logs.
@@ -26,12 +30,15 @@ use anyhow::{Context, bail};
 use chrono::{DateTime, NaiveDate, Utc};
 use late_core::db::Db;
 use late_core::models::artboard::Snapshot;
-use late_core::models::herald::{HeraldNetwork, HeraldPost, HeraldPosted, HeraldSwitch};
+use late_core::models::herald::{HeraldDay, HeraldNetwork, HeraldPost, HeraldPosted, HeraldSwitch};
+use tokio::sync::broadcast;
 use tracing::Instrument;
 use uuid::Uuid;
 
-use super::state::{self, BoardCandidate, Picture};
+use super::state::{self, BoardLook, HeraldCommand, Picture};
 use super::{bluesky, mastodon};
+use crate::app::common::primitives::Banner;
+use crate::app::state::App;
 use crate::config::HeraldConfig;
 use crate::metrics::{self, HeraldDeliveryResult, HeraldPostResult};
 
@@ -51,13 +58,59 @@ pub const HERALD_MAX_ATTEMPTS: i32 = 3;
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const USER_AGENT: &str = "late.sh herald (+https://late.sh)";
+const EVENT_CHANNEL_CAP: usize = 64;
 
 /// What a claimed day came to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Outcome {
     Posted(HeraldPosted),
-    /// Nothing worth posting: no waiting poster, no board with ink.
+    /// Nothing worth posting: no board with ink.
     Skipped,
+}
+
+/// What working a day came to, for the checker and for `/herald post`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum DayWorked {
+    Posted(HeraldPosted),
+    Skipped,
+    /// Another replica holds the day right now.
+    Held,
+    /// The day is settled: posted, skipped, or failed at the cap.
+    Finished,
+    /// The claim or the post failed; logged and counted here.
+    Failed,
+}
+
+/// The answer to an admin's `/herald` command.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CommandOutcome {
+    SwitchedOn,
+    SwitchedOff,
+    /// The row and today's day as they stand.
+    Status {
+        on: bool,
+        day: NaiveDate,
+        today: Option<HeraldDay>,
+    },
+    /// What `/herald post` would send today, and where.
+    Preview {
+        day: NaiveDate,
+        look: BoardLook,
+        networks: Vec<HeraldNetwork>,
+    },
+    Worked(DayWorked),
+    /// No network is configured on this deployment.
+    Unconfigured,
+    Failed,
+}
+
+/// What the service tells sessions.
+#[derive(Clone, Debug)]
+pub(crate) enum HeraldEvent {
+    Command {
+        user_id: Uuid,
+        outcome: CommandOutcome,
+    },
 }
 
 #[derive(Clone)]
@@ -67,6 +120,7 @@ pub struct HeraldService {
     config: HeraldConfig,
     /// The public web, for the page the post links to.
     web_url: String,
+    event_tx: broadcast::Sender<HeraldEvent>,
 }
 
 impl HeraldService {
@@ -76,6 +130,7 @@ impl HeraldService {
             .timeout(HTTP_TIMEOUT)
             .build()
             .expect("reqwest client with a user agent and a timeout builds");
+        let (event_tx, _) = broadcast::channel(EVENT_CHANNEL_CAP);
         Self {
             db,
             http,
@@ -84,7 +139,12 @@ impl HeraldService {
                 ..config
             },
             web_url: web_url.trim_end_matches('/').to_string(),
+            event_tx,
         }
+    }
+
+    pub(crate) fn subscribe(&self) -> broadcast::Receiver<HeraldEvent> {
+        self.event_tx.subscribe()
     }
 
     /// Every replica runs it; the row claims decide who posts.
@@ -128,57 +188,108 @@ impl HeraldService {
                 return false;
             }
         }
-        let key = match self.claim(day).await {
-            Ok(Some(key)) => key,
-            Ok(None) => {
-                match self.finished(day).await {
-                    Ok(true) => *finished_for = Some(day),
-                    Ok(false) => {}
-                    Err(error) => {
-                        tracing::warn!(error = ?error, %day, "failed to read the herald's day");
-                    }
+        match self.work_day(day, now).await {
+            DayWorked::Posted(_) | DayWorked::Skipped => {
+                *finished_for = Some(day);
+                true
+            }
+            DayWorked::Finished => {
+                *finished_for = Some(day);
+                false
+            }
+            DayWorked::Held => false,
+            DayWorked::Failed => true,
+        }
+    }
+
+    /// An admin's `/herald` command, run off the session; the answer
+    /// comes back as a [`HeraldEvent`] for the caller's banner.
+    pub(crate) fn request(&self, user_id: Uuid, command: HeraldCommand) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let outcome = service.run_command(command, Utc::now()).await;
+                let _ = service
+                    .event_tx
+                    .send(HeraldEvent::Command { user_id, outcome });
+            }
+            .instrument(tracing::info_span!("herald.command", user_id = %user_id, ?command)),
+        );
+    }
+
+    /// The command itself. `/herald post` works today's day regardless of
+    /// the row: an admin asking is the switch for that one post. The
+    /// 16:00 check then finds the day settled and leaves it.
+    pub(crate) async fn run_command(
+        &self,
+        command: HeraldCommand,
+        now: DateTime<Utc>,
+    ) -> CommandOutcome {
+        let today = now.date_naive();
+        let result: anyhow::Result<CommandOutcome> = async {
+            match command {
+                HeraldCommand::On => {
+                    let client = self.db.get().await?;
+                    HeraldSwitch::set(&client, true).await?;
+                    Ok(CommandOutcome::SwitchedOn)
                 }
-                metrics::record_herald_post(HeraldPostResult::Lost);
-                return false;
-            }
-            Err(error) => {
-                late_core::error_span!(
-                    "herald_claim_failed",
-                    error = ?error,
-                    %day,
-                    "failed to claim the herald's day"
-                );
-                return false;
-            }
-        };
-        match self.post_claimed(day, key, now).await {
-            Ok(Outcome::Posted(posted)) => {
-                *finished_for = Some(day);
-                metrics::record_herald_post(HeraldPostResult::Posted);
-                tracing::info!(
-                    %day,
-                    kind = posted.kind.as_str(),
-                    subject = %posted.subject,
-                    urls = ?posted.deliveries.iter().map(|d| d.url.as_str()).collect::<Vec<_>>(),
-                    "the herald posted"
-                );
-            }
-            Ok(Outcome::Skipped) => {
-                *finished_for = Some(day);
-                metrics::record_herald_post(HeraldPostResult::Skipped);
-                tracing::info!(%day, "the herald had nothing worth posting");
-            }
-            Err(error) => {
-                metrics::record_herald_post(HeraldPostResult::Failed);
-                late_core::error_span!(
-                    "herald_post_failed",
-                    error = ?error,
-                    %day,
-                    "the herald's post failed"
-                );
+                HeraldCommand::Off => {
+                    let client = self.db.get().await?;
+                    HeraldSwitch::set(&client, false).await?;
+                    Ok(CommandOutcome::SwitchedOff)
+                }
+                HeraldCommand::Status => {
+                    let client = self.db.get().await?;
+                    let on = HeraldSwitch::is_on(&client).await?;
+                    let today_row = HeraldPost::day(&client, today).await?;
+                    Ok(CommandOutcome::Status {
+                        on,
+                        day: today,
+                        today: today_row,
+                    })
+                }
+                HeraldCommand::Preview => {
+                    let client = self.db.get().await?;
+                    let look = self.look(&client, today).await?;
+                    Ok(CommandOutcome::Preview {
+                        day: today,
+                        look,
+                        networks: self.networks(),
+                    })
+                }
+                HeraldCommand::Post => {
+                    if !self.config.enabled() {
+                        return Ok(CommandOutcome::Unconfigured);
+                    }
+                    Ok(CommandOutcome::Worked(self.work_day(today, now).await))
+                }
             }
         }
-        true
+        .await;
+        match result {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                late_core::error_span!(
+                    "herald_command_failed",
+                    error = ?error,
+                    command = ?command,
+                    "the herald's command failed"
+                );
+                CommandOutcome::Failed
+            }
+        }
+    }
+
+    /// The networks this deployment posts to, in delivery order.
+    fn networks(&self) -> Vec<HeraldNetwork> {
+        let mut networks = Vec::new();
+        if self.config.mastodon.is_some() {
+            networks.push(HeraldNetwork::Mastodon);
+        }
+        if self.config.bluesky.is_some() {
+            networks.push(HeraldNetwork::Bluesky);
+        }
+        networks
     }
 
     async fn switch_on(&self) -> anyhow::Result<bool> {
@@ -197,10 +308,66 @@ impl HeraldService {
         HeraldPost::is_finished(&client, day, HERALD_MAX_ATTEMPTS).await
     }
 
+    /// Claim the day and post it. Every outcome is counted and logged
+    /// here, once, for the checker and `/herald post` alike.
+    async fn work_day(&self, day: NaiveDate, now: DateTime<Utc>) -> DayWorked {
+        let key = match self.claim(day).await {
+            Ok(Some(key)) => key,
+            Ok(None) => {
+                metrics::record_herald_post(HeraldPostResult::Lost);
+                return match self.finished(day).await {
+                    Ok(true) => DayWorked::Finished,
+                    Ok(false) => DayWorked::Held,
+                    Err(error) => {
+                        tracing::warn!(error = ?error, %day, "failed to read the herald's day");
+                        DayWorked::Held
+                    }
+                };
+            }
+            Err(error) => {
+                late_core::error_span!(
+                    "herald_claim_failed",
+                    error = ?error,
+                    %day,
+                    "failed to claim the herald's day"
+                );
+                return DayWorked::Failed;
+            }
+        };
+        match self.post_claimed(day, key, now).await {
+            Ok(Outcome::Posted(posted)) => {
+                metrics::record_herald_post(HeraldPostResult::Posted);
+                tracing::info!(
+                    %day,
+                    kind = posted.kind.as_str(),
+                    subject = %posted.subject,
+                    urls = ?posted.deliveries.iter().map(|d| d.url.as_str()).collect::<Vec<_>>(),
+                    "the herald posted"
+                );
+                DayWorked::Posted(posted)
+            }
+            Ok(Outcome::Skipped) => {
+                metrics::record_herald_post(HeraldPostResult::Skipped);
+                tracing::info!(%day, "the herald had nothing worth posting");
+                DayWorked::Skipped
+            }
+            Err(error) => {
+                metrics::record_herald_post(HeraldPostResult::Failed);
+                late_core::error_span!(
+                    "herald_post_failed",
+                    error = ?error,
+                    %day,
+                    "the herald's post failed"
+                );
+                DayWorked::Failed
+            }
+        }
+    }
+
     /// The claimed day: post it, then settle the row. An error marks the
     /// row failed for the next check and is passed up for the one log
-    /// line in `check`. Clients are scoped to each query; nothing holds a
-    /// pooled connection across an HTTP call.
+    /// line in `work_day`. Clients are scoped to each query; nothing
+    /// holds a pooled connection across an HTTP call.
     async fn post_claimed(
         &self,
         day: NaiveDate,
@@ -365,7 +532,7 @@ impl HeraldService {
                 serde_json::from_value(stored).context("decoding the stored picture")?;
             return Ok(Some(picture));
         }
-        let Some(picture) = self.pick(&client, day).await? else {
+        let Some(picture) = self.look(&client, day).await?.picture() else {
             return Ok(None);
         };
         let stored = serde_json::to_value(&picture).context("encoding the picture")?;
@@ -374,29 +541,24 @@ impl HeraldService {
         Ok(Some(picture))
     }
 
-    /// The rotation's inputs, then the rule.
-    async fn pick(
+    /// Yesterday's board as the rollover archived it, with its ink
+    /// counted; `state::BoardLook::picture` says whether it is a post.
+    async fn look(
         &self,
         client: &tokio_postgres::Client,
         day: NaiveDate,
-    ) -> anyhow::Result<Option<Picture>> {
-        let last = HeraldPost::last_posted_kind(client, day).await?;
-        let poster = HeraldPost::next_poster_candidate(client).await?;
+    ) -> anyhow::Result<BoardLook> {
         let shown = state::shown_day(day);
         let key = state::board_key(shown);
-        let board = match Snapshot::find_by_board_key(client, &key).await? {
+        let ink = match Snapshot::find_by_board_key(client, &key).await? {
             Some(snapshot) => {
                 let canvas: dartboard_core::Canvas = serde_json::from_value(snapshot.canvas)
                     .with_context(|| format!("decoding artboard snapshot {key}"))?;
-                if state::ink_cells(&canvas) >= state::BOARD_MIN_INK {
-                    Some(BoardCandidate { key, shown })
-                } else {
-                    None
-                }
+                Some(state::ink_cells(&canvas))
             }
             None => None,
         };
-        Ok(state::pick_picture(last, poster, board))
+        Ok(BoardLook { key, shown, ink })
     }
 
     /// The picture from late-web's PNG route, as bytes.
@@ -418,5 +580,124 @@ impl HeraldService {
             .await
             .with_context(|| format!("reading {url}"))?;
         Ok(bytes.to_vec())
+    }
+}
+
+/// The session side: drain the service's answers for this user into a
+/// banner, and hand `/herald` from the composer to the service.
+pub(crate) fn tick(app: &mut App) -> bool {
+    let mut changed = drain_events(app);
+    changed |= tick_commands(app);
+    changed
+}
+
+fn drain_events(app: &mut App) -> bool {
+    use tokio::sync::broadcast::error::TryRecvError;
+    let mut changed = false;
+    loop {
+        let event = match app.herald.rx.try_recv() {
+            Ok(event) => event,
+            Err(TryRecvError::Lagged(_)) => continue,
+            Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+        };
+        match event {
+            HeraldEvent::Command { user_id, outcome } => {
+                if user_id != app.user_id {
+                    continue;
+                }
+                changed = true;
+                app.banner = Some(banner_for(outcome));
+            }
+        }
+    }
+    changed
+}
+
+/// Drain `/herald` from the composer. Every subcommand reaches here only
+/// from admins (the composer refuses them for anyone else with a banner).
+fn tick_commands(app: &mut App) -> bool {
+    let Some(command) = app.chat.take_requested_herald() else {
+        return false;
+    };
+    let working = match command {
+        HeraldCommand::On | HeraldCommand::Off | HeraldCommand::Status | HeraldCommand::Preview => {
+            None
+        }
+        HeraldCommand::Post => Some("Posting today's picture…"),
+    };
+    if let Some(working) = working {
+        app.banner = Some(Banner::info(working));
+    }
+    app.herald.service.request(app.user_id, command);
+    true
+}
+
+fn names(networks: &[HeraldNetwork]) -> String {
+    networks
+        .iter()
+        .map(|network| network.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// One line per outcome, the admin's whole answer.
+fn banner_for(outcome: CommandOutcome) -> Banner {
+    match outcome {
+        CommandOutcome::SwitchedOn => {
+            Banner::success("The herald is on: the next post goes out at 16:00 UTC")
+        }
+        CommandOutcome::SwitchedOff => {
+            Banner::success("The herald is off: nothing posts until /herald on")
+        }
+        CommandOutcome::Status { on, day, today } => {
+            let switch = if on { "on" } else { "off" };
+            let state = match today {
+                None => "no post yet".to_string(),
+                Some(row) => row.describe(),
+            };
+            Banner::info(&format!("Herald {switch}. Today, {day}: {state}"))
+        }
+        CommandOutcome::Preview {
+            day,
+            look,
+            networks,
+        } => {
+            if networks.is_empty() {
+                return Banner::error("No network is configured here");
+            }
+            match look.picture() {
+                Some(picture) => Banner::info(&format!(
+                    "Would post {} ({} drawn cells) to {} for {day}",
+                    picture.subject(),
+                    look.ink.unwrap_or(0),
+                    names(&networks),
+                )),
+                None => Banner::info(&format!("Nothing to post for {day}: {}", look.describe())),
+            }
+        }
+        CommandOutcome::Worked(DayWorked::Posted(posted)) => Banner::success(&format!(
+            "Posted {} to {}",
+            posted.subject,
+            posted
+                .deliveries
+                .iter()
+                .map(|delivery| format!("{} ({})", delivery.network.as_str(), delivery.url))
+                .collect::<Vec<_>>()
+                .join(", "),
+        )),
+        CommandOutcome::Worked(DayWorked::Skipped) => {
+            Banner::info("Nothing worth posting today; the day is settled as skipped")
+        }
+        CommandOutcome::Worked(DayWorked::Held) => {
+            Banner::info("Another replica is posting today right now")
+        }
+        CommandOutcome::Worked(DayWorked::Finished) => {
+            Banner::info("Today is already settled; /herald status says how")
+        }
+        CommandOutcome::Worked(DayWorked::Failed) => {
+            Banner::error("The herald's post failed; see the logs")
+        }
+        CommandOutcome::Unconfigured => Banner::error("No network is configured here"),
+        CommandOutcome::Failed => Banner::error("The herald's command failed; see the logs"),
     }
 }

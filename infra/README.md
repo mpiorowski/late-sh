@@ -330,11 +330,12 @@ accepts PROXY headers, so there is no accept-side toggle.
 
 ### Secrets injected into late-ssh
 
-| Variable          | Description                                                                 |
-| ----------------- | --------------------------------------------------------------------------- |
-| `AI_API_KEY`      | Gemini API key                                                              |
-| `YOUTUBE_API_KEY` | YouTube Data API key                                                        |
-| `HERALD_TOKEN`    | Mastodon application token for the herald (`write:media`, `write:statuses`) |
+| Variable                  | Description                                                                 |
+| ------------------------- | --------------------------------------------------------------------------- |
+| `AI_API_KEY`              | Gemini API key                                                              |
+| `YOUTUBE_API_KEY`         | YouTube Data API key                                                        |
+| `HERALD_MASTODON_TOKEN`   | Mastodon application token for the herald (`write:media`, `write:statuses`) |
+| `HERALD_BLUESKY_PASSWORD` | Bluesky app password for the herald's account                               |
 
 ### Voice / LiveKit
 

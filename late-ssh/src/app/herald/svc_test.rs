@@ -9,18 +9,17 @@ use axum::routing::{get, post};
 use chrono::{Duration, NaiveDate, TimeZone, Utc};
 use dartboard_core::{Canvas, Pos};
 use late_core::models::artboard::Snapshot;
-use late_core::models::deadchannel_runner::DeadchannelRunner;
-use late_core::models::herald::{HeraldKind, HeraldNetwork, HeraldPost, HeraldSwitch};
-use late_core::models::work_profile::{WorkProfile, WorkProfileParams, WorkStatus, WorkType};
-use late_core::test_utils::create_test_user;
+use late_core::models::herald::{
+    HeraldDay, HeraldDayStatus, HeraldKind, HeraldNetwork, HeraldPost, HeraldSwitch,
+};
 use tokio::net::TcpListener;
 use tokio_postgres::Client;
 use uuid::Uuid;
 
 use super::bluesky::tid_for;
 use super::bluesky_test::png;
-use super::state::{BOARD_MIN_INK, board_key, shown_day};
-use super::svc::{HERALD_MAX_ATTEMPTS, HeraldService};
+use super::state::{BOARD_MIN_INK, BoardLook, HeraldCommand, board_key, shown_day};
+use super::svc::{CommandOutcome, DayWorked, HERALD_MAX_ATTEMPTS, HeraldService};
 use crate::config::{BlueskyConfig, HeraldConfig, HeraldVisibility, MastodonConfig};
 use crate::test_helpers::new_test_db;
 
@@ -46,13 +45,11 @@ struct Recorded {
 
 type Log = Arc<Mutex<Recorded>>;
 
-/// late-web's two PNG routes and both networks' endpoints on one local
-/// port.
+/// late-web's PNG route and both networks' endpoints on one local port.
 async fn fake_servers() -> (String, Log) {
     let log: Log = Arc::default();
     let app = Router::new()
         .route("/gallery/{key}/image.png", get(picture))
-        .route("/profiles/{slug}/poster.png", get(picture))
         .route("/api/v2/media", post(media))
         .route("/api/v1/statuses", post(status))
         .route("/xrpc/com.atproto.server.createSession", post(session))
@@ -196,42 +193,6 @@ fn service(db: late_core::db::Db, base: &str) -> HeraldService {
     )
 }
 
-/// A standing runner with a poster and a public profile under `slug`.
-async fn runner_with_poster(
-    client: &Client,
-    db: &late_core::db::Db,
-    name: &str,
-    slug: &str,
-) -> Uuid {
-    let user = create_test_user(db, name).await;
-    DeadchannelRunner::ensure_for_user(client, user.id, &serde_json::json!({}))
-        .await
-        .expect("runner");
-    DeadchannelRunner::store_poster(client, user.id, &serde_json::json!({"cells": []}))
-        .await
-        .expect("poster");
-    WorkProfile::create_by_user_id(
-        client,
-        user.id,
-        WorkProfileParams {
-            user_id: user.id,
-            slug: slug.into(),
-            headline: "Terminal artist".into(),
-            status: WorkStatus::Open,
-            work_type: WorkType::Any,
-            location: "The night city".into(),
-            contact: String::new(),
-            links: vec!["https://late.sh".into()],
-            skills: vec![],
-            skills_tags: vec![],
-            summary: "Paints posters at PRINTS.".into(),
-        },
-    )
-    .await
-    .expect("profile");
-    user.id
-}
-
 /// The board archived for `shown`, with `ink` drawn cells.
 async fn daily_board(client: &Client, shown: NaiveDate, ink: usize) {
     let mut canvas = Canvas::with_size(80, 24);
@@ -265,18 +226,16 @@ async fn row(client: &Client, day: NaiveDate) -> (Uuid, String, i32) {
     (row.get("id"), row.get("status"), row.get("attempts"))
 }
 
-/// Day one posts the waiting poster to both networks, day two the board,
-/// day three has a bare board and nothing waiting and rests; a day is
-/// settled once.
+/// Day one posts yesterday's board to both networks, day two the next
+/// board, day three has a bare board and rests; a day is settled once.
 #[tokio::test]
-async fn the_herald_posts_a_poster_then_the_board_then_rests() {
+async fn the_herald_posts_the_board_and_rests_on_a_bare_one() {
     let test_db = new_test_db().await;
     let db = test_db.db.clone();
     let client = db.get().await.expect("db client");
     let (base, log) = fake_servers().await;
     HeraldSwitch::set(&client, true).await.expect("switch on");
 
-    let painter = runner_with_poster(&client, &db, "h_painter", "w_heraldsvc001").await;
     let now = Utc.with_ymd_and_hms(2026, 10, 23, 16, 30, 0).unwrap();
     let day = now.date_naive();
     daily_board(&client, shown_day(day), BOARD_MIN_INK).await;
@@ -296,7 +255,7 @@ async fn the_herald_posts_a_poster_then_the_board_then_rests() {
     let herald = service(db.clone(), &base);
     let mut finished = None;
 
-    // Day one: the poster, on both networks.
+    // Day one: the board of the 22nd, on both networks.
     assert!(herald.check(now, &mut finished).await);
     assert_eq!(finished, Some(day));
     let (key, status, attempts) = row(&client, day).await;
@@ -305,8 +264,8 @@ async fn the_herald_posts_a_poster_then_the_board_then_rests() {
         .await
         .expect("read")
         .expect("posted");
-    assert_eq!(posted.kind, HeraldKind::Poster);
-    assert_eq!(posted.subject, painter.to_string());
+    assert_eq!(posted.kind, HeraldKind::Artboard);
+    assert_eq!(posted.subject, "daily:2026-10-22");
     let rkey = tid_for(key);
     assert_eq!(posted.deliveries.len(), 2);
     assert_eq!(posted.deliveries[0].network, HeraldNetwork::Bluesky);
@@ -320,7 +279,7 @@ async fn the_herald_posts_a_poster_then_the_board_then_rests() {
         let log = log.lock().expect("log");
         assert_eq!(
             log.picture_paths,
-            vec!["/profiles/w_heraldsvc001/poster.png"],
+            vec!["/gallery/daily:2026-10-22/image.png"],
             "fetched once for both networks"
         );
 
@@ -329,7 +288,7 @@ async fn the_herald_posts_a_poster_then_the_board_then_rests() {
         assert!(body.contains("name=\"file\""), "{body}");
         assert!(body.contains("image/png"), "{body}");
         assert!(body.contains("name=\"description\""), "{body}");
-        assert!(body.contains("painted by ~h_painter"), "{body}");
+        assert!(body.contains("22 October 2026"), "{body}");
         let (auth, idempotency, status) = &log.statuses[0];
         assert_eq!(auth, "Bearer secret-token");
         assert_eq!(
@@ -341,11 +300,12 @@ async fn the_herald_posts_a_poster_then_the_board_then_rests() {
         assert_eq!(status["visibility"], "unlisted");
         assert_eq!(status["language"], "en");
         let text = status["status"].as_str().expect("text");
-        assert!(text.contains("~h_painter painted this poster"), "{text}");
+        assert!(text.contains("The Artboard yesterday"), "{text}");
         assert!(
-            text.contains("https://late.sh/profiles/w_heraldsvc001"),
+            text.contains("https://late.sh/gallery?key=daily:2026-10-22"),
             "{text}"
         );
+        assert!(text.contains("#MastoArt"), "{text}");
 
         assert_eq!(log.sessions[0]["identifier"], "late.test");
         assert_eq!(log.sessions[0]["password"], "app-pass");
@@ -367,7 +327,7 @@ async fn the_herald_posts_a_poster_then_the_board_then_rests() {
         );
         assert!(!record["facets"].as_array().unwrap().is_empty());
         let image = &record["embed"]["images"][0];
-        assert!(image["alt"].as_str().unwrap().contains("~h_painter"));
+        assert!(image["alt"].as_str().unwrap().contains("22 October 2026"));
         assert_eq!(image["image"]["ref"]["$link"], "bafyfake");
         assert_eq!(
             image["aspectRatio"],
@@ -382,7 +342,7 @@ async fn the_herald_posts_a_poster_then_the_board_then_rests() {
     assert_eq!(fresh, Some(day), "a settled day is memoized on sight");
     assert_eq!(log.lock().expect("log").statuses.len(), 1);
 
-    // Day two: the board, since the last post was a poster.
+    // Day two: the next day's board.
     let day_two = day + Duration::days(1);
     assert!(herald.check(now + Duration::days(1), &mut finished).await);
     let posted = HeraldPost::posted_on(&client, day_two)
@@ -401,11 +361,10 @@ async fn the_herald_posts_a_poster_then_the_board_then_rests() {
             text.contains("https://late.sh/gallery?key=daily:2026-10-23"),
             "{text}"
         );
-        assert!(text.contains("#MastoArt"), "{text}");
         assert_eq!(log.records[1].1["record"]["text"], text);
     }
 
-    // Day three: the one poster went out, the board is a smudge.
+    // Day three: the board is a smudge.
     let day_three = day + Duration::days(2);
     assert!(herald.check(now + Duration::days(2), &mut finished).await);
     assert_eq!(
@@ -433,11 +392,11 @@ async fn the_switch_off_posts_nothing() {
     let db = test_db.db.clone();
     let client = db.get().await.expect("db client");
     let (base, log) = fake_servers().await;
-    runner_with_poster(&client, &db, "h_quiet", "w_heraldsvc002").await;
+    let now = Utc.with_ymd_and_hms(2026, 10, 23, 16, 30, 0).unwrap();
+    daily_board(&client, shown_day(now.date_naive()), BOARD_MIN_INK).await;
 
     let herald = service(db.clone(), &base);
     let mut finished = None;
-    let now = Utc.with_ymd_and_hms(2026, 10, 23, 16, 30, 0).unwrap();
     assert!(!herald.check(now, &mut finished).await);
     assert_eq!(finished, None);
     let rows: i64 = client
@@ -462,12 +421,12 @@ async fn a_failed_network_is_retried_alone_under_the_same_key() {
     let client = db.get().await.expect("db client");
     let (base, log) = fake_servers().await;
     HeraldSwitch::set(&client, true).await.expect("switch on");
-    let painter = runner_with_poster(&client, &db, "h_retry", "w_heraldsvc003").await;
+    let now = Utc.with_ymd_and_hms(2026, 10, 23, 16, 30, 0).unwrap();
+    let day = now.date_naive();
+    daily_board(&client, shown_day(day), BOARD_MIN_INK).await;
     log.lock().expect("log").fail_bluesky = true;
 
     let herald = service(db.clone(), &base);
-    let now = Utc.with_ymd_and_hms(2026, 10, 23, 16, 30, 0).unwrap();
-    let day = now.date_naive();
     let mut finished = None;
     assert!(
         herald.check(now, &mut finished).await,
@@ -504,10 +463,104 @@ async fn a_failed_network_is_retried_alone_under_the_same_key() {
         .await
         .expect("read")
         .expect("posted on the retry");
-    assert_eq!(posted.subject, painter.to_string(), "the stored pick");
+    assert_eq!(posted.subject, "daily:2026-10-22", "the stored pick");
     assert_eq!(posted.deliveries.len(), 2);
     let log = log.lock().expect("log");
     assert_eq!(log.statuses.len(), 1, "mastodon was not sent again");
     assert_eq!(log.records.len(), 1);
     assert_eq!(log.records[0].1["rkey"], tid_for(key));
+}
+
+/// An admin's `/herald`: the row flips, status and preview read without
+/// posting, and `post` works today before 16:00 with the row off; the
+/// same day again is settled, and the checker then leaves it alone.
+#[tokio::test]
+async fn the_commands_flip_read_and_post_today_by_hand() {
+    let test_db = new_test_db().await;
+    let db = test_db.db.clone();
+    let client = db.get().await.expect("db client");
+    let (base, log) = fake_servers().await;
+    let herald = service(db.clone(), &base);
+    // Mid-morning: the checker's due day is yesterday, the admin's is today.
+    let now = Utc.with_ymd_and_hms(2026, 10, 23, 9, 0, 0).unwrap();
+    let today = now.date_naive();
+
+    assert_eq!(
+        herald.run_command(HeraldCommand::On, now).await,
+        CommandOutcome::SwitchedOn
+    );
+    assert!(HeraldSwitch::is_on(&client).await.expect("read"));
+    assert_eq!(
+        herald.run_command(HeraldCommand::Off, now).await,
+        CommandOutcome::SwitchedOff
+    );
+    assert!(!HeraldSwitch::is_on(&client).await.expect("read"));
+
+    assert_eq!(
+        herald.run_command(HeraldCommand::Status, now).await,
+        CommandOutcome::Status {
+            on: false,
+            day: today,
+            today: None,
+        }
+    );
+    assert_eq!(
+        herald.run_command(HeraldCommand::Preview, now).await,
+        CommandOutcome::Preview {
+            day: today,
+            look: BoardLook {
+                key: "daily:2026-10-22".to_string(),
+                shown: shown_day(today),
+                ink: None,
+            },
+            networks: vec![HeraldNetwork::Mastodon, HeraldNetwork::Bluesky],
+        }
+    );
+
+    daily_board(&client, shown_day(today), BOARD_MIN_INK + 3).await;
+    match herald.run_command(HeraldCommand::Preview, now).await {
+        CommandOutcome::Preview { look, .. } => {
+            assert_eq!(look.ink, Some(BOARD_MIN_INK + 3));
+            assert!(look.picture().is_some());
+        }
+        other => panic!("a preview, not {other:?}"),
+    }
+    assert!(
+        log.lock().expect("log").statuses.is_empty(),
+        "a preview sends nothing"
+    );
+
+    // Posting by hand, with the row off and before the post time.
+    let worked = herald.run_command(HeraldCommand::Post, now).await;
+    let CommandOutcome::Worked(DayWorked::Posted(posted)) = worked else {
+        panic!("posted, not {worked:?}");
+    };
+    assert_eq!(posted.subject, "daily:2026-10-22");
+    assert_eq!(posted.deliveries.len(), 2);
+    assert_eq!(
+        herald.run_command(HeraldCommand::Status, now).await,
+        CommandOutcome::Status {
+            on: false,
+            day: today,
+            today: Some(HeraldDay {
+                status: HeraldDayStatus::Posted,
+                attempts: 1,
+                deliveries: posted.deliveries.clone(),
+            }),
+        }
+    );
+    assert_eq!(
+        herald.run_command(HeraldCommand::Post, now).await,
+        CommandOutcome::Worked(DayWorked::Finished),
+        "a day goes out once"
+    );
+
+    // The checker at 16:00 with the row on finds today settled.
+    HeraldSwitch::set(&client, true).await.expect("switch on");
+    let mut finished = None;
+    assert!(!herald.check(now + Duration::hours(8), &mut finished).await);
+    assert_eq!(finished, Some(today));
+    let log = log.lock().expect("log");
+    assert_eq!(log.statuses.len(), 1);
+    assert_eq!(log.records.len(), 1);
 }

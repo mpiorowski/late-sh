@@ -220,6 +220,9 @@ pub struct SessionConfig {
     pub summary_service: crate::app::ai::summary::SummaryService,
     /// The Late Edition (`app/paper`): the newsstand this session reads from.
     pub paper_service: crate::app::paper::svc::PaperService,
+    /// The herald (`app/herald`): the social accounts' switch and press,
+    /// for an admin's `/herald`.
+    pub herald_service: crate::app::herald::svc::HeraldService,
     /// The job feed (`app/jobs`): the shelf snapshot this session copies.
     pub jobs_service: crate::app::jobs::svc::JobsService,
     pub notification_service: NotificationService,
@@ -550,6 +553,8 @@ pub struct App {
     pub(crate) ultimate_cooldown_was_running: bool,
     /// The Late Edition: its modal, the login pop, and the `/paper` drain.
     pub(crate) paper: crate::app::paper::state::PaperState,
+    /// The herald: the `/herald` drain and its answers.
+    pub(crate) herald: crate::app::herald::state::HeraldState,
     /// The watch player and setup box, and the session's one play on the
     /// paired CLI (`app/video/`).
     pub(crate) video: crate::app::video::state::State,
@@ -1692,6 +1697,7 @@ impl App {
                 config.paper_at_login,
             ),
             video: crate::app::video::state::State::default(),
+            herald: crate::app::herald::state::HeraldState::new(config.herald_service),
             jobs: crate::app::jobs::state::JobsState::new(config.jobs_service),
             help_modal_state: help_modal::state::HelpModalState::new(),
             leaderboard_page: crate::app::leaderboard::state::LeaderboardPageState::new(),

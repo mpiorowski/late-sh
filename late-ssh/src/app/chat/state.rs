@@ -1113,6 +1113,8 @@ pub struct ChatState {
     hits_on: bool,
     /// Set by `/paper`; consumed by `paper::svc::tick` every tick.
     requested_paper: Option<crate::app::paper::state::PaperCommand>,
+    /// Set by `/herald` (admins only); consumed by `herald::svc::tick`.
+    requested_herald: Option<crate::app::herald::state::HeraldCommand>,
     requested_jobs: Option<crate::app::jobs::state::JobsCommand>,
     /// The just-landed echo of this session's own send, and the room it
     /// landed in, for the stage-2 name flicker; consumed by
@@ -1462,6 +1464,7 @@ impl ChatState {
             requested_hit: false,
             hits_on: false,
             requested_paper: None,
+            requested_herald: None,
             requested_jobs: None,
             own_message_landed: None,
             own_send_succeeded: false,
@@ -2238,6 +2241,12 @@ impl ChatState {
         &mut self,
     ) -> Option<crate::app::paper::state::PaperCommand> {
         self.requested_paper.take()
+    }
+
+    pub(crate) fn take_requested_herald(
+        &mut self,
+    ) -> Option<crate::app::herald::state::HeraldCommand> {
+        self.requested_herald.take()
     }
 
     pub(crate) fn take_requested_jobs(&mut self) -> Option<crate::app::jobs::state::JobsCommand> {
@@ -4036,6 +4045,20 @@ impl ChatState {
                 return Some(Banner::error("Only admins can touch the presses"));
             }
             self.requested_paper = Some(command);
+            return None;
+        }
+
+        // `/herald` is the operator's switch and press for the social
+        // accounts: admin-only in every form, and says so.
+        if let Some(parsed) = crate::app::herald::state::parse_herald_command(&body) {
+            self.clear_composer_after_submit();
+            if !self.is_admin {
+                return Some(Banner::error("Only admins can run the herald"));
+            }
+            let Some(command) = parsed else {
+                return Some(Banner::error("Usage: /herald on|off|status|preview|post"));
+            };
+            self.requested_herald = Some(command);
             return None;
         }
 

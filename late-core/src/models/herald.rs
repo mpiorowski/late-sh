@@ -1,7 +1,6 @@
 //! The herald's daily post (`herald_posts`, `herald_deliveries`,
 //! `herald_settings`, migration 252): every read and write of the three
-//! tables, and the two reads that feed the rotation (what went out last,
-//! which poster is waiting).
+//! tables.
 //!
 //! A row is a claim. The sweeper in late-ssh `app/herald/svc.rs` inserts
 //! a `posting` row before it spends any network's calls, so two replicas
@@ -17,7 +16,6 @@
 
 use anyhow::{Result, bail};
 use chrono::{DateTime, NaiveDate, Utc};
-use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -26,24 +24,22 @@ use uuid::Uuid;
 /// read, and never defaulted: an unknown kind in the table is a bug.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HeraldKind {
-    /// Yesterday's daily Artboard snapshot.
+    /// Yesterday's daily Artboard snapshot. The only kind so far; the
+    /// next ones (`AUDIENCE.md`, the herald's future work) widen the
+    /// column's check in a forward migration and land here.
     Artboard,
-    /// A runner's poster from PRINTS.
-    Poster,
 }
 
 impl HeraldKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Artboard => "artboard",
-            Self::Poster => "poster",
         }
     }
 
     fn parse(value: &str) -> Result<Self> {
         match value {
             "artboard" => Ok(Self::Artboard),
-            "poster" => Ok(Self::Poster),
             other => bail!("unknown herald kind {other:?}"),
         }
     }
@@ -73,21 +69,63 @@ impl HeraldNetwork {
     }
 }
 
-/// A standing runner's poster the herald has not posted: the member to
-/// credit and the public page the picture hangs on.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct PosterCandidate {
-    pub user_id: Uuid,
-    pub username: String,
-    /// The work profile's slug: `/profiles/{slug}` and its `poster.png`.
-    pub slug: String,
-}
-
 /// Where a day's picture landed on one network.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeraldDelivery {
     pub network: HeraldNetwork,
     pub url: String,
+}
+
+/// A day's row as it stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HeraldDayStatus {
+    Posting,
+    Posted,
+    Skipped,
+    Failed,
+}
+
+impl HeraldDayStatus {
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "posting" => Ok(Self::Posting),
+            "posted" => Ok(Self::Posted),
+            "skipped" => Ok(Self::Skipped),
+            "failed" => Ok(Self::Failed),
+            other => bail!("unknown herald day status {other:?}"),
+        }
+    }
+}
+
+/// A day's row with its deliveries, for the operator's `/herald status`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeraldDay {
+    pub status: HeraldDayStatus,
+    pub attempts: i32,
+    pub deliveries: Vec<HeraldDelivery>,
+}
+
+impl HeraldDay {
+    /// One clause for a banner.
+    pub fn describe(&self) -> String {
+        match self.status {
+            HeraldDayStatus::Posting => "posting right now".to_string(),
+            HeraldDayStatus::Posted => format!(
+                "posted to {}",
+                self.deliveries
+                    .iter()
+                    .map(|delivery| delivery.network.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ),
+            HeraldDayStatus::Skipped => "skipped, nothing worth posting".to_string(),
+            HeraldDayStatus::Failed => format!(
+                "failed after {} attempt(s), {} delivered",
+                self.attempts,
+                self.deliveries.len()
+            ),
+        }
+    }
 }
 
 /// What a settled day says went out, and where.
@@ -254,22 +292,23 @@ impl HeraldPost {
         Ok(())
     }
 
-    /// What the newest posted day before `day` carried, for the rotation.
-    /// `None` before the first post ever.
-    pub async fn last_posted_kind(client: &Client, day: NaiveDate) -> Result<Option<HeraldKind>> {
+    /// The day's row as it stands, with its deliveries. `None` before the
+    /// first claim.
+    pub async fn day(client: &Client, day: NaiveDate) -> Result<Option<HeraldDay>> {
         let row = client
             .query_opt(
-                "SELECT kind FROM herald_posts
-                 WHERE status = 'posted' AND day < $1
-                 ORDER BY day DESC
-                 LIMIT 1",
+                "SELECT status, attempts FROM herald_posts WHERE day = $1",
                 &[&day],
             )
             .await?;
         match row {
             Some(row) => {
-                let kind: String = row.get("kind");
-                Ok(Some(HeraldKind::parse(&kind)?))
+                let status: String = row.get("status");
+                Ok(Some(HeraldDay {
+                    status: HeraldDayStatus::parse(&status)?,
+                    attempts: row.get("attempts"),
+                    deliveries: Self::deliveries(client, day).await?,
+                }))
             }
             None => Ok(None),
         }
@@ -296,37 +335,6 @@ impl HeraldPost {
             }
             None => Ok(None),
         }
-    }
-
-    /// The next poster to post: a standing runner (`left_at` null) with a
-    /// poster and a public work profile, never posted by the herald (a
-    /// pick on a day that failed for good does not count). The member
-    /// seen most recently first, so the credit lands on someone around to
-    /// see it.
-    pub async fn next_poster_candidate(client: &Client) -> Result<Option<PosterCandidate>> {
-        let row = client
-            .query_opt(
-                "SELECT r.user_id, u.username, w.slug
-                 FROM deadchannel_runners r
-                 JOIN work_profiles w ON w.user_id = r.user_id
-                 JOIN users u ON u.id = r.user_id
-                 WHERE r.poster IS NOT NULL
-                   AND r.left_at IS NULL
-                   AND NOT EXISTS (
-                       SELECT 1 FROM herald_posts h
-                       WHERE h.status = 'posted'
-                         AND h.kind = 'poster'
-                         AND h.subject = r.user_id::text)
-                 ORDER BY u.last_seen DESC, r.user_id
-                 LIMIT 1",
-                &[],
-            )
-            .await?;
-        Ok(row.map(|row| PosterCandidate {
-            user_id: row.get("user_id"),
-            username: row.get("username"),
-            slug: row.get("slug"),
-        }))
     }
 }
 

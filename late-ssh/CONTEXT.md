@@ -308,7 +308,7 @@ dev opt-ins keyed on presence: `LATE_AI_API_KEY`, the R2 pair
 `LATE_FILES_S3_ACCESS_KEY_ID`/`..._SECRET_ACCESS_KEY` (half set is an error),
 `LATE_YOUTUBE_API_KEY`, the herald's pairs `LATE_HERALD_MASTODON_INSTANCE`/
 `..._MASTODON_TOKEN` and `LATE_HERALD_BLUESKY_IDENTIFIER`/`..._BLUESKY_PASSWORD`
-(half a pair is an error; prod pins neither network yet).
+(half a pair is an error; prod pins both accounts and requires both secrets).
 `Config::validate()` checks cross-field invariants at
 boot. Tests in `config_test.rs`. Dev profiles pin compose hostnames, so the
 apps only run inside `docker compose`. Shipping a config change that adds or

@@ -104,6 +104,8 @@ impl App {
         // The Late Edition: the login pop once the splash is down, `/paper`,
         // and the results of both.
         changed |= crate::app::paper::svc::tick(self);
+        // The herald: an admin's `/herald` and its answer.
+        changed |= crate::app::herald::svc::tick(self);
         // The job feed: the shelf snapshot copy, `/jobs`, and the admin's
         // press banners.
         changed |= crate::app::jobs::svc::tick(self);
