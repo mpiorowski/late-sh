@@ -486,6 +486,9 @@ pub struct SessionConfig {
 
     /// Server state
     pub is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Where this session was on the draining pod a CLI moved it off
+    /// (`app/handoff`), read from its `LATE_RESUME` env. `None` is a login.
+    pub resume: Option<crate::app::handoff::state::ResumePoint>,
 }
 
 /// Main application state
@@ -1083,6 +1086,8 @@ pub struct App {
 
     /// Server state
     pub(crate) is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The drain handoff to the new pod (`app/handoff`).
+    pub(crate) handoff: crate::app::handoff::state::HandoffState,
 
     /// Emoji + Nerd Font picker
     pub(crate) icon_picker_open: bool,
@@ -1634,11 +1639,18 @@ impl App {
         // "Land on" tweak sends returning users to Home or Zen instead; a
         // session with the tour still to walk (a first-ever one, or any
         // account after a house-wide reset of the flag) always starts in the
-        // clubhouse so the tutorial runs.
-        let landing = if config.is_new_user || !config.clubhouse_tutorial_done {
-            LandingPage::Clubhouse
-        } else {
-            config.landing_page
+        // clubhouse so the tutorial runs. A session a CLI moved here off a
+        // draining pod (`app/handoff`) is not a login: it lands where it was,
+        // with no splash and no paper pop, unless the tour still has to run.
+        let tour_pending = config.is_new_user || !config.clubhouse_tutorial_done;
+        let resume = match tour_pending {
+            true => None,
+            false => config.resume,
+        };
+        let landing = match (tour_pending, resume) {
+            (true, _) => LandingPage::Clubhouse,
+            (false, Some(point)) => point.page.landing(),
+            (false, None) => config.landing_page,
         };
         let landing_screen = match landing {
             LandingPage::Clubhouse => Screen::Clubhouse,
@@ -1668,7 +1680,7 @@ impl App {
             ),
             banner: aquarium_loss_banner,
             show_settings: false,
-            show_splash: true,
+            show_splash: resume.is_none(),
             splash_ticks: 0,
             marquee_tick: 0,
             started_at: Instant::now(),
@@ -1697,7 +1709,7 @@ impl App {
             // to "is anyone here?" and doubles as the room directory.
             paper: crate::app::paper::state::PaperState::new(
                 config.paper_service,
-                config.paper_at_login,
+                config.paper_at_login && resume.is_none(),
             ),
             video: crate::app::video::state::State::default(),
             herald: crate::app::herald::state::HeraldState::new(config.herald_service),
@@ -2049,6 +2061,7 @@ impl App {
             sent_away: false,
             away: false,
             is_draining: config.is_draining,
+            handoff: crate::app::handoff::state::HandoffState::default(),
             icon_picker_open: false,
             icon_picker_state: super::icon_picker::IconPickerState::default(),
             icon_catalog: None,
@@ -2071,6 +2084,9 @@ impl App {
                 app.zen.enter(Instant::now(), &mut rand::thread_rng());
                 app.sync_aquarium_bounds();
             }
+        }
+        if let Some(point) = resume {
+            crate::app::handoff::svc::resume(&mut app, point);
         }
         app.chat
             .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());

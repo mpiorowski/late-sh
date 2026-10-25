@@ -482,6 +482,18 @@ impl SessionClient {
     }
 }
 
+/// One step of a drain handoff (`app/handoff`): the draining pod asked an idle
+/// session's CLI to move, and the new pod built a session on the resume point
+/// it carried back. `Sent` minus `Resumed` is the handoffs that never landed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandoffStage {
+    Sent,
+    Resumed,
+    /// The CLI carried back a resume point this server cannot read (a format
+    /// from another version); the session started as a fresh one.
+    Unparsed,
+}
+
 /// How one terminal round-trip probe ended (`terminal_probe.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalProbeOutcome {
@@ -775,7 +787,8 @@ mod inner {
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
     use super::{
-        CliLatencyKind, ClientPlatform, ProbeBacklog, SessionClient, TerminalProbeOutcome,
+        CliLatencyKind, ClientPlatform, HandoffStage, ProbeBacklog, SessionClient,
+        TerminalProbeOutcome,
     };
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
@@ -4256,6 +4269,30 @@ mod inner {
             )],
         );
     }
+
+    fn handoff_stage_label(stage: HandoffStage) -> &'static str {
+        match stage {
+            HandoffStage::Sent => "sent",
+            HandoffStage::Resumed => "resumed",
+            HandoffStage::Unparsed => "unparsed",
+        }
+    }
+
+    fn drain_handoffs_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_drain_handoffs_total")
+                .with_description(
+                    "Drain handoffs by stage: idle CLI sessions a draining pod moved, and the sessions the new pod resumed",
+                )
+                .build()
+        })
+    }
+
+    pub fn record_drain_handoff(stage: HandoffStage) {
+        drain_handoffs_total().add(1, &[KeyValue::new("stage", handoff_stage_label(stage))]);
+    }
 }
 
 #[cfg(not(feature = "otel"))]
@@ -4287,7 +4324,8 @@ mod inner {
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
     use super::{
-        CliLatencyKind, ClientPlatform, ProbeBacklog, SessionClient, TerminalProbeOutcome,
+        CliLatencyKind, ClientPlatform, HandoffStage, ProbeBacklog, SessionClient,
+        TerminalProbeOutcome,
     };
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
@@ -4469,6 +4507,7 @@ mod inner {
     pub fn record_zork_catalogue_read(_result: ZorkCatalogueRead) {}
     pub fn record_zork_suggestion(_result: ZorkSuggestion) {}
     pub fn record_online_time_flush(_result: OnlineTimeFlushResult) {}
+    pub fn record_drain_handoff(_stage: HandoffStage) {}
 }
 
 pub use inner::*;

@@ -171,6 +171,9 @@ struct ClientHandler {
     /// openssh CLI modes identify themselves this way and never send
     /// `LATE_CLI_MODE`.
     cli_token_served: bool,
+    /// The resume point a CLI moved off a draining pod carried back
+    /// (`app/handoff`), sent as an env before the pty request.
+    resume: Option<crate::app::handoff::state::ResumePoint>,
     /// `TERM` from the pty request, cleaned for the session wire summary.
     term: Option<String>,
     terminal_env_hints: Vec<(String, String)>,
@@ -477,6 +480,7 @@ impl Server {
             input_rx: None,
             cli_mode: false,
             cli_token_served: false,
+            resume: None,
             term: None,
             terminal_env_hints: Vec::new(),
             session_token: None,
@@ -1174,6 +1178,7 @@ impl russh::server::Handler for ClientHandler {
 
             // Server state
             is_draining: self.state.is_draining.clone(),
+            resume: self.resume.take(),
         })
         .context("failed to initialize app for PTY session")?;
         for (name, value) in &self.terminal_env_hints {
@@ -1216,6 +1221,21 @@ impl russh::server::Handler for ClientHandler {
                 cli_mode = self.cli_mode,
                 "updated cli mode from env request"
             );
+        } else if variable_name == crate::app::handoff::state::RESUME_ENV {
+            self.resume = crate::app::handoff::state::ResumePoint::parse(variable_value);
+            match self.resume {
+                Some(point) => {
+                    metrics::record_drain_handoff(metrics::HandoffStage::Resumed);
+                    tracing::info!(page = ?point.page, "resuming a session moved off a draining pod");
+                }
+                None => {
+                    metrics::record_drain_handoff(metrics::HandoffStage::Unparsed);
+                    tracing::warn!(
+                        len = variable_value.len(),
+                        "unreadable resume point; starting a fresh session"
+                    );
+                }
+            }
         } else if crate::app::files::terminal_image::protocol_from_env_hint(
             variable_name,
             variable_value,

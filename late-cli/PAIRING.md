@@ -80,6 +80,12 @@ Server to client:
 { "event": "voice_set_deafened", "deafened": true }
 ```
 
+Drain handoff, only to a CLI advertising `reconnect` (see "Drain handoff" below). `resume` is opaque to the CLI:
+
+```json
+{ "event": "reconnect", "resume": "v1:arcade" }
+```
+
 Client to server, in response to `request_clipboard_image`:
 
 ```json
@@ -106,7 +112,7 @@ Client to server, native mode only (see "Latency samples"):
 Client state labels:
 - `ssh_mode`: `native`, `openssh`, `old`
 - `platform`: `linux`, `macos`, `windows`, `android`, or `unknown`
-- `capabilities`: optional list; Linux, macOS, and Windows desktop CLI builds advertise `clipboard_image`, `youtube`, `voice`, and `open_url`; Android/Termux builds leave the base list empty. `video` is appended on any build whose startup probe finds no blocker (see "Video watch" below).
+- `capabilities`: optional list; Linux, macOS, and Windows desktop CLI builds advertise `clipboard_image`, `youtube`, `voice`, and `open_url`; Android/Termux builds leave the base list empty. `video` is appended on any build whose startup probe finds no blocker (see "Video watch" below). `reconnect` is appended in native mode only, the one mode that can redial on its own.
 - `video_blockers`: present exactly when `video` is not in `capabilities`; every failing precondition by wire name: `not_native`, `platform`, `multiplexer`, `not_kitty`, `no_pixel_size`, `no_mpv`, `mpv_too_old`, `no_ytdlp`.
 
 Pairing behavior:
@@ -118,6 +124,7 @@ Pairing behavior:
 - `/paste-image` in SSH chat depends on the paired CLI control channel. The server only sends `request_clipboard_image` after seeing `clipboard_image` in the latest paired client's `client_state.capabilities`, so older CLIs and the webview helper do not receive unsupported control events.
 - Linux Wayland support for `/paste-image` depends on the workspace `arboard` dependency enabling `wayland-data-control`; Hyprland uses this path. Without it, the CLI may report that the clipboard does not contain an image even when Wayland has `image/png` content.
 - Latency samples: the server times the whole trip to the user's terminal by following frames with a DSR status query (`CSI 5 n`) and waiting for `CSI 0 n` (`late-ssh/src/terminal_probe.rs`). The CLI passes both through untouched and splits the trip. `ssh_rtt` times `send_ping` (an SSH keepalive and its reply) every 10 s, the transport alone; `terminal` runs from the output loop reading the chunk that carries the query to the stdin thread reading the answer, the user's terminal alone, including any frame still being parsed ahead of it (`TerminalProbeWatch`). Both go into a 16-sample queue (`latency_queue`) that the pair loop drains as `latency` events; a full queue (socket down) drops samples rather than waiting. Native mode only: `openssh` gives the terminal to an ssh child outright, and `old` (which relays it through a local pty) is not wired, so their queue stays empty. The server records them as `late_ssh_cli_latency_seconds{kind,platform}`, and a server older than the CLI logs a parse error per sample, so it must deploy first.
+- Drain handoff: when the session's pod is being replaced, the server sends `reconnect` to a quiet session's native CLI (rules in `late-ssh/src/app/handoff/CONTEXT.md`). `main.rs`'s `run_native_session` dials and authenticates the new pod with the old session still on screen, and only once it holds the new token retires the old shell and opens the new one with `LATE_RESUME=<resume>` set before the pty request. The old pair socket keeps running through the dial and closes only once the move holds, so a failed dial leaves the old session, its pairing and its update banner in place (a fresh pair socket on the old token would reach only the new pod and its 404, `SCALE.md` Pain Point 10). Audio is not touched; pairing restarts on the new token with `PairRetryPolicy::after_handoff`, which never releases the boot mute since the old server already aligned this process's audio. A second `reconnect` while one is underway is dropped.
 - Clipboard images are converted to PNG in the CLI before upload. The CLI rejects zero-size images, very large decoded RGBA buffers, and PNG payloads above the upload cap before sending them over the pair socket.
 
 ## Embedded YouTube helper window

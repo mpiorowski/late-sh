@@ -746,6 +746,7 @@ const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
 const LANDING_PAGE_KEY: &str = "landing_page";
 const SCREENSAVER_KEY: &str = "screensaver";
 const PAPER_AT_LOGIN_KEY: &str = "paper_at_login";
+const AUTO_RESTART_KEY: &str = "auto_restart";
 const SHOW_WATCH_CHAT_KEY: &str = "show_watch_chat";
 const TERMINAL_IMAGES_KEY: &str = "terminal_images";
 /// Award categories the user keeps off their chat label. Read by the chat
@@ -2320,6 +2321,16 @@ pub fn extract_terminal_images(settings: &Value) -> TerminalImagesMode {
 pub fn extract_paper_at_login(settings: &Value) -> bool {
     settings
         .get(PAPER_AT_LOGIN_KEY)
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
+/// Tweak: during a server update, move an idle `late` CLI session to the new
+/// version on its own (late-ssh `app/handoff`). Defaults to true; off keeps
+/// the update banner and the manual reconnect.
+pub fn extract_auto_restart(settings: &Value) -> bool {
+    settings
+        .get(AUTO_RESTART_KEY)
         .and_then(Value::as_bool)
         .unwrap_or(true)
 }

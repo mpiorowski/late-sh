@@ -20,6 +20,7 @@ pub(crate) mod directory;
 pub mod door;
 pub mod files;
 pub mod games;
+pub mod handoff;
 pub(crate) mod help_modal;
 pub mod herald;
 pub(crate) mod hub;

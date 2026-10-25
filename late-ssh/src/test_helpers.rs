@@ -491,6 +491,9 @@ pub struct SessionWorld {
     /// The tour still to walk (the account's flag is unset), which also
     /// starts the session in the Clubhouse. Unset means walked.
     pub tour_pending: bool,
+    /// Where a session moved off a draining pod was (`app/handoff`). Unset
+    /// is a login.
+    pub resume: Option<crate::app::handoff::state::ResumePoint>,
     /// One replica's chat service, shared the way production shares it:
     /// every session on it hears every other's `ChatEvent`s. Unset gives
     /// the session its own. Mention notifications ride the app's own
@@ -774,6 +777,7 @@ fn make_app_with_chat_service_and_permissions(
         },
         paper_at_login: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        resume: world.resume,
         initial_theme_id: "contrast".to_string(),
         initial_interaction_mode: None,
         initial_audio_source: late_core::models::user::AudioSource::default(),
@@ -785,7 +789,11 @@ fn make_app_with_chat_service_and_permissions(
     app.skip_splash_for_tests();
     // The suite starts on Home, but a test that sets the landing inputs is
     // asserting where the session landed, so it keeps that screen.
-    if world.landing_page.is_some() || world.is_new_user || world.tour_pending {
+    if world.landing_page.is_some()
+        || world.is_new_user
+        || world.tour_pending
+        || world.resume.is_some()
+    {
         app.screen = landed;
         app.sync_visible_chat_room();
     }
@@ -1063,6 +1071,7 @@ pub fn make_app_with_paired_client(
         landing_page: late_core::models::user::LandingPage::Clubhouse,
         paper_at_login: false,
         is_draining: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        resume: None,
         initial_radio_station: late_core::models::user::RadioStation::default(),
         initial_radio_slots: late_core::models::user::RadioSlots::default(),
         initial_theme_id: "contrast".to_string(),

@@ -630,5 +630,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_radio_station: late_core::models::user::extract_radio_station(&user.settings),
         initial_radio_slots: late_core::models::user::extract_radio_slots(&user.settings),
         is_draining: state.is_draining.clone(),
+        resume: None,
     }
 }

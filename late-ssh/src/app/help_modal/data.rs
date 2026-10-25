@@ -1855,6 +1855,8 @@ fn settings_help_lines() -> Vec<String> {
         "    Land on                       where a session starts: Clubhouse (default), Home, or Zen; first sessions always start in the Clubhouse"
             .to_string(),
         "    Daily paper at login          show or skip the daily paper pop after login".to_string(),
+        "    Auto restart on update        on (default): when the server updates and you have not typed for 5 minutes, the late CLI (native mode) reconnects you on its own, music playing and on the same page; voice, a video, or an unsent message keep you put. Off, or plain ssh: the update banner asks you to reconnect"
+            .to_string(),
         "".to_string(),
         "Statusline tab".to_string(),
         "  The bottom-left border of the app frame is a status bar you arrange yourself."

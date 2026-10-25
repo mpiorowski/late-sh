@@ -41,6 +41,9 @@ pub(super) struct PairClientInfo {
     pub(super) platform: &'static str,
     /// Empty when this CLI can play video (`video` is advertised).
     pub(super) video_blockers: Vec<VideoBlocker>,
+    /// This CLI can take a drain handoff (`reconnect` is advertised): native
+    /// mode dials the new server itself (`main.rs`), the other modes cannot.
+    pub(super) reconnect: bool,
 }
 
 pub(super) struct PlaybackState<'a> {
@@ -147,6 +150,12 @@ enum PairControlMessage {
     VideoStop {
         play_id: u64,
     },
+    /// Drain handoff: the server is going away. Dial the new one and send
+    /// `resume` back verbatim as the `LATE_RESUME` env; only the server
+    /// reads it. Advertised via the `reconnect` capability.
+    Reconnect {
+        resume: String,
+    },
 }
 
 #[derive(Debug, Deserialize, Clone, Copy, PartialEq, Eq)]
@@ -173,11 +182,15 @@ const BASE_CAPABILITIES: &[&str] = &["clipboard_image", "youtube", "voice", "ope
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 const BASE_CAPABILITIES: &[&str] = &[];
 
-/// `video` joins the base list only when nothing blocks it.
-fn client_capabilities(video_blockers: &[VideoBlocker]) -> Vec<&'static str> {
+/// `video` joins the base list only when nothing blocks it, `reconnect` only
+/// in a mode that can redial.
+fn client_capabilities(client: &PairClientInfo) -> Vec<&'static str> {
     let mut capabilities = BASE_CAPABILITIES.to_vec();
-    if video_blockers.is_empty() {
+    if client.video_blockers.is_empty() {
         capabilities.push("video");
+    }
+    if client.reconnect {
+        capabilities.push("reconnect");
     }
     capabilities
 }
@@ -643,6 +656,9 @@ pub(super) struct PairRuntime<'a> {
     pub(super) desktop_commands: &'a mut tokio::sync::mpsc::Receiver<DesktopCommand>,
     pub(super) viz_frames: &'a mut broadcast::Receiver<VizSample>,
     pub(super) latency_samples: &'a mut tokio::sync::mpsc::Receiver<LatencySample>,
+    /// Where a drain handoff's resume point goes: the SSH loop in `main.rs`
+    /// dials the new server when one arrives.
+    pub(super) handoff: &'a tokio::sync::mpsc::Sender<String>,
 }
 
 /// How long a pair connection has to hold before the retry loop treats it as
@@ -698,6 +714,17 @@ impl PairRetryPolicy {
         Self {
             consecutive_failures: 0,
             server_saw_session: false,
+            startup_mute_released: false,
+        }
+    }
+
+    /// The policy for the session a drain handoff moved this CLI onto. The
+    /// process is already running the user's audio, which the old server
+    /// aligned, so the boot mute is long gone and must never be released.
+    pub(super) fn after_handoff() -> Self {
+        Self {
+            consecutive_failures: 0,
+            server_saw_session: true,
             startup_mute_released: false,
         }
     }
@@ -899,6 +926,7 @@ async fn pair_session_loop(
                                 runtime.video,
                                 runtime.voice,
                                 runtime.desktop_media,
+                                runtime.handoff,
                             )
                             .await?;
                         if should_send_state {
@@ -943,7 +971,7 @@ fn client_state_payload(
         "client_kind": "cli",
         "ssh_mode": client.ssh_mode,
         "platform": client.platform,
-        "capabilities": client_capabilities(&client.video_blockers),
+        "capabilities": client_capabilities(client),
         "muted": muted,
         "volume_percent": volume_percent,
     });
@@ -970,6 +998,7 @@ async fn handle_pair_control(
     video: &mut VideoPlayer,
     voice: &mut VoiceRuntimeState,
     desktop_media: &mut DesktopMedia,
+    handoff: &tokio::sync::mpsc::Sender<String>,
 ) -> Result<bool> {
     let control = match serde_json::from_str::<PairControlMessage>(text) {
         Ok(control) => control,
@@ -1181,6 +1210,13 @@ async fn handle_pair_control(
                 report_video(ws, update).await?;
             }
             silence_for_video(video.is_active(), playback, webview);
+            Ok(false)
+        }
+        PairControlMessage::Reconnect { resume } => {
+            match handoff.try_send(resume) {
+                Ok(()) => info!("server asked this session to move to its new pod"),
+                Err(_) => debug!("ignoring a second handoff request; one is underway"),
+            }
             Ok(false)
         }
     }
@@ -1408,7 +1444,8 @@ fn apply_audio_pair_control(
         | PairControlMessage::VideoPlay { .. }
         | PairControlMessage::VideoPlace { .. }
         | PairControlMessage::VideoControl { .. }
-        | PairControlMessage::VideoStop { .. } => {}
+        | PairControlMessage::VideoStop { .. }
+        | PairControlMessage::Reconnect { .. } => {}
     }
 }
 

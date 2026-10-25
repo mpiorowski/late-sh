@@ -160,7 +160,8 @@ crown, the round, the pot, invites).
 
 `Tab`/`Shift+Tab` cycle the numbered pages. `users.settings.landing_page`
 picks Clubhouse, Home or Zen for returning sessions; a session with the tour
-still to walk always lands in the Clubhouse.
+still to walk always lands in the Clubhouse, and one a drain handoff moved
+off an updating pod lands on the page it left (`handoff`).
 
 Not in the cycle: the door screens (from the hub), the daily match board and
 house tables (from the Lobby), the Realm board, the paired Scratchpad, the
@@ -201,6 +202,7 @@ otherwise.
 | `directory` | The People page and the profile editor |
 | `profile_modal` | The read-only profile modal and the chips ledger |
 | `settings_modal` | Settings (`Ctrl+O`): tabs, pickers, mouse, save rules |
+| `handoff` | Drain handoff: a quiet native-CLI session moved off an updating pod onto its page, the "Auto restart on update" tweak |
 | `statusline` | The frame status bars and their customizer |
 | `zen` | Zen (`Ctrl+F`): the tiling layout, the pet and tank tiles |
 | `ascii` | The animated ascii pieces, the Zen ascii tile, the away screensaver |

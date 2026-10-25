@@ -113,6 +113,12 @@ pub enum PairControlMessage {
     VideoStop {
         play_id: u64,
     },
+    /// Drain handoff (`app/handoff`): this pod is going away, so the CLI
+    /// dials the new one and sends `resume` back verbatim as the
+    /// `LATE_RESUME` env. Only CLIs advertising `reconnect` get it.
+    Reconnect {
+        resume: String,
+    },
 }
 
 /// A key the watch modal relays to the CLI's mpv.
@@ -317,6 +323,13 @@ impl PairedClientRegistry {
     /// did, so the watch modal can tell a dead pairing at once.
     pub fn send_control_to_video_cli(&self, token: &str, msg: PairControlMessage) -> bool {
         self.send_control_filter(token, msg, ClientAudioState::supports_video) > 0
+    }
+
+    /// Deliver a drain handoff to the paired CLIs on `token` advertising
+    /// `reconnect`. Returns whether anyone got it; `false` leaves the session
+    /// on the update banner, the path plain SSH and older CLIs take.
+    pub fn send_control_to_reconnect_cli(&self, token: &str, msg: PairControlMessage) -> bool {
+        self.send_control_filter(token, msg, ClientAudioState::supports_reconnect) > 0
     }
 
     /// Re-send each paired entry's cached playback source for `token`.

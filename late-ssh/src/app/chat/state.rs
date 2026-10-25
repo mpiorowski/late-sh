@@ -931,6 +931,10 @@ pub struct ChatState {
     /// nothing asks for the tail again.
     early_tails: HashMap<Uuid, Vec<ChatMessage>>,
     pub(crate) selected_room_id: Option<Uuid>,
+    /// The room a session moved off a draining pod had selected
+    /// (`app/handoff`). Taken by the first `sync_selection` that has a room
+    /// list, which picks it only when it is one of this user's rooms.
+    resume_room_id: Option<Uuid>,
     pub(crate) room_jump_active: bool,
     composer: TextArea<'static>,
     pub(crate) composing: bool,
@@ -1373,6 +1377,7 @@ impl ChatState {
             loading_tail_rooms: HashSet::new(),
             early_tails: HashMap::new(),
             selected_room_id: None,
+            resume_room_id: None,
             room_jump_active: false,
             composer: new_chat_textarea(),
             composing: false,
@@ -1575,10 +1580,28 @@ impl ChatState {
         }
     }
 
+    /// Select `room_id` once the room list confirms it is one of this user's
+    /// rooms (`app/handoff`, a session moved off a draining pod).
+    pub(crate) fn resume_room(&mut self, room_id: Uuid) {
+        self.resume_room_id = Some(room_id);
+    }
+
     pub fn sync_selection(&mut self) {
         if self.rooms.is_empty() {
             self.selected_room_id = None;
             self.room_jump_active = false;
+            return;
+        }
+
+        // A moved session's room wins the first selection that has a list to
+        // check it against; a room the user cannot see falls through.
+        if let Some(resume_id) = self.resume_room_id.take()
+            && self
+                .rooms
+                .iter()
+                .any(|(room, _)| room.id == resume_id && is_chat_list_room(room))
+        {
+            self.selected_room_id = Some(resume_id);
             return;
         }
 
