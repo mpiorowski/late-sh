@@ -275,8 +275,9 @@ Live, in order of evidence behind them:
   from the rows and no model
   (`late-ssh/src/app/paper/CONTEXT.md`): the one paper section that
   answers a newcomer's "is anyone here?", on the web and on the herald's
-  paper card too. Unmeasured: whether `/paper` opens on purpose move.
-  None of it is measured yet beyond page views. Post, do not federate: a
+  paper card too. Unmeasured: whether the paper's on-purpose opens (7 a
+  day) move; nothing else here is measured beyond page views. Post, do
+  not federate: a
   bot account on an existing instance is
   one bearer token and two HTTP calls; federating profiles (ActivityPub,
   WebFinger, signed fetches, inbound moderation) is weeks of work and
@@ -532,7 +533,11 @@ labels, so the series count cannot grow with the crowd):
   `user_aquarium_care` by `last_fed`; `user_online_time` as the lifetime
   distribution (`total_milliseconds` per `user_id`); `chat_messages` by
   `room_id` and distinct `user_id` per day; `deadchannel_runners` rows
-  with `left_at` null.
+  with `left_at` null. The doors are the exception: `door_openings` holds
+  one row per Enter on a hub card (`late-ssh/src/app/door/CONTEXT.md`),
+  so distinct `user_id` per `card` per day is one query, and the counts
+  alone are on the Grafana Games row ("Doors Opened by Card") and in the
+  paper's YESTERDAY line for the roguelikes.
 - What a newcomer does on day one, per person. The counters split it by
   tenure (`day_one`, `first_week`, `regular` on the attention, visit and
   session-start series), count each first-visit tour stop reached, the
