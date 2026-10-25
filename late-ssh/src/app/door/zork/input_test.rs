@@ -35,14 +35,19 @@ async fn claim_handle(test_db: &TestDb, app: &mut App) {
     .await;
 }
 
-/// A disabled client is a banner on the hub, never a menu whose actions do
-/// nothing; an enabled one opens the edition menu.
+/// Enter on the card with the client disabled is a banner on the hub, never
+/// a menu whose actions do nothing (the hub's gate, `hub/input.rs`, ahead of
+/// `launch`); with it enabled the edition menu opens.
 #[tokio::test]
 async fn the_games_card_respects_the_enabled_gate() {
+    use crate::app::door::hub::{input::handle_event, state::HubGame};
+    use crate::app::input::ParsedInput;
     let (_test_db, mut app) = zork_app("zork-gate").await;
+    app.games_hub_state
+        .select_game(HubGame::roster(app.is_runner()), HubGame::Zork);
     app.zork_enabled = false;
 
-    launch(&mut app);
+    assert!(handle_event(&mut app, &ParsedInput::Byte(b'\r')));
     assert_eq!(app.screen, Screen::Games);
     assert!(app.zork_state.is_none());
     assert_eq!(
@@ -51,7 +56,7 @@ async fn the_games_card_respects_the_enabled_gate() {
     );
 
     app.zork_enabled = true;
-    launch(&mut app);
+    assert!(handle_event(&mut app, &ParsedInput::Byte(b'\r')));
     assert_eq!(app.screen, Screen::Zork);
     assert_eq!(
         app.zork_state.as_ref().map(|state| state.mode()),

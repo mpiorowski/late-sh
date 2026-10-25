@@ -637,7 +637,7 @@ async fn the_commands_flip_read_and_post_today_by_hand() {
         herald.run_command(HeraldCommand::Preview, now).await,
         CommandOutcome::Preview {
             day: today,
-            found: Found {
+            found: Box::new(Found {
                 scoreboard: None,
                 piece: None,
                 board: BoardFound {
@@ -646,7 +646,7 @@ async fn the_commands_flip_read_and_post_today_by_hand() {
                     ink: None,
                 },
                 paper: None,
-            },
+            }),
             post: None,
             networks: vec![HeraldNetwork::Mastodon, HeraldNetwork::Bluesky],
         }

@@ -134,10 +134,11 @@ pub(crate) enum CommandOutcome {
     },
     /// What `/herald post` would send today, and where: what the day
     /// could post and, when it is a post, the rotation's pick and a fresh
-    /// look at it.
+    /// look at it. `found` is boxed: it carries every kind's candidate and
+    /// would otherwise size the whole enum.
     Preview {
         day: NaiveDate,
-        found: Found,
+        found: Box<Found>,
         post: Option<(Picture, Look)>,
         networks: Vec<HeraldNetwork>,
     },
@@ -326,7 +327,7 @@ impl HeraldService {
                     };
                     Ok(CommandOutcome::Preview {
                         day: today,
-                        found,
+                        found: Box::new(found),
                         post,
                         networks: self.networks(),
                     })
