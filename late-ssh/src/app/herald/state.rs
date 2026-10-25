@@ -278,31 +278,45 @@ impl ScoreboardCandidate {
 }
 
 /// The Late Edition dated the post's day, which reads the day before, once
-/// a public column of it printed: the first paragraph of each, for the
-/// alt text (the picture is late-web's card of the same columns).
+/// a public column of it printed: the whole of YESTERDAY (its lines are
+/// the numbers, and few) and the first paragraph of the other two, for
+/// the alt text (the picture is late-web's card of the same columns).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PaperCandidate {
     pub(crate) edition: NaiveDate,
+    /// The column's lines joined with `; `.
+    #[serde(default)]
+    pub(crate) yesterday: Option<String>,
     pub(crate) outside: Option<String>,
     pub(crate) reading: Option<String>,
 }
 
 impl PaperCandidate {
-    /// The edition, if either column printed. A column's paragraphs are
-    /// its non-empty lines, as the web prints them.
+    /// The edition, if any public column printed. A column's paragraphs
+    /// are its non-empty lines, as the web prints them.
     pub(crate) fn of(
         edition: NaiveDate,
+        yesterday: Option<&str>,
         outside: Option<&str>,
         reading: Option<&str>,
     ) -> Option<Self> {
-        let head = |text: Option<&str>| {
-            text.and_then(|text| text.lines().map(str::trim).find(|line| !line.is_empty()))
+        let paragraphs = |text: &str| {
+            text.lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty())
                 .map(str::to_string)
+                .collect::<Vec<_>>()
         };
-        match (head(outside), head(reading)) {
-            (None, None) => None,
-            (outside, reading) => Some(Self {
+        let head = |text: Option<&str>| text.and_then(|text| paragraphs(text).into_iter().next());
+        let whole = |text: Option<&str>| {
+            text.map(|text| paragraphs(text).join("; "))
+                .filter(|joined| !joined.is_empty())
+        };
+        match (whole(yesterday), head(outside), head(reading)) {
+            (None, None, None) => None,
+            (yesterday, outside, reading) => Some(Self {
                 edition,
+                yesterday,
                 outside,
                 reading,
             }),
@@ -629,7 +643,7 @@ fn speech(picture: &Picture) -> (String, &'static [&'static str]) {
         ),
         Picture::Paper(paper) => (
             format!(
-                "The Late Edition for {}: late.sh's daily paper, with what the clubhouse was reading and a look outside.",
+                "The Late Edition for {}: late.sh's daily paper, with the day before in numbers, what the clubhouse was reading and a look outside.",
                 long_date(paper.edition),
             ),
             &PAPER_TAGS,
@@ -731,6 +745,9 @@ pub(crate) fn alt_text(picture: &Picture, look: &Look) -> String {
                 "The front page of the Late Edition, late.sh's daily paper, for {}, in terminal text.",
                 long_date(paper.edition)
             );
+            if let Some(yesterday) = &paper.yesterday {
+                text.push_str(&format!(" Yesterday on late.sh: {yesterday}."));
+            }
             if let Some(outside) = &paper.outside {
                 text.push_str(&format!(" Outside: {outside}"));
             }

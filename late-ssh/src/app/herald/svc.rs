@@ -737,6 +737,7 @@ impl HeraldService {
         let issue = PaperEdition::load(client, day).await?;
         Ok(PaperCandidate::of(
             day,
+            issue.ready_text(PaperSectionKind::Yesterday),
             issue.ready_text(PaperSectionKind::Outside),
             issue.ready_text(PaperSectionKind::Reading),
         ))

@@ -161,6 +161,9 @@ pub mod profile_award;
 #[cfg(test)]
 mod profile_award_test;
 pub mod quest;
+pub mod radio_listen;
+#[cfg(test)]
+mod radio_listen_test;
 pub mod realm_game;
 pub mod referral;
 #[cfg(test)]

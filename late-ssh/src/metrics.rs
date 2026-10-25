@@ -155,6 +155,15 @@ pub enum HeraldLookResult {
     Drawn,
 }
 
+/// How one radio roll call (`app/audio`, every `RADIO_ROLL_CALL_INTERVAL`
+/// on every replica) went: `Called` wrote this replica's paired radio
+/// listeners down for the day, `Failed` wrote none.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RadioRollCallResult {
+    Called,
+    Failed,
+}
+
 /// How one page of The Late Edition (`app/paper`) came off the press.
 /// `Printed` is the variant that spent a model call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -742,11 +751,11 @@ mod inner {
         JobsPressResult, JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure,
         NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult,
         PaperPrintResult, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence,
-        PresenceScope, PresenceWire, RealmChatRoomAttach, RealmPayout, RealmSeasonOpen,
-        RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor,
-        Screen, SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
-        SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
-        VizWireBands, WatchDoor,
+        PresenceScope, PresenceWire, RadioRollCallResult, RealmChatRoomAttach, RealmPayout,
+        RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
+        RoundRefusal, RunnerDoor, Screen, SendRefusal, SessionStartStage, SessionUser,
+        SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
+        ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
@@ -1823,6 +1832,52 @@ mod inner {
                 .with_description("Now-playing polls of third-party radio providers")
                 .build()
         })
+    }
+
+    fn radio_roll_call_result_label(result: RadioRollCallResult) -> &'static str {
+        match result {
+            RadioRollCallResult::Called => "called",
+            RadioRollCallResult::Failed => "failed",
+        }
+    }
+
+    fn radio_roll_calls_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_radio_roll_calls_total")
+                .with_description(
+                    "Radio roll calls (paired listeners written to radio_listens) by result",
+                )
+                .build()
+        })
+    }
+
+    fn radio_listeners_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_radio_listeners_total")
+                .with_description(
+                    "Paired clients on the radio source at each roll call, by station",
+                )
+                .build()
+        })
+    }
+
+    /// One roll call: its result, and how many listeners it found on each
+    /// station (a listener is one account on one station).
+    pub fn record_radio_roll_call(result: RadioRollCallResult, listeners: &[(String, u64)]) {
+        radio_roll_calls_total().add(
+            1,
+            &[KeyValue::new(
+                "result",
+                radio_roll_call_result_label(result),
+            )],
+        );
+        for (station, count) in listeners {
+            radio_listeners_total().add(*count, &[KeyValue::new("station", station.clone())]);
+        }
     }
 
     fn booth_thumbnails_total() -> &'static Counter<u64> {
@@ -4178,11 +4233,11 @@ mod inner {
         JobsPressResult, JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure,
         NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult,
         PaperPrintResult, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence,
-        PresenceScope, PresenceWire, RealmChatRoomAttach, RealmPayout, RealmSeasonOpen,
-        RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor,
-        Screen, SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
-        SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
-        VizWireBands, WatchDoor,
+        PresenceScope, PresenceWire, RadioRollCallResult, RealmChatRoomAttach, RealmPayout,
+        RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
+        RoundRefusal, RunnerDoor, Screen, SendRefusal, SessionStartStage, SessionUser,
+        SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
+        ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
@@ -4298,6 +4353,7 @@ mod inner {
     pub fn record_news_save(_outcome: NewsSaveOutcome) {}
     pub fn record_news_card(_outcome: NewsCardOutcome) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
+    pub fn record_radio_roll_call(_result: RadioRollCallResult, _listeners: &[(String, u64)]) {}
     pub fn record_booth_thumbnail(_outcome: ThumbnailFetch) {}
     pub fn record_booth_favorite(_outcome: BoothFavoriteOutcome) {}
     pub fn record_radio_meta_poll(_feed: PolledFeed, _outcome: PollOutcome) {}

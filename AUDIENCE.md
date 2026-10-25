@@ -256,6 +256,12 @@ Live, in order of evidence behind them:
   Mastodon profile shows late.sh verified, and every page unfurls into a
   preview card: a profile into its runner's poster, a gallery link into
   its snapshot, both drawn server-side as PNG (`late-web/CONTEXT.md`).
+  The paper opens with YESTERDAY ON LATE.SH, the covered day in numbers
+  (the radio's top stations by paired listener, the tracks queued, the
+  games finished on each shelf), drawn from the rows and no model
+  (`late-ssh/src/app/paper/CONTEXT.md`): the one paper section that
+  answers a newcomer's "is anyone here?", on the web and on the herald's
+  paper card too. Unmeasured: whether `/paper` opens on purpose move.
   None of it is measured yet beyond page views. Post, do not federate: a
   bot account on an existing instance is
   one bearer token and two HTTP calls; federating profiles (ActivityPub,
@@ -287,7 +293,8 @@ Live, in order of evidence behind them:
     linking the piece's page; each piece goes out once), else
     yesterday's Artboard snapshot cropped to what is drawn, once it has
     enough ink to be a picture (linking the gallery), else the Late
-    Edition's front page as a card (linking the edition), else nothing.
+    Edition's front page as a card (the day in numbers, then the heads of
+    the prose columns; linking the edition), else nothing.
     The scoreboard goes first because it has one day a week and a piece
     can wait a day; the week's window keeps a backlog from crowding out
     the board, and the launch from posting a year of pieces. Alt text

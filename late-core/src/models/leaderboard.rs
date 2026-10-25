@@ -454,6 +454,62 @@ impl WeekBest {
     }
 }
 
+/// The shelf a game sits on: a section of the week's card, a line of the
+/// paper's YESTERDAY column. One mapping for every surface that groups
+/// the rosters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shelf {
+    /// The daily puzzles and the score games.
+    Arcade,
+    /// The Lobby's correspondence games.
+    Lobby,
+    /// The roguelike doors.
+    Doors,
+}
+
+impl Shelf {
+    /// Every shelf, in the order the rosters are listed.
+    pub const ALL: &'static [Self] = &[Self::Arcade, Self::Lobby, Self::Doors];
+
+    /// The shelf's name as a heading: `ARCADE`.
+    pub const fn heading(self) -> &'static str {
+        match self {
+            Self::Arcade => "ARCADE",
+            Self::Lobby => "LOBBY",
+            Self::Doors => "DOORS",
+        }
+    }
+
+    /// The shelf's name in a sentence: `Arcade`.
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Arcade => "Arcade",
+            Self::Lobby => "Lobby",
+            Self::Doors => "Doors",
+        }
+    }
+}
+
+impl WeekGame {
+    pub const fn shelf(self) -> Shelf {
+        match self {
+            Self::Daily(_) | Self::Score(_) => Shelf::Arcade,
+            Self::Lobby(_) => Shelf::Lobby,
+            Self::Door(_) => Shelf::Doors,
+        }
+    }
+}
+
+/// One game's plays on one UTC day. `won` is what the game calls a win: a
+/// daily puzzle's every finish, a Lobby match with a winner (a draw is
+/// not one), a door run that ascended; a score game has none.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DayTally {
+    pub game: WeekGame,
+    pub plays: i64,
+    pub won: i64,
+}
+
 /// The first day of the week that ends on `last`.
 pub fn week_first_day(last: NaiveDate) -> NaiveDate {
     last - chrono::Days::new(WEEK_DAYS - 1)
@@ -554,6 +610,100 @@ pub async fn week_bests(client: &Client, last: NaiveDate) -> Result<Vec<WeekBest
         .collect::<Result<Vec<_>>>()?;
     bests.sort_by_key(|(position, _)| *position);
     Ok(bests.into_iter().map(|(_, best)| best).collect())
+}
+
+/// The UTC day `day` in every game, one tally per game anyone played, in
+/// roster order: the daily puzzles finished (by finish time, not puzzle
+/// date, so a board solved at 23:50 counts for its day), the score games'
+/// finished runs, the Lobby matches finished (`updated` is the finish,
+/// as `week_bests` reads it) and the door runs that ended. Same arms as
+/// the week, counted instead of ranked, so a new game cannot be left off.
+pub async fn day_tallies(client: &Client, day: NaiveDate) -> Result<Vec<DayTally>> {
+    let floor = day.and_hms_opt(0, 0, 0).expect("midnight").and_utc();
+    let ceiling = floor + chrono::Duration::days(1);
+    let daily = DailyPuzzle::ALL.iter().map(|puzzle| {
+        format!(
+            "SELECT '{tag}' AS game, count(*)::bigint AS plays, count(*)::bigint AS won
+             FROM {table}
+             WHERE created >= $1 AND created < $2",
+            tag = WeekGame::Daily(*puzzle).key(),
+            table = puzzle.wins_table(),
+        )
+    });
+    let score = ScoreGame::ALL.iter().map(|game| {
+        format!(
+            "SELECT '{tag}' AS game, count(*)::bigint AS plays, 0::bigint AS won
+             FROM game_score_events
+             WHERE game = '{key}' AND created_at >= $1 AND created_at < $2",
+            tag = WeekGame::Score(*game).key(),
+            key = game.score_event_key(),
+        )
+    });
+    let lobby_kinds = LobbyGame::ALL
+        .iter()
+        .map(|game| format!("'{}'", game.kind()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let lobby = std::iter::once(format!(
+        "SELECT 'lobby:' || game_kind AS game, count(*)::bigint AS plays,
+                count(winner_user_id)::bigint AS won
+         FROM daily_matches
+         WHERE status = '{finished}' AND game_kind IN ({lobby_kinds})
+           AND updated >= $1 AND updated < $2
+         GROUP BY game_kind",
+        finished = DailyMatch::STATUS_FINISHED,
+    ));
+    let win_results = DoorRunResult::WINS
+        .iter()
+        .map(|result| format!("'{}'", result.key()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let door = DoorGame::ALL.iter().map(|game| {
+        format!(
+            "SELECT '{tag}' AS game, count(*)::bigint AS plays,
+                    (count(*) FILTER (WHERE result IN ({win_results})))::bigint AS won
+             FROM door_runs
+             WHERE game = '{key}' AND ended_at >= $1 AND ended_at < $2",
+            tag = WeekGame::Door(*game).key(),
+            key = game.key(),
+        )
+    });
+    let arms = daily
+        .chain(score)
+        .chain(lobby)
+        .chain(door)
+        .collect::<Vec<_>>()
+        .join("\nUNION ALL\n");
+    let rows = client
+        .query(
+            &format!(
+                "SELECT game, plays, won FROM ({arms}) t
+                 WHERE plays > 0"
+            ),
+            &[&floor, &ceiling],
+        )
+        .await?;
+    let mut tallies = rows
+        .into_iter()
+        .map(|row| {
+            let key: String = row.get("game");
+            let (position, game) = match WeekGame::all()
+                .enumerate()
+                .find(|(_, game)| game.key() == key)
+            {
+                Some(found) => found,
+                None => anyhow::bail!("day_tallies produced an unknown game {key:?}"),
+            };
+            let tally = DayTally {
+                game,
+                plays: row.get("plays"),
+                won: row.get("won"),
+            };
+            Ok((position, tally))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    tallies.sort_by_key(|(position, _)| *position);
+    Ok(tallies.into_iter().map(|(_, tally)| tally).collect())
 }
 
 pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> {

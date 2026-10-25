@@ -59,9 +59,12 @@ impl PaperStatus {
 }
 
 /// The edition-level sections. A new section means a new variant, a wider
-/// CHECK constraint in a migration, and a printer for it in the sweeper.
+/// CHECK constraint in a migration (173, then 258), and a printer for it
+/// in the sweeper.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PaperSectionKind {
+    /// The covered day in numbers, from late.sh's own rows and no model.
+    Yesterday,
     /// What the clubhouse shared into News that day.
     Reading,
     /// The grounded look at the outside world.
@@ -71,6 +74,7 @@ pub enum PaperSectionKind {
 impl PaperSectionKind {
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::Yesterday => "yesterday",
             Self::Reading => "reading",
             Self::Outside => "outside",
         }
@@ -78,6 +82,7 @@ impl PaperSectionKind {
 
     fn parse(value: &str) -> Result<Self> {
         match value {
+            "yesterday" => Ok(Self::Yesterday),
             "reading" => Ok(Self::Reading),
             "outside" => Ok(Self::Outside),
             other => bail!("unknown paper section {other:?}"),

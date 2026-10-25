@@ -278,3 +278,71 @@ fn pair_radio_tracks_adds_the_house_mounts_to_the_radio_meta() {
         ])
     );
 }
+
+/// The roll call writes every paired account on the radio down for the
+/// day under its station, once however many times it is called, and
+/// nothing for an account on YouTube or a replica with nobody paired.
+#[tokio::test]
+async fn the_roll_call_writes_each_radio_listener_down_once_a_day() {
+    use late_core::models::{
+        radio_listen::{RadioListen, StationListeners},
+        user::{AudioSource, RadioStation},
+    };
+
+    let test = test_db().await;
+    let listener = create_test_user(&test.db, "roll-call-listener").await;
+    let watcher = create_test_user(&test.db, "roll-call-watcher").await;
+    let registry = PairedClientRegistry::new("https://audio.late.sh");
+    let service = AudioService::new(
+        test.db.clone(),
+        None,
+        registry.clone(),
+        std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+    );
+    let now = chrono::Utc::now();
+    assert!(
+        service
+            .radio_roll_call(now)
+            .await
+            .expect("an empty roll call")
+            .is_empty()
+    );
+
+    let (cli_tx, _cli_rx) = tokio::sync::mpsc::channel(8);
+    let (watcher_tx, _watcher_rx) = tokio::sync::mpsc::channel(8);
+    registry
+        .register(
+            "tok-listener".to_string(),
+            cli_tx,
+            listener.id,
+            AudioSource::Radio,
+        )
+        .expect("register");
+    registry
+        .register(
+            "tok-watcher".to_string(),
+            watcher_tx,
+            watcher.id,
+            AudioSource::Youtube,
+        )
+        .expect("register");
+    let nightride = RadioStation::from_key("nightride").expect("nightride");
+    registry.set_stream_preferences(listener.id, nightride);
+
+    for _ in 0..2 {
+        assert_eq!(
+            service.radio_roll_call(now).await.expect("roll call"),
+            vec![("nightride".to_string(), 1)]
+        );
+    }
+    let client = test.db.get().await.expect("db client");
+    assert_eq!(
+        RadioListen::top_stations_on(&client, now.date_naive(), 3)
+            .await
+            .expect("stations"),
+        vec![StationListeners {
+            station: "nightride".to_string(),
+            listeners: 1,
+        }]
+    );
+}

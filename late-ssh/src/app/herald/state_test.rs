@@ -65,6 +65,7 @@ fn scoreboard() -> ScoreboardCandidate {
 fn paper() -> PaperCandidate {
     PaperCandidate {
         edition: day(24),
+        yesterday: Some("Booth: 2 tracks queued; Arcade: 3 games finished, all Sudoku".to_string()),
         outside: Some("The world turned.".to_string()),
         reading: None,
     }
@@ -405,7 +406,7 @@ fn the_look_round_trips_and_writes_the_alt() {
             "ASCII art: the late.sh Artboard, a shared terminal canvas, as it stood at the end of 22 October 2026 UTC. Coloured text glyphs on a dark background.",
             "ASCII art: \"harbour at dusk\", a piece hung in the late.sh gallery. Coloured text glyphs on a dark background.",
             "A scoreboard in green and grey terminal text: the week's best in every late.sh game, 18 October to 24 October 2026. Sudoku: ~alice, 6 wins; Lateris: ~bob, 12,340.",
-            "The front page of the Late Edition, late.sh's daily paper, for 24 October 2026, in terminal text. Outside: The world turned.",
+            "The front page of the Late Edition, late.sh's daily paper, for 24 October 2026, in terminal text. Yesterday on late.sh: Booth: 2 tracks queued; Arcade: 3 games finished, all Sudoku. Outside: The world turned.",
         ]
     );
     let long = Picture::Paper(PaperCandidate {

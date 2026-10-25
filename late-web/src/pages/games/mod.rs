@@ -2,7 +2,8 @@
 //! the picture the herald posts on Sundays (`late-ssh/src/app/herald`).
 //! One line per game anyone played, under its shelf (the arcade, the
 //! Lobby, the doors), its best of the week and who, from
-//! `leaderboard::week_bests`. No page; the terminal is where the boards
+//! `leaderboard::week_bests`. No page and no row: the card is drawn on
+//! request from the games' own tables; the terminal is where the boards
 //! live.
 
 use anyhow::Context;
@@ -14,7 +15,7 @@ use axum::{
     routing::get,
 };
 use chrono::NaiveDate;
-use late_core::models::leaderboard::{WeekBest, WeekGame, week_bests, week_first_day};
+use late_core::models::leaderboard::{WeekBest, week_bests, week_first_day};
 
 use crate::{
     AppState,
@@ -65,34 +66,9 @@ async fn week_image_handler(
     Ok(board_png::response(png))
 }
 
-/// The card's sections, in the order `week_bests` lists the rosters.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Shelf {
-    Arcade,
-    Lobby,
-    Doors,
-}
-
-impl Shelf {
-    fn of(game: WeekGame) -> Self {
-        match game {
-            WeekGame::Daily(_) | WeekGame::Score(_) => Self::Arcade,
-            WeekGame::Lobby(_) => Self::Lobby,
-            WeekGame::Door(_) => Self::Doors,
-        }
-    }
-
-    fn heading(self) -> &'static str {
-        match self {
-            Self::Arcade => "ARCADE",
-            Self::Lobby => "LOBBY",
-            Self::Doors => "DOORS",
-        }
-    }
-}
-
-/// The card's lines: the masthead, the week, a section per shelf with a
-/// line per game, the way in.
+/// The card's lines: the masthead, the week, a section per shelf
+/// (`leaderboard::Shelf`, in the order `week_bests` lists the rosters)
+/// with a line per game, the way in.
 pub(crate) fn week_card(last: NaiveDate, bests: &[WeekBest]) -> Vec<CardLine> {
     let mut lines = vec![
         CardLine::new(Ink::Title, "THE LATE.SH GAMES"),
@@ -107,7 +83,7 @@ pub(crate) fn week_card(last: NaiveDate, bests: &[WeekBest]) -> Vec<CardLine> {
     ];
     let mut shelf = None;
     for best in bests {
-        let this = Shelf::of(best.game);
+        let this = best.game.shelf();
         if shelf != Some(this) {
             lines.push(CardLine::blank());
             lines.push(CardLine::new(Ink::Heading, this.heading()));
