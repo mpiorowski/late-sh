@@ -4581,3 +4581,53 @@ async fn selected_video_carries_the_thumbnail_title() {
     state.selected_message_id = Some(reply.id);
     assert_eq!(title(&state), None);
 }
+
+/// A room's tail can land before the room list that names the room: the
+/// join fires both loads at once, and the tail is the lighter query. The
+/// tail waits for its room instead of being dropped, or the pane says "No
+/// messages yet" until something asks again, which nothing does.
+#[tokio::test]
+async fn a_tail_that_lands_before_its_room_waits_for_the_room_list() {
+    use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+    use late_core::models::game_room::GameKind;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = late_core::test_utils::create_test_user(&test_db.db, "early_tail").await;
+    let room = ChatRoom::get_or_create_game_room(&client, GameKind::Poker, "early-tail")
+        .await
+        .expect("game room");
+    ChatRoomMember::join(&client, room.id, user.id)
+        .await
+        .expect("join");
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: user.id,
+            body: "dealt before the list".to_string(),
+        },
+    )
+    .await
+    .expect("message");
+
+    let (mut state, _cyberspace) = chat_state_with_cyberspace(&test_db, user.id);
+    assert!(
+        state.rooms.iter().all(|(known, _)| known.id != room.id),
+        "the room list has not landed yet"
+    );
+    state.merge_room_tail(room.id, vec![message.clone()]);
+
+    tick_until(&mut state, "the room list", |state| {
+        state.rooms.iter().any(|(known, _)| known.id == room.id)
+    })
+    .await;
+    let bodies: Vec<&str> = state
+        .messages_for_room(room.id)
+        .iter()
+        .map(|message| message.body.as_str())
+        .collect();
+    assert_eq!(bodies, vec!["dealt before the list"]);
+}

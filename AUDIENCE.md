@@ -262,9 +262,10 @@ Live, in order of evidence behind them:
   WebFinger, signed fetches, inbound moderation) is weeks of work and
   sends the visibility people want outward, away from the terminal.
 - **The herald: one picture a day on the Fediverse and Bluesky.** Built
-  (`late-ssh/src/app/herald/CONTEXT.md`) and shipped dark: both
-  accounts exist, and the `herald_settings` row starts off. One post
-  a day, delivered to every network the herald has an account on. The
+  (`late-ssh/src/app/herald/CONTEXT.md`) and live: both accounts post,
+  and the `herald_settings` row is on in prod (`/herald off` stops it).
+  One post a day, delivered to every network the herald has an account
+  on. The
   Fediverse: an ordinary account on an existing Mastodon instance
   (fosstodon.org: FOSS-leaning, a local timeline that gives a new account
   readers on day one; invite-only, and its rule for automated accounts
@@ -352,16 +353,15 @@ Live, in order of evidence behind them:
     arrivals leak at 94% on day two. Flip the row on once the first hour
     has moved, so the first thing new followers find is a place that
     holds them. Not measured yet beyond the counter.
-  - **What is left.** The herald is built and documented in
+  - **What is left.** The herald is live and documented in
     `late-ssh/src/app/herald/CONTEXT.md` (the post, the switches, the
-    account setup by hand, the telemetry); the rollout of its two secrets
-    follows the deploy skew rule in `infra/RUNBOOK.md`. Open: Bluesky's
-    `bot` self-label on the profile record (no setting in the app; a
-    one-off `putRecord` of `app.bsky.actor.profile` with `labels.values:
-    [{val: "bot"}]`), a `rel="me"` link from the landing page to
-    `https://fosstodon.org/@late` so the profile's `https://late.sh` link
-    shows verified, the vision check before member pieces go out, and the
-    human half above, daily.
+    account setup by hand, the telemetry); its two secrets went out
+    under the deploy skew rule in `infra/RUNBOOK.md`. Bluesky's
+    automation label is on (Settings, "Show automation label"), and the
+    landing page links both accounts with `rel="me"`, which is what makes
+    the Mastodon profile's `https://late.sh` link show verified. Open:
+    the vision check before member pieces go out, and the human half
+    above, daily.
 - **Launch posts wait for the deadchannel public flip** (`GAME.md`, "The
   three surfaces"), which is the game's public launch. The Hacker News
   front page in July 2026 peaked at about 100 sessions and settled back to

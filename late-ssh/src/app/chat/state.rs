@@ -925,6 +925,11 @@ pub struct ChatState {
     refresh_tx: mpsc::UnboundedSender<()>,
     refresh_room_id: Option<Uuid>,
     loading_tail_rooms: HashSet<Uuid>,
+    /// Tails that landed before the room list named their room: a join
+    /// fires the list refresh and the tail load together, and the tail is
+    /// the lighter query. Held here and merged when the room arrives, since
+    /// nothing asks for the tail again.
+    early_tails: HashMap<Uuid, Vec<ChatMessage>>,
     pub(crate) selected_room_id: Option<Uuid>,
     pub(crate) room_jump_active: bool,
     composer: TextArea<'static>,
@@ -1366,6 +1371,7 @@ impl ChatState {
             refresh_tx,
             refresh_room_id: None,
             loading_tail_rooms: HashSet::new(),
+            early_tails: HashMap::new(),
             selected_room_id: None,
             room_jump_active: false,
             composer: new_chat_textarea(),
@@ -6055,6 +6061,17 @@ impl ChatState {
         let previous_rooms_meta: Vec<ChatRoom> =
             self.rooms.iter().map(|(room, _)| room.clone()).collect();
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
+        let arrived: Vec<Uuid> = self
+            .rooms
+            .iter()
+            .map(|(room, _)| room.id)
+            .filter(|room_id| self.early_tails.contains_key(room_id))
+            .collect();
+        for room_id in arrived {
+            if let Some(messages) = self.early_tails.remove(&room_id) {
+                self.merge_room_tail(room_id, messages);
+            }
+        }
         changed |= self.rooms.len() != previous_rooms_meta.len()
             || self
                 .rooms
@@ -7144,6 +7161,7 @@ impl ChatState {
     fn merge_room_tail(&mut self, room_id: Uuid, messages: Vec<ChatMessage>) {
         self.note_activity_ticker_from(&messages);
         let Some((_, stored)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id) else {
+            self.early_tails.insert(room_id, messages);
             return;
         };
 

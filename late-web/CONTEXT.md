@@ -104,7 +104,7 @@ Important route details:
 - HTMX partial templates live beside their page owner, currently `home/status.html`. The listen page has no HTMX partial; it polls `/listen/state` from Alpine and drives both the `<audio>` element and the YouTube player from that one response.
 - Tailwind source is `static/input.css`; compiled output is committed as `static/style.css`. Rebuild with `npm run tailwind:build` after any class change, or the new classes are missing at runtime.
 - Contrast floor: every real text color on the dark shell must clear 4.5:1. In practice that means `text-gray-400` or lighter (`gray-300`/`gray-200` for body copy) and `text-green-400` for accents; `text-gray-500` is reserved for decorative glyphs (`#`, `·`, `├─`). Gallery uses hand-written CSS, where `#9ca3af` is the dim-text floor.
-- The landing page must keep a visible link to the source repo and an explanation of what the optional `late` companion CLI does next to the piped-install commands. Both exist because a `curl | bash` with no repo link reads as a dark pattern.
+- The landing page must keep a visible link to the source repo and an explanation of what the optional `late` companion CLI does next to the piped-install commands. Both exist because a `curl | bash` with no repo link reads as a dark pattern. It also keeps `rel="me"` links to the herald's accounts (`https://fosstodon.org/@late`, `https://bsky.app/profile/late.sh`, `late-ssh/src/app/herald/CONTEXT.md`): the Mastodon profile lists `https://late.sh`, and the link back is what shows it verified there.
 - npm scripts in `late-web/package.json`:
   - `npm run tailwind:watch`
   - `npm run tailwind:build`
@@ -209,7 +209,7 @@ Agents run targeted tests through `make test-llm ARGS="-p late-web --lib -E 'tes
 
 Current tests:
 
-- `src/pages/home/home_test.rs`: verifies the donation shortlink's GET/HEAD redirect through the app router without DB or upstream access.
+- `src/pages/home/home_test.rs`: verifies the donation shortlink's GET/HEAD redirect and the landing page's `rel="me"` links to the herald's accounts, through the app router without DB or upstream access.
 - `src/pages/stream_test.rs`: verifies `/stream` upstream passthrough and silence fallback.
 - `src/pages/profiles/profiles_test.rs`: a runner's poster hangs on their profile as script-safe JSON, and a civilian's or a leaver's page has none (DB-backed); contact and links carry `rel="me"`, the preview card points at the poster PNG or the site's picture, and the poster route serves a PNG or 404 (DB-backed); plus the profile formatting helpers.
 - `src/pages/gallery/gallery_test.rs`: gallery labels/titles and the board JSON's script-safe escaping (`canvas_json`); a saved snapshot's page points its card at `/gallery/{key}/image.png`, which serves the PNG, 404 for an unknown key (DB-backed).
@@ -232,7 +232,7 @@ Known web smoke-test exception:
 - Gallery rendering depends on `dartboard-core` canvas/provenance schema. Coordinate with `late-ssh/src/app/artboard/CONTEXT.md` and `late-core` migrations before changing it.
 - Profile status strings are presentation-coupled to `open`, `casual`, and `not-looking` for labels and CSS state.
 - The paper on the web prints the sections and the announcements only. A room's column is a conversation summary and stays inside the clubhouse; adding one to `/paper` is a product decision, not a template change.
-- `rel="me"` on profile contact and link anchors is what Mastodon's link verification looks for. Dropping it silently un-verifies every member who set it up.
+- `rel="me"` on profile contact and link anchors is what Mastodon's link verification looks for. Dropping it silently un-verifies every member who set it up; the same on the landing page's account links un-verifies the herald.
 - The `/stream` fallback must never yield empty chunks; some clients treat empty reads as stream end.
 - `metrics.rs` must compile both with and without the optional `otel` feature.
 
