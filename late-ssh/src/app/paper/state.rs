@@ -479,14 +479,7 @@ pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<PaperLine> {
         (PaperSectionKind::Reading, "WHAT WE WERE READING"),
         (PaperSectionKind::Outside, "OUTSIDE"),
     ] {
-        let Some(section) = edition
-            .sections
-            .iter()
-            .find(|section| section.section == kind && section.status == PaperStatus::Ready)
-        else {
-            continue;
-        };
-        let Some(text) = &section.text else {
+        let Some(text) = edition.ready_text(kind) else {
             continue;
         };
         lines.push(PaperLine::new());

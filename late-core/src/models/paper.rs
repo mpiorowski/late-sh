@@ -235,6 +235,17 @@ impl PaperEdition {
                 .any(|section| section.status == PaperStatus::Ready)
     }
 
+    /// The text of `kind`'s column when the press printed it, `None`
+    /// otherwise: the one rule for whether a column is out, for every
+    /// surface that shows one (the terminal paper, the web page and its
+    /// card, the herald).
+    pub fn ready_text(&self, kind: PaperSectionKind) -> Option<&str> {
+        self.sections
+            .iter()
+            .find(|section| section.section == kind && section.status == PaperStatus::Ready)
+            .and_then(|section| section.text.as_deref())
+    }
+
     /// True once the sweeper has reached this edition: at least one row,
     /// quiet, printing, and failed ones included. Every sweep settles the
     /// reading section, so an edition with no rows at all has simply not

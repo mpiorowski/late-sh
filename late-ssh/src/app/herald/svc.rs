@@ -40,7 +40,7 @@ use late_core::models::herald::{
     HeraldSwitch,
 };
 use late_core::models::leaderboard::week_bests;
-use late_core::models::paper::{PaperEdition, PaperSectionKind, PaperStatus};
+use late_core::models::paper::{PaperEdition, PaperSectionKind};
 use tokio::sync::broadcast;
 use tracing::Instrument;
 use uuid::Uuid;
@@ -735,17 +735,10 @@ impl HeraldService {
         day: NaiveDate,
     ) -> anyhow::Result<Option<PaperCandidate>> {
         let issue = PaperEdition::load(client, day).await?;
-        let column = |kind: PaperSectionKind| {
-            issue
-                .sections
-                .iter()
-                .find(|section| section.section == kind && section.status == PaperStatus::Ready)
-                .and_then(|section| section.text.as_deref())
-        };
         Ok(PaperCandidate::of(
             day,
-            column(PaperSectionKind::Outside),
-            column(PaperSectionKind::Reading),
+            issue.ready_text(PaperSectionKind::Outside),
+            issue.ready_text(PaperSectionKind::Reading),
         ))
     }
 

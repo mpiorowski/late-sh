@@ -237,8 +237,9 @@ pub(crate) fn fit_under(png: &[u8], max_bytes: usize) -> anyhow::Result<Fitted> 
 }
 
 /// The rich-text facets: every `http(s)://` word a link, every `#word` a
-/// tag, by UTF-8 byte range as the protocol counts them. Our own text, so
-/// a word is whatever sits between whitespace.
+/// tag, by UTF-8 byte range as the protocol counts them. Our own text (a
+/// piece's title goes in dead, `state::title_words`), so a word is
+/// whatever sits between whitespace.
 pub(crate) fn facets(text: &str) -> Vec<Value> {
     let mut facets = Vec::new();
     let mut start = 0;

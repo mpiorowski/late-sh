@@ -97,3 +97,19 @@ fn a_crop_keeps_the_cells_inside_and_refuses_past_the_edge() {
         assert_eq!(Crop::parse(bad), None, "{bad}");
     }
 }
+
+/// A crop whose far edge overflows is refused like any crop past the
+/// edge, never wrapped back into range: the wrapped crop's huge side
+/// would ask the renderer for tens of gigabytes.
+#[test]
+fn a_crop_whose_edge_overflows_is_refused() {
+    let canvas = Canvas::with_size(8, 4);
+    for overflowing in [
+        "18446744073709551615,0,1,1",
+        "0,18446744073709551615,1,1",
+        "18446744072709551616,0,1000000000,1",
+    ] {
+        let rect = Crop::parse(overflowing).expect("parses");
+        assert_eq!(crop(&canvas, rect), None, "{overflowing}");
+    }
+}

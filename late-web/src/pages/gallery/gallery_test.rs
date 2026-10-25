@@ -139,8 +139,13 @@ async fn a_gallery_link_unfurls_into_its_snapshot() {
         "/gallery/daily:2026-09-03/image.png?crop=0,0,9,1",
         "/gallery/daily:2026-09-03/image.png?crop=0,0,0,1",
         "/gallery/daily:2026-09-03/image.png?crop=1,2,3",
+        "/gallery/daily:2026-09-03/image.png?crop=18446744072709551616,0,1000000000,1",
     ] {
-        assert_eq!(fetch(&router, bad).await.0, StatusCode::BAD_REQUEST, "{bad}");
+        assert_eq!(
+            fetch(&router, bad).await.0,
+            StatusCode::BAD_REQUEST,
+            "{bad}"
+        );
     }
 }
 

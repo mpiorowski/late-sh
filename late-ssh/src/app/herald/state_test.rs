@@ -206,6 +206,58 @@ fn the_words_fit_and_never_mention_anyone() {
     );
 }
 
+/// A piece's title is the one thing in the words a member typed, and it
+/// reaches the post dead: no mention, no tag, no link, on either network.
+/// Mastodon reads all three out of the text; Bluesky makes links and tags
+/// only from the facets, so every facet is the page or the kind's tags.
+#[test]
+fn a_title_cannot_mention_tag_or_link() {
+    let titled = |title: &str| {
+        Picture::Piece(PieceCandidate {
+            title: title.to_string(),
+            ..piece()
+        })
+    };
+    for title in [
+        "@you@mastodon.social hi",
+        "#spam ＃tag ＠you",
+        "see https://x.y or magnet:?xt",
+    ] {
+        let picture = titled(title);
+        let texts = [
+            status_text(&picture, "https://late.sh", Words::Plain),
+            status_text(
+                &picture,
+                "https://late.sh",
+                Words::Marked {
+                    first_line: Some("cw: offensive"),
+                },
+            ),
+            note_text(&picture, "https://late.sh"),
+        ];
+        for text in &texts {
+            let (words, tags) = text.rsplit_once("\n\n").expect("the tags close the post");
+            assert!(!words.contains(['@', '＠', '#', '＃']), "{text}");
+            assert_eq!(words.matches("://").count(), 1, "the page alone: {text}");
+            assert!(!words.contains("magnet:?"), "{text}");
+            assert_eq!(
+                super::bluesky::facets(text).len(),
+                1 + tags.split(' ').count(),
+                "the page and the tags: {text}"
+            );
+        }
+    }
+    let credited = status_text(
+        &titled("@you@mastodon.social see https://x.y"),
+        "https://late.sh",
+        Words::Plain,
+    );
+    assert!(
+        credited.starts_with("\"youmastodon.social see https: //x.y\" by ~painter"),
+        "{credited}"
+    );
+}
+
 fn seen(warning: Option<Warning>) -> Look {
     Look::Seen {
         alt: "A burning refinery across the top.".to_string(),

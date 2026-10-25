@@ -578,6 +578,30 @@ fn week_span(last: NaiveDate) -> String {
     )
 }
 
+/// A piece's title as the words carry it, dead to every network: a
+/// member typed it, and the official account must not mention, tag or
+/// link whatever it says. `@` and `#` go, with the full-width forms
+/// Mastodon also reads, and a colon always has a space after it, so no
+/// `scheme:` survives to open a link (`https: //`, `magnet: ?`).
+fn title_words(title: &str) -> String {
+    let mut out = String::with_capacity(title.len());
+    let mut chars = title.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '@' | '＠' | '#' | '＃' => {}
+            ':' => {
+                out.push(':');
+                match chars.peek() {
+                    Some(next) if !next.is_whitespace() => out.push(' '),
+                    Some(_) | None => {}
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 /// What the post is, in a sentence of plain speech, and its tags.
 fn speech(picture: &Picture) -> (String, &'static [&'static str]) {
     match picture {
@@ -591,7 +615,8 @@ fn speech(picture: &Picture) -> (String, &'static [&'static str]) {
         Picture::Piece(piece) => (
             format!(
                 "\"{}\" by ~{}, hung in the late.sh gallery: drawn cell by cell on the shared ASCII canvas, over SSH.",
-                piece.title, piece.artist,
+                title_words(&piece.title),
+                piece.artist,
             ),
             &ART_TAGS,
         ),
@@ -616,7 +641,8 @@ fn speech(picture: &Picture) -> (String, &'static [&'static str]) {
 /// tightest limit among the networks (`state_test` holds it there, marks
 /// included): a line of plain speech, the page, the tags. A member a kind
 /// credits is `~name`, never `@name`, so no bare `@` can ping a stranger
-/// on the instance. Every network that shows the picture gets the same
+/// on the instance, and a piece's title goes in dead (`title_words`).
+/// Every network that shows the picture gets the same
 /// words but for the mark (`Words`).
 pub(crate) fn status_text(picture: &Picture, web_url: &str, words: Words) -> String {
     let page = match picture.page_path() {
@@ -648,7 +674,8 @@ pub(crate) fn note_text(picture: &Picture, web_url: &str) -> String {
         ),
         Picture::Piece(piece) => format!(
             "\"{}\" by ~{}, a new piece in the late.sh gallery",
-            piece.title, piece.artist
+            title_words(&piece.title),
+            piece.artist
         ),
         Picture::Scoreboard(scoreboard) => format!(
             "The week's best in every late.sh game, to {}",

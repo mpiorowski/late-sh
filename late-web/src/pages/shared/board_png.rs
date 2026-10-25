@@ -129,9 +129,14 @@ impl Crop {
 /// The cells of `canvas` inside `crop`, moved to the origin, colours
 /// kept. A wide glyph that would cross the crop's right edge is left out,
 /// as it would be cut in two. `None` when the crop reaches past the
-/// canvas.
+/// canvas, an edge that overflows `usize` included: the query is anyone's,
+/// and a wrapped edge would pass for one inside.
 pub(crate) fn crop(canvas: &Canvas, crop: Crop) -> Option<Canvas> {
-    if crop.x + crop.width > canvas.width || crop.y + crop.height > canvas.height {
+    let fits = |start: usize, len: usize, side: usize| match start.checked_add(len) {
+        Some(end) => end <= side,
+        None => false,
+    };
+    if !fits(crop.x, crop.width, canvas.width) || !fits(crop.y, crop.height, canvas.height) {
         return None;
     }
     let mut out = Canvas::with_size(crop.width, crop.height);

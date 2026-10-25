@@ -24,7 +24,7 @@ use late_core::{
         chat_room::ChatRoom,
         paper::{
             ANNOUNCEMENTS_LIMIT, ANNOUNCEMENTS_SLUG, EditionStep, PaperEdition, PaperSectionKind,
-            PaperSectionRow, PaperStatus,
+            PaperSectionRow,
         },
     },
 };
@@ -190,13 +190,10 @@ async fn image_handler(
 
 /// A column the press printed, as paragraphs; empty when it did not.
 fn ready_column(issue: &PaperEdition, kind: PaperSectionKind) -> Vec<String> {
-    issue
-        .sections
-        .iter()
-        .find(|section| section.section == kind && section.status == PaperStatus::Ready)
-        .and_then(|section| section.text.as_deref())
-        .map(split_paragraphs)
-        .unwrap_or_default()
+    match issue.ready_text(kind) {
+        Some(text) => split_paragraphs(text),
+        None => Vec::new(),
+    }
 }
 
 /// The front page's lines, `None` when neither column printed.
