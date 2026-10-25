@@ -1,6 +1,7 @@
 //! The herald's pure rules: which day is due, what fills the day's slot,
-//! and the words that travel with the picture. Reads no clock and does no
-//! I/O; `svc.rs` feeds it rows and posts what comes back.
+//! the words that travel with the picture, and how each network marks
+//! what the look saw in it. Reads no clock and does no I/O; `svc.rs`
+//! feeds it rows and posts what comes back.
 
 use chrono::{DateTime, Duration, NaiveDate, NaiveTime, Utc};
 use dartboard_core::{Canvas, CellValue};
@@ -27,7 +28,15 @@ pub(crate) const BOARD_MIN_INK: usize = 200;
 /// The tags the board carries, four at most: a post that is a link and a
 /// pile of tags reads as spam to instance rules and readers alike. The
 /// art tags are the communities that boost strangers' pictures.
-const BOARD_TAGS: &str = "#ASCIIart #MastoArt #tildeverse #terminal";
+const BOARD_TAGS: [&str; 4] = ["#ASCIIart", "#MastoArt", "#tildeverse", "#terminal"];
+
+/// The tag a marked Bluesky post carries in place of its kind's last:
+/// people there hide posts by muting it.
+const NSFW_TAG: &str = "#nsfw";
+
+/// The longest alt text the look keeps, before the `ASCII art: ` prefix.
+/// Mastodon allows 1,500; the model is asked for 800.
+pub(crate) const ALT_MAX_CHARS: usize = 1000;
 
 /// The day whose post is due right now: today once the post time has
 /// passed, yesterday before it. A replica that was down at the hour
@@ -69,16 +78,17 @@ pub(crate) struct BoardCandidate {
 }
 
 /// Yesterday's board as found: the key looked up, and its ink when the
-/// rollover archived one. The ink bar decides whether it is a post.
+/// rollover archived one. The ink bar decides whether it is a post; what
+/// the picture shows is the look's business (`Look`).
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct BoardLook {
+pub(crate) struct BoardFound {
     pub(crate) key: String,
     pub(crate) shown: NaiveDate,
     /// Drawn cells; `None` when no snapshot exists under the key.
     pub(crate) ink: Option<usize>,
 }
 
-impl BoardLook {
+impl BoardFound {
     /// The post this board makes, if it has enough ink.
     pub(crate) fn picture(&self) -> Option<Picture> {
         match self.ink {
@@ -140,25 +150,174 @@ impl Picture {
     }
 }
 
-/// The words under the picture, the same on every network and under
-/// Bluesky's 300 graphemes, the tightest limit among the networks
-/// (`state_test` holds it there): a line of plain speech, the page, the
-/// tags. Nobody is named, so no bare `@` can ping a stranger on the
-/// instance.
-pub(crate) fn status_text(picture: &Picture, web_url: &str) -> String {
-    let page = format!("{web_url}{}", picture.page_path());
-    match picture {
-        Picture::Board(board) => format!(
-            "The Artboard yesterday: late.sh's shared ASCII canvas, as the room left it on {}. Anyone in the clubhouse can pick up a brush.\n\n{page}\n\n{BOARD_TAGS}",
-            board.shown.format("%-d %B %Y"),
-        ),
+/// What the look labelled a picture with: the one warning a post carries.
+/// Closed, so a new warning breaks the build until each network's map
+/// below knows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Warning {
+    /// Bodies, not sexual.
+    Nudity,
+    Suggestive,
+    Explicit,
+    Gore,
+    /// A slur, a hate symbol or harassment drawn on the board.
+    Offensive,
+}
+
+impl Warning {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Nudity => "nudity",
+            Self::Suggestive => "suggestive",
+            Self::Explicit => "explicit",
+            Self::Gore => "gore",
+            Self::Offensive => "offensive",
+        }
     }
 }
 
-/// The picture described for readers who cannot see it.
-pub(crate) fn alt_text(picture: &Picture) -> String {
-    match picture {
-        Picture::Board(board) => format!(
+/// What the look saw in the day's picture. Stored on the day's row with
+/// the picture (migration 255), so a retry posts the same alt text and
+/// the same mark and never asks the model again. The look never skips a
+/// post: it decides the alt text and the warning, nothing else.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Look {
+    /// The model described it. `alt` is the description without the
+    /// prefix, at most `ALT_MAX_CHARS`; `warning` is `None` for a clean
+    /// picture; `reason` names the piece that set the warning, for the
+    /// operator (empty when clean).
+    Seen {
+        alt: String,
+        warning: Option<Warning>,
+        reason: String,
+    },
+    /// Nobody looked: the model failed, or AI is off. Posted with the
+    /// template alt text and marked not reviewed, never unmarked.
+    Unseen,
+}
+
+impl Look {
+    /// One word for the log line and the banner.
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            Self::Seen { warning: None, .. } => "clean",
+            Self::Seen {
+                warning: Some(warning),
+                ..
+            } => warning.as_str(),
+            Self::Unseen => "unseen",
+        }
+    }
+}
+
+/// The content warning a Mastodon post carries, `None` for a clean one.
+/// Any warning also marks the media sensitive, so the image is blurred.
+pub(crate) fn mastodon_warning(look: &Look) -> Option<&'static str> {
+    match look {
+        Look::Seen { warning, .. } => match warning {
+            None => None,
+            Some(Warning::Nudity) => Some("nsfw: nudity"),
+            Some(Warning::Suggestive) => Some("nsfw: suggestive"),
+            Some(Warning::Explicit) => Some("nsfw: explicit"),
+            Some(Warning::Gore) => Some("cw: gore"),
+            Some(Warning::Offensive) => Some("cw: offensive"),
+        },
+        Look::Unseen => Some("cw: not reviewed"),
+    }
+}
+
+/// How the words under the picture carry a mark.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Words {
+    /// The words as they are: a clean post, or a network whose warning
+    /// is a field of its own (Mastodon).
+    Plain,
+    /// `#nsfw` in place of the kind's last tag, so the post stays at four
+    /// tags, and `first_line` above everything when the network has no
+    /// label for what the warning is.
+    Marked { first_line: Option<&'static str> },
+}
+
+/// How a Bluesky post is marked. Bluesky has self-labels, not warnings:
+/// the label (`com.atproto.label.defs#selfLabels`) blurs the image for
+/// whoever hides that kind, and every marked post carries `#nsfw` in its
+/// words for whoever mutes the tag. Where no label fits (offensive, not
+/// reviewed) a first line says what it is, and the image is not blurred.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct BlueskyMark {
+    pub(crate) label: Option<&'static str>,
+    pub(crate) words: Words,
+}
+
+pub(crate) fn bluesky_mark(look: &Look) -> BlueskyMark {
+    let labelled = |label| BlueskyMark {
+        label: Some(label),
+        words: Words::Marked { first_line: None },
+    };
+    match look {
+        Look::Seen { warning, .. } => match warning {
+            None => BlueskyMark {
+                label: None,
+                words: Words::Plain,
+            },
+            Some(Warning::Nudity) => labelled("nudity"),
+            Some(Warning::Suggestive) => labelled("sexual"),
+            Some(Warning::Explicit) => labelled("porn"),
+            Some(Warning::Gore) => labelled("graphic-media"),
+            Some(Warning::Offensive) => BlueskyMark {
+                label: None,
+                words: Words::Marked {
+                    first_line: Some("cw: offensive"),
+                },
+            },
+        },
+        Look::Unseen => BlueskyMark {
+            label: None,
+            words: Words::Marked {
+                first_line: Some("cw: not reviewed"),
+            },
+        },
+    }
+}
+
+/// The words under the picture, under Bluesky's 300 graphemes, the
+/// tightest limit among the networks (`state_test` holds it there, marks
+/// included): a line of plain speech, the page, the tags. Nobody is
+/// named, so no bare `@` can ping a stranger on the instance. Every
+/// network gets the same words but for the mark (`Words`).
+pub(crate) fn status_text(picture: &Picture, web_url: &str, words: Words) -> String {
+    let page = format!("{web_url}{}", picture.page_path());
+    let (speech, tags) = match picture {
+        Picture::Board(board) => (
+            format!(
+                "The Artboard yesterday: late.sh's shared ASCII canvas, as the room left it on {}. Anyone in the clubhouse can pick up a brush.",
+                board.shown.format("%-d %B %Y"),
+            ),
+            BOARD_TAGS,
+        ),
+    };
+    match words {
+        Words::Plain => format!("{speech}\n\n{page}\n\n{}", tags.join(" ")),
+        Words::Marked { first_line } => {
+            let (kept, _) = tags.split_at(tags.len() - 1);
+            let body = format!("{speech}\n\n{page}\n\n{} {NSFW_TAG}", kept.join(" "));
+            match first_line {
+                Some(line) => format!("{line}\n\n{body}"),
+                None => body,
+            }
+        }
+    }
+}
+
+/// The picture described for readers who cannot see it: what the look
+/// saw, else a template that says what the picture is, if not what is
+/// on it.
+pub(crate) fn alt_text(picture: &Picture, look: &Look) -> String {
+    match (picture, look) {
+        (Picture::Board(_), Look::Seen { alt, .. }) => format!("ASCII art: {alt}"),
+        (Picture::Board(board), Look::Unseen) => format!(
             "ASCII art: the late.sh Artboard, a shared terminal canvas, as it stood at the end of {} UTC. Coloured text glyphs on a dark background.",
             board.shown.format("%-d %B %Y"),
         ),

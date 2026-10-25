@@ -18,10 +18,11 @@ use uuid::Uuid;
 
 use super::bluesky::tid_for;
 use super::bluesky_test::png;
-use super::state::{BOARD_MIN_INK, BoardLook, HeraldCommand, post_due_day, shown_day};
+use super::state::{BOARD_MIN_INK, BoardFound, HeraldCommand, Look, post_due_day, shown_day};
 use super::svc::{
     CommandOutcome, DayWorked, HERALD_CLAIM_WINDOW, HERALD_MAX_ATTEMPTS, HeraldService, NextPost,
 };
+use crate::app::ai::svc::AiService;
 use crate::config::{BlueskyConfig, HeraldConfig, HeraldVisibility, MastodonConfig};
 use crate::test_helpers::new_test_db;
 
@@ -43,11 +44,18 @@ struct Recorded {
     fail_mastodon: bool,
     /// While set, the Bluesky blob endpoint answers 500.
     fail_bluesky: bool,
+    /// Gemini: how many times the model was asked, and how many images
+    /// the last call carried.
+    gemini_calls: usize,
+    gemini_images: usize,
+    /// Gemini: the text the model answers.
+    gemini_reply: String,
 }
 
 type Log = Arc<Mutex<Recorded>>;
 
-/// late-web's PNG route and both networks' endpoints on one local port.
+/// late-web's PNG route, both networks' endpoints and the model on one
+/// local port.
 async fn fake_servers() -> (String, Log) {
     let log: Log = Arc::default();
     let app = Router::new()
@@ -57,6 +65,7 @@ async fn fake_servers() -> (String, Log) {
         .route("/xrpc/com.atproto.server.createSession", post(session))
         .route("/xrpc/com.atproto.repo.uploadBlob", post(blob))
         .route("/xrpc/com.atproto.repo.putRecord", post(record))
+        .route("/v1beta/models/{call}", post(gemini))
         .with_state(log.clone());
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
@@ -175,9 +184,32 @@ async fn record(
     axum::Json(serde_json::json!({"uri": uri, "cid": "bafycid"}))
 }
 
-fn service(db: late_core::db::Db, base: &str) -> HeraldService {
+async fn gemini(
+    State(log): State<Log>,
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> impl IntoResponse {
+    let mut log = log.lock().expect("log");
+    log.gemini_calls += 1;
+    log.gemini_images = body["contents"][0]["parts"]
+        .as_array()
+        .expect("parts")
+        .iter()
+        .filter(|part| part.get("inlineData").is_some())
+        .count();
+    axum::Json(serde_json::json!({
+        "candidates": [{"content": {"parts": [{"text": log.gemini_reply}]}}]
+    }))
+}
+
+/// The model switched off, as in dev without a key.
+fn ai_off() -> AiService {
+    AiService::new(false, None)
+}
+
+fn service(db: late_core::db::Db, base: &str, ai: AiService) -> HeraldService {
     HeraldService::new(
         db,
+        ai,
         HeraldConfig {
             mastodon: Some(MastodonConfig {
                 instance: base.to_string(),
@@ -230,6 +262,7 @@ async fn row(client: &Client, day: NaiveDate) -> (Uuid, String, i32) {
 
 /// Day one posts yesterday's board to both networks, day two the next
 /// board, day three has a bare board and rests; a day is settled once.
+/// The model is off, so every post goes out marked not reviewed.
 #[tokio::test]
 async fn the_herald_posts_the_board_and_rests_on_a_bare_one() {
     let test_db = new_test_db().await;
@@ -254,7 +287,7 @@ async fn the_herald_posts_the_board_and_rests_on_a_bare_one() {
     )
     .await;
 
-    let herald = service(db.clone(), &base);
+    let herald = service(db.clone(), &base, ai_off());
     let mut finished = None;
 
     // Day one: the board of the 22nd, on both networks.
@@ -301,6 +334,8 @@ async fn the_herald_posts_the_board_and_rests_on_a_bare_one() {
         assert_eq!(status["media_ids"], serde_json::json!(["77"]));
         assert_eq!(status["visibility"], "unlisted");
         assert_eq!(status["language"], "en");
+        assert_eq!(status["sensitive"], true, "an unseen picture is blurred");
+        assert_eq!(status["spoiler_text"], "cw: not reviewed");
         let text = status["status"].as_str().expect("text");
         assert!(text.contains("The Artboard yesterday"), "{text}");
         assert!(text.contains("https://late.sh/gallery\n"), "{text}");
@@ -316,7 +351,12 @@ async fn the_herald_posts_the_board_and_rests_on_a_bare_one() {
         assert_eq!(put["collection"], "app.bsky.feed.post");
         assert_eq!(put["rkey"], rkey, "the record key comes from the row id");
         let record = &put["record"];
-        assert_eq!(record["text"], text, "the same words on both networks");
+        assert_eq!(
+            record["text"],
+            format!("cw: not reviewed\n\n{}", text.replace("#terminal", "#nsfw")),
+            "the same words on both networks, marked on Bluesky"
+        );
+        assert!(record.get("labels").is_none(), "no label for not reviewed");
         assert_eq!(record["langs"], serde_json::json!(["en"]));
         assert!(
             record["createdAt"]
@@ -357,7 +397,12 @@ async fn the_herald_posts_the_board_and_rests_on_a_bare_one() {
         assert!(log.media_uploads[1].1.contains("23 October 2026"));
         let text = log.statuses[1].2["status"].as_str().expect("text");
         assert!(text.contains("https://late.sh/gallery\n"), "{text}");
-        assert_eq!(log.records[1].1["record"]["text"], text);
+        assert!(
+            log.records[1].1["record"]["text"]
+                .as_str()
+                .expect("text")
+                .starts_with("cw: not reviewed\n\nThe Artboard yesterday")
+        );
     }
 
     // Day three: the board is a smudge.
@@ -396,7 +441,7 @@ async fn the_switch_off_posts_nothing() {
     let now = Utc.with_ymd_and_hms(2026, 10, 23, 16, 30, 0).unwrap();
     daily_board(&client, shown_day(now.date_naive()), BOARD_MIN_INK).await;
 
-    let herald = service(db.clone(), &base);
+    let herald = service(db.clone(), &base, ai_off());
     let mut finished = None;
     assert!(!herald.check(now, &mut finished).await);
     assert_eq!(finished, None);
@@ -427,7 +472,7 @@ async fn a_failed_network_is_retried_alone_under_the_same_key() {
     daily_board(&client, shown_day(day), BOARD_MIN_INK).await;
     log.lock().expect("log").fail_bluesky = true;
 
-    let herald = service(db.clone(), &base);
+    let herald = service(db.clone(), &base, ai_off());
     let mut finished = None;
     assert!(
         herald.check(now, &mut finished).await,
@@ -472,6 +517,82 @@ async fn a_failed_network_is_retried_alone_under_the_same_key() {
     assert_eq!(log.records[0].1["rkey"], tid_for(key));
 }
 
+/// With the model on, its look writes the alt text and the mark on both
+/// networks, and is stored with the pick: a retry after one network
+/// failed sends the same mark without asking the model again.
+#[tokio::test]
+async fn a_seen_day_carries_the_mark_and_a_retry_keeps_it() {
+    let test_db = new_test_db().await;
+    let db = test_db.db.clone();
+    let client = db.get().await.expect("db client");
+    let (base, log) = fake_servers().await;
+    HeraldSwitch::set(&client, true).await.expect("switch on");
+    let now = Utc.with_ymd_and_hms(2026, 10, 23, 16, 30, 0).unwrap();
+    let day = now.date_naive();
+    daily_board(&client, shown_day(day), BOARD_MIN_INK).await;
+    {
+        let mut log = log.lock().expect("log");
+        log.gemini_reply = serde_json::json!({
+            "alt": "A cyborg stands on the left.",
+            "warning": "nudity",
+            "reason": "bare breasts on the cyborg",
+        })
+        .to_string();
+        log.fail_bluesky = true;
+    }
+    let ai = AiService::at_endpoint(true, Some("test-key".to_string()), base.clone());
+    let herald = service(db.clone(), &base, ai);
+    let mut finished = None;
+
+    assert!(herald.check(now, &mut finished).await);
+    assert_eq!(row(&client, day).await.1, "failed");
+    {
+        let log = log.lock().expect("log");
+        assert_eq!(log.gemini_calls, 1);
+        assert_eq!(log.gemini_images, 5, "the board whole and its quarters");
+        assert!(
+            log.media_uploads[0]
+                .1
+                .contains("ASCII art: A cyborg stands on the left."),
+            "{}",
+            log.media_uploads[0].1
+        );
+        let status = &log.statuses[0].2;
+        assert_eq!(status["sensitive"], true);
+        assert_eq!(status["spoiler_text"], "nsfw: nudity");
+        let text = status["status"].as_str().expect("text");
+        assert!(
+            text.ends_with("#terminal"),
+            "Mastodon keeps its tags: {text}"
+        );
+    }
+
+    log.lock().expect("log").fail_bluesky = false;
+    assert!(
+        herald
+            .check(now + Duration::minutes(5), &mut finished)
+            .await
+    );
+    assert_eq!(row(&client, day).await.1, "posted");
+    let log = log.lock().expect("log");
+    assert_eq!(log.gemini_calls, 1, "the stored look, not a second call");
+    let record = &log.records[0].1["record"];
+    assert_eq!(
+        record["labels"],
+        serde_json::json!({
+            "$type": "com.atproto.label.defs#selfLabels",
+            "values": [{"val": "nudity"}],
+        })
+    );
+    let text = record["text"].as_str().expect("text");
+    assert!(text.starts_with("The Artboard yesterday"), "{text}");
+    assert!(text.ends_with("#tildeverse #nsfw"), "{text}");
+    assert_eq!(
+        record["embed"]["images"][0]["alt"],
+        "ASCII art: A cyborg stands on the left."
+    );
+}
+
 /// An admin's `/herald`: the row flips, status and preview read without
 /// posting, and `post` works today before 16:00 with the row off; the
 /// same day again is settled, and the checker then leaves it alone.
@@ -481,7 +602,7 @@ async fn the_commands_flip_read_and_post_today_by_hand() {
     let db = test_db.db.clone();
     let client = db.get().await.expect("db client");
     let (base, log) = fake_servers().await;
-    let herald = service(db.clone(), &base);
+    let herald = service(db.clone(), &base, ai_off());
     // Mid-morning: the checker's due day is yesterday, the admin's is today.
     let now = Utc.with_ymd_and_hms(2026, 10, 23, 9, 0, 0).unwrap();
     let today = now.date_naive();
@@ -510,20 +631,23 @@ async fn the_commands_flip_read_and_post_today_by_hand() {
         herald.run_command(HeraldCommand::Preview, now).await,
         CommandOutcome::Preview {
             day: today,
-            look: BoardLook {
+            board: BoardFound {
                 key: "daily:2026-10-22".to_string(),
                 shown: shown_day(today),
                 ink: None,
             },
+            post: None,
             networks: vec![HeraldNetwork::Mastodon, HeraldNetwork::Bluesky],
         }
     );
 
     daily_board(&client, shown_day(today), BOARD_MIN_INK + 3).await;
     match herald.run_command(HeraldCommand::Preview, now).await {
-        CommandOutcome::Preview { look, .. } => {
-            assert_eq!(look.ink, Some(BOARD_MIN_INK + 3));
-            assert!(look.picture().is_some());
+        CommandOutcome::Preview { board, post, .. } => {
+            assert_eq!(board.ink, Some(BOARD_MIN_INK + 3));
+            let (picture, look) = post.expect("the board is a post");
+            assert_eq!(picture.subject(), "daily:2026-10-22");
+            assert_eq!(look, Look::Unseen, "the model is off");
         }
         other => panic!("a preview, not {other:?}"),
     }
@@ -577,7 +701,7 @@ async fn switching_on_waits_for_the_hour() {
     let db = test_db.db.clone();
     let client = db.get().await.expect("db client");
     let (base, log) = fake_servers().await;
-    let herald = service(db.clone(), &base);
+    let herald = service(db.clone(), &base, ai_off());
     let morning = Utc.with_ymd_and_hms(2026, 10, 23, 10, 0, 0).unwrap();
     let today = morning.date_naive();
     let slept = post_due_day(morning);

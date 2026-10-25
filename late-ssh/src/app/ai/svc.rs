@@ -22,11 +22,16 @@ use serde::{Deserialize, Serialize};
 /// change is a change to how much of the budget the answer still gets.
 pub const AI_MODEL: &str = "gemini-3.7-flash";
 
+/// Gemini's public API, where every production call goes.
+pub const GEMINI_ENDPOINT: &str = "https://generativelanguage.googleapis.com";
+
 #[derive(Debug, Clone)]
 pub struct AiService {
     client: Client,
     api_key: Option<String>,
     enabled: bool,
+    /// Scheme and host the `/v1beta/models/...` calls go to.
+    endpoint: String,
 }
 
 #[derive(Serialize)]
@@ -46,13 +51,30 @@ struct GeminiContent<'a> {
 }
 
 #[derive(Serialize)]
-struct GeminiPart<'a> {
-    text: &'a str,
+#[serde(untagged)]
+enum GeminiPart<'a> {
+    Text {
+        text: &'a str,
+    },
+    /// An image sent beside the text, base64 in the body.
+    InlineData {
+        #[serde(rename = "inlineData")]
+        inline_data: GeminiBlob,
+    },
+}
+
+#[derive(Serialize)]
+struct GeminiBlob {
+    #[serde(rename = "mimeType")]
+    mime_type: &'static str,
+    data: String,
 }
 
 #[derive(Serialize)]
 struct GeminiConfig {
-    temperature: f32,
+    /// `None` leaves the model's own default, which 3.x asks for.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f32>,
     #[serde(rename = "maxOutputTokens")]
     max_output_tokens: u32,
     #[serde(rename = "responseMimeType", skip_serializing_if = "Option::is_none")]
@@ -142,7 +164,14 @@ fn extract_json_object(text: &str) -> &str {
 }
 
 impl AiService {
+    /// The service against Gemini's public API.
     pub fn new(enabled: bool, api_key: Option<String>) -> Self {
+        Self::at_endpoint(enabled, api_key, GEMINI_ENDPOINT.to_string())
+    }
+
+    /// The service against another host speaking Gemini's API: a test's
+    /// fake model.
+    pub fn at_endpoint(enabled: bool, api_key: Option<String>, endpoint: String) -> Self {
         // Every caller funnels through this one client, and several hold a
         // scarce resource across the call (the translation API gate, spawned
         // summary tasks). reqwest has no default timeout, so a hung Gemini
@@ -156,6 +185,7 @@ impl AiService {
             client,
             api_key,
             enabled,
+            endpoint: endpoint.trim_end_matches('/').to_string(),
         }
     }
 
@@ -220,21 +250,21 @@ impl AiService {
 
         let api_key = self.api_key.as_ref().context("missing api key")?;
         let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
-            AI_MODEL
+            "{}/v1beta/models/{}:generateContent",
+            self.endpoint, AI_MODEL
         );
 
         let req = GeminiRequest {
             system_instruction: Some(GeminiContent {
-                parts: vec![GeminiPart {
+                parts: vec![GeminiPart::Text {
                     text: system_prompt,
                 }],
             }),
             contents: vec![GeminiContent {
-                parts: vec![GeminiPart { text: history }],
+                parts: vec![GeminiPart::Text { text: history }],
             }],
             generation_config: GeminiConfig {
-                temperature: 0.8,
+                temperature: Some(0.8),
                 max_output_tokens,
                 response_mime_type: None,
                 response_schema: None,
@@ -294,21 +324,21 @@ impl AiService {
 
         let api_key = self.api_key.as_ref().context("missing api key")?;
         let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
-            AI_MODEL
+            "{}/v1beta/models/{}:generateContent",
+            self.endpoint, AI_MODEL
         );
 
         let req = GeminiRequest {
             system_instruction: Some(GeminiContent {
-                parts: vec![GeminiPart {
+                parts: vec![GeminiPart::Text {
                     text: system_prompt,
                 }],
             }),
             contents: vec![GeminiContent {
-                parts: vec![GeminiPart { text: prompt }],
+                parts: vec![GeminiPart::Text { text: prompt }],
             }],
             generation_config: GeminiConfig {
-                temperature: 0.8,
+                temperature: Some(0.8),
                 max_output_tokens: 8192,
                 response_mime_type: None,
                 response_schema: None,
@@ -368,22 +398,19 @@ impl AiService {
         }
 
         let api_key = self.api_key.as_ref().context("missing api key")?;
-        let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/{}:generateContent",
-            model
-        );
+        let url = format!("{}/v1beta/models/{}:generateContent", self.endpoint, model);
 
         let req = GeminiRequest {
             system_instruction: Some(GeminiContent {
-                parts: vec![GeminiPart {
+                parts: vec![GeminiPart::Text {
                     text: system_prompt,
                 }],
             }),
             contents: vec![GeminiContent {
-                parts: vec![GeminiPart { text: prompt }],
+                parts: vec![GeminiPart::Text { text: prompt }],
             }],
             generation_config: GeminiConfig {
-                temperature: 0.8,
+                temperature: Some(0.8),
                 max_output_tokens: 4096,
                 response_mime_type: Some("application/json".to_string()),
                 response_schema: Some(schema),
@@ -413,6 +440,85 @@ impl AiService {
         let body_text = res.text().await?;
         tracing::debug!(raw_response = %body_text, "Full Gemini API response");
         first_text("generate_json", &body_text)
+    }
+
+    /// `generate_json` with pictures: the PNGs go first, as inline images,
+    /// then the prompt, and the reply is held to `schema`. For a caller
+    /// that asks the model what a picture shows (the herald's look).
+    ///
+    /// No temperature, and a large cap: thinking over images runs long and
+    /// spends from `maxOutputTokens` before the answer starts. Measured on
+    /// the herald's look (five images of a 1536-pixel board): thinking
+    /// reached 5,951 tokens, and a 4,096 cap left 7 of 48 answers empty
+    /// with `MAX_TOKENS`.
+    pub async fn generate_json_with_images(
+        &self,
+        model: &str,
+        system_prompt: &str,
+        pngs: &[&[u8]],
+        prompt: &str,
+        schema: serde_json::Value,
+    ) -> Result<Option<String>> {
+        use base64::Engine;
+
+        if !self.is_enabled() {
+            return Ok(None);
+        }
+
+        let api_key = self.api_key.as_ref().context("missing api key")?;
+        let url = format!("{}/v1beta/models/{}:generateContent", self.endpoint, model);
+
+        let mut parts: Vec<GeminiPart> = pngs
+            .iter()
+            .map(|png| GeminiPart::InlineData {
+                inline_data: GeminiBlob {
+                    mime_type: "image/png",
+                    data: base64::engine::general_purpose::STANDARD.encode(png),
+                },
+            })
+            .collect();
+        parts.push(GeminiPart::Text { text: prompt });
+        let req = GeminiRequest {
+            system_instruction: Some(GeminiContent {
+                parts: vec![GeminiPart::Text {
+                    text: system_prompt,
+                }],
+            }),
+            contents: vec![GeminiContent { parts }],
+            generation_config: GeminiConfig {
+                temperature: None,
+                max_output_tokens: 16384,
+                response_mime_type: Some("application/json".to_string()),
+                response_schema: Some(schema),
+            },
+            tools: None,
+        };
+
+        // The key travels in the `x-goog-api-key` header, never the URL;
+        // `without_url()` stays as defense in depth for a status error's text.
+        let res = match self
+            .client
+            .post(&url)
+            .header("x-goog-api-key", api_key)
+            .json(&req)
+            .send_traced()
+            .await
+        {
+            Ok(res) => res,
+            Err(error) => return Err(error.without_url().into()),
+        };
+        if !res.status().is_success() {
+            let status = res.status();
+            let text = res.text().await.unwrap_or_default();
+            anyhow::bail!("Gemini API error: {} - {}", status, text);
+        }
+
+        let body_text = res.text().await?;
+        tracing::debug!(
+            raw_response_len = body_text.len(),
+            "received Gemini API response"
+        );
+        first_text("generate_json_with_images", &body_text)
     }
 }
 

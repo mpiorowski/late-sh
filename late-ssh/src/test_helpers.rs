@@ -265,6 +265,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let paper_service = crate::app::paper::svc::PaperService::new(db.clone(), ai_service.clone());
     let herald_service = crate::app::herald::svc::HeraldService::new(
         db.clone(),
+        ai_service.clone(),
         config.herald.clone(),
         config.web_url.clone(),
     );
@@ -556,6 +557,7 @@ fn make_app_with_chat_service_and_permissions(
         ),
         herald_service: crate::app::herald::svc::HeraldService::new(
             db.clone(),
+            AiService::new(false, None),
             HeraldConfig::disabled("http://localhost:3000".to_string()),
             "http://localhost:3000".to_string(),
         ),
@@ -842,6 +844,7 @@ pub fn make_app_with_paired_client(
         ),
         herald_service: crate::app::herald::svc::HeraldService::new(
             db.clone(),
+            AiService::new(false, None),
             HeraldConfig::disabled("http://localhost:3000".to_string()),
             "http://localhost:3000".to_string(),
         ),

@@ -4,7 +4,8 @@
 //!
 //! A row is a claim. The checker in late-ssh `app/herald/svc.rs` inserts
 //! a `posting` row before it spends any network's calls, so two replicas
-//! checking the same minute cannot both post; the winner stores its pick,
+//! checking the same minute cannot both post; the winner stores its pick
+//! (the picture and the look, migration 255),
 //! records a delivery per network as each lands, and settles the row to
 //! `posted` once every network has one, or to `skipped`. A day that fails
 //! flips its row to `failed` and keeps the attempt count: the next check
@@ -117,6 +118,14 @@ pub struct HeraldPosted {
     pub deliveries: Vec<HeraldDelivery>,
 }
 
+/// A day's pick as stored: the picture and what the look saw in it, as
+/// the herald serialized them. Both or neither (migration 255).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeraldPick {
+    pub picture: Value,
+    pub look: Value,
+}
+
 /// The daily claim and its record.
 pub struct HeraldPost;
 
@@ -219,33 +228,37 @@ impl HeraldPost {
         Ok(inserted == 1)
     }
 
-    /// The claimed day's pick, written before the first network call so a
-    /// retry delivers the same picture.
-    pub async fn store_picture(
+    /// The claimed day's pick, the picture and the look in one statement,
+    /// written before the first network call so a retry delivers the same
+    /// picture with the same alt text and mark.
+    pub async fn store_pick(
         client: &Client,
         day: NaiveDate,
         kind: HeraldKind,
         subject: &str,
-        picture: &Value,
+        pick: &HeraldPick,
     ) -> Result<()> {
         client
             .execute(
-                "UPDATE herald_posts SET kind = $2, subject = $3, picture = $4 WHERE day = $1",
-                &[&day, &kind.as_str(), &subject, picture],
+                "UPDATE herald_posts SET kind = $2, subject = $3, picture = $4, look = $5 WHERE day = $1",
+                &[&day, &kind.as_str(), &subject, &pick.picture, &pick.look],
             )
             .await?;
         Ok(())
     }
 
     /// The pick an earlier claim of the day stored, if any.
-    pub async fn stored_picture(client: &Client, day: NaiveDate) -> Result<Option<Value>> {
+    pub async fn stored_pick(client: &Client, day: NaiveDate) -> Result<Option<HeraldPick>> {
         let row = client
             .query_opt(
-                "SELECT picture FROM herald_posts WHERE day = $1 AND picture IS NOT NULL",
+                "SELECT picture, look FROM herald_posts WHERE day = $1 AND picture IS NOT NULL",
                 &[&day],
             )
             .await?;
-        Ok(row.map(|row| row.get("picture")))
+        Ok(row.map(|row| HeraldPick {
+            picture: row.get("picture"),
+            look: row.get("look"),
+        }))
     }
 
     /// One network has the day's picture. A second record of the same

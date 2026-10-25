@@ -28,6 +28,9 @@ pub(crate) struct Post<'a> {
     pub(crate) png: &'a [u8],
     pub(crate) text: &'a str,
     pub(crate) alt: &'a str,
+    /// The content warning (`state::mastodon_warning`); any warning also
+    /// marks the media sensitive.
+    pub(crate) warning: Option<&'a str>,
 }
 
 /// `POST /api/v1/statuses` as the instance reads it.
@@ -37,6 +40,9 @@ struct StatusBody<'a> {
     media_ids: Vec<&'a str>,
     visibility: &'a str,
     language: &'a str,
+    sensitive: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    spoiler_text: Option<&'a str>,
 }
 
 #[derive(Deserialize)]
@@ -123,7 +129,8 @@ async fn await_media(
     bail!("media {id} was still processing after {MEDIA_POLL_TRIES} polls")
 }
 
-/// `POST /api/v1/statuses` with the day's key as `Idempotency-Key`.
+/// `POST /api/v1/statuses` with the day's key as `Idempotency-Key`, and
+/// the warning as the status's content warning.
 async fn post_status(
     http: &reqwest::Client,
     config: &MastodonConfig,
@@ -136,6 +143,8 @@ async fn post_status(
         media_ids: vec![media_id],
         visibility: config.visibility.as_str(),
         language: "en",
+        sensitive: post.warning.is_some(),
+        spoiler_text: post.warning,
     };
     let posted: StatusResponse = http
         .post(&url)

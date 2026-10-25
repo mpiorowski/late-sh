@@ -4509,6 +4509,63 @@
         "x": 0,
         "y": 351
       }
+    },
+    {
+      "type": "bargauge",
+      "title": "The Look",
+      "description": "What the herald's look (late-ssh app/herald/look.rs) made of each picture it was shown, a day's fresh pick or an admin's /herald preview: clean (no warning), warned (posted blurred behind a content warning), unseen (the model failed or AI is off; posted marked not reviewed). A retry reuses the stored look and is not counted. Unseen in prod is the herald_look_failed error in the logs.",
+      "datasource": {
+        "uid": "victoriametrics",
+        "type": "victoriametrics-metrics-datasource"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "expr": "sum by (result) (increase(late_ssh_herald_looks_total[$__range]))",
+          "legendFormat": "{{result}}",
+          "instant": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": []
+        },
+        "overrides": []
+      },
+      "options": {
+        "orientation": "horizontal",
+        "displayMode": "gradient",
+        "showUnfilled": true,
+        "minVizWidth": 0,
+        "minVizHeight": 10,
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        }
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 351
+      }
     }
   ]
 }

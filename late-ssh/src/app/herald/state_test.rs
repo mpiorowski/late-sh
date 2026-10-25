@@ -4,13 +4,14 @@ use late_core::models::artboard::Snapshot;
 use late_core::models::herald::HeraldKind;
 
 use super::state::{
-    BOARD_MIN_INK, BoardCandidate, BoardLook, HeraldCommand, Picture, alt_text, ink_cells,
-    parse_herald_command, post_due_day, shown_day, status_text,
+    BOARD_MIN_INK, BlueskyMark, BoardCandidate, BoardFound, HeraldCommand, Look, Picture, Warning,
+    Words, alt_text, bluesky_mark, ink_cells, mastodon_warning, parse_herald_command, post_due_day,
+    shown_day, status_text,
 };
 
 /// The shortest limit among the networks: Bluesky's 300 graphemes
-/// (Mastodon allows 500). One text goes to every network, so it fits the
-/// tightest.
+/// (Mastodon allows 500). The words differ between networks only by the
+/// mark, so every variant fits the tightest.
 const TEXT_LIMIT: usize = 300;
 
 fn day(d: u32) -> NaiveDate {
@@ -55,7 +56,7 @@ fn the_words_fit_and_never_mention_anyone() {
         "/gallery/daily:2026-10-22/image.png"
     );
     assert_eq!(picture.page_path(), "/gallery");
-    let text = status_text(&picture, "https://late.sh");
+    let text = status_text(&picture, "https://late.sh", Words::Plain);
     assert!(text.chars().count() < TEXT_LIMIT, "{text}");
     assert!(text.contains("22 October 2026"));
     assert!(
@@ -64,16 +65,144 @@ fn the_words_fit_and_never_mention_anyone() {
     );
     assert!(text.contains("https://late.sh/gallery\n"), "{text}");
     assert_eq!(text.matches('#').count(), 4);
-    let alt = alt_text(&picture);
+    let alt = alt_text(&picture, &Look::Unseen);
+    assert!(alt.starts_with("ASCII art: "), "{alt}");
     assert!(alt.contains("22 October 2026"));
     assert!(!alt.contains('@'));
+}
+
+fn seen(warning: Option<Warning>) -> Look {
+    Look::Seen {
+        alt: "A burning refinery across the top.".to_string(),
+        warning,
+        reason: String::new(),
+    }
+}
+
+/// Every look, and the mark each network gives it: Mastodon's content
+/// warning (any blurs), Bluesky's self-label and words. The whole table,
+/// so a moved mark shows here.
+#[test]
+fn each_look_maps_to_each_networks_mark() {
+    let marked = |first_line| Words::Marked { first_line };
+    let looks = [
+        seen(None),
+        seen(Some(Warning::Nudity)),
+        seen(Some(Warning::Suggestive)),
+        seen(Some(Warning::Explicit)),
+        seen(Some(Warning::Gore)),
+        seen(Some(Warning::Offensive)),
+        Look::Unseen,
+    ];
+    let marks: Vec<(&str, Option<&str>, BlueskyMark)> = looks
+        .iter()
+        .map(|look| (look.as_str(), mastodon_warning(look), bluesky_mark(look)))
+        .collect();
+    let bluesky = |label, words| BlueskyMark { label, words };
+    assert_eq!(
+        marks,
+        vec![
+            ("clean", None, bluesky(None, Words::Plain)),
+            (
+                "nudity",
+                Some("nsfw: nudity"),
+                bluesky(Some("nudity"), marked(None))
+            ),
+            (
+                "suggestive",
+                Some("nsfw: suggestive"),
+                bluesky(Some("sexual"), marked(None))
+            ),
+            (
+                "explicit",
+                Some("nsfw: explicit"),
+                bluesky(Some("porn"), marked(None))
+            ),
+            (
+                "gore",
+                Some("cw: gore"),
+                bluesky(Some("graphic-media"), marked(None))
+            ),
+            (
+                "offensive",
+                Some("cw: offensive"),
+                bluesky(None, marked(Some("cw: offensive")))
+            ),
+            (
+                "unseen",
+                Some("cw: not reviewed"),
+                bluesky(None, marked(Some("cw: not reviewed")))
+            ),
+        ]
+    );
+}
+
+/// A marked post swaps its last tag for `#nsfw`, keeps four, puts the
+/// first line on top, and still fits Bluesky's limit.
+#[test]
+fn marked_words_keep_four_tags_and_fit() {
+    let picture = Picture::Board(board());
+    let plain = status_text(&picture, "https://late.sh", Words::Plain);
+    assert!(
+        plain.ends_with("#ASCIIart #MastoArt #tildeverse #terminal"),
+        "{plain}"
+    );
+
+    let labelled = status_text(
+        &picture,
+        "https://late.sh",
+        Words::Marked { first_line: None },
+    );
+    assert!(labelled.starts_with("The Artboard yesterday"), "{labelled}");
+    assert!(
+        labelled.ends_with("#ASCIIart #MastoArt #tildeverse #nsfw"),
+        "{labelled}"
+    );
+
+    let unlabelled = status_text(
+        &picture,
+        "https://late.sh",
+        Words::Marked {
+            first_line: Some("cw: not reviewed"),
+        },
+    );
+    assert!(
+        unlabelled.starts_with("cw: not reviewed\n\nThe Artboard"),
+        "{unlabelled}"
+    );
+    assert!(unlabelled.ends_with("#nsfw"), "{unlabelled}");
+    for text in [&plain, &labelled, &unlabelled] {
+        assert!(text.chars().count() < TEXT_LIMIT, "{text}");
+        assert_eq!(text.matches('#').count(), 4, "{text}");
+    }
+}
+
+/// The look round-trips through the row; `Unseen` is the `"unseen"`
+/// migration 255 wrote on the rows picked before it. A seen picture's alt
+/// is the model's, prefixed.
+#[test]
+fn the_look_round_trips_and_writes_the_alt() {
+    assert_eq!(
+        serde_json::to_value(Look::Unseen).expect("serialize"),
+        serde_json::json!("unseen")
+    );
+    let look = seen(Some(Warning::Gore));
+    let stored = serde_json::to_value(&look).expect("serialize");
+    assert_eq!(
+        serde_json::from_value::<Look>(stored).expect("deserialize"),
+        look
+    );
+    assert_eq!(
+        alt_text(&Picture::Board(board()), &look),
+        "ASCII art: A burning refinery across the top."
+    );
 }
 
 /// A board is a post at the ink bar and not under it; a missing one
 /// says so.
 #[test]
-fn the_look_decides_by_the_ink_bar() {
-    let look = |ink| BoardLook {
+fn the_board_is_a_post_at_the_ink_bar() {
+    let look = |ink| BoardFound {
         key: Snapshot::daily_key(day(22)),
         shown: day(22),
         ink,

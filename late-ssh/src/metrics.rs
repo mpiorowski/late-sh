@@ -140,6 +140,18 @@ pub enum HeraldDeliveryResult {
     Failed,
 }
 
+/// What the herald's look (`app/herald/look.rs`) came to, once per look
+/// it runs: a day's fresh pick or an admin's preview.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeraldLookResult {
+    /// The model saw nothing to warn about.
+    Clean,
+    /// The model put a warning on the picture.
+    Warned,
+    /// No answer: the model failed, or AI is off. Posted not reviewed.
+    Unseen,
+}
+
 /// How one page of The Late Edition (`app/paper`) came off the press.
 /// `Printed` is the variant that spent a model call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -723,14 +735,15 @@ mod inner {
         BioScreenOutcome, CrownRefusal, DailyPuzzle, DailyWinPayout, DoorGame, DoorWatchOutcome,
         FightBeat, FirstContactBeat, GalleryApplauseResult, GalleryHangResult,
         GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
-        HeraldDeliveryResult, HeraldPostResult, JobsFetchResult, JobsPostResult, JobsPressResult,
-        JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
-        OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult,
-        Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope,
-        PresenceWire, RealmChatRoomAttach, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError,
-        Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SendRefusal,
-        SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason,
-        SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
+        HeraldDeliveryResult, HeraldLookResult, HeraldPostResult, JobsFetchResult, JobsPostResult,
+        JobsPressResult, JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure,
+        NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult,
+        PaperPrintResult, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence,
+        PresenceScope, PresenceWire, RealmChatRoomAttach, RealmPayout, RealmSeasonOpen,
+        RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor,
+        Screen, SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
+        SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
+        VizWireBands, WatchDoor,
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
@@ -3621,6 +3634,31 @@ mod inner {
         );
     }
 
+    fn herald_look_result_label(result: HeraldLookResult) -> &'static str {
+        match result {
+            HeraldLookResult::Clean => "clean",
+            HeraldLookResult::Warned => "warned",
+            HeraldLookResult::Unseen => "unseen",
+        }
+    }
+
+    fn herald_looks_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_herald_looks_total")
+                .with_description("The herald's look at a picture, by result")
+                .build()
+        })
+    }
+
+    pub fn record_herald_look(result: HeraldLookResult) {
+        herald_looks_total().add(
+            1,
+            &[KeyValue::new("result", herald_look_result_label(result))],
+        );
+    }
+
     fn jobs_fetch_result_label(result: JobsFetchResult) -> &'static str {
         match result {
             JobsFetchResult::Fetched => "fetched",
@@ -4132,14 +4170,15 @@ mod inner {
         BioScreenOutcome, CrownRefusal, DailyPuzzle, DailyWinPayout, DoorGame, DoorWatchOutcome,
         FightBeat, FirstContactBeat, GalleryApplauseResult, GalleryHangResult,
         GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
-        HeraldDeliveryResult, HeraldPostResult, JobsFetchResult, JobsPostResult, JobsPressResult,
-        JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
-        OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult,
-        Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope,
-        PresenceWire, RealmChatRoomAttach, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError,
-        Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SendRefusal,
-        SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason,
-        SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
+        HeraldDeliveryResult, HeraldLookResult, HeraldPostResult, JobsFetchResult, JobsPostResult,
+        JobsPressResult, JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure,
+        NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult,
+        PaperPrintResult, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence,
+        PresenceScope, PresenceWire, RealmChatRoomAttach, RealmPayout, RealmSeasonOpen,
+        RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor,
+        Screen, SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
+        SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
+        VizWireBands, WatchDoor,
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
@@ -4295,6 +4334,7 @@ mod inner {
         _result: HeraldDeliveryResult,
     ) {
     }
+    pub fn record_herald_look(_result: HeraldLookResult) {}
     pub fn record_jobs_fetch(
         _source: late_core::models::job_posting::JobSource,
         _result: JobsFetchResult,

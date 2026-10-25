@@ -2,8 +2,8 @@ use chrono::{Duration, NaiveDate, Utc};
 use tokio_postgres::Client;
 
 use super::herald::{
-    HeraldDayStatus, HeraldDelivery, HeraldKind, HeraldNetwork, HeraldPost, HeraldPosted,
-    HeraldSwitch,
+    HeraldDayStatus, HeraldDelivery, HeraldKind, HeraldNetwork, HeraldPick, HeraldPost,
+    HeraldPosted, HeraldSwitch,
 };
 use crate::test_utils::test_db;
 
@@ -27,12 +27,15 @@ fn window() -> chrono::DateTime<Utc> {
 
 /// Store the pick and settle the day as posted on Mastodon.
 async fn post(client: &Client, day: NaiveDate, kind: HeraldKind, subject: &str) {
-    HeraldPost::store_picture(
+    HeraldPost::store_pick(
         client,
         day,
         kind,
         subject,
-        &serde_json::json!({"pick": subject}),
+        &HeraldPick {
+            picture: serde_json::json!({"pick": subject}),
+            look: serde_json::json!("unseen"),
+        },
     )
     .await
     .expect("store pick");
@@ -109,10 +112,11 @@ async fn a_day_is_claimed_once_and_settles() {
         }
     );
     assert_eq!(
-        HeraldPost::stored_picture(&client, DAY)
-            .await
-            .expect("read"),
-        Some(serde_json::json!({"pick": "daily:2026-10-22"}))
+        HeraldPost::stored_pick(&client, DAY).await.expect("read"),
+        Some(HeraldPick {
+            picture: serde_json::json!({"pick": "daily:2026-10-22"}),
+            look: serde_json::json!("unseen"),
+        })
     );
 
     // The key is the first claim's and never changes; a pick and a
@@ -123,12 +127,15 @@ async fn a_day_is_claimed_once_and_settles() {
         .await
         .expect("claim")
         .expect("wins");
-    HeraldPost::store_picture(
+    HeraldPost::store_pick(
         &client,
         later,
         HeraldKind::Artboard,
         "daily:2026-10-23",
-        &serde_json::json!({}),
+        &HeraldPick {
+            picture: serde_json::json!({}),
+            look: serde_json::json!({"seen": {"alt": "a cat"}}),
+        },
     )
     .await
     .expect("store pick");
@@ -146,10 +153,12 @@ async fn a_day_is_claimed_once_and_settles() {
     assert_eq!(retry, first, "the idempotency key survives a retry");
     assert_ne!(key, first, "each day has its own key");
     assert_eq!(
-        HeraldPost::stored_picture(&client, later)
-            .await
-            .expect("read"),
-        Some(serde_json::json!({}))
+        HeraldPost::stored_pick(&client, later).await.expect("read"),
+        Some(HeraldPick {
+            picture: serde_json::json!({}),
+            look: serde_json::json!({"seen": {"alt": "a cat"}}),
+        }),
+        "the look survives the retry with the picture"
     );
     assert_eq!(
         HeraldPost::deliveries(&client, later).await.expect("read"),

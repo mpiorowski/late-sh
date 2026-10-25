@@ -1,10 +1,10 @@
 # AI Context
 
-`late-ssh/src/app/ai/`: the model calls behind chat. The ghost bots (@bot, @graybeard, @bartender) and their mention cooldowns, screening of text a player writes, chat translation, and the `/summary` catch-up. The daily paper also calls `AiService`, from `app/paper` (its own context). Each module opens with a doc comment that carries its rules; this file is the map plus the flows that cross into chat and chips.
+`late-ssh/src/app/ai/`: the model calls behind chat. The ghost bots (@bot, @graybeard, @bartender) and their mention cooldowns, screening of text a player writes, chat translation, and the `/summary` catch-up. The daily paper also calls `AiService`, from `app/paper` (its own context), and the herald's look, from `app/herald/look.rs`. Each module opens with a doc comment that carries its rules; this file is the map plus the flows that cross into chat and chips.
 
 ## Files
 
-- `svc.rs`: `AiService`, the Gemini client: `generate_reply`/`generate_short_reply`/`generate_ungrounded` for text, `generate_json`/`generate_json_with_search` for schema-enforced JSON. Which path a caller picks (grounded with Google Search or cheap) is the call policy at the top of `ghost.rs`.
+- `svc.rs`: `AiService`, the Gemini client: `generate_reply`/`generate_short_reply`/`generate_ungrounded` for text, `generate_json`/`generate_json_with_search` for schema-enforced JSON, `generate_json_with_images` for a schema answer about PNGs sent as inline images (no temperature, a 16,384 cap: thinking over images ran past 4,096 on the herald's look). `new` points at Gemini's public API (`GEMINI_ENDPOINT`); `at_endpoint` at another host, for a test's fake model. Which path a caller picks (grounded with Google Search or cheap) is the call policy at the top of `ghost.rs`.
 - `ghost.rs`: the always-on chat characters (@bot, @graybeard, @bartender), their mention responders, the clubhouse tutorial's scripted @bartender welcome, and the bartender's order and round flow (`ROUND.md`). Each bot registers with `fingerprint: None`, so it stays out of the human headcount.
 - `bartender_memory.rs`: @bartender's memory of each patron, the terminal side: storing an exchange once its tail closes, and the prompt section that hands him what he remembers (`MEMORY.md`).
 - `ladder.rs`: escalating per-user, per-room mention cooldowns for @bot and @bartender, process-global; the composer reads it to warn at submit time. Graybeard keeps a flat cooldown in his own responder loop.
