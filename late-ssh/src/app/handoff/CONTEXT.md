@@ -38,7 +38,8 @@ before this change) keeps the banner and the manual reconnect.
    `PairRetryPolicy::after_handoff`, which never releases the boot mute.
 4. **The new pod resumes** (`ssh.rs` `env_request`, then `App::new`).
    `ResumePoint::parse` reads the env into `SessionConfig::resume`. A resumed
-   session shows no splash and no paper pop, lands on the resume page
+   session publishes no login event (no "joined" in #lounge, no friend
+   banner, nothing on the Nightcap TV), shows no splash and no paper pop, lands on the resume page
    (`ResumePage::landing`, then `svc::resume` switches pages through
    `set_screen`, as a digit on the first frame would, so the Artboard consent
    and door gates still apply) and hands chat the selected room

@@ -68,9 +68,12 @@ sequenceDiagram
 - The SSH login name is ignored except `invite-<code>` on the connect that
   creates an account (`app/referral`). New accounts get a generated username
   (`usernames::next_generated_username`), retried on a unique violation.
-- The activity receiver is created in `auth_publickey` (before the login event
-  is published), stored on `ClientHandler`, and taken into `SessionConfig` in
-  `pty_request`. Creating it later misses the user's own login event.
+- The activity receiver is created in `auth_publickey`, stored on
+  `ClientHandler`, and taken into `SessionConfig` in `pty_request`. The login
+  event is published in `pty_request`, the first point that knows whether
+  the session was moved off a draining pod (`LATE_RESUME`); a moved session
+  publishes none. Creating the receiver after the publish misses the user's
+  own login event.
 - `force_admin` is a profile literal (`true` in dev, `false` in prod), OR'd with
   `users.is_admin` at session init.
 - SSH compression is pinned to `NONE`: a client that negotiates zlib drops

@@ -755,7 +755,6 @@ impl russh::server::Handler for ClientHandler {
             user.username.clone(),
         );
 
-        let user_id = user.id;
         let username = user.username.clone();
 
         tracing::info!(
@@ -766,11 +765,9 @@ impl russh::server::Handler for ClientHandler {
 
         self.user = Some(user);
         self.auth_fingerprint = Some(fingerprint);
+        // Subscribed here, before `pty_request` publishes this session's own
+        // join, so the session hears it.
         self.activity_feed_rx = Some(self.state.activity_feed.subscribe());
-        let _ = self
-            .state
-            .activity_feed
-            .send(ActivityEvent::joined(user_id, username));
         self.authed_at = Some(Instant::now());
         Ok(Auth::Accept)
     }
@@ -854,6 +851,19 @@ impl russh::server::Handler for ClientHandler {
         };
 
         let user_id = user.id;
+        // The login event waits for the pty, the first point that knows
+        // whether this session is one a drain handoff moved off another pod
+        // (`LATE_RESUME`, read in `env_request`). That one already joined
+        // there and comes in quietly.
+        match self.resume {
+            None => {
+                let _ = self
+                    .state
+                    .activity_feed
+                    .send(ActivityEvent::joined(user_id, user.username.clone()));
+            }
+            Some(_) => {}
+        }
         let permissions = AuthzPermissions::new(
             user.is_admin || self.state.config.force_admin,
             user.is_moderator,
