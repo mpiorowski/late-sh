@@ -1224,11 +1224,12 @@ pub(crate) fn outside_prompt(edition: NaiveDate, covered: &[(NaiveDate, String)]
 
 /// The YESTERDAY column's lines: the radio first (its stations by
 /// listener, the most listened first), then the booth, then one per
-/// shelf anyone played on (the finishes, and which game had the most of
-/// them, or that one game had them all; a door run that ascended is
-/// named). The radio, the booth or a shelf with nothing is not a line,
-/// and a day with nothing at all is `None`. Plain sentences, no bullets:
-/// late.sh's own words, like NEW WORK, not the press's column.
+/// shelf anyone played on: the arcade's and the Lobby's finishes, and
+/// which game had the most of them, or that one game had them all; the
+/// doors opened, per door by openings, and the runs won. The radio, the
+/// booth or a shelf with nothing is not a line, and a day with nothing at
+/// all is `None`. Plain sentences, no bullets: late.sh's own words, like
+/// NEW WORK, not the press's column.
 pub(crate) fn yesterday_column(
     tallies: &[DayTally],
     stations: &[StationListeners],
@@ -1260,14 +1261,19 @@ pub(crate) fn yesterday_column(
             .filter(|tally| tally.game.shelf() == *shelf)
             .collect();
         let plays: i64 = on_shelf.iter().map(|tally| tally.plays).sum();
-        if plays == 0 {
-            continue;
-        }
         let (noun, verb) = match shelf {
             Shelf::Arcade => ("game", "finished"),
             Shelf::Lobby => ("match", "finished"),
-            Shelf::Doors => ("run", "ended"),
+            Shelf::Doors => {
+                if let Some(line) = doors_line(&on_shelf) {
+                    lines.push(line);
+                }
+                continue;
+            }
         };
+        if plays == 0 {
+            continue;
+        }
         let count = match (plays, noun) {
             (1, noun) => format!("1 {noun}"),
             (plays, "match") => format!("{plays} matches"),
@@ -1281,7 +1287,7 @@ pub(crate) fn yesterday_column(
                 Some(_) | None => Some(tally),
             })
             .expect("a shelf with plays has a game");
-        let mut line = match (on_shelf.len(), plays) {
+        let line = match (on_shelf.len(), plays) {
             (1, 1) => format!("{}: {count} {verb}: {}", shelf.title(), top.game.title()),
             (1, _) => format!(
                 "{}: {count} {verb}, all {}",
@@ -1294,20 +1300,49 @@ pub(crate) fn yesterday_column(
                 top.game.title()
             ),
         };
-        if *shelf == Shelf::Doors {
-            let won: i64 = on_shelf.iter().map(|tally| tally.won).sum();
-            match won {
-                0 => {}
-                1 => line.push_str(", 1 won"),
-                won => line.push_str(&format!(", {won} won")),
-            }
-        }
         lines.push(line);
     }
     if lines.is_empty() {
         None
     } else {
         Some(lines.join("\n"))
+    }
+}
+
+/// The doors' line: how many times they were opened (`DayTally::plays`
+/// for a door), each door by its openings, most opened first and the
+/// roster's order on a tie, and the runs won; `None` when nothing was
+/// opened or won.
+fn doors_line(doors: &[&DayTally]) -> Option<String> {
+    let opened: i64 = doors.iter().map(|tally| tally.plays).sum();
+    let won: i64 = doors.iter().map(|tally| tally.won).sum();
+    let mut by_openings: Vec<&DayTally> = doors
+        .iter()
+        .copied()
+        .filter(|tally| tally.plays > 0)
+        .collect();
+    by_openings.sort_by_key(|tally| std::cmp::Reverse(tally.plays));
+    let mut parts: Vec<String> = Vec::new();
+    match by_openings.as_slice() {
+        [] => {}
+        [only] if only.plays == 1 => parts.push(format!("1 opened, {}", only.game.title())),
+        [only] => parts.push(format!("{opened} opened, all {}", only.game.title())),
+        many => {
+            parts.push(format!("{opened} opened"));
+            for tally in many {
+                parts.push(format!("{} {}", tally.game.title(), tally.plays));
+            }
+        }
+    }
+    match won {
+        0 => {}
+        1 => parts.push("1 run won".to_string()),
+        won => parts.push(format!("{won} runs won")),
+    }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(format!("Doors: {}", parts.join(", ")))
     }
 }
 

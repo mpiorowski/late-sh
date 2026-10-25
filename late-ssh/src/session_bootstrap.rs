@@ -499,6 +499,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         arcade_handle_service: state.arcade_handle_service.clone(),
         live_games: state.live_games.clone(),
         door_rc_service: state.door_rc_service.clone(),
+        games_hub_service: state.games_hub_service.clone(),
         initial_door_rcs,
         daily_service: state.daily_service.clone(),
         realm_service: state.realm_service.clone(),

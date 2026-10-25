@@ -150,6 +150,7 @@ pub struct State {
     pub arcade_handle_service: crate::app::door::arcade::ArcadeHandleService,
     pub live_games: crate::app::door::spectate::svc::LiveGamesService,
     pub door_rc_service: crate::app::door::rc::DoorRcService,
+    pub games_hub_service: crate::app::door::hub::svc::GamesHubService,
     pub daily_service: crate::app::lobby::daily::svc::DailyService,
     pub realm_service: crate::app::door::realm::svc::RealmService,
     pub house_registry: crate::app::lobby::house::registry::HouseTableRegistry,

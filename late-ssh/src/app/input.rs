@@ -1565,11 +1565,25 @@ fn open_door_rc_modal(app: &mut App, game: late_core::models::door_rc::DoorRcGam
 
 /// Launch the chosen door game from the hub: switch to its screen and start it
 /// immediately (no second launcher step). Disabled remote games stay in the hub
-/// with a banner instead of bouncing through an empty screen.
+/// with a banner instead of bouncing through an empty screen. Every launch
+/// that gets past the gate is written down as a door opened
+/// (`GamesHubService::record_task`), before the connect: a host that then
+/// refuses still had its door opened, a card that only showed the banner
+/// did not, and the two server cards launch nothing.
 fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state::HubGame) {
     use crate::app::door::hub::state::HubGame;
 
     app.door_delete_confirm = false;
+    let Some(card) = game.card() else {
+        // Played from the game client, not the terminal: the landing says
+        // how to connect and there is nothing to launch.
+        return;
+    };
+    if let Some(unavailable) = games_hub_unavailable(app, game) {
+        app.banner = Some(crate::app::common::primitives::Banner::error(unavailable));
+        return;
+    }
+    app.games_hub_service.record_task(app.user_id, card);
     match game {
         // Only on a runner's roster, so the gate already held when the
         // card was selected; the descent is the one `0` takes.
@@ -1584,64 +1598,34 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
         // and joining happens from it (`j`), after seeing the map. Nothing
         // to open between seasons, which lasts a sweeper tick at most.
         HubGame::Realm => crate::app::door::realm::input::open_realm(app),
-        // Played from the game client, not the terminal: the landing says
-        // how to connect and there is nothing to launch.
-        HubGame::Minecraft | HubGame::VintageStory => {}
+        HubGame::Minecraft | HubGame::VintageStory => {
+            unreachable!("a server card has no door card")
+        }
         HubGame::Rebels => {
-            if !app.rebels_enabled {
-                app.banner = Some(crate::app::common::primitives::Banner::error(
-                    "Rebels in the Sky is currently unavailable.",
-                ));
-                return;
-            }
             app.set_screen(Screen::Rebels);
             if let Some(state) = app.rebels_state.as_mut() {
                 state.connect();
             }
         }
         HubGame::Nethack => {
-            if !app.nethack_enabled {
-                app.banner = Some(crate::app::common::primitives::Banner::error(
-                    "NetHack is currently unavailable.",
-                ));
-                return;
-            }
             app.set_screen(Screen::Nethack);
             if let Some(state) = app.nethack_state.as_mut() {
                 state.connect();
             }
         }
         HubGame::Dcss => {
-            if !app.dcss_enabled {
-                app.banner = Some(crate::app::common::primitives::Banner::error(
-                    "DCSS is currently unavailable.",
-                ));
-                return;
-            }
             app.set_screen(Screen::Dcss);
             if let Some(state) = app.dcss_state.as_mut() {
                 state.connect();
             }
         }
         HubGame::Brogue => {
-            if !app.brogue_enabled {
-                app.banner = Some(crate::app::common::primitives::Banner::error(
-                    "Brogue is currently unavailable.",
-                ));
-                return;
-            }
             app.set_screen(Screen::Brogue);
             if let Some(state) = app.brogue_state.as_mut() {
                 state.connect();
             }
         }
         HubGame::Usurper => {
-            if !app.usurper_enabled {
-                app.banner = Some(crate::app::common::primitives::Banner::error(
-                    "Usurper is currently unavailable.",
-                ));
-                return;
-            }
             app.set_screen(Screen::Usurper);
             if let Some(state) = app.usurper_state.as_mut() {
                 state.connect();
@@ -1652,24 +1636,12 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
             app.enter_greendragon();
         }
         HubGame::Dopewars => {
-            if !app.dopewars_enabled {
-                app.banner = Some(crate::app::common::primitives::Banner::error(
-                    "dopewars is currently unavailable.",
-                ));
-                return;
-            }
             app.set_screen(Screen::Dopewars);
             if let Some(state) = app.dopewars_state.as_mut() {
                 state.connect();
             }
         }
         HubGame::Bashquest => {
-            if !app.bashquest_enabled {
-                app.banner = Some(crate::app::common::primitives::Banner::error(
-                    "BashQuest is currently unavailable.",
-                ));
-                return;
-            }
             app.set_screen(Screen::Bashquest);
             if let Some(state) = app.bashquest_state.as_mut() {
                 state.connect();
@@ -1681,17 +1653,49 @@ fn launch_games_hub_selection(app: &mut App, game: crate::app::door::hub::state:
         }
         HubGame::Zork => crate::app::door::zork::input::launch(app),
         HubGame::Codekeep => {
-            if !app.codekeep_enabled {
-                app.banner = Some(crate::app::common::primitives::Banner::error(
-                    "CodeKeep is currently unavailable.",
-                ));
-                return;
-            }
             app.set_screen(Screen::Codekeep);
             if let Some(state) = app.codekeep_state.as_mut() {
                 state.connect();
             }
         }
+    }
+}
+
+/// The banner a card shows instead of launching while its host is switched
+/// off; the native doors and the server cards are never off.
+fn games_hub_unavailable(
+    app: &App,
+    game: crate::app::door::hub::state::HubGame,
+) -> Option<&'static str> {
+    use crate::app::door::hub::state::HubGame;
+
+    match game {
+        HubGame::NightCity
+        | HubGame::Lateania
+        | HubGame::Realm
+        | HubGame::Minecraft
+        | HubGame::VintageStory
+        | HubGame::GreenDragon
+        | HubGame::Zork
+        | HubGame::Darkroom => None,
+        HubGame::Rebels if !app.rebels_enabled => {
+            Some("Rebels in the Sky is currently unavailable.")
+        }
+        HubGame::Nethack if !app.nethack_enabled => Some("NetHack is currently unavailable."),
+        HubGame::Dcss if !app.dcss_enabled => Some("DCSS is currently unavailable."),
+        HubGame::Brogue if !app.brogue_enabled => Some("Brogue is currently unavailable."),
+        HubGame::Usurper if !app.usurper_enabled => Some("Usurper is currently unavailable."),
+        HubGame::Dopewars if !app.dopewars_enabled => Some("dopewars is currently unavailable."),
+        HubGame::Bashquest if !app.bashquest_enabled => Some("BashQuest is currently unavailable."),
+        HubGame::Codekeep if !app.codekeep_enabled => Some("CodeKeep is currently unavailable."),
+        HubGame::Rebels
+        | HubGame::Nethack
+        | HubGame::Dcss
+        | HubGame::Brogue
+        | HubGame::Usurper
+        | HubGame::Dopewars
+        | HubGame::Bashquest
+        | HubGame::Codekeep => None,
     }
 }
 

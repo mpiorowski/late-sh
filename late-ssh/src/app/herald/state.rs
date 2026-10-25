@@ -241,7 +241,8 @@ pub(crate) struct PieceCandidate {
 }
 
 /// The week's best in every game (the arcade, the Lobby, the doors), one
-/// line per game anyone played.
+/// line per game anyone played, nobody named: the card is public and the
+/// names stay on the terminal's boards.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ScoreboardCandidate {
     /// The week's last day; it runs `WEEK_DAYS` back from here.
@@ -252,7 +253,6 @@ pub(crate) struct ScoreboardCandidate {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ScoreLine {
     pub(crate) game: String,
-    pub(crate) player: String,
     /// `6 wins`, `12,340`.
     pub(crate) best: String,
 }
@@ -269,7 +269,6 @@ impl ScoreboardCandidate {
                 .iter()
                 .map(|best| ScoreLine {
                     game: best.game.title().to_string(),
-                    player: best.username.clone(),
                     best: best.shown_value(),
                 })
                 .collect(),
@@ -736,7 +735,7 @@ pub(crate) fn alt_text(picture: &Picture, look: &Look) -> String {
             scoreboard
                 .lines
                 .iter()
-                .map(|line| format!("{}: ~{}, {}", line.game, line.player, line.best))
+                .map(|line| format!("{}: {}", line.game, line.best))
                 .collect::<Vec<_>>()
                 .join("; "),
         )),

@@ -7,21 +7,17 @@ use super::week_card;
 use crate::pages::shared::card::{CardLine, Ink};
 
 /// The card: the masthead, the week, a section per shelf anyone played
-/// on, one line per game in three columns with the player credited
-/// `~name`, and the way in.
+/// on, one line per game with its best and nobody's name, and the way
+/// in.
 #[test]
-fn the_week_card_lists_each_game_its_best_and_who() {
+fn the_week_card_lists_each_games_best_and_nobody() {
     let last = NaiveDate::from_ymd_opt(2026, 10, 24).unwrap();
-    let best = |game, username: &str, value| WeekBest {
-        game,
-        username: username.to_string(),
-        value,
-    };
+    let best = |game, value| WeekBest { game, value };
     let bests = [
-        best(WeekGame::Daily(DailyPuzzle::Sudoku), "alice", 6),
-        best(WeekGame::Score(ScoreGame::Lateris), "bob", 12_340),
-        best(WeekGame::Lobby(LobbyGame::EightBall), "carol", 2),
-        best(WeekGame::Door(DoorGame::Nethack), "dave", 52_340),
+        best(WeekGame::Daily(DailyPuzzle::Sudoku), 6),
+        best(WeekGame::Score(ScoreGame::Lateris), 12_340),
+        best(WeekGame::Lobby(LobbyGame::EightBall), 2),
+        best(WeekGame::Door(DoorGame::Nethack), 52_340),
     ];
     let line = |ink, text: &str| CardLine::new(ink, text);
     assert_eq!(
@@ -33,23 +29,23 @@ fn the_week_card_lists_each_game_its_best_and_who() {
             line(Ink::Heading, "ARCADE"),
             line(
                 Ink::Body,
-                "Sudoku            ~alice                                  6 wins"
+                "Sudoku                                                    6 wins"
             ),
             line(
                 Ink::Body,
-                "Lateris           ~bob                                    12,340"
+                "Lateris                                                   12,340"
             ),
             CardLine::blank(),
             line(Ink::Heading, "LOBBY"),
             line(
                 Ink::Body,
-                "Eight-Ball        ~carol                                  2 wins"
+                "Eight-Ball                                                2 wins"
             ),
             CardLine::blank(),
             line(Ink::Heading, "DOORS"),
             line(
                 Ink::Body,
-                "NetHack           ~dave                                   52,340"
+                "NetHack                                                   52,340"
             ),
             CardLine::blank(),
             line(Ink::Dim, "ssh late.sh"),

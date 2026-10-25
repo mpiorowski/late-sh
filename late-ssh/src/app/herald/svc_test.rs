@@ -956,9 +956,7 @@ async fn the_cards_go_out_drawn_without_the_model() {
         ]
     );
     assert!(
-        log.media_uploads[0]
-            .1
-            .contains("Le Word: ~card-player, 1 win"),
+        log.media_uploads[0].1.contains("Le Word: 1 win"),
         "{}",
         log.media_uploads[0].1
     );

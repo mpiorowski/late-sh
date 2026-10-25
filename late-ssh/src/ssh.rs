@@ -1023,6 +1023,7 @@ impl russh::server::Handler for ClientHandler {
             arcade_handle_service: self.state.arcade_handle_service.clone(),
             live_games: self.state.live_games.clone(),
             door_rc_service: self.state.door_rc_service.clone(),
+            games_hub_service: self.state.games_hub_service.clone(),
             initial_door_rcs,
             daily_service: self.state.daily_service.clone(),
             realm_service: self.state.realm_service.clone(),

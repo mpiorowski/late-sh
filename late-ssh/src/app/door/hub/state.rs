@@ -131,6 +131,31 @@ impl HubGame {
         }
     }
 
+    /// The stored card an Enter on this one writes down
+    /// (`late_core::models::door_opening::DoorCard`, through
+    /// `svc::GamesHubService`); the two server cards launch nothing and
+    /// write nothing.
+    pub fn card(self) -> Option<late_core::models::door_opening::DoorCard> {
+        use late_core::models::door_opening::DoorCard;
+        match self {
+            HubGame::NightCity => Some(DoorCard::NightCity),
+            HubGame::Lateania => Some(DoorCard::Lateania),
+            HubGame::Realm => Some(DoorCard::Realm),
+            HubGame::Minecraft | HubGame::VintageStory => None,
+            HubGame::Rebels => Some(DoorCard::Rebels),
+            HubGame::Nethack => Some(DoorCard::Nethack),
+            HubGame::Dcss => Some(DoorCard::Dcss),
+            HubGame::Brogue => Some(DoorCard::Brogue),
+            HubGame::Usurper => Some(DoorCard::Usurper),
+            HubGame::GreenDragon => Some(DoorCard::GreenDragon),
+            HubGame::Dopewars => Some(DoorCard::Dopewars),
+            HubGame::Bashquest => Some(DoorCard::Bashquest),
+            HubGame::Codekeep => Some(DoorCard::Codekeep),
+            HubGame::Zork => Some(DoorCard::Zork),
+            HubGame::Darkroom => Some(DoorCard::Darkroom),
+        }
+    }
+
     pub fn group(self) -> HubGroup {
         match self {
             HubGame::NightCity | HubGame::Lateania | HubGame::Realm => HubGroup::House,

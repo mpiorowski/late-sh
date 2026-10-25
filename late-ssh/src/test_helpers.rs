@@ -403,6 +403,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         arcade_handle_service: crate::app::door::arcade::ArcadeHandleService::new(db.clone()),
         live_games: crate::app::door::spectate::svc::LiveGamesService::new(db.clone()),
         door_rc_service: crate::app::door::rc::DoorRcService::new(db.clone()),
+        games_hub_service: crate::app::door::hub::svc::GamesHubService::new(db.clone()),
         daily_service: crate::app::lobby::daily::svc::DailyService::new(
             db.clone(),
             chip_service.clone(),
@@ -692,6 +693,7 @@ fn make_app_with_chat_service_and_permissions(
         arcade_handle_service: crate::app::door::arcade::ArcadeHandleService::new(db.clone()),
         live_games: crate::app::door::spectate::svc::LiveGamesService::new(db.clone()),
         door_rc_service: crate::app::door::rc::DoorRcService::new(db.clone()),
+        games_hub_service: crate::app::door::hub::svc::GamesHubService::new(db.clone()),
         initial_door_rcs: Vec::new(),
         dcss_enabled: false,
         dcss_host: String::new(),
@@ -983,6 +985,7 @@ pub fn make_app_with_paired_client(
         arcade_handle_service: crate::app::door::arcade::ArcadeHandleService::new(db.clone()),
         live_games: crate::app::door::spectate::svc::LiveGamesService::new(db.clone()),
         door_rc_service: crate::app::door::rc::DoorRcService::new(db.clone()),
+        games_hub_service: crate::app::door::hub::svc::GamesHubService::new(db.clone()),
         initial_door_rcs: Vec::new(),
         dcss_enabled: false,
         dcss_host: String::new(),

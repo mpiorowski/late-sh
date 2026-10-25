@@ -346,6 +346,8 @@ pub struct SessionConfig {
     /// Accessor for the account's door rc files (.nethackrc / DCSS init.txt),
     /// edited from the Games hub config box and pushed to the hosts at launch.
     pub door_rc_service: crate::app::door::rc::DoorRcService,
+    /// The hub's door-opened write (`door_openings`), fired on every launch.
+    pub games_hub_service: crate::app::door::hub::svc::GamesHubService,
     /// The account's configured door rcs, preloaded at session init. Edits in
     /// this session update the in-App copy (`App::door_rcs`) alongside the DB.
     pub initial_door_rcs: Vec<(late_core::models::door_rc::DoorRcGame, String)>,
@@ -925,6 +927,7 @@ pub struct App {
     pub(crate) brogue_secret: String,
     pub(crate) arcade_handle_service: crate::app::door::arcade::ArcadeHandleService,
     pub(crate) door_rc_service: crate::app::door::rc::DoorRcService,
+    pub(crate) games_hub_service: crate::app::door::hub::svc::GamesHubService,
     /// The account's door rc files (.nethackrc / DCSS init.txt), keyed by
     /// game. Session-local copy of the DB truth: preloaded at init, updated by
     /// the hub config box, read at door launch. Another session's edits are
@@ -1959,6 +1962,7 @@ impl App {
             brogue_secret: config.brogue_secret,
             arcade_handle_service: config.arcade_handle_service,
             door_rc_service: config.door_rc_service,
+            games_hub_service: config.games_hub_service,
             door_rcs: config.initial_door_rcs.into_iter().collect(),
             door_rc_modal: None,
             usurper_state: None,

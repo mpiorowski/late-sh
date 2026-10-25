@@ -78,6 +78,9 @@ pub mod deadchannel_runner;
 pub mod deadchannel_spawn;
 pub mod door_log_cursor;
 pub mod door_milestone;
+pub mod door_opening;
+#[cfg(test)]
+mod door_opening_test;
 pub mod door_rc;
 #[cfg(test)]
 mod door_rc_test;

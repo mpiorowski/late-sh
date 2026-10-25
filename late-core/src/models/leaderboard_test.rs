@@ -971,9 +971,10 @@ async fn lobby_win(
 
 /// The week's scoreboard: per game, the most daily wins over the week's
 /// puzzle dates, the top score among the week's events, the most Lobby
-/// wins that paid, and the top door run of the week, in roster order; a
-/// win or a score outside the week is not on it, nor a Lobby win that did
-/// not pay, and a game nobody played has no line.
+/// wins that paid, and the top door run of the week, in roster order,
+/// each one person's best and nobody named; a win or a score outside the
+/// week is not on it, nor a Lobby win that did not pay, and a game nobody
+/// played has no line.
 #[tokio::test]
 async fn the_weeks_best_counts_only_the_week() {
     use crate::models::door_run::{DoorRun, DoorRunResult, NewDoorRun};
@@ -1033,28 +1034,24 @@ async fn the_weeks_best_counts_only_the_week() {
         .expect("door run");
     }
 
-    let best = |game, username: &str, value| WeekBest {
-        game,
-        username: username.to_string(),
-        value,
-    };
+    let best = |game, value| WeekBest { game, value };
     assert_eq!(
         week_bests(&client, last).await.expect("week"),
         vec![
-            best(WeekGame::Daily(DailyPuzzle::Sudoku), "week_rival", 1),
-            best(WeekGame::Daily(DailyPuzzle::LeWord), "week_solver", 3),
-            best(WeekGame::Score(ScoreGame::Lateris), "week_rival", 900),
-            best(WeekGame::Lobby(LobbyGame::Chess), "week_solver", 1),
-            best(WeekGame::Door(DoorGame::Dcss), "week_rival", 4_000),
+            best(WeekGame::Daily(DailyPuzzle::Sudoku), 1),
+            best(WeekGame::Daily(DailyPuzzle::LeWord), 3),
+            best(WeekGame::Score(ScoreGame::Lateris), 900),
+            best(WeekGame::Lobby(LobbyGame::Chess), 1),
+            best(WeekGame::Door(DoorGame::Dcss), 4_000),
         ]
     );
     let shown: Vec<String> = [
-        best(WeekGame::Daily(DailyPuzzle::Sudoku), "a", 1),
-        best(WeekGame::Daily(DailyPuzzle::Sudoku), "a", 6),
-        best(WeekGame::Score(ScoreGame::Snake), "a", 900),
-        best(WeekGame::Score(ScoreGame::Snake), "a", 1_234_567),
-        best(WeekGame::Lobby(LobbyGame::Snooker), "a", 2),
-        best(WeekGame::Door(DoorGame::Nethack), "a", 52_340),
+        best(WeekGame::Daily(DailyPuzzle::Sudoku), 1),
+        best(WeekGame::Daily(DailyPuzzle::Sudoku), 6),
+        best(WeekGame::Score(ScoreGame::Snake), 900),
+        best(WeekGame::Score(ScoreGame::Snake), 1_234_567),
+        best(WeekGame::Lobby(LobbyGame::Snooker), 2),
+        best(WeekGame::Door(DoorGame::Nethack), 52_340),
     ]
     .iter()
     .map(WeekBest::shown_value)
@@ -1066,12 +1063,14 @@ async fn the_weeks_best_counts_only_the_week() {
 }
 
 /// A day's tallies: per game anyone played, the finishes inside the UTC
-/// day and what the game calls a win (every daily solve, a Lobby match
-/// with a winner, a door run that ascended; a score game has none), in
-/// roster order. A play on another day is not counted, a game nobody
-/// played has no line, and the shelf is the roster's.
+/// day (the openings, for a door) and what the game calls a win (every
+/// daily solve, a Lobby match with a winner, a door run that ascended; a
+/// score game has none), in roster order. A play on another day is not
+/// counted, a game nobody played has no line, a door won on a day it was
+/// not opened keeps its line, and the shelf is the roster's.
 #[tokio::test]
 async fn a_days_tallies_count_the_days_finishes_by_game() {
+    use crate::models::door_opening::{DoorCard, DoorOpening};
     use crate::models::door_run::{DoorRun, DoorRunResult, NewDoorRun};
     use crate::models::leaderboard::{DayTally, Shelf, day_tallies};
     let test_db = test_db().await;
@@ -1120,6 +1119,34 @@ async fn a_days_tallies_count_the_days_finishes_by_game() {
         .await
         .expect("door run");
     }
+    let now = Utc::now();
+    for (card, days_ago) in [
+        (DoorCard::Nethack, 0),
+        (DoorCard::Nethack, 0),
+        (DoorCard::Lateania, 0),
+        (DoorCard::Brogue, 3),
+    ] {
+        DoorOpening::record(&client, solver.id, card, now - Duration::days(days_ago))
+            .await
+            .expect("opening");
+    }
+    DoorRun::insert_ignore(
+        &client,
+        &NewDoorRun {
+            game: DoorGame::Dcss.key(),
+            user_id: rival.id,
+            ended_at: now,
+            result: DoorRunResult::Win,
+            score: Some(2_000_000),
+            depth: Some(1),
+            turns: Some(90_000),
+            raw: json!({}),
+            source_file: "day".to_string(),
+            source_offset: 4,
+        },
+    )
+    .await
+    .expect("a win opened the day before");
 
     let tally = |game, plays, won| DayTally { game, plays, won };
     assert_eq!(
@@ -1129,8 +1156,10 @@ async fn a_days_tallies_count_the_days_finishes_by_game() {
             tally(WeekGame::Daily(DailyPuzzle::LeWord), 3, 3),
             tally(WeekGame::Score(ScoreGame::Lateris), 1, 0),
             tally(WeekGame::Lobby(LobbyGame::Chess), 2, 2),
+            tally(WeekGame::Door(DoorGame::Dcss), 0, 1),
             tally(WeekGame::Door(DoorGame::Nethack), 2, 1),
-        ]
+        ],
+        "DCSS: a run won today and no opening keeps its line; NetHack: two openings today, one run won today, the deaths uncounted; Lateania is no door of the shelf; Brogue was opened on another day"
     );
     assert!(
         day_tallies(&client, today - Duration::days(10))

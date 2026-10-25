@@ -41,6 +41,19 @@ A person with one session in a week is not necessarily a drive-by: a
 regular who leaves one session open all week also counts once. Session
 counts measure reconnects, not visits.
 
+The CLI is the regulars' client. Per person, over the session summaries
+from 2026-10-20 to 2026-10-25 joined to lifetime `user_online_time`
+(connected time, not keyboard time):
+
+| People in the window | CLI only | Plain ssh only | Both | Mostly CLI, by time | Hours CLI / ssh |
+|---|---|---|---|---|---|
+| All 327 | 95 | 216 | 16 | 107 | 1,266 / 1,006 |
+| The 81 with 24 h or more lifetime | 43 | 27 | 11 | 52 | 1,177 / 917 |
+
+156 accounts have 24 h or more lifetime; the other 75 did not connect in
+the window. Which client a session used is in the logs only, so the split
+cannot reach further back than log retention.
+
 ## 2. Where the time goes
 
 Attention is counted once a second per session, split by screen and by
@@ -258,7 +271,8 @@ Live, in order of evidence behind them:
   its snapshot, both drawn server-side as PNG (`late-web/CONTEXT.md`).
   The paper opens with YESTERDAY ON LATE.SH, the covered day in numbers
   (the radio's top stations by paired listener, the tracks queued, the
-  games finished on each shelf), drawn from the rows and no model
+  games finished in the arcade and the Lobby, the doors opened), drawn
+  from the rows and no model
   (`late-ssh/src/app/paper/CONTEXT.md`): the one paper section that
   answers a newcomer's "is anyone here?", on the web and on the herald's
   paper card too. Unmeasured: whether `/paper` opens on purpose move.
@@ -286,7 +300,7 @@ Live, in order of evidence behind them:
   done from a person's own account.
   - **What it posts.** One picture a day at 16:00 UTC, by a rotation:
     on Sundays the week in every game (a scoreboard card, one line per
-    game anyone played with its best and `~name`: the arcade's daily
+    game anyone played with its best and no name: the arcade's daily
     puzzles and high scores, the Lobby's chess, pool and card games by
     wins that paid, the doors by their top run), else the newest gallery
     piece hung in the last week and never posted (credited `~name`,
@@ -324,7 +338,10 @@ Live, in order of evidence behind them:
     best supply of art the server has: a real picture a member made and
     chose to hang, immutable, credited, with applause. The scoreboard is
     the one kind that shows the whole shelf of games, weekly so it never
-    reads as a daily brag feed. The paper's post text names the edition
+    reads as a daily brag feed, and nameless so it is never a brag at
+    all: hanging a piece is a public act and earns its `~name`, winning
+    Sudoku is not, and nobody opted into being posted; the names stay on
+    the terminal's boards. The paper's post text names the edition
     only and drops `#MastoArt` (art communities dislike model-written
     text); its columns stay inside the picture, never in the text, since
     a list of links is what instance rules call spam. The cards are drawn
@@ -471,6 +488,9 @@ curl -s http://127.0.0.1:19428/select/logsql/query \
 # session lengths (summaries are written for a subset of sessions)
 curl -s http://127.0.0.1:19428/select/logsql/query \
   --data-urlencode 'query=_time:7d "session wire summary" | stats by (client) count() n, quantile(0.5, secs) p50, quantile(0.9, secs) p90'
+# the per-person client split: join this on user_id to user_online_time
+curl -s http://127.0.0.1:19428/select/logsql/query \
+  --data-urlencode 'query=_time:7d "session wire summary" | stats by (user_id, client) count() n, sum(secs) secs' --data-urlencode 'limit=100000'
 ```
 
 The newcomer funnel comes from the database, not the logs: the referral

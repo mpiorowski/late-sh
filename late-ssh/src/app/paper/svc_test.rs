@@ -41,9 +41,9 @@ fn an_edition_covers_the_whole_utc_day_before_it() {
 /// YESTERDAY: the radio's stations by listener under their rail labels
 /// (a key gone from the catalogue prints as the key), the booth's count,
 /// then a line per shelf with its finishes and its most played game (or
-/// the one game that had them all), the doors' ascensions named; the
-/// radio, the booth or a shelf with nothing has no line, and a day with
-/// nothing is no column.
+/// the one game that had them all), the doors by their openings with the
+/// runs won; the radio, the booth or a shelf with nothing has no line,
+/// and a day with nothing is no column.
 #[test]
 fn yesterday_counts_each_shelf_the_radio_and_the_booth() {
     use late_core::models::leaderboard::{
@@ -75,7 +75,7 @@ fn yesterday_counts_each_shelf_the_radio_and_the_booth() {
              Booth: 17 tracks queued\n\
              Arcade: 161 games finished, Minesweeper most played\n\
              Lobby: 1 match finished: Chess\n\
-             Doors: 9 runs ended, NetHack most played, 1 won"
+             Doors: 9 opened, NetHack 5, Brogue 4, 1 run won"
         )
     );
     assert_eq!(
@@ -88,6 +88,27 @@ fn yesterday_counts_each_shelf_the_radio_and_the_booth() {
         Some(
             "Radio: nightride 1 listener\nBooth: 1 track queued\nLobby: 3 matches finished, all Snooker"
         )
+    );
+    assert_eq!(
+        yesterday_column(&[tally(WeekGame::Door(DoorGame::Dcss), 3, 0)], &[], 0).as_deref(),
+        Some("Doors: 3 opened, all DCSS")
+    );
+    assert_eq!(
+        yesterday_column(&[tally(WeekGame::Door(DoorGame::Dcss), 1, 0)], &[], 0).as_deref(),
+        Some("Doors: 1 opened, DCSS")
+    );
+    assert_eq!(
+        yesterday_column(
+            &[
+                tally(WeekGame::Door(DoorGame::Dcss), 0, 1),
+                tally(WeekGame::Door(DoorGame::Brogue), 0, 2),
+            ],
+            &[],
+            0
+        )
+        .as_deref(),
+        Some("Doors: 3 runs won"),
+        "a run won on a day its door was not opened"
     );
     assert_eq!(yesterday_column(&[], &[], 0), None);
 }

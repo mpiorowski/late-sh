@@ -31,11 +31,11 @@ pub(crate) fn router() -> Router<AppState> {
     Router::new().route("/games/week/{last}/image.png", get(week_image_handler))
 }
 
-/// The game's name, then the player, then the value right-aligned: the
-/// three columns of a scoreboard line inside `card::CARD_COLUMNS`.
+/// The game's name, then the value right-aligned: the two columns of a
+/// scoreboard line inside `card::CARD_COLUMNS`. No player: the card is
+/// public and the names stay on the terminal's boards.
 const GAME_COLUMNS: usize = 18;
-const NAME_COLUMNS: usize = 30;
-const VALUE_COLUMNS: usize = card::CARD_COLUMNS - GAME_COLUMNS - NAME_COLUMNS;
+const VALUE_COLUMNS: usize = card::CARD_COLUMNS - GAME_COLUMNS;
 
 /// The week ending on `last` (`YYYY-MM-DD`) as a card. A path that is not
 /// a date, or a week nobody played, is 404.
@@ -89,16 +89,11 @@ pub(crate) fn week_card(last: NaiveDate, bests: &[WeekBest]) -> Vec<CardLine> {
             lines.push(CardLine::new(Ink::Heading, this.heading()));
             shelf = Some(this);
         }
-        let name: String = format!("~{}", best.username)
-            .chars()
-            .take(NAME_COLUMNS - 1)
-            .collect();
         lines.push(CardLine::new(
             Ink::Body,
             format!(
-                "{:<GAME_COLUMNS$}{:<NAME_COLUMNS$}{:>VALUE_COLUMNS$}",
+                "{:<GAME_COLUMNS$}{:>VALUE_COLUMNS$}",
                 best.game.title(),
-                name,
                 best.shown_value(),
             ),
         ));

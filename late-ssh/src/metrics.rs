@@ -1,6 +1,7 @@
 use late_core::models::article::NewsShareReward;
 use late_core::models::chat_message_gild::GildTier;
 use late_core::models::chat_room::WatchDoor;
+use late_core::models::door_opening::DoorCard;
 use late_core::models::leaderboard::{DailyPuzzle, DoorGame};
 use late_core::models::media_queue_item::SongQueueReward;
 
@@ -161,6 +162,14 @@ pub enum HeraldLookResult {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RadioRollCallResult {
     Called,
+    Failed,
+}
+
+/// Whether a door opened from the Games hub (`app/door/hub`) was written
+/// to `door_openings`: `Failed` is one opening short in the paper.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DoorOpeningResult {
+    Recorded,
     Failed,
 }
 
@@ -744,18 +753,18 @@ mod inner {
     use super::SlidingPuzzleArtLoad;
     use super::{
         ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, AwardAnnouncementOutcome,
-        BioScreenOutcome, CrownRefusal, DailyPuzzle, DailyWinPayout, DoorGame, DoorWatchOutcome,
-        FightBeat, FirstContactBeat, GalleryApplauseResult, GalleryHangResult,
-        GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
-        HeraldDeliveryResult, HeraldLookResult, HeraldPostResult, JobsFetchResult, JobsPostResult,
-        JobsPressResult, JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure,
-        NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult,
-        PaperPrintResult, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence,
-        PresenceScope, PresenceWire, RadioRollCallResult, RealmChatRoomAttach, RealmPayout,
-        RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
-        RoundRefusal, RunnerDoor, Screen, SendRefusal, SessionStartStage, SessionUser,
-        SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
-        ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
+        BioScreenOutcome, CrownRefusal, DailyPuzzle, DailyWinPayout, DoorCard, DoorGame,
+        DoorOpeningResult, DoorWatchOutcome, FightBeat, FirstContactBeat, GalleryApplauseResult,
+        GalleryHangResult, GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal,
+        GildTier, HeraldDeliveryResult, HeraldLookResult, HeraldPostResult, JobsFetchResult,
+        JobsPostResult, JobsPressResult, JobsReadResult, LoungeBeat, NewsShareReward,
+        NightcapHouseFailure, NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult,
+        OutputKind, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome, PotRefusal,
+        PotReminderOutcome, Presence, PresenceScope, PresenceWire, RadioRollCallResult,
+        RealmChatRoomAttach, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh,
+        RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SendRefusal,
+        SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason,
+        SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
@@ -3973,6 +3982,36 @@ mod inner {
         door_ingest_lines_total().add(1, &[KeyValue::new("game", game.key())]);
     }
 
+    fn door_opening_result_label(result: DoorOpeningResult) -> &'static str {
+        match result {
+            DoorOpeningResult::Recorded => "recorded",
+            DoorOpeningResult::Failed => "failed",
+        }
+    }
+
+    fn door_openings_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_door_openings_total")
+                .with_description(
+                    "Doors opened from the Games hub (an Enter on a card that launches) by card, and whether the door_openings row was written",
+                )
+                .build()
+        })
+    }
+
+    pub fn record_door_opening(card: DoorCard, result: DoorOpeningResult) {
+        // `DoorCard::key` is the closed roster's own exhaustive label map.
+        door_openings_total().add(
+            1,
+            &[
+                KeyValue::new("card", card.key()),
+                KeyValue::new("result", door_opening_result_label(result)),
+            ],
+        );
+    }
+
     pub fn record_door_ingest_session_failure(game: DoorGame) {
         door_ingest_session_failures_total().add(1, &[KeyValue::new("game", game.key())]);
     }
@@ -4226,18 +4265,18 @@ mod inner {
     use super::SlidingPuzzleArtLoad;
     use super::{
         ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, AwardAnnouncementOutcome,
-        BioScreenOutcome, CrownRefusal, DailyPuzzle, DailyWinPayout, DoorGame, DoorWatchOutcome,
-        FightBeat, FirstContactBeat, GalleryApplauseResult, GalleryHangResult,
-        GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
-        HeraldDeliveryResult, HeraldLookResult, HeraldPostResult, JobsFetchResult, JobsPostResult,
-        JobsPressResult, JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure,
-        NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult,
-        PaperPrintResult, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence,
-        PresenceScope, PresenceWire, RadioRollCallResult, RealmChatRoomAttach, RealmPayout,
-        RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
-        RoundRefusal, RunnerDoor, Screen, SendRefusal, SessionStartStage, SessionUser,
-        SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
-        ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
+        BioScreenOutcome, CrownRefusal, DailyPuzzle, DailyWinPayout, DoorCard, DoorGame,
+        DoorOpeningResult, DoorWatchOutcome, FightBeat, FirstContactBeat, GalleryApplauseResult,
+        GalleryHangResult, GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal,
+        GildTier, HeraldDeliveryResult, HeraldLookResult, HeraldPostResult, JobsFetchResult,
+        JobsPostResult, JobsPressResult, JobsReadResult, LoungeBeat, NewsShareReward,
+        NightcapHouseFailure, NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult,
+        OutputKind, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome, PotRefusal,
+        PotReminderOutcome, Presence, PresenceScope, PresenceWire, RadioRollCallResult,
+        RealmChatRoomAttach, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh,
+        RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SendRefusal,
+        SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason,
+        SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
@@ -4409,6 +4448,7 @@ mod inner {
     pub fn record_gallery_take_down(_result: GalleryTakeDownResult) {}
     pub fn record_gallery_splash_queue_depth(_depth: i64) {}
     pub fn record_door_ingest_line(_game: DoorGame) {}
+    pub fn record_door_opening(_card: DoorCard, _result: DoorOpeningResult) {}
     pub fn record_door_ingest_session_failure(_game: DoorGame) {}
     pub fn record_door_watch_stream(_game: WatchDoor, _outcome: DoorWatchOutcome) {}
     pub fn record_door_watch_roster_failure(_game: WatchDoor) {}

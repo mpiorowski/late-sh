@@ -24,6 +24,21 @@ playing right now on a watchable door (DCSS, NetHack, Brogue, Zork). Sitting on
 a live row previews it in the landing's place; Enter opens the watch with its
 chat (`spectate/CONTEXT.md`).
 
+Every launch is counted. `launch_games_hub_selection` (`app/input.rs`) runs
+one gate (`games_hub_unavailable`: the banner a switched-off host shows
+instead of launching) and then, before the card's own way in, writes a
+`door_openings` row through `hub/svc.rs` (`GamesHubService::record_task`,
+fire-and-forget, its failure logged as `door_opening_failed` and counted in
+`late_ssh_door_openings_total{card,result}`). A row is one Enter that got
+past the gate: a host that then refuses still had its door opened, a
+member who quits and comes back opens it again, and the two server cards
+write nothing. `HubGame::card` maps the roster onto the stored key
+(`late_core::models::door_opening::DoorCard`, a closed roster of its own;
+the roguelikes' keys are `leaderboard::DoorGame`'s). The paper's YESTERDAY
+column reads the day's openings per roguelike through
+`leaderboard::day_tallies` (`app/paper/CONTEXT.md`); the other cards' rows
+wait for a line of their own.
+
 Door screens are never top-level tabs: they are entered only from the hub
 (the Realm also from the #lounge live strip) and return to it on exit (`Esc`
 in Lateania; quitting the game in the PTY doors, e.g. `Ctrl-C`, `Q` at
@@ -32,7 +47,7 @@ Usurper's menus, `S` save in the roguelikes).
 | Key | Action |
 |-----|--------|
 | arrows, `h`/`j`/`k`/`l` | Step along the rail (cards, then live rows), wrapping |
-| `Enter` | Launch the card; on a live row, open the watch |
+| `Enter` | Launch the card, written down as a door opened (below); on a live row, open the watch |
 | `Ctrl+J`/`Ctrl+K`, `Ctrl+Down`/`Ctrl+Up` | Scroll the selected landing (`Enter` matches CR only, since `Ctrl+J` is a bare LF) |
 | `d` | Reset the Green Dragon or A Dark Room save, after confirmation (Lateania resets from its own landing) |
 | `t` | On a watchable door's card: show or hide your watchers' chat beside your own game |
