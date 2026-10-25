@@ -248,12 +248,6 @@ impl AiService {
             return Ok(None);
         }
 
-        let api_key = self.api_key.as_ref().context("missing api key")?;
-        let url = format!(
-            "{}/v1beta/models/{}:generateContent",
-            self.endpoint, AI_MODEL
-        );
-
         let req = GeminiRequest {
             system_instruction: Some(GeminiContent {
                 parts: vec![GeminiPart::Text {
@@ -276,26 +270,7 @@ impl AiService {
             }),
         };
 
-        // The key travels in the `x-goog-api-key` header, never the URL;
-        // `without_url()` stays as defense in depth for a status error's text.
-        let res = match self
-            .client
-            .post(&url)
-            .header("x-goog-api-key", api_key)
-            .json(&req)
-            .send_traced()
-            .await
-        {
-            Ok(res) => res,
-            Err(error) => return Err(error.without_url().into()),
-        };
-        if !res.status().is_success() {
-            let status = res.status();
-            let text = res.text().await.unwrap_or_default();
-            anyhow::bail!("Gemini API error: {} - {}", status, text);
-        }
-
-        let body_text = res.text().await?;
+        let body_text = self.post_generate(AI_MODEL, &req).await?;
         tracing::debug!(
             raw_response_len = body_text.len(),
             "received Gemini API response"
@@ -322,12 +297,6 @@ impl AiService {
             return Ok(None);
         }
 
-        let api_key = self.api_key.as_ref().context("missing api key")?;
-        let url = format!(
-            "{}/v1beta/models/{}:generateContent",
-            self.endpoint, AI_MODEL
-        );
-
         let req = GeminiRequest {
             system_instruction: Some(GeminiContent {
                 parts: vec![GeminiPart::Text {
@@ -348,26 +317,7 @@ impl AiService {
             }]),
         };
 
-        // The key travels in the `x-goog-api-key` header, never the URL;
-        // `without_url()` stays as defense in depth for a status error's text.
-        let res = match self
-            .client
-            .post(&url)
-            .header("x-goog-api-key", api_key)
-            .json(&req)
-            .send_traced()
-            .await
-        {
-            Ok(res) => res,
-            Err(error) => return Err(error.without_url().into()),
-        };
-        if !res.status().is_success() {
-            let status = res.status();
-            let text = res.text().await.unwrap_or_default();
-            anyhow::bail!("Gemini API error: {} - {}", status, text);
-        }
-
-        let body_text = res.text().await?;
+        let body_text = self.post_generate(AI_MODEL, &req).await?;
         tracing::debug!(raw_response = %body_text, "Full Gemini API response");
         match first_text("generate_json_with_search", &body_text)? {
             Some(text) => Ok(Some(extract_json_object(&text).to_string())),
@@ -397,9 +347,6 @@ impl AiService {
             return Ok(None);
         }
 
-        let api_key = self.api_key.as_ref().context("missing api key")?;
-        let url = format!("{}/v1beta/models/{}:generateContent", self.endpoint, model);
-
         let req = GeminiRequest {
             system_instruction: Some(GeminiContent {
                 parts: vec![GeminiPart::Text {
@@ -418,26 +365,7 @@ impl AiService {
             tools: None,
         };
 
-        // The key travels in the `x-goog-api-key` header, never the URL;
-        // `without_url()` stays as defense in depth for a status error's text.
-        let res = match self
-            .client
-            .post(&url)
-            .header("x-goog-api-key", api_key)
-            .json(&req)
-            .send_traced()
-            .await
-        {
-            Ok(res) => res,
-            Err(error) => return Err(error.without_url().into()),
-        };
-        if !res.status().is_success() {
-            let status = res.status();
-            let text = res.text().await.unwrap_or_default();
-            anyhow::bail!("Gemini API error: {} - {}", status, text);
-        }
-
-        let body_text = res.text().await?;
+        let body_text = self.post_generate(model, &req).await?;
         tracing::debug!(raw_response = %body_text, "Full Gemini API response");
         first_text("generate_json", &body_text)
     }
@@ -465,9 +393,6 @@ impl AiService {
             return Ok(None);
         }
 
-        let api_key = self.api_key.as_ref().context("missing api key")?;
-        let url = format!("{}/v1beta/models/{}:generateContent", self.endpoint, model);
-
         let mut parts: Vec<GeminiPart> = pngs
             .iter()
             .map(|png| GeminiPart::InlineData {
@@ -494,13 +419,25 @@ impl AiService {
             tools: None,
         };
 
-        // The key travels in the `x-goog-api-key` header, never the URL;
-        // `without_url()` stays as defense in depth for a status error's text.
+        let body_text = self.post_generate(model, &req).await?;
+        tracing::debug!(
+            raw_response_len = body_text.len(),
+            "received Gemini API response"
+        );
+        first_text("generate_json_with_images", &body_text)
+    }
+
+    /// One `generateContent` call to `model`, the response body back. The
+    /// key travels in the `x-goog-api-key` header, never the URL;
+    /// `without_url()` stays as defense in depth for a status error's text.
+    async fn post_generate(&self, model: &str, req: &GeminiRequest<'_>) -> Result<String> {
+        let api_key = self.api_key.as_ref().context("missing api key")?;
+        let url = format!("{}/v1beta/models/{}:generateContent", self.endpoint, model);
         let res = match self
             .client
             .post(&url)
             .header("x-goog-api-key", api_key)
-            .json(&req)
+            .json(req)
             .send_traced()
             .await
         {
@@ -512,13 +449,7 @@ impl AiService {
             let text = res.text().await.unwrap_or_default();
             anyhow::bail!("Gemini API error: {} - {}", status, text);
         }
-
-        let body_text = res.text().await?;
-        tracing::debug!(
-            raw_response_len = body_text.len(),
-            "received Gemini API response"
-        );
-        first_text("generate_json_with_images", &body_text)
+        Ok(res.text().await?)
     }
 }
 

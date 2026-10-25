@@ -50,11 +50,7 @@ fn the_card_draws_each_line_in_its_ink_inside_the_margin() {
     assert_eq!(card.get(Pos { x: 2, y: 2 }), 'H');
     assert_eq!(
         card.fg(Pos { x: 3, y: 2 }),
-        Some(RgbColor {
-            r: 0x4a,
-            g: 0xde,
-            b: 0x80
-        })
+        Some(RgbColor::new(0x4a, 0xde, 0x80))
     );
     assert_eq!(card.get(Pos { x: 2, y: 4 }), 'o');
     assert_eq!(card.fg(Pos { x: 2, y: 4 }), None);

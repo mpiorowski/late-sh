@@ -15,7 +15,7 @@ use image::{ImageFormat, ImageReader};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::state::{Look, Picture, Warning, cut_alt};
+use super::state::{Look, Picture, Warning, cut_alt, long_date};
 use crate::app::ai::svc::{AI_MODEL, AiService};
 
 /// The prompt's opening: what the call is for.
@@ -25,11 +25,14 @@ const OPENING: &str = "You write the alt text and the content label for one pict
 /// boards, as are the rules below: words never set a label (the room
 /// writes "boobs" more than it draws them), identity never does, and a
 /// character is named only when the model is sure.
-const BOARD_PICTURE: &str = "The picture is a day of the late.sh Artboard: a shared canvas in a terminal that anyone in the room can draw on, so it is usually a collage of many unrelated pieces by different people, overlapping, some finished and some abandoned. Everything is drawn in coloured text glyphs (letters, digits, block and box-drawing characters, symbols) on a dark navy background. Shapes are built from characters, and photos converted to glyphs look like coarse coloured mosaics; read them as the subject they show, not as text.";
+const BOARD_PICTURE: &str = "The picture is a day of the late.sh Artboard: a shared canvas in a terminal that anyone in the room can draw on, so it is usually a collage of many unrelated pieces by different people, overlapping, some finished and some abandoned.";
 
 /// What a gallery piece is: one member's crop of the board, chosen and
 /// titled to be seen. The rules are the board's.
-const PIECE_PICTURE: &str = "The picture is a piece from the late.sh gallery: one member's crop of a shared canvas in a terminal, hung under a title they chose, so it is usually one work rather than a collage, though bits of neighbouring drawings can reach in at the edges. Everything is drawn in coloured text glyphs (letters, digits, block and box-drawing characters, symbols) on a dark navy background. Shapes are built from characters, and photos converted to glyphs look like coarse coloured mosaics; read them as the subject they show, not as text.";
+const PIECE_PICTURE: &str = "The picture is a piece from the late.sh gallery: one member's crop of a shared canvas in a terminal, hung under a title they chose, so it is usually one work rather than a collage, though bits of neighbouring drawings can reach in at the edges.";
+
+/// How every picture is drawn, after what it is.
+const GLYPHS: &str = "Everything is drawn in coloured text glyphs (letters, digits, block and box-drawing characters, symbols) on a dark navy background. Shapes are built from characters, and photos converted to glyphs look like coarse coloured mosaics; read them as the subject they show, not as text.";
 
 const RULES: &str = r#"alt: a description for a reader who cannot see the picture, in plain sentences. Open with the overall impression in one sentence, then name the largest or most striking pieces and where they sit (top left, centre, along the bottom). Name a character, a person or a logo only when you are sure of it (its title is drawn with it, or the design is unmistakable); otherwise describe what you see. Quote a short word or phrase only when it is drawn large as part of the art. Never quote or mention usernames, handles or people's names written on the picture, nothing with an @ sign. Do not open with "ASCII art", "An image of" or "This picture"; a prefix is added for you. No markdown. At most 800 characters.
 
@@ -64,7 +67,7 @@ pub(crate) async fn look(ai: &AiService, picture: &Picture, png: &[u8]) -> anyho
             BOARD_PICTURE,
             format!(
                 "Label this picture: the late.sh Artboard as the room left it on {}, cropped to what is drawn. The first image is the whole board; the next four are its quarters at full detail (top left, top right, bottom left, bottom right), for reading small pieces. Describe and label the whole board.",
-                board.shown.format("%-d %B %Y"),
+                long_date(board.shown),
             ),
         ),
         Picture::Piece(piece) => (
@@ -86,7 +89,7 @@ pub(crate) async fn look(ai: &AiService, picture: &Picture, png: &[u8]) -> anyho
     let answer = ai
         .generate_json_with_images(
             AI_MODEL,
-            &format!("{OPENING}\n\n{what}\n\n{RULES}"),
+            &format!("{OPENING}\n\n{what} {GLYPHS}\n\n{RULES}"),
             &images,
             &prompt,
             schema(),

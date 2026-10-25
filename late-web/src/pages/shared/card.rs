@@ -29,22 +29,10 @@ pub(crate) enum Ink {
 impl Ink {
     fn colour(self) -> Option<RgbColor> {
         match self {
-            Self::Title => Some(RgbColor {
-                r: 0x4a,
-                g: 0xde,
-                b: 0x80,
-            }),
-            Self::Heading => Some(RgbColor {
-                r: 0x22,
-                g: 0xc5,
-                b: 0x5e,
-            }),
+            Self::Title => Some(RgbColor::new(0x4a, 0xde, 0x80)),
+            Self::Heading => Some(RgbColor::new(0x22, 0xc5, 0x5e)),
             Self::Body => None,
-            Self::Dim => Some(RgbColor {
-                r: 0x9c,
-                g: 0xa3,
-                b: 0xaf,
-            }),
+            Self::Dim => Some(RgbColor::new(0x9c, 0xa3, 0xaf)),
         }
     }
 }

@@ -391,6 +391,28 @@ pub enum WeekGame {
 }
 
 impl WeekGame {
+    /// Every game in scoreboard order: the rosters one after another (the
+    /// daily puzzles, the score games, the Lobby, the doors), each in its
+    /// own order.
+    fn all() -> impl Iterator<Item = Self> {
+        let daily = DailyPuzzle::ALL.iter().map(|&puzzle| Self::Daily(puzzle));
+        let score = ScoreGame::ALL.iter().map(|&game| Self::Score(game));
+        let lobby = LobbyGame::ALL.iter().map(|&game| Self::Lobby(game));
+        let door = DoorGame::ALL.iter().map(|&game| Self::Door(game));
+        daily.chain(score).chain(lobby).chain(door)
+    }
+
+    /// The tag `week_bests` puts on this game's rows. The Lobby's arm
+    /// builds its tag in SQL, `'lobby:' || game_kind`, to the same shape.
+    fn key(self) -> String {
+        match self {
+            Self::Daily(puzzle) => format!("daily:{}", puzzle.key()),
+            Self::Score(game) => format!("score:{}", game.score_event_key()),
+            Self::Lobby(game) => format!("lobby:{}", game.kind()),
+            Self::Door(game) => format!("door:{}", game.key()),
+        }
+    }
+
     pub const fn title(self) -> &'static str {
         match self {
             Self::Daily(puzzle) => puzzle.title(),
@@ -454,19 +476,20 @@ pub async fn week_bests(client: &Client, last: NaiveDate) -> Result<Vec<WeekBest
     let ceiling = floor + chrono::Duration::days(WEEK_DAYS as i64);
     let daily = DailyPuzzle::ALL.iter().map(|puzzle| {
         format!(
-            "SELECT 'daily:{key}' AS game, user_id, count(*)::bigint AS value, max(created) AS reached
+            "SELECT '{tag}' AS game, user_id, count(*)::bigint AS value, max(created) AS reached
              FROM {table}
              WHERE puzzle_date BETWEEN $1 AND $2
              GROUP BY user_id",
-            key = puzzle.key(),
+            tag = WeekGame::Daily(*puzzle).key(),
             table = puzzle.wins_table(),
         )
     });
     let score = ScoreGame::ALL.iter().map(|game| {
         format!(
-            "SELECT 'score:{key}' AS game, user_id, score::bigint AS value, created_at AS reached
+            "SELECT '{tag}' AS game, user_id, score::bigint AS value, created_at AS reached
              FROM game_score_events
              WHERE game = '{key}' AND created_at >= $3 AND created_at < $4",
+            tag = WeekGame::Score(*game).key(),
             key = game.score_event_key(),
         )
     });
@@ -485,9 +508,10 @@ pub async fn week_bests(client: &Client, last: NaiveDate) -> Result<Vec<WeekBest
     ));
     let door = DoorGame::ALL.iter().map(|game| {
         format!(
-            "SELECT 'door:{key}' AS game, user_id, score AS value, ended_at AS reached
+            "SELECT '{tag}' AS game, user_id, score AS value, ended_at AS reached
              FROM door_runs
              WHERE game = '{key}' AND score IS NOT NULL AND ended_at >= $3 AND ended_at < $4",
+            tag = WeekGame::Door(*game).key(),
             key = game.key(),
         )
     });
@@ -513,72 +537,23 @@ pub async fn week_bests(client: &Client, last: NaiveDate) -> Result<Vec<WeekBest
         .into_iter()
         .map(|row| {
             let key: String = row.get("game");
-            Ok(WeekBest {
-                game: week_game(&key)?,
+            let (position, game) = match WeekGame::all()
+                .enumerate()
+                .find(|(_, game)| game.key() == key)
+            {
+                Some(found) => found,
+                None => anyhow::bail!("week_bests produced an unknown game {key:?}"),
+            };
+            let best = WeekBest {
+                game,
                 username: row.get("username"),
                 value: row.get("value"),
-            })
+            };
+            Ok((position, best))
         })
         .collect::<Result<Vec<_>>>()?;
-    bests.sort_by_key(|best| roster_position(best.game));
-    Ok(bests)
-}
-
-fn week_game(key: &str) -> Result<WeekGame> {
-    let daily = DailyPuzzle::ALL
-        .iter()
-        .find(|puzzle| key == format!("daily:{}", puzzle.key()));
-    let score = ScoreGame::ALL
-        .iter()
-        .find(|game| key == format!("score:{}", game.score_event_key()));
-    let lobby = LobbyGame::ALL
-        .iter()
-        .find(|game| key == format!("lobby:{}", game.kind()));
-    let door = DoorGame::ALL
-        .iter()
-        .find(|game| key == format!("door:{}", game.key()));
-    match (daily, score, lobby, door) {
-        (Some(puzzle), None, None, None) => Ok(WeekGame::Daily(*puzzle)),
-        (None, Some(game), None, None) => Ok(WeekGame::Score(*game)),
-        (None, None, Some(game), None) => Ok(WeekGame::Lobby(*game)),
-        (None, None, None, Some(game)) => Ok(WeekGame::Door(*game)),
-        _ => anyhow::bail!("week_bests produced an unknown game {key:?}"),
-    }
-}
-
-/// Where a game sits on the scoreboard: the rosters one after another,
-/// each in its own order.
-fn roster_position(game: WeekGame) -> usize {
-    let daily = DailyPuzzle::ALL.len();
-    let score = daily + ScoreGame::ALL.len();
-    let lobby = score + LobbyGame::ALL.len();
-    match game {
-        WeekGame::Daily(puzzle) => DailyPuzzle::ALL
-            .iter()
-            .position(|other| *other == puzzle)
-            .expect("every puzzle is in the roster"),
-        WeekGame::Score(game) => {
-            daily
-                + ScoreGame::ALL
-                    .iter()
-                    .position(|other| *other == game)
-                    .expect("every score game is in the roster")
-        }
-        WeekGame::Lobby(game) => {
-            score
-                + LobbyGame::ALL
-                    .iter()
-                    .position(|other| *other == game)
-                    .expect("every lobby game is in the roster")
-        }
-        WeekGame::Door(game) => {
-            lobby
-                + DoorGame::ALL
-                    .iter()
-                    .position(|other| *other == game)
-                    .expect("every door is in the roster")
-        }
-    }
+    bests.sort_by_key(|(position, _)| *position);
+    Ok(bests.into_iter().map(|(_, best)| best).collect())
 }
 
 pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> {

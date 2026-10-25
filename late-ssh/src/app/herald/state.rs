@@ -564,8 +564,18 @@ pub(crate) fn bluesky_mark(look: &Look) -> BlueskyMark {
 }
 
 /// `day` as the words write it: `24 October 2026`.
-fn long_date(day: NaiveDate) -> String {
+pub(crate) fn long_date(day: NaiveDate) -> String {
     day.format("%-d %B %Y").to_string()
+}
+
+/// The week ending `last` as the words write it: `18 October to 24
+/// October 2026`.
+fn week_span(last: NaiveDate) -> String {
+    format!(
+        "{} to {}",
+        week_first_day(last).format("%-d %B"),
+        long_date(last)
+    )
 }
 
 /// What the post is, in a sentence of plain speech, and its tags.
@@ -587,9 +597,8 @@ fn speech(picture: &Picture) -> (String, &'static [&'static str]) {
         ),
         Picture::Scoreboard(scoreboard) => (
             format!(
-                "The week's best in every late.sh game, {} to {}: the daily puzzles, the arcade's high scores, chess and pool in the Lobby, the roguelike doors, all played in a terminal.",
-                week_first_day(scoreboard.last).format("%-d %B"),
-                long_date(scoreboard.last),
+                "The week's best in every late.sh game, {}: the daily puzzles, the arcade's high scores, chess and pool in the Lobby, the roguelike doors, all played in a terminal.",
+                week_span(scoreboard.last),
             ),
             &SCOREBOARD_TAGS,
         ),
@@ -681,9 +690,8 @@ pub(crate) fn alt_text(picture: &Picture, look: &Look) -> String {
             piece.title,
         ),
         (Picture::Scoreboard(scoreboard), _) => cut_alt(&format!(
-            "A scoreboard in green and grey terminal text: the week's best in every late.sh game, {} to {}. {}.",
-            week_first_day(scoreboard.last).format("%-d %B"),
-            long_date(scoreboard.last),
+            "A scoreboard in green and grey terminal text: the week's best in every late.sh game, {}. {}.",
+            week_span(scoreboard.last),
             scoreboard
                 .lines
                 .iter()

@@ -150,8 +150,8 @@ pub enum HeraldLookResult {
     Warned,
     /// No answer: the model failed, or AI is off. Posted not reviewed.
     Unseen,
-    /// A card late.sh drew from its own words (the paper's front page):
-    /// nothing for the model to see, so no call.
+    /// A card late.sh drew from its own words (the week's scoreboard, the
+    /// paper's front page): nothing for the model to see, so no call.
     Drawn,
 }
 

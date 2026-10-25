@@ -42,18 +42,54 @@ fn canvas_json_keeps_cells_colours_and_cannot_close_its_script_element() {
     );
 }
 
+fn router(db: &late_core::db::Db) -> axum::Router {
+    crate::app(crate::AppState {
+        config: crate::config::Config {
+            env: crate::config::Env::Dev,
+            port: 0,
+            ssh_internal_url: "http://127.0.0.1:9".into(),
+            audio_base_url: "http://127.0.0.1:9".into(),
+            public_base_url: "http://late.test".into(),
+            db: late_core::db::DbConfig::default(),
+        },
+        db: db.clone(),
+        http_client: reqwest::Client::new(),
+    })
+}
+
+/// `GET uri`: the status, the content type and the body.
+async fn fetch(
+    router: &axum::Router,
+    uri: &str,
+) -> (axum::http::StatusCode, Option<String>, Vec<u8>) {
+    use axum::{
+        body::{Body, to_bytes},
+        http::Request,
+    };
+    use tower::ServiceExt;
+
+    let response = router
+        .clone()
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let content_type = response
+        .headers()
+        .get("content-type")
+        .map(|value| value.to_str().unwrap().to_string());
+    let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (status, content_type, body.to_vec())
+}
+
 /// A snapshot's link unfurls into the board itself: the gallery page names
 /// the snapshot's picture at `/gallery/{key}/image.png`, which serves it as
 /// a PNG at preview-card size, and 404 for a key nobody saved.
 #[tokio::test]
 async fn a_gallery_link_unfurls_into_its_snapshot() {
-    use axum::{
-        body::{Body, to_bytes},
-        http::{Request, StatusCode},
-    };
+    use axum::http::StatusCode;
     use dartboard_core::{Canvas, Pos, RgbColor};
-    use late_core::{db::DbConfig, models::artboard::Snapshot, test_utils::test_db};
-    use tower::ServiceExt;
+    use late_core::{models::artboard::Snapshot, test_utils::test_db};
 
     let test = test_db().await;
     let client = test.db.get().await.unwrap();
@@ -68,36 +104,9 @@ async fn a_gallery_link_unfurls_into_its_snapshot() {
     .await
     .unwrap();
 
-    let router = crate::app(crate::AppState {
-        config: crate::config::Config {
-            env: crate::config::Env::Dev,
-            port: 0,
-            ssh_internal_url: "http://127.0.0.1:9".into(),
-            audio_base_url: "http://127.0.0.1:9".into(),
-            public_base_url: "http://late.test".into(),
-            db: DbConfig::default(),
-        },
-        db: test.db.clone(),
-        http_client: reqwest::Client::new(),
-    });
-    let fetch = |uri: &'static str| {
-        let router = router.clone();
-        async move {
-            let response = router
-                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
-                .await
-                .unwrap();
-            let status = response.status();
-            let content_type = response
-                .headers()
-                .get("content-type")
-                .map(|value| value.to_str().unwrap().to_string());
-            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-            (status, content_type, body.to_vec())
-        }
-    };
+    let router = router(&test.db);
 
-    let (status, _, html) = fetch("/gallery?key=daily:2026-09-03").await;
+    let (status, _, html) = fetch(&router, "/gallery?key=daily:2026-09-03").await;
     assert_eq!(status, StatusCode::OK);
     let html = String::from_utf8(html).unwrap();
     for needle in [
@@ -108,7 +117,7 @@ async fn a_gallery_link_unfurls_into_its_snapshot() {
         assert!(html.contains(needle), "{needle}");
     }
 
-    let (status, content_type, png) = fetch("/gallery/daily:2026-09-03/image.png").await;
+    let (status, content_type, png) = fetch(&router, "/gallery/daily:2026-09-03/image.png").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(content_type.as_deref(), Some("image/png"));
     let reader = png::Decoder::new(std::io::Cursor::new(png))
@@ -116,11 +125,11 @@ async fn a_gallery_link_unfurls_into_its_snapshot() {
         .unwrap();
     assert_eq!((reader.info().width, reader.info().height), (384, 384));
 
-    let (status, _, _) = fetch("/gallery/daily:2099-01-01/image.png").await;
+    let (status, _, _) = fetch(&router, "/gallery/daily:2099-01-01/image.png").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
     // The herald's crop: the cells inside, at the scale of their width.
-    let (status, _, png) = fetch("/gallery/daily:2026-09-03/image.png?crop=0,0,4,2").await;
+    let (status, _, png) = fetch(&router, "/gallery/daily:2026-09-03/image.png?crop=0,0,4,2").await;
     assert_eq!(status, StatusCode::OK);
     let reader = png::Decoder::new(std::io::Cursor::new(png))
         .read_info()
@@ -131,7 +140,7 @@ async fn a_gallery_link_unfurls_into_its_snapshot() {
         "/gallery/daily:2026-09-03/image.png?crop=0,0,0,1",
         "/gallery/daily:2026-09-03/image.png?crop=1,2,3",
     ] {
-        assert_eq!(fetch(bad).await.0, StatusCode::BAD_REQUEST, "{bad}");
+        assert_eq!(fetch(&router, bad).await.0, StatusCode::BAD_REQUEST, "{bad}");
     }
 }
 
@@ -139,17 +148,12 @@ async fn a_gallery_link_unfurls_into_its_snapshot() {
 /// an unknown id, a path that is no id, and a piece taken down are 404.
 #[tokio::test]
 async fn a_piece_has_a_page_and_a_picture_until_it_comes_down() {
-    use axum::{
-        body::{Body, to_bytes},
-        http::{Request, StatusCode},
-    };
+    use axum::http::StatusCode;
     use dartboard_core::{Canvas, Pos};
     use late_core::{
-        db::DbConfig,
         models::artboard_piece::{ArtboardPiece, HangOutcome, HangParams},
         test_utils::{create_test_user, test_db},
     };
-    use tower::ServiceExt;
 
     let test = test_db().await;
     let client = test.db.get().await.unwrap();
@@ -175,33 +179,10 @@ async fn a_piece_has_a_page_and_a_picture_until_it_comes_down() {
         panic!("hung");
     };
 
-    let router = crate::app(crate::AppState {
-        config: crate::config::Config {
-            env: crate::config::Env::Dev,
-            port: 0,
-            ssh_internal_url: "http://127.0.0.1:9".into(),
-            audio_base_url: "http://127.0.0.1:9".into(),
-            public_base_url: "http://late.test".into(),
-            db: DbConfig::default(),
-        },
-        db: test.db.clone(),
-        http_client: reqwest::Client::new(),
-    });
-    let fetch = |uri: String| {
-        let router = router.clone();
-        async move {
-            let response = router
-                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
-                .await
-                .unwrap();
-            let status = response.status();
-            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-            (status, body.to_vec())
-        }
-    };
+    let router = router(&test.db);
     let page = format!("/gallery/pieces/{}", piece.id);
 
-    let (status, html) = fetch(page.clone()).await;
+    let (status, _, html) = fetch(&router, &page).await;
     assert_eq!(status, StatusCode::OK);
     let html = String::from_utf8(html).unwrap();
     assert!(!html.contains("<at>"), "the title is escaped");
@@ -212,7 +193,7 @@ async fn a_piece_has_a_page_and_a_picture_until_it_comes_down() {
     ] {
         assert!(html.contains(&needle), "{needle}");
     }
-    let (status, png) = fetch(format!("{page}/image.png")).await;
+    let (status, _, png) = fetch(&router, &format!("{page}/image.png")).await;
     assert_eq!(status, StatusCode::OK);
     assert!(png.starts_with(b"\x89PNG"));
 
@@ -222,15 +203,15 @@ async fn a_piece_has_a_page_and_a_picture_until_it_comes_down() {
         "/gallery/pieces/not-an-id/image.png".to_string(),
     ] {
         assert_eq!(
-            fetch(missing.clone()).await.0,
+            fetch(&router, &missing).await.0,
             StatusCode::NOT_FOUND,
             "{missing}"
         );
     }
     ArtboardPiece::remove(&client, piece.id).await.unwrap();
-    assert_eq!(fetch(page.clone()).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(fetch(&router, &page).await.0, StatusCode::NOT_FOUND);
     assert_eq!(
-        fetch(format!("{page}/image.png")).await.0,
+        fetch(&router, &format!("{page}/image.png")).await.0,
         StatusCode::NOT_FOUND
     );
 }
