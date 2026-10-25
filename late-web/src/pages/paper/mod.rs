@@ -34,6 +34,8 @@ use crate::{
     error::AppError,
     metrics,
     pages::shared::{
+        board_png,
+        card::{self, CardLine, Ink},
         meta,
         text::{escape_html, split_paragraphs},
     },
@@ -44,7 +46,12 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/paper", get(latest_handler))
         .route("/paper/feed.xml", get(feed_handler))
         .route("/paper/{date}", get(dated_handler))
+        .route("/paper/{date}/image.png", get(image_handler))
 }
+
+/// How much of each column the front-page card shows: its first
+/// paragraphs, cut to this many lines.
+const CARD_COLUMN_LINES: usize = 10;
 
 /// How many editions the feed carries.
 const FEED_EDITIONS: i64 = 20;
@@ -146,6 +153,86 @@ async fn dated_handler(
     Ok((status, Html(page.render()?)).into_response())
 }
 
+/// The edition's front page as a card: the masthead, the dateline and the
+/// head of OUTSIDE and WHAT WE WERE READING, the picture the herald posts
+/// on a day with nothing drawn (`late-ssh/src/app/herald`). A path that
+/// is not a date, or an edition with neither column printed, is 404.
+#[tracing::instrument(skip(state))]
+async fn image_handler(
+    State(state): State<AppState>,
+    Path(date): Path<String>,
+) -> Result<Response, AppError> {
+    metrics::record_page_view("paper_image", false);
+
+    let Ok(edition) = NaiveDate::parse_from_str(&date, "%Y-%m-%d") else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    let client = state
+        .db
+        .get()
+        .await
+        .context("failed to get db client for the paper card")?;
+    let issue = PaperEdition::load(&client, edition)
+        .await
+        .context("failed to load the edition")?;
+    let Some(lines) = front_page(
+        edition,
+        &ready_column(&issue, PaperSectionKind::Outside),
+        &ready_column(&issue, PaperSectionKind::Reading),
+    ) else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    let png = board_png::render_blocking(card::canvas(&lines))
+        .await
+        .context("failed to render the paper card")?;
+    Ok(board_png::response(png))
+}
+
+/// A column the press printed, as paragraphs; empty when it did not.
+fn ready_column(issue: &PaperEdition, kind: PaperSectionKind) -> Vec<String> {
+    issue
+        .sections
+        .iter()
+        .find(|section| section.section == kind && section.status == PaperStatus::Ready)
+        .and_then(|section| section.text.as_deref())
+        .map(split_paragraphs)
+        .unwrap_or_default()
+}
+
+/// The front page's lines, `None` when neither column printed.
+pub(crate) fn front_page(
+    edition: NaiveDate,
+    outside: &[String],
+    reading: &[String],
+) -> Option<Vec<CardLine>> {
+    if outside.is_empty() && reading.is_empty() {
+        return None;
+    }
+    let mut lines = vec![
+        CardLine::new(Ink::Title, "THE LATE EDITION"),
+        CardLine::new(Ink::Dim, edition.format("%A, %-d %B %Y").to_string()),
+    ];
+    for (heading, column) in [("OUTSIDE", outside), ("WHAT WE WERE READING", reading)] {
+        if column.is_empty() {
+            continue;
+        }
+        lines.push(CardLine::blank());
+        lines.push(CardLine::new(Ink::Heading, heading));
+        let mut room = CARD_COLUMN_LINES;
+        for text in column {
+            if room == 0 {
+                break;
+            }
+            let wrapped = card::paragraph(Ink::Body, text, room);
+            room -= wrapped.len();
+            lines.extend(wrapped);
+        }
+    }
+    lines.push(CardLine::blank());
+    lines.push(CardLine::new(Ink::Dim, "late.sh/paper"));
+    Some(lines)
+}
+
 /// RSS 2.0: one item per edition with a printed column, newest first.
 #[tracing::instrument(skip(state))]
 async fn feed_handler(State(state): State<AppState>) -> Result<Response, AppError> {
@@ -204,17 +291,8 @@ async fn read_page(client: &PooledClient, base: &str, edition: NaiveDate) -> any
         true => read_announcements(client, edition).await?,
         false => Vec::new(),
     };
-    let column = |kind: PaperSectionKind| {
-        issue
-            .sections
-            .iter()
-            .find(|section| section.section == kind && section.status == PaperStatus::Ready)
-            .and_then(|section| section.text.as_deref())
-            .map(split_paragraphs)
-            .unwrap_or_default()
-    };
-    let reading = column(PaperSectionKind::Reading);
-    let outside = column(PaperSectionKind::Outside);
+    let reading = ready_column(&issue, PaperSectionKind::Reading);
+    let outside = ready_column(&issue, PaperSectionKind::Outside);
     let printed = !reading.is_empty() || !outside.is_empty() || !announcements.is_empty();
     let earlier = PaperSectionRow::nearest_ready(client, edition, EditionStep::Earlier)
         .await

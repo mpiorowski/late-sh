@@ -18,7 +18,9 @@ use uuid::Uuid;
 
 use super::bluesky::tid_for;
 use super::bluesky_test::png;
-use super::state::{BOARD_MIN_INK, BoardFound, HeraldCommand, Look, post_due_day, shown_day};
+use super::state::{
+    BOARD_MIN_INK, BoardFound, BoardInk, Crop, Found, HeraldCommand, Look, post_due_day, shown_day,
+};
 use super::svc::{
     CommandOutcome, DayWorked, HERALD_CLAIM_WINDOW, HERALD_MAX_ATTEMPTS, HeraldService, NextPost,
 };
@@ -44,6 +46,9 @@ struct Recorded {
     fail_mastodon: bool,
     /// While set, the Bluesky blob endpoint answers 500.
     fail_bluesky: bool,
+    /// While set, late-web's picture routes answer what an older late-web
+    /// answers for a route it lacks: a page, not a picture.
+    web_answers_html: bool,
     /// Gemini: how many times the model was asked, and how many images
     /// the last call carried.
     gemini_calls: usize,
@@ -60,6 +65,9 @@ async fn fake_servers() -> (String, Log) {
     let log: Log = Arc::default();
     let app = Router::new()
         .route("/gallery/{key}/image.png", get(picture))
+        .route("/gallery/pieces/{id}/image.png", get(picture))
+        .route("/arcade/week/{last}/image.png", get(picture))
+        .route("/paper/{edition}/image.png", get(picture))
         .route("/api/v2/media", post(media))
         .route("/api/v1/statuses", post(status))
         .route("/xrpc/com.atproto.server.createSession", post(session))
@@ -84,14 +92,18 @@ fn header_text(headers: &HeaderMap, name: &str) -> String {
 }
 
 async fn picture(State(log): State<Log>, uri: Uri) -> impl IntoResponse {
-    log.lock()
-        .expect("log")
-        .picture_paths
-        .push(uri.path().to_string());
-    (
-        [(header::CONTENT_TYPE, "image/png")],
-        Bytes::from(png(640, 200, false)),
-    )
+    let mut log = log.lock().expect("log");
+    log.picture_paths.push(uri.to_string());
+    match log.web_answers_html {
+        true => (
+            [(header::CONTENT_TYPE, "text/html; charset=utf-8")],
+            Bytes::from_static(b"<html>late.sh</html>"),
+        ),
+        false => (
+            [(header::CONTENT_TYPE, "image/png")],
+            Bytes::from(png(640, 200, false)),
+        ),
+    }
 }
 
 async fn media(State(log): State<Log>, headers: HeaderMap, body: Bytes) -> impl IntoResponse {
@@ -262,7 +274,8 @@ async fn row(client: &Client, day: NaiveDate) -> (Uuid, String, i32) {
 
 /// Day one posts yesterday's board to both networks, day two the next
 /// board, day three has a bare board and rests; a day is settled once.
-/// The model is off, so every post goes out marked not reviewed.
+/// The model is off, so every post goes out marked not reviewed: Bluesky
+/// gets the picture with the mark, Mastodon a note in its place.
 #[tokio::test]
 async fn the_herald_posts_the_board_and_rests_on_a_bare_one() {
     let test_db = new_test_db().await;
@@ -314,16 +327,14 @@ async fn the_herald_posts_the_board_and_rests_on_a_bare_one() {
         let log = log.lock().expect("log");
         assert_eq!(
             log.picture_paths,
-            vec!["/gallery/daily:2026-10-22/image.png"],
-            "fetched once for both networks"
+            vec!["/gallery/daily:2026-10-22/image.png?crop=0,0,80,5"],
+            "fetched once for both networks, cropped to the drawn rows"
         );
 
-        let (auth, body) = &log.media_uploads[0];
-        assert_eq!(auth, "Bearer secret-token");
-        assert!(body.contains("name=\"file\""), "{body}");
-        assert!(body.contains("image/png"), "{body}");
-        assert!(body.contains("name=\"description\""), "{body}");
-        assert!(body.contains("22 October 2026"), "{body}");
+        assert!(
+            log.media_uploads.is_empty(),
+            "an unseen picture stays off Mastodon"
+        );
         let (auth, idempotency, status) = &log.statuses[0];
         assert_eq!(auth, "Bearer secret-token");
         assert_eq!(
@@ -331,15 +342,16 @@ async fn the_herald_posts_the_board_and_rests_on_a_bare_one() {
             key.to_string(),
             "the row id is the idempotency key"
         );
-        assert_eq!(status["media_ids"], serde_json::json!(["77"]));
+        assert_eq!(status["media_ids"], serde_json::json!([]));
         assert_eq!(status["visibility"], "unlisted");
         assert_eq!(status["language"], "en");
-        assert_eq!(status["sensitive"], true, "an unseen picture is blurred");
+        assert_eq!(status["sensitive"], true);
         assert_eq!(status["spoiler_text"], "cw: not reviewed");
-        let text = status["status"].as_str().expect("text");
-        assert!(text.contains("The Artboard yesterday"), "{text}");
-        assert!(text.contains("https://late.sh/gallery\n"), "{text}");
-        assert!(text.contains("#MastoArt"), "{text}");
+        assert_eq!(
+            status["status"],
+            "Yesterday's Artboard, as the room left it on 22 October 2026, is behind a content warning, so this server gets a note and not the picture. It is on late.sh, and on Bluesky with a label.\n\nhttps://late.sh\n\n#tildeverse #terminal",
+            "the note links the front page, never the gallery's card"
+        );
 
         assert_eq!(log.sessions[0]["identifier"], "late.test");
         assert_eq!(log.sessions[0]["password"], "app-pass");
@@ -353,8 +365,7 @@ async fn the_herald_posts_the_board_and_rests_on_a_bare_one() {
         let record = &put["record"];
         assert_eq!(
             record["text"],
-            format!("cw: not reviewed\n\n{}", text.replace("#terminal", "#nsfw")),
-            "the same words on both networks, marked on Bluesky"
+            "cw: not reviewed\n\nThe Artboard yesterday: late.sh's shared ASCII canvas, as the room left it on 22 October 2026. Anyone in the clubhouse can pick up a brush.\n\nhttps://late.sh/gallery\n\n#ASCIIart #MastoArt #tildeverse #nsfw",
         );
         assert!(record.get("labels").is_none(), "no label for not reviewed");
         assert_eq!(record["langs"], serde_json::json!(["en"]));
@@ -393,10 +404,12 @@ async fn the_herald_posts_the_board_and_rests_on_a_bare_one() {
     assert_eq!(posted.deliveries.len(), 2);
     {
         let log = log.lock().expect("log");
-        assert_eq!(log.picture_paths[1], "/gallery/daily:2026-10-23/image.png");
-        assert!(log.media_uploads[1].1.contains("23 October 2026"));
+        assert_eq!(
+            log.picture_paths[1],
+            "/gallery/daily:2026-10-23/image.png?crop=0,0,80,5"
+        );
         let text = log.statuses[1].2["status"].as_str().expect("text");
-        assert!(text.contains("https://late.sh/gallery\n"), "{text}");
+        assert!(text.contains("23 October 2026"), "{text}");
         assert!(
             log.records[1].1["record"]["text"]
                 .as_str()
@@ -517,9 +530,10 @@ async fn a_failed_network_is_retried_alone_under_the_same_key() {
     assert_eq!(log.records[0].1["rkey"], tid_for(key));
 }
 
-/// With the model on, its look writes the alt text and the mark on both
-/// networks, and is stored with the pick: a retry after one network
-/// failed sends the same mark without asking the model again.
+/// With the model on, its look writes the alt text and the mark, and is
+/// stored with the pick: a warned board is a note on Mastodon and the
+/// labelled picture on Bluesky, and a retry after one network failed sends
+/// the same mark without asking the model again.
 #[tokio::test]
 async fn a_seen_day_carries_the_mark_and_a_retry_keeps_it() {
     let test_db = new_test_db().await;
@@ -550,21 +564,13 @@ async fn a_seen_day_carries_the_mark_and_a_retry_keeps_it() {
         let log = log.lock().expect("log");
         assert_eq!(log.gemini_calls, 1);
         assert_eq!(log.gemini_images, 5, "the board whole and its quarters");
-        assert!(
-            log.media_uploads[0]
-                .1
-                .contains("ASCII art: A cyborg stands on the left."),
-            "{}",
-            log.media_uploads[0].1
-        );
+        assert!(log.media_uploads.is_empty(), "no picture on Mastodon");
         let status = &log.statuses[0].2;
+        assert_eq!(status["media_ids"], serde_json::json!([]));
         assert_eq!(status["sensitive"], true);
         assert_eq!(status["spoiler_text"], "nsfw: nudity");
         let text = status["status"].as_str().expect("text");
-        assert!(
-            text.ends_with("#terminal"),
-            "Mastodon keeps its tags: {text}"
-        );
+        assert!(text.starts_with("Yesterday's Artboard"), "{text}");
     }
 
     log.lock().expect("log").fail_bluesky = false;
@@ -631,10 +637,15 @@ async fn the_commands_flip_read_and_post_today_by_hand() {
         herald.run_command(HeraldCommand::Preview, now).await,
         CommandOutcome::Preview {
             day: today,
-            board: BoardFound {
-                key: "daily:2026-10-22".to_string(),
-                shown: shown_day(today),
-                ink: None,
+            found: Found {
+                scoreboard: None,
+                piece: None,
+                board: BoardFound {
+                    key: "daily:2026-10-22".to_string(),
+                    shown: shown_day(today),
+                    ink: None,
+                },
+                paper: None,
             },
             post: None,
             networks: vec![HeraldNetwork::Mastodon, HeraldNetwork::Bluesky],
@@ -643,8 +654,19 @@ async fn the_commands_flip_read_and_post_today_by_hand() {
 
     daily_board(&client, shown_day(today), BOARD_MIN_INK + 3).await;
     match herald.run_command(HeraldCommand::Preview, now).await {
-        CommandOutcome::Preview { board, post, .. } => {
-            assert_eq!(board.ink, Some(BOARD_MIN_INK + 3));
+        CommandOutcome::Preview { found, post, .. } => {
+            assert_eq!(
+                found.board.ink,
+                Some(BoardInk {
+                    cells: BOARD_MIN_INK + 3,
+                    area: Some(Crop {
+                        x: 0,
+                        y: 0,
+                        width: 80,
+                        height: 5,
+                    }),
+                })
+            );
             let (picture, look) = post.expect("the board is a post");
             assert_eq!(picture.subject(), "daily:2026-10-22");
             assert_eq!(look, Look::Unseen, "the model is off");
@@ -735,7 +757,7 @@ async fn switching_on_waits_for_the_hour() {
         assert_eq!(log.statuses.len(), 1);
         assert_eq!(
             log.picture_paths,
-            vec!["/gallery/daily:2026-10-22/image.png"],
+            vec!["/gallery/daily:2026-10-22/image.png?crop=0,0,80,5"],
             "today's board, not the one the switch slept through"
         );
     }
@@ -751,4 +773,244 @@ async fn switching_on_waits_for_the_hour() {
         herald.run_command(HeraldCommand::On, evening).await,
         CommandOutcome::SwitchedOn(NextPost::NextCheck)
     );
+}
+
+/// A piece hung through the gallery's own model, the way the hang flow
+/// does.
+async fn hang_piece(client: &late_core::db::PooledClient, user_id: Uuid, title: &str) -> Uuid {
+    use late_core::models::artboard_piece::{ArtboardPiece, HangOutcome, HangParams};
+    let mut canvas = Canvas::with_size(12, 4);
+    canvas.set(Pos { x: 0, y: 0 }, '#');
+    match ArtboardPiece::hang(
+        client,
+        HangParams {
+            user_id,
+            title: title.to_string(),
+            width: 12,
+            height: 4,
+            canvas: serde_json::to_value(&canvas).expect("canvas json"),
+            provenance: serde_json::json!({"cells": []}),
+            glyph_count: 40,
+            own_share_percent: 100,
+            content_hash: format!("hash-{title}"),
+        },
+    )
+    .await
+    .expect("hang")
+    {
+        HangOutcome::Hung(piece) => piece.id,
+        other => panic!("hung, not {other:?}"),
+    }
+}
+
+fn model_on(base: &str) -> AiService {
+    AiService::at_endpoint(true, Some("test-key".to_string()), base.to_string())
+}
+
+/// A waiting piece beats the board; the model saw it clean, so both
+/// networks get the picture, credited and linking its page. Picked once:
+/// the next day the rotation falls back to the board.
+#[tokio::test]
+async fn a_clean_piece_goes_out_as_a_picture_and_only_once() {
+    let test_db = new_test_db().await;
+    let db = test_db.db.clone();
+    let client = db.get().await.expect("db client");
+    let (base, log) = fake_servers().await;
+    HeraldSwitch::set(&client, true).await.expect("switch on");
+    let now = Utc.with_ymd_and_hms(2026, 10, 23, 16, 30, 0).unwrap();
+    let day = now.date_naive();
+    daily_board(&client, shown_day(day), BOARD_MIN_INK).await;
+    daily_board(&client, shown_day(day + Duration::days(1)), BOARD_MIN_INK).await;
+    let artist = late_core::test_utils::create_test_user(&db, "herald-artist").await;
+    let piece = hang_piece(&client, artist.id, "harbour").await;
+    log.lock().expect("log").gemini_reply = serde_json::json!({
+        "alt": "A lighthouse on a cliff.",
+        "warning": "none",
+        "reason": "",
+    })
+    .to_string();
+    let herald = service(db.clone(), &base, model_on(&base));
+    let mut finished = None;
+
+    assert!(herald.check(now, &mut finished).await);
+    let posted = HeraldPost::posted_on(&client, day)
+        .await
+        .expect("read")
+        .expect("posted");
+    assert_eq!(
+        (posted.kind, posted.subject.as_str()),
+        (HeraldKind::Piece, format!("piece:{piece}").as_str())
+    );
+    {
+        let log = log.lock().expect("log");
+        assert_eq!(
+            log.picture_paths,
+            vec![format!("/gallery/pieces/{piece}/image.png")]
+        );
+        assert!(
+            log.media_uploads[0]
+                .1
+                .contains("ASCII art: A lighthouse on a cliff."),
+            "{}",
+            log.media_uploads[0].1
+        );
+        let status = &log.statuses[0].2;
+        assert_eq!(status["media_ids"], serde_json::json!(["77"]));
+        assert_eq!(status["sensitive"], false);
+        assert!(status.get("spoiler_text").is_none(), "{status}");
+        let text = status["status"].as_str().expect("text");
+        assert_eq!(
+            text,
+            format!(
+                "\"harbour\" by ~herald-artist, hung in the late.sh gallery: drawn cell by cell on the shared ASCII canvas, over SSH.\n\nhttps://late.sh/gallery/pieces/{piece}\n\n#ASCIIart #MastoArt #tildeverse #terminal"
+            )
+        );
+        let record = &log.records[0].1["record"];
+        assert_eq!(record["text"], text, "clean: the same words on both");
+        assert!(record.get("labels").is_none());
+        assert_eq!(
+            record["embed"]["images"][0]["alt"],
+            "ASCII art: A lighthouse on a cliff."
+        );
+    }
+
+    assert!(herald.check(now + Duration::days(1), &mut finished).await);
+    let next = HeraldPost::posted_on(&client, day + Duration::days(1))
+        .await
+        .expect("read")
+        .expect("posted");
+    assert_eq!(
+        (next.kind, next.subject.as_str()),
+        (HeraldKind::Artboard, "daily:2026-10-23"),
+        "the piece went out once"
+    );
+}
+
+/// The cards are drawn from late.sh's own words and never shown to the
+/// model: the week's scoreboard on Sunday, the paper on a Monday with
+/// nothing drawn. Both carry the picture on both networks, alt text from
+/// the same words.
+#[tokio::test]
+async fn the_cards_go_out_drawn_without_the_model() {
+    use late_core::models::le_word;
+    use late_core::models::paper::{PaperSectionKind, PaperSectionRow};
+
+    let test_db = new_test_db().await;
+    let db = test_db.db.clone();
+    let client = db.get().await.expect("db client");
+    let (base, log) = fake_servers().await;
+    HeraldSwitch::set(&client, true).await.expect("switch on");
+    let sunday = Utc.with_ymd_and_hms(2026, 10, 25, 16, 30, 0).unwrap();
+    let player = late_core::test_utils::create_test_user(&db, "card-player").await;
+    le_word::DailyWin::record_win(&client, player.id, shown_day(sunday.date_naive()), 4)
+        .await
+        .expect("a win in the week");
+    let monday = sunday + Duration::days(1);
+    assert!(
+        PaperSectionRow::claim_printing(
+            &client,
+            monday.date_naive(),
+            PaperSectionKind::Outside,
+            Utc::now() - Duration::minutes(15),
+            3,
+        )
+        .await
+        .expect("claim")
+    );
+    PaperSectionRow::finish(
+        &client,
+        monday.date_naive(),
+        PaperSectionKind::Outside,
+        Some("The world turned."),
+    )
+    .await
+    .expect("print");
+    let herald = service(db.clone(), &base, model_on(&base));
+    let mut finished = None;
+
+    assert!(herald.check(sunday, &mut finished).await);
+    assert!(herald.check(monday, &mut finished).await);
+    let kinds = [sunday, monday].map(|at| at.date_naive());
+    let mut posted = Vec::new();
+    for day in kinds {
+        let row = HeraldPost::posted_on(&client, day)
+            .await
+            .expect("read")
+            .expect("posted");
+        posted.push((row.kind, row.subject));
+    }
+    assert_eq!(
+        posted,
+        vec![
+            (HeraldKind::Scoreboard, "week:2026-10-24".to_string()),
+            (HeraldKind::Paper, "paper:2026-10-26".to_string()),
+        ]
+    );
+    let log = log.lock().expect("log");
+    assert_eq!(log.gemini_calls, 0, "a card is never shown to the model");
+    assert_eq!(
+        log.picture_paths,
+        vec![
+            "/arcade/week/2026-10-24/image.png",
+            "/paper/2026-10-26/image.png"
+        ]
+    );
+    assert!(
+        log.media_uploads[0]
+            .1
+            .contains("Le Word: ~card-player, 1 win"),
+        "{}",
+        log.media_uploads[0].1
+    );
+    assert!(
+        log.media_uploads[1]
+            .1
+            .contains("Outside: The world turned."),
+        "{}",
+        log.media_uploads[1].1
+    );
+    for (_, _, status) in &log.statuses {
+        assert_eq!(status["sensitive"], false);
+    }
+    let paper = log.statuses[1].2["status"].as_str().expect("text");
+    assert!(
+        paper.contains("https://late.sh/paper/2026-10-26\n"),
+        "{paper}"
+    );
+    assert!(paper.ends_with("#smolweb"), "{paper}");
+    assert!(
+        log.statuses[0].2["status"]
+            .as_str()
+            .expect("text")
+            .contains("\n\nhttps://late.sh\n\n#puzzles"),
+        "the scoreboard links the front page"
+    );
+    for (_, put) in &log.records {
+        assert!(put["record"].get("labels").is_none());
+    }
+}
+
+/// A picture route that answers anything but a PNG fails the day before
+/// any network is called: an older late-web's landing page never goes out
+/// as the picture.
+#[tokio::test]
+async fn a_page_where_the_picture_should_be_fails_the_day() {
+    let test_db = new_test_db().await;
+    let db = test_db.db.clone();
+    let client = db.get().await.expect("db client");
+    let (base, log) = fake_servers().await;
+    HeraldSwitch::set(&client, true).await.expect("switch on");
+    let now = Utc.with_ymd_and_hms(2026, 10, 23, 16, 30, 0).unwrap();
+    let day = now.date_naive();
+    daily_board(&client, shown_day(day), BOARD_MIN_INK).await;
+    log.lock().expect("log").web_answers_html = true;
+
+    let herald = service(db.clone(), &base, ai_off());
+    let mut finished = None;
+    assert!(herald.check(now, &mut finished).await);
+    assert_eq!(row(&client, day).await.1, "failed");
+    let log = log.lock().expect("log");
+    assert_eq!(log.picture_paths.len(), 1);
+    assert!(log.statuses.is_empty());
+    assert!(log.records.is_empty());
 }

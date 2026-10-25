@@ -14,7 +14,8 @@ use late_core::{
 };
 use tower::ServiceExt;
 
-use super::feed_items;
+use super::{feed_items, front_page};
+use crate::pages::shared::card::{CardLine, Ink};
 
 const EDITION: NaiveDate = match NaiveDate::from_ymd_opt(2026, 9, 3) {
     Some(date) => date,
@@ -261,4 +262,62 @@ fn feed_items_merge_both_columns_newest_first_and_escape_once() {
         items[1].description_html,
         "<h3>What we were reading</h3><p>ducks &amp; geese</p><h3>Outside</h3><p>quiet</p><p>streets</p>"
     );
+}
+
+/// The front page's lines: the masthead, the dateline, each printed
+/// column's head under its name (a column that did not print is left
+/// out), the way in; nothing when neither printed.
+#[test]
+fn the_front_page_card_heads_each_printed_column() {
+    let line = |ink, text: &str| CardLine::new(ink, text);
+    assert_eq!(
+        front_page(EDITION, &["The world turned.".to_string()], &[]),
+        Some(vec![
+            line(Ink::Title, "THE LATE EDITION"),
+            line(Ink::Dim, "Thursday, 3 September 2026"),
+            CardLine::blank(),
+            line(Ink::Heading, "OUTSIDE"),
+            line(Ink::Body, "The world turned."),
+            CardLine::blank(),
+            line(Ink::Dim, "late.sh/paper"),
+        ])
+    );
+    assert_eq!(front_page(EDITION, &[], &[]), None);
+}
+
+/// The card route serves a printed edition as a PNG; an unprinted day and
+/// a path that is not a date are 404.
+#[tokio::test]
+async fn the_front_page_card_is_a_png_for_a_printed_edition() {
+    let test = test_db().await;
+    let client = test.db.get().await.unwrap();
+    print_section(
+        &client,
+        EDITION,
+        PaperSectionKind::Reading,
+        "We read about ducks.",
+    )
+    .await;
+    let router = router(&test.db);
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/paper/2026-09-03/image.png")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let png = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert!(png.starts_with(b"\x89PNG"));
+    for missing in ["/paper/2026-09-02/image.png", "/paper/someday/image.png"] {
+        assert_eq!(
+            get(&router, missing).await.0,
+            StatusCode::NOT_FOUND,
+            "{missing}"
+        );
+    }
 }

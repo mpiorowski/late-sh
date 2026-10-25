@@ -1,6 +1,7 @@
-//! The Mastodon leg of a delivery: the media upload and the status call,
-//! against any server speaking the Mastodon API. Returns the status's URL
-//! or an error; `svc.rs` logs and counts.
+//! The Mastodon leg of a delivery: the media upload and the status call
+//! for a picture, the status call alone for a note behind a warning
+//! (`state::mastodon_post`), against any server speaking the Mastodon
+//! API. Returns the status's URL or an error; `svc.rs` logs and counts.
 
 use std::time::Duration;
 
@@ -20,17 +21,25 @@ const MEDIA_POLL_TRIES: u32 = 15;
 /// The file name the upload carries; the instance keeps its own.
 const UPLOAD_FILE_NAME: &str = "late-sh.png";
 
-/// What goes out with the picture.
+/// What goes out.
 pub(crate) struct Post<'a> {
     /// The day's key: the `Idempotency-Key` on the status call, so a retry
     /// after a lost answer gets the status the instance already made.
     pub(crate) key: Uuid,
-    pub(crate) png: &'a [u8],
     pub(crate) text: &'a str,
-    pub(crate) alt: &'a str,
-    /// The content warning (`state::mastodon_warning`); any warning also
-    /// marks the media sensitive.
-    pub(crate) warning: Option<&'a str>,
+    pub(crate) body: Body<'a>,
+}
+
+/// A clean picture, or a note in its place.
+pub(crate) enum Body<'a> {
+    Picture {
+        png: &'a [u8],
+        alt: &'a str,
+    },
+    /// No media: the status sensitive, `warning` its content warning.
+    Note {
+        warning: &'a str,
+    },
 }
 
 /// `POST /api/v1/statuses` as the instance reads it.
@@ -56,15 +65,22 @@ struct StatusResponse {
     url: Option<String>,
 }
 
-/// Upload the picture, then post the status carrying it. The status's
-/// public URL comes back.
+/// Upload the picture, then post the status carrying it; a note is the
+/// status alone. The status's public URL comes back.
 pub(crate) async fn deliver(
     http: &reqwest::Client,
     config: &MastodonConfig,
     post: Post<'_>,
 ) -> anyhow::Result<String> {
-    let media_id = upload_media(http, config, post.png.to_vec(), post.alt).await?;
-    post_status(http, config, &post, &media_id).await
+    match post.body {
+        Body::Picture { png, alt } => {
+            let media_id = upload_media(http, config, png.to_vec(), alt).await?;
+            post_status(http, config, post.key, post.text, Carries::Media(&media_id)).await
+        }
+        Body::Note { warning } => {
+            post_status(http, config, post.key, post.text, Carries::Warning(warning)).await
+        }
+    }
 }
 
 /// `POST /api/v2/media`: the picture with its alt text. The instance
@@ -129,27 +145,41 @@ async fn await_media(
     bail!("media {id} was still processing after {MEDIA_POLL_TRIES} polls")
 }
 
-/// `POST /api/v1/statuses` with the day's key as `Idempotency-Key`, and
-/// the warning as the status's content warning.
+/// What a status carries besides its words.
+enum Carries<'a> {
+    /// The uploaded picture's id.
+    Media(&'a str),
+    /// A note's content warning.
+    Warning(&'a str),
+}
+
+/// `POST /api/v1/statuses` with the day's key as `Idempotency-Key`: the
+/// picture's media, or the note's warning as the status's content
+/// warning, the status marked sensitive.
 async fn post_status(
     http: &reqwest::Client,
     config: &MastodonConfig,
-    post: &Post<'_>,
-    media_id: &str,
+    key: Uuid,
+    text: &str,
+    carries: Carries<'_>,
 ) -> anyhow::Result<String> {
     let url = format!("{}/api/v1/statuses", config.instance);
+    let (media_ids, spoiler_text) = match carries {
+        Carries::Media(id) => (vec![id], None),
+        Carries::Warning(warning) => (Vec::new(), Some(warning)),
+    };
     let body = StatusBody {
-        status: post.text,
-        media_ids: vec![media_id],
+        status: text,
+        media_ids,
         visibility: config.visibility.as_str(),
         language: "en",
-        sensitive: post.warning.is_some(),
-        spoiler_text: post.warning,
+        sensitive: spoiler_text.is_some(),
+        spoiler_text,
     };
     let posted: StatusResponse = http
         .post(&url)
         .bearer_auth(&config.token)
-        .header("Idempotency-Key", post.key.to_string())
+        .header("Idempotency-Key", key.to_string())
         .json(&body)
         .send_traced()
         .await

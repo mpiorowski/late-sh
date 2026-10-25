@@ -1,9 +1,11 @@
 //! The look: one vision call at pick time that describes the day's
 //! picture for readers who cannot see it and labels what it shows
-//! (`AUDIENCE.md`, the herald's "The look"). The model gets the picture
-//! whole and in four quarters: a 1536-pixel board reaches it shrunk, and
-//! only the quarters let it see a small piece (a doodle the whole picture
-//! hid in the hand run over the gallery). Returns the `Look` or an error;
+//! (`AUDIENCE.md`, the herald's "The look"), for the kinds members drew
+//! (the board, a gallery piece); a card late.sh drew from its own words is
+//! `Drawn` without a call. The model gets the picture whole and in four
+//! quarters: a 1536-pixel board reaches it shrunk, and only the quarters
+//! let it see a small piece (a doodle the whole picture hid in the hand
+//! run over the gallery). Returns the `Look` or an error;
 //! `svc.rs` logs and counts, and posts an error as `Look::Unseen`.
 
 use std::io::Cursor;
@@ -13,17 +15,23 @@ use image::{ImageFormat, ImageReader};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::state::{ALT_MAX_CHARS, Look, Picture, Warning};
+use super::state::{Look, Picture, Warning, cut_alt};
 use crate::app::ai::svc::{AI_MODEL, AiService};
 
-/// Tuned by hand over the gallery's archived boards: words never set a
-/// label (the room writes "boobs" more than it draws them), identity
-/// never does, and a character is named only when the model is sure.
-const BOARD_SYSTEM_PROMPT: &str = r#"You write the alt text and the content label for one picture that late.sh posts on Mastodon and Bluesky.
+/// The prompt's opening: what the call is for.
+const OPENING: &str = "You write the alt text and the content label for one picture that late.sh posts on Mastodon and Bluesky.";
 
-The picture is a day of the late.sh Artboard: a shared canvas in a terminal that anyone in the room can draw on, so it is usually a collage of many unrelated pieces by different people, overlapping, some finished and some abandoned. Everything is drawn in coloured text glyphs (letters, digits, block and box-drawing characters, symbols) on a dark navy background. Shapes are built from characters, and photos converted to glyphs look like coarse coloured mosaics; read them as the subject they show, not as text.
+/// What a day of the board is. Tuned by hand over the gallery's archived
+/// boards, as are the rules below: words never set a label (the room
+/// writes "boobs" more than it draws them), identity never does, and a
+/// character is named only when the model is sure.
+const BOARD_PICTURE: &str = "The picture is a day of the late.sh Artboard: a shared canvas in a terminal that anyone in the room can draw on, so it is usually a collage of many unrelated pieces by different people, overlapping, some finished and some abandoned. Everything is drawn in coloured text glyphs (letters, digits, block and box-drawing characters, symbols) on a dark navy background. Shapes are built from characters, and photos converted to glyphs look like coarse coloured mosaics; read them as the subject they show, not as text.";
 
-alt: a description for a reader who cannot see the picture, in plain sentences. Open with the overall impression in one sentence, then name the largest or most striking pieces and where they sit (top left, centre, along the bottom). Name a character, a person or a logo only when you are sure of it (its title is drawn with it, or the design is unmistakable); otherwise describe what you see. Quote a short word or phrase only when it is drawn large as part of the art. Never quote or mention usernames, handles or people's names written on the board, nothing with an @ sign. Do not open with "ASCII art", "An image of" or "This picture"; a prefix is added for you. No markdown. At most 800 characters.
+/// What a gallery piece is: one member's crop of the board, chosen and
+/// titled to be seen. The rules are the board's.
+const PIECE_PICTURE: &str = "The picture is a piece from the late.sh gallery: one member's crop of a shared canvas in a terminal, hung under a title they chose, so it is usually one work rather than a collage, though bits of neighbouring drawings can reach in at the edges. Everything is drawn in coloured text glyphs (letters, digits, block and box-drawing characters, symbols) on a dark navy background. Shapes are built from characters, and photos converted to glyphs look like coarse coloured mosaics; read them as the subject they show, not as text.";
+
+const RULES: &str = r#"alt: a description for a reader who cannot see the picture, in plain sentences. Open with the overall impression in one sentence, then name the largest or most striking pieces and where they sit (top left, centre, along the bottom). Name a character, a person or a logo only when you are sure of it (its title is drawn with it, or the design is unmistakable); otherwise describe what you see. Quote a short word or phrase only when it is drawn large as part of the art. Never quote or mention usernames, handles or people's names written on the picture, nothing with an @ sign. Do not open with "ASCII art", "An image of" or "This picture"; a prefix is added for you. No markdown. At most 800 characters.
 
 warning: one label for the most serious thing drawn anywhere in the picture, however small or partly covered. Look at every region in turn, including small pieces at the edges and shapes inside larger pieces. Label what is drawn, not what is written: small text, chat lines and jokes in words never set a label; the one exception is a slur or hate phrase drawn large enough to read at a glance, which is offensive. Words, flags and symbols of identity (gay, a pride or trans flag) are never a label.
 - none: nothing below.
@@ -36,7 +44,7 @@ When more than one applies, pick the first in this order: explicit, gore, nudity
 
 reason: for any label but none, the piece that set it and where it sits, in one short sentence; empty for none.
 
-The label is not a verdict on whether to post: the picture is posted either way, and the label decides only the warning readers see before it."#;
+The label is not a verdict on the art: it decides only how readers meet the picture, behind a warning or as a link to it."#;
 
 /// The model's answer as the schema holds it.
 #[derive(Deserialize)]
@@ -46,10 +54,28 @@ struct Answer {
     reason: String,
 }
 
-/// Ask the model about `png`, the picture `picture` names. AI off is
-/// `Unseen` without a call; a call that fails or answers nothing usable
-/// is an error.
+/// Ask the model about `png`, the picture `picture` names. A card
+/// late.sh drew from its own words is `Drawn`, and AI off is `Unseen`,
+/// both without a call; a call that fails or answers nothing usable is an
+/// error.
 pub(crate) async fn look(ai: &AiService, picture: &Picture, png: &[u8]) -> anyhow::Result<Look> {
+    let (what, prompt) = match picture {
+        Picture::Board(board) => (
+            BOARD_PICTURE,
+            format!(
+                "Label this picture: the late.sh Artboard as the room left it on {}, cropped to what is drawn. The first image is the whole board; the next four are its quarters at full detail (top left, top right, bottom left, bottom right), for reading small pieces. Describe and label the whole board.",
+                board.shown.format("%-d %B %Y"),
+            ),
+        ),
+        Picture::Piece(piece) => (
+            PIECE_PICTURE,
+            format!(
+                "Label this picture: a piece from the late.sh gallery, titled {:?}. The first image is the whole piece; the next four are its quarters at full detail (top left, top right, bottom left, bottom right), for reading small details. Describe and label the whole piece.",
+                piece.title,
+            ),
+        ),
+        Picture::Scoreboard(_) | Picture::Paper(_) => return Ok(Look::Drawn),
+    };
     if !ai.is_enabled() {
         return Ok(Look::Unseen);
     }
@@ -60,9 +86,9 @@ pub(crate) async fn look(ai: &AiService, picture: &Picture, png: &[u8]) -> anyho
     let answer = ai
         .generate_json_with_images(
             AI_MODEL,
-            system_prompt(picture),
+            &format!("{OPENING}\n\n{what}\n\n{RULES}"),
             &images,
-            &prompt(picture),
+            &prompt,
             schema(),
         )
         .await
@@ -70,21 +96,6 @@ pub(crate) async fn look(ai: &AiService, picture: &Picture, png: &[u8]) -> anyho
     match answer {
         Some(text) => parse(&text),
         None => bail!("the model gave no answer"),
-    }
-}
-
-fn system_prompt(picture: &Picture) -> &'static str {
-    match picture {
-        Picture::Board(_) => BOARD_SYSTEM_PROMPT,
-    }
-}
-
-fn prompt(picture: &Picture) -> String {
-    match picture {
-        Picture::Board(board) => format!(
-            "Label this picture: the late.sh Artboard as the room left it on {}. The first image is the whole board; the next four are its quarters at full detail (top left, top right, bottom left, bottom right), for reading small pieces. Describe and label the whole board.",
-            board.shown.format("%-d %B %Y"),
-        ),
     }
 }
 
@@ -106,7 +117,7 @@ pub(crate) fn schema() -> serde_json::Value {
 }
 
 /// The answer as a `Look`: the warning one of the closed set, the alt
-/// text trimmed and cut to `ALT_MAX_CHARS`. An unknown warning or an
+/// text trimmed and cut to `state::ALT_MAX_CHARS`. An unknown warning or an
 /// empty description is refused, never guessed.
 pub(crate) fn parse(text: &str) -> anyhow::Result<Look> {
     let answer: Answer = serde_json::from_str(text).context("decoding the look's answer")?;
@@ -123,15 +134,8 @@ pub(crate) fn parse(text: &str) -> anyhow::Result<Look> {
     if alt.is_empty() {
         bail!("the look's alt text is empty");
     }
-    let alt = if alt.chars().count() > ALT_MAX_CHARS {
-        let mut cut: String = alt.chars().take(ALT_MAX_CHARS - 1).collect();
-        cut.push('…');
-        cut
-    } else {
-        alt.to_string()
-    };
     Ok(Look::Seen {
-        alt,
+        alt: cut_alt(alt),
         warning,
         reason: answer.reason.trim().to_string(),
     })

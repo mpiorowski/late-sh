@@ -150,6 +150,9 @@ pub enum HeraldLookResult {
     Warned,
     /// No answer: the model failed, or AI is off. Posted not reviewed.
     Unseen,
+    /// A card late.sh drew from its own words (the paper's front page):
+    /// nothing for the model to see, so no call.
+    Drawn,
 }
 
 /// How one page of The Late Edition (`app/paper`) came off the press.
@@ -3639,6 +3642,7 @@ mod inner {
             HeraldLookResult::Clean => "clean",
             HeraldLookResult::Warned => "warned",
             HeraldLookResult::Unseen => "unseen",
+            HeraldLookResult::Drawn => "drawn",
         }
     }
 

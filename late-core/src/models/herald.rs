@@ -5,7 +5,7 @@
 //! A row is a claim. The checker in late-ssh `app/herald/svc.rs` inserts
 //! a `posting` row before it spends any network's calls, so two replicas
 //! checking the same minute cannot both post; the winner stores its pick
-//! (the picture and the look, migration 255),
+//! (the picture and the look, migration 255; the kinds, migration 256),
 //! records a delivery per network as each lands, and settles the row to
 //! `posted` once every network has one, or to `skipped`. A day that fails
 //! flips its row to `failed` and keeps the attempt count: the next check
@@ -29,22 +29,28 @@ use uuid::Uuid;
 /// read, and never defaulted: an unknown kind in the table is a bug.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HeraldKind {
-    /// Yesterday's daily Artboard snapshot. The only kind so far; the
-    /// next ones (`AUDIENCE.md`, the herald's future work) widen the
-    /// column's check in a forward migration and land here.
+    /// Yesterday's daily Artboard snapshot.
     Artboard,
+    /// A piece a member hung in the gallery, once.
+    Piece,
+    /// The Late Edition's card, on a day with nothing drawn.
+    Paper,
 }
 
 impl HeraldKind {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Artboard => "artboard",
+            Self::Piece => "piece",
+            Self::Paper => "paper",
         }
     }
 
     fn parse(value: &str) -> Result<Self> {
         match value {
             "artboard" => Ok(Self::Artboard),
+            "piece" => Ok(Self::Piece),
+            "paper" => Ok(Self::Paper),
             other => bail!("unknown herald kind {other:?}"),
         }
     }
@@ -259,6 +265,23 @@ impl HeraldPost {
             picture: row.get("picture"),
             look: row.get("look"),
         }))
+    }
+
+    /// The subjects of `kind` picked on `since` or after, whatever came of
+    /// the day: a piece picked once is never picked again, even when its
+    /// day failed.
+    pub async fn subjects_since(
+        client: &Client,
+        kind: HeraldKind,
+        since: NaiveDate,
+    ) -> Result<Vec<String>> {
+        let rows = client
+            .query(
+                "SELECT subject FROM herald_posts WHERE kind = $1 AND day >= $2 ORDER BY day",
+                &[&kind.as_str(), &since],
+            )
+            .await?;
+        Ok(rows.into_iter().map(|row| row.get("subject")).collect())
     }
 
     /// One network has the day's picture. A second record of the same

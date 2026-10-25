@@ -11,7 +11,7 @@ use std::sync::OnceLock;
 
 use ab_glyph::{Font, FontRef, PxScale, ScaleFont, point};
 use anyhow::{Context, bail};
-use dartboard_core::{Canvas, CellValue, RgbColor};
+use dartboard_core::{Canvas, CellValue, Pos, RgbColor};
 
 /// The shell's background, `#111827`, as `board.js` fills it.
 pub(crate) const BACKGROUND: [u8; 3] = [0x11, 0x18, 0x27];
@@ -96,6 +96,67 @@ pub(crate) fn render(canvas: &Canvas) -> anyhow::Result<Vec<u8>> {
         });
     }
     image.encode()
+}
+
+/// A rectangle of cells, as `crop` and the gallery's `?crop=` read it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Crop {
+    pub(crate) x: usize,
+    pub(crate) y: usize,
+    pub(crate) width: usize,
+    pub(crate) height: usize,
+}
+
+impl Crop {
+    /// `x,y,width,height`, every side at least one cell.
+    pub(crate) fn parse(text: &str) -> Option<Self> {
+        let parts: Vec<usize> = text
+            .split(',')
+            .map(|part| part.trim().parse().ok())
+            .collect::<Option<_>>()?;
+        match parts.as_slice() {
+            [x, y, width, height] if *width > 0 && *height > 0 => Some(Self {
+                x: *x,
+                y: *y,
+                width: *width,
+                height: *height,
+            }),
+            _ => None,
+        }
+    }
+}
+
+/// The cells of `canvas` inside `crop`, moved to the origin, colours
+/// kept. A wide glyph that would cross the crop's right edge is left out,
+/// as it would be cut in two. `None` when the crop reaches past the
+/// canvas.
+pub(crate) fn crop(canvas: &Canvas, crop: Crop) -> Option<Canvas> {
+    if crop.x + crop.width > canvas.width || crop.y + crop.height > canvas.height {
+        return None;
+    }
+    let mut out = Canvas::with_size(crop.width, crop.height);
+    for (pos, cell) in canvas.iter() {
+        let ch = match cell {
+            CellValue::Narrow(ch) | CellValue::Wide(ch) => *ch,
+            CellValue::WideCont => continue,
+        };
+        let inside = pos.x >= crop.x
+            && pos.x < crop.x + crop.width
+            && pos.y >= crop.y
+            && pos.y < crop.y + crop.height;
+        if !inside {
+            continue;
+        }
+        let at = Pos {
+            x: pos.x - crop.x,
+            y: pos.y - crop.y,
+        };
+        match canvas.fg(*pos) {
+            Some(fg) => out.put_glyph_colored(at, ch, fg),
+            None => out.put_glyph(at, ch),
+        };
+    }
+    Some(out)
 }
 
 /// One render at a time. `service-web`'s CPU limit leaves tokio a single

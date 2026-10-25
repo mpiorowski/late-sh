@@ -118,4 +118,119 @@ async fn a_gallery_link_unfurls_into_its_snapshot() {
 
     let (status, _, _) = fetch("/gallery/daily:2099-01-01/image.png").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // The herald's crop: the cells inside, at the scale of their width.
+    let (status, _, png) = fetch("/gallery/daily:2026-09-03/image.png?crop=0,0,4,2").await;
+    assert_eq!(status, StatusCode::OK);
+    let reader = png::Decoder::new(std::io::Cursor::new(png))
+        .read_info()
+        .unwrap();
+    assert_eq!((reader.info().width, reader.info().height), (192, 192));
+    for bad in [
+        "/gallery/daily:2026-09-03/image.png?crop=0,0,9,1",
+        "/gallery/daily:2026-09-03/image.png?crop=0,0,0,1",
+        "/gallery/daily:2026-09-03/image.png?crop=1,2,3",
+    ] {
+        assert_eq!(fetch(bad).await.0, StatusCode::BAD_REQUEST, "{bad}");
+    }
+}
+
+/// A piece has a page of its own, credited and unfurling into its PNG;
+/// an unknown id, a path that is no id, and a piece taken down are 404.
+#[tokio::test]
+async fn a_piece_has_a_page_and_a_picture_until_it_comes_down() {
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode},
+    };
+    use dartboard_core::{Canvas, Pos};
+    use late_core::{
+        db::DbConfig,
+        models::artboard_piece::{ArtboardPiece, HangOutcome, HangParams},
+        test_utils::{create_test_user, test_db},
+    };
+    use tower::ServiceExt;
+
+    let test = test_db().await;
+    let client = test.db.get().await.unwrap();
+    let painter = create_test_user(&test.db, "piece-painter").await;
+    let mut canvas = Canvas::with_size(12, 4);
+    canvas.put_glyph(Pos { x: 0, y: 0 }, '#');
+    let HangOutcome::Hung(piece) = ArtboardPiece::hang(
+        &client,
+        HangParams {
+            user_id: painter.id,
+            title: "harbour <at> dusk".to_string(),
+            width: 12,
+            height: 4,
+            canvas: serde_json::to_value(&canvas).unwrap(),
+            provenance: serde_json::json!({ "cells": [] }),
+            glyph_count: 40,
+            own_share_percent: 100,
+            content_hash: "hash-harbour".to_string(),
+        },
+    )
+    .await
+    .unwrap() else {
+        panic!("hung");
+    };
+
+    let router = crate::app(crate::AppState {
+        config: crate::config::Config {
+            env: crate::config::Env::Dev,
+            port: 0,
+            ssh_internal_url: "http://127.0.0.1:9".into(),
+            audio_base_url: "http://127.0.0.1:9".into(),
+            public_base_url: "http://late.test".into(),
+            db: DbConfig::default(),
+        },
+        db: test.db.clone(),
+        http_client: reqwest::Client::new(),
+    });
+    let fetch = |uri: String| {
+        let router = router.clone();
+        async move {
+            let response = router
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            let status = response.status();
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            (status, body.to_vec())
+        }
+    };
+    let page = format!("/gallery/pieces/{}", piece.id);
+
+    let (status, html) = fetch(page.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    let html = String::from_utf8(html).unwrap();
+    assert!(!html.contains("<at>"), "the title is escaped");
+    for needle in [
+        "harbour ".to_string(),
+        "by ~piece-painter".to_string(),
+        format!(r#"<meta property="og:image" content="http://late.test{page}/image.png">"#),
+    ] {
+        assert!(html.contains(&needle), "{needle}");
+    }
+    let (status, png) = fetch(format!("{page}/image.png")).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(png.starts_with(b"\x89PNG"));
+
+    for missing in [
+        format!("/gallery/pieces/{}", uuid::Uuid::now_v7()),
+        "/gallery/pieces/not-an-id".to_string(),
+        "/gallery/pieces/not-an-id/image.png".to_string(),
+    ] {
+        assert_eq!(
+            fetch(missing.clone()).await.0,
+            StatusCode::NOT_FOUND,
+            "{missing}"
+        );
+    }
+    ArtboardPiece::remove(&client, piece.id).await.unwrap();
+    assert_eq!(fetch(page.clone()).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(
+        fetch(format!("{page}/image.png")).await.0,
+        StatusCode::NOT_FOUND
+    );
 }

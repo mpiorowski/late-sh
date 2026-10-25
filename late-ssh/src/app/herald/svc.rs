@@ -3,12 +3,14 @@
 //! checks every `HERALD_CHECK_INTERVAL`; once the day's post time
 //! (`state::HERALD_POST_TIME`) has passed, the `herald_posts` row for the
 //! day is the claim (root CONTEXT.md, multi-replica rule), so one replica
-//! posts. A claimed day is: pick the picture (yesterday's board, once it
-//! has `state::BOARD_MIN_INK` drawn cells; nothing otherwise), fetch it
-//! from late-web's PNG route, look at it (`look.rs`: the alt text and the
-//! warning) and store the pick and the look on the row, deliver it to
-//! every configured network that has no delivery yet (`mastodon.rs`,
-//! `bluesky.rs`), settle the row once all have one. A failed day marks
+//! posts. A claimed day is: find what it could post (the week's
+//! scoreboard on Sundays, a gallery piece waiting, yesterday's board with
+//! `state::BOARD_MIN_INK` drawn cells, the day's paper) and pick one by the
+//! rotation (`state::Found::picture`), fetch it from late-web's PNG route,
+//! look at it (`look.rs`: the alt text and the warning) and store the pick
+//! and the look on the row, deliver it to every configured network that
+//! has no delivery yet (`mastodon.rs`, a note in place of a marked
+//! picture; `bluesky.rs`), settle the row once all have one. A failed day marks
 //! its row and the next check claims it again, up to
 //! `HERALD_MAX_ATTEMPTS`, reusing the stored pick and skipping the
 //! networks already delivered; a claim whose replica died is taken over
@@ -32,14 +34,21 @@ use anyhow::{Context, bail};
 use chrono::{DateTime, NaiveDate, Utc};
 use late_core::db::Db;
 use late_core::models::artboard::Snapshot;
+use late_core::models::artboard_piece::ArtboardPiece;
 use late_core::models::herald::{
-    HeraldDay, HeraldDayStatus, HeraldNetwork, HeraldPick, HeraldPost, HeraldPosted, HeraldSwitch,
+    HeraldDay, HeraldDayStatus, HeraldKind, HeraldNetwork, HeraldPick, HeraldPost, HeraldPosted,
+    HeraldSwitch,
 };
+use late_core::models::leaderboard::week_bests;
+use late_core::models::paper::{PaperEdition, PaperSectionKind, PaperStatus};
 use tokio::sync::broadcast;
 use tracing::Instrument;
 use uuid::Uuid;
 
-use super::state::{self, BoardFound, HeraldCommand, Look, Picture, Words};
+use super::state::{
+    self, BoardFound, BoardInk, Found, HeraldCommand, Look, MastodonPost, PaperCandidate, Picture,
+    PieceCandidate, ScoreboardCandidate, Words,
+};
 use super::{bluesky, look, mastodon};
 use crate::app::ai::svc::AiService;
 use crate::app::common::primitives::Banner;
@@ -76,7 +85,7 @@ const EVENT_CHANNEL_CAP: usize = 64;
 pub(crate) enum Outcome {
     /// Every network has the picture, marked as `look` says.
     Posted { posted: HeraldPosted, look: Look },
-    /// Nothing worth posting: no board with ink.
+    /// Nothing worth posting: no kind had anything.
     Skipped,
 }
 
@@ -123,11 +132,12 @@ pub(crate) enum CommandOutcome {
         day: NaiveDate,
         today: Option<HeraldDay>,
     },
-    /// What `/herald post` would send today, and where: the board as
-    /// found and, when it is a post, the picture and a fresh look at it.
+    /// What `/herald post` would send today, and where: what the day
+    /// could post and, when it is a post, the rotation's pick and a fresh
+    /// look at it.
     Preview {
         day: NaiveDate,
-        board: BoardFound,
+        found: Found,
         post: Option<(Picture, Look)>,
         networks: Vec<HeraldNetwork>,
     },
@@ -305,11 +315,8 @@ impl HeraldService {
                     if !self.config.enabled() {
                         return Ok(CommandOutcome::Unconfigured);
                     }
-                    let board = {
-                        let client = self.db.get().await?;
-                        self.find_board(&client, today).await?
-                    };
-                    let post = match board.picture() {
+                    let found = self.find(today).await?;
+                    let post = match found.picture() {
                         Some(picture) => {
                             let png = self.fetch_picture(&picture).await?;
                             let look = self.look_at(&picture, &png).await;
@@ -319,7 +326,7 @@ impl HeraldService {
                     };
                     Ok(CommandOutcome::Preview {
                         day: today,
-                        board,
+                        found,
                         post,
                         networks: self.networks(),
                     })
@@ -512,16 +519,26 @@ impl HeraldService {
         if let Some(config) = &self.config.mastodon
             && !delivered.contains(&HeraldNetwork::Mastodon)
         {
-            let text = state::status_text(&picture, &self.web_url, Words::Plain);
+            let (text, body) = match state::mastodon_post(&look) {
+                MastodonPost::Picture => (
+                    state::status_text(&picture, &self.web_url, Words::Plain),
+                    mastodon::Body::Picture {
+                        png: &png,
+                        alt: &alt,
+                    },
+                ),
+                MastodonPost::Note { warning } => (
+                    state::note_text(&picture, &self.web_url),
+                    mastodon::Body::Note { warning },
+                ),
+            };
             let sent = mastodon::deliver(
                 &self.http,
                 config,
                 mastodon::Post {
                     key,
-                    png: &png,
                     text: &text,
-                    alt: &alt,
-                    warning: state::mastodon_warning(&look),
+                    body,
                 },
             )
             .await;
@@ -630,11 +647,7 @@ impl HeraldService {
             let png = self.fetch_picture(&picture).await?;
             return Ok(Some(Pick { picture, look, png }));
         }
-        let board = {
-            let client = self.db.get().await?;
-            self.find_board(&client, day).await?
-        };
-        let Some(picture) = board.picture() else {
+        let Some(picture) = self.find(day).await?.picture() else {
             return Ok(None);
         };
         let png = self.fetch_picture(&picture).await?;
@@ -670,12 +683,74 @@ impl HeraldService {
                 warning: Some(_), ..
             } => HeraldLookResult::Warned,
             Look::Unseen => HeraldLookResult::Unseen,
+            Look::Drawn => HeraldLookResult::Drawn,
         });
         look
     }
 
-    /// Yesterday's board as the rollover archived it, with its ink
-    /// counted; `state::BoardFound::picture` says whether it is a post.
+    /// Everything the day could post, one read per kind; the rotation
+    /// (`state::Found::picture`) picks.
+    async fn find(&self, day: NaiveDate) -> anyhow::Result<Found> {
+        let client = self.db.get().await?;
+        let scoreboard = match state::scoreboard_week(day) {
+            Some(last) => ScoreboardCandidate::of(last, &week_bests(&client, last).await?),
+            None => None,
+        };
+        Ok(Found {
+            scoreboard,
+            piece: self.find_piece(&client, day).await?,
+            board: self.find_board(&client, day).await?,
+            paper: self.find_paper(&client, day).await?,
+        })
+    }
+
+    /// The newest piece hung inside the waiting window that no day picked
+    /// yet.
+    async fn find_piece(
+        &self,
+        client: &late_core::db::PooledClient,
+        day: NaiveDate,
+    ) -> anyhow::Result<Option<PieceCandidate>> {
+        let start = state::piece_window_start(day);
+        let subjects = HeraldPost::subjects_since(client, HeraldKind::Piece, start).await?;
+        let picked = state::picked_pieces(&subjects)?;
+        let since = start
+            .and_hms_opt(0, 0, 0)
+            .expect("midnight exists on every date")
+            .and_utc();
+        Ok(ArtboardPiece::newest_hung_since(client, since, &picked)
+            .await?
+            .map(|piece| PieceCandidate {
+                id: piece.id,
+                title: piece.title,
+                artist: piece.username,
+            }))
+    }
+
+    /// The edition dated `day`, which reads the day before, once a public
+    /// column of it printed.
+    async fn find_paper(
+        &self,
+        client: &tokio_postgres::Client,
+        day: NaiveDate,
+    ) -> anyhow::Result<Option<PaperCandidate>> {
+        let issue = PaperEdition::load(client, day).await?;
+        let column = |kind: PaperSectionKind| {
+            issue
+                .sections
+                .iter()
+                .find(|section| section.section == kind && section.status == PaperStatus::Ready)
+                .and_then(|section| section.text.as_deref())
+        };
+        Ok(PaperCandidate::of(
+            day,
+            column(PaperSectionKind::Outside),
+            column(PaperSectionKind::Reading),
+        ))
+    }
+
+    /// Yesterday's board as the rollover archived it, with its ink counted
+    /// and located; `state::BoardFound::picture` says whether it is a post.
     async fn find_board(
         &self,
         client: &tokio_postgres::Client,
@@ -687,23 +762,38 @@ impl HeraldService {
             Some(snapshot) => {
                 let canvas: dartboard_core::Canvas = serde_json::from_value(snapshot.canvas)
                     .with_context(|| format!("decoding artboard snapshot {key}"))?;
-                Some(state::ink_cells(&canvas))
+                Some(BoardInk::of(&canvas))
             }
             None => None,
         };
         Ok(BoardFound { key, shown, ink })
     }
 
-    /// The picture from late-web's PNG route, as bytes.
+    /// The picture from late-web's PNG route, as bytes. Anything but a
+    /// PNG is an error: a 404 (a piece taken down since its pick), or the
+    /// redirect to the landing page an older late-web answers for a route
+    /// it does not have yet, would otherwise go out as the picture.
     async fn fetch_picture(&self, picture: &Picture) -> anyhow::Result<Vec<u8>> {
         use late_core::telemetry::TracedExt;
         let url = format!("{}{}", self.config.web_internal_url, picture.picture_path());
-        let bytes = self
+        let response = self
             .http
             .get(&url)
             .send_traced()
             .await
             .with_context(|| format!("getting {url}"))?
+            .error_for_status()
+            .with_context(|| format!("getting {url}"))?;
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_string);
+        match content_type.as_deref() {
+            Some("image/png") => {}
+            other => bail!("{url} answered {other:?}, not a png"),
+        }
+        let bytes = response
             .bytes()
             .await
             .with_context(|| format!("reading {url}"))?;
@@ -800,6 +890,15 @@ fn describe_look(look: &Look) -> String {
             ..
         } => format!("warned {} ({reason})", warning.as_str()),
         Look::Unseen => "not reviewed (the look failed or AI is off)".to_string(),
+        Look::Drawn => "drawn by late.sh from its own words".to_string(),
+    }
+}
+
+/// What Mastodon gets, in a clause, for `/herald preview`.
+fn describe_mastodon(look: &Look) -> &'static str {
+    match state::mastodon_post(look) {
+        MastodonPost::Picture => "the picture on Mastodon",
+        MastodonPost::Note { .. } => "a note in place of the picture on Mastodon",
     }
 }
 
@@ -830,19 +929,19 @@ fn banner_for(outcome: CommandOutcome) -> Banner {
         }
         CommandOutcome::Preview {
             day,
-            board,
+            found,
             post,
             networks,
         } => match post {
             Some((picture, look)) => Banner::info(&format!(
-                "Would post {} ({} drawn cells) to {} for {day}, {}. Alt: {}",
+                "Would post {} to {} for {day}, {}, {}. Alt: {}",
                 picture.subject(),
-                board.ink.unwrap_or(0),
                 names(&networks),
                 describe_look(&look),
+                describe_mastodon(&look),
                 state::alt_text(&picture, &look),
             )),
-            None => Banner::info(&format!("Nothing to post for {day}: {}", board.describe())),
+            None => Banner::info(&format!("Nothing to post for {day}: {}", found.describe())),
         },
         CommandOutcome::Worked(DayWorked::Posted(posted)) => Banner::success(&format!(
             "Posted {} to {}",
