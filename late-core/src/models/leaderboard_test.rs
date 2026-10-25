@@ -1072,7 +1072,7 @@ async fn the_weeks_best_counts_only_the_week() {
 async fn a_days_tallies_count_the_days_finishes_by_game() {
     use crate::models::door_opening::{DoorCard, DoorOpening};
     use crate::models::door_run::{DoorRun, DoorRunResult, NewDoorRun};
-    use crate::models::leaderboard::{DayTally, Shelf, day_tallies};
+    use crate::models::leaderboard::{DayGame, DayTally, Shelf, day_tallies};
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
     let solver = create_test_user(&test_db.db, "day_solver").await;
@@ -1152,14 +1152,15 @@ async fn a_days_tallies_count_the_days_finishes_by_game() {
     assert_eq!(
         day_tallies(&client, today).await.expect("day"),
         vec![
-            tally(WeekGame::Daily(DailyPuzzle::Sudoku), 1, 1),
-            tally(WeekGame::Daily(DailyPuzzle::LeWord), 3, 3),
-            tally(WeekGame::Score(ScoreGame::Lateris), 1, 0),
-            tally(WeekGame::Lobby(LobbyGame::Chess), 2, 2),
-            tally(WeekGame::Door(DoorGame::Dcss), 0, 1),
-            tally(WeekGame::Door(DoorGame::Nethack), 2, 1),
+            tally(DayGame::Daily(DailyPuzzle::Sudoku), 1, 1),
+            tally(DayGame::Daily(DailyPuzzle::LeWord), 3, 3),
+            tally(DayGame::Score(ScoreGame::Lateris), 1, 0),
+            tally(DayGame::Lobby(LobbyGame::Chess), 2, 2),
+            tally(DayGame::Door(DoorCard::Lateania), 1, 0),
+            tally(DayGame::Door(DoorCard::Nethack), 2, 1),
+            tally(DayGame::Door(DoorCard::Dcss), 0, 1),
         ],
-        "DCSS: a run won today and no opening keeps its line; NetHack: two openings today, one run won today, the deaths uncounted; Lateania is no door of the shelf; Brogue was opened on another day"
+        "Lateania: one opening, a card with no runs to win; NetHack: two openings today, one run won today, the deaths uncounted; DCSS: a run won today and no opening keeps its line; Brogue was opened on another day"
     );
     assert!(
         day_tallies(&client, today - Duration::days(10))
@@ -1179,5 +1180,19 @@ async fn a_days_tallies_count_the_days_finishes_by_game() {
     assert_eq!(
         shelves,
         vec![Shelf::Arcade, Shelf::Arcade, Shelf::Lobby, Shelf::Doors]
+    );
+    let day_shelves: Vec<Shelf> = [
+        DayGame::Daily(DailyPuzzle::Sudoku),
+        DayGame::Score(ScoreGame::Snake),
+        DayGame::Lobby(LobbyGame::Snooker),
+        DayGame::Door(DoorCard::Zork),
+    ]
+    .iter()
+    .map(|game| game.shelf())
+    .collect();
+    assert_eq!(
+        day_shelves,
+        vec![Shelf::Arcade, Shelf::Arcade, Shelf::Lobby, Shelf::Doors],
+        "every hub card is a door of the day's shelf"
     );
 }

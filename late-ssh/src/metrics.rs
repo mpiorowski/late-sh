@@ -4,6 +4,7 @@ use late_core::models::chat_room::WatchDoor;
 use late_core::models::door_opening::DoorCard;
 use late_core::models::leaderboard::{DailyPuzzle, DoorGame};
 use late_core::models::media_queue_item::SongQueueReward;
+use late_core::models::user::RadioStation;
 
 use crate::app::activity::event::ActivityGame;
 use crate::app::arcade::share::ShareCardKind;
@@ -158,7 +159,9 @@ pub enum HeraldLookResult {
 
 /// How one radio roll call (`app/audio`, every `RADIO_ROLL_CALL_INTERVAL`
 /// on every replica) went: `Called` wrote this replica's paired radio
-/// listeners down for the day, `Failed` wrote none.
+/// listeners down for the day, `Failed` stopped at the first listener it
+/// could not write (the ones before it are written, and the next call
+/// fills the gap: a listener already written is a no-op).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RadioRollCallResult {
     Called,
@@ -174,7 +177,9 @@ pub enum DoorOpeningResult {
 }
 
 /// How one page of The Late Edition (`app/paper`) came off the press.
-/// `Printed` is the variant that spent a model call.
+/// `Printed` is a page with text on it: a room page, READING and OUTSIDE
+/// spent a model call for it, YESTERDAY is counted from late.sh's own rows
+/// and spends none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaperPrintResult {
     Printed,
@@ -761,8 +766,8 @@ mod inner {
         NightcapHouseFailure, NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult,
         OutputKind, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome, PotRefusal,
         PotReminderOutcome, Presence, PresenceScope, PresenceWire, RadioRollCallResult,
-        RealmChatRoomAttach, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh,
-        RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SendRefusal,
+        RadioStation, RealmChatRoomAttach, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError,
+        Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SendRefusal,
         SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason,
         SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
@@ -1876,7 +1881,7 @@ mod inner {
 
     /// One roll call: its result, and how many listeners it found on each
     /// station (a listener is one account on one station).
-    pub fn record_radio_roll_call(result: RadioRollCallResult, listeners: &[(String, u64)]) {
+    pub fn record_radio_roll_call(result: RadioRollCallResult, listeners: &[(RadioStation, u64)]) {
         radio_roll_calls_total().add(
             1,
             &[KeyValue::new(
@@ -1885,7 +1890,7 @@ mod inner {
             )],
         );
         for (station, count) in listeners {
-            radio_listeners_total().add(*count, &[KeyValue::new("station", station.clone())]);
+            radio_listeners_total().add(*count, &[KeyValue::new("station", station.as_str())]);
         }
     }
 
@@ -4273,8 +4278,8 @@ mod inner {
         NightcapHouseFailure, NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult,
         OutputKind, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome, PotRefusal,
         PotReminderOutcome, Presence, PresenceScope, PresenceWire, RadioRollCallResult,
-        RealmChatRoomAttach, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh,
-        RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SendRefusal,
+        RadioStation, RealmChatRoomAttach, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError,
+        Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SendRefusal,
         SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason,
         SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
@@ -4392,7 +4397,11 @@ mod inner {
     pub fn record_news_save(_outcome: NewsSaveOutcome) {}
     pub fn record_news_card(_outcome: NewsCardOutcome) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
-    pub fn record_radio_roll_call(_result: RadioRollCallResult, _listeners: &[(String, u64)]) {}
+    pub fn record_radio_roll_call(
+        _result: RadioRollCallResult,
+        _listeners: &[(RadioStation, u64)],
+    ) {
+    }
     pub fn record_booth_thumbnail(_outcome: ThumbnailFetch) {}
     pub fn record_booth_favorite(_outcome: BoothFavoriteOutcome) {}
     pub fn record_radio_meta_poll(_feed: PolledFeed, _outcome: PollOutcome) {}

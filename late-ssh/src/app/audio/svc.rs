@@ -620,24 +620,21 @@ impl AudioService {
     /// and a listener already written today is a no-op, so a day's rows
     /// are its distinct listeners per station. Returns how many listeners
     /// each station had on this call, for the counter.
-    pub async fn radio_roll_call(&self, now: DateTime<Utc>) -> Result<Vec<(String, u64)>> {
+    pub async fn radio_roll_call(&self, now: DateTime<Utc>) -> Result<Vec<(RadioStation, u64)>> {
         let listeners = self.paired_clients.radio_listeners();
         if listeners.is_empty() {
             return Ok(Vec::new());
         }
         let day = now.date_naive();
         let client = self.db.get().await?;
-        let mut by_station: Vec<(String, u64)> = Vec::new();
+        let mut by_station: Vec<(RadioStation, u64)> = Vec::new();
         for (user_id, station) in listeners {
             RadioListen::record(&client, user_id, station, day)
                 .await
                 .with_context(|| format!("recording {user_id} on {}", station.as_str()))?;
-            match by_station
-                .iter_mut()
-                .find(|(key, _)| key == station.as_str())
-            {
+            match by_station.iter_mut().find(|(key, _)| *key == station) {
                 Some((_, count)) => *count += 1,
-                None => by_station.push((station.as_str().to_string(), 1)),
+                None => by_station.push((station, 1)),
             }
         }
         Ok(by_station)

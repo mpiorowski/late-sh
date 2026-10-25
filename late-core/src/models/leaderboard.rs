@@ -475,7 +475,7 @@ pub enum Shelf {
     Arcade,
     /// The Lobby's correspondence games.
     Lobby,
-    /// The roguelike doors.
+    /// The hub's doors: every card that launches something.
     Doors,
 }
 
@@ -512,15 +512,69 @@ impl WeekGame {
     }
 }
 
+/// One game of a day's tallies, from any of the rosters. The week ranks
+/// the doors by their runs (`WeekGame::Door`: the three roguelikes with a
+/// log pipe); the day counts every card of the hub by its openings
+/// (`DoorCard`), so the two keep their own door roster.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DayGame {
+    Daily(DailyPuzzle),
+    Score(ScoreGame),
+    Lobby(LobbyGame),
+    Door(DoorCard),
+}
+
+impl DayGame {
+    /// Every game in tally order: the rosters one after another (the
+    /// daily puzzles, the score games, the Lobby, the hub's cards), each
+    /// in its own order.
+    fn all() -> impl Iterator<Item = Self> {
+        let daily = DailyPuzzle::ALL.iter().map(|&puzzle| Self::Daily(puzzle));
+        let score = ScoreGame::ALL.iter().map(|&game| Self::Score(game));
+        let lobby = LobbyGame::ALL.iter().map(|&game| Self::Lobby(game));
+        let door = DoorCard::ALL.iter().map(|&card| Self::Door(card));
+        daily.chain(score).chain(lobby).chain(door)
+    }
+
+    /// The tag `day_tallies` puts on this game's rows, the shape of
+    /// `WeekGame::key`; a roguelike's door tag is the same in both.
+    fn key(self) -> String {
+        match self {
+            Self::Daily(puzzle) => format!("daily:{}", puzzle.key()),
+            Self::Score(game) => format!("score:{}", game.score_event_key()),
+            Self::Lobby(game) => format!("lobby:{}", game.kind()),
+            Self::Door(card) => format!("door:{}", card.key()),
+        }
+    }
+
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Daily(puzzle) => puzzle.title(),
+            Self::Score(game) => game.title(),
+            Self::Lobby(game) => game.title(),
+            Self::Door(card) => card.title(),
+        }
+    }
+
+    pub const fn shelf(self) -> Shelf {
+        match self {
+            Self::Daily(_) | Self::Score(_) => Shelf::Arcade,
+            Self::Lobby(_) => Shelf::Lobby,
+            Self::Door(_) => Shelf::Doors,
+        }
+    }
+}
+
 /// One game's plays on one UTC day: the finishes for the arcade and the
 /// Lobby, the times its hub card was opened for a door (`door_openings`;
 /// a run can be long and nothing marks its start, an opening is the one
 /// true count). `won` is what the game calls a win: a daily puzzle's
-/// every finish, a Lobby match with a winner (a draw is not one), a door
-/// run that ascended, ended inside the day; a score game has none.
+/// every finish, a Lobby match with a winner (a draw is not one), a
+/// roguelike run that ascended, ended inside the day; a score game and
+/// the other doors have none.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DayTally {
-    pub game: WeekGame,
+    pub game: DayGame,
     pub plays: i64,
     pub won: i64,
 }
@@ -630,10 +684,11 @@ pub async fn week_bests(client: &Client, last: NaiveDate) -> Result<Vec<WeekBest
 /// roster order: the daily puzzles finished (by finish time, not puzzle
 /// date, so a board solved at 23:50 counts for its day), the score games'
 /// finished runs, the Lobby matches finished (`updated` is the finish,
-/// as `week_bests` reads it) and the doors opened from the hub, with the
-/// runs that ended won. The same rosters as the week, counted instead of
-/// ranked, so a new game cannot be left off; a door with a win and no
-/// opening on the day (a run opened the day before) still has its line.
+/// as `week_bests` reads it) and every hub card opened from the hub, with
+/// the runs that ended won for the three roguelikes that log them. The
+/// same rosters as the week, counted instead of ranked, so a new game
+/// cannot be left off; a roguelike with a win and no opening on the day
+/// (a run opened the day before) still has its line.
 pub async fn day_tallies(client: &Client, day: NaiveDate) -> Result<Vec<DayTally>> {
     let floor = day.and_hms_opt(0, 0, 0).expect("midnight").and_utc();
     let ceiling = floor + chrono::Duration::days(1);
@@ -642,7 +697,7 @@ pub async fn day_tallies(client: &Client, day: NaiveDate) -> Result<Vec<DayTally
             "SELECT '{tag}' AS game, count(*)::bigint AS plays, count(*)::bigint AS won
              FROM {table}
              WHERE created >= $1 AND created < $2",
-            tag = WeekGame::Daily(*puzzle).key(),
+            tag = DayGame::Daily(*puzzle).key(),
             table = puzzle.wins_table(),
         )
     });
@@ -651,7 +706,7 @@ pub async fn day_tallies(client: &Client, day: NaiveDate) -> Result<Vec<DayTally
             "SELECT '{tag}' AS game, count(*)::bigint AS plays, 0::bigint AS won
              FROM game_score_events
              WHERE game = '{key}' AND created_at >= $1 AND created_at < $2",
-            tag = WeekGame::Score(*game).key(),
+            tag = DayGame::Score(*game).key(),
             key = game.score_event_key(),
         )
     });
@@ -674,17 +729,24 @@ pub async fn day_tallies(client: &Client, day: NaiveDate) -> Result<Vec<DayTally
         .map(|result| format!("'{}'", result.key()))
         .collect::<Vec<_>>()
         .join(", ");
-    let door = DoorGame::ALL.iter().map(|game| {
+    let door = DoorCard::ALL.iter().map(|card| {
+        // Only a roguelike has runs to win; every other card's wins are 0.
+        let won = match DoorGame::ALL.iter().find(|game| game.card() == *card) {
+            Some(game) => format!(
+                "(SELECT count(*) FROM door_runs
+                  WHERE game = '{key}' AND result IN ({win_results})
+                    AND ended_at >= $1 AND ended_at < $2)::bigint",
+                key = game.key(),
+            ),
+            None => "0::bigint".to_string(),
+        };
         format!(
             "SELECT '{tag}' AS game,
                     (SELECT count(*) FROM door_openings
                      WHERE card = '{card}' AND opened_at >= $1 AND opened_at < $2)::bigint AS plays,
-                    (SELECT count(*) FROM door_runs
-                     WHERE game = '{key}' AND result IN ({win_results})
-                       AND ended_at >= $1 AND ended_at < $2)::bigint AS won",
-            tag = WeekGame::Door(*game).key(),
-            card = game.card().key(),
-            key = game.key(),
+                    {won} AS won",
+            tag = DayGame::Door(*card).key(),
+            card = card.key(),
         )
     });
     let arms = daily
@@ -706,7 +768,7 @@ pub async fn day_tallies(client: &Client, day: NaiveDate) -> Result<Vec<DayTally
         .into_iter()
         .map(|row| {
             let key: String = row.get("game");
-            let (position, game) = match WeekGame::all()
+            let (position, game) = match DayGame::all()
                 .enumerate()
                 .find(|(_, game)| game.key() == key)
             {

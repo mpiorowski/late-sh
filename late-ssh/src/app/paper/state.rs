@@ -399,7 +399,7 @@ pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<PaperLine> {
     // first thing a newcomer reads of what the place does in a day.
     if let Some(text) = edition.ready_text(PaperSectionKind::Yesterday) {
         lines.push(PaperLine::new());
-        lines.push(heading("YESTERDAY ON LATE.SH"));
+        lines.push(heading(PaperSectionKind::Yesterday.heading()));
         lines.extend(column_lines(text));
     }
 
@@ -484,15 +484,12 @@ pub(crate) fn lay_out(layout: PaperLayout<'_>) -> Vec<PaperLine> {
         }
     }
 
-    for (kind, title) in [
-        (PaperSectionKind::Reading, "WHAT WE WERE READING"),
-        (PaperSectionKind::Outside, "OUTSIDE"),
-    ] {
+    for kind in [PaperSectionKind::Reading, PaperSectionKind::Outside] {
         let Some(text) = edition.ready_text(kind) else {
             continue;
         };
         lines.push(PaperLine::new());
-        lines.push(heading(title));
+        lines.push(heading(kind.heading()));
         lines.extend(column_lines(text));
     }
 

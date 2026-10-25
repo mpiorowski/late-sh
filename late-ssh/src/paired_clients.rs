@@ -654,14 +654,16 @@ impl PairedClientRegistry {
         }
     }
 
-    /// Every account with a paired client on the radio source, with the
-    /// station it is on, once per account and station however many sockets
-    /// it holds: the audio service's roll call (`app/audio/svc.rs`).
+    /// Every account with a paired client on the radio source and not
+    /// muted, with the station it is on, once per account and station
+    /// however many sockets it holds: the audio service's roll call
+    /// (`app/audio/svc.rs`). A muted client hears nothing, so it is no
+    /// listener; a quiet volume can be deliberate and still counts.
     pub fn radio_listeners(&self) -> Vec<(Uuid, RadioStation)> {
         let clients = self.clients.lock_recover();
         let mut listeners: Vec<(Uuid, RadioStation)> = Vec::new();
         for entry in clients.values().flatten() {
-            if entry.audio_source != AudioSource::Radio {
+            if entry.audio_source != AudioSource::Radio || entry.state.muted {
                 continue;
             }
             let listener = (entry.user_id, entry.radio_station);

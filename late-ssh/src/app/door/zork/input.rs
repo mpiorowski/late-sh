@@ -4,17 +4,15 @@
 //! instead of reaching the story. `App` only calls in.
 
 use super::state::Mode;
-use crate::app::common::primitives::{Banner, Screen};
+use crate::app::common::primitives::Screen;
 use crate::app::input::{ParsedInput, launcher_key_byte};
 use crate::app::state::{App, DOOR_DETACH_KEY};
 
 /// Enter on the Games card: the edition menu, keeping any live game open
-/// behind it (Continue on that edition resumes it).
+/// behind it (Continue on that edition resumes it). The hub has already
+/// gated on `zork_enabled` (`hub/input.rs`), so this never runs while the
+/// host is off.
 pub fn launch(app: &mut App) {
-    if !app.zork_enabled {
-        app.banner = Some(Banner::error("Zork Trilogy is currently unavailable."));
-        return;
-    }
     app.set_screen(Screen::Zork);
     if let Some(state) = app.zork_state.as_mut() {
         state.open_menu();

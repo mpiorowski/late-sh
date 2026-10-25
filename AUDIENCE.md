@@ -537,7 +537,7 @@ labels, so the series count cannot grow with the crowd):
   one row per Enter on a hub card (`late-ssh/src/app/door/CONTEXT.md`),
   so distinct `user_id` per `card` per day is one query, and the counts
   alone are on the Grafana Games row ("Doors Opened by Card") and in the
-  paper's YESTERDAY line for the roguelikes.
+  paper's YESTERDAY line, every card.
 - What a newcomer does on day one, per person. The counters split it by
   tenure (`day_one`, `first_week`, `regular` on the attention, visit and
   session-start series), count each first-visit tour stop reached, the

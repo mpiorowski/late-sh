@@ -332,7 +332,7 @@ async fn the_roll_call_writes_each_radio_listener_down_once_a_day() {
     for _ in 0..2 {
         assert_eq!(
             service.radio_roll_call(now).await.expect("roll call"),
-            vec![("nightride".to_string(), 1)]
+            vec![(nightride, 1)]
         );
     }
     let client = test.db.get().await.expect("db client");

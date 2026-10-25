@@ -6,7 +6,7 @@
 //! before the connect. A member who quits and comes back opens the door
 //! again, so a day's rows count openings, never runs or people. The
 //! paper's YESTERDAY column reads them per card through
-//! `leaderboard::day_tallies`.
+//! `leaderboard::day_tallies` (`DayGame::Door`).
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -76,6 +76,27 @@ impl DoorCard {
 
     pub fn from_key(key: &str) -> Option<Self> {
         Self::ALL.iter().copied().find(|card| card.key() == key)
+    }
+
+    /// The card's name as the hub prints it, for the paper's Doors line.
+    /// The roguelikes' match `leaderboard::DoorGame::title`.
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::NightCity => "Night City",
+            Self::Lateania => "Lateania",
+            Self::Realm => "Realm",
+            Self::Rebels => "Rebels",
+            Self::Nethack => "NetHack",
+            Self::Dcss => "DCSS",
+            Self::Brogue => "Brogue",
+            Self::Usurper => "Usurper",
+            Self::GreenDragon => "Green Dragon",
+            Self::Dopewars => "dopewars",
+            Self::Bashquest => "BashQuest",
+            Self::Codekeep => "CodeKeep",
+            Self::Zork => "Zork Trilogy",
+            Self::Darkroom => "A Dark Room",
+        }
     }
 }
 

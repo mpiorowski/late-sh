@@ -952,7 +952,7 @@ The target shape already exists in the tree and is the thing to copy: `app/deadc
 
 | Move | From | To | Size |
 |---|---|---|---|
-| Door-game enter/leave/launch, idle reaps, "return to hub on exit" | `state.rs` (22 fns), `tick.rs` (lines ~540-620), `input.rs` `handle_games_hub_input` + `launch_games_hub_selection` (256 lines) | `app/door/hub/{state,input,svc}.rs`, one `door::svc::tick(app)` | ~600 lines |
+| Door-game enter/leave, idle reaps, "return to hub on exit" (the hub's keys and launch are in `app/door/hub/input.rs` already) | `state.rs` (22 fns), `tick.rs` (lines ~540-620) | `app/door/hub/{state,svc}.rs`, one `door::svc::tick(app)` | ~350 lines |
 | Voice join/leave/mute/deafen, on-air consent, `voice_toggle_intent`, `handle_voice_join_result` | `state.rs` (12 fns) | `app/voice/{state,svc}.rs` (`voice/state.rs` is 54 lines today; the logic is at the root) | ~300 lines |
 | Image upload result, inline image polls, mod outputs, sheet save, requested-profile-open, debounced username click | `tick.rs` lines ~171-224 | `chat::svc::tick(app)` returning a `ChatTick { banner, screen_switch, open_profile, open_sheet }` | ~120 lines |
 | Daily-match room join on board load, lobby sync | `tick.rs` lines ~419-445 | `lobby::daily::svc::tick(app)` | ~30 lines |

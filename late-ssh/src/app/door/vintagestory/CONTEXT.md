@@ -12,7 +12,7 @@ Vintage Story is not a door. Nothing runs inside `late-ssh` and there is no prox
 
 ## Card
 
-- `HubGame::VintageStory` sits in the `Servers` group after Minecraft (`hub/state.rs`). Enter does nothing on it (`launch_games_hub_selection` shares Minecraft's empty arm), the hub footer drops its Enter hint, and it is never live.
+- `HubGame::VintageStory` sits in the `Servers` group after Minecraft (`hub/state.rs`). Enter does nothing on it (`hub/input.rs::launch_selection` launches nothing for a server card), the hub footer drops its Enter hint, and it is never live.
 - The landing scrolls with the rest of the hub (Ctrl+J/K). Claiming comes before the rules so the most useful part stays near the top.
 - `ADDRESS` and `VERSION` are constants. `ui_test.rs::quoted_settings_match_the_terraform_and_the_image` reads `infra/vintagestory.tf`, `infra/defaults.tf`, and `docker/vintagestory/Dockerfile` at test time and fails when the card and the server drift: the Dockerfile's `VS_VERSION`, the game version in the `vintagestory_image` tag, port 42420, the address, and the `--withconfig` keys the card quotes (whitelist, account verification, PvP, fire spread, time passing when empty). The build never reads those files.
 - The claim allowance on the card (3 claims, 262144 blocks) is the game's default for the `suplayer` role, read off a generated `serverconfig.json`, not Terraform, so the drift test does not cover it. Re-check it if the roles are ever customised.

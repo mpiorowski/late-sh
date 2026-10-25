@@ -46,9 +46,8 @@ fn an_edition_covers_the_whole_utc_day_before_it() {
 /// and a day with nothing is no column.
 #[test]
 fn yesterday_counts_each_shelf_the_radio_and_the_booth() {
-    use late_core::models::leaderboard::{
-        DailyPuzzle, DayTally, DoorGame, LobbyGame, ScoreGame, WeekGame,
-    };
+    use late_core::models::door_opening::DoorCard;
+    use late_core::models::leaderboard::{DailyPuzzle, DayGame, DayTally, LobbyGame, ScoreGame};
     use late_core::models::radio_listen::StationListeners;
     let tally = |game, plays, won| DayTally { game, plays, won };
     let station = |station: &str, listeners| StationListeners {
@@ -56,12 +55,12 @@ fn yesterday_counts_each_shelf_the_radio_and_the_booth() {
         listeners,
     };
     let tallies = [
-        tally(WeekGame::Daily(DailyPuzzle::Sudoku), 39, 39),
-        tally(WeekGame::Daily(DailyPuzzle::Minesweeper), 61, 61),
-        tally(WeekGame::Score(ScoreGame::Lateris), 61, 0),
-        tally(WeekGame::Lobby(LobbyGame::Chess), 1, 1),
-        tally(WeekGame::Door(DoorGame::Nethack), 5, 1),
-        tally(WeekGame::Door(DoorGame::Brogue), 4, 0),
+        tally(DayGame::Daily(DailyPuzzle::Sudoku), 39, 39),
+        tally(DayGame::Daily(DailyPuzzle::Minesweeper), 61, 61),
+        tally(DayGame::Score(ScoreGame::Lateris), 61, 0),
+        tally(DayGame::Lobby(LobbyGame::Chess), 1, 1),
+        tally(DayGame::Door(DoorCard::Nethack), 5, 1),
+        tally(DayGame::Door(DoorCard::Brogue), 4, 0),
     ];
     let stations = [
         station("chillsynth", 14),
@@ -80,7 +79,7 @@ fn yesterday_counts_each_shelf_the_radio_and_the_booth() {
     );
     assert_eq!(
         yesterday_column(
-            &[tally(WeekGame::Lobby(LobbyGame::Snooker), 3, 2)],
+            &[tally(DayGame::Lobby(LobbyGame::Snooker), 3, 2)],
             &[station("nightride", 1)],
             1
         )
@@ -90,18 +89,18 @@ fn yesterday_counts_each_shelf_the_radio_and_the_booth() {
         )
     );
     assert_eq!(
-        yesterday_column(&[tally(WeekGame::Door(DoorGame::Dcss), 3, 0)], &[], 0).as_deref(),
+        yesterday_column(&[tally(DayGame::Door(DoorCard::Dcss), 3, 0)], &[], 0).as_deref(),
         Some("Doors: 3 opened, all DCSS")
     );
     assert_eq!(
-        yesterday_column(&[tally(WeekGame::Door(DoorGame::Dcss), 1, 0)], &[], 0).as_deref(),
-        Some("Doors: 1 opened, DCSS")
+        yesterday_column(&[tally(DayGame::Door(DoorCard::Zork), 1, 0)], &[], 0).as_deref(),
+        Some("Doors: 1 opened, Zork Trilogy")
     );
     assert_eq!(
         yesterday_column(
             &[
-                tally(WeekGame::Door(DoorGame::Dcss), 0, 1),
-                tally(WeekGame::Door(DoorGame::Brogue), 0, 2),
+                tally(DayGame::Door(DoorCard::Dcss), 0, 1),
+                tally(DayGame::Door(DoorCard::Brogue), 0, 2),
             ],
             &[],
             0
@@ -109,6 +108,29 @@ fn yesterday_counts_each_shelf_the_radio_and_the_booth() {
         .as_deref(),
         Some("Doors: 3 runs won"),
         "a run won on a day its door was not opened"
+    );
+    let busy = [
+        tally(DayGame::Door(DoorCard::Lateania), 12, 0),
+        tally(DayGame::Door(DoorCard::Nethack), 9, 1),
+        tally(DayGame::Door(DoorCard::Dcss), 7, 0),
+        tally(DayGame::Door(DoorCard::Brogue), 3, 0),
+        tally(DayGame::Door(DoorCard::GreenDragon), 2, 0),
+        tally(DayGame::Door(DoorCard::Zork), 5, 0),
+        tally(DayGame::Door(DoorCard::Darkroom), 2, 0),
+    ];
+    assert_eq!(
+        yesterday_column(&busy, &[], 0).as_deref(),
+        Some(
+            "Doors: 40 opened, Lateania 12, NetHack 9, DCSS 7, Zork Trilogy 5, Brogue 3, others 4, 1 run won"
+        ),
+        "every card counts, the five most opened by name, the roster's order on a tie, the rest folded"
+    );
+    assert_eq!(
+        yesterday_column(&busy[..6], &[], 0).as_deref(),
+        Some(
+            "Doors: 38 opened, Lateania 12, NetHack 9, DCSS 7, Zork Trilogy 5, Brogue 3, Green Dragon 2, 1 run won"
+        ),
+        "one card past the five is named, not folded"
     );
     assert_eq!(yesterday_column(&[], &[], 0), None);
 }

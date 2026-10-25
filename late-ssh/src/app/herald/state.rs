@@ -8,6 +8,7 @@ use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Utc, Weekday};
 use dartboard_core::{Canvas, CellValue};
 use late_core::models::herald::HeraldKind;
 use late_core::models::leaderboard::{WeekBest, week_first_day};
+use late_core::models::paper::PaperSectionKind;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
 use uuid::Uuid;
@@ -745,13 +746,22 @@ pub(crate) fn alt_text(picture: &Picture, look: &Look) -> String {
                 long_date(paper.edition)
             );
             if let Some(yesterday) = &paper.yesterday {
-                text.push_str(&format!(" Yesterday on late.sh: {yesterday}."));
+                text.push_str(&format!(
+                    " {}: {yesterday}.",
+                    PaperSectionKind::Yesterday.title()
+                ));
             }
             if let Some(outside) = &paper.outside {
-                text.push_str(&format!(" Outside: {outside}"));
+                text.push_str(&format!(
+                    " {}: {outside}",
+                    PaperSectionKind::Outside.title()
+                ));
             }
             if let Some(reading) = &paper.reading {
-                text.push_str(&format!(" What we were reading: {reading}"));
+                text.push_str(&format!(
+                    " {}: {reading}",
+                    PaperSectionKind::Reading.title()
+                ));
             }
             cut_alt(&text)
         }

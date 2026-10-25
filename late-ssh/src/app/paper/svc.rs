@@ -1309,10 +1309,14 @@ pub(crate) fn yesterday_column(
     }
 }
 
-/// The doors' line: how many times they were opened (`DayTally::plays`
-/// for a door), each door by its openings, most opened first and the
-/// roster's order on a tie, and the runs won; `None` when nothing was
-/// opened or won.
+/// The most doors the line names; past that the rest fold into `others N`.
+const DOORS_NAMED: usize = 5;
+
+/// The doors' line: how many times the hub's cards were opened
+/// (`DayTally::plays` for a door), each card by its openings, most opened
+/// first and the roster's order on a tie, the first `DOORS_NAMED` by name
+/// and the rest as `others`, and the roguelike runs won; `None` when
+/// nothing was opened or won.
 fn doors_line(doors: &[&DayTally]) -> Option<String> {
     let opened: i64 = doors.iter().map(|tally| tally.plays).sum();
     let won: i64 = doors.iter().map(|tally| tally.won).sum();
@@ -1329,8 +1333,18 @@ fn doors_line(doors: &[&DayTally]) -> Option<String> {
         [only] => parts.push(format!("{opened} opened, all {}", only.game.title())),
         many => {
             parts.push(format!("{opened} opened"));
-            for tally in many {
+            // Folding a single card into "others" saves nothing, so the
+            // fold starts at two.
+            let (named, others) = match many.len() > DOORS_NAMED + 1 {
+                true => many.split_at(DOORS_NAMED),
+                false => (many, &[][..]),
+            };
+            for tally in named {
                 parts.push(format!("{} {}", tally.game.title(), tally.plays));
+            }
+            let folded: i64 = others.iter().map(|tally| tally.plays).sum();
+            if folded > 0 {
+                parts.push(format!("others {folded}"));
             }
         }
     }

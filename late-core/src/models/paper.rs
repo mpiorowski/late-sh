@@ -80,6 +80,26 @@ impl PaperSectionKind {
         }
     }
 
+    /// The section's heading as the paper prints it, in every surface's
+    /// capitals: the terminal page, the web page and its card.
+    pub const fn heading(self) -> &'static str {
+        match self {
+            Self::Yesterday => "YESTERDAY ON LATE.SH",
+            Self::Reading => "WHAT WE WERE READING",
+            Self::Outside => "OUTSIDE",
+        }
+    }
+
+    /// The heading in a sentence: the feed's column titles, the herald's
+    /// alt text.
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Yesterday => "Yesterday on late.sh",
+            Self::Reading => "What we were reading",
+            Self::Outside => "Outside",
+        }
+    }
+
     fn parse(value: &str) -> Result<Self> {
         match value {
             "yesterday" => Ok(Self::Yesterday),

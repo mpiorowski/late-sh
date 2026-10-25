@@ -655,23 +655,42 @@ fn radio_listeners_are_counted_once_per_account_and_station() {
     let registry = PairedClientRegistry::new("https://audio.late.sh");
     let on_radio = Uuid::now_v7();
     let on_youtube = Uuid::now_v7();
+    let on_mute = Uuid::now_v7();
     let nightride = RadioStation::from_key("nightride").expect("nightride");
     let datawave = RadioStation::from_key("datawave").expect("datawave");
+    let mut muted_registration = None;
     for (token, user, source) in [
         ("tok1", on_radio, AudioSource::Radio),
         ("tok1", on_radio, AudioSource::Radio),
         ("tok2", on_radio, AudioSource::Radio),
         ("tok3", on_youtube, AudioSource::Youtube),
+        ("tok4", on_mute, AudioSource::Radio),
     ] {
         let (tx, _rx) = tokio::sync::mpsc::channel(PAIR_CONTROL_QUEUE_CAP);
-        registry
+        let registration_id = registry
             .register(token.to_string(), tx, user, source)
             .expect("paired register");
+        if token == "tok4" {
+            muted_registration = Some(registration_id);
+        }
     }
     registry.set_stream_preferences(on_radio, nightride);
     registry.set_stream_preferences(on_youtube, datawave);
+    registry.set_stream_preferences(on_mute, nightride);
+    registry.update_state_and_enforce_mute_policy(
+        "tok4",
+        muted_registration.expect("the muted session registered"),
+        ClientAudioState {
+            muted: true,
+            ..ClientAudioState::default()
+        },
+    );
 
-    assert_eq!(registry.radio_listeners(), vec![(on_radio, nightride)]);
+    assert_eq!(
+        registry.radio_listeners(),
+        vec![(on_radio, nightride)],
+        "a muted session on the radio is no listener"
+    );
 
     registry.set_radio_station(on_radio, datawave);
     assert_eq!(registry.radio_listeners(), vec![(on_radio, datawave)]);

@@ -3,15 +3,15 @@ use chrono::{Duration, Utc};
 use crate::{
     models::{
         door_opening::{DoorCard, DoorOpening},
-        leaderboard::{DayTally, DoorGame, WeekGame, day_tallies},
+        leaderboard::{DayGame, DayTally, DoorGame, day_tallies},
     },
     test_utils::{create_test_user, test_db},
 };
 
 /// Every opening is its own row, the same member again included; the
-/// day's tallies count a card's openings inside the UTC day and leave
-/// another day's out; every card's key reads back as the card, and the
-/// roguelikes' keys are the leaderboard's.
+/// day's tallies count every card's openings inside the UTC day and
+/// leave another day's out; every card's key reads back as the card, and
+/// the roguelikes' keys are the leaderboard's.
 #[tokio::test]
 async fn each_opening_is_counted_on_its_day() {
     let test_db = test_db().await;
@@ -48,16 +48,17 @@ async fn each_opening_is_counted_on_its_day() {
         .await
         .expect("day")
         .into_iter()
-        .filter(|tally| matches!(tally.game, WeekGame::Door(_)))
+        .filter(|tally| matches!(tally.game, DayGame::Door(_)))
         .collect();
     let tally = |game, plays, won| DayTally { game, plays, won };
     assert_eq!(
         doors,
         vec![
-            tally(WeekGame::Door(DoorGame::Dcss), 1, 0),
-            tally(WeekGame::Door(DoorGame::Nethack), 3, 0),
+            tally(DayGame::Door(DoorCard::Lateania), 1, 0),
+            tally(DayGame::Door(DoorCard::Nethack), 3, 0),
+            tally(DayGame::Door(DoorCard::Dcss), 1, 0),
         ],
-        "the roguelikes' openings, in roster order; Lateania is not a door of the shelf and yesterday's Brogue is not today's"
+        "every card's openings, in the cards' order; yesterday's Brogue is not today's"
     );
 
     for card in DoorCard::ALL {

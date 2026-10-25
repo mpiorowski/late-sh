@@ -1,7 +1,7 @@
 use late_core::{
     models::{
         door_opening::DoorCard,
-        leaderboard::{DayTally, DoorGame, WeekGame, day_tallies},
+        leaderboard::{DayGame, DayTally, DoorGame, day_tallies},
     },
     test_utils::{create_test_user, test_db},
 };
@@ -26,15 +26,22 @@ async fn an_opening_is_written_and_every_card_knows_its_key() {
         .await
         .expect("day")
         .into_iter()
-        .filter(|tally| matches!(tally.game, WeekGame::Door(_)))
+        .filter(|tally| matches!(tally.game, DayGame::Door(_)))
         .collect();
     assert_eq!(
         doors,
-        vec![DayTally {
-            game: WeekGame::Door(DoorGame::Brogue),
-            plays: 2,
-            won: 0,
-        }]
+        vec![
+            DayTally {
+                game: DayGame::Door(DoorCard::Brogue),
+                plays: 2,
+                won: 0,
+            },
+            DayTally {
+                game: DayGame::Door(DoorCard::Zork),
+                plays: 1,
+                won: 0,
+            },
+        ]
     );
 
     let cards: Vec<Option<DoorCard>> = HubGame::ALL.iter().map(|game| game.card()).collect();

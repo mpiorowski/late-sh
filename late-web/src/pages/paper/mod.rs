@@ -215,16 +215,16 @@ pub(crate) fn front_page(
         CardLine::new(Ink::Title, "THE LATE EDITION"),
         CardLine::new(Ink::Dim, edition.format("%A, %-d %B %Y").to_string()),
     ];
-    for (heading, column) in [
-        ("YESTERDAY ON LATE.SH", yesterday),
-        ("OUTSIDE", outside),
-        ("WHAT WE WERE READING", reading),
+    for (kind, column) in [
+        (PaperSectionKind::Yesterday, yesterday),
+        (PaperSectionKind::Outside, outside),
+        (PaperSectionKind::Reading, reading),
     ] {
         if column.is_empty() {
             continue;
         }
         lines.push(CardLine::blank());
-        lines.push(CardLine::new(Ink::Heading, heading));
+        lines.push(CardLine::new(Ink::Heading, kind.heading()));
         let mut room = CARD_COLUMN_LINES;
         for text in column {
             if room == 0 {
@@ -410,13 +410,25 @@ fn feed_items(
         .map(|(edition, columns)| {
             let mut description_html = String::new();
             if let Some(text) = columns.yesterday {
-                push_column(&mut description_html, "Yesterday on late.sh", &text);
+                push_column(
+                    &mut description_html,
+                    PaperSectionKind::Yesterday.title(),
+                    &text,
+                );
             }
             if let Some(text) = columns.reading {
-                push_column(&mut description_html, "What we were reading", &text);
+                push_column(
+                    &mut description_html,
+                    PaperSectionKind::Reading.title(),
+                    &text,
+                );
             }
             if let Some(text) = columns.outside {
-                push_column(&mut description_html, "Outside", &text);
+                push_column(
+                    &mut description_html,
+                    PaperSectionKind::Outside.title(),
+                    &text,
+                );
             }
             FeedItem {
                 title: format!("The Late Edition, {}", edition.format("%-d %B %Y")),

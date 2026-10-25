@@ -1478,7 +1478,7 @@
     {
       "type": "bargauge",
       "title": "Radio Listeners by Station",
-      "description": "Paired clients on the radio source at each roll call (late-ssh app/audio, every 10 minutes per replica), by station: a listener is one account on one station, so divide by six for listener-hours. The paper's YESTERDAY column prints the same thing per day from radio_listens.",
+      "description": "Unmuted paired clients on the radio source at each called roll call (late-ssh app/audio, every 10 minutes per replica), by station: a listener is one account on one station, so divide by six for listener-hours. The paper's YESTERDAY column prints the same thing per day from radio_listens.",
       "datasource": {
         "uid": "victoriametrics",
         "type": "victoriametrics-metrics-datasource"
@@ -1535,7 +1535,7 @@
     {
       "type": "bargauge",
       "title": "Radio Roll Calls",
-      "description": "Roll calls by result: called (this replica's paired radio listeners written to radio_listens for the day) and failed (nothing written; the radio_roll_call_failed error in the logs).",
+      "description": "Roll calls by result: called (this replica's paired radio listeners written to radio_listens for the day) and failed (stopped at the first listener it could not write, the ones before it are in and the next call fills the gap; the radio_roll_call_failed error in the logs).",
       "datasource": {
         "uid": "victoriametrics",
         "type": "victoriametrics-metrics-datasource"
