@@ -240,7 +240,8 @@ pub(crate) struct PieceCandidate {
     pub(crate) artist: String,
 }
 
-/// The week's best in the arcade, one line per game anyone played.
+/// The week's best in every game (the arcade, the Lobby, the doors), one
+/// line per game anyone played.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ScoreboardCandidate {
     /// The week's last day; it runs `WEEK_DAYS` back from here.
@@ -390,7 +391,7 @@ impl Picture {
             ),
             Self::Piece(piece) => format!("/gallery/pieces/{}/image.png", piece.id),
             Self::Scoreboard(scoreboard) => {
-                format!("/arcade/week/{}/image.png", scoreboard.last)
+                format!("/games/week/{}/image.png", scoreboard.last)
             }
             Self::Paper(paper) => format!("/paper/{}/image.png", paper.edition),
         }
@@ -586,7 +587,7 @@ fn speech(picture: &Picture) -> (String, &'static [&'static str]) {
         ),
         Picture::Scoreboard(scoreboard) => (
             format!(
-                "The week's best in the late.sh arcade, {} to {}: the daily puzzles and the high scores, played in a terminal.",
+                "The week's best in every late.sh game, {} to {}: the daily puzzles, the arcade's high scores, chess and pool in the Lobby, the roguelike doors, all played in a terminal.",
                 week_first_day(scoreboard.last).format("%-d %B"),
                 long_date(scoreboard.last),
             ),
@@ -641,7 +642,7 @@ pub(crate) fn note_text(picture: &Picture, web_url: &str) -> String {
             piece.title, piece.artist
         ),
         Picture::Scoreboard(scoreboard) => format!(
-            "The late.sh arcade's week to {}",
+            "The week's best in every late.sh game, to {}",
             long_date(scoreboard.last)
         ),
         Picture::Paper(paper) => format!("The Late Edition for {}", long_date(paper.edition)),
@@ -680,7 +681,7 @@ pub(crate) fn alt_text(picture: &Picture, look: &Look) -> String {
             piece.title,
         ),
         (Picture::Scoreboard(scoreboard), _) => cut_alt(&format!(
-            "A scoreboard in green and grey terminal text: the late.sh arcade's best for the week of {} to {}. {}.",
+            "A scoreboard in green and grey terminal text: the week's best in every late.sh game, {} to {}. {}.",
             week_first_day(scoreboard.last).format("%-d %B"),
             long_date(scoreboard.last),
             scoreboard

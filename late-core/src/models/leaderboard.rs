@@ -6,6 +6,7 @@ use tokio_postgres::Client;
 use uuid::Uuid;
 
 use super::chips::{ChipMove, Difficulty, MONTH_TS_FILTER, UserChips};
+use super::daily_match::DailyMatch;
 use super::door_run::DoorRunResult;
 
 /// UTC calendar-month window over a `puzzle_date` date column. The
@@ -82,6 +83,16 @@ roster!(
     /// board triple: Wins (all-time), Deepest dive, and Top score (monthly +
     /// all-time), all from the per-window union query.
     DoorGame: Dcss, Nethack, Brogue
+);
+
+roster!(
+    /// The Lobby's correspondence games, as `daily_matches` stores them. The
+    /// roster that plays them is late-ssh's `DailyGame`
+    /// (`late-ssh/src/app/lobby/daily/games.rs`), which owns everything
+    /// else about them; this one only names them for the week's
+    /// scoreboard, and a lobby test holds the two equal.
+    LobbyGame: Chess, Chess960, Battleship, ConnectFour, Reversi, Checkers, Backgammon,
+        Briscola, Cribbage, GinRummy, EightBall, NineBall, Snooker
 );
 
 impl DailyPuzzle {
@@ -185,6 +196,45 @@ impl DoorGame {
 
     pub fn from_key(key: &str) -> Option<Self> {
         Self::ALL.iter().copied().find(|game| game.key() == key)
+    }
+}
+
+impl LobbyGame {
+    /// The `daily_matches.game_kind` value.
+    pub const fn kind(self) -> &'static str {
+        match self {
+            Self::Chess => DailyMatch::GAME_KIND_CHESS,
+            Self::Chess960 => DailyMatch::GAME_KIND_CHESS960,
+            Self::Battleship => DailyMatch::GAME_KIND_BATTLESHIP,
+            Self::ConnectFour => DailyMatch::GAME_KIND_CONNECTFOUR,
+            Self::Reversi => DailyMatch::GAME_KIND_REVERSI,
+            Self::Checkers => DailyMatch::GAME_KIND_CHECKERS,
+            Self::Backgammon => DailyMatch::GAME_KIND_BACKGAMMON,
+            Self::Briscola => DailyMatch::GAME_KIND_BRISCOLA,
+            Self::Cribbage => DailyMatch::GAME_KIND_CRIBBAGE,
+            Self::GinRummy => DailyMatch::GAME_KIND_GIN,
+            Self::EightBall => DailyMatch::GAME_KIND_EIGHTBALL,
+            Self::NineBall => DailyMatch::GAME_KIND_NINEBALL,
+            Self::Snooker => DailyMatch::GAME_KIND_SNOOKER,
+        }
+    }
+
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Chess => "Chess",
+            Self::Chess960 => "Chess960",
+            Self::Battleship => "Battleship",
+            Self::ConnectFour => "Connect Four",
+            Self::Reversi => "Reversi",
+            Self::Checkers => "Checkers",
+            Self::Backgammon => "Backgammon",
+            Self::Briscola => "Briscola",
+            Self::Cribbage => "Cribbage",
+            Self::GinRummy => "Gin Rummy",
+            Self::EightBall => "Eight-Ball",
+            Self::NineBall => "Nine-Ball",
+            Self::Snooker => "Snooker",
+        }
     }
 }
 
@@ -321,6 +371,213 @@ impl LeaderboardData {
 
     pub fn door_board(&self, game: DoorGame) -> Option<&DoorBoards> {
         self.door_boards.get(&game)
+    }
+}
+
+/// How many UTC days a week's scoreboard covers, ending on its last day.
+pub const WEEK_DAYS: u64 = 7;
+
+/// One game on a week's scoreboard, from any of the rosters.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WeekGame {
+    /// The week's most daily wins.
+    Daily(DailyPuzzle),
+    /// The week's top final score.
+    Score(ScoreGame),
+    /// The week's most paid wins in the Lobby.
+    Lobby(LobbyGame),
+    /// The week's top scoring run.
+    Door(DoorGame),
+}
+
+impl WeekGame {
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Daily(puzzle) => puzzle.title(),
+            Self::Score(game) => game.title(),
+            Self::Lobby(game) => game.title(),
+            Self::Door(game) => game.title(),
+        }
+    }
+}
+
+/// One game's best of a week: who, and the wins or the score.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WeekBest {
+    pub game: WeekGame,
+    pub username: String,
+    pub value: i64,
+}
+
+impl WeekBest {
+    /// The value as the scoreboard prints it: `6 wins`, `12,340`.
+    pub fn shown_value(&self) -> String {
+        match self.game {
+            WeekGame::Daily(_) | WeekGame::Lobby(_) => match self.value {
+                1 => "1 win".to_string(),
+                wins => format!("{wins} wins"),
+            },
+            WeekGame::Score(_) | WeekGame::Door(_) => {
+                let digits = self.value.to_string();
+                let mut out = String::new();
+                for (index, ch) in digits.chars().enumerate() {
+                    if index > 0 && (digits.len() - index) % 3 == 0 {
+                        out.push(',');
+                    }
+                    out.push(ch);
+                }
+                out
+            }
+        }
+    }
+}
+
+/// The first day of the week that ends on `last`.
+pub fn week_first_day(last: NaiveDate) -> NaiveDate {
+    last - chrono::Days::new(WEEK_DAYS - 1)
+}
+
+/// The week ending on `last`, one best per game anyone played, in roster
+/// order (the daily puzzles, the score games, the Lobby, the doors): the
+/// most daily wins over the week's puzzle dates, the top final score among
+/// the week's score events, the most Lobby wins that paid among the
+/// matches finished in the week (a paid win is the Lobby's own anti-farm
+/// rule: five moves played, one per opponent per day), and the top
+/// scoring door run that ended in the week. A finished match's `updated`
+/// is its finish: the payout settle follows within seconds, and reading
+/// the result does not touch it. A tie goes to whoever got there first.
+/// One query, the arms generated from the rosters, so a new game cannot be
+/// left off.
+pub async fn week_bests(client: &Client, last: NaiveDate) -> Result<Vec<WeekBest>> {
+    let first = week_first_day(last);
+    let floor = first.and_hms_opt(0, 0, 0).expect("midnight").and_utc();
+    let ceiling = floor + chrono::Duration::days(WEEK_DAYS as i64);
+    let daily = DailyPuzzle::ALL.iter().map(|puzzle| {
+        format!(
+            "SELECT 'daily:{key}' AS game, user_id, count(*)::bigint AS value, max(created) AS reached
+             FROM {table}
+             WHERE puzzle_date BETWEEN $1 AND $2
+             GROUP BY user_id",
+            key = puzzle.key(),
+            table = puzzle.wins_table(),
+        )
+    });
+    let score = ScoreGame::ALL.iter().map(|game| {
+        format!(
+            "SELECT 'score:{key}' AS game, user_id, score::bigint AS value, created_at AS reached
+             FROM game_score_events
+             WHERE game = '{key}' AND created_at >= $3 AND created_at < $4",
+            key = game.score_event_key(),
+        )
+    });
+    let lobby_kinds = LobbyGame::ALL
+        .iter()
+        .map(|game| format!("'{}'", game.kind()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let lobby = std::iter::once(format!(
+        "SELECT 'lobby:' || game_kind AS game, winner_user_id AS user_id, count(*)::bigint AS value, max(updated) AS reached
+         FROM daily_matches
+         WHERE status = '{finished}' AND win_payout = 'paid' AND game_kind IN ({lobby_kinds})
+           AND updated >= $3 AND updated < $4
+         GROUP BY game_kind, winner_user_id",
+        finished = DailyMatch::STATUS_FINISHED,
+    ));
+    let door = DoorGame::ALL.iter().map(|game| {
+        format!(
+            "SELECT 'door:{key}' AS game, user_id, score AS value, ended_at AS reached
+             FROM door_runs
+             WHERE game = '{key}' AND score IS NOT NULL AND ended_at >= $3 AND ended_at < $4",
+            key = game.key(),
+        )
+    });
+    let arms = daily
+        .chain(score)
+        .chain(lobby)
+        .chain(door)
+        .collect::<Vec<_>>()
+        .join("\nUNION ALL\n");
+    let rows = client
+        .query(
+            &format!(
+                "SELECT DISTINCT ON (b.game) b.game, u.username, b.value
+                 FROM ({arms}) b
+                 JOIN users u ON u.id = b.user_id
+                 WHERE b.value > 0
+                 ORDER BY b.game, b.value DESC, b.reached ASC"
+            ),
+            &[&first, &last, &floor, &ceiling],
+        )
+        .await?;
+    let mut bests = rows
+        .into_iter()
+        .map(|row| {
+            let key: String = row.get("game");
+            Ok(WeekBest {
+                game: week_game(&key)?,
+                username: row.get("username"),
+                value: row.get("value"),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    bests.sort_by_key(|best| roster_position(best.game));
+    Ok(bests)
+}
+
+fn week_game(key: &str) -> Result<WeekGame> {
+    let daily = DailyPuzzle::ALL
+        .iter()
+        .find(|puzzle| key == format!("daily:{}", puzzle.key()));
+    let score = ScoreGame::ALL
+        .iter()
+        .find(|game| key == format!("score:{}", game.score_event_key()));
+    let lobby = LobbyGame::ALL
+        .iter()
+        .find(|game| key == format!("lobby:{}", game.kind()));
+    let door = DoorGame::ALL
+        .iter()
+        .find(|game| key == format!("door:{}", game.key()));
+    match (daily, score, lobby, door) {
+        (Some(puzzle), None, None, None) => Ok(WeekGame::Daily(*puzzle)),
+        (None, Some(game), None, None) => Ok(WeekGame::Score(*game)),
+        (None, None, Some(game), None) => Ok(WeekGame::Lobby(*game)),
+        (None, None, None, Some(game)) => Ok(WeekGame::Door(*game)),
+        _ => anyhow::bail!("week_bests produced an unknown game {key:?}"),
+    }
+}
+
+/// Where a game sits on the scoreboard: the rosters one after another,
+/// each in its own order.
+fn roster_position(game: WeekGame) -> usize {
+    let daily = DailyPuzzle::ALL.len();
+    let score = daily + ScoreGame::ALL.len();
+    let lobby = score + LobbyGame::ALL.len();
+    match game {
+        WeekGame::Daily(puzzle) => DailyPuzzle::ALL
+            .iter()
+            .position(|other| *other == puzzle)
+            .expect("every puzzle is in the roster"),
+        WeekGame::Score(game) => {
+            daily
+                + ScoreGame::ALL
+                    .iter()
+                    .position(|other| *other == game)
+                    .expect("every score game is in the roster")
+        }
+        WeekGame::Lobby(game) => {
+            score
+                + LobbyGame::ALL
+                    .iter()
+                    .position(|other| *other == game)
+                    .expect("every lobby game is in the roster")
+        }
+        WeekGame::Door(game) => {
+            lobby
+                + DoorGame::ALL
+                    .iter()
+                    .position(|other| *other == game)
+                    .expect("every door is in the roster")
+        }
     }
 }
 

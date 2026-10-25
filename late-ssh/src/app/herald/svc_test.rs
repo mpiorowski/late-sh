@@ -66,7 +66,7 @@ async fn fake_servers() -> (String, Log) {
     let app = Router::new()
         .route("/gallery/{key}/image.png", get(picture))
         .route("/gallery/pieces/{id}/image.png", get(picture))
-        .route("/arcade/week/{last}/image.png", get(picture))
+        .route("/games/week/{last}/image.png", get(picture))
         .route("/paper/{edition}/image.png", get(picture))
         .route("/api/v2/media", post(media))
         .route("/api/v1/statuses", post(status))
@@ -951,7 +951,7 @@ async fn the_cards_go_out_drawn_without_the_model() {
     assert_eq!(
         log.picture_paths,
         vec![
-            "/arcade/week/2026-10-24/image.png",
+            "/games/week/2026-10-24/image.png",
             "/paper/2026-10-26/image.png"
         ]
     );

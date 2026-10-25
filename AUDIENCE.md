@@ -279,9 +279,10 @@ Live, in order of evidence behind them:
   never likes, reposts or replies unprompted, so the human half there is
   done from a person's own account.
   - **What it posts.** One picture a day at 16:00 UTC, by a rotation:
-    on Sundays the arcade's week (a scoreboard card, one line per game
-    with its best and `~name`, from the daily wins and
-    `game_score_events`; doors are not on it), else the newest gallery
+    on Sundays the week in every game (a scoreboard card, one line per
+    game anyone played with its best and `~name`: the arcade's daily
+    puzzles and high scores, the Lobby's chess, pool and card games by
+    wins that paid, the doors by their top run), else the newest gallery
     piece hung in the last week and never posted (credited `~name`,
     linking the piece's page; each piece goes out once), else
     yesterday's Artboard snapshot cropped to what is drawn, once it has
@@ -302,14 +303,14 @@ Live, in order of evidence behind them:
     and #terminal (terminal culture; #ssh was dropped, it is sysadmin and
     security talk) bring members. Per kind: the board and gallery pieces
     `#ASCIIart #MastoArt #tildeverse #terminal`;
-    the weekly wins `#puzzles #sudoku #tildeverse #terminal`; the paper
+    the weekly scoreboard `#puzzles #sudoku #tildeverse #terminal`; the paper
     `#tildeverse #terminal #smolweb`, never #MastoArt. Candidates not
     taken: #ANSIart (the BBS and coloured-terminal tradition, a smaller
     crowd), #TUI, #TextArt. Unmeasured: compare recent posters on each
     tag's page on the instance before changing a set.
   - **The kinds.** Built (`late-ssh/src/app/herald/CONTEXT.md`, "The
     post"). Each kind is one PNG route on the front door (late-web's
-    piece page and PNG, the arcade week card, the paper's front-page
+    piece page and PNG, the week's games card, the paper's front-page
     card, all through `late-web/src/pages/shared/board_png.rs`), one
     candidate read, one text, and one variant of the herald's picture,
     which breaks the build until every match knows it. A piece is the
@@ -326,7 +327,7 @@ Live, in order of evidence behind them:
     (dull, a handful a month). Further out, each behind a PNG route:
     share cards with the `ssh late.sh` footer, a frame of the tavern or
     the night city, the rare headline events the #lounge feed treats as
-    stories, the doors on the weekly scoreboard. Unmeasured: how many
+    stories. Unmeasured: how many
     pieces a week wait, which decides how often the board still gets the
     slot.
   - **What it never posts.** Chat. A frame of #lounge is people's

@@ -9,9 +9,9 @@ use crate::{
         drinks::{UserDrinks, WELCOME_DRINK_POINTS},
         le_word,
         leaderboard::{
-            DailyPuzzle, LATEANIA_XP_AT_LEVEL_CAP, LATEANIA_XP_PER_PARAGON_LEVEL,
-            OnlineTimeIncrement, RankedEntry, ScoreGame, apply_online_time_batch,
-            fetch_leaderboard_data,
+            DailyPuzzle, DoorGame, LATEANIA_XP_AT_LEVEL_CAP, LATEANIA_XP_PER_PARAGON_LEVEL,
+            LobbyGame, OnlineTimeIncrement, RankedEntry, ScoreGame, WeekBest, WeekGame,
+            apply_online_time_batch, fetch_leaderboard_data, week_bests,
         },
         mud_character::MudCharacter,
         rubiks_cube, sliding_puzzle, snake, sudoku, tetris, twenty_forty_eight,
@@ -375,7 +375,6 @@ async fn lateania_boards_rank_living_characters() {
 async fn door_boards_rank_wins_depth_and_score() {
     use crate::models::door_milestone::{DoorMilestone, DoorMilestoneKind, NewDoorMilestone};
     use crate::models::door_run::{DoorRun, DoorRunResult, NewDoorRun};
-    use crate::models::leaderboard::DoorGame;
 
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
@@ -929,4 +928,139 @@ async fn top_drinkers_sums_buzz_by_month_and_year() {
         vec![(binger.id, 1, 6_000), (steady.id, 2, steady_monthly)]
     );
     assert_eq!(yearly, vec![(binger.id, 1, 6_000), (steady.id, 2, 1_650)]);
+}
+
+/// A Lobby match `winner` won this week, settled as `win_payout`.
+async fn lobby_win(
+    client: &crate::db::PooledClient,
+    game: LobbyGame,
+    winner: Uuid,
+    loser: Uuid,
+    win_payout: &str,
+) {
+    use crate::models::daily_match::{DailyMatch, DailyResult};
+    let state = json!({});
+    let challenge = DailyMatch::create_challenge(client, game.kind(), winner)
+        .await
+        .expect("create challenge");
+    DailyMatch::claim(
+        client,
+        challenge.id,
+        loser,
+        winner,
+        Utc::now() + Duration::hours(1),
+        &state,
+    )
+    .await
+    .expect("claim")
+    .expect("challenge was open");
+    DailyMatch::finish(
+        client,
+        challenge.id,
+        Some(winner),
+        DailyResult::Resign,
+        &state,
+        0,
+    )
+    .await
+    .expect("finish");
+    DailyMatch::set_win_payout(client, challenge.id, win_payout)
+        .await
+        .expect("settle");
+}
+
+/// The week's scoreboard: per game, the most daily wins over the week's
+/// puzzle dates, the top score among the week's events, the most Lobby
+/// wins that paid, and the top door run of the week, in roster order; a
+/// win or a score outside the week is not on it, nor a Lobby win that did
+/// not pay, and a game nobody played has no line.
+#[tokio::test]
+async fn the_weeks_best_counts_only_the_week() {
+    use crate::models::door_run::{DoorRun, DoorRunResult, NewDoorRun};
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let solver = create_test_user(&test_db.db, "week_solver").await;
+    let rival = create_test_user(&test_db.db, "week_rival").await;
+    let last = Utc::now().date_naive();
+
+    tetris::HighScore::record_score_event(&client, rival.id, 50_000)
+        .await
+        .expect("old score");
+    roll_score_events_back_a_month(&client).await;
+    for offset in [0, 2, 6] {
+        le_word::DailyWin::record_win(&client, solver.id, last - Duration::days(offset), 4)
+            .await
+            .expect("solver win");
+    }
+    for offset in [7, 8, 9] {
+        le_word::DailyWin::record_win(&client, rival.id, last - Duration::days(offset), 4)
+            .await
+            .expect("rival's wins the week before");
+    }
+    le_word::DailyWin::record_win(&client, rival.id, last, 4)
+        .await
+        .expect("rival win");
+    sudoku::DailyWin::record_win(&client, rival.id, "hard".to_string(), last, 100)
+        .await
+        .expect("rival sudoku");
+    tetris::HighScore::record_score_event(&client, solver.id, 500)
+        .await
+        .expect("solver score");
+    tetris::HighScore::record_score_event(&client, rival.id, 900)
+        .await
+        .expect("rival score");
+    lobby_win(&client, LobbyGame::Chess, solver.id, rival.id, "paid").await;
+    for _ in 0..2 {
+        lobby_win(&client, LobbyGame::Chess, rival.id, solver.id, "unplayed").await;
+    }
+    for (offset, score, ended_days_ago) in [(1, 99_999, 10), (2, 4_000, 1)] {
+        DoorRun::insert_ignore(
+            &client,
+            &NewDoorRun {
+                game: DoorGame::Dcss.key(),
+                user_id: rival.id,
+                ended_at: Utc::now() - Duration::days(ended_days_ago),
+                result: DoorRunResult::Death,
+                score: Some(score),
+                depth: Some(3),
+                turns: Some(100),
+                raw: json!({}),
+                source_file: "week".to_string(),
+                source_offset: offset,
+            },
+        )
+        .await
+        .expect("door run");
+    }
+
+    let best = |game, username: &str, value| WeekBest {
+        game,
+        username: username.to_string(),
+        value,
+    };
+    assert_eq!(
+        week_bests(&client, last).await.expect("week"),
+        vec![
+            best(WeekGame::Daily(DailyPuzzle::Sudoku), "week_rival", 1),
+            best(WeekGame::Daily(DailyPuzzle::LeWord), "week_solver", 3),
+            best(WeekGame::Score(ScoreGame::Lateris), "week_rival", 900),
+            best(WeekGame::Lobby(LobbyGame::Chess), "week_solver", 1),
+            best(WeekGame::Door(DoorGame::Dcss), "week_rival", 4_000),
+        ]
+    );
+    let shown: Vec<String> = [
+        best(WeekGame::Daily(DailyPuzzle::Sudoku), "a", 1),
+        best(WeekGame::Daily(DailyPuzzle::Sudoku), "a", 6),
+        best(WeekGame::Score(ScoreGame::Snake), "a", 900),
+        best(WeekGame::Score(ScoreGame::Snake), "a", 1_234_567),
+        best(WeekGame::Lobby(LobbyGame::Snooker), "a", 2),
+        best(WeekGame::Door(DoorGame::Nethack), "a", 52_340),
+    ]
+    .iter()
+    .map(WeekBest::shown_value)
+    .collect();
+    assert_eq!(
+        shown,
+        vec!["1 win", "6 wins", "900", "1,234,567", "2 wins", "52,340"]
+    );
 }

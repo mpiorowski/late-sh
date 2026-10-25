@@ -1,8 +1,7 @@
 //! A card of text as a cell canvas: the pictures late.sh draws from its
-//! own words (the paper's front page, the herald's picture on a day with
-//! nothing drawn),
-//! rendered by `board_png` like any board, so they look like the rest of
-//! what the server posts. Lines are wrapped here by display width; a card
+//! own words (the week's scoreboard of every game, the paper's front
+//! page), rendered by `board_png` like any board, so they look like the
+//! rest of what the server posts. Lines are wrapped here by display width; a card
 //! never runs wider than `CARD_COLUMNS` plus its margin.
 
 use dartboard_core::{Canvas, Pos, RgbColor};

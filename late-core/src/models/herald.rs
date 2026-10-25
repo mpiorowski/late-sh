@@ -5,9 +5,9 @@
 //! A row is a claim. The checker in late-ssh `app/herald/svc.rs` inserts
 //! a `posting` row before it spends any network's calls, so two replicas
 //! checking the same minute cannot both post; the winner stores its pick
-//! (the picture and the look, migration 255; the kinds, migration 256),
-//! records a delivery per network as each lands, and settles the row to
-//! `posted` once every network has one, or to `skipped`. A day that fails
+//! (the picture and the look, migration 255; the kinds, migrations 256
+//! and 257), records a delivery per network as each lands, and settles
+//! the row to `posted` once every network has one, or to `skipped`. A day that fails
 //! flips its row to `failed` and keeps the attempt count: the next check
 //! claims it again until the caller's cap, reuses the stored pick, and
 //! sends only to the networks without a delivery. A `posting` row nobody
@@ -33,6 +33,8 @@ pub enum HeraldKind {
     Artboard,
     /// A piece a member hung in the gallery, once.
     Piece,
+    /// The week's best in every game, on Sundays.
+    Scoreboard,
     /// The Late Edition's card, on a day with nothing drawn.
     Paper,
 }
@@ -42,6 +44,7 @@ impl HeraldKind {
         match self {
             Self::Artboard => "artboard",
             Self::Piece => "piece",
+            Self::Scoreboard => "scoreboard",
             Self::Paper => "paper",
         }
     }
@@ -50,6 +53,7 @@ impl HeraldKind {
         match value {
             "artboard" => Ok(Self::Artboard),
             "piece" => Ok(Self::Piece),
+            "scoreboard" => Ok(Self::Scoreboard),
             "paper" => Ok(Self::Paper),
             other => bail!("unknown herald kind {other:?}"),
         }
