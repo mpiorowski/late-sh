@@ -1596,10 +1596,7 @@ impl ChatState {
         // A moved session's room wins the first selection that has a list to
         // check it against; a room the user cannot see falls through.
         if let Some(resume_id) = self.resume_room_id.take()
-            && self
-                .rooms
-                .iter()
-                .any(|(room, _)| room.id == resume_id && is_chat_list_room(room))
+            && self.lists_room(resume_id)
         {
             self.selected_room_id = Some(resume_id);
             return;
@@ -1612,11 +1609,7 @@ impl ChatState {
             if self.stream_for_room(selected_id).is_some() {
                 return;
             }
-            if self
-                .rooms
-                .iter()
-                .any(|(room, _)| room.id == selected_id && is_chat_list_room(room))
-            {
+            if self.lists_room(selected_id) {
                 return;
             }
         }
@@ -3371,10 +3364,14 @@ impl ChatState {
             return None;
         }
         let room_id = self.selected_room_id?;
+        self.lists_room(room_id).then_some(room_id)
+    }
+
+    /// Whether `room_id` is one of this user's rooms on the chat list.
+    fn lists_room(&self, room_id: Uuid) -> bool {
         self.rooms
             .iter()
             .any(|(room, _)| room.id == room_id && is_chat_list_room(room))
-            .then_some(room_id)
     }
 
     /// Build the flat visual navigation order.

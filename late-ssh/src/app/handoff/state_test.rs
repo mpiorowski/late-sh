@@ -71,9 +71,8 @@ fn a_page_comes_back_as_itself_and_a_screen_off_the_cycle_as_its_page() {
     }
 }
 
-fn idle_draining() -> HandoffCheck {
+fn idle() -> HandoffCheck {
     HandoffCheck {
-        draining: true,
         auto_restart: true,
         idle: HANDOFF_IDLE,
         in_voice: false,
@@ -84,36 +83,32 @@ fn idle_draining() -> HandoffCheck {
 
 #[test]
 fn a_quiet_session_on_a_draining_pod_moves_at_five_minutes() {
-    assert!(idle_draining().ready());
+    assert!(idle().ready());
     let just_short = HandoffCheck {
         idle: HANDOFF_IDLE - Duration::from_secs(1),
-        ..idle_draining()
+        ..idle()
     };
     assert!(!just_short.ready());
 }
 
 #[test]
-fn the_setting_the_pod_and_anything_a_person_does_without_typing_hold_it_in_place() {
+fn the_setting_and_anything_a_person_does_without_typing_hold_it_in_place() {
     let held = [
         HandoffCheck {
-            draining: false,
-            ..idle_draining()
-        },
-        HandoffCheck {
             auto_restart: false,
-            ..idle_draining()
+            ..idle()
         },
         HandoffCheck {
             in_voice: true,
-            ..idle_draining()
+            ..idle()
         },
         HandoffCheck {
             watching_video: true,
-            ..idle_draining()
+            ..idle()
         },
         HandoffCheck {
             composer_draft: true,
-            ..idle_draining()
+            ..idle()
         },
     ];
     for check in held {

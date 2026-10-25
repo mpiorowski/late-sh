@@ -23,7 +23,7 @@ use tokio::{
 use tracing::{debug, info};
 
 use super::{
-    config::{Config, SshMode},
+    config::Config,
     identity::ssh_key_setup_hint,
     latency::{LatencyKind, LatencySample, LatencySink, SSH_PING_INTERVAL, TerminalProbeWatch},
     pty::terminal_size_or_default,
@@ -171,25 +171,6 @@ pub(super) enum WriterCommand {
     Eof,
     WindowChange { cols: u16, rows: u16 },
     Close,
-}
-
-/// The subprocess (`old`) mode's session. Native mode runs through
-/// [`connect_native`] so a drain handoff can redial; OpenSSH mode through
-/// [`prepare_openssh_ssh`].
-pub(super) fn spawn_ssh(
-    config: &Config,
-    identity_file: &Path,
-    token_tx: oneshot::Sender<String>,
-) -> Result<SshProcess> {
-    match config.ssh_mode {
-        SshMode::Subprocess => spawn_subprocess_ssh(config, identity_file, token_tx),
-        SshMode::Native => {
-            anyhow::bail!("native mode must use connect_native")
-        }
-        SshMode::OpenSsh => {
-            anyhow::bail!("openssh mode must use prepare_openssh_ssh")
-        }
-    }
 }
 
 #[cfg(unix)]
@@ -601,8 +582,11 @@ fn apply_resize(handle: &ResizeHandle) -> Result<()> {
     }
 }
 
+/// The subprocess (`old`) mode's session. Native mode runs through
+/// [`connect_native`] so a drain handoff can redial; OpenSSH mode through
+/// [`prepare_openssh_ssh`].
 #[cfg(unix)]
-fn spawn_subprocess_ssh(
+pub(super) fn spawn_subprocess_ssh(
     config: &Config,
     identity_file: &Path,
     token_tx: oneshot::Sender<String>,
@@ -691,7 +675,7 @@ fn spawn_subprocess_ssh(
 }
 
 #[cfg(not(unix))]
-fn spawn_subprocess_ssh(
+pub(super) fn spawn_subprocess_ssh(
     _config: &Config,
     _identity_file: &Path,
     _token_tx: oneshot::Sender<String>,

@@ -1,4 +1,6 @@
 use super::*;
+#[cfg(unix)]
+use crate::config::SshMode;
 
 // The banner parser and the openssh command specs are Unix-only, so the tests
 // covering them compile only there. parse_session_token_response and

@@ -26,7 +26,7 @@ use audio::{AudioRuntime, audio_startup_hint};
 use config::{Config, init_logging};
 use identity::ensure_client_identity_at;
 use raw_mode::{RawModeGuard, SessionModesGuard, enable_ansi_output_if_tty};
-use ssh::{SshProcess, flush_stdin_input_queue, forward_resize_events, spawn_ssh};
+use ssh::{SshProcess, flush_stdin_input_queue, forward_resize_events, spawn_subprocess_ssh};
 use ws::{
     MAX_CONSECUTIVE_FAILURES, PAIR_RECONNECT_DELAY, PAIR_SLOW_RECONNECT_DELAY, PairAttempt,
     PairClientInfo, PairRetryPolicy, PairRuntime, PlaybackState, ReconnectPlan,
@@ -216,7 +216,7 @@ async fn run_subprocess_session(
         completion_task,
         resize_handle,
         input_gate,
-    } = spawn_ssh(config, ssh_identity, token_tx)?;
+    } = spawn_subprocess_ssh(config, ssh_identity, token_tx)?;
     let resize_task = tokio::spawn(forward_resize_events(resize_handle));
 
     let token = tokio::time::timeout(Duration::from_secs(10), token_rx)
@@ -228,11 +228,7 @@ async fn run_subprocess_session(
         .context("ssh session token channel closed")?;
     flush_stdin_input_queue();
     input_gate.store(true, Ordering::Relaxed);
-    // Not wired for latency samples; the held sink keeps the pair loop's
-    // queue open and quiet (`latency.rs`).
-    let (_latency_sink, latency_samples) = latency::latency_queue();
-    let ssh_exit =
-        wait_for_ssh_with_ws_pairing(completion_task, config, token, audio, latency_samples).await;
+    let ssh_exit = wait_for_ssh_with_ws_pairing(completion_task, config, token, audio).await;
 
     resize_task.abort();
     ssh_exit
@@ -374,12 +370,7 @@ async fn run_openssh_mode(config: Config, ssh_identity: Option<std::path::PathBu
     }
     info!("starting OpenSSH interactive session");
     let ssh::OpenSshProcess { completion_task } = session.spawn_shell(&config)?;
-    // The ssh child owns the terminal here, so nothing samples; the held sink
-    // keeps the pair loop's queue open and quiet (`latency.rs`).
-    let (_latency_sink, latency_samples) = latency::latency_queue();
-    let ssh_exit =
-        wait_for_ssh_with_ws_pairing(completion_task, &config, token, &audio, latency_samples)
-            .await?;
+    let ssh_exit = wait_for_ssh_with_ws_pairing(completion_task, &config, token, &audio).await?;
 
     audio.stop.store(true, Ordering::Relaxed);
     debug!(?ssh_exit, "ssh session ended");
@@ -389,15 +380,18 @@ async fn run_openssh_mode(config: Config, ssh_identity: Option<std::path::PathBu
 }
 
 /// One session with its pairing, for the modes that cannot redial (OpenSSH,
-/// subprocess). They never advertise `reconnect`, so no handoff arrives.
+/// subprocess). They never advertise `reconnect`, so no handoff arrives, and
+/// they never sample latency (OpenSSH's ssh child owns the terminal, old mode
+/// is not wired): the held sink keeps the pair loop's queue open and quiet
+/// (`latency.rs`).
 async fn wait_for_ssh_with_ws_pairing(
     completion_task: tokio::task::JoinHandle<Result<ssh::SshExit>>,
     config: &Config,
     token: String,
     audio: &AudioRuntime,
-    mut latency_samples: tokio::sync::mpsc::Receiver<latency::LatencySample>,
 ) -> Result<ssh::SshExit> {
     let (handoff_tx, _handoff_rx) = tokio::sync::mpsc::channel(1);
+    let (_latency_sink, mut latency_samples) = latency::latency_queue();
     tokio::select! {
         result = completion_task => join_ssh_exit(result),
         () = run_ws_pairing(

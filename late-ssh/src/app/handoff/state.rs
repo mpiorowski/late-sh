@@ -171,12 +171,12 @@ impl ResumePoint {
     }
 }
 
-/// What decides whether a session moves this tick. The session's own key
-/// presses are the idle clock; voice, a video, and an unsent draft are
-/// things a person does without typing, so each holds the session in place.
+/// What decides whether a session on a draining pod moves this tick. The
+/// session's own key presses are the idle clock; voice, a video, and an
+/// unsent draft are things a person does without typing, so each holds the
+/// session in place.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct HandoffCheck {
-    pub(crate) draining: bool,
     pub(crate) auto_restart: bool,
     pub(crate) idle: Duration,
     pub(crate) in_voice: bool,
@@ -186,8 +186,7 @@ pub(crate) struct HandoffCheck {
 
 impl HandoffCheck {
     pub(crate) fn ready(&self) -> bool {
-        self.draining
-            && self.auto_restart
+        self.auto_restart
             && self.idle >= HANDOFF_IDLE
             && !self.in_voice
             && !self.watching_video

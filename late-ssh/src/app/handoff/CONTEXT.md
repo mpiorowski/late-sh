@@ -10,12 +10,11 @@ before this change) keeps the banner and the manual reconnect.
 
 ## Flow
 
-1. **The old pod decides** (`svc::tick`, every world tick). `HandoffCheck`
-   is ready when the pod is draining (`App::is_draining`, set by the
-   shutdown signal),
-   the account's Tweaks row "Auto restart on update" is on
-   (`users.settings.auto_restart`, default on), and `last_active_at` is at
-   least `HANDOFF_IDLE` (5 min) old. That clock moves only on input from a
+1. **The old pod decides** (`svc::tick`, every world tick). Only a draining
+   pod (`App::is_draining`, set by the shutdown signal) looks further; there
+   `HandoffCheck` is ready when the account's Tweaks row "Auto restart on
+   update" is on (`users.settings.auto_restart`, default on), and
+   `last_active_at` is at least `HANDOFF_IDLE` (5 min) old. That clock moves only on input from a
    person, never on a mouse move or a terminal probe reply. A voice room, an
    open watch modal, or text in the chat composer each hold the session in
    place: things a person does without typing. Active sessions are checked

@@ -9,13 +9,13 @@ use super::state::{HandoffCheck, ResumePage, ResumePoint};
 /// Once per world tick: on a draining pod, ask this session's CLI to move to
 /// the new pod once the session has gone quiet. Sessions without a capable
 /// CLI (plain SSH, older CLIs, OpenSSH mode) are never asked and keep the
-/// update banner.
+/// update banner. A live pod returns before reading anything else, since
+/// every session pays this on every tick.
 pub(crate) fn tick(app: &mut App) {
-    if app.handoff.sent {
+    if app.handoff.sent || !app.is_draining.load(Ordering::Relaxed) {
         return;
     }
     let check = HandoffCheck {
-        draining: app.is_draining.load(Ordering::Relaxed),
         auto_restart: app.profile_state.profile().auto_restart,
         idle: app.last_active_at.elapsed(),
         in_voice: app.voice.is_joined(app.user_id),
