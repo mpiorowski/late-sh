@@ -16,8 +16,17 @@ pub(crate) const RESUME_ENV: &str = "LATE_RESUME";
 pub(crate) struct HandoffState {
     /// How long the session goes without input from a person before a
     /// draining pod moves it, from the profile (`Config::handoff_idle`).
-    pub(crate) idle_needed: Duration,
-    pub(crate) sent: bool,
+    pub(super) idle_needed: Duration,
+    pub(super) sent: bool,
+}
+
+impl HandoffState {
+    pub(crate) fn new(idle_needed: Duration) -> Self {
+        Self {
+            idle_needed,
+            sent: false,
+        }
+    }
 }
 
 /// The wire spelling of a page in a resume point.

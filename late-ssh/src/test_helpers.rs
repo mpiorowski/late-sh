@@ -492,8 +492,8 @@ pub struct SessionWorld {
     /// The tour still to walk (the account's flag is unset), which also
     /// starts the session in the Clubhouse. Unset means walked.
     pub tour_pending: bool,
-    /// Where a session moved off a draining pod was (`app/handoff`). Unset
-    /// is a login.
+    /// Where a session its CLI moved here was (`app/handoff`). Unset is a
+    /// login.
     pub resume: Option<crate::app::handoff::state::ResumePoint>,
     /// One replica's chat service, shared the way production shares it:
     /// every session on it hears every other's `ChatEvent`s. Unset gives

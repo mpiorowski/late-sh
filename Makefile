@@ -219,9 +219,9 @@ startm: .env keys
 # `down` takes the containers away and keeps the database (the named
 # `postgres-data` volume); `remove` wipes the database too. Not `down -v`:
 # that also drops the cargo caches and forces a full rebuild.
-down: .env
+down:
 	scripts/fleet.sh down
-stop: .env
+stop:
 	scripts/fleet.sh stop
 remove: down
 	docker volume rm -f "$$(docker compose -f docker-compose.yml config | sed -n 's/^name: //p')_postgres-data"
@@ -230,13 +230,13 @@ remove: down
 # working tree out now (a deploy, even when the binary is unchanged), list the
 # pods, follow them, or kill the draining ones as the 6 h grace deadline does.
 .PHONY: fleet-rollout fleet-ps fleet-logs fleet-expire
-fleet-rollout: .env
+fleet-rollout:
 	scripts/fleet.sh rollout $(REPLICAS) always
-fleet-ps: .env
+fleet-ps:
 	@scripts/fleet.sh ps
-fleet-logs: .env
+fleet-logs:
 	@scripts/fleet.sh logs
-fleet-expire: .env
+fleet-expire:
 	scripts/fleet.sh expire
 
 # Stops every running container on this machine, not just this project's.

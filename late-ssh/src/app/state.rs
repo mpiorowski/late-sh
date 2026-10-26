@@ -2064,10 +2064,7 @@ impl App {
             sent_away: false,
             away: false,
             is_draining: config.is_draining,
-            handoff: crate::app::handoff::state::HandoffState {
-                idle_needed: config.handoff_idle,
-                sent: false,
-            },
+            handoff: crate::app::handoff::state::HandoffState::new(config.handoff_idle),
             icon_picker_open: false,
             icon_picker_state: super::icon_picker::IconPickerState::default(),
             icon_catalog: None,

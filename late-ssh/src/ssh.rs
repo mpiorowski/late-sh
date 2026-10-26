@@ -171,8 +171,9 @@ struct ClientHandler {
     /// openssh CLI modes identify themselves this way and never send
     /// `LATE_CLI_MODE`.
     cli_token_served: bool,
-    /// The resume point a CLI moved off a draining pod carried back
-    /// (`app/handoff`), sent as an env before the pty request.
+    /// The resume point a CLI carried back when it moved here, off a draining
+    /// pod or on a restart from the quit modal (`app/handoff`), sent as an env
+    /// before the pty request.
     resume: Option<crate::app::handoff::state::ResumePoint>,
     /// `TERM` from the pty request, cleaned for the session wire summary.
     term: Option<String>,
@@ -1190,14 +1191,14 @@ impl russh::server::Handler for ClientHandler {
             resume,
         })
         .context("failed to initialize app for PTY session")?;
-        // Counted once the session stands, so a handoff whose new session
-        // failed to start stays in `sent` minus `resumed`.
+        // Counted once the session stands, so a move whose new session failed
+        // to start stays in `sent` plus `requested` minus `resumed`.
         if let Some(point) = resume {
             metrics::record_drain_handoff(metrics::HandoffStage::Resumed);
             tracing::info!(
                 user_id = %user_id,
                 page = ?point.page,
-                "resuming a session moved off a draining pod"
+                "resuming a session its cli moved here"
             );
         }
         for (name, value) in &self.terminal_env_hints {

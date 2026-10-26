@@ -931,7 +931,7 @@ pub struct ChatState {
     /// nothing asks for the tail again.
     early_tails: HashMap<Uuid, Vec<ChatMessage>>,
     pub(crate) selected_room_id: Option<Uuid>,
-    /// The room a session moved off a draining pod had selected
+    /// The room a session its CLI moved here had selected
     /// (`app/handoff`). Taken by the first `sync_selection` that has a room
     /// list, which picks it only when it is one of this user's rooms.
     resume_room_id: Option<Uuid>,
@@ -1589,7 +1589,7 @@ impl ChatState {
     }
 
     /// Select `room_id` once the room list confirms it is one of this user's
-    /// rooms (`app/handoff`, a session moved off a draining pod).
+    /// rooms (`app/handoff`, a session its CLI moved here).
     pub(crate) fn resume_room(&mut self, room_id: Uuid) {
         self.resume_room_id = Some(room_id);
     }

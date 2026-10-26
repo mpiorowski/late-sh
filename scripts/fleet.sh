@@ -37,18 +37,19 @@ WATCHED=(Cargo.toml Cargo.lock late-ssh late-core assets)
 # A new pod gets this long to answer /api/health with 200, migrations included.
 READY_TIMEOUT_SECS=600
 # The edge resolves `ssh-pod` and checks each pod once a second; a ready pod
-# gets this long to enter rotation before an old one leaves it.
-EDGE_PICKUP_SECS=3
+# gets this long to show up UP in every backend before the rollout stops.
+EDGE_PICKUP_TIMEOUT_SECS=30
 
 required_env() {
   local value
   value=$(grep -E "^$1=" .env | tail -n 1 | cut -d= -f2- || true)
-  if [[ -z $value ]]; then echo ".env has no $1; run this through make" >&2; exit 2; fi
+  if [[ -z $value ]]; then echo ".env has no $1; make start writes it" >&2; exit 2; fi
   echo "$value"
 }
 INSTANCE=$(required_env INSTANCE)
 API_PORT=$(required_env LATE_API_PORT)
 PROJECT=$(docker compose "${BASE_FILES[@]}" config | sed -n 's/^name: //p')
+EDGE="$INSTANCE-ssh-edge"
 ROLLOUT_LOCK="${TMPDIR:-/tmp}/late-fleet-$PROJECT.rollout"
 START_LOCK="${TMPDIR:-/tmp}/late-fleet-$PROJECT.start"
 
@@ -198,11 +199,47 @@ wait_ready() {
   return 1
 }
 
-# A pod that never got ready stops the rollout where it is, the pods it did
-# not replace still serving, as a stalled Deployment does.
+# Whether the edge routes new connections to the pod at <ip>: its runtime
+# API (`stats socket`, docker/fleet/haproxy.cfg) lists the address UP in
+# every backend. A pod Docker's DNS lists but no slot holds is never routed
+# to.
+routed_by_edge() {
+  docker exec "$EDGE" sh -c 'echo "show stat" | nc 127.0.0.1 9999' 2>/dev/null |
+    awk -F, -v want="$1:" '
+      NR == 1 { sub(/^# /, ""); for (i = 1; i <= NF; i++) col[$i] = i; next }
+      $col["status"] == "UP" && index($col["addr"], want) == 1 { up[$col["pxname"]] = 1 }
+      END { exit !(up["ssh_pods"] && up["api_pods"] && up["irc_pods"]) }'
+}
+
+# The readiness the rollout drains on: a ready pod is not serving until the
+# edge sends it connections, as a ready pod is not until its endpoint lands.
+wait_routed() {
+  local pod=$1 ip waited=0
+  ip=$(docker inspect -f "{{(index .NetworkSettings.Networks \"${PROJECT}_default\").IPAddress}}" "$pod")
+  echo "waiting for the edge to route to $pod"
+  while ((waited < EDGE_PICKUP_TIMEOUT_SECS)); do
+    if routed_by_edge "$ip"; then return 0; fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  return 1
+}
+
+# A running edge keeps the config it started with. Reload it onto
+# docker/fleet/haproxy.cfg as it is now: HAProxy runs master-worker, so the
+# old worker keeps its connections and sessions survive.
+reload_running_edge() {
+  if [[ $(docker inspect -f '{{.State.Running}}' "$EDGE" 2>/dev/null) == true ]]; then
+    docker kill --signal USR2 "$EDGE" >/dev/null
+  fi
+}
+
+# A pod that never got ready, or never got routed to, stops the rollout where
+# it is, the pods it did not replace still serving, as a stalled Deployment
+# does.
 fail_pod() {
-  local pod=$1
-  echo "$pod never became ready; its last log lines:" >&2
+  local pod=$1 reason=$2
+  echo "$pod $reason; its last log lines:" >&2
   docker logs --tail 40 "$pod" >&2 || true
   docker rm -f "$pod" >/dev/null
   echo 'stopped; the pods that were serving still are (make fleet-ps)' >&2
@@ -231,7 +268,7 @@ up() {
     deps=no_deps
     if ((index == 1)); then deps=with_deps; fi
     pod=$(start_pod "$gen" "$index" "$deps")
-    wait_ready "$pod" || fail_pod "$pod"
+    wait_ready "$pod" || fail_pod "$pod" 'never became ready'
   done
   stack_compose up -d
   ps_pods
@@ -262,8 +299,9 @@ rollout() {
   esac
   for index in $(seq 1 "$replicas"); do
     pod=$(start_pod "$gen" "$index" no_deps)
-    wait_ready "$pod" || fail_pod "$pod"
-    sleep "$EDGE_PICKUP_SECS"
+    wait_ready "$pod" || fail_pod "$pod" 'never became ready'
+    wait_routed "$pod" ||
+      fail_pod "$pod" 'never got routed to: the edge has no slot for it while draining pods hold them all (make fleet-expire), or it predates its runtime API (make stop, then make start)'
     pod=$(oldest_serving_before "$gen")
     if [[ -n $pod ]]; then drain "$pod"; fi
   done
@@ -337,6 +375,22 @@ expire() {
   if ((expired == 0)); then echo 'no draining pods'; fi
 }
 
+# `make stop` and `make down` from another terminal would leave a running
+# `make start` watching, and its next deploy would bring the stack back up.
+refuse_while_held() {
+  local lock=$1 what=$2 hint=$3 holder
+  holder=$(cat "$lock/pid" 2>/dev/null || true)
+  if [[ -n $holder ]] && kill -0 "$holder" 2>/dev/null; then
+    echo "$what is running (pid $holder): $hint" >&2
+    exit 1
+  fi
+}
+
+refuse_while_running() {
+  refuse_while_held "$START_LOCK" 'make start' 'Ctrl-C it, which stops the stack'
+  refuse_while_held "$ROLLOUT_LOCK" 'a rollout' 'let it finish'
+}
+
 stop_stack() {
   local gen name state running=""
   while read -r gen name state; do
@@ -386,6 +440,7 @@ start() {
   fi
   trap on_start_exit EXIT
   trap 'exit 130' INT TERM
+  reload_running_edge
   case $stack in
     monitoring) docker compose "${ALL_FILES[@]}" up -d otel-collector ;;
     plain) ;;
@@ -411,7 +466,9 @@ start() {
     fi
     follow_new_pods --since "$since"
     sleep 1
-    if [[ -z $(find "${WATCHED[@]}" -newer "$STAMP" -type f -print -quit 2>/dev/null) ]]; then continue; fi
+    # Directories count: a delete or a rename changes only the directory's
+    # mtime.
+    if [[ -z $(find "${WATCHED[@]}" -newer "$STAMP" -print -quit 2>/dev/null) ]]; then continue; fi
     # Let an editor finish writing, then mark what this build covers: an edit
     # made while it runs triggers the next one.
     sleep 0.5
@@ -448,8 +505,8 @@ case ${1:-} in
   ps) ps_pods ;;
   logs) logs ;;
   expire) expire ;;
-  stop) stop_stack ;;
-  down) down ;;
+  stop) refuse_while_running; stop_stack ;;
+  down) refuse_while_running; down ;;
   -h | --help) usage ;;
   *) usage >&2; exit 2 ;;
 esac

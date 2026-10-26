@@ -17,7 +17,9 @@ services:
       - "${LATE_API_PORT}:${LATE_API_PORT}"
       - "${LATE_IRC_PORT:-6667}:${LATE_IRC_PORT:-6667}"
     volumes:
-      - ./docker/fleet/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+      # The directory, not the file: an editor that saves by renaming leaves
+      # a file mount on the old inode, and a reload would read stale config.
+      - ./docker/fleet:/usr/local/etc/haproxy:ro
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:${LATE_API_PORT}/api/health"]
       interval: 30s

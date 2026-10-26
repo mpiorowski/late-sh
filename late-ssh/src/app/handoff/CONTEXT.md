@@ -85,7 +85,7 @@ there for an `r restart`, `unparsed` on the new one when the env arrives,
 `requested` minus `resumed` is the moves that never landed, those whose new
 session failed to start included. Logs: "asked an idle cli session to move
 to the new pod" and "asked a cli session to restart at the user's request"
-(old pod), "resuming a session moved off a draining pod" (new pod), and the
+(old pod), "resuming a session its cli moved here" (new pod), and the
 CLI's "drain handoff: ..." lines in its own log.
 
 ## Gaps

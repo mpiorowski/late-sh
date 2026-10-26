@@ -145,8 +145,10 @@ which wins over `.env`. `make start-instance2` runs a second instance from
 `late-ssh` runs the way production runs it, as a pod behind a copy of the
 production SSH edge. A saved change that rebuilds the binary rolls out like a
 deploy: a new pod starts, and once it is ready the old one drains. Your open
-session stays on the old code behind the update banner until you reconnect,
-and a change that does not compile leaves the old pod serving.
+session stays on the old code behind the update banner until you reconnect
+(the native CLI, `scripts/run_local_cli_native.sh`, moves it on its own after
+30 s without input), and a change that does not compile leaves the old pod
+serving.
 `make fleet-rollout` rolls out by hand, `make fleet-ps` lists the pods, and
 `make fleet-logs` follows them.
 

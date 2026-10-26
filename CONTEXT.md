@@ -280,12 +280,15 @@ query gotchas: `infra/RUNBOOK.md`.
   `scripts/fleet.sh`). `make start` builds the working tree as a generation,
   then watches `late-ssh`, `late-core`, `assets` and the Cargo files: a
   change that rebuilds the binary rolls out a new generation as a deploy
-  does, the new pod ready before the old one gets SIGTERM and drains, and a
-  build or start that fails leaves the old pod serving. An open session stays
-  on the old code behind the update banner until you reconnect. From another
+  does, the new pod ready and routed by the edge before the old one gets
+  SIGTERM and drains, and a build, start or edge pickup that fails leaves the
+  old pod serving. An open session stays on the old code behind the update
+  banner until you reconnect, or until the native CLI moves it after 30 s
+  without input (`late-ssh/src/app/handoff/CONTEXT.md`). From another
   terminal, `make fleet-rollout` rolls out even an unchanged binary, and
   `make fleet-ps`, `fleet-logs` and `fleet-expire` (the 6 h grace deadline)
-  work the pods. `REPLICAS=2` reproduces the pair websocket misrouting in
+  work the pods; `make stop` and `make down` refuse while a `make start`
+  runs, whose Ctrl-C stops the stack. `REPLICAS=2` reproduces the pair websocket misrouting in
   `SCALE.md`, Pain Point 2.
 - Fixtures: `make seed-artboard`, `seed-calendar`, `seed-paper`,
   `seed-irc-history`, `seed-leaderboard`, each described in its domain's

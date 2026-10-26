@@ -71,8 +71,8 @@ sequenceDiagram
 - The activity receiver is created in `auth_publickey`, stored on
   `ClientHandler`, and taken into `SessionConfig` in `pty_request`. The login
   event is published in `pty_request`, the first point that knows whether
-  the session was moved off a draining pod (`LATE_RESUME`); a moved session
-  publishes none. Creating the receiver after the publish misses the user's
+  the session's CLI moved it here, off a draining pod or on a quit-modal
+  restart (`LATE_RESUME`); a moved session publishes none. Creating the receiver after the publish misses the user's
   own login event.
 - `force_admin` is a profile literal (`true` in dev, `false` in prod), OR'd with
   `users.is_admin` at session init.
@@ -459,8 +459,9 @@ a no-op twin when built without `otel`.
   a session ended: the last thing a newcomer saw). The Grafana "Newcomers"
   row (`monitoring/dashboards/observability.json`) reads these plus the
   day-one slice of the attention counter.
-- Drain handoff: `late_ssh_drain_handoffs_total{stage}` (`sent`, `resumed`,
-  `unparsed`; `app/handoff/CONTEXT.md`).
+- Drain handoff: `late_ssh_drain_handoffs_total{stage}` (`sent`, `requested`
+  for the quit modal's `r restart`, `resumed`, `unparsed`;
+  `app/handoff/CONTEXT.md`).
 - Connections: `late_ssh_connections_total`,
   `late_ssh_connections_rejected_total{reason}`, `late_ssh_sessions_active`,
   `late_ssh_session_start_seconds{stage,user,tenure}` (`user` is whether the
