@@ -793,11 +793,7 @@ fn draw_activity_tile(
     friends: &[ActiveFriend],
 ) {
     if entries.is_empty() {
-        draw_centered_note(
-            frame,
-            area,
-            &["quiet for now", "wins and joins land here"],
-        );
+        draw_centered_note(frame, area, &["quiet for now", "wins and joins land here"]);
         return;
     }
     let width = area.width as usize;

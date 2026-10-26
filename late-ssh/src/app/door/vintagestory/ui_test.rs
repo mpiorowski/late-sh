@@ -49,7 +49,10 @@ fn landing_tells_a_player_how_to_join() {
     let text = landing_text();
     assert!(text.contains("address   vs.late.sh"), "{text}");
     assert!(text.contains("client    Vintage Story 1.22.7"), "{text}");
-    assert!(text.contains("mods      Carry On, ProspectTogether"), "{text}");
+    assert!(
+        text.contains("mods      Carry On, ProspectTogether"),
+        "{text}"
+    );
     assert!(
         text.contains("/dm       a moderator with your exact Vintage Story username"),
         "{text}"

@@ -772,18 +772,18 @@ mod inner {
     use super::SlidingPuzzleArtLoad;
     use super::{
         ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, AwardAnnouncementOutcome,
-        BioScreenOutcome, DailyPuzzle, DailyWinPayout, DoorCard, DoorGame,
-        DoorOpeningResult, DoorWatchOutcome, FightBeat, FirstContactBeat, GalleryApplauseResult,
-        GalleryHangResult, GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal,
-        GildTier, HeraldDeliveryResult, HeraldLookResult, HeraldPostResult, JobsFetchResult,
-        JobsPostResult, JobsPressResult, JobsReadResult, LoungeBeat, NewsShareReward,
-        NightcapHouseFailure, NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult,
-        OutputKind, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome, PotRefusal,
-        PotReminderOutcome, Presence, PresenceScope, PresenceWire, RadioRollCallResult,
-        RadioStation, RealmChatRoomAttach, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError,
-        Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SendRefusal,
-        SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason,
-        SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
+        BioScreenOutcome, DailyPuzzle, DailyWinPayout, DoorCard, DoorGame, DoorOpeningResult,
+        DoorWatchOutcome, FightBeat, FirstContactBeat, GalleryApplauseResult, GalleryHangResult,
+        GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
+        HeraldDeliveryResult, HeraldLookResult, HeraldPostResult, JobsFetchResult, JobsPostResult,
+        JobsPressResult, JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure,
+        NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult,
+        PaperPrintResult, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence,
+        PresenceScope, PresenceWire, RadioRollCallResult, RadioStation, RealmChatRoomAttach,
+        RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
+        RoundRefusal, RunnerDoor, Screen, SendRefusal, SessionStartStage, SessionUser,
+        SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
+        ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
@@ -4259,18 +4259,18 @@ mod inner {
     use super::SlidingPuzzleArtLoad;
     use super::{
         ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, AwardAnnouncementOutcome,
-        BioScreenOutcome, DailyPuzzle, DailyWinPayout, DoorCard, DoorGame,
-        DoorOpeningResult, DoorWatchOutcome, FightBeat, FirstContactBeat, GalleryApplauseResult,
-        GalleryHangResult, GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal,
-        GildTier, HeraldDeliveryResult, HeraldLookResult, HeraldPostResult, JobsFetchResult,
-        JobsPostResult, JobsPressResult, JobsReadResult, LoungeBeat, NewsShareReward,
-        NightcapHouseFailure, NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult,
-        OutputKind, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome, PotRefusal,
-        PotReminderOutcome, Presence, PresenceScope, PresenceWire, RadioRollCallResult,
-        RadioStation, RealmChatRoomAttach, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError,
-        Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SendRefusal,
-        SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason,
-        SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
+        BioScreenOutcome, DailyPuzzle, DailyWinPayout, DoorCard, DoorGame, DoorOpeningResult,
+        DoorWatchOutcome, FightBeat, FirstContactBeat, GalleryApplauseResult, GalleryHangResult,
+        GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
+        HeraldDeliveryResult, HeraldLookResult, HeraldPostResult, JobsFetchResult, JobsPostResult,
+        JobsPressResult, JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure,
+        NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult,
+        PaperPrintResult, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence,
+        PresenceScope, PresenceWire, RadioRollCallResult, RadioStation, RealmChatRoomAttach,
+        RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
+        RoundRefusal, RunnerDoor, Screen, SendRefusal, SessionStartStage, SessionUser,
+        SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
+        ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
