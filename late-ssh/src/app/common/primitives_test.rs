@@ -53,6 +53,46 @@ fn daily_match_board_is_outside_the_tab_cycle_and_falls_back_home() {
     assert_eq!(Screen::DailyMatch.prev(), Screen::Dashboard);
 }
 
+/// Every page is its own, and a screen off the tab cycle belongs to the page
+/// it is reached from, which is also where Tab steps back to.
+#[test]
+fn a_screen_off_the_cycle_belongs_to_the_page_it_is_reached_from() {
+    for page in [
+        Page::Clubhouse,
+        Page::Dashboard,
+        Page::Arcade,
+        Page::Games,
+        Page::Artboard,
+        Page::Profiles,
+        Page::Leaderboard,
+        Page::Calendars,
+        Page::Zen,
+    ] {
+        assert_eq!(page.screen().page(), page);
+    }
+    for (screen, page) in [
+        (Screen::Nethack, Page::Games),
+        (Screen::Lateania, Page::Games),
+        (Screen::Darkroom, Page::Games),
+        (Screen::Realm, Page::Games),
+        (Screen::Nightcap, Page::Clubhouse),
+        (Screen::City, Page::Clubhouse),
+        (Screen::DailyMatch, Page::Dashboard),
+        (Screen::HouseTable, Page::Dashboard),
+        (Screen::Scratchpad, Page::Dashboard),
+    ] {
+        assert_eq!(screen.page(), page, "{screen:?}");
+        assert_eq!(screen.next(), page.screen(), "{screen:?} next");
+        assert_eq!(screen.prev(), page.screen(), "{screen:?} prev");
+    }
+}
+
+#[test]
+fn zen_is_a_page_off_the_cycle_that_tabs_to_home() {
+    assert_eq!(Screen::Zen.next(), Screen::Dashboard);
+    assert_eq!(Screen::Zen.prev(), Screen::Dashboard);
+}
+
 #[test]
 fn format_duration_mmss_formats_minutes_and_seconds() {
     assert_eq!(format_duration_mmss(Duration::from_secs(0)), "0:00");

@@ -2,19 +2,19 @@ use std::time::Duration;
 
 use uuid::Uuid;
 
-use super::state::{HANDOFF_IDLE, HandoffCheck, ResumePage, ResumePoint};
-use crate::app::common::primitives::Screen;
+use super::state::{HANDOFF_IDLE, HandoffCheck, ResumePoint};
+use crate::app::common::primitives::Page;
 
-const PAGES: [ResumePage; 9] = [
-    ResumePage::Clubhouse,
-    ResumePage::Dashboard,
-    ResumePage::Arcade,
-    ResumePage::Games,
-    ResumePage::Artboard,
-    ResumePage::Profiles,
-    ResumePage::Leaderboard,
-    ResumePage::Calendars,
-    ResumePage::Zen,
+const PAGES: [Page; 9] = [
+    Page::Clubhouse,
+    Page::Dashboard,
+    Page::Arcade,
+    Page::Games,
+    Page::Artboard,
+    Page::Profiles,
+    Page::Leaderboard,
+    Page::Calendars,
+    Page::Zen,
 ];
 
 #[test]
@@ -49,25 +49,6 @@ fn a_resume_point_this_server_did_not_write_is_refused() {
         format!("v1:dashboard:{room_id}:"),
     ] {
         assert_eq!(ResumePoint::parse(&raw), None, "{raw:?}");
-    }
-}
-
-#[test]
-fn a_page_comes_back_as_itself_and_a_screen_off_the_cycle_as_its_page() {
-    for page in PAGES {
-        assert_eq!(ResumePage::from_screen(page.screen()), page);
-    }
-    for (screen, page) in [
-        (Screen::Nethack, ResumePage::Games),
-        (Screen::Lateania, ResumePage::Games),
-        (Screen::Realm, ResumePage::Games),
-        (Screen::City, ResumePage::Clubhouse),
-        (Screen::Nightcap, ResumePage::Clubhouse),
-        (Screen::HouseTable, ResumePage::Dashboard),
-        (Screen::DailyMatch, ResumePage::Dashboard),
-        (Screen::Scratchpad, ResumePage::Dashboard),
-    ] {
-        assert_eq!(ResumePage::from_screen(screen), page, "{screen:?}");
     }
 }
 

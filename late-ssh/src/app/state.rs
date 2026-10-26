@@ -1649,7 +1649,7 @@ impl App {
         };
         let landing = match (tour_pending, resume) {
             (true, _) => LandingPage::Clubhouse,
-            (false, Some(point)) => point.page.landing(),
+            (false, Some(point)) => point.landing(),
             (false, None) => config.landing_page,
         };
         let landing_screen = match landing {

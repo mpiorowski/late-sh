@@ -117,11 +117,10 @@ async fn main() -> Result<()> {
 
 /// Native mode: one SSH session after another on the same terminal. A drain
 /// handoff (`reconnect` from a server that is going away) dials the new
-/// server while the old session is still on screen, retires the old one only
-/// once the new connection holds a token, and opens the new session where the
-/// old one was. Audio runs underneath the whole time, so the music never
-/// stops. A dial that fails leaves the session where it is, on the server's
-/// update banner.
+/// server and opens the new session there while the old one is still on
+/// screen, then swaps them. The local audio runs underneath the whole time,
+/// so the radio never stops. A move that fails at any step before the swap
+/// leaves the session where it is, on the server's update banner.
 async fn run_native_session(
     config: &Config,
     ssh_identity: &std::path::Path,
@@ -133,14 +132,14 @@ async fn run_native_session(
 
     let connection = ssh::connect_native(config, ssh_identity).await?;
     let mut token = connection.token().to_string();
-    let mut shell = connection.open_shell(&link, None).await?;
+    let mut shell = connection.open_shell(&link, ssh::ShellStart::Login).await?;
     flush_stdin_input_queue();
     link.input.attach(&shell);
 
     let mut policy = PairRetryPolicy::new();
     let exit = loop {
         let (handoff_tx, mut handoff_rx) = tokio::sync::mpsc::channel(1);
-        // The pairing is held across a failed dial: the old pod is out of the
+        // The pairing is held across a failed move: the old pod is out of the
         // Service endpoints, so a fresh pair socket on this token would only
         // reach the new pod and its 404 (SCALE.md, Pain Point 10).
         let mut pairing = Box::pin(run_ws_pairing(
@@ -161,30 +160,29 @@ async fn run_native_session(
             let dial = tokio::select! {
                 result = &mut shell.completion_task => break NativeTurn::Ended(join_ssh_exit(result)),
                 () = &mut pairing => unreachable!("the pair loop retries forever"),
-                dial = ssh::connect_native(config, ssh_identity) => dial,
+                dial = open_handoff_session(config, ssh_identity, &link, &resume) => dial,
             };
             match dial {
-                Ok(connection) => break NativeTurn::Moved { connection, resume },
+                Ok((token, shell)) => break NativeTurn::Moved { token, shell },
                 Err(err) => {
-                    warn!(error = ?err, "drain handoff could not reach the new server; staying on this one");
+                    warn!(error = ?err, "drain handoff could not open a session on the new server; staying on this one");
                 }
             }
         };
         drop(pairing);
 
-        let (connection, resume) = match moved {
+        let (next_token, next_shell) = match moved {
             NativeTurn::Ended(exit) => break exit,
-            NativeTurn::Moved { connection, resume } => (connection, resume),
+            NativeTurn::Moved { token, shell } => (token, shell),
         };
         link.input.detach();
-        shell.retire().await;
-        token = connection.token().to_string();
-        shell = connection
-            .open_shell(&link, Some(&resume))
-            .await
-            .context("failed to reopen the session on the new server")?;
+        let old_shell = std::mem::replace(&mut shell, next_shell);
+        old_shell.retire().await;
+        shell.show();
+        token = next_token;
         flush_stdin_input_queue();
         link.input.attach(&shell);
+        link.input.resize_to_terminal();
         // This process is running the audio the old server aligned; the new
         // pairing must never treat the boot mute as still pending.
         policy = PairRetryPolicy::after_handoff();
@@ -196,13 +194,32 @@ async fn run_native_session(
 }
 
 /// How one native session's turn ends: the session itself ended, or a drain
-/// handoff holds a connection to the new server.
+/// handoff holds a session on the new server, its output not yet shown.
 enum NativeTurn {
     Ended(Result<ssh::SshExit>),
     Moved {
-        connection: ssh::NativeConnection,
-        resume: String,
+        token: String,
+        shell: ssh::NativeShell,
     },
+}
+
+/// A drain handoff's half of a move, run while the old session stays on
+/// screen and paired: dial and authenticate the new server, then open the
+/// session there with its output held. A failure at any step leaves the old
+/// session as it was.
+async fn open_handoff_session(
+    config: &Config,
+    ssh_identity: &std::path::Path,
+    link: &ssh::NativeLink,
+    resume: &str,
+) -> Result<(String, ssh::NativeShell)> {
+    let connection = ssh::connect_native(config, ssh_identity).await?;
+    let token = connection.token().to_string();
+    let shell = connection
+        .open_shell(link, ssh::ShellStart::Handoff { resume })
+        .await
+        .context("failed to open the session on the new server")?;
+    Ok((token, shell))
 }
 
 /// The legacy subprocess (`old`) mode: one session, no handoff.

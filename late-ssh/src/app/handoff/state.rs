@@ -3,10 +3,10 @@ use std::time::Duration;
 use late_core::models::user::LandingPage;
 use uuid::Uuid;
 
-use crate::app::common::primitives::Screen;
+use crate::app::common::primitives::Page;
 
 /// How long a session goes without input from a person before a draining pod
-/// moves it. The page and the music survive the move, so a wrong guess costs
+/// moves it. The page and the radio survive the move, so a wrong guess costs
 /// a redraw and a scroll position.
 pub(crate) const HANDOFF_IDLE: Duration = Duration::from_secs(5 * 60);
 
@@ -22,120 +22,44 @@ pub(crate) struct HandoffState {
     pub(crate) sent: bool,
 }
 
-/// The page a moved session comes back to. Only pages are restored, never
-/// what was open on them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ResumePage {
-    Clubhouse,
-    Dashboard,
-    Arcade,
-    Games,
-    Artboard,
-    Profiles,
-    Leaderboard,
-    Calendars,
-    Zen,
-}
-
-impl ResumePage {
-    /// Where a session on `screen` comes back to: a page is itself, every
-    /// other screen is the page it was reached from.
-    pub(crate) fn from_screen(screen: Screen) -> Self {
-        match screen {
-            Screen::Clubhouse | Screen::Nightcap | Screen::City => Self::Clubhouse,
-            Screen::Dashboard | Screen::DailyMatch | Screen::HouseTable | Screen::Scratchpad => {
-                Self::Dashboard
-            }
-            Screen::Arcade => Self::Arcade,
-            Screen::Games
-            | Screen::Lateania
-            | Screen::Rebels
-            | Screen::Nethack
-            | Screen::Dcss
-            | Screen::Brogue
-            | Screen::Dopewars
-            | Screen::Bashquest
-            | Screen::Codekeep
-            | Screen::Zork
-            | Screen::Usurper
-            | Screen::GreenDragon
-            | Screen::Darkroom
-            | Screen::Realm => Self::Games,
-            Screen::Artboard => Self::Artboard,
-            Screen::Profiles => Self::Profiles,
-            Screen::Leaderboard => Self::Leaderboard,
-            Screen::Calendars => Self::Calendars,
-            Screen::Zen => Self::Zen,
-        }
-    }
-
-    pub(crate) fn screen(self) -> Screen {
-        match self {
-            Self::Clubhouse => Screen::Clubhouse,
-            Self::Dashboard => Screen::Dashboard,
-            Self::Arcade => Screen::Arcade,
-            Self::Games => Screen::Games,
-            Self::Artboard => Screen::Artboard,
-            Self::Profiles => Screen::Profiles,
-            Self::Leaderboard => Screen::Leaderboard,
-            Self::Calendars => Screen::Calendars,
-            Self::Zen => Screen::Zen,
-        }
-    }
-
-    /// The landing a resumed session is built on. The three landings are
-    /// themselves; any other page lands on Home and is switched to from
-    /// there, like a digit pressed on the first frame.
-    pub(crate) fn landing(self) -> LandingPage {
-        match self {
-            Self::Clubhouse => LandingPage::Clubhouse,
-            Self::Zen => LandingPage::Zen,
-            Self::Dashboard
-            | Self::Arcade
-            | Self::Games
-            | Self::Artboard
-            | Self::Profiles
-            | Self::Leaderboard
-            | Self::Calendars => LandingPage::Home,
-        }
-    }
-
-    fn key(self) -> &'static str {
-        match self {
-            Self::Clubhouse => "clubhouse",
-            Self::Dashboard => "dashboard",
-            Self::Arcade => "arcade",
-            Self::Games => "games",
-            Self::Artboard => "artboard",
-            Self::Profiles => "profiles",
-            Self::Leaderboard => "leaderboard",
-            Self::Calendars => "calendars",
-            Self::Zen => "zen",
-        }
-    }
-
-    fn from_key(key: &str) -> Option<Self> {
-        match key {
-            "clubhouse" => Some(Self::Clubhouse),
-            "dashboard" => Some(Self::Dashboard),
-            "arcade" => Some(Self::Arcade),
-            "games" => Some(Self::Games),
-            "artboard" => Some(Self::Artboard),
-            "profiles" => Some(Self::Profiles),
-            "leaderboard" => Some(Self::Leaderboard),
-            "calendars" => Some(Self::Calendars),
-            "zen" => Some(Self::Zen),
-            _ => None,
-        }
+/// The wire spelling of a page in a resume point.
+fn page_key(page: Page) -> &'static str {
+    match page {
+        Page::Clubhouse => "clubhouse",
+        Page::Dashboard => "dashboard",
+        Page::Arcade => "arcade",
+        Page::Games => "games",
+        Page::Artboard => "artboard",
+        Page::Profiles => "profiles",
+        Page::Leaderboard => "leaderboard",
+        Page::Calendars => "calendars",
+        Page::Zen => "zen",
     }
 }
 
-/// Where a moved session was: its page and the chat room it had selected.
-/// The room is a hint the new session checks against the user's own room
-/// list, so a point naming a room the user cannot see lands on the default.
+fn page_from_key(key: &str) -> Option<Page> {
+    match key {
+        "clubhouse" => Some(Page::Clubhouse),
+        "dashboard" => Some(Page::Dashboard),
+        "arcade" => Some(Page::Arcade),
+        "games" => Some(Page::Games),
+        "artboard" => Some(Page::Artboard),
+        "profiles" => Some(Page::Profiles),
+        "leaderboard" => Some(Page::Leaderboard),
+        "calendars" => Some(Page::Calendars),
+        "zen" => Some(Page::Zen),
+        _ => None,
+    }
+}
+
+/// Where a moved session was: the page of the screen it was on
+/// (`Screen::page`) and the chat room it had selected. Only the page comes
+/// back, never what was open on it. The room is a hint the new session
+/// checks against the user's own room list, so a point naming a room the
+/// user cannot see lands on the default.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ResumePoint {
-    pub(crate) page: ResumePage,
+    pub(crate) page: Page,
     pub(crate) room_id: Option<Uuid>,
 }
 
@@ -146,8 +70,8 @@ impl ResumePoint {
     /// it back verbatim and never reads it, so only servers agree on it.
     pub(crate) fn encode(&self) -> String {
         match self.room_id {
-            Some(room_id) => format!("{WIRE_VERSION}:{}:{room_id}", self.page.key()),
-            None => format!("{WIRE_VERSION}:{}", self.page.key()),
+            Some(room_id) => format!("{WIRE_VERSION}:{}:{room_id}", page_key(self.page)),
+            None => format!("{WIRE_VERSION}:{}", page_key(self.page)),
         }
     }
 
@@ -162,12 +86,29 @@ impl ResumePoint {
         if version != WIRE_VERSION || parts.next().is_some() {
             return None;
         }
-        let page = ResumePage::from_key(page)?;
+        let page = page_from_key(page)?;
         let room_id = match room {
             None => None,
             Some(room) => Some(Uuid::parse_str(room).ok()?),
         };
         Some(Self { page, room_id })
+    }
+
+    /// The landing a resumed session is built on. The three landings are
+    /// themselves; any other page lands on Home and is switched to from
+    /// there, like a digit pressed on the first frame.
+    pub(crate) fn landing(&self) -> LandingPage {
+        match self.page {
+            Page::Clubhouse => LandingPage::Clubhouse,
+            Page::Zen => LandingPage::Zen,
+            Page::Dashboard
+            | Page::Arcade
+            | Page::Games
+            | Page::Artboard
+            | Page::Profiles
+            | Page::Leaderboard
+            | Page::Calendars => LandingPage::Home,
+        }
     }
 }
 

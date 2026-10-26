@@ -3153,6 +3153,25 @@ fn own_chat_split(
     }
 }
 
+/// The numbered page tabs in the frame title, by the screen each one is.
+const FRAME_TABS: [(Screen, &str); 8] = [
+    (Screen::Clubhouse, "0"),
+    (Screen::Dashboard, "1"),
+    (Screen::Arcade, "2"),
+    (Screen::Games, "3"),
+    (Screen::Artboard, "4"),
+    (Screen::Profiles, "5"),
+    (Screen::Leaderboard, "6"),
+    (Screen::Calendars, "7"),
+];
+
+/// A screen off the tab cycle lights the tab of its page (`Screen::page`): a
+/// door keeps Games lit, the daily board keeps Home lit. Zen is a page with
+/// no tab.
+fn tab_is_lit(tab_screen: Screen, screen: Screen) -> bool {
+    tab_screen == screen.page().screen()
+}
+
 fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     let mut spans = vec![Span::styled(
         " late.sh ",
@@ -3162,43 +3181,11 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     )];
 
     spans.push(Span::styled("| ", Style::default().fg(theme::BORDER_DIM())));
-    let tabs = [
-        (Screen::Clubhouse, "0"),
-        (Screen::Dashboard, "1"),
-        (Screen::Arcade, "2"),
-        (Screen::Games, "3"),
-        (Screen::Artboard, "4"),
-        (Screen::Profiles, "5"),
-        (Screen::Leaderboard, "6"),
-        (Screen::Calendars, "7"),
-    ];
-    for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
+    for (idx, (tab_screen, key)) in FRAME_TABS.iter().enumerate() {
         if idx > 0 {
             spans.push(Span::raw(" "));
         }
-        // While a door game is open the user is "inside" the Games hub, so keep
-        // the Games tab lit rather than leaving no tab highlighted. The daily
-        // board is a Home-surface feature, so Home stays lit there.
-        let active = *tab_screen == screen
-            || (*tab_screen == Screen::Games
-                && matches!(
-                    screen,
-                    Screen::Lateania
-                        | Screen::Rebels
-                        | Screen::Nethack
-                        | Screen::Dcss
-                        | Screen::Brogue
-                        | Screen::Usurper
-                        | Screen::Dopewars
-                        | Screen::Bashquest
-                        | Screen::Codekeep
-                        | Screen::Zork
-                        | Screen::GreenDragon
-                ))
-            || (*tab_screen == Screen::Dashboard
-                && matches!(screen, Screen::DailyMatch | Screen::HouseTable))
-            || (*tab_screen == Screen::Clubhouse
-                && matches!(screen, Screen::City | Screen::Nightcap));
+        let active = tab_is_lit(*tab_screen, screen);
         let style = if active {
             Style::default()
                 .fg(theme::BG_SELECTION())

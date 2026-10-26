@@ -988,6 +988,7 @@ fn client_state_payload(
     payload
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn handle_pair_control(
     text: &str,
     ws: &mut tokio_tungstenite::WebSocketStream<

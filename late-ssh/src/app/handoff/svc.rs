@@ -4,7 +4,7 @@ use crate::app::state::App;
 use crate::metrics::{self, HandoffStage};
 use crate::paired_clients::PairControlMessage;
 
-use super::state::{HandoffCheck, ResumePage, ResumePoint};
+use super::state::{HandoffCheck, ResumePoint};
 
 /// Once per world tick: on a draining pod, ask this session's CLI to move to
 /// the new pod once the session has gone quiet. Sessions without a capable
@@ -20,12 +20,7 @@ pub(crate) fn tick(app: &mut App) {
         idle: app.last_active_at.elapsed(),
         in_voice: app.voice.is_joined(app.user_id),
         watching_video: app.video.is_open(),
-        composer_draft: app
-            .chat
-            .composer()
-            .lines()
-            .iter()
-            .any(|line| !line.trim().is_empty()),
+        composer_draft: app.chat.has_unsent_draft(),
     };
     if !check.ready() {
         return;
@@ -34,7 +29,7 @@ pub(crate) fn tick(app: &mut App) {
         return;
     };
     let resume = ResumePoint {
-        page: ResumePage::from_screen(app.screen),
+        page: app.screen.page(),
         room_id: app.chat.selected_room_id,
     };
     let delivered = registry.send_control_to_reconnect_cli(

@@ -855,14 +855,12 @@ impl russh::server::Handler for ClientHandler {
         // whether this session is one a drain handoff moved off another pod
         // (`LATE_RESUME`, read in `env_request`). That one already joined
         // there and comes in quietly.
-        match self.resume {
-            None => {
-                let _ = self
-                    .state
-                    .activity_feed
-                    .send(ActivityEvent::joined(user_id, user.username.clone()));
-            }
-            Some(_) => {}
+        let resume = self.resume.take();
+        if resume.is_none() {
+            let _ = self
+                .state
+                .activity_feed
+                .send(ActivityEvent::joined(user_id, user.username.clone()));
         }
         let permissions = AuthzPermissions::new(
             user.is_admin || self.state.config.force_admin,
@@ -1188,9 +1186,19 @@ impl russh::server::Handler for ClientHandler {
 
             // Server state
             is_draining: self.state.is_draining.clone(),
-            resume: self.resume.take(),
+            resume,
         })
         .context("failed to initialize app for PTY session")?;
+        // Counted once the session stands, so a handoff whose new session
+        // failed to start stays in `sent` minus `resumed`.
+        if let Some(point) = resume {
+            metrics::record_drain_handoff(metrics::HandoffStage::Resumed);
+            tracing::info!(
+                user_id = %user_id,
+                page = ?point.page,
+                "resuming a session moved off a draining pod"
+            );
+        }
         for (name, value) in &self.terminal_env_hints {
             app.apply_terminal_env_hint(name, value);
         }
@@ -1232,12 +1240,10 @@ impl russh::server::Handler for ClientHandler {
                 "updated cli mode from env request"
             );
         } else if variable_name == crate::app::handoff::state::RESUME_ENV {
+            // `Resumed` waits for `pty_request` to build the session.
             self.resume = crate::app::handoff::state::ResumePoint::parse(variable_value);
             match self.resume {
-                Some(point) => {
-                    metrics::record_drain_handoff(metrics::HandoffStage::Resumed);
-                    tracing::info!(page = ?point.page, "resuming a session moved off a draining pod");
-                }
+                Some(_) => {}
                 None => {
                     metrics::record_drain_handoff(metrics::HandoffStage::Unparsed);
                     tracing::warn!(

@@ -5,9 +5,9 @@ use late_core::models::{chat_room::ChatRoom, chat_room_member::ChatRoomMember, u
 use late_core::test_utils::create_test_user;
 use tokio::sync::mpsc;
 
-use super::state::{HANDOFF_IDLE, ResumePage, ResumePoint};
+use super::state::{HANDOFF_IDLE, ResumePoint};
 use crate::app::audio::client_state::{ClientAudioState, ClientKind};
-use crate::app::common::primitives::Screen;
+use crate::app::common::primitives::{Page, Screen};
 use crate::app::state::App;
 use crate::paired_clients::{PAIR_CONTROL_QUEUE_CAP, PairControlMessage};
 use crate::test_helpers::{
@@ -92,7 +92,7 @@ async fn a_quiet_session_on_a_draining_pod_asks_its_cli_once_to_move_with_its_pa
         panic!("the quiet session's cli is asked to move once, got {sent:?}");
     };
     let point = ResumePoint::parse(resume).expect("a resume point this server reads");
-    assert_eq!(point.page, ResumePage::Arcade);
+    assert_eq!(point.page, Page::Arcade);
     assert_eq!(
         reconnects(&mut plain_rx),
         Vec::<String>::new(),
@@ -111,32 +111,12 @@ async fn a_quiet_session_on_a_draining_pod_asks_its_cli_once_to_move_with_its_pa
 async fn a_moved_session_lands_on_its_page_unless_the_tour_still_has_to_run() {
     let test_db = new_test_db().await;
     for (idx, (page, landing, tour_pending, expected)) in [
-        (
-            ResumePage::Arcade,
-            LandingPage::Clubhouse,
-            false,
-            Screen::Arcade,
-        ),
-        (
-            ResumePage::Calendars,
-            LandingPage::Zen,
-            false,
-            Screen::Calendars,
-        ),
-        (ResumePage::Zen, LandingPage::Home, false, Screen::Zen),
-        (
-            ResumePage::Clubhouse,
-            LandingPage::Home,
-            false,
-            Screen::Clubhouse,
-        ),
+        (Page::Arcade, LandingPage::Clubhouse, false, Screen::Arcade),
+        (Page::Calendars, LandingPage::Zen, false, Screen::Calendars),
+        (Page::Zen, LandingPage::Home, false, Screen::Zen),
+        (Page::Clubhouse, LandingPage::Home, false, Screen::Clubhouse),
         // The tour only runs in the tavern, so it wins over the resume.
-        (
-            ResumePage::Arcade,
-            LandingPage::Home,
-            true,
-            Screen::Clubhouse,
-        ),
+        (Page::Arcade, LandingPage::Home, true, Screen::Clubhouse),
     ]
     .into_iter()
     .enumerate()
@@ -197,7 +177,7 @@ async fn a_moved_session_selects_its_room_only_if_it_is_one_of_the_users_rooms()
             &format!("handoff-room-flow-it-{idx}"),
             SessionWorld {
                 resume: Some(ResumePoint {
-                    page: ResumePage::Dashboard,
+                    page: Page::Dashboard,
                     room_id: Some(resume_room),
                 }),
                 ..SessionWorld::default()
@@ -213,4 +193,38 @@ async fn a_moved_session_selects_its_room_only_if_it_is_one_of_the_users_rooms()
             None => assert_ne!(selected, stranger.id, "a room the user cannot see"),
         }
     }
+}
+
+/// Half-typed text holds a quiet session in place wherever it was typed: the
+/// News composer's link loses its text in a move as surely as chat's draft.
+#[tokio::test]
+async fn an_unsent_news_draft_holds_a_quiet_session_until_it_is_dropped() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "handoff-news-draft-it").await;
+    let (mut app, _plain_rx) =
+        make_app_with_paired_client(test_db.db.clone(), user.id, "handoff-news-draft-flow-it");
+    let mut cli_rx = pair_reconnect_cli(&app);
+    app.is_draining.store(true, Ordering::Relaxed);
+    app.chat.news.start_composing();
+    for ch in "https://example.com/half".chars() {
+        app.chat.news.composer_push(ch);
+    }
+    app.last_active_at = Instant::now()
+        .checked_sub(HANDOFF_IDLE + Duration::from_secs(1))
+        .expect("a machine booted more than five minutes ago");
+
+    app.tick();
+    assert_eq!(
+        reconnects(&mut cli_rx),
+        Vec::<String>::new(),
+        "an unsent news link keeps the banner"
+    );
+
+    app.chat.news.stop_composing();
+    app.tick();
+    assert_eq!(
+        reconnects(&mut cli_rx).len(),
+        1,
+        "with the draft gone the session moves"
+    );
 }

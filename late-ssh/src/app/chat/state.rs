@@ -1520,6 +1520,14 @@ impl ChatState {
         &self.composer
     }
 
+    /// Text typed and not yet sent, in the chat composer or the News one:
+    /// what a session moved to another pod would lose (`app/handoff`).
+    pub(crate) fn has_unsent_draft(&self) -> bool {
+        [&self.composer, self.news.composer()]
+            .into_iter()
+            .any(|composer| composer.lines().iter().any(|line| !line.trim().is_empty()))
+    }
+
     pub(crate) fn refresh_composer_theme(&mut self) {
         composer::apply_themed_textarea_style(&mut self.composer, self.composing);
         self.news.refresh_composer_theme();
