@@ -258,3 +258,9 @@ async fn artboard_snapshot_copy_board_key_if_absent_preserves_existing_target() 
     assert_eq!(reloaded.canvas, target_canvas);
     assert_eq!(reloaded.provenance, target_provenance);
 }
+
+#[test]
+fn the_daily_key_is_the_iso_date_under_the_prefix() {
+    let date = chrono::NaiveDate::from_ymd_opt(2026, 4, 30).expect("valid date");
+    assert_eq!(Snapshot::daily_key(date), "daily:2026-04-30");
+}

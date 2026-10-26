@@ -181,8 +181,14 @@ check: .env
 	$(CHECK_CARGO_ENV) cargo clippy -j $(CHECK_BUILD_JOBS) --workspace --all-targets --features otel -- -D warnings; \
 	TEST_DATABASE_URL="$(CHECK_TEST_DATABASE_URL)" $(CHECK_CARGO_ENV) cargo nextest run --build-jobs $(CHECK_BUILD_JOBS) --workspace --all-targets --no-fail-fast --failure-output final
 
+# late-ssh runs as pods behind an edge, the way prod runs it (scripts/fleet.sh,
+# docker-compose.yml). `make start` brings the stack up on the working tree and
+# rolls out a new generation for every change that rebuilds the binary; Ctrl-C
+# stops the stack. Prod runs one replica, and more pair badly until pair
+# websockets route to the owning pod (SCALE.md, Pain Point 2).
+REPLICAS ?= 1
 start: .env keys
-	docker compose -f docker-compose.yml up --build
+	scripts/fleet.sh start $(REPLICAS) plain
 
 # Drop the per-test databases that killed test runs leave behind. Each test
 # makes its own and drops it on the way out, but a cancelled or timed-out run
@@ -202,22 +208,36 @@ start-amd64: .env keys
 		postgres:18 \
 		libretime/icecast:2.4.4 \
 		savonet/liquidsoap:v2.4.0 \
-		livekit/livekit-server:latest; do \
+		livekit/livekit-server:latest \
+		haproxy:2.9-alpine; do \
 		docker pull --platform linux/amd64 "$$image"; \
 	done
-	DOCKER_DEFAULT_PLATFORM=linux/amd64 docker compose -f docker-compose.yml up --build
+	DOCKER_DEFAULT_PLATFORM=linux/amd64 scripts/fleet.sh start $(REPLICAS) plain
 
 startm: .env keys
-	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml up --build
+	scripts/fleet.sh start $(REPLICAS) monitoring
 # `down` takes the containers away and keeps the database (the named
 # `postgres-data` volume); `remove` wipes the database too. Not `down -v`:
 # that also drops the cargo caches and forces a full rebuild.
 down:
-	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml down
+	scripts/fleet.sh down
 stop:
-	docker compose -f docker-compose.yml -f docker-compose.monitoring.yml stop
+	scripts/fleet.sh stop
 remove: down
 	docker volume rm -f "$$(docker compose -f docker-compose.yml config | sed -n 's/^name: //p')_postgres-data"
+
+# Working the pods of a running `make start` from another terminal: roll the
+# working tree out now (a deploy, even when the binary is unchanged), list the
+# pods, follow them, or kill the draining ones as the 6 h grace deadline does.
+.PHONY: fleet-rollout fleet-ps fleet-logs fleet-expire
+fleet-rollout:
+	scripts/fleet.sh rollout $(REPLICAS) always
+fleet-ps:
+	@scripts/fleet.sh ps
+fleet-logs:
+	@scripts/fleet.sh logs
+fleet-expire:
+	scripts/fleet.sh expire
 
 # Stops every running container on this machine, not just this project's.
 .PHONY: stop-all

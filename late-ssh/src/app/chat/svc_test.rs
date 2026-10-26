@@ -122,6 +122,7 @@ async fn send_pre_translates_to_english_for_opted_in_authors() {
             start_with_music_muted: false,
             landing_page: late_core::models::user::LandingPage::Clubhouse,
             paper_at_login: true,
+            auto_restart: true,
             screensaver: late_core::models::user::Screensaver::DEFAULT,
             show_watch_chat: true,
             artboard_disclaimer: true,
@@ -745,6 +746,7 @@ async fn room_tail_task_loads_favorite_room_history() {
             start_with_music_muted: false,
             landing_page: late_core::models::user::LandingPage::Clubhouse,
             paper_at_login: true,
+            auto_restart: true,
             screensaver: late_core::models::user::Screensaver::DEFAULT,
             show_watch_chat: true,
             artboard_disclaimer: true,
@@ -1078,7 +1080,7 @@ async fn join_public_room_task_only_adds_requesting_user() {
 }
 
 #[tokio::test]
-async fn open_public_room_task_joins_only_creator_and_disables_auto_join() {
+async fn open_public_room_task_joins_only_creator_of_new_room_without_auto_join() {
     let test_db = new_test_db().await;
     let service = ChatService::new(
         test_db.db.clone(),
@@ -1204,6 +1206,59 @@ async fn fill_room_task_adds_all_users_to_public_room() {
         .expect("reload room")
         .expect("room exists");
     assert!(refreshed_room.auto_join);
+}
+
+#[tokio::test]
+async fn open_public_room_task_keeps_auto_join_on_filled_room() {
+    let test_db = new_test_db().await;
+    let service = ChatService::new(
+        test_db.db.clone(),
+        NotificationService::new(test_db.db.clone()),
+    );
+    let mut events = service.subscribe_events();
+    let client = test_db.db.get().await.expect("db client");
+
+    let admin = create_test_user(&test_db.db, "filled_admin").await;
+    ChatRoom::get_or_create_public_room(&client, "books")
+        .await
+        .expect("create room");
+    service.fill_room_task(admin.id, "books".to_string());
+    match timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event")
+    {
+        ChatEvent::RoomFilled { .. } => {}
+        other => panic!("expected RoomFilled, got {other:?}"),
+    }
+
+    // `/join #books` from someone who was not around for the fill.
+    let joiner = create_test_user(&test_db.db, "filled_joiner").await;
+    service.open_public_room_task(joiner.id, "books".to_string());
+    let room_id = match timeout(Duration::from_secs(2), events.recv())
+        .await
+        .expect("event timeout")
+        .expect("event")
+    {
+        ChatEvent::RoomJoined { room_id, .. } => room_id,
+        other => panic!("expected RoomJoined, got {other:?}"),
+    };
+
+    let room = ChatRoom::get(&client, room_id)
+        .await
+        .expect("reload room")
+        .expect("room exists");
+    assert!(room.auto_join);
+
+    let future_user = create_test_user(&test_db.db, "filled_future").await;
+    ChatRoomMember::auto_join_public_rooms(&client, future_user.id)
+        .await
+        .expect("auto-join future user");
+    assert!(
+        ChatRoomMember::is_member(&client, room_id, future_user.id)
+            .await
+            .unwrap()
+    );
 }
 
 #[tokio::test]

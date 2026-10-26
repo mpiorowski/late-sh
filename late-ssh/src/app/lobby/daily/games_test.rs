@@ -49,3 +49,20 @@ fn every_pool_game_is_known_to_be_one() {
     assert!(!DailyGame::Chess.is_pool());
     assert!(!DailyGame::Briscola.is_pool());
 }
+
+#[test]
+fn the_weeks_scoreboard_knows_every_game_by_the_same_name() {
+    // The herald's Sunday scoreboard reads `daily_matches` through
+    // late-core's `LobbyGame`, which cannot see this roster: a game added
+    // here and not there is left off the card without a sound.
+    use late_core::models::leaderboard::LobbyGame;
+    let ours: Vec<(&str, &str)> = DailyGame::ALL
+        .iter()
+        .map(|game| (game.kind(), game.display_name()))
+        .collect();
+    let theirs: Vec<(&str, &str)> = LobbyGame::ALL
+        .iter()
+        .map(|game| (game.kind(), game.title()))
+        .collect();
+    assert_eq!(ours, theirs);
+}

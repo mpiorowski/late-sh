@@ -285,6 +285,7 @@ async fn main() -> anyhow::Result<()> {
     let arcade_handle_service = late_ssh::app::door::arcade::ArcadeHandleService::new(db.clone());
     let live_games = late_ssh::app::door::spectate::svc::LiveGamesService::new(db.clone());
     let door_rc_service = late_ssh::app::door::rc::DoorRcService::new(db.clone());
+    let games_hub_service = late_ssh::app::door::hub::svc::GamesHubService::new(db.clone());
     let house_registry = late_ssh::app::lobby::house::registry::HouseTableRegistry::new(
         chip_service.clone(),
         late_ssh::app::lobby::house::blackjack::player::BlackjackPlayerDirectory::new(db.clone()),
@@ -354,6 +355,15 @@ async fn main() -> anyhow::Result<()> {
     let paper_service =
         late_ssh::app::paper::svc::PaperService::new(db.clone(), ai_service.clone());
     let _paper_sweeper_task = paper_service.start_sweeper_task();
+    // The herald: every replica checks, the day's row decides who posts.
+    // See `app/herald/svc.rs`.
+    let herald_service = late_ssh::app::herald::svc::HeraldService::new(
+        db.clone(),
+        ai_service.clone(),
+        config.herald.clone(),
+        config.web_url.clone(),
+    );
+    let _herald_task = herald_service.start_task();
     // The job feed's press: once a night, the run row decides which
     // replica; every replica keeps its own shelf snapshot. See
     // `app/jobs/svc.rs`.
@@ -472,6 +482,7 @@ async fn main() -> anyhow::Result<()> {
         translation_service: translation_service.clone(),
         summary_service: summary_service.clone(),
         paper_service: paper_service.clone(),
+        herald_service: herald_service.clone(),
         jobs_service: jobs_service.clone(),
         audio_service: audio_service.clone(),
         voice_service,
@@ -502,6 +513,7 @@ async fn main() -> anyhow::Result<()> {
         arcade_handle_service,
         live_games,
         door_rc_service,
+        games_hub_service,
         daily_service,
         realm_service,
         bonsai_service,

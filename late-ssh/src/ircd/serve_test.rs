@@ -973,6 +973,7 @@ async fn profile_username_change_projects_to_live_irc_session() {
             start_with_music_muted: false,
             landing_page: late_core::models::user::LandingPage::Clubhouse,
             paper_at_login: true,
+            auto_restart: true,
             screensaver: late_core::models::user::Screensaver::DEFAULT,
             show_watch_chat: true,
             artboard_disclaimer: true,

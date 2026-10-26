@@ -8,22 +8,19 @@ use std::{
     env, io,
     io::{IsTerminal, Read},
     path::Path,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, Ordering},
-    },
+    sync::{Arc, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 use tokio::{
     io::AsyncWriteExt,
-    sync::{mpsc, oneshot},
-    task::JoinHandle,
+    sync::{mpsc, oneshot, watch},
+    task::{AbortHandle, JoinHandle},
     time::MissedTickBehavior,
 };
 use tracing::{debug, info};
 
 use super::{
-    config::{Config, SshMode},
+    config::Config,
     identity::ssh_key_setup_hint,
     latency::{LatencyKind, LatencySample, LatencySink, SSH_PING_INTERVAL, TerminalProbeWatch},
     pty::terminal_size_or_default,
@@ -46,6 +43,7 @@ use std::{
     os::unix::fs::DirBuilderExt,
     path::PathBuf,
     process::Command as StdCommand,
+    sync::atomic::Ordering,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -57,6 +55,9 @@ pub(super) const CLI_MODE_ENV: &str = "LATE_CLI_MODE";
 #[cfg(unix)]
 const CLI_TOKEN_PREFIX: &str = "LATE_SESSION_TOKEN=";
 const CLI_TOKEN_REQUEST: &str = "late-cli-token-v1";
+/// The env a drain handoff's resume point rides back on (late-ssh
+/// `app/handoff/state.rs` spells it too).
+const RESUME_ENV: &str = "LATE_RESUME";
 const GENERIC_SSH_AUTH_HINT_MARKER: &str = "late.sh requires SSH public-key auth.";
 const TERMINAL_ENV_HINTS: &[&str] = &[
     "TERM_PROGRAM",
@@ -160,7 +161,7 @@ pub(super) struct SshProcess {
 pub(super) enum ResizeHandle {
     #[cfg(unix)]
     Subprocess(PtyResizeHandle),
-    Native(mpsc::UnboundedSender<WriterCommand>),
+    Native(NativeInput),
 }
 
 pub(super) enum WriterCommand {
@@ -168,23 +169,6 @@ pub(super) enum WriterCommand {
     Eof,
     WindowChange { cols: u16, rows: u16 },
     Close,
-}
-
-/// `latency` collects the round trips native mode times (`latency.rs`); the
-/// subprocess (`old`) mode is not wired and drops it.
-pub(super) async fn spawn_ssh(
-    config: &Config,
-    identity_file: &Path,
-    token_tx: oneshot::Sender<String>,
-    latency: LatencySink,
-) -> Result<SshProcess> {
-    match config.ssh_mode {
-        SshMode::Subprocess => spawn_subprocess_ssh(config, identity_file, token_tx),
-        SshMode::Native => spawn_native_ssh(config, identity_file, token_tx, latency).await,
-        SshMode::OpenSsh => {
-            anyhow::bail!("openssh mode must use prepare_openssh_ssh")
-        }
-    }
 }
 
 #[cfg(unix)]
@@ -573,10 +557,8 @@ pub(super) async fn forward_resize_events(handle: ResizeHandle) {
 fn apply_resize(handle: &ResizeHandle) -> Result<()> {
     match handle {
         ResizeHandle::Subprocess(handle) => handle.resize_to_current(),
-        ResizeHandle::Native(tx) => {
-            let (cols, rows) = terminal_size_or_default();
-            tx.send(WriterCommand::WindowChange { cols, rows })
-                .map_err(|_| anyhow::anyhow!("native ssh resize channel is closed"))?;
+        ResizeHandle::Native(input) => {
+            input.resize_to_terminal();
             Ok(())
         }
     }
@@ -585,17 +567,18 @@ fn apply_resize(handle: &ResizeHandle) -> Result<()> {
 #[cfg(not(unix))]
 fn apply_resize(handle: &ResizeHandle) -> Result<()> {
     match handle {
-        ResizeHandle::Native(tx) => {
-            let (cols, rows) = terminal_size_or_default();
-            tx.send(WriterCommand::WindowChange { cols, rows })
-                .map_err(|_| anyhow::anyhow!("native ssh resize channel is closed"))?;
+        ResizeHandle::Native(input) => {
+            input.resize_to_terminal();
             Ok(())
         }
     }
 }
 
+/// The subprocess (`old`) mode's session. Native mode runs through
+/// [`connect_native`] so a drain handoff can redial; OpenSSH mode through
+/// [`prepare_openssh_ssh`].
 #[cfg(unix)]
-fn spawn_subprocess_ssh(
+pub(super) fn spawn_subprocess_ssh(
     config: &Config,
     identity_file: &Path,
     token_tx: oneshot::Sender<String>,
@@ -684,7 +667,7 @@ fn spawn_subprocess_ssh(
 }
 
 #[cfg(not(unix))]
-fn spawn_subprocess_ssh(
+pub(super) fn spawn_subprocess_ssh(
     _config: &Config,
     _identity_file: &Path,
     _token_tx: oneshot::Sender<String>,
@@ -692,12 +675,93 @@ fn spawn_subprocess_ssh(
     anyhow::bail!("subprocess ssh mode is only available on Unix; use --ssh-mode native");
 }
 
-async fn spawn_native_ssh(
+/// Where stdin goes in native mode. One reader thread ([`start_native_link`])
+/// lives for the whole run; a session's writer is attached once its token
+/// phase is done and detached when a drain handoff retires it, so keys typed
+/// while nothing is attached are dropped, as keys typed before the first token
+/// always were.
+#[derive(Clone, Default)]
+pub(super) struct NativeInput(Arc<std::sync::Mutex<Option<mpsc::UnboundedSender<WriterCommand>>>>);
+
+impl NativeInput {
+    pub(super) fn attach(&self, shell: &NativeShell) {
+        *self.lock() = Some(shell.writer_tx.clone());
+    }
+
+    pub(super) fn detach(&self) {
+        *self.lock() = None;
+    }
+
+    /// Tell the attached session the terminal's size. Between sessions
+    /// nothing is attached and this is dropped, so a drain handoff sends it
+    /// again once the new session is attached: its pty request carried the
+    /// size from before the switch.
+    pub(super) fn resize_to_terminal(&self) {
+        let (cols, rows) = terminal_size_or_default();
+        self.send(WriterCommand::WindowChange { cols, rows });
+    }
+
+    fn writer(&self) -> Option<mpsc::UnboundedSender<WriterCommand>> {
+        self.lock().clone()
+    }
+
+    fn send(&self, command: WriterCommand) {
+        if let Some(tx) = self.writer() {
+            let _ = tx.send(command);
+        }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Option<mpsc::UnboundedSender<WriterCommand>>> {
+        self.0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+/// The native-mode pieces that outlive any one SSH session: the stdin reader,
+/// and the terminal-probe watch and latency sink it shares with each
+/// session's output.
+pub(super) struct NativeLink {
+    pub(super) input: NativeInput,
+    probe_watch: Arc<TerminalProbeWatch>,
+    latency: LatencySink,
+}
+
+impl NativeLink {
+    pub(super) fn resize_handle(&self) -> ResizeHandle {
+        ResizeHandle::Native(self.input.clone())
+    }
+}
+
+/// `latency` collects the round trips native mode times (`latency.rs`).
+pub(super) fn start_native_link(latency: LatencySink) -> NativeLink {
+    let input = NativeInput::default();
+    let probe_watch = Arc::new(TerminalProbeWatch::default());
+    let input_for_stdin = input.clone();
+    let probe_watch_for_stdin = Arc::clone(&probe_watch);
+    let latency_for_stdin = latency.clone();
+    spawn_stdin_forwarder("late-cli-stdin-native", move || {
+        forward_stdin_to_native(&input_for_stdin, &probe_watch_for_stdin, &latency_for_stdin)
+    });
+    NativeLink {
+        input,
+        probe_watch,
+        latency,
+    }
+}
+
+/// An authenticated native connection holding its session token, before the
+/// interactive shell is open. A drain handoff makes this connection to the new
+/// server while the old session is still on screen.
+pub(super) struct NativeConnection {
+    session: Arc<client::Handle<NativeClientHandler>>,
+    token: String,
+}
+
+pub(super) async fn connect_native(
     config: &Config,
     identity_file: &Path,
-    token_tx: oneshot::Sender<String>,
-    latency: LatencySink,
-) -> Result<SshProcess> {
+) -> Result<NativeConnection> {
     let target = ResolvedTarget::from_config(config)?;
     let private_key = keys::load_secret_key(identity_file, None).with_context(|| {
         format!(
@@ -755,61 +819,139 @@ async fn spawn_native_ssh(
     let token = fetch_native_session_token(&session)
         .await
         .context("failed to fetch session token over native ssh handshake")?;
-    let _ = token_tx.send(token);
+    Ok(NativeConnection { session, token })
+}
 
-    let channel = session
-        .channel_open_session()
-        .await
-        .context("failed to open native ssh session channel")?;
-    let (cols, rows) = terminal_size_or_default();
-    let term = env::var("TERM").unwrap_or_else(|_| "xterm-256color".to_string());
-    channel
-        .request_pty(true, &term, cols as u32, rows as u32, 0, 0, &[])
-        .await
-        .context("failed to request ssh pty")?;
-    send_terminal_env_hints(&channel).await;
-    channel
-        .request_shell(true)
-        .await
-        .context("failed to request remote shell")?;
+impl NativeConnection {
+    pub(super) fn token(&self) -> &str {
+        &self.token
+    }
 
-    let (mut read_half, write_half) = channel.split();
-    let input_gate = Arc::new(AtomicBool::new(false));
-    let input_gate_for_task = Arc::clone(&input_gate);
-    let (writer_tx, writer_rx) = mpsc::unbounded_channel();
-    let writer_tx_for_completion = writer_tx.clone();
-    let writer_tx_for_resize = writer_tx.clone();
+    /// Open the interactive shell.
+    pub(super) async fn open_shell(
+        self,
+        link: &NativeLink,
+        start: ShellStart<'_>,
+    ) -> Result<NativeShell> {
+        let session = self.session;
+        let channel = session
+            .channel_open_session()
+            .await
+            .context("failed to open native ssh session channel")?;
+        let output = match start {
+            ShellStart::Login => ShellOutput::Shown,
+            ShellStart::Handoff { resume } => {
+                channel
+                    .set_env(false, RESUME_ENV, resume)
+                    .await
+                    .context("failed to send the resume point")?;
+                ShellOutput::Held
+            }
+        };
+        let (cols, rows) = terminal_size_or_default();
+        let term = env::var("TERM").unwrap_or_else(|_| "xterm-256color".to_string());
+        channel
+            .request_pty(true, &term, cols as u32, rows as u32, 0, 0, &[])
+            .await
+            .context("failed to request ssh pty")?;
+        send_terminal_env_hints(&channel).await;
+        channel
+            .request_shell(true)
+            .await
+            .context("failed to request remote shell")?;
 
-    let probe_watch = Arc::new(TerminalProbeWatch::default());
-    let probe_watch_for_stdin = Arc::clone(&probe_watch);
-    let latency_for_stdin = latency.clone();
+        let (mut read_half, write_half) = channel.split();
+        let (writer_tx, writer_rx) = mpsc::unbounded_channel();
+        let writer_tx_for_completion = writer_tx.clone();
+        let (output_tx, output_rx) = watch::channel(output);
+        let probe_watch = Arc::clone(&link.probe_watch);
 
-    let writer_task = tokio::spawn(async move { drive_native_writer(write_half, writer_rx).await });
-    spawn_stdin_forwarder("late-cli-stdin-native", move || {
-        forward_stdin_to_native(
+        let writer_task =
+            tokio::spawn(async move { drive_native_writer(write_half, writer_rx).await });
+        let rtt_task = tokio::spawn(sample_ssh_rtt(Arc::clone(&session), link.latency.clone()));
+        let rtt_abort = rtt_task.abort_handle();
+        let completion_task = tokio::spawn(async move {
+            let exit = drive_native_output(&mut read_half, &probe_watch, output_rx).await;
+            rtt_task.abort();
+            let _ = writer_tx_for_completion.send(WriterCommand::Close);
+            let _ = writer_task.await;
+            let _ = session
+                .disconnect(Disconnect::ByApplication, "", "en")
+                .await;
+            exit
+        });
+
+        Ok(NativeShell {
+            completion_task,
             writer_tx,
-            input_gate_for_task,
-            &probe_watch_for_stdin,
-            &latency_for_stdin,
-        )
-    });
-    let rtt_task = tokio::spawn(sample_ssh_rtt(Arc::clone(&session), latency));
-    let completion_task = tokio::spawn(async move {
-        let exit = drive_native_output(&mut read_half, &probe_watch).await;
-        rtt_task.abort();
-        let _ = writer_tx_for_completion.send(WriterCommand::Close);
-        let _ = writer_task.await;
-        let _ = session
-            .disconnect(Disconnect::ByApplication, "", "en")
-            .await;
-        exit
-    });
+            output: output_tx,
+            rtt_task: rtt_abort,
+        })
+    }
+}
 
-    Ok(SshProcess {
-        completion_task,
-        resize_handle: ResizeHandle::Native(writer_tx_for_resize),
-        input_gate,
-    })
+/// How a native shell starts: the run's first session, or the one a drain
+/// handoff opens on the new server while the old session is still on screen.
+pub(super) enum ShellStart<'a> {
+    Login,
+    /// `resume` goes out as `LATE_RESUME` before the pty request, because the
+    /// server builds the session there. The output is held until
+    /// [`NativeShell::show`].
+    Handoff {
+        resume: &'a str,
+    },
+}
+
+/// What a shell does with what its server sends.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShellOutput {
+    /// A handoff's new shell, opened while the old one is still on screen:
+    /// kept until shown, since the server paints the whole screen only in its
+    /// first frame and sends changes after that.
+    Held,
+    Shown,
+    /// Retired by a handoff: what the old server sends on its way out never
+    /// lands on the screen the new session draws.
+    Retired,
+}
+
+/// How long a retired shell gets to close its channel before it is dropped.
+const RETIRE_GRACE: Duration = Duration::from_secs(2);
+
+/// One interactive native session.
+pub(super) struct NativeShell {
+    pub(super) completion_task: JoinHandle<Result<SshExit>>,
+    writer_tx: mpsc::UnboundedSender<WriterCommand>,
+    output: watch::Sender<ShellOutput>,
+    /// The SSH round-trip sampler, stopped by `retire` itself: a completion
+    /// task aborted after `RETIRE_GRACE` never gets to stop it, and a stray
+    /// sampler would keep pinging the old server into this run's latency
+    /// samples.
+    rtt_task: AbortHandle,
+}
+
+impl NativeShell {
+    /// Put a handoff's held shell on screen, starting with what its server
+    /// drew while it was held.
+    pub(super) fn show(&self) {
+        self.output.send_replace(ShellOutput::Shown);
+    }
+
+    /// Retire this shell for a drain handoff: stop painting its output, close
+    /// the channel, and give the connection a moment to wind down. The caller
+    /// detaches stdin first.
+    pub(super) async fn retire(mut self) {
+        self.output.send_replace(ShellOutput::Retired);
+        self.rtt_task.abort();
+        let _ = self.writer_tx.send(WriterCommand::Close);
+        match tokio::time::timeout(RETIRE_GRACE, &mut self.completion_task).await {
+            Ok(exit) => debug!(?exit, "retired the draining server's ssh session"),
+            Err(_) => {
+                debug!("draining server's ssh session slow to close; dropping it");
+                self.completion_task.abort();
+            }
+        }
+    }
 }
 
 async fn send_terminal_env_hints(channel: &russh::Channel<russh::client::Msg>) {
@@ -1012,26 +1154,59 @@ fn forward_ssh_output(mut pty: fs::File, token_tx: oneshot::Sender<String>) -> R
     Ok(())
 }
 
+/// `output` says where the server's bytes go ([`ShellOutput`]). Whatever it
+/// says, the channel drains to its close.
 async fn drive_native_output(
     read_half: &mut ChannelReadHalf,
     probe_watch: &TerminalProbeWatch,
+    mut output: watch::Receiver<ShellOutput>,
 ) -> Result<SshExit> {
     let mut stdout = tokio::io::stdout();
     let mut stderr = tokio::io::stderr();
+    // What the server drew while the shell was held, painted first once
+    // it is shown.
+    let mut held = Vec::new();
     let mut exit_code = None;
     let mut exit_signal = None;
 
-    while let Some(msg) = read_half.wait().await {
+    loop {
+        let msg = tokio::select! {
+            msg = read_half.wait() => msg,
+            // Shown with nothing new arriving: paint what was held now rather
+            // than with the server's next frame, which a quiet session may
+            // not send for a while.
+            Ok(()) = output.changed() => {
+                let mode = *output.borrow();
+                if mode == ShellOutput::Shown {
+                    paint_held(&mut stdout, probe_watch, &mut held).await?;
+                }
+                continue;
+            }
+        };
+        let Some(msg) = msg else {
+            break;
+        };
+        // Copied out: the borrow is a lock guard, not to be held across a
+        // write.
+        let mode = *output.borrow();
         match msg {
-            ChannelMsg::Data { data } => {
-                probe_watch.saw_output(data.as_ref(), Instant::now());
-                stdout.write_all(data.as_ref()).await?;
-                stdout.flush().await?;
-            }
-            ChannelMsg::ExtendedData { data, .. } => {
-                stderr.write_all(data.as_ref()).await?;
-                stderr.flush().await?;
-            }
+            ChannelMsg::Data { data } => match mode {
+                ShellOutput::Held => held.extend_from_slice(data.as_ref()),
+                ShellOutput::Shown => {
+                    paint_held(&mut stdout, probe_watch, &mut held).await?;
+                    paint(&mut stdout, probe_watch, data.as_ref()).await?;
+                }
+                ShellOutput::Retired => {}
+            },
+            ChannelMsg::ExtendedData { data, .. } => match mode {
+                // The server never writes stderr, so a held shell keeps
+                // stdout only.
+                ShellOutput::Held | ShellOutput::Retired => {}
+                ShellOutput::Shown => {
+                    stderr.write_all(data.as_ref()).await?;
+                    stderr.flush().await?;
+                }
+            },
             ChannelMsg::ExitStatus { exit_status } => {
                 exit_code = Some(exit_status);
             }
@@ -1057,6 +1232,28 @@ async fn drive_native_output(
     }
 
     Ok(SshExit::RemoteStatus { code: exit_code })
+}
+
+async fn paint(
+    stdout: &mut tokio::io::Stdout,
+    probe_watch: &TerminalProbeWatch,
+    data: &[u8],
+) -> Result<()> {
+    probe_watch.saw_output(data, Instant::now());
+    stdout.write_all(data).await?;
+    stdout.flush().await?;
+    Ok(())
+}
+
+async fn paint_held(
+    stdout: &mut tokio::io::Stdout,
+    probe_watch: &TerminalProbeWatch,
+    held: &mut Vec<u8>,
+) -> Result<()> {
+    if held.is_empty() {
+        return Ok(());
+    }
+    paint(stdout, probe_watch, &std::mem::take(held)).await
 }
 
 fn render_signal_name(signal_name: &russh::Sig) -> String {
@@ -1160,9 +1357,11 @@ fn forward_stdin_to_pty(mut pty: fs::File, input_gate: Arc<AtomicBool>) -> Resul
     Ok(())
 }
 
+/// Runs for the whole native run, across drain handoffs: a send to a session
+/// that just ended is dropped, and the next attached session takes the next
+/// read.
 fn forward_stdin_to_native(
-    tx: mpsc::UnboundedSender<WriterCommand>,
-    input_gate: Arc<AtomicBool>,
+    input: &NativeInput,
     probe_watch: &TerminalProbeWatch,
     latency: &LatencySink,
 ) -> Result<()> {
@@ -1175,20 +1374,16 @@ fn forward_stdin_to_native(
             Err(err) => return Err(err.into()),
         };
         if n == 0 {
-            if input_gate.load(Ordering::Relaxed) {
-                let _ = tx.send(WriterCommand::Eof);
-            }
+            input.send(WriterCommand::Eof);
             break;
         }
-        if !input_gate.load(Ordering::Relaxed) {
+        let Some(tx) = input.writer() else {
             continue;
-        }
+        };
         if let Some(sample) = probe_watch.saw_input(&buf[..n], Instant::now()) {
             latency.record(sample);
         }
-        if tx.send(WriterCommand::Data(buf[..n].to_vec())).is_err() {
-            break;
-        }
+        let _ = tx.send(WriterCommand::Data(buf[..n].to_vec()));
     }
     Ok(())
 }

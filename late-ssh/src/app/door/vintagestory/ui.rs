@@ -54,7 +54,7 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, scroll: u16) -> u16 {
             Span::styled("Whitelist only.", Style::default().fg(theme::AMBER_DIM())),
         ]),
         Line::from(Span::styled(
-            "The official server, no mods. Not played in the terminal: join from the game.",
+            "The official server plus a few mods. Not played in the terminal: join from the game.",
             Style::default().fg(theme::TEXT_DIM()),
         )),
         Line::from(""),
@@ -64,6 +64,11 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, scroll: u16) -> u16 {
         landing::stat(
             "account",
             "your Vintage Story account; the server checks it with Anego",
+            10,
+        ),
+        landing::stat(
+            "mods",
+            "Carry On, ProspectTogether, Auto Map Markers, QP's Chisel Tools, VS Roofing, BetterRuins; the game offers them when you join",
             10,
         ),
         Line::from(""),

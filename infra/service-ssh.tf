@@ -294,6 +294,27 @@ resource "kubernetes_deployment_v1" "service_ssh" {
               }
             }
           }
+          # --- The herald (credentials only; the Mastodon instance, the
+          # Bluesky handle and the visibility are prod-profile literals in
+          # late-ssh/src/config.rs) ---
+          env {
+            name = "LATE_HERALD_MASTODON_TOKEN"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.herald_credentials.metadata[0].name
+                key  = "mastodon_token"
+              }
+            }
+          }
+          env {
+            name = "LATE_HERALD_BLUESKY_PASSWORD"
+            value_from {
+              secret_key_ref {
+                name = kubernetes_secret_v1.herald_credentials.metadata[0].name
+                key  = "bluesky_password"
+              }
+            }
+          }
 
           # --- Voice / LiveKit (credentials only; both URLs and the room name
           # are prod-profile literals in late-ssh/src/config.rs, including the

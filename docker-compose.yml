@@ -1,19 +1,52 @@
 services:
 
+  # late-ssh runs the way prod runs it: pods behind an edge, rolled out per
+  # change by scripts/fleet.sh (`make start`). The edge is a local copy of
+  # prod's (infra/ssh-tcp.tf) and takes the service-ssh name, so late-web's
+  # `http://service-ssh:4001` and its wait for a healthy service-ssh land on
+  # whichever pod is ready.
   service-ssh:
-    build:
-      context: .
-      target: dev-ssh
-    container_name: ${INSTANCE}-ssh
+    image: haproxy:2.9-alpine
+    container_name: ${INSTANCE}-ssh-edge
+    environment:
+      LATE_SSH_PORT: ${LATE_SSH_PORT}
+      LATE_API_PORT: ${LATE_API_PORT}
+      LATE_IRC_PORT: ${LATE_IRC_PORT:-6667}
     ports:
       - "${LATE_SSH_PORT}:${LATE_SSH_PORT}"
       - "${LATE_API_PORT}:${LATE_API_PORT}"
       - "${LATE_IRC_PORT:-6667}:${LATE_IRC_PORT:-6667}"
-      - "${LATE_IRC_TLS_HOST_PORT:-6697}:6697"
+    volumes:
+      # The directory, not the file: an editor that saves by renaming leaves
+      # a file mount on the old inode, and a reload would read stale config.
+      - ./docker/fleet:/usr/local/etc/haproxy:ro
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:${LATE_API_PORT}/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 600s
+      start_interval: 5s
+
+  # One late-ssh pod. scripts/fleet.sh runs each with `run --use-aliases`,
+  # which puts it behind the `ssh-pod` name the edge resolves, and passes its
+  # generation's binary as the command; the profile keeps `up` from starting
+  # one. No published ports: every connection comes through the edge.
+  ssh-pod:
+    build:
+      context: .
+      target: dev-ssh
+    profiles: [fleet-pod]
     env_file:
       - .env
       - path: .env.local
         required: false
+    # `cargo run` hands a process the [env] of .cargo/config.toml; a pod runs
+    # its binary bare, so it sets the entry that matters itself. Without it
+    # tokio's workers get 2 MiB stacks, and the unoptimized build overflows
+    # them building a new session.
+    environment:
+      RUST_MIN_STACK: "8388608"
     volumes:
       - .:/app
       - cargo-registry:/usr/local/cargo/registry

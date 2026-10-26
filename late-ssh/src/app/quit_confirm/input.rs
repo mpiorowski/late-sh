@@ -19,6 +19,12 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
             app.running = false;
         }
+        // Shown only to a session whose CLI can move it; elsewhere a no-op.
+        ParsedInput::Byte(b'r' | b'R') | ParsedInput::Char('r' | 'R') => {
+            if crate::app::handoff::svc::request_move(app) {
+                app.show_quit_confirm = false;
+            }
+        }
         ParsedInput::Byte(0x1B) => app.show_quit_confirm = false,
         _ => {}
     }

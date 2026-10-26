@@ -73,7 +73,7 @@ Cross-crate touchpoints:
   `123_media_queue_unique_active_track.sql`,
   `251_media_favorites.sql`.
 - `late-core/src/audio.rs`: `VizFrame { bands[VIZ_BANDS], rms, track_pos_ms }` (`VIZ_BANDS` = 16) shared between server and CLI.
-- `late-ssh/src/paired_clients.rs` — `PairedClientRegistry`, `PairControlMessage::SetPlaybackSource`, source/surface policy.
+- `late-ssh/src/paired_clients.rs` — `PairedClientRegistry`, `PairControlMessage::SetPlaybackSource`, source/surface policy, `radio_listeners` for the roll call.
 - `late-ssh/src/api.rs` — `/api/ws/pair` multiplexes `AudioWsMessage` + `PairControlMessage`; `/api/now-playing`.
 - `late-ssh/src/app/chat/{state,input}.rs` — `/audio` and `/audio fallback` chat commands.
 - `late-cli/src/ws.rs`, `late-cli/src/main.rs`, `late-cli/src/audio/output.rs` — CLI tolerates unknown audio events and gates Icecast output on `set_playback_source` without changing the user mute flag.
@@ -116,6 +116,9 @@ Every track playing or queued is a candidate for the live strip (`../live/CONTEX
 - Fetched once per track per replica, in memory only: nothing is stored. Both fields are `#[serde(skip)]`, so paired clients never see them.
 - Off when `LATE_YOUTUBE_API_KEY` is unset: nothing can be queued then, and tests never reach the network.
 - `late_ssh_booth_thumbnails_total{outcome}` counts `fetched` and `failed`; a failure is logged with the video id.
+
+### The roll call
+Who is on the radio, written down: every `RADIO_ROLL_CALL_INTERVAL` (10 minutes) each replica's `start_background_task` runs `radio_roll_call`, which takes `PairedClientRegistry::radio_listeners` (every paired account on the radio source and not muted, with its station, once per account and station) and writes each as a `radio_listens` row for today, UTC, through `RadioListen::record`; a listener already written is a no-op, so a day's rows are its distinct listeners per station, never minutes. A listener gone inside one interval is missed, which keeps a station flipped through from counting. Each replica calls its own paired clients, and the row's upsert makes the replicas' overlap harmless. The paper's YESTERDAY column reads the covered day's top stations (`../paper/CONTEXT.md`). `late_ssh_radio_roll_calls_total{result}` counts `called` and `failed` (a failed call is the `radio_roll_call_failed` error: it stopped at the first listener it could not write, the ones before it are in, and the next call fills the gap); `late_ssh_radio_listeners_total{station}` adds each called roll call's listeners per station, a failed call's none.
 
 ### Submission reward
 Queueing a track pays the person who brought it `SONG_QUEUE_REWARD_CHIPS`
@@ -384,6 +387,10 @@ In `STAGE.md`: the fixed-height accordion, the active-source rule, title-bar sou
 - History has no votes; it is a pure recency list.
 - History is listed and pruned to `HISTORY_LIMIT = 200` rows by `last_played_at` descending, then `created` descending. `idx_media_history_last_played` covers that sort.
 
+### `radio_listens` (migration `259`)
+- One row per account, station (the catalogue key) and UTC day, `PRIMARY KEY (user_id, station, day)`, `ON DELETE CASCADE` from `users`; `first_heard` is the first roll call that found them.
+- Written only by the roll call (§4); read by the paper. Index `(day, station)` for the paper's grouped read.
+
 ### `media_favorites` (migration `251`)
 - One row per listener per track, unique by `(user_id, media_kind, external_id)`, `ON DELETE CASCADE` from `users`.
 - Carries its own copy of the validated metadata (`title`, `channel`, `duration_ms`, `is_stream`), with no reference to `media_history_items`, so the History prune and a staff History delete never take a favorite with it.
@@ -394,6 +401,7 @@ Model helpers (`late-core/src/models/media_queue_item.rs`, `media_source.rs`):
 - `MediaSource::{youtube_fallback, upsert_youtube_fallback}`. Constants: `KIND_YOUTUBE_FALLBACK`, `MEDIA_KIND_YOUTUBE`.
 - `MediaHistoryItem::{record_play_from_queue_item, list_recent, prune_to_limit, delete_by_id, find_by_id}`.
 - `MediaFavorite::{add_from_history, list_for_user, get_by_user_id, delete_by_user_id}` (`media_favorite.rs`), every one scoped by `user_id` in SQL. `add_from_history` takes the id the session already shows the favorite under.
+- `RadioListen::{record, top_stations_on}` (`radio_listen.rs`): the roll call's write and the paper's read. `MediaQueueItem::count_queued_between` is the paper's booth line.
 
 ---
 

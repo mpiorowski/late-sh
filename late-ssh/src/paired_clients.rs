@@ -113,6 +113,12 @@ pub enum PairControlMessage {
     VideoStop {
         play_id: u64,
     },
+    /// Drain handoff (`app/handoff`): this pod is going away, so the CLI
+    /// dials the new one and sends `resume` back verbatim as the
+    /// `LATE_RESUME` env. Only CLIs advertising `reconnect` get it.
+    Reconnect {
+        resume: String,
+    },
 }
 
 /// A key the watch modal relays to the CLI's mpv.
@@ -317,6 +323,13 @@ impl PairedClientRegistry {
     /// did, so the watch modal can tell a dead pairing at once.
     pub fn send_control_to_video_cli(&self, token: &str, msg: PairControlMessage) -> bool {
         self.send_control_filter(token, msg, ClientAudioState::supports_video) > 0
+    }
+
+    /// Deliver a drain handoff to the paired CLIs on `token` advertising
+    /// `reconnect`. Returns whether anyone got it; `false` leaves the session
+    /// on the update banner, the path plain SSH and older CLIs take.
+    pub fn send_control_to_reconnect_cli(&self, token: &str, msg: PairControlMessage) -> bool {
+        self.send_control_filter(token, msg, ClientAudioState::supports_reconnect) > 0
     }
 
     /// Re-send each paired entry's cached playback source for `token`.
@@ -535,6 +548,16 @@ impl PairedClientRegistry {
             .is_some_and(|entries| entries.iter().any(|entry| entry.state.supports_video()))
     }
 
+    /// True when a paired CLI on `token` advertises `reconnect`: the quit
+    /// modal offers a restart only then. Scans every entry, like
+    /// `has_voice_cli`.
+    pub fn has_reconnect_cli(&self, token: &str) -> bool {
+        let clients = self.clients.lock_recover();
+        clients
+            .get(token)
+            .is_some_and(|entries| entries.iter().any(|entry| entry.state.supports_reconnect()))
+    }
+
     /// The most recently registered CLI's reported state on `token`, if a
     /// CLI is paired: the watch setup box reads its mode, platform, and
     /// `video_blockers` from it. `None` is a plain SSH session.
@@ -652,6 +675,26 @@ impl PairedClientRegistry {
                 }
             }
         }
+    }
+
+    /// Every account with a paired client on the radio source and not
+    /// muted, with the station it is on, once per account and station
+    /// however many sockets it holds: the audio service's roll call
+    /// (`app/audio/svc.rs`). A muted client hears nothing, so it is no
+    /// listener; a quiet volume can be deliberate and still counts.
+    pub fn radio_listeners(&self) -> Vec<(Uuid, RadioStation)> {
+        let clients = self.clients.lock_recover();
+        let mut listeners: Vec<(Uuid, RadioStation)> = Vec::new();
+        for entry in clients.values().flatten() {
+            if entry.audio_source != AudioSource::Radio || entry.state.muted {
+                continue;
+            }
+            let listener = (entry.user_id, entry.radio_station);
+            if !listeners.contains(&listener) {
+                listeners.push(listener);
+            }
+        }
+        listeners
     }
 
     /// Update every entry for `user_id` to the new station and push

@@ -227,6 +227,7 @@ pub(crate) fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         start_with_music_muted: profile.start_with_music_muted,
         landing_page: profile.landing_page,
         paper_at_login: profile.paper_at_login,
+        auto_restart: profile.auto_restart,
         screensaver: profile.screensaver,
         show_watch_chat: profile.show_watch_chat,
         artboard_disclaimer: profile.artboard_disclaimer,

@@ -106,25 +106,53 @@ pub enum Screen {
     Scratchpad,
 }
 
-impl Screen {
-    /// Tab cycles the top-level pages, Clubhouse (`0`, the landing screen)
-    /// through Calendars (`7`). The door games (Lateania, Rebels, Nethack,
-    /// Green Dragon) are reached through the Games hub, not the tab bar, so
-    /// they are absent from the cycle; if one is somehow current,
-    /// `next`/`prev` fall back to the hub that owns them.
-    pub fn next(self) -> Self {
+/// The page a screen belongs to: one of the eight numbered pages, or Zen. A
+/// screen off the tab cycle belongs to the page it is reached from. Decided
+/// once, in [`Screen::page`]: the tab cycle, the lit tab in the frame title
+/// and a drain handoff's resume page (`app/handoff`) all read it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Page {
+    Clubhouse,
+    Dashboard,
+    Arcade,
+    Games,
+    Artboard,
+    Profiles,
+    Leaderboard,
+    Calendars,
+    Zen,
+}
+
+impl Page {
+    /// The screen the page itself is.
+    pub fn screen(self) -> Screen {
         match self {
-            Screen::Clubhouse => Screen::Dashboard,
-            Screen::Dashboard => Screen::Arcade,
-            Screen::Arcade => Screen::Games,
-            Screen::Games => Screen::Artboard,
-            Screen::Artboard => Screen::Profiles,
-            Screen::Profiles => Screen::Leaderboard,
-            Screen::Leaderboard => Screen::Calendars,
-            Screen::Calendars => Screen::Clubhouse,
-            Screen::City => Screen::Clubhouse,
-            Screen::Zen => Screen::Dashboard,
-            Screen::Lateania
+            Page::Clubhouse => Screen::Clubhouse,
+            Page::Dashboard => Screen::Dashboard,
+            Page::Arcade => Screen::Arcade,
+            Page::Games => Screen::Games,
+            Page::Artboard => Screen::Artboard,
+            Page::Profiles => Screen::Profiles,
+            Page::Leaderboard => Screen::Leaderboard,
+            Page::Calendars => Screen::Calendars,
+            Page::Zen => Screen::Zen,
+        }
+    }
+}
+
+impl Screen {
+    /// The page this screen belongs to: a page is its own, the doors and the
+    /// Realm belong to the Games hub, the Nightcap and the Undercity to the
+    /// Clubhouse, the daily board, house tables and the scratchpad to Home.
+    pub fn page(self) -> Page {
+        match self {
+            Screen::Clubhouse | Screen::Nightcap | Screen::City => Page::Clubhouse,
+            Screen::Dashboard | Screen::DailyMatch | Screen::HouseTable | Screen::Scratchpad => {
+                Page::Dashboard
+            }
+            Screen::Arcade => Page::Arcade,
+            Screen::Games
+            | Screen::Lateania
             | Screen::Rebels
             | Screen::Nethack
             | Screen::Dcss
@@ -135,44 +163,53 @@ impl Screen {
             | Screen::Zork
             | Screen::Usurper
             | Screen::GreenDragon
-            | Screen::Darkroom => Screen::Games,
-            Screen::DailyMatch => Screen::Dashboard,
-            Screen::HouseTable => Screen::Dashboard,
-            Screen::Realm => Screen::Games,
-            Screen::Scratchpad => Screen::Dashboard,
-            Screen::Nightcap => Screen::Clubhouse,
+            | Screen::Darkroom
+            | Screen::Realm => Page::Games,
+            Screen::Artboard => Page::Artboard,
+            Screen::Profiles => Page::Profiles,
+            Screen::Leaderboard => Page::Leaderboard,
+            Screen::Calendars => Page::Calendars,
+            Screen::Zen => Page::Zen,
+        }
+    }
+
+    /// Tab cycles the top-level pages, Clubhouse (`0`, the landing screen)
+    /// through Calendars (`7`). A screen off the cycle (a door, the daily
+    /// board, the Nightcap) steps back to its page first, and Zen steps to
+    /// Home either way.
+    pub fn next(self) -> Self {
+        let page = self.page();
+        if page.screen() != self {
+            return page.screen();
+        }
+        match page {
+            Page::Clubhouse => Screen::Dashboard,
+            Page::Dashboard => Screen::Arcade,
+            Page::Arcade => Screen::Games,
+            Page::Games => Screen::Artboard,
+            Page::Artboard => Screen::Profiles,
+            Page::Profiles => Screen::Leaderboard,
+            Page::Leaderboard => Screen::Calendars,
+            Page::Calendars => Screen::Clubhouse,
+            Page::Zen => Screen::Dashboard,
         }
     }
 
     pub fn prev(self) -> Self {
-        match self {
-            Screen::Clubhouse => Screen::Calendars,
-            Screen::Calendars => Screen::Leaderboard,
-            Screen::City => Screen::Clubhouse,
-            Screen::Zen => Screen::Dashboard,
-            Screen::Dashboard => Screen::Clubhouse,
-            Screen::Arcade => Screen::Dashboard,
-            Screen::Games => Screen::Arcade,
-            Screen::Artboard => Screen::Games,
-            Screen::Profiles => Screen::Artboard,
-            Screen::Leaderboard => Screen::Profiles,
-            Screen::Lateania
-            | Screen::Rebels
-            | Screen::Nethack
-            | Screen::Dcss
-            | Screen::Brogue
-            | Screen::Dopewars
-            | Screen::Bashquest
-            | Screen::Codekeep
-            | Screen::Zork
-            | Screen::Usurper
-            | Screen::GreenDragon
-            | Screen::Darkroom => Screen::Games,
-            Screen::DailyMatch => Screen::Dashboard,
-            Screen::HouseTable => Screen::Dashboard,
-            Screen::Realm => Screen::Games,
-            Screen::Scratchpad => Screen::Dashboard,
-            Screen::Nightcap => Screen::Clubhouse,
+        let page = self.page();
+        if page.screen() != self {
+            return page.screen();
+        }
+        match page {
+            Page::Clubhouse => Screen::Calendars,
+            Page::Dashboard => Screen::Clubhouse,
+            Page::Arcade => Screen::Dashboard,
+            Page::Games => Screen::Arcade,
+            Page::Artboard => Screen::Games,
+            Page::Profiles => Screen::Artboard,
+            Page::Leaderboard => Screen::Profiles,
+            Page::Calendars => Screen::Leaderboard,
+            Page::Zen => Screen::Dashboard,
         }
     }
 }

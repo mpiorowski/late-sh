@@ -75,6 +75,9 @@ pub mod deadchannel_runner;
 pub mod deadchannel_spawn;
 pub mod door_log_cursor;
 pub mod door_milestone;
+pub mod door_opening;
+#[cfg(test)]
+mod door_opening_test;
 pub mod door_rc;
 #[cfg(test)]
 mod door_rc_test;
@@ -95,6 +98,9 @@ pub mod greendragon_clan;
 pub mod greendragon_commentary;
 pub mod greendragon_news;
 pub mod greendragon_setting;
+pub mod herald;
+#[cfg(test)]
+mod herald_test;
 pub mod irc_history;
 #[cfg(test)]
 mod irc_history_test;
@@ -155,6 +161,9 @@ pub mod profile_award;
 #[cfg(test)]
 mod profile_award_test;
 pub mod quest;
+pub mod radio_listen;
+#[cfg(test)]
+mod radio_listen_test;
 pub mod realm_game;
 pub mod referral;
 #[cfg(test)]

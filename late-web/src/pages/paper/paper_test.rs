@@ -14,7 +14,8 @@ use late_core::{
 };
 use tower::ServiceExt;
 
-use super::feed_items;
+use super::{feed_items, front_page};
+use crate::pages::shared::card::{CardLine, Ink};
 
 const EDITION: NaiveDate = match NaiveDate::from_ymd_opt(2026, 9, 3) {
     Some(date) => date,
@@ -119,6 +120,13 @@ async fn the_paper_prints_its_columns_on_the_web_and_in_the_feed() {
     print_section(
         &client,
         EDITION,
+        PaperSectionKind::Yesterday,
+        "Booth: 2 tracks queued\nArcade: 3 games finished, all Sudoku",
+    )
+    .await;
+    print_section(
+        &client,
+        EDITION,
         PaperSectionKind::Reading,
         "We read about ducks.\nAnd geese & swans.",
     )
@@ -178,6 +186,9 @@ async fn the_paper_prints_its_columns_on_the_web_and_in_the_feed() {
     let (status, _, html) = get(&router, "/paper/2026-09-03").await;
     assert_eq!(status, StatusCode::OK);
     for needle in [
+        "yesterday on late.sh",
+        "Booth: 2 tracks queued",
+        "Arcade: 3 games finished, all Sudoku",
         "We read about ducks.",
         "And geese &#38; swans.",
         "The world turned.",
@@ -194,6 +205,10 @@ async fn the_paper_prints_its_columns_on_the_web_and_in_the_feed() {
     }
     assert!(!html.contains("lounge gossip"));
     assert!(!html.contains("later &rarr;"));
+    assert!(
+        html.find("yesterday on late.sh").unwrap() < html.find("what we were reading").unwrap(),
+        "the numbers come before the columns"
+    );
 
     let (status, _, html) = get(&router, "/paper/2026-08-31").await;
     assert_eq!(status, StatusCode::OK);
@@ -227,7 +242,7 @@ async fn the_paper_prints_its_columns_on_the_web_and_in_the_feed() {
         "<pubDate>Thu, 03 Sep 2026 00:00:00 +0000</pubDate>",
         // Askama escapes with numeric entities; the inner `&amp;` is the
         // HTML escape a reader keeps after unescaping the XML.
-        "&#60;h3&#62;What we were reading&#60;/h3&#62;&#60;p&#62;We read about ducks.&#60;/p&#62;&#60;p&#62;And geese &#38;amp; swans.&#60;/p&#62;&#60;h3&#62;Outside&#60;/h3&#62;&#60;p&#62;The world turned.&#60;/p&#62;",
+        "&#60;h3&#62;Yesterday on late.sh&#60;/h3&#62;&#60;p&#62;Booth: 2 tracks queued&#60;/p&#62;&#60;p&#62;Arcade: 3 games finished, all Sudoku&#60;/p&#62;&#60;h3&#62;What we were reading&#60;/h3&#62;&#60;p&#62;We read about ducks.&#60;/p&#62;&#60;p&#62;And geese &#38;amp; swans.&#60;/p&#62;&#60;h3&#62;Outside&#60;/h3&#62;&#60;p&#62;The world turned.&#60;/p&#62;",
         "<link>http://late.test/paper/2026-08-31</link>",
     ] {
         assert!(xml.contains(needle), "{needle}");
@@ -235,13 +250,14 @@ async fn the_paper_prints_its_columns_on_the_web_and_in_the_feed() {
     assert!(xml.find("2026-09-03").unwrap() < xml.find("2026-08-31").unwrap());
 }
 
-/// One item per edition, newest first, both columns when both printed,
-/// the text escaped once as HTML for the reader to unescape.
+/// One item per edition, newest first, every printed column in page
+/// order, the text escaped once as HTML for the reader to unescape.
 #[test]
-fn feed_items_merge_both_columns_newest_first_and_escape_once() {
+fn feed_items_merge_the_columns_newest_first_and_escape_once() {
     let earlier = EDITION - Duration::days(2);
     let items = feed_items(
         "http://late.test",
+        vec![(earlier, "Booth: 1 track queued".to_string())],
         vec![(earlier, "ducks & geese".to_string())],
         vec![
             (EDITION, "the <world>".to_string()),
@@ -259,6 +275,78 @@ fn feed_items_merge_both_columns_newest_first_and_escape_once() {
     assert_eq!(items[1].url, "http://late.test/paper/2026-09-01");
     assert_eq!(
         items[1].description_html,
-        "<h3>What we were reading</h3><p>ducks &amp; geese</p><h3>Outside</h3><p>quiet</p><p>streets</p>"
+        "<h3>Yesterday on late.sh</h3><p>Booth: 1 track queued</p><h3>What we were reading</h3><p>ducks &amp; geese</p><h3>Outside</h3><p>quiet</p><p>streets</p>"
     );
+}
+
+/// The front page's lines: the masthead, the dateline, the numbers whole
+/// and then each printed column's head under its name (a column that did
+/// not print is left out), the way in; nothing when none printed.
+#[test]
+fn the_front_page_card_heads_each_printed_column() {
+    let line = |ink, text: &str| CardLine::new(ink, text);
+    let yesterday = [
+        "Booth: 2 tracks queued".to_string(),
+        "Arcade: 3 games finished, all Sudoku".to_string(),
+    ];
+    assert_eq!(
+        front_page(EDITION, &yesterday, &["The world turned.".to_string()], &[]),
+        Some(vec![
+            line(Ink::Title, "THE LATE EDITION"),
+            line(Ink::Dim, "Thursday, 3 September 2026"),
+            CardLine::blank(),
+            line(Ink::Heading, "YESTERDAY ON LATE.SH"),
+            line(Ink::Body, "Booth: 2 tracks queued"),
+            line(Ink::Body, "Arcade: 3 games finished, all Sudoku"),
+            CardLine::blank(),
+            line(Ink::Heading, "OUTSIDE"),
+            line(Ink::Body, "The world turned."),
+            CardLine::blank(),
+            line(Ink::Dim, "late.sh/paper"),
+        ])
+    );
+    assert_eq!(
+        front_page(EDITION, &[], &["The world turned.".to_string()], &[])
+            .expect("a column printed")
+            .len(),
+        7
+    );
+    assert_eq!(front_page(EDITION, &[], &[], &[]), None);
+}
+
+/// The card route serves a printed edition as a PNG; an unprinted day and
+/// a path that is not a date are 404.
+#[tokio::test]
+async fn the_front_page_card_is_a_png_for_a_printed_edition() {
+    let test = test_db().await;
+    let client = test.db.get().await.unwrap();
+    print_section(
+        &client,
+        EDITION,
+        PaperSectionKind::Reading,
+        "We read about ducks.",
+    )
+    .await;
+    let router = router(&test.db);
+
+    let response = router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri("/paper/2026-09-03/image.png")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let png = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    assert!(png.starts_with(b"\x89PNG"));
+    for missing in ["/paper/2026-09-02/image.png", "/paper/someday/image.png"] {
+        assert_eq!(
+            get(&router, missing).await.0,
+            StatusCode::NOT_FOUND,
+            "{missing}"
+        );
+    }
 }

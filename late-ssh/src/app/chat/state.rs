@@ -883,7 +883,16 @@ pub struct ChatState {
     refresh_tx: mpsc::UnboundedSender<()>,
     refresh_room_id: Option<Uuid>,
     loading_tail_rooms: HashSet<Uuid>,
+    /// Tails that landed before the room list named their room: a join
+    /// fires the list refresh and the tail load together, and the tail is
+    /// the lighter query. Held here and merged when the room arrives, since
+    /// nothing asks for the tail again.
+    early_tails: HashMap<Uuid, Vec<ChatMessage>>,
     pub(crate) selected_room_id: Option<Uuid>,
+    /// The room a session its CLI moved here had selected
+    /// (`app/handoff`). Taken by the first `sync_selection` that has a room
+    /// list, which picks it only when it is one of this user's rooms.
+    resume_room_id: Option<Uuid>,
     pub(crate) room_jump_active: bool,
     composer: TextArea<'static>,
     pub(crate) composing: bool,
@@ -1070,6 +1079,8 @@ pub struct ChatState {
     hits_on: bool,
     /// Set by `/paper`; consumed by `paper::svc::tick` every tick.
     requested_paper: Option<crate::app::paper::state::PaperCommand>,
+    /// Set by `/herald` (admins only); consumed by `herald::svc::tick`.
+    requested_herald: Option<crate::app::herald::state::HeraldCommand>,
     requested_jobs: Option<crate::app::jobs::state::JobsCommand>,
     /// The just-landed echo of this session's own send, and the room it
     /// landed in, for the stage-2 name flicker; consumed by
@@ -1321,7 +1332,9 @@ impl ChatState {
             refresh_tx,
             refresh_room_id: None,
             loading_tail_rooms: HashSet::new(),
+            early_tails: HashMap::new(),
             selected_room_id: None,
+            resume_room_id: None,
             room_jump_active: false,
             composer: new_chat_textarea(),
             composing: false,
@@ -1418,6 +1431,7 @@ impl ChatState {
             requested_hit: false,
             hits_on: false,
             requested_paper: None,
+            requested_herald: None,
             requested_jobs: None,
             own_message_landed: None,
             own_send_succeeded: false,
@@ -1460,6 +1474,14 @@ impl ChatState {
 
     pub(crate) fn composer(&self) -> &TextArea<'static> {
         &self.composer
+    }
+
+    /// Text typed and not yet sent, in the chat composer or the News one:
+    /// what a session moved to another pod would lose (`app/handoff`).
+    pub(crate) fn has_unsent_draft(&self) -> bool {
+        [&self.composer, self.news.composer()]
+            .into_iter()
+            .any(|composer| composer.lines().iter().any(|line| !line.trim().is_empty()))
     }
 
     pub(crate) fn refresh_composer_theme(&mut self) {
@@ -1522,10 +1544,25 @@ impl ChatState {
         }
     }
 
+    /// Select `room_id` once the room list confirms it is one of this user's
+    /// rooms (`app/handoff`, a session its CLI moved here).
+    pub(crate) fn resume_room(&mut self, room_id: Uuid) {
+        self.resume_room_id = Some(room_id);
+    }
+
     pub fn sync_selection(&mut self) {
         if self.rooms.is_empty() {
             self.selected_room_id = None;
             self.room_jump_active = false;
+            return;
+        }
+
+        // A moved session's room wins the first selection that has a list to
+        // check it against; a room the user cannot see falls through.
+        if let Some(resume_id) = self.resume_room_id.take()
+            && self.lists_room(resume_id)
+        {
+            self.selected_room_id = Some(resume_id);
             return;
         }
 
@@ -1536,11 +1573,7 @@ impl ChatState {
             if self.stream_for_room(selected_id).is_some() {
                 return;
             }
-            if self
-                .rooms
-                .iter()
-                .any(|(room, _)| room.id == selected_id && is_chat_list_room(room))
-            {
+            if self.lists_room(selected_id) {
                 return;
             }
         }
@@ -2190,6 +2223,12 @@ impl ChatState {
         &mut self,
     ) -> Option<crate::app::paper::state::PaperCommand> {
         self.requested_paper.take()
+    }
+
+    pub(crate) fn take_requested_herald(
+        &mut self,
+    ) -> Option<crate::app::herald::state::HeraldCommand> {
+        self.requested_herald.take()
     }
 
     pub(crate) fn take_requested_jobs(&mut self) -> Option<crate::app::jobs::state::JobsCommand> {
@@ -3285,10 +3324,14 @@ impl ChatState {
             return None;
         }
         let room_id = self.selected_room_id?;
+        self.lists_room(room_id).then_some(room_id)
+    }
+
+    /// Whether `room_id` is one of this user's rooms on the chat list.
+    fn lists_room(&self, room_id: Uuid) -> bool {
         self.rooms
             .iter()
             .any(|(room, _)| room.id == room_id && is_chat_list_room(room))
-            .then_some(room_id)
     }
 
     /// Build the flat visual navigation order.
@@ -3977,6 +4020,20 @@ impl ChatState {
                 return Some(Banner::error("Only admins can touch the presses"));
             }
             self.requested_paper = Some(command);
+            return None;
+        }
+
+        // `/herald` is the operator's switch and press for the social
+        // accounts: admin-only in every form, and says so.
+        if let Some(parsed) = crate::app::herald::state::parse_herald_command(&body) {
+            self.clear_composer_after_submit();
+            if !self.is_admin {
+                return Some(Banner::error("Only admins can run the herald"));
+            }
+            let Some(command) = parsed else {
+                return Some(Banner::error("Usage: /herald on|off|status|preview|post"));
+            };
+            self.requested_herald = Some(command);
             return None;
         }
 
@@ -5973,6 +6030,17 @@ impl ChatState {
         let previous_rooms_meta: Vec<ChatRoom> =
             self.rooms.iter().map(|(room, _)| room.clone()).collect();
         self.rooms = self.merge_rooms(snapshot.chat_rooms);
+        let arrived: Vec<Uuid> = self
+            .rooms
+            .iter()
+            .map(|(room, _)| room.id)
+            .filter(|room_id| self.early_tails.contains_key(room_id))
+            .collect();
+        for room_id in arrived {
+            if let Some(messages) = self.early_tails.remove(&room_id) {
+                self.merge_room_tail(room_id, messages);
+            }
+        }
         changed |= self.rooms.len() != previous_rooms_meta.len()
             || self
                 .rooms
@@ -7062,6 +7130,7 @@ impl ChatState {
     fn merge_room_tail(&mut self, room_id: Uuid, messages: Vec<ChatMessage>) {
         self.note_activity_ticker_from(&messages);
         let Some((_, stored)) = self.rooms.iter_mut().find(|(room, _)| room.id == room_id) else {
+            self.early_tails.insert(room_id, messages);
             return;
         };
 

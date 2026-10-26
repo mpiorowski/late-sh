@@ -172,30 +172,31 @@ async fn open_the_doors(test_db: &TestDb, game_id: Uuid) {
         .expect("backdate the muster");
 }
 
-/// Claim a territory, however many rolls it takes. A claim is a dice roll, so
-/// a test that needs the ground taken has to keep asking — asserting on one
-/// attempt is asserting on the weather.
-async fn claim_until_taken(svc: &RealmService, game_id: Uuid, user_id: Uuid, target: u16) {
-    for _ in 0..40 {
-        let state = load_state(svc, game_id).await;
-        if state.ownership.get(&target) == Some(&user_id) {
-            return;
-        }
-        if svc
-            .act(user_id, game_id, RealmAction::Claim { target })
-            .await
-            .is_err()
-        {
-            // Out of points for the day, or the game ended under us; either
-            // way the next loop's ownership check is the answer.
+/// Take `count` more territories, however many rolls it takes. A claim is a
+/// dice roll, so a test that needs the ground taken has to keep asking:
+/// asserting on one attempt is asserting on the weather. One player's day is
+/// not enough either, since seven rolls at two-in-three odds miss two wins
+/// up to once in a hundred runs, so each player rolls until out of points.
+async fn take_free_land(svc: &RealmService, game_id: Uuid, players: &[Uuid], count: usize) {
+    let goal = load_state(svc, game_id).await.ownership.len() + count;
+    for &player in players {
+        loop {
             let state = load_state(svc, game_id).await;
-            if state.ownership.get(&target) == Some(&user_id) {
+            if state.ownership.len() >= goal {
                 return;
             }
-            panic!("could not take {target}");
+            let target = nearest_free(&state, player);
+            if svc
+                .act(player, game_id, RealmAction::Claim { target })
+                .await
+                .is_err()
+            {
+                // Out of points for the day: the next player rolls on.
+                break;
+            }
         }
     }
-    panic!("{target} never fell");
+    panic!("{count} territories never fell to the players' dice");
 }
 
 /// The moves in a day's log, without the arrivals. Spawns are logged too —
@@ -1469,24 +1470,10 @@ async fn a_resolved_action_asks_for_the_frame_that_shows_it() {
     .await;
     assert!(board_loaded, "the board never loaded");
 
-    // Claim something reachable, the way the board does.
+    // Claim something reachable, the way the board does. Not a land border:
+    // a spawn whose only neighbour is the other player's spawn has none free.
     let state = load_state(&svc, game_id).await;
-    let map = crate::app::door::realm::map::map_handle(&state.ruleset.map_id, None).expect("map");
-    let mine = *state
-        .ownership
-        .iter()
-        .find(|(_, owner)| **owner == ids[0])
-        .expect("alice holds something")
-        .0;
-    let target = map
-        .territory(mine)
-        .expect("held territory")
-        .neighbors
-        .iter()
-        .copied()
-        .find(|n| !state.ownership.contains_key(n))
-        .expect("free land next door");
-    let held_before = state.territory_count(ids[0]);
+    let target = nearest_free(&state, ids[0]);
 
     svc.act(ids[0], game_id, RealmAction::Claim { target })
         .await
@@ -1507,7 +1494,6 @@ async fn a_resolved_action_asks_for_the_frame_that_shows_it() {
             .map(|d| d.state.revision)
             .unwrap_or(0)
     };
-    let _ = held_before;
     let mut arrived = false;
     for _ in 0..200 {
         let before = revision(&session);
@@ -1943,16 +1929,11 @@ async fn a_busy_day_keeps_its_board_through_the_quiet_ones() {
     let test_db = new_test_db().await;
     let svc = realm_service(&test_db);
     let (game_id, ids) = started_game(&svc, &test_db, &["alice", "bob"]).await;
-    let alice = ids[0];
     let busy_day = realm_day(Utc::now(), RESET_HOUR);
 
     // Taken, not merely attempted: a claim is a roll, and this test is about
     // what the board holds rather than about luck.
-    for _ in 0..2 {
-        let state = load_state(&svc, game_id).await;
-        let target = nearest_free(&state, alice);
-        claim_until_taken(&svc, game_id, alice, target).await;
-    }
+    take_free_land(&svc, game_id, &ids, 2).await;
 
     // Then nobody plays for a while, and the sweeper walks the days on.
     for ahead in 1..=4 {

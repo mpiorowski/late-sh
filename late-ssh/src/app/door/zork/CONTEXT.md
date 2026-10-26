@@ -9,8 +9,8 @@ below.
 
 One **Zork Trilogy** Games card, filed under "remakes" after A Dark Room, opens
 edition selection, then Continue, Load manual save, Start new game, and Back.
-Entry is gated on the client's `zork_enabled`, and play on a claimed arcade
-handle (see Watchers and suggestions). Each account has two slots per edition: automatic progress and a deliberate manual fallback. These are six
+Entry is gated on the client's `zork_enabled` by the hub (`../hub/input.rs`,
+before the opening is counted), and play on a claimed arcade handle (see Watchers and suggestions). Each account has two slots per edition: automatic progress and a deliberate manual fallback. These are six
 slots, not six independent campaigns. Missing, invalid, and unavailable slots
 are distinct; Continue and manual load are disabled unless their slot is ready
 (Continue also resumes the session's live edition). Manual load and new game
@@ -85,7 +85,7 @@ nothing.
 | File | Responsibility |
 |---|---|
 | `state.rs` | Native menu/confirmation state, async metadata, the arcade-handle flow (lookup, claim modal, launch after claim), one proxy, switch ordering, timers, incremental input filtering, typing a suggestion, and all of the client's telemetry (see Telemetry). |
-| `input.rs` | Games-card launch (gated on `zork_enabled`), parsed menu keys, raw passthrough to a visible game with backtick detach and F3. `App` only calls in. |
+| `input.rs` | Games-card launch (the hub has already gated on `zork_enabled`), parsed menu keys, raw passthrough to a visible game with backtick detach and F3. `App` only calls in. |
 | `render.rs` | Games landing, native edition/save menus, slot metadata, existing vt100 cell blit with theme text for default game foregrounds (`inherit_theme_text`, also used by the watch view). |
 | `suggest.rs` | Watchers' `>` commands: parsing a chat line into a command, the waiting suggestion for this session's own game, and the empty-prompt test. |
 | `proxy.rs` | Private SSH client, bounded metadata JSON request, PTY exec/input/resize, the tagged `Ending` (exit status, closed, failed), task teardown. |

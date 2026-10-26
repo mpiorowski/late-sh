@@ -542,6 +542,11 @@ async fn sections_settle_as_ready_or_quiet_and_load_with_the_edition() {
         ]
     );
     assert!(edition.has_print());
+    assert_eq!(
+        edition.ready_text(PaperSectionKind::Outside),
+        Some("- the world")
+    );
+    assert_eq!(edition.ready_text(PaperSectionKind::Reading), None, "quiet");
 }
 
 #[tokio::test]

@@ -136,6 +136,7 @@ pub(crate) fn dashboard_home_selected(
 /// non-image render still draws the existing prompt + footer.
 fn push_quit_confirm_sayonara_placement(
     modal_area: Rect,
+    can_restart: bool,
     protocol: Option<crate::app::files::terminal_image::TerminalImageProtocol>,
     terminal_images: &mut crate::app::files::terminal_image::TerminalImageFrame,
 ) {
@@ -146,7 +147,7 @@ fn push_quit_confirm_sayonara_placement(
     let Some(protocol) = protocol else {
         return;
     };
-    let Some(area) = sayonara_scene_area(modal_area) else {
+    let Some(area) = sayonara_scene_area(modal_area, can_restart) else {
         return;
     };
     let data = match sayonara_terminal_image(protocol) {
@@ -349,6 +350,8 @@ struct DrawContext<'a> {
     show_settings: bool,
     settings_modal_state: &'a settings_modal::state::SettingsModalState,
     show_quit_confirm: bool,
+    /// The quit modal offers `r restart` (`handoff::svc::can_request_move`).
+    quit_confirm_can_restart: bool,
     show_mod_modal: bool,
     show_hub_modal: bool,
     aquarium_state: &'a crate::app::hub::aquarium::state::AquariumState,
@@ -678,6 +681,9 @@ impl App {
         let eq_state =
             crate::app::audio::viz::eq_state(paired_client.as_ref(), self.audio.live_bands());
         let paired_cli_supports_voice = self.paired_cli_supports_voice();
+        // Asked only while the modal is up: it takes the registry lock.
+        let quit_confirm_can_restart =
+            self.show_quit_confirm && crate::app::handoff::svc::can_request_move(self);
         let banner = self.active_banner().cloned();
         // First contact, stage 1 (`app/deadchannel/haunt`): a live glitch
         // burst swaps a clock character or two for the glyph alphabet.
@@ -1829,6 +1835,7 @@ impl App {
                         show_settings: self.show_settings,
                         settings_modal_state: &self.settings_modal_state,
                         show_quit_confirm: self.show_quit_confirm,
+                        quit_confirm_can_restart,
                         show_mod_modal: self.show_mod_modal,
                         show_hub_modal: self.show_hub_modal,
                         aquarium_state: &self.aquarium_state,
@@ -2975,9 +2982,10 @@ impl App {
         }
 
         if ctx.show_quit_confirm {
-            quit_confirm::ui::draw(frame, inner);
+            quit_confirm::ui::draw(frame, inner, ctx.quit_confirm_can_restart);
             push_quit_confirm_sayonara_placement(
                 inner,
+                ctx.quit_confirm_can_restart,
                 ctx.terminal_image_protocol,
                 terminal_images,
             );
@@ -3153,6 +3161,25 @@ fn own_chat_split(
     }
 }
 
+/// The numbered page tabs in the frame title, by the screen each one is.
+const FRAME_TABS: [(Screen, &str); 8] = [
+    (Screen::Clubhouse, "0"),
+    (Screen::Dashboard, "1"),
+    (Screen::Arcade, "2"),
+    (Screen::Games, "3"),
+    (Screen::Artboard, "4"),
+    (Screen::Profiles, "5"),
+    (Screen::Leaderboard, "6"),
+    (Screen::Calendars, "7"),
+];
+
+/// A screen off the tab cycle lights the tab of its page (`Screen::page`): a
+/// door keeps Games lit, the daily board keeps Home lit. Zen is a page with
+/// no tab.
+fn tab_is_lit(tab_screen: Screen, screen: Screen) -> bool {
+    tab_screen == screen.page().screen()
+}
+
 fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     let mut spans = vec![Span::styled(
         " late.sh ",
@@ -3162,43 +3189,11 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     )];
 
     spans.push(Span::styled("| ", Style::default().fg(theme::BORDER_DIM())));
-    let tabs = [
-        (Screen::Clubhouse, "0"),
-        (Screen::Dashboard, "1"),
-        (Screen::Arcade, "2"),
-        (Screen::Games, "3"),
-        (Screen::Artboard, "4"),
-        (Screen::Profiles, "5"),
-        (Screen::Leaderboard, "6"),
-        (Screen::Calendars, "7"),
-    ];
-    for (idx, (tab_screen, key)) in tabs.iter().enumerate() {
+    for (idx, (tab_screen, key)) in FRAME_TABS.iter().enumerate() {
         if idx > 0 {
             spans.push(Span::raw(" "));
         }
-        // While a door game is open the user is "inside" the Games hub, so keep
-        // the Games tab lit rather than leaving no tab highlighted. The daily
-        // board is a Home-surface feature, so Home stays lit there.
-        let active = *tab_screen == screen
-            || (*tab_screen == Screen::Games
-                && matches!(
-                    screen,
-                    Screen::Lateania
-                        | Screen::Rebels
-                        | Screen::Nethack
-                        | Screen::Dcss
-                        | Screen::Brogue
-                        | Screen::Usurper
-                        | Screen::Dopewars
-                        | Screen::Bashquest
-                        | Screen::Codekeep
-                        | Screen::Zork
-                        | Screen::GreenDragon
-                ))
-            || (*tab_screen == Screen::Dashboard
-                && matches!(screen, Screen::DailyMatch | Screen::HouseTable))
-            || (*tab_screen == Screen::Clubhouse
-                && matches!(screen, Screen::City | Screen::Nightcap));
+        let active = tab_is_lit(*tab_screen, screen);
         let style = if active {
             Style::default()
                 .fg(theme::BG_SELECTION())

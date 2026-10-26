@@ -160,7 +160,8 @@ round, the pot, invites).
 
 `Tab`/`Shift+Tab` cycle the numbered pages. `users.settings.landing_page`
 picks Clubhouse, Home or Zen for returning sessions; a session with the tour
-still to walk always lands in the Clubhouse.
+still to walk always lands in the Clubhouse, and one a drain handoff moved
+off an updating pod lands on the page it left (`handoff`).
 
 Not in the cycle: the door screens (from the hub), the daily match board and
 house tables (from the Lobby), the Realm board, the paired Scratchpad, the
@@ -195,10 +196,12 @@ otherwise.
 | `live` | The live strip (`now`) on #lounge and the Live panel (rows and keys in `PANEL.md`) |
 | `paper` | The Late Edition: the daily paper and its print sweeper |
 | `jobs` | The job feed: nightly press, posts, tags, matches |
+| `herald` | The herald: one picture a day on the Fediverse and Bluesky, the daily claim and the post |
 | `usermap` | The People map |
 | `directory` | The People page and the profile editor |
 | `profile_modal` | The read-only profile modal and the chips ledger |
 | `settings_modal` | Settings (`Ctrl+O`): tabs, pickers, mouse, save rules |
+| `handoff` | Drain handoff: a quiet native-CLI session moved off an updating pod onto its page, the "Auto restart on update" tweak |
 | `statusline` | The frame status bars and their customizer |
 | `zen` | Zen (`Ctrl+F`): the tiling layout, the pet and tank tiles |
 | `ascii` | The animated ascii pieces, the Zen ascii tile, the away screensaver |
@@ -230,7 +233,7 @@ otherwise.
 | `door/nethack`, `door/dcss`, `door/brogue`, `door/usurper`, `door/dopewars`, `door/bashquest`, `door/codekeep`, `door/zork` | PTY doors and their host crates (build and deploy in `DEPLOY.md` for NetHack, DCSS, Brogue, dopewars and BashQuest; DCSS's public crawl files in `dcss/PUBLISH.md`, Brogue's grid fixes in `brogue/RENDER.md`, BashQuest's graduation pipeline in `bashquest/CERTIFICATE.md`) |
 | `door/spectate` | Watching live door games |
 | `door/ingest` | The door log pipe: host log files into `door_runs`/`door_milestones`, door badges and payouts |
-| `door/minecraft`, `door/vintagestory` | Info-only cards for the game servers, and the servers' operations |
+| `door/minecraft`, `door/vintagestory` | Info-only cards for the game servers, and the servers' operations (every Vintage Story world option in `vintagestory/WORLDCONFIG.md`) |
 
 No context of its own (read `late-ssh/CONTEXT.md` and the code): `activity`,
 `common`, `dashboard`, `files`, `help_modal`,
@@ -271,6 +274,21 @@ query gotchas: `infra/RUNBOOK.md`.
   localhost -p 2222`. The dev profiles pin compose hostnames, so the apps run
   only inside compose. Config is compiled per profile (`late-ssh/CONTEXT.md`,
   Config).
+- late-ssh runs locally the way prod runs it: pods behind a local copy of the
+  prod SSH edge (`docker-compose.yml` `service-ssh` and `ssh-pod`,
+  `scripts/fleet.sh`). `make start` builds the working tree as a generation,
+  then watches `late-ssh`, `late-core`, `assets` and the Cargo files: a
+  change that rebuilds the binary rolls out a new generation as a deploy
+  does, the new pod ready and routed by the edge before the old one gets
+  SIGTERM and drains, and a build, start or edge pickup that fails leaves the
+  old pod serving. An open session stays on the old code behind the update
+  banner until you reconnect, or until the native CLI moves it after 30 s
+  without input (`late-ssh/src/app/handoff/CONTEXT.md`). From another
+  terminal, `make fleet-rollout` rolls out even an unchanged binary, and
+  `make fleet-ps`, `fleet-logs` and `fleet-expire` (the 6 h grace deadline)
+  work the pods; `make stop` and `make down` refuse while a `make start`
+  runs, whose Ctrl-C stops the stack. `REPLICAS=2` reproduces the pair websocket misrouting in
+  `SCALE.md`, Pain Point 2.
 - Fixtures: `make seed-artboard`, `seed-calendar`, `seed-paper`,
   `seed-irc-history`, `seed-leaderboard`, each described in its domain's
   context. Chips for a local account come from the admin `/grant` command.

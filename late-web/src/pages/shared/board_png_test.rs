@@ -1,6 +1,6 @@
 use dartboard_core::{Canvas, Pos, RgbColor};
 
-use super::board_png::{BACKGROUND, cell_size, render};
+use super::board_png::{BACKGROUND, Crop, cell_size, crop, render};
 
 /// Decode a PNG into its size and RGB bytes.
 fn decode(png: Vec<u8>) -> (u32, u32, Vec<u8>) {
@@ -56,4 +56,60 @@ fn cell_size_scales_a_board_to_preview_width() {
 #[test]
 fn an_empty_canvas_is_refused() {
     assert!(render(&Canvas::with_size(0, 0)).is_err());
+}
+
+/// A crop moves the cells inside to the origin with their colours, leaves
+/// out a wide glyph the edge would cut, and refuses to reach past the
+/// canvas; `x,y,width,height` parses with no empty side.
+#[test]
+fn a_crop_keeps_the_cells_inside_and_refuses_past_the_edge() {
+    let mut canvas = Canvas::with_size(8, 4);
+    canvas.put_glyph_colored(Pos { x: 2, y: 1 }, 'a', RgbColor::new(255, 0, 80));
+    canvas.put_glyph(Pos { x: 4, y: 2 }, '界');
+    canvas.put_glyph(Pos { x: 0, y: 0 }, 'z');
+    let rect = Crop::parse("2,1,3,2").expect("parses");
+    assert_eq!(
+        rect,
+        Crop {
+            x: 2,
+            y: 1,
+            width: 3,
+            height: 2
+        }
+    );
+    let cropped = crop(&canvas, rect).expect("inside");
+    assert_eq!((cropped.width, cropped.height), (3, 2));
+    let cells: Vec<(Pos, char)> = cropped
+        .iter()
+        .map(|(pos, _)| (*pos, cropped.get(*pos)))
+        .collect();
+    assert_eq!(
+        cells,
+        vec![(Pos { x: 0, y: 0 }, 'a')],
+        "the wide glyph is cut, z is outside"
+    );
+    assert_eq!(
+        cropped.fg(Pos { x: 0, y: 0 }),
+        Some(RgbColor::new(255, 0, 80))
+    );
+    assert_eq!(crop(&canvas, Crop::parse("6,0,3,1").unwrap()), None);
+    for bad in ["1,1,0,1", "1,1,1", "a,b,c,d", ""] {
+        assert_eq!(Crop::parse(bad), None, "{bad}");
+    }
+}
+
+/// A crop whose far edge overflows is refused like any crop past the
+/// edge, never wrapped back into range: the wrapped crop's huge side
+/// would ask the renderer for tens of gigabytes.
+#[test]
+fn a_crop_whose_edge_overflows_is_refused() {
+    let canvas = Canvas::with_size(8, 4);
+    for overflowing in [
+        "18446744073709551615,0,1,1",
+        "0,18446744073709551615,1,1",
+        "18446744072709551616,0,1000000000,1",
+    ] {
+        let rect = Crop::parse(overflowing).expect("parses");
+        assert_eq!(crop(&canvas, rect), None, "{overflowing}");
+    }
 }

@@ -162,13 +162,14 @@ pub(crate) enum TweakRow {
     ChatBadges,
     LandingPage,
     PaperAtLogin,
+    AutoRestart,
     ArtboardDisclaimer,
     // Away group.
     Screensaver,
 }
 
 impl TweakRow {
-    pub(crate) const ALL: [TweakRow; 13] = [
+    pub(crate) const ALL: [TweakRow; 14] = [
         TweakRow::BackgroundColor,
         TweakRow::TextBrightness,
         TweakRow::RightSidebar,
@@ -180,6 +181,7 @@ impl TweakRow {
         TweakRow::ChatBadges,
         TweakRow::LandingPage,
         TweakRow::PaperAtLogin,
+        TweakRow::AutoRestart,
         TweakRow::ArtboardDisclaimer,
         TweakRow::Screensaver,
     ];
@@ -1193,6 +1195,9 @@ impl SettingsModalState {
             }
             TweakRow::PaperAtLogin => {
                 self.draft.paper_at_login ^= true;
+            }
+            TweakRow::AutoRestart => {
+                self.draft.auto_restart ^= true;
             }
             TweakRow::ArtboardDisclaimer => {
                 self.device_artboard_disclaimer ^= true;
@@ -2764,6 +2769,7 @@ impl SettingsModalState {
             start_with_music_muted: draft.start_with_music_muted,
             landing_page: draft.landing_page,
             paper_at_login: draft.paper_at_login,
+            auto_restart: draft.auto_restart,
             screensaver: draft.screensaver,
             show_watch_chat: draft.show_watch_chat,
             artboard_disclaimer: draft.artboard_disclaimer,

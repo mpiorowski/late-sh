@@ -220,6 +220,9 @@ pub struct SessionConfig {
     pub summary_service: crate::app::ai::summary::SummaryService,
     /// The Late Edition (`app/paper`): the newsstand this session reads from.
     pub paper_service: crate::app::paper::svc::PaperService,
+    /// The herald (`app/herald`): the social accounts' switch and press,
+    /// for an admin's `/herald`.
+    pub herald_service: crate::app::herald::svc::HeraldService,
     /// The job feed (`app/jobs`): the shelf snapshot this session copies.
     pub jobs_service: crate::app::jobs::svc::JobsService,
     pub notification_service: NotificationService,
@@ -343,6 +346,8 @@ pub struct SessionConfig {
     /// Accessor for the account's door rc files (.nethackrc / DCSS init.txt),
     /// edited from the Games hub config box and pushed to the hosts at launch.
     pub door_rc_service: crate::app::door::rc::DoorRcService,
+    /// The hub's door-opened write (`door_openings`), fired on every launch.
+    pub games_hub_service: crate::app::door::hub::svc::GamesHubService,
     /// The account's configured door rcs, preloaded at session init. Edits in
     /// this session update the in-App copy (`App::door_rcs`) alongside the DB.
     pub initial_door_rcs: Vec<(late_core::models::door_rc::DoorRcGame, String)>,
@@ -478,6 +483,12 @@ pub struct SessionConfig {
 
     /// Server state
     pub is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// How long this session goes quiet before a draining pod moves it
+    /// (`Config::handoff_idle`).
+    pub handoff_idle: std::time::Duration,
+    /// Where this session was on the draining pod a CLI moved it off
+    /// (`app/handoff`), read from its `LATE_RESUME` env. `None` is a login.
+    pub resume: Option<crate::app::handoff::state::ResumePoint>,
 }
 
 /// Main application state
@@ -547,6 +558,8 @@ pub struct App {
     pub(crate) ultimate_cooldown_was_running: bool,
     /// The Late Edition: its modal, the login pop, and the `/paper` drain.
     pub(crate) paper: crate::app::paper::state::PaperState,
+    /// The herald: the `/herald` drain and its answers.
+    pub(crate) herald: crate::app::herald::state::HeraldState,
     /// The watch player and setup box, and the session's one play on the
     /// paired CLI (`app/video/`).
     pub(crate) video: crate::app::video::state::State,
@@ -912,6 +925,7 @@ pub struct App {
     pub(crate) brogue_secret: String,
     pub(crate) arcade_handle_service: crate::app::door::arcade::ArcadeHandleService,
     pub(crate) door_rc_service: crate::app::door::rc::DoorRcService,
+    pub(crate) games_hub_service: crate::app::door::hub::svc::GamesHubService,
     /// The account's door rc files (.nethackrc / DCSS init.txt), keyed by
     /// game. Session-local copy of the DB truth: preloaded at init, updated by
     /// the hub config box, read at door launch. Another session's edits are
@@ -1067,6 +1081,8 @@ pub struct App {
 
     /// Server state
     pub(crate) is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The drain handoff to the new pod (`app/handoff`).
+    pub(crate) handoff: crate::app::handoff::state::HandoffState,
 
     /// Emoji + Nerd Font picker
     pub(crate) icon_picker_open: bool,
@@ -1618,11 +1634,18 @@ impl App {
         // "Land on" tweak sends returning users to Home or Zen instead; a
         // session with the tour still to walk (a first-ever one, or any
         // account after a house-wide reset of the flag) always starts in the
-        // clubhouse so the tutorial runs.
-        let landing = if config.is_new_user || !config.clubhouse_tutorial_done {
-            LandingPage::Clubhouse
-        } else {
-            config.landing_page
+        // clubhouse so the tutorial runs. A session a CLI moved here off a
+        // draining pod (`app/handoff`) is not a login: it lands where it was,
+        // with no splash and no paper pop, unless the tour still has to run.
+        let tour_pending = config.is_new_user || !config.clubhouse_tutorial_done;
+        let resume = match tour_pending {
+            true => None,
+            false => config.resume,
+        };
+        let landing = match (tour_pending, resume) {
+            (true, _) => LandingPage::Clubhouse,
+            (false, Some(point)) => point.landing(),
+            (false, None) => config.landing_page,
         };
         let landing_screen = match landing {
             LandingPage::Clubhouse => Screen::Clubhouse,
@@ -1652,7 +1675,7 @@ impl App {
             ),
             banner: aquarium_loss_banner,
             show_settings: false,
-            show_splash: true,
+            show_splash: resume.is_none(),
             splash_ticks: 0,
             marquee_tick: 0,
             started_at: Instant::now(),
@@ -1681,9 +1704,10 @@ impl App {
             // to "is anyone here?" and doubles as the room directory.
             paper: crate::app::paper::state::PaperState::new(
                 config.paper_service,
-                config.paper_at_login,
+                config.paper_at_login && resume.is_none(),
             ),
             video: crate::app::video::state::State::default(),
+            herald: crate::app::herald::state::HeraldState::new(config.herald_service),
             jobs: crate::app::jobs::state::JobsState::new(config.jobs_service),
             help_modal_state: help_modal::state::HelpModalState::new(),
             leaderboard_page: crate::app::leaderboard::state::LeaderboardPageState::new(),
@@ -1936,6 +1960,7 @@ impl App {
             brogue_secret: config.brogue_secret,
             arcade_handle_service: config.arcade_handle_service,
             door_rc_service: config.door_rc_service,
+            games_hub_service: config.games_hub_service,
             door_rcs: config.initial_door_rcs.into_iter().collect(),
             door_rc_modal: None,
             usurper_state: None,
@@ -2022,6 +2047,7 @@ impl App {
             sent_away: false,
             away: false,
             is_draining: config.is_draining,
+            handoff: crate::app::handoff::state::HandoffState::new(config.handoff_idle),
             icon_picker_open: false,
             icon_picker_state: super::icon_picker::IconPickerState::default(),
             icon_catalog: None,
@@ -2044,6 +2070,9 @@ impl App {
                 app.zen.enter(Instant::now(), &mut rand::thread_rng());
                 app.sync_aquarium_bounds();
             }
+        }
+        if let Some(point) = resume {
+            crate::app::handoff::svc::resume(&mut app, point);
         }
         app.chat
             .set_favorite_room_ids(app.profile_state.profile().favorite_room_ids.clone());

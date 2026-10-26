@@ -171,6 +171,10 @@ struct ClientHandler {
     /// openssh CLI modes identify themselves this way and never send
     /// `LATE_CLI_MODE`.
     cli_token_served: bool,
+    /// The resume point a CLI carried back when it moved here, off a draining
+    /// pod or on a restart from the quit modal (`app/handoff`), sent as an env
+    /// before the pty request.
+    resume: Option<crate::app::handoff::state::ResumePoint>,
     /// `TERM` from the pty request, cleaned for the session wire summary.
     term: Option<String>,
     terminal_env_hints: Vec<(String, String)>,
@@ -477,6 +481,7 @@ impl Server {
             input_rx: None,
             cli_mode: false,
             cli_token_served: false,
+            resume: None,
             term: None,
             terminal_env_hints: Vec::new(),
             session_token: None,
@@ -751,7 +756,6 @@ impl russh::server::Handler for ClientHandler {
             user.username.clone(),
         );
 
-        let user_id = user.id;
         let username = user.username.clone();
 
         tracing::info!(
@@ -762,11 +766,9 @@ impl russh::server::Handler for ClientHandler {
 
         self.user = Some(user);
         self.auth_fingerprint = Some(fingerprint);
+        // Subscribed here, before `pty_request` publishes this session's own
+        // join, so the session hears it.
         self.activity_feed_rx = Some(self.state.activity_feed.subscribe());
-        let _ = self
-            .state
-            .activity_feed
-            .send(ActivityEvent::joined(user_id, username));
         self.authed_at = Some(Instant::now());
         Ok(Auth::Accept)
     }
@@ -850,6 +852,17 @@ impl russh::server::Handler for ClientHandler {
         };
 
         let user_id = user.id;
+        // The login event waits for the pty, the first point that knows
+        // whether this session is one a drain handoff moved off another pod
+        // (`LATE_RESUME`, read in `env_request`). That one already joined
+        // there and comes in quietly.
+        let resume = self.resume.take();
+        if resume.is_none() {
+            let _ = self
+                .state
+                .activity_feed
+                .send(ActivityEvent::joined(user_id, user.username.clone()));
+        }
         let permissions = AuthzPermissions::new(
             user.is_admin || self.state.config.force_admin,
             user.is_moderator,
@@ -980,6 +993,7 @@ impl russh::server::Handler for ClientHandler {
             translation_service: self.state.translation_service.clone(),
             summary_service: self.state.summary_service.clone(),
             paper_service: self.state.paper_service.clone(),
+            herald_service: self.state.herald_service.clone(),
             jobs_service: self.state.jobs_service.clone(),
             notification_service: self.state.notification_service.clone(),
             article_service,
@@ -1022,6 +1036,7 @@ impl russh::server::Handler for ClientHandler {
             arcade_handle_service: self.state.arcade_handle_service.clone(),
             live_games: self.state.live_games.clone(),
             door_rc_service: self.state.door_rc_service.clone(),
+            games_hub_service: self.state.games_hub_service.clone(),
             initial_door_rcs,
             daily_service: self.state.daily_service.clone(),
             realm_service: self.state.realm_service.clone(),
@@ -1171,8 +1186,20 @@ impl russh::server::Handler for ClientHandler {
 
             // Server state
             is_draining: self.state.is_draining.clone(),
+            handoff_idle: self.state.config.handoff_idle,
+            resume,
         })
         .context("failed to initialize app for PTY session")?;
+        // Counted once the session stands, so a move whose new session failed
+        // to start stays in `sent` plus `requested` minus `resumed`.
+        if let Some(point) = resume {
+            metrics::record_drain_handoff(metrics::HandoffStage::Resumed);
+            tracing::info!(
+                user_id = %user_id,
+                page = ?point.page,
+                "resuming a session its cli moved here"
+            );
+        }
         for (name, value) in &self.terminal_env_hints {
             app.apply_terminal_env_hint(name, value);
         }
@@ -1213,6 +1240,19 @@ impl russh::server::Handler for ClientHandler {
                 cli_mode = self.cli_mode,
                 "updated cli mode from env request"
             );
+        } else if variable_name == crate::app::handoff::state::RESUME_ENV {
+            // `Resumed` waits for `pty_request` to build the session.
+            self.resume = crate::app::handoff::state::ResumePoint::parse(variable_value);
+            match self.resume {
+                Some(_) => {}
+                None => {
+                    metrics::record_drain_handoff(metrics::HandoffStage::Unparsed);
+                    tracing::warn!(
+                        len = variable_value.len(),
+                        "unreadable resume point; starting a fresh session"
+                    );
+                }
+            }
         } else if crate::app::files::terminal_image::protocol_from_env_hint(
             variable_name,
             variable_value,

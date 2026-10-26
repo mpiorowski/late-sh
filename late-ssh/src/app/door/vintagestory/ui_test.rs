@@ -42,13 +42,14 @@ fn tf_value(tf: &str, key: &str) -> String {
     value.trim_matches('"').to_string()
 }
 
-/// A player needs three things from this card: where to connect, which client
-/// version, and who to ask for the whitelist.
+/// A player needs four things from this card: where to connect, which client
+/// version, which mods, and who to ask for the whitelist.
 #[test]
 fn landing_tells_a_player_how_to_join() {
     let text = landing_text();
     assert!(text.contains("address   vs.late.sh"), "{text}");
     assert!(text.contains("client    Vintage Story 1.22.7"), "{text}");
+    assert!(text.contains("mods      Carry On, ProspectTogether"), "{text}");
     assert!(
         text.contains("/dm       a moderator with your exact Vintage Story username"),
         "{text}"

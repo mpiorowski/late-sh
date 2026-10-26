@@ -171,3 +171,35 @@ async fn titles_resolve_from_the_newest_titled_queue_row() {
     assert_eq!(titles.len(), 1);
     assert_eq!(titles.get("vid-a").map(String::as_str), Some("Old title"));
 }
+
+/// The paper's booth line counts every track queued inside the window,
+/// played out or not, and nothing outside it.
+#[tokio::test]
+async fn tracks_queued_in_a_window_are_counted_whatever_became_of_them() {
+    let test_db = test_db().await;
+    let user = create_test_user(&test_db.db, "count-user").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let (played, _) =
+        MediaQueueItem::insert_youtube(&mut client, user.id, "cnt-a", None, None, None, false)
+            .await
+            .expect("first queue");
+    MediaQueueItem::insert_youtube(&mut client, user.id, "cnt-b", None, None, None, false)
+        .await
+        .expect("second queue");
+    play_out(&client, played.id).await;
+
+    let now = Utc::now();
+    let hour = chrono::Duration::hours(1);
+    assert_eq!(
+        MediaQueueItem::count_queued_between(&client, now - hour, now + hour)
+            .await
+            .expect("count"),
+        2
+    );
+    assert_eq!(
+        MediaQueueItem::count_queued_between(&client, now + hour, now + hour * 2)
+            .await
+            .expect("count later"),
+        0
+    );
+}

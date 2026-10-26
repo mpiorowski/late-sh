@@ -1,7 +1,8 @@
 use super::{
-    AUTO_RIGHT_SIDEBAR_MIN_COLS, AUTO_ROOM_LIST_MIN_COLS, app_frame_bottom_titles,
+    AUTO_RIGHT_SIDEBAR_MIN_COLS, AUTO_ROOM_LIST_MIN_COLS, FRAME_TABS, app_frame_bottom_titles,
     app_frame_sponsor_title, dashboard_home_selected, line_width, resolve_right_sidebar_enabled,
     resolve_room_list_enabled, room_list_sidebar_enabled, sidebar_enabled, sponsor_line,
+    tab_is_lit,
 };
 use crate::app::common::primitives::Screen;
 use late_core::models::user::{RightSidebarMode, RoomListMode};
@@ -256,4 +257,31 @@ fn keyhints_too_wide_for_the_row_are_dropped_like_any_other_segment() {
     let bar = line_text(&bar.expect("the narrower segments still fit").line);
     assert!(!bar.contains("Settings"), "{bar:?}");
     assert!(bar.contains("unread 0"), "{bar:?}");
+}
+
+/// The lit tab is the page a screen belongs to, the one Tab steps back to:
+/// a screen off the cycle lights exactly that tab, and Zen lights none.
+#[test]
+fn the_lit_tab_is_the_page_the_screen_belongs_to() {
+    let lit = |screen: Screen| -> Vec<Screen> {
+        FRAME_TABS
+            .iter()
+            .map(|(tab, _)| *tab)
+            .filter(|tab| tab_is_lit(*tab, screen))
+            .collect()
+    };
+    for (screen, tab) in [
+        (Screen::Games, Screen::Games),
+        (Screen::Nethack, Screen::Games),
+        (Screen::Darkroom, Screen::Games),
+        (Screen::Realm, Screen::Games),
+        (Screen::DailyMatch, Screen::Dashboard),
+        (Screen::HouseTable, Screen::Dashboard),
+        (Screen::Scratchpad, Screen::Dashboard),
+        (Screen::Nightcap, Screen::Clubhouse),
+        (Screen::City, Screen::Clubhouse),
+    ] {
+        assert_eq!(lit(screen), vec![tab], "{screen:?}");
+    }
+    assert_eq!(lit(Screen::Zen), Vec::<Screen>::new());
 }

@@ -20,6 +20,12 @@
 # the whitelist lives in Playerdata/ on the volume. Land claims are built into
 # the game and run on its role defaults.
 #
+# World options (terrain, climate, rules) are not set here; they live in
+# serverconfig.json on the volume. The full list of keys and values is in
+# late-ssh/src/app/door/vintagestory/WORLDCONFIG.md. Mods are not set here
+# either: they are zips in /data/Mods on the volume, listed in that folder's
+# CONTEXT.md.
+#
 # The Games hub card (late-ssh/src/app/door/vintagestory/ui.rs) quotes the
 # version, address, and the settings below to players; its ui_test.rs reads
 # this file, defaults.tf, and the Dockerfile and fails when they drift.

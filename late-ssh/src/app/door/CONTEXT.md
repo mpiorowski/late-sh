@@ -24,6 +24,25 @@ playing right now on a watchable door (DCSS, NetHack, Brogue, Zork). Sitting on
 a live row previews it in the landing's place; Enter opens the watch with its
 chat (`spectate/CONTEXT.md`).
 
+The hub's keys live in `hub/input.rs` (`handle_event`, the one arm the
+root dispatcher keeps for the Games screen; `open_rc_modal` for the door
+screens' `c`). Every launch is counted there. `launch_selection` runs one
+gate (`unavailable`: the banner a switched-off host shows instead of
+launching, every host's flag in that one match, Zork's included) and then,
+before the card's own way in, writes a `door_openings` row through
+`hub/svc.rs` (`GamesHubService::record_task`, fire-and-forget, its failure
+logged as `door_opening_failed` and counted in
+`late_ssh_door_openings_total{card,result}`). A row is one Enter that got
+past the gate: a host that then refuses still had its door opened, a
+member who quits and comes back opens it again, and the two server cards
+write nothing. The Realm between seasons is the one banner that still
+counts, a sweeper tick at most. `HubGame::card` maps the roster onto the
+stored key (`late_core::models::door_opening::DoorCard`, a closed roster of
+its own; the roguelikes' keys are `leaderboard::DoorGame`'s). The paper's
+YESTERDAY column reads the day's openings of every card through
+`leaderboard::day_tallies` (`DayGame::Door`, `app/paper/CONTEXT.md`), the
+runs won for the three roguelikes beside them.
+
 Door screens are never top-level tabs: they are entered only from the hub
 (the Realm also from the #lounge live strip) and return to it on exit (`Esc`
 in Lateania; quitting the game in the PTY doors, e.g. `Ctrl-C`, `Q` at
@@ -32,7 +51,7 @@ Usurper's menus, `S` save in the roguelikes).
 | Key | Action |
 |-----|--------|
 | arrows, `h`/`j`/`k`/`l` | Step along the rail (cards, then live rows), wrapping |
-| `Enter` | Launch the card; on a live row, open the watch |
+| `Enter` | Launch the card, written down as a door opened (below); on a live row, open the watch |
 | `Ctrl+J`/`Ctrl+K`, `Ctrl+Down`/`Ctrl+Up` | Scroll the selected landing (`Enter` matches CR only, since `Ctrl+J` is a bare LF) |
 | `d` | Reset the Green Dragon or A Dark Room save, after confirmation (Lateania resets from its own landing) |
 | `t` | On a watchable door's card: show or hide your watchers' chat beside your own game |

@@ -21,6 +21,8 @@
 # =============================================================================
 
 locals {
+  # docker/fleet/haproxy.cfg is this edge's local stand-in (make start): keep
+  # its defaults (mode, timeouts, retries) and per-port routing in step.
   ssh_edge_haproxy_config = <<-EOT
     global
       log stdout format raw local0

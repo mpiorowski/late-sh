@@ -119,6 +119,62 @@ async fn ssh_bootstrap_shows_gallery_splash_only_after_always_view() {
     server.abort();
 }
 
+/// A session a drain handoff moved here already joined on the old pod, so it
+/// must not tell #lounge, its friends and the Nightcap TV that it logged in
+/// again. A fresh session still announces itself.
+#[tokio::test]
+async fn a_session_moved_off_a_draining_pod_does_not_announce_a_join() {
+    use crate::app::activity::event::ActivityKind;
+    use late_core::models::user::{User, UserParams};
+    let test_db = new_test_db().await;
+    let state = test_app_state(test_db.db.clone(), test_config(test_db.db.config().clone()));
+    let mut activity = state.activity_feed.subscribe();
+    let db_client = test_db.db.get().await.unwrap();
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        let _ = run_with_listener(listener, state, None).await;
+    });
+    for (label, resume, expect_join) in [("fresh", None, true), ("moved", Some("v1:arcade"), false)]
+    {
+        let key = new_client_key();
+        let user = User::create(
+            &db_client,
+            UserParams {
+                fingerprint: key.public_key().fingerprint(HashAlg::Sha256).to_string(),
+                username: format!("handoff-join-{label}"),
+                settings: serde_json::json!({}),
+            },
+        )
+        .await
+        .unwrap();
+        let mut connection = client::connect(Arc::new(client::Config::default()), addr, TestClient)
+            .await
+            .unwrap();
+        assert!(authenticate(&mut connection, "handoff-test", key).await);
+        let mut shell = connection.channel_open_session().await.unwrap();
+        // As `late` sends it: before the pty request, no reply wanted.
+        if let Some(resume) = resume {
+            shell.set_env(false, "LATE_RESUME", resume).await.unwrap();
+        }
+        shell
+            .request_pty(true, "xterm-256color", 160, 40, 0, 0, &[])
+            .await
+            .unwrap();
+        shell.request_shell(true).await.unwrap();
+        expect_shell_data(&mut shell).await;
+
+        let joined = std::iter::from_fn(|| activity.try_recv().ok())
+            .any(|event| event.user_id == Some(user.id) && event.kind == ActivityKind::UserJoined);
+        assert_eq!(joined, expect_join, "{label} session");
+        connection
+            .disconnect(russh::Disconnect::ByApplication, "", "en")
+            .await
+            .unwrap();
+    }
+    server.abort();
+}
+
 impl client::Handler for TestClient {
     type Error = russh::Error;
 

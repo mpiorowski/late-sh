@@ -1,8 +1,10 @@
 use late_core::models::article::NewsShareReward;
 use late_core::models::chat_message_gild::GildTier;
 use late_core::models::chat_room::WatchDoor;
+use late_core::models::door_opening::DoorCard;
 use late_core::models::leaderboard::{DailyPuzzle, DoorGame};
 use late_core::models::media_queue_item::SongQueueReward;
+use late_core::models::user::RadioStation;
 
 use crate::app::activity::event::ActivityGame;
 use crate::app::arcade::share::ShareCardKind;
@@ -120,8 +122,63 @@ pub enum BartenderMemoryWrite {
     WipeFailed,
 }
 
+/// How one day of the herald (`app/herald`) resolved. `Posted` is the
+/// variant that spent the instance's calls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeraldPostResult {
+    Posted,
+    /// Nothing worth posting that day: no board with enough ink.
+    Skipped,
+    /// Another replica held the day's claim.
+    Lost,
+    Failed,
+}
+
+/// How one network's leg of the herald's post went.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeraldDeliveryResult {
+    Delivered,
+    Failed,
+}
+
+/// What the herald's look (`app/herald/look.rs`) came to, once per look
+/// it runs: a day's fresh pick or an admin's preview.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeraldLookResult {
+    /// The model saw nothing to warn about.
+    Clean,
+    /// The model put a warning on the picture.
+    Warned,
+    /// No answer: the model failed, or AI is off. Posted not reviewed.
+    Unseen,
+    /// A card late.sh drew from its own words (the week's scoreboard, the
+    /// paper's front page): nothing for the model to see, so no call.
+    Drawn,
+}
+
+/// How one radio roll call (`app/audio`, every `RADIO_ROLL_CALL_INTERVAL`
+/// on every replica) went: `Called` wrote this replica's paired radio
+/// listeners down for the day, `Failed` stopped at the first listener it
+/// could not write (the ones before it are written, and the next call
+/// fills the gap: a listener already written is a no-op).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RadioRollCallResult {
+    Called,
+    Failed,
+}
+
+/// Whether a door opened from the Games hub (`app/door/hub`) was written
+/// to `door_openings`: `Failed` is one opening short in the paper.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DoorOpeningResult {
+    Recorded,
+    Failed,
+}
+
 /// How one page of The Late Edition (`app/paper`) came off the press.
-/// `Printed` is the variant that spent a model call.
+/// `Printed` is a page with text on it: a room page, READING and OUTSIDE
+/// spent a model call for it, YESTERDAY is counted from late.sh's own rows
+/// and spends none.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PaperPrintResult {
     Printed,
@@ -424,6 +481,21 @@ impl SessionClient {
     }
 }
 
+/// One step of a drain handoff (`app/handoff`): the draining pod asked an idle
+/// session's CLI to move, or a person asked from the quit modal, and the new
+/// session was built on the resume point the CLI carried back. `Sent` plus
+/// `Requested` minus `Resumed` is the moves that never landed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HandoffStage {
+    Sent,
+    /// A person pressed `r restart` in the quit modal, on any pod.
+    Requested,
+    Resumed,
+    /// The CLI carried back a resume point this server cannot read (a format
+    /// from another version); the session started as a fresh one.
+    Unparsed,
+}
+
 /// How one terminal round-trip probe ended (`terminal_probe.rs`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalProbeOutcome {
@@ -700,23 +772,25 @@ mod inner {
     use super::SlidingPuzzleArtLoad;
     use super::{
         ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, AwardAnnouncementOutcome,
-        BioScreenOutcome, DailyPuzzle, DailyWinPayout, DoorGame, DoorWatchOutcome, FightBeat,
-        FirstContactBeat, GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult,
-        GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier, JobsFetchResult, JobsPostResult,
-        JobsPressResult, JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure,
-        NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult,
-        PaperPrintResult, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence,
-        PresenceScope, PresenceWire, RealmChatRoomAttach, RealmPayout, RealmSeasonOpen,
-        RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor,
-        Screen, SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
-        SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
-        VizWireBands, WatchDoor,
+        BioScreenOutcome, DailyPuzzle, DailyWinPayout, DoorCard, DoorGame,
+        DoorOpeningResult, DoorWatchOutcome, FightBeat, FirstContactBeat, GalleryApplauseResult,
+        GalleryHangResult, GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal,
+        GildTier, HeraldDeliveryResult, HeraldLookResult, HeraldPostResult, JobsFetchResult,
+        JobsPostResult, JobsPressResult, JobsReadResult, LoungeBeat, NewsShareReward,
+        NightcapHouseFailure, NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult,
+        OutputKind, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome, PotRefusal,
+        PotReminderOutcome, Presence, PresenceScope, PresenceWire, RadioRollCallResult,
+        RadioStation, RealmChatRoomAttach, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError,
+        Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SendRefusal,
+        SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason,
+        SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
     use super::{
-        CliLatencyKind, ClientPlatform, ProbeBacklog, SessionClient, TerminalProbeOutcome,
+        CliLatencyKind, ClientPlatform, HandoffStage, ProbeBacklog, SessionClient,
+        TerminalProbeOutcome,
     };
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
@@ -1749,6 +1823,52 @@ mod inner {
                 .with_description("Now-playing polls of third-party radio providers")
                 .build()
         })
+    }
+
+    fn radio_roll_call_result_label(result: RadioRollCallResult) -> &'static str {
+        match result {
+            RadioRollCallResult::Called => "called",
+            RadioRollCallResult::Failed => "failed",
+        }
+    }
+
+    fn radio_roll_calls_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_radio_roll_calls_total")
+                .with_description(
+                    "Radio roll calls (paired listeners written to radio_listens) by result",
+                )
+                .build()
+        })
+    }
+
+    fn radio_listeners_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_radio_listeners_total")
+                .with_description(
+                    "Paired clients on the radio source at each roll call, by station",
+                )
+                .build()
+        })
+    }
+
+    /// One roll call: its result, and how many listeners it found on each
+    /// station (a listener is one account on one station).
+    pub fn record_radio_roll_call(result: RadioRollCallResult, listeners: &[(RadioStation, u64)]) {
+        radio_roll_calls_total().add(
+            1,
+            &[KeyValue::new(
+                "result",
+                radio_roll_call_result_label(result),
+            )],
+        );
+        for (station, count) in listeners {
+            radio_listeners_total().add(*count, &[KeyValue::new("station", station.as_str())]);
+        }
     }
 
     fn booth_thumbnails_total() -> &'static Counter<u64> {
@@ -3494,6 +3614,88 @@ mod inner {
         );
     }
 
+    fn herald_post_result_label(result: HeraldPostResult) -> &'static str {
+        match result {
+            HeraldPostResult::Posted => "posted",
+            HeraldPostResult::Skipped => "skipped",
+            HeraldPostResult::Lost => "lost",
+            HeraldPostResult::Failed => "failed",
+        }
+    }
+
+    fn herald_posts_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_herald_posts_total")
+                .with_description("The herald's daily post by result")
+                .build()
+        })
+    }
+
+    pub fn record_herald_post(result: HeraldPostResult) {
+        herald_posts_total().add(
+            1,
+            &[KeyValue::new("result", herald_post_result_label(result))],
+        );
+    }
+
+    fn herald_delivery_result_label(result: HeraldDeliveryResult) -> &'static str {
+        match result {
+            HeraldDeliveryResult::Delivered => "delivered",
+            HeraldDeliveryResult::Failed => "failed",
+        }
+    }
+
+    fn herald_deliveries_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_herald_deliveries_total")
+                .with_description("The herald's post landing on each network, by result")
+                .build()
+        })
+    }
+
+    pub fn record_herald_delivery(
+        network: late_core::models::herald::HeraldNetwork,
+        result: HeraldDeliveryResult,
+    ) {
+        herald_deliveries_total().add(
+            1,
+            &[
+                KeyValue::new("network", network.as_str()),
+                KeyValue::new("result", herald_delivery_result_label(result)),
+            ],
+        );
+    }
+
+    fn herald_look_result_label(result: HeraldLookResult) -> &'static str {
+        match result {
+            HeraldLookResult::Clean => "clean",
+            HeraldLookResult::Warned => "warned",
+            HeraldLookResult::Unseen => "unseen",
+            HeraldLookResult::Drawn => "drawn",
+        }
+    }
+
+    fn herald_looks_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_herald_looks_total")
+                .with_description("The herald's look at a picture, by result")
+                .build()
+        })
+    }
+
+    pub fn record_herald_look(result: HeraldLookResult) {
+        herald_looks_total().add(
+            1,
+            &[KeyValue::new("result", herald_look_result_label(result))],
+        );
+    }
+
     fn jobs_fetch_result_label(result: JobsFetchResult) -> &'static str {
         match result {
             JobsFetchResult::Fetched => "fetched",
@@ -3749,6 +3951,36 @@ mod inner {
         door_ingest_lines_total().add(1, &[KeyValue::new("game", game.key())]);
     }
 
+    fn door_opening_result_label(result: DoorOpeningResult) -> &'static str {
+        match result {
+            DoorOpeningResult::Recorded => "recorded",
+            DoorOpeningResult::Failed => "failed",
+        }
+    }
+
+    fn door_openings_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_door_openings_total")
+                .with_description(
+                    "Doors opened from the Games hub (an Enter on a card that launches) by card, and whether the door_openings row was written",
+                )
+                .build()
+        })
+    }
+
+    pub fn record_door_opening(card: DoorCard, result: DoorOpeningResult) {
+        // `DoorCard::key` is the closed roster's own exhaustive label map.
+        door_openings_total().add(
+            1,
+            &[
+                KeyValue::new("card", card.key()),
+                KeyValue::new("result", door_opening_result_label(result)),
+            ],
+        );
+    }
+
     pub fn record_door_ingest_session_failure(game: DoorGame) {
         door_ingest_session_failures_total().add(1, &[KeyValue::new("game", game.key())]);
     }
@@ -3988,6 +4220,31 @@ mod inner {
             )],
         );
     }
+
+    fn handoff_stage_label(stage: HandoffStage) -> &'static str {
+        match stage {
+            HandoffStage::Sent => "sent",
+            HandoffStage::Requested => "requested",
+            HandoffStage::Resumed => "resumed",
+            HandoffStage::Unparsed => "unparsed",
+        }
+    }
+
+    fn drain_handoffs_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_drain_handoffs_total")
+                .with_description(
+                    "Drain handoffs by stage: idle CLI sessions a draining pod moved, CLI sessions a person restarted from the quit modal, and the sessions resumed from either",
+                )
+                .build()
+        })
+    }
+
+    pub fn record_drain_handoff(stage: HandoffStage) {
+        drain_handoffs_total().add(1, &[KeyValue::new("stage", handoff_stage_label(stage))]);
+    }
 }
 
 #[cfg(not(feature = "otel"))]
@@ -4002,23 +4259,25 @@ mod inner {
     use super::SlidingPuzzleArtLoad;
     use super::{
         ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, AwardAnnouncementOutcome,
-        BioScreenOutcome, DailyPuzzle, DailyWinPayout, DoorGame, DoorWatchOutcome, FightBeat,
-        FirstContactBeat, GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult,
-        GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier, JobsFetchResult, JobsPostResult,
-        JobsPressResult, JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure,
-        NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult,
-        PaperPrintResult, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence,
-        PresenceScope, PresenceWire, RealmChatRoomAttach, RealmPayout, RealmSeasonOpen,
-        RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor,
-        Screen, SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
-        SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
-        VizWireBands, WatchDoor,
+        BioScreenOutcome, DailyPuzzle, DailyWinPayout, DoorCard, DoorGame,
+        DoorOpeningResult, DoorWatchOutcome, FightBeat, FirstContactBeat, GalleryApplauseResult,
+        GalleryHangResult, GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal,
+        GildTier, HeraldDeliveryResult, HeraldLookResult, HeraldPostResult, JobsFetchResult,
+        JobsPostResult, JobsPressResult, JobsReadResult, LoungeBeat, NewsShareReward,
+        NightcapHouseFailure, NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult,
+        OutputKind, PaperOpenResult, PaperPrintResult, Place, PoolShotOutcome, PotRefusal,
+        PotReminderOutcome, Presence, PresenceScope, PresenceWire, RadioRollCallResult,
+        RadioStation, RealmChatRoomAttach, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError,
+        Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor, Screen, SendRefusal,
+        SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward, SshRejectReason,
+        SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
     use super::{CalendarAnnouncement, CalendarOp, CalendarRefusalKind, CalendarWrite, LiveOrigin};
     use super::{
-        CliLatencyKind, ClientPlatform, ProbeBacklog, SessionClient, TerminalProbeOutcome,
+        CliLatencyKind, ClientPlatform, HandoffStage, ProbeBacklog, SessionClient,
+        TerminalProbeOutcome,
     };
     use super::{IrcHistoryOutcome, IrcHistoryRequest};
     use super::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement, ReferralSource};
@@ -4128,6 +4387,11 @@ mod inner {
     pub fn record_news_save(_outcome: NewsSaveOutcome) {}
     pub fn record_news_card(_outcome: NewsCardOutcome) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
+    pub fn record_radio_roll_call(
+        _result: RadioRollCallResult,
+        _listeners: &[(RadioStation, u64)],
+    ) {
+    }
     pub fn record_booth_thumbnail(_outcome: ThumbnailFetch) {}
     pub fn record_booth_favorite(_outcome: BoothFavoriteOutcome) {}
     pub fn record_radio_meta_poll(_feed: PolledFeed, _outcome: PollOutcome) {}
@@ -4160,6 +4424,13 @@ mod inner {
     pub fn record_chat_summary(_result: SummaryResult) {}
     pub fn record_paper_print(_result: PaperPrintResult) {}
     pub fn record_paper_open(_result: PaperOpenResult) {}
+    pub fn record_herald_post(_result: HeraldPostResult) {}
+    pub fn record_herald_delivery(
+        _network: late_core::models::herald::HeraldNetwork,
+        _result: HeraldDeliveryResult,
+    ) {
+    }
+    pub fn record_herald_look(_result: HeraldLookResult) {}
     pub fn record_jobs_fetch(
         _source: late_core::models::job_posting::JobSource,
         _result: JobsFetchResult,
@@ -4174,6 +4445,7 @@ mod inner {
     pub fn record_gallery_take_down(_result: GalleryTakeDownResult) {}
     pub fn record_gallery_splash_queue_depth(_depth: i64) {}
     pub fn record_door_ingest_line(_game: DoorGame) {}
+    pub fn record_door_opening(_card: DoorCard, _result: DoorOpeningResult) {}
     pub fn record_door_ingest_session_failure(_game: DoorGame) {}
     pub fn record_door_watch_stream(_game: WatchDoor, _outcome: DoorWatchOutcome) {}
     pub fn record_door_watch_roster_failure(_game: WatchDoor) {}
@@ -4185,6 +4457,7 @@ mod inner {
     pub fn record_zork_catalogue_read(_result: ZorkCatalogueRead) {}
     pub fn record_zork_suggestion(_result: ZorkSuggestion) {}
     pub fn record_online_time_flush(_result: OnlineTimeFlushResult) {}
+    pub fn record_drain_handoff(_stage: HandoffStage) {}
 }
 
 pub use inner::*;

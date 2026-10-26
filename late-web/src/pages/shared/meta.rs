@@ -7,8 +7,7 @@
 pub(crate) const SITE_IMAGE_PATH: &str = "/static/og-image.png";
 
 /// What the site picture shows, for readers that cannot see it.
-pub(crate) const SITE_IMAGE_ALT: &str =
-    "A steaming coffee cup drawn in braille dots beside the prompt: ssh late.sh";
+pub(crate) const SITE_IMAGE_ALT: &str = "ASCII art of a night city: lit windows in a skyline under stars, and a terminal prompt below reading ssh late.sh, welcome to the clubhouse, the night is young";
 
 /// The site picture's URL under `base`, and its alt text.
 pub(crate) fn site_image(base: &str) -> (String, String) {

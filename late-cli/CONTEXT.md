@@ -63,9 +63,10 @@ Runtime flow:
 2. Resolve/generate SSH identity unless OpenSSH mode is allowed to use normal OpenSSH discovery.
 3. Start local audio and analyzer, except OpenSSH mode which authenticates and fetches the token before audio starts.
 4. Fetch a session token through the selected SSH transport.
-5. Open the real SSH TUI session, except old/native modes where the interactive channel/process is already running with input gated.
+5. Open the real SSH TUI session. Old mode's process is already running with input gated until the token arrives; native mode opens the shell right after the token and attaches stdin once it is up.
 6. Connect `/api/ws/pair?token=...` and send visualizer frames plus client state.
 7. Apply paired control messages by muting/unmuting or changing local volume.
+8. Native mode only: on a drain handoff or a restart from the quit modal, redial the server and repeat from step 4 with the audio still playing.
 
 OpenSSH mode differs slightly: it authenticates and fetches the token first through a ControlMaster, starts audio and WebSocket pairing, then opens the interactive shell through the same master connection.
 
@@ -169,6 +170,8 @@ The server must return JSON:
 
 After the token is received, native mode opens the interactive SSH channel. There is no fallback to the legacy `LATE_SESSION_TOKEN=` banner protocol.
 
+Native mode is the only mode that survives a server update without a manual reconnect. `connect_native` (dial, auth, token) and `NativeConnection::open_shell` are separate steps, so a drain handoff (`reconnect` on the pair socket, `PAIRING.md`) can make the new connection and open its shell (`ShellStart::Handoff`: `LATE_RESUME` set before the pty request, output held) before it retires the old one; `NativeShell::show` then paints the held first frame. A failure anywhere before that swap leaves the old session running. The stdin reader thread, the terminal-probe watch and the latency sink live in `NativeLink` for the whole run; `NativeInput` points stdin at whichever session is attached, and keys typed during the switch are dropped. A retired shell stops writing to the terminal before its channel closes, so the old server's farewell never lands under the new session.
+
 Native target parsing supports `user@host:port` and bracketed IPv6. If no user is supplied, it falls back to `USER`, then `USERNAME`, then `late`.
 
 ### OpenSSH mode
@@ -258,7 +261,7 @@ Platform notes:
 - Stream URL normalization trims trailing slashes, preserves `/stream`, `/stream/...`, and direct `.mp3`/`.m4a`/`.aac` URLs, and appends `/stream` only for base URLs.
 - Stream probing scans up to 64 KiB for MP3 sync/ID3 before probing.
 - Initial volume is 30%. Enabled desktop audio boots muted until the pair WebSocket delivers the user's initial mute/source state; if the server never sees this session at all, the CLI releases that startup mute once, after 10 failed attempts, rather than leave the user silently muted with no explanation. Volume uses squared scaling.
-- Releasing the startup mute is gated on the session never having paired, and that gate is load-bearing: a session the server has already seen is running the user's stored device mute, so a mid-session pair-WS outage must leave the mute alone. Silence is the safe failure mode; unmuting on reconnect failure would start music behind the user's back in a muted session. The fact is structural, not guessed: `run_pair_session` reports whether any frame arrived from the server (`PairSessionEnd::server_frame_received`), and only such a session counts as `PairAttempt::Ended`. A successful `client_state` write is not enough, because the server accepts the WebSocket upgrade before it checks the per-IP pair limit and the per-token capacity, so a rejected socket still takes the write and then dies unread; the server's first frame (`set_playback_source`, sent right after registering) is what proves the session was registered and the buffered `client_state` read. Because the slow retry never gives up, a session that did release the mute still gets the stored value applied when the server comes back, since the server's alignment is claimed once per session token and was never claimed.
+- Releasing the startup mute is gated on the session never having paired, and that gate is load-bearing: a session the server has already seen is running the user's stored device mute, so a mid-session pair-WS outage must leave the mute alone. Silence is the safe failure mode; unmuting on reconnect failure would start music behind the user's back in a muted session. The fact is structural, not guessed: `run_pair_session` reports whether any frame arrived from the server (`PairSessionEnd::server_frame_received`), and only such a session counts as `PairAttempt::Ended`. A successful `client_state` write is not enough, because the server accepts the WebSocket upgrade before it checks the per-IP pair limit and the per-token capacity, so a rejected socket still takes the write and then dies unread; the server's first frame (`set_playback_source`, sent right after registering) is what proves the session was registered and the buffered `client_state` read. Because the slow retry never gives up, a session that did release the mute still gets the stored value applied when the server comes back, since the server's alignment is claimed once per session token and was never claimed. A session a drain handoff moved pairs under `PairRetryPolicy::after_handoff`, which counts it as already seen: the process is still playing what the old server aligned.
 - On Linux, the pair client consumes `queue_update`, `now_playing_update`, and `radio_meta_update` snapshots and publishes the currently selected source through `org.mpris.MediaPlayer2`. YouTube includes title/channel/duration, watch URL, thumbnail, and wall-clock-derived initial position; Icecast and radio select the metadata entry matching `set_playback_source.station`. The house mounts arrive as radio stations: their title and artist come from `radio_meta_update` (the server merges them in), their track length from `now_playing_update`. Missing metadata falls back to the source/station label, with no artist.
 - MPRIS is controllable, but only over mute and volume. `Play`/`Pause`/`PlayPause`/`Stop` resolve through `TransportCommand` to an absolute mute target, and `SetVolume` maps the slider to a percent (raising it off zero also unmutes). `CanPlay`/`CanPause`/`CanControl` are therefore true, `CanSeek`/`CanGoNext`/`CanGoPrevious` false. Muted publishes as `Paused` rather than a zeroed volume, which is what a desktop widget draws a play button for. Reporting the read-only truth (`CanControl=false`) is spec-correct but makes the player invisible to **playerctl**, which skips any player whose `can-play` is false, and with it waybar/polybar, since those link `libplayerctl`.
 - Desktop writes are not applied locally. The MPRIS interface queues a `DesktopCommand`, the pair WS loop sends it as a `set_muted`/`set_volume` event, and the server fans the result back to every paired client (`PairControlMessage::SetMuted`/`SetVolume`), exactly like a TUI `m` keypress. That round trip is what lets a widget pause reach YouTube, which plays in the separate `late-webview` helper on its own pair WS, and it keeps CLI, helper, and sidebar convergent. It also means controls need a live pair socket, and the widget updates when the fan-out lands rather than instantly.
@@ -298,7 +301,7 @@ Raw mode:
 
 Shutdown invariant:
 - Native mode treats SSH channel `EOF` the same as `Close` for interactive-session shutdown.
-- Native and old modes must not run stdin forwarding in Tokio `spawn_blocking`: a thread blocked in `stdin.read()` cannot be aborted and can keep the runtime alive after the server has printed the farewell frame. Use a detached OS thread for stdin forwarding so process exit is controlled by the SSH completion task, not by the next local keypress.
+- Native and old modes must not run stdin forwarding in Tokio `spawn_blocking`: a thread blocked in `stdin.read()` cannot be aborted and can keep the runtime alive after the server has printed the farewell frame. Use a detached OS thread for stdin forwarding so process exit is controlled by the SSH completion task, not by the next local keypress. Native mode starts that thread once per run, not once per session, so a drain handoff never leaves two readers racing for the same keys.
 
 ---
 
@@ -342,7 +345,7 @@ scripts/run_prod_cli.sh
 ```
 
 Local end-to-end pairing needs:
-- `late-ssh` API reachable, usually `localhost:4000`
+- `late-ssh` API reachable, usually `localhost:4001`
 - `late-ssh` SSH reachable, usually `localhost:2222`
 - `late-web` stream proxy reachable, usually `localhost:3000/stream`
 - Icecast/Liquidsoap stack serving `/stream`

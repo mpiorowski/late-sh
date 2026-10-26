@@ -456,6 +456,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         translation_service: state.translation_service.clone(),
         summary_service: state.summary_service.clone(),
         paper_service: state.paper_service.clone(),
+        herald_service: state.herald_service.clone(),
         jobs_service: state.jobs_service.clone(),
         notification_service: state.notification_service.clone(),
         article_service: state.article_service.clone(),
@@ -498,6 +499,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         arcade_handle_service: state.arcade_handle_service.clone(),
         live_games: state.live_games.clone(),
         door_rc_service: state.door_rc_service.clone(),
+        games_hub_service: state.games_hub_service.clone(),
         initial_door_rcs,
         daily_service: state.daily_service.clone(),
         realm_service: state.realm_service.clone(),
@@ -627,5 +629,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_radio_station: late_core::models::user::extract_radio_station(&user.settings),
         initial_radio_slots: late_core::models::user::extract_radio_slots(&user.settings),
         is_draining: state.is_draining.clone(),
+        handoff_idle: state.config.handoff_idle,
+        resume: None,
     }
 }

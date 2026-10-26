@@ -1,9 +1,9 @@
 //! The Late Edition on the public web: the columns every login reads, on
 //! a page a link can point at, plus an RSS feed of them. Only what names
 //! no room's conversation goes out: the operator's `#announcements` as
-//! written, WHAT WE WERE READING, and OUTSIDE. The room columns stay
-//! inside the clubhouse. The press is `late-ssh/src/app/paper`; this
-//! module only reads the rows it prints.
+//! written, YESTERDAY ON LATE.SH, WHAT WE WERE READING, and OUTSIDE. The
+//! room columns stay inside the clubhouse. The press is
+//! `late-ssh/src/app/paper`; this module only reads the rows it prints.
 
 use std::collections::BTreeMap;
 
@@ -24,7 +24,7 @@ use late_core::{
         chat_room::ChatRoom,
         paper::{
             ANNOUNCEMENTS_LIMIT, ANNOUNCEMENTS_SLUG, EditionStep, PaperEdition, PaperSectionKind,
-            PaperSectionRow, PaperStatus,
+            PaperSectionRow,
         },
     },
 };
@@ -34,6 +34,8 @@ use crate::{
     error::AppError,
     metrics,
     pages::shared::{
+        board_png,
+        card::{self, CardLine, Ink},
         meta,
         text::{escape_html, split_paragraphs},
     },
@@ -44,7 +46,12 @@ pub(crate) fn router() -> Router<AppState> {
         .route("/paper", get(latest_handler))
         .route("/paper/feed.xml", get(feed_handler))
         .route("/paper/{date}", get(dated_handler))
+        .route("/paper/{date}/image.png", get(image_handler))
 }
+
+/// How much of each column the front-page card shows: its first
+/// paragraphs, cut to this many lines.
+const CARD_COLUMN_LINES: usize = 10;
 
 /// How many editions the feed carries.
 const FEED_EDITIONS: i64 = 20;
@@ -60,6 +67,7 @@ struct Page {
     /// announcement over a swept edition.
     printed: bool,
     announcements: Vec<Announcement>,
+    yesterday: Vec<String>,
     reading: Vec<String>,
     outside: Vec<String>,
     /// Paths of the nearest editions with a printed column either side.
@@ -146,6 +154,92 @@ async fn dated_handler(
     Ok((status, Html(page.render()?)).into_response())
 }
 
+/// The edition's front page as a card: the masthead, the dateline,
+/// YESTERDAY ON LATE.SH whole and the head of OUTSIDE and WHAT WE WERE
+/// READING, the picture the herald posts on a day with nothing drawn
+/// (`late-ssh/src/app/herald`). A path that is not a date, or an edition
+/// with no column printed, is 404.
+#[tracing::instrument(skip(state))]
+async fn image_handler(
+    State(state): State<AppState>,
+    Path(date): Path<String>,
+) -> Result<Response, AppError> {
+    metrics::record_page_view("paper_image", false);
+
+    let Ok(edition) = NaiveDate::parse_from_str(&date, "%Y-%m-%d") else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    let client = state
+        .db
+        .get()
+        .await
+        .context("failed to get db client for the paper card")?;
+    let issue = PaperEdition::load(&client, edition)
+        .await
+        .context("failed to load the edition")?;
+    let Some(lines) = front_page(
+        edition,
+        &ready_column(&issue, PaperSectionKind::Yesterday),
+        &ready_column(&issue, PaperSectionKind::Outside),
+        &ready_column(&issue, PaperSectionKind::Reading),
+    ) else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    let png = board_png::render_blocking(card::canvas(&lines))
+        .await
+        .context("failed to render the paper card")?;
+    Ok(board_png::response(png))
+}
+
+/// A column the press printed, as paragraphs; empty when it did not.
+fn ready_column(issue: &PaperEdition, kind: PaperSectionKind) -> Vec<String> {
+    match issue.ready_text(kind) {
+        Some(text) => split_paragraphs(text),
+        None => Vec::new(),
+    }
+}
+
+/// The front page's lines, `None` when no column printed. YESTERDAY's
+/// lines are numbers and few, so they all fit under the cap the prose
+/// columns are cut to.
+pub(crate) fn front_page(
+    edition: NaiveDate,
+    yesterday: &[String],
+    outside: &[String],
+    reading: &[String],
+) -> Option<Vec<CardLine>> {
+    if yesterday.is_empty() && outside.is_empty() && reading.is_empty() {
+        return None;
+    }
+    let mut lines = vec![
+        CardLine::new(Ink::Title, "THE LATE EDITION"),
+        CardLine::new(Ink::Dim, edition.format("%A, %-d %B %Y").to_string()),
+    ];
+    for (kind, column) in [
+        (PaperSectionKind::Yesterday, yesterday),
+        (PaperSectionKind::Outside, outside),
+        (PaperSectionKind::Reading, reading),
+    ] {
+        if column.is_empty() {
+            continue;
+        }
+        lines.push(CardLine::blank());
+        lines.push(CardLine::new(Ink::Heading, kind.heading()));
+        let mut room = CARD_COLUMN_LINES;
+        for text in column {
+            if room == 0 {
+                break;
+            }
+            let wrapped = card::paragraph(Ink::Body, text, room);
+            room -= wrapped.len();
+            lines.extend(wrapped);
+        }
+    }
+    lines.push(CardLine::blank());
+    lines.push(CardLine::new(Ink::Dim, "late.sh/paper"));
+    Some(lines)
+}
+
 /// RSS 2.0: one item per edition with a printed column, newest first.
 #[tracing::instrument(skip(state))]
 async fn feed_handler(State(state): State<AppState>) -> Result<Response, AppError> {
@@ -157,6 +251,14 @@ async fn feed_handler(State(state): State<AppState>) -> Result<Response, AppErro
         .await
         .context("failed to get db client for the paper feed")?;
     let before = tomorrow(Utc::now().date_naive());
+    let yesterday = PaperSectionRow::list_recent_ready(
+        &client,
+        PaperSectionKind::Yesterday,
+        before,
+        FEED_EDITIONS,
+    )
+    .await
+    .context("failed to list the yesterday columns")?;
     let reading = PaperSectionRow::list_recent_ready(
         &client,
         PaperSectionKind::Reading,
@@ -174,7 +276,7 @@ async fn feed_handler(State(state): State<AppState>) -> Result<Response, AppErro
     .await
     .context("failed to list the outside columns")?;
     let feed = Feed {
-        items: feed_items(&state.config.public_base_url, reading, outside),
+        items: feed_items(&state.config.public_base_url, yesterday, reading, outside),
         base_url: state.config.public_base_url.clone(),
     };
     Ok((
@@ -204,18 +306,13 @@ async fn read_page(client: &PooledClient, base: &str, edition: NaiveDate) -> any
         true => read_announcements(client, edition).await?,
         false => Vec::new(),
     };
-    let column = |kind: PaperSectionKind| {
-        issue
-            .sections
-            .iter()
-            .find(|section| section.section == kind && section.status == PaperStatus::Ready)
-            .and_then(|section| section.text.as_deref())
-            .map(split_paragraphs)
-            .unwrap_or_default()
-    };
-    let reading = column(PaperSectionKind::Reading);
-    let outside = column(PaperSectionKind::Outside);
-    let printed = !reading.is_empty() || !outside.is_empty() || !announcements.is_empty();
+    let yesterday = ready_column(&issue, PaperSectionKind::Yesterday);
+    let reading = ready_column(&issue, PaperSectionKind::Reading);
+    let outside = ready_column(&issue, PaperSectionKind::Outside);
+    let printed = !yesterday.is_empty()
+        || !reading.is_empty()
+        || !outside.is_empty()
+        || !announcements.is_empty();
     let earlier = PaperSectionRow::nearest_ready(client, edition, EditionStep::Earlier)
         .await
         .context("failed to find the earlier edition")?
@@ -235,6 +332,7 @@ async fn read_page(client: &PooledClient, base: &str, edition: NaiveDate) -> any
         dateline: edition.format("%A, %-d %B %Y").to_string(),
         printed,
         announcements,
+        yesterday,
         reading,
         outside,
         earlier,
@@ -279,31 +377,58 @@ async fn read_announcements(
         .collect())
 }
 
-/// One item per edition that printed either column, newest first, both
-/// columns in it when both printed.
+/// An edition's public columns as the feed found them.
+#[derive(Default)]
+struct FeedColumns {
+    yesterday: Option<String>,
+    reading: Option<String>,
+    outside: Option<String>,
+}
+
+/// One item per edition that printed any column, newest first, every
+/// printed column in it, in page order.
 fn feed_items(
     base: &str,
+    yesterday: Vec<(NaiveDate, String)>,
     reading: Vec<(NaiveDate, String)>,
     outside: Vec<(NaiveDate, String)>,
 ) -> Vec<FeedItem> {
-    let mut by_edition: BTreeMap<NaiveDate, (Option<String>, Option<String>)> = BTreeMap::new();
+    let mut by_edition: BTreeMap<NaiveDate, FeedColumns> = BTreeMap::new();
+    for (edition, text) in yesterday {
+        by_edition.entry(edition).or_default().yesterday = Some(text);
+    }
     for (edition, text) in reading {
-        by_edition.entry(edition).or_default().0 = Some(text);
+        by_edition.entry(edition).or_default().reading = Some(text);
     }
     for (edition, text) in outside {
-        by_edition.entry(edition).or_default().1 = Some(text);
+        by_edition.entry(edition).or_default().outside = Some(text);
     }
     by_edition
         .into_iter()
         .rev()
         .take(FEED_EDITIONS as usize)
-        .map(|(edition, (reading, outside))| {
+        .map(|(edition, columns)| {
             let mut description_html = String::new();
-            if let Some(text) = reading {
-                push_column(&mut description_html, "What we were reading", &text);
+            if let Some(text) = columns.yesterday {
+                push_column(
+                    &mut description_html,
+                    PaperSectionKind::Yesterday.title(),
+                    &text,
+                );
             }
-            if let Some(text) = outside {
-                push_column(&mut description_html, "Outside", &text);
+            if let Some(text) = columns.reading {
+                push_column(
+                    &mut description_html,
+                    PaperSectionKind::Reading.title(),
+                    &text,
+                );
+            }
+            if let Some(text) = columns.outside {
+                push_column(
+                    &mut description_html,
+                    PaperSectionKind::Outside.title(),
+                    &text,
+                );
             }
             FeedItem {
                 title: format!("The Late Edition, {}", edition.format("%-d %B %Y")),

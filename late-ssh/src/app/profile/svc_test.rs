@@ -489,6 +489,7 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             start_with_music_muted: false,
             landing_page: LandingPage::Zen,
             paper_at_login: true,
+            auto_restart: false,
             screensaver: late_core::models::user::Screensaver::Off,
             show_watch_chat: true,
             artboard_disclaimer: false,
@@ -528,6 +529,7 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
     assert_eq!(updated.terminal_images, TerminalImagesMode::Off);
     assert_eq!(updated.hidden_award_categories, hidden_awards);
     assert!(!updated.artboard_disclaimer);
+    assert!(!updated.auto_restart);
     assert_eq!(
         updated.screensaver,
         late_core::models::user::Screensaver::Off
@@ -540,6 +542,7 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
         serde_json::json!(false)
     );
     assert_eq!(saved.settings["screensaver"], serde_json::json!("off"));
+    assert_eq!(saved.settings["auto_restart"], serde_json::json!(false));
 }
 
 #[tokio::test]
@@ -588,6 +591,7 @@ async fn edit_profile_normalizes_username_before_persisting() {
             start_with_music_muted: false,
             landing_page: late_core::models::user::LandingPage::Clubhouse,
             paper_at_login: true,
+            auto_restart: true,
             screensaver: late_core::models::user::Screensaver::DEFAULT,
             show_watch_chat: true,
             artboard_disclaimer: true,
@@ -665,6 +669,7 @@ async fn edit_profile_preserves_unrelated_settings_keys() {
             start_with_music_muted: false,
             landing_page: late_core::models::user::LandingPage::Clubhouse,
             paper_at_login: true,
+            auto_restart: true,
             screensaver: late_core::models::user::Screensaver::DEFAULT,
             show_watch_chat: true,
             artboard_disclaimer: true,
@@ -953,6 +958,7 @@ async fn edit_profile_snapshots_stay_per_user() {
             start_with_music_muted: false,
             landing_page: late_core::models::user::LandingPage::Clubhouse,
             paper_at_login: true,
+            auto_restart: true,
             screensaver: late_core::models::user::Screensaver::DEFAULT,
             show_watch_chat: true,
             artboard_disclaimer: true,

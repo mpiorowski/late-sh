@@ -952,7 +952,7 @@ The target shape already exists in the tree and is the thing to copy: `app/deadc
 
 | Move | From | To | Size |
 |---|---|---|---|
-| Door-game enter/leave/launch, idle reaps, "return to hub on exit" | `state.rs` (22 fns), `tick.rs` (lines ~540-620), `input.rs` `handle_games_hub_input` + `launch_games_hub_selection` (256 lines) | `app/door/hub/{state,input,svc}.rs`, one `door::svc::tick(app)` | ~600 lines |
+| Door-game enter/leave, idle reaps, "return to hub on exit" (the hub's keys and launch are in `app/door/hub/input.rs` already) | `state.rs` (22 fns), `tick.rs` (lines ~540-620) | `app/door/hub/{state,svc}.rs`, one `door::svc::tick(app)` | ~350 lines |
 | Voice join/leave/mute/deafen, on-air consent, `voice_toggle_intent`, `handle_voice_join_result` | `state.rs` (12 fns) | `app/voice/{state,svc}.rs` (`voice/state.rs` is 54 lines today; the logic is at the root) | ~300 lines |
 | Image upload result, inline image polls, mod outputs, sheet save, requested-profile-open, debounced username click | `tick.rs` lines ~171-224 | `chat::svc::tick(app)` returning a `ChatTick { banner, screen_switch, open_profile, open_sheet }` | ~120 lines |
 | Daily-match room join on board load, lobby sync | `tick.rs` lines ~419-445 | `lobby::daily::svc::tick(app)` | ~30 lines |
@@ -1083,6 +1083,8 @@ Minimum viable design:
 - On session end, remove token ownership
 
 Do not scale `service-ssh` randomly before this exists. The proxy half already pays for itself at one replica: it closes Pain Point 10.
+
+`make start REPLICAS=2` reproduces the misrouting locally: two pods behind a copy of the edge, the pair websocket round-robined apart from the SSH connection. The Docker name the edge resolves (`ssh-pod`) lists draining pods too, as the peer Service with `publishNotReadyAddresses` would, so the forwarding can be built and checked there (root `CONTEXT.md`, Build, run, test).
 
 The app half runs in parallel and is the longer job: work the Pain Point 2 ledger row by row, in the order the transport design needs them (presence first, since sticky sessions alone do not make a round's roster right; ghost single-leader second, since duplicate bot replies are the first thing users would notice; the translation cap last). New features never add rows to that table (root CONTEXT.md, multi-replica rule); a switch still held in process memory becomes a row as it is touched (Pain Point 2).
 

@@ -189,6 +189,16 @@ impl ClientAudioState {
                 .any(|capability| capability == "video")
     }
 
+    /// The `reconnect` capability: a native-mode CLI that can take a drain
+    /// handoff (`app/handoff`) and dial the new pod on its own.
+    pub fn supports_reconnect(&self) -> bool {
+        self.client_kind == ClientKind::Cli
+            && self
+                .capabilities
+                .iter()
+                .any(|capability| capability == "reconnect")
+    }
+
     pub(crate) fn cli_usage_labels(&self) -> Option<(&'static str, &'static str)> {
         if self.client_kind != ClientKind::Cli {
             return None;
