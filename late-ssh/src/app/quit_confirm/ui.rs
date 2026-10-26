@@ -9,25 +9,43 @@ use ratatui::{
 use crate::app::common::theme;
 
 const MODAL_WIDTH: u16 = 60;
-const MODAL_HEIGHT: u16 = 11;
+/// Borders, breathing room, prompt and the scene's spacer; the key rows come
+/// on top (`footer_rows`).
+const MODAL_HEIGHT_ABOVE_FOOTER: u16 = 10;
+
+/// The key rows under the spacer: `q` / `Esc`, and `r restart` under `q`
+/// when the session's CLI can move it (`handoff::svc::can_request_move`).
+fn footer_rows(can_restart: bool) -> u16 {
+    if can_restart { 2 } else { 1 }
+}
+
+/// The modal grows by the restart row, so the spacer, and the scene in it,
+/// keep their size.
+fn popup_rect(modal_area: Rect, can_restart: bool) -> Rect {
+    centered_rect(
+        MODAL_WIDTH,
+        MODAL_HEIGHT_ABOVE_FOOTER + footer_rows(can_restart),
+        modal_area,
+    )
+}
 
 /// Compute the rect the sayonara sixel scene should occupy, centred in
 /// the modal's spacer area. Returns `None` when the modal is too small
-/// to fit the scene cleanly — the non-image render path covers that
+/// to fit the scene cleanly; the non-image render path covers that
 /// case automatically.
-pub(crate) fn sayonara_scene_area(modal_area: Rect) -> Option<Rect> {
+pub(crate) fn sayonara_scene_area(modal_area: Rect, can_restart: bool) -> Option<Rect> {
     use super::sayonara_sixel::{SAYONARA_DISPLAY_COLS, SAYONARA_DISPLAY_ROWS};
-    let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, modal_area);
+    let popup = popup_rect(modal_area, can_restart);
     let block = Block::default().borders(Borders::ALL);
     let inner = block.inner(popup);
     if inner.width < SAYONARA_DISPLAY_COLS || inner.height < SAYONARA_DISPLAY_ROWS + 2 {
         return None;
     }
     // Spacer sits between the prompt row (y = inner.y + 1) and the
-    // footer row (y = inner.bottom() - 1). Centre the scene there with
-    // a one-row gutter so it doesn't bleed into either.
+    // footer rows at the bottom. Centre the scene there with a one-row
+    // gutter so it doesn't bleed into either.
     let spacer_top = inner.y + 2;
-    let spacer_height = inner.height.saturating_sub(3);
+    let spacer_height = inner.height.saturating_sub(2 + footer_rows(can_restart));
     if spacer_height < SAYONARA_DISPLAY_ROWS {
         return None;
     }
@@ -41,8 +59,8 @@ pub(crate) fn sayonara_scene_area(modal_area: Rect) -> Option<Rect> {
     ))
 }
 
-pub(crate) fn draw(frame: &mut Frame, area: Rect) {
-    let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
+pub(crate) fn draw(frame: &mut Frame, area: Rect, can_restart: bool) {
+    let popup = popup_rect(area, can_restart);
     frame.render_widget(Clear, popup);
 
     let block = Block::default()
@@ -58,10 +76,10 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect) {
     frame.render_widget(block, popup);
 
     let layout = Layout::vertical([
-        Constraint::Length(1), // breathing room
-        Constraint::Length(1), // prompt
-        Constraint::Min(1),    // spacer
-        Constraint::Length(1), // footer
+        Constraint::Length(1),                        // breathing room
+        Constraint::Length(1),                        // prompt
+        Constraint::Min(1),                           // spacer
+        Constraint::Length(footer_rows(can_restart)), // footer
     ])
     .split(inner);
 
@@ -79,10 +97,16 @@ pub(crate) fn draw(frame: &mut Frame, area: Rect) {
     ])
     .split(layout[3]);
 
-    let left = Line::from(vec![
+    let mut left = vec![Line::from(vec![
         Span::styled("q", Style::default().fg(theme::AMBER_DIM())),
         Span::styled(" bye, I'll be back", Style::default().fg(theme::TEXT_DIM())),
-    ]);
+    ])];
+    if can_restart {
+        left.push(Line::from(vec![
+            Span::styled("r", Style::default().fg(theme::AMBER_DIM())),
+            Span::styled(" restart", Style::default().fg(theme::TEXT_DIM())),
+        ]));
+    }
     frame.render_widget(Paragraph::new(left), footer_cols[1]);
 
     let right = Line::from(vec![

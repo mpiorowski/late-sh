@@ -7,7 +7,7 @@ services:
       - postgres
       - otel-collector
 
-  service-ssh:
+  ssh-pod:
     environment:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
     depends_on:

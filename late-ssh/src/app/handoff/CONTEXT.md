@@ -8,15 +8,23 @@ radio never stops, and the session comes back on the page it was on.
 Everyone else (plain `ssh`, OpenSSH and subprocess CLI modes, CLIs from
 before this change) keeps the banner and the manual reconnect.
 
+The same move is on a key: the quit modal shows `r restart` under `q` when
+the session's CLI can take it (`svc::can_request_move`), and `r`
+(`svc::request_move`) sends the request at once, on a live pod as on a
+draining one. On a live pod the CLI gets a fresh session wherever the edge
+sends it, on the same page, with the radio still playing.
+
 ## Flow
 
 1. **The old pod decides** (`svc::tick`, every world tick). Only a draining
    pod (`App::is_draining`, set by the shutdown signal) looks further; there
    `HandoffCheck` is ready when the account's Tweaks row "Auto restart on
    update" is on (`users.settings.auto_restart`, default on), and
-   `last_active_at` is at least `HANDOFF_IDLE` (5 min) old. That clock moves
-   only on input from a person, never on a mouse move or a terminal probe
-   reply. A voice room, an open watch modal, or unsent text in the chat or
+   `last_active_at` is at least the profile's `Config::handoff_idle` old
+   (5 min in prod, 30 s in dev). That clock moves only on input from a
+   person: keys, clicks, drags, scrolls and pastes, never a bare mouse move,
+   a focus change or a terminal probe reply (`common/away.rs`,
+   `presence_input`). A voice room, an open watch modal, or unsent text in the chat or
    News composer (`ChatState::has_unsent_draft`) each hold the session in
    place: things a person does without typing. Active sessions are checked
    again every tick, so they move once they go quiet.
@@ -71,12 +79,14 @@ gates like a key press.
 
 ## Telemetry
 
-`late_ssh_drain_handoffs_total{stage}`: `sent` on the old pod, `unparsed` on
-the new one when the env arrives, `resumed` there once `pty_request` has
-built the session; `sent` minus `resumed` is the handoffs that never landed,
-those whose new session failed to start included. Logs: "asked an idle cli session to move to the new pod" (old pod),
-"resuming a session moved off a draining pod" (new pod), and the CLI's
-"drain handoff: ..." lines in its own log.
+`late_ssh_drain_handoffs_total{stage}`: `sent` on the old pod, `requested`
+there for an `r restart`, `unparsed` on the new one when the env arrives,
+`resumed` there once `pty_request` has built the session; `sent` plus
+`requested` minus `resumed` is the moves that never landed, those whose new
+session failed to start included. Logs: "asked an idle cli session to move
+to the new pod" and "asked a cli session to restart at the user's request"
+(old pod), "resuming a session moved off a draining pod" (new pod), and the
+CLI's "drain handoff: ..." lines in its own log.
 
 ## Gaps
 
@@ -85,6 +95,11 @@ those whose new session failed to start included. Logs: "asked an idle cli sessi
   hear it and stays on the banner.
 - Voice, video and an unsent draft block the handoff instead of moving
   with it.
+- A restart whose dial fails is invisible here: the CLI logs it and stays,
+  and the session shows "Restarting your session..." until the banner
+  expires. On a single-replica pod the new session counts against
+  `max_conns_per_ip` beside the old one until the old one closes, so a user
+  already at the limit cannot restart.
 - YouTube does not play straight through. The helper (`late-webview`) is
   paired to the old session's token, so the move stops it and the new
   pairing starts another: a few seconds of silence, then it seeks to the
@@ -96,9 +111,22 @@ Nothing shared: `is_draining` is the process's own lifecycle, `sent` is one
 session's flag, and the resume point travels through the client to whichever
 pod the CLI reaches.
 
+## Trying it locally
+
+`make start` runs late-ssh as a pod behind a local copy of the prod edge
+and rolls it out on every change, the way a deploy does (root `CONTEXT.md`,
+Build, run, test). Connect with `scripts/run_local_cli_native.sh` and leave
+it alone, then save a change or run `make fleet-rollout`. The dev profile
+moves a session after 30 s without input, counted from the last key press,
+so it can pass while the rollout builds; the session moves once the old pod
+drains and the 30 s are up.
+The `make start` output shows the old pod asking and the new one resuming,
+and `make fleet-ps` the old pod exiting with its last session.
+
 ## Tests
 
 `state_test.rs` pins the wire format and the check (the page mapping is
 `common/primitives_test.rs`);
-`svc_test.rs` drives an app through the send, the draft hold, the landing
-and the room hint against a disposable database. The CLI side is in `late-cli/src/ws_test.rs`.
+`svc_test.rs` drives an app through the send, the draft hold, the quit
+modal's restart, the landing and the room hint against a disposable
+database. The CLI side is in `late-cli/src/ws_test.rs`.

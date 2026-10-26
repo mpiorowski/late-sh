@@ -5,11 +5,6 @@ use uuid::Uuid;
 
 use crate::app::common::primitives::Page;
 
-/// How long a session goes without input from a person before a draining pod
-/// moves it. The page and the radio survive the move, so a wrong guess costs
-/// a redraw and a scroll position.
-pub(crate) const HANDOFF_IDLE: Duration = Duration::from_secs(5 * 60);
-
 /// The env a CLI carries the resume point back in, on the new connection and
 /// before its pty request. `late-cli/src/ssh.rs` spells it too.
 pub(crate) const RESUME_ENV: &str = "LATE_RESUME";
@@ -17,8 +12,11 @@ pub(crate) const RESUME_ENV: &str = "LATE_RESUME";
 /// The session's handoff bookkeeping. One handoff per session: once a CLI has
 /// been asked to move, a session that stays (the dial failed, or the CLI
 /// never acted on it) keeps the update banner.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub(crate) struct HandoffState {
+    /// How long the session goes without input from a person before a
+    /// draining pod moves it, from the profile (`Config::handoff_idle`).
+    pub(crate) idle_needed: Duration,
     pub(crate) sent: bool,
 }
 
@@ -120,6 +118,7 @@ impl ResumePoint {
 pub(crate) struct HandoffCheck {
     pub(crate) auto_restart: bool,
     pub(crate) idle: Duration,
+    pub(crate) idle_needed: Duration,
     pub(crate) in_voice: bool,
     pub(crate) watching_video: bool,
     pub(crate) composer_draft: bool,
@@ -128,7 +127,7 @@ pub(crate) struct HandoffCheck {
 impl HandoffCheck {
     pub(crate) fn ready(&self) -> bool {
         self.auto_restart
-            && self.idle >= HANDOFF_IDLE
+            && self.idle >= self.idle_needed
             && !self.in_voice
             && !self.watching_video
             && !self.composer_draft

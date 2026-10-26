@@ -1449,7 +1449,7 @@ fn overview_lines() -> Vec<String> {
         "  Tab / Shift+Tab   next / previous screen",
         "  0-7               jump straight to a screen",
         "  ?                 open this guide",
-        "  q                 open quit confirm (press q again to leave)",
+        "  q                 open quit confirm (press q again to leave; r restarts the session in the late CLI)",
         "  Ctrl+O            open Settings",
         "  Ctrl+G            open / close the Lobby (daily games + house tables)",
         "  Ctrl+F            open / close Zen",

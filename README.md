@@ -142,6 +142,14 @@ Personal keys (an AI key, a YouTube key) go in the gitignored `.env.local`,
 which wins over `.env`. `make start-instance2` runs a second instance from
 `.env.dev2`.
 
+`late-ssh` runs the way production runs it, as a pod behind a copy of the
+production SSH edge. A saved change that rebuilds the binary rolls out like a
+deploy: a new pod starts, and once it is ready the old one drains. Your open
+session stays on the old code behind the update banner until you reconnect,
+and a change that does not compile leaves the old pod serving.
+`make fleet-rollout` rolls out by hand, `make fleet-ps` lists the pods, and
+`make fleet-logs` follows them.
+
 The Zork door is enabled in the development profile. Build its vendored asset
 image once before building the Compose services (the door base images target
 amd64):

@@ -13,8 +13,9 @@ Artboard content disclaimer; everyone else sees the coffee cup.
 Rerunning restores the fixture pieces and their applause, including test
 changes made in the TUI. Existing accounts and other pieces are preserved.
 
-Run make start first so the database migrations have been applied. Restart
-service-ssh after seeding to refresh its cached splash, then reconnect.
+Run make start first so the database migrations have been applied. Roll out
+a fresh pod after seeding (make fleet-rollout) to refresh the cached splash,
+then reconnect.
 Test SSH keys are retained in tmp/artboard-seed-keys (gitignored).
 Optional environment: LATE_DB_USER, LATE_DB_NAME (both default to postgres).
 The usual COMPOSE_PROJECT_NAME and COMPOSE_FILE overrides are supported.
@@ -97,5 +98,5 @@ piece to applaud. Log in as any fixture account:
   ssh -o IdentitiesOnly=yes -i tmp/artboard-seed-keys/art_artist1 -p 2222 localhost
 Voters, moderators, and admins have matching keys in the same directory.
 Press A on the Artboard disclaimer, then reconnect to see the splash piece.
-Refresh the splash cache with: docker compose restart service-ssh
+Refresh the splash cache with: make fleet-rollout
 READY

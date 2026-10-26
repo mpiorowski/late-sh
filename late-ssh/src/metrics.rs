@@ -483,11 +483,14 @@ impl SessionClient {
 }
 
 /// One step of a drain handoff (`app/handoff`): the draining pod asked an idle
-/// session's CLI to move, and the new pod built a session on the resume point
-/// it carried back. `Sent` minus `Resumed` is the handoffs that never landed.
+/// session's CLI to move, or a person asked from the quit modal, and the new
+/// session was built on the resume point the CLI carried back. `Sent` plus
+/// `Requested` minus `Resumed` is the moves that never landed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandoffStage {
     Sent,
+    /// A person pressed `r restart` in the quit modal, on any pod.
+    Requested,
     Resumed,
     /// The CLI carried back a resume point this server cannot read (a format
     /// from another version); the session started as a fresh one.
@@ -4273,6 +4276,7 @@ mod inner {
     fn handoff_stage_label(stage: HandoffStage) -> &'static str {
         match stage {
             HandoffStage::Sent => "sent",
+            HandoffStage::Requested => "requested",
             HandoffStage::Resumed => "resumed",
             HandoffStage::Unparsed => "unparsed",
         }
@@ -4284,7 +4288,7 @@ mod inner {
             meter()
                 .u64_counter("late_ssh_drain_handoffs_total")
                 .with_description(
-                    "Drain handoffs by stage: idle CLI sessions a draining pod moved, and the sessions the new pod resumed",
+                    "Drain handoffs by stage: idle CLI sessions a draining pod moved, CLI sessions a person restarted from the quit modal, and the sessions resumed from either",
                 )
                 .build()
         })

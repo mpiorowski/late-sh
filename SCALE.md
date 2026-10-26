@@ -1084,6 +1084,8 @@ Minimum viable design:
 
 Do not scale `service-ssh` randomly before this exists. The proxy half already pays for itself at one replica: it closes Pain Point 10.
 
+`make start REPLICAS=2` reproduces the misrouting locally: two pods behind a copy of the edge, the pair websocket round-robined apart from the SSH connection. The Docker name the edge resolves (`ssh-pod`) lists draining pods too, as the peer Service with `publishNotReadyAddresses` would, so the forwarding can be built and checked there (root `CONTEXT.md`, Build, run, test).
+
 The app half runs in parallel and is the longer job: work the Pain Point 2 ledger row by row, in the order the transport design needs them (presence first, since sticky sessions alone do not make a round's roster right; ghost single-leader second, since duplicate bot replies are the first thing users would notice; the translation cap last). New features never add rows to that table (root CONTEXT.md, multi-replica rule); a switch still held in process memory becomes a row as it is touched (Pain Point 2).
 
 ### 9. Add PgBouncer

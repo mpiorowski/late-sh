@@ -548,6 +548,16 @@ impl PairedClientRegistry {
             .is_some_and(|entries| entries.iter().any(|entry| entry.state.supports_video()))
     }
 
+    /// True when a paired CLI on `token` advertises `reconnect`: the quit
+    /// modal offers a restart only then. Scans every entry, like
+    /// `has_voice_cli`.
+    pub fn has_reconnect_cli(&self, token: &str) -> bool {
+        let clients = self.clients.lock_recover();
+        clients
+            .get(token)
+            .is_some_and(|entries| entries.iter().any(|entry| entry.state.supports_reconnect()))
+    }
+
     /// The most recently registered CLI's reported state on `token`, if a
     /// CLI is paired: the watch setup box reads its mode, platform, and
     /// `video_blockers` from it. `None` is a plain SSH session.

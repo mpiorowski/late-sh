@@ -136,6 +136,7 @@ pub(crate) fn dashboard_home_selected(
 /// non-image render still draws the existing prompt + footer.
 fn push_quit_confirm_sayonara_placement(
     modal_area: Rect,
+    can_restart: bool,
     protocol: Option<crate::app::files::terminal_image::TerminalImageProtocol>,
     terminal_images: &mut crate::app::files::terminal_image::TerminalImageFrame,
 ) {
@@ -146,7 +147,7 @@ fn push_quit_confirm_sayonara_placement(
     let Some(protocol) = protocol else {
         return;
     };
-    let Some(area) = sayonara_scene_area(modal_area) else {
+    let Some(area) = sayonara_scene_area(modal_area, can_restart) else {
         return;
     };
     let data = match sayonara_terminal_image(protocol) {
@@ -349,6 +350,8 @@ struct DrawContext<'a> {
     show_settings: bool,
     settings_modal_state: &'a settings_modal::state::SettingsModalState,
     show_quit_confirm: bool,
+    /// The quit modal offers `r restart` (`handoff::svc::can_request_move`).
+    quit_confirm_can_restart: bool,
     show_mod_modal: bool,
     show_hub_modal: bool,
     aquarium_state: &'a crate::app::hub::aquarium::state::AquariumState,
@@ -678,6 +681,9 @@ impl App {
         let eq_state =
             crate::app::audio::viz::eq_state(paired_client.as_ref(), self.audio.live_bands());
         let paired_cli_supports_voice = self.paired_cli_supports_voice();
+        // Asked only while the modal is up: it takes the registry lock.
+        let quit_confirm_can_restart =
+            self.show_quit_confirm && crate::app::handoff::svc::can_request_move(self);
         let banner = self.active_banner().cloned();
         // First contact, stage 1 (`app/deadchannel/haunt`): a live glitch
         // burst swaps a clock character or two for the glyph alphabet.
@@ -1829,6 +1835,7 @@ impl App {
                         show_settings: self.show_settings,
                         settings_modal_state: &self.settings_modal_state,
                         show_quit_confirm: self.show_quit_confirm,
+                        quit_confirm_can_restart,
                         show_mod_modal: self.show_mod_modal,
                         show_hub_modal: self.show_hub_modal,
                         aquarium_state: &self.aquarium_state,
@@ -2975,9 +2982,10 @@ impl App {
         }
 
         if ctx.show_quit_confirm {
-            quit_confirm::ui::draw(frame, inner);
+            quit_confirm::ui::draw(frame, inner, ctx.quit_confirm_can_restart);
             push_quit_confirm_sayonara_placement(
                 inner,
+                ctx.quit_confirm_can_restart,
                 ctx.terminal_image_protocol,
                 terminal_images,
             );

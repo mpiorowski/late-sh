@@ -486,6 +486,9 @@ pub struct SessionConfig {
 
     /// Server state
     pub is_draining: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// How long this session goes quiet before a draining pod moves it
+    /// (`Config::handoff_idle`).
+    pub handoff_idle: std::time::Duration,
     /// Where this session was on the draining pod a CLI moved it off
     /// (`app/handoff`), read from its `LATE_RESUME` env. `None` is a login.
     pub resume: Option<crate::app::handoff::state::ResumePoint>,
@@ -2061,7 +2064,10 @@ impl App {
             sent_away: false,
             away: false,
             is_draining: config.is_draining,
-            handoff: crate::app::handoff::state::HandoffState::default(),
+            handoff: crate::app::handoff::state::HandoffState {
+                idle_needed: config.handoff_idle,
+                sent: false,
+            },
             icon_picker_open: false,
             icon_picker_state: super::icon_picker::IconPickerState::default(),
             icon_catalog: None,

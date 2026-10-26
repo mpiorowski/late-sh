@@ -344,8 +344,11 @@ ENV CARGO_TARGET_DIR=/app/target
 # ==============================================================================
 # Stage 3c: Dev targets
 # ==============================================================================
+# A late-ssh pod (the compose `ssh-pod` service): scripts/fleet.sh builds each
+# generation in it and starts every pod with its generation's binary as the
+# command, so the image has none of its own to fall back on.
 FROM dev-base AS dev-ssh
-CMD ["cargo", "watch", "-w", "late-ssh", "-x", "run --features otel -p late-ssh"]
+CMD ["sh", "-c", "echo 'a late-ssh pod runs the binary scripts/fleet.sh passes it' >&2; exit 1"]
 
 FROM dev-base AS dev-web
 CMD ["bash", "-c", "cd /app/late-web && npm install && npm run tailwind:build && (npm run tailwind:watch &) && cd /app && cargo watch -w late-web -x 'run --features otel -p late-web'"]

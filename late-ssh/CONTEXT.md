@@ -263,8 +263,9 @@ Pair WS, client to server: `heartbeat`; `viz` (16 bands; older CLIs send 8 and
 mute, volume; legacy `browser`/`webview` spellings still parse); `latency`
 (telemetry only, `late_ssh_cli_latency_seconds{kind,platform}`; deploy the
 server before a CLI that sends a new event). Server to client: `toggle_mute`,
-`volume_up`, `volume_down`, `reconnect` (a drain handoff, only to a CLI that
-advertises the `reconnect` capability; `app/handoff`), plus the audio-source,
+`volume_up`, `volume_down`, `reconnect` (a drain handoff or the quit modal's
+`r restart`, only to a CLI that advertises the `reconnect` capability;
+`app/handoff`), plus the audio-source,
 clipboard, YouTube and voice messages owned by `app/audio`, `app/voice` and
 `late-cli`.
 

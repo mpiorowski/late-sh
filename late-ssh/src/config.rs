@@ -168,6 +168,11 @@ pub struct Config {
     pub max_conns_global: usize,
     pub max_conns_per_ip: usize,
     pub ssh_idle_timeout: u64,
+    /// How long a session goes without input from a person before a
+    /// draining pod moves it to the new one (`app/handoff`). The page and the
+    /// radio survive the move, so a wrong guess costs a redraw and a scroll
+    /// position.
+    pub handoff_idle: std::time::Duration,
     pub server_key_path: PathBuf,
     pub frame_drop_log_every: u64,
     pub ssh_max_attempts_per_ip: usize,
@@ -442,6 +447,9 @@ impl Config {
             max_conns_global: 10_000,
             max_conns_per_ip: 3,
             ssh_idle_timeout: 3600,
+            // Short, so a local rollout (`make start`) moves a native CLI
+            // session within a minute of going quiet, not five.
+            handoff_idle: std::time::Duration::from_secs(30),
             server_key_path: PathBuf::from("/app/server_key"),
             frame_drop_log_every: 100,
             ssh_max_attempts_per_ip: 30,
@@ -559,6 +567,7 @@ impl Config {
             max_conns_global: 1000,
             max_conns_per_ip: 3,
             ssh_idle_timeout: 3600,
+            handoff_idle: std::time::Duration::from_secs(5 * 60),
             server_key_path: PathBuf::from("/app/keys/server_key"),
             frame_drop_log_every: 100,
             ssh_max_attempts_per_ip: 30,
@@ -748,7 +757,8 @@ impl Config {
             max_global = self.max_conns_global,
             max_per_ip = self.max_conns_per_ip,
             idle_timeout_secs = self.ssh_idle_timeout,
-            "limits: max simultaneous SSH sessions (global / per-IP), idle disconnect"
+            handoff_idle_secs = self.handoff_idle.as_secs(),
+            "limits: max simultaneous SSH sessions (global / per-IP), idle disconnect, quiet time before a drain handoff"
         );
         tracing::info!(
             ssh_max_attempts = self.ssh_max_attempts_per_ip,

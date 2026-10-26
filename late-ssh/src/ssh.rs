@@ -1186,6 +1186,7 @@ impl russh::server::Handler for ClientHandler {
 
             // Server state
             is_draining: self.state.is_draining.clone(),
+            handoff_idle: self.state.config.handoff_idle,
             resume,
         })
         .context("failed to initialize app for PTY session")?;

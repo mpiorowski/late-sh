@@ -275,6 +275,18 @@ query gotchas: `infra/RUNBOOK.md`.
   localhost -p 2222`. The dev profiles pin compose hostnames, so the apps run
   only inside compose. Config is compiled per profile (`late-ssh/CONTEXT.md`,
   Config).
+- late-ssh runs locally the way prod runs it: pods behind a local copy of the
+  prod SSH edge (`docker-compose.yml` `service-ssh` and `ssh-pod`,
+  `scripts/fleet.sh`). `make start` builds the working tree as a generation,
+  then watches `late-ssh`, `late-core`, `assets` and the Cargo files: a
+  change that rebuilds the binary rolls out a new generation as a deploy
+  does, the new pod ready before the old one gets SIGTERM and drains, and a
+  build or start that fails leaves the old pod serving. An open session stays
+  on the old code behind the update banner until you reconnect. From another
+  terminal, `make fleet-rollout` rolls out even an unchanged binary, and
+  `make fleet-ps`, `fleet-logs` and `fleet-expire` (the 6 h grace deadline)
+  work the pods. `REPLICAS=2` reproduces the pair websocket misrouting in
+  `SCALE.md`, Pain Point 2.
 - Fixtures: `make seed-artboard`, `seed-calendar`, `seed-paper`,
   `seed-irc-history`, `seed-leaderboard`, each described in its domain's
   context. Chips for a local account come from the admin `/grant` command.

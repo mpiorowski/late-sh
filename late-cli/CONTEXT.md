@@ -66,7 +66,7 @@ Runtime flow:
 5. Open the real SSH TUI session. Old mode's process is already running with input gated until the token arrives; native mode opens the shell right after the token and attaches stdin once it is up.
 6. Connect `/api/ws/pair?token=...` and send visualizer frames plus client state.
 7. Apply paired control messages by muting/unmuting or changing local volume.
-8. Native mode only: on a drain handoff, redial the new server and repeat from step 4 with the audio still playing.
+8. Native mode only: on a drain handoff or a restart from the quit modal, redial the server and repeat from step 4 with the audio still playing.
 
 OpenSSH mode differs slightly: it authenticates and fetches the token first through a ControlMaster, starts audio and WebSocket pairing, then opens the interactive shell through the same master connection.
 
@@ -345,7 +345,7 @@ scripts/run_prod_cli.sh
 ```
 
 Local end-to-end pairing needs:
-- `late-ssh` API reachable, usually `localhost:4000`
+- `late-ssh` API reachable, usually `localhost:4001`
 - `late-ssh` SSH reachable, usually `localhost:2222`
 - `late-web` stream proxy reachable, usually `localhost:3000/stream`
 - Icecast/Liquidsoap stack serving `/stream`

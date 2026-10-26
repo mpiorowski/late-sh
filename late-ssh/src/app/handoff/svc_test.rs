@@ -5,13 +5,14 @@ use late_core::models::{chat_room::ChatRoom, chat_room_member::ChatRoomMember, u
 use late_core::test_utils::create_test_user;
 use tokio::sync::mpsc;
 
-use super::state::{HANDOFF_IDLE, ResumePoint};
+use super::state::ResumePoint;
 use crate::app::audio::client_state::{ClientAudioState, ClientKind};
 use crate::app::common::primitives::{Page, Screen};
 use crate::app::state::App;
 use crate::paired_clients::{PAIR_CONTROL_QUEUE_CAP, PairControlMessage};
 use crate::test_helpers::{
-    SessionWorld, make_app_in_world, make_app_with_paired_client, new_test_db, wait_for_app,
+    SessionWorld, make_app_in_world, make_app_with_paired_client, new_test_db, render_plain,
+    wait_for_app, wait_for_render_contains,
 };
 
 /// Pair a native CLI that advertises `reconnect` on the app's token, the way
@@ -64,7 +65,7 @@ async fn a_quiet_session_on_a_draining_pod_asks_its_cli_once_to_move_with_its_pa
 
     // Quiet, but the pod is not draining.
     app.last_active_at = Instant::now()
-        .checked_sub(HANDOFF_IDLE + Duration::from_secs(1))
+        .checked_sub(app.handoff.idle_needed + Duration::from_secs(1))
         .expect("a machine booted more than five minutes ago");
     app.tick();
     assert_eq!(
@@ -84,7 +85,7 @@ async fn a_quiet_session_on_a_draining_pod_asks_its_cli_once_to_move_with_its_pa
     );
 
     app.last_active_at = Instant::now()
-        .checked_sub(HANDOFF_IDLE + Duration::from_secs(1))
+        .checked_sub(app.handoff.idle_needed + Duration::from_secs(1))
         .expect("a machine booted more than five minutes ago");
     app.tick();
     let sent = reconnects(&mut cli_rx);
@@ -105,6 +106,42 @@ async fn a_quiet_session_on_a_draining_pod_asks_its_cli_once_to_move_with_its_pa
         Vec::<String>::new(),
         "one handoff per session"
     );
+}
+
+#[tokio::test]
+async fn the_quit_modal_restarts_a_session_on_a_live_pod_only_through_a_cli_that_can_move() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "handoff-restart-it").await;
+    let (mut app, mut plain_rx) =
+        make_app_with_paired_client(test_db.db.clone(), user.id, "handoff-restart-flow-it");
+    app.set_screen(Screen::Arcade);
+
+    app.handle_input(b"q");
+    wait_for_render_contains(&mut app, "bye, I'll be back").await;
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("r restart"),
+        "a client without the capability is not offered a restart; frame={frame:?}"
+    );
+    app.handle_input(b"r");
+    assert!(
+        app.show_quit_confirm,
+        "r does nothing without a capable cli"
+    );
+    assert_eq!(reconnects(&mut plain_rx), Vec::<String>::new());
+
+    let mut cli_rx = pair_reconnect_cli(&app);
+    wait_for_render_contains(&mut app, "r restart").await;
+    app.handle_input(b"r");
+    let sent = reconnects(&mut cli_rx);
+    let [resume] = sent.as_slice() else {
+        panic!("the cli is asked to move once, got {sent:?}");
+    };
+    let point = ResumePoint::parse(resume).expect("a resume point this server reads");
+    assert_eq!(point.page, Page::Arcade);
+    assert!(!app.show_quit_confirm, "the modal closes on a restart");
+    assert!(app.is_running(), "the session stays up until the cli moves");
+    wait_for_render_contains(&mut app, "Restarting your session").await;
 }
 
 #[tokio::test]
@@ -210,7 +247,7 @@ async fn an_unsent_news_draft_holds_a_quiet_session_until_it_is_dropped() {
         app.chat.news.composer_push(ch);
     }
     app.last_active_at = Instant::now()
-        .checked_sub(HANDOFF_IDLE + Duration::from_secs(1))
+        .checked_sub(app.handoff.idle_needed + Duration::from_secs(1))
         .expect("a machine booted more than five minutes ago");
 
     app.tick();

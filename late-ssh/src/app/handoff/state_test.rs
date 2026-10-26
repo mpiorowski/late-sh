@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use uuid::Uuid;
 
-use super::state::{HANDOFF_IDLE, HandoffCheck, ResumePoint};
+use super::state::{HandoffCheck, ResumePoint};
 use crate::app::common::primitives::Page;
 
 const PAGES: [Page; 9] = [
@@ -52,10 +52,13 @@ fn a_resume_point_this_server_did_not_write_is_refused() {
     }
 }
 
+const IDLE_NEEDED: Duration = Duration::from_secs(5 * 60);
+
 fn idle() -> HandoffCheck {
     HandoffCheck {
         auto_restart: true,
-        idle: HANDOFF_IDLE,
+        idle: IDLE_NEEDED,
+        idle_needed: IDLE_NEEDED,
         in_voice: false,
         watching_video: false,
         composer_draft: false,
@@ -63,13 +66,19 @@ fn idle() -> HandoffCheck {
 }
 
 #[test]
-fn a_quiet_session_on_a_draining_pod_moves_at_five_minutes() {
+fn a_quiet_session_on_a_draining_pod_moves_once_quiet_for_the_profile_idle() {
     assert!(idle().ready());
     let just_short = HandoffCheck {
-        idle: HANDOFF_IDLE - Duration::from_secs(1),
+        idle: IDLE_NEEDED - Duration::from_secs(1),
         ..idle()
     };
     assert!(!just_short.ready());
+    let shorter_profile = HandoffCheck {
+        idle: Duration::from_secs(30),
+        idle_needed: Duration::from_secs(30),
+        ..idle()
+    };
+    assert!(shorter_profile.ready());
 }
 
 #[test]
