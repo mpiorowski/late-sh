@@ -5087,8 +5087,9 @@ impl ChatService {
         let existed = ChatRoom::find_topic_room(&client, "public", slug)
             .await?
             .is_some();
+        // A new room is created without auto-join. An existing one keeps
+        // whatever a mod set: `/join` on a filled room must not unfill it.
         let room = ChatRoom::get_or_create_public_room(&client, slug).await?;
-        ChatRoom::set_auto_join(&client, room.id, false).await?;
         if !existed {
             ChatRoom::set_creator(&client, room.id, user_id).await?;
         }
