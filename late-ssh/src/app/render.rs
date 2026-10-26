@@ -773,10 +773,6 @@ impl App {
             .unwrap_or(&[]);
         let dashboard_selected_image_message = shell_active_room
             .is_some_and(|room_id| self.chat.selected_message_has_inline_image_in_room(room_id));
-        let dashboard_room_effects = shell_active_room
-            .and_then(|room_id| self.shop_state.active_room_effects().get(&room_id))
-            .map(Vec::as_slice)
-            .unwrap_or_default();
         let dashboard_active_poll =
             shell_active_room.and_then(|room_id| self.chat.active_poll_for_room(room_id));
         // The live games on the watchable doors: the hub rail's live rows,
@@ -953,7 +949,6 @@ impl App {
             name_flicker,
             translations: &self.chat.translations,
             translation_hidden: &self.chat.translation_hidden,
-            active_room_effects: dashboard_room_effects,
             active_poll: dashboard_active_poll,
             live_strip: dashboard_live_strip,
             live_strip_hit: &self.live.hit,

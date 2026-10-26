@@ -9,7 +9,7 @@ use late_core::models::{
 use ratatui::{
     Frame,
     layout::{Constraint, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
 };
@@ -167,7 +167,6 @@ pub struct DashboardChatView<'a> {
     pub name_flicker: Option<(Uuid, u64)>,
     pub translations: &'a HashMap<Uuid, TranslationDisplay>,
     pub translation_hidden: &'a HashSet<Uuid>,
-    pub active_room_effects: &'a [ActiveChatRoomEffect],
     pub active_poll: Option<&'a ActiveChatPoll>,
     /// The #lounge live strip (`app/live/`): one thing that just happened
     /// in the house, drawn above the poll strip. `None` when nothing is
@@ -764,122 +763,6 @@ fn draw_activity_ticker(
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_room_page_effects(frame: &mut Frame, area: Rect, effects: &[ActiveChatRoomEffect]) {
-    if effects.is_empty() || area.is_empty() {
-        return;
-    }
-    if has_room_effect(effects, "room_glow") {
-        draw_room_glow(frame, area);
-    }
-    if has_room_effect(effects, "room_pulse") {
-        draw_room_pulse(frame, area);
-    }
-    if has_room_effect(effects, "room_spark") {
-        draw_room_sparkles(frame, area);
-    }
-}
-
-fn draw_room_glow(frame: &mut Frame, area: Rect) {
-    if area.width < 4 || area.height < 2 {
-        return;
-    }
-    // A warm halo that breathes in from the edges. It only tints the
-    // background of the outer ring, never stamps glyphs, so text (including
-    // the first message) stays fully readable underneath the light.
-    let phase = Utc::now().timestamp_millis().rem_euclid(2600) as f32 / 2600.0;
-    let breath = 0.5 - 0.5 * (phase * std::f32::consts::TAU).cos();
-    let glow = theme::AMBER_GLOW();
-    let buf = frame.buffer_mut();
-    let max_x = area.right().saturating_sub(1);
-    let max_y = area.bottom().saturating_sub(1);
-    for y in area.y..area.bottom() {
-        for x in area.x..area.right() {
-            let left = x.saturating_sub(area.x);
-            let right = max_x.saturating_sub(x);
-            let top = y.saturating_sub(area.y);
-            let bottom = max_y.saturating_sub(y);
-            let edge_distance = left.min(right).min(top).min(bottom);
-            if edge_distance > 1 {
-                continue;
-            }
-            let base = if edge_distance == 0 { 0.30 } else { 0.14 };
-            let strength = base + 0.10 * breath;
-            if let Some(cell) = buf.cell_mut((x, y)) {
-                cell.set_bg(blend_room_glow(cell.bg, glow, strength));
-            }
-        }
-    }
-}
-
-fn blend_room_glow(base: Color, glow: Color, t: f32) -> Color {
-    let base = match base {
-        Color::Rgb(..) => base,
-        _ => theme::BG_CANVAS(),
-    };
-    match (base, glow) {
-        (Color::Rgb(br, bg, bb), Color::Rgb(gr, gg, gb)) => {
-            let mix = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t).round() as u8;
-            Color::Rgb(mix(br, gr), mix(bg, gg), mix(bb, gb))
-        }
-        _ => base,
-    }
-}
-
-fn draw_room_pulse(frame: &mut Frame, area: Rect) {
-    if area.width < 4 || area.height < 2 {
-        return;
-    }
-    let tick = Utc::now().timestamp_millis().div_euclid(120) as u16;
-    let wave_x = area.x + tick.wrapping_mul(3) % area.width;
-    let wave_y = area.y + tick % area.height;
-    let buf = frame.buffer_mut();
-    for x in area.x..area.right() {
-        if x.wrapping_add(tick) % 2 == 0
-            && let Some(cell) = buf.cell_mut((x, wave_y))
-        {
-            cell.set_symbol("·").set_fg(theme::SUCCESS());
-        }
-    }
-    for y in area.y..area.bottom() {
-        if y.wrapping_add(tick) % 2 == 0
-            && let Some(cell) = buf.cell_mut((wave_x, y))
-        {
-            cell.set_symbol("·").set_fg(theme::AMBER_DIM());
-        }
-    }
-}
-
-fn draw_room_sparkles(frame: &mut Frame, area: Rect) {
-    if area.width < 4 || area.height < 2 {
-        return;
-    }
-    const GLYPHS: [&str; 4] = ["*", "+", "✦", "·"];
-    let seed = Utc::now().timestamp_millis().div_euclid(180) as u64;
-    let cell_count = u64::from(area.width) * u64::from(area.height);
-    let sparkle_count = (cell_count / 70).clamp(8, 36);
-    let buf = frame.buffer_mut();
-    for index in 0..sparkle_count {
-        let mixed = seed
-            .wrapping_mul(1_103_515_245)
-            .wrapping_add(index.wrapping_mul(2_654_435_761))
-            .wrapping_add(12_345);
-        let x = area.x + (mixed % u64::from(area.width)) as u16;
-        let y = area.y + ((mixed / 97) % u64::from(area.height)) as u16;
-        if let Some(cell) = buf.cell_mut((x, y)) {
-            let glyph = GLYPHS[(mixed as usize) % GLYPHS.len()];
-            cell.set_symbol(glyph).set_fg(room_sparkle_color(mixed));
-        }
-    }
-}
-
-fn room_sparkle_color(seed: u64) -> Color {
-    match seed % 3 {
-        0 => theme::AMBER_GLOW(),
-        1 => theme::SUCCESS(),
-        _ => theme::TEXT_BRIGHT(),
-    }
-}
-
 fn split_poll_and_messages(area: Rect, poll: Option<&ActiveChatPoll>) -> (Option<Rect>, Rect) {
     let Some(poll) = poll else {
         return (None, area);
@@ -1366,7 +1249,6 @@ pub fn draw_dashboard_chat_card(
         draw_poll_strip(frame, poll_area, poll);
     }
     frame.render_widget(Paragraph::new(lines), messages_area);
-    draw_room_page_effects(frame, messages_area, view.active_room_effects);
     // Only publish the chat-scroll hit layout when nothing is painted on
     // top of the messages (overlay or image modal) — those intercept
     // clicks via their own input paths, so a stale layout here would
@@ -5561,14 +5443,7 @@ fn draw_selected_content(
         {
             draw_poll_strip(frame, poll_area, poll);
         }
-        let mut selected_room_effects: &[ActiveChatRoomEffect] = &[];
         let message_lines: Vec<Line> = if let Some((room, messages)) = selected_room {
-            let active_effects = view
-                .active_room_effects
-                .get(&room.id)
-                .map(Vec::as_slice)
-                .unwrap_or(&[]);
-            selected_room_effects = active_effects;
             let height = message_render_area.height.max(1) as usize;
             let width = message_render_area.width.max(1) as usize;
 
@@ -5638,7 +5513,6 @@ fn draw_selected_content(
 
         let messages_paragraph = Paragraph::new(message_lines);
         frame.render_widget(messages_paragraph, message_render_area);
-        draw_room_page_effects(frame, message_render_area, selected_room_effects);
         if let (Some(slot), Some(hits)) = (view.chat_hit_slot, chat_hits)
             && view.overlay.is_none()
             && view.image_modal.is_none()

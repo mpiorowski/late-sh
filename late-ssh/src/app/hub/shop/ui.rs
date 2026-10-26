@@ -210,14 +210,14 @@ fn item_list_rows<'a>(
 }
 
 /// The Chat tab's three groups, in the order `visible_items` sorts them: the
-/// name colors, the title, then the one-shot consumables.
+/// name colors, the title, then the room consumable (Room Bump).
 fn chat_section_label(item: &ShopCatalogItem) -> &'static str {
     if item.is_username_effect() {
         "Name effects"
     } else if item.is_title_rental() {
         "Title"
     } else {
-        "Consumables"
+        "Room"
     }
 }
 
@@ -494,12 +494,6 @@ fn draw_item_detail(
             lines.push(Line::from(vec![
                 Span::raw("  effect "),
                 Span::styled(effect.clone(), Style::default().fg(theme::TEXT_DIM())),
-            ]));
-        }
-        if item.daily_limited {
-            lines.push(Line::from(vec![
-                Span::raw("  limit  "),
-                Span::styled("once per UTC day", Style::default().fg(theme::TEXT_DIM())),
             ]));
         }
         if item.requires_room {
@@ -855,12 +849,6 @@ fn draw_room_effect_confirm(frame: &mut Frame, area: Rect, pending: &PendingRoom
         lines.push(Line::from(vec![
             Span::raw("  effect   "),
             Span::styled(effect_kind.clone(), Style::default().fg(theme::TEXT_DIM())),
-        ]));
-    }
-    if pending.daily_limited {
-        lines.push(Line::from(vec![
-            Span::raw("  limit    "),
-            Span::styled("once per UTC day", Style::default().fg(theme::TEXT_DIM())),
         ]));
     }
     lines.push(Line::from(""));

@@ -230,7 +230,6 @@ pub enum PurchaseStatus {
     AlreadyOwned,
     InsufficientFunds,
     RequiresAquarium,
-    DailyLimitReached,
     /// A fish or plant the user already owns the cap of
     /// (`TankStockKind::cap`), in the water and parked together.
     OwnedCapReached,
@@ -458,25 +457,6 @@ async fn purchase_item_by_sku_inner(
             });
         }
 
-        if has_reached_daily_purchase_limit(&tx, user_id, &item).await? {
-            tx.commit().await?;
-            return Ok(PurchaseWithEffectResult {
-                purchase: Some(PurchaseResult {
-                    status: PurchaseStatus::DailyLimitReached,
-                    item,
-                    balance,
-                    quantity,
-                    active_quantity,
-                }),
-                refresh_all_active_users: false,
-                username_effect: None,
-                bonsai_decay_protection: None,
-                aquarium_shield: None,
-                badge_rental: None,
-                title_rental: None,
-            });
-        }
-
         if balance < item.price_chips {
             tx.commit().await?;
             return Ok(PurchaseWithEffectResult {
@@ -555,25 +535,6 @@ async fn purchase_item_by_sku_inner(
             aquarium_shield: activated_aquarium_shield,
             badge_rental: activated_badge_rental,
             title_rental: activated_title_rental,
-        });
-    }
-
-    if has_reached_daily_purchase_limit(&tx, user_id, &item).await? {
-        tx.commit().await?;
-        return Ok(PurchaseWithEffectResult {
-            purchase: Some(PurchaseResult {
-                status: PurchaseStatus::DailyLimitReached,
-                item,
-                balance,
-                quantity: 0,
-                active_quantity: 0,
-            }),
-            refresh_all_active_users: false,
-            username_effect: None,
-            bonsai_decay_protection: None,
-            aquarium_shield: None,
-            badge_rental: None,
-            title_rental: None,
         });
     }
 
@@ -1378,42 +1339,6 @@ pub async fn notify_user_shop_changed(client: &impl GenericClient, user_id: Uuid
         )
         .await?;
     Ok(())
-}
-
-async fn has_reached_daily_purchase_limit(
-    tx: &tokio_postgres::Transaction<'_>,
-    user_id: Uuid,
-    item: &MarketplaceItem,
-) -> Result<bool> {
-    let daily_limit = item
-        .payload
-        .get("daily_limit")
-        .and_then(|value| value.as_bool())
-        .unwrap_or(false);
-    if !daily_limit {
-        return Ok(false);
-    }
-
-    let row = tx
-        .query_one(
-            "SELECT EXISTS (
-                 SELECT 1
-                 FROM chip_ledger
-                 WHERE user_id = $1
-                   AND reason = $2
-                   AND source_kind = $3
-                   AND source_ref = $4
-                   AND created_at >= (date_trunc('day', current_timestamp AT TIME ZONE 'UTC') AT TIME ZONE 'UTC')
-             ) AS purchased_today",
-            &[
-                &user_id,
-                &ChipMove::ShopPurchase.reason(),
-                &ChipMove::ShopPurchase.source_kind(),
-                &item.sku,
-            ],
-        )
-        .await?;
-    Ok(row.get("purchased_today"))
 }
 
 async fn lock_user_chips_in_tx(tx: &tokio_postgres::Transaction<'_>, user_id: Uuid) -> Result<i64> {

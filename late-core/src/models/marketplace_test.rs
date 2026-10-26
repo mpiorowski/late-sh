@@ -41,7 +41,7 @@ const AQUARIUM_BIGBERT_PRICE: i64 = 10_000;
 /// Lowered from 10,000,000 by migration 157: at ten million neither spell
 /// ever sold, and the burn milestones ladder up to half of the new ceiling.
 const ULTIMATE_SPELL_PRICE: i64 = 1_000_000;
-const ROOM_SPARK_PRICE: i64 = 2_000;
+const ROOM_BUMP_PRICE: i64 = 1_000;
 const BADGE_RENTAL_DAY_PRICE: i64 = 100;
 const BADGE_RENTAL_MONTH_PRICE: i64 = 3_000;
 const CUSTOM_TITLE_DAY_PRICE: i64 = 1_000;
@@ -148,14 +148,14 @@ async fn seeded_catalog_contains_chat_consumables_and_retired_the_food() {
     let items = MarketplaceItem::list_visible(&client)
         .await
         .expect("list items");
-    let room_spark = items
+    let room_bump = items
         .iter()
-        .find(|item| item.sku == "chat_room_spark")
-        .expect("room spark item");
-    assert_eq!(room_spark.item_kind, CHAT_CONSUMABLE_ITEM_KIND);
-    assert_eq!(room_spark.price_chips, ROOM_SPARK_PRICE);
-    assert_eq!(room_spark.payload["effect_kind"], "room_spark");
-    assert_eq!(room_spark.payload["daily_limit"], true);
+        .find(|item| item.sku == "chat_room_bump")
+        .expect("room bump item");
+    assert_eq!(room_bump.item_kind, CHAT_CONSUMABLE_ITEM_KIND);
+    assert_eq!(room_bump.price_chips, ROOM_BUMP_PRICE);
+    assert_eq!(room_bump.payload["effect_kind"], "room_bump");
+    assert_eq!(room_bump.payload["target"], "room");
 
     // Care is free and daily now (migration 178): the food rows stay for
     // purchase history but nothing on sale is a companion consumable.
@@ -179,12 +179,11 @@ async fn seeded_catalog_contains_chat_consumables_and_retired_the_food() {
 }
 
 #[tokio::test]
-async fn hack_room_is_retired_and_room_bump_leads_the_chat_consumables() {
+async fn room_bump_is_the_only_chat_consumable_on_sale() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
 
-    // Catalog order is the Chat tab's order: Room Bump first, nothing named
-    // Hack Room anywhere on sale.
+    // Hack Room (152) and the room page effects (261) are retired.
     let items = MarketplaceItem::list_visible(&client)
         .await
         .expect("list items");
@@ -193,26 +192,30 @@ async fn hack_room_is_retired_and_room_bump_leads_the_chat_consumables() {
         .filter(|item| item.item_kind == CHAT_CONSUMABLE_ITEM_KIND)
         .map(|item| item.sku.as_str())
         .collect();
-    assert_eq!(
-        chat_consumables,
-        vec![
-            "chat_room_bump",
-            "chat_room_spark",
-            "chat_room_glow",
-            "chat_room_pulse"
-        ]
-    );
+    assert_eq!(chat_consumables, vec!["chat_room_bump"]);
 
-    // Retired, not deleted: the row stays for purchase history, inactive.
-    let active: bool = client
-        .query_one(
-            "SELECT active FROM marketplace_items WHERE sku = 'chat_pinned_vibe'",
+    // Retired, not deleted: the rows stay for purchase history, inactive.
+    let retired: Vec<(String, bool)> = client
+        .query(
+            "SELECT sku, active FROM marketplace_items
+             WHERE sku IN ('chat_pinned_vibe', 'chat_room_spark', 'chat_room_glow', 'chat_room_pulse')
+             ORDER BY sku",
             &[],
         )
         .await
-        .expect("hack room row")
-        .get(0);
-    assert!(!active);
+        .expect("retired rows")
+        .into_iter()
+        .map(|row| (row.get(0), row.get(1)))
+        .collect();
+    assert_eq!(
+        retired,
+        vec![
+            ("chat_pinned_vibe".to_string(), false),
+            ("chat_room_glow".to_string(), false),
+            ("chat_room_pulse".to_string(), false),
+            ("chat_room_spark".to_string(), false),
+        ]
+    );
 }
 
 #[tokio::test]
@@ -796,24 +799,27 @@ async fn seeded_catalog_contains_ultimate_spells() {
 }
 
 #[tokio::test]
-async fn consumable_purchase_repeats_and_daily_limit_is_enforced() {
+async fn consumable_purchase_repeats_within_a_day() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "marketplace-consumable-repeat").await;
     let mut client = test_db.db.get().await.expect("db client");
-    UserChips::admin_grant(&**client, user.id, ROOM_SPARK_PRICE)
+    let starting_balance = UserChips::admin_grant(&**client, user.id, ROOM_BUMP_PRICE * 2)
         .await
-        .expect("fund chips");
+        .expect("fund chips")
+        .balance;
 
-    let first_spark = purchase_durable_item_by_sku(&mut client, user.id, "chat_room_spark")
+    let first_bump = purchase_durable_item_by_sku(&mut client, user.id, "chat_room_bump")
         .await
-        .expect("first spark")
-        .expect("spark item");
-    let second_spark = purchase_durable_item_by_sku(&mut client, user.id, "chat_room_spark")
+        .expect("first bump")
+        .expect("bump item");
+    let second_bump = purchase_durable_item_by_sku(&mut client, user.id, "chat_room_bump")
         .await
-        .expect("second spark")
-        .expect("spark item");
-    assert_eq!(first_spark.status, PurchaseStatus::Purchased);
-    assert_eq!(second_spark.status, PurchaseStatus::DailyLimitReached);
+        .expect("second bump")
+        .expect("bump item");
+    assert_eq!(first_bump.status, PurchaseStatus::Purchased);
+    assert_eq!(second_bump.status, PurchaseStatus::QuantityAdded);
+    assert_eq!(second_bump.quantity, 2);
+    assert_eq!(second_bump.balance, starting_balance - ROOM_BUMP_PRICE * 2);
 }
 
 #[tokio::test]

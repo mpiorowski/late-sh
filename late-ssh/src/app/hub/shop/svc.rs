@@ -127,7 +127,6 @@ pub struct ShopCatalogItem {
     pub consumable_category: Option<String>,
     pub effect_kind: Option<String>,
     pub requires_room: bool,
-    pub daily_limited: bool,
     /// For `username_effect` items: which style family the item sells
     /// ("glow" | "gradient" | "shimmer"), from the item payload.
     pub username_effect_variant: Option<String>,
@@ -291,7 +290,6 @@ fn purchase_story(
         PurchaseStatus::AlreadyOwned
         | PurchaseStatus::InsufficientFunds
         | PurchaseStatus::RequiresAquarium
-        | PurchaseStatus::DailyLimitReached
         | PurchaseStatus::OwnedCapReached => return None,
     }
     let duration = rental_duration_secs(&result.item);
@@ -359,7 +357,6 @@ fn custom_title_outcome(settled: SettledPurchase) -> CustomTitleOutcome {
             PurchaseStatus::AlreadyOwned
             | PurchaseStatus::InsufficientFunds
             | PurchaseStatus::RequiresAquarium
-            | PurchaseStatus::DailyLimitReached
             | PurchaseStatus::OwnedCapReached,
         )
         | None => CustomTitleOutcome::Refused(settled.message),
@@ -935,9 +932,6 @@ impl ShopService {
                         }
                     }
                 }
-                PurchaseStatus::DailyLimitReached => {
-                    format!("{} is limited to once per day", result.item.name)
-                }
             },
         };
 
@@ -1149,11 +1143,6 @@ impl ShopService {
                     .map(ToOwned::to_owned);
                 let requires_room =
                     item.payload.get("target").and_then(|value| value.as_str()) == Some("room");
-                let daily_limited = item
-                    .payload
-                    .get("daily_limit")
-                    .and_then(|value| value.as_bool())
-                    .unwrap_or(false);
                 let username_effect_variant = (item_kind == USERNAME_EFFECT_ITEM_KIND)
                     .then(|| {
                         item.payload
@@ -1205,7 +1194,6 @@ impl ShopService {
                     consumable_category,
                     effect_kind,
                     requires_room,
-                    daily_limited,
                     username_effect_variant,
                     rental_duration_secs,
                     badge_slot,
