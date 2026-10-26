@@ -36,9 +36,9 @@ pub const WELCOME_DRINK_POINTS: i64 = 100;
 pub const MAX_DRUNK_POINTS: i64 = 4_000;
 /// How long a patron sitting on the cap takes to come back to fully sober.
 /// This is the dial to turn when the bar feels too forgiving or too punishing;
-/// the per-hour rate below follows from it. Half a day means a big night is
-/// gone by the next evening, and entering "wasted" (2000) clears in six hours.
-pub const DRUNK_SOBER_UP_HOURS: i64 = 12;
+/// the per-hour rate below follows from it. Six hours means a big night is
+/// gone by morning, and entering "wasted" (2000) clears in three hours.
+pub const DRUNK_SOBER_UP_HOURS: i64 = 6;
 /// How fast the buzz wears off, in drunk points (= chips) per hour. Derived
 /// from the cap and [`DRUNK_SOBER_UP_HOURS`], rounded up so the last hour
 /// finishes the job instead of leaving a point of buzz behind.

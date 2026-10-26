@@ -796,7 +796,7 @@ fn draw_activity_tile(
         draw_centered_note(
             frame,
             area,
-            &["quiet for now", "wins, joins, and crowns land here"],
+            &["quiet for now", "wins and joins land here"],
         );
         return;
     }

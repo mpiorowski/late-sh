@@ -1009,7 +1009,7 @@ existing chat label query, never a second directory.
 
 ### Shop rules the game inherits
 
-The chip-sink roadmap that built the Shop (rentals, gild, crown, burn
+The chip-sink roadmap that built the Shop (rentals, gild, burn
 milestones, pot, door payouts, the round) is finished and its doc is gone
 (2026-09-03); its ideas that never shipped are dropped. The rules it ran
 on still bind every piece, band, and ration the city sells:
@@ -1030,9 +1030,8 @@ on still bind every piece, band, and ration the city sells:
   with `UPDATE ... WHERE status = 'open' RETURNING *`, so exactly one
   replica wins.
 - **Prices sit in one price band with the Shop.** A completionist arcade
-  day is about 2,000 chips; rentals price against that day, the month
-  tier is 40x the day tier, and the crown's 1.5x ratchet is the only
-  price we never set.
+  day is about 2,000 chips; rentals price against that day, and the month
+  tier is 40x the day tier.
 - **Spectator side bets on fights** (the arena, phase 4) were parked in
   the shop roadmap for the game to own; the pot's parimutuel shape is the
   engine to copy when they come.

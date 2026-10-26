@@ -58,10 +58,10 @@ pub const GIFT_DRINK_PRICE: i64 = 200;
 /// The buzz a cashed tavern round records, regardless of what the bartender
 /// named or priced the pour at. Four times what the buyer paid a head, and
 /// sized against `drinks::DRUNK_LEVEL_THRESHOLDS`: buzzed starts at 300, so a
-/// flat 300 landed exactly on the line and the first decay tick (334 an hour)
+/// flat 300 landed exactly on the line and the first decay tick (667 an hour)
 /// dropped the drinker back to tipsy within seconds of the pour. 400 buys
-/// about eighteen minutes of the level the round is meant to hand out, and is
-/// still gone in a bit over an hour like any other drink.
+/// about nine minutes of the level the round is meant to hand out, and is
+/// still gone in under forty minutes like any other drink.
 ///
 /// It is the tavern's number because a tavern round is bought for everyone
 /// online: the buyer pays for twenty and maybe three walk up, so the pours
