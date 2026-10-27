@@ -39,8 +39,8 @@ const ART_TAGS: [&str; 4] = ["#ASCIIart", "#MastoArt", "#tildeverse", "#terminal
 const SCOREBOARD_TAGS: [&str; 4] = ["#puzzles", "#sudoku", "#tildeverse", "#terminal"];
 
 /// The paper's: never `#MastoArt`, since art communities dislike
-/// model-written text.
-const PAPER_TAGS: [&str; 3] = ["#tildeverse", "#terminal", "#smolweb"];
+/// model-written text; `#TUI` for the people who browse terminal apps.
+const PAPER_TAGS: [&str; 4] = ["#tildeverse", "#terminal", "#TUI", "#smolweb"];
 
 /// A Mastodon note in place of a marked picture: no art tags on a post
 /// with no art.
@@ -55,13 +55,14 @@ const NSFW_TAG: &str = "#nsfw";
 pub(crate) const ALT_MAX_CHARS: usize = 1000;
 
 /// The longest an announcement's words run: under Bluesky's 300 with what
-/// `status_text` puts after them, the edition's page
-/// (`https://late.sh/paper/YYYY-MM-DD`, 32), two blank lines (4) and
-/// `ANNOUNCEMENT_TAGS` (21). The brief is asked for this many.
-pub(crate) const ANNOUNCEMENT_MAX_CHARS: usize = 240;
+/// `status_text` puts after them, `Full notes: ` and the edition's page
+/// (`https://late.sh/paper/YYYY-MM-DD`, 44), two blank lines (4) and
+/// `ANNOUNCEMENT_TAGS` (26). The brief is asked for this many.
+pub(crate) const ANNOUNCEMENT_MAX_CHARS: usize = 225;
 
-/// An announcement's: no art tags on a post with no art.
-const ANNOUNCEMENT_TAGS: [&str; 2] = ["#tildeverse", "#terminal"];
+/// An announcement's: no art tags on a post with no art, `#TUI` for the
+/// people who browse terminal apps, who are who a release note is for.
+const ANNOUNCEMENT_TAGS: [&str; 3] = ["#tildeverse", "#terminal", "#TUI"];
 
 /// The site's own picture on late-web, the night-city skyline
 /// (`late-web/src/pages/shared/meta.rs`, `SITE_IMAGE_PATH`): the thumb of
@@ -754,8 +755,10 @@ fn week_span(last: NaiveDate) -> String {
 /// typed, an announcement the operator or the model wrote, and the
 /// official account must not mention, tag or link whatever they say. `@`
 /// and `#` go, with the full-width forms Mastodon also reads, and a colon
-/// always has a space after it, so no `scheme:` survives to open a link
-/// (`https: //`, `magnet: ?`).
+/// that closes a word has a space after it, so no `scheme:` survives to
+/// open a link (`https: //`, `magnet: ?`). Every scheme a network links
+/// ends in a letter, so a colon after a digit stays: a time (`16:00`) or
+/// a ratio reads as written.
 pub(crate) fn dead_words(title: &str) -> String {
     let mut out = String::with_capacity(title.len());
     let mut chars = title.chars().peekable();
@@ -763,10 +766,11 @@ pub(crate) fn dead_words(title: &str) -> String {
         match ch {
             '@' | '＠' | '#' | '＃' => {}
             ':' => {
+                let closes_a_word = out.chars().next_back().is_some_and(char::is_alphabetic);
                 out.push(':');
-                match chars.peek() {
-                    Some(next) if !next.is_whitespace() => out.push(' '),
-                    Some(_) | None => {}
+                match (closes_a_word, chars.peek()) {
+                    (true, Some(next)) if !next.is_whitespace() => out.push(' '),
+                    (true | false, Some(_) | None) => {}
                 }
             }
             other => out.push(other),

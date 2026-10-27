@@ -213,11 +213,11 @@ fn the_words_fit_and_never_mention_anyone() {
     );
     assert_eq!(
         tags(Picture::Paper(paper())),
-        "#tildeverse #terminal #smolweb"
+        "#tildeverse #terminal #TUI #smolweb"
     );
     assert_eq!(
         tags(Picture::Announcement(announcement())),
-        "#tildeverse #terminal"
+        "#tildeverse #terminal #TUI"
     );
     let announced = status_text(
         &Picture::Announcement(announcement()),
@@ -226,7 +226,7 @@ fn the_words_fit_and_never_mention_anyone() {
     );
     assert_eq!(
         announced,
-        "Server updates no longer kick you out.\n\nOn the late CLI, an idle session moves to the new server by itself.\n\nFull notes: https://late.sh/paper/2026-10-24\n\n#tildeverse #terminal"
+        "Server updates no longer kick you out.\n\nOn the late CLI, an idle session moves to the new server by itself.\n\nFull notes: https://late.sh/paper/2026-10-24\n\n#tildeverse #terminal #TUI"
     );
     assert!(
         status_text(&Picture::Paper(paper()), "https://late.sh", Words::Plain)
@@ -474,15 +474,16 @@ fn the_look_round_trips_and_writes_the_alt() {
 
 /// An announcement's words go out plain, dead and cut, whoever wrote
 /// them: markdown markers dropped, a dash a comma, `@` and `#` gone, a
-/// scheme broken, at most `ANNOUNCEMENT_MAX_CHARS` with an ellipsis; and
-/// under the page and the tags they fit the tightest network.
+/// scheme broken but a time kept whole, at most `ANNOUNCEMENT_MAX_CHARS`
+/// with an ellipsis; and under the page and the tags they fit the
+/// tightest network.
 #[test]
 fn an_announcements_words_are_plain_dead_and_cut() {
-    let note = "# Server updates no longer kick you out\n\n## Update your CLI\n\n- Run `curl -fsSL https://cli.late.sh/install.sh | bash`\n- Thanks @mat — see #lounge\n";
+    let note = "# Server updates no longer kick you out\n\n## Update your CLI\n\n- Run `curl -fsSL https://cli.late.sh/install.sh | bash`\n- Thanks @mat — see #lounge at 16:00\n";
     let cut = AnnouncementCandidate::of(day(24), note, Brief::Cut, None);
     assert_eq!(
         cut.text,
-        "Server updates no longer kick you out\n\nUpdate your CLI\n\nRun `curl -fsSL https: //cli.late.sh/install.sh | bash`\nThanks mat, see lounge"
+        "Server updates no longer kick you out\n\nUpdate your CLI\n\nRun `curl -fsSL https: //cli.late.sh/install.sh | bash`\nThanks mat, see lounge at 16:00"
     );
     let long = AnnouncementCandidate::of(day(24), &"word ".repeat(100), Brief::Model, None);
     assert_eq!(long.text.chars().count(), ANNOUNCEMENT_MAX_CHARS);
@@ -498,7 +499,7 @@ fn an_announcements_words_are_plain_dead_and_cut() {
         text.chars().count()
     );
     assert!(
-        text.ends_with("\n\nFull notes: https://late.sh/paper/2026-10-24\n\n#tildeverse #terminal"),
+        text.ends_with("\n\nFull notes: https://late.sh/paper/2026-10-24\n\n#tildeverse #terminal #TUI"),
         "{text}"
     );
 }

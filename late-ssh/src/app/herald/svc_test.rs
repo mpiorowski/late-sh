@@ -1132,7 +1132,7 @@ async fn an_announcement_goes_out_as_words_the_day_its_edition_prints() {
         (posted.kind, posted.subject.as_str()),
         (HeraldKind::Announcement, "announcement:2026-10-23")
     );
-    let words = "A new late CLI is out, and server updates no longer kick you out.\n\nIdle five minutes when we ship and your session moves to the new server by itself.\n\nFull notes: https://late.sh/paper/2026-10-23\n\n#tildeverse #terminal";
+    let words = "A new late CLI is out, and server updates no longer kick you out.\n\nIdle five minutes when we ship and your session moves to the new server by itself.\n\nFull notes: https://late.sh/paper/2026-10-23\n\n#tildeverse #terminal #TUI";
     {
         let log = log.lock().expect("log");
         assert_eq!(
@@ -1191,7 +1191,7 @@ async fn an_announcement_goes_out_as_words_the_day_its_edition_prints() {
     );
     assert!(
         status
-            .ends_with("\n\nFull notes: https://late.sh/paper/2026-10-24\n\n#tildeverse #terminal"),
+            .ends_with("\n\nFull notes: https://late.sh/paper/2026-10-24\n\n#tildeverse #terminal #TUI"),
         "{status}"
     );
 }
