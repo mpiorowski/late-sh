@@ -303,8 +303,9 @@ Live, in order of evidence behind them:
     first: a day whose edition carries `#announcements` posts goes out
     as words alone, the note compressed by the model into one post that
     links the edition for the note in full, whatever the weekday. Else a
-    picture, by a weekly schedule: on Monday, Tuesday, Thursday and Friday the piece over the
-    door, the splash wall's piece of the day (credited `~name`, linking
+    picture, by a weekly schedule: on Monday, Tuesday, Thursday and
+    Friday the piece over the door, the splash wall's piece of the day
+    (credited `~name`, linking
     the piece's page; the wall is one queue in hang order, so the post
     and the login screen show the same piece), else yesterday's Artboard
     snapshot cropped to what is drawn, once it has enough ink to be a
@@ -317,10 +318,9 @@ Live, in order of evidence behind them:
     chess, pool and card games by wins that paid, the doors by their top
     run). A day whose kind has nothing falls through to the next, and a
     day with nothing at all posts nothing.
-    The scoreboard goes first because it has one day a week and a piece
-    can wait a day; the week's window keeps a backlog from crowding out
-    the board, and the launch from posting a year of pieces. Alt text
-    and the kind's tags. The first design alternated the board with
+    The wall moves on every day whatever the herald posts, so a piece
+    whose day is a paper day or a Sunday hangs over the door unposted,
+    and no piece is posted twice. Alt text and the kind's tags. The first design alternated the board with
     members' PRINTS posters, each once; dropped before launch, since a
     few new posters a month cannot carry a slot.
   - **The tags.** Four at most, two that bring readers and two that
@@ -333,16 +333,18 @@ Live, in order of evidence behind them:
     security talk) bring members. Per kind: the board and gallery pieces
     `#ASCIIart #MastoArt #tildeverse #terminal`;
     the weekly scoreboard `#puzzles #sudoku #tildeverse #terminal`; the paper
-    `#tildeverse #terminal #smolweb`, never #MastoArt. Candidates not
-    taken: #ANSIart (the BBS and coloured-terminal tradition, a smaller
-    crowd), #TUI, #TextArt. Unmeasured: compare recent posters on each
+    `#tildeverse #terminal #smolweb`, never #MastoArt; an announcement
+    `#tildeverse #terminal`, no art tags on a post with no art.
+    Candidates not taken: #ANSIart (the BBS and coloured-terminal
+    tradition, a smaller crowd), #TUI, #TextArt. Unmeasured: compare recent posters on each
     tag's page on the instance before changing a set.
   - **The kinds.** Built (`late-ssh/src/app/herald/CONTEXT.md`, "The
-    post"). Each kind is one PNG route on the front door (late-web's
-    piece page and PNG, the week's games card, the paper's front-page
-    card, all through `late-web/src/pages/shared/board_png.rs`), one
-    candidate read, one text, and one variant of the herald's picture,
-    which breaks the build until every match knows it. A piece is the
+    post"). Each picture kind is one PNG route on the front door
+    (late-web's piece page and PNG, the week's games card, the paper's
+    front-page card, all through `late-web/src/pages/shared/board_png.rs`),
+    one candidate read, one text, and one variant of the herald's
+    picture, which breaks the build until every match knows it; the
+    announcement is the one kind with no route, words alone. A piece is the
     best supply of art the server has: a real picture a member made and
     chose to hang, immutable, credited, with applause. The scoreboard is
     the one kind that shows the whole shelf of games, weekly so it never

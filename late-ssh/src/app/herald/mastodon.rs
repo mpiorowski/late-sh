@@ -1,7 +1,8 @@
 //! The Mastodon leg of a delivery: the media upload and the status call
 //! for a picture, the status call alone for a note behind a warning
 //! (`state::mastodon_post`) or for words with no picture (an
-//! announcement), against any server speaking the Mastodon API. Returns the status's URL or an error; `svc.rs` logs and counts.
+//! announcement), against any server speaking the Mastodon API. Returns
+//! the status's URL or an error; `svc.rs` logs and counts.
 
 use std::time::Duration;
 

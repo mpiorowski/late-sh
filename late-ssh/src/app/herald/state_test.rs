@@ -451,9 +451,8 @@ fn the_look_round_trips_and_writes_the_alt() {
 
 /// An announcement's words go out plain, dead and cut, whoever wrote
 /// them: markdown markers dropped, a dash a comma, `@` and `#` gone, a
-/// scheme broken, at
-/// most `ANNOUNCEMENT_MAX_CHARS` with an ellipsis; and under the page and
-/// the tags they fit the tightest network.
+/// scheme broken, at most `ANNOUNCEMENT_MAX_CHARS` with an ellipsis; and
+/// under the page and the tags they fit the tightest network.
 #[test]
 fn an_announcements_words_are_plain_dead_and_cut() {
     let note = "# Server updates no longer kick you out\n\n## Update your CLI\n\n- Run `curl -fsSL https://cli.late.sh/install.sh | bash`\n- Thanks @mat — see #lounge\n";

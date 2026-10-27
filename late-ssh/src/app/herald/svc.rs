@@ -152,9 +152,9 @@ pub(crate) enum CommandOutcome {
         today: Option<HeraldDay>,
     },
     /// What `/herald post` would send today, and where: what the day
-    /// could post and, when it is a post, the day's pick, briefed or with a
-    /// fresh look at it. `found` is boxed: it carries every kind's candidate and
-    /// would otherwise size the whole enum.
+    /// could post and, when it is a post, the day's pick, briefed or with
+    /// a fresh look at it. `found` is boxed: it carries every kind's
+    /// candidate and would otherwise size the whole enum.
     Preview {
         day: NaiveDate,
         found: Box<Found>,

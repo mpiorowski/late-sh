@@ -87,10 +87,12 @@ pub(crate) async fn deliver(
     config: &BlueskyConfig,
     post: Post<'_>,
 ) -> anyhow::Result<String> {
-    let fitted = match &post.picture {
+    let image = match &post.picture {
         Some(picture) => {
             let png = picture.png.to_vec();
-            Some(tokio::task::spawn_blocking(move || fit_under(&png, BLOB_MAX_BYTES)).await??)
+            let fitted =
+                tokio::task::spawn_blocking(move || fit_under(&png, BLOB_MAX_BYTES)).await??;
+            Some((fitted, picture.alt))
         }
         None => None,
     };
@@ -103,12 +105,12 @@ pub(crate) async fn deliver(
         "langs": ["en"],
         "facets": facets(post.text),
     });
-    if let (Some(picture), Some(fitted)) = (&post.picture, fitted) {
+    if let Some((fitted, alt)) = image {
         let blob = upload_blob(http, config, &session, fitted.png).await?;
         record["embed"] = json!({
             "$type": "app.bsky.embed.images",
             "images": [{
-                "alt": picture.alt,
+                "alt": alt,
                 "image": blob,
                 "aspectRatio": { "width": fitted.width, "height": fitted.height },
             }],
@@ -252,7 +254,7 @@ pub(crate) fn fit_under(png: &[u8], max_bytes: usize) -> anyhow::Result<Fitted> 
 
 /// The rich-text facets: every `http(s)://` word a link, every `#word` a
 /// tag, by UTF-8 byte range as the protocol counts them. Our own text (a
-/// piece's title goes in dead, `state::title_words`), so a word is
+/// piece's title goes in dead, `state::dead_words`), so a word is
 /// whatever sits between whitespace.
 pub(crate) fn facets(text: &str) -> Vec<Value> {
     let mut facets = Vec::new();

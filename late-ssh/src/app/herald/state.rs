@@ -445,19 +445,10 @@ impl Found {
             HeraldKind::Announcement => {
                 return self.announcement.clone().map(Choice::Announcement);
             }
-            HeraldKind::Scoreboard => self
-                .scoreboard
-                .as_ref()
-                .map(|scoreboard| Picture::Scoreboard(scoreboard.clone())),
-            HeraldKind::Piece => self
-                .piece
-                .as_ref()
-                .map(|piece| Picture::Piece(piece.clone())),
+            HeraldKind::Scoreboard => self.scoreboard.clone().map(Picture::Scoreboard),
+            HeraldKind::Piece => self.piece.clone().map(Picture::Piece),
             HeraldKind::Artboard => self.board.picture(),
-            HeraldKind::Paper => self
-                .paper
-                .as_ref()
-                .map(|paper| Picture::Paper(paper.clone())),
+            HeraldKind::Paper => self.paper.clone().map(Picture::Paper),
         };
         picture.map(Choice::Picture)
     }
@@ -771,8 +762,8 @@ fn speech(picture: &Picture) -> (String, &'static [&'static str]) {
 /// tightest limit among the networks (`state_test` holds it there, marks
 /// included): a line of plain speech, the page, the tags. A member a kind
 /// credits is `~name`, never `@name`, so no bare `@` can ping a stranger
-/// on the instance, and a piece's title goes in dead (`title_words`).
-/// Every network that shows the picture gets the same
+/// on the instance, and a piece's title and an announcement go in dead
+/// (`dead_words`). Every network that shows the picture gets the same
 /// words but for the mark (`Words`).
 pub(crate) fn status_text(picture: &Picture, web_url: &str, words: Words) -> String {
     let page = match picture.page_path() {
