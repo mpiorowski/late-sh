@@ -1279,14 +1279,7 @@ pub(crate) fn yesterday_column(
             (plays, "match") => format!("{plays} matches"),
             (plays, noun) => format!("{plays} {noun}s"),
         };
-        // The first of the top games in roster order, as the card lists them.
-        let top = on_shelf
-            .iter()
-            .fold(None::<&DayTally>, |best, tally| match best {
-                Some(best) if best.plays >= tally.plays => Some(best),
-                Some(_) | None => Some(tally),
-            })
-            .expect("a shelf with plays has a game");
+        let top = DayTally::most_played(tallies, *shelf).expect("a shelf with plays has a game");
         let line = match (on_shelf.len(), plays) {
             (1, 1) => format!("{}: {count} {verb}: {}", shelf.title(), top.game.title()),
             (1, _) => format!(

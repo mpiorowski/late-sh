@@ -24,6 +24,9 @@ pub(crate) enum Ink {
     Body,
     /// Datelines and footers: the shell's dim text, `#9ca3af`.
     Dim,
+    /// A small ASCII picture on the card (the paper's most played game):
+    /// `text-yellow-400`, so it stands out from the words.
+    Art,
 }
 
 impl Ink {
@@ -33,6 +36,7 @@ impl Ink {
             Self::Heading => Some(RgbColor::new(0x22, 0xc5, 0x5e)),
             Self::Body => None,
             Self::Dim => Some(RgbColor::new(0x9c, 0xa3, 0xaf)),
+            Self::Art => Some(RgbColor::new(0xfa, 0xcc, 0x15)),
         }
     }
 }

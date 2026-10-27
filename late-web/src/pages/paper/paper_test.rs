@@ -8,6 +8,7 @@ use late_core::{
     models::{
         chat_message::{ChatMessage, ChatMessageParams},
         chat_room::ChatRoom,
+        leaderboard::{ArcadeGame, DailyPuzzle, ScoreGame},
         paper::{PaperEdition, PaperRoomEdition, PaperSectionKind, PaperSectionRow},
     },
     test_utils::{create_test_user, test_db},
@@ -279,21 +280,38 @@ fn feed_items_merge_the_columns_newest_first_and_escape_once() {
     );
 }
 
-/// The front page's lines: the masthead, the dateline, the numbers whole
-/// and then each printed column's head under its name (a column that did
-/// not print is left out), the way in; nothing when none printed.
+/// The front page's lines: the masthead, the dateline, the most played
+/// arcade game with its picture and its finishes when anyone played, the
+/// numbers whole and then each printed column's head under its name (a
+/// column that did not print is left out), the way in; nothing when none
+/// printed, whoever played.
 #[test]
-fn the_front_page_card_heads_each_printed_column() {
+fn the_front_page_card_leads_with_the_most_played_game() {
     let line = |ink, text: &str| CardLine::new(ink, text);
     let yesterday = [
         "Booth: 2 tracks queued".to_string(),
         "Arcade: 3 games finished, all Sudoku".to_string(),
     ];
+    let sudoku = Some((ArcadeGame::Puzzle(DailyPuzzle::Sudoku), 3));
     assert_eq!(
-        front_page(EDITION, &yesterday, &["The world turned.".to_string()], &[]),
+        front_page(
+            EDITION,
+            sudoku,
+            &yesterday,
+            &["The world turned.".to_string()],
+            &[]
+        ),
         Some(vec![
             line(Ink::Title, "THE LATE EDITION"),
             line(Ink::Dim, "Thursday, 3 September 2026"),
+            CardLine::blank(),
+            line(Ink::Heading, "MOST PLAYED YESTERDAY"),
+            line(Ink::Art, "  +---+---+---+"),
+            line(Ink::Art, "  | 5 |   | 3 |"),
+            line(Ink::Art, "  +---+---+---+"),
+            line(Ink::Art, "  |   | 7 |   |"),
+            line(Ink::Art, "  +---+---+---+"),
+            line(Ink::Body, "Sudoku, 3 games finished"),
             CardLine::blank(),
             line(Ink::Heading, "YESTERDAY ON LATE.SH"),
             line(Ink::Body, "Booth: 2 tracks queued"),
@@ -305,13 +323,22 @@ fn the_front_page_card_heads_each_printed_column() {
             line(Ink::Dim, "late.sh/paper"),
         ])
     );
-    assert_eq!(
-        front_page(EDITION, &[], &["The world turned.".to_string()], &[])
-            .expect("a column printed")
-            .len(),
-        7
+    let quiet = front_page(EDITION, None, &[], &["The world turned.".to_string()], &[])
+        .expect("a column printed");
+    assert_eq!(quiet.len(), 7, "nobody played: no headline");
+    let one = front_page(
+        EDITION,
+        Some((ArcadeGame::Score(ScoreGame::Snake), 1)),
+        &[],
+        &["The world turned.".to_string()],
+        &[],
+    )
+    .expect("a column printed");
+    assert!(
+        one.contains(&line(Ink::Body, "Snake, 1 game finished")),
+        "{one:?}"
     );
-    assert_eq!(front_page(EDITION, &[], &[], &[]), None);
+    assert_eq!(front_page(EDITION, sudoku, &[], &[], &[]), None);
 }
 
 /// The card route serves a printed edition as a PNG; an unprinted day and

@@ -75,7 +75,8 @@ impl HubGame {
     /// the runners' own card, sliced off for everyone else by
     /// [`HubGame::roster`], then Lateania, ours from the ground up, then the
     /// Realm, the house's one standing world), the roguelikes by stature, the remakes (our own build of A Dark Room,
-    /// then the Zork Trilogy behind our own edition and save menus), the
+    /// then the Zork Trilogy behind our own edition and save menus, then
+    /// BashQuest), the
     /// servers we host and you play from a game client (Minecraft, Vintage
     /// Story), then the
     /// doors: Green Dragon (our native LORD remake, filed with the BBS doors
@@ -90,12 +91,12 @@ impl HubGame {
         HubGame::Brogue,
         HubGame::Darkroom,
         HubGame::Zork,
+        HubGame::Bashquest,
         HubGame::Minecraft,
         HubGame::VintageStory,
         HubGame::GreenDragon,
         HubGame::Usurper,
         HubGame::Dopewars,
-        HubGame::Bashquest,
         HubGame::Rebels,
         HubGame::Codekeep,
     ];
@@ -160,12 +161,11 @@ impl HubGame {
         match self {
             HubGame::NightCity | HubGame::Lateania | HubGame::Realm => HubGroup::House,
             HubGame::Dcss | HubGame::Nethack | HubGame::Brogue => HubGroup::Roguelikes,
-            HubGame::Darkroom | HubGame::Zork => HubGroup::Remakes,
+            HubGame::Darkroom | HubGame::Zork | HubGame::Bashquest => HubGroup::Remakes,
             HubGame::Minecraft | HubGame::VintageStory => HubGroup::Servers,
             HubGame::GreenDragon
             | HubGame::Usurper
             | HubGame::Dopewars
-            | HubGame::Bashquest
             | HubGame::Rebels
             | HubGame::Codekeep => HubGroup::Doors,
         }

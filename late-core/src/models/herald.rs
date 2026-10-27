@@ -271,23 +271,6 @@ impl HeraldPost {
         }))
     }
 
-    /// The subjects of `kind` picked on `since` or after, whatever came of
-    /// the day: a piece picked once is never picked again, even when its
-    /// day failed.
-    pub async fn subjects_since(
-        client: &Client,
-        kind: HeraldKind,
-        since: NaiveDate,
-    ) -> Result<Vec<String>> {
-        let rows = client
-            .query(
-                "SELECT subject FROM herald_posts WHERE kind = $1 AND day >= $2 ORDER BY day",
-                &[&kind.as_str(), &since],
-            )
-            .await?;
-        Ok(rows.into_iter().map(|row| row.get("subject")).collect())
-    }
-
     /// One network has the day's picture. A second record of the same
     /// network is ignored.
     pub async fn record_delivery(

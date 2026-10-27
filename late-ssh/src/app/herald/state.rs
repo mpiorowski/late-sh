@@ -1,9 +1,9 @@
 //! The herald's pure rules: which day is due, what fills the day's slot
-//! (the rotation over the kinds), the words that travel with the picture,
-//! and how each network marks what the look saw in it. Reads no clock and
-//! does no I/O; `svc.rs` feeds it rows and posts what comes back.
+//! (the week's schedule of the kinds), the words that travel with the
+//! picture, and how each network marks what the look saw in it. Reads no
+//! clock and does no I/O; `svc.rs` feeds it rows and posts what comes
+//! back.
 
-use anyhow::Context;
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Utc, Weekday};
 use dartboard_core::{Canvas, CellValue};
 use late_core::models::herald::HeraldKind;
@@ -54,12 +54,6 @@ const NSFW_TAG: &str = "#nsfw";
 /// Mastodon allows 1,500; the model is asked for 800.
 pub(crate) const ALT_MAX_CHARS: usize = 1000;
 
-/// How long a piece waits for the herald after it is hung. A piece hung
-/// before the window is the gallery's, never posted: a backlog never
-/// crowds out the board for weeks, and the launch does not post a year of
-/// pieces.
-pub(crate) const PIECE_WAIT_DAYS: i64 = 7;
-
 /// Blank cells the board's crop keeps around what is drawn.
 pub(crate) const CROP_MARGIN: usize = 2;
 
@@ -94,24 +88,27 @@ pub(crate) fn scoreboard_week(day: NaiveDate) -> Option<NaiveDate> {
     }
 }
 
-/// The first day whose pieces still wait for a post dated `day`.
-pub(crate) fn piece_window_start(day: NaiveDate) -> NaiveDate {
-    day - Duration::days(PIECE_WAIT_DAYS)
-}
-
-/// The pieces the herald already picked, from their subjects
-/// (`HeraldPost::subjects_since`). A subject that is not a piece's is a
-/// row the herald never wrote.
-pub(crate) fn picked_pieces(subjects: &[String]) -> anyhow::Result<Vec<Uuid>> {
-    subjects
-        .iter()
-        .map(|subject| {
-            let id = subject
-                .strip_prefix("piece:")
-                .with_context(|| format!("{subject:?} is not a piece's subject"))?;
-            Uuid::parse_str(id).with_context(|| format!("{subject:?} names no piece"))
-        })
-        .collect()
+/// The week's schedule: the kinds a day dated `day` tries, in order, the
+/// first with something to show being the post. Art most days (the piece
+/// over the door, else yesterday's board), the paper on Wednesday and
+/// Saturday, the week's scoreboard on Sunday; a day whose kind has
+/// nothing falls through to the next, so a quiet paper day still shows a
+/// piece and a Sunday nobody played still shows something.
+pub(crate) fn schedule(day: NaiveDate) -> &'static [HeraldKind] {
+    match day.weekday() {
+        Weekday::Mon | Weekday::Tue | Weekday::Thu | Weekday::Fri => {
+            &[HeraldKind::Piece, HeraldKind::Artboard, HeraldKind::Paper]
+        }
+        Weekday::Wed | Weekday::Sat => {
+            &[HeraldKind::Paper, HeraldKind::Piece, HeraldKind::Artboard]
+        }
+        Weekday::Sun => &[
+            HeraldKind::Scoreboard,
+            HeraldKind::Paper,
+            HeraldKind::Piece,
+            HeraldKind::Artboard,
+        ],
+    }
 }
 
 /// Cells carrying a glyph that is not whitespace.
@@ -233,7 +230,8 @@ impl BoardFound {
     }
 }
 
-/// A piece a member hung in the gallery, posted once and credited.
+/// The piece over the door today: the splash wall's piece for the day
+/// (`ArtboardPiece::splash_for_day`, hang order, one a day), credited.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PieceCandidate {
     pub(crate) id: Uuid,
@@ -324,40 +322,48 @@ impl PaperCandidate {
     }
 }
 
-/// Everything a day could post, as found: the rotation picks one
+/// Everything a day could post, as found: the schedule picks one
 /// (`picture`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Found {
     /// Sundays only, and only when anyone played.
     pub(crate) scoreboard: Option<ScoreboardCandidate>,
+    /// The day's piece over the door, when the wall has one.
     pub(crate) piece: Option<PieceCandidate>,
     pub(crate) board: BoardFound,
     pub(crate) paper: Option<PaperCandidate>,
 }
 
 impl Found {
-    /// The rotation: the scoreboard on Sundays (one day a week, where a
-    /// piece can wait a day), else a waiting piece, else yesterday's board
-    /// when it has ink, else the paper's front page, else nothing.
-    pub(crate) fn picture(&self) -> Option<Picture> {
-        match (
-            &self.scoreboard,
-            &self.piece,
-            self.board.picture(),
-            &self.paper,
-        ) {
-            (Some(scoreboard), _, _, _) => Some(Picture::Scoreboard(scoreboard.clone())),
-            (None, Some(piece), _, _) => Some(Picture::Piece(piece.clone())),
-            (None, None, Some(board), _) => Some(board),
-            (None, None, None, Some(paper)) => Some(Picture::Paper(paper.clone())),
-            (None, None, None, None) => None,
+    /// The day's post: the first kind of the day's `schedule` that has
+    /// something, else nothing.
+    pub(crate) fn picture(&self, day: NaiveDate) -> Option<Picture> {
+        schedule(day).iter().find_map(|kind| self.of(*kind))
+    }
+
+    /// What was found of one kind.
+    fn of(&self, kind: HeraldKind) -> Option<Picture> {
+        match kind {
+            HeraldKind::Scoreboard => self
+                .scoreboard
+                .as_ref()
+                .map(|scoreboard| Picture::Scoreboard(scoreboard.clone())),
+            HeraldKind::Piece => self
+                .piece
+                .as_ref()
+                .map(|piece| Picture::Piece(piece.clone())),
+            HeraldKind::Artboard => self.board.picture(),
+            HeraldKind::Paper => self
+                .paper
+                .as_ref()
+                .map(|paper| Picture::Paper(paper.clone())),
         }
     }
 
     /// Why a bare day is bare, for the admin's banner.
     pub(crate) fn describe(&self) -> String {
         format!(
-            "no piece waiting, {}, no edition printed",
+            "no piece over the door, {}, no edition printed",
             self.board.describe()
         )
     }
@@ -384,8 +390,7 @@ impl Picture {
         }
     }
 
-    /// What the row records: what the post is of. A piece's is how the
-    /// rotation knows it went out (`picked_pieces`).
+    /// What the row records: what the post is of.
     pub(crate) fn subject(&self) -> String {
         match self {
             Self::Board(board) => board.key.clone(),

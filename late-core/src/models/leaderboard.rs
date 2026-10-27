@@ -563,6 +563,16 @@ impl DayGame {
             Self::Door(_) => Shelf::Doors,
         }
     }
+
+    /// The game as the Arcade shelf's own roster names it, `None` off
+    /// the shelf.
+    pub const fn arcade(self) -> Option<ArcadeGame> {
+        match self {
+            Self::Daily(puzzle) => Some(ArcadeGame::Puzzle(puzzle)),
+            Self::Score(game) => Some(ArcadeGame::Score(game)),
+            Self::Lobby(_) | Self::Door(_) => None,
+        }
+    }
 }
 
 /// One game's plays on one UTC day: the finishes for the arcade and the
@@ -577,6 +587,52 @@ pub struct DayTally {
     pub game: DayGame,
     pub plays: i64,
     pub won: i64,
+}
+
+impl DayTally {
+    /// The shelf's most played game of the day: the most plays, the first
+    /// in tally order on a tie; `None` when nothing on the shelf was
+    /// played. The paper's YESTERDAY line and the front page's headline
+    /// read this one rule.
+    pub fn most_played(tallies: &[Self], shelf: Shelf) -> Option<&Self> {
+        tallies
+            .iter()
+            .filter(|tally| tally.game.shelf() == shelf && tally.plays > 0)
+            .fold(None, |best, tally| match best {
+                Some(best) if best.plays >= tally.plays => Some(best),
+                Some(_) | None => Some(tally),
+            })
+    }
+
+    /// The arcade's most played game and its finishes, for the front
+    /// page's headline and its picture.
+    pub fn most_played_arcade(tallies: &[Self]) -> Option<(ArcadeGame, i64)> {
+        Self::most_played(tallies, Shelf::Arcade).map(|top| {
+            let game = top
+                .game
+                .arcade()
+                .expect("a tally on the arcade shelf is an arcade game");
+            (game, top.plays)
+        })
+    }
+}
+
+/// A game of the Arcade shelf: a daily puzzle or a score game. The front
+/// page draws one picture per variant, so a new arcade game breaks the
+/// build there until it has one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArcadeGame {
+    Puzzle(DailyPuzzle),
+    Score(ScoreGame),
+}
+
+impl ArcadeGame {
+    pub const fn title(self) -> &'static str {
+        match self {
+            Self::Puzzle(puzzle) => puzzle.title(),
+            Self::Score(game) => game.title(),
+        }
+    }
 }
 
 /// The first day of the week that ends on `last`.

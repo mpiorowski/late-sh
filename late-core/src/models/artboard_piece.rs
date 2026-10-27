@@ -390,29 +390,6 @@ impl ArtboardPiece {
         }))
     }
 
-    /// The newest piece still up that was hung at `since` or after and is
-    /// not in `excluding`: the herald's next piece (late-ssh `app/herald`),
-    /// which passes the pieces it already posted. No viewer, so no hand
-    /// is marked.
-    pub async fn newest_hung_since(
-        client: &impl GenericClient,
-        since: DateTime<Utc>,
-        excluding: &[Uuid],
-    ) -> Result<Option<Self>> {
-        let row = client
-            .query_opt(
-                &format!(
-                    "{PIECE_VIEW_SQL}
-                     WHERE p.created >= $2 AND NOT (p.id = ANY($3))
-                     ORDER BY p.created DESC
-                     LIMIT 1"
-                ),
-                &[&Uuid::nil(), &since, &excluding],
-            )
-            .await?;
-        Ok(row.map(Self::from))
-    }
-
     /// The splash wall's piece for one UTC day: the piece stamped
     /// `splash_on` that day, or, when no piece holds the day yet, the
     /// oldest piece never shown and hung before that day, claimed by

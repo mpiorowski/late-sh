@@ -19,7 +19,8 @@ use uuid::Uuid;
 use super::bluesky::tid_for;
 use super::bluesky_test::png;
 use super::state::{
-    BOARD_MIN_INK, BoardFound, BoardInk, Crop, Found, HeraldCommand, Look, post_due_day, shown_day,
+    BOARD_MIN_INK, BoardFound, BoardInk, Crop, Found, HeraldCommand, Look, post_due_day, schedule,
+    shown_day,
 };
 use super::svc::{
     CommandOutcome, DayWorked, HERALD_CLAIM_WINDOW, HERALD_MAX_ATTEMPTS, HeraldService, NextPost,
@@ -807,18 +808,35 @@ fn model_on(base: &str) -> AiService {
     AiService::at_endpoint(true, Some("test-key".to_string()), base.to_string())
 }
 
-/// A waiting piece beats the board; the model saw it clean, so both
-/// networks get the picture, credited and linking its page. Picked once:
-/// the next day the rotation falls back to the board.
+/// The first day after today on which the schedule leads with the piece:
+/// the wall shows a piece the day after it was hung at the earliest, and
+/// the test hangs one now.
+fn next_piece_day() -> NaiveDate {
+    let mut day = Utc::now().date_naive() + Duration::days(1);
+    while schedule(day)[0] != HeraldKind::Piece {
+        day += Duration::days(1);
+    }
+    day
+}
+
+/// On an art day the piece over the door beats the board; the model saw
+/// it clean, so both networks get the picture, credited and linking its
+/// page. The wall moves on: the next day has no piece and the board goes
+/// out.
 #[tokio::test]
 async fn a_clean_piece_goes_out_as_a_picture_and_only_once() {
+    use late_core::models::artboard_piece::ArtboardPiece;
+
     let test_db = new_test_db().await;
     let db = test_db.db.clone();
     let client = db.get().await.expect("db client");
     let (base, log) = fake_servers().await;
     HeraldSwitch::set(&client, true).await.expect("switch on");
-    let now = Utc.with_ymd_and_hms(2026, 10, 23, 16, 30, 0).unwrap();
-    let day = now.date_naive();
+    let day = next_piece_day();
+    let now = day
+        .and_hms_opt(16, 30, 0)
+        .expect("half past four")
+        .and_utc();
     daily_board(&client, shown_day(day), BOARD_MIN_INK).await;
     daily_board(&client, shown_day(day + Duration::days(1)), BOARD_MIN_INK).await;
     let artist = late_core::test_utils::create_test_user(&db, "herald-artist").await;
@@ -840,6 +858,14 @@ async fn a_clean_piece_goes_out_as_a_picture_and_only_once() {
     assert_eq!(
         (posted.kind, posted.subject.as_str()),
         (HeraldKind::Piece, format!("piece:{piece}").as_str())
+    );
+    assert_eq!(
+        ArtboardPiece::splash_for_day(&client, day)
+            .await
+            .expect("the wall")
+            .map(|over_the_door| over_the_door.id),
+        Some(piece),
+        "the post is the piece over the door that day"
     );
     {
         let log = log.lock().expect("log");
@@ -881,8 +907,11 @@ async fn a_clean_piece_goes_out_as_a_picture_and_only_once() {
         .expect("posted");
     assert_eq!(
         (next.kind, next.subject.as_str()),
-        (HeraldKind::Artboard, "daily:2026-10-23"),
-        "the piece went out once"
+        (
+            HeraldKind::Artboard,
+            Snapshot::daily_key(shown_day(day + Duration::days(1))).as_str()
+        ),
+        "the wall has no piece the next day"
     );
 }
 

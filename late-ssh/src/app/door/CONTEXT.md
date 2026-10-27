@@ -15,9 +15,9 @@ beside it (a selector, not a scroll). `HubGame` is the closed roster and
   Enter takes the same descent as `0` on the Clubhouse,
   `app/deadchannel/CONTEXT.md`), Lateania, the Realm.
 - **roguelikes:** DCSS, NetHack, Brogue.
-- **remakes:** A Dark Room, Zork Trilogy.
+- **remakes:** A Dark Room, Zork Trilogy, BashQuest.
 - **servers:** Minecraft, Vintage Story (info-only cards, Enter does nothing).
-- **doors:** Green Dragon, Usurper, dopewars, BashQuest, Rebels, CodeKeep.
+- **doors:** Green Dragon, Usurper, dopewars, Rebels, CodeKeep.
 
 Under the cards the rail pins a `live` section: one row per game someone is
 playing right now on a watchable door (DCSS, NetHack, Brogue, Zork). Sitting on

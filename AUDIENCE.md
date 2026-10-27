@@ -299,17 +299,21 @@ Live, in order of evidence behind them:
   `bot` self-label, posting through an app password; it asks that a bot
   never likes, reposts or replies unprompted, so the human half there is
   done from a person's own account.
-  - **What it posts.** One picture a day at 16:00 UTC, by a rotation:
-    on Sundays the week in every game (a scoreboard card, one line per
-    game anyone played with its best and no name: the arcade's daily
-    puzzles and high scores, the Lobby's chess, pool and card games by
-    wins that paid, the doors by their top run), else the newest gallery
-    piece hung in the last week and never posted (credited `~name`,
-    linking the piece's page; each piece goes out once), else
-    yesterday's Artboard snapshot cropped to what is drawn, once it has
-    enough ink to be a picture (linking the gallery), else the Late
-    Edition's front page as a card (the day in numbers, then the heads of
-    the prose columns; linking the edition), else nothing.
+  - **What it posts.** One picture a day at 16:00 UTC, by a weekly
+    schedule: on Monday, Tuesday, Thursday and Friday the piece over the
+    door, the splash wall's piece of the day (credited `~name`, linking
+    the piece's page; the wall is one queue in hang order, so the post
+    and the login screen show the same piece), else yesterday's Artboard
+    snapshot cropped to what is drawn, once it has enough ink to be a
+    picture (linking the gallery); on Wednesday and Saturday the Late
+    Edition's front page as a card (the most played arcade game with its
+    ASCII picture, the day in numbers, then the heads of the prose
+    columns; linking the edition); on Sunday the week in every game (a
+    scoreboard card, one line per game anyone played with its best and
+    no name: the arcade's daily puzzles and high scores, the Lobby's
+    chess, pool and card games by wins that paid, the doors by their top
+    run). A day whose kind has nothing falls through to the next, and a
+    day with nothing at all posts nothing.
     The scoreboard goes first because it has one day a week and a piece
     can wait a day; the week's window keeps a backlog from crowding out
     the board, and the launch from posting a year of pieces. Alt text
@@ -352,14 +356,14 @@ Live, in order of evidence behind them:
     (dull, a handful a month). Further out, each behind a PNG route:
     share cards with the `ssh late.sh` footer, a frame of the tavern or
     the night city, the rare headline events the #lounge feed treats as
-    stories. Unmeasured: how many
-    pieces a week wait, which decides how often the board still gets the
-    slot.
+    stories. How many pieces wait is the wall's queue depth
+    (`late_ssh_artboard_gallery_splash_queue_depth`), which decides how
+    often the board still gets an art day.
   - **What it never posts.** Chat. A frame of #lounge is people's
     messages on the public web; the Artboard, posters and cards are
     things people made to be seen, messages are not.
   - **The rhythm.** One post a day, never two. A muted account never
-    recovers; the rotation is so one slot never repeats, not so there are
+    recovers; the schedule is so one slot never repeats, not so there are
     more slots.
   - **The shape.** A late-ssh domain built like the paper's press: a
     checker on every replica, a `herald_posts` row per UTC day claimed by

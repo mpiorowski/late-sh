@@ -3,7 +3,9 @@
 //! no room's conversation goes out: the operator's `#announcements` as
 //! written, YESTERDAY ON LATE.SH, WHAT WE WERE READING, and OUTSIDE. The
 //! room columns stay inside the clubhouse. The press is
-//! `late-ssh/src/app/paper`; this module only reads the rows it prints.
+//! `late-ssh/src/app/paper`; this module only reads the rows it prints,
+//! and for the front-page card the day's tallies, to lead with the
+//! arcade's most played game and its picture (`arcade_art`).
 
 use std::collections::BTreeMap;
 
@@ -22,6 +24,7 @@ use late_core::{
     models::{
         chat_message::ChatMessage,
         chat_room::ChatRoom,
+        leaderboard::{ArcadeGame, DayTally, day_tallies},
         paper::{
             ANNOUNCEMENTS_LIMIT, ANNOUNCEMENTS_SLUG, EditionStep, PaperEdition, PaperSectionKind,
             PaperSectionRow,
@@ -154,9 +157,10 @@ async fn dated_handler(
     Ok((status, Html(page.render()?)).into_response())
 }
 
-/// The edition's front page as a card: the masthead, the dateline,
+/// The edition's front page as a card: the masthead, the dateline, the
+/// arcade's most played game of the covered day with its picture,
 /// YESTERDAY ON LATE.SH whole and the head of OUTSIDE and WHAT WE WERE
-/// READING, the picture the herald posts on a day with nothing drawn
+/// READING, the picture the herald posts on its paper days
 /// (`late-ssh/src/app/herald`). A path that is not a date, or an edition
 /// with no column printed, is 404.
 #[tracing::instrument(skip(state))]
@@ -177,8 +181,13 @@ async fn image_handler(
     let issue = PaperEdition::load(&client, edition)
         .await
         .context("failed to load the edition")?;
+    let covered = PaperEdition::window(edition).0.date_naive();
+    let tallies = day_tallies(&client, covered)
+        .await
+        .context("failed to read the covered day's tallies")?;
     let Some(lines) = front_page(
         edition,
+        DayTally::most_played_arcade(&tallies),
         &ready_column(&issue, PaperSectionKind::Yesterday),
         &ready_column(&issue, PaperSectionKind::Outside),
         &ready_column(&issue, PaperSectionKind::Reading),
@@ -199,11 +208,13 @@ fn ready_column(issue: &PaperEdition, kind: PaperSectionKind) -> Vec<String> {
     }
 }
 
-/// The front page's lines, `None` when no column printed. YESTERDAY's
-/// lines are numbers and few, so they all fit under the cap the prose
-/// columns are cut to.
+/// The front page's lines, `None` when no column printed: the most
+/// played arcade game first, when anyone played, with its picture and its
+/// finishes, then the columns. YESTERDAY's lines are numbers and few, so
+/// they all fit under the cap the prose columns are cut to.
 pub(crate) fn front_page(
     edition: NaiveDate,
+    most_played: Option<(ArcadeGame, i64)>,
     yesterday: &[String],
     outside: &[String],
     reading: &[String],
@@ -215,6 +226,21 @@ pub(crate) fn front_page(
         CardLine::new(Ink::Title, "THE LATE EDITION"),
         CardLine::new(Ink::Dim, edition.format("%A, %-d %B %Y").to_string()),
     ];
+    if let Some((game, plays)) = most_played {
+        lines.push(CardLine::blank());
+        lines.push(CardLine::new(Ink::Heading, "MOST PLAYED YESTERDAY"));
+        for row in arcade_art::art(game) {
+            lines.push(CardLine::new(Ink::Art, format!("  {row}")));
+        }
+        let finished = match plays {
+            1 => "1 game finished".to_string(),
+            plays => format!("{plays} games finished"),
+        };
+        lines.push(CardLine::new(
+            Ink::Body,
+            format!("{}, {finished}", game.title()),
+        ));
+    }
     for (kind, column) in [
         (PaperSectionKind::Yesterday, yesterday),
         (PaperSectionKind::Outside, outside),
@@ -458,5 +484,9 @@ fn push_column(html: &mut String, heading: &str, text: &str) {
     }
 }
 
+mod arcade_art;
+
+#[cfg(test)]
+mod arcade_art_test;
 #[cfg(test)]
 mod paper_test;

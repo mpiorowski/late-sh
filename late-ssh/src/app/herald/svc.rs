@@ -4,9 +4,10 @@
 //! (`state::HERALD_POST_TIME`) has passed, the `herald_posts` row for the
 //! day is the claim (root CONTEXT.md, multi-replica rule), so one replica
 //! posts. A claimed day is: find what it could post (the week's
-//! scoreboard on Sundays, a gallery piece waiting, yesterday's board with
+//! scoreboard on Sundays, the piece over the door, yesterday's board with
 //! `state::BOARD_MIN_INK` drawn cells, the day's paper) and pick one by the
-//! rotation (`state::Found::picture`), fetch it from late-web's PNG route,
+//! week's schedule (`state::schedule`, `state::Found::picture`), fetch it
+//! from late-web's PNG route,
 //! look at it (`look.rs`: the alt text and the warning) and store the pick
 //! and the look on the row, deliver it to every configured network that
 //! has no delivery yet (`mastodon.rs`, a note in place of a marked
@@ -36,8 +37,7 @@ use late_core::db::Db;
 use late_core::models::artboard::Snapshot;
 use late_core::models::artboard_piece::ArtboardPiece;
 use late_core::models::herald::{
-    HeraldDay, HeraldDayStatus, HeraldKind, HeraldNetwork, HeraldPick, HeraldPost, HeraldPosted,
-    HeraldSwitch,
+    HeraldDay, HeraldDayStatus, HeraldNetwork, HeraldPick, HeraldPost, HeraldPosted, HeraldSwitch,
 };
 use late_core::models::leaderboard::week_bests;
 use late_core::models::paper::{PaperEdition, PaperSectionKind};
@@ -133,7 +133,7 @@ pub(crate) enum CommandOutcome {
         today: Option<HeraldDay>,
     },
     /// What `/herald post` would send today, and where: what the day
-    /// could post and, when it is a post, the rotation's pick and a fresh
+    /// could post and, when it is a post, the schedule's pick and a fresh
     /// look at it. `found` is boxed: it carries every kind's candidate and
     /// would otherwise size the whole enum.
     Preview {
@@ -317,7 +317,7 @@ impl HeraldService {
                         return Ok(CommandOutcome::Unconfigured);
                     }
                     let found = self.find(today).await?;
-                    let post = match found.picture() {
+                    let post = match found.picture(today) {
                         Some(picture) => {
                             let png = self.fetch_picture(&picture).await?;
                             let look = self.look_at(&picture, &png).await;
@@ -648,7 +648,7 @@ impl HeraldService {
             let png = self.fetch_picture(&picture).await?;
             return Ok(Some(Pick { picture, look, png }));
         }
-        let Some(picture) = self.find(day).await?.picture() else {
+        let Some(picture) = self.find(day).await?.picture(day) else {
             return Ok(None);
         };
         let png = self.fetch_picture(&picture).await?;
@@ -689,7 +689,7 @@ impl HeraldService {
         look
     }
 
-    /// Everything the day could post, one read per kind; the rotation
+    /// Everything the day could post, one read per kind; the schedule
     /// (`state::Found::picture`) picks.
     async fn find(&self, day: NaiveDate) -> anyhow::Result<Found> {
         let client = self.db.get().await?;
@@ -705,21 +705,17 @@ impl HeraldService {
         })
     }
 
-    /// The newest piece hung inside the waiting window that no day picked
-    /// yet.
+    /// The piece over the door on `day`: the splash wall's piece for it
+    /// (`app/artboard/gallery`), claimed through the wall's own claim when
+    /// the gallery's hourly refresh has not yet, so the post and the login
+    /// screen show one piece. The wall is one queue in hang order, a day
+    /// each, so nothing here remembers what went out.
     async fn find_piece(
         &self,
         client: &late_core::db::PooledClient,
         day: NaiveDate,
     ) -> anyhow::Result<Option<PieceCandidate>> {
-        let start = state::piece_window_start(day);
-        let subjects = HeraldPost::subjects_since(client, HeraldKind::Piece, start).await?;
-        let picked = state::picked_pieces(&subjects)?;
-        let since = start
-            .and_hms_opt(0, 0, 0)
-            .expect("midnight exists on every date")
-            .and_utc();
-        Ok(ArtboardPiece::newest_hung_since(client, since, &picked)
+        Ok(ArtboardPiece::splash_for_day(client, day)
             .await?
             .map(|piece| PieceCandidate {
                 id: piece.id,

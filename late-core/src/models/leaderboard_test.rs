@@ -1192,3 +1192,39 @@ async fn a_days_tallies_count_the_days_finishes_by_game() {
         "every hub card is a door of the day's shelf"
     );
 }
+
+/// A shelf's most played game is the one with the most plays, the first
+/// in tally order on a tie, never one with none; the arcade's comes with
+/// its finishes and as an arcade game.
+#[test]
+fn the_most_played_game_of_a_shelf() {
+    use crate::models::door_opening::DoorCard;
+    use crate::models::leaderboard::{ArcadeGame, DayGame, DayTally, Shelf};
+    let tally = |game, plays| DayTally {
+        game,
+        plays,
+        won: 0,
+    };
+    let tallies = [
+        tally(DayGame::Daily(DailyPuzzle::Sudoku), 3),
+        tally(DayGame::Daily(DailyPuzzle::LeWord), 3),
+        tally(DayGame::Score(ScoreGame::Snake), 2),
+        tally(DayGame::Lobby(LobbyGame::Chess), 0),
+        tally(DayGame::Door(DoorCard::Nethack), 9),
+    ];
+    assert_eq!(
+        DayTally::most_played(&tallies, Shelf::Arcade),
+        Some(&tallies[0]),
+        "a tie goes to the first listed"
+    );
+    assert_eq!(DayTally::most_played(&tallies, Shelf::Lobby), None);
+    assert_eq!(
+        DayTally::most_played(&tallies, Shelf::Doors),
+        Some(&tallies[4])
+    );
+    assert_eq!(
+        DayTally::most_played_arcade(&tallies),
+        Some((ArcadeGame::Puzzle(DailyPuzzle::Sudoku), 3))
+    );
+    assert_eq!(DayTally::most_played_arcade(&tallies[3..]), None);
+}

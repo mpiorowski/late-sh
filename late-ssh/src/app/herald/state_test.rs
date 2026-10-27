@@ -8,8 +8,8 @@ use super::state::{
     ALT_MAX_CHARS, BOARD_MIN_INK, BlueskyMark, BoardCandidate, BoardFound, BoardInk, Crop, Found,
     HeraldCommand, Look, MastodonPost, PaperCandidate, Picture, PieceCandidate, ScoreLine,
     ScoreboardCandidate, Warning, Words, alt_text, bluesky_mark, drawn_area, ink_cells,
-    mastodon_post, note_text, parse_herald_command, picked_pieces, piece_window_start,
-    post_due_day, scoreboard_week, shown_day, status_text,
+    mastodon_post, note_text, parse_herald_command, post_due_day, schedule, scoreboard_week,
+    shown_day, status_text,
 };
 
 /// The shortest limit among the networks: Bluesky's 300 graphemes
@@ -447,46 +447,63 @@ fn the_board_is_a_post_at_the_ink_bar() {
     );
 }
 
-/// The rotation: the scoreboard on its Sunday, else a waiting piece, else
-/// the board with ink, else the paper, else nothing.
+/// The week's schedule, over the week of Monday 19 October 2026: art on
+/// Monday, Tuesday, Thursday and Friday (the piece over the door, else
+/// the board with ink), the paper on Wednesday and Saturday, the
+/// scoreboard on Sunday, each day falling through to the next kind with
+/// something; a bare day is nothing.
 #[test]
-fn the_rotation_takes_the_first_kind_that_has_something() {
-    let found = |sunday: bool, waiting: bool, ink: Option<usize>, printed: bool| Found {
-        scoreboard: sunday.then(scoreboard),
-        piece: waiting.then(piece),
+fn the_schedule_takes_the_days_first_kind_that_has_something() {
+    use HeraldKind::{Artboard, Paper, Piece, Scoreboard};
+    let found = |played: bool, over_the_door: bool, ink: Option<usize>, printed: bool| Found {
+        scoreboard: played.then(scoreboard),
+        piece: over_the_door.then(piece),
         board: found_board(ink),
         paper: printed.then(paper),
     };
     let bar = Some(BOARD_MIN_INK);
-    let picks: Vec<Option<HeraldKind>> = [
-        found(true, true, bar, true),
-        found(false, true, bar, true),
-        found(false, false, bar, true),
-        found(false, false, Some(3), true),
-        found(false, false, None, false),
-    ]
-    .iter()
-    .map(|found| found.picture().map(|picture| picture.kind()))
-    .collect();
+    let week = |found: &Found| -> Vec<Option<HeraldKind>> {
+        (19..=25)
+            .map(|d| found.picture(day(d)).map(|picture| picture.kind()))
+            .collect()
+    };
+    let some = |kinds: [HeraldKind; 7]| kinds.map(Some).to_vec();
+
     assert_eq!(
-        picks,
-        vec![
-            Some(HeraldKind::Scoreboard),
-            Some(HeraldKind::Piece),
-            Some(HeraldKind::Artboard),
-            Some(HeraldKind::Paper),
-            None,
-        ]
+        schedule(day(19)),
+        &[Piece, Artboard, Paper],
+        "a weekday leads with art"
+    );
+    assert_eq!(schedule(day(21)), &[Paper, Piece, Artboard]);
+    assert_eq!(schedule(day(25)), &[Scoreboard, Paper, Piece, Artboard]);
+    assert_eq!(
+        week(&found(true, true, bar, true)),
+        some([Piece, Piece, Paper, Piece, Piece, Paper, Scoreboard]),
+        "everything found: the schedule as written"
     );
     assert_eq!(
+        week(&found(false, false, bar, true)),
+        some([Artboard, Artboard, Paper, Artboard, Artboard, Paper, Paper]),
+        "no piece over the door, nobody played: the board on art days, the paper on Sunday"
+    );
+    assert_eq!(
+        week(&found(false, true, Some(3), false)),
+        some([Piece, Piece, Piece, Piece, Piece, Piece, Piece]),
+        "nothing printed, a bare board: the piece every day"
+    );
+    assert_eq!(
+        week(&found(false, false, Some(3), true)),
+        some([Paper, Paper, Paper, Paper, Paper, Paper, Paper]),
+        "only the paper printed"
+    );
+    assert_eq!(week(&found(false, false, None, false)), vec![None; 7]);
+    assert_eq!(
         found(false, false, None, false).describe(),
-        "no piece waiting, no board archived for 2026-10-22, no edition printed"
+        "no piece over the door, no board archived for 2026-10-22, no edition printed"
     );
 }
 
-/// The scoreboard falls on Sundays and shows the week to Saturday; a
-/// piece waits a week; the picked pieces read back from their subjects,
-/// and a subject that is not a piece's is refused.
+/// The scoreboard falls on Sundays and shows the week to Saturday.
 #[test]
 fn the_calendar_of_the_kinds() {
     let week: Vec<Option<NaiveDate>> = (19..=25).map(|d| scoreboard_week(day(d))).collect();
@@ -495,14 +512,6 @@ fn the_calendar_of_the_kinds() {
         vec![None, None, None, None, None, None, Some(day(24))],
         "19 October 2026 is a Monday"
     );
-    assert_eq!(piece_window_start(day(25)), day(18));
-    let id = Uuid::from_u128(7);
-    assert_eq!(
-        picked_pieces(&[format!("piece:{id}")]).expect("parse"),
-        vec![id]
-    );
-    assert!(picked_pieces(&["daily:2026-10-22".to_string()]).is_err());
-    assert!(picked_pieces(&["piece:nope".to_string()]).is_err());
 }
 
 /// The crop is the drawn cells with a margin, kept inside the board; a

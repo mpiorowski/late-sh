@@ -570,37 +570,3 @@ async fn the_newest_hanging_piece_names_its_artist() {
     assert_eq!(newest.title, latest.title);
     assert_eq!(newest.artist, second.username);
 }
-
-/// The herald's next piece: the newest still up, hung since the bound,
-/// and not one it already posted; a piece taken down is never offered.
-#[tokio::test]
-async fn the_heralds_next_piece_is_the_newest_not_yet_posted() {
-    let test_db = test_db().await;
-    let client = test_db.db.get().await.expect("db client");
-    let painter = create_test_user(&test_db.db, "herald-painter").await;
-    let since = Utc::now() - chrono::Duration::minutes(1);
-    let older = hang(&client, hang_params(painter.id, "older", "hash-older")).await;
-    let newer = hang(&client, hang_params(painter.id, "newer", "hash-newer")).await;
-
-    let next = |excluding: Vec<Uuid>, since| {
-        let client = &client;
-        async move {
-            ArtboardPiece::newest_hung_since(client, since, &excluding)
-                .await
-                .expect("next piece")
-                .map(|piece| piece.title)
-        }
-    };
-    assert_eq!(next(vec![], since).await, Some("newer".to_string()));
-    assert_eq!(next(vec![newer.id], since).await, Some("older".to_string()));
-    assert_eq!(next(vec![newer.id, older.id], since).await, None);
-    assert_eq!(
-        next(vec![], Utc::now() + chrono::Duration::minutes(1)).await,
-        None,
-        "hung before the bound"
-    );
-    ArtboardPiece::remove(&client, newer.id)
-        .await
-        .expect("take down");
-    assert_eq!(next(vec![], since).await, Some("older".to_string()));
-}
