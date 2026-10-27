@@ -63,6 +63,12 @@ pub(crate) const ANNOUNCEMENT_MAX_CHARS: usize = 240;
 /// An announcement's: no art tags on a post with no art.
 const ANNOUNCEMENT_TAGS: [&str; 2] = ["#tildeverse", "#terminal"];
 
+/// The site's own picture on late-web, the night-city skyline
+/// (`late-web/src/pages/shared/meta.rs`, `SITE_IMAGE_PATH`): the thumb of
+/// an announcement's link card on Bluesky, which has no card of its own
+/// for a post made through the API (the app builds one by hand).
+pub(crate) const SITE_IMAGE_PATH: &str = "/static/og-image.png";
+
 /// Blank cells the board's crop keeps around what is drawn.
 pub(crate) const CROP_MARGIN: usize = 2;
 
@@ -338,6 +344,9 @@ impl PaperCandidate {
 pub(crate) struct AnnouncementFound {
     pub(crate) edition: NaiveDate,
     pub(crate) text: String,
+    /// The edition's first line of OUTSIDE, else of WHAT WE WERE READING,
+    /// for the link card, the way the web's own card reads it.
+    pub(crate) summary: Option<String>,
 }
 
 /// Where an announcement's words came from.
@@ -366,15 +375,33 @@ pub(crate) struct AnnouncementCandidate {
     pub(crate) edition: NaiveDate,
     pub(crate) text: String,
     pub(crate) brief: Brief,
+    #[serde(default)]
+    pub(crate) summary: Option<String>,
+}
+
+/// The link card a Bluesky post of words alone carries
+/// (`app.bsky.embed.external`): the edition's page, named and described
+/// as the web's own preview card is.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct LinkCard {
+    pub(crate) uri: String,
+    pub(crate) title: String,
+    pub(crate) description: String,
 }
 
 impl AnnouncementCandidate {
     /// The words made safe for the account and cut to
     /// `ANNOUNCEMENT_MAX_CHARS`, whoever wrote them: markdown markers
-    /// dropped (`plain_lines`), dashes made commas (`no_dashes`), every
-    /// `@`, `#` and `scheme:` dead (`dead_words`), so a note as written
-    /// cannot tag or mention anyone and the model cannot either.
-    pub(crate) fn of(edition: NaiveDate, text: &str, brief: Brief) -> Self {
+    /// dropped and paragraphs kept (`plain_lines`), dashes made commas
+    /// (`no_dashes`), every `@`, `#` and `scheme:` dead (`dead_words`), so
+    /// a note as written cannot tag or mention anyone and the model
+    /// cannot either.
+    pub(crate) fn of(
+        edition: NaiveDate,
+        text: &str,
+        brief: Brief,
+        summary: Option<String>,
+    ) -> Self {
         Self {
             edition,
             text: cut_to(
@@ -382,6 +409,19 @@ impl AnnouncementCandidate {
                 ANNOUNCEMENT_MAX_CHARS,
             ),
             brief,
+            summary,
+        }
+    }
+
+    /// The card under the words on Bluesky.
+    pub(crate) fn link_card(&self, web_url: &str) -> LinkCard {
+        LinkCard {
+            uri: format!("{web_url}/paper/{}", self.edition),
+            title: format!("The Late Edition, {}", long_date(self.edition)),
+            description: match &self.summary {
+                Some(summary) => summary.clone(),
+                None => "late.sh's daily paper, printed once a day.".to_string(),
+            },
         }
     }
 }
@@ -396,15 +436,28 @@ pub(crate) fn no_dashes(text: &str) -> String {
 }
 
 /// `text` line by line, trimmed, without the markdown markers a note is
-/// written with (`#` headings, `-` and `*` bullets, `>` quotes), blank
-/// lines dropped. The note reads as sentences on a network that shows
-/// markdown as typed and reads `#word` as a tag.
+/// written with (`#` headings, `-` and `*` bullets, `>` quotes); a run of
+/// blank lines is one paragraph break, and none open or close the text.
+/// The note reads as paragraphs on a network that shows markdown as typed
+/// and reads `#word` as a tag.
 pub(crate) fn plain_lines(text: &str) -> String {
-    text.lines()
-        .map(|line| line.trim().trim_start_matches(['#', '-', '*', '>']).trim())
-        .filter(|line| !line.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut out = String::with_capacity(text.len());
+    let mut pending_break = false;
+    for line in text.lines() {
+        let line = line.trim().trim_start_matches(['#', '-', '*', '>']).trim();
+        if line.is_empty() {
+            pending_break = !out.is_empty();
+            continue;
+        }
+        if pending_break {
+            out.push_str("\n\n");
+            pending_break = false;
+        } else if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(line);
+    }
+    out
 }
 
 /// Everything a day could post, as found: the day's choice is the first
@@ -760,7 +813,9 @@ fn speech(picture: &Picture) -> (String, &'static [&'static str]) {
 
 /// The words under the picture, under Bluesky's 300 graphemes, the
 /// tightest limit among the networks (`state_test` holds it there, marks
-/// included): a line of plain speech, the page, the tags. A member a kind
+/// included): a line of plain speech (an announcement's paragraphs), the
+/// page (the paper's and an announcement's named, `Full edition:`, `Full
+/// notes:`, so the link reads as what it is), the tags. A member a kind
 /// credits is `~name`, never `@name`, so no bare `@` can ping a stranger
 /// on the instance, and a piece's title and an announcement go in dead
 /// (`dead_words`). Every network that shows the picture gets the same
@@ -769,6 +824,11 @@ pub(crate) fn status_text(picture: &Picture, web_url: &str, words: Words) -> Str
     let page = match picture.page_path() {
         Some(path) => format!("{web_url}{path}"),
         None => web_url.to_string(),
+    };
+    let page = match picture {
+        Picture::Board(_) | Picture::Piece(_) | Picture::Scoreboard(_) => page,
+        Picture::Paper(_) => format!("Full edition: {page}"),
+        Picture::Announcement(_) => format!("Full notes: {page}"),
     };
     let (speech, tags) = speech(picture);
     match words {

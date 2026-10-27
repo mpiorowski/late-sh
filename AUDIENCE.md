@@ -282,7 +282,7 @@ Live, in order of evidence behind them:
   one bearer token and two HTTP calls; federating profiles (ActivityPub,
   WebFinger, signed fetches, inbound moderation) is weeks of work and
   sends the visibility people want outward, away from the terminal.
-- **The herald: one picture a day on the Fediverse and Bluesky.** Built
+- **The herald: one post a day on the Fediverse and Bluesky.** Built
   (`late-ssh/src/app/herald/CONTEXT.md`) and live: both accounts post,
   and the `herald_settings` row is on in prod (`/herald off` stops it).
   One post a day, delivered to every network the herald has an account

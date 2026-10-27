@@ -196,7 +196,7 @@ otherwise.
 | `live` | The live strip (`now`) on #lounge and the Live panel (rows and keys in `PANEL.md`) |
 | `paper` | The Late Edition: the daily paper and its print sweeper |
 | `jobs` | The job feed: nightly press, posts, tags, matches |
-| `herald` | The herald: one picture a day on the Fediverse and Bluesky, the daily claim and the post |
+| `herald` | The herald: one post a day on the Fediverse and Bluesky, the daily claim and the post |
 | `usermap` | The People map |
 | `directory` | The People page and the profile editor |
 | `profile_modal` | The read-only profile modal and the chips ledger |

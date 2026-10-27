@@ -69,6 +69,7 @@ async fn fake_servers() -> (String, Log) {
         .route("/gallery/pieces/{id}/image.png", get(picture))
         .route("/games/week/{last}/image.png", get(picture))
         .route("/paper/{edition}/image.png", get(picture))
+        .route("/static/og-image.png", get(picture))
         .route("/api/v2/media", post(media))
         .route("/api/v1/statuses", post(status))
         .route("/xrpc/com.atproto.server.createSession", post(session))
@@ -1116,7 +1117,7 @@ async fn an_announcement_goes_out_as_words_the_day_its_edition_prints() {
     daily_board(&client, shown_day(day), BOARD_MIN_INK).await;
     announce(&db, &client, day, "herald-admin").await;
     log.lock().expect("log").gemini_reply = serde_json::json!({
-        "text": "A new late CLI is out, and server updates no longer kick you out: idle five minutes when we ship and your session moves to the new server by itself.",
+        "text": "A new late CLI is out, and server updates no longer kick you out.\n\nIdle five minutes when we ship and your session moves to the new server by itself.",
     })
     .to_string();
     let herald = service(db.clone(), &base, model_on(&base));
@@ -1131,13 +1132,17 @@ async fn an_announcement_goes_out_as_words_the_day_its_edition_prints() {
         (posted.kind, posted.subject.as_str()),
         (HeraldKind::Announcement, "announcement:2026-10-23")
     );
-    let words = "A new late CLI is out, and server updates no longer kick you out: idle five minutes when we ship and your session moves to the new server by itself.\n\nhttps://late.sh/paper/2026-10-23\n\n#tildeverse #terminal";
+    let words = "A new late CLI is out, and server updates no longer kick you out.\n\nIdle five minutes when we ship and your session moves to the new server by itself.\n\nFull notes: https://late.sh/paper/2026-10-23\n\n#tildeverse #terminal";
     {
         let log = log.lock().expect("log");
-        assert!(log.picture_paths.is_empty(), "nothing to fetch");
+        assert_eq!(
+            log.picture_paths,
+            vec!["/static/og-image.png"],
+            "only the card's thumb is fetched"
+        );
         assert_eq!((log.gemini_calls, log.gemini_images), (1, 0));
-        assert!(log.media_uploads.is_empty());
-        assert!(log.blobs.is_empty());
+        assert!(log.media_uploads.is_empty(), "no media on Mastodon");
+        assert_eq!(log.blobs.len(), 1, "the thumb");
         let status = &log.statuses[0].2;
         assert_eq!(status["status"], words);
         assert_eq!(status["media_ids"], serde_json::json!([]));
@@ -1145,7 +1150,12 @@ async fn an_announcement_goes_out_as_words_the_day_its_edition_prints() {
         assert!(status.get("spoiler_text").is_none(), "{status}");
         let record = &log.records[0].1["record"];
         assert_eq!(record["text"], words);
-        assert!(record.get("embed").is_none(), "{record}");
+        assert_eq!(record["embed"]["$type"], "app.bsky.embed.external");
+        let external = &record["embed"]["external"];
+        assert_eq!(external["uri"], "https://late.sh/paper/2026-10-23");
+        assert_eq!(external["title"], "The Late Edition, 23 October 2026");
+        assert_eq!(external["description"], "The world turned.");
+        assert!(external.get("thumb").is_some(), "{record}");
         assert!(record.get("labels").is_none(), "{record}");
         let facets = record["facets"].as_array().expect("facets");
         assert!(
@@ -1175,12 +1185,13 @@ async fn an_announcement_goes_out_as_words_the_day_its_edition_prints() {
     let status = log.statuses[1].2["status"].as_str().expect("text");
     assert!(
         status.starts_with(
-            "Server updates no longer kick you out\nA new `late` CLI is out: `curl -fsSL https: //cli.late.sh/install.sh | bash`\n"
+            "Server updates no longer kick you out\n\nA new `late` CLI is out: `curl -fsSL https: //cli.late.sh/install.sh | bash`\n"
         ),
         "the note as written, dead: {status}"
     );
     assert!(
-        status.ends_with("https://late.sh/paper/2026-10-24\n\n#tildeverse #terminal"),
+        status
+            .ends_with("\n\nFull notes: https://late.sh/paper/2026-10-24\n\n#tildeverse #terminal"),
         "{status}"
     );
 }

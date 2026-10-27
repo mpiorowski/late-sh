@@ -7,9 +7,10 @@ use uuid::Uuid;
 use super::state::{
     ALT_MAX_CHARS, ANNOUNCEMENT_MAX_CHARS, AnnouncementCandidate, AnnouncementFound, BOARD_MIN_INK,
     BlueskyMark, BoardCandidate, BoardFound, BoardInk, Brief, Choice, Crop, Found, HeraldCommand,
-    Look, MastodonPost, PaperCandidate, Picture, PieceCandidate, ScoreLine, ScoreboardCandidate,
-    Warning, Words, alt_text, bluesky_mark, drawn_area, ink_cells, mastodon_post, note_text,
-    parse_herald_command, post_due_day, schedule, scoreboard_week, shown_day, status_text,
+    LinkCard, Look, MastodonPost, PaperCandidate, Picture, PieceCandidate, ScoreLine,
+    ScoreboardCandidate, Warning, Words, alt_text, bluesky_mark, drawn_area, ink_cells,
+    mastodon_post, note_text, parse_herald_command, post_due_day, schedule, scoreboard_week,
+    shown_day, status_text,
 };
 
 /// The shortest limit among the networks: Bluesky's 300 graphemes
@@ -72,8 +73,9 @@ fn paper() -> PaperCandidate {
 fn announcement() -> AnnouncementCandidate {
     AnnouncementCandidate {
         edition: day(24),
-        text: "Server updates no longer kick you out: on the late CLI, an idle session moves to the new server by itself.".to_string(),
+        text: "Server updates no longer kick you out.\n\nOn the late CLI, an idle session moves to the new server by itself.".to_string(),
         brief: Brief::Model,
+        summary: Some("The world turned.".to_string()),
     }
 }
 
@@ -222,9 +224,30 @@ fn the_words_fit_and_never_mention_anyone() {
         "https://late.sh",
         Words::Plain,
     );
+    assert_eq!(
+        announced,
+        "Server updates no longer kick you out.\n\nOn the late CLI, an idle session moves to the new server by itself.\n\nFull notes: https://late.sh/paper/2026-10-24\n\n#tildeverse #terminal"
+    );
     assert!(
-        announced.starts_with("Server updates no longer kick you out:"),
-        "{announced}"
+        status_text(&Picture::Paper(paper()), "https://late.sh", Words::Plain)
+            .contains("\n\nFull edition: https://late.sh/paper/2026-10-24\n\n"),
+    );
+    assert_eq!(
+        announcement().link_card("https://late.sh"),
+        LinkCard {
+            uri: "https://late.sh/paper/2026-10-24".to_string(),
+            title: "The Late Edition, 24 October 2026".to_string(),
+            description: "The world turned.".to_string(),
+        }
+    );
+    assert_eq!(
+        AnnouncementCandidate {
+            summary: None,
+            ..announcement()
+        }
+        .link_card("https://late.sh")
+        .description,
+        "late.sh's daily paper, printed once a day."
     );
     let credited = status_text(&Picture::Piece(piece()), "https://late.sh", Words::Plain);
     assert!(
@@ -456,12 +479,12 @@ fn the_look_round_trips_and_writes_the_alt() {
 #[test]
 fn an_announcements_words_are_plain_dead_and_cut() {
     let note = "# Server updates no longer kick you out\n\n## Update your CLI\n\n- Run `curl -fsSL https://cli.late.sh/install.sh | bash`\n- Thanks @mat — see #lounge\n";
-    let cut = AnnouncementCandidate::of(day(24), note, Brief::Cut);
+    let cut = AnnouncementCandidate::of(day(24), note, Brief::Cut, None);
     assert_eq!(
         cut.text,
-        "Server updates no longer kick you out\nUpdate your CLI\nRun `curl -fsSL https: //cli.late.sh/install.sh | bash`\nThanks mat, see lounge"
+        "Server updates no longer kick you out\n\nUpdate your CLI\n\nRun `curl -fsSL https: //cli.late.sh/install.sh | bash`\nThanks mat, see lounge"
     );
-    let long = AnnouncementCandidate::of(day(24), &"word ".repeat(100), Brief::Model);
+    let long = AnnouncementCandidate::of(day(24), &"word ".repeat(100), Brief::Model, None);
     assert_eq!(long.text.chars().count(), ANNOUNCEMENT_MAX_CHARS);
     assert!(long.text.ends_with('…'));
     let text = status_text(
@@ -475,7 +498,7 @@ fn an_announcements_words_are_plain_dead_and_cut() {
         text.chars().count()
     );
     assert!(
-        text.ends_with("https://late.sh/paper/2026-10-24\n\n#tildeverse #terminal"),
+        text.ends_with("\n\nFull notes: https://late.sh/paper/2026-10-24\n\n#tildeverse #terminal"),
         "{text}"
     );
 }
@@ -571,6 +594,7 @@ fn the_schedule_takes_the_days_first_kind_that_has_something() {
         announcement: Some(AnnouncementFound {
             edition: day(19),
             text: "A new late CLI is out.".to_string(),
+            summary: None,
         }),
         ..found(true, true, bar, true)
     };

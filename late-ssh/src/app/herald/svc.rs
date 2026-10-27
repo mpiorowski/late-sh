@@ -112,8 +112,11 @@ enum Media {
         png: Vec<u8>,
         alt: String,
     },
-    /// An announcement: the words are the post.
-    Words,
+    /// An announcement: the words are the post, with the site's picture
+    /// as the thumb of its link card where a network wants one.
+    Words {
+        thumb: Vec<u8>,
+    },
 }
 
 /// What working a day came to, for the checker and for `/herald post`.
@@ -547,11 +550,11 @@ impl HeraldService {
                     state::status_text(&picture, &self.web_url, Words::Plain),
                     mastodon::Body::Picture { png, alt },
                 ),
-                (MastodonPost::Picture, Media::Words) => (
+                (MastodonPost::Picture, Media::Words { .. }) => (
                     state::status_text(&picture, &self.web_url, Words::Plain),
                     mastodon::Body::Words,
                 ),
-                (MastodonPost::Note { warning }, Media::Png { .. } | Media::Words) => (
+                (MastodonPost::Note { warning }, Media::Png { .. } | Media::Words { .. }) => (
                     state::note_text(&picture, &self.web_url),
                     mastodon::Body::Note { warning },
                 ),
@@ -573,15 +576,29 @@ impl HeraldService {
         {
             let mark = state::bluesky_mark(&look);
             let text = state::status_text(&picture, &self.web_url, mark.words);
+            let card = match &picture {
+                Picture::Announcement(announcement) => Some(announcement.link_card(&self.web_url)),
+                Picture::Board(_)
+                | Picture::Piece(_)
+                | Picture::Scoreboard(_)
+                | Picture::Paper(_) => None,
+            };
+            let embed = match (&media, &card) {
+                (Media::Png { png, alt }, _) => bluesky::Embed::Picture { png, alt },
+                (Media::Words { thumb }, Some(card)) => bluesky::Embed::Card {
+                    uri: &card.uri,
+                    title: &card.title,
+                    description: &card.description,
+                    thumb,
+                },
+                (Media::Words { .. }, None) => bail!("words alone come with a link card"),
+            };
             let sent = bluesky::deliver(
                 &self.http,
                 config,
                 bluesky::Post {
                     key,
-                    picture: match &media {
-                        Media::Png { png, alt } => Some(bluesky::Picture { png, alt }),
-                        Media::Words => None,
-                    },
+                    embed,
                     text: &text,
                     label: mark.label,
                     created_at: now,
@@ -723,11 +740,11 @@ impl HeraldService {
             }
         };
         metrics::record_herald_brief(result);
-        AnnouncementCandidate::of(found.edition, &words, brief)
+        AnnouncementCandidate::of(found.edition, &words, brief, found.summary.clone())
     }
 
     /// A fresh pick's look and media: the picture fetched and looked at,
-    /// or words alone, drawn.
+    /// or words alone, drawn, with the site's picture for their card.
     async fn look_and_media(&self, picture: &Picture) -> anyhow::Result<(Look, Media)> {
         match picture.picture_path() {
             Some(path) => {
@@ -738,19 +755,24 @@ impl HeraldService {
                 };
                 Ok((look, Media::Png { png, alt }))
             }
-            None => Ok((Look::Drawn, Media::Words)),
+            None => {
+                let thumb = self.fetch_picture(state::SITE_IMAGE_PATH).await?;
+                Ok((Look::Drawn, Media::Words { thumb }))
+            }
         }
     }
 
     /// A stored pick's media: the picture fetched again, its alt text from
-    /// the stored look, or words alone.
+    /// the stored look, or words alone with the site's picture.
     async fn fetch_media(&self, picture: &Picture, look: &Look) -> anyhow::Result<Media> {
         match (picture.picture_path(), state::alt_text(picture, look)) {
             (Some(path), Some(alt)) => Ok(Media::Png {
                 png: self.fetch_picture(&path).await?,
                 alt,
             }),
-            (None, None) => Ok(Media::Words),
+            (None, None) => Ok(Media::Words {
+                thumb: self.fetch_picture(state::SITE_IMAGE_PATH).await?,
+            }),
             (Some(_), None) | (None, Some(_)) => {
                 bail!("a picture and its alt text come together")
             }
@@ -793,12 +815,16 @@ impl HeraldService {
             None => None,
         };
         let issue = PaperEdition::load(&client, day).await?;
+        let paper = Self::find_paper(&issue);
+        let summary = paper
+            .as_ref()
+            .and_then(|paper| paper.outside.clone().or_else(|| paper.reading.clone()));
         Ok(Found {
-            announcement: Self::find_announcement(&client, &issue).await?,
+            announcement: Self::find_announcement(&client, &issue, summary).await?,
             scoreboard,
             piece: self.find_piece(&client, day).await?,
             board: self.find_board(&client, day).await?,
-            paper: Self::find_paper(&issue),
+            paper,
         })
     }
 
@@ -806,10 +832,11 @@ impl HeraldService {
     /// written, oldest first, once the press has swept the edition (the
     /// same line the paper draws, `app/paper`): the post goes out the day
     /// the note is on the edition's page. No room, or nothing said, is
-    /// `None`.
+    /// `None`. `summary` is the edition's first line for the link card.
     async fn find_announcement(
         client: &tokio_postgres::Client,
         issue: &PaperEdition,
+        summary: Option<String>,
     ) -> anyhow::Result<Option<AnnouncementFound>> {
         if !issue.is_swept() {
             return Ok(None);
@@ -832,6 +859,7 @@ impl HeraldService {
         }
         Ok(Some(AnnouncementFound {
             edition: issue.edition,
+            summary,
             text: posts
                 .iter()
                 .map(|post| post.body.as_str())
