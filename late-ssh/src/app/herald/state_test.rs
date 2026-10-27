@@ -499,7 +499,9 @@ fn an_announcements_words_are_plain_dead_and_cut() {
         text.chars().count()
     );
     assert!(
-        text.ends_with("\n\nFull notes: https://late.sh/paper/2026-10-24\n\n#tildeverse #terminal #TUI"),
+        text.ends_with(
+            "\n\nFull notes: https://late.sh/paper/2026-10-24\n\n#tildeverse #terminal #TUI"
+        ),
         "{text}"
     );
 }

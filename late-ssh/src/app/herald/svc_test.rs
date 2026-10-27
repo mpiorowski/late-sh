@@ -1190,8 +1190,9 @@ async fn an_announcement_goes_out_as_words_the_day_its_edition_prints() {
         "the note as written, dead: {status}"
     );
     assert!(
-        status
-            .ends_with("\n\nFull notes: https://late.sh/paper/2026-10-24\n\n#tildeverse #terminal #TUI"),
+        status.ends_with(
+            "\n\nFull notes: https://late.sh/paper/2026-10-24\n\n#tildeverse #terminal #TUI"
+        ),
         "{status}"
     );
 }
