@@ -31,18 +31,24 @@ const MIN_WIDTH: u32 = 320;
 /// spell it.
 const TID_ALPHABET: &[u8; 32] = b"234567abcdefghijklmnopqrstuvwxyz";
 
-/// What goes out with the picture.
+/// What goes out.
 pub(crate) struct Post<'a> {
     /// The day's key: the record key is derived from it, so a retry puts
     /// the same record again instead of a second post.
     pub(crate) key: Uuid,
-    pub(crate) png: &'a [u8],
+    /// `None` posts the words alone, with no embed.
+    pub(crate) picture: Option<Picture<'a>>,
     pub(crate) text: &'a str,
-    pub(crate) alt: &'a str,
     /// The self-label the record carries (`state::bluesky_mark`), if any.
     pub(crate) label: Option<&'a str>,
     /// When the post says it was made.
     pub(crate) created_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// The picture a post embeds, with its alt text.
+pub(crate) struct Picture<'a> {
+    pub(crate) png: &'a [u8],
+    pub(crate) alt: &'a str,
 }
 
 #[derive(Deserialize)]
@@ -72,18 +78,23 @@ pub(crate) struct Fitted {
     pub(crate) height: u32,
 }
 
-/// Fit, session, blob, record. The post's URL on bsky.app comes back. The
-/// fit is image work, so it runs on the blocking pool, and first: a
-/// picture that cannot fit spends no login.
+/// Fit, session, blob, record; words alone skip the fit and the blob. The
+/// post's URL on bsky.app comes back. The fit is image work, so it runs
+/// on the blocking pool, and first: a picture that cannot fit spends no
+/// login.
 pub(crate) async fn deliver(
     http: &reqwest::Client,
     config: &BlueskyConfig,
     post: Post<'_>,
 ) -> anyhow::Result<String> {
-    let png = post.png.to_vec();
-    let fitted = tokio::task::spawn_blocking(move || fit_under(&png, BLOB_MAX_BYTES)).await??;
+    let fitted = match &post.picture {
+        Some(picture) => {
+            let png = picture.png.to_vec();
+            Some(tokio::task::spawn_blocking(move || fit_under(&png, BLOB_MAX_BYTES)).await??)
+        }
+        None => None,
+    };
     let session = create_session(http, config).await?;
-    let blob = upload_blob(http, config, &session, fitted.png).await?;
     let rkey = tid_for(post.key);
     let mut record = json!({
         "$type": "app.bsky.feed.post",
@@ -91,15 +102,18 @@ pub(crate) async fn deliver(
         "createdAt": post.created_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         "langs": ["en"],
         "facets": facets(post.text),
-        "embed": {
+    });
+    if let (Some(picture), Some(fitted)) = (&post.picture, fitted) {
+        let blob = upload_blob(http, config, &session, fitted.png).await?;
+        record["embed"] = json!({
             "$type": "app.bsky.embed.images",
             "images": [{
-                "alt": post.alt,
+                "alt": picture.alt,
                 "image": blob,
                 "aspectRatio": { "width": fitted.width, "height": fitted.height },
             }],
-        },
-    });
+        });
+    }
     if let Some(label) = post.label {
         record["labels"] = json!({
             "$type": "com.atproto.label.defs#selfLabels",

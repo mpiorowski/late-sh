@@ -1,7 +1,7 @@
 //! The Mastodon leg of a delivery: the media upload and the status call
 //! for a picture, the status call alone for a note behind a warning
-//! (`state::mastodon_post`), against any server speaking the Mastodon
-//! API. Returns the status's URL or an error; `svc.rs` logs and counts.
+//! (`state::mastodon_post`) or for words with no picture (an
+//! announcement), against any server speaking the Mastodon API. Returns the status's URL or an error; `svc.rs` logs and counts.
 
 use std::time::Duration;
 
@@ -30,7 +30,7 @@ pub(crate) struct Post<'a> {
     pub(crate) body: Body<'a>,
 }
 
-/// A clean picture, or a note in its place.
+/// A clean picture, a note in its place, or words alone.
 pub(crate) enum Body<'a> {
     Picture {
         png: &'a [u8],
@@ -40,6 +40,8 @@ pub(crate) enum Body<'a> {
     Note {
         warning: &'a str,
     },
+    /// No media and no warning: the words are the post.
+    Words,
 }
 
 /// `POST /api/v1/statuses` as the instance reads it.
@@ -65,8 +67,8 @@ struct StatusResponse {
     url: Option<String>,
 }
 
-/// Upload the picture, then post the status carrying it; a note is the
-/// status alone. The status's public URL comes back.
+/// Upload the picture, then post the status carrying it; a note and words
+/// alone are the status alone. The status's public URL comes back.
 pub(crate) async fn deliver(
     http: &reqwest::Client,
     config: &MastodonConfig,
@@ -80,6 +82,7 @@ pub(crate) async fn deliver(
         Body::Note { warning } => {
             post_status(http, config, post.key, post.text, Carries::Warning(warning)).await
         }
+        Body::Words => post_status(http, config, post.key, post.text, Carries::Nothing).await,
     }
 }
 
@@ -151,11 +154,12 @@ enum Carries<'a> {
     Media(&'a str),
     /// A note's content warning.
     Warning(&'a str),
+    Nothing,
 }
 
 /// `POST /api/v1/statuses` with the day's key as `Idempotency-Key`: the
 /// picture's media, or the note's warning as the status's content
-/// warning, the status marked sensitive.
+/// warning, the status marked sensitive, or the words alone.
 async fn post_status(
     http: &reqwest::Client,
     config: &MastodonConfig,
@@ -167,6 +171,7 @@ async fn post_status(
     let (media_ids, spoiler_text) = match carries {
         Carries::Media(id) => (vec![id], None),
         Carries::Warning(warning) => (Vec::new(), Some(warning)),
+        Carries::Nothing => (Vec::new(), None),
     };
     let body = StatusBody {
         status: text,

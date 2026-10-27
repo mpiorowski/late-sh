@@ -1,6 +1,9 @@
 pub(crate) mod bluesky;
 #[cfg(test)]
 mod bluesky_test;
+pub(crate) mod brief;
+#[cfg(test)]
+mod brief_test;
 pub(crate) mod look;
 #[cfg(test)]
 mod look_test;

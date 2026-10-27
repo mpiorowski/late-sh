@@ -3,15 +3,17 @@
 //! checks every `HERALD_CHECK_INTERVAL`; once the day's post time
 //! (`state::HERALD_POST_TIME`) has passed, the `herald_posts` row for the
 //! day is the claim (root CONTEXT.md, multi-replica rule), so one replica
-//! posts. A claimed day is: find what it could post (the week's
-//! scoreboard on Sundays, the piece over the door, yesterday's board with
-//! `state::BOARD_MIN_INK` drawn cells, the day's paper) and pick one by the
-//! week's schedule (`state::schedule`, `state::Found::picture`), fetch it
-//! from late-web's PNG route,
-//! look at it (`look.rs`: the alt text and the warning) and store the pick
-//! and the look on the row, deliver it to every configured network that
-//! has no delivery yet (`mastodon.rs`, a note in place of a marked
-//! picture; `bluesky.rs`), settle the row once all have one. A failed day marks
+//! posts. A claimed day is: find what it could post (the operator's
+//! announcements the edition carries, the week's scoreboard on Sundays,
+//! the piece over the door, yesterday's board with `state::BOARD_MIN_INK`
+//! drawn cells, the day's paper) and pick one, an announcement first,
+//! else by the week's schedule (`state::schedule`, `state::Found::choice`);
+//! an announcement is briefed into words (`brief.rs`), a picture is
+//! fetched from late-web's PNG route and looked at (`look.rs`: the alt
+//! text and the warning); the pick and the look are stored on the row,
+//! delivered to every configured network that has no delivery yet
+//! (`mastodon.rs`, a note in place of a marked picture; `bluesky.rs`), and
+//! the row settled once all have one. A failed day marks
 //! its row and the next check claims it again, up to
 //! `HERALD_MAX_ATTEMPTS`, reusing the stored pick and skipping the
 //! networks already delivered; a claim whose replica died is taken over
@@ -36,25 +38,32 @@ use chrono::{DateTime, NaiveDate, Utc};
 use late_core::db::Db;
 use late_core::models::artboard::Snapshot;
 use late_core::models::artboard_piece::ArtboardPiece;
+use late_core::models::chat_message::ChatMessage;
+use late_core::models::chat_room::ChatRoom;
 use late_core::models::herald::{
     HeraldDay, HeraldDayStatus, HeraldNetwork, HeraldPick, HeraldPost, HeraldPosted, HeraldSwitch,
 };
 use late_core::models::leaderboard::week_bests;
-use late_core::models::paper::{PaperEdition, PaperSectionKind};
+use late_core::models::paper::{
+    ANNOUNCEMENTS_LIMIT, ANNOUNCEMENTS_SLUG, PaperEdition, PaperSectionKind,
+};
 use tokio::sync::broadcast;
 use tracing::Instrument;
 use uuid::Uuid;
 
 use super::state::{
-    self, BoardFound, BoardInk, Found, HeraldCommand, Look, MastodonPost, PaperCandidate, Picture,
-    PieceCandidate, ScoreboardCandidate, Words,
+    self, AnnouncementCandidate, AnnouncementFound, BoardFound, BoardInk, Brief, Choice, Found,
+    HeraldCommand, Look, MastodonPost, PaperCandidate, Picture, PieceCandidate,
+    ScoreboardCandidate, Words,
 };
-use super::{bluesky, look, mastodon};
+use super::{bluesky, brief, look, mastodon};
 use crate::app::ai::svc::AiService;
 use crate::app::common::primitives::Banner;
 use crate::app::state::App;
 use crate::config::HeraldConfig;
-use crate::metrics::{self, HeraldDeliveryResult, HeraldLookResult, HeraldPostResult};
+use crate::metrics::{
+    self, HeraldBriefResult, HeraldDeliveryResult, HeraldLookResult, HeraldPostResult,
+};
 
 /// How often each replica asks whether the day's post is due and
 /// unclaimed. The steady state is one flag read per check.
@@ -90,11 +99,21 @@ pub(crate) enum Outcome {
 }
 
 /// The day's pick, ready to deliver: the picture, what the look saw in
-/// it, and its bytes.
+/// it, and what goes up with the words.
 struct Pick {
     picture: Picture,
     look: Look,
-    png: Vec<u8>,
+    media: Media,
+}
+
+/// What a post carries besides its words.
+enum Media {
+    Png {
+        png: Vec<u8>,
+        alt: String,
+    },
+    /// An announcement: the words are the post.
+    Words,
 }
 
 /// What working a day came to, for the checker and for `/herald post`.
@@ -133,8 +152,8 @@ pub(crate) enum CommandOutcome {
         today: Option<HeraldDay>,
     },
     /// What `/herald post` would send today, and where: what the day
-    /// could post and, when it is a post, the schedule's pick and a fresh
-    /// look at it. `found` is boxed: it carries every kind's candidate and
+    /// could post and, when it is a post, the day's pick, briefed or with a
+    /// fresh look at it. `found` is boxed: it carries every kind's candidate and
     /// would otherwise size the whole enum.
     Preview {
         day: NaiveDate,
@@ -317,10 +336,9 @@ impl HeraldService {
                         return Ok(CommandOutcome::Unconfigured);
                     }
                     let found = self.find(today).await?;
-                    let post = match found.picture(today) {
+                    let post = match self.choose(&found, today).await {
                         Some(picture) => {
-                            let png = self.fetch_picture(&picture).await?;
-                            let look = self.look_at(&picture, &png).await;
+                            let (look, _) = self.look_and_media(&picture).await?;
                             Some((picture, look))
                         }
                         None => None,
@@ -503,10 +521,14 @@ impl HeraldService {
         key: Uuid,
         now: DateTime<Utc>,
     ) -> anyhow::Result<Outcome> {
-        let Some(Pick { picture, look, png }) = self.pick_for(day).await? else {
+        let Some(Pick {
+            picture,
+            look,
+            media,
+        }) = self.pick_for(day).await?
+        else {
             return Ok(Outcome::Skipped);
         };
-        let alt = state::alt_text(&picture, &look);
         let delivered: Vec<HeraldNetwork> = {
             let client = self.db.get().await?;
             HeraldPost::deliveries(&client, day)
@@ -520,15 +542,16 @@ impl HeraldService {
         if let Some(config) = &self.config.mastodon
             && !delivered.contains(&HeraldNetwork::Mastodon)
         {
-            let (text, body) = match state::mastodon_post(&look) {
-                MastodonPost::Picture => (
+            let (text, body) = match (state::mastodon_post(&look), &media) {
+                (MastodonPost::Picture, Media::Png { png, alt }) => (
                     state::status_text(&picture, &self.web_url, Words::Plain),
-                    mastodon::Body::Picture {
-                        png: &png,
-                        alt: &alt,
-                    },
+                    mastodon::Body::Picture { png, alt },
                 ),
-                MastodonPost::Note { warning } => (
+                (MastodonPost::Picture, Media::Words) => (
+                    state::status_text(&picture, &self.web_url, Words::Plain),
+                    mastodon::Body::Words,
+                ),
+                (MastodonPost::Note { warning }, Media::Png { .. } | Media::Words) => (
                     state::note_text(&picture, &self.web_url),
                     mastodon::Body::Note { warning },
                 ),
@@ -555,9 +578,11 @@ impl HeraldService {
                 config,
                 bluesky::Post {
                     key,
-                    png: &png,
+                    picture: match &media {
+                        Media::Png { png, alt } => Some(bluesky::Picture { png, alt }),
+                        Media::Words => None,
+                    },
                     text: &text,
-                    alt: &alt,
                     label: mark.label,
                     created_at: now,
                 },
@@ -632,9 +657,9 @@ impl HeraldService {
     }
 
     /// The day's pick with its picture fetched: the one an earlier claim
-    /// stored, look and all, else a fresh pick looked at and stored now,
-    /// before the first network call. `None` is a day with nothing worth
-    /// posting.
+    /// stored, look and all, else a fresh pick briefed or looked at and
+    /// stored now, before the first network call. `None` is a day with
+    /// nothing worth posting.
     async fn pick_for(&self, day: NaiveDate) -> anyhow::Result<Option<Pick>> {
         let stored = {
             let client = self.db.get().await?;
@@ -645,21 +670,91 @@ impl HeraldService {
                 serde_json::from_value(stored.picture).context("decoding the stored picture")?;
             let look: Look =
                 serde_json::from_value(stored.look).context("decoding the stored look")?;
-            let png = self.fetch_picture(&picture).await?;
-            return Ok(Some(Pick { picture, look, png }));
+            let media = self.fetch_media(&picture, &look).await?;
+            return Ok(Some(Pick {
+                picture,
+                look,
+                media,
+            }));
         }
-        let Some(picture) = self.find(day).await?.picture(day) else {
+        let found = self.find(day).await?;
+        let Some(picture) = self.choose(&found, day).await else {
             return Ok(None);
         };
-        let png = self.fetch_picture(&picture).await?;
-        let look = self.look_at(&picture, &png).await;
+        let (look, media) = self.look_and_media(&picture).await?;
         let stored = HeraldPick {
             picture: serde_json::to_value(&picture).context("encoding the picture")?,
             look: serde_json::to_value(&look).context("encoding the look")?,
         };
         let client = self.db.get().await?;
         HeraldPost::store_pick(&client, day, picture.kind(), &picture.subject(), &stored).await?;
-        Ok(Some(Pick { picture, look, png }))
+        Ok(Some(Pick {
+            picture,
+            look,
+            media,
+        }))
+    }
+
+    /// The day's post from what was found: an announcement briefed into
+    /// its words, else the schedule's picture.
+    async fn choose(&self, found: &Found, day: NaiveDate) -> Option<Picture> {
+        match found.choice(day)? {
+            Choice::Picture(picture) => Some(picture),
+            Choice::Announcement(found) => Some(Picture::Announcement(self.brief(&found).await)),
+        }
+    }
+
+    /// The words of an announcement, for a fresh pick or an admin's
+    /// preview: the model's, counted here, or the note as written and
+    /// cut when AI is off or the model failed, the failure logged here,
+    /// once. The post goes out either way.
+    async fn brief(&self, found: &AnnouncementFound) -> AnnouncementCandidate {
+        let (words, brief, result) = match brief::brief(&self.ai, &found.text).await {
+            Ok(Some(words)) => (words, Brief::Model, HeraldBriefResult::Model),
+            Ok(None) => (found.text.clone(), Brief::Cut, HeraldBriefResult::AsWritten),
+            Err(error) => {
+                late_core::error_span!(
+                    "herald_brief_failed",
+                    error = ?error,
+                    edition = %found.edition,
+                    "the herald's brief failed; posting the note as written, cut"
+                );
+                (found.text.clone(), Brief::Cut, HeraldBriefResult::Failed)
+            }
+        };
+        metrics::record_herald_brief(result);
+        AnnouncementCandidate::of(found.edition, &words, brief)
+    }
+
+    /// A fresh pick's look and media: the picture fetched and looked at,
+    /// or words alone, drawn.
+    async fn look_and_media(&self, picture: &Picture) -> anyhow::Result<(Look, Media)> {
+        match picture.picture_path() {
+            Some(path) => {
+                let png = self.fetch_picture(&path).await?;
+                let look = self.look_at(picture, &png).await;
+                let Some(alt) = state::alt_text(picture, &look) else {
+                    bail!("a picture and its alt text come together");
+                };
+                Ok((look, Media::Png { png, alt }))
+            }
+            None => Ok((Look::Drawn, Media::Words)),
+        }
+    }
+
+    /// A stored pick's media: the picture fetched again, its alt text from
+    /// the stored look, or words alone.
+    async fn fetch_media(&self, picture: &Picture, look: &Look) -> anyhow::Result<Media> {
+        match (picture.picture_path(), state::alt_text(picture, look)) {
+            (Some(path), Some(alt)) => Ok(Media::Png {
+                png: self.fetch_picture(&path).await?,
+                alt,
+            }),
+            (None, None) => Ok(Media::Words),
+            (Some(_), None) | (None, Some(_)) => {
+                bail!("a picture and its alt text come together")
+            }
+        }
     }
 
     /// The look at a picture, for a fresh pick or an admin's preview:
@@ -689,20 +784,60 @@ impl HeraldService {
         look
     }
 
-    /// Everything the day could post, one read per kind; the schedule
-    /// (`state::Found::picture`) picks.
+    /// Everything the day could post, one read per kind; the day's choice
+    /// (`state::Found::choice`) picks.
     async fn find(&self, day: NaiveDate) -> anyhow::Result<Found> {
         let client = self.db.get().await?;
         let scoreboard = match state::scoreboard_week(day) {
             Some(last) => ScoreboardCandidate::of(last, &week_bests(&client, last).await?),
             None => None,
         };
+        let issue = PaperEdition::load(&client, day).await?;
         Ok(Found {
+            announcement: Self::find_announcement(&client, &issue).await?,
             scoreboard,
             piece: self.find_piece(&client, day).await?,
             board: self.find_board(&client, day).await?,
-            paper: self.find_paper(&client, day).await?,
+            paper: Self::find_paper(&issue),
         })
+    }
+
+    /// The operator's `#announcements` over the edition's window, as
+    /// written, oldest first, once the press has swept the edition (the
+    /// same line the paper draws, `app/paper`): the post goes out the day
+    /// the note is on the edition's page. No room, or nothing said, is
+    /// `None`.
+    async fn find_announcement(
+        client: &tokio_postgres::Client,
+        issue: &PaperEdition,
+    ) -> anyhow::Result<Option<AnnouncementFound>> {
+        if !issue.is_swept() {
+            return Ok(None);
+        }
+        let Some(room) = ChatRoom::find_public_non_dm_by_slug(client, ANNOUNCEMENTS_SLUG).await?
+        else {
+            return Ok(None);
+        };
+        let (floor, ceiling) = PaperEdition::window(issue.edition);
+        let posts = ChatMessage::list_public_room_between_with_author(
+            client,
+            room.id,
+            floor,
+            ceiling,
+            ANNOUNCEMENTS_LIMIT,
+        )
+        .await?;
+        if posts.is_empty() {
+            return Ok(None);
+        }
+        Ok(Some(AnnouncementFound {
+            edition: issue.edition,
+            text: posts
+                .iter()
+                .map(|post| post.body.as_str())
+                .collect::<Vec<_>>()
+                .join("\n\n"),
+        }))
     }
 
     /// The piece over the door on `day`: the splash wall's piece for it
@@ -724,20 +859,15 @@ impl HeraldService {
             }))
     }
 
-    /// The edition dated `day`, which reads the day before, once a public
-    /// column of it printed.
-    async fn find_paper(
-        &self,
-        client: &tokio_postgres::Client,
-        day: NaiveDate,
-    ) -> anyhow::Result<Option<PaperCandidate>> {
-        let issue = PaperEdition::load(client, day).await?;
-        Ok(PaperCandidate::of(
-            day,
+    /// The edition dated the day, which reads the day before, once a
+    /// public column of it printed.
+    fn find_paper(issue: &PaperEdition) -> Option<PaperCandidate> {
+        PaperCandidate::of(
+            issue.edition,
             issue.ready_text(PaperSectionKind::Yesterday),
             issue.ready_text(PaperSectionKind::Outside),
             issue.ready_text(PaperSectionKind::Reading),
-        ))
+        )
     }
 
     /// Yesterday's board as the rollover archived it, with its ink counted
@@ -764,9 +894,9 @@ impl HeraldService {
     /// PNG is an error: a 404 (a piece taken down since its pick), or the
     /// redirect to the landing page an older late-web answers for a route
     /// it does not have yet, would otherwise go out as the picture.
-    async fn fetch_picture(&self, picture: &Picture) -> anyhow::Result<Vec<u8>> {
+    async fn fetch_picture(&self, path: &str) -> anyhow::Result<Vec<u8>> {
         use late_core::telemetry::TracedExt;
-        let url = format!("{}{}", self.config.web_internal_url, picture.picture_path());
+        let url = format!("{}{path}", self.config.web_internal_url);
         let response = self
             .http
             .get(&url)
@@ -924,14 +1054,29 @@ fn banner_for(outcome: CommandOutcome) -> Banner {
             post,
             networks,
         } => match post {
-            Some((picture, look)) => Banner::info(&format!(
-                "Would post {} to {} for {day}, {}, {}. Alt: {}",
-                picture.subject(),
-                names(&networks),
-                describe_look(&look),
-                describe_mastodon(&look),
-                state::alt_text(&picture, &look),
-            )),
+            Some((picture, look)) => {
+                let shown = match &picture {
+                    Picture::Announcement(announcement) => format!(
+                        "Words ({}): {}",
+                        announcement.brief.as_str(),
+                        announcement.text
+                    ),
+                    Picture::Board(_)
+                    | Picture::Piece(_)
+                    | Picture::Scoreboard(_)
+                    | Picture::Paper(_) => format!(
+                        "Alt: {}",
+                        state::alt_text(&picture, &look).expect("a picture has alt text")
+                    ),
+                };
+                Banner::info(&format!(
+                    "Would post {} to {} for {day}, {}, {}. {shown}",
+                    picture.subject(),
+                    names(&networks),
+                    describe_look(&look),
+                    describe_mastodon(&look),
+                ))
+            }
             None => Banner::info(&format!("Nothing to post for {day}: {}", found.describe())),
         },
         CommandOutcome::Worked(DayWorked::Posted(posted)) => Banner::success(&format!(

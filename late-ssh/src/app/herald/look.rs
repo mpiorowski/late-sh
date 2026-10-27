@@ -77,7 +77,9 @@ pub(crate) async fn look(ai: &AiService, picture: &Picture, png: &[u8]) -> anyho
                 piece.title,
             ),
         ),
-        Picture::Scoreboard(_) | Picture::Paper(_) => return Ok(Look::Drawn),
+        Picture::Scoreboard(_) | Picture::Paper(_) | Picture::Announcement(_) => {
+            return Ok(Look::Drawn);
+        }
     };
     if !ai.is_enabled() {
         return Ok(Look::Unseen);

@@ -35,8 +35,11 @@ pub enum HeraldKind {
     Piece,
     /// The week's best in every game, on Sundays.
     Scoreboard,
-    /// The Late Edition's card, on a day with nothing drawn.
+    /// The Late Edition's card, on its paper days.
     Paper,
+    /// The operator's `#announcements` of the day an edition covers, as
+    /// one text-only post the day the edition prints.
+    Announcement,
 }
 
 impl HeraldKind {
@@ -46,6 +49,7 @@ impl HeraldKind {
             Self::Piece => "piece",
             Self::Scoreboard => "scoreboard",
             Self::Paper => "paper",
+            Self::Announcement => "announcement",
         }
     }
 
@@ -55,6 +59,7 @@ impl HeraldKind {
             "piece" => Ok(Self::Piece),
             "scoreboard" => Ok(Self::Scoreboard),
             "paper" => Ok(Self::Paper),
+            "announcement" => Ok(Self::Announcement),
             other => bail!("unknown herald kind {other:?}"),
         }
     }

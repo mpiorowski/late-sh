@@ -639,6 +639,7 @@ async fn the_commands_flip_read_and_post_today_by_hand() {
         CommandOutcome::Preview {
             day: today,
             found: Box::new(Found {
+                announcement: None,
                 scoreboard: None,
                 piece: None,
                 board: BoardFound {
@@ -1040,4 +1041,146 @@ async fn a_page_where_the_picture_should_be_fails_the_day() {
     assert_eq!(log.picture_paths.len(), 1);
     assert!(log.statuses.is_empty());
     assert!(log.records.is_empty());
+}
+
+/// The note of the day, as the operator posts it in `#announcements`.
+const NOTE: &str = "# Server updates no longer kick you out\n\n- A new `late` CLI is out: `curl -fsSL https://cli.late.sh/install.sh | bash`\n- Idle 5 minutes when we ship, and your session moves to the new server by itself.";
+
+/// `NOTE` posted in `#announcements` on the day `edition` covers, and the
+/// edition swept (one public column printed), the way the paper's tests
+/// set a day up.
+async fn announce(db: &late_core::db::Db, client: &Client, edition: NaiveDate, author: &str) {
+    use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::paper::{PaperEdition, PaperSectionKind, PaperSectionRow};
+
+    let room = ChatRoom::find_non_dm_by_slug(client, "announcements")
+        .await
+        .expect("find announcements")
+        .expect("announcements room");
+    let admin = late_core::test_utils::create_test_user(db, author).await;
+    let message = ChatMessage::create(
+        client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: admin.id,
+            body: NOTE.to_string(),
+        },
+    )
+    .await
+    .expect("post the note");
+    let (floor, _) = PaperEdition::window(edition);
+    client
+        .execute(
+            "UPDATE chat_messages SET created = $2 WHERE id = $1",
+            &[&message.id, &(floor + Duration::hours(1))],
+        )
+        .await
+        .expect("backdate the note");
+    assert!(
+        PaperSectionRow::claim_printing(
+            client,
+            edition,
+            PaperSectionKind::Outside,
+            Utc::now() - Duration::minutes(15),
+            3,
+        )
+        .await
+        .expect("claim")
+    );
+    PaperSectionRow::finish(
+        client,
+        edition,
+        PaperSectionKind::Outside,
+        Some("The world turned."),
+    )
+    .await
+    .expect("print");
+}
+
+/// The operator's word goes out the day its edition prints, ahead of the
+/// schedule, as words alone: the model's brief on both networks (no media
+/// on Mastodon, no embed on Bluesky, the edition's page linked), nothing
+/// fetched from late-web and nothing shown to the model but the note; and
+/// when the model's answer is unusable, the note as written, cut.
+#[tokio::test]
+async fn an_announcement_goes_out_as_words_the_day_its_edition_prints() {
+    let test_db = new_test_db().await;
+    let db = test_db.db.clone();
+    let client = db.get().await.expect("db client");
+    let (base, log) = fake_servers().await;
+    HeraldSwitch::set(&client, true).await.expect("switch on");
+    // A Friday: an art day, and a board with ink waits and loses.
+    let now = Utc.with_ymd_and_hms(2026, 10, 23, 16, 30, 0).unwrap();
+    let day = now.date_naive();
+    daily_board(&client, shown_day(day), BOARD_MIN_INK).await;
+    announce(&db, &client, day, "herald-admin").await;
+    log.lock().expect("log").gemini_reply = serde_json::json!({
+        "text": "A new late CLI is out, and server updates no longer kick you out: idle five minutes when we ship and your session moves to the new server by itself.",
+    })
+    .to_string();
+    let herald = service(db.clone(), &base, model_on(&base));
+    let mut finished = None;
+
+    assert!(herald.check(now, &mut finished).await);
+    let posted = HeraldPost::posted_on(&client, day)
+        .await
+        .expect("read")
+        .expect("posted");
+    assert_eq!(
+        (posted.kind, posted.subject.as_str()),
+        (HeraldKind::Announcement, "announcement:2026-10-23")
+    );
+    let words = "A new late CLI is out, and server updates no longer kick you out: idle five minutes when we ship and your session moves to the new server by itself.\n\nhttps://late.sh/paper/2026-10-23\n\n#tildeverse #terminal";
+    {
+        let log = log.lock().expect("log");
+        assert!(log.picture_paths.is_empty(), "nothing to fetch");
+        assert_eq!((log.gemini_calls, log.gemini_images), (1, 0));
+        assert!(log.media_uploads.is_empty());
+        assert!(log.blobs.is_empty());
+        let status = &log.statuses[0].2;
+        assert_eq!(status["status"], words);
+        assert_eq!(status["media_ids"], serde_json::json!([]));
+        assert_eq!(status["sensitive"], false);
+        assert!(status.get("spoiler_text").is_none(), "{status}");
+        let record = &log.records[0].1["record"];
+        assert_eq!(record["text"], words);
+        assert!(record.get("embed").is_none(), "{record}");
+        assert!(record.get("labels").is_none(), "{record}");
+        let facets = record["facets"].as_array().expect("facets");
+        assert!(
+            facets
+                .iter()
+                .any(|facet| { facet["features"][0]["uri"] == "https://late.sh/paper/2026-10-23" }),
+            "{facets:?}"
+        );
+    }
+
+    // The next day, a Saturday: another note, and the model answers junk.
+    let next = day + Duration::days(1);
+    announce(&db, &client, next, "herald-admin-again").await;
+    log.lock().expect("log").gemini_reply = "not json".to_string();
+    assert!(herald.check(now + Duration::days(1), &mut finished).await);
+    let posted = HeraldPost::posted_on(&client, next)
+        .await
+        .expect("read")
+        .expect("posted");
+    assert_eq!(posted.kind, HeraldKind::Announcement);
+    let stored = HeraldPost::stored_pick(&client, next)
+        .await
+        .expect("read")
+        .expect("stored");
+    assert_eq!(stored.picture["Announcement"]["brief"], "cut");
+    let log = log.lock().expect("log");
+    let status = log.statuses[1].2["status"].as_str().expect("text");
+    assert!(
+        status.starts_with(
+            "Server updates no longer kick you out\nA new `late` CLI is out: `curl -fsSL https: //cli.late.sh/install.sh | bash`\n"
+        ),
+        "the note as written, dead: {status}"
+    );
+    assert!(
+        status.ends_with("https://late.sh/paper/2026-10-24\n\n#tildeverse #terminal"),
+        "{status}"
+    );
 }

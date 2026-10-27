@@ -156,6 +156,18 @@ pub enum HeraldLookResult {
     Drawn,
 }
 
+/// What the herald's brief (`app/herald/brief.rs`) came to, once per
+/// announcement it words: a day's fresh pick or an admin's preview.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeraldBriefResult {
+    /// The model compressed the note.
+    Model,
+    /// AI is off: the note as written, cut.
+    AsWritten,
+    /// The model failed: the note as written, cut.
+    Failed,
+}
+
 /// How one radio roll call (`app/audio`, every `RADIO_ROLL_CALL_INTERVAL`
 /// on every replica) went: `Called` wrote this replica's paired radio
 /// listeners down for the day, `Failed` stopped at the first listener it
@@ -775,15 +787,16 @@ mod inner {
         BioScreenOutcome, DailyPuzzle, DailyWinPayout, DoorCard, DoorGame, DoorOpeningResult,
         DoorWatchOutcome, FightBeat, FirstContactBeat, GalleryApplauseResult, GalleryHangResult,
         GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
-        HeraldDeliveryResult, HeraldLookResult, HeraldPostResult, JobsFetchResult, JobsPostResult,
-        JobsPressResult, JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure,
-        NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult,
-        PaperPrintResult, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence,
-        PresenceScope, PresenceWire, RadioRollCallResult, RadioStation, RealmChatRoomAttach,
-        RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
-        RoundRefusal, RunnerDoor, Screen, SendRefusal, SessionStartStage, SessionUser,
-        SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
-        ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
+        HeraldBriefResult, HeraldDeliveryResult, HeraldLookResult, HeraldPostResult,
+        JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, LoungeBeat,
+        NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
+        OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult, Place,
+        PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire,
+        RadioRollCallResult, RadioStation, RealmChatRoomAttach, RealmPayout, RealmSeasonOpen,
+        RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor,
+        Screen, SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
+        SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
+        VizWireBands, WatchDoor,
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
@@ -3696,6 +3709,31 @@ mod inner {
         );
     }
 
+    fn herald_brief_result_label(result: HeraldBriefResult) -> &'static str {
+        match result {
+            HeraldBriefResult::Model => "model",
+            HeraldBriefResult::AsWritten => "as_written",
+            HeraldBriefResult::Failed => "failed",
+        }
+    }
+
+    fn herald_briefs_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_herald_briefs_total")
+                .with_description("The herald's brief of an announcement, by result")
+                .build()
+        })
+    }
+
+    pub fn record_herald_brief(result: HeraldBriefResult) {
+        herald_briefs_total().add(
+            1,
+            &[KeyValue::new("result", herald_brief_result_label(result))],
+        );
+    }
+
     fn jobs_fetch_result_label(result: JobsFetchResult) -> &'static str {
         match result {
             JobsFetchResult::Fetched => "fetched",
@@ -4262,15 +4300,16 @@ mod inner {
         BioScreenOutcome, DailyPuzzle, DailyWinPayout, DoorCard, DoorGame, DoorOpeningResult,
         DoorWatchOutcome, FightBeat, FirstContactBeat, GalleryApplauseResult, GalleryHangResult,
         GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
-        HeraldDeliveryResult, HeraldLookResult, HeraldPostResult, JobsFetchResult, JobsPostResult,
-        JobsPressResult, JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure,
-        NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult,
-        PaperPrintResult, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence,
-        PresenceScope, PresenceWire, RadioRollCallResult, RadioStation, RealmChatRoomAttach,
-        RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason,
-        RoundRefusal, RunnerDoor, Screen, SendRefusal, SessionStartStage, SessionUser,
-        SnapshotRowError, SongQueueReward, SshRejectReason, SummaryResult, TailorBeat,
-        ThumbnailFetch, TranslationResult, VizWireBands, WatchDoor,
+        HeraldBriefResult, HeraldDeliveryResult, HeraldLookResult, HeraldPostResult,
+        JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, LoungeBeat,
+        NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
+        OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult, Place,
+        PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire,
+        RadioRollCallResult, RadioStation, RealmChatRoomAttach, RealmPayout, RealmSeasonOpen,
+        RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason, RoundRefusal, RunnerDoor,
+        Screen, SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
+        SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
+        VizWireBands, WatchDoor,
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
@@ -4431,6 +4470,7 @@ mod inner {
     ) {
     }
     pub fn record_herald_look(_result: HeraldLookResult) {}
+    pub fn record_herald_brief(_result: HeraldBriefResult) {}
     pub fn record_jobs_fetch(
         _source: late_core::models::job_posting::JobSource,
         _result: JobsFetchResult,

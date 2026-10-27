@@ -299,8 +299,11 @@ Live, in order of evidence behind them:
   `bot` self-label, posting through an app password; it asks that a bot
   never likes, reposts or replies unprompted, so the human half there is
   done from a person's own account.
-  - **What it posts.** One picture a day at 16:00 UTC, by a weekly
-    schedule: on Monday, Tuesday, Thursday and Friday the piece over the
+  - **What it posts.** One post a day at 16:00 UTC. The operator's word
+    first: a day whose edition carries `#announcements` posts goes out
+    as words alone, the note compressed by the model into one post that
+    links the edition for the note in full, whatever the weekday. Else a
+    picture, by a weekly schedule: on Monday, Tuesday, Thursday and Friday the piece over the
     door, the splash wall's piece of the day (credited `~name`, linking
     the piece's page; the wall is one queue in hang order, so the post
     and the login screen show the same piece), else yesterday's Artboard

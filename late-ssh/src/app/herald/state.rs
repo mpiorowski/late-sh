@@ -54,6 +54,15 @@ const NSFW_TAG: &str = "#nsfw";
 /// Mastodon allows 1,500; the model is asked for 800.
 pub(crate) const ALT_MAX_CHARS: usize = 1000;
 
+/// The longest an announcement's words run: under Bluesky's 300 with what
+/// `status_text` puts after them, the edition's page
+/// (`https://late.sh/paper/YYYY-MM-DD`, 32), two blank lines (4) and
+/// `ANNOUNCEMENT_TAGS` (21). The brief is asked for this many.
+pub(crate) const ANNOUNCEMENT_MAX_CHARS: usize = 240;
+
+/// An announcement's: no art tags on a post with no art.
+const ANNOUNCEMENT_TAGS: [&str; 2] = ["#tildeverse", "#terminal"];
+
 /// Blank cells the board's crop keeps around what is drawn.
 pub(crate) const CROP_MARGIN: usize = 2;
 
@@ -322,10 +331,88 @@ impl PaperCandidate {
     }
 }
 
-/// Everything a day could post, as found: the schedule picks one
-/// (`picture`).
+/// The operator's `#announcements` posts of the day an edition covers, as
+/// written, once the edition is swept: what the brief compresses
+/// (`brief.rs`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct AnnouncementFound {
+    pub(crate) edition: NaiveDate,
+    pub(crate) text: String,
+}
+
+/// Where an announcement's words came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum Brief {
+    /// The model compressed the note.
+    Model,
+    /// The note as written, cut at the limit: the model is off or failed.
+    Cut,
+}
+
+impl Brief {
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::Model => "model",
+            Self::Cut => "cut",
+        }
+    }
+}
+
+/// The day's announcement as it goes out: one text, no picture, the
+/// edition's page under it for the full note.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct AnnouncementCandidate {
+    pub(crate) edition: NaiveDate,
+    pub(crate) text: String,
+    pub(crate) brief: Brief,
+}
+
+impl AnnouncementCandidate {
+    /// The words made safe for the account and cut to
+    /// `ANNOUNCEMENT_MAX_CHARS`, whoever wrote them: markdown markers
+    /// dropped (`plain_lines`), dashes made commas (`no_dashes`), every
+    /// `@`, `#` and `scheme:` dead (`dead_words`), so a note as written
+    /// cannot tag or mention anyone and the model cannot either.
+    pub(crate) fn of(edition: NaiveDate, text: &str, brief: Brief) -> Self {
+        Self {
+            edition,
+            text: cut_to(
+                &dead_words(&no_dashes(&plain_lines(text))),
+                ANNOUNCEMENT_MAX_CHARS,
+            ),
+            brief,
+        }
+    }
+}
+
+/// `text` with every em or en dash used as punctuation made a comma: the
+/// house style has none, and the model reaches for them whatever the
+/// prompt says.
+pub(crate) fn no_dashes(text: &str) -> String {
+    text.replace(" — ", ", ")
+        .replace(" – ", ", ")
+        .replace(['—', '–'], ", ")
+}
+
+/// `text` line by line, trimmed, without the markdown markers a note is
+/// written with (`#` headings, `-` and `*` bullets, `>` quotes), blank
+/// lines dropped. The note reads as sentences on a network that shows
+/// markdown as typed and reads `#word` as a tag.
+pub(crate) fn plain_lines(text: &str) -> String {
+    text.lines()
+        .map(|line| line.trim().trim_start_matches(['#', '-', '*', '>']).trim())
+        .filter(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Everything a day could post, as found: the day's choice is the first
+/// with something (`choice`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Found {
+    /// The edition's announcements, when the operator spoke.
+    pub(crate) announcement: Option<AnnouncementFound>,
     /// Sundays only, and only when anyone played.
     pub(crate) scoreboard: Option<ScoreboardCandidate>,
     /// The day's piece over the door, when the wall has one.
@@ -334,16 +421,30 @@ pub(crate) struct Found {
     pub(crate) paper: Option<PaperCandidate>,
 }
 
+/// What a day posts: a picture, or an announcement still to be briefed
+/// (the brief is a model call, `svc.rs`'s to make).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum Choice {
+    Picture(Picture),
+    Announcement(AnnouncementFound),
+}
+
 impl Found {
-    /// The day's post: the first kind of the day's `schedule` that has
-    /// something, else nothing.
-    pub(crate) fn picture(&self, day: NaiveDate) -> Option<Picture> {
-        schedule(day).iter().find_map(|kind| self.of(*kind))
+    /// The day's post: an announcement jumps the schedule, else the first
+    /// kind of the day's `schedule` that has something, else nothing.
+    pub(crate) fn choice(&self, day: NaiveDate) -> Option<Choice> {
+        [HeraldKind::Announcement]
+            .iter()
+            .chain(schedule(day))
+            .find_map(|kind| self.of(*kind))
     }
 
     /// What was found of one kind.
-    fn of(&self, kind: HeraldKind) -> Option<Picture> {
-        match kind {
+    fn of(&self, kind: HeraldKind) -> Option<Choice> {
+        let picture = match kind {
+            HeraldKind::Announcement => {
+                return self.announcement.clone().map(Choice::Announcement);
+            }
             HeraldKind::Scoreboard => self
                 .scoreboard
                 .as_ref()
@@ -357,13 +458,14 @@ impl Found {
                 .paper
                 .as_ref()
                 .map(|paper| Picture::Paper(paper.clone())),
-        }
+        };
+        picture.map(Choice::Picture)
     }
 
     /// Why a bare day is bare, for the admin's banner.
     pub(crate) fn describe(&self) -> String {
         format!(
-            "no piece over the door, {}, no edition printed",
+            "no announcement, no piece over the door, {}, no edition printed",
             self.board.describe()
         )
     }
@@ -378,6 +480,8 @@ pub(crate) enum Picture {
     Piece(PieceCandidate),
     Scoreboard(ScoreboardCandidate),
     Paper(PaperCandidate),
+    /// Words only: no picture, no look.
+    Announcement(AnnouncementCandidate),
 }
 
 impl Picture {
@@ -387,6 +491,7 @@ impl Picture {
             Self::Piece(_) => HeraldKind::Piece,
             Self::Scoreboard(_) => HeraldKind::Scoreboard,
             Self::Paper(_) => HeraldKind::Paper,
+            Self::Announcement(_) => HeraldKind::Announcement,
         }
     }
 
@@ -397,22 +502,24 @@ impl Picture {
             Self::Piece(piece) => format!("piece:{}", piece.id),
             Self::Scoreboard(scoreboard) => format!("week:{}", scoreboard.last),
             Self::Paper(paper) => format!("paper:{}", paper.edition),
+            Self::Announcement(announcement) => format!("announcement:{}", announcement.edition),
         }
     }
 
     /// The picture's route on late-web (`late-web/CONTEXT.md`, the PNG
-    /// routes).
-    pub(crate) fn picture_path(&self) -> String {
+    /// routes); `None` for a post of words alone.
+    pub(crate) fn picture_path(&self) -> Option<String> {
         match self {
-            Self::Board(board) => format!(
+            Self::Board(board) => Some(format!(
                 "/gallery/{}/image.png?crop={},{},{},{}",
                 board.key, board.crop.x, board.crop.y, board.crop.width, board.crop.height
-            ),
-            Self::Piece(piece) => format!("/gallery/pieces/{}/image.png", piece.id),
+            )),
+            Self::Piece(piece) => Some(format!("/gallery/pieces/{}/image.png", piece.id)),
             Self::Scoreboard(scoreboard) => {
-                format!("/games/week/{}/image.png", scoreboard.last)
+                Some(format!("/games/week/{}/image.png", scoreboard.last))
             }
-            Self::Paper(paper) => format!("/paper/{}/image.png", paper.edition),
+            Self::Paper(paper) => Some(format!("/paper/{}/image.png", paper.edition)),
+            Self::Announcement(_) => None,
         }
     }
 
@@ -420,13 +527,15 @@ impl Picture {
     /// The board links the gallery itself, not the day's snapshot: the
     /// Artboard keeps only the newest seven dailies
     /// (`app/artboard/CONTEXT.md`), and a post outlives that by years. The
-    /// scoreboard has no page; the boards live in the terminal.
+    /// scoreboard has no page; the boards live in the terminal. An
+    /// announcement links the edition, which carries the note in full.
     pub(crate) fn page_path(&self) -> Option<String> {
         match self {
             Self::Board(_) => Some("/gallery".to_string()),
             Self::Piece(piece) => Some(format!("/gallery/pieces/{}", piece.id)),
             Self::Scoreboard(_) => None,
             Self::Paper(paper) => Some(format!("/paper/{}", paper.edition)),
+            Self::Announcement(announcement) => Some(format!("/paper/{}", announcement.edition)),
         }
     }
 }
@@ -597,12 +706,13 @@ fn week_span(last: NaiveDate) -> String {
     )
 }
 
-/// A piece's title as the words carry it, dead to every network: a
-/// member typed it, and the official account must not mention, tag or
-/// link whatever it says. `@` and `#` go, with the full-width forms
-/// Mastodon also reads, and a colon always has a space after it, so no
-/// `scheme:` survives to open a link (`https: //`, `magnet: ?`).
-fn title_words(title: &str) -> String {
+/// Words the words carry dead to every network: a piece's title a member
+/// typed, an announcement the operator or the model wrote, and the
+/// official account must not mention, tag or link whatever they say. `@`
+/// and `#` go, with the full-width forms Mastodon also reads, and a colon
+/// always has a space after it, so no `scheme:` survives to open a link
+/// (`https: //`, `magnet: ?`).
+pub(crate) fn dead_words(title: &str) -> String {
     let mut out = String::with_capacity(title.len());
     let mut chars = title.chars().peekable();
     while let Some(ch) = chars.next() {
@@ -634,7 +744,7 @@ fn speech(picture: &Picture) -> (String, &'static [&'static str]) {
         Picture::Piece(piece) => (
             format!(
                 "\"{}\" by ~{}, hung in the late.sh gallery: drawn cell by cell on the shared ASCII canvas, over SSH.",
-                title_words(&piece.title),
+                dead_words(&piece.title),
                 piece.artist,
             ),
             &ART_TAGS,
@@ -653,6 +763,7 @@ fn speech(picture: &Picture) -> (String, &'static [&'static str]) {
             ),
             &PAPER_TAGS,
         ),
+        Picture::Announcement(announcement) => (announcement.text.clone(), &ANNOUNCEMENT_TAGS),
     }
 }
 
@@ -693,7 +804,7 @@ pub(crate) fn note_text(picture: &Picture, web_url: &str) -> String {
         ),
         Picture::Piece(piece) => format!(
             "\"{}\" by ~{}, a new piece in the late.sh gallery",
-            title_words(&piece.title),
+            dead_words(&piece.title),
             piece.artist
         ),
         Picture::Scoreboard(scoreboard) => format!(
@@ -701,6 +812,9 @@ pub(crate) fn note_text(picture: &Picture, web_url: &str) -> String {
             long_date(scoreboard.last)
         ),
         Picture::Paper(paper) => format!("The Late Edition for {}", long_date(paper.edition)),
+        Picture::Announcement(announcement) => {
+            format!("late.sh's news of {}", long_date(announcement.edition))
+        }
     };
     format!(
         "{what}, is behind a content warning, so this server gets a note and not the picture. It is on late.sh, and on Bluesky with a label.\n\n{web_url}\n\n{}",
@@ -708,10 +822,10 @@ pub(crate) fn note_text(picture: &Picture, web_url: &str) -> String {
     )
 }
 
-/// `text` cut to `ALT_MAX_CHARS`, an ellipsis where it was cut.
-pub(crate) fn cut_alt(text: &str) -> String {
-    if text.chars().count() > ALT_MAX_CHARS {
-        let mut cut: String = text.chars().take(ALT_MAX_CHARS - 1).collect();
+/// `text` cut to `max` characters, an ellipsis where it was cut.
+pub(crate) fn cut_to(text: &str, max: usize) -> String {
+    if text.chars().count() > max {
+        let mut cut: String = text.chars().take(max - 1).collect();
         cut.push('…');
         cut
     } else {
@@ -719,11 +833,17 @@ pub(crate) fn cut_alt(text: &str) -> String {
     }
 }
 
+/// `text` cut to `ALT_MAX_CHARS`.
+pub(crate) fn cut_alt(text: &str) -> String {
+    cut_to(text, ALT_MAX_CHARS)
+}
+
 /// The picture described for readers who cannot see it: what the look
 /// saw, else a template that says what the picture is, if not what is
-/// on it. A card's is its own words.
-pub(crate) fn alt_text(picture: &Picture, look: &Look) -> String {
-    match (picture, look) {
+/// on it. A card's is its own words. `None` for a post with no picture.
+pub(crate) fn alt_text(picture: &Picture, look: &Look) -> Option<String> {
+    let alt = match (picture, look) {
+        (Picture::Announcement(_), _) => return None,
         (Picture::Board(_) | Picture::Piece(_), Look::Seen { alt, .. }) => {
             format!("ASCII art: {alt}")
         }
@@ -770,7 +890,8 @@ pub(crate) fn alt_text(picture: &Picture, look: &Look) -> String {
             }
             cut_alt(&text)
         }
-    }
+    };
+    Some(alt)
 }
 
 /// What `/herald` asked for. Every subcommand is admin-only, refused with
