@@ -1,5 +1,6 @@
 use crate::app::activity::event::ActivityEvent;
 use crate::app::ai::svc::AiService;
+use crate::app::arcade::chess_puzzle::svc::ChessPuzzleService;
 use crate::app::arcade::le_word::svc::LeWordService;
 use crate::app::arcade::minesweeper::svc::MinesweeperService;
 use crate::app::arcade::netwalk::svc::NetwalkService;
@@ -136,6 +137,7 @@ pub struct State {
     pub rubiks_cube_service: RubiksCubeService,
     pub sliding_puzzle_service: SlidingPuzzleService,
     pub netwalk_service: NetwalkService,
+    pub chess_puzzle_service: ChessPuzzleService,
     pub le_word_service: LeWordService,
     pub sudoku_service: SudokuService,
     pub nonogram_service: NonogramService,

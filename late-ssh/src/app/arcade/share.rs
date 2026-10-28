@@ -169,6 +169,7 @@ pub const fn icon(puzzle: DailyPuzzle) -> &'static str {
         DailyPuzzle::Minesweeper => "💣",
         DailyPuzzle::Solitaire => "🃏",
         DailyPuzzle::Netwalk => "🔌",
+        DailyPuzzle::ChessPuzzle => "♟️",
     }
 }
 

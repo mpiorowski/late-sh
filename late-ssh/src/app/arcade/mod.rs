@@ -1,3 +1,4 @@
+pub mod chess_puzzle;
 pub mod daily;
 pub mod input;
 pub mod le_word;

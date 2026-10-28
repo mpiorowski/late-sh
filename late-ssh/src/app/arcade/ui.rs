@@ -33,7 +33,8 @@ pub(crate) fn daily_available(
         | DailyPuzzle::Sudoku
         | DailyPuzzle::Minesweeper
         | DailyPuzzle::Solitaire
-        | DailyPuzzle::Netwalk => true,
+        | DailyPuzzle::Netwalk
+        | DailyPuzzle::ChessPuzzle => true,
     }
 }
 
@@ -284,6 +285,7 @@ pub struct ArcadeHubView<'a> {
     pub solitaire_state: &'a super::solitaire::state::State,
     pub minesweeper_state: &'a super::minesweeper::state::State,
     pub netwalk_state: &'a super::netwalk::state::State,
+    pub chess_puzzle_state: &'a super::chess_puzzle::state::State,
     pub daily_completion: Option<&'a DailyCompletionStatus>,
     /// Dailies this session banked today, ahead of the snapshot above.
     pub session_daily_completion: Option<&'a DailyCompletionStatus>,
@@ -402,6 +404,12 @@ fn draw_puzzle(
         DailyPuzzle::Netwalk => {
             super::netwalk::ui::draw_game(frame, area, view.netwalk_state, show_bottom_bar)
         }
+        DailyPuzzle::ChessPuzzle => super::chess_puzzle::ui::draw_game(
+            frame,
+            area,
+            view.chess_puzzle_state,
+            show_bottom_bar,
+        ),
     }
 }
 
@@ -715,6 +723,7 @@ fn lobby_card(view: &ArcadeHubView<'_>, puzzle: DailyPuzzle) -> DailyRow {
         DailyPuzzle::Minesweeper => "Flag mines, clear the field. Three lives.",
         DailyPuzzle::Solitaire => "Klondike with daily and personal deals over SSH.",
         DailyPuzzle::Netwalk => "Turn the tiles until one network lights every one.",
+        DailyPuzzle::ChessPuzzle => "Find the winning moves of a real game. Three lives.",
     };
     DailyRow {
         description,

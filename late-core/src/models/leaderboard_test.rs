@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 use crate::{
     models::{
+        chess_puzzle,
         chips::{ChipMove, Difficulty, UserChips},
         drink_round::Bar,
         drinks::{UserDrinks, WELCOME_DRINK_POINTS},
@@ -266,6 +267,7 @@ fn points_sql_follows_each_puzzles_tiers() {
                     .to_string()
             ),
             (DailyPuzzle::Netwalk, three.to_string()),
+            (DailyPuzzle::ChessPuzzle, three.to_string()),
         ]
     );
 }
@@ -321,6 +323,11 @@ async fn record_daily_win(
             netwalk::DailyWin::record_win(client, user_id, tier, day, 30)
                 .await
                 .expect("netwalk win");
+        }
+        DailyPuzzle::ChessPuzzle => {
+            chess_puzzle::DailyWin::record_win(client, user_id, tier, day, 1)
+                .await
+                .expect("chess puzzle win");
         }
     }
 }

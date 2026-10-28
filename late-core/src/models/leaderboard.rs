@@ -72,7 +72,7 @@ roster!(
     /// card's, the backtick cycle's, the rollover's, and every board list
     /// that iterates `ALL`. One order, so nothing else lists the dailies.
     DailyPuzzle: LeWord, RubiksCube, SlidingPuzzle, Sudoku, Nonogram, Minesweeper, Solitaire,
-        Netwalk
+        Netwalk, ChessPuzzle
 );
 
 roster!(
@@ -148,6 +148,7 @@ impl DailyPuzzle {
             Self::Minesweeper => "minesweeper",
             Self::Solitaire => "solitaire",
             Self::Netwalk => "netwalk",
+            Self::ChessPuzzle => "chess_puzzle",
         }
     }
 
@@ -161,6 +162,7 @@ impl DailyPuzzle {
             Self::Minesweeper => "Minesweeper",
             Self::Solitaire => "Solitaire",
             Self::Netwalk => "Netwalk",
+            Self::ChessPuzzle => "Chess Puzzle",
         }
     }
 
@@ -175,7 +177,8 @@ impl DailyPuzzle {
             | Self::Sudoku
             | Self::Nonogram
             | Self::Minesweeper
-            | Self::Netwalk => Tiers::Keyed(THREE_TIERS),
+            | Self::Netwalk
+            | Self::ChessPuzzle => Tiers::Keyed(THREE_TIERS),
             Self::Solitaire => {
                 Tiers::Keyed(&[("draw-1", Difficulty::Medium), ("draw-3", Difficulty::Hard)])
             }
@@ -193,6 +196,7 @@ impl DailyPuzzle {
             Self::Minesweeper => "minesweeper_daily_wins",
             Self::Solitaire => "solitaire_daily_wins",
             Self::Netwalk => "netwalk_daily_wins",
+            Self::ChessPuzzle => "chess_puzzle_daily_wins",
         }
     }
 

@@ -58,6 +58,9 @@ mod chat_room_member_test;
 #[cfg(test)]
 mod chat_room_test;
 pub mod chat_slow_mode;
+pub mod chess_puzzle;
+#[cfg(test)]
+mod chess_puzzle_test;
 pub mod chips;
 #[cfg(test)]
 mod chips_test;

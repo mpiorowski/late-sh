@@ -1,13 +1,13 @@
-# Plan: four new Arcade dailies
+# Plan: the remaining new Arcade dailies
 
 Status: the refactor that makes a new daily one roster variant ("the
-tree") is in, and so is Netwalk (`late-ssh/src/app/arcade/netwalk/`); the
-other three games are investigated, not implemented, one PR each in the
-order below. As each lands, its shipped behavior moves into
+tree") is in, and so are Netwalk and Chess Puzzle
+(`late-ssh/src/app/arcade/{netwalk,chess_puzzle}/`); the two word games
+are investigated, not implemented, one PR each in the order below. As each lands, its shipped behavior moves into
 `late-ssh/src/app/arcade/CONTEXT.md` and `GAMES.md` and its section here is
 deleted; delete this file with the last one.
 
-## Why these four
+## Why these games
 
 `AUDIENCE.md` section 4: the Arcade is the second room, 32% of active time,
 and its daily is the strongest ritual the site has. The shape that works is
@@ -17,7 +17,6 @@ category, never a high-score run (score games hold a tenth of the hours).
 
 | Game | Shape | Tiers | Content | Why first/last |
 |---|---|---|---|---|
-| Chess Puzzle | find the only moves | easy/medium/hard, daily + personal | Lichess open database, CC0, offline pack | reuses `games/chess_core` whole |
 | Spelling Bee | find words from seven letters | one board, three tiers banked by rank | offline pack built from a dictionary | needs a dictionary decision (below) |
 | Connections | sort sixteen words into four groups | one board, one tier | hand-authored pack | content is the cost; the pack must be skimmed |
 
@@ -26,13 +25,12 @@ category, never a high-score run (score games hold a tenth of the hours).
 Read `late-ssh/src/app/arcade/CONTEXT.md` and `GAMES.md` ("Adding a new
 Arcade game") first. The reference implementations:
 
-- **Tiered, daily + personal, seeded:** `arcade/sliding_puzzle/` and
-  `late-core/src/models/sliding_puzzle.rs`, migration 167, and the newer
-  copy `arcade/netwalk/`, migration 265. Chess Puzzle copies this row
-  shape: `<game>_games (user_id, mode, difficulty_key,
-  puzzle_date, puzzle_seed|puzzle_id, <board>, moves, UNIQUE(user_id,
-  difficulty_key, mode))` and `<game>_daily_wins (user_id, difficulty_key,
-  puzzle_date, <score>, UNIQUE(user_id, difficulty_key, puzzle_date))`.
+- **Tiered, daily + personal:** `arcade/sliding_puzzle/` (migration 167),
+  `arcade/netwalk/` (265) and `arcade/chess_puzzle/` (266):
+  `<game>_games (user_id, mode, difficulty_key, puzzle_date,
+  puzzle_seed|puzzle_id, <board>, UNIQUE(user_id, difficulty_key, mode))`
+  and `<game>_daily_wins (user_id, difficulty_key, puzzle_date, <score>,
+  UNIQUE(user_id, difficulty_key, puzzle_date))`.
 - **One global board a day, claimed in the DB:** `arcade/le_word/svc.rs`
   (`DailyWord::lock_daily_creation`, the unused-first pick, the `oneshot`
   reload drained by `poll_word_reload`). Spelling Bee and Connections copy
@@ -42,11 +40,12 @@ Arcade game") first. The reference implementations:
 - **No-tier win publish:** `arcade/rubiks_cube/svc.rs::record_win_and_publish`
   (the `detail` is `"daily"`). Tiered games pass the difficulty key as
   `detail`, as Sliding Puzzle does.
-- **Offline pack, embedded with `include_bytes!`, selected by date hash:**
-  `late-core/src/nonogram.rs` (`select_for_date`), `late-core/src/bin/gen_nonograms.rs`,
-  `late-ssh/assets/nonograms/`, and the test
-  `nonogram/state_test.rs::every_shipped_puzzle_solves_by_line_logic` that
-  pins the shipped pack. Chess Puzzle copies this.
+- **Offline pack built by a generator, embedded with `include_bytes!`:**
+  `late-core/src/chess_puzzle.rs` and `late-core/src/bin/gen_chess_puzzles.rs`
+  (a dump path in, one JSON per tier out, one puzzle per line), with
+  `chess_puzzle/state_test.rs::every_shipped_puzzle_replays_through_the_board`
+  pinning the shipped pack; the nonograms are the older copy. Spelling Bee
+  copies the generator half; its daily pick is the claimed row below.
 
 Every game ships with the same file roles: `mod.rs` (declarations only),
 `state.rs` pure rules and per-session state, `input.rs`, `ui.rs`, `share.rs`
@@ -67,8 +66,8 @@ points both come from its tier in `DailyPuzzle::tiers()`.
   fixed seed or pack entry and assert the full result; the generator is
   deterministic per (date, difficulty); the solved check is right on the
   solved and one-off boards; the rollover swaps the board only off-screen.
-- A pack validator test pinning the shipped assets (chess, bee,
-  connections), like the nonogram one.
+- A pack validator test pinning the shipped assets (bee, connections),
+  like the chess and nonogram ones.
 - `svc_test.rs` beside `svc.rs`: a fresh win inserts, publishes `GameWon`
   with the right `detail`, and bumps `daily_win_totals`; a replay inserts
   nothing and publishes nothing; a personal finish publishes nothing.
@@ -77,70 +76,7 @@ points both come from its tier in `DailyPuzzle::tiers()`.
   `make test-llm ARGS="-p late-core --lib -E 'test(<game>)'"`; `make check`
   is the owner's.
 
-## 1. Chess Puzzle
-
-**Source.** The Lichess puzzle dump, `lichess_db_puzzle.csv.zst` from
-`database.lichess.org` (CC0, 307 MB compressed, read 2026-10-28). Columns:
-`PuzzleId,FEN,Moves,Rating,RatingDeviation,Popularity,NbPlays,Themes,GameUrl,OpeningTags,DailyDate`.
-The FEN is the position before the opponent's move; the first move in
-`Moves` (UCI) is that opponent move, the rest alternate player, opponent.
-Every player move is the only good move, except a mate in one, where any
-mating move wins.
-
-**Pack** (`late-core/src/bin/gen_chess_puzzles.rs`, reads the CSV path as an
-argument, writes `late-ssh/assets/chess_puzzles/{easy,medium,hard}.json`
-plus `index.json`). Keep a row when `Popularity >= 90`, `NbPlays >= 1000`,
-`RatingDeviation <= 80`, the player has at most four moves, and no solution
-move is a promotion other than to a queen (`legal_move_for` resolves
-promotions to queen, so an underpromotion puzzle cannot be played). Tiers by
-`Rating`: easy 600 to 1100, medium 1300 to 1700, hard 1900 to 2300. Take
-2,000 per tier by a seeded shuffle. Per puzzle store `id`, `fen`, `moves`,
-`rating`, and the one theme that names it when present (`mateIn1`,
-`mateIn2`, `mateIn3`, `fork`, `pin`, ...) for the hint line. Validate at
-generation with `cozy_chess`: the FEN parses, every move is legal in turn.
-About 1 MB embedded. The runtime test re-walks every shipped puzzle the same
-way. `select_for_date` as the nonograms do, salted per tier; personal picks
-a random id from the same tier.
-
-**Rules.** Show the position after the opponent's first move, oriented to
-the player's colour. The player makes the next solution move; the opponent's
-reply plays itself after a short tick delay (a `pending_reply` the Arcade's
-15 fps tick drains while the board is open, like Solitaire's cascade). A
-wrong move snaps back and costs one of three lives, Minesweeper's rule; out
-of lives is a lost finish (`ArcadeFinish::Lost`, the solution shown, no
-win). Mate in one: any mating move is correct (`board.status()` after the
-move). Solved when the last solution move is played.
-
-**State.** `puzzle_id`, `ply` (solution moves played), `mistakes`,
-`board: cozy_chess::Board` rebuilt from the FEN and the played plies on
-load, cursor and selection, `pending_reply`. Persisted: `(mode,
-difficulty_key, puzzle_date, puzzle_id, ply, mistakes)`; a stored daily row
-whose `puzzle_id` is not today's pick is ignored on load, like Rubik's.
-
-**Controls.** Arrows or `h/j/k/l` move the cursor (`chess_core::cursor::move_cursor`),
-`Enter`/`Space` select then move (`rules::legal_move_for`, legal targets
-through `cursor::legal_targets`), left click through `board_ui::square_at`,
-`d`/`p`, `n` twice new personal, `[`/`]`, `r`/`0` twice restart the board
-(refused once won), `s` share card. The info panel shows "White to play"
-and the theme hint, the SAN of played moves from `rules::san_label`, and
-the credit "Puzzles: the Lichess open database (CC0)".
-
-**Rendering.** `chess_core::board_ui::draw_board` with `pick_tier`; the
-last opponent move highlighted; a wrong move flashes the square red for a
-tick.
-
-**Score and win.** `mistakes` stored on the win row; `tiers()` is
-`Keyed(easy/medium/hard)`. Share card: one row of glyphs per solution move, Green
-for a move found first try, Yellow for one found after a mistake, plus the
-theme word when there is one; a lost board has no card. Nothing on the card
-spoils the moves.
-
-**Tables:** `chess_puzzle_games`, `chess_puzzle_daily_wins`. Key
-`chess_puzzle`, title `Chess Puzzle`, `ActivityGame::ChessPuzzle` (the
-existing `Chess` is the Lobby match and sits in the `Match` family), icon
-`♟️`. `LICENSING.md` gets the Lichess line.
-
-## 2. Spelling Bee
+## 1. Spelling Bee
 
 **Rules.** Seven distinct letters, one of them the centre. A word counts
 when it has four or more letters, uses only those letters (repeats
@@ -202,7 +138,7 @@ words on the card.
 UNIQUE(user_id, puzzle_date, difficulty_key))`. Key `spelling_bee`, title
 `Spelling Bee`, icon `🐝`.
 
-## 3. Connections
+## 2. Connections
 
 **Rules.** Sixteen words, four hidden groups of four, each group a colour
 by difficulty: yellow (plainest), green, blue, purple (the trick). Select
@@ -262,14 +198,11 @@ puzzle_date))`. Key `connections`, title `Connections`, icon `🟪`.
   word list" feel arbitrary). Recommendation: SCOWL size 60. The dictionary
   is a generator input, never vendored; only the pack ships.
 - **Chips.** Every daily is a faucet and `AUDIENCE.md` calls the economy
-  deflated. The plan keeps the standard tiers so the four games read like
+  deflated. The plan keeps the standard tiers so the new games read like
   the rest; lowering payouts is a `reward_templates` edit, not a design
   change.
-- **Personal mode** is in for Chess Puzzle (free: a pack id, as Netwalk's
-  is a seed) and out for the two word games (one board a day is the game).
-- **Chess Puzzle lives.** Three, like Minesweeper. Lichess fails a puzzle on
-  the first wrong move; that is harsh for a once-a-day board that pays
-  chips. One life is a one-line constant change if the three feel soft.
+- **Personal mode** is out for the two word games (one board a day is the
+  game).
 
 ## Out of scope
 

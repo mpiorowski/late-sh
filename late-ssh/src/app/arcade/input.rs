@@ -160,6 +160,13 @@ fn handle_puzzle_key(app: &mut App, puzzle: DailyPuzzle, byte: u8) -> bool {
             }
             super::netwalk::input::handle_key(&mut app.netwalk_state, byte)
         }
+        DailyPuzzle::ChessPuzzle => {
+            if closes_board(byte) {
+                app.is_playing_game = false;
+                return true;
+            }
+            super::chess_puzzle::input::handle_key(&mut app.chess_puzzle_state, byte)
+        }
     }
 }
 
@@ -221,7 +228,8 @@ fn launch_selected(app: &mut App) {
             | DailyPuzzle::Nonogram
             | DailyPuzzle::Minesweeper
             | DailyPuzzle::Solitaire
-            | DailyPuzzle::Netwalk => {}
+            | DailyPuzzle::Netwalk
+            | DailyPuzzle::ChessPuzzle => {}
         }
     }
     app.is_playing_game = true;
@@ -267,6 +275,7 @@ fn daily_share(app: &App, puzzle: DailyPuzzle) -> Option<ShareCard> {
         DailyPuzzle::Minesweeper => super::minesweeper::share::from_state(&app.minesweeper_state),
         DailyPuzzle::Solitaire => super::solitaire::share::from_state(&app.solitaire_state),
         DailyPuzzle::Netwalk => super::netwalk::share::from_state(&app.netwalk_state),
+        DailyPuzzle::ChessPuzzle => super::chess_puzzle::share::from_state(&app.chess_puzzle_state),
     }
 }
 
@@ -344,6 +353,9 @@ fn handle_puzzle_arrow(app: &mut App, puzzle: DailyPuzzle, key: u8) -> bool {
             super::solitaire::input::handle_arrow(&mut app.solitaire_state, key)
         }
         DailyPuzzle::Netwalk => super::netwalk::input::handle_arrow(&mut app.netwalk_state, key),
+        DailyPuzzle::ChessPuzzle => {
+            super::chess_puzzle::input::handle_arrow(&mut app.chess_puzzle_state, key)
+        }
     }
 }
 
@@ -379,6 +391,9 @@ pub(crate) fn handle_event(app: &mut App, event: &crate::app::input::ParsedInput
         }
         ArcadeGame::Puzzle(DailyPuzzle::Netwalk) => {
             super::netwalk::input::handle_mouse(&mut app.netwalk_state, area, *mouse)
+        }
+        ArcadeGame::Puzzle(DailyPuzzle::ChessPuzzle) => {
+            super::chess_puzzle::input::handle_mouse(&mut app.chess_puzzle_state, area, *mouse)
         }
         ArcadeGame::Puzzle(
             DailyPuzzle::RubiksCube | DailyPuzzle::Sudoku | DailyPuzzle::Nonogram,

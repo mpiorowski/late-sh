@@ -339,6 +339,28 @@ fn arcade_sections() -> Vec<GuideSection> {
             ],
         },
         GuideSection {
+            title: "Chess Puzzle",
+            body: vec![
+                "A Lichess puzzle: the opponent has just moved; find the best reply, then each move after it."
+                    .to_string(),
+                "Daily and personal puzzles: easy rated 600-1100, medium 1300-1700, hard 1900-2300."
+                    .to_string(),
+                "hjkl or arrows move the cursor; Space or Enter picks a piece up and plays it; a click does the same."
+                    .to_string(),
+                "A wrong move is taken back and costs one of three lives; out of lives, the solution is shown."
+                    .to_string(),
+                "Any checkmate wins, even one the puzzle does not list.".to_string(),
+                "d selects daily; p selects personal; n twice deals a new personal puzzle."
+                    .to_string(),
+                "Personal puzzles persist but grant no chips, quest progress, or Arcade Win."
+                    .to_string(),
+                "[ and ] change difficulty.".to_string(),
+                "r or 0 twice restarts a personal puzzle; the daily keeps its moves and lives."
+                    .to_string(),
+                "Puzzles: the Lichess open database (CC0).".to_string(),
+            ],
+        },
+        GuideSection {
             title: "Daily Puzzle Common Keys",
             body: vec![
                 "d selects the daily board.".to_string(),

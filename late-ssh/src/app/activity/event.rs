@@ -297,6 +297,7 @@ pub enum ActivityGame {
     Blackjack,
     Brogue,
     Chess,
+    ChessPuzzle,
     Darkroom,
     Dcss,
     GreenDragon,
@@ -345,7 +346,8 @@ pub enum GameFamily {
 impl ActivityGame {
     pub fn family(self) -> GameFamily {
         match self {
-            Self::LeWord
+            Self::ChessPuzzle
+            | Self::LeWord
             | Self::Minesweeper
             | Self::Netwalk
             | Self::Nonogram
@@ -382,6 +384,7 @@ impl ActivityGame {
             Self::Minesweeper => Some(DailyPuzzle::Minesweeper),
             Self::Solitaire => Some(DailyPuzzle::Solitaire),
             Self::Netwalk => Some(DailyPuzzle::Netwalk),
+            Self::ChessPuzzle => Some(DailyPuzzle::ChessPuzzle),
             Self::Asterion
             | Self::Blackjack
             | Self::Brogue
@@ -410,6 +413,7 @@ impl ActivityGame {
             Self::Blackjack => "blackjack",
             Self::Brogue => "brogue",
             Self::Chess => "chess",
+            Self::ChessPuzzle => "chess_puzzle",
             Self::Darkroom => "darkroom",
             Self::Dcss => "dcss",
             Self::GreenDragon => "greendragon",
@@ -442,6 +446,7 @@ impl ActivityGame {
             Self::Blackjack => "Blackjack",
             Self::Brogue => "Brogue",
             Self::Chess => "Chess",
+            Self::ChessPuzzle => "Chess Puzzle",
             Self::Darkroom => "A Dark Room",
             Self::Dcss => "DCSS",
             Self::GreenDragon => "Green Dragon",
@@ -520,6 +525,7 @@ impl ActivityEvent {
             ActivityGame::Blackjack => "won Blackjack hand",
             ActivityGame::Brogue => "conquered Brogue",
             ActivityGame::Chess => "won Chess game",
+            ActivityGame::ChessPuzzle => "solved Chess Puzzle",
             ActivityGame::Darkroom => "flew out of A Dark Room",
             ActivityGame::Dcss => "escaped DCSS with the Orb of Zot",
             ActivityGame::GreenDragon => "prevailed in the Green Dragon",
@@ -610,6 +616,7 @@ impl ActivityEvent {
             ActivityGame::Asterion
             | ActivityGame::Blackjack
             | ActivityGame::Chess
+            | ActivityGame::ChessPuzzle
             | ActivityGame::LeWord
             | ActivityGame::Minesweeper
             | ActivityGame::Netwalk

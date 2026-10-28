@@ -50,6 +50,7 @@ pub struct ArcadeSessionPreloads {
     pub initial_solitaire_games: Vec<late_core::models::solitaire::Game>,
     pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
     pub initial_netwalk_games: Vec<late_core::models::netwalk::Game>,
+    pub initial_chess_puzzle_games: Vec<late_core::models::chess_puzzle::Game>,
 }
 
 pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> ArcadeSessionPreloads {
@@ -65,6 +66,7 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
     let solitaire_service = state.solitaire_service.clone();
     let minesweeper_service = state.minesweeper_service.clone();
     let netwalk_service = state.netwalk_service.clone();
+    let chess_puzzle_service = state.chess_puzzle_service.clone();
 
     let (
         initial_2048_game,
@@ -84,6 +86,7 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
         initial_solitaire_games,
         initial_minesweeper_games,
         initial_netwalk_games,
+        initial_chess_puzzle_games,
     ) = tokio::join!(
         async {
             match twenty_forty_eight_service.load_game(user_id).await {
@@ -239,6 +242,15 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
                 }
             }
         },
+        async {
+            match chess_puzzle_service.load_games(user_id).await {
+                Ok(games) => games,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load chess puzzle game states");
+                    Vec::new()
+                }
+            }
+        },
     );
 
     ArcadeSessionPreloads {
@@ -259,6 +271,7 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
         initial_solitaire_games,
         initial_minesweeper_games,
         initial_netwalk_games,
+        initial_chess_puzzle_games,
     }
 }
 
@@ -370,6 +383,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_solitaire_games,
         initial_minesweeper_games,
         initial_netwalk_games,
+        initial_chess_puzzle_games,
     } = load_arcade_session_preloads(state, user_id).await;
     let initial_bonsai_tree = match state.bonsai_service.ensure_tree(user_id).await {
         Ok(tree) => Some(tree),
@@ -492,6 +506,8 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_sliding_puzzle_games,
         netwalk_service: state.netwalk_service.clone(),
         initial_netwalk_games,
+        chess_puzzle_service: state.chess_puzzle_service.clone(),
+        initial_chess_puzzle_games,
         initial_tetris_game,
         initial_snake_game,
         initial_tetris_high_score,

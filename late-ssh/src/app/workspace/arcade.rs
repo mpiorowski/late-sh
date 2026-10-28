@@ -25,6 +25,7 @@ pub(crate) fn active_daily_stop(app: &App) -> Option<DailyPuzzle> {
         DailyPuzzle::Minesweeper => app.minesweeper_state.is_daily_active(),
         DailyPuzzle::Solitaire => app.solitaire_state.is_daily_active(),
         DailyPuzzle::Netwalk => app.netwalk_state.is_daily_active(),
+        DailyPuzzle::ChessPuzzle => app.chess_puzzle_state.is_daily_active(),
     };
     is_daily.then_some(puzzle)
 }
@@ -48,6 +49,7 @@ fn has_unfinished_daily(app: &App, puzzle: DailyPuzzle) -> bool {
         DailyPuzzle::Minesweeper => app.minesweeper_state.first_unfinished_daily().is_some(),
         DailyPuzzle::Solitaire => app.solitaire_state.first_unfinished_daily().is_some(),
         DailyPuzzle::Netwalk => app.netwalk_state.has_unfinished_daily(),
+        DailyPuzzle::ChessPuzzle => app.chess_puzzle_state.has_unfinished_daily(),
     }
 }
 
@@ -87,6 +89,11 @@ pub(crate) fn open_stop(app: &mut App, puzzle: DailyPuzzle) {
             app.netwalk_state.ensure_current_daily();
             let index = app.netwalk_state.first_unfinished_daily().unwrap_or(0);
             app.netwalk_state.open_daily(index);
+        }
+        DailyPuzzle::ChessPuzzle => {
+            app.chess_puzzle_state.ensure_current_daily();
+            let index = app.chess_puzzle_state.first_unfinished_daily().unwrap_or(0);
+            app.chess_puzzle_state.open_daily(index);
         }
     }
     app.game_selection = ArcadeGame::Puzzle(puzzle);

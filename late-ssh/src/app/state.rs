@@ -233,6 +233,8 @@ pub struct SessionConfig {
     pub initial_sliding_puzzle_games: Vec<late_core::models::sliding_puzzle::Game>,
     pub netwalk_service: crate::app::arcade::netwalk::svc::NetwalkService,
     pub initial_netwalk_games: Vec<late_core::models::netwalk::Game>,
+    pub chess_puzzle_service: crate::app::arcade::chess_puzzle::svc::ChessPuzzleService,
+    pub initial_chess_puzzle_games: Vec<late_core::models::chess_puzzle::Game>,
     pub initial_tetris_game: Option<late_core::models::tetris::Game>,
     pub initial_snake_game: Option<late_core::models::snake::Game>,
     pub initial_tetris_high_score: Option<late_core::models::tetris::HighScore>,
@@ -989,6 +991,7 @@ pub struct App {
     pub(crate) rubiks_cube_state: crate::app::arcade::rubiks_cube::state::State,
     pub(crate) sliding_puzzle_state: crate::app::arcade::sliding_puzzle::state::State,
     pub(crate) netwalk_state: crate::app::arcade::netwalk::state::State,
+    pub(crate) chess_puzzle_state: crate::app::arcade::chess_puzzle::state::State,
     pub(crate) le_word_state: crate::app::arcade::le_word::state::State,
     pub(crate) sudoku_state: crate::app::arcade::sudoku::state::State,
     pub(crate) nonogram_state: crate::app::arcade::nonogram::state::State,
@@ -1444,6 +1447,11 @@ impl App {
             config.user_id,
             config.netwalk_service.clone(),
             config.initial_netwalk_games,
+        );
+        let chess_puzzle_state = crate::app::arcade::chess_puzzle::state::State::new(
+            config.user_id,
+            config.chess_puzzle_service.clone(),
+            config.initial_chess_puzzle_games,
         );
         let le_word_state = crate::app::arcade::le_word::state::State::new(
             config.user_id,
@@ -2013,6 +2021,7 @@ impl App {
             rubiks_cube_state,
             sliding_puzzle_state,
             netwalk_state,
+            chess_puzzle_state,
             le_word_state,
             sudoku_state,
             nonogram_state,

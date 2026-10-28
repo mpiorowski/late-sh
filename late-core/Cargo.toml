@@ -36,6 +36,9 @@ deadpool-postgres.workspace = true
 tokio-postgres = { workspace = true }
 bytes = { workspace = true }
 
+# Chess (the Chess Puzzle pack generator validates every move)
+cozy-chess = { workspace = true }
+
 # Crypto / RNG
 getrandom = { workspace = true }
 hex = { workspace = true }

@@ -886,6 +886,7 @@ impl russh::server::Handler for ClientHandler {
             initial_solitaire_games,
             initial_minesweeper_games,
             initial_netwalk_games,
+            initial_chess_puzzle_games,
         } = load_arcade_session_preloads(&self.state, user_id).await;
         let initial_bonsai_tree = match self.state.bonsai_service.ensure_tree(user_id).await {
             Ok(tree) => Some(tree),
@@ -1016,6 +1017,8 @@ impl russh::server::Handler for ClientHandler {
             initial_sliding_puzzle_games,
             netwalk_service: self.state.netwalk_service.clone(),
             initial_netwalk_games,
+            chess_puzzle_service: self.state.chess_puzzle_service.clone(),
+            initial_chess_puzzle_games,
             initial_tetris_game,
             initial_snake_game,
             initial_tetris_high_score,

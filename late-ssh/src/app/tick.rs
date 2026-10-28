@@ -513,6 +513,11 @@ impl App {
                 ArcadeGame::Puzzle(DailyPuzzle::Solitaire) => {
                     changed |= self.solitaire_state.tick_win_animation();
                 }
+                // The opponent's reply lands a few frames after the
+                // player's move, so the move shows before the answer.
+                ArcadeGame::Puzzle(DailyPuzzle::ChessPuzzle) => {
+                    changed |= self.chess_puzzle_state.tick();
+                }
                 // Turn-based boards move only on input.
                 ArcadeGame::Score(ScoreGame::TwentyFortyEight)
                 | ArcadeGame::Puzzle(

@@ -835,6 +835,7 @@ mod inner {
             ActivityGame::Blackjack => "blackjack",
             ActivityGame::Brogue => "brogue",
             ActivityGame::Chess => "chess",
+            ActivityGame::ChessPuzzle => "chess_puzzle",
             ActivityGame::Darkroom => "darkroom",
             ActivityGame::Dcss => "dcss",
             ActivityGame::GreenDragon => "greendragon",

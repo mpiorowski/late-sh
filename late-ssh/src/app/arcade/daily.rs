@@ -26,6 +26,7 @@ pub(crate) const fn activity_game(puzzle: DailyPuzzle) -> ActivityGame {
         DailyPuzzle::Minesweeper => ActivityGame::Minesweeper,
         DailyPuzzle::Solitaire => ActivityGame::Solitaire,
         DailyPuzzle::Netwalk => ActivityGame::Netwalk,
+        DailyPuzzle::ChessPuzzle => ActivityGame::ChessPuzzle,
     }
 }
 
@@ -112,6 +113,7 @@ fn ensure_current_daily(app: &mut App, puzzle: DailyPuzzle) -> bool {
         DailyPuzzle::Minesweeper => app.minesweeper_state.ensure_current_daily(),
         DailyPuzzle::Solitaire => app.solitaire_state.ensure_current_daily(),
         DailyPuzzle::Netwalk => app.netwalk_state.ensure_current_daily(),
+        DailyPuzzle::ChessPuzzle => app.chess_puzzle_state.ensure_current_daily(),
     }
 }
 

@@ -43,7 +43,7 @@ fn day_card_marks_wins_in_lobby_order_with_an_icon_under_each_box() {
     assert_eq!(
         card,
         ShareCard {
-            title: "late.sh Daily #150 · 2/8 · 🔥 41".to_string(),
+            title: "late.sh Daily #150 · 2/9 · 🔥 41".to_string(),
             rows: vec![
                 Row::Glyphs(vec![
                     Glyph::Green,
@@ -54,21 +54,22 @@ fn day_card_marks_wins_in_lobby_order_with_an_icon_under_each_box() {
                     Glyph::Dark,
                     Glyph::Dark,
                     Glyph::Dark,
+                    Glyph::Dark,
                 ]),
-                Row::Text("🔤🧊🧩🔢🎨💣🃏🔌".to_string()),
+                Row::Text("🔤🧊🧩🔢🎨💣🃏🔌♟️".to_string()),
             ],
         }
     );
     assert_eq!(
         render(&card, ShareFormat::Emoji),
-        "late.sh Daily #150 · 2/8 · 🔥 41\n🟩⬛⬛🟩⬛⬛⬛⬛\n🔤🧊🧩🔢🎨💣🃏🔌\nssh late.sh"
+        "late.sh Daily #150 · 2/9 · 🔥 41\n🟩⬛⬛🟩⬛⬛⬛⬛⬛\n🔤🧊🧩🔢🎨💣🃏🔌♟️\nssh late.sh"
     );
 }
 
 #[test]
 fn day_card_without_a_streak_omits_the_flame() {
     let card = day_card(ARCADE_EPOCH, |_| true, 0);
-    assert_eq!(card.title, "late.sh Daily #1 · 8/8");
+    assert_eq!(card.title, "late.sh Daily #1 · 9/9");
 }
 
 #[test]
