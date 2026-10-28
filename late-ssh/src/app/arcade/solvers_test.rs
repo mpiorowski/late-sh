@@ -6,8 +6,6 @@ use uuid::Uuid;
 
 use super::{Roster, TierSolvers, TodaySolvers};
 
-const TIERS: &[(&str, i64)] = &[("easy", 100), ("medium", 250), ("hard", 500)];
-
 fn status(marks: &[(DailyPuzzle, &str)]) -> DailyCompletionStatus {
     let mut status = DailyCompletionStatus::default();
     for (game, difficulty) in marks {
@@ -52,7 +50,7 @@ fn roster_lists_hardest_first_with_the_session_win_folded_in() {
         own_session: Some(&own),
     };
 
-    let roster = today.roster(date(), DailyPuzzle::Sudoku, TIERS);
+    let roster = today.roster(date(), DailyPuzzle::Sudoku);
 
     assert_eq!(
         roster.total, 3,
@@ -108,16 +106,10 @@ fn tier_order_is_fixed_per_day_and_identical_for_every_viewer() {
         own_username: "b",
         own_session: None,
     };
-    let tiers = &[("daily", 200)];
-
-    let first = viewer_a.roster(date(), DailyPuzzle::LeWord, tiers);
-    let again = viewer_a.roster(date(), DailyPuzzle::LeWord, tiers);
-    let other_viewer = viewer_b.roster(date(), DailyPuzzle::LeWord, tiers);
-    let tomorrow = viewer_a.roster(
-        date().succ_opt().expect("tomorrow"),
-        DailyPuzzle::LeWord,
-        tiers,
-    );
+    let first = viewer_a.roster(date(), DailyPuzzle::LeWord);
+    let again = viewer_a.roster(date(), DailyPuzzle::LeWord);
+    let other_viewer = viewer_b.roster(date(), DailyPuzzle::LeWord);
+    let tomorrow = viewer_a.roster(date().succ_opt().expect("tomorrow"), DailyPuzzle::LeWord);
 
     assert_eq!(first, again);
     assert_eq!(first, other_viewer);
@@ -150,11 +142,7 @@ fn a_solver_is_counted_once_and_a_nameless_row_is_skipped() {
         own_session: Some(&own),
     };
 
-    let roster = today.roster(
-        date(),
-        DailyPuzzle::Solitaire,
-        &[("draw-1", 250), ("draw-3", 500)],
-    );
+    let roster = today.roster(date(), DailyPuzzle::Solitaire);
 
     assert_eq!(
         roster,

@@ -7,6 +7,7 @@ use late_core::models::{
     asterion::ASTERION_DAILY_ESCAPE_PAYOUT,
     chat_message_gild::GildTier,
     chips::{CHIP_FLOOR, Difficulty, INITIAL_CHIP_BALANCE},
+    leaderboard::DailyPuzzle,
     media_queue_item::{SONG_QUEUE_MAX_PAID_PER_DAY, SONG_QUEUE_REWARD_CHIPS},
     pot::{POT_MAX_TICKETS_PER_DAY, POT_TICKET_PRICE},
     quest::{DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL},
@@ -368,21 +369,20 @@ fn economy_lines() -> Vec<String> {
 /// Every way Late Chips enter or leave an account, in one place. "How do I
 /// earn chips" is the single most asked question, so this tab is the one
 /// source of truth: the Economy tab keeps ranking and per-game rules, and the
-/// payout numbers live here. Amounts pull from constants where one exists;
-/// the rest come from the seeded reward templates in `late-core/migrations`,
-/// so update both together when a payout changes.
+/// payout numbers live here. Amounts pull from constants where one exists
+/// (the Arcade dailies from the roster's `DailyPuzzle::tiers`, which a
+/// late-core test holds to the reward templates); the rest come from the
+/// seeded reward templates in `late-core/migrations`, so update both
+/// together when a payout changes.
 fn chips_help_lines() -> Vec<String> {
     let start = INITIAL_CHIP_BALANCE;
     let floor = CHIP_FLOOR;
-    let easy = Difficulty::Easy.chips();
-    let medium = Difficulty::Medium.chips();
-    let hard = Difficulty::Hard.chips();
     let water = crate::app::bonsai::svc::WATER_CHIP_BONUS;
     let asterion = ASTERION_DAILY_ESCAPE_PAYOUT;
     let streak_step = DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL;
     let streak_max = i64::from(MAX_DAILY_QUEST_STREAK_BONUS_LEVEL) * streak_step;
 
-    vec![
+    let mut lines = vec![
         "Late Chips".to_string(),
         "".to_string(),
         "Late Chips are the single currency: one balance per account, spent in the Shop and at the bar, and ranked monthly on the Top Chips board.".to_string(),
@@ -392,20 +392,15 @@ fn chips_help_lines() -> Vec<String> {
         "".to_string(),
         "1. Arcade dailies (page 2)".to_string(),
         "  Every daily puzzle pays once per board per UTC day, for everyone who solves it.".to_string(),
-        format!("  easy               {easy} chips"),
-        format!("  medium             {medium} chips"),
-        format!("  hard               {hard} chips"),
-        "  Sudoku, Nonograms, Minesweeper, and Sliding Puzzle each have all three difficulties.".to_string(),
-        format!("  Solitaire draw-1   {medium} chips"),
-        format!("  Solitaire draw-3   {hard} chips"),
+    ];
+    lines.extend(DailyPuzzle::ALL.iter().map(|puzzle| {
         format!(
-            "  Le Word daily      {} chips",
-            crate::app::arcade::le_word::state::DAILY_WIN_REWARD_CHIPS
-        ),
-        format!(
-            "  Rubik's Cube daily {} chips",
-            crate::app::arcade::rubiks_cube::state::DAILY_WIN_REWARD_CHIPS
-        ),
+            "  {:<16} {} chips",
+            puzzle.title(),
+            crate::app::help_modal::hub_guide::daily_tiers_text(*puzzle, Difficulty::chips)
+        )
+    }));
+    lines.extend([
         "  Personal (non-daily) boards pay nothing; only the daily board pays.".to_string(),
         "  The high-score games (2048, Lateris, Snake, Traffic) pay no chips for a run on their own. They pay through Quests, and they rank you on the monthly leaderboards.".to_string(),
         "".to_string(),
@@ -571,7 +566,8 @@ fn chips_help_lines() -> Vec<String> {
         format!("  Pot tickets (/pot buy N) at {} chips each, of which a fifth is burned at the draw.", thousands(POT_TICKET_PRICE)),
         "  Burn milestones and the two ultimate spells (1,000,000 each), the top of the Shop.".to_string(),
         "  Monthly Top Chips counts what you earned: dailies, quests, doors, the arena, prizes, the pot, gilds received. Table bets and wins, gifts, invite rewards, the starting chips, and every kind of spending stay off it.".to_string(),
-    ]
+    ]);
+    lines
 }
 
 pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {

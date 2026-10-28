@@ -52,6 +52,7 @@ Current user-facing chip amounts:
   - Le Word daily: 100 chips
   - Rubik's Cube daily: 250 chips
   - Sliding Puzzle easy/medium/hard: 100/250/500 chips
+  - Netwalk easy/medium/hard: 100/250/500 chips
 - Bonsai watering pays 200 chips once per UTC day (`app/bonsai/CONTEXT.md`).
 - Quest completions pay their template-defined chip reward automatically once per active assignment.
 - Asterion escapes pay 4000 chips once per UTC day through `game_payout_claims`.
@@ -94,14 +95,15 @@ Seeded Arcade quest templates include Sudoku easy/medium, Nonogram easy/medium, 
 ## Arcade Wins Scoring
 
 The monthly Arcade Wins board is not a chip board. It awards points for daily puzzle completions:
-- easy / draw-1: 1 point
-- medium: 3 points
+- easy: 1 point
+- medium / draw-1: 3 points
 - hard / draw-3: 5 points
 - Le Word daily: 1 point
 - Rubik's Cube daily: 3 points
 - Sliding Puzzle easy/medium/hard: 1/3/5 points
+- Netwalk easy/medium/hard: 1/3/5 points
 
-This scoring lives in `late-core/src/models/leaderboard.rs` SQL. Completing more hard dailies across more daily games is the intended path to win the board.
+Each board's tier is `DailyPuzzle::tiers` in `late-core/src/models/leaderboard.rs`, the same tier its chip payout comes from, and the points SQL is generated from it. Completing more hard dailies across more daily games is the intended path to win the board.
 
 ## Shop / Marketplace
 

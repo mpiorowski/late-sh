@@ -10,8 +10,9 @@ use late_core::{
             Bar, GIFT_DRINK_PRICE, MAX_OPEN_CREDITS, ROUND_DRINK_POINTS, ROUND_PRICE_PER_PATRON,
         },
         drinks::{UserDrinks, drunk_level},
+        leaderboard::DailyPuzzle,
         reward::{
-            DARKROOM_ESCAPE_REWARD_KEY, DailyPuzzleRewardGame, GREENDRAGON_DRAGON_REWARD_KEY,
+            DARKROOM_ESCAPE_REWARD_KEY, GREENDRAGON_DRAGON_REWARD_KEY,
             LATEANIA_ARCHDEMON_REWARD_KEY, REWARD_CLAIM_POLICY_UTC_DAY, RewardTemplate,
             daily_puzzle_reward_key,
         },
@@ -42,7 +43,7 @@ async fn sliding_puzzle_activity_rewards_pay_seeded_tiers_once_per_utc_day() {
         chips.ensure_chips(user.id).await.expect("initial chips");
 
         let reward_key =
-            daily_puzzle_reward_key(DailyPuzzleRewardGame::SlidingPuzzle, difficulty.key());
+            daily_puzzle_reward_key(DailyPuzzle::SlidingPuzzle, difficulty.key());
         let client = test_db.db.get().await.expect("db client");
         let template = RewardTemplate::get_active_by_key(&**client, &reward_key)
             .await

@@ -92,16 +92,13 @@ pub struct ShareCard {
     pub rows: Vec<Row>,
 }
 
-/// Which card was shared. Closed so the metric label set is finite.
+/// Which card was shared. Closed so the metric label set is finite: the
+/// dailies' labels are their roster keys.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ShareCardKind {
-    LeWord,
-    Nonogram,
-    Sudoku,
-    Minesweeper,
-    Solitaire,
-    RubiksCube,
-    SlidingPuzzle,
+    /// A finished daily's own card.
+    Daily(DailyPuzzle),
+    /// The lobby's day card.
     Day,
     /// The undercity's road (`deadchannel/fight/share.rs`).
     Road,
@@ -159,18 +156,6 @@ pub fn puzzle_number(day: NaiveDate) -> i64 {
     (day - ARCADE_EPOCH).num_days() + 1
 }
 
-/// The lobby order of the dailies, which is also the order of the day
-/// card's row. Keep in sync with `LOBBY_GAME_ORDER` in `arcade/input.rs`.
-pub const DAY_CARD_ORDER: [DailyPuzzle; 7] = [
-    DailyPuzzle::LeWord,
-    DailyPuzzle::RubiksCube,
-    DailyPuzzle::SlidingPuzzle,
-    DailyPuzzle::Sudoku,
-    DailyPuzzle::Nonogram,
-    DailyPuzzle::Minesweeper,
-    DailyPuzzle::Solitaire,
-];
-
 /// The icon printed under a daily's box on the day card, so a reader can
 /// tell which box is which without a legend. One full-width emoji each, so
 /// the row lines up under the boxes wherever the card is pasted.
@@ -183,14 +168,15 @@ pub const fn icon(puzzle: DailyPuzzle) -> &'static str {
         DailyPuzzle::Nonogram => "🎨",
         DailyPuzzle::Minesweeper => "💣",
         DailyPuzzle::Solitaire => "🃏",
+        DailyPuzzle::Netwalk => "🔌",
     }
 }
 
-/// The day card: one glyph per daily, filled for each won today, with each
-/// daily's icon beneath its box, plus the daily-quest streak. `won` answers
-/// for each puzzle in `DAY_CARD_ORDER`.
+/// The day card: one glyph per daily in lobby order (`DailyPuzzle::ALL`),
+/// filled for each won today, with each daily's icon beneath its box, plus
+/// the daily-quest streak. `won` answers for each puzzle.
 pub fn day_card(day: NaiveDate, won: impl Fn(DailyPuzzle) -> bool, streak_days: i32) -> ShareCard {
-    let marks: Vec<Glyph> = DAY_CARD_ORDER
+    let marks: Vec<Glyph> = DailyPuzzle::ALL
         .iter()
         .map(|puzzle| {
             if won(*puzzle) {
@@ -200,13 +186,13 @@ pub fn day_card(day: NaiveDate, won: impl Fn(DailyPuzzle) -> bool, streak_days: 
             }
         })
         .collect();
-    let icons: String = DAY_CARD_ORDER.iter().map(|puzzle| icon(*puzzle)).collect();
+    let icons: String = DailyPuzzle::ALL.iter().map(|puzzle| icon(*puzzle)).collect();
     let won_count = marks.iter().filter(|g| **g == Glyph::Green).count();
     let number = puzzle_number(day);
     let result = if streak_days > 0 {
-        format!("{won_count}/{} · 🔥 {streak_days}", DAY_CARD_ORDER.len())
+        format!("{won_count}/{} · 🔥 {streak_days}", DailyPuzzle::ALL.len())
     } else {
-        format!("{won_count}/{}", DAY_CARD_ORDER.len())
+        format!("{won_count}/{}", DailyPuzzle::ALL.len())
     };
     ShareCard {
         title: title("Daily", number, Some(&result)),

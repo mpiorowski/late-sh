@@ -8,6 +8,7 @@ use crate::app::arcade::minesweeper::svc::MinesweeperService;
 use crate::app::arcade::nonogram::state::Library as NonogramLibrary;
 use crate::app::arcade::nonogram::svc::NonogramService;
 use crate::app::arcade::rubiks_cube::svc::RubiksCubeService;
+use crate::app::arcade::netwalk::svc::NetwalkService;
 use crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleService;
 use crate::app::arcade::snake::svc::SnakeService;
 use crate::app::arcade::solitaire::svc::SolitaireService;
@@ -300,6 +301,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let le_word_service = LeWordService::new(db.clone(), activity_tx.clone());
     let rubiks_cube_service = RubiksCubeService::new(db.clone(), activity_tx.clone());
     let sliding_puzzle_service = SlidingPuzzleService::new(db.clone(), activity_tx.clone());
+    let netwalk_service = NetwalkService::new(db.clone(), activity_tx.clone());
     let chip_service = ChipService::new(db.clone());
     let activity_publisher = ActivityPublisher::new(db.clone(), activity_tx.clone());
     let sudoku_service = SudokuService::new(db.clone(), activity_tx.clone());
@@ -376,6 +378,7 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         le_word_service,
         rubiks_cube_service,
         sliding_puzzle_service,
+        netwalk_service,
         sudoku_service,
         nonogram_service,
         solitaire_service,
@@ -601,6 +604,8 @@ fn make_app_with_chat_service_and_permissions(
         initial_rubiks_cube_game: None,
         sliding_puzzle_service: SlidingPuzzleService::new(db.clone(), activity_tx.clone()),
         initial_sliding_puzzle_games: Vec::new(),
+        netwalk_service: NetwalkService::new(db.clone(), activity_tx.clone()),
+        initial_netwalk_games: Vec::new(),
         initial_le_word_daily_word: None,
         initial_le_word_game: None,
         sudoku_service: SudokuService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
@@ -894,6 +899,8 @@ pub fn make_app_with_paired_client(
         initial_rubiks_cube_game: None,
         sliding_puzzle_service: SlidingPuzzleService::new(db.clone(), activity_tx.clone()),
         initial_sliding_puzzle_games: Vec::new(),
+        netwalk_service: NetwalkService::new(db.clone(), activity_tx.clone()),
+        initial_netwalk_games: Vec::new(),
         initial_le_word_daily_word: None,
         initial_le_word_game: None,
         sudoku_service: SudokuService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),

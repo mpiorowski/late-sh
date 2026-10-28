@@ -17,7 +17,7 @@ use std::{
 use tokio::sync::{broadcast, mpsc, watch};
 use uuid::Uuid;
 
-use late_core::models::leaderboard::LeaderboardData;
+use late_core::models::leaderboard::{ArcadeGame, DailyPuzzle, LeaderboardData};
 use late_core::models::profile::Profile;
 use late_core::models::user::{LandingPage, RightSidebarMode, RoomListMode, TerminalImagesMode};
 use late_core::models::user_ssh_key::KeyLayout;
@@ -105,19 +105,6 @@ fn voice_toggle_intent(
         (None, _) => VoiceToggleIntent::JoinOrSwitch,
     }
 }
-
-pub(crate) const GAME_SELECTION_2048: usize = 0;
-pub(crate) const GAME_SELECTION_TETRIS: usize = 1;
-pub(crate) const GAME_SELECTION_LE_WORD: usize = 2;
-pub(crate) const GAME_SELECTION_SUDOKU: usize = 3;
-pub(crate) const GAME_SELECTION_NONOGRAMS: usize = 4;
-pub(crate) const GAME_SELECTION_MINESWEEPER: usize = 5;
-pub(crate) const GAME_SELECTION_SOLITAIRE: usize = 6;
-pub(crate) const GAME_SELECTION_SNAKE: usize = 7;
-pub(crate) const GAME_SELECTION_TRAFFIC: usize = 8;
-pub(crate) const GAME_SELECTION_RUBIKS_CUBE: usize = 9;
-pub(crate) const GAME_SELECTION_SLIDING_PUZZLE: usize = 10;
-pub(crate) const DEFAULT_GAME_SELECTION: usize = GAME_SELECTION_LE_WORD;
 
 /// Rail modes in force: this device's stored layout when its key has one, else
 /// the account default. Free-standing so `App::new` can seed the settings draft
@@ -244,6 +231,8 @@ pub struct SessionConfig {
     pub initial_rubiks_cube_game: Option<late_core::models::rubiks_cube::Game>,
     pub sliding_puzzle_service: crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleService,
     pub initial_sliding_puzzle_games: Vec<late_core::models::sliding_puzzle::Game>,
+    pub netwalk_service: crate::app::arcade::netwalk::svc::NetwalkService,
+    pub initial_netwalk_games: Vec<late_core::models::netwalk::Game>,
     pub initial_tetris_game: Option<late_core::models::tetris::Game>,
     pub initial_snake_game: Option<late_core::models::snake::Game>,
     pub initial_tetris_high_score: Option<late_core::models::tetris::HighScore>,
@@ -838,8 +827,9 @@ pub struct App {
     pub(crate) ultimate_state: crate::app::ultimates::UltimateState,
     pub(crate) usermap: crate::app::usermap::state::UserMapState,
 
-    /// Arcade Hub
-    pub(crate) game_selection: usize,
+    /// Arcade Hub: the lobby's selected game, and the open board while
+    /// `is_playing_game`.
+    pub(crate) game_selection: ArcadeGame,
     pub(crate) is_playing_game: bool,
     /// The Arcade lobby's solvers roster (`o`) is open over the selected daily.
     pub(crate) arcade_solvers_open: bool,
@@ -998,6 +988,7 @@ pub struct App {
     pub(crate) snake_state: crate::app::arcade::snake::state::State,
     pub(crate) rubiks_cube_state: crate::app::arcade::rubiks_cube::state::State,
     pub(crate) sliding_puzzle_state: crate::app::arcade::sliding_puzzle::state::State,
+    pub(crate) netwalk_state: crate::app::arcade::netwalk::state::State,
     pub(crate) le_word_state: crate::app::arcade::le_word::state::State,
     pub(crate) sudoku_state: crate::app::arcade::sudoku::state::State,
     pub(crate) nonogram_state: crate::app::arcade::nonogram::state::State,
@@ -1448,6 +1439,11 @@ impl App {
             config.user_id,
             config.sliding_puzzle_service.clone(),
             config.initial_sliding_puzzle_games,
+        );
+        let netwalk_state = crate::app::arcade::netwalk::state::State::new(
+            config.user_id,
+            config.netwalk_service.clone(),
+            config.initial_netwalk_games,
         );
         let le_word_state = crate::app::arcade::le_word::state::State::new(
             config.user_id,
@@ -1917,7 +1913,7 @@ impl App {
             ultimate_state: crate::app::ultimates::UltimateState::with_cooldowns(
                 config.initial_ultimate_cooldowns,
             ),
-            game_selection: DEFAULT_GAME_SELECTION,
+            game_selection: ArcadeGame::Puzzle(DailyPuzzle::LeWord),
             is_playing_game: false,
             arcade_solvers_open: false,
             door_delete_confirm: false,
@@ -2016,6 +2012,7 @@ impl App {
             snake_state,
             rubiks_cube_state,
             sliding_puzzle_state,
+            netwalk_state,
             le_word_state,
             sudoku_state,
             nonogram_state,

@@ -1,6 +1,7 @@
 use std::time::Instant;
 
 use chrono::{DateTime, NaiveDate, Utc};
+use late_core::models::leaderboard::DailyPuzzle;
 use uuid::Uuid;
 
 use crate::metrics;
@@ -303,6 +304,7 @@ pub enum ActivityGame {
     Minesweeper,
     Mud,
     Nethack,
+    Netwalk,
     Nonogram,
     Poker,
     Realm,
@@ -345,6 +347,7 @@ impl ActivityGame {
         match self {
             Self::LeWord
             | Self::Minesweeper
+            | Self::Netwalk
             | Self::Nonogram
             | Self::RubiksCube
             | Self::SlidingPuzzle
@@ -366,6 +369,41 @@ impl ActivityGame {
         }
     }
 
+    /// The Arcade daily this game is, `None` off that shelf. The inverse of
+    /// `arcade::daily::activity_game`; the chip payout reads it to find the
+    /// reward template of a `GameWon`.
+    pub const fn daily_puzzle(self) -> Option<DailyPuzzle> {
+        match self {
+            Self::LeWord => Some(DailyPuzzle::LeWord),
+            Self::RubiksCube => Some(DailyPuzzle::RubiksCube),
+            Self::SlidingPuzzle => Some(DailyPuzzle::SlidingPuzzle),
+            Self::Sudoku => Some(DailyPuzzle::Sudoku),
+            Self::Nonogram => Some(DailyPuzzle::Nonogram),
+            Self::Minesweeper => Some(DailyPuzzle::Minesweeper),
+            Self::Solitaire => Some(DailyPuzzle::Solitaire),
+            Self::Netwalk => Some(DailyPuzzle::Netwalk),
+            Self::Asterion
+            | Self::Blackjack
+            | Self::Brogue
+            | Self::Chess
+            | Self::Darkroom
+            | Self::Dcss
+            | Self::GreenDragon
+            | Self::Mud
+            | Self::Nethack
+            | Self::Poker
+            | Self::Realm
+            | Self::Sshattrick
+            | Self::Ssnake
+            | Self::TicTacToe
+            | Self::Lateris
+            | Self::TwentyFortyEight
+            | Self::Tron
+            | Self::Snake
+            | Self::Traffic => None,
+        }
+    }
+
     pub fn key(self) -> &'static str {
         match self {
             Self::Asterion => "asterion",
@@ -379,6 +417,7 @@ impl ActivityGame {
             Self::Minesweeper => "minesweeper",
             Self::Mud => "mud",
             Self::Nethack => "nethack",
+            Self::Netwalk => "netwalk",
             Self::Nonogram => "nonogram",
             Self::Poker => "poker",
             Self::Realm => "realm",
@@ -410,6 +449,7 @@ impl ActivityGame {
             Self::Minesweeper => "Minesweeper",
             Self::Mud => "Lateania",
             Self::Nethack => "NetHack",
+            Self::Netwalk => "Netwalk",
             Self::Nonogram => "Nonogram",
             Self::Poker => "Poker",
             Self::Realm => "Realm",
@@ -487,6 +527,7 @@ impl ActivityEvent {
             ActivityGame::Minesweeper => "cleared Minesweeper",
             ActivityGame::Mud => "triumphed in Lateania",
             ActivityGame::Nethack => "conquered NetHack",
+            ActivityGame::Netwalk => "solved Netwalk",
             ActivityGame::Nonogram => "solved Nonogram",
             ActivityGame::Poker => "won Poker hand",
             ActivityGame::Realm => "conquered the Realm",
@@ -571,6 +612,7 @@ impl ActivityEvent {
             | ActivityGame::Chess
             | ActivityGame::LeWord
             | ActivityGame::Minesweeper
+            | ActivityGame::Netwalk
             | ActivityGame::Nonogram
             | ActivityGame::Poker
             | ActivityGame::Realm

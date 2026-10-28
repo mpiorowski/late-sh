@@ -11,7 +11,7 @@ use late_core::models::game_payout::{
     GAME_PAYOUT_PERIOD_COOLDOWN, GamePayout, GamePayoutClaim, GamePayoutKey, GamePayoutMultiGrant,
 };
 use late_core::models::reward::{
-    ASTERION_DAILY_ESCAPE_REWARD_KEY, DailyPuzzleRewardGame, REWARD_CLAIM_POLICY_PER_EVENT,
+    ASTERION_DAILY_ESCAPE_REWARD_KEY, REWARD_CLAIM_POLICY_PER_EVENT,
     REWARD_CLAIM_POLICY_UTC_DAY, RewardTemplate, daily_puzzle_reward_key,
 };
 use tokio::sync::broadcast;
@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use crate::app::activity::{
     channel::ActivitySender,
-    event::{ActivityEvent, ActivityGame, ActivityKind},
+    event::{ActivityEvent, ActivityKind},
 };
 
 // `period_kind = "lifetime"` is gone from every write path: migration 158
@@ -195,14 +195,14 @@ impl ChipService {
         let ActivityKind::GameWon { game, detail, .. } = event.kind else {
             return Ok(());
         };
-        let Some(game) = daily_puzzle_reward_game(game) else {
+        let Some(puzzle) = game.daily_puzzle() else {
             return Ok(());
         };
         let Some(difficulty_key) = detail else {
             return Ok(());
         };
 
-        let reward_key = daily_puzzle_reward_key(game, &difficulty_key);
+        let reward_key = daily_puzzle_reward_key(puzzle, &difficulty_key);
         self.credit_daily_reward_template(
             user_id,
             &reward_key,
@@ -754,21 +754,3 @@ const fn reward_grant(amount: i64, claim: GamePayoutClaim) -> RewardGrant {
         amount,
     }
 }
-
-const fn daily_puzzle_reward_game(game: ActivityGame) -> Option<DailyPuzzleRewardGame> {
-    match game {
-        ActivityGame::LeWord => Some(DailyPuzzleRewardGame::LeWord),
-        ActivityGame::Minesweeper => Some(DailyPuzzleRewardGame::Minesweeper),
-        ActivityGame::Nonogram => Some(DailyPuzzleRewardGame::Nonogram),
-        ActivityGame::RubiksCube => Some(DailyPuzzleRewardGame::RubiksCube),
-        ActivityGame::SlidingPuzzle => Some(DailyPuzzleRewardGame::SlidingPuzzle),
-        ActivityGame::Solitaire => Some(DailyPuzzleRewardGame::Solitaire),
-        ActivityGame::Sudoku => Some(DailyPuzzleRewardGame::Sudoku),
-        ActivityGame::Sshattrick => None,
-        _ => None,
-    }
-}
-
-#[cfg(test)]
-#[path = "svc_internal_test.rs"]
-mod svc_internal_test;

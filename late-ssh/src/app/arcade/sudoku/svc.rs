@@ -4,7 +4,8 @@ use late_core::db::Db;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::app::activity::event::{ActivityEvent, ActivityGame};
+use crate::app::activity::event::ActivityEvent;
+use crate::app::arcade::daily::activity_game;
 use crate::metrics::{self, ArcadeDifficulty, ArcadeFinish, ArcadeMode};
 use late_core::models::leaderboard::DailyPuzzle;
 use late_core::models::profile::fetch_username;
@@ -108,7 +109,7 @@ impl SudokuService {
             let _ = svc.activity_feed.send(ActivityEvent::game_won_at(
                 user_id,
                 username,
-                ActivityGame::Sudoku,
+                activity_game(DailyPuzzle::Sudoku),
                 Some(difficulty_key.clone()),
                 Some(score),
                 ActivityEvent::occurred_on_utc_date(puzzle_date),

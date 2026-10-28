@@ -4,7 +4,8 @@ use late_core::db::Db;
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::app::activity::event::{ActivityEvent, ActivityGame};
+use crate::app::activity::event::ActivityEvent;
+use crate::app::arcade::daily::activity_game;
 use crate::metrics::{self, ArcadeDifficulty, ArcadeFinish, ArcadeMode};
 use late_core::models::leaderboard::DailyPuzzle;
 use late_core::models::nonogram::{DailyWin, Game, GameParams};
@@ -87,7 +88,7 @@ impl NonogramService {
             let _ = svc.activity_feed.send(ActivityEvent::game_won_at(
                 user_id,
                 username,
-                ActivityGame::Nonogram,
+                activity_game(DailyPuzzle::Nonogram),
                 Some(difficulty_key.clone()),
                 None,
                 ActivityEvent::occurred_on_utc_date(puzzle_date),

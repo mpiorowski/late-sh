@@ -1,4 +1,5 @@
 use super::*;
+use late_core::models::leaderboard::DailyPuzzle;
 use crate::app::door::spectate::state::SpectateGame;
 
 fn id(n: u128) -> Uuid {
@@ -135,7 +136,7 @@ fn lost_seat_restarts_from_front() {
 #[test]
 fn arcade_stops_slot_after_house_tables() {
     let tables = [HouseTable::Poker];
-    let arcade = [ArcadeStop::Sudoku, ArcadeStop::Solitaire];
+    let arcade = [DailyPuzzle::Sudoku, DailyPuzzle::Solitaire];
     assert_eq!(
         next_workspace(
             &[],
@@ -145,7 +146,7 @@ fn arcade_stops_slot_after_house_tables() {
             &[],
             GameWorkspace::HouseTable(HouseTable::Poker)
         ),
-        GameWorkspace::Arcade(ArcadeStop::Sudoku)
+        GameWorkspace::Arcade(DailyPuzzle::Sudoku)
     );
     assert_eq!(
         next_workspace(
@@ -154,9 +155,9 @@ fn arcade_stops_slot_after_house_tables() {
             &arcade,
             &[],
             &[],
-            GameWorkspace::Arcade(ArcadeStop::Sudoku)
+            GameWorkspace::Arcade(DailyPuzzle::Sudoku)
         ),
-        GameWorkspace::Arcade(ArcadeStop::Solitaire)
+        GameWorkspace::Arcade(DailyPuzzle::Solitaire)
     );
     assert_eq!(
         next_workspace(
@@ -165,7 +166,7 @@ fn arcade_stops_slot_after_house_tables() {
             &arcade,
             &[],
             &[],
-            GameWorkspace::Arcade(ArcadeStop::Solitaire)
+            GameWorkspace::Arcade(DailyPuzzle::Solitaire)
         ),
         GameWorkspace::Base
     );
@@ -173,10 +174,10 @@ fn arcade_stops_slot_after_house_tables() {
 
 #[test]
 fn arcade_only_cycle_works_without_lobby_stops() {
-    let arcade = [ArcadeStop::LeWord];
+    let arcade = [DailyPuzzle::LeWord];
     assert_eq!(
         next_workspace(&[], &[], &arcade, &[], &[], GameWorkspace::Base),
-        GameWorkspace::Arcade(ArcadeStop::LeWord)
+        GameWorkspace::Arcade(DailyPuzzle::LeWord)
     );
     assert_eq!(
         next_workspace(
@@ -185,7 +186,7 @@ fn arcade_only_cycle_works_without_lobby_stops() {
             &arcade,
             &[],
             &[],
-            GameWorkspace::Arcade(ArcadeStop::LeWord)
+            GameWorkspace::Arcade(DailyPuzzle::LeWord)
         ),
         GameWorkspace::Base
     );
@@ -193,7 +194,7 @@ fn arcade_only_cycle_works_without_lobby_stops() {
 
 #[test]
 fn live_doors_slot_last_then_wrap_home() {
-    let arcade = [ArcadeStop::Sudoku];
+    let arcade = [DailyPuzzle::Sudoku];
     let doors = [Screen::Dcss, Screen::Nethack];
     assert_eq!(
         next_workspace(
@@ -202,7 +203,7 @@ fn live_doors_slot_last_then_wrap_home() {
             &arcade,
             &doors,
             &[],
-            GameWorkspace::Arcade(ArcadeStop::Sudoku)
+            GameWorkspace::Arcade(DailyPuzzle::Sudoku)
         ),
         GameWorkspace::Door(Screen::Dcss)
     );
@@ -360,10 +361,10 @@ fn solved_arcade_stop_restarts_from_front() {
         next_workspace(
             &[id(1)],
             &[],
-            &[ArcadeStop::Nonogram],
+            &[DailyPuzzle::Nonogram],
             &[],
             &[],
-            GameWorkspace::Arcade(ArcadeStop::Sudoku)
+            GameWorkspace::Arcade(DailyPuzzle::Sudoku)
         ),
         GameWorkspace::DailyBoard(id(1))
     );

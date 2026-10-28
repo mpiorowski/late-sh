@@ -487,7 +487,9 @@ async fn topbar_clicks_precede_active_game_input_and_respect_app_modals() {
     let user = create_test_user(&test_db.db, "game-topbar-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "game-topbar-flow-it");
     app.set_screen(Screen::Arcade);
-    app.game_selection = crate::app::state::GAME_SELECTION_2048;
+    app.game_selection = late_core::models::leaderboard::ArcadeGame::Score(
+        late_core::models::leaderboard::ScoreGame::TwentyFortyEight,
+    );
     app.handle_input(b"\r");
     assert!(app.is_playing_game);
 
@@ -1633,7 +1635,9 @@ async fn ctrl_s_stays_in_arcade_games_but_opens_shop_from_the_menu() {
     let user = create_test_user(&test_db.db, "ctrl-s-arcade-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "ctrl-s-arcade-flow-it");
     app.set_screen(Screen::Arcade);
-    app.game_selection = crate::app::state::GAME_SELECTION_2048;
+    app.game_selection = late_core::models::leaderboard::ArcadeGame::Score(
+        late_core::models::leaderboard::ScoreGame::TwentyFortyEight,
+    );
     app.handle_input(b"\r");
     assert!(app.is_playing_game);
 

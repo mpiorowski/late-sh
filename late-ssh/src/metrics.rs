@@ -842,6 +842,7 @@ mod inner {
             ActivityGame::Minesweeper => "minesweeper",
             ActivityGame::Mud => "mud",
             ActivityGame::Nethack => "nethack",
+            ActivityGame::Netwalk => "netwalk",
             ActivityGame::Nonogram => "nonogram",
             ActivityGame::Poker => "poker",
             ActivityGame::Realm => "realm",
@@ -2906,13 +2907,7 @@ mod inner {
 
     fn share_card_kind_label(kind: ShareCardKind) -> &'static str {
         match kind {
-            ShareCardKind::LeWord => "le_word",
-            ShareCardKind::Nonogram => "nonogram",
-            ShareCardKind::Sudoku => "sudoku",
-            ShareCardKind::Minesweeper => "minesweeper",
-            ShareCardKind::Solitaire => "solitaire",
-            ShareCardKind::RubiksCube => "rubiks_cube",
-            ShareCardKind::SlidingPuzzle => "sliding_puzzle",
+            ShareCardKind::Daily(puzzle) => puzzle.key(),
             ShareCardKind::Day => "day",
             ShareCardKind::Road => "road",
         }

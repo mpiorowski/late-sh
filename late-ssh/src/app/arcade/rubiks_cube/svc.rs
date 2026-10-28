@@ -6,7 +6,8 @@ use late_core::models::rubiks_cube::{DailyWin, Game, GameParams};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
-use crate::app::activity::event::{ActivityEvent, ActivityGame};
+use crate::app::activity::event::ActivityEvent;
+use crate::app::arcade::daily::activity_game;
 use crate::metrics::{self, ArcadeDifficulty, ArcadeFinish, ArcadeMode};
 use late_core::models::leaderboard::DailyPuzzle;
 
@@ -80,7 +81,7 @@ impl RubiksCubeService {
         let _ = self.activity_feed.send(ActivityEvent::game_won_at(
             user_id,
             username,
-            ActivityGame::RubiksCube,
+            activity_game(DailyPuzzle::RubiksCube),
             Some("daily".to_string()),
             None,
             ActivityEvent::occurred_on_utc_date(puzzle_date),

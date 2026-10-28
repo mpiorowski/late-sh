@@ -6,12 +6,12 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-use super::state::{
-    DAILY_WIN_REWARD_CHIPS, NetTile, State, Sticker, face_for_view, net_view, oriented_face,
-};
+use late_core::models::leaderboard::DailyPuzzle;
+
+use super::state::{NetTile, State, Sticker, face_for_view, net_view, oriented_face};
 use crate::app::arcade::ui::{
     GameBottomBar, OverlayAnchor, centered_rect, draw_game_frame, draw_game_overlay_anchored,
-    keys_line, status_line, tip_line,
+    keys_line, single_board_chips, status_line, tip_line,
 };
 use crate::app::common::theme;
 
@@ -31,7 +31,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("daily", state.daily_label(), theme::SUCCESS()),
             (
                 "reward",
-                format!("{DAILY_WIN_REWARD_CHIPS} chips"),
+                format!("{} chips", single_board_chips(DailyPuzzle::RubiksCube)),
                 theme::AMBER_GLOW(),
             ),
             ("view", state.view_label(), theme::TEXT_BRIGHT()),
@@ -87,7 +87,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             frame,
             board_area,
             "SOLVED",
-            &format!("{DAILY_WIN_REWARD_CHIPS} chips"),
+            &format!("{} chips", single_board_chips(DailyPuzzle::RubiksCube)),
             theme::SUCCESS(),
             OverlayAnchor::Top,
         );

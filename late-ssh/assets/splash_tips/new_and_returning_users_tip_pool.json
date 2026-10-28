@@ -48,6 +48,11 @@
   "Press g on someone else's message to gild it: three tiers, chips to the author, a permanent marker on the message",
   "Sliding Puzzle in the Arcade: press i to swap numbered tiles for the picture, same board, same chips",
   "Wondering who else cracked today's Sudoku? Press o on any daily card in the Arcade",
+  "Le Word in the Arcade is one five-letter word a day, the same for everyone: six guesses, then s shares your grid",
+  "Rubik's Cube in the Arcade scrambles the same cube for everyone each UTC day; v and the arrows turn the view, not the cube",
+  "Nonograms in the Arcade never need a guess: line logic alone finishes every one",
+  "Minesweeper in the Arcade gives every board three lives, and when it ends your flags turn green or red",
+  "Solitaire in the Arcade deals a draw-1 and a draw-3 game each UTC day; land the last card for the classic cascade",
   "Proud of your Artboard work? On page 4 pick Hang a piece in the rail and frame it",
   "On the Artboard press i, then paste ASCII art: it floats at your cursor until Enter stamps it, Esc drops it",
   "Artboard's NSFW disclaimer: V views this visit, A always views on this device, B returns to chat; Ctrl+O > Tweaks sets it per device",
@@ -64,5 +69,6 @@
   "The Realm's gates are open while under half the world is claimed ~ j on the map takes your spot",
   "Where is everyone? /map shades the Earth by who is online where ~ Ctrl+O sets your country so you are on it",
   "Who is hiring: /jobs opens the job feed ~ s searches it, / keeps the postings that carry your tags",
-  "Looking for someone? Page 5, ] to Profiles, then s searches names, cards and projects"
+  "Looking for someone? Page 5, ] to Profiles, then s searches names, cards and projects",
+  "Netwalk in the Arcade: turn tiles until the network lights every one ~ f locks a tile you are sure of"
 ]

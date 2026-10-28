@@ -2,100 +2,64 @@
 //! least one player move that are not solved yet. Daily boards only, since
 //! they expire at UTC midnight, so abandoned puzzles fall out of the cycle
 //! on their own. Real-time score games (Lateris, Snake, Traffic, NES) never
-//! join.
+//! join. A stop is a `DailyPuzzle`, in its roster's (the lobby's) order.
 
-use crate::app::state::{
-    App, GAME_SELECTION_LE_WORD, GAME_SELECTION_MINESWEEPER, GAME_SELECTION_NONOGRAMS,
-    GAME_SELECTION_RUBIKS_CUBE, GAME_SELECTION_SLIDING_PUZZLE, GAME_SELECTION_SOLITAIRE,
-    GAME_SELECTION_SUDOKU,
-};
+use late_core::models::leaderboard::{ArcadeGame, DailyPuzzle};
 
-/// One cycle-eligible Arcade daily puzzle. Roster order mirrors the Arcade
-/// lobby order (`LOBBY_GAME_ORDER` in `arcade/input.rs`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ArcadeStop {
-    LeWord,
-    RubiksCube,
-    SlidingPuzzle,
-    Sudoku,
-    Nonogram,
-    Minesweeper,
-    Solitaire,
-}
-
-impl ArcadeStop {
-    pub(crate) const ALL: [ArcadeStop; 7] = [
-        ArcadeStop::LeWord,
-        ArcadeStop::RubiksCube,
-        ArcadeStop::SlidingPuzzle,
-        ArcadeStop::Sudoku,
-        ArcadeStop::Nonogram,
-        ArcadeStop::Minesweeper,
-        ArcadeStop::Solitaire,
-    ];
-
-    pub(crate) fn game_selection(self) -> usize {
-        match self {
-            ArcadeStop::LeWord => GAME_SELECTION_LE_WORD,
-            ArcadeStop::RubiksCube => GAME_SELECTION_RUBIKS_CUBE,
-            ArcadeStop::SlidingPuzzle => GAME_SELECTION_SLIDING_PUZZLE,
-            ArcadeStop::Sudoku => GAME_SELECTION_SUDOKU,
-            ArcadeStop::Nonogram => GAME_SELECTION_NONOGRAMS,
-            ArcadeStop::Minesweeper => GAME_SELECTION_MINESWEEPER,
-            ArcadeStop::Solitaire => GAME_SELECTION_SOLITAIRE,
-        }
-    }
-
-    pub(crate) fn for_selection(selection: usize) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|stop| stop.game_selection() == selection)
-    }
-}
+use crate::app::state::App;
 
 /// The stop for the active Arcade board, but only when that board is a daily
 /// in progress. Personal/practice boards return `None` so backtick never
 /// treats them as their game's daily stop (personal boards never join the
 /// cycle). Le Word and Rubik's Cube are daily-only; Sliding Puzzle exposes a
 /// separate personal mode.
-pub(crate) fn active_daily_stop(app: &App) -> Option<ArcadeStop> {
-    let stop = ArcadeStop::for_selection(app.game_selection)?;
-    let is_daily = match stop {
-        ArcadeStop::LeWord | ArcadeStop::RubiksCube => true,
-        ArcadeStop::SlidingPuzzle => app.sliding_puzzle_state.is_daily_active(),
-        ArcadeStop::Sudoku => app.sudoku_state.is_daily_active(),
-        ArcadeStop::Nonogram => app.nonogram_state.is_daily_active(),
-        ArcadeStop::Minesweeper => app.minesweeper_state.is_daily_active(),
-        ArcadeStop::Solitaire => app.solitaire_state.is_daily_active(),
+pub(crate) fn active_daily_stop(app: &App) -> Option<DailyPuzzle> {
+    let ArcadeGame::Puzzle(puzzle) = app.game_selection else {
+        return None;
     };
-    is_daily.then_some(stop)
+    let is_daily = match puzzle {
+        DailyPuzzle::LeWord | DailyPuzzle::RubiksCube => true,
+        DailyPuzzle::SlidingPuzzle => app.sliding_puzzle_state.is_daily_active(),
+        DailyPuzzle::Sudoku => app.sudoku_state.is_daily_active(),
+        DailyPuzzle::Nonogram => app.nonogram_state.is_daily_active(),
+        DailyPuzzle::Minesweeper => app.minesweeper_state.is_daily_active(),
+        DailyPuzzle::Solitaire => app.solitaire_state.is_daily_active(),
+        DailyPuzzle::Netwalk => app.netwalk_state.is_daily_active(),
+    };
+    is_daily.then_some(puzzle)
 }
 
-/// Arcade stops with an unfinished daily board, in lobby order.
-pub(crate) fn unfinished_daily_stops(app: &App) -> Vec<ArcadeStop> {
-    ArcadeStop::ALL
-        .into_iter()
-        .filter(|stop| match stop {
-            ArcadeStop::LeWord => app.le_word_state.has_unfinished_daily(),
-            ArcadeStop::RubiksCube => app.rubiks_cube_state.has_unfinished_daily(),
-            ArcadeStop::SlidingPuzzle => app.sliding_puzzle_state.has_unfinished_daily(),
-            ArcadeStop::Sudoku => app.sudoku_state.first_unfinished_daily().is_some(),
-            ArcadeStop::Nonogram => app.nonogram_state.first_unfinished_daily().is_some(),
-            ArcadeStop::Minesweeper => app.minesweeper_state.first_unfinished_daily().is_some(),
-            ArcadeStop::Solitaire => app.solitaire_state.first_unfinished_daily().is_some(),
-        })
+/// Dailies with an unfinished board, in lobby order.
+pub(crate) fn unfinished_daily_stops(app: &App) -> Vec<DailyPuzzle> {
+    DailyPuzzle::ALL
+        .iter()
+        .copied()
+        .filter(|puzzle| has_unfinished_daily(app, *puzzle))
         .collect()
+}
+
+fn has_unfinished_daily(app: &App, puzzle: DailyPuzzle) -> bool {
+    match puzzle {
+        DailyPuzzle::LeWord => app.le_word_state.has_unfinished_daily(),
+        DailyPuzzle::RubiksCube => app.rubiks_cube_state.has_unfinished_daily(),
+        DailyPuzzle::SlidingPuzzle => app.sliding_puzzle_state.has_unfinished_daily(),
+        DailyPuzzle::Sudoku => app.sudoku_state.first_unfinished_daily().is_some(),
+        DailyPuzzle::Nonogram => app.nonogram_state.first_unfinished_daily().is_some(),
+        DailyPuzzle::Minesweeper => app.minesweeper_state.first_unfinished_daily().is_some(),
+        DailyPuzzle::Solitaire => app.solitaire_state.first_unfinished_daily().is_some(),
+        DailyPuzzle::Netwalk => app.netwalk_state.has_unfinished_daily(),
+    }
 }
 
 /// Open a stop's unfinished daily board as the active Arcade game. The caller
 /// switches the screen; this only points the Arcade at the right board.
-pub(crate) fn open_stop(app: &mut App, stop: ArcadeStop) {
-    match stop {
-        ArcadeStop::LeWord => {}
-        ArcadeStop::RubiksCube => {
+pub(crate) fn open_stop(app: &mut App, puzzle: DailyPuzzle) {
+    match puzzle {
+        DailyPuzzle::LeWord => {}
+        DailyPuzzle::RubiksCube => {
             app.rubiks_cube_state.ensure_current_daily();
         }
-        ArcadeStop::SlidingPuzzle => {
+        DailyPuzzle::SlidingPuzzle => {
             app.sliding_puzzle_state.ensure_current_daily();
             let index = app
                 .sliding_puzzle_state
@@ -103,23 +67,28 @@ pub(crate) fn open_stop(app: &mut App, stop: ArcadeStop) {
                 .unwrap_or(0);
             app.sliding_puzzle_state.open_daily(index);
         }
-        ArcadeStop::Sudoku => {
+        DailyPuzzle::Sudoku => {
             let index = app.sudoku_state.first_unfinished_daily().unwrap_or(0);
             app.sudoku_state.open_daily(index);
         }
-        ArcadeStop::Nonogram => {
+        DailyPuzzle::Nonogram => {
             let index = app.nonogram_state.first_unfinished_daily().unwrap_or(0);
             app.nonogram_state.open_daily(index);
         }
-        ArcadeStop::Minesweeper => {
+        DailyPuzzle::Minesweeper => {
             let index = app.minesweeper_state.first_unfinished_daily().unwrap_or(0);
             app.minesweeper_state.open_daily(index);
         }
-        ArcadeStop::Solitaire => {
+        DailyPuzzle::Solitaire => {
             let index = app.solitaire_state.first_unfinished_daily().unwrap_or(0);
             app.solitaire_state.open_daily(index);
         }
+        DailyPuzzle::Netwalk => {
+            app.netwalk_state.ensure_current_daily();
+            let index = app.netwalk_state.first_unfinished_daily().unwrap_or(0);
+            app.netwalk_state.open_daily(index);
+        }
     }
-    app.game_selection = stop.game_selection();
+    app.game_selection = ArcadeGame::Puzzle(puzzle);
     app.is_playing_game = true;
 }

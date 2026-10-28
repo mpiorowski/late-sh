@@ -1,10 +1,11 @@
 # Plan: four new Arcade dailies
 
-Status: investigated, not implemented. One refactor PR first (PR 0, "the
-tree"), then four games, one PR each, in the order below. As each lands,
-its shipped behavior moves into `late-ssh/src/app/arcade/CONTEXT.md` and
-`GAMES.md` and its section here is deleted; delete this file with the last
-one.
+Status: the refactor that makes a new daily one roster variant ("the
+tree") is in, and so is Netwalk (`late-ssh/src/app/arcade/netwalk/`); the
+other three games are investigated, not implemented, one PR each in the
+order below. As each lands, its shipped behavior moves into
+`late-ssh/src/app/arcade/CONTEXT.md` and `GAMES.md` and its section here is
+deleted; delete this file with the last one.
 
 ## Why these four
 
@@ -16,8 +17,6 @@ category, never a high-score run (score games hold a tenth of the hours).
 
 | Game | Shape | Tiers | Content | Why first/last |
 |---|---|---|---|---|
-| PR 0, the tree | no game; one roster variant breaks the build at every site | | | so each game PR is "add the variant, fix the red" |
-| Netwalk | rotate tiles until the network connects | easy/medium/hard, daily + personal | seeded generator, no pack | mirrors Sliding Puzzle one to one; proves the checklist |
 | Chess Puzzle | find the only moves | easy/medium/hard, daily + personal | Lichess open database, CC0, offline pack | reuses `games/chess_core` whole |
 | Spelling Bee | find words from seven letters | one board, three tiers banked by rank | offline pack built from a dictionary | needs a dictionary decision (below) |
 | Connections | sort sixteen words into four groups | one board, one tier | hand-authored pack | content is the cost; the pack must be skimmed |
@@ -29,7 +28,7 @@ Arcade game") first. The reference implementations:
 
 - **Tiered, daily + personal, seeded:** `arcade/sliding_puzzle/` and
   `late-core/src/models/sliding_puzzle.rs`, migration 167. Netwalk and Chess
-  Puzzle copy this row shape: `<game>_games (user_id, mode, difficulty_key,
+  Puzzle copy this row shape (`arcade/netwalk/` is the newest copy): `<game>_games (user_id, mode, difficulty_key,
   puzzle_date, puzzle_seed|puzzle_id, <board>, moves, UNIQUE(user_id,
   difficulty_key, mode))` and `<game>_daily_wins (user_id, difficulty_key,
   puzzle_date, <score>, UNIQUE(user_id, difficulty_key, puzzle_date))`.
@@ -53,130 +52,13 @@ Every game ships with the same file roles: `mod.rs` (declarations only),
 pure card, `svc.rs` tasks calling `late-core` models, and the `_test.rs`
 twins beside each. SQL lives in `late-core/src/models/<game>.rs`.
 
-## PR 0: the tree
+## Wiring a game
 
-Goal: adding one variant to `roster!(DailyPuzzle: ...)` in
-`late-core/src/models/leaderboard.rs` fails the build at every site that
-needs the new game, and nothing else lists games. Today about half the
-sites are exhaustive matches and the rest are arrays, `usize` constants,
-call lists and one wildcard arm, which compile fine with a game missing.
-One `svc` wildcard would even record wins and pay no chips. PR 0 is a
-refactor with no behavior change except the one order change named in A.
-
-**Already red today, kept as is:** the roster's own `key`, `title`,
-`wins_table`, `points_sql`, `status_difficulty_sql`; `ActivityGame::key`,
-`family`, the lounge arm in `activity/filter.rs`, the `metrics.rs` label
-maps; `share::icon` and `Glyph`; and the paper's front-page card art,
-`late-web/src/pages/paper/arcade_art.rs::art`, an exhaustive match on
-`ArcadeGame::Puzzle(DailyPuzzle)` with no wildcard. That art is the picture
-on the paper card the herald posts on Wednesdays and Saturdays (its most
-played game), so late-web goes red until the new game has its ASCII
-picture. The herald's Sunday scoreboard and the paper's YESTERDAY line
-iterate `WeekGame::all()` and `DayGame::all()` over the roster and need
-nothing per game.
-
-**What PR 0 changes**, each item one of the "by hand" sites made red:
-
-- **A. One order.** Reorder the roster to lobby order, Le Word first:
-  `roster!(DailyPuzzle: LeWord, RubiksCube, SlidingPuzzle, Sudoku,
-  Nonogram, Minesweeper, Solitaire)`. `DailyPuzzle::ALL` is then the lobby
-  order, the day card order, the workspace cycle order and the rollover
-  order. Delete `DAY_CARD_ORDER` in `arcade/share.rs` and `ArcadeStop::ALL`
-  in `workspace/arcade.rs`; iterate `DailyPuzzle::ALL`. The one visible
-  consequence: the Leaderboards page's per-game boards and the week card's
-  Arcade section follow the same order; note it in
-  `leaderboard/CONTEXT.md`.
-- **B. Tiers on the roster.** `DailyPuzzle::tiers(self) -> Tiers` with
-  `enum Tiers { Single(Difficulty), Keyed(&'static [(&'static str,
-  Difficulty)]) }`: Sudoku, Nonogram, Minesweeper and Sliding Puzzle
-  `Keyed(easy/medium/hard)`, Solitaire `Keyed([("draw-1", Easy), ("draw-3",
-  Hard)])`, Le Word `Single(Easy)`, Rubik's `Single(Medium)`. Derive from
-  it `points_sql` (the CASE or the constant), `status_difficulty_sql`
-  (`difficulty_key` or `'daily'`), the lobby's ✓/✗ marks with
-  `Difficulty::chips`, and the help modal's Economy lines. Delete
-  `TIERED_REWARDS`, `SOLITAIRE_REWARDS` and both `DAILY_WIN_REWARD_CHIPS`
-  constants; a snapshot test pins that the derived `points_sql` strings
-  equal today's. Found while planning: the two constants disagree with
-  what is paid. Le Word's template row pays 100 (Easy) while the lobby
-  card, the game panel and the help modal show 250; Rubik's pays 250
-  (Medium) and shows 500. Deriving the shown number from `tiers()` makes
-  the display say what the ledger does; no payout changes.
-- **C. The selection is an enum.** Replace the `GAME_SELECTION_*` `usize`
-  constants and `DEFAULT_GAME_SELECTION` in `app/state.rs` with late-core's
-  existing `ArcadeGame { Puzzle(DailyPuzzle), Score(ScoreGame) }`;
-  `App::game_selection: ArcadeGame`, default `Puzzle(LeWord)`. Delete
-  `LOBBY_GAME_ORDER`; the lobby is `DailyPuzzle::ALL` then
-  `ScoreGame::ALL`, as `ArcadeGame::all()` in late-core. `game_for_selection`,
-  the launch, the active-game key dispatch in `arcade/input.rs`, the draw
-  dispatch and the lobby rows in `arcade/ui.rs` become exhaustive matches
-  with no `unreachable!`. The lobby's Le Word special case (it draws
-  Rubik's and Sliding Puzzle after Le Word) goes away with the order in A.
-  Mechanical: about 150 uses across `arcade/input.rs`, `arcade/ui.rs`,
-  `state.rs`, `tick.rs`, `render.rs`, `workspace/arcade.rs` and their
-  tests. Nothing persists the selection.
-- **D. `ArcadeStop` is `DailyPuzzle`.** Delete the enum;
-  `GameWorkspace::Arcade(DailyPuzzle)` in `workspace/cycle.rs`;
-  `is_daily_active`, `has_unfinished_daily` and `open_stop` in
-  `workspace/arcade.rs` match `DailyPuzzle` exhaustively.
-- **E. The share hook is per puzzle.** `ShareCardKind` keeps its non-daily
-  variants and gains `Daily(DailyPuzzle)` in place of the seven per-game
-  ones; `arcade/input.rs` gets `fn daily_share(app: &App, puzzle:
-  DailyPuzzle) -> Option<ShareCard>`, an exhaustive match that calls each
-  game's `share::from_state`; the metrics label is `puzzle.key()`.
-- **F. One reward enum.** Delete `DailyPuzzleRewardGame` in
-  `late-core/src/models/reward.rs`; `daily_puzzle_reward_key(DailyPuzzle,
-  tier)`. In `games/chips/svc.rs` replace `daily_puzzle_reward_game` and its
-  `_ => None` with `ActivityGame::daily_puzzle(self) -> Option<DailyPuzzle>`
-  in `activity/event.rs`, every variant written out, no wildcard. Add the
-  forward map `DailyPuzzle::activity_game(self) -> ActivityGame` in
-  `arcade/daily.rs`, exhaustive, used by `game_for_selection` and by every
-  daily's `record_win_and_publish`: a new roster variant forces the
-  `ActivityGame` variant, which forces its `key`, `family`, lounge arm and
-  metrics label.
-- **G. Every per-game call list is a loop over `ALL` plus one exhaustive
-  match.** `refresh_daily_games` becomes `for puzzle in DailyPuzzle::ALL {
-  changed |= ensure_current_daily(app, puzzle) }` with `fn
-  ensure_current_daily(app: &mut App, puzzle: DailyPuzzle) -> bool` matching
-  every variant onto its state field. The same shape for the lobby rows
-  (`fn lobby_card(view, DailyPuzzle) -> DailyRow`), the draw dispatch, the
-  key dispatch and the share hook. Each arm names `app.<game>_state`, so a
-  missing `App` field is red, which makes the `AppConfig` service field red,
-  which makes the `AppState` struct literal in `main.rs` and the bootstrap
-  load red. The struct literal is what carries the chain to `main.rs`.
-
-**What stays yellow (a test, not the compiler)**, because it is data, not
-code:
-
-- The `reward_templates` rows of a migration: a late-core DB test walks
-  `DailyPuzzle::ALL` and every tier from `tiers()` and asserts
-  `RewardTemplate::get_active_by_key(daily_puzzle_reward_key(puzzle,
-  tier))` finds an active row. A missing migration fails the test, not the
-  build.
-- `bump_daily_win_total_sql` inside each game's win insert: the per-game
-  `svc_test` asserts a fresh win bumps `daily_win_totals`.
-- The splash tips: a test asserts every `DailyPuzzle::title()` appears in
-  at least one tip pool.
-
-**What stays prose:** the help modal's Arcade notes, `GAMES.md`,
-`arcade/CONTEXT.md`, `LICENSING.md`. The Economy list is generated from
-the roster after B, so only the notes are hand copy.
-
-**PR 0 tests:** the existing lobby navigation and render tests rewritten
-onto `ArcadeGame`; the `points_sql` and chips snapshot from B; the three
-yellow tests above; `make test-llm ARGS="-p late-ssh --lib -E
-'test(arcade) | test(workspace) | test(chips)'"` and `-p late-core --lib -E
-'test(leaderboard) | test(reward)'`.
-
-### What a game PR touches after PR 0
-
-Add the roster variant and fix the red, in this order so each fix unlocks
-the next: `late-core` (roster methods, `tiers`, the model file, the
-migration), `late-web` (the card art), `late-ssh` (`ActivityGame` and its
-maps, `share::icon`, the per-puzzle matches in `arcade/`, the state field,
-the service, `main.rs`). Then the yellow: the reward rows in the
-migration, the splash tip, the win-bump test. Then the prose: the help
-notes, `GAMES.md`, `arcade/CONTEXT.md`, `LICENSING.md` where data is
-imported.
+Adding a variant to `roster!(DailyPuzzle: ...)` fails the build at every
+site that needs the new game; the order to fix the red, the three tests
+that hold what the compiler cannot see, and the prose to update are in
+`GAMES.md`, "Adding a new Arcade game". A board's chips and Arcade Wins
+points both come from its tier in `DailyPuzzle::tiers()`.
 
 ### Tests, per game
 
@@ -194,57 +76,7 @@ imported.
   `make test-llm ARGS="-p late-core --lib -E 'test(<game>)'"`; `make check`
   is the owner's.
 
-## 1. Netwalk
-
-**Rules.** A grid of tiles; each tile has connections on some of its four
-sides. One source tile (the centre) powers the network. Rotate tiles until
-every tile with connections is lit and no connection points off a tile into
-nothing. The solution is a spanning tree, so there is exactly one answer up
-to symmetric tiles. No wrapping.
-
-**Tiers.** `Difficulty::Easy` 5x5, `Medium` 7x7, `Hard` 9x9. Daily seeds
-derive from UTC date plus difficulty, personal seeds are random; both
-restore from `puzzle_seed`, like Sliding Puzzle.
-
-**Generator** (`netwalk/state.rs`, pure): a seeded random spanning tree over
-the grid (randomized Prim from the centre), each tile's connection mask from
-its tree edges, then every tile rotated by a random 0..4 quarter turns;
-re-roll a scramble that leaves the board solved. Tile mask is 4 bits
-(N E S W); rotation is a bit rotate. A tile is `lit` when reachable from the
-source through matching connections; `solved` when every non-empty tile is
-lit and every connection meets a matching one.
-
-**State.** `enum Tile { mask: u8 }` is enough; `rotations: Vec<u8>` is the
-persisted board (`tiles INT[]`, one entry per cell, the current mask), plus
-`moves`. Session-only: cursor, `locked: Vec<bool>` (a locked tile refuses
-rotation), `reset_pending`. Persist on every rotation and reset through a
-save task; the win through `record_win_task` stamped with the board's own
-date.
-
-**Controls.** Arrows or `h/j/k/l` move, `Space`/`Enter` rotate clockwise,
-`x` counter-clockwise, `f` lock/unlock the tile, left click rotates, `d`/`p`
-daily/personal, `n` twice new personal, `[`/`]` difficulty, `r`/`0` twice
-restore the scramble (refused on a solved daily), `s` share card.
-
-**Rendering.** One cell per tile at the small tier (the sixteen box-drawing
-glyphs `─│┌┐└┘├┤┬┴┼╴╵╶╷` and space, mask to glyph by a `const` table),
-three columns by one row per tile when the area allows (the tier picker
-pattern of `chess_core::board_ui::pick_tier`). Lit tiles in `theme::SUCCESS`,
-unlit in `TEXT_DIM`, the source as `■`, leaves (one connection) as `▣`,
-locked tiles dimmer. Sweep every palette for glyph contrast against the
-selection fill, as `snake/ui_test.rs` does.
-
-**Score and win.** Rotations, stored as `moves`; `tiers()` is
-`Keyed(easy/medium/hard)`. Share card: the start grid as one `Glyph` row per board
-row (Green lit, Dark unlit, White empty) above an arrow row with the turn
-count, the Sliding Puzzle before-and-after minus the after (a solved board
-is all green and says nothing).
-
-**Tables:** `netwalk_games`, `netwalk_daily_wins`, both as the Sliding
-Puzzle ones with `tiles INT[]` and `moves`. Key `netwalk`, title
-`Netwalk`, icon `🔌`.
-
-## 2. Chess Puzzle
+## 1. Chess Puzzle
 
 **Source.** The Lichess puzzle dump, `lichess_db_puzzle.csv.zst` from
 `database.lichess.org` (CC0, 307 MB compressed, read 2026-10-28). Columns:
@@ -307,7 +139,7 @@ spoils the moves.
 existing `Chess` is the Lobby match and sits in the `Match` family), icon
 `♟️`. `LICENSING.md` gets the Lichess line.
 
-## 3. Spelling Bee
+## 2. Spelling Bee
 
 **Rules.** Seven distinct letters, one of them the centre. A word counts
 when it has four or more letters, uses only those letters (repeats
@@ -369,7 +201,7 @@ words on the card.
 UNIQUE(user_id, puzzle_date, difficulty_key))`. Key `spelling_bee`, title
 `Spelling Bee`, icon `🐝`.
 
-## 4. Connections
+## 3. Connections
 
 **Rules.** Sixteen words, four hidden groups of four, each group a colour
 by difficulty: yellow (plainest), green, blue, purple (the trick). Select
@@ -432,8 +264,8 @@ puzzle_date))`. Key `connections`, title `Connections`, icon `🟪`.
   deflated. The plan keeps the standard tiers so the four games read like
   the rest; lowering payouts is a `reward_templates` edit, not a design
   change.
-- **Personal mode** is in for Netwalk and Chess Puzzle (free: a seed or a
-  pack id) and out for the two word games (one board a day is the game).
+- **Personal mode** is in for Chess Puzzle (free: a pack id, as Netwalk's
+  is a seed) and out for the two word games (one board a day is the game).
 - **Chess Puzzle lives.** Three, like Minesweeper. Lichess fails a puzzle on
   the first wrong move; that is harsh for a once-a-day board that pays
   chips. One life is a one-line constant change if the three feel soft.

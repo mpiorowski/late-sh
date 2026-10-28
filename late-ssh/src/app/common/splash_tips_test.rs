@@ -47,3 +47,17 @@ fn splash_hint_selection_uses_pool_values_when_available() {
             .any(|candidate| candidate == &tip)
     );
 }
+
+/// Every Arcade daily is named in a tip, so a new one cannot ship without
+/// the splash ever mentioning it.
+#[test]
+fn every_daily_puzzle_has_a_tip() {
+    let candidates = tip_candidates(false);
+    for puzzle in late_core::models::leaderboard::DailyPuzzle::ALL {
+        assert!(
+            candidates.iter().any(|tip| tip.contains(puzzle.title())),
+            "no splash tip names {}",
+            puzzle.title()
+        );
+    }
+}

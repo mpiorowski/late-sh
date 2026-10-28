@@ -18,7 +18,7 @@ use uuid::Uuid;
 
 use super::art::PuzzleArt;
 use crate::{
-    app::activity::event::{ActivityEvent, ActivityGame},
+    app::{activity::event::ActivityEvent, arcade::daily::activity_game},
     metrics::{self, ArcadeDifficulty, ArcadeFinish, ArcadeMode},
 };
 
@@ -310,7 +310,7 @@ async fn record_win_and_publish(
     let _ = activity_feed.send(ActivityEvent::game_won_at(
         user_id,
         username,
-        ActivityGame::SlidingPuzzle,
+        activity_game(DailyPuzzle::SlidingPuzzle),
         Some(difficulty.key().to_string()),
         Some(moves),
         ActivityEvent::occurred_on_utc_date(puzzle_date),

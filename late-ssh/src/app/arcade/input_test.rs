@@ -1,46 +1,41 @@
 use super::*;
 
+/// The lobby walks one order, the rosters' (`ArcadeGame::all()`): the
+/// dailies, then the score games, and wraps at both ends.
 #[test]
-fn lobby_navigation_follows_rendered_order() {
+fn lobby_navigation_walks_the_roster_order_and_wraps() {
+    let mut forward = vec![ArcadeGame::Puzzle(DailyPuzzle::LeWord)];
+    for _ in 0..11 {
+        forward.push(next_lobby_selection(*forward.last().expect("a game")));
+    }
     assert_eq!(
-        next_lobby_selection(GAME_SELECTION_LE_WORD),
-        GAME_SELECTION_RUBIKS_CUBE
+        forward,
+        vec![
+            ArcadeGame::Puzzle(DailyPuzzle::LeWord),
+            ArcadeGame::Puzzle(DailyPuzzle::RubiksCube),
+            ArcadeGame::Puzzle(DailyPuzzle::SlidingPuzzle),
+            ArcadeGame::Puzzle(DailyPuzzle::Sudoku),
+            ArcadeGame::Puzzle(DailyPuzzle::Nonogram),
+            ArcadeGame::Puzzle(DailyPuzzle::Minesweeper),
+            ArcadeGame::Puzzle(DailyPuzzle::Solitaire),
+            ArcadeGame::Puzzle(DailyPuzzle::Netwalk),
+            ArcadeGame::Score(ScoreGame::TwentyFortyEight),
+            ArcadeGame::Score(ScoreGame::Lateris),
+            ArcadeGame::Score(ScoreGame::Snake),
+            ArcadeGame::Score(ScoreGame::Traffic),
+        ]
     );
     assert_eq!(
-        next_lobby_selection(GAME_SELECTION_RUBIKS_CUBE),
-        GAME_SELECTION_SLIDING_PUZZLE
+        next_lobby_selection(ArcadeGame::Score(ScoreGame::Traffic)),
+        ArcadeGame::Puzzle(DailyPuzzle::LeWord)
     );
     assert_eq!(
-        next_lobby_selection(GAME_SELECTION_SLIDING_PUZZLE),
-        GAME_SELECTION_SUDOKU
+        prev_lobby_selection(ArcadeGame::Puzzle(DailyPuzzle::LeWord)),
+        ArcadeGame::Score(ScoreGame::Traffic)
     );
     assert_eq!(
-        next_lobby_selection(GAME_SELECTION_SOLITAIRE),
-        GAME_SELECTION_2048
-    );
-    assert_eq!(
-        next_lobby_selection(GAME_SELECTION_2048),
-        GAME_SELECTION_TETRIS
-    );
-    assert_eq!(
-        next_lobby_selection(GAME_SELECTION_SNAKE),
-        GAME_SELECTION_TRAFFIC
-    );
-    assert_eq!(
-        prev_lobby_selection(GAME_SELECTION_2048),
-        GAME_SELECTION_SOLITAIRE
-    );
-}
-
-#[test]
-fn lobby_navigation_wraps_in_rendered_order() {
-    assert_eq!(
-        next_lobby_selection(GAME_SELECTION_TRAFFIC),
-        GAME_SELECTION_LE_WORD
-    );
-    assert_eq!(
-        prev_lobby_selection(GAME_SELECTION_LE_WORD),
-        GAME_SELECTION_TRAFFIC
+        prev_lobby_selection(ArcadeGame::Score(ScoreGame::TwentyFortyEight)),
+        ArcadeGame::Puzzle(DailyPuzzle::Netwalk)
     );
 }
 
@@ -53,7 +48,7 @@ async fn sliding_puzzle_q_and_escape_return_to_arcade_lobby() {
     let user = create_test_user(&test_db.db, "sliding-puzzle-exit-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "sliding-puzzle-exit-token");
     app.set_screen(Screen::Arcade);
-    app.game_selection = GAME_SELECTION_SLIDING_PUZZLE;
+    app.game_selection = ArcadeGame::Puzzle(DailyPuzzle::SlidingPuzzle);
 
     for key in [b'q', 0x1B] {
         app.is_playing_game = true;
@@ -75,7 +70,7 @@ async fn sliding_puzzle_left_click_moves_an_adjacent_tile_into_the_gap() {
     let user = create_test_user(&test_db.db, "sliding-puzzle-click-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "sliding-puzzle-click-token");
     app.set_screen(Screen::Arcade);
-    app.game_selection = GAME_SELECTION_SLIDING_PUZZLE;
+    app.game_selection = ArcadeGame::Puzzle(DailyPuzzle::SlidingPuzzle);
     app.is_playing_game = true;
     app.sliding_puzzle_state.set_board_for_test(
         Difficulty::Easy,
@@ -122,7 +117,7 @@ async fn le_word_s_types_a_letter_until_the_round_ends_then_copies_the_card() {
     let user = create_test_user(&test_db.db, "le-word-share-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "le-word-share-token");
     app.set_screen(Screen::Arcade);
-    app.game_selection = GAME_SELECTION_LE_WORD;
+    app.game_selection = ArcadeGame::Puzzle(DailyPuzzle::LeWord);
     app.is_playing_game = true;
     app.le_word_state.daily_word_loaded = true;
     app.le_word_state.answer = "shade".to_string();
@@ -162,7 +157,7 @@ async fn lobby_s_copies_the_day_card() {
     let card = app.pending_clipboard.take().expect("day card copied");
     assert!(card.starts_with("late.sh Daily #"), "{card}");
     assert!(
-        card.contains("· 0/7\n⬛⬛⬛⬛⬛⬛⬛\n🔤🧊🧩🔢🎨💣🃏\nssh late.sh"),
+        card.contains("· 0/8\n⬛⬛⬛⬛⬛⬛⬛⬛\n🔤🧊🧩🔢🎨💣🃏🔌\nssh late.sh"),
         "{card}"
     );
 }

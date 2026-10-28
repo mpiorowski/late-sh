@@ -10,7 +10,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear},
 };
 
-use late_core::models::leaderboard::LeaderboardData;
+use late_core::models::leaderboard::{ArcadeGame, LeaderboardData, ScoreGame};
 use late_core::models::statusline::StatusComponentSetting;
 use late_core::models::user::{RightSidebarComponentSetting, RightSidebarMode, RoomListMode};
 
@@ -174,7 +174,7 @@ struct DrawContext<'a> {
     calendar: &'a crate::app::calendar::state::CalendarState,
     dashboard_view: chat::ui::DashboardChatView<'a>,
     chat_view: chat::ui::ChatRenderInput<'a>,
-    game_selection: usize,
+    game_selection: ArcadeGame,
     is_playing_game: bool,
     arcade_solvers_open: bool,
     door_delete_confirm: bool,
@@ -275,6 +275,7 @@ struct DrawContext<'a> {
     nonogram_state: &'a crate::app::arcade::nonogram::state::State,
     solitaire_state: &'a crate::app::arcade::solitaire::state::State,
     minesweeper_state: &'a crate::app::arcade::minesweeper::state::State,
+    netwalk_state: &'a crate::app::arcade::netwalk::state::State,
     dartboard_state: Option<&'a crate::app::artboard::state::State>,
     scratchpad: Option<&'a crate::app::scratchpad::state::ScratchpadState>,
     directory_state: &'a crate::app::directory::state::DirectoryState,
@@ -1770,6 +1771,7 @@ impl App {
                         nonogram_state: &self.nonogram_state,
                         solitaire_state: &self.solitaire_state,
                         minesweeper_state: &self.minesweeper_state,
+                        netwalk_state: &self.netwalk_state,
                         dartboard_state: self.dartboard_state.as_ref(),
                         scratchpad: self.scratchpad.as_ref(),
                         directory_state: &self.directory_state,
@@ -2562,6 +2564,7 @@ impl App {
                     nonogram_state: ctx.nonogram_state,
                     solitaire_state: ctx.solitaire_state,
                     minesweeper_state: ctx.minesweeper_state,
+                    netwalk_state: ctx.netwalk_state,
                     daily_completion: ctx.leaderboard.user_daily_statuses.get(&ctx.user_id),
                     session_daily_completion: ctx.session_daily_wins.today(),
                     quest_state: ctx.quest_state,
@@ -3557,13 +3560,10 @@ fn append_arcade_title_extras(spans: &mut Vec<Span<'static>>, ctx: &DrawContext<
 
     spans.push(Span::styled("· ", Style::default().fg(theme::TEXT_DIM())));
     spans.push(Span::styled(
-        format!(
-            "{} ",
-            crate::app::arcade::ui::game_title(ctx.game_selection)
-        ),
+        format!("{} ", ctx.game_selection.title()),
         Style::default().fg(theme::TEXT_BRIGHT()),
     ));
-    if ctx.game_selection == crate::app::state::GAME_SELECTION_SNAKE {
+    if ctx.game_selection == ArcadeGame::Score(ScoreGame::Snake) {
         spans.push(Span::styled("by github.com/AndreLobato ", dim));
     }
 }

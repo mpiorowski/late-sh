@@ -12,10 +12,12 @@ use crate::app::lobby::house::{
 use late_core::models::{
     asterion::ASTERION_DAILY_ESCAPE_PAYOUT,
     chat_message_gild::GildTier,
+    chips::Difficulty,
     drink_round::{
         GIFT_DRINK_PRICE, MAX_OPEN_CREDITS, ROUND_CREDIT_TTL_HOURS, ROUND_PRICE_PER_PATRON,
     },
     drinks::{DRINK_PRICE_MAX, DRINK_PRICE_MIN, DRUNK_DECAY_PER_HOUR},
+    leaderboard::{DailyPuzzle, ScoreGame},
     quest::{DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL},
 };
 
@@ -158,22 +160,41 @@ fn quest_sections() -> Vec<GuideSection> {
     }]
 }
 
+/// A daily's boards with what each pays or scores, easiest first, from
+/// the roster's tiers: `easy 100 · medium 250 · hard 500`.
+pub(crate) fn daily_tiers_text(puzzle: DailyPuzzle, value: fn(Difficulty) -> i64) -> String {
+    puzzle
+        .tiers()
+        .list()
+        .into_iter()
+        .map(|(difficulty_key, tier)| format!("{difficulty_key} {}", value(tier)))
+        .collect::<Vec<_>>()
+        .join(" · ")
+}
+
+fn arcade_wins_lines() -> Vec<String> {
+    let titles: Vec<&str> = DailyPuzzle::ALL.iter().map(|puzzle| puzzle.title()).collect();
+    let (last, rest) = titles.split_last().expect("the roster has dailies");
+    let mut body = vec![
+        format!("Counts daily {}, and {last}.", rest.join(", ")),
+        "Each completed daily adds monthly points, per board:".to_string(),
+    ];
+    body.extend(DailyPuzzle::ALL.iter().map(|puzzle| {
+        format!(
+            "{:<15} {}",
+            puzzle.title(),
+            daily_tiers_text(*puzzle, Difficulty::points)
+        )
+    }));
+    body.push("More hard dailies across more games wins the board.".to_string());
+    body
+}
+
 fn leaderboard_sections() -> Vec<GuideSection> {
     vec![
         GuideSection {
             title: "Arcade Wins",
-            body: vec![
-                "Counts daily Sudoku, Nonograms, Solitaire, Minesweeper, Le Word, Rubik's Cube, and Sliding Puzzle."
-                    .to_string(),
-                "Each completed daily adds monthly points:".to_string(),
-                "easy / draw-1  1 pt".to_string(),
-                "medium         3 pts".to_string(),
-                "hard / draw-3  5 pts".to_string(),
-                "Le Word daily  1 pt".to_string(),
-                "Rubik's Cube   3 pts".to_string(),
-                "Sliding Puzzle 1 / 3 / 5 pts by difficulty".to_string(),
-                "More hard dailies across more games wins the board.".to_string(),
-            ],
+            body: arcade_wins_lines(),
         },
         GuideSection {
             title: "Score Games",
@@ -202,6 +223,12 @@ fn leaderboard_sections() -> Vec<GuideSection> {
     ]
 }
 
+/// "Daily games: Le Word, Rubik's Cube, ...": a roster in lobby order, so
+/// a new game is named here without a copy edit.
+fn roster_line<'a>(label: &str, titles: impl Iterator<Item = &'a str>) -> String {
+    format!("{label}: {}.", titles.collect::<Vec<_>>().join(", "))
+}
+
 fn arcade_sections() -> Vec<GuideSection> {
     vec![
         GuideSection {
@@ -210,9 +237,8 @@ fn arcade_sections() -> Vec<GuideSection> {
                 "The Arcade mixes daily puzzle runs, daily challenges, and endless score chases."
                     .to_string(),
                 "Open The Arcade with 2.".to_string(),
-                "High-score games: 2048, Lateris, Snake, Traffic.".to_string(),
-                "Daily games: Rubik's Cube, Sliding Puzzle, Sudoku, Nonograms, Minesweeper, Solitaire, Le Word."
-                    .to_string(),
+                roster_line("High-score games", ScoreGame::ALL.iter().map(|game| game.title())),
+                roster_line("Daily games", DailyPuzzle::ALL.iter().map(|puzzle| puzzle.title())),
             ],
         },
         GuideSection {
@@ -288,6 +314,25 @@ fn arcade_sections() -> Vec<GuideSection> {
                     .to_string(),
                 "[ and ] change difficulty.".to_string(),
                 "r or 0 twice resets the current scramble.".to_string(),
+            ],
+        },
+        GuideSection {
+            title: "Netwalk",
+            body: vec![
+                "Turn tiles until one network, fed from the amber source in the centre, lights every tile with no loose end."
+                    .to_string(),
+                "Daily and personal boards: easy 5x5, medium 7x7, hard 9x9.".to_string(),
+                "hjkl or arrows move the cursor.".to_string(),
+                "Space or Enter turns the tile clockwise; x turns it back; a click turns the clicked tile."
+                    .to_string(),
+                "f locks a tile you are sure of; it draws in heavy lines and will not turn until f again."
+                    .to_string(),
+                "d selects daily; p selects personal; n twice starts a new personal board."
+                    .to_string(),
+                "Personal boards persist but grant no chips, quest progress, or Arcade Win."
+                    .to_string(),
+                "[ and ] change difficulty.".to_string(),
+                "r or 0 twice restores the current scramble.".to_string(),
             ],
         },
         GuideSection {

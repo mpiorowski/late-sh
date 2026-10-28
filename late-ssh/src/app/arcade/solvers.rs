@@ -87,19 +87,17 @@ impl TodaySolvers<'_> {
             .count()
     }
 
-    /// The full roster of `game`, `tiers` given easiest first as the lobby
-    /// card lists them; the roster comes back hardest first.
-    pub(crate) fn roster(
-        &self,
-        date: NaiveDate,
-        game: DailyPuzzle,
-        tiers: &[(&'static str, i64)],
-    ) -> Roster {
+    /// The full roster of `game`, one block per tier of `game.tiers()`
+    /// (the list the lobby card's marks read, easiest first); the roster
+    /// comes back hardest first.
+    pub(crate) fn roster(&self, date: NaiveDate, game: DailyPuzzle) -> Roster {
         let candidates = self.candidates();
-        let tiers = tiers
-            .iter()
+        let tiers = game
+            .tiers()
+            .list()
+            .into_iter()
             .rev()
-            .map(|(difficulty_key, chips)| {
+            .map(|(difficulty_key, tier)| {
                 let mut names: Vec<String> = candidates
                     .iter()
                     .filter(|id| self.solved_tier(**id, game, difficulty_key))
@@ -111,7 +109,7 @@ impl TodaySolvers<'_> {
                 shuffle(&mut names, day_seed(date, game, difficulty_key));
                 TierSolvers {
                     difficulty_key,
-                    chips: *chips,
+                    chips: tier.chips(),
                     names,
                 }
             })

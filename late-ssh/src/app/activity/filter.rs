@@ -56,6 +56,7 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
             | ActivityGame::Chess
             | ActivityGame::LeWord
             | ActivityGame::Minesweeper
+            | ActivityGame::Netwalk
             | ActivityGame::Nonogram
             | ActivityGame::Poker
             | ActivityGame::Realm
@@ -102,6 +103,7 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
             // puzzle" story worth sharing.
             ActivityGame::LeWord
             | ActivityGame::Minesweeper
+            | ActivityGame::Netwalk
             | ActivityGame::Nonogram
             | ActivityGame::RubiksCube
             | ActivityGame::SlidingPuzzle

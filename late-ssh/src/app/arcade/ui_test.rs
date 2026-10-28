@@ -29,14 +29,6 @@ fn keys_line_does_not_pad_key_only_hints() {
     assert_eq!(text, "hjkl↕↔ · q exit");
 }
 
-#[test]
-fn sliding_puzzle_uses_its_user_facing_title() {
-    assert_eq!(
-        game_title(crate::app::state::GAME_SELECTION_SLIDING_PUZZLE),
-        "Sliding Puzzle"
-    );
-}
-
 #[tokio::test]
 async fn sliding_puzzle_card_renders_rewards_and_launches() {
     use crate::{
@@ -57,7 +49,9 @@ async fn sliding_puzzle_card_renders_rewards_and_launches() {
         right_sidebar_mode: RightSidebarMode::On,
     });
     app.set_screen(Screen::Arcade);
-    app.game_selection = crate::app::state::GAME_SELECTION_SLIDING_PUZZLE;
+    app.game_selection = late_core::models::leaderboard::ArcadeGame::Puzzle(
+        late_core::models::leaderboard::DailyPuzzle::SlidingPuzzle,
+    );
 
     let lobby = render_plain(&mut app);
     assert!(lobby.contains("Sliding Puzzle"));
@@ -210,7 +204,9 @@ async fn a_daily_win_turns_the_lobby_mark_green_before_the_leaderboard_refresh()
         right_sidebar_mode: RightSidebarMode::On,
     });
     app.set_screen(Screen::Arcade);
-    app.game_selection = crate::app::state::GAME_SELECTION_SLIDING_PUZZLE;
+    app.game_selection = late_core::models::leaderboard::ArcadeGame::Puzzle(
+        late_core::models::leaderboard::DailyPuzzle::SlidingPuzzle,
+    );
     let (activity_tx, activity_rx) = broadcast::channel::<ActivityEvent>(8);
     app.activity_feed_rx = Some(activity_rx);
 
@@ -272,7 +268,7 @@ async fn the_lobby_counts_todays_solvers_and_o_opens_the_roster() {
     };
     use late_core::{
         models::{
-            leaderboard::{DailyCompletionStatus, DailyPuzzle, LeaderboardData},
+            leaderboard::{ArcadeGame, DailyCompletionStatus, DailyPuzzle, LeaderboardData},
             user::RightSidebarMode,
             user_ssh_key::KeyLayout,
         },
@@ -289,7 +285,7 @@ async fn the_lobby_counts_todays_solvers_and_o_opens_the_roster() {
         right_sidebar_mode: RightSidebarMode::On,
     });
     app.set_screen(Screen::Arcade);
-    app.game_selection = crate::app::state::GAME_SELECTION_SUDOKU;
+    app.game_selection = ArcadeGame::Puzzle(DailyPuzzle::Sudoku);
 
     let alice = Uuid::from_u128(0xa11ce);
     let bob = Uuid::from_u128(0xb0b);

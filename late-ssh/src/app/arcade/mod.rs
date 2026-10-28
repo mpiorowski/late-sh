@@ -2,6 +2,7 @@ pub mod daily;
 pub mod input;
 pub mod le_word;
 pub mod minesweeper;
+pub mod netwalk;
 pub mod nonogram;
 pub mod rubiks_cube;
 pub mod share;

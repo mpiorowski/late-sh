@@ -6,9 +6,12 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use super::state::{DAILY_WIN_REWARD_CHIPS, LetterScore, MAX_GUESSES, State, WORD_LEN};
+use late_core::models::leaderboard::DailyPuzzle;
+
+use super::state::{LetterScore, MAX_GUESSES, State, WORD_LEN};
 use crate::app::arcade::ui::{
-    GameBottomBar, centered_rect, draw_game_frame, keys_line, status_line, tip_line,
+    GameBottomBar, centered_rect, draw_game_frame, keys_line, single_board_chips, status_line,
+    tip_line,
 };
 use crate::app::common::theme;
 
@@ -137,7 +140,8 @@ fn draw_rules_modal(frame: &mut Frame, area: Rect) {
         Line::from(""),
         Line::from("A new daily answer appears once per day."),
         Line::from(format!(
-            "Solving the daily earns {DAILY_WIN_REWARD_CHIPS} chips."
+            "Solving the daily earns {} chips.",
+            single_board_chips(DailyPuzzle::LeWord)
         )),
         Line::from(""),
         Line::from(Span::styled(

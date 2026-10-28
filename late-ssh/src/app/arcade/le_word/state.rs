@@ -6,8 +6,6 @@ use uuid::Uuid;
 use super::svc::LeWordService;
 use crate::metrics::{ArcadeDifficulty, ArcadeFinish, ArcadeMode};
 
-/// Mirrors the `le_word_daily_daily_win` reward template. Update both together.
-pub const DAILY_WIN_REWARD_CHIPS: i64 = 250;
 pub const WORD_LEN: usize = 5;
 pub const MAX_GUESSES: usize = 6;
 pub const DAILY_DIFFICULTY_KEY: &str = "daily";
