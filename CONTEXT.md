@@ -253,7 +253,8 @@ small modals.
   contributors.
 - `devdocs/`: research and design notes (door candidates, the parked feed
   budget, the IRC design and IRCv3 ideas, the parked audio leader, the CLI
-  YouTube backend plan, the permissions matrix).
+  YouTube backend plan, the four new Arcade dailies plan, the permissions
+  matrix).
 
 ## 7. Telemetry
 

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use late_core::models::{
     chips::Difficulty,
     leaderboard::{DailyCompletionStatus, DailyPuzzle},
@@ -9,7 +11,9 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
+use uuid::Uuid;
 
+use super::solvers::{Roster, TodaySolvers};
 use crate::app::{
     activity::event::ActivityGame,
     common::theme,
@@ -39,14 +43,39 @@ const SOLITAIRE_REWARDS: DailyRewardTiers = &[
     ("draw-1", Difficulty::Medium.chips()),
     ("draw-3", Difficulty::Hard.chips()),
 ];
-type DailyRow = (
-    usize,
-    &'static str,
-    &'static str,
-    bool,
-    DailyPuzzle,
-    DailyRewardTiers,
-);
+type DailyRow = (usize, &'static str, &'static str, bool, DailyPuzzle);
+
+/// The reward tiers a daily's lobby card lists, easiest first. The solvers
+/// modal walks the same list backwards, so the two can never disagree.
+pub(crate) const fn daily_tiers(game: DailyPuzzle) -> DailyRewardTiers {
+    match game {
+        DailyPuzzle::Sudoku
+        | DailyPuzzle::Nonogram
+        | DailyPuzzle::Minesweeper
+        | DailyPuzzle::SlidingPuzzle => TIERED_REWARDS,
+        DailyPuzzle::Solitaire => SOLITAIRE_REWARDS,
+        DailyPuzzle::LeWord => &[("daily", super::le_word::state::DAILY_WIN_REWARD_CHIPS)],
+        DailyPuzzle::RubiksCube => &[("daily", super::rubiks_cube::state::DAILY_WIN_REWARD_CHIPS)],
+    }
+}
+
+/// The daily behind a lobby selection; `None` for the score games.
+pub(crate) fn daily_for_selection(selection: usize) -> Option<DailyPuzzle> {
+    match selection {
+        GAME_SELECTION_LE_WORD => Some(DailyPuzzle::LeWord),
+        GAME_SELECTION_SUDOKU => Some(DailyPuzzle::Sudoku),
+        GAME_SELECTION_NONOGRAMS => Some(DailyPuzzle::Nonogram),
+        GAME_SELECTION_MINESWEEPER => Some(DailyPuzzle::Minesweeper),
+        GAME_SELECTION_SOLITAIRE => Some(DailyPuzzle::Solitaire),
+        GAME_SELECTION_RUBIKS_CUBE => Some(DailyPuzzle::RubiksCube),
+        GAME_SELECTION_SLIDING_PUZZLE => Some(DailyPuzzle::SlidingPuzzle),
+        _ => None,
+    }
+}
+
+/// Narrower lobbies drop the `[o who]` hint from the selected card; the
+/// count stays, the key is still in the guide.
+const SOLVERS_HINT_MIN_WIDTH: u16 = 62;
 
 // ── Arcade game frame ─────────────────────────────────────────
 
@@ -311,6 +340,27 @@ pub struct ArcadeHubView<'a> {
     /// Dailies this session banked today, ahead of the snapshot above.
     pub session_daily_completion: Option<&'a DailyCompletionStatus>,
     pub quest_state: &'a crate::app::hub::dailies::state::QuestState,
+    /// Every user's marks today and their names, for the `N solved` count
+    /// and the `o` roster. `session_daily_completion` is OR'd in for the
+    /// viewer, as it is for the ✓ marks.
+    pub today_statuses: &'a HashMap<Uuid, DailyCompletionStatus>,
+    pub today_solver_names: &'a HashMap<Uuid, String>,
+    pub user_id: Uuid,
+    pub username: &'a str,
+    /// The solvers roster is open over the selected daily.
+    pub show_solvers: bool,
+}
+
+impl ArcadeHubView<'_> {
+    fn today_solvers(&self) -> TodaySolvers<'_> {
+        TodaySolvers {
+            statuses: self.today_statuses,
+            usernames: self.today_solver_names,
+            own_user_id: self.user_id,
+            own_username: self.username,
+            own_session: self.session_daily_completion,
+        }
+    }
 }
 
 /// Arcade games always draw their status/keys/tip footer. Mouse hit-testing
@@ -397,6 +447,137 @@ pub fn draw_arcade_hub(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) 
     // No banner art above the list: with the quest strip on top, every row
     // belongs to the games, and small terminals never had the headroom.
     draw_game_list(frame, content_area, view);
+
+    if view.show_solvers
+        && let Some(game) = daily_for_selection(view.game_selection)
+    {
+        let roster =
+            view.today_solvers()
+                .roster(chrono::Utc::now().date_naive(), game, daily_tiers(game));
+        draw_solvers_modal(frame, content_area, game, view.username, &roster);
+    }
+}
+
+/// Everyone who solved `game` today, one block per tier, hardest first.
+/// Names flow as a wrapped list in the day's shuffled order; the viewer's
+/// own name is lit. Sized to its text, clipped to the area.
+fn draw_solvers_modal(
+    frame: &mut Frame,
+    area: Rect,
+    game: DailyPuzzle,
+    own_username: &str,
+    roster: &Roster,
+) {
+    const MAX_WIDTH: u16 = 64;
+    const MIN_WIDTH: u16 = 36;
+    let popup_w = MAX_WIDTH
+        .min(area.width.saturating_sub(2))
+        .max(MIN_WIDTH.min(area.width));
+    let text_w = popup_w.saturating_sub(4) as usize;
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for (i, tier) in roster.tiers.iter().enumerate() {
+        if i > 0 {
+            lines.push(Line::from(""));
+        }
+        let solved = match tier.names.len() {
+            0 => "nobody yet".to_string(),
+            1 => "1 solved".to_string(),
+            n => format!("{n} solved"),
+        };
+        lines.push(Line::from(vec![
+            Span::styled(
+                tier.difficulty_key.to_string(),
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!(" · {} chips · ", tier.chips),
+                Style::default().fg(theme::TEXT_DIM()),
+            ),
+            Span::styled(solved, Style::default().fg(theme::TEXT())),
+        ]));
+        for row in wrap_names(&tier.names, text_w) {
+            let mut spans: Vec<Span<'static>> = vec![Span::raw("  ")];
+            for (j, name) in row.into_iter().enumerate() {
+                if j > 0 {
+                    spans.push(Span::styled(", ", Style::default().fg(theme::TEXT_DIM())));
+                }
+                let style = if name == own_username {
+                    Style::default()
+                        .fg(theme::SUCCESS())
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(theme::TEXT())
+                };
+                spans.push(Span::styled(name, style));
+            }
+            lines.push(Line::from(spans));
+        }
+    }
+    lines.push(Line::from(""));
+    lines.push(crate::app::common::primitives::hint_line(&[
+        ("Esc", "close"),
+        ("", "order shuffled daily, nobody is first"),
+    ]));
+
+    let popup_h = (lines.len() as u16 + 2).min(area.height);
+    let popup = centered_rect(area, popup_w, popup_h);
+    let title = format!(" {} · {} solved today ", game.title(), roster.total);
+    let block = Block::default()
+        .title(title)
+        .title_style(
+            Style::default()
+                .fg(theme::TEXT())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()))
+        .style(Style::default().bg(theme::BG_CANVAS()));
+    let inner = block.inner(popup);
+    frame.render_widget(Clear, popup);
+    frame.render_widget(block, popup);
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        Rect {
+            x: inner.x + 1,
+            y: inner.y,
+            width: inner.width.saturating_sub(1),
+            height: inner.height,
+        },
+    );
+}
+
+/// Greedy rows of names that fit `width` cells joined by `, `, two cells of
+/// indent already taken off. A name longer than the row gets a row alone.
+fn wrap_names(names: &[String], width: usize) -> Vec<Vec<String>> {
+    let width = width.saturating_sub(2).max(1);
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut row: Vec<String> = Vec::new();
+    let mut used = 0usize;
+    for name in names {
+        let cells = name.chars().count();
+        let needed = if row.is_empty() {
+            cells
+        } else {
+            used + 2 + cells
+        };
+        if !row.is_empty() && needed > width {
+            rows.push(std::mem::take(&mut row));
+            used = 0;
+        }
+        used = if row.is_empty() {
+            cells
+        } else {
+            used + 2 + cells
+        };
+        row.push(name.clone());
+    }
+    if !row.is_empty() {
+        rows.push(row);
+    }
+    rows
 }
 
 fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
@@ -444,7 +625,6 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             "Guess the daily five-letter word in six tries.",
             true,
             DailyPuzzle::LeWord,
-            &[("daily", super::le_word::state::DAILY_WIN_REWARD_CHIPS)],
         ),
         (
             GAME_SELECTION_SUDOKU,
@@ -452,7 +632,6 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             "Classic newspaper puzzle, rebuilt for the terminal.",
             true,
             DailyPuzzle::Sudoku,
-            TIERED_REWARDS,
         ),
         (
             GAME_SELECTION_NONOGRAMS,
@@ -460,7 +639,6 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             "Pixel puzzles painted by logic, one clue at a time.",
             view.nonogram_state.has_puzzles(),
             DailyPuzzle::Nonogram,
-            TIERED_REWARDS,
         ),
         (
             GAME_SELECTION_MINESWEEPER,
@@ -468,7 +646,6 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             "Flag mines, clear the field. Three lives.",
             true,
             DailyPuzzle::Minesweeper,
-            TIERED_REWARDS,
         ),
         (
             GAME_SELECTION_SOLITAIRE,
@@ -476,11 +653,12 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             "Klondike with daily and personal deals over SSH.",
             true,
             DailyPuzzle::Solitaire,
-            SOLITAIRE_REWARDS,
         ),
     ];
 
-    for (idx, name, desc, available, game, tiers) in daily_rows {
+    let today = view.today_solvers();
+    let show_hint = area.width >= SOLVERS_HINT_MIN_WIDTH;
+    for (idx, name, desc, available, game) in daily_rows {
         let title_style = Style::default()
             .fg(theme::TEXT_BRIGHT())
             .add_modifier(Modifier::BOLD);
@@ -495,12 +673,7 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
             Style::default().fg(theme::TEXT_MUTED())
         };
         let status = if available {
-            daily_reward_status_spans(
-                view.daily_completion,
-                view.session_daily_completion,
-                game,
-                tiers,
-            )
+            card_status_spans(view, &today, game, show_hint && idx == selection)
         } else {
             vec![Span::styled(
                 "Coming Soon",
@@ -538,11 +711,11 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
                         .add_modifier(Modifier::BOLD),
                     normal_style: Style::default().fg(theme::TEXT()),
                     description_style: Style::default().fg(theme::TEXT_DIM()),
-                    status: daily_reward_status_spans(
-                        view.daily_completion,
-                        view.session_daily_completion,
+                    status: card_status_spans(
+                        view,
+                        &today,
                         DailyPuzzle::RubiksCube,
-                        &[("daily", super::rubiks_cube::state::DAILY_WIN_REWARD_CHIPS)],
+                        show_hint && selection == GAME_SELECTION_RUBIKS_CUBE,
                     ),
                     label_width: 16,
                 },
@@ -560,11 +733,11 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
                         .add_modifier(Modifier::BOLD),
                     normal_style: Style::default().fg(theme::TEXT()),
                     description_style: Style::default().fg(theme::TEXT_DIM()),
-                    status: daily_reward_status_spans(
-                        view.daily_completion,
-                        view.session_daily_completion,
+                    status: card_status_spans(
+                        view,
+                        &today,
                         DailyPuzzle::SlidingPuzzle,
-                        TIERED_REWARDS,
+                        show_hint && selection == GAME_SELECTION_SLIDING_PUZZLE,
                     ),
                     label_width: 16,
                 },
@@ -672,6 +845,41 @@ fn push_game_section(lines: &mut Vec<Line<'static>>, title: &str) {
             .fg(theme::AMBER())
             .add_modifier(Modifier::BOLD),
     )));
+}
+
+/// A daily card's status: the tier marks, then today's solver count and,
+/// on the selected card, the key that opens the roster.
+fn card_status_spans(
+    view: &ArcadeHubView<'_>,
+    today: &TodaySolvers<'_>,
+    game: DailyPuzzle,
+    with_hint: bool,
+) -> Vec<Span<'static>> {
+    let mut status = daily_reward_status_spans(
+        view.daily_completion,
+        view.session_daily_completion,
+        game,
+        daily_tiers(game),
+    );
+    status.extend(solved_count_spans(today.solved_count(game), with_hint));
+    status
+}
+
+/// ` · 14 solved`, dim, plus ` [o who]` when this is the selected card.
+fn solved_count_spans(solved: usize, with_hint: bool) -> Vec<Span<'static>> {
+    let mut spans = vec![Span::styled(
+        format!(" · {solved} solved"),
+        Style::default().fg(theme::TEXT_DIM()),
+    )];
+    if with_hint {
+        spans.push(Span::styled(" [", Style::default().fg(theme::TEXT_DIM())));
+        spans.push(Span::styled("o", Style::default().fg(theme::AMBER())));
+        spans.push(Span::styled(
+            " who]",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
+    spans
 }
 
 /// One `✓chips`/`✗chips` span per tier. A tier is done when either the

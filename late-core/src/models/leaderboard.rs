@@ -348,6 +348,10 @@ pub struct DoorBoards {
 pub struct LeaderboardData {
     pub today_champions: Vec<LeaderboardEntry>,
     pub user_daily_statuses: HashMap<Uuid, DailyCompletionStatus>,
+    /// The username of every user in `user_daily_statuses`, read by the same
+    /// query, so a surface naming today's solvers never needs a second
+    /// lookup. A user with no daily win today has no row here.
+    pub today_solver_names: HashMap<Uuid, String>,
     pub user_chips: HashMap<Uuid, i64>,
     pub monthly_chip_earners: Vec<RankedEntry>,
     pub arcade_champions: Vec<RankedEntry>,
@@ -846,7 +850,7 @@ pub async fn day_tallies(client: &Client, day: NaiveDate) -> Result<Vec<DayTally
 pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> {
     let (
         today_champions,
-        user_daily_statuses,
+        today_statuses,
         user_chips,
         monthly_chip_earners,
         arcade_champions,
@@ -927,7 +931,8 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
 
     Ok(LeaderboardData {
         today_champions,
-        user_daily_statuses,
+        user_daily_statuses: today_statuses.statuses,
+        today_solver_names: today_statuses.usernames,
         user_chips,
         monthly_chip_earners,
         arcade_champions,
@@ -1696,9 +1701,14 @@ async fn fetch_today_champions(client: &Client, limit: i64) -> Result<Vec<Leader
         .collect())
 }
 
-async fn fetch_today_daily_statuses(
-    client: &Client,
-) -> Result<HashMap<Uuid, DailyCompletionStatus>> {
+/// Today's per-user completion marks and the usernames behind them, one
+/// query over every daily win table.
+struct TodayDailyStatuses {
+    statuses: HashMap<Uuid, DailyCompletionStatus>,
+    usernames: HashMap<Uuid, String>,
+}
+
+async fn fetch_today_daily_statuses(client: &Client) -> Result<TodayDailyStatuses> {
     let arms: String = DailyPuzzle::ALL
         .iter()
         .map(|puzzle| {
@@ -1715,12 +1725,18 @@ async fn fetch_today_daily_statuses(
         .join("\nUNION ALL\n");
     let rows = client
         .query(
-            &format!("WITH all_today AS ({arms}) SELECT user_id, game, difficulty FROM all_today"),
+            &format!(
+                "WITH all_today AS ({arms})
+                 SELECT a.user_id, a.game, a.difficulty, u.username
+                 FROM all_today a
+                 JOIN users u ON u.id = a.user_id"
+            ),
             &[],
         )
         .await?;
 
     let mut statuses: HashMap<Uuid, DailyCompletionStatus> = HashMap::new();
+    let mut usernames: HashMap<Uuid, String> = HashMap::new();
     for row in rows {
         let user_id: Uuid = row.get("user_id");
         let game = DailyPuzzle::from_key(row.get("game")).expect("status row game key from roster");
@@ -1729,7 +1745,13 @@ async fn fetch_today_daily_statuses(
             .entry(user_id)
             .or_default()
             .mark_completed(game, difficulty);
+        usernames
+            .entry(user_id)
+            .or_insert_with(|| row.get("username"));
     }
 
-    Ok(statuses)
+    Ok(TodayDailyStatuses {
+        statuses,
+        usernames,
+    })
 }

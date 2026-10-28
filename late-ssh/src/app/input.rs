@@ -2028,7 +2028,7 @@ fn dispatch_escape(app: &mut App) {
             return;
         }
     }
-    if ctx.screen == Screen::Arcade && app.is_playing_game {
+    if ctx.screen == Screen::Arcade && crate::app::arcade::input::claims_escape(app) {
         dispatch_screen_key(app, ctx.screen, 0x1B);
         return;
     }

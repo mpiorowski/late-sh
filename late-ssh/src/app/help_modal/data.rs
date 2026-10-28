@@ -1035,6 +1035,7 @@ fn arcade_help_lines() -> Vec<String> {
         "  Esc / q           leave current game",
         "  `                 in a daily puzzle: hop games waiting on you (boards, tables, dailies, live dungeons)",
         "  s                 in the lobby: copy your day card (one square per daily won today, its icon beneath, plus your streak)",
+        "  o                 in the lobby: who solved the selected daily today, by difficulty, hardest first; order is shuffled daily, nobody is first (dailies run on the UTC day). Esc closes.",
         "  s                 on a finished daily: copy that puzzle's share card, ready to paste anywhere",
         "",
         "Notes",

@@ -62,7 +62,10 @@ The one surface that does not wait is the Arcade lobby card's own-user
 ✓/✗ tier marks: `App.session_daily_wins` (`arcade/daily.rs::SessionDailyWins`)
 is marked from the session's own `GameWon` Activity events, which the daily
 services publish only after the win row commits, and the card ORs it with the
-snapshot's `user_daily_statuses`. Other players' standings still wait.
+snapshot's `user_daily_statuses`. The same snapshot carries
+`today_solver_names` (the username of every user with a mark today, from the
+same query) for the Arcade card's `N solved` count and its `o` roster
+(`arcade/solvers.rs`). Other players' standings still wait.
 
 ### Late Time persistence
 

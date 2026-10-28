@@ -8,6 +8,7 @@ pub mod share;
 pub mod sliding_puzzle;
 pub mod snake;
 pub mod solitaire;
+pub mod solvers;
 pub mod sudoku;
 pub mod tetris;
 pub mod traffic;

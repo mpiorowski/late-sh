@@ -257,3 +257,113 @@ async fn a_daily_win_turns_the_lobby_mark_green_before_the_leaderboard_refresh()
         "the other tiered games stay unmarked: {marked}"
     );
 }
+
+/// The lobby card counts today's solvers from the leaderboard snapshot, and
+/// `o` opens the roster over the selected daily: tiers hardest first, the
+/// names grouped under them, Esc closes it. A solver of another daily is
+/// neither counted nor listed.
+#[tokio::test]
+async fn the_lobby_counts_todays_solvers_and_o_opens_the_roster() {
+    use std::{collections::HashMap, sync::Arc};
+
+    use crate::{
+        app::common::primitives::Screen,
+        test_helpers::{make_app, new_test_db, render_plain},
+    };
+    use late_core::{
+        models::{
+            leaderboard::{DailyCompletionStatus, DailyPuzzle, LeaderboardData},
+            user::RightSidebarMode,
+            user_ssh_key::KeyLayout,
+        },
+        test_utils::create_test_user,
+    };
+    use uuid::Uuid;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "solvers-roster-viewer").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "solvers-roster-token");
+    app.resize(120, 30).expect("resize test terminal");
+    app.device_rails = Some(KeyLayout {
+        room_list_mode: app.rail_modes().0,
+        right_sidebar_mode: RightSidebarMode::On,
+    });
+    app.set_screen(Screen::Arcade);
+    app.game_selection = crate::app::state::GAME_SELECTION_SUDOKU;
+
+    let alice = Uuid::from_u128(0xa11ce);
+    let bob = Uuid::from_u128(0xb0b);
+    let carol = Uuid::from_u128(0xca401);
+    let mut alice_status = DailyCompletionStatus::default();
+    alice_status.mark_completed(DailyPuzzle::Sudoku, "hard".to_string());
+    alice_status.mark_completed(DailyPuzzle::Sudoku, "easy".to_string());
+    let mut bob_status = DailyCompletionStatus::default();
+    bob_status.mark_completed(DailyPuzzle::Sudoku, "easy".to_string());
+    let mut carol_status = DailyCompletionStatus::default();
+    carol_status.mark_completed(DailyPuzzle::Minesweeper, "hard".to_string());
+    app.leaderboard = Arc::new(LeaderboardData {
+        user_daily_statuses: HashMap::from([
+            (alice, alice_status),
+            (bob, bob_status),
+            (carol, carol_status),
+        ]),
+        today_solver_names: HashMap::from([
+            (alice, "alice-solves".to_string()),
+            (bob, "bob-solves".to_string()),
+            (carol, "carol-sweeps".to_string()),
+        ]),
+        ..LeaderboardData::default()
+    });
+
+    let lobby = render_plain(&mut app);
+    assert!(lobby.contains("2 solved [o who]"), "{lobby}");
+    assert!(
+        lobby.contains("1 solved"),
+        "minesweeper counts carol: {lobby}"
+    );
+    assert!(
+        !lobby.contains("alice-solves"),
+        "names stay off the cards: {lobby}"
+    );
+
+    app.handle_input(b"o");
+    assert!(app.arcade_solvers_open);
+    let roster = render_plain(&mut app);
+    assert!(roster.contains("Sudoku · 2 solved today"), "{roster}");
+    let hard = roster
+        .find("hard · 500 chips · 1 solved")
+        .expect("hard tier");
+    let medium = roster
+        .find("medium · 250 chips · nobody yet")
+        .expect("medium tier");
+    let easy = roster
+        .find("easy · 100 chips · 2 solved")
+        .expect("easy tier");
+    assert!(hard < medium && medium < easy, "hardest first: {roster}");
+    assert!(roster.contains("alice-solves"), "{roster}");
+    assert!(roster.contains("bob-solves"), "{roster}");
+    assert!(
+        !roster.contains("carol-sweeps"),
+        "another daily's solver: {roster}"
+    );
+
+    // Enter is swallowed while the roster is up: nothing launches behind it.
+    app.handle_input(b"\r");
+    assert!(!app.is_playing_game);
+    assert!(app.arcade_solvers_open);
+
+    // A lone Esc is held as a possible sequence prefix until the tick
+    // times it out, so poll rather than assert on the spot.
+    app.handle_input(b"\x1b");
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while app.arcade_solvers_open {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "timed out waiting for esc to close the roster"
+        );
+        app.tick();
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    }
+    let closed = render_plain(&mut app);
+    assert!(!closed.contains("solved today"), "{closed}");
+}

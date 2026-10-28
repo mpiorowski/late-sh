@@ -231,6 +231,11 @@ async fn daily_boards_and_arcade_points_follow_the_roster() {
     assert!(rival_status.completed_difficulty(DailyPuzzle::RubiksCube, "daily"));
     assert!(rival_status.completed(DailyPuzzle::SlidingPuzzle));
     assert!(rival_status.completed_difficulty(DailyPuzzle::SlidingPuzzle, "hard"));
+    assert_eq!(
+        data.today_solver_names.get(&rival.id),
+        Some(&rival.username),
+        "today's solvers carry their username"
+    );
 }
 
 /// Same-day replays upsert the win row (keep-best-score), so they must not

@@ -841,6 +841,8 @@ pub struct App {
     /// Arcade Hub
     pub(crate) game_selection: usize,
     pub(crate) is_playing_game: bool,
+    /// The Arcade lobby's solvers roster (`o`) is open over the selected daily.
+    pub(crate) arcade_solvers_open: bool,
     pub(crate) door_delete_confirm: bool,
     /// Highlighted row on the Lateania character-select landing (0-based
     /// slot index). Also which slot a confirmed `d` delete targets.
@@ -1917,6 +1919,7 @@ impl App {
             ),
             game_selection: DEFAULT_GAME_SELECTION,
             is_playing_game: false,
+            arcade_solvers_open: false,
             door_delete_confirm: false,
             lateania_slot_cursor: 0,
             lateania_slots_seen: crate::app::door::lateania::svc::SlotList::Loading,

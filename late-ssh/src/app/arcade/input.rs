@@ -149,7 +149,18 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
         return false;
     }
 
-    // Lobby mode
+    // Lobby mode. The solvers roster owns the lobby while it is open: Esc
+    // or `o` closes it, j/k move it to the next card, nothing else gets
+    // through (Enter must not launch the game behind it).
+    if app.arcade_solvers_open {
+        match byte {
+            0x1B | b'o' | b'O' => app.arcade_solvers_open = false,
+            b'j' | b'J' => app.game_selection = next_lobby_selection(app.game_selection),
+            b'k' | b'K' => app.game_selection = prev_lobby_selection(app.game_selection),
+            _ => {}
+        }
+        return true;
+    }
     if byte == b's' {
         let card = day_card(app);
         share_card(app, ShareCardKind::Day, &card);
@@ -162,6 +173,10 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
         }
         b'k' | b'K' => {
             app.game_selection = prev_lobby_selection(app.game_selection);
+            true
+        }
+        b'o' | b'O' if selected_daily_is_available(app) => {
+            app.arcade_solvers_open = true;
             true
         }
         b'\r' | b'\n' => {
@@ -187,6 +202,25 @@ pub fn handle_key(app: &mut App, byte: u8) -> bool {
         }
         _ => false,
     }
+}
+
+/// The selected card is a daily that can be played today, so it has a
+/// roster to show. Nonograms without a pack are "coming soon" and have none.
+fn selected_daily_is_available(app: &App) -> bool {
+    match super::ui::daily_for_selection(app.game_selection) {
+        Some(late_core::models::leaderboard::DailyPuzzle::Nonogram) => {
+            app.nonogram_state.has_puzzles()
+        }
+        Some(_) => true,
+        None => false,
+    }
+}
+
+/// Whether Esc on the Arcade page belongs to this domain: an open board, or
+/// the lobby's solvers roster. `app/input.rs` asks before treating Esc as
+/// the page's.
+pub(crate) fn claims_escape(app: &App) -> bool {
+    app.is_playing_game || app.arcade_solvers_open
 }
 
 /// The share card of the daily on screen, once it is finished.
