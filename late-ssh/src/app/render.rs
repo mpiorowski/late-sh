@@ -2578,7 +2578,7 @@ impl App {
                     session_daily_completion: ctx.session_daily_wins.today(),
                     quest_state: ctx.quest_state,
                     today_statuses: &ctx.leaderboard.user_daily_statuses,
-                    today_solver_names: &ctx.leaderboard.today_solver_names,
+                    usernames: ctx.usernames,
                     user_id: ctx.user_id,
                     username: ctx.clubhouse_own_username,
                     show_solvers: ctx.arcade_solvers_open,

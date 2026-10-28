@@ -47,16 +47,27 @@ async fn a_fresh_win_publishes_once_and_a_replay_publishes_nothing() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "netwalk-svc-win").await;
     let (activity_tx, mut activity_rx) = broadcast::channel(8);
-    let service = NetwalkService::new(test_db.db.clone(), activity_tx);
 
-    service
-        .record_win_and_publish(user.id, Difficulty::Medium, date(), 30)
-        .await
-        .expect("first win");
-    service
-        .record_win_and_publish(user.id, Difficulty::Medium, date(), 21)
-        .await
-        .expect("replay");
+    super::record_win_and_publish(
+        &test_db.db,
+        &activity_tx,
+        user.id,
+        Difficulty::Medium,
+        date(),
+        30,
+    )
+    .await
+    .expect("first win");
+    super::record_win_and_publish(
+        &test_db.db,
+        &activity_tx,
+        user.id,
+        Difficulty::Medium,
+        date(),
+        21,
+    )
+    .await
+    .expect("replay");
 
     let event = activity_rx.recv().await.expect("win event");
     assert!(matches!(

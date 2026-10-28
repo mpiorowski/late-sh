@@ -47,15 +47,12 @@ async fn a_fresh_win_publishes_once_and_a_repeat_publishes_nothing() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "quartets-svc-win").await;
     let (activity_tx, mut activity_rx) = broadcast::channel(8);
-    let service = QuartetsService::new(test_db.db.clone(), activity_tx);
     let today = Utc::now().date_naive();
 
-    service
-        .record_win_and_publish(user.id, today, 2)
+    super::record_win_and_publish(&test_db.db, &activity_tx, user.id, today, 2)
         .await
         .expect("first record");
-    service
-        .record_win_and_publish(user.id, today, 0)
+    super::record_win_and_publish(&test_db.db, &activity_tx, user.id, today, 0)
         .await
         .expect("repeat");
 
@@ -123,4 +120,40 @@ async fn play_saves_the_tries_and_banks_the_solved_wall() {
         .expect("find win")
         .expect("win exists");
     assert_eq!(win.strikes, 1);
+}
+
+/// A solved wall is saved only behind its recorded win. When the win cannot
+/// be written, the board is left one try short, so the player can enter the
+/// solving try again on reconnect instead of finding a finished wall with no
+/// win behind it.
+#[tokio::test]
+async fn a_win_that_fails_to_record_leaves_the_wall_unsolved() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "quartets-svc-failed-win").await;
+    let (activity_tx, mut activity_rx) = broadcast::channel::<ActivityEvent>(8);
+    let service = QuartetsService::new(test_db.db.clone(), activity_tx);
+    let today = Utc::now().date_naive();
+    let daily = Daily {
+        puzzle_date: today,
+        puzzle: find_puzzle(1).expect("puzzle 1 in the pack"),
+    };
+    let client = test_db.db.get().await.expect("db client");
+    client
+        .batch_execute("ALTER TABLE quartets_daily_wins RENAME TO quartets_daily_wins_gone")
+        .await
+        .expect("break the win table");
+    let mut state = State::new(user.id, service.clone(), Some(daily), None);
+
+    for words in [[0, 1, 2, 4], [0, 1, 2, 3], [4, 5, 6, 7], [8, 9, 10, 11]] {
+        play(&mut state, words);
+    }
+    service.flush_game_saves().await.expect("flush");
+
+    assert!(activity_rx.try_recv().is_err(), "no win was recorded");
+    let saved = service
+        .load_game(user.id, today)
+        .await
+        .expect("load game")
+        .expect("saved game");
+    assert_eq!(saved.tries, vec![0, 1, 2, 4, 0, 1, 2, 3, 4, 5, 6, 7]);
 }

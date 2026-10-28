@@ -459,7 +459,8 @@ impl State {
     }
 
     pub fn reply_pending(&self) -> bool {
-        self.active().is_some_and(|slot| slot.pending_reply.is_some())
+        self.active()
+            .is_some_and(|slot| slot.pending_reply.is_some())
     }
 
     pub fn message(&self) -> &str {

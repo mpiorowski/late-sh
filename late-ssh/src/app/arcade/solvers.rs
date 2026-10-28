@@ -12,12 +12,14 @@ use chrono::NaiveDate;
 use late_core::models::leaderboard::{DailyCompletionStatus, DailyPuzzle};
 use uuid::Uuid;
 
+use crate::usernames::UsernameResolver;
+
 /// The snapshot's view of today plus this session's own marks. The session's
 /// wins land in the snapshot within a refresh; until then they are OR'd in
 /// here, the same way the card's ✓ marks work.
 pub(crate) struct TodaySolvers<'a> {
     pub(crate) statuses: &'a HashMap<Uuid, DailyCompletionStatus>,
-    pub(crate) usernames: &'a HashMap<Uuid, String>,
+    pub(crate) usernames: &'a dyn UsernameResolver,
     pub(crate) own_user_id: Uuid,
     pub(crate) own_username: &'a str,
     pub(crate) own_session: Option<&'a DailyCompletionStatus>,
@@ -77,7 +79,7 @@ impl TodaySolvers<'_> {
         if user_id == self.own_user_id {
             return Some(self.own_username.to_string());
         }
-        self.usernames.get(&user_id).cloned()
+        self.usernames.username(&user_id).cloned()
     }
 
     /// How many distinct people solved `game` today, at any tier.

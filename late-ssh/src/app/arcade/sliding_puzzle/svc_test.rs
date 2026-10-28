@@ -8,7 +8,7 @@ use late_core::{
 };
 use std::time::Duration;
 
-use super::svc::SlidingPuzzleService;
+use super::SlidingPuzzleService;
 use crate::{
     app::activity::event::{ActivityGame, ActivityKind},
     test_helpers::new_test_db,
@@ -174,7 +174,7 @@ async fn service_loads_upserted_slots_and_publishes_only_the_first_same_day_win(
     let client = test_db.db.get().await.expect("db client");
     let today = NaiveDate::from_ymd_opt(2026, 8, 21).unwrap();
     let (activity_tx, mut activity_rx) = broadcast::channel(8);
-    let service = SlidingPuzzleService::new(test_db.db.clone(), activity_tx);
+    let service = SlidingPuzzleService::new(test_db.db.clone(), activity_tx.clone());
 
     Game::upsert(
         &client,
@@ -194,14 +194,26 @@ async fn service_loads_upserted_slots_and_publishes_only_the_first_same_day_win(
     assert_eq!(games.len(), 1);
     assert_eq!(games[0].moves, 12);
 
-    service
-        .record_win_and_publish(user.id, Difficulty::Easy, today, 12)
-        .await
-        .expect("record first win");
-    service
-        .record_win_and_publish(user.id, Difficulty::Easy, today, 8)
-        .await
-        .expect("record replay win");
+    super::record_win_and_publish(
+        &test_db.db,
+        &activity_tx,
+        user.id,
+        Difficulty::Easy,
+        today,
+        12,
+    )
+    .await
+    .expect("record first win");
+    super::record_win_and_publish(
+        &test_db.db,
+        &activity_tx,
+        user.id,
+        Difficulty::Easy,
+        today,
+        8,
+    )
+    .await
+    .expect("record replay win");
 
     let event = activity_rx.recv().await.expect("first activity event");
     assert!(matches!(
@@ -230,7 +242,7 @@ async fn service_loads_upserted_slots_and_publishes_only_the_first_same_day_win(
 /// pins the session side of it.
 #[tokio::test]
 async fn the_board_lands_yesterdays_gallery_piece_as_its_art() {
-    use super::{
+    use super::super::{
         art::{TileGeometry, TileView},
         state::{ArtStatus, State},
     };

@@ -1,7 +1,4 @@
-use std::sync::{Arc, OnceLock};
-use std::time::Duration;
-
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use late_core::{
     db::Db,
@@ -11,19 +8,20 @@ use late_core::{
         quartets::{DailyWall, DailyWin, Game, GameParams},
     },
 };
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::broadcast;
 use uuid::Uuid;
 
 use super::state::{Puzzle, choose_for_date, find_puzzle, pack};
 use crate::{
-    app::{activity::event::ActivityEvent, arcade::daily::activity_game},
+    app::{
+        activity::event::ActivityEvent,
+        arcade::{
+            daily::activity_game,
+            save_queue::{SaveCommand, SaveQueue},
+        },
+    },
     metrics::{self, ArcadeDifficulty, ArcadeFinish, ArcadeMode},
 };
-
-/// How long a session load waits for the shared save queue to drain before
-/// reading the database anyway. The queue is process-wide, so without a bound
-/// one player's login would sit behind every other player's queued tries.
-const LOAD_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The day's wall, claimed in the database and found in the pack.
 #[derive(Clone, Copy, Debug)]
@@ -35,32 +33,31 @@ pub struct Daily {
 #[derive(Clone)]
 pub struct QuartetsService {
     db: Db,
-    activity_feed: broadcast::Sender<ActivityEvent>,
-    game_save_tx: Arc<OnceLock<mpsc::UnboundedSender<GameSaveCommand>>>,
+    saves: SaveQueue<GameSaveCommand>,
 }
 
 enum GameSaveCommand {
     Save(GameParams),
-    Bank {
-        user_id: Uuid,
-        puzzle_date: NaiveDate,
+    /// A solved wall: the win is recorded first and the solved board saved
+    /// behind it, so a win that fails to record leaves the wall one try
+    /// short instead of finished with no win.
+    Complete {
+        params: GameParams,
         strikes: i32,
     },
-    Flush(oneshot::Sender<()>),
 }
 
 impl QuartetsService {
     pub fn new(db: Db, activity_feed: broadcast::Sender<ActivityEvent>) -> Self {
         Self {
+            saves: SaveQueue::new(DailyPuzzle::Quartets, db.clone(), activity_feed),
             db,
-            activity_feed,
-            game_save_tx: Arc::new(OnceLock::new()),
         }
     }
 
     /// A wall ended on this session, solved or out of strikes. Counted for
     /// the dashboard, nothing stored: the win itself goes through
-    /// `bank_task`.
+    /// `complete_game_task`.
     pub fn record_finish(
         &self,
         mode: ArcadeMode,
@@ -112,117 +109,62 @@ impl QuartetsService {
     }
 
     pub async fn load_game(&self, user_id: Uuid, puzzle_date: NaiveDate) -> Result<Option<Game>> {
-        // The barrier only orders queued writes ahead of this read. If it
-        // cannot answer in time, the database is still authoritative, and
-        // a save never shortens the stored tries, so a late one loses
-        // nothing.
-        match tokio::time::timeout(LOAD_FLUSH_TIMEOUT, self.flush_game_saves()).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                tracing::error!(
-                    error = ?error,
-                    "quartets save queue flush failed; restoring from the database anyway"
-                );
-            }
-            Err(_elapsed) => {
-                tracing::error!(
-                    timeout_secs = LOAD_FLUSH_TIMEOUT.as_secs(),
-                    "quartets save queue flush timed out; restoring from the database anyway"
-                );
-            }
-        }
+        self.saves.settle().await;
         let client = self.db.get().await?;
         Game::find_for_date(&client, user_id, puzzle_date).await
     }
 
     pub fn save_game_task(&self, params: GameParams) {
-        if self
-            .game_save_sender()
-            .send(GameSaveCommand::Save(params))
-            .is_err()
-        {
-            tracing::error!("failed to enqueue quartets game state save");
-        }
+        self.saves.send(GameSaveCommand::Save(params));
     }
 
-    /// Record a solved wall and publish it when it is the first. The state
-    /// sends it once per session; the table's UNIQUE is the gate across
-    /// sessions.
-    pub fn bank_task(&self, user_id: Uuid, puzzle_date: NaiveDate, strikes: i32) {
-        if self
-            .game_save_sender()
-            .send(GameSaveCommand::Bank {
-                user_id,
-                puzzle_date,
-                strikes,
-            })
-            .is_err()
-        {
-            tracing::error!("failed to enqueue quartets win");
-        }
-    }
-
-    pub(crate) async fn flush_game_saves(&self) -> Result<()> {
-        let (done_tx, done_rx) = oneshot::channel();
-        self.game_save_sender()
-            .send(GameSaveCommand::Flush(done_tx))
-            .map_err(|_| anyhow!("quartets game save queue is closed"))?;
-        done_rx
-            .await
-            .context("quartets game save worker stopped before flush")?;
-        Ok(())
-    }
-
-    fn game_save_sender(&self) -> &mpsc::UnboundedSender<GameSaveCommand> {
-        self.game_save_tx.get_or_init(|| {
-            let (save_tx, save_rx) = mpsc::unbounded_channel();
-            tokio::spawn(run_game_save_worker(
-                self.db.clone(),
-                self.activity_feed.clone(),
-                save_rx,
-            ));
-            save_tx
-        })
+    /// Record a solved wall and save the solved board behind it, publishing
+    /// the win when it is the first. The state sends it once per session;
+    /// the table's UNIQUE is the gate across sessions.
+    pub fn complete_game_task(&self, params: GameParams, strikes: i32) {
+        self.saves
+            .send(GameSaveCommand::Complete { params, strikes });
     }
 
     #[cfg(test)]
-    pub(crate) async fn record_win_and_publish(
-        &self,
-        user_id: Uuid,
-        puzzle_date: NaiveDate,
-        strikes: i32,
-    ) -> Result<()> {
-        record_win_and_publish(&self.db, &self.activity_feed, user_id, puzzle_date, strikes).await
+    pub(crate) async fn flush_game_saves(&self) -> Result<()> {
+        self.saves.flush().await
     }
 }
 
-/// The one writer for every session's tries and wins, so a player's saves
-/// land in the order they were made.
-async fn run_game_save_worker(
-    db: Db,
-    activity_feed: broadcast::Sender<ActivityEvent>,
-    mut save_rx: mpsc::UnboundedReceiver<GameSaveCommand>,
-) {
-    while let Some(command) = save_rx.recv().await {
-        match command {
-            GameSaveCommand::Save(params) => {
-                if let Err(error) = save_game(&db, params).await {
+impl SaveCommand for GameSaveCommand {
+    async fn run(self, db: &Db, activity_feed: &broadcast::Sender<ActivityEvent>) {
+        match self {
+            Self::Save(params) => {
+                if let Err(error) = save_game(db, params).await {
                     tracing::error!(error = ?error, "failed to save quartets game state");
                 }
             }
-            GameSaveCommand::Bank {
-                user_id,
-                puzzle_date,
-                strikes,
-            } => {
-                if let Err(error) =
-                    record_win_and_publish(&db, &activity_feed, user_id, puzzle_date, strikes).await
+            Self::Complete { params, strikes } => {
+                match record_win_and_publish(
+                    db,
+                    activity_feed,
+                    params.user_id,
+                    params.puzzle_date,
+                    strikes,
+                )
+                .await
                 {
-                    tracing::error!(error = ?error, "failed to record quartets win");
+                    Ok(()) => {
+                        if let Err(error) = save_game(db, params).await {
+                            tracing::error!(
+                                error = ?error,
+                                "failed to save solved quartets wall after recording win"
+                            );
+                        }
+                    }
+                    Err(error) => {
+                        tracing::error!(
+                            error = ?error,
+                            "failed to record quartets win; solved wall was not persisted"
+                        );
+                    }
                 }
-            }
-            GameSaveCommand::Flush(done_tx) => {
-                let _ = done_tx.send(());
             }
         }
     }

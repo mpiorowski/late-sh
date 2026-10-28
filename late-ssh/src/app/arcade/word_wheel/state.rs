@@ -207,8 +207,9 @@ impl State {
     }
 
     /// Take a saved word list. Words the wheel does not accept are dropped,
-    /// and the ranks it already reaches count as banked: they were banked
-    /// as they were reached.
+    /// and every paid rank the list reaches is banked again: the stored list
+    /// merges every session's words, so it can pass a rank no single session
+    /// banked, and a rank already recorded pays nothing twice.
     fn restore(&mut self, saved: Vec<String>) {
         let Some(wheel) = self.wheel else {
             return;
@@ -221,6 +222,14 @@ impl State {
         found.dedup();
         self.found = found;
         self.banked = self.rank();
+        let score = self.score() as i32;
+        for paid in Rank::ALL {
+            if let Some(difficulty) = paid.difficulty()
+                && paid <= self.banked
+            {
+                self.bank_async(difficulty, score);
+            }
+        }
         if !self.found.is_empty() {
             self.message = "Keep going.".to_string();
         }

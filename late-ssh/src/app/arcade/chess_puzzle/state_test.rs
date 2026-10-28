@@ -236,7 +236,15 @@ fn any_mate_wins_even_one_the_puzzle_does_not_list() {
         puzzle,
         &Game {
             mate_move: row.mate_move.clone(),
-            ..saved(user_id, "daily", Difficulty::Easy, Some(date()), "two-mates", 0, vec![])
+            ..saved(
+                user_id,
+                "daily",
+                Difficulty::Easy,
+                Some(date()),
+                "two-mates",
+                0,
+                vec![],
+            )
         },
     )
     .expect("the row fits its puzzle");
@@ -254,7 +262,15 @@ fn any_mate_wins_even_one_the_puzzle_does_not_list() {
     for (ply, mate_move) in [(0, "b1b7"), (0, "a1a7"), (1, "b1b8")] {
         let row = Game {
             mate_move: Some(mate_move.to_string()),
-            ..saved(user_id, "daily", Difficulty::Easy, Some(date()), "two-mates", ply, vec![])
+            ..saved(
+                user_id,
+                "daily",
+                Difficulty::Easy,
+                Some(date()),
+                "two-mates",
+                ply,
+                vec![],
+            )
         };
         assert!(slot_from_row(puzzle, &row).is_none(), "{ply} {mate_move}");
     }
@@ -414,7 +430,12 @@ fn without_the_days_claim_the_daily_boards_are_unavailable() {
             state.pieces().iter().all(Option::is_none),
             state.message()
         ),
-        (false, None, true, "Chess Puzzle is unavailable. Try again soon.")
+        (
+            false,
+            None,
+            true,
+            "Chess Puzzle is unavailable. Try again soon."
+        )
     );
     state.click(12);
     assert_eq!(
@@ -463,9 +484,15 @@ fn the_utc_rollover_clears_the_dailies_and_backs_off_a_failed_fetch() {
     );
     assert!(!state.ensure_current_daily());
     assert!(state.poll_reload());
-    assert_eq!(state.message(), "Chess Puzzle is unavailable. Retrying soon.");
+    assert_eq!(
+        state.message(),
+        "Chess Puzzle is unavailable. Retrying soon."
+    );
     assert!(!state.ensure_current_daily());
 
     state.show_personal();
-    assert_eq!((state.puzzle_id(), state.played_san().len()), (Some("02LIr"), 2));
+    assert_eq!(
+        (state.puzzle_id(), state.played_san().len()),
+        (Some("02LIr"), 2)
+    );
 }

@@ -303,13 +303,15 @@ async fn the_lobby_counts_todays_solvers_and_o_opens_the_roster() {
             (bob, bob_status),
             (carol, carol_status),
         ]),
-        today_solver_names: HashMap::from([
-            (alice, "alice-solves".to_string()),
-            (bob, "bob-solves".to_string()),
-            (carol, "carol-sweeps".to_string()),
-        ]),
         ..LeaderboardData::default()
     });
+    let names = Arc::new(HashMap::from([
+        (alice, "alice-solves".to_string()),
+        (bob, "bob-solves".to_string()),
+        (carol, "carol-sweeps".to_string()),
+    ]));
+    app.username_directory = Some(Arc::new(std::sync::Mutex::new(Arc::clone(&names))));
+    app.last_username_directory = Some(names);
 
     let lobby = render_plain(&mut app);
     assert!(lobby.contains("2 solved [o who]"), "{lobby}");

@@ -49,16 +49,27 @@ async fn a_fresh_rank_publishes_once_and_a_repeat_publishes_nothing() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "word-wheel-svc-win").await;
     let (activity_tx, mut activity_rx) = broadcast::channel(8);
-    let service = WordWheelService::new(test_db.db.clone(), activity_tx);
 
-    service
-        .record_win_and_publish(user.id, Difficulty::Medium, date(), 50)
-        .await
-        .expect("first record");
-    service
-        .record_win_and_publish(user.id, Difficulty::Medium, date(), 61)
-        .await
-        .expect("repeat");
+    super::record_win_and_publish(
+        &test_db.db,
+        &activity_tx,
+        user.id,
+        Difficulty::Medium,
+        date(),
+        50,
+    )
+    .await
+    .expect("first record");
+    super::record_win_and_publish(
+        &test_db.db,
+        &activity_tx,
+        user.id,
+        Difficulty::Medium,
+        date(),
+        61,
+    )
+    .await
+    .expect("repeat");
 
     let event = activity_rx.recv().await.expect("win event");
     assert!(matches!(
@@ -127,4 +138,48 @@ async fn play_saves_the_words_and_banks_the_rank_reached() {
             ]
         )
     );
+}
+
+/// Two sessions of a day each stay under Bronze, but the words they save
+/// merge past it. The next session restores the merged words and banks the
+/// rank nobody banked: the merge must not leave a reached rank unpaid.
+#[tokio::test]
+async fn a_rank_reached_only_by_merged_sessions_is_banked_on_restore() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "word-wheel-svc-merge").await;
+    let (activity_tx, mut activity_rx) = broadcast::channel::<ActivityEvent>(8);
+    let service = WordWheelService::new(test_db.db.clone(), activity_tx);
+    let daily = super::Daily {
+        puzzle_date: date(),
+        wheel: find_wheel("rabcikt").expect("wheel in the pack"),
+    };
+
+    let mut first = State::new(user.id, service.clone(), Some(daily), None);
+    let mut second = State::new(user.id, service.clone(), Some(daily), None);
+    for word in ["brickbat", "backtrack"] {
+        play(&mut first, word);
+    }
+    for word in ["baccarat", "barbaric"] {
+        play(&mut second, word);
+    }
+    service.flush_game_saves().await.expect("flush");
+    assert!(
+        activity_rx.try_recv().is_err(),
+        "neither session reaches Bronze alone"
+    );
+
+    let saved = service.load_game(user.id, date()).await.expect("load game");
+    let _third = State::new(user.id, service.clone(), Some(daily), saved);
+    service.flush_game_saves().await.expect("flush");
+
+    let event = activity_rx.try_recv().expect("win event");
+    assert!(matches!(
+        event.kind,
+        ActivityKind::GameWon {
+            game: ActivityGame::WordWheel,
+            ref detail,
+            score: Some(26),
+        } if detail.as_deref() == Some("easy")
+    ));
+    assert!(activity_rx.try_recv().is_err());
 }

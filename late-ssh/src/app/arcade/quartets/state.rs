@@ -525,14 +525,14 @@ impl State {
         let split = self.take_try(tried);
         self.message = self.try_message(puzzle, split, tried);
         match self.outcome() {
-            Outcome::Playing => {}
+            Outcome::Playing => self.save_async(puzzle),
             Outcome::Solved => {
                 self.svc.record_finish(
                     ArcadeMode::Daily,
                     ArcadeDifficulty::Single,
                     ArcadeFinish::Won,
                 );
-                self.bank_async();
+                self.complete_async(puzzle);
             }
             Outcome::OutOfStrikes => {
                 self.svc.record_finish(
@@ -540,9 +540,9 @@ impl State {
                     ArcadeDifficulty::Single,
                     ArcadeFinish::Lost,
                 );
+                self.save_async(puzzle);
             }
         }
-        self.save_async(puzzle);
         true
     }
 
@@ -599,19 +599,23 @@ impl State {
 
     // Pure state tests run without a runtime, and the save worker is a
     // spawned task; they assert on the state and the svc tests on the rows.
-    fn bank_async(&self) {
+    fn complete_async(&self, puzzle: &Puzzle) {
         if tokio::runtime::Handle::try_current().is_err() {
             return;
         }
         self.svc
-            .bank_task(self.user_id, self.puzzle_date, self.strikes() as i32);
+            .complete_game_task(self.params(puzzle), self.strikes() as i32);
     }
 
     fn save_async(&self, puzzle: &Puzzle) {
         if tokio::runtime::Handle::try_current().is_err() {
             return;
         }
-        self.svc.save_game_task(GameParams {
+        self.svc.save_game_task(self.params(puzzle));
+    }
+
+    fn params(&self, puzzle: &Puzzle) -> GameParams {
+        GameParams {
             user_id: self.user_id,
             puzzle_date: self.puzzle_date,
             puzzle_id: puzzle.id,
@@ -621,7 +625,7 @@ impl State {
                 .flatten()
                 .map(|word| i16::from(*word))
                 .collect(),
-        });
+        }
     }
 }
 

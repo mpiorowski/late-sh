@@ -1,7 +1,4 @@
-use std::sync::{Arc, OnceLock};
-use std::time::Duration;
-
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use chrono::NaiveDate;
 use late_core::{
     db::Db,
@@ -13,12 +10,18 @@ use late_core::{
         sliding_puzzle::{DailyWin, Game, GameParams},
     },
 };
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{broadcast, oneshot};
 use uuid::Uuid;
 
 use super::art::PuzzleArt;
 use crate::{
-    app::{activity::event::ActivityEvent, arcade::daily::activity_game},
+    app::{
+        activity::event::ActivityEvent,
+        arcade::{
+            daily::activity_game,
+            save_queue::{SaveCommand, SaveQueue},
+        },
+    },
     metrics::{self, ArcadeDifficulty, ArcadeFinish, ArcadeMode},
 };
 
@@ -39,16 +42,10 @@ pub enum ArtLoad {
     Failed,
 }
 
-/// How long a session load waits for the shared save queue to drain before
-/// reading the database anyway. The queue is process-wide, so without a bound
-/// one player's login would sit behind every other player's queued moves.
-pub(crate) const LOAD_FLUSH_TIMEOUT: Duration = Duration::from_secs(2);
-
 #[derive(Clone)]
 pub struct SlidingPuzzleService {
     db: Db,
-    activity_feed: broadcast::Sender<ActivityEvent>,
-    game_save_tx: Arc<OnceLock<mpsc::UnboundedSender<GameSaveCommand>>>,
+    saves: SaveQueue<GameSaveCommand>,
 }
 
 enum GameSaveCommand {
@@ -59,7 +56,6 @@ enum GameSaveCommand {
         puzzle_date: NaiveDate,
         moves: i32,
     },
-    Flush(oneshot::Sender<()>),
 }
 
 impl SlidingPuzzleService {
@@ -76,9 +72,8 @@ impl SlidingPuzzleService {
 
     pub fn new(db: Db, activity_feed: broadcast::Sender<ActivityEvent>) -> Self {
         Self {
+            saves: SaveQueue::new(DailyPuzzle::SlidingPuzzle, db.clone(), activity_feed),
             db,
-            activity_feed,
-            game_save_tx: Arc::new(OnceLock::new()),
         }
     }
 
@@ -115,37 +110,13 @@ impl SlidingPuzzleService {
     }
 
     pub async fn load_games(&self, user_id: Uuid) -> Result<Vec<Game>> {
-        // The barrier only orders queued writes ahead of this read. If it
-        // cannot answer in time, the database is still authoritative:
-        // returning an error here would hand bootstrap an empty restore that
-        // overwrites every persisted board on the next save.
-        match tokio::time::timeout(LOAD_FLUSH_TIMEOUT, self.flush_game_saves()).await {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                tracing::error!(
-                    error = ?error,
-                    "Sliding Puzzle save queue flush failed; restoring from the database anyway"
-                );
-            }
-            Err(_elapsed) => {
-                tracing::error!(
-                    timeout_secs = LOAD_FLUSH_TIMEOUT.as_secs(),
-                    "Sliding Puzzle save queue flush timed out; restoring from the database anyway"
-                );
-            }
-        }
+        self.saves.settle().await;
         let client = self.db.get().await?;
         Game::list_by_user_id(&client, user_id).await
     }
 
     pub fn save_game_task(&self, params: GameParams) {
-        if self
-            .game_save_sender()
-            .send(GameSaveCommand::Save(params))
-            .is_err()
-        {
-            tracing::error!("failed to enqueue Sliding Puzzle game state save");
-        }
+        self.saves.send(GameSaveCommand::Save(params));
     }
 
     /// Record a solved daily and persist the solved board behind it. The
@@ -159,76 +130,29 @@ impl SlidingPuzzleService {
         puzzle_date: NaiveDate,
         moves: i32,
     ) {
-        if self
-            .game_save_sender()
-            .send(GameSaveCommand::Complete {
-                params,
-                difficulty,
-                puzzle_date,
-                moves,
-            })
-            .is_err()
-        {
-            tracing::error!("failed to enqueue Sliding Puzzle completed move");
-        }
-    }
-
-    pub(crate) async fn flush_game_saves(&self) -> Result<()> {
-        let (done_tx, done_rx) = oneshot::channel();
-        self.game_save_sender()
-            .send(GameSaveCommand::Flush(done_tx))
-            .map_err(|_| anyhow!("Sliding Puzzle game save queue is closed"))?;
-        done_rx
-            .await
-            .context("Sliding Puzzle game save worker stopped before flush")?;
-        Ok(())
-    }
-
-    fn game_save_sender(&self) -> &mpsc::UnboundedSender<GameSaveCommand> {
-        self.game_save_tx.get_or_init(|| {
-            let (save_tx, save_rx) = mpsc::unbounded_channel();
-            tokio::spawn(run_game_save_worker(
-                self.db.clone(),
-                self.activity_feed.clone(),
-                save_rx,
-            ));
-            save_tx
-        })
-    }
-
-    #[cfg(test)]
-    pub(crate) async fn record_win_and_publish(
-        &self,
-        user_id: Uuid,
-        difficulty: Difficulty,
-        puzzle_date: NaiveDate,
-        moves: i32,
-    ) -> Result<()> {
-        record_win_and_publish(
-            &self.db,
-            &self.activity_feed,
-            user_id,
+        self.saves.send(GameSaveCommand::Complete {
+            params,
             difficulty,
             puzzle_date,
             moves,
-        )
-        .await
+        });
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn flush_game_saves(&self) -> Result<()> {
+        self.saves.flush().await
     }
 }
 
-async fn run_game_save_worker(
-    db: Db,
-    activity_feed: broadcast::Sender<ActivityEvent>,
-    mut save_rx: mpsc::UnboundedReceiver<GameSaveCommand>,
-) {
-    while let Some(command) = save_rx.recv().await {
-        match command {
-            GameSaveCommand::Save(params) => {
-                if let Err(error) = save_game(&db, params).await {
+impl SaveCommand for GameSaveCommand {
+    async fn run(self, db: &Db, activity_feed: &broadcast::Sender<ActivityEvent>) {
+        match self {
+            Self::Save(params) => {
+                if let Err(error) = save_game(db, params).await {
                     tracing::error!(error = ?error, "failed to save Sliding Puzzle game state");
                 }
             }
-            GameSaveCommand::Complete {
+            Self::Complete {
                 params,
                 difficulty,
                 puzzle_date,
@@ -236,8 +160,8 @@ async fn run_game_save_worker(
             } => {
                 let user_id = params.user_id;
                 match record_win_and_publish(
-                    &db,
-                    &activity_feed,
+                    db,
+                    activity_feed,
                     user_id,
                     difficulty,
                     puzzle_date,
@@ -246,7 +170,7 @@ async fn run_game_save_worker(
                 .await
                 {
                     Ok(()) => {
-                        if let Err(error) = save_game(&db, params).await {
+                        if let Err(error) = save_game(db, params).await {
                             tracing::error!(
                                 error = ?error,
                                 "failed to save completed Sliding Puzzle state after recording win"
@@ -260,9 +184,6 @@ async fn run_game_save_worker(
                         );
                     }
                 }
-            }
-            GameSaveCommand::Flush(done_tx) => {
-                let _ = done_tx.send(());
             }
         }
     }
@@ -317,3 +238,7 @@ async fn record_win_and_publish(
     ));
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "svc_test.rs"]
+mod svc_test;

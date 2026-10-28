@@ -13,7 +13,10 @@ use ratatui::{
 use uuid::Uuid;
 
 use super::solvers::{Roster, TodaySolvers};
-use crate::app::{activity::event::ActivityGame, common::theme};
+use crate::{
+    app::{activity::event::ActivityGame, common::theme},
+    usernames::UsernameLookup,
+};
 
 /// Smallest area the Arcade lobby (quest strip + game grid) still fits in.
 const LOBBY_MIN_WIDTH: u16 = 50;
@@ -335,11 +338,12 @@ pub struct ArcadeHubView<'a> {
     /// Dailies this session banked today, ahead of the snapshot above.
     pub session_daily_completion: Option<&'a DailyCompletionStatus>,
     pub quest_state: &'a crate::app::hub::dailies::state::QuestState,
-    /// Every user's marks today and their names, for the `N solved` count
-    /// and the `o` roster. `session_daily_completion` is OR'd in for the
-    /// viewer, as it is for the ✓ marks.
+    /// Every user's marks today, for the `N solved` count and the `o`
+    /// roster, named through the app's username directory.
+    /// `session_daily_completion` is OR'd in for the viewer, as it is for
+    /// the ✓ marks.
     pub today_statuses: &'a HashMap<Uuid, DailyCompletionStatus>,
-    pub today_solver_names: &'a HashMap<Uuid, String>,
+    pub usernames: &'a UsernameLookup<'a>,
     pub user_id: Uuid,
     pub username: &'a str,
     /// The solvers roster is open over the selected daily.
@@ -350,7 +354,7 @@ impl ArcadeHubView<'_> {
     fn today_solvers(&self) -> TodaySolvers<'_> {
         TodaySolvers {
             statuses: self.today_statuses,
-            usernames: self.today_solver_names,
+            usernames: self.usernames,
             own_user_id: self.user_id,
             own_username: self.username,
             own_session: self.session_daily_completion,

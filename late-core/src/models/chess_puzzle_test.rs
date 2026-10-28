@@ -66,7 +66,11 @@ async fn daily_pick_keeps_the_first_claim_and_reports_last_use_per_tier() {
         .await
         .expect("easy last used");
     assert_eq!(easy.get("3WAR5"), Some(&day));
-    assert_eq!(easy.get("FDotv"), None, "another tier's claim is not this tier's");
+    assert_eq!(
+        easy.get("FDotv"),
+        None,
+        "another tier's claim is not this tier's"
+    );
 }
 
 /// One daily and one personal slot per difficulty, each upsert replacing
