@@ -1,7 +1,9 @@
-use chrono::NaiveDate;
+use std::collections::HashMap;
+
+use chrono::{Duration, NaiveDate};
 
 use crate::{
-    chess_puzzle::{ChessPuzzle, Theme, select_for_date},
+    chess_puzzle::{ChessPuzzle, Theme, choose_for_date},
     models::chips::Difficulty,
 };
 
@@ -24,29 +26,43 @@ fn the_naming_theme_prefers_a_mate_count_and_skips_bare_tags() {
     }
 }
 
-/// The daily pick is a pure function of the date and tier: the same puzzle
-/// for every session, a different draw per tier, and pinned so a changed
-/// hash cannot silently swap a day's board under players mid-solve.
+/// Unclaimed puzzles come first, picked by the date and tier; once all are
+/// used, the one claimed longest ago comes round.
 #[test]
-fn the_daily_pick_is_pinned_per_date_and_tier() {
-    let puzzles: Vec<ChessPuzzle> = (0..100)
-        .map(|index| ChessPuzzle {
-            id: format!("p{index}"),
+fn the_pick_prefers_unused_puzzles_then_the_one_used_longest_ago() {
+    let puzzles: Vec<ChessPuzzle> = ["p0", "p1", "p2"]
+        .into_iter()
+        .map(|id| ChessPuzzle {
+            id: id.to_string(),
             fen: String::new(),
             moves: Vec::new(),
             rating: 1000,
             theme: None,
         })
         .collect();
-    let date = NaiveDate::from_ymd_opt(2026, 10, 28).unwrap();
-    let picks = [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard]
-        .map(|difficulty| select_for_date(&puzzles, date, difficulty).id.clone());
-    let next_day = select_for_date(&puzzles, date.succ_opt().unwrap(), Difficulty::Easy);
-    assert_eq!(
-        (picks, next_day.id.as_str()),
-        (
-            ["p24".to_string(), "p9".to_string(), "p3".to_string()],
-            "p5"
+    let day = NaiveDate::from_ymd_opt(2026, 10, 28).expect("valid date");
+    let pick = |last_used: &HashMap<String, NaiveDate>, offset: i64| {
+        choose_for_date(
+            &puzzles,
+            last_used,
+            day + Duration::days(offset),
+            Difficulty::Easy,
         )
-    );
+        .id
+        .clone()
+    };
+
+    let mut last_used = HashMap::new();
+    let first = pick(&last_used, 0);
+    last_used.insert(first.clone(), day);
+    let second = pick(&last_used, 1);
+    assert_ne!(first, second);
+    last_used.insert(second.clone(), day + Duration::days(1));
+    let third = pick(&last_used, 2);
+    last_used.insert(third.clone(), day + Duration::days(2));
+
+    let mut all = vec![first.clone(), second, third];
+    all.sort();
+    assert_eq!(all, ["p0", "p1", "p2"]);
+    assert_eq!(pick(&last_used, 3), first);
 }

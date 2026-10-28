@@ -50,6 +50,7 @@ pub struct ArcadeSessionPreloads {
     pub initial_solitaire_games: Vec<late_core::models::solitaire::Game>,
     pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
     pub initial_netwalk_games: Vec<late_core::models::netwalk::Game>,
+    pub initial_chess_puzzle_daily: Option<crate::app::arcade::chess_puzzle::svc::Daily>,
     pub initial_chess_puzzle_games: Vec<late_core::models::chess_puzzle::Game>,
     pub initial_word_wheel_daily: Option<crate::app::arcade::word_wheel::svc::Daily>,
     pub initial_word_wheel_game: Option<late_core::models::word_wheel::Game>,
@@ -92,7 +93,7 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
         initial_solitaire_games,
         initial_minesweeper_games,
         initial_netwalk_games,
-        initial_chess_puzzle_games,
+        initial_chess_puzzle,
         initial_word_wheel,
         initial_quartets,
     ) = tokio::join!(
@@ -251,13 +252,24 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
             }
         },
         async {
-            match chess_puzzle_service.load_games(user_id).await {
+            // The saved rows load whether or not the day's claim did:
+            // personal puzzles restore on their own, and a daily row only
+            // counts once the state pairs it with the claimed puzzle.
+            let daily = match chess_puzzle_service.ensure_daily_puzzles().await {
+                Ok(daily) => Some(daily),
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load the chess puzzle daily puzzles");
+                    None
+                }
+            };
+            let games = match chess_puzzle_service.load_games(user_id).await {
                 Ok(games) => games,
                 Err(e) => {
                     tracing::warn!(error = ?e, "failed to load chess puzzle game states");
                     Vec::new()
                 }
-            }
+            };
+            (daily, games)
         },
         async {
             // The game is read for the claimed wheel's own date, so a
@@ -299,6 +311,7 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
             }
         },
     );
+    let (initial_chess_puzzle_daily, initial_chess_puzzle_games) = initial_chess_puzzle;
     let (initial_word_wheel_daily, initial_word_wheel_game) = initial_word_wheel;
     let (initial_quartets_daily, initial_quartets_game) = initial_quartets;
 
@@ -320,6 +333,7 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
         initial_solitaire_games,
         initial_minesweeper_games,
         initial_netwalk_games,
+        initial_chess_puzzle_daily,
         initial_chess_puzzle_games,
         initial_word_wheel_daily,
         initial_word_wheel_game,
@@ -436,6 +450,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_solitaire_games,
         initial_minesweeper_games,
         initial_netwalk_games,
+        initial_chess_puzzle_daily,
         initial_chess_puzzle_games,
         initial_word_wheel_daily,
         initial_word_wheel_game,
@@ -564,6 +579,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         netwalk_service: state.netwalk_service.clone(),
         initial_netwalk_games,
         chess_puzzle_service: state.chess_puzzle_service.clone(),
+        initial_chess_puzzle_daily,
         initial_chess_puzzle_games,
         word_wheel_service: state.word_wheel_service.clone(),
         initial_word_wheel_daily,

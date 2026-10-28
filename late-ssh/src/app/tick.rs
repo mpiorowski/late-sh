@@ -357,6 +357,7 @@ impl App {
         changed |= self.le_word_state.poll_word_reload();
         changed |= self.word_wheel_state.poll_reload();
         changed |= self.quartets_state.poll_reload();
+        changed |= self.chess_puzzle_state.poll_reload();
         let settings_tick = self.settings_modal_state.tick();
         changed |= settings_tick.changed;
         if let Some(b) = settings_tick.banner {

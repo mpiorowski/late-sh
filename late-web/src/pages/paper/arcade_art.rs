@@ -76,7 +76,7 @@ pub(crate) fn art(game: ArcadeGame) -> &'static [&'static str] {
             "      D",
         ],
         ArcadeGame::Puzzle(DailyPuzzle::Quartets) => &[
-            "[  HAVE KEYS  ]", //
+            "[  ?  ?  ?  ?  ]", //
             "[OAK][EGG][DOG]",
             "[ELM][MAP][YEW]",
             "[ASH][FIG][PUG]",

@@ -234,6 +234,7 @@ pub struct SessionConfig {
     pub netwalk_service: crate::app::arcade::netwalk::svc::NetwalkService,
     pub initial_netwalk_games: Vec<late_core::models::netwalk::Game>,
     pub chess_puzzle_service: crate::app::arcade::chess_puzzle::svc::ChessPuzzleService,
+    pub initial_chess_puzzle_daily: Option<crate::app::arcade::chess_puzzle::svc::Daily>,
     pub initial_chess_puzzle_games: Vec<late_core::models::chess_puzzle::Game>,
     pub word_wheel_service: crate::app::arcade::word_wheel::svc::WordWheelService,
     pub initial_word_wheel_daily: Option<crate::app::arcade::word_wheel::svc::Daily>,
@@ -1459,6 +1460,7 @@ impl App {
         let chess_puzzle_state = crate::app::arcade::chess_puzzle::state::State::new(
             config.user_id,
             config.chess_puzzle_service.clone(),
+            config.initial_chess_puzzle_daily,
             config.initial_chess_puzzle_games,
         );
         let word_wheel_state = crate::app::arcade::word_wheel::state::State::new(

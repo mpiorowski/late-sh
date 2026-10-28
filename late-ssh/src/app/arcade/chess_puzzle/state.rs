@@ -1,24 +1,26 @@
-//! Chess Puzzle: one Lichess puzzle a day per tier. The opponent's setup
-//! move is already on the board; the player finds each solution move in
-//! turn and the opponent's replies play themselves after a short delay. A
-//! wrong move is taken back and costs one of three lives; out of lives, the
-//! puzzle is lost and its solution shown. A checkmate always wins, whether
-//! or not it is the move the puzzle lists. This file holds the embedded
-//! pack, the rules and the per-session state; persistence goes through
-//! `svc.rs`.
+//! Chess Puzzle: one Lichess puzzle a day per tier, claimed in the database
+//! for everyone like Quartets' wall. The opponent's setup move is already
+//! on the board; the player finds each solution move in turn and the
+//! opponent's replies play themselves after a short delay. A wrong move is
+//! taken back and costs one of three lives; out of lives, the puzzle is
+//! lost and its solution shown. A checkmate always wins, whether or not it
+//! is the move the puzzle lists. This file holds the embedded pack, the
+//! rules and the per-session state; persistence goes through `svc.rs`.
 
 use std::sync::OnceLock;
+use std::time::{Duration, Instant};
 
-use chrono::{NaiveDate, Utc};
+use chrono::NaiveDate;
 use cozy_chess::{Board, Color, GameStatus, Move};
 use late_core::{
-    chess_puzzle::{ChessPuzzle, Theme, select_for_date},
+    chess_puzzle::{ChessPuzzle, Theme},
     models::{
         chess_puzzle::{Game, GameParams},
         chips::Difficulty,
     },
 };
 use rand_core::{OsRng, RngCore};
+use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::{
@@ -29,9 +31,12 @@ use crate::{
     metrics::{ArcadeDifficulty, ArcadeFinish, ArcadeMode},
 };
 
-use super::svc::ChessPuzzleService;
+use super::svc::{ChessPuzzleService, Daily};
 
-const DIFFICULTIES: [Difficulty; 3] = [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard];
+/// The tiers in board order: the index into every per-tier array here and
+/// in `svc::Daily`.
+pub(crate) const DIFFICULTIES: [Difficulty; 3] =
+    [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard];
 
 /// Wrong moves a puzzle forgives, as Minesweeper's lives.
 pub const LIVES: usize = 3;
@@ -39,6 +44,10 @@ pub const LIVES: usize = 3;
 /// Ticks of the Arcade's 15 fps loop before the opponent's reply lands, so
 /// the player sees their own move on the board first.
 pub const REPLY_DELAY_TICKS: u8 = 6;
+
+/// How long a failed rollover fetch waits before the next attempt.
+const RELOAD_RETRY: Duration = Duration::from_secs(30);
+const UNAVAILABLE: &str = "Chess Puzzle is unavailable. Try again soon.";
 
 const EASY_PACK: &[u8] = include_bytes!("../../../../assets/chess_puzzles/easy.json");
 const MEDIUM_PACK: &[u8] = include_bytes!("../../../../assets/chess_puzzles/medium.json");
@@ -57,6 +66,11 @@ pub fn pack(difficulty: Difficulty) -> &'static [ChessPuzzle] {
         Difficulty::Hard => (&HARD, HARD_PACK),
     };
     cell.get_or_init(|| serde_json::from_slice(bytes).expect("embedded chess puzzle pack parses"))
+}
+
+/// The pack puzzle with this id on a tier.
+pub fn find_puzzle(difficulty: Difficulty, id: &str) -> Option<&'static ChessPuzzle> {
+    pack(difficulty).iter().find(|puzzle| puzzle.id == id)
 }
 
 /// The pack's moves for a puzzle, setup move first.
@@ -112,9 +126,9 @@ pub enum Outcome {
     Lost,
 }
 
-/// A puzzle in play. The puzzle, `ply` and `mistake_plies` persist; the
-/// board and its move list are replayed from them, and the reply timer is
-/// this session's only.
+/// A puzzle in play. The puzzle, `ply`, `mistake_plies` and `mate` persist;
+/// the board and its move list are replayed from them, and the reply timer
+/// is this session's only.
 struct Slot {
     puzzle: &'static ChessPuzzle,
     line: Vec<Move>,
@@ -123,6 +137,8 @@ struct Slot {
     ply: usize,
     /// The ply of each wrong move: one per life spent.
     mistake_plies: Vec<usize>,
+    /// A checkmate off the line the puzzle ended on, played after `ply`.
+    mate: Option<Move>,
     board: Board,
     player: Color,
     /// SAN of every move on the board, the setup move first.
@@ -135,7 +151,12 @@ struct Slot {
 }
 
 impl Slot {
-    fn new(puzzle: &'static ChessPuzzle, ply: usize, mistake_plies: Vec<usize>) -> Self {
+    fn new(
+        puzzle: &'static ChessPuzzle,
+        ply: usize,
+        mistake_plies: Vec<usize>,
+        mate: Option<Move>,
+    ) -> Self {
         let line = line(puzzle);
         let mut board = start_board(puzzle);
         let mut san = Vec::with_capacity(line.len());
@@ -154,6 +175,7 @@ impl Slot {
             line,
             ply,
             mistake_plies,
+            mate: None,
             board,
             player,
             san,
@@ -161,12 +183,16 @@ impl Slot {
             pending_reply: None,
             finish_reported: false,
         };
+        if let Some(mate) = mate {
+            slot.play(mate);
+            slot.mate = Some(mate);
+        }
         slot.finish_reported = slot.outcome().is_some();
         slot
     }
 
     fn outcome(&self) -> Option<Outcome> {
-        if self.ply + 1 == self.line.len() {
+        if self.mate.is_some() || self.ply + 1 == self.line.len() {
             Some(Outcome::Solved)
         } else if self.mistake_plies.len() >= LIVES {
             Some(Outcome::Lost)
@@ -176,7 +202,13 @@ impl Slot {
     }
 
     fn has_started(&self) -> bool {
-        self.ply > 0 || !self.mistake_plies.is_empty()
+        self.ply > 0 || !self.mistake_plies.is_empty() || self.mate.is_some()
+    }
+
+    /// Player moves on the board: the line's up to `ply`, plus the mate off
+    /// it when there is one.
+    fn found(&self) -> usize {
+        self.ply.div_ceil(2) + usize::from(self.mate.is_some())
     }
 
     /// Play the next move of the line.
@@ -198,40 +230,33 @@ pub struct State {
     puzzle_date: NaiveDate,
     mode: Mode,
     selected_difficulty: usize,
-    daily: [Slot; 3],
+    /// `None` while today's puzzles are loading or could not be loaded.
+    daily: Option<[Slot; 3]>,
     personal: [Option<Slot>; 3],
     cursor: usize,
     selected: Option<usize>,
     reset_pending: Option<ResetAction>,
     message: String,
     svc: ChessPuzzleService,
+    /// In flight only while a rolled-over day is fetching its puzzles; see
+    /// `ensure_current_daily`.
+    reload_rx: Option<oneshot::Receiver<Option<Daily>>>,
+    /// Set when a rollover fetch failed; `ensure_current_daily` holds off
+    /// until this passes, then tries again.
+    reload_backoff_until: Option<Instant>,
 }
 
 impl State {
-    pub fn new(user_id: Uuid, svc: ChessPuzzleService, saved_games: Vec<Game>) -> Self {
-        Self::new_for_date(user_id, svc, Utc::now().date_naive(), saved_games)
-    }
-
-    pub(crate) fn new_for_date(
+    pub fn new(
         user_id: Uuid,
         svc: ChessPuzzleService,
-        puzzle_date: NaiveDate,
+        daily: Option<Daily>,
         saved_games: Vec<Game>,
     ) -> Self {
-        let daily = DIFFICULTIES.map(|difficulty| {
-            let puzzle = daily_puzzle(puzzle_date, difficulty);
-            saved_games
-                .iter()
-                .find(|game| {
-                    game.user_id == user_id
-                        && game.mode == "daily"
-                        && game.difficulty_key == difficulty.key()
-                        && game.puzzle_date == Some(puzzle_date)
-                        && game.puzzle_id == puzzle.id
-                })
-                .and_then(|game| slot_from_game(game, difficulty))
-                .unwrap_or_else(|| Slot::new(puzzle, 0, Vec::new()))
-        });
+        let puzzle_date = match daily {
+            Some(daily) => daily.puzzle_date,
+            None => svc.today(),
+        };
         let personal = DIFFICULTIES.map(|difficulty| {
             saved_games
                 .iter()
@@ -249,16 +274,44 @@ impl State {
             puzzle_date,
             mode: Mode::Daily,
             selected_difficulty: 0,
-            daily,
+            daily: None,
             personal,
             cursor: 0,
             selected: None,
             reset_pending: None,
             message: String::new(),
             svc,
+            reload_rx: None,
+            reload_backoff_until: None,
         };
+        if let Some(daily) = daily {
+            state.install(daily, &saved_games);
+        }
         state.focus_board();
         state
+    }
+
+    /// Put a day's puzzles on the daily boards, restoring the saved rows
+    /// that belong to them.
+    fn install(&mut self, daily: Daily, saved_games: &[Game]) {
+        self.puzzle_date = daily.puzzle_date;
+        let user_id = self.user_id;
+        let mut index = 0;
+        self.daily = Some(DIFFICULTIES.map(|difficulty| {
+            let puzzle = daily.puzzles[index];
+            index += 1;
+            saved_games
+                .iter()
+                .find(|game| {
+                    game.user_id == user_id
+                        && game.mode == "daily"
+                        && game.difficulty_key == difficulty.key()
+                        && game.puzzle_date == Some(daily.puzzle_date)
+                        && game.puzzle_id == puzzle.id
+                })
+                .and_then(|game| slot_from_game(game, difficulty))
+                .unwrap_or_else(|| Slot::new(puzzle, 0, Vec::new(), None))
+        }));
     }
 
     pub fn difficulty(&self) -> Difficulty {
@@ -281,25 +334,37 @@ impl State {
         self.puzzle_date
     }
 
-    pub fn puzzle_id(&self) -> &str {
-        &self.active().puzzle.id
+    /// The open board has a puzzle: a daily that is loaded, or a personal
+    /// puzzle once dealt. Every board accessor below is empty until then.
+    pub fn is_loaded(&self) -> bool {
+        self.active().is_some()
     }
 
-    pub fn rating(&self) -> u16 {
-        self.active().puzzle.rating
+    pub fn puzzle_id(&self) -> Option<&str> {
+        self.active().map(|slot| slot.puzzle.id.as_str())
+    }
+
+    pub fn rating(&self) -> Option<u16> {
+        self.active().map(|slot| slot.puzzle.rating)
     }
 
     pub fn theme(&self) -> Option<Theme> {
-        self.active().puzzle.theme
+        self.active().and_then(|slot| slot.puzzle.theme)
     }
 
     pub fn pieces(&self) -> [Option<ChessPiece>; 64] {
-        rules::board_pieces(&self.active().board)
+        match self.active() {
+            Some(slot) => rules::board_pieces(&slot.board),
+            None => [None; 64],
+        }
     }
 
     /// The player's colour: the board is drawn from their side.
     pub fn player(&self) -> ChessColor {
-        rules::chess_color(self.active().player)
+        match self.active() {
+            Some(slot) => rules::chess_color(slot.player),
+            None => ChessColor::White,
+        }
     }
 
     pub fn cursor(&self) -> usize {
@@ -311,36 +376,46 @@ impl State {
     }
 
     pub fn last_move(&self) -> Option<(usize, usize)> {
-        self.active().last
+        self.active().and_then(|slot| slot.last)
     }
 
     /// The king in check, if the side to move is.
     pub fn check_square(&self) -> Option<usize> {
-        let board = &self.active().board;
+        let board = &self.active()?.board;
         (!board.checkers().is_empty()).then(|| board.king(board.side_to_move()) as usize)
     }
 
     /// Where the selected piece can go, while it is the player's move.
     pub fn legal_targets(&self) -> Vec<usize> {
-        if !self.player_to_move() {
-            return Vec::new();
+        match self.active() {
+            Some(slot) if self.player_to_move() => {
+                cursor::legal_targets(&rules::legal_moves(&slot.board), self.selected)
+            }
+            Some(_) | None => Vec::new(),
         }
-        cursor::legal_targets(&rules::legal_moves(&self.active().board), self.selected)
     }
 
     /// SAN of the opponent's setup move.
     pub fn setup_san(&self) -> &str {
-        &self.active().san[0]
+        self.active().map_or("", |slot| slot.san[0].as_str())
     }
 
     /// SAN of the solution moves played so far.
     pub fn played_san(&self) -> &[String] {
-        &self.active().san[1..]
+        match self.active() {
+            Some(slot) => &slot.san[1..],
+            None => &[],
+        }
     }
 
     /// SAN of the moves still to play, shown once the puzzle is lost.
     pub fn remaining_san(&self) -> Vec<String> {
-        let slot = self.active();
+        let Some(slot) = self.active() else {
+            return Vec::new();
+        };
+        if slot.mate.is_some() {
+            return Vec::new();
+        }
         let mut board = slot.board.clone();
         slot.line[slot.ply + 1..]
             .iter()
@@ -354,18 +429,21 @@ impl State {
 
     /// For each player move found so far, whether it was found first try.
     pub fn first_tries(&self) -> Vec<bool> {
-        let slot = self.active();
-        (0..slot.ply.div_ceil(2))
+        let Some(slot) = self.active() else {
+            return Vec::new();
+        };
+        (0..slot.found())
             .map(|found| !slot.mistake_plies.contains(&(found * 2)))
             .collect()
     }
 
+    /// The moves the puzzle asks for.
     pub fn player_moves(&self) -> usize {
-        self.active().line.len() / 2
+        self.active().map_or(0, |slot| slot.line.len() / 2)
     }
 
     pub fn mistakes(&self) -> usize {
-        self.active().mistake_plies.len()
+        self.active().map_or(0, |slot| slot.mistake_plies.len())
     }
 
     pub fn lives_left(&self) -> usize {
@@ -373,15 +451,15 @@ impl State {
     }
 
     pub fn outcome(&self) -> Option<Outcome> {
-        self.active().outcome()
+        self.active().and_then(Slot::outcome)
     }
 
     pub fn has_started(&self) -> bool {
-        self.active().has_started()
+        self.active().is_some_and(Slot::has_started)
     }
 
     pub fn reply_pending(&self) -> bool {
-        self.active().pending_reply.is_some()
+        self.active().is_some_and(|slot| slot.pending_reply.is_some())
     }
 
     pub fn message(&self) -> &str {
@@ -394,12 +472,13 @@ impl State {
 
     pub fn first_unfinished_daily(&self) -> Option<usize> {
         self.daily
+            .as_ref()?
             .iter()
             .position(|slot| slot.has_started() && slot.outcome().is_none())
     }
 
     pub fn has_unfinished_daily(&self) -> bool {
-        self.puzzle_date == Utc::now().date_naive() && self.first_unfinished_daily().is_some()
+        self.puzzle_date == self.svc.today() && self.first_unfinished_daily().is_some()
     }
 
     pub fn is_daily_active(&self) -> bool {
@@ -413,22 +492,78 @@ impl State {
         self.focus_board();
     }
 
-    /// Roll the dailies forward when the UTC date changes under a live
-    /// session. Returns true when it moved.
+    /// Roll the dailies over when the UTC date changes under a live session.
+    /// The claims live in the database, so this clears the daily boards at
+    /// once and fetches the new puzzles in the background; `poll_reload`
+    /// installs them. `puzzle_date` only advances once they land, so a
+    /// failed fetch is retried here after `RELOAD_RETRY`. Personal puzzles
+    /// are left alone. Returns true when the screen changed.
     pub fn ensure_current_daily(&mut self) -> bool {
-        let today = Utc::now().date_naive();
-        if self.puzzle_date == today {
+        if self.puzzle_date == self.svc.today() || self.reload_rx.is_some() {
             return false;
         }
-        self.puzzle_date = today;
-        self.daily = DIFFICULTIES
-            .map(|difficulty| Slot::new(daily_puzzle(today, difficulty), 0, Vec::new()));
+        if let Some(until) = self.reload_backoff_until
+            && Instant::now() < until
+        {
+            return false;
+        }
+        self.reload_backoff_until = None;
+
+        // Yesterday's puzzles must stop taking moves right away, whether or
+        // not the fetch succeeds.
+        self.daily = None;
         self.clear_reset_pending();
         if self.mode == Mode::Daily {
             self.focus_board();
-            self.message = "Today's Chess Puzzle is ready.".to_string();
+            self.message = "Loading today's Chess Puzzle.".to_string();
+        }
+
+        let (tx, rx) = oneshot::channel();
+        self.reload_rx = Some(rx);
+        let svc = self.svc.clone();
+        // Pure state tests drive this without a runtime; the boards are
+        // already cleared, and the poll installs nothing when nothing comes.
+        if tokio::runtime::Handle::try_current().is_ok() {
+            tokio::spawn(async move {
+                let daily = match svc.ensure_daily_puzzles().await {
+                    Ok(daily) => Some(daily),
+                    Err(error) => {
+                        tracing::error!(error = ?error, "failed to load the rolled-over chess puzzles");
+                        None
+                    }
+                };
+                let _ = tx.send(daily);
+            });
         }
         true
+    }
+
+    /// Install puzzles fetched by `ensure_current_daily`. Returns true when
+    /// the screen changed.
+    pub fn poll_reload(&mut self) -> bool {
+        let Some(rx) = self.reload_rx.as_mut() else {
+            return false;
+        };
+        match rx.try_recv() {
+            Ok(Some(daily)) => {
+                self.reload_rx = None;
+                self.install(daily, &[]);
+                if self.mode == Mode::Daily {
+                    self.focus_board();
+                    self.message = "Today's Chess Puzzle is ready.".to_string();
+                }
+                true
+            }
+            Ok(None) | Err(oneshot::error::TryRecvError::Closed) => {
+                self.reload_rx = None;
+                self.reload_backoff_until = Some(Instant::now() + RELOAD_RETRY);
+                if self.mode == Mode::Daily {
+                    self.message = "Chess Puzzle is unavailable. Retrying soon.".to_string();
+                }
+                true
+            }
+            Err(oneshot::error::TryRecvError::Empty) => false,
+        }
     }
 
     pub fn show_daily(&mut self) {
@@ -509,8 +644,10 @@ impl State {
 
     /// The personal puzzle from its start, lives restored.
     pub fn reset(&mut self) {
-        let puzzle = self.active().puzzle;
-        *self.active_mut() = Slot::new(puzzle, 0, Vec::new());
+        let Some(puzzle) = self.active().map(|slot| slot.puzzle) else {
+            return;
+        };
+        self.set_active(Slot::new(puzzle, 0, Vec::new(), None));
         self.reset_pending = None;
         self.focus_board();
         self.message = format!("Puzzle restarted. {}", self.message);
@@ -530,11 +667,20 @@ impl State {
     pub fn activate(&mut self) {
         self.clear_reset_pending();
         let target = self.cursor;
-        if let Some(outcome) = self.outcome() {
+        let Some(slot) = self.active() else {
+            self.message = UNAVAILABLE.to_string();
+            return;
+        };
+        let outcome = slot.outcome();
+        let reply_pending = slot.pending_reply.is_some();
+        let held_move = self
+            .selected
+            .and_then(|from| rules::legal_move_for(&slot.board, from, target));
+        if let Some(outcome) = outcome {
             self.message = self.outcome_message(outcome);
             return;
         }
-        if self.reply_pending() {
+        if reply_pending {
             self.message = format!("Wait for {}'s reply.", self.player().other().label());
             return;
         }
@@ -544,9 +690,6 @@ impl State {
             .copied()
             .flatten()
             .is_some_and(|piece| piece.color == self.player());
-        let held_move = self
-            .selected
-            .and_then(|from| rules::legal_move_for(&self.active().board, from, target));
         match (self.selected, held_move) {
             (Some(from), _) if from == target => self.selected = None,
             (Some(_), Some(mv)) => self.attempt(mv),
@@ -573,7 +716,9 @@ impl State {
     /// The opponent's reply lands once its delay runs out. Driven by the
     /// Arcade tick while this board is open; true when the board changed.
     pub fn tick(&mut self) -> bool {
-        let slot = self.active_mut();
+        let Some(slot) = self.active_mut() else {
+            return false;
+        };
         let Some(ticks) = slot.pending_reply else {
             return false;
         };
@@ -597,7 +742,9 @@ impl State {
     /// anything else is taken back and costs a life.
     fn attempt(&mut self, mv: Move) {
         self.selected = None;
-        let slot = self.active_mut();
+        let Some(slot) = self.active_mut() else {
+            return;
+        };
         let expected = slot.line[slot.ply + 1];
         let mut after = slot.board.clone();
         after.play(mv);
@@ -619,11 +766,11 @@ impl State {
         }
 
         slot.play(mv);
-        slot.ply += 1;
-        if mates {
-            // Any mate wins: the line ends here even when the puzzle listed
-            // a different mating move.
-            slot.ply = slot.line.len() - 1;
+        if mv == expected {
+            slot.ply += 1;
+        } else {
+            // A mate the puzzle did not list ends it here, off the line.
+            slot.mate = Some(mv);
         }
         if slot.outcome() == Some(Outcome::Solved) {
             self.finish(Outcome::Solved);
@@ -639,7 +786,9 @@ impl State {
         let mode = self.mode;
         let difficulty = self.difficulty();
         let mistakes = self.mistakes();
-        let slot = self.active_mut();
+        let Some(slot) = self.active_mut() else {
+            return;
+        };
         let first_report = !slot.finish_reported;
         slot.finish_reported = true;
         self.message = self.outcome_message(outcome);
@@ -676,7 +825,7 @@ impl State {
     /// held, and the "who is to move" line.
     fn focus_board(&mut self) {
         self.selected = None;
-        self.cursor = self.active().last.map_or(0, |(_, to)| to);
+        self.cursor = self.last_move().map_or(0, |(_, to)| to);
         self.message = self.board_message();
     }
 
@@ -699,6 +848,9 @@ impl State {
 
     /// The one "which board is this" line, whichever key asked for it.
     fn board_message(&self) -> String {
+        if !self.is_loaded() {
+            return UNAVAILABLE.to_string();
+        }
         match self.outcome() {
             Some(outcome) => self.outcome_message(outcome),
             None => format!(
@@ -711,28 +863,33 @@ impl State {
     }
 
     fn player_to_move(&self) -> bool {
-        let slot = self.active();
-        slot.outcome().is_none() && slot.pending_reply.is_none()
+        self.active()
+            .is_some_and(|slot| slot.outcome().is_none() && slot.pending_reply.is_none())
     }
 
     fn save_async(&self) {
         if tokio::runtime::Handle::try_current().is_err() {
             return;
         }
-        self.svc.save_game_task(self.game_params());
+        if let Some(params) = self.game_params() {
+            self.svc.save_game_task(params);
+        }
     }
 
     fn complete_async(&self, difficulty: Difficulty, mistakes: i32) {
         if tokio::runtime::Handle::try_current().is_err() {
             return;
         }
-        self.svc
-            .complete_game_task(self.game_params(), difficulty, self.puzzle_date, mistakes);
+        if let Some(params) = self.game_params() {
+            self.svc
+                .complete_game_task(params, difficulty, self.puzzle_date, mistakes);
+        }
     }
 
-    fn game_params(&self) -> GameParams {
-        let slot = self.active();
-        GameParams {
+    /// The open board as a row, `None` while there is no board to save.
+    fn game_params(&self) -> Option<GameParams> {
+        let slot = self.active()?;
+        Some(GameParams {
             user_id: self.user_id,
             mode: self.mode.as_str().to_string(),
             difficulty_key: self.difficulty().key().to_string(),
@@ -740,7 +897,8 @@ impl State {
             puzzle_id: slot.puzzle.id.clone(),
             ply: slot.ply as i32,
             mistake_plies: slot.mistake_plies.iter().map(|&ply| ply as i32).collect(),
-        }
+            mate_move: slot.mate.map(|mate| mate.to_string()),
+        })
     }
 
     #[cfg(test)]
@@ -756,7 +914,7 @@ impl State {
         if self.mode == Mode::Personal {
             self.ensure_personal();
         }
-        *self.active_mut() = Slot::new(puzzle, 0, Vec::new());
+        self.set_active(Slot::new(puzzle, 0, Vec::new(), None));
         self.focus_board();
     }
 
@@ -779,46 +937,56 @@ impl State {
         true
     }
 
-    fn active(&self) -> &Slot {
+    fn active(&self) -> Option<&Slot> {
         let index = self.selected_difficulty;
         match self.mode {
-            Mode::Daily => &self.daily[index],
-            Mode::Personal => self.personal[index]
-                .as_ref()
-                .expect("personal puzzle is dealt before activation"),
+            Mode::Daily => self.daily.as_ref().map(|slots| &slots[index]),
+            Mode::Personal => self.personal[index].as_ref(),
         }
     }
 
-    fn active_mut(&mut self) -> &mut Slot {
+    fn active_mut(&mut self) -> Option<&mut Slot> {
         let index = self.selected_difficulty;
         match self.mode {
-            Mode::Daily => &mut self.daily[index],
-            Mode::Personal => self.personal[index]
-                .as_mut()
-                .expect("personal puzzle is dealt before activation"),
+            Mode::Daily => self.daily.as_mut().map(|slots| &mut slots[index]),
+            Mode::Personal => self.personal[index].as_mut(),
         }
     }
-}
 
-/// The day's puzzle in a tier.
-pub fn daily_puzzle(date: NaiveDate, difficulty: Difficulty) -> &'static ChessPuzzle {
-    select_for_date(pack(difficulty), date, difficulty)
+    /// Replace the open board. A daily board needs its day loaded; a
+    /// personal one is dealt whether or not it was.
+    fn set_active(&mut self, slot: Slot) {
+        let index = self.selected_difficulty;
+        match self.mode {
+            Mode::Daily => {
+                if let Some(slots) = self.daily.as_mut() {
+                    slots[index] = slot;
+                }
+            }
+            Mode::Personal => self.personal[index] = Some(slot),
+        }
+    }
 }
 
 fn random_slot(difficulty: Difficulty) -> Slot {
     let puzzles = pack(difficulty);
     let index = (OsRng.next_u64() % puzzles.len() as u64) as usize;
-    Slot::new(&puzzles[index], 0, Vec::new())
+    Slot::new(&puzzles[index], 0, Vec::new(), None)
 }
 
-/// A saved row, or `None` when it does not fit its puzzle: an id the pack
-/// no longer has, a ply past the line, more mistakes than lives, or a
-/// mistake on a ply the player never had. A row saved between the player's
-/// move and the opponent's reply gets the reply played at once.
+/// A saved row, or `None` when it does not fit its puzzle (see
+/// `slot_from_row`); the puzzle is looked up on the row's tier.
 fn slot_from_game(game: &Game, difficulty: Difficulty) -> Option<Slot> {
-    let puzzle = pack(difficulty)
-        .iter()
-        .find(|puzzle| puzzle.id == game.puzzle_id)?;
+    let puzzle = find_puzzle(difficulty, &game.puzzle_id)?;
+    slot_from_row(puzzle, game)
+}
+
+/// A saved row on its puzzle, or `None` when it does not fit: a ply past
+/// the line, more mistakes than lives, a mistake on a ply the player never
+/// had, or a mate move that is not a checkmate from the row's position. A
+/// row saved between the player's move and the opponent's reply gets the
+/// reply played at once.
+fn slot_from_row(puzzle: &'static ChessPuzzle, game: &Game) -> Option<Slot> {
     let ply = usize::try_from(game.ply)
         .ok()
         .filter(|&ply| ply < puzzle.moves.len())?;
@@ -834,7 +1002,26 @@ fn slot_from_game(game: &Game, difficulty: Difficulty) -> Option<Slot> {
     if mistake_plies.len() > LIVES {
         return None;
     }
-    let mut slot = Slot::new(puzzle, ply, mistake_plies);
+    let mate = match &game.mate_move {
+        Some(mate_move) => {
+            if ply % 2 == 1 {
+                return None;
+            }
+            let mate: Move = mate_move.parse().ok()?;
+            let board = Slot::new(puzzle, ply, Vec::new(), None).board;
+            if rules::legal_move_for(&board, mate.from as usize, mate.to as usize) != Some(mate) {
+                return None;
+            }
+            let mut after = board;
+            after.play(mate);
+            if after.status() != GameStatus::Won {
+                return None;
+            }
+            Some(mate)
+        }
+        None => None,
+    };
+    let mut slot = Slot::new(puzzle, ply, mistake_plies, mate);
     if ply % 2 == 1 && slot.outcome().is_none() {
         slot.play_next();
     }

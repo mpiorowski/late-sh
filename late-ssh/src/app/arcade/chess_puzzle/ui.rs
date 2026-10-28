@@ -89,6 +89,12 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
         tip: Some(tip_line(state.message().to_string())),
     };
     let board_area = draw_game_frame(frame, area, "Chess Puzzle", bottom, show_bottom_bar);
+    if !state.is_loaded() {
+        // The day's puzzles are claimed in the database; until they land
+        // (or when they could not) the tip line says so and there is no
+        // board to draw.
+        return;
+    }
     let layout = layout(board_area);
     let ctx = BoardCtx {
         orientation: state.player(),
@@ -143,9 +149,10 @@ fn panel_lines(state: &State) -> Vec<Line<'static>> {
         Some(Outcome::Lost) => "Out of lives".to_string(),
         None => format!("{} to move", state.player().label()),
     };
+    let rating = state.rating().expect("the panel draws a loaded board");
     let hint = match state.theme() {
-        Some(theme) => format!("{} · rated {}", theme.label(), state.rating()),
-        None => format!("Rated {}", state.rating()),
+        Some(theme) => format!("{} · rated {rating}", theme.label()),
+        None => format!("Rated {rating}"),
     };
     let mut lines = vec![
         Line::from(Span::styled(

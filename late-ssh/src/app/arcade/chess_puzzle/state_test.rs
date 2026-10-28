@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use chrono::Duration;
+use chrono::{Duration, Utc};
 use late_core::{
     chess_puzzle::rating_range,
     db::{Db, DbConfig},
@@ -21,16 +21,37 @@ fn date() -> NaiveDate {
 }
 
 fn pack_puzzle(difficulty: Difficulty, id: &str) -> &'static ChessPuzzle {
-    pack(difficulty)
-        .iter()
-        .find(|puzzle| puzzle.id == id)
-        .expect("puzzle in the pack")
+    find_puzzle(difficulty, id).expect("puzzle in the pack")
+}
+
+/// A day's claim as the service would hand it over: one pack puzzle per
+/// tier.
+fn daily(puzzle_date: NaiveDate) -> Daily {
+    Daily {
+        puzzle_date,
+        puzzles: [
+            pack_puzzle(Difficulty::Easy, "3WAR5"),
+            pack_puzzle(Difficulty::Medium, "uHqD7"),
+            pack_puzzle(Difficulty::Hard, "IYCVq"),
+        ],
+    }
 }
 
 /// Easy `02LIr`: after White's Kg2, Black mates in two with Qf2+ Kh3
 /// Qxh2#. Squares used below: b7 49, b6 41, c5 34, f2 13, h2 15.
 fn mate_in_two() -> &'static ChessPuzzle {
     pack_puzzle(Difficulty::Easy, "02LIr")
+}
+
+/// Both rooks mate; the pack names Ra8#, so Rb8# is a mate off the line.
+fn two_mates() -> &'static ChessPuzzle {
+    Box::leak(Box::new(ChessPuzzle {
+        id: "two-mates".to_string(),
+        fen: "7k/p5pp/8/8/8/8/8/RR4K1 b - - 0 1".to_string(),
+        moves: vec!["a7a6".to_string(), "a1a8".to_string()],
+        rating: 1000,
+        theme: Some(Theme::MateIn1),
+    }))
 }
 
 fn saved(
@@ -53,6 +74,7 @@ fn saved(
         puzzle_id: puzzle_id.to_string(),
         ply,
         mistake_plies,
+        mate_move: None,
     }
 }
 
@@ -103,26 +125,12 @@ fn every_shipped_puzzle_replays_through_the_board() {
     }
 }
 
-/// Every session picks the day's puzzle from the date alone, so a change
-/// to the pick or the pack swaps the board under the people solving it.
-/// This pins two days of all three tiers.
-#[test]
-fn the_daily_puzzle_for_a_day_is_pinned() {
-    let picks =
-        |date: NaiveDate| DIFFICULTIES.map(|difficulty| daily_puzzle(date, difficulty).id.as_str());
-    assert_eq!(picks(date()), ["3WAR5", "uHqD7", "IYCVq"]);
-    assert_eq!(
-        picks(date() + Duration::days(1)),
-        ["FDotv", "6FWc7", "d6lZj"]
-    );
-}
-
 /// A whole puzzle: a wrong move is taken back and costs a life, the right
 /// one waits for the reply, the reply lands on the tick, and the last move
 /// solves it with one move found first try and one not.
 #[test]
 fn a_puzzle_played_through_with_one_mistake() {
-    let mut state = State::new_for_date(Uuid::now_v7(), service(), date(), Vec::new());
+    let mut state = State::new(Uuid::now_v7(), service(), Some(daily(date())), Vec::new());
     state.set_puzzle_for_test(Difficulty::Easy, mate_in_two());
     assert_eq!(
         (
@@ -190,43 +198,73 @@ fn a_puzzle_played_through_with_one_mistake() {
     assert!(!state.tick());
 }
 
-/// A mate the puzzle does not list still wins: here both rooks mate, the
-/// pack names Ra8#, and Rb8# solves it.
+/// A mate the puzzle does not list still wins, as the one move the player
+/// made: the card counts one move, nothing remains to show, the row keeps
+/// the mate, and a restore from that row ends on the player's mate, not
+/// the pack's.
 #[test]
 fn any_mate_wins_even_one_the_puzzle_does_not_list() {
-    let two_mates: &'static ChessPuzzle = Box::leak(Box::new(ChessPuzzle {
-        id: "two-mates".to_string(),
-        fen: "7k/p5pp/8/8/8/8/8/RR4K1 b - - 0 1".to_string(),
-        moves: vec!["a7a6".to_string(), "a1a8".to_string()],
-        rating: 1000,
-        theme: Some(Theme::MateIn1),
-    }));
-    let mut state = State::new_for_date(Uuid::now_v7(), service(), date(), Vec::new());
-    state.set_puzzle_for_test(Difficulty::Easy, two_mates);
+    let puzzle = two_mates();
+    let user_id = Uuid::now_v7();
+    let mut state = State::new(user_id, service(), Some(daily(date())), Vec::new());
+    state.set_puzzle_for_test(Difficulty::Easy, puzzle);
 
     state.click(1);
     state.click(57);
     assert_eq!(
         (
             state.played_san(),
+            state.first_tries(),
+            state.remaining_san(),
             state.mistakes(),
             state.outcome(),
             state.message()
         ),
         (
             &["Rb8#".to_string()][..],
+            vec![true],
+            Vec::<String>::new(),
             0,
             Some(Outcome::Solved),
             "Solved with no mistakes. Today's puzzle is banked."
         )
     );
+    let row = state.game_params().expect("a board to save");
+    assert_eq!((row.ply, row.mate_move.as_deref()), (0, Some("b1b8")));
+
+    let restored = slot_from_row(
+        puzzle,
+        &Game {
+            mate_move: row.mate_move.clone(),
+            ..saved(user_id, "daily", Difficulty::Easy, Some(date()), "two-mates", 0, vec![])
+        },
+    )
+    .expect("the row fits its puzzle");
+    assert_eq!(
+        (restored.san.clone(), restored.outcome(), restored.found()),
+        (
+            vec!["a6".to_string(), "Rb8#".to_string()],
+            Some(Outcome::Solved),
+            1
+        )
+    );
+
+    // A mate move that does not mate from the row's position is a corrupt
+    // row, as is one on the opponent's ply.
+    for (ply, mate_move) in [(0, "b1b7"), (0, "a1a7"), (1, "b1b8")] {
+        let row = Game {
+            mate_move: Some(mate_move.to_string()),
+            ..saved(user_id, "daily", Difficulty::Easy, Some(date()), "two-mates", ply, vec![])
+        };
+        assert!(slot_from_row(puzzle, &row).is_none(), "{ply} {mate_move}");
+    }
 }
 
 /// Three wrong moves lose: the board stops taking moves, the solution is
 /// named, the daily is no longer unfinished, and it cannot be restarted.
 #[test]
 fn three_wrong_moves_lose_and_show_the_solution() {
-    let mut state = State::new_for_date(Uuid::now_v7(), service(), date(), Vec::new());
+    let mut state = State::new(Uuid::now_v7(), service(), Some(daily(date())), Vec::new());
     state.set_puzzle_for_test(Difficulty::Easy, mate_in_two());
     for _ in 0..LIVES {
         state.click(49);
@@ -302,24 +340,24 @@ fn saved_rows_restore_and_bad_rows_are_dealt_fresh() {
             vec![0],
         ),
     ];
-    let mut state = State::new_for_date(user_id, service(), date(), rows);
+    let mut state = State::new(user_id, service(), Some(daily(date())), rows);
 
-    let mut daily = Vec::new();
+    let mut dailies = Vec::new();
     for index in 0..3 {
         state.open_daily(index);
-        daily.push((
-            state.puzzle_id().to_string(),
+        dailies.push((
+            state.puzzle_id().map(str::to_string),
             state.played_san().len(),
             state.mistakes(),
             state.reply_pending(),
         ));
     }
     assert_eq!(
-        daily,
+        dailies,
         [
-            ("3WAR5".to_string(), 0, 1, false),
-            ("uHqD7".to_string(), 0, 0, false),
-            ("IYCVq".to_string(), 2, 0, false),
+            (Some("3WAR5".to_string()), 0, 1, false),
+            (Some("uHqD7".to_string()), 0, 0, false),
+            (Some("IYCVq".to_string()), 2, 0, false),
         ]
     );
     assert_eq!(state.first_unfinished_daily(), Some(0));
@@ -332,7 +370,7 @@ fn saved_rows_restore_and_bad_rows_are_dealt_fresh() {
             state.played_san().len(),
             state.mistakes()
         ),
-        ("02LIr", 2, 1)
+        (Some("02LIr"), 2, 1)
     );
 
     for (ply, mistakes) in [
@@ -364,17 +402,43 @@ fn saved_rows_restore_and_bad_rows_are_dealt_fresh() {
     assert!(slot_from_game(&unknown, Difficulty::Easy).is_none());
 }
 
-/// A session left open past UTC midnight rolls its dailies to the new
-/// day's puzzles, once, and leaves the personal puzzles alone.
+/// A session that came up without the day's claim has no daily board: the
+/// tip line says so, moves do nothing, and a personal puzzle still deals.
 #[test]
-fn the_utc_rollover_deals_new_dailies_and_keeps_personal_puzzles() {
+fn without_the_days_claim_the_daily_boards_are_unavailable() {
+    let mut state = State::new(Uuid::now_v7(), service(), None, Vec::new());
+    assert_eq!(
+        (
+            state.is_loaded(),
+            state.puzzle_id(),
+            state.pieces().iter().all(Option::is_none),
+            state.message()
+        ),
+        (false, None, true, "Chess Puzzle is unavailable. Try again soon.")
+    );
+    state.click(12);
+    assert_eq!(
+        (state.selected(), state.message()),
+        (None, "Chess Puzzle is unavailable. Try again soon.")
+    );
+    assert!(!state.has_unfinished_daily());
+
+    state.show_personal();
+    assert!(state.is_loaded());
+    assert!(state.player_moves() > 0);
+}
+
+/// A session left open past UTC midnight clears its dailies at once, asks
+/// for the new day's puzzles, backs off a failed fetch, and leaves the
+/// personal puzzles alone.
+#[test]
+fn the_utc_rollover_clears_the_dailies_and_backs_off_a_failed_fetch() {
     let user_id = Uuid::now_v7();
-    let today = Utc::now().date_naive();
-    let yesterday = today - Duration::days(1);
-    let mut state = State::new_for_date(
+    let yesterday = Utc::now().date_naive() - Duration::days(1);
+    let mut state = State::new(
         user_id,
         service(),
-        yesterday,
+        Some(daily(yesterday)),
         vec![saved(
             user_id,
             "personal",
@@ -385,24 +449,23 @@ fn the_utc_rollover_deals_new_dailies_and_keeps_personal_puzzles() {
             vec![],
         )],
     );
+    assert!(state.is_loaded());
 
     assert!(state.ensure_current_daily());
-    assert!(!state.ensure_current_daily());
-    let mut dailies = Vec::new();
-    for index in 0..3 {
-        state.open_daily(index);
-        dailies.push(state.puzzle_id().to_string());
-    }
     assert_eq!(
-        (state.puzzle_date(), dailies),
         (
-            today,
-            DIFFICULTIES
-                .map(|difficulty| daily_puzzle(today, difficulty).id.clone())
-                .to_vec()
-        )
+            state.is_loaded(),
+            state.puzzle_date(),
+            state.first_unfinished_daily(),
+            state.message()
+        ),
+        (false, yesterday, None, "Loading today's Chess Puzzle.")
     );
-    state.open_daily(0);
+    assert!(!state.ensure_current_daily());
+    assert!(state.poll_reload());
+    assert_eq!(state.message(), "Chess Puzzle is unavailable. Retrying soon.");
+    assert!(!state.ensure_current_daily());
+
     state.show_personal();
-    assert_eq!((state.puzzle_id(), state.played_san().len()), ("02LIr", 2));
+    assert_eq!((state.puzzle_id(), state.played_san().len()), (Some("02LIr"), 2));
 }

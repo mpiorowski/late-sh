@@ -1,6 +1,8 @@
 //! The Chess Puzzle pack: Lichess puzzles (the open database, CC0) cut into
 //! three rating tiers by `gen_chess_puzzles`, one JSON file per tier that
-//! late-ssh embeds, and the daily pick over a tier.
+//! late-ssh embeds, and the pick of the day's puzzle on a tier.
+
+use std::collections::HashMap;
 
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
@@ -161,18 +163,36 @@ pub const fn rating_range(difficulty: Difficulty) -> (u16, u16) {
     }
 }
 
-/// The day's puzzle in a tier: a stable FNV-1a hash of the date and tier,
-/// so every session picks the same one without asking the database.
-pub fn select_for_date(
-    puzzles: &[ChessPuzzle],
+/// The puzzle to claim for `date` on a tier. A puzzle never claimed comes
+/// first, picked by a hash of the date and tier; once every puzzle of the
+/// tier has had a day, the one claimed longest ago (ties by id) comes round
+/// again, so there is always a puzzle. `last_used` maps a puzzle id to the
+/// last day it was claimed on this tier.
+pub fn choose_for_date<'a>(
+    puzzles: &'a [ChessPuzzle],
+    last_used: &HashMap<String, NaiveDate>,
     date: NaiveDate,
     difficulty: Difficulty,
-) -> &ChessPuzzle {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    let key = format!("late-sh-chess-puzzle-daily-v1:{date}:{}", difficulty.key());
-    for byte in key.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0100_0000_01b3);
+) -> &'a ChessPuzzle {
+    let unused: Vec<&ChessPuzzle> = puzzles
+        .iter()
+        .filter(|puzzle| !last_used.contains_key(&puzzle.id))
+        .collect();
+    if !unused.is_empty() {
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        let key = format!("late-sh-chess-puzzle-daily-v1:{date}:{}", difficulty.key());
+        for byte in key.bytes() {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0100_0000_01b3);
+        }
+        return unused[(hash % unused.len() as u64) as usize];
     }
-    &puzzles[(hash % puzzles.len() as u64) as usize]
+    puzzles
+        .iter()
+        .min_by(|a, b| {
+            last_used[&a.id]
+                .cmp(&last_used[&b.id])
+                .then_with(|| a.id.cmp(&b.id))
+        })
+        .expect("a chess puzzle tier's pack is not empty")
 }

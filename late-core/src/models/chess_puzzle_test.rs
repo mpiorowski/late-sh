@@ -2,7 +2,7 @@ use chrono::{Duration, NaiveDate};
 
 use crate::{
     models::{
-        chess_puzzle::{DailyWin, Game, GameParams},
+        chess_puzzle::{DailyPick, DailyWin, Game, GameParams},
         chips::Difficulty,
     },
     test_utils::{create_test_user, test_db},
@@ -17,7 +17,56 @@ fn params(user_id: uuid::Uuid, mode: &str, difficulty: Difficulty) -> GameParams
         puzzle_id: "00008".to_string(),
         ply: 0,
         mistake_plies: Vec::new(),
+        mate_move: None,
     }
+}
+
+/// The claim table answers the day's puzzle per tier and the last day each
+/// puzzle was claimed for on that tier; a second insert for a date and
+/// tier keeps the first claim.
+#[tokio::test]
+async fn daily_pick_keeps_the_first_claim_and_reports_last_use_per_tier() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let day = NaiveDate::from_ymd_opt(2026, 10, 28).unwrap() + Duration::days(4000);
+
+    DailyPick::insert_for_date(&**client, day - Duration::days(9), "easy", "3WAR5")
+        .await
+        .expect("old claim");
+    let first = DailyPick::insert_for_date(&**client, day, "easy", "3WAR5")
+        .await
+        .expect("claim");
+    let second = DailyPick::insert_for_date(&**client, day, "easy", "FDotv")
+        .await
+        .expect("racing claim");
+    DailyPick::insert_for_date(&**client, day, "hard", "FDotv")
+        .await
+        .expect("hard claim");
+    assert_eq!(
+        (first.puzzle_id.as_str(), second.puzzle_id.as_str()),
+        ("3WAR5", "3WAR5")
+    );
+
+    let mut found: Vec<(String, String)> = DailyPick::find_by_date(&**client, day)
+        .await
+        .expect("find claims")
+        .into_iter()
+        .map(|pick| (pick.difficulty_key, pick.puzzle_id))
+        .collect();
+    found.sort();
+    assert_eq!(
+        found,
+        [
+            ("easy".to_string(), "3WAR5".to_string()),
+            ("hard".to_string(), "FDotv".to_string()),
+        ]
+    );
+
+    let easy = DailyPick::last_used(&**client, "easy")
+        .await
+        .expect("easy last used");
+    assert_eq!(easy.get("3WAR5"), Some(&day));
+    assert_eq!(easy.get("FDotv"), None, "another tier's claim is not this tier's");
 }
 
 /// One daily and one personal slot per difficulty, each upsert replacing
