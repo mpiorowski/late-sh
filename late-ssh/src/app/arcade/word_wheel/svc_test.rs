@@ -169,14 +169,7 @@ async fn a_rank_reached_only_by_merged_sessions_is_banked_on_restore() {
     );
 
     let saved = service.load_game(user.id, date()).await.expect("load game");
-    let _third = State::new(
-        user.id,
-        service.clone(),
-        Some(Today {
-            daily,
-            saved: saved,
-        }),
-    );
+    let _third = State::new(user.id, service.clone(), Some(Today { daily, saved }));
     service.flush_game_saves().await.expect("flush");
 
     let event = activity_rx.try_recv().expect("win event");
