@@ -3,15 +3,15 @@ use ratatui::{
     layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 
 use late_core::models::leaderboard::DailyPuzzle;
 
 use super::state::{LetterScore, MAX_GUESSES, State, WORD_LEN};
 use crate::app::arcade::ui::{
-    GameBottomBar, centered_rect, draw_game_frame, keys_line, single_board_chips, status_line,
-    tip_line,
+    GameBottomBar, centered_rect, draw_game_frame, draw_rules_modal, keys_line, single_board_chips,
+    status_line, tip_line,
 };
 use crate::app::common::theme;
 
@@ -108,20 +108,20 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
     }
 
     if state.show_rules {
-        draw_rules_modal(frame, board_area);
+        draw_rules_modal(
+            frame,
+            board_area,
+            58,
+            16,
+            "Le Word Rules",
+            rules_lines(),
+            "! / q / Esc closes",
+        );
     }
 }
 
-fn draw_rules_modal(frame: &mut Frame, area: Rect) {
-    let modal = centered_rect(area, 58.min(area.width), 16.min(area.height));
-    let rules = Paragraph::new(vec![
-        Line::from(Span::styled(
-            "Le Word Rules",
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
+fn rules_lines() -> Vec<Line<'static>> {
+    vec![
         Line::from("Guess the hidden five-letter word in six tries."),
         Line::from("Each guess must be a valid word."),
         Line::from(""),
@@ -143,22 +143,7 @@ fn draw_rules_modal(frame: &mut Frame, area: Rect) {
             "Solving the daily earns {} chips.",
             single_board_chips(DailyPuzzle::LeWord)
         )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "! / q / Esc closes",
-            Style::default().fg(theme::TEXT_DIM()),
-        )),
-    ])
-    .alignment(Alignment::Center)
-    .wrap(Wrap { trim: true })
-    .style(Style::default().fg(theme::TEXT_DIM()).bg(Color::Reset))
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::AMBER_GLOW())),
-    );
-    frame.render_widget(Clear, modal);
-    frame.render_widget(rules, modal);
+    ]
 }
 
 fn draw_result_panel(

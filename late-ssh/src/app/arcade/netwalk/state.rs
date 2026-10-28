@@ -459,13 +459,8 @@ impl State {
                 Mode::Personal => ArcadeMode::Personal,
             };
             let difficulty = self.difficulty();
-            let difficulty_label = match difficulty {
-                Difficulty::Easy => ArcadeDifficulty::Easy,
-                Difficulty::Medium => ArcadeDifficulty::Medium,
-                Difficulty::Hard => ArcadeDifficulty::Hard,
-            };
             self.svc
-                .record_finish(mode, difficulty_label, ArcadeFinish::Won);
+                .record_finish(mode, ArcadeDifficulty::of(difficulty), ArcadeFinish::Won);
             match self.mode {
                 Mode::Daily => {
                     self.message = format!("Connected in {moves} moves.");

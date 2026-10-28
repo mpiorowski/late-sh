@@ -218,6 +218,47 @@ pub fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
     }
 }
 
+/// A daily's rules card over its board: the bold title, the game's own
+/// `body`, then the dim `keys` line, in an amber frame `width` by `height`
+/// clipped to `area`.
+pub fn draw_rules_modal(
+    frame: &mut Frame,
+    area: Rect,
+    width: u16,
+    height: u16,
+    title: &str,
+    body: Vec<Line<'static>>,
+    keys: &str,
+) {
+    let mut lines = vec![
+        Line::from(Span::styled(
+            title.to_string(),
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(""),
+    ];
+    lines.extend(body);
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        keys.to_string(),
+        Style::default().fg(theme::TEXT_DIM()),
+    )));
+    let modal = centered_rect(area, width, height);
+    let rules = Paragraph::new(lines)
+        .alignment(Alignment::Center)
+        .wrap(Wrap { trim: true })
+        .style(Style::default().fg(theme::TEXT_DIM()).bg(Color::Reset))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(theme::AMBER_GLOW())),
+        );
+    frame.render_widget(Clear, modal);
+    frame.render_widget(rules, modal);
+}
+
 pub fn status_line(segments: Vec<(&'static str, String, Color)>) -> Line<'static> {
     let mut spans: Vec<Span<'static>> = Vec::new();
     for (i, (label, value, color)) in segments.into_iter().enumerate() {
@@ -549,14 +590,8 @@ fn wrap_names(names: &[String], width: usize) -> Vec<Vec<String>> {
     let mut used = 0usize;
     for name in names {
         let cells = name.chars().count();
-        let needed = if row.is_empty() {
-            cells
-        } else {
-            used + 2 + cells
-        };
-        if !row.is_empty() && needed > width {
+        if !row.is_empty() && used + 2 + cells > width {
             rows.push(std::mem::take(&mut row));
-            used = 0;
         }
         used = if row.is_empty() {
             cells

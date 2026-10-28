@@ -8,13 +8,13 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::Paragraph,
 };
 
 use super::state::{Rank, State, word_score};
 use crate::app::{
     arcade::ui::{
-        GameBottomBar, SHOW_GAME_BOTTOM_BAR, centered_rect, draw_game_frame, game_content_area,
+        GameBottomBar, SHOW_GAME_BOTTOM_BAR, draw_game_frame, draw_rules_modal, game_content_area,
         keys_line, share_hints, status_line, tip_line,
     },
     common::theme,
@@ -121,7 +121,15 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
         draw_found(frame, layout.words, state);
     }
     if state.show_rules() {
-        draw_rules_modal(frame, board_area);
+        draw_rules_modal(
+            frame,
+            board_area,
+            60,
+            19,
+            "Word Wheel Rules",
+            rules_lines(),
+            "Tab shuffles the rim · ! / Esc closes",
+        );
     }
 }
 
@@ -331,29 +339,19 @@ fn plural(count: usize, noun: &str) -> String {
     }
 }
 
-fn draw_rules_modal(frame: &mut Frame, area: Rect) {
-    let modal = centered_rect(area, 60.min(area.width), 19.min(area.height));
-    let text = |line: String| Line::from(line);
-    let rules = Paragraph::new(vec![
-        Line::from(Span::styled(
-            "Word Wheel Rules",
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(""),
-        text("Spell words from the seven letters on the wheel.".to_string()),
-        text(
-            "Every word uses the hub in the middle, has four letters or more, and may use a letter more than once."
-                .to_string(),
+fn rules_lines() -> Vec<Line<'static>> {
+    vec![
+        Line::from("Spell words from the seven letters on the wheel."),
+        Line::from(
+            "Every word uses the hub in the middle, has four letters or more, and may use a letter more than once.",
         ),
         Line::from(""),
-        text(format!(
+        Line::from(format!(
             "A four-letter word scores {}, and each letter past three adds one. A full wheel uses all seven letters and scores double.",
             word_score("abcdefg", "abcd")
         )),
         Line::from(""),
-        text(format!(
+        Line::from(format!(
             "Bronze, Silver and Gold are {}%, {}% and {}% of the wheel's top score, and pay {}, {} and {} chips.",
             Rank::Bronze.percent(),
             Rank::Silver.percent(),
@@ -362,23 +360,8 @@ fn draw_rules_modal(frame: &mut Frame, area: Rect) {
             Difficulty::Medium.chips(),
             Difficulty::Hard.chips()
         )),
-        text("One wheel for everyone, new each day.".to_string()),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Tab shuffles the rim · ! / Esc closes",
-            Style::default().fg(theme::TEXT_DIM()),
-        )),
-    ])
-    .alignment(Alignment::Center)
-    .wrap(Wrap { trim: true })
-    .style(Style::default().fg(theme::TEXT_DIM()).bg(Color::Reset))
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::AMBER_GLOW())),
-    );
-    frame.render_widget(Clear, modal);
-    frame.render_widget(rules, modal);
+        Line::from("One wheel for everyone, new each day."),
+    ]
 }
 
 #[cfg(test)]

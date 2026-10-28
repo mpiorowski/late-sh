@@ -10,13 +10,13 @@ use ratatui::{
     layout::{Alignment, Constraint, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph, Wrap},
+    widgets::Paragraph,
 };
 
 use super::state::{MAX_STRIKES, Outcome, Puzzle, QUARTETS, State};
 use crate::app::{
     arcade::ui::{
-        GameBottomBar, SHOW_GAME_BOTTOM_BAR, centered_rect, draw_game_frame, game_content_area,
+        GameBottomBar, SHOW_GAME_BOTTOM_BAR, draw_game_frame, draw_rules_modal, game_content_area,
         keys_line, share_hints, single_board_chips, status_line, tip_line,
     },
     common::theme,
@@ -99,7 +99,15 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
         );
     }
     if state.show_rules() {
-        draw_rules_modal(frame, board_area);
+        draw_rules_modal(
+            frame,
+            board_area,
+            62,
+            21,
+            "Quartets Rules",
+            rules_lines(),
+            "Space picks · x clears · Tab shuffles · ! / Esc closes",
+        );
     }
 }
 
@@ -291,45 +299,21 @@ fn status_text(state: &State) -> Line<'static> {
     Line::from(spans)
 }
 
-fn draw_rules_modal(frame: &mut Frame, area: Rect) {
+fn rules_lines() -> Vec<Line<'static>> {
     let chips = single_board_chips(DailyPuzzle::Quartets);
-    let modal = centered_rect(area, 62.min(area.width), 21.min(area.height));
-    let text = |line: String| Line::from(line);
-    let rules = Paragraph::new(vec![
-        Line::from(Span::styled(
-            "Quartets Rules",
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-        )),
+    vec![
+        Line::from("Sixteen words hide four quartets: four words that share a link."),
+        Line::from("Pick four and press Enter. A quartet locks in with its link."),
         Line::from(""),
-        text("Sixteen words hide four quartets: four words that share a link.".to_string()),
-        text("Pick four and press Enter. A quartet locks in with its link.".to_string()),
-        Line::from(""),
-        text(format!(
+        Line::from(format!(
             "A miss is a strike, and says how the four split: three and one, two pairs, one pair, or all apart. {MAX_STRIKES} strikes and the wall is shown."
         )),
-        text("Once three quartets are in, the last four lock in by themselves.".to_string()),
+        Line::from("Once three quartets are in, the last four lock in by themselves."),
         Line::from(""),
-        text(format!(
+        Line::from(format!(
             "A solved wall pays {chips} chips. One wall for everyone, new each day."
         )),
-        Line::from(""),
-        Line::from(Span::styled(
-            "Space picks · x clears · Tab shuffles · ! / Esc closes",
-            Style::default().fg(theme::TEXT_DIM()),
-        )),
-    ])
-    .alignment(Alignment::Center)
-    .wrap(Wrap { trim: true })
-    .style(Style::default().fg(theme::TEXT_DIM()).bg(Color::Reset))
-    .block(
-        Block::default()
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(theme::AMBER_GLOW())),
-    );
-    frame.render_widget(Clear, modal);
-    frame.render_widget(rules, modal);
+    ]
 }
 
 #[cfg(test)]

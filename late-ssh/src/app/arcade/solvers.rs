@@ -64,12 +64,13 @@ impl TodaySolvers<'_> {
     }
 
     /// Every user id with a mark today, the session's own included.
-    fn candidates(&self) -> Vec<Uuid> {
-        let mut ids: Vec<Uuid> = self.statuses.keys().copied().collect();
-        if !self.statuses.contains_key(&self.own_user_id) {
-            ids.push(self.own_user_id);
-        }
-        ids
+    fn candidates(&self) -> impl Iterator<Item = Uuid> + '_ {
+        let own = if self.statuses.contains_key(&self.own_user_id) {
+            None
+        } else {
+            Some(self.own_user_id)
+        };
+        self.statuses.keys().copied().chain(own)
     }
 
     fn name_of(&self, user_id: Uuid) -> Option<String> {
@@ -82,7 +83,6 @@ impl TodaySolvers<'_> {
     /// How many distinct people solved `game` today, at any tier.
     pub(crate) fn solved_count(&self, game: DailyPuzzle) -> usize {
         self.candidates()
-            .into_iter()
             .filter(|id| self.solved_any(*id, game))
             .count()
     }
@@ -91,17 +91,16 @@ impl TodaySolvers<'_> {
     /// (the list the lobby card's marks read, easiest first); the roster
     /// comes back hardest first.
     pub(crate) fn roster(&self, date: NaiveDate, game: DailyPuzzle) -> Roster {
-        let candidates = self.candidates();
         let tiers = game
             .tiers()
             .list()
             .into_iter()
             .rev()
             .map(|(difficulty_key, tier)| {
-                let mut names: Vec<String> = candidates
-                    .iter()
-                    .filter(|id| self.solved_tier(**id, game, difficulty_key))
-                    .filter_map(|id| self.name_of(*id))
+                let mut names: Vec<String> = self
+                    .candidates()
+                    .filter(|id| self.solved_tier(*id, game, difficulty_key))
+                    .filter_map(|id| self.name_of(id))
                     .collect();
                 // Sort first so the shuffle sees the same input whatever
                 // order the maps iterate in.

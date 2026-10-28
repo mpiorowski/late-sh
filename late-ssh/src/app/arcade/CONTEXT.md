@@ -112,7 +112,7 @@ Nonograms are runtime-only inside `late-ssh`; puzzle generation is offline.
 
 - `arcade/ui.rs` renders the lobby game list and delegates active games to their `ui.rs`.
 - The lobby has no ASCII banner (with the quest strip on top, small terminals have no headroom for one) and auto-scrolls the selected entry near the top third of the viewport.
-- `draw_game_frame`, `draw_game_overlay`, `centered_rect`, `status_line`, `keys_line`, and `tip_line` are Arcade-only helpers used by Arcade games.
+- `draw_game_frame`, `draw_game_overlay`, `draw_rules_modal`, `centered_rect`, `status_line`, `keys_line`, and `tip_line` are Arcade-only helpers used by Arcade games. `draw_rules_modal` is the `!` rules card's frame (title, keys line, amber border); Le Word, Word Wheel and Quartets pass only their body lines.
 - Daily puzzle QoL feedback is local to each game UI: Sudoku user-entered values render red only when they duplicate the same number in their row, column, or 3x3 box; Nonogram clue labels render green when the current filled runs satisfy that row/column clue and red when current fills/X marks make that row/column impossible, with the active row/column emphasized through clue text only; Minesweeper flags render green/red after game over based on whether they mark real mines and hidden cells that would open from a currently valid chord are highlighted.
 - Arcade game bottom status/key bars render unconditionally.
 

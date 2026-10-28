@@ -573,13 +573,8 @@ impl State {
                 Mode::Daily => ArcadeMode::Daily,
                 Mode::Personal => ArcadeMode::Personal,
             };
-            let difficulty_label = match difficulty {
-                Difficulty::Easy => ArcadeDifficulty::Easy,
-                Difficulty::Medium => ArcadeDifficulty::Medium,
-                Difficulty::Hard => ArcadeDifficulty::Hard,
-            };
             self.svc
-                .record_finish(mode, difficulty_label, ArcadeFinish::Won);
+                .record_finish(mode, ArcadeDifficulty::of(difficulty), ArcadeFinish::Won);
             if self.mode == Mode::Daily {
                 self.message = format!("Solved in {moves} moves.");
                 self.complete_async(difficulty, moves);

@@ -1,6 +1,7 @@
 use late_core::models::article::NewsShareReward;
 use late_core::models::chat_message_gild::GildTier;
 use late_core::models::chat_room::WatchDoor;
+use late_core::models::chips::Difficulty;
 use late_core::models::door_opening::DoorCard;
 use late_core::models::leaderboard::{DailyPuzzle, DoorGame};
 use late_core::models::media_queue_item::SongQueueReward;
@@ -544,6 +545,17 @@ pub enum ArcadeDifficulty {
     DrawOne,
     DrawThree,
     Single,
+}
+
+impl ArcadeDifficulty {
+    /// The label of a board on one of the three shared tiers.
+    pub const fn of(difficulty: Difficulty) -> Self {
+        match difficulty {
+            Difficulty::Easy => Self::Easy,
+            Difficulty::Medium => Self::Medium,
+            Difficulty::Hard => Self::Hard,
+        }
+    }
 }
 
 /// How an Arcade board ended. Only Le Word (out of guesses), Minesweeper

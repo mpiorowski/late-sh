@@ -513,7 +513,7 @@ impl State {
             if paid > self.banked && paid <= rank {
                 self.svc.record_finish(
                     ArcadeMode::Daily,
-                    arcade_difficulty(difficulty),
+                    ArcadeDifficulty::of(difficulty),
                     ArcadeFinish::Won,
                 );
                 self.bank_async(difficulty, score);
@@ -563,14 +563,6 @@ fn rank_message(rank: Rank) -> String {
                 format!("{} reached.", rank.label())
             }
         },
-    }
-}
-
-fn arcade_difficulty(difficulty: Difficulty) -> ArcadeDifficulty {
-    match difficulty {
-        Difficulty::Easy => ArcadeDifficulty::Easy,
-        Difficulty::Medium => ArcadeDifficulty::Medium,
-        Difficulty::Hard => ArcadeDifficulty::Hard,
     }
 }
 

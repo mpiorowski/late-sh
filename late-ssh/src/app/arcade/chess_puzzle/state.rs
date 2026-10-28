@@ -658,17 +658,12 @@ impl State {
             Mode::Daily => ArcadeMode::Daily,
             Mode::Personal => ArcadeMode::Personal,
         };
-        let metric_difficulty = match difficulty {
-            Difficulty::Easy => ArcadeDifficulty::Easy,
-            Difficulty::Medium => ArcadeDifficulty::Medium,
-            Difficulty::Hard => ArcadeDifficulty::Hard,
-        };
         let finish = match outcome {
             Outcome::Solved => ArcadeFinish::Won,
             Outcome::Lost => ArcadeFinish::Lost,
         };
         self.svc
-            .record_finish(metric_mode, metric_difficulty, finish);
+            .record_finish(metric_mode, ArcadeDifficulty::of(difficulty), finish);
         match (outcome, mode) {
             (Outcome::Solved, Mode::Daily) => self.complete_async(difficulty, mistakes as i32),
             (Outcome::Solved, Mode::Personal) | (Outcome::Lost, Mode::Daily | Mode::Personal) => {
