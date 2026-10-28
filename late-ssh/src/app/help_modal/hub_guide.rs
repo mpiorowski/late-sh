@@ -173,7 +173,10 @@ pub(crate) fn daily_tiers_text(puzzle: DailyPuzzle, value: fn(Difficulty) -> i64
 }
 
 fn arcade_wins_lines() -> Vec<String> {
-    let titles: Vec<&str> = DailyPuzzle::ALL.iter().map(|puzzle| puzzle.title()).collect();
+    let titles: Vec<&str> = DailyPuzzle::ALL
+        .iter()
+        .map(|puzzle| puzzle.title())
+        .collect();
     let (last, rest) = titles.split_last().expect("the roster has dailies");
     let mut body = vec![
         format!("Counts daily {}, and {last}.", rest.join(", ")),

@@ -176,10 +176,9 @@ impl DailyPuzzle {
             | Self::Nonogram
             | Self::Minesweeper
             | Self::Netwalk => Tiers::Keyed(THREE_TIERS),
-            Self::Solitaire => Tiers::Keyed(&[
-                ("draw-1", Difficulty::Medium),
-                ("draw-3", Difficulty::Hard),
-            ]),
+            Self::Solitaire => {
+                Tiers::Keyed(&[("draw-1", Difficulty::Medium), ("draw-3", Difficulty::Hard)])
+            }
         }
     }
 

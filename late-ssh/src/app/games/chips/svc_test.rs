@@ -42,8 +42,7 @@ async fn sliding_puzzle_activity_rewards_pay_seeded_tiers_once_per_utc_day() {
         .await;
         chips.ensure_chips(user.id).await.expect("initial chips");
 
-        let reward_key =
-            daily_puzzle_reward_key(DailyPuzzle::SlidingPuzzle, difficulty.key());
+        let reward_key = daily_puzzle_reward_key(DailyPuzzle::SlidingPuzzle, difficulty.key());
         let client = test_db.db.get().await.expect("db client");
         let template = RewardTemplate::get_active_by_key(&**client, &reward_key)
             .await

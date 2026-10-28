@@ -13,8 +13,10 @@ use crate::{
             LobbyGame, OnlineTimeIncrement, RankedEntry, ScoreGame, WeekBest, WeekGame,
             apply_online_time_batch, fetch_leaderboard_data, week_bests,
         },
-        minesweeper, mud_character::MudCharacter, netwalk, nonogram, rubiks_cube, sliding_puzzle, snake,
-        solitaire, sudoku, tetris, twenty_forty_eight,
+        minesweeper,
+        mud_character::MudCharacter,
+        netwalk, nonogram, rubiks_cube, sliding_puzzle, snake, solitaire, sudoku, tetris,
+        twenty_forty_eight,
     },
     test_utils::{
         create_test_user, roll_high_scores_back_a_month, roll_score_events_back_a_month, test_db,
@@ -243,7 +245,8 @@ async fn daily_boards_and_arcade_points_follow_the_roster() {
 /// string, never as a quietly different board.
 #[test]
 fn points_sql_follows_each_puzzles_tiers() {
-    let three = "CASE difficulty_key WHEN 'easy' THEN 1 WHEN 'medium' THEN 3 WHEN 'hard' THEN 5 ELSE 0 END";
+    let three =
+        "CASE difficulty_key WHEN 'easy' THEN 1 WHEN 'medium' THEN 3 WHEN 'hard' THEN 5 ELSE 0 END";
     let points: Vec<(DailyPuzzle, String)> = DailyPuzzle::ALL
         .iter()
         .map(|puzzle| (*puzzle, puzzle.points_sql()))

@@ -1,6 +1,6 @@
 use super::*;
-use late_core::models::leaderboard::DailyPuzzle;
 use crate::app::door::spectate::state::SpectateGame;
+use late_core::models::leaderboard::DailyPuzzle;
 
 fn id(n: u128) -> Uuid {
     Uuid::from_u128(n)

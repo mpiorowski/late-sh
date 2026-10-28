@@ -186,7 +186,10 @@ pub fn day_card(day: NaiveDate, won: impl Fn(DailyPuzzle) -> bool, streak_days: 
             }
         })
         .collect();
-    let icons: String = DailyPuzzle::ALL.iter().map(|puzzle| icon(*puzzle)).collect();
+    let icons: String = DailyPuzzle::ALL
+        .iter()
+        .map(|puzzle| icon(*puzzle))
+        .collect();
     let won_count = marks.iter().filter(|g| **g == Glyph::Green).count();
     let number = puzzle_number(day);
     let result = if streak_days > 0 {

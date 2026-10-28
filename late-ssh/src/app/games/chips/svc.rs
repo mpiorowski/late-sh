@@ -11,8 +11,8 @@ use late_core::models::game_payout::{
     GAME_PAYOUT_PERIOD_COOLDOWN, GamePayout, GamePayoutClaim, GamePayoutKey, GamePayoutMultiGrant,
 };
 use late_core::models::reward::{
-    ASTERION_DAILY_ESCAPE_REWARD_KEY, REWARD_CLAIM_POLICY_PER_EVENT,
-    REWARD_CLAIM_POLICY_UTC_DAY, RewardTemplate, daily_puzzle_reward_key,
+    ASTERION_DAILY_ESCAPE_REWARD_KEY, REWARD_CLAIM_POLICY_PER_EVENT, REWARD_CLAIM_POLICY_UTC_DAY,
+    RewardTemplate, daily_puzzle_reward_key,
 };
 use tokio::sync::broadcast;
 use uuid::Uuid;

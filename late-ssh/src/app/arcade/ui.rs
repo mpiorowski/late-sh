@@ -662,7 +662,10 @@ fn draw_game_list(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
                     .add_modifier(Modifier::BOLD),
                 normal_style: Style::default().fg(theme::TEXT()),
                 description_style: Style::default().fg(theme::TEXT_DIM()),
-                status: vec![Span::styled(card.best, Style::default().fg(theme::SUCCESS()))],
+                status: vec![Span::styled(
+                    card.best,
+                    Style::default().fg(theme::SUCCESS()),
+                )],
                 label_width: 16,
             },
         );

@@ -380,9 +380,9 @@ pub(crate) fn handle_event(app: &mut App, event: &crate::app::input::ParsedInput
         ArcadeGame::Puzzle(DailyPuzzle::Netwalk) => {
             super::netwalk::input::handle_mouse(&mut app.netwalk_state, area, *mouse)
         }
-        ArcadeGame::Puzzle(DailyPuzzle::RubiksCube | DailyPuzzle::Sudoku | DailyPuzzle::Nonogram) => {
-            false
-        }
+        ArcadeGame::Puzzle(
+            DailyPuzzle::RubiksCube | DailyPuzzle::Sudoku | DailyPuzzle::Nonogram,
+        ) => false,
         // The score games are keyboard-only.
         ArcadeGame::Score(_) => false,
     }

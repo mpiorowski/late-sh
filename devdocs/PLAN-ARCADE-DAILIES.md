@@ -27,8 +27,9 @@ Read `late-ssh/src/app/arcade/CONTEXT.md` and `GAMES.md` ("Adding a new
 Arcade game") first. The reference implementations:
 
 - **Tiered, daily + personal, seeded:** `arcade/sliding_puzzle/` and
-  `late-core/src/models/sliding_puzzle.rs`, migration 167. Netwalk and Chess
-  Puzzle copy this row shape (`arcade/netwalk/` is the newest copy): `<game>_games (user_id, mode, difficulty_key,
+  `late-core/src/models/sliding_puzzle.rs`, migration 167, and the newer
+  copy `arcade/netwalk/`, migration 265. Chess Puzzle copies this row
+  shape: `<game>_games (user_id, mode, difficulty_key,
   puzzle_date, puzzle_seed|puzzle_id, <board>, moves, UNIQUE(user_id,
   difficulty_key, mode))` and `<game>_daily_wins (user_id, difficulty_key,
   puzzle_date, <score>, UNIQUE(user_id, difficulty_key, puzzle_date))`.

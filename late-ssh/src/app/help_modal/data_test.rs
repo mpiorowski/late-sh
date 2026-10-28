@@ -111,9 +111,18 @@ fn chips_guide_lists_every_earning_surface() {
         assert!(chips.contains(expected), "chips guide missing {expected}");
     }
     // Every daily on the roster, each board with the chips its tier pays.
-    assert!(chips.contains("  Le Word          daily 100 chips"), "{chips}");
-    assert!(chips.contains("  Rubik's Cube     daily 250 chips"), "{chips}");
-    assert!(chips.contains("  Solitaire        draw-1 250 · draw-3 500 chips"), "{chips}");
+    assert!(
+        chips.contains("  Le Word          daily 100 chips"),
+        "{chips}"
+    );
+    assert!(
+        chips.contains("  Rubik's Cube     daily 250 chips"),
+        "{chips}"
+    );
+    assert!(
+        chips.contains("  Solitaire        draw-1 250 · draw-3 500 chips"),
+        "{chips}"
+    );
     for puzzle in late_core::models::leaderboard::DailyPuzzle::ALL {
         assert!(
             chips.contains(&format!("  {:<16} ", puzzle.title())),
