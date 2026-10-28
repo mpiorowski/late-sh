@@ -75,6 +75,8 @@ Then what the compiler cannot see, each held by a test:
 - the win bump (`late-core/src/models/leaderboard_test.rs::every_daily_win_insert_bumps_the_all_time_rollup_once`, whose `record_daily_win` match is red in the test build until the new model is called);
 - a splash tip naming the game (`common/splash_tips_test.rs::every_daily_puzzle_has_a_tip`).
 
+Quest templates are separate rows with `is_quest = true` and no test asks for them; a daily joins the quest pool only when a migration adds them (the tier pattern and amounts are in `app/hub/CONTEXT.md`, Quests).
+
 Then the prose: the help modal's Arcade notes and controls (`app/help_modal/data.rs`; its payout and Arcade Wins lists are generated from the roster), this file, `CONTEXT.md` here and at the root, and `LICENSING.md` when the game ships imported data.
 
 Wiring, a score game: add the variant to `roster!(ScoreGame: ...)` at its lobby place and fix the red the same way (the roster's methods, the card art, `ActivityGame`, `ui.rs::game_for_selection`, the key/arrow/draw dispatch and lobby card, the Arcade arm in `app/tick.rs`, the state field, service and saved-game load). Help-modal copy and the docs above as for a daily.
