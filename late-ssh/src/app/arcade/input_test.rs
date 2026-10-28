@@ -12,16 +12,16 @@ fn lobby_navigation_walks_the_roster_order_and_wraps() {
         forward,
         vec![
             ArcadeGame::Puzzle(DailyPuzzle::LeWord),
-            ArcadeGame::Puzzle(DailyPuzzle::RubiksCube),
-            ArcadeGame::Puzzle(DailyPuzzle::SlidingPuzzle),
+            ArcadeGame::Puzzle(DailyPuzzle::WordWheel),
+            ArcadeGame::Puzzle(DailyPuzzle::Quartets),
             ArcadeGame::Puzzle(DailyPuzzle::Sudoku),
             ArcadeGame::Puzzle(DailyPuzzle::Nonogram),
             ArcadeGame::Puzzle(DailyPuzzle::Minesweeper),
-            ArcadeGame::Puzzle(DailyPuzzle::Solitaire),
             ArcadeGame::Puzzle(DailyPuzzle::Netwalk),
             ArcadeGame::Puzzle(DailyPuzzle::ChessPuzzle),
-            ArcadeGame::Puzzle(DailyPuzzle::WordWheel),
-            ArcadeGame::Puzzle(DailyPuzzle::Quartets),
+            ArcadeGame::Puzzle(DailyPuzzle::Solitaire),
+            ArcadeGame::Puzzle(DailyPuzzle::SlidingPuzzle),
+            ArcadeGame::Puzzle(DailyPuzzle::RubiksCube),
             ArcadeGame::Score(ScoreGame::TwentyFortyEight),
             ArcadeGame::Score(ScoreGame::Lateris),
             ArcadeGame::Score(ScoreGame::Snake),
@@ -160,7 +160,7 @@ async fn lobby_s_copies_the_day_card() {
     let card = app.pending_clipboard.take().expect("day card copied");
     assert!(card.starts_with("late.sh Daily #"), "{card}");
     assert!(
-        card.contains("· 0/11\n⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛\n🔤🧊🧩🔢🎨💣🃏🔌♟️🎡🔗\nssh late.sh"),
+        card.contains("· 0/11\n⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛\n🔤🎡🔗🔢🎨💣🔌♟️🃏🧩🧊\nssh late.sh"),
         "{card}"
     );
 }

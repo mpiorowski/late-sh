@@ -14,7 +14,11 @@ use uuid::Uuid;
 
 use super::solvers::{Roster, TodaySolvers};
 use crate::{
-    app::{activity::event::ActivityGame, common::theme},
+    app::{
+        activity::event::ActivityGame,
+        common::theme,
+        files::terminal_image::{TerminalImageFrame, TerminalImageProtocol},
+    },
     usernames::UsernameLookup,
 };
 
@@ -348,6 +352,8 @@ pub struct ArcadeHubView<'a> {
     pub username: &'a str,
     /// The solvers roster is open over the selected daily.
     pub show_solvers: bool,
+    /// The terminal's image protocol, for Chess Puzzle's PNG pieces.
+    pub image_protocol: Option<TerminalImageProtocol>,
 }
 
 impl ArcadeHubView<'_> {
@@ -368,11 +374,18 @@ impl ArcadeHubView<'_> {
 /// re-decided as a literal at each call site.
 pub const SHOW_GAME_BOTTOM_BAR: bool = true;
 
-pub fn draw_arcade_hub(frame: &mut Frame, area: Rect, view: &ArcadeHubView<'_>) {
+pub fn draw_arcade_hub(
+    frame: &mut Frame,
+    area: Rect,
+    view: &ArcadeHubView<'_>,
+    terminal_images: &mut TerminalImageFrame,
+) {
     let show_bottom_bar = SHOW_GAME_BOTTOM_BAR;
     if view.is_playing_game {
         match view.game_selection {
-            ArcadeGame::Puzzle(puzzle) => draw_puzzle(frame, area, view, puzzle, show_bottom_bar),
+            ArcadeGame::Puzzle(puzzle) => {
+                draw_puzzle(frame, area, view, puzzle, show_bottom_bar, terminal_images)
+            }
             ArcadeGame::Score(game) => draw_score_game(frame, area, view, game, show_bottom_bar),
         }
         return;
@@ -424,6 +437,7 @@ fn draw_puzzle(
     view: &ArcadeHubView<'_>,
     puzzle: DailyPuzzle,
     show_bottom_bar: bool,
+    terminal_images: &mut TerminalImageFrame,
 ) {
     match puzzle {
         DailyPuzzle::LeWord => {
@@ -458,6 +472,8 @@ fn draw_puzzle(
             area,
             view.chess_puzzle_state,
             show_bottom_bar,
+            view.image_protocol,
+            terminal_images,
         ),
         DailyPuzzle::WordWheel => {
             super::word_wheel::ui::draw_game(frame, area, view.word_wheel_state, show_bottom_bar)

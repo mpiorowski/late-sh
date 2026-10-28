@@ -14,8 +14,8 @@ use ratatui::{
 use super::state::{Rank, State, word_score};
 use crate::app::{
     arcade::ui::{
-        GameBottomBar, SHOW_GAME_BOTTOM_BAR, draw_game_frame, draw_rules_modal, game_content_area,
-        keys_line, share_hints, status_line, tip_line,
+        GameBottomBar, SHOW_GAME_BOTTOM_BAR, centered_rect, draw_game_frame, draw_rules_modal,
+        game_content_area, keys_line, share_hints, status_line, tip_line,
     },
     common::theme,
 };
@@ -38,7 +38,19 @@ const SPOKES: [(u16, u16, &str); 6] = [
 ];
 const METER_SLOTS: u32 = 10;
 /// A column of found words: the longest answer and a gap.
-const WORD_COLUMN_WIDTH: u16 = 17;
+const LONGEST_WORD: u16 = 15;
+const WORD_GAP: u16 = 2;
+const WORD_COLUMN_WIDTH: u16 = LONGEST_WORD + WORD_GAP;
+/// The found words run in at most this many columns, so the list stays
+/// under the wheel instead of spreading across a wide terminal.
+const MAX_WORD_COLUMNS: u16 = 5;
+/// Rows kept for the found words, the header included: the pack's largest
+/// wheel (70 answers) in five columns. Fixed, so the group is centred once
+/// and the wheel never moves as words come in.
+const WORDS_HEIGHT: u16 = 15;
+/// The wheel, the typed word and the meter with the gaps between and
+/// under them, above the found words.
+const HEAD_HEIGHT: u16 = WHEEL_HEIGHT + 1 + 1 + 1 + 2 + 1;
 
 /// A letter's place on the wheel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,10 +146,11 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
 }
 
 /// The wheel, the typed word, the meter and the words found, top to
-/// bottom; the wheel centred.
+/// bottom, the group centred in the board area like every Arcade board.
+/// A short terminal gives the found words what is left.
 pub(crate) fn layout(board_area: Rect) -> WheelLayout {
+    let group = centered_rect(board_area, board_area.width, HEAD_HEIGHT + WORDS_HEIGHT);
     let rows = Layout::vertical([
-        Constraint::Length(1),
         Constraint::Length(WHEEL_HEIGHT),
         Constraint::Length(1),
         Constraint::Length(1),
@@ -146,8 +159,8 @@ pub(crate) fn layout(board_area: Rect) -> WheelLayout {
         Constraint::Length(1),
         Constraint::Min(0),
     ])
-    .split(board_area);
-    let wheel_row = rows[1];
+    .split(group);
+    let wheel_row = rows[0];
     let width = WHEEL_WIDTH.min(wheel_row.width);
     WheelLayout {
         wheel: Rect::new(
@@ -156,9 +169,9 @@ pub(crate) fn layout(board_area: Rect) -> WheelLayout {
             width,
             wheel_row.height,
         ),
-        typed: rows[3],
-        meter: rows[5],
-        words: rows[7],
+        typed: rows[2],
+        meter: rows[4],
+        words: rows[6],
     }
 }
 
@@ -267,7 +280,9 @@ fn meter_lines(state: &State) -> Vec<Line<'static>> {
 }
 
 /// The words found in columns, alphabetical down each column, full wheels
-/// in amber. When they outgrow the area the last line says how many more.
+/// in amber, under a centred header. The columns block is centred by the
+/// columns it fills. When the words outgrow the area the last line says
+/// how many more.
 fn draw_found(frame: &mut Frame, area: Rect, state: &State) {
     if area.height < 2 || area.width == 0 {
         return;
@@ -281,22 +296,36 @@ fn draw_found(frame: &mut Frame, area: Rect, state: &State) {
             plural(full, "full wheel")
         ),
     };
-    let columns = usize::from((area.width / WORD_COLUMN_WIDTH).max(1));
-    let rows = usize::from(area.height - 1);
+    let (header_row, list_area) = (
+        Rect::new(area.x, area.y, area.width, 1),
+        Rect::new(area.x, area.y + 1, area.width, area.height - 1),
+    );
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            header,
+            Style::default().fg(theme::TEXT_MUTED()),
+        )))
+        .alignment(Alignment::Center),
+        header_row,
+    );
+
+    let columns = usize::from((area.width / WORD_COLUMN_WIDTH).clamp(1, MAX_WORD_COLUMNS));
+    let rows = usize::from(list_area.height);
     let capacity = columns * rows;
     let (shown, more) = if found.len() > capacity {
         (capacity - 1, found.len() - (capacity - 1))
     } else {
         (found.len(), 0)
     };
+    if shown == 0 && more == 0 {
+        return;
+    }
     let per_column = shown.div_ceil(columns).max(1);
-    let mut lines = vec![Line::from(Span::styled(
-        header,
-        Style::default().fg(theme::TEXT_MUTED()),
-    ))];
+    let used_columns = shown.div_ceil(per_column).max(1);
+    let mut lines = Vec::new();
     for row in 0..per_column.min(rows) {
         let mut spans = Vec::new();
-        for column in 0..columns {
+        for column in 0..used_columns {
             let index = column * per_column + row;
             if index >= shown {
                 break;
@@ -322,12 +351,13 @@ fn draw_found(frame: &mut Frame, area: Rect, state: &State) {
             Style::default().fg(theme::TEXT_DIM()),
         )));
     }
-    let width = (columns as u16 * WORD_COLUMN_WIDTH).min(area.width);
+    // The last column's trailing gap is not part of the block's width.
+    let width = (used_columns as u16 * WORD_COLUMN_WIDTH - WORD_GAP).min(list_area.width);
     let list = Rect::new(
-        area.x + (area.width - width) / 2,
-        area.y,
+        list_area.x + (list_area.width - width) / 2,
+        list_area.y,
         width,
-        area.height,
+        list_area.height,
     );
     frame.render_widget(Paragraph::new(lines), list);
 }

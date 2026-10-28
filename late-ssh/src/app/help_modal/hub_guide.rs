@@ -347,6 +347,8 @@ fn arcade_sections() -> Vec<GuideSection> {
                     .to_string(),
                 "hjkl or arrows move the cursor; Space or Enter picks a piece up and plays it; a click does the same."
                     .to_string(),
+                "i toggles PNG and ASCII pieces where the terminal shows images; session only, and a finished puzzle draws ASCII."
+                    .to_string(),
                 "A wrong move is taken back and costs one of three lives; out of lives, the solution is shown."
                     .to_string(),
                 "Any checkmate wins, even one the puzzle does not list.".to_string(),

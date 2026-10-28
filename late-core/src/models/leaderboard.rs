@@ -71,8 +71,8 @@ roster!(
     /// Declaration order is the Arcade lobby's order, and with it the day
     /// card's, the backtick cycle's, the rollover's, and every board list
     /// that iterates `ALL`. One order, so nothing else lists the dailies.
-    DailyPuzzle: LeWord, RubiksCube, SlidingPuzzle, Sudoku, Nonogram, Minesweeper, Solitaire,
-        Netwalk, ChessPuzzle, WordWheel, Quartets
+    DailyPuzzle: LeWord, WordWheel, Quartets, Sudoku, Nonogram, Minesweeper, Netwalk,
+        ChessPuzzle, Solitaire, SlidingPuzzle, RubiksCube
 );
 
 roster!(

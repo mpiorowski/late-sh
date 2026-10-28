@@ -32,3 +32,25 @@ fn a_click_lands_on_the_wheel_letter_drawn() {
         ]
     );
 }
+
+/// The wheel and the words under it sit mid-board as one group, with the
+/// space for the words kept whether or not any are found yet; a short
+/// board gives the words what is left.
+#[test]
+fn the_wheel_and_its_words_sit_mid_board() {
+    let board = Rect::new(0, 2, 100, 48);
+    let tall = layout(board);
+    let (above, below) = (
+        tall.wheel.y - board.y,
+        board.bottom() - tall.words.bottom(),
+    );
+    assert!(above.abs_diff(below) <= 1, "{above} above, {below} below");
+    assert_eq!(tall.words.height, WORDS_HEIGHT);
+
+    let short = layout(Rect::new(0, 0, 100, 20));
+    assert_eq!(
+        (short.wheel.y, short.words.bottom()),
+        (0, 20),
+        "a short board starts at the top and fills it"
+    );
+}

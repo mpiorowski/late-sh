@@ -70,3 +70,15 @@ fn a_click_lands_on_the_tile_drawn() {
         [None, Some(0), Some(11)]
     );
 }
+
+/// The wall and its status line sit mid-board as one group.
+#[test]
+fn the_wall_sits_mid_board() {
+    let board = Rect::new(0, 2, 100, 48);
+    let layout = layout(board, MAX_TILE_WIDTH);
+    let (above, below) = (
+        layout.wall.y - board.y,
+        board.bottom() - layout.status.bottom(),
+    );
+    assert!(above.abs_diff(below) <= 1, "{above} above, {below} below");
+}

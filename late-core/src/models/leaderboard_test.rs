@@ -251,20 +251,20 @@ fn points_sql_follows_each_puzzles_tiers() {
         points,
         vec![
             (DailyPuzzle::LeWord, "1".to_string()),
-            (DailyPuzzle::RubiksCube, "3".to_string()),
-            (DailyPuzzle::SlidingPuzzle, three.to_string()),
+            (DailyPuzzle::WordWheel, three.to_string()),
+            (DailyPuzzle::Quartets, "3".to_string()),
             (DailyPuzzle::Sudoku, three.to_string()),
             (DailyPuzzle::Nonogram, three.to_string()),
             (DailyPuzzle::Minesweeper, three.to_string()),
+            (DailyPuzzle::Netwalk, three.to_string()),
+            (DailyPuzzle::ChessPuzzle, three.to_string()),
             (
                 DailyPuzzle::Solitaire,
                 "CASE difficulty_key WHEN 'draw-1' THEN 3 WHEN 'draw-3' THEN 5 ELSE 0 END"
                     .to_string()
             ),
-            (DailyPuzzle::Netwalk, three.to_string()),
-            (DailyPuzzle::ChessPuzzle, three.to_string()),
-            (DailyPuzzle::WordWheel, three.to_string()),
-            (DailyPuzzle::Quartets, "3".to_string()),
+            (DailyPuzzle::SlidingPuzzle, three.to_string()),
+            (DailyPuzzle::RubiksCube, "3".to_string()),
         ]
     );
 }

@@ -16,8 +16,8 @@ use ratatui::{
 use super::state::{MAX_STRIKES, Outcome, Puzzle, QUARTETS, State};
 use crate::app::{
     arcade::ui::{
-        GameBottomBar, SHOW_GAME_BOTTOM_BAR, draw_game_frame, draw_rules_modal, game_content_area,
-        keys_line, share_hints, single_board_chips, status_line, tip_line,
+        GameBottomBar, SHOW_GAME_BOTTOM_BAR, centered_rect, draw_game_frame, draw_rules_modal,
+        game_content_area, keys_line, share_hints, single_board_chips, status_line, tip_line,
     },
     common::theme,
 };
@@ -123,21 +123,20 @@ pub(crate) fn tile_width(puzzle: &Puzzle) -> u16 {
     (longest + TILE_MARGIN).clamp(MIN_TILE_WIDTH, MAX_TILE_WIDTH)
 }
 
-/// The wall, then a blank line and the status line, the wall centred and
-/// its tiles narrowed to fit.
+/// The wall, then a blank line and the status line, the group centred in
+/// the board area like every Arcade board and the tiles narrowed to fit.
 pub(crate) fn layout(board_area: Rect, tile_width: u16) -> WallLayout {
+    let group = centered_rect(board_area, board_area.width, WALL_HEIGHT + 2);
     let rows = Layout::vertical([
-        Constraint::Length(1),
         Constraint::Length(WALL_HEIGHT),
         Constraint::Length(1),
         Constraint::Length(1),
-        Constraint::Min(0),
     ])
-    .split(board_area);
+    .split(group);
     let gaps = (QUARTETS as u16 - 1) * TILE_GAP;
     let tile_width = tile_width.min(board_area.width.saturating_sub(gaps) / QUARTETS as u16);
     let width = (tile_width * QUARTETS as u16 + gaps).min(board_area.width);
-    let wall_row = rows[1];
+    let wall_row = rows[0];
     WallLayout {
         wall: Rect::new(
             wall_row.x + (wall_row.width - width) / 2,
@@ -146,7 +145,7 @@ pub(crate) fn layout(board_area: Rect, tile_width: u16) -> WallLayout {
             wall_row.height,
         ),
         tile_width,
-        status: rows[3],
+        status: rows[2],
     }
 }
 

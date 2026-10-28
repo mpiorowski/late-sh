@@ -336,6 +336,49 @@ fn three_wrong_moves_lose_and_show_the_solution() {
     assert_eq!(state.first_unfinished_daily(), None);
 }
 
+/// Pieces start as PNGs and `i` flips them, the way a daily chess board
+/// does; a finished puzzle draws ASCII whatever the choice.
+#[test]
+fn a_finished_puzzle_draws_ascii_pieces_whatever_the_choice() {
+    let mut state = State::new(
+        Uuid::now_v7(),
+        service(),
+        Some(Today {
+            daily: daily(date()),
+            games: Vec::new(),
+        }),
+        Vec::new(),
+    );
+    state.set_puzzle_for_test(Difficulty::Easy, mate_in_two());
+    assert_eq!(
+        (state.piece_render_mode(), state.board_render_mode()),
+        (ChessPieceRenderMode::Graphics, ChessPieceRenderMode::Graphics)
+    );
+    state.toggle_piece_render_mode();
+    assert_eq!(
+        (state.piece_render_mode(), state.board_render_mode()),
+        (ChessPieceRenderMode::Ascii, ChessPieceRenderMode::Ascii)
+    );
+    state.toggle_piece_render_mode();
+
+    for _ in 0..LIVES {
+        state.click(49);
+        state.click(41);
+    }
+    assert_eq!(
+        (
+            state.outcome(),
+            state.piece_render_mode(),
+            state.board_render_mode()
+        ),
+        (
+            Some(Outcome::Lost),
+            ChessPieceRenderMode::Graphics,
+            ChessPieceRenderMode::Ascii
+        )
+    );
+}
+
 /// Saved rows come back as they were left: a mistake keeps its life
 /// spent, a row saved before the opponent's reply gets the reply, a daily
 /// row from another puzzle is ignored, and the personal slot restores. A

@@ -26,7 +26,7 @@ use crate::{
         arcade::daily_load::{DailyLoad, Polled},
         games::chess_core::{
             cursor, rules,
-            types::{ChessColor, ChessPiece},
+            types::{ChessColor, ChessPiece, ChessPieceRenderMode},
         },
     },
     metrics::{ArcadeDifficulty, ArcadeFinish, ArcadeMode},
@@ -235,6 +235,8 @@ pub struct State {
     cursor: usize,
     selected: Option<usize>,
     reset_pending: Option<ResetAction>,
+    /// PNG or ASCII pieces, session only like a daily chess board's.
+    piece_render_mode: ChessPieceRenderMode,
     message: String,
     svc: ChessPuzzleService,
     /// Today's puzzles while the daily boards have none; see `poll_load`.
@@ -278,6 +280,7 @@ impl State {
             cursor: 0,
             selected: None,
             reset_pending: None,
+            piece_render_mode: ChessPieceRenderMode::Graphics,
             message: String::new(),
             svc,
             load: DailyLoad::after_connect(today.is_some()),
@@ -371,6 +374,29 @@ impl State {
 
     pub fn cursor(&self) -> usize {
         self.cursor
+    }
+
+    pub fn piece_render_mode(&self) -> ChessPieceRenderMode {
+        self.piece_render_mode
+    }
+
+    /// The pieces the board draws: the player's choice while the puzzle is
+    /// open, ASCII once it is solved or lost. Daily chess does the same with
+    /// a finished match: image pieces left unrefreshed linger as ghosts on
+    /// protocols with no delete-by-id, and the result overlay sits on top.
+    pub fn board_render_mode(&self) -> ChessPieceRenderMode {
+        match self.outcome() {
+            Some(_) => ChessPieceRenderMode::Ascii,
+            None => self.piece_render_mode,
+        }
+    }
+
+    pub fn toggle_piece_render_mode(&mut self) {
+        self.clear_reset_pending();
+        self.piece_render_mode = match self.piece_render_mode {
+            ChessPieceRenderMode::Graphics => ChessPieceRenderMode::Ascii,
+            ChessPieceRenderMode::Ascii => ChessPieceRenderMode::Graphics,
+        };
     }
 
     pub fn selected(&self) -> Option<usize> {

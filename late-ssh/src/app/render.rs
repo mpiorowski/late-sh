@@ -2582,7 +2582,9 @@ impl App {
                     user_id: ctx.user_id,
                     username: ctx.clubhouse_own_username,
                     show_solvers: ctx.arcade_solvers_open,
+                    image_protocol: ctx.terminal_image_protocol,
                 },
+                terminal_images,
             ),
             Screen::Leaderboard => crate::app::leaderboard::ui::draw(
                 frame,

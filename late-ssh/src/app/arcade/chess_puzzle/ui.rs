@@ -1,8 +1,9 @@
 //! The Chess Puzzle screen: the shared chess board, drawn from the player's
 //! side, with a side panel when the terminal is wide enough for one. Pieces
-//! are always ASCII: the Arcade view carries no terminal-image frame, and
-//! image pieces would linger under the solved overlay. Mouse hit-testing
-//! reads the same layout the frame drew.
+//! draw as PNGs where the terminal shows images and as ASCII otherwise, `i`
+//! toggling (Sliding Puzzle's image key), the way a daily chess board does;
+//! a finished puzzle always draws ASCII (`State::board_render_mode`). Mouse
+//! hit-testing reads the same layout the frame drew.
 
 use ratatui::{
     Frame,
@@ -21,7 +22,7 @@ use crate::app::{
         tip_line,
     },
     common::theme,
-    files::terminal_image::TerminalImageFrame,
+    files::terminal_image::{TerminalImageFrame, TerminalImageProtocol},
     games::chess_core::{
         board_ui::{self, BoardCtx, Tier, pick_tier},
         types::{ChessColor, ChessPieceRenderMode},
@@ -32,6 +33,8 @@ const FULL_CONTROL_HINTS_WIDTH: u16 = 100;
 const PANEL_WIDTH: u16 = 30;
 const PANEL_GAP: u16 = 3;
 const CREDIT: &str = "Puzzles: the Lichess open database (CC0)";
+/// Seeds the piece image ids; one board per session, so one constant.
+const PLACEMENT_SEED: Uuid = Uuid::from_u128(0x6368_6573_735f_7075_7a7a_6c65_0000_0000);
 
 /// Where the board and the side panel go inside the board area.
 #[derive(Clone, Copy)]
@@ -41,10 +44,21 @@ pub(crate) struct Layout {
     pub panel: Option<Rect>,
 }
 
-pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: bool) {
+pub fn draw_game(
+    frame: &mut Frame,
+    area: Rect,
+    state: &State,
+    show_bottom_bar: bool,
+    image_protocol: Option<TerminalImageProtocol>,
+    terminal_images: &mut TerminalImageFrame,
+) {
     let (reward, reward_color) = match state.reward_chips() {
         Some(chips) => (format!("{chips} chips"), theme::AMBER_GLOW()),
         None => ("none".to_string(), theme::TEXT_DIM()),
+    };
+    let pieces = match state.piece_render_mode() {
+        ChessPieceRenderMode::Graphics => "pieces png",
+        ChessPieceRenderMode::Ascii => "pieces ascii",
     };
     let control_hints = if area.width >= FULL_CONTROL_HINTS_WIDTH {
         vec![
@@ -53,6 +67,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("[]", "change diff"),
             ("n/r", "new/restart"),
             ("d/p", "daily/personal"),
+            ("i", pieces),
             ("q", "exit"),
         ]
     } else {
@@ -62,6 +77,7 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
             ("[]", "diff"),
             ("n", "new"),
             ("d/p", "mode"),
+            ("i", pieces),
             ("q", "exit"),
         ]
     };
@@ -110,10 +126,10 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, show_bottom_bar: 
         &state.pieces(),
         &ctx,
         &state.legal_targets(),
-        Uuid::nil(),
-        None,
-        &mut TerminalImageFrame::default(),
-        ChessPieceRenderMode::Ascii,
+        PLACEMENT_SEED,
+        image_protocol,
+        terminal_images,
+        state.board_render_mode(),
         false,
     );
     if let Some(panel) = layout.panel {

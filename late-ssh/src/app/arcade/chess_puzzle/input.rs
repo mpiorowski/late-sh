@@ -13,6 +13,7 @@ pub fn handle_key(state: &mut State, byte: u8) -> bool {
         }
         b'p' | b'P' => state.show_personal(),
         b'd' | b'D' => state.show_daily(),
+        b'i' | b'I' => state.toggle_piece_render_mode(),
         b'[' => state.prev_difficulty(),
         b']' => state.next_difficulty(),
         b'r' | b'R' | b'0' => {
