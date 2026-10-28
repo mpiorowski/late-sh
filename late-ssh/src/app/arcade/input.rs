@@ -167,6 +167,27 @@ fn handle_puzzle_key(app: &mut App, puzzle: DailyPuzzle, byte: u8) -> bool {
             }
             super::chess_puzzle::input::handle_key(&mut app.chess_puzzle_state, byte)
         }
+        DailyPuzzle::WordWheel => {
+            if byte == b'?' {
+                app.word_wheel_state.close_rules();
+                open_global_help(app);
+                return true;
+            }
+            // Word Wheel types letters, `q` among them, so only `Esc`
+            // leaves, as in Le Word.
+            if byte == 0x1B && !app.word_wheel_state.show_rules() {
+                app.is_playing_game = false;
+                return true;
+            }
+            super::word_wheel::input::handle_key(&mut app.word_wheel_state, byte)
+        }
+        DailyPuzzle::Quartets => {
+            if closes_board(byte) && !app.quartets_state.show_rules() {
+                app.is_playing_game = false;
+                return true;
+            }
+            super::quartets::input::handle_key(&mut app.quartets_state, byte)
+        }
     }
 }
 
@@ -229,7 +250,9 @@ fn launch_selected(app: &mut App) {
             | DailyPuzzle::Minesweeper
             | DailyPuzzle::Solitaire
             | DailyPuzzle::Netwalk
-            | DailyPuzzle::ChessPuzzle => {}
+            | DailyPuzzle::ChessPuzzle
+            | DailyPuzzle::WordWheel
+            | DailyPuzzle::Quartets => {}
         }
     }
     app.is_playing_game = true;
@@ -276,6 +299,8 @@ fn daily_share(app: &App, puzzle: DailyPuzzle) -> Option<ShareCard> {
         DailyPuzzle::Solitaire => super::solitaire::share::from_state(&app.solitaire_state),
         DailyPuzzle::Netwalk => super::netwalk::share::from_state(&app.netwalk_state),
         DailyPuzzle::ChessPuzzle => super::chess_puzzle::share::from_state(&app.chess_puzzle_state),
+        DailyPuzzle::WordWheel => super::word_wheel::share::from_state(&app.word_wheel_state),
+        DailyPuzzle::Quartets => super::quartets::share::from_state(&app.quartets_state),
     }
 }
 
@@ -356,6 +381,10 @@ fn handle_puzzle_arrow(app: &mut App, puzzle: DailyPuzzle, key: u8) -> bool {
         DailyPuzzle::ChessPuzzle => {
             super::chess_puzzle::input::handle_arrow(&mut app.chess_puzzle_state, key)
         }
+        DailyPuzzle::WordWheel => {
+            super::word_wheel::input::handle_arrow(&mut app.word_wheel_state, key)
+        }
+        DailyPuzzle::Quartets => super::quartets::input::handle_arrow(&mut app.quartets_state, key),
     }
 }
 
@@ -394,6 +423,12 @@ pub(crate) fn handle_event(app: &mut App, event: &crate::app::input::ParsedInput
         }
         ArcadeGame::Puzzle(DailyPuzzle::ChessPuzzle) => {
             super::chess_puzzle::input::handle_mouse(&mut app.chess_puzzle_state, area, *mouse)
+        }
+        ArcadeGame::Puzzle(DailyPuzzle::WordWheel) => {
+            super::word_wheel::input::handle_mouse(&mut app.word_wheel_state, area, *mouse)
+        }
+        ArcadeGame::Puzzle(DailyPuzzle::Quartets) => {
+            super::quartets::input::handle_mouse(&mut app.quartets_state, area, *mouse)
         }
         ArcadeGame::Puzzle(
             DailyPuzzle::RubiksCube | DailyPuzzle::Sudoku | DailyPuzzle::Nonogram,

@@ -11,14 +11,17 @@ use crate::app::state::App;
 /// The stop for the active Arcade board, but only when that board is a daily
 /// in progress. Personal/practice boards return `None` so backtick never
 /// treats them as their game's daily stop (personal boards never join the
-/// cycle). Le Word and Rubik's Cube are daily-only; Sliding Puzzle exposes a
-/// separate personal mode.
+/// cycle). Le Word, Rubik's Cube, Word Wheel and Quartets are daily-only;
+/// Sliding Puzzle exposes a separate personal mode.
 pub(crate) fn active_daily_stop(app: &App) -> Option<DailyPuzzle> {
     let ArcadeGame::Puzzle(puzzle) = app.game_selection else {
         return None;
     };
     let is_daily = match puzzle {
-        DailyPuzzle::LeWord | DailyPuzzle::RubiksCube => true,
+        DailyPuzzle::LeWord
+        | DailyPuzzle::RubiksCube
+        | DailyPuzzle::WordWheel
+        | DailyPuzzle::Quartets => true,
         DailyPuzzle::SlidingPuzzle => app.sliding_puzzle_state.is_daily_active(),
         DailyPuzzle::Sudoku => app.sudoku_state.is_daily_active(),
         DailyPuzzle::Nonogram => app.nonogram_state.is_daily_active(),
@@ -50,6 +53,8 @@ fn has_unfinished_daily(app: &App, puzzle: DailyPuzzle) -> bool {
         DailyPuzzle::Solitaire => app.solitaire_state.first_unfinished_daily().is_some(),
         DailyPuzzle::Netwalk => app.netwalk_state.has_unfinished_daily(),
         DailyPuzzle::ChessPuzzle => app.chess_puzzle_state.has_unfinished_daily(),
+        DailyPuzzle::WordWheel => app.word_wheel_state.has_unfinished_daily(),
+        DailyPuzzle::Quartets => app.quartets_state.has_unfinished_daily(),
     }
 }
 
@@ -95,6 +100,7 @@ pub(crate) fn open_stop(app: &mut App, puzzle: DailyPuzzle) {
             let index = app.chess_puzzle_state.first_unfinished_daily().unwrap_or(0);
             app.chess_puzzle_state.open_daily(index);
         }
+        DailyPuzzle::WordWheel | DailyPuzzle::Quartets => {}
     }
     app.game_selection = ArcadeGame::Puzzle(puzzle);
     app.is_playing_game = true;

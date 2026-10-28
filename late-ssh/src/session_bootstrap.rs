@@ -51,6 +51,10 @@ pub struct ArcadeSessionPreloads {
     pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
     pub initial_netwalk_games: Vec<late_core::models::netwalk::Game>,
     pub initial_chess_puzzle_games: Vec<late_core::models::chess_puzzle::Game>,
+    pub initial_word_wheel_daily: Option<crate::app::arcade::word_wheel::svc::Daily>,
+    pub initial_word_wheel_game: Option<late_core::models::word_wheel::Game>,
+    pub initial_quartets_daily: Option<crate::app::arcade::quartets::svc::Daily>,
+    pub initial_quartets_game: Option<late_core::models::quartets::Game>,
 }
 
 pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> ArcadeSessionPreloads {
@@ -67,6 +71,8 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
     let minesweeper_service = state.minesweeper_service.clone();
     let netwalk_service = state.netwalk_service.clone();
     let chess_puzzle_service = state.chess_puzzle_service.clone();
+    let word_wheel_service = state.word_wheel_service.clone();
+    let quartets_service = state.quartets_service.clone();
 
     let (
         initial_2048_game,
@@ -87,6 +93,8 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
         initial_minesweeper_games,
         initial_netwalk_games,
         initial_chess_puzzle_games,
+        initial_word_wheel,
+        initial_quartets,
     ) = tokio::join!(
         async {
             match twenty_forty_eight_service.load_game(user_id).await {
@@ -251,7 +259,48 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
                 }
             }
         },
+        async {
+            // The game is read for the claimed wheel's own date, so a
+            // session opened across midnight never pairs a wheel with
+            // another day's words.
+            let daily = match word_wheel_service.ensure_daily_wheel().await {
+                Ok(daily) => daily,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load the word wheel daily wheel");
+                    return (None, None);
+                }
+            };
+            match word_wheel_service
+                .load_game(user_id, daily.puzzle_date)
+                .await
+            {
+                Ok(game) => (Some(daily), game),
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load word wheel game state");
+                    (Some(daily), None)
+                }
+            }
+        },
+        async {
+            // Read for the claimed wall's own date, as Word Wheel's game is.
+            let daily = match quartets_service.ensure_daily_wall().await {
+                Ok(daily) => daily,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load the quartets daily wall");
+                    return (None, None);
+                }
+            };
+            match quartets_service.load_game(user_id, daily.puzzle_date).await {
+                Ok(game) => (Some(daily), game),
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load quartets game state");
+                    (Some(daily), None)
+                }
+            }
+        },
     );
+    let (initial_word_wheel_daily, initial_word_wheel_game) = initial_word_wheel;
+    let (initial_quartets_daily, initial_quartets_game) = initial_quartets;
 
     ArcadeSessionPreloads {
         initial_2048_game,
@@ -272,6 +321,10 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
         initial_minesweeper_games,
         initial_netwalk_games,
         initial_chess_puzzle_games,
+        initial_word_wheel_daily,
+        initial_word_wheel_game,
+        initial_quartets_daily,
+        initial_quartets_game,
     }
 }
 
@@ -384,6 +437,10 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_minesweeper_games,
         initial_netwalk_games,
         initial_chess_puzzle_games,
+        initial_word_wheel_daily,
+        initial_word_wheel_game,
+        initial_quartets_daily,
+        initial_quartets_game,
     } = load_arcade_session_preloads(state, user_id).await;
     let initial_bonsai_tree = match state.bonsai_service.ensure_tree(user_id).await {
         Ok(tree) => Some(tree),
@@ -508,6 +565,12 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_netwalk_games,
         chess_puzzle_service: state.chess_puzzle_service.clone(),
         initial_chess_puzzle_games,
+        word_wheel_service: state.word_wheel_service.clone(),
+        initial_word_wheel_daily,
+        initial_word_wheel_game,
+        quartets_service: state.quartets_service.clone(),
+        initial_quartets_daily,
+        initial_quartets_game,
         initial_tetris_game,
         initial_snake_game,
         initial_tetris_high_score,

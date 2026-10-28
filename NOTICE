@@ -409,3 +409,26 @@ MPL-2.0 compliance notes:
   - MPL §2.3 grants no trademark rights. "A Dark Room" is Michael Townsend's;
     the name is used here to credit the original, and the paid iOS, Android and
     Steam versions are separate products we have no rights in.
+
+
+SCOWL (Spell Checker Oriented Word Lists)
+-----------------------------------------
+
+The Word Wheel pack (late-ssh/assets/word_wheel/wheels.json) is derived from
+SCOWL: its answer lists are the American English words up to size 60, less a
+blocklist, cut into seven-letter wheels by late-core/src/bin/gen_word_wheel.rs.
+The word lists themselves are not bundled.
+
+  Program:    SCOWL, release 2020.12.07
+  License:    The SCOWL copyright and permission notice, a permissive license
+              (use, copy, modify, distribute and sell, provided the notice is
+              kept), with the notices of the sources it was compiled from
+  Copyright:  Copyright 2000-2018 by Kevin Atkinson, and the holders named in
+              the notice
+  Upstream:   http://wordlist.aspell.net/
+              https://sourceforge.net/projects/wordlist/files/SCOWL/2020.12.07/
+  Installed:  Not installed. Only the derived pack ships, with SCOWL's full
+              notice beside it as late-ssh/assets/word_wheel/SCOWL-COPYRIGHT.
+  Modified:   Yes. Words with capitals, apostrophes, non-ASCII letters or an
+              "s" are dropped, as are words shorter than four letters and the
+              slurs and vulgar words listed in the generator.

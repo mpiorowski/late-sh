@@ -6,6 +6,7 @@ use crate::app::arcade::minesweeper::svc::MinesweeperService;
 use crate::app::arcade::netwalk::svc::NetwalkService;
 use crate::app::arcade::nonogram::state::Library as NonogramLibrary;
 use crate::app::arcade::nonogram::svc::NonogramService;
+use crate::app::arcade::quartets::svc::QuartetsService;
 use crate::app::arcade::rubiks_cube::svc::RubiksCubeService;
 use crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleService;
 use crate::app::arcade::snake::svc::SnakeService;
@@ -14,6 +15,7 @@ use crate::app::arcade::sudoku::svc::SudokuService;
 use crate::app::arcade::tetris::svc::LaterisService;
 use crate::app::arcade::traffic::svc::TrafficService;
 use crate::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService;
+use crate::app::arcade::word_wheel::svc::WordWheelService;
 use crate::app::artboard::provenance::SharedArtboardProvenance;
 use crate::app::audio::svc::AudioService;
 use crate::app::bonsai::svc::BonsaiService;
@@ -138,6 +140,8 @@ pub struct State {
     pub sliding_puzzle_service: SlidingPuzzleService,
     pub netwalk_service: NetwalkService,
     pub chess_puzzle_service: ChessPuzzleService,
+    pub word_wheel_service: WordWheelService,
+    pub quartets_service: QuartetsService,
     pub le_word_service: LeWordService,
     pub sudoku_service: SudokuService,
     pub nonogram_service: NonogramService,

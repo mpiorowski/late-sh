@@ -34,12 +34,14 @@ pub(crate) fn daily_available(
         | DailyPuzzle::Minesweeper
         | DailyPuzzle::Solitaire
         | DailyPuzzle::Netwalk
-        | DailyPuzzle::ChessPuzzle => true,
+        | DailyPuzzle::ChessPuzzle
+        | DailyPuzzle::WordWheel
+        | DailyPuzzle::Quartets => true,
     }
 }
 
 /// The chips one daily win pays on a puzzle with one board a day (Le Word,
-/// Rubik's Cube), from its tier, for the game's own reward copy.
+/// Rubik's Cube, Quartets), from its tier, for the game's own reward copy.
 pub fn single_board_chips(puzzle: DailyPuzzle) -> i64 {
     match puzzle.tiers() {
         Tiers::Single(tier) => tier.chips(),
@@ -286,6 +288,8 @@ pub struct ArcadeHubView<'a> {
     pub minesweeper_state: &'a super::minesweeper::state::State,
     pub netwalk_state: &'a super::netwalk::state::State,
     pub chess_puzzle_state: &'a super::chess_puzzle::state::State,
+    pub word_wheel_state: &'a super::word_wheel::state::State,
+    pub quartets_state: &'a super::quartets::state::State,
     pub daily_completion: Option<&'a DailyCompletionStatus>,
     /// Dailies this session banked today, ahead of the snapshot above.
     pub session_daily_completion: Option<&'a DailyCompletionStatus>,
@@ -410,6 +414,12 @@ fn draw_puzzle(
             view.chess_puzzle_state,
             show_bottom_bar,
         ),
+        DailyPuzzle::WordWheel => {
+            super::word_wheel::ui::draw_game(frame, area, view.word_wheel_state, show_bottom_bar)
+        }
+        DailyPuzzle::Quartets => {
+            super::quartets::ui::draw_game(frame, area, view.quartets_state, show_bottom_bar)
+        }
     }
 }
 
@@ -724,6 +734,10 @@ fn lobby_card(view: &ArcadeHubView<'_>, puzzle: DailyPuzzle) -> DailyRow {
         DailyPuzzle::Solitaire => "Klondike with daily and personal deals over SSH.",
         DailyPuzzle::Netwalk => "Turn the tiles until one network lights every one.",
         DailyPuzzle::ChessPuzzle => "Find the winning moves of a real game. Three lives.",
+        DailyPuzzle::WordWheel => {
+            "Spell words from a wheel of seven letters. Bronze, Silver, Gold."
+        }
+        DailyPuzzle::Quartets => "Sort sixteen words into four quartets. Three strikes.",
     };
     DailyRow {
         description,

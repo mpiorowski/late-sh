@@ -16,8 +16,8 @@ use crate::{
         },
         minesweeper,
         mud_character::MudCharacter,
-        netwalk, nonogram, rubiks_cube, sliding_puzzle, snake, solitaire, sudoku, tetris,
-        twenty_forty_eight,
+        netwalk, nonogram, quartets, rubiks_cube, sliding_puzzle, snake, solitaire, sudoku, tetris,
+        twenty_forty_eight, word_wheel,
     },
     test_utils::{
         create_test_user, roll_high_scores_back_a_month, roll_score_events_back_a_month, test_db,
@@ -268,6 +268,8 @@ fn points_sql_follows_each_puzzles_tiers() {
             ),
             (DailyPuzzle::Netwalk, three.to_string()),
             (DailyPuzzle::ChessPuzzle, three.to_string()),
+            (DailyPuzzle::WordWheel, three.to_string()),
+            (DailyPuzzle::Quartets, "3".to_string()),
         ]
     );
 }
@@ -328,6 +330,16 @@ async fn record_daily_win(
             chess_puzzle::DailyWin::record_win(client, user_id, tier, day, 1)
                 .await
                 .expect("chess puzzle win");
+        }
+        DailyPuzzle::WordWheel => {
+            word_wheel::DailyWin::record_win(client, user_id, tier, day, 40)
+                .await
+                .expect("word wheel win");
+        }
+        DailyPuzzle::Quartets => {
+            quartets::DailyWin::record_win(client, user_id, day, 1)
+                .await
+                .expect("quartets win");
         }
     }
 }

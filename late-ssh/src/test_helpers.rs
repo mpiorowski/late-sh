@@ -9,6 +9,7 @@ use crate::app::arcade::minesweeper::svc::MinesweeperService;
 use crate::app::arcade::netwalk::svc::NetwalkService;
 use crate::app::arcade::nonogram::state::Library as NonogramLibrary;
 use crate::app::arcade::nonogram::svc::NonogramService;
+use crate::app::arcade::quartets::svc::QuartetsService;
 use crate::app::arcade::rubiks_cube::svc::RubiksCubeService;
 use crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleService;
 use crate::app::arcade::snake::svc::SnakeService;
@@ -17,6 +18,7 @@ use crate::app::arcade::sudoku::svc::SudokuService;
 use crate::app::arcade::tetris::svc::LaterisService;
 use crate::app::arcade::traffic::svc::TrafficService;
 use crate::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService;
+use crate::app::arcade::word_wheel::svc::WordWheelService;
 use crate::app::artboard::provenance::ArtboardProvenance;
 use crate::app::bonsai::svc::BonsaiService;
 use crate::app::chat::news::svc::ArticleService;
@@ -304,6 +306,8 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let sliding_puzzle_service = SlidingPuzzleService::new(db.clone(), activity_tx.clone());
     let netwalk_service = NetwalkService::new(db.clone(), activity_tx.clone());
     let chess_puzzle_service = ChessPuzzleService::new(db.clone(), activity_tx.clone());
+    let word_wheel_service = WordWheelService::new(db.clone(), activity_tx.clone());
+    let quartets_service = QuartetsService::new(db.clone(), activity_tx.clone());
     let chip_service = ChipService::new(db.clone());
     let activity_publisher = ActivityPublisher::new(db.clone(), activity_tx.clone());
     let sudoku_service = SudokuService::new(db.clone(), activity_tx.clone());
@@ -382,6 +386,8 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         sliding_puzzle_service,
         netwalk_service,
         chess_puzzle_service,
+        word_wheel_service,
+        quartets_service,
         sudoku_service,
         nonogram_service,
         solitaire_service,
@@ -611,6 +617,12 @@ fn make_app_with_chat_service_and_permissions(
         initial_netwalk_games: Vec::new(),
         chess_puzzle_service: ChessPuzzleService::new(db.clone(), activity_tx.clone()),
         initial_chess_puzzle_games: Vec::new(),
+        word_wheel_service: WordWheelService::new(db.clone(), activity_tx.clone()),
+        initial_word_wheel_daily: None,
+        initial_word_wheel_game: None,
+        quartets_service: QuartetsService::new(db.clone(), activity_tx.clone()),
+        initial_quartets_daily: None,
+        initial_quartets_game: None,
         initial_le_word_daily_word: None,
         initial_le_word_game: None,
         sudoku_service: SudokuService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
@@ -908,6 +920,12 @@ pub fn make_app_with_paired_client(
         initial_netwalk_games: Vec::new(),
         chess_puzzle_service: ChessPuzzleService::new(db.clone(), activity_tx.clone()),
         initial_chess_puzzle_games: Vec::new(),
+        word_wheel_service: WordWheelService::new(db.clone(), activity_tx.clone()),
+        initial_word_wheel_daily: None,
+        initial_word_wheel_game: None,
+        quartets_service: QuartetsService::new(db.clone(), activity_tx.clone()),
+        initial_quartets_daily: None,
+        initial_quartets_game: None,
         initial_le_word_daily_word: None,
         initial_le_word_game: None,
         sudoku_service: SudokuService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),

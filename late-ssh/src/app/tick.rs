@@ -355,6 +355,8 @@ impl App {
             .set_translate_settings(translate_to, auto_translate);
         changed |= self.sudoku_state.poll_daily_generation();
         changed |= self.le_word_state.poll_word_reload();
+        changed |= self.word_wheel_state.poll_reload();
+        changed |= self.quartets_state.poll_reload();
         let settings_tick = self.settings_modal_state.tick();
         changed |= settings_tick.changed;
         if let Some(b) = settings_tick.banner {
@@ -527,7 +529,9 @@ impl App {
                     | DailyPuzzle::Sudoku
                     | DailyPuzzle::Nonogram
                     | DailyPuzzle::Minesweeper
-                    | DailyPuzzle::Netwalk,
+                    | DailyPuzzle::Netwalk
+                    | DailyPuzzle::WordWheel
+                    | DailyPuzzle::Quartets,
                 ) => {}
             }
         }

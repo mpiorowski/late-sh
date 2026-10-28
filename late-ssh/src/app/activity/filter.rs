@@ -55,6 +55,8 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
             | ActivityGame::Blackjack
             | ActivityGame::Chess
             | ActivityGame::ChessPuzzle
+            | ActivityGame::WordWheel
+            | ActivityGame::Quartets
             | ActivityGame::LeWord
             | ActivityGame::Minesweeper
             | ActivityGame::Netwalk
@@ -103,6 +105,8 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
             // finishes, not high-volume grind — a small "someone beat today's
             // puzzle" story worth sharing.
             ActivityGame::ChessPuzzle
+            | ActivityGame::WordWheel
+            | ActivityGame::Quartets
             | ActivityGame::LeWord
             | ActivityGame::Minesweeper
             | ActivityGame::Netwalk

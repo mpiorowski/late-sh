@@ -26,6 +26,9 @@ pub mod telemetry;
 pub mod vocab;
 #[cfg(test)]
 mod vocab_test;
+pub mod word_wheel;
+#[cfg(test)]
+mod word_wheel_test;
 
 #[cfg(feature = "testing")]
 pub mod test_utils;

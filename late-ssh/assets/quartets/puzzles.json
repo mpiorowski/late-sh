@@ -1,0 +1,542 @@
+[
+  {
+    "id": 1,
+    "quartets": [
+      { "link": "Have keys", "words": ["piano", "lock", "map", "keyboard"] },
+      { "link": "Have shells", "words": ["egg", "snail", "taco", "oyster"] },
+      { "link": "Have needles", "words": ["pine", "compass", "cactus", "syringe"] },
+      { "link": "Bark", "words": ["dog", "oak", "birch", "seal"] }
+    ]
+  },
+  {
+    "id": 2,
+    "quartets": [
+      { "link": "Card games", "words": ["snap", "rummy", "poker", "whist"] },
+      { "link": "Dental work", "words": ["crown", "bridge", "filling", "brace"] },
+      { "link": "___ball", "words": ["snow", "foot", "eye", "meat"] },
+      { "link": "Weather", "words": ["rain", "hail", "sleet", "fog"] }
+    ]
+  },
+  {
+    "id": 3,
+    "quartets": [
+      { "link": "Shades of red", "words": ["crimson", "scarlet", "cherry", "brick"] },
+      { "link": "Gemstones", "words": ["opal", "jade", "pearl", "ruby"] },
+      { "link": "Programming languages", "words": ["rust", "go", "swift", "perl"] },
+      { "link": "___cake", "words": ["cup", "pan", "cheese", "sponge"] }
+    ]
+  },
+  {
+    "id": 4,
+    "quartets": [
+      { "link": "Greek letters", "words": ["alpha", "beta", "pi", "sigma"] },
+      { "link": "Parts of a river", "words": ["delta", "mouth", "source", "bend"] },
+      { "link": "Keep money in it", "words": ["bank", "safe", "vault", "wallet"] },
+      { "link": "Have rings", "words": ["saturn", "tree", "circus", "onion"] }
+    ]
+  },
+  {
+    "id": 5,
+    "quartets": [
+      { "link": "Breakfast", "words": ["bacon", "cereal", "waffle", "porridge"] },
+      { "link": "Raise a ___", "words": ["toast", "bar", "eyebrow", "alarm"] },
+      { "link": "Trees", "words": ["oak", "elm", "ash", "yew"] },
+      { "link": "Fencing", "words": ["foil", "epee", "sabre", "lunge"] }
+    ]
+  },
+  {
+    "id": 6,
+    "quartets": [
+      { "link": "Fictional detectives", "words": ["holmes", "poirot", "marple", "columbo"] },
+      { "link": "___ code", "words": ["morse", "zip", "area", "dress"] },
+      { "link": "Have teeth", "words": ["comb", "saw", "gear", "shark"] },
+      { "link": "Board games", "words": ["chess", "ludo", "risk", "cluedo"] }
+    ]
+  },
+  {
+    "id": 7,
+    "quartets": [
+      { "link": "Hide a number", "words": ["often", "phone", "weight", "canine"] },
+      { "link": "Dog breeds", "words": ["poodle", "beagle", "pug", "collie"] },
+      { "link": "Sportspeople", "words": ["boxer", "skater", "diver", "jockey"] },
+      { "link": "Start with a vehicle", "words": ["carpet", "vanish", "cabin", "bushel"] }
+    ]
+  },
+  {
+    "id": 8,
+    "quartets": [
+      { "link": "Poker moves", "words": ["fold", "call", "bluff", "raise"] },
+      { "link": "Chess terms", "words": ["castle", "pin", "mate", "check"] },
+      { "link": "Kitchen utensils", "words": ["fork", "knife", "spoon", "ladle"] },
+      { "link": "Friends", "words": ["pal", "chum", "buddy", "crony"] }
+    ]
+  },
+  {
+    "id": 9,
+    "quartets": [
+      { "link": "Units of length", "words": ["inch", "mile", "league", "foot"] },
+      { "link": "Body parts", "words": ["arm", "shin", "hip", "knee"] },
+      { "link": "Places for ships", "words": ["dock", "wharf", "yard", "marina"] },
+      { "link": "Fortified wines", "words": ["port", "sherry", "madeira", "marsala"] }
+    ]
+  },
+  {
+    "id": 10,
+    "quartets": [
+      { "link": "Unix commands", "words": ["grep", "awk", "touch", "tail"] },
+      { "link": "Senses", "words": ["sight", "smell", "taste", "hearing"] },
+      { "link": "Things you fly", "words": ["kite", "flag", "plane", "drone"] },
+      { "link": "Have tails", "words": ["comet", "coin", "tadpole", "monkey"] }
+    ]
+  },
+  {
+    "id": 11,
+    "quartets": [
+      { "link": "Git commands", "words": ["commit", "rebase", "stash", "merge"] },
+      { "link": "Dog commands", "words": ["sit", "stay", "heel", "fetch"] },
+      { "link": "Freshwater fish", "words": ["pike", "carp", "perch", "trout"] },
+      { "link": "Copies", "words": ["clone", "twin", "replica", "duplicate"] }
+    ]
+  },
+  {
+    "id": 12,
+    "quartets": [
+      { "link": "HTTP methods", "words": ["get", "put", "delete", "patch"] },
+      { "link": "Mail", "words": ["letter", "parcel", "stamp", "post"] },
+      { "link": "Mend", "words": ["darn", "fix", "sew", "repair"] },
+      { "link": "Golf scores", "words": ["eagle", "birdie", "bogey", "par"] }
+    ]
+  },
+  {
+    "id": 13,
+    "quartets": [
+      { "link": "Palindromes", "words": ["radar", "civic", "rotor", "refer"] },
+      { "link": "Boats", "words": ["kayak", "canoe", "yacht", "barge"] },
+      { "link": "Times of day", "words": ["noon", "dawn", "dusk", "midnight"] },
+      { "link": "Have blades", "words": ["fan", "skate", "knife", "propeller"] }
+    ]
+  },
+  {
+    "id": 14,
+    "quartets": [
+      { "link": "Sound like letters", "words": ["bee", "sea", "why", "queue"] },
+      { "link": "Birds", "words": ["jay", "wren", "crow", "robin"] },
+      { "link": "Drinks", "words": ["tea", "milk", "juice", "cocoa"] },
+      { "link": "Vegetables", "words": ["pea", "leek", "kale", "bean"] }
+    ]
+  },
+  {
+    "id": 15,
+    "quartets": [
+      { "link": "Fire___", "words": ["place", "work", "arm", "wall"] },
+      { "link": "Insects", "words": ["ant", "wasp", "moth", "fly"] },
+      { "link": "Body parts", "words": ["leg", "hip", "chin", "knee"] },
+      { "link": "Shades of blue", "words": ["navy", "teal", "azure", "cobalt"] }
+    ]
+  },
+  {
+    "id": 16,
+    "quartets": [
+      { "link": "Currencies", "words": ["euro", "peso", "rand", "rupee"] },
+      { "link": "Weights", "words": ["ounce", "stone", "gram", "ton"] },
+      { "link": "Desire", "words": ["yen", "craving", "longing", "urge"] },
+      { "link": "Past tenses", "words": ["won", "ran", "ate", "sang"] }
+    ]
+  },
+  {
+    "id": 17,
+    "quartets": [
+      { "link": "Draw a ___", "words": ["bath", "breath", "blank", "sword"] },
+      { "link": "Weapons", "words": ["spear", "axe", "mace", "club"] },
+      { "link": "Have strings", "words": ["guitar", "puppet", "harp", "bow"] },
+      { "link": "Golf kit", "words": ["tee", "iron", "wood", "putter"] }
+    ]
+  },
+  {
+    "id": 18,
+    "quartets": [
+      { "link": "Cold ___", "words": ["feet", "war", "snap", "case"] },
+      { "link": "Countries", "words": ["turkey", "chad", "jordan", "peru"] },
+      { "link": "Card games", "words": ["rummy", "whist", "bridge", "canasta"] },
+      { "link": "Cuts of lamb", "words": ["leg", "rack", "loin", "shank"] }
+    ]
+  },
+  {
+    "id": 19,
+    "quartets": [
+      { "link": "Text editors", "words": ["vim", "emacs", "helix", "nano"] },
+      { "link": "Small prefixes", "words": ["micro", "pico", "femto", "mini"] },
+      { "link": "Energy", "words": ["zest", "pep", "verve", "gusto"] },
+      { "link": "Twists", "words": ["coil", "swirl", "whorl", "spiral"] }
+    ]
+  },
+  {
+    "id": 20,
+    "quartets": [
+      { "link": "Shakespeare plays", "words": ["macbeth", "othello", "cymbeline", "tempest"] },
+      { "link": "Settlements", "words": ["village", "town", "city", "hamlet"] },
+      { "link": "Storms", "words": ["gale", "squall", "typhoon", "cyclone"] },
+      { "link": "Board games", "words": ["chess", "ludo", "risk", "draughts"] }
+    ]
+  },
+  {
+    "id": 21,
+    "quartets": [
+      { "link": "Have scales", "words": ["fish", "map", "snake", "kettle"] },
+      { "link": "Keyboard instruments", "words": ["piano", "organ", "harpsichord", "accordion"] },
+      { "link": "Organs", "words": ["heart", "liver", "lung", "kidney"] },
+      { "link": "Shades of green", "words": ["lime", "olive", "mint", "sage"] }
+    ]
+  },
+  {
+    "id": 22,
+    "quartets": [
+      { "link": "Unix shells", "words": ["bash", "zsh", "fish", "dash"] },
+      { "link": "Parties", "words": ["rave", "gala", "ball", "soiree"] },
+      { "link": "Small amounts", "words": ["pinch", "drop", "dab", "splash"] },
+      { "link": "Have fins", "words": ["shark", "dolphin", "surfboard", "rocket"] }
+    ]
+  },
+  {
+    "id": 23,
+    "quartets": [
+      { "link": "___board", "words": ["key", "clip", "card", "cup"] },
+      { "link": "Have handles", "words": ["door", "pan", "mug", "suitcase"] },
+      { "link": "Flipped", "words": ["coin", "pancake", "burger", "omelette"] },
+      { "link": "Paper ___", "words": ["plane", "weight", "towel", "trail"] }
+    ]
+  },
+  {
+    "id": 24,
+    "quartets": [
+      { "link": "NATO alphabet", "words": ["hotel", "kilo", "oscar", "sierra"] },
+      { "link": "Dances", "words": ["waltz", "salsa", "rumba", "tango"] },
+      { "link": "Capitals", "words": ["lima", "quito", "oslo", "rome"] },
+      { "link": "Sports", "words": ["golf", "polo", "judo", "rugby"] }
+    ]
+  },
+  {
+    "id": 25,
+    "quartets": [
+      { "link": "Hide a body part", "words": ["machine", "harmony", "tulip", "legend"] },
+      { "link": "Flowers", "words": ["rose", "daisy", "iris", "lily"] },
+      { "link": "Vegetables", "words": ["potato", "carrot", "onion", "leek"] },
+      { "link": "Stories", "words": ["myth", "fable", "saga", "tale"] }
+    ]
+  },
+  {
+    "id": 26,
+    "quartets": [
+      { "link": "Moons", "words": ["io", "europa", "phobos", "titan"] },
+      { "link": "Huge", "words": ["giant", "colossal", "jumbo", "mammoth"] },
+      { "link": "Extinct", "words": ["dodo", "moa", "mastodon", "trilobite"] },
+      { "link": "Shades of purple", "words": ["lilac", "mauve", "violet", "plum"] }
+    ]
+  },
+  {
+    "id": 27,
+    "quartets": [
+      { "link": "Car parts", "words": ["clutch", "gear", "boot", "bonnet"] },
+      { "link": "Footwear", "words": ["sandal", "slipper", "clog", "mule"] },
+      { "link": "Headwear", "words": ["cap", "beret", "fedora", "turban"] },
+      { "link": "Bags", "words": ["tote", "satchel", "purse", "pouch"] }
+    ]
+  },
+  {
+    "id": 28,
+    "quartets": [
+      { "link": "Coffee", "words": ["latte", "mocha", "cortado", "espresso"] },
+      { "link": "Indonesian islands", "words": ["bali", "sumatra", "borneo", "lombok"] },
+      { "link": "Programming languages", "words": ["java", "python", "kotlin", "scala"] },
+      { "link": "Snakes", "words": ["cobra", "viper", "mamba", "adder"] }
+    ]
+  },
+  {
+    "id": 29,
+    "quartets": [
+      { "link": "Cook", "words": ["bake", "fry", "boil", "steam"] },
+      { "link": "Interrogate", "words": ["quiz", "question", "probe", "grill"] },
+      { "link": "Run down", "words": ["slam", "pan", "knock", "roast"] },
+      { "link": "Steal", "words": ["nick", "pinch", "swipe", "poach"] }
+    ]
+  },
+  {
+    "id": 30,
+    "quartets": [
+      { "link": "___light", "words": ["spot", "flood", "high", "head"] },
+      { "link": "Citrus", "words": ["lemon", "orange", "yuzu", "lime"] },
+      { "link": "Parts of a ship", "words": ["bow", "stern", "hull", "keel"] },
+      { "link": "Tennis terms", "words": ["ace", "let", "deuce", "love"] }
+    ]
+  },
+  {
+    "id": 31,
+    "quartets": [
+      { "link": "Linux distros", "words": ["debian", "ubuntu", "gentoo", "nixos"] },
+      { "link": "Hats", "words": ["beret", "trilby", "bowler", "fedora"] },
+      { "link": "Herbs", "words": ["basil", "sage", "thyme", "mint"] },
+      { "link": "Architecture", "words": ["dome", "column", "spire", "arch"] }
+    ]
+  },
+  {
+    "id": 32,
+    "quartets": [
+      { "link": "Metals", "words": ["tin", "copper", "zinc", "nickel"] },
+      { "link": "Golf clubs", "words": ["wood", "putter", "wedge", "iron"] },
+      { "link": "Dog gear", "words": ["collar", "harness", "muzzle", "lead"] },
+      { "link": "Coins", "words": ["penny", "dime", "quarter", "cent"] }
+    ]
+  },
+  {
+    "id": 33,
+    "quartets": [
+      { "link": "Add S to the front", "words": ["nail", "word", "mile", "tar"] },
+      { "link": "Distances", "words": ["yard", "furlong", "league", "parsec"] },
+      { "link": "Road surfaces", "words": ["asphalt", "gravel", "concrete", "cobble"] },
+      { "link": "Fixings", "words": ["screw", "bolt", "rivet", "staple"] }
+    ]
+  },
+  {
+    "id": 34,
+    "quartets": [
+      { "link": "Non-zodiac constellations", "words": ["orion", "lyra", "cygnus", "draco"] },
+      { "link": "Star signs", "words": ["leo", "aries", "virgo", "libra"] },
+      { "link": "Mythical beasts", "words": ["hydra", "phoenix", "griffin", "unicorn"] },
+      { "link": "European rivers", "words": ["rhine", "danube", "loire", "volga"] }
+    ]
+  },
+  {
+    "id": 35,
+    "quartets": [
+      { "link": "Keyboard keys", "words": ["tab", "enter", "delete", "escape"] },
+      { "link": "Work periods", "words": ["stint", "spell", "term", "shift"] },
+      { "link": "Run away", "words": ["flee", "bolt", "scarper", "abscond"] },
+      { "link": "Get rid of", "words": ["erase", "remove", "scrap", "purge"] }
+    ]
+  },
+  {
+    "id": 36,
+    "quartets": [
+      { "link": "___ cream", "words": ["sun", "sour", "shaving", "clotted"] },
+      { "link": "Frozen water", "words": ["ice", "snow", "frost", "hail"] },
+      { "link": "Tastes", "words": ["sweet", "bitter", "salty", "umami"] },
+      { "link": "Short for weekdays", "words": ["mon", "tue", "wed", "thu"] }
+    ]
+  },
+  {
+    "id": 37,
+    "quartets": [
+      { "link": "Crack a ___", "words": ["code", "safe", "egg", "smile"] },
+      { "link": "Riding gear", "words": ["saddle", "bridle", "stirrup", "whip"] },
+      { "link": "Laughs", "words": ["gag", "pun", "quip", "joke"] },
+      { "link": "Breads", "words": ["bagel", "brioche", "naan", "pita"] }
+    ]
+  },
+  {
+    "id": 38,
+    "quartets": [
+      { "link": "___fish", "words": ["star", "jelly", "cuttle", "sword"] },
+      { "link": "Heavenly beings", "words": ["angel", "cherub", "seraph", "archangel"] },
+      { "link": "Blades", "words": ["sabre", "rapier", "cutlass", "scimitar"] },
+      { "link": "On a Christmas tree", "words": ["bauble", "tinsel", "lights", "garland"] }
+    ]
+  },
+  {
+    "id": 39,
+    "quartets": [
+      { "link": "Malware", "words": ["virus", "trojan", "spyware", "adware"] },
+      { "link": "Male animals", "words": ["ram", "buck", "boar", "stallion"] },
+      { "link": "Garden creatures", "words": ["slug", "snail", "beetle", "worm"] },
+      { "link": "Biscuits", "words": ["cookie", "wafer", "cracker", "digestive"] }
+    ]
+  },
+  {
+    "id": 40,
+    "quartets": [
+      { "link": "Sauces", "words": ["pesto", "gravy", "ketchup", "aioli"] },
+      { "link": "Dances", "words": ["samba", "jive", "polka", "salsa"] },
+      { "link": "Patterns", "words": ["tartan", "paisley", "check", "stripe"] },
+      { "link": "Cocktail garnishes", "words": ["olive", "cherry", "wedge", "umbrella"] }
+    ]
+  },
+  {
+    "id": 41,
+    "quartets": [
+      { "link": "Trees", "words": ["birch", "cedar", "larch", "alder"] },
+      { "link": "Girls' names", "words": ["holly", "ivy", "hazel", "willow"] },
+      { "link": "Shipshape", "words": ["neat", "tidy", "trim", "spruce"] },
+      { "link": "___ syrup", "words": ["maple", "golden", "corn", "cough"] }
+    ]
+  },
+  {
+    "id": 42,
+    "quartets": [
+      { "link": "Racket sports", "words": ["tennis", "badminton", "padel", "pickleball"] },
+      { "link": "Gourd family", "words": ["pumpkin", "zucchini", "marrow", "squash"] },
+      { "link": "Halloween", "words": ["costume", "candy", "witch", "ghost"] },
+      { "link": "Dance events", "words": ["ball", "prom", "disco", "rave"] }
+    ]
+  },
+  {
+    "id": 43,
+    "quartets": [
+      { "link": "Cheeses", "words": ["brie", "feta", "edam", "gouda"] },
+      { "link": "Dutch cities", "words": ["utrecht", "delft", "leiden", "haarlem"] },
+      { "link": "___ moon", "words": ["half", "full", "new", "honey"] },
+      { "link": "Bees", "words": ["hive", "drone", "queen", "comb"] }
+    ]
+  },
+  {
+    "id": 44,
+    "quartets": [
+      { "link": "Sound like numbers", "words": ["won", "too", "ate", "fore"] },
+      { "link": "Golf", "words": ["tee", "par", "birdie", "eagle"] },
+      { "link": "In addition", "words": ["besides", "likewise", "further", "moreover"] },
+      { "link": "Past tenses", "words": ["ran", "sat", "swam", "drew"] }
+    ]
+  },
+  {
+    "id": 45,
+    "quartets": [
+      { "link": "Bathroom", "words": ["soap", "towel", "razor", "plunger"] },
+      { "link": "Cakes", "words": ["sponge", "carrot", "fruit", "pound"] },
+      { "link": "Currencies", "words": ["euro", "yen", "rupee", "peso"] },
+      { "link": "Snowman", "words": ["coal", "scarf", "hat", "buttons"] }
+    ]
+  },
+  {
+    "id": 46,
+    "quartets": [
+      { "link": "Unix commands", "words": ["man", "top", "kill", "cut"] },
+      { "link": "Comparisons", "words": ["less", "more", "fewer", "greater"] },
+      { "link": "Toys", "words": ["yoyo", "kite", "doll", "marble"] },
+      { "link": "Isle of ___", "words": ["wight", "skye", "mull", "arran"] }
+    ]
+  },
+  {
+    "id": 47,
+    "quartets": [
+      { "link": "Things you roll", "words": ["dice", "eyes", "dough", "sleeves"] },
+      { "link": "Japanese dishes", "words": ["ramen", "tempura", "udon", "sushi"] },
+      { "link": "Money slang", "words": ["bread", "dosh", "brass", "moolah"] },
+      { "link": "Seabirds", "words": ["gull", "tern", "puffin", "gannet"] }
+    ]
+  },
+  {
+    "id": 48,
+    "quartets": [
+      { "link": "___paper", "words": ["sand", "wall", "news", "rice"] },
+      { "link": "Kinds of rice", "words": ["basmati", "arborio", "wild", "jasmine"] },
+      { "link": "Flowers", "words": ["orchid", "peony", "poppy", "lotus"] },
+      { "link": "Not tame", "words": ["feral", "savage", "fierce", "unruly"] }
+    ]
+  },
+  {
+    "id": 49,
+    "quartets": [
+      { "link": "Cat breeds", "words": ["sphynx", "ragdoll", "bengal", "birman"] },
+      { "link": "Languages", "words": ["persian", "hindi", "urdu", "swahili"] },
+      { "link": "Kinds of twins", "words": ["siamese", "identical", "fraternal", "mirror"] },
+      { "link": "Bays", "words": ["biscay", "fundy", "hudson", "botany"] }
+    ]
+  },
+  {
+    "id": 50,
+    "quartets": [
+      { "link": "Seasons", "words": ["summer", "autumn", "winter", "spring"] },
+      { "link": "Jump", "words": ["leap", "bound", "hop", "vault"] },
+      { "link": "___ bank", "words": ["piggy", "food", "blood", "river"] },
+      { "link": "Gymnastics", "words": ["beam", "rings", "bars", "trampoline"] }
+    ]
+  },
+  {
+    "id": 51,
+    "quartets": [
+      { "link": "___man", "words": ["snow", "post", "milk", "chair"] },
+      { "link": "Eight legs", "words": ["spider", "octopus", "scorpion", "tick"] },
+      { "link": "Punctuation", "words": ["comma", "colon", "period", "hyphen"] },
+      { "link": "Mail", "words": ["letter", "stamp", "parcel", "envelope"] }
+    ]
+  },
+  {
+    "id": 52,
+    "quartets": [
+      { "link": "Fonts", "words": ["arial", "helvetica", "garamond", "futura"] },
+      { "link": "Carry messages", "words": ["courier", "postman", "messenger", "runner"] },
+      { "link": "Track events", "words": ["hurdles", "relay", "sprint", "marathon"] },
+      { "link": "Beans", "words": ["kidney", "pinto", "broad", "navy"] }
+    ]
+  },
+  {
+    "id": 53,
+    "quartets": [
+      { "link": "Off-whites", "words": ["ivory", "linen", "chalk", "pearl"] },
+      { "link": "Dairy", "words": ["milk", "butter", "yogurt", "cream"] },
+      { "link": "School supplies", "words": ["ruler", "pencil", "eraser", "crayon"] },
+      { "link": "Jewellery", "words": ["locket", "bangle", "brooch", "tiara"] }
+    ]
+  },
+  {
+    "id": 54,
+    "quartets": [
+      { "link": "Fruits", "words": ["fig", "pear", "mango", "quince"] },
+      { "link": "Flightless birds", "words": ["kiwi", "emu", "ostrich", "rhea"] },
+      { "link": "Shades of purple", "words": ["plum", "aubergine", "lavender", "amethyst"] },
+      { "link": "Romance", "words": ["date", "crush", "flirt", "kiss"] }
+    ]
+  },
+  {
+    "id": 55,
+    "quartets": [
+      { "link": "Keyboard layouts", "words": ["qwerty", "colemak", "azerty", "dvorak"] },
+      { "link": "Composers", "words": ["bach", "liszt", "chopin", "handel"] },
+      { "link": "Volcanoes", "words": ["etna", "vesuvius", "krakatoa", "fuji"] },
+      { "link": "Apples", "words": ["gala", "braeburn", "honeycrisp", "cox"] }
+    ]
+  },
+  {
+    "id": 56,
+    "quartets": [
+      { "link": "Bowling", "words": ["strike", "spare", "gutter", "lane"] },
+      { "link": "Lightning", "words": ["flash", "bolt", "fork", "sheet"] },
+      { "link": "Protest", "words": ["march", "rally", "picket", "boycott"] },
+      { "link": "Months", "words": ["may", "june", "april", "august"] }
+    ]
+  },
+  {
+    "id": 57,
+    "quartets": [
+      { "link": "In a deck of cards", "words": ["king", "ace", "joker", "jack"] },
+      { "link": "Tools", "words": ["wrench", "spanner", "pliers", "chisel"] },
+      { "link": "Bee colony", "words": ["queen", "drone", "worker", "larva"] },
+      { "link": "Expert", "words": ["pro", "whiz", "guru", "maestro"] }
+    ]
+  },
+  {
+    "id": 58,
+    "quartets": [
+      { "link": "Have bridges", "words": ["nose", "ship", "glasses", "guitar"] },
+      { "link": "Orchestral strings", "words": ["violin", "viola", "cello", "harp"] },
+      { "link": "Eyewear", "words": ["monocle", "goggles", "specs", "shades"] },
+      { "link": "Rhyme with doze", "words": ["rose", "hose", "pose", "prose"] }
+    ]
+  },
+  {
+    "id": 59,
+    "quartets": [
+      { "link": "Snooker", "words": ["cue", "baulk", "cushion", "chalk"] },
+      { "link": "Clothing parts", "words": ["collar", "cuff", "hem", "pocket"] },
+      { "link": "Pause", "words": ["break", "rest", "recess", "respite"] },
+      { "link": "Soft furnishings", "words": ["throw", "bolster", "pillow", "duvet"] }
+    ]
+  },
+  {
+    "id": 60,
+    "quartets": [
+      { "link": "___ware", "words": ["soft", "hard", "firm", "glass"] },
+      { "link": "Difficult", "words": ["tough", "tricky", "thorny", "knotty"] },
+      { "link": "Businesses", "words": ["outfit", "concern", "agency", "enterprise"] },
+      { "link": "Drinking vessels", "words": ["mug", "tumbler", "goblet", "beaker"] }
+    ]
+  }
+]

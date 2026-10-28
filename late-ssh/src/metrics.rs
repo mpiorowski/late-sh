@@ -535,7 +535,7 @@ pub enum ArcadeMode {
 }
 
 /// The difficulty of a finished Arcade board. `Single` is a game with one
-/// board a day and no difficulty (Le Word, Rubik's Cube).
+/// board a day and no difficulty (Le Word, Rubik's Cube, Quartets).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArcadeDifficulty {
     Easy,
@@ -546,9 +546,9 @@ pub enum ArcadeDifficulty {
     Single,
 }
 
-/// How an Arcade board ended. Only Le Word (out of guesses) and
-/// Minesweeper (out of lives) can be lost; the rest end solved or not at
-/// all.
+/// How an Arcade board ended. Only Le Word (out of guesses), Minesweeper
+/// and Chess Puzzle (out of lives) and Quartets (out of strikes) can be
+/// lost; the rest end solved or not at all.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArcadeFinish {
     Won,
@@ -836,6 +836,8 @@ mod inner {
             ActivityGame::Brogue => "brogue",
             ActivityGame::Chess => "chess",
             ActivityGame::ChessPuzzle => "chess_puzzle",
+            ActivityGame::WordWheel => "word_wheel",
+            ActivityGame::Quartets => "quartets",
             ActivityGame::Darkroom => "darkroom",
             ActivityGame::Dcss => "dcss",
             ActivityGame::GreenDragon => "greendragon",

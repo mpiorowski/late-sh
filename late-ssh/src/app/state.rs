@@ -235,6 +235,12 @@ pub struct SessionConfig {
     pub initial_netwalk_games: Vec<late_core::models::netwalk::Game>,
     pub chess_puzzle_service: crate::app::arcade::chess_puzzle::svc::ChessPuzzleService,
     pub initial_chess_puzzle_games: Vec<late_core::models::chess_puzzle::Game>,
+    pub word_wheel_service: crate::app::arcade::word_wheel::svc::WordWheelService,
+    pub initial_word_wheel_daily: Option<crate::app::arcade::word_wheel::svc::Daily>,
+    pub initial_word_wheel_game: Option<late_core::models::word_wheel::Game>,
+    pub quartets_service: crate::app::arcade::quartets::svc::QuartetsService,
+    pub initial_quartets_daily: Option<crate::app::arcade::quartets::svc::Daily>,
+    pub initial_quartets_game: Option<late_core::models::quartets::Game>,
     pub initial_tetris_game: Option<late_core::models::tetris::Game>,
     pub initial_snake_game: Option<late_core::models::snake::Game>,
     pub initial_tetris_high_score: Option<late_core::models::tetris::HighScore>,
@@ -992,6 +998,8 @@ pub struct App {
     pub(crate) sliding_puzzle_state: crate::app::arcade::sliding_puzzle::state::State,
     pub(crate) netwalk_state: crate::app::arcade::netwalk::state::State,
     pub(crate) chess_puzzle_state: crate::app::arcade::chess_puzzle::state::State,
+    pub(crate) word_wheel_state: crate::app::arcade::word_wheel::state::State,
+    pub(crate) quartets_state: crate::app::arcade::quartets::state::State,
     pub(crate) le_word_state: crate::app::arcade::le_word::state::State,
     pub(crate) sudoku_state: crate::app::arcade::sudoku::state::State,
     pub(crate) nonogram_state: crate::app::arcade::nonogram::state::State,
@@ -1452,6 +1460,18 @@ impl App {
             config.user_id,
             config.chess_puzzle_service.clone(),
             config.initial_chess_puzzle_games,
+        );
+        let word_wheel_state = crate::app::arcade::word_wheel::state::State::new(
+            config.user_id,
+            config.word_wheel_service.clone(),
+            config.initial_word_wheel_daily,
+            config.initial_word_wheel_game,
+        );
+        let quartets_state = crate::app::arcade::quartets::state::State::new(
+            config.user_id,
+            config.quartets_service.clone(),
+            config.initial_quartets_daily,
+            config.initial_quartets_game,
         );
         let le_word_state = crate::app::arcade::le_word::state::State::new(
             config.user_id,
@@ -2022,6 +2042,8 @@ impl App {
             sliding_puzzle_state,
             netwalk_state,
             chess_puzzle_state,
+            word_wheel_state,
+            quartets_state,
             le_word_state,
             sudoku_state,
             nonogram_state,

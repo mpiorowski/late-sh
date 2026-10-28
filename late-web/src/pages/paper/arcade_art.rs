@@ -68,6 +68,19 @@ pub(crate) fn art(game: ArcadeGame) -> &'static [&'static str] {
             ". . . . . . . .",
             ". . . . K . . .",
         ],
+        ArcadeGame::Puzzle(DailyPuzzle::WordWheel) => &[
+            "      W", //
+            "  L \\ | / O",
+            "     [H]",
+            "  E / | \\ R",
+            "      D",
+        ],
+        ArcadeGame::Puzzle(DailyPuzzle::Quartets) => &[
+            "[  HAVE KEYS  ]", //
+            "[OAK][EGG][DOG]",
+            "[ELM][MAP][YEW]",
+            "[ASH][FIG][PUG]",
+        ],
         ArcadeGame::Score(ScoreGame::Lateris) => &[
             "      [][]", //
             "  [][][][]",

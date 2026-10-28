@@ -72,7 +72,7 @@ roster!(
     /// card's, the backtick cycle's, the rollover's, and every board list
     /// that iterates `ALL`. One order, so nothing else lists the dailies.
     DailyPuzzle: LeWord, RubiksCube, SlidingPuzzle, Sudoku, Nonogram, Minesweeper, Solitaire,
-        Netwalk, ChessPuzzle
+        Netwalk, ChessPuzzle, WordWheel, Quartets
 );
 
 roster!(
@@ -149,6 +149,8 @@ impl DailyPuzzle {
             Self::Solitaire => "solitaire",
             Self::Netwalk => "netwalk",
             Self::ChessPuzzle => "chess_puzzle",
+            Self::WordWheel => "word_wheel",
+            Self::Quartets => "quartets",
         }
     }
 
@@ -163,6 +165,8 @@ impl DailyPuzzle {
             Self::Solitaire => "Solitaire",
             Self::Netwalk => "Netwalk",
             Self::ChessPuzzle => "Chess Puzzle",
+            Self::WordWheel => "Word Wheel",
+            Self::Quartets => "Quartets",
         }
     }
 
@@ -172,13 +176,14 @@ impl DailyPuzzle {
     pub const fn tiers(self) -> Tiers {
         match self {
             Self::LeWord => Tiers::Single(Difficulty::Easy),
-            Self::RubiksCube => Tiers::Single(Difficulty::Medium),
+            Self::RubiksCube | Self::Quartets => Tiers::Single(Difficulty::Medium),
             Self::SlidingPuzzle
             | Self::Sudoku
             | Self::Nonogram
             | Self::Minesweeper
             | Self::Netwalk
-            | Self::ChessPuzzle => Tiers::Keyed(THREE_TIERS),
+            | Self::ChessPuzzle
+            | Self::WordWheel => Tiers::Keyed(THREE_TIERS),
             Self::Solitaire => {
                 Tiers::Keyed(&[("draw-1", Difficulty::Medium), ("draw-3", Difficulty::Hard)])
             }
@@ -197,6 +202,8 @@ impl DailyPuzzle {
             Self::Solitaire => "solitaire_daily_wins",
             Self::Netwalk => "netwalk_daily_wins",
             Self::ChessPuzzle => "chess_puzzle_daily_wins",
+            Self::WordWheel => "word_wheel_daily_wins",
+            Self::Quartets => "quartets_daily_wins",
         }
     }
 

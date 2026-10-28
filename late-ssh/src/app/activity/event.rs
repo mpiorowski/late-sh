@@ -321,6 +321,8 @@ pub enum ActivityGame {
     Tron,
     Snake,
     Traffic,
+    WordWheel,
+    Quartets,
 }
 
 /// Which shelf a game sits on, for splitting its wins on the dashboard.
@@ -347,6 +349,8 @@ impl ActivityGame {
     pub fn family(self) -> GameFamily {
         match self {
             Self::ChessPuzzle
+            | Self::WordWheel
+            | Self::Quartets
             | Self::LeWord
             | Self::Minesweeper
             | Self::Netwalk
@@ -385,6 +389,8 @@ impl ActivityGame {
             Self::Solitaire => Some(DailyPuzzle::Solitaire),
             Self::Netwalk => Some(DailyPuzzle::Netwalk),
             Self::ChessPuzzle => Some(DailyPuzzle::ChessPuzzle),
+            Self::WordWheel => Some(DailyPuzzle::WordWheel),
+            Self::Quartets => Some(DailyPuzzle::Quartets),
             Self::Asterion
             | Self::Blackjack
             | Self::Brogue
@@ -414,6 +420,8 @@ impl ActivityGame {
             Self::Brogue => "brogue",
             Self::Chess => "chess",
             Self::ChessPuzzle => "chess_puzzle",
+            Self::WordWheel => "word_wheel",
+            Self::Quartets => "quartets",
             Self::Darkroom => "darkroom",
             Self::Dcss => "dcss",
             Self::GreenDragon => "greendragon",
@@ -447,6 +455,8 @@ impl ActivityGame {
             Self::Brogue => "Brogue",
             Self::Chess => "Chess",
             Self::ChessPuzzle => "Chess Puzzle",
+            Self::WordWheel => "Word Wheel",
+            Self::Quartets => "Quartets",
             Self::Darkroom => "A Dark Room",
             Self::Dcss => "DCSS",
             Self::GreenDragon => "Green Dragon",
@@ -526,6 +536,8 @@ impl ActivityEvent {
             ActivityGame::Brogue => "conquered Brogue",
             ActivityGame::Chess => "won Chess game",
             ActivityGame::ChessPuzzle => "solved Chess Puzzle",
+            ActivityGame::WordWheel => "ranked on Word Wheel",
+            ActivityGame::Quartets => "solved Quartets",
             ActivityGame::Darkroom => "flew out of A Dark Room",
             ActivityGame::Dcss => "escaped DCSS with the Orb of Zot",
             ActivityGame::GreenDragon => "prevailed in the Green Dragon",
@@ -617,6 +629,8 @@ impl ActivityEvent {
             | ActivityGame::Blackjack
             | ActivityGame::Chess
             | ActivityGame::ChessPuzzle
+            | ActivityGame::WordWheel
+            | ActivityGame::Quartets
             | ActivityGame::LeWord
             | ActivityGame::Minesweeper
             | ActivityGame::Netwalk

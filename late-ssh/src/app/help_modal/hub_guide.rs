@@ -361,6 +361,38 @@ fn arcade_sections() -> Vec<GuideSection> {
             ],
         },
         GuideSection {
+            title: "Word Wheel",
+            body: vec![
+                "One wheel a day for everyone: seven letters, the hub in the middle."
+                    .to_string(),
+                "Words have four letters or more, use the hub, and may repeat letters."
+                    .to_string(),
+                "A four-letter word scores 1, each letter past three adds one; a full wheel uses all seven letters and scores double."
+                    .to_string(),
+                "Bronze, Silver and Gold (20%, 45%, 70% of the top score) pay the easy, medium and hard daily wins."
+                    .to_string(),
+                "Type letters; Enter submits; Backspace deletes; Tab shuffles the rim; a click on a letter types it."
+                    .to_string(),
+                "q is a letter here, so Esc leaves; ! shows the rules; s shares once Bronze is reached."
+                    .to_string(),
+                "Words: SCOWL by Kevin Atkinson.".to_string(),
+            ],
+        },
+        GuideSection {
+            title: "Quartets",
+            body: vec![
+                "One wall a day for everyone: sixteen words hiding four quartets, four words that share a link."
+                    .to_string(),
+                "Pick four and try them: a quartet locks in with its link, and once three are in the last four follow."
+                    .to_string(),
+                "A miss is a strike and names its split: three and one, two pairs, one pair, or all apart. Three strikes show the wall."
+                    .to_string(),
+                "Arrows or h/j/k/l move; Space picks; Enter tries; x clears the picks; Tab shuffles; a click picks a word."
+                    .to_string(),
+                "! shows the rules; s shares once the wall is done.".to_string(),
+            ],
+        },
+        GuideSection {
             title: "Daily Puzzle Common Keys",
             body: vec![
                 "d selects the daily board.".to_string(),

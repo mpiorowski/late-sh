@@ -166,6 +166,9 @@ pub mod profile;
 pub mod profile_award;
 #[cfg(test)]
 mod profile_award_test;
+pub mod quartets;
+#[cfg(test)]
+mod quartets_test;
 pub mod quest;
 pub mod radio_listen;
 #[cfg(test)]
@@ -211,6 +214,9 @@ mod user_ssh_key_test;
 mod user_test;
 pub mod username_effect;
 pub mod voice_channel;
+pub mod word_wheel;
+#[cfg(test)]
+mod word_wheel_test;
 pub mod work_feed_read;
 pub mod work_profile;
 #[cfg(test)]

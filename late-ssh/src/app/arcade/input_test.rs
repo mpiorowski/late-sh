@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn lobby_navigation_walks_the_roster_order_and_wraps() {
     let mut forward = vec![ArcadeGame::Puzzle(DailyPuzzle::LeWord)];
-    for _ in 0..12 {
+    for _ in 0..14 {
         forward.push(next_lobby_selection(*forward.last().expect("a game")));
     }
     assert_eq!(
@@ -20,6 +20,8 @@ fn lobby_navigation_walks_the_roster_order_and_wraps() {
             ArcadeGame::Puzzle(DailyPuzzle::Solitaire),
             ArcadeGame::Puzzle(DailyPuzzle::Netwalk),
             ArcadeGame::Puzzle(DailyPuzzle::ChessPuzzle),
+            ArcadeGame::Puzzle(DailyPuzzle::WordWheel),
+            ArcadeGame::Puzzle(DailyPuzzle::Quartets),
             ArcadeGame::Score(ScoreGame::TwentyFortyEight),
             ArcadeGame::Score(ScoreGame::Lateris),
             ArcadeGame::Score(ScoreGame::Snake),
@@ -36,7 +38,7 @@ fn lobby_navigation_walks_the_roster_order_and_wraps() {
     );
     assert_eq!(
         prev_lobby_selection(ArcadeGame::Score(ScoreGame::TwentyFortyEight)),
-        ArcadeGame::Puzzle(DailyPuzzle::ChessPuzzle)
+        ArcadeGame::Puzzle(DailyPuzzle::Quartets)
     );
 }
 
@@ -158,7 +160,7 @@ async fn lobby_s_copies_the_day_card() {
     let card = app.pending_clipboard.take().expect("day card copied");
     assert!(card.starts_with("late.sh Daily #"), "{card}");
     assert!(
-        card.contains("· 0/9\n⬛⬛⬛⬛⬛⬛⬛⬛⬛\n🔤🧊🧩🔢🎨💣🃏🔌♟️\nssh late.sh"),
+        card.contains("· 0/11\n⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛⬛\n🔤🧊🧩🔢🎨💣🃏🔌♟️🎡🔗\nssh late.sh"),
         "{card}"
     );
 }
