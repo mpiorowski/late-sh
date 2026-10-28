@@ -833,7 +833,7 @@ fn slot_from_game(game: &Game, difficulty: Difficulty) -> Option<Slot> {
         .map(|&mistake| {
             usize::try_from(mistake)
                 .ok()
-                .filter(|&mistake| mistake <= ply && mistake % 2 == 0)
+                .filter(|&mistake| mistake <= ply && mistake.is_multiple_of(2))
         })
         .collect::<Option<Vec<usize>>>()?;
     if mistake_plies.len() > LIVES {

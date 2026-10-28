@@ -138,7 +138,7 @@ impl<'a> Row<'a> {
         let well_tested = self.popularity >= MIN_POPULARITY
             && self.plays >= MIN_PLAYS
             && self.rating_deviation <= MAX_RATING_DEVIATION;
-        let short = self.moves.len() % 2 == 0
+        let short = self.moves.len().is_multiple_of(2)
             && self.moves.len() >= 2
             && self.moves.len() <= 2 * MAX_PLAYER_MOVES;
         if !(well_tested && short) {

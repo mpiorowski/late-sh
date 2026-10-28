@@ -78,7 +78,7 @@ fn every_shipped_puzzle_replays_through_the_board() {
             );
             let moves = line(puzzle);
             assert!(
-                moves.len() % 2 == 0 && (2..=8).contains(&moves.len()),
+                moves.len().is_multiple_of(2) && (2..=8).contains(&moves.len()),
                 "{} has {} moves",
                 puzzle.id,
                 moves.len()
