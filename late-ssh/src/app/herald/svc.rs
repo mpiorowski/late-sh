@@ -43,7 +43,7 @@ use late_core::models::chat_room::ChatRoom;
 use late_core::models::herald::{
     HeraldDay, HeraldDayStatus, HeraldNetwork, HeraldPick, HeraldPost, HeraldPosted, HeraldSwitch,
 };
-use late_core::models::leaderboard::week_bests;
+use late_core::models::leaderboard::{DayTally, day_tallies, week_bests};
 use late_core::models::paper::{
     ANNOUNCEMENTS_LIMIT, ANNOUNCEMENTS_SLUG, PaperEdition, PaperSectionKind,
 };
@@ -815,7 +815,7 @@ impl HeraldService {
             None => None,
         };
         let issue = PaperEdition::load(&client, day).await?;
-        let paper = Self::find_paper(&issue);
+        let paper = Self::find_paper(&client, &issue).await?;
         let summary = paper
             .as_ref()
             .and_then(|paper| paper.outside.clone().or_else(|| paper.reading.clone()));
@@ -888,14 +888,22 @@ impl HeraldService {
     }
 
     /// The edition dated the day, which reads the day before, once a
-    /// public column of it printed.
-    fn find_paper(issue: &PaperEdition) -> Option<PaperCandidate> {
-        PaperCandidate::of(
+    /// public column of it printed, with the covered day's most played
+    /// arcade game (the card's headline, read by the same rule late-web
+    /// draws it with).
+    async fn find_paper(
+        client: &tokio_postgres::Client,
+        issue: &PaperEdition,
+    ) -> anyhow::Result<Option<PaperCandidate>> {
+        let covered = PaperEdition::window(issue.edition).0.date_naive();
+        let tallies = day_tallies(client, covered).await?;
+        Ok(PaperCandidate::of(
             issue.edition,
+            DayTally::most_played_arcade(&tallies),
             issue.ready_text(PaperSectionKind::Yesterday),
-            issue.ready_text(PaperSectionKind::Outside),
             issue.ready_text(PaperSectionKind::Reading),
-        )
+            issue.ready_text(PaperSectionKind::Outside),
+        ))
     }
 
     /// Yesterday's board as the rollover archived it, with its ink counted

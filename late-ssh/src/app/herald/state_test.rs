@@ -2,6 +2,7 @@ use chrono::{NaiveDate, TimeZone, Utc};
 use dartboard_core::{Canvas, Pos};
 use late_core::models::artboard::Snapshot;
 use late_core::models::herald::HeraldKind;
+use late_core::models::leaderboard::{ArcadeGame, DailyPuzzle, ScoreGame};
 use uuid::Uuid;
 
 use super::state::{
@@ -64,9 +65,10 @@ fn scoreboard() -> ScoreboardCandidate {
 fn paper() -> PaperCandidate {
     PaperCandidate {
         edition: day(24),
+        most_played: Some("Sudoku, 3 games finished".to_string()),
         yesterday: Some("Booth: 2 tracks queued; Arcade: 3 games finished, all Sudoku".to_string()),
+        reading: Some("Someone shared a fine link.".to_string()),
         outside: Some("The world turned.".to_string()),
-        reading: None,
     }
 }
 
@@ -455,7 +457,7 @@ fn the_look_round_trips_and_writes_the_alt() {
             "ASCII art: the late.sh Artboard, a shared terminal canvas, as it stood at the end of 22 October 2026 UTC. Coloured text glyphs on a dark background.",
             "ASCII art: \"harbour at dusk\", a piece hung in the late.sh gallery. Coloured text glyphs on a dark background.",
             "A scoreboard in green and grey terminal text: the week's best in every late.sh game, 18 October to 24 October 2026. Sudoku: 6 wins; Lateris: 12,340.",
-            "The front page of the Late Edition, late.sh's daily paper, for 24 October 2026, in terminal text. Yesterday on late.sh: Booth: 2 tracks queued; Arcade: 3 games finished, all Sudoku. Outside: The world turned.",
+            "The front page of the Late Edition, late.sh's daily paper, for 24 October 2026, in terminal text. Most played yesterday: Sudoku, 3 games finished. Yesterday on late.sh: Booth: 2 tracks queued; Arcade: 3 games finished, all Sudoku. What we were reading: Someone shared a fine link. Outside: The world turned.",
         ]
     );
     let long = Picture::Paper(PaperCandidate {
@@ -470,6 +472,37 @@ fn the_look_round_trips_and_writes_the_alt() {
         None,
         "words alone have no picture to describe"
     );
+}
+
+/// The paper's candidate carries the card's headline as the card writes
+/// it (one game finished, or many) and each column's head; the headline
+/// alone, with no column printed, is no edition.
+#[test]
+fn the_paper_carries_the_most_played_game_and_the_columns() {
+    let sudoku = Some((ArcadeGame::Puzzle(DailyPuzzle::Sudoku), 3));
+    assert_eq!(
+        PaperCandidate::of(
+            day(24),
+            sudoku,
+            Some("Booth: 2 tracks queued\n\nArcade: 3 games finished, all Sudoku"),
+            Some("Someone shared a fine link.\nAnd another."),
+            Some("The world turned."),
+        ),
+        Some(paper())
+    );
+    let one = PaperCandidate::of(
+        day(24),
+        Some((ArcadeGame::Score(ScoreGame::Snake), 1)),
+        None,
+        None,
+        Some("The world turned."),
+    )
+    .expect("a column printed");
+    assert_eq!(one.most_played.as_deref(), Some("Snake, 1 game finished"));
+    let quiet = PaperCandidate::of(day(24), None, None, None, Some("The world turned."))
+        .expect("a column printed");
+    assert_eq!(quiet.most_played, None, "nobody played: no headline");
+    assert_eq!(PaperCandidate::of(day(24), sudoku, None, None, None), None);
 }
 
 /// An announcement's words go out plain, dead and cut, whoever wrote

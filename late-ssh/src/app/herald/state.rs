@@ -7,7 +7,7 @@
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Utc, Weekday};
 use dartboard_core::{Canvas, CellValue};
 use late_core::models::herald::HeraldKind;
-use late_core::models::leaderboard::{WeekBest, week_first_day};
+use late_core::models::leaderboard::{ArcadeGame, WeekBest, week_first_day};
 use late_core::models::paper::PaperSectionKind;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
@@ -292,27 +292,34 @@ impl ScoreboardCandidate {
 }
 
 /// The Late Edition dated the post's day, which reads the day before, once
-/// a public column of it printed: the whole of YESTERDAY (its lines are
-/// the numbers, and few) and the first paragraph of the other two, for
-/// the alt text (the picture is late-web's card of the same columns).
+/// a public column of it printed: the covered day's most played arcade
+/// game, the whole of YESTERDAY (its lines are the numbers, and few) and
+/// the first paragraph of the other two, for the alt text (the picture is
+/// late-web's card of the same, in the same order).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct PaperCandidate {
     pub(crate) edition: NaiveDate,
+    /// The card's headline: the game and its finishes, as the card
+    /// writes them.
+    #[serde(default)]
+    pub(crate) most_played: Option<String>,
     /// The column's lines joined with `; `.
     #[serde(default)]
     pub(crate) yesterday: Option<String>,
-    pub(crate) outside: Option<String>,
     pub(crate) reading: Option<String>,
+    pub(crate) outside: Option<String>,
 }
 
 impl PaperCandidate {
-    /// The edition, if any public column printed. A column's paragraphs
-    /// are its non-empty lines, as the web prints them.
+    /// The edition, if any public column printed (the most played game
+    /// alone is no edition). A column's paragraphs are its non-empty
+    /// lines, as the web prints them.
     pub(crate) fn of(
         edition: NaiveDate,
+        most_played: Option<(ArcadeGame, i64)>,
         yesterday: Option<&str>,
-        outside: Option<&str>,
         reading: Option<&str>,
+        outside: Option<&str>,
     ) -> Option<Self> {
         let paragraphs = |text: &str| {
             text.lines()
@@ -326,13 +333,17 @@ impl PaperCandidate {
             text.map(|text| paragraphs(text).join("; "))
                 .filter(|joined| !joined.is_empty())
         };
-        match (whole(yesterday), head(outside), head(reading)) {
+        match (whole(yesterday), head(reading), head(outside)) {
             (None, None, None) => None,
-            (yesterday, outside, reading) => Some(Self {
+            (yesterday, reading, outside) => Some(Self {
                 edition,
+                most_played: most_played.map(|(game, plays)| match plays {
+                    1 => format!("{}, 1 game finished", game.title()),
+                    plays => format!("{}, {plays} games finished", game.title()),
+                }),
                 yesterday,
-                outside,
                 reading,
+                outside,
             }),
         }
     }
@@ -925,22 +936,25 @@ pub(crate) fn alt_text(picture: &Picture, look: &Look) -> Option<String> {
                 "The front page of the Late Edition, late.sh's daily paper, for {}, in terminal text.",
                 long_date(paper.edition)
             );
+            if let Some(most_played) = &paper.most_played {
+                text.push_str(&format!(" Most played yesterday: {most_played}."));
+            }
             if let Some(yesterday) = &paper.yesterday {
                 text.push_str(&format!(
                     " {}: {yesterday}.",
                     PaperSectionKind::Yesterday.title()
                 ));
             }
-            if let Some(outside) = &paper.outside {
-                text.push_str(&format!(
-                    " {}: {outside}",
-                    PaperSectionKind::Outside.title()
-                ));
-            }
             if let Some(reading) = &paper.reading {
                 text.push_str(&format!(
                     " {}: {reading}",
                     PaperSectionKind::Reading.title()
+                ));
+            }
+            if let Some(outside) = &paper.outside {
+                text.push_str(&format!(
+                    " {}: {outside}",
+                    PaperSectionKind::Outside.title()
                 ));
             }
             cut_alt(&text)
