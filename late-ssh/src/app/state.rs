@@ -234,14 +234,12 @@ pub struct SessionConfig {
     pub netwalk_service: crate::app::arcade::netwalk::svc::NetwalkService,
     pub initial_netwalk_games: Vec<late_core::models::netwalk::Game>,
     pub chess_puzzle_service: crate::app::arcade::chess_puzzle::svc::ChessPuzzleService,
-    pub initial_chess_puzzle_daily: Option<crate::app::arcade::chess_puzzle::svc::Daily>,
+    pub initial_chess_puzzle_today: Option<crate::app::arcade::chess_puzzle::svc::Today>,
     pub initial_chess_puzzle_games: Vec<late_core::models::chess_puzzle::Game>,
     pub word_wheel_service: crate::app::arcade::word_wheel::svc::WordWheelService,
-    pub initial_word_wheel_daily: Option<crate::app::arcade::word_wheel::svc::Daily>,
-    pub initial_word_wheel_game: Option<late_core::models::word_wheel::Game>,
+    pub initial_word_wheel_today: Option<crate::app::arcade::word_wheel::svc::Today>,
     pub quartets_service: crate::app::arcade::quartets::svc::QuartetsService,
-    pub initial_quartets_daily: Option<crate::app::arcade::quartets::svc::Daily>,
-    pub initial_quartets_game: Option<late_core::models::quartets::Game>,
+    pub initial_quartets_today: Option<crate::app::arcade::quartets::svc::Today>,
     pub initial_tetris_game: Option<late_core::models::tetris::Game>,
     pub initial_snake_game: Option<late_core::models::snake::Game>,
     pub initial_tetris_high_score: Option<late_core::models::tetris::HighScore>,
@@ -249,8 +247,7 @@ pub struct SessionConfig {
     pub initial_traffic_track_scores: Vec<late_core::models::traffic::TrackScore>,
     pub initial_traffic_high_score: Option<late_core::models::traffic::HighScore>,
     pub le_word_service: crate::app::arcade::le_word::svc::LeWordService,
-    pub initial_le_word_daily_word: Option<late_core::models::le_word::DailyWord>,
-    pub initial_le_word_game: Option<late_core::models::le_word::Game>,
+    pub initial_le_word_today: Option<crate::app::arcade::le_word::svc::Today>,
     pub sudoku_service: crate::app::arcade::sudoku::svc::SudokuService,
     pub initial_sudoku_games: Vec<late_core::models::sudoku::Game>,
     pub nonogram_service: crate::app::arcade::nonogram::svc::NonogramService,
@@ -1460,26 +1457,23 @@ impl App {
         let chess_puzzle_state = crate::app::arcade::chess_puzzle::state::State::new(
             config.user_id,
             config.chess_puzzle_service.clone(),
-            config.initial_chess_puzzle_daily,
+            config.initial_chess_puzzle_today,
             config.initial_chess_puzzle_games,
         );
         let word_wheel_state = crate::app::arcade::word_wheel::state::State::new(
             config.user_id,
             config.word_wheel_service.clone(),
-            config.initial_word_wheel_daily,
-            config.initial_word_wheel_game,
+            config.initial_word_wheel_today,
         );
         let quartets_state = crate::app::arcade::quartets::state::State::new(
             config.user_id,
             config.quartets_service.clone(),
-            config.initial_quartets_daily,
-            config.initial_quartets_game,
+            config.initial_quartets_today,
         );
         let le_word_state = crate::app::arcade::le_word::state::State::new(
             config.user_id,
             config.le_word_service.clone(),
-            config.initial_le_word_daily_word,
-            config.initial_le_word_game,
+            config.initial_le_word_today,
         );
         let nonogram_state = crate::app::arcade::nonogram::state::State::new(
             config.user_id,

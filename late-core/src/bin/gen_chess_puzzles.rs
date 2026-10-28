@@ -25,6 +25,7 @@ use anyhow::{Context, Result, bail};
 use cozy_chess::{Board, Piece, util::parse_uci_move};
 use late_core::{
     chess_puzzle::{ChessPuzzle, Theme, rating_range},
+    daily::{fnv1a, splitmix64},
     models::chips::Difficulty,
 };
 
@@ -201,19 +202,3 @@ impl PartialEq for Candidate {
 }
 
 impl Eq for Candidate {}
-
-fn fnv1a(text: &str) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in text.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0100_0000_01b3);
-    }
-    hash
-}
-
-fn splitmix64(mut value: u64) -> u64 {
-    value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
-    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-    value ^ (value >> 31)
-}

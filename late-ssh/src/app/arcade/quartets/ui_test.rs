@@ -8,7 +8,7 @@ use crate::app::{
     activity::event::ActivityEvent,
     arcade::quartets::{
         state::find_puzzle,
-        svc::{Daily, QuartetsService},
+        svc::{Daily, QuartetsService, Today},
     },
 };
 
@@ -23,11 +23,13 @@ fn a_click_lands_on_the_tile_drawn() {
     let mut state = State::new(
         Uuid::now_v7(),
         QuartetsService::new(db, activity),
-        Some(Daily {
-            puzzle_date: Utc::now().date_naive(),
-            puzzle,
+        Some(Today {
+            daily: Daily {
+                puzzle_date: Utc::now().date_naive(),
+                puzzle,
+            },
+            saved: None,
         }),
-        None,
     );
     let area = Rect::new(0, 0, 100, 40);
     let layout = layout(

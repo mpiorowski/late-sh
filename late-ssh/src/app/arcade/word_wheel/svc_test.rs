@@ -5,7 +5,7 @@ use late_core::{
 };
 use tokio::sync::broadcast;
 
-use super::WordWheelService;
+use super::{Today, WordWheelService};
 use crate::{
     app::{
         activity::event::{ActivityEvent, ActivityGame, ActivityKind},
@@ -104,7 +104,7 @@ async fn play_saves_the_words_and_banks_the_rank_reached() {
         puzzle_date: date(),
         wheel: find_wheel("rabcikt").expect("wheel in the pack"),
     };
-    let mut state = State::new(user.id, service.clone(), Some(daily), None);
+    let mut state = State::new(user.id, service.clone(), Some(Today { daily, saved: None }));
 
     for word in ["brickbat", "backtrack", "baccarat", "barbaric"] {
         play(&mut state, word);
@@ -154,8 +154,8 @@ async fn a_rank_reached_only_by_merged_sessions_is_banked_on_restore() {
         wheel: find_wheel("rabcikt").expect("wheel in the pack"),
     };
 
-    let mut first = State::new(user.id, service.clone(), Some(daily), None);
-    let mut second = State::new(user.id, service.clone(), Some(daily), None);
+    let mut first = State::new(user.id, service.clone(), Some(Today { daily, saved: None }));
+    let mut second = State::new(user.id, service.clone(), Some(Today { daily, saved: None }));
     for word in ["brickbat", "backtrack"] {
         play(&mut first, word);
     }
@@ -169,7 +169,14 @@ async fn a_rank_reached_only_by_merged_sessions_is_banked_on_restore() {
     );
 
     let saved = service.load_game(user.id, date()).await.expect("load game");
-    let _third = State::new(user.id, service.clone(), Some(daily), saved);
+    let _third = State::new(
+        user.id,
+        service.clone(),
+        Some(Today {
+            daily,
+            saved: saved,
+        }),
+    );
     service.flush_game_saves().await.expect("flush");
 
     let event = activity_rx.try_recv().expect("win event");

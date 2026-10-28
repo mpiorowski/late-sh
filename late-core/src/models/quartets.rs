@@ -123,10 +123,29 @@ impl Game {
         Ok(row.map(Self::from))
     }
 
+    /// The stored row, locked until the caller's transaction ends, so a
+    /// save or a win decided on what it holds cannot interleave with another
+    /// session's.
+    pub async fn lock_for_date(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        puzzle_date: NaiveDate,
+    ) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "SELECT * FROM quartets_games
+                 WHERE user_id = $1 AND puzzle_date = $2
+                 FOR UPDATE",
+                &[&user_id, &puzzle_date],
+            )
+            .await?;
+        Ok(row.map(Self::from))
+    }
+
     /// Store a session's tries. Tries only grow, so a stored list at least
     /// as long for the same puzzle wins and a stale session cannot hand
     /// back strikes; a row for another puzzle is replaced outright.
-    pub async fn upsert(client: &Client, params: GameParams) -> Result<()> {
+    pub async fn upsert(client: &impl GenericClient, params: GameParams) -> Result<()> {
         client
             .execute(
                 "INSERT INTO quartets_games (user_id, puzzle_date, puzzle_id, tries)
@@ -154,7 +173,7 @@ impl DailyWin {
     /// and counts once toward `daily_win_totals`; a repeat keeps the fewer
     /// strikes and is not fresh.
     pub async fn record_win(
-        client: &Client,
+        client: &impl GenericClient,
         user_id: Uuid,
         puzzle_date: NaiveDate,
         strikes: i32,

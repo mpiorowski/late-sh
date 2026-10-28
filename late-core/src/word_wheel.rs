@@ -8,6 +8,8 @@ use std::collections::HashMap;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
+use crate::daily;
+
 /// The letters on a wheel: the hub and six on the rim.
 pub const WHEEL_LETTERS: usize = 7;
 /// The shortest word a wheel accepts.
@@ -59,32 +61,19 @@ pub fn is_full_wheel(letters: &str, word: &str) -> bool {
     letters.chars().all(|letter| word.contains(letter))
 }
 
-/// The wheel to claim for `date`. A wheel never claimed comes first, picked
-/// by a hash of the date; once every wheel has had a day, the one claimed
-/// longest ago (ties by letters) comes round again, so there is always a
-/// wheel. `last_used` maps a wheel's letters to the last day it was claimed.
+/// The wheel to claim for `date`, by the shared daily pick
+/// (`daily::choose_for_date`) keyed on the letters and seeded by the date.
+/// `last_used` maps a wheel's letters to the last day it was claimed.
 pub fn choose_for_date<'a>(
     pack: &'a [WordWheel],
     last_used: &HashMap<String, NaiveDate>,
     date: NaiveDate,
 ) -> &'a WordWheel {
-    let unused: Vec<&WordWheel> = pack
-        .iter()
-        .filter(|wheel| !last_used.contains_key(&wheel.letters))
-        .collect();
-    if !unused.is_empty() {
-        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-        for byte in format!("late-sh-word-wheel-daily-v1:{date}").bytes() {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x0100_0000_01b3);
-        }
-        return unused[(hash % unused.len() as u64) as usize];
-    }
-    pack.iter()
-        .min_by(|a, b| {
-            last_used[&a.letters]
-                .cmp(&last_used[&b.letters])
-                .then_with(|| a.letters.cmp(&b.letters))
-        })
-        .expect("the word wheel pack is not empty")
+    daily::choose_for_date(
+        pack,
+        |wheel| &wheel.letters,
+        last_used,
+        &format!("late-sh-word-wheel-daily-v1:{date}"),
+    )
+    .expect("the word wheel pack is not empty")
 }

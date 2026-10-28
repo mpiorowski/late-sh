@@ -8,7 +8,6 @@
 //! rules and the per-session state; persistence goes through `svc.rs`.
 
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
 
 use chrono::NaiveDate;
 use cozy_chess::{Board, Color, GameStatus, Move};
@@ -20,18 +19,20 @@ use late_core::{
     },
 };
 use rand_core::{OsRng, RngCore};
-use tokio::sync::oneshot;
 use uuid::Uuid;
 
 use crate::{
-    app::games::chess_core::{
-        cursor, rules,
-        types::{ChessColor, ChessPiece},
+    app::{
+        arcade::daily_load::{DailyLoad, Polled},
+        games::chess_core::{
+            cursor, rules,
+            types::{ChessColor, ChessPiece},
+        },
     },
     metrics::{ArcadeDifficulty, ArcadeFinish, ArcadeMode},
 };
 
-use super::svc::{ChessPuzzleService, Daily};
+use super::svc::{ChessPuzzleService, Today};
 
 /// The tiers in board order: the index into every per-tier array here and
 /// in `svc::Daily`.
@@ -45,8 +46,6 @@ pub const LIVES: usize = 3;
 /// the player sees their own move on the board first.
 pub const REPLY_DELAY_TICKS: u8 = 6;
 
-/// How long a failed rollover fetch waits before the next attempt.
-const RELOAD_RETRY: Duration = Duration::from_secs(30);
 const UNAVAILABLE: &str = "Chess Puzzle is unavailable. Try again soon.";
 
 const EASY_PACK: &[u8] = include_bytes!("../../../../assets/chess_puzzles/easy.json");
@@ -194,7 +193,7 @@ impl Slot {
     fn outcome(&self) -> Option<Outcome> {
         if self.mate.is_some() || self.ply + 1 == self.line.len() {
             Some(Outcome::Solved)
-        } else if self.mistake_plies.len() >= LIVES {
+        } else if out_of_lives(self.mistake_plies.len()) {
             Some(Outcome::Lost)
         } else {
             None
@@ -238,23 +237,23 @@ pub struct State {
     reset_pending: Option<ResetAction>,
     message: String,
     svc: ChessPuzzleService,
-    /// In flight only while a rolled-over day is fetching its puzzles; see
-    /// `ensure_current_daily`.
-    reload_rx: Option<oneshot::Receiver<Option<Daily>>>,
-    /// Set when a rollover fetch failed; `ensure_current_daily` holds off
-    /// until this passes, then tries again.
-    reload_backoff_until: Option<Instant>,
+    /// Today's puzzles while the daily boards have none; see `poll_load`.
+    load: DailyLoad<Today>,
 }
 
 impl State {
+    /// A session's boards from its connect-time loads: `today` for the
+    /// dailies (`None`, a failed load, shows them unavailable and retries
+    /// from `poll_load`), `saved_games` for the personal puzzles, read on
+    /// their own so they restore whether or not the day's claim did.
     pub fn new(
         user_id: Uuid,
         svc: ChessPuzzleService,
-        daily: Option<Daily>,
+        today: Option<Today>,
         saved_games: Vec<Game>,
     ) -> Self {
-        let puzzle_date = match daily {
-            Some(daily) => daily.puzzle_date,
+        let puzzle_date = match &today {
+            Some(today) => today.daily.puzzle_date,
             None => svc.today(),
         };
         let personal = DIFFICULTIES.map(|difficulty| {
@@ -281,11 +280,10 @@ impl State {
             reset_pending: None,
             message: String::new(),
             svc,
-            reload_rx: None,
-            reload_backoff_until: None,
+            load: DailyLoad::after_connect(today.is_some()),
         };
-        if let Some(daily) = daily {
-            state.install(daily, &saved_games);
+        if let Some(today) = today {
+            state.install(today);
         }
         state.focus_board();
         state
@@ -293,7 +291,11 @@ impl State {
 
     /// Put a day's puzzles on the daily boards, restoring the saved rows
     /// that belong to them.
-    fn install(&mut self, daily: Daily, saved_games: &[Game]) {
+    fn install(&mut self, today: Today) {
+        let Today {
+            daily,
+            games: saved_games,
+        } = today;
         self.puzzle_date = daily.puzzle_date;
         let user_id = self.user_id;
         let mut index = 0;
@@ -493,77 +495,50 @@ impl State {
         self.focus_board();
     }
 
-    /// Roll the dailies over when the UTC date changes under a live session.
-    /// The claims live in the database, so this clears the daily boards at
-    /// once and fetches the new puzzles in the background; `poll_reload`
-    /// installs them. `puzzle_date` only advances once they land, so a
-    /// failed fetch is retried here after `RELOAD_RETRY`. Personal puzzles
-    /// are left alone. Returns true when the screen changed.
+    /// Roll the dailies over when the UTC date changes under a live session:
+    /// yesterday's puzzles come off at once, and `poll_load` fetches
+    /// today's. Personal puzzles are left alone. Returns true when the screen
+    /// changed.
     pub fn ensure_current_daily(&mut self) -> bool {
-        if self.puzzle_date == self.svc.today() || self.reload_rx.is_some() {
+        if self.daily.is_none() || self.puzzle_date == self.svc.today() {
             return false;
         }
-        if let Some(until) = self.reload_backoff_until
-            && Instant::now() < until
-        {
-            return false;
-        }
-        self.reload_backoff_until = None;
-
         // Yesterday's puzzles must stop taking moves right away, whether or
-        // not the fetch succeeds.
+        // not today's load.
         self.daily = None;
         self.clear_reset_pending();
         if self.mode == Mode::Daily {
             self.focus_board();
             self.message = "Loading today's Chess Puzzle.".to_string();
         }
-
-        let (tx, rx) = oneshot::channel();
-        self.reload_rx = Some(rx);
-        let svc = self.svc.clone();
-        // Pure state tests drive this without a runtime; the boards are
-        // already cleared, and the poll installs nothing when nothing comes.
-        if tokio::runtime::Handle::try_current().is_ok() {
-            tokio::spawn(async move {
-                let daily = match svc.ensure_daily_puzzles().await {
-                    Ok(daily) => Some(daily),
-                    Err(error) => {
-                        tracing::error!(error = ?error, "failed to load the rolled-over chess puzzles");
-                        None
-                    }
-                };
-                let _ = tx.send(daily);
-            });
-        }
         true
     }
 
-    /// Install puzzles fetched by `ensure_current_daily`. Returns true when
-    /// the screen changed.
-    pub fn poll_reload(&mut self) -> bool {
-        let Some(rx) = self.reload_rx.as_mut() else {
-            return false;
-        };
-        match rx.try_recv() {
-            Ok(Some(daily)) => {
-                self.reload_rx = None;
-                self.install(daily, &[]);
+    /// Load today's puzzles and saved rows whenever the daily boards have
+    /// none (a failed connect-time load, or the rollover), and install what
+    /// lands. Runs on every tick, board open or not. Returns true when the
+    /// screen changed.
+    pub fn poll_load(&mut self) -> bool {
+        let (svc, user_id) = (&self.svc, self.user_id);
+        match self
+            .load
+            .poll(self.daily.is_none(), || svc.load_today_task(user_id))
+        {
+            Polled::Waiting => false,
+            Polled::Loaded(today) => {
+                self.install(today);
                 if self.mode == Mode::Daily {
                     self.focus_board();
                     self.message = "Today's Chess Puzzle is ready.".to_string();
                 }
                 true
             }
-            Ok(None) | Err(oneshot::error::TryRecvError::Closed) => {
-                self.reload_rx = None;
-                self.reload_backoff_until = Some(Instant::now() + RELOAD_RETRY);
+            Polled::Failed => {
                 if self.mode == Mode::Daily {
                     self.message = "Chess Puzzle is unavailable. Retrying soon.".to_string();
                 }
                 true
             }
-            Err(oneshot::error::TryRecvError::Empty) => false,
         }
     }
 
@@ -973,6 +948,13 @@ fn random_slot(difficulty: Difficulty) -> Slot {
     let puzzles = pack(difficulty);
     let index = (OsRng.next_u64() % puzzles.len() as u64) as usize;
     Slot::new(&puzzles[index], 0, Vec::new(), None)
+}
+
+/// Whether `mistakes` wrong moves have spent every life: the puzzle is lost.
+/// The service holds a stored daily row to it too, so a second session
+/// cannot win a puzzle another one lost.
+pub(crate) fn out_of_lives(mistakes: usize) -> bool {
+    mistakes >= LIVES
 }
 
 /// A saved row, or `None` when it does not fit its puzzle (see

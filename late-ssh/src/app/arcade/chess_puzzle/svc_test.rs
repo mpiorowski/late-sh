@@ -1,16 +1,19 @@
 use chrono::NaiveDate;
 use late_core::{
     chess_puzzle::ChessPuzzle,
-    models::{chess_puzzle::DailyWin, chips::Difficulty},
+    models::{
+        chess_puzzle::{DailyWin, GameParams},
+        chips::Difficulty,
+    },
     test_utils::create_test_user,
 };
 use tokio::sync::broadcast;
 
-use super::{ChessPuzzleService, Daily};
+use super::{ChessPuzzleService, Daily, Today};
 use crate::{
     app::{
         activity::event::{ActivityEvent, ActivityGame, ActivityKind},
-        arcade::chess_puzzle::state::{DIFFICULTIES, REPLY_DELAY_TICKS, State, find_puzzle},
+        arcade::chess_puzzle::state::{DIFFICULTIES, LIVES, REPLY_DELAY_TICKS, State, find_puzzle},
     },
     test_helpers::new_test_db,
 };
@@ -78,20 +81,31 @@ async fn a_fresh_win_publishes_once_and_a_replay_publishes_nothing() {
     let user = create_test_user(&test_db.db, "chess-puzzle-svc-win").await;
     let (activity_tx, mut activity_rx) = broadcast::channel(8);
 
-    super::record_win_and_publish(
+    let solved = || GameParams {
+        user_id: user.id,
+        mode: "daily".to_string(),
+        difficulty_key: "medium".to_string(),
+        puzzle_date: Some(date()),
+        puzzle_id: "uHqD7".to_string(),
+        ply: 1,
+        mistake_plies: Vec::new(),
+        mate_move: None,
+    };
+
+    super::complete(
         &test_db.db,
         &activity_tx,
-        user.id,
+        solved(),
         Difficulty::Medium,
         date(),
         2,
     )
     .await
     .expect("first win");
-    super::record_win_and_publish(
+    super::complete(
         &test_db.db,
         &activity_tx,
-        user.id,
+        solved(),
         Difficulty::Medium,
         date(),
         0,
@@ -128,7 +142,15 @@ async fn the_finishing_move_of_a_daily_records_the_win_and_saves_the_board() {
     let user = create_test_user(&test_db.db, "chess-puzzle-svc-finish").await;
     let (activity_tx, mut activity_rx) = broadcast::channel::<ActivityEvent>(8);
     let service = ChessPuzzleService::new(test_db.db.clone(), activity_tx);
-    let mut state = State::new(user.id, service.clone(), Some(daily(date())), Vec::new());
+    let mut state = State::new(
+        user.id,
+        service.clone(),
+        Some(Today {
+            daily: daily(date()),
+            games: Vec::new(),
+        }),
+        Vec::new(),
+    );
     state.set_puzzle_for_test(Difficulty::Easy, mate_in_two());
 
     solve(&mut state);
@@ -177,7 +199,15 @@ async fn a_personal_finish_saves_without_a_win_or_an_event() {
     let user = create_test_user(&test_db.db, "chess-puzzle-svc-personal").await;
     let (activity_tx, mut activity_rx) = broadcast::channel::<ActivityEvent>(8);
     let service = ChessPuzzleService::new(test_db.db.clone(), activity_tx);
-    let mut state = State::new(user.id, service.clone(), Some(daily(date())), Vec::new());
+    let mut state = State::new(
+        user.id,
+        service.clone(),
+        Some(Today {
+            daily: daily(date()),
+            games: Vec::new(),
+        }),
+        Vec::new(),
+    );
     state.show_personal();
     state.set_puzzle_for_test(Difficulty::Easy, mate_in_two());
 
@@ -202,5 +232,59 @@ async fn a_personal_finish_saves_without_a_win_or_an_event() {
     assert_eq!(
         (saved.puzzle_date, saved.puzzle_id.as_str(), saved.ply),
         (None, "02LIr", 3)
+    );
+}
+
+/// Two sessions on one daily: the first runs out of lives, the second,
+/// opened before that loss, solved it, so the loss bought a free win. A
+/// lost puzzle stays lost: the second session's row does not hand the lives
+/// back, and its win is refused.
+#[tokio::test]
+async fn a_daily_lost_on_one_session_cannot_be_won_on_another() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "chess-puzzle-svc-two-sessions").await;
+    let (activity_tx, mut activity_rx) = broadcast::channel::<ActivityEvent>(8);
+    let service = ChessPuzzleService::new(test_db.db.clone(), activity_tx);
+    let session = || {
+        let mut state = State::new(
+            user.id,
+            service.clone(),
+            Some(Today {
+                daily: daily(date()),
+                games: Vec::new(),
+            }),
+            Vec::new(),
+        );
+        state.set_puzzle_for_test(Difficulty::Easy, mate_in_two());
+        state
+    };
+    let mut losing = session();
+    let mut winning = session();
+
+    for _ in 0..LIVES {
+        losing.click(49);
+        losing.click(41);
+    }
+    solve(&mut winning);
+    service.flush_game_saves().await.expect("flush");
+
+    assert!(
+        activity_rx.try_recv().is_err(),
+        "the lost puzzle paid a win"
+    );
+    let client = test_db.db.get().await.expect("db client");
+    let win = DailyWin::find(&client, user.id, "easy", date())
+        .await
+        .expect("find win");
+    let saved = service
+        .load_games(user.id)
+        .await
+        .expect("load games")
+        .into_iter()
+        .find(|game| game.mode == "daily" && game.difficulty_key == "easy")
+        .expect("saved daily board");
+    assert_eq!(
+        (win.is_some(), saved.ply, saved.mistake_plies.len()),
+        (false, 0, LIVES)
     );
 }

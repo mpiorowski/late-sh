@@ -7,6 +7,7 @@ use late_core::{
 };
 use tokio::sync::broadcast;
 
+use super::super::svc::Daily;
 use super::*;
 use crate::app::activity::event::ActivityEvent;
 
@@ -130,7 +131,15 @@ fn every_shipped_puzzle_replays_through_the_board() {
 /// solves it with one move found first try and one not.
 #[test]
 fn a_puzzle_played_through_with_one_mistake() {
-    let mut state = State::new(Uuid::now_v7(), service(), Some(daily(date())), Vec::new());
+    let mut state = State::new(
+        Uuid::now_v7(),
+        service(),
+        Some(Today {
+            daily: daily(date()),
+            games: Vec::new(),
+        }),
+        Vec::new(),
+    );
     state.set_puzzle_for_test(Difficulty::Easy, mate_in_two());
     assert_eq!(
         (
@@ -206,7 +215,15 @@ fn a_puzzle_played_through_with_one_mistake() {
 fn any_mate_wins_even_one_the_puzzle_does_not_list() {
     let puzzle = two_mates();
     let user_id = Uuid::now_v7();
-    let mut state = State::new(user_id, service(), Some(daily(date())), Vec::new());
+    let mut state = State::new(
+        user_id,
+        service(),
+        Some(Today {
+            daily: daily(date()),
+            games: Vec::new(),
+        }),
+        Vec::new(),
+    );
     state.set_puzzle_for_test(Difficulty::Easy, puzzle);
 
     state.click(1);
@@ -280,7 +297,15 @@ fn any_mate_wins_even_one_the_puzzle_does_not_list() {
 /// named, the daily is no longer unfinished, and it cannot be restarted.
 #[test]
 fn three_wrong_moves_lose_and_show_the_solution() {
-    let mut state = State::new(Uuid::now_v7(), service(), Some(daily(date())), Vec::new());
+    let mut state = State::new(
+        Uuid::now_v7(),
+        service(),
+        Some(Today {
+            daily: daily(date()),
+            games: Vec::new(),
+        }),
+        Vec::new(),
+    );
     state.set_puzzle_for_test(Difficulty::Easy, mate_in_two());
     for _ in 0..LIVES {
         state.click(49);
@@ -356,7 +381,15 @@ fn saved_rows_restore_and_bad_rows_are_dealt_fresh() {
             vec![0],
         ),
     ];
-    let mut state = State::new(user_id, service(), Some(daily(date())), rows);
+    let mut state = State::new(
+        user_id,
+        service(),
+        Some(Today {
+            daily: daily(date()),
+            games: rows.clone(),
+        }),
+        rows,
+    );
 
     let mut dailies = Vec::new();
     for index in 0..3 {
@@ -459,7 +492,10 @@ fn the_utc_rollover_clears_the_dailies_and_backs_off_a_failed_fetch() {
     let mut state = State::new(
         user_id,
         service(),
-        Some(daily(yesterday)),
+        Some(Today {
+            daily: daily(yesterday),
+            games: Vec::new(),
+        }),
         vec![saved(
             user_id,
             "personal",
@@ -483,7 +519,10 @@ fn the_utc_rollover_clears_the_dailies_and_backs_off_a_failed_fetch() {
         (false, yesterday, None, "Loading today's Chess Puzzle.")
     );
     assert!(!state.ensure_current_daily());
-    assert!(state.poll_reload());
+    let (tx, rx) = tokio::sync::oneshot::channel::<Option<Today>>();
+    state.load = DailyLoad::Loading(rx);
+    drop(tx);
+    assert!(state.poll_load());
     assert_eq!(
         state.message(),
         "Chess Puzzle is unavailable. Retrying soon."

@@ -567,6 +567,15 @@ pub enum ArcadeFinish {
     Lost,
 }
 
+/// How one load of a database-claimed daily's puzzle and saved progress
+/// ended (`arcade/daily_load.rs`), at connect, after a failed load, or at
+/// the UTC rollover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArcadeDailyLoad {
+    Loaded,
+    Failed,
+}
+
 /// Whether a session's second of attention had a key press behind it
 /// recently (`Active`) or is a terminal left open (`Idle`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -795,20 +804,20 @@ mod inner {
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
     use super::{
-        ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, AwardAnnouncementOutcome,
-        BioScreenOutcome, DailyPuzzle, DailyWinPayout, DoorCard, DoorGame, DoorOpeningResult,
-        DoorWatchOutcome, FightBeat, FirstContactBeat, GalleryApplauseResult, GalleryHangResult,
-        GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
-        HeraldBriefResult, HeraldDeliveryResult, HeraldLookResult, HeraldPostResult,
-        JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, LoungeBeat,
-        NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
-        OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult, Place,
-        PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire,
-        RadioStation, RealmChatRoomAttach, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError,
-        Refresh, RefreshOutcome, RenderReason, RollCallResult, RoundRefusal, RunnerDoor, Screen,
-        SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
-        SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
-        VizWireBands, WatchDoor,
+        ActivityGame, ArcadeDailyLoad, ArcadeDifficulty, ArcadeFinish, ArcadeMode,
+        AwardAnnouncementOutcome, BioScreenOutcome, DailyPuzzle, DailyWinPayout, DoorCard,
+        DoorGame, DoorOpeningResult, DoorWatchOutcome, FightBeat, FirstContactBeat,
+        GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict,
+        GiftDrinkRefusal, GildRefusal, GildTier, HeraldBriefResult, HeraldDeliveryResult,
+        HeraldLookResult, HeraldPostResult, JobsFetchResult, JobsPostResult, JobsPressResult,
+        JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
+        OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult,
+        Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope,
+        PresenceWire, RadioStation, RealmChatRoomAttach, RealmPayout, RealmSeasonOpen,
+        RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason, RollCallResult, RoundRefusal,
+        RunnerDoor, Screen, SendRefusal, SessionStartStage, SessionUser, SnapshotRowError,
+        SongQueueReward, SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch,
+        TranslationResult, VizWireBands, WatchDoor,
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
@@ -2009,6 +2018,18 @@ mod inner {
         })
     }
 
+    fn arcade_daily_loads_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_arcade_daily_loads_total")
+                .with_description(
+                    "Loads of a database-claimed Arcade daily (puzzle and saved progress), by game and outcome",
+                )
+                .build()
+        })
+    }
+
     fn attention_seconds_total() -> &'static Counter<f64> {
         static METRIC: OnceLock<Counter<f64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -2683,6 +2704,24 @@ mod inner {
                 KeyValue::new("mode", arcade_mode_label(mode)),
                 KeyValue::new("difficulty", arcade_difficulty_label(difficulty)),
                 KeyValue::new("finish", arcade_finish_label(finish)),
+            ],
+        );
+    }
+
+    fn arcade_daily_load_label(load: ArcadeDailyLoad) -> &'static str {
+        match load {
+            ArcadeDailyLoad::Loaded => "loaded",
+            ArcadeDailyLoad::Failed => "failed",
+        }
+    }
+
+    /// One load of today's `puzzle` and the player's saved progress on it.
+    pub fn record_arcade_daily_load(puzzle: DailyPuzzle, load: ArcadeDailyLoad) {
+        arcade_daily_loads_total().add(
+            1,
+            &[
+                KeyValue::new("game", puzzle.key()),
+                KeyValue::new("outcome", arcade_daily_load_label(load)),
             ],
         );
     }
@@ -4319,20 +4358,20 @@ mod inner {
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
     use super::{
-        ActivityGame, ArcadeDifficulty, ArcadeFinish, ArcadeMode, AwardAnnouncementOutcome,
-        BioScreenOutcome, DailyPuzzle, DailyWinPayout, DoorCard, DoorGame, DoorOpeningResult,
-        DoorWatchOutcome, FightBeat, FirstContactBeat, GalleryApplauseResult, GalleryHangResult,
-        GalleryTakeDownResult, GateVerdict, GiftDrinkRefusal, GildRefusal, GildTier,
-        HeraldBriefResult, HeraldDeliveryResult, HeraldLookResult, HeraldPostResult,
-        JobsFetchResult, JobsPostResult, JobsPressResult, JobsReadResult, LoungeBeat,
-        NewsShareReward, NightcapHouseFailure, NightcapOrderResult, OldSignalPayout,
-        OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult, Place,
-        PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope, PresenceWire,
-        RadioStation, RealmChatRoomAttach, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError,
-        Refresh, RefreshOutcome, RenderReason, RollCallResult, RoundRefusal, RunnerDoor, Screen,
-        SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
-        SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
-        VizWireBands, WatchDoor,
+        ActivityGame, ArcadeDailyLoad, ArcadeDifficulty, ArcadeFinish, ArcadeMode,
+        AwardAnnouncementOutcome, BioScreenOutcome, DailyPuzzle, DailyWinPayout, DoorCard,
+        DoorGame, DoorOpeningResult, DoorWatchOutcome, FightBeat, FirstContactBeat,
+        GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict,
+        GiftDrinkRefusal, GildRefusal, GildTier, HeraldBriefResult, HeraldDeliveryResult,
+        HeraldLookResult, HeraldPostResult, JobsFetchResult, JobsPostResult, JobsPressResult,
+        JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
+        OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult,
+        Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope,
+        PresenceWire, RadioStation, RealmChatRoomAttach, RealmPayout, RealmSeasonOpen,
+        RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason, RollCallResult, RoundRefusal,
+        RunnerDoor, Screen, SendRefusal, SessionStartStage, SessionUser, SnapshotRowError,
+        SongQueueReward, SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch,
+        TranslationResult, VizWireBands, WatchDoor,
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
@@ -4413,6 +4452,7 @@ mod inner {
         _finish: ArcadeFinish,
     ) {
     }
+    pub fn record_arcade_daily_load(_puzzle: DailyPuzzle, _load: ArcadeDailyLoad) {}
     pub fn record_attention(
         _screen: Screen,
         _place: Place,

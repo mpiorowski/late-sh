@@ -104,14 +104,16 @@ pub(crate) fn state_for(puzzle_date: chrono::NaiveDate, answer: &str) -> State {
     State::new(
         Uuid::now_v7(),
         svc,
-        Some(DailyWord {
-            id: Uuid::now_v7(),
-            created: now,
-            updated: now,
-            puzzle_date,
-            answer_word: answer.to_string(),
+        Some(Today {
+            word: DailyWord {
+                id: Uuid::now_v7(),
+                created: now,
+                updated: now,
+                puzzle_date,
+                answer_word: answer.to_string(),
+            },
+            saved: None,
         }),
-        None,
     )
 }
 
@@ -132,8 +134,27 @@ fn todays_word(today: chrono::NaiveDate) -> late_core::models::le_word::DailyWor
     }
 }
 
+/// A round of `guesses` on today's word, as another session saved it.
+fn saved_round(today: chrono::NaiveDate, guesses: &[&str]) -> late_core::models::le_word::Game {
+    let now = chrono::Utc::now();
+    late_core::models::le_word::Game {
+        id: uuid::Uuid::now_v7(),
+        created: now,
+        updated: now,
+        user_id: uuid::Uuid::now_v7(),
+        puzzle_date: today,
+        answer_word: "slate".to_string(),
+        guesses: serde_json::json!(guesses),
+        current_guess: String::new(),
+        is_game_over: false,
+        won: false,
+    }
+}
+
 /// Yesterday's word stayed on the board of a session that never reconnected,
 /// so guesses went on being scored against it after the day rolled over.
+/// The rollover now clears it at once, and today's word lands with the
+/// round the player already has on it.
 #[test]
 fn rolling_over_the_day_clears_yesterdays_word() {
     let (mut state, today, yesterday) = yesterdays_state();
@@ -146,52 +167,106 @@ fn rolling_over_the_day_clears_yesterdays_word() {
         !state.daily_word_loaded,
         "the board must not accept guesses until today's word lands"
     );
+    assert!(!state.ensure_current_daily(), "nothing left to clear");
 
-    // A fetch is in flight: no duplicate spawn on the next tick.
-    assert!(!state.ensure_current_daily());
-
-    // The word lands; only now does the round own today's date.
     let (tx, rx) = tokio::sync::oneshot::channel();
-    state.word_reload_rx = Some(rx);
-    tx.send(Some(todays_word(today))).expect("deliver word");
-    assert!(state.poll_word_reload());
-    assert_eq!(state.puzzle_date, today);
-    assert!(state.daily_word_loaded);
-
-    // Same day again: nothing to do.
+    state.load = DailyLoad::Loading(rx);
+    tx.send(Some(Today {
+        word: todays_word(today),
+        saved: Some(saved_round(today, &["crane"])),
+    }))
+    .expect("deliver word");
+    assert!(state.poll_load());
+    assert_eq!(
+        (
+            state.puzzle_date,
+            state.daily_word_loaded,
+            state.guesses.clone(),
+            state.message.as_str()
+        ),
+        (today, true, vec!["crane".to_string()], "Keep going.")
+    );
     assert!(!state.ensure_current_daily());
 }
 
-/// A failed rollover fetch used to disable Le Word for the rest of the
-/// session: the date had already advanced, so the rollover never re-ran and
-/// input stayed gated on `daily_word_loaded`. The date now only advances when
-/// the word lands, and a failure retries after a backoff.
+/// A failed rollover load used to disable Le Word for the rest of the
+/// session. The date only advances when the word lands, and a load that
+/// brings nothing says so and waits before the next.
 #[test]
-fn failed_word_fetch_retries_after_backoff() {
-    let (mut state, today, yesterday) = yesterdays_state();
-
-    // Without a runtime the fetch sender drops, standing in for a DB error.
+fn a_failed_load_says_so_and_keeps_yesterdays_date() {
+    let (mut state, _today, yesterday) = yesterdays_state();
     assert!(state.ensure_current_daily());
-    assert!(state.poll_word_reload(), "the dead fetch should be noticed");
+
+    let (tx, rx) = tokio::sync::oneshot::channel::<Option<Today>>();
+    state.load = DailyLoad::Loading(rx);
+    drop(tx);
+    assert!(state.poll_load(), "the dead load should be noticed");
     assert_eq!(
-        state.puzzle_date, yesterday,
-        "a failure must not bank today"
+        (
+            state.puzzle_date,
+            state.daily_word_loaded,
+            state.message.as_str()
+        ),
+        (yesterday, false, "Le Word is unavailable. Retrying soon.")
     );
+    assert!(!state.poll_load(), "inside the wait nothing changes");
+}
+
+/// A session whose connect-time load failed kept Le Word unavailable until
+/// it reconnected: only the rollover reloaded, and the date had not moved.
+/// The board now loads again once the wait passes, with the player's round.
+#[tokio::test]
+async fn a_failed_connect_time_load_retries_with_the_saved_round() {
+    use late_core::{models::le_word::GameParams, test_utils::create_test_user};
+
+    use crate::app::arcade::le_word::svc::LeWordService;
+    use crate::test_helpers::new_test_db;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "le-word-retry").await;
+    let (activity_feed, _) = tokio::sync::broadcast::channel(8);
+    let svc = LeWordService::new(test_db.db.clone(), activity_feed);
+    let word = svc.ensure_daily_word().await.expect("daily word");
+    let client = test_db.db.get().await.expect("db client");
+    late_core::models::le_word::Game::upsert(
+        &client,
+        GameParams {
+            user_id: user.id,
+            puzzle_date: word.puzzle_date,
+            answer_word: word.answer_word.clone(),
+            guesses: serde_json::json!(["crane"]),
+            current_guess: String::new(),
+            is_game_over: false,
+            won: false,
+        },
+    )
+    .await
+    .expect("another session's round");
+
+    let mut state = State::new(user.id, svc, None);
     assert!(!state.daily_word_loaded);
-
-    // Inside the backoff window: no hammering.
-    assert!(!state.ensure_current_daily());
-
-    // Once the backoff passes, the rollover tries again...
-    state.word_reload_backoff_until = Some(std::time::Instant::now());
-    assert!(state.ensure_current_daily(), "the fetch should retry");
-
-    // ...and a successful retry brings the board back for good.
-    let (tx, rx) = tokio::sync::oneshot::channel();
-    state.word_reload_rx = Some(rx);
-    tx.send(Some(todays_word(today))).expect("deliver word");
-    assert!(state.poll_word_reload());
-    assert_eq!(state.puzzle_date, today);
-    assert!(state.daily_word_loaded, "the retried word should install");
-    assert!(!state.ensure_current_daily());
+    state.load = DailyLoad::Failed {
+        retry_after: std::time::Instant::now(),
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !state.daily_word_loaded {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the retry never landed"
+        );
+        state.poll_load();
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    }
+    assert_eq!(
+        (
+            state.puzzle_date,
+            state.answer.clone(),
+            state.guesses.clone()
+        ),
+        (
+            word.puzzle_date,
+            word.answer_word,
+            vec!["crane".to_string()]
+        )
+    );
 }

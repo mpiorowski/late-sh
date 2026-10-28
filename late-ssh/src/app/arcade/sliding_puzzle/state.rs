@@ -1,7 +1,10 @@
 use chrono::{NaiveDate, Utc};
-use late_core::models::{
-    chips::Difficulty,
-    sliding_puzzle::{Game, GameParams},
+use late_core::{
+    daily,
+    models::{
+        chips::Difficulty,
+        sliding_puzzle::{Game, GameParams},
+    },
 };
 use rand_core::{OsRng, RngCore};
 use std::time::{Duration, Instant};
@@ -768,17 +771,11 @@ pub fn solved_board(difficulty: Difficulty) -> Vec<u8> {
 }
 
 pub(crate) fn daily_seed(puzzle_date: NaiveDate, difficulty: Difficulty) -> u64 {
-    let mut seed = 0xcbf2_9ce4_8422_2325u64;
-    for byte in b"late-sh-sliding-puzzle-daily-v1"
-        .iter()
-        .copied()
-        .chain(puzzle_date.format("%Y-%m-%d").to_string().bytes())
-        .chain(difficulty.key().bytes())
-    {
-        seed ^= u64::from(byte);
-        seed = seed.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    seed
+    daily::fnv1a(&format!(
+        "late-sh-sliding-puzzle-daily-v1{}{}",
+        puzzle_date.format("%Y-%m-%d"),
+        difficulty.key()
+    ))
 }
 
 pub fn generate_scramble(difficulty: Difficulty, mut seed: u64) -> GeneratedBoard {

@@ -1,9 +1,10 @@
 use chrono::NaiveDate;
-use late_core::models::le_word::{DailyWord, Game, GameParams};
+use late_core::models::le_word::GameParams;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::svc::LeWordService;
+use super::svc::{LeWordService, Today};
+use crate::app::arcade::daily_load::{DailyLoad, Polled};
 use crate::metrics::{ArcadeDifficulty, ArcadeFinish, ArcadeMode};
 
 pub const WORD_LEN: usize = 5;
@@ -28,94 +29,74 @@ pub struct State {
     pub won: bool,
     pub show_rules: bool,
     pub message: String,
-    /// In flight only while a rolled-over day is fetching its word; see
-    /// `ensure_current_daily`.
-    word_reload_rx: Option<tokio::sync::oneshot::Receiver<Option<DailyWord>>>,
-    /// Set when a rollover fetch failed; `ensure_current_daily` holds off
-    /// until this passes, then tries again. Without it a transient DB error
-    /// at midnight left the board dead for the rest of the session.
-    word_reload_backoff_until: Option<std::time::Instant>,
+    /// Today's word while the board has none; see `poll_load`.
+    load: DailyLoad<Today>,
     pub svc: LeWordService,
 }
 
-/// How long a failed rollover word fetch waits before the next attempt.
-const WORD_RELOAD_RETRY: std::time::Duration = std::time::Duration::from_secs(30);
-
 impl State {
-    pub fn new(
-        user_id: Uuid,
-        svc: LeWordService,
-        daily_word: Option<DailyWord>,
-        saved_game: Option<Game>,
-    ) -> Self {
-        let daily_word_loaded = daily_word.is_some();
-        let puzzle_date = daily_word
-            .as_ref()
-            .map(|word| word.puzzle_date)
-            .unwrap_or_else(|| svc.today());
-        let answer = daily_word.map(|word| word.answer_word).unwrap_or_default();
+    /// A session's board from its connect-time load; `None` (the load
+    /// failed) shows the board unavailable and retries from `poll_load`.
+    pub fn new(user_id: Uuid, svc: LeWordService, today: Option<Today>) -> Self {
         let mut state = Self {
             user_id,
-            puzzle_date,
-            answer,
-            daily_word_loaded,
+            puzzle_date: svc.today(),
+            answer: String::new(),
+            daily_word_loaded: false,
             guesses: Vec::new(),
             current_guess: String::new(),
             is_game_over: false,
             won: false,
             show_rules: false,
-            message: if daily_word_loaded {
-                "Guess today's Le Word.".to_string()
-            } else {
-                "Le Word is unavailable. Try again soon.".to_string()
-            },
-            word_reload_rx: None,
-            word_reload_backoff_until: None,
+            message: "Le Word is unavailable. Try again soon.".to_string(),
+            load: DailyLoad::after_connect(today.is_some()),
             svc,
         };
-        if let Some(game) = saved_game
-            && game.puzzle_date == state.puzzle_date
-            && game.answer_word == state.answer
-        {
-            state.guesses = serde_json::from_value(game.guesses).unwrap_or_default();
-            state.current_guess = game.current_guess;
-            state.is_game_over = game.is_game_over;
-            state.won = game.won;
-            state.message = if state.won {
-                format!("Solved in {}.", state.guesses.len())
-            } else if state.is_game_over {
-                format!("The word was {}.", state.answer.to_uppercase())
-            } else {
-                "Keep going.".to_string()
-            };
+        if let Some(today) = today {
+            state.install(today);
         }
         state
     }
 
-    /// Roll the round over when the UTC date changes under a live session.
-    /// The word itself lives in the database (the session's first one arrives
-    /// with the bootstrap), so this clears the board immediately and fetches
-    /// the new word in the background; `poll_word_reload` installs it.
-    /// `puzzle_date` only advances once the word lands, so a failed fetch is
-    /// retried here (after `WORD_RELOAD_RETRY`) instead of leaving the board
-    /// dead until reconnect. Returns true when the screen changed.
-    pub fn ensure_current_daily(&mut self) -> bool {
-        let today = self.svc.today();
-        if self.puzzle_date == today {
-            return false;
-        }
-        if self.word_reload_rx.is_some() {
-            return false;
-        }
-        if let Some(until) = self.word_reload_backoff_until
-            && std::time::Instant::now() < until
+    /// Put a day's word on the board with the saved round that belongs to
+    /// it.
+    fn install(&mut self, today: Today) {
+        let Today { word, saved } = today;
+        self.puzzle_date = word.puzzle_date;
+        self.answer = word.answer_word;
+        self.daily_word_loaded = true;
+        self.guesses.clear();
+        self.current_guess.clear();
+        self.is_game_over = false;
+        self.won = false;
+        self.message = "Guess today's Le Word.".to_string();
+        if let Some(game) = saved
+            && game.puzzle_date == self.puzzle_date
+            && game.answer_word == self.answer
         {
+            self.guesses = serde_json::from_value(game.guesses).unwrap_or_default();
+            self.current_guess = game.current_guess;
+            self.is_game_over = game.is_game_over;
+            self.won = game.won;
+            self.message = if self.won {
+                format!("Solved in {}.", self.guesses.len())
+            } else if self.is_game_over {
+                format!("The word was {}.", self.answer.to_uppercase())
+            } else {
+                "Keep going.".to_string()
+            };
+        }
+    }
+
+    /// Roll the round over when the UTC date changes under a live session:
+    /// yesterday's word comes off at once, and `poll_load` fetches today's.
+    /// Returns true when the screen changed.
+    pub fn ensure_current_daily(&mut self) -> bool {
+        if !self.daily_word_loaded || self.puzzle_date == self.svc.today() {
             return false;
         }
-        self.word_reload_backoff_until = None;
-
         // Yesterday's word must stop scoring guesses right away, whether or
-        // not the fetch succeeds.
+        // not today's loads.
         self.answer = String::new();
         self.daily_word_loaded = false;
         self.guesses.clear();
@@ -123,53 +104,28 @@ impl State {
         self.is_game_over = false;
         self.won = false;
         self.message = "Loading today's Le Word.".to_string();
-
-        let (tx, rx) = tokio::sync::oneshot::channel();
-        self.word_reload_rx = Some(rx);
-        let svc = self.svc.clone();
-        // Pure state tests drive this without a runtime; the state is already
-        // cleared, and the poll below installs nothing when nothing arrives.
-        if tokio::runtime::Handle::try_current().is_ok() {
-            tokio::spawn(async move {
-                let word = match svc.ensure_daily_word().await {
-                    Ok(word) => Some(word),
-                    Err(error) => {
-                        tracing::error!(error = ?error, "failed to load the rolled-over Le Word");
-                        None
-                    }
-                };
-                let _ = tx.send(word);
-            });
-        }
         true
     }
 
-    /// Install a word fetched by `ensure_current_daily`. Returns true when the
-    /// screen changed.
-    pub fn poll_word_reload(&mut self) -> bool {
-        let Some(rx) = self.word_reload_rx.as_mut() else {
-            return false;
-        };
-        match rx.try_recv() {
-            Ok(Some(word)) => {
-                self.word_reload_rx = None;
-                self.word_reload_backoff_until = None;
-                self.puzzle_date = word.puzzle_date;
-                self.answer = word.answer_word;
-                self.daily_word_loaded = true;
-                self.message = "Guess today's Le Word.".to_string();
+    /// Load today's word and saved round whenever the board has no word (a
+    /// failed connect-time load, or the rollover), and install what lands.
+    /// Runs on every tick, board open or not. Returns true when the screen
+    /// changed.
+    pub fn poll_load(&mut self) -> bool {
+        let (svc, user_id) = (&self.svc, self.user_id);
+        match self
+            .load
+            .poll(!self.daily_word_loaded, || svc.load_today_task(user_id))
+        {
+            Polled::Waiting => false,
+            Polled::Loaded(today) => {
+                self.install(today);
                 true
             }
-            Ok(None) | Err(tokio::sync::oneshot::error::TryRecvError::Closed) => {
-                self.word_reload_rx = None;
-                // `puzzle_date` was not advanced, so `ensure_current_daily`
-                // tries again once the backoff passes.
-                self.word_reload_backoff_until =
-                    Some(std::time::Instant::now() + WORD_RELOAD_RETRY);
+            Polled::Failed => {
                 self.message = "Le Word is unavailable. Retrying soon.".to_string();
                 true
             }
-            Err(tokio::sync::oneshot::error::TryRecvError::Empty) => false,
         }
     }
 
@@ -355,7 +311,7 @@ fn score_rank(score: LetterScore) -> u8 {
 }
 
 // A child of this module (not a sibling in mod.rs) so the rollover tests can
-// drive the private reload channel and backoff directly. `pub(crate)` so the
+// drive the private daily load directly. `pub(crate)` so the
 // UI tests share its `state_for` fixture.
 #[cfg(test)]
 #[path = "state_test.rs"]

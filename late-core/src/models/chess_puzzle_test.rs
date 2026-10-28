@@ -84,7 +84,7 @@ async fn game_upsert_keeps_one_daily_and_one_personal_slot_per_difficulty() {
 
     for difficulty in [Difficulty::Easy, Difficulty::Medium, Difficulty::Hard] {
         Game::upsert(
-            &client,
+            &**client,
             GameParams {
                 puzzle_date: Some(today - Duration::days(1)),
                 ply: 2,
@@ -95,7 +95,7 @@ async fn game_upsert_keeps_one_daily_and_one_personal_slot_per_difficulty() {
         .expect("insert daily slot");
     }
     Game::upsert(
-        &client,
+        &**client,
         GameParams {
             puzzle_date: Some(today),
             puzzle_id: "0000D".to_string(),
@@ -107,7 +107,7 @@ async fn game_upsert_keeps_one_daily_and_one_personal_slot_per_difficulty() {
     .await
     .expect("update daily slot");
     Game::upsert(
-        &client,
+        &**client,
         GameParams {
             puzzle_id: "0009B".to_string(),
             ply: 1,
@@ -157,7 +157,7 @@ async fn game_rows_hold_at_most_three_mistakes() {
     let client = test_db.db.get().await.expect("db client");
 
     let result = Game::upsert(
-        &client,
+        &**client,
         GameParams {
             mistake_plies: vec![0, 0, 2, 2],
             ..params(user.id, "personal", Difficulty::Easy)
@@ -176,13 +176,13 @@ async fn daily_win_keeps_the_fewest_mistakes_and_counts_once() {
     let client = test_db.db.get().await.expect("db client");
     let today = NaiveDate::from_ymd_opt(2026, 10, 28).unwrap();
 
-    let first = DailyWin::record_win(&client, user.id, Difficulty::Hard, today, 1)
+    let first = DailyWin::record_win(&**client, user.id, Difficulty::Hard, today, 1)
         .await
         .expect("first win");
-    let worse = DailyWin::record_win(&client, user.id, Difficulty::Hard, today, 2)
+    let worse = DailyWin::record_win(&**client, user.id, Difficulty::Hard, today, 2)
         .await
         .expect("worse replay");
-    let clean = DailyWin::record_win(&client, user.id, Difficulty::Hard, today, 0)
+    let clean = DailyWin::record_win(&**client, user.id, Difficulty::Hard, today, 0)
         .await
         .expect("clean replay");
     assert_eq!(

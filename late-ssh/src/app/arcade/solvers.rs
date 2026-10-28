@@ -9,7 +9,10 @@
 use std::collections::HashMap;
 
 use chrono::NaiveDate;
-use late_core::models::leaderboard::{DailyCompletionStatus, DailyPuzzle};
+use late_core::{
+    daily,
+    models::leaderboard::{DailyCompletionStatus, DailyPuzzle},
+};
 use uuid::Uuid;
 
 use crate::usernames::UsernameResolver;
@@ -107,7 +110,7 @@ impl TodaySolvers<'_> {
                 // Sort first so the shuffle sees the same input whatever
                 // order the maps iterate in.
                 names.sort();
-                shuffle(&mut names, day_seed(date, game, difficulty_key));
+                daily::shuffle(&mut names, day_seed(date, game, difficulty_key));
                 TierSolvers {
                     difficulty_key,
                     chips: tier.chips(),
@@ -124,34 +127,11 @@ impl TodaySolvers<'_> {
 
 /// FNV-1a over the date, game and tier: one fixed order per tier per day.
 fn day_seed(date: NaiveDate, game: DailyPuzzle, difficulty_key: &str) -> u64 {
-    let mut seed = 0xcbf2_9ce4_8422_2325u64;
-    for byte in b"late-sh-daily-solvers-v1"
-        .iter()
-        .copied()
-        .chain(date.format("%Y-%m-%d").to_string().bytes())
-        .chain(game.key().bytes())
-        .chain(difficulty_key.bytes())
-    {
-        seed ^= u64::from(byte);
-        seed = seed.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    seed
-}
-
-/// Fisher-Yates over a splitmix64 stream, so the order depends on the seed
-/// alone and not on a platform RNG.
-fn shuffle<T>(items: &mut [T], mut seed: u64) {
-    let mut next = move || {
-        seed = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = seed;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
-    };
-    for i in (1..items.len()).rev() {
-        let j = (next() % (i as u64 + 1)) as usize;
-        items.swap(i, j);
-    }
+    daily::fnv1a(&format!(
+        "late-sh-daily-solvers-v1{}{}{difficulty_key}",
+        date.format("%Y-%m-%d"),
+        game.key()
+    ))
 }
 
 #[cfg(test)]

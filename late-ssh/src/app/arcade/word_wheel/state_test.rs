@@ -3,10 +3,12 @@ use std::collections::HashSet;
 use chrono::{Duration, NaiveDate, Utc};
 use late_core::{
     db::{Db, DbConfig},
+    models::word_wheel::Game,
     word_wheel::{WHEEL_LETTERS, fits},
 };
 use tokio::sync::broadcast;
 
+use super::super::svc::Daily;
 use super::*;
 use crate::app::activity::event::ActivityEvent;
 
@@ -123,7 +125,14 @@ fn ranks_start_at_their_share_of_the_top_score() {
 #[test]
 fn a_wheel_played_through_to_bronze() {
     let today = NaiveDate::from_ymd_opt(2026, 10, 28).unwrap();
-    let mut state = State::new(Uuid::now_v7(), service(), Some(daily(today)), None);
+    let mut state = State::new(
+        Uuid::now_v7(),
+        service(),
+        Some(Today {
+            daily: daily(today),
+            saved: None,
+        }),
+    );
     let mut messages = Vec::new();
     for word in ["rat", "attic", "brac", "brickbat", "brickbat"] {
         play(&mut state, word);
@@ -186,19 +195,21 @@ fn saved_words_restore_without_reaching_their_rank_again() {
     let mut state = State::new(
         Uuid::now_v7(),
         service(),
-        Some(daily(today)),
-        Some(saved(
-            today,
-            "rabcikt",
-            &[
-                "brickbat",
-                "backtrack",
-                "nope",
-                "baccarat",
-                "barbaric",
-                "brickbat",
-            ],
-        )),
+        Some(Today {
+            daily: daily(today),
+            saved: Some(saved(
+                today,
+                "rabcikt",
+                &[
+                    "brickbat",
+                    "backtrack",
+                    "nope",
+                    "baccarat",
+                    "barbaric",
+                    "brickbat",
+                ],
+            )),
+        }),
     );
     assert_eq!(
         (
@@ -217,7 +228,14 @@ fn saved_words_restore_without_reaching_their_rank_again() {
         saved(today - Duration::days(1), "rabcikt", &["brickbat"]),
         saved(today, "tabcikr", &["brickbat"]),
     ] {
-        let state = State::new(Uuid::now_v7(), service(), Some(daily(today)), Some(other));
+        let state = State::new(
+            Uuid::now_v7(),
+            service(),
+            Some(Today {
+                daily: daily(today),
+                saved: Some(other),
+            }),
+        );
         assert!(state.found().is_empty());
     }
 }
@@ -229,8 +247,10 @@ fn shuffle_reorders_the_rim_only() {
     let mut state = State::new(
         Uuid::now_v7(),
         service(),
-        Some(daily(Utc::now().date_naive())),
-        None,
+        Some(Today {
+            daily: daily(Utc::now().date_naive()),
+            saved: None,
+        }),
     );
     state.push_letter('r');
     let before = state.rim();
@@ -247,11 +267,18 @@ fn shuffle_reorders_the_rim_only() {
 }
 
 /// A session left open past UTC midnight clears yesterday's wheel at once;
-/// a fetch that brings nothing says so and waits before trying again.
+/// a load that brings nothing says so and waits before trying again.
 #[test]
 fn the_rollover_clears_the_wheel_and_backs_off_a_failed_fetch() {
     let yesterday = Utc::now().date_naive() - Duration::days(1);
-    let mut state = State::new(Uuid::now_v7(), service(), Some(daily(yesterday)), None);
+    let mut state = State::new(
+        Uuid::now_v7(),
+        service(),
+        Some(Today {
+            daily: daily(yesterday),
+            saved: None,
+        }),
+    );
     play(&mut state, "brickbat");
 
     assert!(state.ensure_current_daily());
@@ -264,7 +291,10 @@ fn the_rollover_clears_the_wheel_and_backs_off_a_failed_fetch() {
         (false, 0, "Loading today's Word Wheel.".to_string())
     );
     assert!(!state.ensure_current_daily());
-    assert!(state.poll_reload());
+    let (tx, rx) = tokio::sync::oneshot::channel::<Option<Today>>();
+    state.load = DailyLoad::Loading(rx);
+    drop(tx);
+    assert!(state.poll_load());
     assert_eq!(state.message(), "Word Wheel is unavailable. Retrying soon.");
     assert!(!state.ensure_current_daily());
     assert!(!state.push_letter('r'));

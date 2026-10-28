@@ -10,7 +10,7 @@ use late_core::{
     },
     word_wheel::{WordWheel, choose_for_date},
 };
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, oneshot};
 use uuid::Uuid;
 
 use super::state::{find_wheel, pack};
@@ -19,6 +19,7 @@ use crate::{
         activity::event::ActivityEvent,
         arcade::{
             daily::activity_game,
+            daily_load,
             save_queue::{SaveCommand, SaveQueue},
         },
     },
@@ -30,6 +31,14 @@ use crate::{
 pub struct Daily {
     pub puzzle_date: NaiveDate,
     pub wheel: &'static WordWheel,
+}
+
+/// Today's wheel with this user's saved words on it, as `load_today` hands
+/// it over.
+#[derive(Debug)]
+pub struct Today {
+    pub daily: Daily,
+    pub saved: Option<Game>,
 }
 
 #[derive(Clone)]
@@ -112,6 +121,30 @@ impl WordWheelService {
         self.saves.settle().await;
         let client = self.db.get().await?;
         Game::find_for_date(&client, user_id, puzzle_date).await
+    }
+
+    /// Today's wheel and this user's words on it, read for the wheel's own
+    /// date so a load across midnight never pairs a wheel with another day's
+    /// words. Logged and counted by `daily_load`; `None` when it failed.
+    pub async fn load_today(&self, user_id: Uuid) -> Option<Today> {
+        daily_load::load(DailyPuzzle::WordWheel, self.clone().fetch_today(user_id)).await
+    }
+
+    /// [`Self::load_today`] off the tick, for a board left without a wheel.
+    pub fn load_today_task(&self, user_id: Uuid) -> oneshot::Receiver<Option<Today>> {
+        daily_load::load_task(DailyPuzzle::WordWheel, self.clone().fetch_today(user_id))
+    }
+
+    async fn fetch_today(self, user_id: Uuid) -> Result<Today> {
+        let daily = self
+            .ensure_daily_wheel()
+            .await
+            .context("claiming today's word wheel")?;
+        let saved = self
+            .load_game(user_id, daily.puzzle_date)
+            .await
+            .context("loading the saved word wheel words")?;
+        Ok(Today { daily, saved })
     }
 
     pub fn save_game_task(&self, params: GameParams) {

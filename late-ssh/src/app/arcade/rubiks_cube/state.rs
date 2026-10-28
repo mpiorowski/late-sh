@@ -1,5 +1,8 @@
 use chrono::{NaiveDate, Utc};
-use late_core::models::rubiks_cube::{Game, GameParams};
+use late_core::{
+    daily,
+    models::rubiks_cube::{Game, GameParams},
+};
 use uuid::Uuid;
 
 use super::svc::RubiksCubeService;
@@ -375,16 +378,10 @@ fn daily_scramble(puzzle_date: NaiveDate) -> Vec<CubeMove> {
 }
 
 fn stable_daily_seed(puzzle_date: NaiveDate) -> u64 {
-    let mut seed = 0xcbf2_9ce4_8422_2325u64;
-    for byte in b"late-sh-rubiks-cube-daily-v1" {
-        seed ^= u64::from(*byte);
-        seed = seed.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    for byte in puzzle_date.format("%Y-%m-%d").to_string().bytes() {
-        seed ^= u64::from(byte);
-        seed = seed.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    seed
+    daily::fnv1a(&format!(
+        "late-sh-rubiks-cube-daily-v1{}",
+        puzzle_date.format("%Y-%m-%d")
+    ))
 }
 
 fn next_seed(seed: &mut u64) -> u64 {

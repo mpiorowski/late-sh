@@ -1,9 +1,13 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{Duration, NaiveDate, Utc};
-use late_core::db::{Db, DbConfig};
+use late_core::{
+    db::{Db, DbConfig},
+    models::quartets::Game,
+};
 use tokio::sync::broadcast;
 
+use super::super::svc::Daily;
 use super::*;
 use crate::app::activity::event::ActivityEvent;
 
@@ -114,7 +118,14 @@ fn a_try_splits_by_how_its_words_fall_across_the_quartets() {
 #[test]
 fn a_wall_played_through_to_solved() {
     let today = Utc::now().date_naive();
-    let mut state = State::new(Uuid::now_v7(), service(), Some(daily(today)), None);
+    let mut state = State::new(
+        Uuid::now_v7(),
+        service(),
+        Some(Today {
+            daily: daily(today),
+            saved: None,
+        }),
+    );
     let mut messages = Vec::new();
 
     pick(&mut state, &[0, 1, 2, 4]);
@@ -181,7 +192,14 @@ fn a_wall_played_through_to_solved() {
 #[test]
 fn the_third_strike_ends_the_wall() {
     let today = Utc::now().date_naive();
-    let mut state = State::new(Uuid::now_v7(), service(), Some(daily(today)), None);
+    let mut state = State::new(
+        Uuid::now_v7(),
+        service(),
+        Some(Today {
+            daily: daily(today),
+            saved: None,
+        }),
+    );
     for words in [[0, 1, 2, 3], [4, 8, 12, 13], [4, 5, 8, 12], [8, 9, 12, 13]] {
         try_words(&mut state, words);
     }
@@ -225,8 +243,10 @@ fn saved_tries_replay_and_drop_what_the_wall_cannot_take() {
     let state = State::new(
         Uuid::now_v7(),
         service(),
-        Some(daily(today)),
-        Some(saved(today, 1, tries)),
+        Some(Today {
+            daily: daily(today),
+            saved: Some(saved(today, 1, tries)),
+        }),
     );
     assert_eq!(
         (
@@ -251,7 +271,14 @@ fn saved_tries_replay_and_drop_what_the_wall_cannot_take() {
         saved(today - Duration::days(1), 1, &[0, 1, 2, 3]),
         saved(today, 2, &[0, 1, 2, 3]),
     ] {
-        let state = State::new(Uuid::now_v7(), service(), Some(daily(today)), Some(other));
+        let state = State::new(
+            Uuid::now_v7(),
+            service(),
+            Some(Today {
+                daily: daily(today),
+                saved: Some(other),
+            }),
+        );
         assert!(state.tries().is_empty());
     }
 }
@@ -268,7 +295,14 @@ fn the_opening_wall_is_the_days_and_shuffle_is_the_sessions() {
     assert_eq!(opening, opening_wall(today, 1));
     assert_ne!(opening, opening_wall(today + Duration::days(1), 1));
 
-    let mut state = State::new(Uuid::now_v7(), service(), Some(daily(today)), None);
+    let mut state = State::new(
+        Uuid::now_v7(),
+        service(),
+        Some(Today {
+            daily: daily(today),
+            saved: None,
+        }),
+    );
     assert_eq!(state.wall(), &opening[..]);
     pick(&mut state, &[0, 4, 0, 8]);
     let mut orders = HashSet::new();
@@ -313,11 +347,18 @@ fn the_days_pick_prefers_unused_then_oldest() {
 }
 
 /// A session left open past UTC midnight clears yesterday's wall at once;
-/// a fetch that brings nothing says so and waits before trying again.
+/// a load that brings nothing says so and waits before trying again.
 #[test]
 fn the_rollover_clears_the_wall_and_backs_off_a_failed_fetch() {
     let yesterday = Utc::now().date_naive() - Duration::days(1);
-    let mut state = State::new(Uuid::now_v7(), service(), Some(daily(yesterday)), None);
+    let mut state = State::new(
+        Uuid::now_v7(),
+        service(),
+        Some(Today {
+            daily: daily(yesterday),
+            saved: None,
+        }),
+    );
     try_words(&mut state, [0, 1, 2, 3]);
 
     assert!(state.ensure_current_daily());
@@ -331,7 +372,10 @@ fn the_rollover_clears_the_wall_and_backs_off_a_failed_fetch() {
         (false, 0, 0, "Loading today's Quartets.".to_string())
     );
     assert!(!state.ensure_current_daily());
-    assert!(state.poll_reload());
+    let (tx, rx) = tokio::sync::oneshot::channel::<Option<Today>>();
+    state.load = DailyLoad::Loading(rx);
+    drop(tx);
+    assert!(state.poll_load());
     assert_eq!(state.message(), "Quartets is unavailable. Retrying soon.");
     assert!(!state.ensure_current_daily());
     assert!(!state.click(0));

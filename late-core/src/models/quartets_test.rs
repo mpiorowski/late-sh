@@ -33,10 +33,10 @@ async fn game_upsert_keeps_the_longer_tries_of_the_same_puzzle() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "quartets-model-upsert").await;
     let client = test_db.db.get().await.expect("db client");
-    Game::upsert(&client, params(user.id, 7, &[0, 1, 2, 4]))
+    Game::upsert(&**client, params(user.id, 7, &[0, 1, 2, 4]))
         .await
         .expect("first try");
-    Game::upsert(&client, params(user.id, 7, &[0, 1, 2, 4, 0, 1, 2, 3]))
+    Game::upsert(&**client, params(user.id, 7, &[0, 1, 2, 4, 0, 1, 2, 3]))
         .await
         .expect("second try");
     assert_eq!(
@@ -44,7 +44,7 @@ async fn game_upsert_keeps_the_longer_tries_of_the_same_puzzle() {
         Some((7, vec![0, 1, 2, 4, 0, 1, 2, 3]))
     );
 
-    Game::upsert(&client, params(user.id, 7, &[4, 5, 6, 7]))
+    Game::upsert(&**client, params(user.id, 7, &[4, 5, 6, 7]))
         .await
         .expect("stale session");
     assert_eq!(
@@ -52,7 +52,7 @@ async fn game_upsert_keeps_the_longer_tries_of_the_same_puzzle() {
         Some((7, vec![0, 1, 2, 4, 0, 1, 2, 3]))
     );
 
-    Game::upsert(&client, params(user.id, 9, &[]))
+    Game::upsert(&**client, params(user.id, 9, &[]))
         .await
         .expect("other puzzle");
     assert_eq!(stored(&client, user.id).await, Some((9, vec![])));
@@ -94,10 +94,10 @@ async fn daily_win_counts_once_and_keeps_the_fewer_strikes() {
     let user = create_test_user(&test_db.db, "quartets-model-win").await;
     let client = test_db.db.get().await.expect("db client");
 
-    let first = DailyWin::record_win(&client, user.id, today(), 2)
+    let first = DailyWin::record_win(&**client, user.id, today(), 2)
         .await
         .expect("first solve");
-    let again = DailyWin::record_win(&client, user.id, today(), 1)
+    let again = DailyWin::record_win(&**client, user.id, today(), 1)
         .await
         .expect("solve again");
     assert_eq!(

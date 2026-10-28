@@ -6,20 +6,17 @@
 //! the same wheel as the score crosses them.
 
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
 
 use chrono::NaiveDate;
 use late_core::{
-    models::{
-        chips::Difficulty,
-        word_wheel::{Game, GameParams},
-    },
+    daily,
+    models::{chips::Difficulty, word_wheel::GameParams},
     word_wheel::{WHEEL_LETTERS, WordWheel, is_full_wheel},
 };
-use tokio::sync::oneshot;
 use uuid::Uuid;
 
-use super::svc::{Daily, WordWheelService};
+use super::svc::{Today, WordWheelService};
+use crate::app::arcade::daily_load::{DailyLoad, Polled};
 use crate::metrics::{ArcadeDifficulty, ArcadeFinish, ArcadeMode};
 
 const PACK: &[u8] = include_bytes!("../../../../assets/word_wheel/wheels.json");
@@ -27,8 +24,6 @@ static WHEELS: OnceLock<Vec<WordWheel>> = OnceLock::new();
 
 /// The most letters the typed line holds; the pack's longest answer has 15.
 pub const MAX_TYPED: usize = 20;
-/// How long a failed rollover fetch waits before the next attempt.
-const RELOAD_RETRY: Duration = Duration::from_secs(30);
 const UNAVAILABLE: &str = "Word Wheel is unavailable. Try again soon.";
 const READY: &str = "Spell words from the wheel. Every word uses the hub.";
 
@@ -149,23 +144,16 @@ pub struct State {
     banked: Rank,
     show_rules: bool,
     message: String,
-    /// In flight only while a rolled-over day is fetching its wheel; see
-    /// `ensure_current_daily`.
-    reload_rx: Option<oneshot::Receiver<Option<Daily>>>,
-    /// Set when a rollover fetch failed; `ensure_current_daily` holds off
-    /// until this passes, then tries again.
-    reload_backoff_until: Option<Instant>,
+    /// Today's wheel while the board has none; see `poll_load`.
+    load: DailyLoad<Today>,
 }
 
 impl State {
-    pub fn new(
-        user_id: Uuid,
-        svc: WordWheelService,
-        daily: Option<Daily>,
-        saved: Option<Game>,
-    ) -> Self {
-        let puzzle_date = match daily {
-            Some(daily) => daily.puzzle_date,
+    /// A session's board from its connect-time load; `None` (the load
+    /// failed) shows the board unavailable and retries from `poll_load`.
+    pub fn new(user_id: Uuid, svc: WordWheelService, today: Option<Today>) -> Self {
+        let puzzle_date = match &today {
+            Some(today) => today.daily.puzzle_date,
             None => svc.today(),
         };
         let mut state = Self {
@@ -180,22 +168,18 @@ impl State {
             banked: Rank::Start,
             show_rules: false,
             message: UNAVAILABLE.to_string(),
-            reload_rx: None,
-            reload_backoff_until: None,
+            load: DailyLoad::after_connect(today.is_some()),
         };
-        if let Some(daily) = daily {
-            state.install(daily);
-            if let Some(game) = saved
-                && game.puzzle_date == daily.puzzle_date
-                && game.letters == daily.wheel.letters
-            {
-                state.restore(game.found);
-            }
+        if let Some(today) = today {
+            state.install(today);
         }
         state
     }
 
-    fn install(&mut self, daily: Daily) {
+    /// Put a day's wheel on the board with the saved words that belong to
+    /// it.
+    fn install(&mut self, today: Today) {
+        let Today { daily, saved } = today;
         self.puzzle_date = daily.puzzle_date;
         self.wheel = Some(daily.wheel);
         self.found.clear();
@@ -204,6 +188,12 @@ impl State {
         self.shuffles = 0;
         self.banked = Rank::Start;
         self.message = READY.to_string();
+        if let Some(game) = saved
+            && game.puzzle_date == daily.puzzle_date
+            && game.letters == daily.wheel.letters
+        {
+            self.restore(game.found);
+        }
     }
 
     /// Take a saved word list. Words the wheel does not accept are dropped,
@@ -235,70 +225,42 @@ impl State {
         }
     }
 
-    /// Roll the wheel over when the UTC date changes under a live session.
-    /// The claim lives in the database, so this clears the board at once
-    /// and fetches the new wheel in the background; `poll_reload` installs
-    /// it. `puzzle_date` only advances once the wheel lands, so a failed
-    /// fetch is retried here after `RELOAD_RETRY`. Returns true when the
-    /// screen changed.
+    /// Roll the wheel over when the UTC date changes under a live session:
+    /// yesterday's wheel comes off at once, and `poll_load` fetches today's.
+    /// Returns true when the screen changed.
     pub fn ensure_current_daily(&mut self) -> bool {
-        if self.puzzle_date == self.svc.today() || self.reload_rx.is_some() {
+        if self.wheel.is_none() || self.puzzle_date == self.svc.today() {
             return false;
         }
-        if let Some(until) = self.reload_backoff_until
-            && Instant::now() < until
-        {
-            return false;
-        }
-        self.reload_backoff_until = None;
-
         // Yesterday's wheel must stop taking words right away, whether or
-        // not the fetch succeeds.
+        // not today's loads.
         self.wheel = None;
         self.found.clear();
         self.typed.clear();
         self.banked = Rank::Start;
         self.message = "Loading today's Word Wheel.".to_string();
-
-        let (tx, rx) = oneshot::channel();
-        self.reload_rx = Some(rx);
-        let svc = self.svc.clone();
-        // Pure state tests drive this without a runtime; the board is
-        // already cleared, and the poll installs nothing when nothing comes.
-        if tokio::runtime::Handle::try_current().is_ok() {
-            tokio::spawn(async move {
-                let daily = match svc.ensure_daily_wheel().await {
-                    Ok(daily) => Some(daily),
-                    Err(error) => {
-                        tracing::error!(error = ?error, "failed to load the rolled-over word wheel");
-                        None
-                    }
-                };
-                let _ = tx.send(daily);
-            });
-        }
         true
     }
 
-    /// Install a wheel fetched by `ensure_current_daily`. Returns true when
-    /// the screen changed.
-    pub fn poll_reload(&mut self) -> bool {
-        let Some(rx) = self.reload_rx.as_mut() else {
-            return false;
-        };
-        match rx.try_recv() {
-            Ok(Some(daily)) => {
-                self.reload_rx = None;
-                self.install(daily);
+    /// Load today's wheel and saved words whenever the board has no wheel (a
+    /// failed connect-time load, or the rollover), and install what lands.
+    /// Runs on every tick, board open or not. Returns true when the screen
+    /// changed.
+    pub fn poll_load(&mut self) -> bool {
+        let (svc, user_id) = (&self.svc, self.user_id);
+        match self
+            .load
+            .poll(self.wheel.is_none(), || svc.load_today_task(user_id))
+        {
+            Polled::Waiting => false,
+            Polled::Loaded(today) => {
+                self.install(today);
                 true
             }
-            Ok(None) | Err(oneshot::error::TryRecvError::Closed) => {
-                self.reload_rx = None;
-                self.reload_backoff_until = Some(Instant::now() + RELOAD_RETRY);
+            Polled::Failed => {
                 self.message = "Word Wheel is unavailable. Retrying soon.".to_string();
                 true
             }
-            Err(oneshot::error::TryRecvError::Empty) => false,
         }
     }
 
@@ -442,12 +404,7 @@ impl State {
             return false;
         }
         self.shuffles += 1;
-        let mut seed = self.shuffles;
-        for index in (1..self.rim.len()).rev() {
-            seed = splitmix64(seed);
-            let swap = (seed % (index as u64 + 1)) as usize;
-            self.rim.swap(index, swap);
-        }
+        daily::shuffle(&mut self.rim, self.shuffles);
         true
     }
 
@@ -573,13 +530,6 @@ fn rank_message(rank: Rank) -> String {
             }
         },
     }
-}
-
-fn splitmix64(mut value: u64) -> u64 {
-    value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
-    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-    value ^ (value >> 31)
 }
 
 #[cfg(test)]

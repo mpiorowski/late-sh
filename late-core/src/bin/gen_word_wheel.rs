@@ -19,7 +19,10 @@
 use std::{collections::HashMap, env, fs, path::PathBuf};
 
 use anyhow::{Context, Result, bail};
-use late_core::word_wheel::{MIN_WORD_LEN, WHEEL_LETTERS, WordWheel, fits};
+use late_core::{
+    daily::{fnv1a, splitmix64},
+    word_wheel::{MIN_WORD_LEN, WHEEL_LETTERS, WordWheel, fits},
+};
 
 const PACK_SIZE: usize = 2000;
 const SEED: u64 = 0x6c61_7465_2d77_6865;
@@ -290,20 +293,4 @@ fn best_wheel(by_letters: &HashMap<u32, Vec<String>>, mask: u32) -> Option<(u64,
             ))
         })
         .min_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.letters.cmp(&b.1.letters)))
-}
-
-fn fnv1a(text: &str) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in text.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0100_0000_01b3);
-    }
-    hash
-}
-
-fn splitmix64(mut value: u64) -> u64 {
-    value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
-    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-    value ^ (value >> 31)
 }

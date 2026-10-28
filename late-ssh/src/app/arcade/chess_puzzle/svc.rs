@@ -10,15 +10,17 @@ use late_core::{
         profile::fetch_username,
     },
 };
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, oneshot};
+use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
-use super::state::{DIFFICULTIES, find_puzzle, pack};
+use super::state::{DIFFICULTIES, find_puzzle, out_of_lives, pack};
 use crate::{
     app::{
         activity::event::ActivityEvent,
         arcade::{
             daily::activity_game,
+            daily_load,
             save_queue::{SaveCommand, SaveQueue},
         },
     },
@@ -31,6 +33,14 @@ use crate::{
 pub struct Daily {
     pub puzzle_date: NaiveDate,
     pub puzzles: [&'static ChessPuzzle; 3],
+}
+
+/// Today's puzzles with this user's saved rows, as `load_today` hands them
+/// over. The state takes only the daily rows that belong to the puzzles.
+#[derive(Debug)]
+pub struct Today {
+    pub daily: Daily,
+    pub games: Vec<Game>,
 }
 
 #[derive(Clone)]
@@ -134,6 +144,30 @@ impl ChessPuzzleService {
         Game::list_by_user_id(&client, user_id).await
     }
 
+    /// Today's puzzles and this user's saved rows. Logged and counted by
+    /// `daily_load`; `None` when it failed.
+    pub async fn load_today(&self, user_id: Uuid) -> Option<Today> {
+        daily_load::load(DailyPuzzle::ChessPuzzle, self.clone().fetch_today(user_id)).await
+    }
+
+    /// [`Self::load_today`] off the tick, for daily boards left without
+    /// puzzles.
+    pub fn load_today_task(&self, user_id: Uuid) -> oneshot::Receiver<Option<Today>> {
+        daily_load::load_task(DailyPuzzle::ChessPuzzle, self.clone().fetch_today(user_id))
+    }
+
+    async fn fetch_today(self, user_id: Uuid) -> Result<Today> {
+        let daily = self
+            .ensure_daily_puzzles()
+            .await
+            .context("claiming today's chess puzzles")?;
+        let games = self
+            .load_games(user_id)
+            .await
+            .context("loading the saved chess puzzle games")?;
+        Ok(Today { daily, games })
+    }
+
     pub fn save_game_task(&self, params: GameParams) {
         self.saves.send(GameSaveCommand::Save(params));
     }
@@ -167,8 +201,16 @@ impl SaveCommand for GameSaveCommand {
     async fn run(self, db: &Db, activity_feed: &broadcast::Sender<ActivityEvent>) {
         match self {
             Self::Save(params) => {
-                if let Err(error) = save_game(db, params).await {
-                    tracing::error!(error = ?error, "failed to save chess puzzle game state");
+                let user_id = params.user_id;
+                match save_game(db, params).await {
+                    Ok(Saved::Stored) => {}
+                    Ok(Saved::KeptLost) => tracing::info!(
+                        %user_id,
+                        "kept a chess puzzle another session ran out of lives on"
+                    ),
+                    Err(error) => {
+                        tracing::error!(error = ?error, "failed to save chess puzzle game state");
+                    }
                 }
             }
             Self::Complete {
@@ -178,66 +220,103 @@ impl SaveCommand for GameSaveCommand {
                 mistakes,
             } => {
                 let user_id = params.user_id;
-                match record_win_and_publish(
-                    db,
-                    activity_feed,
-                    user_id,
-                    difficulty,
-                    puzzle_date,
-                    mistakes,
-                )
-                .await
-                {
-                    Ok(()) => {
-                        if let Err(error) = save_game(db, params).await {
-                            tracing::error!(
-                                error = ?error,
-                                "failed to save completed chess puzzle state after recording win"
-                            );
-                        }
-                    }
-                    Err(error) => {
-                        tracing::error!(
-                            error = ?error,
-                            "failed to record chess puzzle win; solved state was not persisted"
-                        );
-                    }
+                match complete(db, activity_feed, params, difficulty, puzzle_date, mistakes).await {
+                    Ok(Completion::Recorded) => {}
+                    Ok(Completion::AlreadyLost) => tracing::warn!(
+                        %user_id,
+                        "refused a chess puzzle win over a puzzle another session ran out of lives on"
+                    ),
+                    Err(error) => tracing::error!(
+                        error = ?error,
+                        "failed to record chess puzzle win; solved state was not persisted"
+                    ),
                 }
             }
         }
     }
 }
 
-async fn save_game(db: &Db, params: GameParams) -> Result<()> {
-    let client = db.get().await?;
-    Game::upsert(&client, params).await?;
-    Ok(())
+/// What a `Save` came to.
+enum Saved {
+    Stored,
+    /// Another session had already run the day's puzzle out of lives, so it
+    /// stays lost: a stale session's row must not hand the lives back.
+    KeptLost,
 }
 
-async fn record_win_and_publish(
+/// What a `Complete` came to.
+enum Completion {
+    /// The win is recorded and the solved board saved behind it.
+    Recorded,
+    /// Another session had already run the puzzle out of lives, so there is
+    /// no win and nothing is saved.
+    AlreadyLost,
+}
+
+/// Whether the stored row of the slot is this same daily puzzle run out of
+/// lives, locked until `tx` ends so no other session's save lands in
+/// between. Personal rows never pay, so they are never held.
+async fn stored_daily_lost(tx: &impl GenericClient, params: &GameParams) -> Result<bool> {
+    let Some(puzzle_date) = params.puzzle_date else {
+        return Ok(false);
+    };
+    match Game::lock_slot(tx, params.user_id, &params.difficulty_key, &params.mode).await? {
+        Some(stored) => Ok(stored.puzzle_date == Some(puzzle_date)
+            && stored.puzzle_id == params.puzzle_id
+            && out_of_lives(stored.mistake_plies.len())),
+        None => Ok(false),
+    }
+}
+
+async fn save_game(db: &Db, params: GameParams) -> Result<Saved> {
+    let mut client = db.get().await?;
+    let tx = client.transaction().await?;
+    if stored_daily_lost(&*tx, &params).await? {
+        return Ok(Saved::KeptLost);
+    }
+    Game::upsert(&*tx, params).await?;
+    tx.commit().await?;
+    Ok(Saved::Stored)
+}
+
+/// Record a solved daily and save the solved board, in one transaction: a
+/// win that fails to record leaves the board unsolved, and a puzzle another
+/// session already lost takes neither. The win is published once committed,
+/// and only the day's first.
+async fn complete(
     db: &Db,
     activity_feed: &broadcast::Sender<ActivityEvent>,
-    user_id: Uuid,
+    params: GameParams,
     difficulty: Difficulty,
     puzzle_date: NaiveDate,
     mistakes: i32,
-) -> Result<()> {
-    let client = db.get().await?;
-    let result = DailyWin::record_win(&client, user_id, difficulty, puzzle_date, mistakes).await?;
-    if !result.fresh {
-        return Ok(());
+) -> Result<Completion> {
+    let user_id = params.user_id;
+    let mut client = db.get().await?;
+    let tx = client.transaction().await?;
+    if stored_daily_lost(&*tx, &params).await? {
+        return Ok(Completion::AlreadyLost);
     }
+    let record = DailyWin::record_win(&*tx, user_id, difficulty, puzzle_date, mistakes)
+        .await
+        .context("recording the win")?;
+    Game::upsert(&*tx, params)
+        .await
+        .context("saving the solved board")?;
+    tx.commit().await?;
 
-    let username = fetch_username(&client, user_id).await;
-    let _ = activity_feed.send(ActivityEvent::game_won_at(
-        user_id,
-        username,
-        activity_game(DailyPuzzle::ChessPuzzle),
-        Some(difficulty.key().to_string()),
-        Some(mistakes),
-        ActivityEvent::occurred_on_utc_date(puzzle_date),
-    ));
-    Ok(())
+    if record.fresh {
+        let username = fetch_username(&client, user_id).await;
+        let _ = activity_feed.send(ActivityEvent::game_won_at(
+            user_id,
+            username,
+            activity_game(DailyPuzzle::ChessPuzzle),
+            Some(difficulty.key().to_string()),
+            Some(mistakes),
+            ActivityEvent::occurred_on_utc_date(puzzle_date),
+        ));
+    }
+    Ok(Completion::Recorded)
 }
 
 #[cfg(test)]

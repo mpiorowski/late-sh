@@ -353,11 +353,7 @@ impl App {
         changed |= self
             .chat
             .set_translate_settings(translate_to, auto_translate);
-        changed |= self.sudoku_state.poll_daily_generation();
-        changed |= self.le_word_state.poll_word_reload();
-        changed |= self.word_wheel_state.poll_reload();
-        changed |= self.quartets_state.poll_reload();
-        changed |= self.chess_puzzle_state.poll_reload();
+        changed |= crate::app::arcade::daily::poll_daily_loads(self);
         let settings_tick = self.settings_modal_state.tick();
         changed |= settings_tick.changed;
         if let Some(b) = settings_tick.banner {

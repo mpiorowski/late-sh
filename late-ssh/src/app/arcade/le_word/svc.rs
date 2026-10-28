@@ -7,11 +7,12 @@ use late_core::db::Db;
 use late_core::models::le_word::{DailyWin, DailyWord, Game, GameParams};
 use late_core::models::profile::fetch_username;
 use rand_core::{OsRng, RngCore};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, oneshot};
 use uuid::Uuid;
 
 use crate::app::activity::event::ActivityEvent;
 use crate::app::arcade::daily::activity_game;
+use crate::app::arcade::daily_load;
 use crate::metrics::{self, ArcadeDifficulty, ArcadeFinish, ArcadeMode};
 use late_core::models::leaderboard::DailyPuzzle;
 
@@ -20,6 +21,14 @@ const VALID_EXTRA: &str = include_str!("../../../../assets/le_word/valid_extra.t
 
 static ANSWER_WORDS: OnceLock<Vec<&'static str>> = OnceLock::new();
 static VALID_GUESSES: OnceLock<HashSet<&'static str>> = OnceLock::new();
+
+/// Today's word with this user's saved round on it, as `load_today` hands
+/// it over.
+#[derive(Debug)]
+pub struct Today {
+    pub word: DailyWord,
+    pub saved: Option<Game>,
+}
 
 #[derive(Clone)]
 pub struct LeWordService {
@@ -79,6 +88,30 @@ impl LeWordService {
     pub async fn load_game(&self, user_id: Uuid, puzzle_date: NaiveDate) -> Result<Option<Game>> {
         let client = self.db.get().await?;
         Game::find_by_user_id_for_date(&client, user_id, puzzle_date).await
+    }
+
+    /// Today's word and this user's round on it, read for the word's own
+    /// date so a load across midnight never pairs a word with another day's
+    /// guesses. Logged and counted by `daily_load`; `None` when it failed.
+    pub async fn load_today(&self, user_id: Uuid) -> Option<Today> {
+        daily_load::load(DailyPuzzle::LeWord, self.clone().fetch_today(user_id)).await
+    }
+
+    /// [`Self::load_today`] off the tick, for a board left without a word.
+    pub fn load_today_task(&self, user_id: Uuid) -> oneshot::Receiver<Option<Today>> {
+        daily_load::load_task(DailyPuzzle::LeWord, self.clone().fetch_today(user_id))
+    }
+
+    async fn fetch_today(self, user_id: Uuid) -> Result<Today> {
+        let word = self
+            .ensure_daily_word()
+            .await
+            .context("claiming today's Le Word")?;
+        let saved = self
+            .load_game(user_id, word.puzzle_date)
+            .await
+            .context("loading the saved Le Word round")?;
+        Ok(Today { word, saved })
     }
 
     pub async fn has_won_today(&self, user_id: Uuid) -> Result<bool> {

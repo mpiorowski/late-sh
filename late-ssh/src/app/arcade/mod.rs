@@ -1,5 +1,6 @@
 pub mod chess_puzzle;
 pub mod daily;
+pub mod daily_load;
 pub mod input;
 pub mod le_word;
 pub mod minesweeper;

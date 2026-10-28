@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
-use crate::models::chips::Difficulty;
+use crate::{daily, models::chips::Difficulty};
 
 /// One puzzle as the pack stores it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -163,36 +163,21 @@ pub const fn rating_range(difficulty: Difficulty) -> (u16, u16) {
     }
 }
 
-/// The puzzle to claim for `date` on a tier. A puzzle never claimed comes
-/// first, picked by a hash of the date and tier; once every puzzle of the
-/// tier has had a day, the one claimed longest ago (ties by id) comes round
-/// again, so there is always a puzzle. `last_used` maps a puzzle id to the
-/// last day it was claimed on this tier.
+/// The puzzle to claim for `date` on a tier, by the shared daily pick
+/// (`daily::choose_for_date`) keyed on the id and seeded by the date and
+/// tier. `last_used` maps a puzzle id to the last day it was claimed on this
+/// tier.
 pub fn choose_for_date<'a>(
     puzzles: &'a [ChessPuzzle],
     last_used: &HashMap<String, NaiveDate>,
     date: NaiveDate,
     difficulty: Difficulty,
 ) -> &'a ChessPuzzle {
-    let unused: Vec<&ChessPuzzle> = puzzles
-        .iter()
-        .filter(|puzzle| !last_used.contains_key(&puzzle.id))
-        .collect();
-    if !unused.is_empty() {
-        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-        let key = format!("late-sh-chess-puzzle-daily-v1:{date}:{}", difficulty.key());
-        for byte in key.bytes() {
-            hash ^= u64::from(byte);
-            hash = hash.wrapping_mul(0x0100_0000_01b3);
-        }
-        return unused[(hash % unused.len() as u64) as usize];
-    }
-    puzzles
-        .iter()
-        .min_by(|a, b| {
-            last_used[&a.id]
-                .cmp(&last_used[&b.id])
-                .then_with(|| a.id.cmp(&b.id))
-        })
-        .expect("a chess puzzle tier's pack is not empty")
+    daily::choose_for_date(
+        puzzles,
+        |puzzle| &puzzle.id,
+        last_used,
+        &format!("late-sh-chess-puzzle-daily-v1:{date}:{}", difficulty.key()),
+    )
+    .expect("a chess puzzle tier's pack is not empty")
 }

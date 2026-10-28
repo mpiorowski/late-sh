@@ -21,9 +21,10 @@ late-core/
     rate_limit.rs      sliding-window per-IP limiter
     radio.rs           station catalogue, RADIO_SLOTS (see app/audio/STATIONS.md)
     vocab.rs           the tag vocabulary (skills, langs)
+    daily.rs           stable FNV-1a/splitmix64, seeded shuffle, the shared daily pick rule
     nonogram.rs        pack schema, clue derivation, daily selection
-    word_wheel.rs      Word Wheel pack schema, word rule, daily pick
-    chess_puzzle.rs    Chess Puzzle pack schema (three rating tiers), daily pick
+    word_wheel.rs      Word Wheel pack schema, word rule, daily pick seed
+    chess_puzzle.rs    Chess Puzzle pack schema (three rating tiers), daily pick seed
     bin/               pack generators: gen_nonograms, gen_word_wheel, gen_chess_puzzles
     icecast.rs audio.rs ascii.rs api_types.rs shutdown.rs
 ```

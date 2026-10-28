@@ -1,6 +1,7 @@
 //! Arcade daily lifecycle: this session's own win marks for the lobby cards,
 //! the UTC-midnight rollover that swaps every daily board to today's
-//! puzzle, and the map from a daily to its Activity game. The backtick-cycle
+//! puzzle, the per-tick walk that takes in each daily's background loads,
+//! and the map from a daily to its Activity game. The backtick-cycle
 //! leg (which dailies count as stops, and how to open one) lives in
 //! `workspace/arcade.rs`.
 
@@ -118,6 +119,38 @@ fn ensure_current_daily(app: &mut App, puzzle: DailyPuzzle) -> bool {
         DailyPuzzle::ChessPuzzle => app.chess_puzzle_state.ensure_current_daily(),
         DailyPuzzle::WordWheel => app.word_wheel_state.ensure_current_daily(),
         DailyPuzzle::Quartets => app.quartets_state.ensure_current_daily(),
+    }
+}
+
+/// Take in every daily's background work that landed since the last tick:
+/// Sudoku's off-thread boards, and the puzzle loads of the dailies claimed in
+/// the database (`daily_load.rs`), which also start a load for a board left
+/// without one. Runs on every tick, board open or not. Returns true when
+/// anything moved, so the caller can force a frame.
+pub(crate) fn poll_daily_loads(app: &mut App) -> bool {
+    let mut changed = false;
+    for puzzle in DailyPuzzle::ALL {
+        changed |= poll_daily_load(app, *puzzle);
+    }
+    changed
+}
+
+/// One daily's background work; true when its screen changed.
+fn poll_daily_load(app: &mut App, puzzle: DailyPuzzle) -> bool {
+    match puzzle {
+        DailyPuzzle::LeWord => app.le_word_state.poll_load(),
+        DailyPuzzle::Sudoku => app.sudoku_state.poll_daily_generation(),
+        DailyPuzzle::ChessPuzzle => app.chess_puzzle_state.poll_load(),
+        DailyPuzzle::WordWheel => app.word_wheel_state.poll_load(),
+        DailyPuzzle::Quartets => app.quartets_state.poll_load(),
+        // Built from the date in `ensure_current_daily`, nothing in the
+        // background. Sliding Puzzle's art is polled with its open board.
+        DailyPuzzle::RubiksCube
+        | DailyPuzzle::SlidingPuzzle
+        | DailyPuzzle::Nonogram
+        | DailyPuzzle::Minesweeper
+        | DailyPuzzle::Solitaire
+        | DailyPuzzle::Netwalk => false,
     }
 }
 

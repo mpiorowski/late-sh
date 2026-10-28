@@ -125,7 +125,27 @@ impl DailyPick {
 }
 
 impl Game {
-    pub async fn upsert(client: &Client, params: GameParams) -> Result<Self> {
+    /// The stored row of one slot, locked until the caller's transaction
+    /// ends, so a save or a win decided on what it holds cannot interleave
+    /// with another session's.
+    pub async fn lock_slot(
+        client: &impl GenericClient,
+        user_id: Uuid,
+        difficulty_key: &str,
+        mode: &str,
+    ) -> Result<Option<Self>> {
+        let row = client
+            .query_opt(
+                "SELECT * FROM chess_puzzle_games
+                 WHERE user_id = $1 AND difficulty_key = $2 AND mode = $3
+                 FOR UPDATE",
+                &[&user_id, &difficulty_key, &mode],
+            )
+            .await?;
+        Ok(row.map(Self::from))
+    }
+
+    pub async fn upsert(client: &impl GenericClient, params: GameParams) -> Result<Self> {
         let row = client
             .query_one(
                 "INSERT INTO chess_puzzle_games
@@ -158,7 +178,7 @@ impl Game {
 
 impl DailyWin {
     pub async fn record_win(
-        client: &Client,
+        client: &impl GenericClient,
         user_id: Uuid,
         difficulty: Difficulty,
         puzzle_date: NaiveDate,

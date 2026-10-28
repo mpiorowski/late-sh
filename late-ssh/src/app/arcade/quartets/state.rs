@@ -7,15 +7,14 @@
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
 
 use chrono::NaiveDate;
-use late_core::models::quartets::{Game, GameParams};
+use late_core::{daily, models::quartets::GameParams};
 use serde::Deserialize;
-use tokio::sync::oneshot;
 use uuid::Uuid;
 
-use super::svc::{Daily, QuartetsService};
+use super::svc::{QuartetsService, Today};
+use crate::app::arcade::daily_load::{DailyLoad, Polled};
 use crate::metrics::{ArcadeDifficulty, ArcadeFinish, ArcadeMode};
 
 const PACK: &[u8] = include_bytes!("../../../../assets/quartets/puzzles.json");
@@ -27,8 +26,6 @@ pub const QUARTETS: usize = 4;
 pub const WORDS: usize = QUARTETS * QUARTETS;
 /// The misses that end a wall.
 pub const MAX_STRIKES: usize = 3;
-/// How long a failed rollover fetch waits before the next attempt.
-const RELOAD_RETRY: Duration = Duration::from_secs(30);
 const UNAVAILABLE: &str = "Quartets is unavailable. Try again soon.";
 const READY: &str = "Find the four quartets: four words that share a link.";
 
@@ -75,42 +72,67 @@ pub fn find_puzzle(id: i32) -> Option<&'static Puzzle> {
         .map(|index| &puzzles[index])
 }
 
-/// The puzzle to claim for `date`. A puzzle never claimed comes first,
-/// picked by a hash of the date; once every puzzle has had a day, the one
-/// claimed longest ago (ties by id) comes round again, so there is always
-/// a wall. `last_used` maps a puzzle id to the last day it was claimed.
+/// The puzzle to claim for `date`, by the shared daily pick
+/// (`daily::choose_for_date`) keyed on the id and seeded by the date.
+/// `last_used` maps a puzzle id to the last day it was claimed.
 pub fn choose_for_date<'a>(
     pack: &'a [Puzzle],
     last_used: &HashMap<i32, NaiveDate>,
     date: NaiveDate,
 ) -> &'a Puzzle {
-    let unused: Vec<&Puzzle> = pack
-        .iter()
-        .filter(|puzzle| !last_used.contains_key(&puzzle.id))
-        .collect();
-    if !unused.is_empty() {
-        let hash = fnv1a(&format!("late-sh-quartets-daily-v1:{date}"));
-        return unused[(hash % unused.len() as u64) as usize];
-    }
-    pack.iter()
-        .min_by(|a, b| {
-            last_used[&a.id]
-                .cmp(&last_used[&b.id])
-                .then_with(|| a.id.cmp(&b.id))
-        })
-        .expect("the quartets pack is not empty")
+    daily::choose_for_date(
+        pack,
+        |puzzle| &puzzle.id,
+        last_used,
+        &format!("late-sh-quartets-daily-v1:{date}"),
+    )
+    .expect("the quartets pack is not empty")
 }
 
 /// The wall everyone starts the day on: the sixteen words dealt by a hash
 /// of the date and the puzzle.
 pub fn opening_wall(date: NaiveDate, puzzle_id: i32) -> [u8; WORDS] {
     let mut wall: [u8; WORDS] = std::array::from_fn(|index| index as u8);
-    let mut seed = fnv1a(&format!("late-sh-quartets-wall-v1:{date}:{puzzle_id}"));
-    for index in (1..WORDS).rev() {
-        seed = splitmix64(seed);
-        wall.swap(index, (seed % (index as u64 + 1)) as usize);
-    }
+    daily::shuffle(
+        &mut wall,
+        daily::fnv1a(&format!("late-sh-quartets-wall-v1:{date}:{puzzle_id}")),
+    );
     wall
+}
+
+/// How a stored list of tries left the wall, replayed in order as
+/// `State::restore` does: a try is a quartet or a strike, three quartets
+/// lock the last, three strikes end it. The saving session wrote the list
+/// whole, so every try is four distinct words; a malformed chunk is skipped.
+pub fn stored_outcome(tries: &[i16]) -> Outcome {
+    let mut found = 0;
+    let mut strikes = 0;
+    for chunk in tries.chunks(QUARTETS) {
+        let Some(tried) = words_of(chunk) else {
+            continue;
+        };
+        if Split::of(tried) == Split::Quartet {
+            found += 1;
+        } else {
+            strikes += 1;
+        }
+        if found == QUARTETS - 1 {
+            return Outcome::Solved;
+        }
+        if strikes == MAX_STRIKES {
+            return Outcome::OutOfStrikes;
+        }
+    }
+    Outcome::Playing
+}
+
+fn words_of(chunk: &[i16]) -> Option<[u8; QUARTETS]> {
+    let chunk: [i16; QUARTETS] = chunk.try_into().ok()?;
+    let mut tried = [0u8; QUARTETS];
+    for (slot, word) in tried.iter_mut().zip(chunk) {
+        *slot = u8::try_from(word).ok()?;
+    }
+    Some(tried)
 }
 
 /// How the four words of a try fall across the quartets.
@@ -188,23 +210,16 @@ pub struct State {
     shuffles: u64,
     show_rules: bool,
     message: String,
-    /// In flight only while a rolled-over day is fetching its wall; see
-    /// `ensure_current_daily`.
-    reload_rx: Option<oneshot::Receiver<Option<Daily>>>,
-    /// Set when a rollover fetch failed; `ensure_current_daily` holds off
-    /// until this passes, then tries again.
-    reload_backoff_until: Option<Instant>,
+    /// Today's wall while the board has none; see `poll_load`.
+    load: DailyLoad<Today>,
 }
 
 impl State {
-    pub fn new(
-        user_id: Uuid,
-        svc: QuartetsService,
-        daily: Option<Daily>,
-        saved: Option<Game>,
-    ) -> Self {
-        let puzzle_date = match daily {
-            Some(daily) => daily.puzzle_date,
+    /// A session's board from its connect-time load; `None` (the load
+    /// failed) shows the board unavailable and retries from `poll_load`.
+    pub fn new(user_id: Uuid, svc: QuartetsService, today: Option<Today>) -> Self {
+        let puzzle_date = match &today {
+            Some(today) => today.daily.puzzle_date,
             None => svc.today(),
         };
         let mut state = Self {
@@ -220,22 +235,17 @@ impl State {
             shuffles: 0,
             show_rules: false,
             message: UNAVAILABLE.to_string(),
-            reload_rx: None,
-            reload_backoff_until: None,
+            load: DailyLoad::after_connect(today.is_some()),
         };
-        if let Some(daily) = daily {
-            state.install(daily);
-            if let Some(game) = saved
-                && game.puzzle_date == daily.puzzle_date
-                && game.puzzle_id == daily.puzzle.id
-            {
-                state.restore(&game.tries);
-            }
+        if let Some(today) = today {
+            state.install(today);
         }
         state
     }
 
-    fn install(&mut self, daily: Daily) {
+    /// Put a day's wall on the board with the saved tries that belong to it.
+    fn install(&mut self, today: Today) {
+        let Today { daily, saved } = today;
         self.puzzle_date = daily.puzzle_date;
         self.puzzle = Some(daily.puzzle);
         self.wall = opening_wall(daily.puzzle_date, daily.puzzle.id).to_vec();
@@ -245,6 +255,12 @@ impl State {
         self.cursor = 0;
         self.shuffles = 0;
         self.message = READY.to_string();
+        if let Some(game) = saved
+            && game.puzzle_date == daily.puzzle_date
+            && game.puzzle_id == daily.puzzle.id
+        {
+            self.restore(&game.tries);
+        }
     }
 
     /// Replay saved tries. One that is not four distinct words still on
@@ -270,38 +286,22 @@ impl State {
     }
 
     fn saved_try(&self, chunk: &[i16]) -> Option<[u8; QUARTETS]> {
-        if chunk.len() != QUARTETS {
-            return None;
-        }
-        let mut tried = [0u8; QUARTETS];
-        for (slot, word) in tried.iter_mut().zip(chunk) {
-            *slot = u8::try_from(*word).ok()?;
-        }
+        let mut tried = words_of(chunk)?;
         tried.sort_unstable();
         let distinct = tried.windows(2).all(|pair| pair[0] < pair[1]);
         let on_wall = tried.iter().all(|word| self.wall.contains(word));
         (distinct && on_wall && !self.tries.contains(&tried)).then_some(tried)
     }
 
-    /// Roll the wall over when the UTC date changes under a live session.
-    /// The claim lives in the database, so this clears the board at once
-    /// and fetches the new wall in the background; `poll_reload` installs
-    /// it. `puzzle_date` only advances once the wall lands, so a failed
-    /// fetch is retried here after `RELOAD_RETRY`. Returns true when the
-    /// screen changed.
+    /// Roll the wall over when the UTC date changes under a live session:
+    /// yesterday's wall comes off at once, and `poll_load` fetches today's.
+    /// Returns true when the screen changed.
     pub fn ensure_current_daily(&mut self) -> bool {
-        if self.puzzle_date == self.svc.today() || self.reload_rx.is_some() {
+        if self.puzzle.is_none() || self.puzzle_date == self.svc.today() {
             return false;
         }
-        if let Some(until) = self.reload_backoff_until
-            && Instant::now() < until
-        {
-            return false;
-        }
-        self.reload_backoff_until = None;
-
         // Yesterday's wall must stop taking tries right away, whether or
-        // not the fetch succeeds.
+        // not today's loads.
         self.puzzle = None;
         self.wall.clear();
         self.found.clear();
@@ -309,46 +309,28 @@ impl State {
         self.picked.clear();
         self.cursor = 0;
         self.message = "Loading today's Quartets.".to_string();
-
-        let (tx, rx) = oneshot::channel();
-        self.reload_rx = Some(rx);
-        let svc = self.svc.clone();
-        // Pure state tests drive this without a runtime; the board is
-        // already cleared, and the poll installs nothing when nothing comes.
-        if tokio::runtime::Handle::try_current().is_ok() {
-            tokio::spawn(async move {
-                let daily = match svc.ensure_daily_wall().await {
-                    Ok(daily) => Some(daily),
-                    Err(error) => {
-                        tracing::error!(error = ?error, "failed to load the rolled-over quartets wall");
-                        None
-                    }
-                };
-                let _ = tx.send(daily);
-            });
-        }
         true
     }
 
-    /// Install a wall fetched by `ensure_current_daily`. Returns true when
-    /// the screen changed.
-    pub fn poll_reload(&mut self) -> bool {
-        let Some(rx) = self.reload_rx.as_mut() else {
-            return false;
-        };
-        match rx.try_recv() {
-            Ok(Some(daily)) => {
-                self.reload_rx = None;
-                self.install(daily);
+    /// Load today's wall and saved tries whenever the board has no wall (a
+    /// failed connect-time load, or the rollover), and install what lands.
+    /// Runs on every tick, board open or not. Returns true when the screen
+    /// changed.
+    pub fn poll_load(&mut self) -> bool {
+        let (svc, user_id) = (&self.svc, self.user_id);
+        match self
+            .load
+            .poll(self.puzzle.is_none(), || svc.load_today_task(user_id))
+        {
+            Polled::Waiting => false,
+            Polled::Loaded(today) => {
+                self.install(today);
                 true
             }
-            Ok(None) | Err(oneshot::error::TryRecvError::Closed) => {
-                self.reload_rx = None;
-                self.reload_backoff_until = Some(Instant::now() + RELOAD_RETRY);
+            Polled::Failed => {
                 self.message = "Quartets is unavailable. Retrying soon.".to_string();
                 true
             }
-            Err(oneshot::error::TryRecvError::Empty) => false,
         }
     }
 
@@ -493,11 +475,7 @@ impl State {
             return false;
         }
         self.shuffles += 1;
-        let mut seed = self.shuffles;
-        for index in (1..self.wall.len()).rev() {
-            seed = splitmix64(seed);
-            self.wall.swap(index, (seed % (index as u64 + 1)) as usize);
-        }
+        daily::shuffle(&mut self.wall, self.shuffles);
         true
     }
 
@@ -627,22 +605,6 @@ impl State {
                 .collect(),
         }
     }
-}
-
-fn fnv1a(text: &str) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in text.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0100_0000_01b3);
-    }
-    hash
-}
-
-fn splitmix64(mut value: u64) -> u64 {
-    value = value.wrapping_add(0x9e37_79b9_7f4a_7c15);
-    value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-    value ^ (value >> 31)
 }
 
 #[cfg(test)]
