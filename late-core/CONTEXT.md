@@ -3,9 +3,9 @@
 `late-core` is the shared library under `late-ssh` and `late-web` (not
 `late-cli`, which stands alone): the database layer, every SQL migration, the
 models, and small shared pieces (telemetry init, rate limiting, the radio
-catalogue, the tag vocabulary, the nonogram pack schema). A domain's own rules
-for its tables live in that domain's `CONTEXT.md`; this file holds what every
-model shares.
+catalogue, the tag vocabulary, the Nonogram, Word Wheel and Chess Puzzle pack
+schemas). A domain's own rules for its tables live in that domain's
+`CONTEXT.md`; this file holds what every model shares.
 
 ## 1. File map
 
@@ -22,6 +22,9 @@ late-core/
     radio.rs           station catalogue, RADIO_SLOTS (see app/audio/STATIONS.md)
     vocab.rs           the tag vocabulary (skills, langs)
     nonogram.rs        pack schema, clue derivation, daily selection
+    word_wheel.rs      Word Wheel pack schema, word rule, daily pick
+    chess_puzzle.rs    Chess Puzzle pack schema (three rating tiers), daily pick
+    bin/               pack generators: gen_nonograms, gen_word_wheel, gen_chess_puzzles
     icecast.rs audio.rs ascii.rs api_types.rs shutdown.rs
 ```
 
