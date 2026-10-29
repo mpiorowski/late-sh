@@ -2,14 +2,19 @@
 //! board state (`Screen::Realm`) — map viewport, selection, the target table,
 //! and async row/log loads. Mirrors `daily::state` shapes.
 //!
-//! There is no local action draft any more: an action is sent the moment it
-//! is taken and comes back as a result, so the only client-side state is what
-//! you are looking at.
+//! There is no local action draft: an action or an order is sent the moment
+//! it is confirmed and comes back as a result, so the client-side state is
+//! what you are looking at, plus the one order being written in the prompt.
+//!
+//! This is the board's one place that asks which engine runs the game
+//! (`Resolution`): what `a`/`f` do, how a target is priced, and whether the
+//! history offers the night's replay. Every view draws what it is handed.
 
 use std::cell::Cell;
 use std::collections::BTreeMap;
+use std::num::NonZeroU8;
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use late_core::models::realm_game::RealmGame;
@@ -20,11 +25,12 @@ use uuid::Uuid;
 use crate::app::common::primitives::{Banner, Screen};
 
 use super::map::{TerritoryId, WorldMap, map_handle};
+use super::night::{self, Projection};
 use super::resolver::{
-    ActionRejected, ReachIndex, RealmAction, RealmGameState, RealmPlayerStatus,
-    projected_probability,
+    ActionRejected, DayResult, LogEntry, Order, OrderRejected, ReachIndex, RealmAction,
+    RealmGameState, RealmPlayerStatus, projected_probability,
 };
-use super::rulesets::Reach;
+use super::rulesets::{OPTION_FORTIFY, Reach, Resolution};
 use super::svc::{
     ArchivedDay, RealmEvent, RealmService, RealmSnapshot, countdown_label, muster_left,
     parse_state, realm_day,
@@ -37,6 +43,9 @@ pub enum RealmView {
     /// The target table: every territory you can reach, what it costs you in
     /// hops, who holds it, and the odds — the map without the squinting.
     Targets,
+    /// Tonight's orders and what the last night did: the list `x` withdraws
+    /// from, and the dispatch beneath it.
+    Orders,
     Overview,
     Log,
     /// The realm as it was: a day picked with the arrows, the map painted
@@ -48,7 +57,8 @@ impl RealmView {
     pub fn next(self) -> Self {
         match self {
             RealmView::Map => RealmView::Targets,
-            RealmView::Targets => RealmView::Overview,
+            RealmView::Targets => RealmView::Orders,
+            RealmView::Orders => RealmView::Overview,
             RealmView::Overview => RealmView::Log,
             RealmView::Log => RealmView::History,
             RealmView::History => RealmView::Map,
@@ -117,6 +127,16 @@ pub struct RealmBoardState {
     /// An action is in flight; the board shows it and refuses a second one
     /// until the result lands, so a double-tap can't spend two points.
     pub act_in_flight: bool,
+    /// The order being written: `a`/`f` open it on a game that takes orders,
+    /// `+`/`-` and digits size it, Enter places it, Esc puts it away.
+    pub prompt: Option<Order>,
+    /// Cursor into the orders view's list.
+    pub orders_cursor: usize,
+    /// The day rolled with this board open: the night's dispatch is owed,
+    /// and goes up once the reloaded row carrying it lands.
+    dispatch_pending: bool,
+    /// The history's night being played back, a fight a step.
+    pub replay: Option<Replay>,
     /// Cursor into the target table.
     pub targets_cursor: usize,
     /// Cursor into the overview's holdings list.
@@ -159,6 +179,31 @@ pub struct RealmBoardState {
     /// See [`RealmState::force_board_idle_for_test`].
     #[cfg(test)]
     idle_forced: bool,
+}
+
+/// A night played back in the history view, one `Fought` entry a step,
+/// over the board the night opened on.
+#[derive(Clone, Copy, Debug)]
+pub struct Replay {
+    /// The archived day whose night is playing.
+    pub day: i32,
+    /// The fight on screen, an index into [`replay_steps`].
+    pub step: usize,
+    /// Advancing by itself, a step every [`REPLAY_STEP`].
+    pub playing: bool,
+    last_step: Instant,
+}
+
+/// How long a replayed fight stays on screen while it plays by itself.
+pub const REPLAY_STEP: Duration = Duration::from_millis(500);
+
+/// A night's steps: its fights, in the order the night rolled them.
+pub fn replay_steps(result: &DayResult) -> Vec<&LogEntry> {
+    result
+        .entries
+        .iter()
+        .filter(|entry| matches!(entry, LogEntry::Fought { .. }))
+        .collect()
 }
 
 pub struct RealmDetail {
@@ -240,18 +285,19 @@ pub struct TargetRow {
     pub color: Option<(u8, u8, u8)>,
     pub population: u64,
     pub area_km2: u64,
-    pub reach: Reach,
+    pub route: Route,
     /// How deep its holder has dug in, 1 for plain ground.
     pub fort_level: u8,
-    /// Odds if you acted on it now; None for your own land.
+    /// Odds if you acted on it now (one point, on a game that takes
+    /// orders); None for your own land.
     pub probability: Option<f64>,
     /// Claim (free) or attack (held by someone else).
     pub attack: bool,
     /// Your own territory — listed so the table doubles as the atlas of
     /// what you hold, and so you can jump to it on the map.
     pub mine: bool,
-    /// Set when the early-game grace forbids this attack for now.
-    pub locked: Option<ActionRejected>,
+    /// Set when a rule forbids taking it for now.
+    pub locked: Option<Lock>,
 }
 
 impl TargetRow {
@@ -260,12 +306,62 @@ impl TargetRow {
     pub fn actionable(&self) -> bool {
         !self.mine && self.locked.is_none()
     }
+}
 
-    pub fn action(&self) -> RealmAction {
-        if self.attack {
-            RealmAction::Attack { target: self.id }
-        } else {
-            RealmAction::Claim { target: self.id }
+/// How a take gets to a row: the instant engine prices the route there, the
+/// orders engine the land behind the take.
+#[derive(Clone, Copy, Debug)]
+pub enum Route {
+    Reach(Reach),
+    /// The wall levels behind a take (`Projection::front`), and whether it
+    /// comes off the sea.
+    Front {
+        strength: f64,
+        landing: bool,
+    },
+    /// Nothing of yours borders it and no shore of yours reaches it.
+    NoFront,
+}
+
+impl Route {
+    /// The column's heading, as the table's rows read it.
+    pub fn heading(self) -> &'static str {
+        match self {
+            Route::Reach(_) => "reach",
+            Route::Front { .. } | Route::NoFront => "front",
+        }
+    }
+
+    /// The route in words, for the territory card.
+    pub fn describe(self) -> String {
+        match self {
+            Route::Reach(reach) => reach.describe(),
+            Route::Front {
+                strength,
+                landing: true,
+            } => format!("a landing, front {strength:.1}"),
+            Route::Front {
+                strength,
+                landing: false,
+            } => format!("front {strength:.1} behind it"),
+            Route::NoFront => "nothing of yours borders it".to_string(),
+        }
+    }
+}
+
+/// Why a row cannot be taken right now, as whichever engine runs the game
+/// says it.
+#[derive(Clone, Copy, Debug)]
+pub enum Lock {
+    Action(ActionRejected),
+    Order(OrderRejected),
+}
+
+impl Lock {
+    pub fn message(self) -> String {
+        match self {
+            Lock::Action(rejected) => rejected.message(),
+            Lock::Order(rejected) => rejected.message(),
         }
     }
 }
@@ -439,6 +535,11 @@ impl RealmState {
         changed |= self.poll_logs_load();
         self.pull_history_archive();
         self.start_pending_reload();
+        if let Some(dispatch) = self.take_dispatch() {
+            banner = Some(dispatch);
+            changed = true;
+        }
+        changed |= self.advance_replay();
         changed |= self.countdown_ticked();
         RealmTick { banner, changed }
     }
@@ -516,6 +617,51 @@ impl RealmState {
                 })
             }
             RealmEvent::ActionResolved { .. } => None,
+            // Your own order stands: the banner says it, and what it would
+            // fetch if the night fell now.
+            RealmEvent::OrderPlaced {
+                game_id,
+                user_id,
+                order,
+                probability,
+                points_left,
+            } if user_id == self.user_id => {
+                let name = self.territory_name(game_id, order.target());
+                self.order_answered(game_id);
+                Some(Banner::success(&match (order, probability) {
+                    (Order::Take { points, .. }, Some(p)) => format!(
+                        "Realm: ordered a take on {name} with {} · {:.0}% as it stands · \
+                         {points_left} left to order",
+                        points_label(points.get()),
+                        p * 100.0
+                    ),
+                    (Order::Take { points, .. }, None) => format!(
+                        "Realm: ordered a take on {name} with {} · {points_left} left to order",
+                        points_label(points.get())
+                    ),
+                    (Order::Fortify { levels, .. }, _) => format!(
+                        "Realm: ordered {} of walls on {name} · {points_left} left to order",
+                        match levels.get() {
+                            1 => "a level".to_string(),
+                            n => format!("{n} levels"),
+                        }
+                    ),
+                }))
+            }
+            RealmEvent::OrderPlaced { .. } => None,
+            RealmEvent::OrderWithdrawn {
+                game_id,
+                user_id,
+                target,
+                points_left,
+            } if user_id == self.user_id => {
+                let name = self.territory_name(game_id, target);
+                self.order_answered(game_id);
+                Some(Banner::info(&format!(
+                    "Realm: order on {name} withdrawn · {points_left} left to order"
+                )))
+            }
+            RealmEvent::OrderWithdrawn { .. } => None,
             // Someone else moved: reload quietly, no banner storm.
             RealmEvent::GameChanged { game_id } => {
                 if let Some(board) = self.board.as_mut()
@@ -535,14 +681,24 @@ impl RealmState {
                             p.user_id == self.user_id && p.status == RealmPlayerStatus::Alive
                         })
                 });
+                let here = self.board.as_ref().is_some_and(|b| b.game_id == game_id);
                 if let Some(board) = self.board.as_mut()
-                    && board.game_id == game_id
+                    && here
                 {
+                    // A load already on its way carries the board from
+                    // before the night; the dispatch has to wait for one
+                    // that started after it.
+                    board.load_rx = None;
                     board.reload_pending = true;
+                    board.dispatch_pending = true;
                     board.logs.clear();
                     board.logs_exhausted = false;
+                    board.prompt = None;
+                    board.replay = None;
                 }
-                mine.then(|| Banner::info(&format!("The Realm calls you! ({name})")))
+                // With the board open the night's dispatch says it instead,
+                // once the row carrying the night has landed.
+                (mine && !here).then(|| Banner::info(&format!("The Realm calls you! ({name})")))
             }
             // The end of a realm is the one event worth interrupting for.
             RealmEvent::GameFinished {
@@ -579,6 +735,28 @@ impl RealmState {
         }
     }
 
+    /// A territory's name on the board open on `game_id`, for a banner.
+    fn territory_name(&self, game_id: Uuid, target: TerritoryId) -> String {
+        self.board
+            .as_ref()
+            .filter(|b| b.game_id == game_id)
+            .and_then(|b| b.detail.as_ref())
+            .and_then(|d| d.map())
+            .and_then(|m| m.territory(target).map(|t| t.name.clone()))
+            .unwrap_or_else(|| "the territory".to_string())
+    }
+
+    /// An order's answer landed: the board may write the next one, and
+    /// reloads to show this one standing.
+    fn order_answered(&mut self, game_id: Uuid) {
+        if let Some(board) = self.board.as_mut()
+            && board.game_id == game_id
+        {
+            board.act_in_flight = false;
+            board.reload_pending = true;
+        }
+    }
+
     /// Open the full-screen board for a game.
     pub fn open_board(&mut self, game_id: Uuid, return_screen: Screen) {
         // A picker belongs to the board it was opened over.
@@ -597,6 +775,10 @@ impl RealmState {
             load_rx: None,
             reload_pending: false,
             act_in_flight: false,
+            prompt: None,
+            orders_cursor: 0,
+            dispatch_pending: false,
+            replay: None,
             chat_join_requested: false,
             targets_cursor: 0,
             holdings_cursor: 0,
@@ -830,6 +1012,7 @@ impl RealmState {
         let day = self.history_days().into_iter().nth(next).map(|d| d.day());
         if let Some(board) = self.board.as_mut() {
             board.history_day = day;
+            board.replay = None;
         }
         // Older pages load as the slider reaches for them. The view also
         // chases the rest of the archive on its own; this is what covers a
@@ -849,6 +1032,7 @@ impl RealmState {
         };
         if let Some(board) = self.board.as_mut() {
             board.history_day = day;
+            board.replay = None;
         }
         if !to_end {
             self.load_more_logs();
@@ -941,45 +1125,86 @@ impl RealmState {
     }
 
     /// Act on the selected territory: claim it when free, attack it when
-    /// someone else holds it. The action is sent immediately; the result
-    /// arrives as a banner. Returns a banner when the board itself can say
-    /// no without bothering the server.
+    /// someone else holds it, or open the order prompt on a game that takes
+    /// orders. Returns a banner when the board itself can say no without
+    /// bothering the server.
     pub fn act_selected(&mut self) -> Option<Banner> {
         let target = self.board.as_ref()?.selected?;
         self.act_on(target)
     }
 
-    /// Act on `target`, whatever view picked it.
+    /// `a` on `target`, whatever view picked it.
     pub fn act_on(&mut self, target: TerritoryId) -> Option<Banner> {
+        let resolution = match self.gate() {
+            Ok(resolution) => resolution,
+            Err(refusal) => return refusal,
+        };
+        match resolution {
+            Resolution::Instant => self.act_now(target),
+            Resolution::Orders => self.open_prompt(target, OrderKind::Take),
+        }
+    }
+
+    /// Dig in on the selected territory — the only way a point is ever
+    /// spent on walls.
+    pub fn fortify_selected(&mut self) -> Option<Banner> {
+        let target = self.board.as_ref()?.selected?;
+        self.fortify_on(target)
+    }
+
+    /// `f` on `target`, whatever view picked it.
+    pub fn fortify_on(&mut self, target: TerritoryId) -> Option<Banner> {
+        let resolution = match self.gate() {
+            Ok(resolution) => resolution,
+            Err(refusal) => return refusal,
+        };
+        match resolution {
+            Resolution::Instant => self.fortify_now(target),
+            Resolution::Orders => self.open_prompt(target, OrderKind::Fortify),
+        }
+    }
+
+    /// What every key that spends points asks first: a running game, open,
+    /// with the viewer alive in it and nothing already in flight. `Err` is
+    /// the board saying no, with a banner when there is something to say.
+    fn gate(&self) -> Result<Resolution, Option<Banner>> {
+        let board = self.board.as_ref().ok_or(None)?;
+        let detail = board.detail.as_ref().ok_or(None)?;
+        if detail.row_status != "active" {
+            return Err(Some(Banner::info("Realm: the game is not running")));
+        }
+        if let Some(left) = detail.muster_left() {
+            return Err(Some(Banner::info(&format!(
+                "Realm: this one opens in {} — everyone starts together",
+                countdown_label(left)
+            ))));
+        }
+        match detail.state.player(self.user_id).map(|p| p.status) {
+            Some(RealmPlayerStatus::Alive) => {}
+            Some(_) => {
+                return Err(Some(Banner::info(
+                    "Realm: you are out of this war — watching only",
+                )));
+            }
+            None => {
+                return Err(Some(Banner::info(
+                    "Realm: you are watching this realm, not playing it",
+                )));
+            }
+        }
+        if board.act_in_flight {
+            return Err(None);
+        }
+        Ok(detail.state.ruleset.resolution)
+    }
+
+    /// The instant engine's `a`: the action is sent immediately and the
+    /// result arrives as a banner.
+    fn act_now(&mut self, target: TerritoryId) -> Option<Banner> {
         let user_id = self.user_id;
         let board = self.board.as_ref()?;
         let game_id = board.game_id;
         let detail = board.detail.as_ref()?;
-        if detail.row_status != "active" {
-            return Some(Banner::info("Realm: the game is not running"));
-        }
-        if let Some(left) = detail.muster_left() {
-            return Some(Banner::info(&format!(
-                "Realm: this one opens in {} — everyone starts together",
-                countdown_label(left)
-            )));
-        }
-        match detail.state.player(user_id).map(|p| p.status) {
-            Some(RealmPlayerStatus::Alive) => {}
-            Some(_) => {
-                return Some(Banner::info(
-                    "Realm: you are out of this war — watching only",
-                ));
-            }
-            None => {
-                return Some(Banner::info(
-                    "Realm: you are watching this realm, not playing it",
-                ));
-            }
-        }
-        if board.act_in_flight {
-            return None;
-        }
         if detail.state.points_left(user_id, detail.today()) == 0 {
             return Some(Banner::info(
                 "Realm: no action points left until the next refill",
@@ -1021,36 +1246,13 @@ impl RealmState {
         None
     }
 
-    /// Dig in on the selected territory — the only way a point is ever
-    /// spent on walls.
-    pub fn fortify_selected(&mut self) -> Option<Banner> {
-        let target = self.board.as_ref()?.selected?;
-        self.fortify_on(target)
-    }
-
-    pub fn fortify_on(&mut self, target: TerritoryId) -> Option<Banner> {
+    /// The instant engine's `f`: a level of walls, on the spot.
+    fn fortify_now(&mut self, target: TerritoryId) -> Option<Banner> {
         let user_id = self.user_id;
         let board = self.board.as_ref()?;
         let game_id = board.game_id;
         let detail = board.detail.as_ref()?;
-        if detail.row_status != "active" {
-            return Some(Banner::info("Realm: the game is not running"));
-        }
-        if let Some(left) = detail.muster_left() {
-            return Some(Banner::info(&format!(
-                "Realm: this one opens in {} — everyone starts together",
-                countdown_label(left)
-            )));
-        }
-        if detail.state.player(user_id).map(|p| p.status) != Some(RealmPlayerStatus::Alive) {
-            return Some(Banner::info(
-                "Realm: you are watching this realm, not playing it",
-            ));
-        }
-        if board.act_in_flight {
-            return None;
-        }
-        if !detail.state.option(super::rulesets::OPTION_FORTIFY) {
+        if !detail.state.option(OPTION_FORTIFY) {
             return Some(Banner::info(
                 "Realm: this realm has no fortifications — take ground instead",
             ));
@@ -1077,37 +1279,375 @@ impl RealmState {
         None
     }
 
-    /// Odds for a territory from the viewer's seat, exactly as the engine
-    /// would roll them right now.
-    pub fn projected_probability(&self, action: &RealmAction) -> Option<f64> {
-        let detail = self.board.as_ref()?.detail.as_ref()?;
-        let map = detail.map()?;
-        let target = action.target();
-        let reach =
-            super::resolver::reach_for(&detail.state, &map, self.user_id, target, detail.today());
-        projected_probability(
-            &detail.state,
-            &map,
-            self.user_id,
-            target,
-            reach,
-            detail.today(),
-        )
+    // ----- orders (written by day, resolved at the night)
+
+    /// Open the prompt on `target`, sized at the viewer's standing order
+    /// there if they have one, else at one. Refused on the spot, for free,
+    /// when the night could not carry it out at any size.
+    fn open_prompt(&mut self, target: TerritoryId, kind: OrderKind) -> Option<Banner> {
+        let standing = self
+            .my_orders()
+            .into_iter()
+            .find(|order| order.target() == target);
+        let order = match (kind, standing) {
+            (OrderKind::Take, Some(order @ Order::Take { .. }))
+            | (OrderKind::Fortify, Some(order @ Order::Fortify { .. })) => order,
+            (OrderKind::Take, _) => Order::Take {
+                target,
+                points: NonZeroU8::MIN,
+            },
+            (OrderKind::Fortify, _) => Order::Fortify {
+                target,
+                levels: NonZeroU8::MIN,
+            },
+        };
+        if let Err(refused) = self.check_order(order)? {
+            return Some(Banner::info(&format!("Realm: {}", refused.message())));
+        }
+        if let Some(board) = self.board.as_mut() {
+            board.prompt = Some(order);
+        }
+        None
     }
 
-    /// How far the selected territory is from your land, for the map panel.
-    pub fn selected_reach(&self) -> Option<Reach> {
+    /// Would the service take this order, on the board as it stands? The
+    /// same `night::place_order` the service runs, on a copy, so the round
+    /// trip never carries an order the board could have refused.
+    fn check_order(&self, order: Order) -> Option<Result<night::Placed, OrderRejected>> {
+        let detail = self.board.as_ref()?.detail.as_ref()?;
+        let map = detail.map()?;
+        let mut state = detail.state.clone();
+        Some(night::place_order(
+            &mut state,
+            &map,
+            self.user_id,
+            order,
+            detail.today(),
+        ))
+    }
+
+    /// The viewer's orders for tonight, in the order they were placed.
+    pub fn my_orders(&self) -> Vec<Order> {
+        self.board
+            .as_ref()
+            .and_then(|b| b.detail.as_ref())
+            .and_then(|d| d.state.player(self.user_id))
+            .map(|p| p.orders.clone())
+            .unwrap_or_default()
+    }
+
+    /// The most the prompt's order can be sized to: today's points, with
+    /// those of the order it would replace counted back in, and for walls
+    /// no further than the ceiling.
+    fn prompt_max(&self, order: Order) -> u8 {
+        let Some(detail) = self.board.as_ref().and_then(|b| b.detail.as_ref()) else {
+            return 1;
+        };
+        let state = &detail.state;
+        let target = order.target();
+        let replaced = self
+            .my_orders()
+            .iter()
+            .find(|o| o.target() == target)
+            .map(Order::cost)
+            .unwrap_or(0);
+        let left = state
+            .points_left(self.user_id, detail.today())
+            .saturating_add(replaced);
+        let most = match order {
+            Order::Take { .. } => left,
+            Order::Fortify { .. } => left.min(
+                state
+                    .ruleset
+                    .fort_max_level
+                    .saturating_sub(state.fort_level(target)),
+            ),
+        };
+        most.max(1)
+    }
+
+    /// Size the prompt's order, held between one and what can be afforded.
+    pub fn prompt_resize(&mut self, amount: u8) {
+        let Some(order) = self.board.as_ref().and_then(|b| b.prompt) else {
+            return;
+        };
+        let amount =
+            NonZeroU8::new(amount.clamp(1, self.prompt_max(order))).unwrap_or(NonZeroU8::MIN);
+        let sized = match order {
+            Order::Take { target, .. } => Order::Take {
+                target,
+                points: amount,
+            },
+            Order::Fortify { target, .. } => Order::Fortify {
+                target,
+                levels: amount,
+            },
+        };
+        if let Some(board) = self.board.as_mut() {
+            board.prompt = Some(sized);
+        }
+    }
+
+    /// `+`/`-` on the prompt.
+    pub fn prompt_adjust(&mut self, delta: i16) {
+        let Some(order) = self.board.as_ref().and_then(|b| b.prompt) else {
+            return;
+        };
+        let amount = (i16::from(order.cost()) + delta).clamp(1, i16::from(u8::MAX));
+        self.prompt_resize(amount as u8);
+    }
+
+    /// Place the prompt's order. The prompt stays up when the board can say
+    /// no, so the size can be fixed rather than typed again.
+    pub fn prompt_confirm(&mut self) -> Option<Banner> {
+        let order = self.board.as_ref()?.prompt?;
+        let game_id = self.board.as_ref()?.game_id;
+        if let Err(refused) = self.check_order(order)? {
+            return Some(Banner::info(&format!("Realm: {}", refused.message())));
+        }
+        if let Some(board) = self.board.as_mut() {
+            board.prompt = None;
+            board.act_in_flight = true;
+        }
+        self.svc.place_order_task(self.user_id, game_id, order);
+        None
+    }
+
+    /// Esc on the prompt. Returns true when it was up, so the key is spent
+    /// here rather than closing the board.
+    pub fn prompt_cancel(&mut self) -> bool {
+        self.board
+            .as_mut()
+            .is_some_and(|board| board.prompt.take().is_some())
+    }
+
+    /// The prompt's take priced at the size on screen, as the night would
+    /// price it with the board as it stands. `None` for walls.
+    pub fn prompt_projection(&self) -> Option<Projection> {
         let board = self.board.as_ref()?;
         let detail = board.detail.as_ref()?;
         let map = detail.map()?;
-        let target = board.selected?;
-        Some(super::resolver::reach_for(
-            &detail.state,
-            &map,
-            self.user_id,
-            target,
-            detail.today(),
-        ))
+        match board.prompt? {
+            Order::Take { target, points } => night::projection(
+                &detail.state,
+                &map,
+                self.user_id,
+                target,
+                points.get(),
+                detail.today(),
+            ),
+            Order::Fortify { .. } => None,
+        }
+    }
+
+    /// A standing order priced as the board now stands, for the orders
+    /// list: the odds can move during the day as others' walls go up.
+    pub fn order_projection(&self, order: Order) -> Option<Projection> {
+        let detail = self.board.as_ref()?.detail.as_ref()?;
+        let map = detail.map()?;
+        match order {
+            Order::Take { target, points } => night::projection(
+                &detail.state,
+                &map,
+                self.user_id,
+                target,
+                points.get(),
+                detail.today(),
+            ),
+            Order::Fortify { .. } => None,
+        }
+    }
+
+    /// Walk the orders list, mirroring the pick into the map selection.
+    pub fn move_orders_cursor(&mut self, delta: isize) {
+        let orders = self.my_orders();
+        let Some(board) = self.board.as_mut() else {
+            return;
+        };
+        if orders.is_empty() {
+            board.orders_cursor = 0;
+            return;
+        }
+        let next = (board.orders_cursor as isize + delta).clamp(0, orders.len() as isize - 1);
+        board.orders_cursor = next as usize;
+        board.selected = Some(orders[next as usize].target());
+    }
+
+    /// The order the list's cursor is on.
+    pub fn selected_order(&self) -> Option<Order> {
+        let board = self.board.as_ref()?;
+        let orders = self.my_orders();
+        let at = board.orders_cursor.min(orders.len().saturating_sub(1));
+        orders.get(at).copied()
+    }
+
+    /// `x` on the orders list: take the highlighted order back, and its
+    /// points with it.
+    pub fn withdraw_selected(&mut self) -> Option<Banner> {
+        let order = self.selected_order()?;
+        if let Err(refusal) = self.gate() {
+            return refusal;
+        }
+        let game_id = self.board.as_ref()?.game_id;
+        if let Some(board) = self.board.as_mut() {
+            board.act_in_flight = true;
+        }
+        self.svc
+            .withdraw_order_task(self.user_id, game_id, order.target());
+        None
+    }
+
+    /// The banner the board owes after a night: once the reloaded row that
+    /// carries it has landed. A game with no nights to report (or a viewer
+    /// with no part in it) gets the day's summons instead.
+    fn take_dispatch(&mut self) -> Option<Banner> {
+        let board = self.board.as_mut()?;
+        let ready = board.dispatch_pending
+            && board.load_rx.is_none()
+            && !board.reload_pending
+            && board.load_error.is_none();
+        if !ready {
+            return None;
+        }
+        board.dispatch_pending = false;
+        let detail = board.detail.as_ref()?;
+        let player = detail.state.player(self.user_id)?;
+        match (detail.state.last_night.as_ref(), player.status) {
+            (Some(night), _) => Some(Banner::info(&format!(
+                "The night has passed: {}",
+                dispatch_line(night, self.user_id)
+            ))),
+            (None, RealmPlayerStatus::Alive) => Some(Banner::info(&format!(
+                "The Realm calls you! ({})",
+                detail.name
+            ))),
+            (None, _) => None,
+        }
+    }
+
+    // ----- the replay (the history's night, a fight a step)
+
+    /// Does the history offer the day on screen's night as a replay? Only a
+    /// game that resolves at night has one, and only a day whose opening
+    /// board was kept and that saw a fight.
+    pub fn replay_available(&self) -> bool {
+        let Some(detail) = self.board.as_ref().and_then(|b| b.detail.as_ref()) else {
+            return false;
+        };
+        match detail.state.ruleset.resolution {
+            Resolution::Instant => false,
+            Resolution::Orders => self.history_selected().is_some_and(|day| {
+                day.board_open.is_some() && !replay_steps(&day.result).is_empty()
+            }),
+        }
+    }
+
+    /// Does the standings table say how many points `user_id` has left? On
+    /// the instant engine a point spent is a move everyone saw. On the
+    /// campaign a rival's points left is how much they committed tonight,
+    /// and orders are secret: only the viewer's own show.
+    pub fn points_shown(&self, user_id: Uuid) -> bool {
+        let Some(detail) = self.board.as_ref().and_then(|b| b.detail.as_ref()) else {
+            return false;
+        };
+        match detail.state.ruleset.resolution {
+            Resolution::Instant => true,
+            Resolution::Orders => user_id == self.user_id,
+        }
+    }
+
+    /// `p`: start the day on screen's replay on its first fight, still; and
+    /// once it is up, set it playing or hold it.
+    pub fn replay_toggle(&mut self) -> Option<Banner> {
+        if let Some(replay) = self.board.as_mut().and_then(|b| b.replay.as_mut()) {
+            replay.playing ^= true;
+            replay.last_step = Instant::now();
+            return None;
+        }
+        if !self.replay_available() {
+            return Some(Banner::info("Realm: this day has no night to play back"));
+        }
+        let day = self.history_selected()?.day();
+        if let Some(board) = self.board.as_mut() {
+            board.replay = Some(Replay {
+                day,
+                step: 0,
+                playing: false,
+                last_step: Instant::now(),
+            });
+        }
+        None
+    }
+
+    /// `.` and `,`: one fight on or back, which also holds the replay.
+    pub fn replay_step(&mut self, delta: isize) {
+        let steps = self.replay_len();
+        if let Some(replay) = self.board.as_mut().and_then(|b| b.replay.as_mut()) {
+            replay.playing = false;
+            replay.step = history_step_index(replay.step, steps, delta);
+        }
+    }
+
+    /// Esc on the replay. Returns true when one was up.
+    pub fn replay_stop(&mut self) -> bool {
+        self.board
+            .as_mut()
+            .is_some_and(|board| board.replay.take().is_some())
+    }
+
+    /// How many fights the playing replay has.
+    fn replay_len(&self) -> usize {
+        let Some(replay) = self.board.as_ref().and_then(|b| b.replay) else {
+            return 0;
+        };
+        self.history_days()
+            .into_iter()
+            .find(|day| day.day() == replay.day)
+            .map(|day| replay_steps(&day.result).len())
+            .unwrap_or(0)
+    }
+
+    /// Move a playing replay on when its step is up; it stops on the last
+    /// fight. True when the frame changed.
+    fn advance_replay(&mut self) -> bool {
+        let steps = self.replay_len();
+        let Some(replay) = self.board.as_mut().and_then(|b| b.replay.as_mut()) else {
+            return false;
+        };
+        if !replay.playing || replay.last_step.elapsed() < REPLAY_STEP {
+            return false;
+        }
+        replay.last_step = Instant::now();
+        match replay.step + 1 < steps {
+            true => replay.step += 1,
+            false => replay.playing = false,
+        }
+        true
+    }
+
+    /// How a row is priced and whether it is open: one map lookup per
+    /// territory in `only` (every territory when `None`), by whichever
+    /// engine runs the game.
+    fn rows_for(&self, only: Option<TerritoryId>) -> Vec<TargetRow> {
+        let Some(detail) = self.board.as_ref().and_then(|b| b.detail.as_ref()) else {
+            return Vec::new();
+        };
+        let Some(map) = detail.map() else {
+            return Vec::new();
+        };
+        let territories = map
+            .territories
+            .iter()
+            .filter(|t| only.is_none_or(|id| t.id == id));
+        match detail.state.ruleset.resolution {
+            Resolution::Instant => instant_rows(detail, &map, self.user_id, territories),
+            Resolution::Orders => order_rows(detail, &map, self.user_id, territories),
+        }
+    }
+
+    /// The selected territory's row, for the map's territory card.
+    pub fn target_row(&self, target: TerritoryId) -> Option<TargetRow> {
+        self.rows_for(Some(target)).pop()
     }
 
     /// Every territory worth a row in the target table: your own holdings
@@ -1115,88 +1655,7 @@ impl RealmState {
     /// everything you could act on, nearest first and best odds within a
     /// distance.
     pub fn target_rows(&self) -> Vec<TargetRow> {
-        let Some(detail) = self.board.as_ref().and_then(|b| b.detail.as_ref()) else {
-            return Vec::new();
-        };
-        let Some(map) = detail.map() else {
-            return Vec::new();
-        };
-        let state = &detail.state;
-        let today = detail.today();
-        let reach_index = ReachIndex::build(state, &map, self.user_id, today);
-        // Whether the short-reach cap is biting at all: it lifts entirely
-        // for a player with nothing in range, so the table must not mark
-        // rows unreachable when they are the only thing left.
-        let out_of_range_applies = state.reach_cap().is_some_and(|cap| {
-            super::resolver::anything_within(state, &map, &reach_index, self.user_id, cap)
-        });
-        let mut rows: Vec<TargetRow> = map
-            .territories
-            .iter()
-            .map(|t| {
-                let owner = state.ownership.get(&t.id).copied();
-                let mine = owner == Some(self.user_id);
-                // Your own land has no route to price.
-                let reach = reach_index.reach(&map, &state.ruleset, t.id);
-                let probability = if mine {
-                    None
-                } else {
-                    projected_probability(state, &map, self.user_id, t.id, reach, today)
-                };
-                let locked = if !mine && reach.is_unreachable() {
-                    // Nothing to sail from, or nothing to land on. Said
-                    // plainly, because the row used to read like any other.
-                    Some(ActionRejected::NoRoute)
-                } else if !mine
-                    && state.reach_cap().is_some_and(|cap| reach.cost > cap)
-                    && out_of_range_applies
-                {
-                    // This game keeps war close to home, and something
-                    // nearer is still on the table.
-                    Some(ActionRejected::OutOfRange)
-                } else {
-                    owner.filter(|_| !mine).and_then(|defender| {
-                        state
-                            .attack_allowed(self.user_id, defender, reach, today)
-                            .err()
-                    })
-                };
-                TargetRow {
-                    id: t.id,
-                    name: t.name.clone(),
-                    owner,
-                    owner_name: owner.and_then(|o| state.player(o).map(|p| p.username.clone())),
-                    color: owner.map(|o| player_color(state, o)),
-                    population: t.population,
-                    area_km2: t.area_km2,
-                    reach,
-                    fort_level: state.fort_level(t.id),
-                    probability,
-                    attack: owner.is_some(),
-                    mine,
-                    locked,
-                }
-            })
-            .collect();
-        rows.sort_by(|a, b| {
-            // Yours first, then by what the route costs, then by odds.
-            b.mine
-                .cmp(&a.mine)
-                .then_with(|| {
-                    a.reach
-                        .cost
-                        .partial_cmp(&b.reach.cost)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .then_with(|| {
-                    b.probability
-                        .unwrap_or(0.0)
-                        .partial_cmp(&a.probability.unwrap_or(0.0))
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .then_with(|| a.name.cmp(&b.name))
-        });
-        rows
+        self.rows_for(None)
     }
 
     /// Move the target-table cursor and mirror the pick into the map
@@ -1267,133 +1726,347 @@ pub fn points_left(board: &RealmBoardState, user_id: Uuid) -> Option<(usize, usi
     ))
 }
 
-/// One player's colour: a name to pick it by and a ladder of five shades,
+/// The instant engine's rows: priced along the route there, yours first,
+/// then nearest, then best odds.
+fn instant_rows<'a>(
+    detail: &RealmDetail,
+    map: &WorldMap,
+    user_id: Uuid,
+    territories: impl Iterator<Item = &'a super::map::Territory>,
+) -> Vec<TargetRow> {
+    let state = &detail.state;
+    let today = detail.today();
+    let reach_index = ReachIndex::build(state, map, user_id, today);
+    // Whether the short-reach cap is biting at all: it lifts entirely for a
+    // player with nothing in range, so the table must not mark rows
+    // unreachable when they are the only thing left.
+    let out_of_range_applies = state.reach_cap().is_some_and(|cap| {
+        super::resolver::anything_within(state, map, &reach_index, user_id, cap)
+    });
+    let mut rows: Vec<(f64, TargetRow)> = territories
+        .map(|t| {
+            let owner = state.ownership.get(&t.id).copied();
+            let mine = owner == Some(user_id);
+            // Your own land has no route to price.
+            let reach = reach_index.reach(map, &state.ruleset, t.id);
+            let probability = if mine {
+                None
+            } else {
+                projected_probability(state, map, user_id, t.id, reach, today)
+            };
+            let locked = if !mine && reach.is_unreachable() {
+                // Nothing to sail from, or nothing to land on. Said plainly,
+                // because the row used to read like any other.
+                Some(ActionRejected::NoRoute)
+            } else if !mine
+                && state.reach_cap().is_some_and(|cap| reach.cost > cap)
+                && out_of_range_applies
+            {
+                // This game keeps war close to home, and something nearer
+                // is still on the table.
+                Some(ActionRejected::OutOfRange)
+            } else {
+                owner.filter(|_| !mine).and_then(|defender| {
+                    state.attack_allowed(user_id, defender, reach, today).err()
+                })
+            };
+            (
+                reach.cost,
+                row_of(
+                    state,
+                    t,
+                    owner,
+                    mine,
+                    Route::Reach(reach),
+                    probability,
+                    locked.map(Lock::Action),
+                ),
+            )
+        })
+        .collect();
+    rows.sort_by(|(a_cost, a), (b_cost, b)| {
+        b.mine
+            .cmp(&a.mine)
+            .then_with(|| a_cost.total_cmp(b_cost))
+            .then_with(|| {
+                b.probability
+                    .unwrap_or(0.0)
+                    .total_cmp(&a.probability.unwrap_or(0.0))
+            })
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    rows.into_iter().map(|(_, row)| row).collect()
+}
+
+/// The orders engine's rows: priced at one point as tonight looks from the
+/// viewer's seat, yours first, then what is open, best odds first.
+fn order_rows<'a>(
+    detail: &RealmDetail,
+    map: &WorldMap,
+    user_id: Uuid,
+    territories: impl Iterator<Item = &'a super::map::Territory>,
+) -> Vec<TargetRow> {
+    let state = &detail.state;
+    let today = detail.today();
+    let mut rows: Vec<TargetRow> = territories
+        .map(|t| {
+            let owner = state.ownership.get(&t.id).copied();
+            let mine = owner == Some(user_id);
+            let projection = match mine {
+                true => None,
+                false => night::projection(state, map, user_id, t.id, 1, today),
+            };
+            let route = match projection {
+                Some(p) => Route::Front {
+                    strength: p.front,
+                    landing: p.landing,
+                },
+                None => Route::NoFront,
+            };
+            let locked = match mine {
+                true => None,
+                false => night::check_take(state, map, user_id, t.id, today).err(),
+            };
+            row_of(
+                state,
+                t,
+                owner,
+                mine,
+                route,
+                projection.map(|p| p.probability),
+                locked.map(Lock::Order),
+            )
+        })
+        .collect();
+    let front = |row: &TargetRow| match row.route {
+        Route::Front { strength, .. } => strength,
+        Route::Reach(_) | Route::NoFront => 0.0,
+    };
+    rows.sort_by(|a, b| {
+        b.mine
+            .cmp(&a.mine)
+            .then_with(|| a.locked.is_some().cmp(&b.locked.is_some()))
+            .then_with(|| {
+                b.probability
+                    .unwrap_or(0.0)
+                    .total_cmp(&a.probability.unwrap_or(0.0))
+            })
+            .then_with(|| front(b).total_cmp(&front(a)))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    rows
+}
+
+fn row_of(
+    state: &RealmGameState,
+    t: &super::map::Territory,
+    owner: Option<Uuid>,
+    mine: bool,
+    route: Route,
+    probability: Option<f64>,
+    locked: Option<Lock>,
+) -> TargetRow {
+    TargetRow {
+        id: t.id,
+        name: t.name.clone(),
+        owner,
+        owner_name: owner.and_then(|o| state.player(o).map(|p| p.username.clone())),
+        color: owner.map(|o| player_color(state, o)),
+        population: t.population,
+        area_km2: t.area_km2,
+        route,
+        fort_level: state.fort_level(t.id),
+        probability,
+        attack: owner.is_some(),
+        mine,
+        locked,
+    }
+}
+
+/// Which kind of order a key opens the prompt on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OrderKind {
+    Take,
+    Fortify,
+}
+
+/// How a finished game was won, from the `Won` line its last log carries:
+/// the night's on a game that resolves at night, the day's otherwise.
+pub fn win_kind(state: &RealmGameState) -> Option<super::resolver::WinKind> {
+    [state.last_night.as_ref(), state.last_day.as_ref()]
+        .into_iter()
+        .flatten()
+        .flat_map(|day| day.entries.iter())
+        .find_map(|entry| {
+            let LogEntry::Won { kind, .. } = entry else {
+                return None;
+            };
+            Some(*kind)
+        })
+}
+
+/// "1 pt", "3 pts".
+pub fn points_label(points: u8) -> String {
+    match points {
+        1 => "1 pt".to_string(),
+        n => format!("{n} pts"),
+    }
+}
+
+/// What a night did to one player, counted: the dispatch banner's line,
+/// "you took 2, lost 1, 1 bounced".
+pub fn dispatch_line(night: &DayResult, user_id: Uuid) -> String {
+    let (mut took, mut lost, mut bounced, mut failed) = (0u32, 0u32, 0u32, 0u32);
+    for entry in &night.entries {
+        let LogEntry::Fought {
+            holder,
+            taken_by,
+            takers,
+            bounced: level,
+            ..
+        } = entry
+        else {
+            continue;
+        };
+        if let Some(roll) = takers.iter().find(|roll| roll.user_id == user_id) {
+            match (*taken_by == Some(user_id), roll.success && *level) {
+                (true, _) => took += 1,
+                (false, true) => bounced += 1,
+                (false, false) => failed += 1,
+            }
+        }
+        if *holder == Some(user_id) && taken_by.is_some_and(|by| by != user_id) {
+            lost += 1;
+        }
+    }
+    let mut parts = Vec::new();
+    if took > 0 {
+        parts.push(format!("you took {took}"));
+    }
+    if lost > 0 {
+        parts.push(format!("lost {lost}"));
+    }
+    if bounced > 0 {
+        parts.push(format!("{bounced} bounced"));
+    }
+    if failed > 0 {
+        parts.push(format!("{failed} failed"));
+    }
+    match parts.is_empty() {
+        true => "nothing of yours was fought over".to_string(),
+        false => parts.join(", "),
+    }
+}
+
+/// One player's colour: a name to pick it by and a ladder of three shades,
 /// palest first.
 pub struct PlayerPalette {
     pub name: &'static str,
     pub shades: [(u8, u8, u8); FORT_SHADES],
 }
 
-/// The ten colours a realm can be played in.
+/// The twenty colours a realm can be played in.
 ///
-/// Both of the map's fills live in here — whose a territory is (the hue) and
+/// Both of the map's fills live in here: whose a territory is (the hue) and
 /// how dug in they are (where along the ladder it sits, dark meaning walled
-/// up). Ten hues times five steps is fifty fills that have to stay apart by
-/// eye, which hand-picking does badly: the old table had a silver and a
-/// brown whose shades were closer to each other than either was to its own
-/// neighbouring step. So the ladders are laid out in CIELAB — even hue
-/// spacing, a constant lightness and chroma span — and the distances are
-/// held to by a test rather than by eye.
-pub const PLAYER_PALETTES: [PlayerPalette; 10] = [
+/// up). Twenty hues times three steps is sixty fills that have to stay apart
+/// by eye, which hand-picking does badly, so the ladders are laid out in
+/// CIELAB and the distances are held to by a test rather than by eye. The
+/// first ten are the middle of season one's five-step ladders, so a game
+/// from then draws as it did; the other ten were placed around them by a
+/// search for the largest gap, with every shade light enough to read on a
+/// dark terminal.
+pub const PLAYER_PALETTES: [PlayerPalette; 20] = [
     PlayerPalette {
         name: "rose",
-        shades: [
-            (255, 200, 221),
-            (255, 161, 197),
-            (255, 116, 174),
-            (238, 76, 150),
-            (220, 4, 127),
-        ],
+        shades: [(255, 161, 197), (255, 116, 174), (238, 76, 150)],
     },
     PlayerPalette {
         name: "orange",
-        shades: [
-            (255, 204, 183),
-            (255, 166, 130),
-            (246, 132, 87),
-            (226, 100, 52),
-            (204, 67, 10),
-        ],
+        shades: [(255, 166, 130), (246, 132, 87), (226, 100, 52)],
     },
     PlayerPalette {
         name: "gold",
-        shades: [
-            (249, 211, 139),
-            (226, 184, 96),
-            (201, 157, 51),
-            (175, 132, 0),
-            (145, 108, 0),
-        ],
+        shades: [(226, 184, 96), (201, 157, 51), (175, 132, 0)],
     },
     PlayerPalette {
         name: "olive",
-        shades: [
-            (206, 224, 146),
-            (175, 199, 105),
-            (145, 175, 62),
-            (113, 151, 0),
-            (93, 124, 0),
-        ],
+        shades: [(175, 199, 105), (145, 175, 62), (113, 151, 0)],
     },
     PlayerPalette {
         name: "green",
-        shades: [
-            (156, 233, 176),
-            (113, 209, 141),
-            (63, 185, 108),
-            (0, 160, 78),
-            (0, 132, 63),
-        ],
+        shades: [(113, 209, 141), (63, 185, 108), (0, 160, 78)],
     },
     PlayerPalette {
         name: "teal",
-        shades: [
-            (109, 237, 214),
-            (0, 213, 187),
-            (0, 184, 162),
-            (0, 156, 137),
-            (0, 129, 113),
-        ],
+        shades: [(0, 213, 187), (0, 184, 162), (0, 156, 137)],
     },
     PlayerPalette {
         name: "cyan",
-        shades: [
-            (102, 233, 255),
-            (0, 208, 237),
-            (0, 180, 206),
-            (0, 153, 175),
-            (0, 126, 145),
-        ],
+        shades: [(0, 208, 237), (0, 180, 206), (0, 153, 175)],
     },
     PlayerPalette {
         name: "blue",
-        shades: [
-            (171, 222, 255),
-            (101, 199, 255),
-            (0, 175, 240),
-            (0, 148, 205),
-            (0, 122, 170),
-        ],
+        shades: [(101, 199, 255), (0, 175, 240), (0, 148, 205)],
     },
     PlayerPalette {
         name: "violet",
-        shades: [
-            (220, 210, 255),
-            (193, 179, 255),
-            (164, 150, 255),
-            (134, 123, 242),
-            (100, 96, 228),
-        ],
+        shades: [(193, 179, 255), (164, 150, 255), (134, 123, 242)],
     },
     PlayerPalette {
         name: "magenta",
-        shades: [
-            (255, 196, 255),
-            (239, 163, 243),
-            (219, 131, 226),
-            (199, 99, 208),
-            (178, 63, 190),
-        ],
+        shades: [(239, 163, 243), (219, 131, 226), (199, 99, 208)],
+    },
+    PlayerPalette {
+        name: "brick",
+        shades: [(227, 110, 116), (193, 90, 95), (160, 70, 76)],
+    },
+    PlayerPalette {
+        name: "blush",
+        shades: [(248, 190, 184), (215, 158, 153), (183, 128, 123)],
+    },
+    PlayerPalette {
+        name: "sand",
+        shades: [(213, 208, 178), (181, 176, 148), (149, 145, 119)],
+    },
+    PlayerPalette {
+        name: "lemon",
+        shades: [(249, 232, 109), (227, 210, 72), (204, 190, 25)],
+    },
+    PlayerPalette {
+        name: "lime",
+        shades: [(159, 254, 119), (132, 233, 92), (105, 213, 64)],
+    },
+    PlayerPalette {
+        name: "moss",
+        shades: [(113, 158, 96), (88, 132, 72), (63, 106, 49)],
+    },
+    PlayerPalette {
+        name: "seafoam",
+        shades: [(169, 254, 242), (156, 229, 218), (143, 205, 195)],
+    },
+    PlayerPalette {
+        name: "cobalt",
+        shades: [(52, 142, 242), (50, 123, 210), (47, 106, 179)],
+    },
+    PlayerPalette {
+        name: "slate",
+        shades: [(144, 145, 172), (121, 122, 146), (99, 99, 120)],
+    },
+    PlayerPalette {
+        name: "plum",
+        shades: [(175, 121, 171), (161, 98, 158), (147, 74, 144)],
     },
 ];
 
-/// Steps in a player's ladder.
-pub const FORT_SHADES: usize = 5;
+/// Steps in a player's ladder. Walls map onto it as 1 pale, 2 to 3 mid, 4 to
+/// 5 dark (`shade_index`).
+pub const FORT_SHADES: usize = 3;
 
 /// Which step stands for a player away from the map — in the standings, the
 /// results card, the rail. The middle one: bright enough to read as text on
 /// the dark background, and the centre of the range their territories span.
-const IDENTITY_SHADE: usize = 2;
+const IDENTITY_SHADE: usize = 1;
 
 /// The colour a player picked, or the one their seat implies on a game made
 /// before picking existed.
@@ -1485,5 +2158,76 @@ mod history_keys_test {
         assert_eq!(history_step_index(3, 45, -1), 2);
         assert_eq!(history_step_index(44, 45, 1), 44, "the last day is the end");
         assert_eq!(history_step_index(0, 45, -1), 0, "and so is the first");
+    }
+}
+
+#[cfg(test)]
+mod dispatch_test {
+    use uuid::Uuid;
+
+    use super::dispatch_line;
+    use crate::app::door::realm::resolver::{DayResult, LogEntry, TakerRoll};
+
+    fn roll(user: u128, success: bool) -> TakerRoll {
+        TakerRoll {
+            user_id: Uuid::from_u128(user),
+            points: 2,
+            from: 0,
+            force: 2.0,
+            probability: 0.5,
+            shown: 0.5,
+            success,
+        }
+    }
+
+    fn fought(
+        target: u16,
+        holder: Option<u128>,
+        taken_by: Option<u128>,
+        takers: Vec<TakerRoll>,
+        bounced: bool,
+    ) -> LogEntry {
+        LogEntry::Fought {
+            target,
+            holder: holder.map(Uuid::from_u128),
+            taken_by: taken_by.map(Uuid::from_u128),
+            defence: 1.0,
+            takers,
+            bounced,
+        }
+    }
+
+    /// The banner after a night counts what it did to you: takes of yours
+    /// that landed, holdings you lost, level bounces, takes that failed.
+    /// Somebody else's fight is not yours to count.
+    #[test]
+    fn the_dispatch_counts_your_night() {
+        let me = 1;
+        let night = DayResult {
+            day: 1,
+            seed: 1,
+            entries: vec![
+                fought(10, None, Some(me), vec![roll(me, true)], false),
+                fought(
+                    11,
+                    Some(2),
+                    Some(me),
+                    vec![roll(me, true), roll(3, false)],
+                    false,
+                ),
+                fought(12, Some(me), Some(3), vec![roll(3, true)], false),
+                fought(13, Some(2), None, vec![roll(me, true), roll(3, true)], true),
+                fought(14, Some(2), None, vec![roll(me, false)], false),
+                fought(15, Some(2), Some(3), vec![roll(3, true)], false),
+            ],
+        };
+        assert_eq!(
+            dispatch_line(&night, Uuid::from_u128(me)),
+            "you took 2, lost 1, 1 bounced, 1 failed"
+        );
+        assert_eq!(
+            dispatch_line(&night, Uuid::from_u128(9)),
+            "nothing of yours was fought over"
+        );
     }
 }

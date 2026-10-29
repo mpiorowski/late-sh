@@ -13,7 +13,7 @@ use uuid::Uuid;
 use crate::app::common::theme;
 
 use super::map::WorldMap;
-use super::resolver::{DayResult, FizzleReason, LogEntry, RealmGameState};
+use super::resolver::{DayResult, FizzleReason, LogEntry, RealmGameState, TakerRoll, WinKind};
 use super::state::RealmState;
 
 pub fn draw_log_view(frame: &mut Frame, area: Rect, realm: &RealmState) {
@@ -60,7 +60,7 @@ pub fn draw_log_view(frame: &mut Frame, area: Rect, realm: &RealmState) {
             )));
         }
         for entry in &day.entries {
-            lines.push(entry_line(entry, state, &map));
+            lines.extend(entry_lines(entry, state, &map));
         }
         lines.push(Line::from(""));
     }
@@ -103,20 +103,70 @@ fn reach_note(hops: u32, by_sea: bool) -> String {
     }
 }
 
-/// One log line, for the map rail's "latest" strip as well as the log view.
-pub fn entry_line_public(
-    entry: &LogEntry,
-    state: &RealmGameState,
-    map: &WorldMap,
-) -> Line<'static> {
-    entry_line(entry, state, map)
+/// The lines for one log entry: one, except a night's fight, which has a
+/// line per taker. For the map rail's "latest" strip as well as the log view.
+pub fn entry_lines(entry: &LogEntry, state: &RealmGameState, map: &WorldMap) -> Vec<Line<'static>> {
+    match entry {
+        LogEntry::Fought {
+            target,
+            holder,
+            taken_by,
+            takers,
+            bounced,
+            ..
+        } => takers
+            .iter()
+            .map(|roll| fought_line(state, map, *target, *holder, *taken_by, *bounced, roll))
+            .collect(),
+        _ => vec![entry_line(entry, state, map)],
+    }
 }
 
-pub(super) fn entry_line(
-    entry: &LogEntry,
+/// "spoon → Micronesia · 3 pts · 42% · taken from mat": one taker's roll at
+/// a night.
+pub(super) fn fought_line(
     state: &RealmGameState,
     map: &WorldMap,
+    target: u16,
+    holder: Option<Uuid>,
+    taken_by: Option<Uuid>,
+    bounced: bool,
+    roll: &TakerRoll,
 ) -> Line<'static> {
+    let (verdict, style) = match (taken_by == Some(roll.user_id), roll.success, bounced) {
+        (true, _, _) => (
+            match holder {
+                Some(holder) => format!("taken from {}", name_of(state, holder)),
+                None => "taken".to_string(),
+            },
+            Style::default().fg(theme::SUCCESS()),
+        ),
+        (false, true, true) => ("bounced".to_string(), Style::default().fg(theme::AMBER())),
+        (false, true, false) => ("outfought".to_string(), Style::default().fg(theme::ERROR())),
+        (false, false, _) => ("held".to_string(), Style::default().fg(theme::ERROR())),
+    };
+    let points = match roll.points {
+        1 => "1 pt".to_string(),
+        n => format!("{n} pts"),
+    };
+    Line::from(vec![
+        Span::styled(
+            format!("  {} ", name_of(state, roll.user_id)),
+            Style::default().fg(theme::TEXT()),
+        ),
+        Span::styled(
+            format!(
+                "\u{2192} {} \u{b7} {points} \u{b7} {:.0}% \u{b7} ",
+                territory_name(map, target),
+                roll.probability * 100.0
+            ),
+            Style::default().fg(theme::TEXT_DIM()),
+        ),
+        Span::styled(verdict, style),
+    ])
+}
+
+fn entry_line(entry: &LogEntry, state: &RealmGameState, map: &WorldMap) -> Line<'static> {
     let ok = Style::default().fg(theme::SUCCESS());
     let bad = Style::default().fg(theme::ERROR());
     let dim = Style::default().fg(theme::TEXT_DIM());
@@ -188,6 +238,8 @@ pub(super) fn entry_line(
                 FizzleReason::NotAdjacent => "no route to it",
                 FizzleReason::PlayerEliminated => "they had already fallen",
                 FizzleReason::UnknownTerritory => "no such place",
+                FizzleReason::TargetProtected => "it was under protection by nightfall",
+                FizzleReason::NoFront => "nothing of theirs bordered it by nightfall",
             };
             Line::from(vec![
                 Span::styled(format!("  {} ", name_of(state, *user_id)), text),
@@ -246,11 +298,19 @@ pub(super) fn entry_line(
             ),
             bad,
         )),
-        LogEntry::Won { user_id } => Line::from(Span::styled(
-            format!("  ★ {} rules the realm", name_of(state, *user_id)),
+        LogEntry::Won { user_id, kind } => Line::from(Span::styled(
+            match kind {
+                WinKind::LastStanding => {
+                    format!("  ★ {} rules the realm", name_of(state, *user_id))
+                }
+                WinKind::Dominated | WinKind::SeasonOver => {
+                    format!("  ★ {} {}", name_of(state, *user_id), kind.phrase())
+                }
+            },
             Style::default()
                 .fg(theme::AMBER())
                 .add_modifier(Modifier::BOLD),
         )),
+        LogEntry::Fought { .. } => unreachable!("entry_lines draws a fight, a line per taker"),
     }
 }

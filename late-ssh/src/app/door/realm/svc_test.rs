@@ -1,3 +1,5 @@
+use std::num::NonZeroU8;
+
 use chrono::{Duration, Utc};
 use late_core::{
     models::{
@@ -8,16 +10,16 @@ use late_core::{
 };
 use uuid::Uuid;
 
-use crate::app::activity::event::{ActivityEvent, ActivityKind};
+use crate::app::activity::event::{ActivityEvent, ActivityKind, RealmWinner};
 use crate::app::activity::lounge::{SYSTEM_FINGERPRINT, SYSTEM_USERNAME};
 use crate::app::activity::publisher::ActivityPublisher;
 use crate::app::door::realm::map::TerritoryId;
 use crate::app::door::realm::resolver::{
-    RealmAction, RealmGameState, RealmNewsKind, RealmPlayerStatus,
+    LogEntry, Order, RealmAction, RealmGameState, RealmNewsKind, RealmPlayerStatus, WinKind,
 };
 use crate::app::door::realm::svc::{
-    RealmService, WorldChoice, WorldSpec, next_reset, parse_state, realm_day, reset_hour_label,
-    reset_hour_label_at,
+    RealmEvent, RealmService, WorldChoice, WorldSpec, next_reset, parse_state, realm_day,
+    reset_hour_label, reset_hour_label_at,
 };
 use crate::app::games::chips::svc::ChipService;
 use crate::test_helpers::new_test_db;
@@ -144,11 +146,30 @@ fn realm_service_watching(
 
 /// Open a standard world and march the given players in; returns the game id.
 async fn started_game(svc: &RealmService, test_db: &TestDb, names: &[&str]) -> (Uuid, Vec<Uuid>) {
+    started_on(svc, test_db, &spec(RESET_HOUR), names).await
+}
+
+/// The usual world on the campaign rules: orders by day, the night resolves
+/// them.
+fn campaign_spec() -> WorldSpec {
+    WorldSpec {
+        ruleset: &crate::app::door::realm::rulesets::CAMPAIGN,
+        ..spec(RESET_HOUR)
+    }
+}
+
+/// Open a world from `spec`, march the given players in and open its doors.
+async fn started_on(
+    svc: &RealmService,
+    test_db: &TestDb,
+    spec: &WorldSpec,
+    names: &[&str],
+) -> (Uuid, Vec<Uuid>) {
     let mut ids = Vec::new();
     for name in names {
         ids.push(create_test_user(&test_db.db, name).await);
     }
-    let game = open(svc, test_db, &spec(RESET_HOUR)).await;
+    let game = open(svc, test_db, spec).await;
     for user in &ids {
         svc.join_game(user.id, &user.username, game.id, None)
             .await
@@ -355,12 +376,20 @@ async fn the_house_raises_the_next_world_when_none_stands() {
         "odd seasons are played on Earth"
     );
     assert_eq!(state.ruleset.pace_name, "Fast");
+    assert_eq!(state.ruleset.id, "campaign", "the house plays the campaign");
+    assert_eq!(
+        state.ruleset.resolution,
+        crate::app::door::realm::rulesets::Resolution::Orders
+    );
     assert!(state.players.is_empty());
     assert!(
-        svc.act_at(
+        svc.place_order_at(
             Uuid::nil(),
             first.id,
-            RealmAction::Claim { target: 0 },
+            Order::Take {
+                target: 0,
+                points: NonZeroU8::MIN,
+            },
             Utc::now()
         )
         .await
@@ -970,6 +999,7 @@ async fn a_game_nobody_plays_dissolves_without_paying() {
         Some(RealmNewsKind::Ended {
             winner_user_id: None,
             winner_username: None,
+            win_kind: None,
         }),
         "the strip reads a world that fell silent"
     );
@@ -1123,7 +1153,10 @@ async fn a_conquest_after_a_week_of_play_pays_the_pot() {
         ActivityKind::RealmSeasonEnded {
             game_id,
             season: row.season,
-            winner: Some("realm_p_a".to_string()),
+            winner: Some(RealmWinner {
+                username: "realm_p_a".to_string(),
+                took_it: "conquered the realm",
+            }),
             pot,
             players: 3,
         }
@@ -1134,6 +1167,7 @@ async fn a_conquest_after_a_week_of_play_pays_the_pot() {
         Some(RealmNewsKind::Ended {
             winner_user_id: Some(alice),
             winner_username: Some("realm_p_a".to_string()),
+            win_kind: Some(WinKind::LastStanding),
         })
     );
 }
@@ -2487,4 +2521,366 @@ async fn a_finished_worlds_room_is_cleared_after_a_month() {
         assert_eq!(row.chat_room_id, game.chat_room_id, "kept its room");
         assert!(row.chat_room_id.is_some());
     }
+}
+
+/// A free territory across one of this player's land borders: their
+/// ordinary first take.
+fn free_border(state: &RealmGameState, user_id: Uuid) -> TerritoryId {
+    let map = crate::app::door::realm::map::map_by_id(&state.ruleset.map_id).expect("map");
+    state
+        .holdings(user_id)
+        .iter()
+        .filter_map(|t| map.territory(*t))
+        .flat_map(|t| t.land_links.iter().map(|(n, _)| *n))
+        .find(|n| !state.ownership.contains_key(n))
+        .expect("free land on a spawn's border")
+}
+
+fn take(target: TerritoryId, points: u8) -> Order {
+    Order::Take {
+        target,
+        points: NonZeroU8::new(points).expect("non-zero"),
+    }
+}
+
+/// Stand a game in a position, written the way any write is.
+async fn stand(test_db: &TestDb, game_id: Uuid, state: &mut RealmGameState) {
+    let client = test_db.db.get().await.expect("client");
+    let expected = state.revision as i64;
+    state.revision += 1;
+    let updated = RealmGame::update_state_cas(
+        &client,
+        game_id,
+        &serde_json::to_value(&*state).expect("state"),
+        expected,
+    )
+    .await
+    .expect("write state");
+    assert_eq!(updated, 1);
+}
+
+#[tokio::test]
+async fn an_order_lands_in_the_row_and_answers_only_its_actor() {
+    let test_db = new_test_db().await;
+    let svc = realm_service(&test_db);
+    let (game_id, ids) = started_on(&svc, &test_db, &campaign_spec(), &["alice", "bob"]).await;
+    let alice = ids[0];
+    let mut events = svc.subscribe_events();
+    let state = load_state(&svc, game_id).await;
+    let target = free_border(&state, alice);
+    let now = Utc::now();
+    let today = realm_day(now, RESET_HOUR);
+
+    svc.place_order_at(alice, game_id, take(target, 2), now)
+        .await
+        .expect("the order stands");
+    let placed = load_state(&svc, game_id).await;
+    assert_eq!(placed.player(alice).unwrap().orders, vec![take(target, 2)]);
+    // Five points a day for two players, as the campaign's tiers pay.
+    assert_eq!(placed.points_left(alice, today), 3);
+    // Ordered, not taken: nothing moves until the night.
+    assert_eq!(placed.ownership.get(&target), None);
+    let answers: Vec<RealmEvent> = drained(&mut events)
+        .await
+        .into_iter()
+        .filter(|e| matches!(e, RealmEvent::OrderPlaced { .. }))
+        .collect();
+    assert!(matches!(
+        answers.as_slice(),
+        [RealmEvent::OrderPlaced { user_id, order, probability: Some(_), points_left: 3, .. }]
+            if *user_id == alice && *order == take(target, 2)
+    ));
+
+    // A refusal is free and writes nothing.
+    let own = placed.holdings(alice)[0];
+    let refused = svc.place_order_at(alice, game_id, take(own, 1), now).await;
+    assert!(refused.is_err());
+    assert_eq!(load_state(&svc, game_id).await.revision, placed.revision);
+
+    // The instant engine's door is shut on a campaign.
+    let acted = svc
+        .act_at(alice, game_id, RealmAction::Claim { target }, now)
+        .await
+        .expect_err("a campaign takes no actions");
+    assert_eq!(acted.to_string(), "this realm takes orders, not actions");
+
+    svc.withdraw_order_at(alice, game_id, target, now)
+        .await
+        .expect("withdrawn");
+    let withdrawn = load_state(&svc, game_id).await;
+    assert!(withdrawn.player(alice).unwrap().orders.is_empty());
+    assert_eq!(withdrawn.points_left(alice, today), 5);
+}
+
+#[tokio::test]
+async fn the_sweeper_runs_the_night_at_the_hour_and_keeps_both_boards() {
+    let test_db = new_test_db().await;
+    let svc = realm_service(&test_db);
+    let (game_id, ids) = started_on(&svc, &test_db, &campaign_spec(), &["alice", "bob"]).await;
+    let alice = ids[0];
+    let now = Utc::now();
+    let today = realm_day(now, RESET_HOUR);
+    let target = free_border(&load_state(&svc, game_id).await, alice);
+    svc.place_order_at(alice, game_id, take(target, 3), now)
+        .await
+        .expect("order");
+
+    // Before the hour the day stays open.
+    svc.sweep(now).await.expect("sweep");
+    assert!(load_state(&svc, game_id).await.last_night.is_none());
+
+    svc.sweep(now + Duration::days(1)).await.expect("sweep");
+    let state = load_state(&svc, game_id).await;
+    let night = state.last_night.as_ref().expect("the night ran");
+    assert_eq!(night.day, today);
+    assert!(night.entries.iter().any(|e| matches!(
+        e,
+        LogEntry::Fought { target: t, .. } if *t == target
+    )));
+    assert!(state.players.iter().all(|p| p.orders.is_empty()));
+    assert_eq!(state.last_day.as_ref().map(|d| d.day), Some(today + 1));
+
+    let days = svc.load_day_logs(game_id, None, 10).await.expect("logs");
+    let closed = days
+        .iter()
+        .find(|d| d.day() == today)
+        .expect("the day is archived");
+    let open_board = closed
+        .board_open
+        .as_ref()
+        .expect("the board the night opened on");
+    let closing_board = closed.board.as_ref().expect("the board it closed on");
+    assert!(
+        open_board.owner(target).is_none(),
+        "free when the night began"
+    );
+    assert_eq!(
+        closing_board.owner(target).map(|p| p.user_id),
+        state.ownership.get(&target).copied(),
+        "and whatever the fight made it after"
+    );
+}
+
+#[tokio::test]
+async fn an_order_after_the_hour_runs_the_night_first() {
+    let test_db = new_test_db().await;
+    let svc = realm_service(&test_db);
+    let (game_id, ids) = started_on(&svc, &test_db, &campaign_spec(), &["alice", "bob"]).await;
+    let alice = ids[0];
+    let now = Utc::now();
+    let today = realm_day(now, RESET_HOUR);
+    let target = free_border(&load_state(&svc, game_id).await, alice);
+    svc.place_order_at(alice, game_id, take(target, 1), now)
+        .await
+        .expect("order");
+
+    // Tomorrow, before the sweeper has been round.
+    let spawn = load_state(&svc, game_id).await.holdings(alice)[0];
+    let walls = Order::Fortify {
+        target: spawn,
+        levels: NonZeroU8::MIN,
+    };
+    svc.place_order_at(alice, game_id, walls, now + Duration::days(1))
+        .await
+        .expect("tomorrow's order");
+    let state = load_state(&svc, game_id).await;
+    assert_eq!(state.last_night.as_ref().map(|n| n.day), Some(today));
+    assert_eq!(state.last_day.as_ref().map(|d| d.day), Some(today + 1));
+    let player = state.player(alice).unwrap();
+    assert_eq!(player.orders, vec![walls], "yesterday's take was resolved");
+    assert_eq!(player.actions_day, today + 1);
+}
+
+#[tokio::test]
+async fn two_replicas_closing_one_day_run_its_night_once() {
+    let test_db = new_test_db().await;
+    let svc = realm_service(&test_db);
+    let other = realm_service(&test_db);
+    let (game_id, ids) = started_on(&svc, &test_db, &campaign_spec(), &["alice", "bob"]).await;
+    let alice = ids[0];
+    let now = Utc::now();
+    let target = free_border(&load_state(&svc, game_id).await, alice);
+    svc.place_order_at(alice, game_id, take(target, 2), now)
+        .await
+        .expect("order");
+
+    let tomorrow = now + Duration::days(1);
+    let (here, there) = tokio::join!(svc.sweep(tomorrow), other.sweep(tomorrow));
+    here.expect("sweep here");
+    there.expect("sweep there");
+
+    let state = load_state(&svc, game_id).await;
+    let fights = |entries: &[LogEntry]| {
+        entries
+            .iter()
+            .filter(|e| matches!(e, LogEntry::Fought { .. }))
+            .count()
+    };
+    assert_eq!(
+        fights(&state.last_night.as_ref().expect("a night").entries),
+        1
+    );
+    let today = realm_day(now, RESET_HOUR);
+    let days = svc.load_day_logs(game_id, None, 10).await.expect("logs");
+    let closed = days.iter().find(|d| d.day() == today).expect("archived");
+    assert_eq!(fights(&closed.result.entries), 1, "the night ran once");
+    // And whoever lost the write left the row as the winner wrote it.
+    assert_eq!(load_state(&other, game_id).await.revision, state.revision);
+}
+
+#[tokio::test]
+async fn an_order_on_a_realm_whose_night_fails_is_refused_once_and_writes_nothing() {
+    let test_db = new_test_db().await;
+    let svc = realm_service(&test_db);
+    let (game_id, ids) = started_on(&svc, &test_db, &campaign_spec(), &["alice", "bob"]).await;
+    let alice = ids[0];
+    let now = Utc::now();
+    let target = free_border(&load_state(&svc, game_id).await, alice);
+    svc.place_order_at(alice, game_id, take(target, 1), now)
+        .await
+        .expect("order");
+    // A world whose map this process cannot build: its night fails before
+    // it writes anything.
+    let mut state = load_state(&svc, game_id).await;
+    state.ruleset.map_id = "nowhere".to_string();
+    stand(&test_db, game_id, &mut state).await;
+
+    let refused = svc
+        .place_order_at(alice, game_id, take(target, 1), now + Duration::days(1))
+        .await
+        .expect_err("the night could not run");
+    assert_eq!(
+        refused.to_string(),
+        "the night could not be resolved, try again in a minute"
+    );
+    let after = load_state(&svc, game_id).await;
+    assert_eq!(after.revision, state.revision, "nothing was written");
+    assert_eq!(
+        after.player(alice).unwrap().orders,
+        vec![take(target, 1)],
+        "yesterday's order waits for the sweeper's night"
+    );
+    assert!(after.last_night.is_none());
+}
+
+#[tokio::test]
+async fn the_season_clock_gives_the_world_to_the_biggest_share_and_pays() {
+    use crate::app::door::realm::night;
+
+    let test_db = new_test_db().await;
+    let svc = realm_service(&test_db);
+    let (game_id, ids) = started_on(
+        &svc,
+        &test_db,
+        &campaign_spec(),
+        &["realm_c_a", "realm_c_b", "realm_c_c"],
+    )
+    .await;
+    let today = realm_day(Utc::now(), RESET_HOUR);
+
+    // Three players who have played their weeks, splitting part of the
+    // world, on the last day of the season.
+    let mut state = load_state(&svc, game_id).await;
+    let bar = state.ruleset.min_active_days_to_win;
+    for player in &mut state.players {
+        player.active_days = bar;
+    }
+    state.ownership.clear();
+    for (territory, owner) in (0..30u16).zip(ids.iter().cycle()) {
+        state.ownership.insert(territory, *owner);
+    }
+    state.start_day = today - i32::from(state.ruleset.season_days);
+    assert_eq!(night::season_last_day(&state), Some(today));
+    stand(&test_db, game_id, &mut state).await;
+    let map = crate::app::door::realm::map::map_by_id(&state.ruleset.map_id).expect("map");
+    let biggest = *ids
+        .iter()
+        .max_by(|a, b| night::share(&state, &map, **a).total_cmp(&night::share(&state, &map, **b)))
+        .expect("players");
+
+    svc.sweep(Utc::now() + Duration::days(1))
+        .await
+        .expect("sweep");
+    let row = svc.load_game(game_id).await.expect("load").expect("row");
+    assert_eq!(row.status, RealmGame::STATUS_FINISHED);
+    assert_eq!(row.winner_user_id, Some(biggest));
+    let state = load_state(&svc, game_id).await;
+    assert!(
+        state
+            .last_night
+            .as_ref()
+            .unwrap()
+            .entries
+            .iter()
+            .any(|e| matches!(
+                e,
+                LogEntry::Won { user_id, kind: WinKind::SeasonOver } if *user_id == biggest
+            ))
+    );
+    let pot: i64 = crate::app::door::realm::svc::payout_plan(3, state.ruleset.pot_scale)
+        .iter()
+        .map(|(_, chips)| chips)
+        .sum();
+    assert_eq!(wait_for_payout(&test_db, biggest).await, Some(pot));
+}
+
+#[tokio::test]
+async fn a_domination_headlines_the_lounge_with_how_it_was_won() {
+    let test_db = new_test_db().await;
+    let (svc, mut activity) = realm_service_watching(&test_db);
+    let (game_id, ids) = started_on(
+        &svc,
+        &test_db,
+        &campaign_spec(),
+        &["realm_d_a", "realm_d_b", "realm_d_c"],
+    )
+    .await;
+    let alice = ids[0];
+
+    // Alice holds nearly everything and has for two nights already.
+    let mut state = load_state(&svc, game_id).await;
+    let bar = state.ruleset.min_active_days_to_win;
+    let map = crate::app::door::realm::map::map_by_id(&state.ruleset.map_id).expect("map");
+    let last = map.territories.len() as u16;
+    state.ownership.clear();
+    for territory in 0..last - 2 {
+        state.ownership.insert(territory, alice);
+    }
+    state.ownership.insert(last - 2, ids[1]);
+    state.ownership.insert(last - 1, ids[2]);
+    for player in &mut state.players {
+        player.active_days = bar;
+        if player.user_id == alice {
+            player.dominating_nights = state.ruleset.domination_nights - 1;
+        }
+    }
+    stand(&test_db, game_id, &mut state).await;
+
+    svc.sweep(Utc::now() + Duration::days(1))
+        .await
+        .expect("sweep");
+    let row = svc.load_game(game_id).await.expect("load").expect("row");
+    assert_eq!(row.winner_user_id, Some(alice));
+    let fell = activity_where(&mut activity, |event| {
+        matches!(event.kind, ActivityKind::RealmSeasonEnded { game_id: g, .. } if g == game_id)
+    })
+    .await;
+    assert!(matches!(
+        fell.kind,
+        ActivityKind::RealmSeasonEnded {
+            winner: Some(RealmWinner {
+                took_it: "dominated the realm",
+                ..
+            }),
+            ..
+        }
+    ));
+    let state = load_state(&svc, game_id).await;
+    assert!(matches!(
+        state.news.map(|n| n.kind),
+        Some(RealmNewsKind::Ended {
+            win_kind: Some(WinKind::Dominated),
+            ..
+        })
+    ));
 }

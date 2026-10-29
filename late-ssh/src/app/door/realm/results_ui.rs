@@ -19,7 +19,7 @@ use late_core::models::realm_game::RealmGame;
 use crate::app::common::theme;
 
 use super::map_ui::compact;
-use super::resolver::RealmPlayerStatus;
+use super::resolver::{RealmPlayerStatus, WinKind};
 use super::state::{RealmState, player_color};
 use super::svc::{FinalPlace, final_table};
 use super::ui::truncate;
@@ -88,13 +88,19 @@ pub fn results_lines(realm: &RealmState, text_width: usize) -> Option<Vec<Line<'
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(
-                    // Two ways to have won, and the card says which: the
-                    // whole map, or the last one standing with unclaimed
-                    // ground still lying about.
-                    if whole_map {
-                        " holds the whole world"
-                    } else {
-                        " is the last one standing"
+                    // How it was won, and the card says which: dominated,
+                    // ahead when the clock ran out, the whole map, or the
+                    // last one standing with unclaimed ground lying about.
+                    match super::state::win_kind(state) {
+                        Some(kind @ (WinKind::Dominated | WinKind::SeasonOver)) => {
+                            format!(" {}", kind.phrase())
+                        }
+                        Some(WinKind::LastStanding) | None if whole_map => {
+                            " holds the whole world".to_string()
+                        }
+                        Some(WinKind::LastStanding) | None => {
+                            format!(" {}", WinKind::LastStanding.phrase())
+                        }
                     },
                     bright,
                 ),
@@ -270,6 +276,8 @@ mod tests {
                     last_action_day: Some(20_010),
                     active_days: 12,
                     color: None,
+                    orders: Vec::new(),
+                    dominating_nights: 0,
                     joined_claimed: 0,
                 })
                 .collect(),
@@ -279,6 +287,7 @@ mod tests {
             start_player_count: players.len() as u8,
             start_day: 20_000,
             news: None,
+            last_night: None,
         }
     }
 

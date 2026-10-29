@@ -1,7 +1,8 @@
 //! Realm: multiplayer territory conquest. DB-durable games (see
-//! `late-core/src/models/realm_game.rs`); actions resolve the instant they
-//! are taken, and the house world refills its daily action points at the
-//! house hour (`svc::HOUSE_RESET_HOUR_UTC`). See CONTEXT.md.
+//! `late-core/src/models/realm_game.rs`); on the house's campaign, orders
+//! written by day resolve together at the night, when the day turns over at
+//! the house hour (`svc::HOUSE_RESET_HOUR_UTC`), and on the standard ruleset
+//! an action resolves the instant it is taken. See CONTEXT.md.
 
 pub mod history_ui;
 pub mod input;
@@ -12,6 +13,8 @@ pub mod log_ui;
 pub mod map;
 pub mod map_ui;
 pub mod mapgen;
+pub mod night;
+pub mod orders_ui;
 pub mod overview_ui;
 pub mod resolver;
 pub mod results_ui;

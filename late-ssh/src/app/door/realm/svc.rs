@@ -6,11 +6,14 @@
 //! nothing needs reconciling after a restart, and two players reaching for
 //! the same territory are settled first-come-first-served by that CAS.
 //!
-//! Actions resolve the instant they are taken (see `resolver::apply_action`).
-//! The 60s sweeper is not a resolver: it rolls the world's day over at its
-//! `reset_hour_utc` (archiving the day's log), dissolves a realm everyone has
-//! gone quiet in, settles the pot of a finished game whose chips have not
-//! moved yet, and opens the next season when no world stands.
+//! Two engines, picked by the frozen ruleset's `Resolution`. An instant game
+//! resolves every action the moment it is taken (`resolver::apply_action`).
+//! A campaign takes orders by day (`night::place_order`) and resolves them all
+//! at the night, when the day turns over (`close_day`, `night::resolve_night`).
+//! The 60s sweeper rolls each world's day over at its `reset_hour_utc`
+//! (running a campaign's night, archiving the day's log), dissolves a realm
+//! everyone has gone quiet in, settles the pot of a finished game whose chips
+//! have not moved yet, and opens the next season when no world stands.
 //!
 //! Fan-out is derived, not sent. A trigger on `realm_games` notifies every
 //! replica of every write; each one re-reads the snapshot and
@@ -34,8 +37,10 @@ use late_core::{
 };
 use serde_json::Value;
 use tokio::sync::{broadcast, mpsc, watch};
+use tracing::Instrument;
 use uuid::Uuid;
 
+use crate::app::activity::event::RealmWinner;
 use crate::app::activity::lounge::SYSTEM_FINGERPRINT;
 use crate::app::activity::publisher::ActivityPublisher;
 use crate::app::ai::svc::{AI_MODEL, AiService};
@@ -46,12 +51,15 @@ use super::map::{
     EARTH_MAP_ID, GENERATED_MAP_ID, TerritoryId, WorldMap, map_handle, territory_total,
 };
 use super::mapgen::{self, GeneratedMapSpec};
+use super::night;
 use super::resolver::{
-    self, ActionRejected, DayBoard, DayResult, PALETTE_SLOTS, PlayerPhase, RealmAction,
-    RealmGameState, RealmNews, RealmNewsKind, RealmPlayer, RealmPlayerStatus, ResolveEnd,
-    STATE_VERSION, SplitMix64, day_seed,
+    self, ActionRejected, DayBoard, DayResult, LogEntry, Order, OrderRejected, PALETTE_SLOTS,
+    PlayerPhase, RealmAction, RealmGameState, RealmNews, RealmNewsKind, RealmPlayer,
+    RealmPlayerStatus, ResolveEnd, STATE_VERSION, SplitMix64, WinKind, day_seed,
 };
-use super::rulesets::{RealmPace, RealmRuleset, RealmRulesetSnapshot, STANDARD, pace_by_id};
+use super::rulesets::{
+    CAMPAIGN, RealmPace, RealmRuleset, RealmRulesetSnapshot, Resolution, pace_by_id,
+};
 
 /// How long a world stands frozen after it is opened: the gates are open,
 /// the map, the spawns and the roster are all there to look at, and nothing
@@ -137,13 +145,18 @@ pub enum WorldChoice {
     },
 }
 
-/// What the house opens for `season`: the standard rules at the house pace,
+/// The rules every world the house opens is played by.
+pub fn house_ruleset() -> &'static RealmRuleset {
+    &CAMPAIGN
+}
+
+/// What the house opens for `season`: the campaign rules at the house pace,
 /// on Earth for odd seasons and a drawn world for even ones, so the two kinds
 /// of world take turns and nobody plays the same map twice running.
 pub fn house_spec(season: i32) -> WorldSpec {
     let shape = GeneratedMapSpec::default();
     WorldSpec {
-        ruleset: &STANDARD,
+        ruleset: house_ruleset(),
         pace: pace_by_id(HOUSE_PACE).expect("the house pace is on the roster"),
         reset_hour_utc: HOUSE_RESET_HOUR_UTC,
         map: match season % 2 == 0 {
@@ -197,6 +210,21 @@ const SWEEP_INTERVAL: Duration = Duration::from_secs(60);
 const MAX_GAMES_PER_SWEEP: usize = 20;
 /// CAS-retry attempts for join/leave style read-modify-write mutations.
 const CAS_RETRIES: usize = 3;
+
+/// What `close_day` did with a game's day.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DayTurn {
+    /// This call turned the day; its night, on a campaign, is the night.
+    Turned,
+    /// Another write got there first: on a campaign, somebody else ran the
+    /// night. The row is theirs to read again.
+    Lost,
+    /// The day on the row is the day asked for: nothing to turn.
+    Open,
+    /// A campaign's night failed before anything was written. Logged and
+    /// counted once, where it failed; the next sweep runs it again.
+    NightFailed,
+}
 
 /// Days since the Unix epoch of `now`, UTC. The unit of realm time for
 /// anything not tied to a single game (joins, exits, seeds).
@@ -399,9 +427,10 @@ impl RealmGameItem {
     }
 }
 
-/// What a session is told. Everything but `ActionResolved` and `Error` is
-/// derived from the snapshot diff in `publish` (see `derive_events`), never
-/// sent by a mutation, so it reads the same on every replica.
+/// What a session is told. Everything but `ActionResolved`, the two order
+/// answers and `Error` is derived from the snapshot diff in `publish` (see
+/// `derive_events`), never sent by a mutation, so it reads the same on every
+/// replica.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RealmEvent {
     /// A world rose and is still mustering: an invitation, which every
@@ -421,6 +450,23 @@ pub enum RealmEvent {
         probability: f64,
         success: bool,
         attack: bool,
+        points_left: u8,
+    },
+    /// Targeted answer to the actor's own order: it stands for tonight, with
+    /// its odds as the board now sees them (none for walls) and what is left
+    /// to order. Nobody else hears of it: orders are secret until the night.
+    OrderPlaced {
+        game_id: Uuid,
+        user_id: Uuid,
+        order: Order,
+        probability: Option<f64>,
+        points_left: u8,
+    },
+    /// Targeted answer to the actor's withdrawn order: its points are back.
+    OrderWithdrawn {
+        game_id: Uuid,
+        user_id: Uuid,
+        target: TerritoryId,
         points_left: u8,
     },
     /// The world moved (a write, or the row leaving the listing): anyone with
@@ -563,6 +609,36 @@ impl RealmService {
         });
     }
 
+    /// Write one order for tonight. Fire-and-forget like the rest; the answer
+    /// comes back as a targeted `OrderPlaced` (or `Error`) event.
+    pub fn place_order_task(&self, user_id: Uuid, game_id: Uuid, order: Order) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc
+                .place_order_at(user_id, game_id, order, Utc::now())
+                .await
+            {
+                tracing::error!(error = ?e, %user_id, %game_id, "failed to place realm order");
+                svc.send_error(user_id, &e);
+            }
+        });
+    }
+
+    /// Take back tonight's order on `target`. The answer comes back as a
+    /// targeted `OrderWithdrawn` (or `Error`) event.
+    pub fn withdraw_order_task(&self, user_id: Uuid, game_id: Uuid, target: TerritoryId) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc
+                .withdraw_order_at(user_id, game_id, target, Utc::now())
+                .await
+            {
+                tracing::error!(error = ?e, %user_id, %game_id, "failed to withdraw realm order");
+                svc.send_error(user_id, &e);
+            }
+        });
+    }
+
     // ----- reads
 
     pub async fn load_game(&self, game_id: Uuid) -> Result<Option<RealmGame>> {
@@ -585,7 +661,14 @@ impl RealmService {
                 let board = day
                     .board
                     .and_then(|board| serde_json::from_value::<DayBoard>(board).ok());
-                Some(ArchivedDay { result, board })
+                let board_open = day
+                    .board_open
+                    .and_then(|board| serde_json::from_value::<DayBoard>(board).ok());
+                Some(ArchivedDay {
+                    result,
+                    board,
+                    board_open,
+                })
             })
             .collect())
     }
@@ -681,6 +764,7 @@ impl RealmService {
                 at: now,
                 kind: RealmNewsKind::Opened,
             }),
+            last_night: None,
         };
         state.roll_day(today, day_seed(Uuid::nil(), today));
         let Some(game) = RealmGame::open_season(
@@ -760,16 +844,9 @@ impl RealmService {
             let joined_day = realm_day(Utc::now(), game.reset_hour_utc)
                 .max(first_playable_day(game.created, game.reset_hour_utc));
             let color = pick_color(&state.taken_colors(), color)?;
-            let claimed = (state.claimed_fraction(&map) * 100.0)
-                .round()
-                .clamp(0.0, 100.0) as u8;
-            state
-                .players
-                .push(new_player(user_id, username, joined_day, color, claimed));
-            state.start_player_count = state.start_player_count.max(state.players.len() as u8);
-            let spawn_seed =
-                day_seed(game_id, state.revision as i32) ^ u64::from(user_id.as_u128() as u32);
-            if !spawn_player(&mut state, &map, game_id, user_id, spawn_seed) {
+            if !admit_player(
+                &mut state, &map, game_id, user_id, username, joined_day, color,
+            ) {
                 bail!("there is no free land left to spawn on");
             }
             state.news = Some(RealmNews {
@@ -831,9 +908,14 @@ impl RealmService {
             }
             let expected = state.revision as i64;
             let freed = state.release_holdings(user_id);
+            // Onto the day still open, which is behind today when the hour
+            // has struck and the sweeper has not been round: logging onto
+            // today would open it, and the day it replaced would never be
+            // turned over (for a campaign, its night would never run).
+            let open_day = state.last_day.as_ref().map_or(today, |d| d.day);
             state.log(
-                today,
-                day_seed(game_id, today),
+                open_day,
+                day_seed(game_id, open_day),
                 resolver::LogEntry::Left { user_id, freed },
             );
             state.players.retain(|p| p.user_id != user_id);
@@ -891,6 +973,10 @@ impl RealmService {
                 );
             }
             let mut state = parse_state(&game.state)?;
+            match state.ruleset.resolution {
+                Resolution::Instant => {}
+                Resolution::Orders => bail!("this realm takes orders, not actions"),
+            }
             let map = self.map_for(&state)?;
             let expected = state.revision as i64;
             let day = realm_day(now, game.reset_hour_utc);
@@ -926,7 +1012,7 @@ impl RealmService {
                     RealmGame::advance_day_cas(&client, game_id, day, &state_value, expected)
                         .await?
                 }
-                ResolveEnd::Won(winner) => {
+                ResolveEnd::Won { winner, kind } => {
                     let updated = RealmGame::finish_cas(
                         &client,
                         game_id,
@@ -937,7 +1023,7 @@ impl RealmService {
                     )
                     .await?;
                     if updated > 0 {
-                        self.on_finished(&game, &state, Some(winner));
+                        self.on_finished(&game, &state, Some((winner, kind)));
                     }
                     updated
                 }
@@ -961,7 +1047,7 @@ impl RealmService {
             }
 
             if let Some(finished) = rolled {
-                self.archive_with_board(&client, game_id, &finished, closing_board.as_ref())
+                self.archive_with_board(&client, game_id, &finished, closing_board.as_ref(), None)
                     .await;
                 // The day that opened, which is not `finished.day + 1` when
                 // the realm went days without a rollover.
@@ -972,7 +1058,7 @@ impl RealmService {
                 // final board is written onto the day it ended on.
                 let final_board =
                     (!matches!(outcome.end, ResolveEnd::Ongoing)).then(|| DayBoard::of(&state));
-                self.archive_with_board(&client, game_id, current, final_board.as_ref())
+                self.archive_with_board(&client, game_id, current, final_board.as_ref(), None)
                     .await;
             }
             // The actor's own banner is the one thing the write sends
@@ -994,13 +1080,129 @@ impl RealmService {
         bail!("the realm moved while you acted, try again")
     }
 
+    /// Write one order for tonight, as of `now` (the muster and the hour are
+    /// wall-clock rules). A refusal writes nothing and costs nothing.
+    pub async fn place_order_at(
+        &self,
+        user_id: Uuid,
+        game_id: Uuid,
+        order: Order,
+        now: DateTime<Utc>,
+    ) -> Result<()> {
+        let placed = self
+            .write_order(game_id, now, |state, map, day| {
+                night::place_order(state, map, user_id, order, day)
+            })
+            .await?;
+        crate::metrics::record_realm_order(RealmOrderOutcome::Placed);
+        // Like `ActionResolved`, the actor's answer is the one thing the
+        // write sends itself; the board reloads from the snapshot diff.
+        let _ = self.event_tx.send(RealmEvent::OrderPlaced {
+            game_id,
+            user_id,
+            order,
+            probability: placed.projection.map(|p| p.probability),
+            points_left: placed.points_left,
+        });
+        Ok(())
+    }
+
+    /// Take back tonight's order on `target`, as of `now`, and its points.
+    pub async fn withdraw_order_at(
+        &self,
+        user_id: Uuid,
+        game_id: Uuid,
+        target: TerritoryId,
+        now: DateTime<Utc>,
+    ) -> Result<()> {
+        let points_left = self
+            .write_order(game_id, now, |state, _map, day| {
+                night::withdraw_order(state, user_id, target, day)
+            })
+            .await?;
+        crate::metrics::record_realm_order(RealmOrderOutcome::Withdrawn);
+        let _ = self.event_tx.send(RealmEvent::OrderWithdrawn {
+            game_id,
+            user_id,
+            target,
+            points_left,
+        });
+        Ok(())
+    }
+
+    /// The write every order goes through: a campaign, running, past its
+    /// muster. A day the hour has already closed is turned over first
+    /// (`close_day`: the night runs, then the order lands on the day it
+    /// opened), and the change persists under the row CAS, rerun from a fresh
+    /// read when another write landed first.
+    async fn write_order<T>(
+        &self,
+        game_id: Uuid,
+        now: DateTime<Utc>,
+        mut change: impl FnMut(&mut RealmGameState, &WorldMap, i32) -> Result<T, OrderRejected>,
+    ) -> Result<T> {
+        let client = self.db.get().await?;
+        for _ in 0..CAS_RETRIES {
+            let game = RealmGame::get(&client, game_id)
+                .await?
+                .context("realm game not found")?;
+            if game.status != RealmGame::STATUS_ACTIVE {
+                bail!("this realm game is not running");
+            }
+            if let Some(left) = muster_left(game.created, now) {
+                bail!(
+                    "this realm opens in {}, everyone starts together",
+                    countdown_label(left)
+                );
+            }
+            let mut state = parse_state(&game.state)?;
+            match state.ruleset.resolution {
+                Resolution::Instant => bail!("this realm takes actions, not orders"),
+                Resolution::Orders => {}
+            }
+            let day = realm_day(now, game.reset_hour_utc);
+            match self.close_day(&client, &game, day).await? {
+                // The day on the row is the day the order is for.
+                DayTurn::Open => {}
+                // A night ran, this replica's or another's: the order lands
+                // on the day it opened, read fresh.
+                DayTurn::Turned | DayTurn::Lost => continue,
+                DayTurn::NightFailed => {
+                    bail!("the night could not be resolved, try again in a minute")
+                }
+            }
+            let map = self.map_for(&state)?;
+            let expected = state.revision as i64;
+            let answer = match change(&mut state, &map, day) {
+                Ok(answer) => answer,
+                Err(rejected) => {
+                    crate::metrics::record_realm_order(RealmOrderOutcome::Refused);
+                    return Err(reject_order(rejected));
+                }
+            };
+            let updated = RealmGame::update_state_cas(
+                &client,
+                game_id,
+                &serde_json::to_value(&state)?,
+                expected,
+            )
+            .await?;
+            if updated == 0 {
+                continue;
+            }
+            self.publish(&client).await?;
+            return Ok(answer);
+        }
+        bail!("the realm moved while you gave the order, try again")
+    }
+
     // ----- sweeping
 
-    /// Per-game housekeeping, run every 60s: roll the day over at the game's
-    /// own reset hour (archiving the log it closes), dissolve a realm that
-    /// every living player has been quiet in for `REALM_ABANDON_DAYS`, and
-    /// settle the pot of any finished game whose chips have not moved.
-    /// Nothing here decides a move — moves resolved when they were taken.
+    /// Per-game housekeeping, run every 60s: turn the day over at the game's
+    /// own reset hour (`close_day`: a campaign's night, the log archived),
+    /// dissolve a realm that every living player has been quiet in for
+    /// `REALM_ABANDON_DAYS`, and settle the pot of any finished game whose
+    /// chips have not moved.
     /// Both work lists are bounded per tick and filtered in SQL, so a tick
     /// only ever picks up games with something to do and the next tick
     /// continues where this one stopped.
@@ -1053,8 +1255,9 @@ impl RealmService {
         let mut changed = false;
         for game in games {
             let day = realm_day(now, game.reset_hour_utc);
-            match self.sweep_game(&client, &game, day).await {
-                Ok(touched) => changed |= touched,
+            match self.close_day(&client, &game, day).await {
+                Ok(DayTurn::Turned) => changed = true,
+                Ok(DayTurn::Open | DayTurn::Lost | DayTurn::NightFailed) => {}
                 Err(e) => {
                     tracing::error!(error = ?e, game_id = %game.id, "failed to sweep realm game");
                 }
@@ -1072,13 +1275,48 @@ impl RealmService {
         Ok(())
     }
 
-    async fn sweep_game(
+    /// Turn a game's day over to `day`: the one place that does it, for the
+    /// sweeper and for an order that arrives after the hour (`write_order`).
+    /// The instant engine's own actions roll the day inline (`act_at`), as
+    /// they always have. Says what it did (`DayTurn`), so an order can tell
+    /// a day it may land on from a night it has to wait for.
+    async fn close_day(
         &self,
         client: &tokio_postgres::Client,
         game: &RealmGame,
         day: i32,
-    ) -> Result<bool> {
-        let mut state = parse_state(&game.state)?;
+    ) -> Result<DayTurn> {
+        let state = parse_state(&game.state)?;
+        match state.ruleset.resolution {
+            Resolution::Instant => self.close_instant_day(client, game, state, day).await,
+            Resolution::Orders => {
+                let span = tracing::info_span!("realm.night", game_id = %game.id, day);
+                match self
+                    .close_night(client, game, state, day)
+                    .instrument(span)
+                    .await
+                {
+                    Ok(turn) => Ok(turn),
+                    // Nothing was written: the next sweep runs the night again.
+                    Err(e) => {
+                        tracing::error!(error = ?e, game_id = %game.id, day, "failed to resolve realm night");
+                        crate::metrics::record_realm_night(RealmNightOutcome::Failed);
+                        Ok(DayTurn::NightFailed)
+                    }
+                }
+            }
+        }
+    }
+
+    /// The instant engine's rollover: the day rolls, the abandoned dissolve.
+    /// Nothing here decides a move; moves resolved when they were taken.
+    async fn close_instant_day(
+        &self,
+        client: &tokio_postgres::Client,
+        game: &RealmGame,
+        mut state: RealmGameState,
+        day: i32,
+    ) -> Result<DayTurn> {
         let map = self.map_for(&state)?;
         let expected = state.revision as i64;
         // The closing board, taken before the day turns and before the sweep
@@ -1095,13 +1333,150 @@ impl RealmService {
             state.news = Some(news);
         }
 
-        let state_value = serde_json::to_value(&state)?;
         let name = display_name(game, &state);
+        if self
+            .write_turn(client, game, day, &state, expected, end)
+            .await?
+            == 0
+        {
+            // A player acted in the same instant; their write carries the
+            // rollover too, and the next tick re-checks the kicks.
+            return Ok(DayTurn::Lost);
+        }
+        if let Some(finished) = finished_day {
+            self.archive_with_board(client, game.id, &finished, Some(&closing_board), None)
+                .await;
+        }
+        if let Some(current) = state.last_day.as_ref() {
+            // A sweep that ended the game writes the final board on the day
+            // it ended, since there is no rollover left to carry it.
+            let final_board = (!matches!(end, ResolveEnd::Ongoing)).then(|| DayBoard::of(&state));
+            self.archive_with_board(client, game.id, current, final_board.as_ref(), None)
+                .await;
+        }
+        self.announce_day_rolled(game.id, &name, day, &state);
+        Ok(DayTurn::Turned)
+    }
+
+    /// A campaign's rollover: the night resolves the open day's orders, then
+    /// the day rolls and the abandoned dissolve. All of it is one CAS write,
+    /// so a night runs exactly once: a replica that loses the write wrote
+    /// nothing, and the winner's night is the night.
+    async fn close_night(
+        &self,
+        client: &tokio_postgres::Client,
+        game: &RealmGame,
+        mut state: RealmGameState,
+        day: i32,
+    ) -> Result<DayTurn> {
+        // A night runs once, on an open day the clock has passed. The
+        // sweeper's work list and `write_order` both arrive here believing
+        // that; this is where it is held, on the row as it was just read.
+        if !state.last_day.as_ref().is_some_and(|open| open.day < day) {
+            return Ok(DayTurn::Open);
+        }
+        let map = self.map_for(&state)?;
+        let expected = state.revision as i64;
+        // The board the night opens on, for the replay to draw its fights
+        // over, and the board it leaves, for the history.
+        let open_board = DayBoard::of(&state);
+        let report = night::resolve_night(&mut state, &map);
+        let closing_board = DayBoard::of(&state);
+        let (rolled, end) = match report.end {
+            ResolveEnd::Ongoing => {
+                let rolled = state.roll_day(day, day_seed(game.id, day));
+                match resolver::dissolve_if_abandoned(&mut state, day) {
+                    Some(_kicked) => (rolled, ResolveEnd::Dissolved),
+                    None => (rolled, ResolveEnd::Ongoing),
+                }
+            }
+            // A game the night ended has no tomorrow to open.
+            ended => (None, ended),
+        };
+        if let Some(news) = news_of_night(&state, &map, end, Utc::now()) {
+            state.news = Some(news);
+        }
+        let name = display_name(game, &state);
+        if self
+            .write_turn(client, game, day, &state, expected, end)
+            .await?
+            == 0
+        {
+            return Ok(DayTurn::Lost);
+        }
+
+        // The day the night closed: handed back by the roll, or still the
+        // open day when the night ended the game.
+        let closed = match (&rolled, report.end) {
+            (Some(closed), _) => Some(closed),
+            (None, ResolveEnd::Ongoing) => None,
+            (None, ResolveEnd::Won { .. } | ResolveEnd::Dissolved) => state.last_day.as_ref(),
+        };
+        if let Some(closed) = closed {
+            self.archive_with_board(
+                client,
+                game.id,
+                closed,
+                Some(&closing_board),
+                Some(&open_board),
+            )
+            .await;
+        }
+        match (rolled.is_some(), end) {
+            (true, ResolveEnd::Ongoing) => self.announce_day_rolled(game.id, &name, day, &state),
+            // Dissolved on the day that opened: its kicks and the final board
+            // go onto it.
+            (true, ResolveEnd::Dissolved | ResolveEnd::Won { .. }) => {
+                if let Some(current) = state.last_day.as_ref() {
+                    let final_board = DayBoard::of(&state);
+                    self.archive_with_board(client, game.id, current, Some(&final_board), None)
+                        .await;
+                }
+            }
+            (false, _) => {}
+        }
+
+        let outcome = match end {
+            ResolveEnd::Ongoing => RealmNightOutcome::Resolved,
+            ResolveEnd::Won { .. } => RealmNightOutcome::Won,
+            ResolveEnd::Dissolved => RealmNightOutcome::Dissolved,
+        };
+        tracing::info!(
+            game_id = %game.id,
+            day,
+            taken = report.taken,
+            held = report.held,
+            bounced = report.bounced,
+            fizzled = report.fizzled,
+            outcome = ?outcome,
+            "realm night resolved"
+        );
+        crate::metrics::record_realm_night(outcome);
+        crate::metrics::record_realm_fights(RealmFightResult::Taken, report.taken);
+        crate::metrics::record_realm_fights(RealmFightResult::Held, report.held);
+        crate::metrics::record_realm_fights(RealmFightResult::Bounced, report.bounced);
+        crate::metrics::record_realm_fights(RealmFightResult::Fizzled, report.fizzled);
+        Ok(DayTurn::Turned)
+    }
+
+    /// Persist a turned day under the row CAS: advanced while the game goes
+    /// on, finished (and the finish announced, once) when it ended. Hands
+    /// back the rows written; zero means another write landed first.
+    async fn write_turn(
+        &self,
+        client: &tokio_postgres::Client,
+        game: &RealmGame,
+        day: i32,
+        state: &RealmGameState,
+        expected: i64,
+        end: ResolveEnd,
+    ) -> Result<u64> {
+        let state_value = serde_json::to_value(state)?;
         let updated = match end {
             ResolveEnd::Ongoing => {
                 RealmGame::advance_day_cas(client, game.id, day, &state_value, expected).await?
             }
-            ResolveEnd::Won(winner) => {
+            ResolveEnd::Won { winner, kind } => {
                 let updated = RealmGame::finish_cas(
                     client,
                     game.id,
@@ -1112,7 +1487,7 @@ impl RealmService {
                 )
                 .await?;
                 if updated > 0 {
-                    self.on_finished(game, &state, Some(winner));
+                    self.on_finished(game, state, Some((winner, kind)));
                 }
                 updated
             }
@@ -1121,48 +1496,33 @@ impl RealmService {
                     RealmGame::finish_cas(client, game.id, day, None, &state_value, expected)
                         .await?;
                 if updated > 0 {
-                    self.on_finished(game, &state, None);
+                    self.on_finished(game, state, None);
                 }
                 updated
             }
         };
-        if updated == 0 {
-            // A player acted in the same instant; their write carries the
-            // rollover too, and the next tick re-checks the kicks.
-            return Ok(false);
-        }
-        if let Some(finished) = finished_day {
-            self.archive_with_board(client, game.id, &finished, Some(&closing_board))
-                .await;
-        }
-        if let Some(current) = state.last_day.as_ref() {
-            // A sweep that ended the game writes the final board on the day
-            // it ended, since there is no rollover left to carry it.
-            let final_board = (!matches!(end, ResolveEnd::Ongoing)).then(|| DayBoard::of(&state));
-            self.archive_with_board(client, game.id, current, final_board.as_ref())
-                .await;
-        }
-        self.announce_day_rolled(game.id, &name, day, &state);
-        Ok(true)
+        Ok(updated)
     }
 
     /// Write a day's log to the archive. Best-effort: the log is history, and
-    /// losing a line must never fail the action that produced it.
-    /// Write a day's log, and the board as it closed when there is one. Only
-    /// the rollover and the finish pass a board: the live upsert while a day
-    /// is being played must not overwrite a closing snapshot with a mid-day
-    /// one.
+    /// losing a line must never fail the action that produced it. The board
+    /// as it closed and, for a campaign, the board its night opened on go
+    /// with it when there are any. Only the rollover and the finish pass a
+    /// board: the live upsert while a day is being played must not overwrite
+    /// a closing snapshot with a mid-day one.
     async fn archive_with_board(
         &self,
         client: &tokio_postgres::Client,
         game_id: Uuid,
         day: &DayResult,
         board: Option<&DayBoard>,
+        board_open: Option<&DayBoard>,
     ) {
         let Ok(log) = serde_json::to_value(day) else {
             return;
         };
         let board = board.and_then(|board| serde_json::to_value(board).ok());
+        let board_open = board_open.and_then(|board| serde_json::to_value(board).ok());
         if let Err(e) = RealmGame::archive_day(
             client,
             game_id,
@@ -1170,6 +1530,7 @@ impl RealmService {
             day.seed as i64,
             &log,
             board.as_ref(),
+            board_open.as_ref(),
         )
         .await
         {
@@ -1198,9 +1559,10 @@ impl RealmService {
     /// finish is durable before this runs, so the chips are settled from the
     /// stored row in a task of their own, and anything that stops them is
     /// picked up by the sweeper (`list_finished_unpaid`) rather than lost.
-    fn on_finished(&self, game: &RealmGame, state: &RealmGameState, winner: Option<Uuid>) {
+    fn on_finished(&self, game: &RealmGame, state: &RealmGameState, won: Option<(Uuid, WinKind)>) {
         let game_id = game.id;
         let name = display_name(game, state);
+        let winner = won.map(|(winner, _)| winner);
         if let Some(winner) = winner {
             self.activity.game_won_task(
                 winner,
@@ -1214,13 +1576,16 @@ impl RealmService {
                 None,
             );
         }
-        let winner_name = winner
-            .and_then(|id| state.player(id))
-            .map(|p| p.username.clone());
+        let took_it = won.and_then(|(winner, kind)| {
+            state.player(winner).map(|p| RealmWinner {
+                username: p.username.clone(),
+                took_it: kind.lounge_phrase(),
+            })
+        });
         self.activity.realm_season_ended(
             game_id,
             game.season,
-            winner_name,
+            took_it,
             ended_pot(state, game_id, winner),
             state.start_player_count,
         );
@@ -1499,6 +1864,31 @@ impl RealmService {
     }
 }
 
+/// The pure half of a join, after its refusals: the player goes on the
+/// roster with how much of the world was taken when they came, the roster's
+/// high-water mark moves, and they land on free ground, seeded from the game
+/// and the revision so two arrivals never land by the same draw. False when
+/// there is no free land left. The campaign simulation joins through it too.
+pub(super) fn admit_player(
+    state: &mut RealmGameState,
+    map: &WorldMap,
+    game_id: Uuid,
+    user_id: Uuid,
+    username: &str,
+    joined_day: i32,
+    color: u8,
+) -> bool {
+    let claimed = (state.claimed_fraction(map) * 100.0)
+        .round()
+        .clamp(0.0, 100.0) as u8;
+    state
+        .players
+        .push(new_player(user_id, username, joined_day, color, claimed));
+    state.start_player_count = state.start_player_count.max(state.players.len() as u8);
+    let spawn_seed = day_seed(game_id, state.revision as i32) ^ u64::from(user_id.as_u128() as u32);
+    spawn_player(state, map, game_id, user_id, spawn_seed)
+}
+
 /// Put a player on the map: a free territory drawn with `spawn_seed`.
 /// Returns false when the world is full, which is the one thing that can
 /// refuse a join outright. The caller owns the seed, drawn from the game and
@@ -1558,6 +1948,10 @@ pub struct ArchivedDay {
     /// `None` for days archived before `realm_days.board` existed, and for a
     /// day still being played.
     pub board: Option<DayBoard>,
+    /// The board the day's night opened on, what its replay is drawn over.
+    /// `None` on instant games, on days from before it was kept, and on a day
+    /// still being played.
+    pub board_open: Option<DayBoard>,
 }
 
 impl ArchivedDay {
@@ -1582,7 +1976,7 @@ pub fn game_name(stored: &str, season: i32) -> String {
 }
 
 /// The world a state is played on, for a sentence: "Earth", or what a drawn
-/// world is ("5 continents · 8 islands · 240 lands").
+/// world is ("5 continents · 8 islands · 300 lands").
 pub fn world_label(state: &RealmGameState) -> String {
     match state.ruleset.map_spec.as_ref() {
         Some(spec) => spec.summary(),
@@ -1652,15 +2046,90 @@ fn news_of_action(
     fell.or(took).map(|kind| RealmNews { at: now, kind })
 }
 
+/// The night's biggest moment for the live strip: the end when it ended,
+/// else a fall, else the heaviest take of somebody's land. One line a night
+/// at most, the budget the instant engine's moments keep.
+fn news_of_night(
+    state: &RealmGameState,
+    map: &WorldMap,
+    end: ResolveEnd,
+    now: DateTime<Utc>,
+) -> Option<RealmNews> {
+    if let Some(news) = ended_news(state, end, now) {
+        return Some(news);
+    }
+    let entries = state
+        .last_night
+        .as_ref()
+        .map_or(&[][..], |n| &n.entries[..]);
+    let name_of = |id: Uuid| {
+        state
+            .player(id)
+            .map(|p| p.username.clone())
+            .unwrap_or_else(|| "someone".to_string())
+    };
+    let fell = entries.iter().find_map(|entry| match entry {
+        LogEntry::Eliminated {
+            user_id,
+            by_user_id,
+        } => Some(RealmNewsKind::Fell {
+            user_id: *user_id,
+            username: name_of(*user_id),
+            by_user_id: *by_user_id,
+            by_username: name_of(*by_user_id),
+        }),
+        _ => None,
+    });
+    let took = entries
+        .iter()
+        .filter_map(|entry| match entry {
+            LogEntry::Fought {
+                target,
+                holder: Some(holder),
+                taken_by: Some(taker),
+                takers,
+                ..
+            } => {
+                let points = takers
+                    .iter()
+                    .find(|roll| roll.user_id == *taker)
+                    .map_or(0, |roll| roll.points);
+                Some((points, *target, *holder, *taker))
+            }
+            _ => None,
+        })
+        // The heaviest take; the first of equals, in the order they landed.
+        .fold(
+            None,
+            |best: Option<(u8, TerritoryId, Uuid, Uuid)>, take| match best {
+                Some(top) if top.0 >= take.0 => Some(top),
+                _ => Some(take),
+            },
+        )
+        .map(|(_, target, holder, taker)| RealmNewsKind::Took {
+            user_id: taker,
+            username: name_of(taker),
+            from_user_id: holder,
+            from_username: name_of(holder),
+            target,
+            target_name: map
+                .territory(target)
+                .map(|t| t.name.clone())
+                .unwrap_or_else(|| "a country".to_string()),
+        });
+    fell.or(took).map(|kind| RealmNews { at: now, kind })
+}
+
 /// The news of a world ending, or `None` while it goes on.
 fn ended_news(state: &RealmGameState, end: ResolveEnd, now: DateTime<Utc>) -> Option<RealmNews> {
     match end {
         ResolveEnd::Ongoing => None,
-        ResolveEnd::Won(winner) => Some(RealmNews {
+        ResolveEnd::Won { winner, kind } => Some(RealmNews {
             at: now,
             kind: RealmNewsKind::Ended {
                 winner_user_id: Some(winner),
                 winner_username: state.player(winner).map(|p| p.username.clone()),
+                win_kind: Some(kind),
             },
         }),
         ResolveEnd::Dissolved => Some(RealmNews {
@@ -1668,6 +2137,7 @@ fn ended_news(state: &RealmGameState, end: ResolveEnd, now: DateTime<Utc>) -> Op
             kind: RealmNewsKind::Ended {
                 winner_user_id: None,
                 winner_username: None,
+                win_kind: None,
             },
         }),
     }
@@ -1895,6 +2365,8 @@ fn new_player(
 ) -> RealmPlayer {
     RealmPlayer {
         color: Some(color),
+        orders: Vec::new(),
+        dominating_nights: 0,
         joined_claimed,
         user_id,
         username: username.to_string(),
@@ -1916,6 +2388,11 @@ fn reject(rejected: ActionRejected) -> anyhow::Error {
     anyhow::anyhow!(rejected.message())
 }
 
+/// A refused order, the same way.
+fn reject_order(rejected: OrderRejected) -> anyhow::Error {
+    anyhow::anyhow!(rejected.message())
+}
+
 /// What a finished game's chips did, as the dashboard counts it: one per
 /// place settled, one per game with nothing to pay, one per credit that
 /// failed and was left for the sweeper.
@@ -1927,6 +2404,38 @@ pub enum RealmPayout {
     Unearned,
     Dissolved,
     Failed,
+}
+
+/// What a campaign's night came to, as the dashboard counts it: one per
+/// night that turned a day.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RealmNightOutcome {
+    /// The fights landed and the game goes on.
+    Resolved,
+    Won,
+    /// Nobody left to win it, or nobody eligible when the clock ran out, or
+    /// abandoned.
+    Dissolved,
+    /// Nothing was written; the next sweep tries again.
+    Failed,
+}
+
+/// How a night's fights went, one count per target (fizzles per order).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RealmFightResult {
+    Taken,
+    Held,
+    Bounced,
+    Fizzled,
+}
+
+/// What became of an order a player gave.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RealmOrderOutcome {
+    Placed,
+    Withdrawn,
+    /// Refused by the rules, for free.
+    Refused,
 }
 
 /// What a sweeper tick that found no world standing did about it, as the
@@ -2251,6 +2760,7 @@ mod tests {
             start_player_count: 2,
             start_day: 10,
             news: None,
+            last_night: None,
         };
         state.roll_day(10, 7);
         let now = Utc::now();
@@ -2315,10 +2825,21 @@ mod tests {
         );
         assert!(news_of_action(&state, &map, logged, ResolveEnd::Ongoing, now).is_none());
         assert_eq!(
-            news_of_action(&state, &map, logged, ResolveEnd::Won(alice), now).map(|n| n.kind),
+            news_of_action(
+                &state,
+                &map,
+                logged,
+                ResolveEnd::Won {
+                    winner: alice,
+                    kind: WinKind::LastStanding
+                },
+                now
+            )
+            .map(|n| n.kind),
             Some(RealmNewsKind::Ended {
                 winner_user_id: Some(alice),
                 winner_username: Some("alice".to_string()),
+                win_kind: Some(WinKind::LastStanding),
             })
         );
     }

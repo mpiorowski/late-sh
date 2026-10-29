@@ -2056,15 +2056,19 @@ fn dispatch_escape(app: &mut App) {
     // nothing to confirm on the way out: closing the board is not leaving
     // the game, because a running realm cannot be left at all.
     if ctx.screen == Screen::Realm {
-        // The colour picker peels first, then the results card, then a
-        // picked chat message: Esc puts away what is on top before it puts
-        // the whole board away. The selection has to go here, since a lone
-        // Esc never reaches the board's own keys, and one left standing
-        // would take `j`/`k` the moment the board is reopened.
+        // The colour picker peels first, then the results card, the order
+        // prompt, a replaying night, then a picked chat message: Esc puts
+        // away what is on top before it puts the whole board away. The
+        // selection has to go here, since a lone Esc never reaches the
+        // board's own keys, and one left standing would take `j`/`k` the
+        // moment the board is reopened.
         if app.realm.join_cancel() {
             return;
         }
         if app.realm.close_results() {
+            return;
+        }
+        if app.realm.prompt_cancel() || app.realm.replay_stop() {
             return;
         }
         if let Some(chat_room_id) = app.realm.shown_chat_room_id()

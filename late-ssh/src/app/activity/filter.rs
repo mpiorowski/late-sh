@@ -293,12 +293,15 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
             ..
         } => Some(match (winner, *pot) {
             (Some(winner), 0) => format!(
-                "\u{2694} @{winner} conquered the realm: season {season} is over after {players} \
-                 players, too soon to pay. The next world rises within the day."
+                "\u{2694} @{} {}: season {season} is over after {players} players, too soon \
+                 to pay. The next world rises within the day.",
+                winner.username, winner.took_it
             ),
             (Some(winner), pot) => format!(
-                "\u{2694} @{winner} conquered the realm: season {season} is over after {players} \
-                 players and {} chips paid. The next world rises within the day.",
+                "\u{2694} @{} {}: season {season} is over after {players} players and {} chips \
+                 paid. The next world rises within the day.",
+                winner.username,
+                winner.took_it,
                 thousands(pot)
             ),
             (None, _) => format!(

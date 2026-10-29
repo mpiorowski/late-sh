@@ -112,6 +112,11 @@ pub enum RealmNewsKind {
     Ended {
         winner_user_id: Option<Uuid>,
         winner_username: Option<String>,
+        /// How the winner won. `None` on a dissolve, and on news written
+        /// before there was more than one way, which was the last one
+        /// standing.
+        #[serde(default)]
+        win_kind: Option<WinKind>,
     },
 }
 
@@ -179,7 +184,7 @@ pub struct RealmPlayer {
 /// but the count is a rule the service enforces when someone picks one —
 /// `state::PLAYER_PALETTES` must have exactly this many, which a test holds
 /// it to.
-pub const PALETTE_SLOTS: u8 = 10;
+pub const PALETTE_SLOTS: u8 = 20;
 
 impl RealmPlayer {
     /// Points already spent on `day` (zero once the day has rolled).
@@ -209,6 +214,8 @@ impl RealmPlayer {
 pub struct DayStanding {
     /// Base points for the game's size.
     pub base: u8,
+    /// Points the land they hold pays (`land_points`), on top of the base.
+    pub land: u8,
     /// Points banked from missed days, after the penalty ladder.
     pub banked: u8,
     /// Everything they may spend today (base + banked).
@@ -323,11 +330,16 @@ pub enum OrderRejected {
     /// Digging in is switched off in this realm.
     NoFortifying,
     /// The walls would pass the ruleset's ceiling.
-    FullyFortified { level: u8, max: u8 },
+    FullyFortified {
+        level: u8,
+        max: u8,
+    },
     /// Nothing of yours borders the target, by land or within sea reach.
     NoFront,
     /// More points than are left today.
-    NotEnoughPoints { left: u8 },
+    NotEnoughPoints {
+        left: u8,
+    },
     /// You are new: free land only. Carries the days left.
     AttacksLocked(u8),
     /// You are ramping up: land neighbours only, no landings. Carries the
@@ -630,6 +642,15 @@ impl WinKind {
             WinKind::LastStanding => "is the last one standing",
         }
     }
+
+    /// The same, as the #lounge headline says it.
+    pub fn lounge_phrase(self) -> &'static str {
+        match self {
+            WinKind::Dominated => "dominated the realm",
+            WinKind::SeasonOver => "won the realm on the clock",
+            WinKind::LastStanding => "conquered the realm",
+        }
+    }
 }
 
 fn one_hop() -> u32 {
@@ -775,7 +796,10 @@ impl PlayerPhase {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolveEnd {
     Ongoing,
-    Won { winner: Uuid, kind: WinKind },
+    Won {
+        winner: Uuid,
+        kind: WinKind,
+    },
     /// Everyone exited; no winner.
     Dissolved,
 }
@@ -976,6 +1000,30 @@ impl RealmGameState {
         self.ruleset.actions_per_day(self.involved_count(day))
     }
 
+    /// What this player's land pays on top of the base: `land_points` per
+    /// hundred territories held, rounded down. Nothing on a ruleset that
+    /// pays the same whatever you hold.
+    pub fn land_points(&self, user_id: Uuid) -> u8 {
+        let held = f64::from(self.territory_count(user_id));
+        (held * self.ruleset.land_points / 100.0)
+            .floor()
+            .clamp(0.0, f64::from(u8::MAX)) as u8
+    }
+
+    /// Everyone who has been properly in the war by `day`, the fallen
+    /// included: the count the domination bar is sized against. A newcomer
+    /// lowers the bar only once they are out of protection and able to fight
+    /// the leader, so a late arrival is never a gift to whoever is ahead;
+    /// knocking a rival out never raises it, so a winner is not punished
+    /// for winning.
+    pub fn war_roster(&self, day: i32) -> u8 {
+        self.players
+            .iter()
+            .filter(|p| (day - p.joined_day).max(0) >= self.rampup_until(p.user_id))
+            .count()
+            .min(u8::MAX as usize) as u8
+    }
+
     /// Living players who are past their opening days — the count the daily
     /// action budget is sized against. A realm nobody has settled into yet
     /// pays the most generous tier, which is what the founders deserve while
@@ -1098,16 +1146,17 @@ impl RealmGameState {
 
     /// What a day opens with for this player: base plus the bank. Computed
     /// from the gap since their last action, so it must be read *before*
-    /// they act on `day` — which is why the first action freezes it.
-    fn opening_allowance(&self, player: &RealmPlayer, day: i32) -> (u8, u8) {
+    /// they act on `day` — which is why the first action freezes it. The
+    /// land's points come on top and bank nothing: a day away is a day the
+    /// land was not ordered to anything.
+    fn opening_banked(&self, player: &RealmPlayer, day: i32) -> u8 {
         let base = self.daily_base(day);
         // Days between their last action and today are the missed ones; the
         // ladder decides what each of them is still worth, one rung a day.
         let missed = (player.quiet_days(day) - 1).max(0);
         let rungs: f64 = (1..=missed).map(|nth| self.bank_rate(nth)).sum();
         let cap = f64::from(base) * f64::from(self.ruleset.bank_cap_days);
-        let banked = (f64::from(base) * rungs).min(cap).floor() as u8;
-        (base, banked)
+        (f64::from(base) * rungs).min(cap).floor() as u8
     }
 
     /// Everything about a player's day: allowance, banking, decay.
@@ -1116,6 +1165,7 @@ impl RealmGameState {
         let Some(player) = self.player(user_id) else {
             return DayStanding {
                 base,
+                land: 0,
                 banked: 0,
                 allowance: 0,
                 used: 0,
@@ -1124,18 +1174,23 @@ impl RealmGameState {
                 decay: 1.0,
             };
         };
+        let land = self.land_points(user_id);
         let (allowance, banked) = if player.actions_day == day && player.actions_allowance > 0 {
             // Already playing today: the day's worth was settled when it
             // opened and does not shift underneath them.
             let allowance = player.actions_allowance;
-            (allowance, allowance.saturating_sub(base))
+            (
+                allowance,
+                allowance.saturating_sub(base).saturating_sub(land),
+            )
         } else {
-            let (base, banked) = self.opening_allowance(player, day);
-            (base.saturating_add(banked), banked)
+            let banked = self.opening_banked(player, day);
+            (base.saturating_add(land).saturating_add(banked), banked)
         };
         let missed = (player.quiet_days(day) - 1).max(0);
         DayStanding {
             base,
+            land,
             banked,
             allowance,
             used: player.used_on(day),
@@ -1477,6 +1532,12 @@ impl ReachIndex {
 /// first action on it. Every action pays the same, whether it takes ground
 /// or digs into it.
 fn spend_point(state: &mut RealmGameState, actor: Uuid, day: i32) {
+    spend_points(state, actor, day, 1);
+}
+
+/// Take `points` off this player's day, opening the day if this is their
+/// first spend on it: an action is one point, an order is what it carries.
+pub(super) fn spend_points(state: &mut RealmGameState, actor: Uuid, day: i32, points: u8) {
     // Today's allowance is the base plus whatever missed days banked, read
     // before acting closes the gap it was computed from.
     let allowance = state.standing(actor, day).allowance;
@@ -1486,7 +1547,7 @@ fn spend_point(state: &mut RealmGameState, actor: Uuid, day: i32) {
             p.actions_used = 0;
             p.actions_allowance = allowance;
         }
-        p.actions_used = p.actions_used.saturating_add(1).min(allowance);
+        p.actions_used = p.actions_used.saturating_add(points).min(allowance);
         // A day you acted on is a day you played — the clock that gates
         // winning and being paid.
         if p.last_action_day != Some(day) {

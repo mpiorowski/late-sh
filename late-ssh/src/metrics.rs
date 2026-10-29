@@ -26,7 +26,8 @@ use crate::app::clubhouse::state::Tutorial;
 use crate::app::common::primitives::Screen;
 use crate::app::deadchannel::haunt::state::GateVerdict;
 use crate::app::door::realm::svc::{
-    RealmChatRoomAttach, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError,
+    RealmChatRoomAttach, RealmFightResult, RealmNightOutcome, RealmOrderOutcome, RealmPayout,
+    RealmSeasonOpen, RealmSnapshotRowError,
 };
 use crate::app::door::zork::protocol::{Action as ZorkAction, Edition as ZorkEdition};
 use crate::app::games::chips::svc::{GiftDrinkRefusal, RoundRefusal};
@@ -813,11 +814,12 @@ mod inner {
         JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
         OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult,
         Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope,
-        PresenceWire, RadioStation, RealmChatRoomAttach, RealmPayout, RealmSeasonOpen,
-        RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason, RollCallResult, RoundRefusal,
-        RunnerDoor, Screen, SendRefusal, SessionStartStage, SessionUser, SnapshotRowError,
-        SongQueueReward, SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch,
-        TranslationResult, VizWireBands, WatchDoor,
+        PresenceWire, RadioStation, RealmChatRoomAttach, RealmFightResult, RealmNightOutcome,
+        RealmOrderOutcome, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh,
+        RefreshOutcome, RenderReason, RollCallResult, RoundRefusal, RunnerDoor, Screen,
+        SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
+        SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
+        VizWireBands, WatchDoor,
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
@@ -1722,6 +1724,42 @@ mod inner {
                 .u64_counter("late_ssh_realm_chat_rooms_reaped_total")
                 .with_description(
                     "Realm chat rooms hard-deleted by the sweeper 30 days after their world ended",
+                )
+                .build()
+        })
+    }
+
+    fn realm_nights_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_realm_nights_total")
+                .with_description(
+                    "Realm campaign nights, one per day turned over, by outcome: resolved, won, dissolved, failed (nothing written, the next sweep retries)",
+                )
+                .build()
+        })
+    }
+
+    fn realm_fights_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_realm_fights_total")
+                .with_description(
+                    "Realm campaign fights resolved at the night, one per target (fizzled: one per order no longer legal), by result: taken, held, bounced, fizzled",
+                )
+                .build()
+        })
+    }
+
+    fn realm_orders_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_realm_orders_total")
+                .with_description(
+                    "Realm campaign orders given, by outcome: placed, withdrawn, refused (by the rules, for free)",
                 )
                 .build()
         })
@@ -3088,6 +3126,47 @@ mod inner {
         realm_chat_rooms_reaped_total().add(deleted, &[]);
     }
 
+    fn realm_night_label(outcome: RealmNightOutcome) -> &'static str {
+        match outcome {
+            RealmNightOutcome::Resolved => "resolved",
+            RealmNightOutcome::Won => "won",
+            RealmNightOutcome::Dissolved => "dissolved",
+            RealmNightOutcome::Failed => "failed",
+        }
+    }
+
+    pub fn record_realm_night(outcome: RealmNightOutcome) {
+        realm_nights_total().add(1, &[KeyValue::new("outcome", realm_night_label(outcome))]);
+    }
+
+    fn realm_fight_label(result: RealmFightResult) -> &'static str {
+        match result {
+            RealmFightResult::Taken => "taken",
+            RealmFightResult::Held => "held",
+            RealmFightResult::Bounced => "bounced",
+            RealmFightResult::Fizzled => "fizzled",
+        }
+    }
+
+    pub fn record_realm_fights(result: RealmFightResult, count: u32) {
+        realm_fights_total().add(
+            u64::from(count),
+            &[KeyValue::new("result", realm_fight_label(result))],
+        );
+    }
+
+    fn realm_order_label(outcome: RealmOrderOutcome) -> &'static str {
+        match outcome {
+            RealmOrderOutcome::Placed => "placed",
+            RealmOrderOutcome::Withdrawn => "withdrawn",
+            RealmOrderOutcome::Refused => "refused",
+        }
+    }
+
+    pub fn record_realm_order(outcome: RealmOrderOutcome) {
+        realm_orders_total().add(1, &[KeyValue::new("outcome", realm_order_label(outcome))]);
+    }
+
     fn realm_snapshot_row_rejected_label(error: &RealmSnapshotRowError) -> &'static str {
         match error {
             RealmSnapshotRowError::UnreadableState(_) => "unreadable_state",
@@ -4367,11 +4446,12 @@ mod inner {
         JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
         OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult,
         Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope,
-        PresenceWire, RadioStation, RealmChatRoomAttach, RealmPayout, RealmSeasonOpen,
-        RealmSnapshotRowError, Refresh, RefreshOutcome, RenderReason, RollCallResult, RoundRefusal,
-        RunnerDoor, Screen, SendRefusal, SessionStartStage, SessionUser, SnapshotRowError,
-        SongQueueReward, SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch,
-        TranslationResult, VizWireBands, WatchDoor,
+        PresenceWire, RadioStation, RealmChatRoomAttach, RealmFightResult, RealmNightOutcome,
+        RealmOrderOutcome, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh,
+        RefreshOutcome, RenderReason, RollCallResult, RoundRefusal, RunnerDoor, Screen,
+        SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
+        SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
+        VizWireBands, WatchDoor,
     };
     use super::{BodyFetchOutcome, BodyStatus, WatchOutcome, WatchSource};
     use super::{BonsaiAction, BonsaiActionResult};
@@ -4479,6 +4559,9 @@ mod inner {
     pub fn record_realm_season_open(_outcome: RealmSeasonOpen) {}
     pub fn record_realm_chat_room_attach(_outcome: RealmChatRoomAttach) {}
     pub fn record_realm_chat_rooms_reaped(_deleted: u64) {}
+    pub fn record_realm_night(_outcome: RealmNightOutcome) {}
+    pub fn record_realm_fights(_result: RealmFightResult, _count: u32) {}
+    pub fn record_realm_order(_outcome: RealmOrderOutcome) {}
     pub fn record_realm_snapshot_row_rejected(_error: &RealmSnapshotRowError) {}
     pub fn record_irc_history(_request: IrcHistoryRequest, _outcome: IrcHistoryOutcome) {}
     pub fn record_news_shared(_reward: NewsShareReward) {}
