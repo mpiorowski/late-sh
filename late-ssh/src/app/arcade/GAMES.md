@@ -73,9 +73,8 @@ Wiring, a daily puzzle: add the variant to `roster!(DailyPuzzle: ...)` in `late-
 Then what the compiler cannot see, each held by a test:
 - the `reward_templates` rows in the migration, one per tier of `tiers()` at that tier's `Difficulty::chips` (`late-core/src/models/reward_test.rs::every_daily_tier_has_an_active_template_paying_its_tier`);
 - the win bump (`late-core/src/models/leaderboard_test.rs::every_daily_win_insert_bumps_the_all_time_rollup_once`, whose `record_daily_win` match is red in the test build until the new model is called);
-- a splash tip naming the game (`common/splash_tips_test.rs::every_daily_puzzle_has_a_tip`).
-
-Quest templates are separate rows with `is_quest = true` and no test asks for them; a daily joins the quest pool only when a migration adds them (the tier pattern and amounts are in `app/hub/CONTEXT.md`, Quests).
+- a splash tip naming the game (`common/splash_tips_test.rs::every_daily_puzzle_has_a_tip`);
+- the quest templates, `is_quest = true` rows in the migration that put the game in the Hub quest pool at the tier pattern and amounts in `app/hub/CONTEXT.md`, Quests (`late-core/src/models/quest_test.rs::every_daily_puzzle_has_an_active_quest_template`).
 
 Then the prose: the help modal's Arcade notes and controls (`app/help_modal/data.rs`; its payout and Arcade Wins lists are generated from the roster), this file, `CONTEXT.md` here and at the root, and `LICENSING.md` when the game ships imported data.
 

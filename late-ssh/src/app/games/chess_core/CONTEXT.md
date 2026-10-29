@@ -4,7 +4,7 @@ Part of the shared games domain (`../CONTEXT.md`). The match lifecycle,
 persistence and screens are the daily domain's
 (`late-ssh/src/app/lobby/daily/CONTEXT.md`, `GAMES.md`).
 
-`chess_core/` is the surface-agnostic chess kernel. Daily chess and daily chess960 use it, differing only in the opening position, and the Arcade's Chess Puzzle (`late-ssh/src/app/arcade/chess_puzzle/`) plays its puzzles through the same rules, cursor and board renderer (ASCII pieces only):
+`chess_core/` is the surface-agnostic chess kernel. Daily chess and daily chess960 use it, differing only in the opening position, and the Arcade's Chess Puzzle (`late-ssh/src/app/arcade/chess_puzzle/`) plays its puzzles through the same rules, cursor and board renderer, PNG pieces included (its own fixed `placement_seed`; ASCII once a puzzle is finished, see `late-ssh/src/app/arcade/GAMES.md`):
 
 ## Files
 

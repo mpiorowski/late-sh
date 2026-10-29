@@ -2,7 +2,7 @@
 //! spokes), the word being typed, the rank meter, and the words found in
 //! columns. Mouse hit-testing reads the same layout the frame drew.
 
-use late_core::models::chips::Difficulty;
+use late_core::{models::chips::Difficulty, word_wheel::MAX_ANSWERS};
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Layout, Rect},
@@ -45,9 +45,9 @@ const WORD_COLUMN_WIDTH: u16 = LONGEST_WORD + WORD_GAP;
 /// under the wheel instead of spreading across a wide terminal.
 const MAX_WORD_COLUMNS: u16 = 5;
 /// Rows kept for the found words, the header included: the pack's largest
-/// wheel (70 answers) in five columns. Fixed, so the group is centred once
-/// and the wheel never moves as words come in.
-const WORDS_HEIGHT: u16 = 15;
+/// wheel in five columns. Fixed, so the group is centred once and the wheel
+/// never moves as words come in.
+const WORDS_HEIGHT: u16 = 1 + (MAX_ANSWERS as u16).div_ceil(MAX_WORD_COLUMNS);
 /// The wheel, the typed word and the meter with the gaps between and
 /// under them, above the found words.
 const HEAD_HEIGHT: u16 = WHEEL_HEIGHT + 1 + 1 + 1 + 2 + 1;

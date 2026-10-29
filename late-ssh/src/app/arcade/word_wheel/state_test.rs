@@ -4,7 +4,7 @@ use chrono::{Duration, NaiveDate, Utc};
 use late_core::{
     db::{Db, DbConfig},
     models::word_wheel::Game,
-    word_wheel::{WHEEL_LETTERS, fits},
+    word_wheel::{MAX_ANSWERS, MIN_ANSWERS, WHEEL_LETTERS, fits},
 };
 use tokio::sync::broadcast;
 
@@ -48,7 +48,8 @@ fn saved(puzzle_date: NaiveDate, letters: &str, found: &[&str]) -> Game {
 
 /// The pack validator: every shipped wheel is seven distinct letters with
 /// no `s`, unique and in order, and its answers are alphabetical, unique,
-/// all fit the wheel, number 25 to 70, and hold a full wheel.
+/// all fit the wheel, number `MIN_ANSWERS` to `MAX_ANSWERS`, and hold a
+/// full wheel.
 #[test]
 fn every_shipped_wheel_holds_its_own_answers() {
     let wheels = pack();
@@ -70,7 +71,7 @@ fn every_shipped_wheel_holds_its_own_answers() {
             wheel.letters
         );
         assert!(
-            (25..=70).contains(&wheel.answers.len()),
+            (MIN_ANSWERS..=MAX_ANSWERS).contains(&wheel.answers.len()),
             "{} has {} answers",
             wheel.letters,
             wheel.answers.len()

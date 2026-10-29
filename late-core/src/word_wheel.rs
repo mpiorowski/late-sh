@@ -1,7 +1,7 @@
 //! The Word Wheel pack: seven-letter wheels cut from the SCOWL word list by
-//! `gen_word_wheel`, one JSON file late-ssh embeds, the word rule the
-//! generator applies and the shipped pack is held to, and the pick of the
-//! day's wheel.
+//! `gen_word_wheel`, one JSON file late-ssh embeds, the word rule and answer
+//! bounds the generator applies and the shipped pack is held to, and the
+//! pick of the day's wheel.
 
 use std::collections::HashMap;
 
@@ -14,6 +14,10 @@ use crate::daily;
 pub const WHEEL_LETTERS: usize = 7;
 /// The shortest word a wheel accepts.
 pub const MIN_WORD_LEN: usize = 4;
+/// The fewest answers a wheel in the pack holds.
+pub const MIN_ANSWERS: usize = 25;
+/// The most answers a wheel in the pack holds.
+pub const MAX_ANSWERS: usize = 70;
 
 /// One wheel as the pack stores it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

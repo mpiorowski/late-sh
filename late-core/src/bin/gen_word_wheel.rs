@@ -21,13 +21,11 @@ use std::{collections::HashMap, env, fs, path::PathBuf};
 use anyhow::{Context, Result, bail};
 use late_core::{
     daily::{fnv1a, splitmix64},
-    word_wheel::{MIN_WORD_LEN, WHEEL_LETTERS, WordWheel, fits},
+    word_wheel::{MAX_ANSWERS, MIN_ANSWERS, MIN_WORD_LEN, WHEEL_LETTERS, WordWheel, fits},
 };
 
 const PACK_SIZE: usize = 2000;
 const SEED: u64 = 0x6c61_7465_2d77_6865;
-const MIN_ANSWERS: usize = 25;
-const MAX_ANSWERS: usize = 70;
 const SIZES: [u8; 7] = [10, 20, 35, 40, 50, 55, 60];
 const LISTS: [&str; 2] = ["english-words", "american-words"];
 /// Words SCOWL lists that a daily puzzle should not ask anyone to type:

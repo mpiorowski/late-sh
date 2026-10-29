@@ -1659,8 +1659,10 @@ impl App {
             || self.stations_modal_state.is_open()
             || self.stream_modal.is_some()
             || self.chat.history_modal.is_open();
-        // No screen places a non-modal persistent raster today; the slot
-        // stays so a screen that does can tag its raster here.
+        // The chess boards' piece images need no tag: the cells a piece
+        // leaves are redrawn inside the frame (`redraw_vacated_persistent_raster`
+        // below). The slot stays for a raster whose pixels must go before
+        // the frame draws.
         let non_modal_image_tag: Option<u64> = None;
         let pre_wipe = self
             .terminal_image_render_state
@@ -1968,6 +1970,12 @@ impl App {
                 for effect in ultimate_effects {
                     crate::app::ultimates::apply_ultimate_postprocess(frame.buffer_mut(), effect);
                 }
+                self.terminal_image_render_state
+                    .redraw_vacated_persistent_raster(
+                        frame.buffer_mut(),
+                        &terminal_image_frame,
+                        suppress_new_raster,
+                    );
             })
             .context("failed to draw frame");
 

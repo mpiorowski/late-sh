@@ -459,6 +459,47 @@ fn iterm_opaque_cell_replacement_emits_only_changed_cells() {
     );
 }
 
+/// iTerm2 and Sixel cannot delete an image: its pixels go only when the
+/// cells under it are written again. A cell an image leaves is redrawn though
+/// the frame drew it the same (a square a chess piece left, a board dealt
+/// fresh), every one under an overlay that suppresses the images; a cell that
+/// keeps an image or gets a new one is left to the image, and Kitty deletes
+/// its own placements.
+#[test]
+fn cells_a_persistent_image_leaves_are_redrawn_though_drawn_the_same() {
+    let redrawn = |protocol, suppress| {
+        let data = opaque_test_data(Rgba([255, 0, 0, 255]), protocol);
+        let replacement = opaque_test_data(Rgba([0, 0, 255, 255]), protocol);
+        let mut state = TerminalImageRenderState::default();
+        let mut frame = TerminalImageFrame::default();
+        frame.push(placement(Uuid::from_u128(1), 2, data.clone()));
+        frame.push(placement(Uuid::from_u128(2), 3, data.clone()));
+        frame.push(placement(Uuid::from_u128(3), 4, data.clone()));
+        state.build_commands(Some(protocol), &frame, false);
+
+        frame.clear();
+        frame.push(placement(Uuid::from_u128(1), 2, data));
+        frame.push(placement(Uuid::from_u128(4), 3, replacement));
+        let previous = Buffer::empty(Rect::new(0, 0, 8, 6));
+        let mut drawn = previous.clone();
+        state.redraw_vacated_persistent_raster(&mut drawn, &frame, suppress);
+        previous
+            .diff(&drawn)
+            .into_iter()
+            .map(|(x, y, _)| (x, y))
+            .collect::<Vec<_>>()
+    };
+
+    assert_eq!(
+        (
+            redrawn(TerminalImageProtocol::Iterm2, false),
+            redrawn(TerminalImageProtocol::Iterm2, true),
+            redrawn(TerminalImageProtocol::Kitty, false),
+        ),
+        (vec![(4, 3)], vec![(2, 3), (3, 3), (4, 3)], Vec::new())
+    );
+}
+
 #[test]
 fn kitty_family_identities_use_kitty_protocol() {
     for value in [
