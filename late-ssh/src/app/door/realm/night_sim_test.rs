@@ -589,10 +589,10 @@ impl Sim {
                 .collect();
             let dominator = self.dominator();
             while let Some(order) = self.next_order(actor, policy, &takeable, leader) {
-                if let (Order::Take { target, .. }, Some(dominator)) = (order, dominator) {
-                    if self.state.ownership.get(&target) == Some(&dominator) {
-                        self.alarm += 1;
-                    }
+                if let (Order::Take { target, .. }, Some(dominator)) = (order, dominator)
+                    && self.state.ownership.get(&target) == Some(&dominator)
+                {
+                    self.alarm += 1;
                 }
                 match place_order(&mut self.state, &self.map, actor, order, self.day) {
                     Ok(_) => match order {
@@ -629,12 +629,12 @@ impl Sim {
         // across a land border presses them first, the three nights being
         // the window the rules give the field. Only a pure turtle sits it
         // out.
-        if let Some(dominator) = self.dominator() {
-            if dominator != actor && policy != Policy::Turtle {
-                if let Some(order) = self.press(actor, &open, Against::Dominator(dominator)) {
-                    return Some(order);
-                }
-            }
+        if let Some(dominator) = self.dominator()
+            && dominator != actor
+            && policy != Policy::Turtle
+            && let Some(order) = self.press(actor, &open, Against::Dominator(dominator))
+        {
+            return Some(order);
         }
         match policy {
             Policy::Settler | Policy::Absentee => self
