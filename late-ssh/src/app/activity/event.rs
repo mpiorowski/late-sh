@@ -16,6 +16,15 @@ pub enum ActivityCategory {
     Quest,
 }
 
+/// Who took a realm, and how the headline says they took it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RealmWinner {
+    pub username: String,
+    /// The realm's own words for how it was won ("conquered the realm"), so
+    /// this domain never has to know its rules.
+    pub took_it: &'static str,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ActivityKind {
     UserJoined,
@@ -228,12 +237,12 @@ pub enum ActivityKind {
         season: i32,
         opens_in: String,
     },
-    /// The world ended: conquered by `winner`, or dissolved when nobody held
+    /// The world ended: taken by `winner`, or dissolved when nobody held
     /// it. `pot` is what the conquest paid in all, 0 when it paid nothing.
     RealmSeasonEnded {
         game_id: Uuid,
         season: i32,
-        winner: Option<String>,
+        winner: Option<RealmWinner>,
         pot: i64,
         players: u8,
     },
@@ -695,12 +704,12 @@ impl ActivityEvent {
     pub fn realm_season_ended(
         game_id: Uuid,
         season: i32,
-        winner: Option<String>,
+        winner: Option<RealmWinner>,
         pot: i64,
         players: u8,
     ) -> Self {
-        let action = match winner.as_deref() {
-            Some(winner) => format!("has fallen: season {season} is {winner}'s"),
+        let action = match winner.as_ref() {
+            Some(winner) => format!("has fallen: season {season} is {}'s", winner.username),
             None => format!("fell silent: season {season} ended with nobody holding it"),
         };
         Self::new(

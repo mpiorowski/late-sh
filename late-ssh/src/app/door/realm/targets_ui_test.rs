@@ -4,7 +4,7 @@ use ratatui::{Terminal, backend::TestBackend};
 use super::{Columns, target_line};
 use crate::app::common::theme;
 use crate::app::door::realm::rulesets::{Reach, RouteMode};
-use crate::app::door::realm::state::TargetRow;
+use crate::app::door::realm::state::{Route, TargetRow};
 
 fn row(name: &str, mine: bool) -> TargetRow {
     TargetRow {
@@ -15,10 +15,10 @@ fn row(name: &str, mine: bool) -> TargetRow {
         color: None,
         population: 1_000_000,
         area_km2: 50_000,
-        reach: Reach {
+        route: Route::Reach(Reach {
             cost: 1.0,
             mode: RouteMode::Land { through_rivals: 0 },
-        },
+        }),
         fort_level: 1,
         probability: Some(0.5),
         attack: false,

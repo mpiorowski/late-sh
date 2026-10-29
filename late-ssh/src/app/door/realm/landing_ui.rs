@@ -18,7 +18,7 @@ use ratatui::{
 use crate::app::common::theme;
 use crate::app::door::landing;
 
-use super::resolver::RealmPlayerStatus;
+use super::resolver::{RealmNewsKind, RealmPlayerStatus, WinKind};
 use super::state::{PLAYER_PALETTES, RealmState};
 use super::svc::{RealmGameItem, countdown_label, muster_left, reset_hour_label};
 use super::ui::truncate;
@@ -48,6 +48,12 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, realm: &RealmState, scroll: u
 /// The card's lines, top to bottom. Pure, so the card can be tested without
 /// a frame.
 pub(crate) fn landing_lines(realm: &RealmState, width: usize) -> Vec<Line<'static>> {
+    // The standing world's rules, which say how it is played and won; the
+    // house's own when nothing stands.
+    let rules = realm
+        .live()
+        .and_then(|game| super::rulesets::ruleset_by_id(&game.ruleset_id))
+        .unwrap_or(super::svc::house_ruleset());
     let mut lines = vec![Line::raw("")];
     lines.extend(logo());
     lines.extend([
@@ -65,11 +71,19 @@ pub(crate) fn landing_lines(realm: &RealmState, width: usize) -> Vec<Line<'stati
             ),
         ]),
         Line::from(Span::styled(
-            "Claim land, take it from your neighbours, dig in. Conquer every rival and the world is yours.",
+            format!(
+                "Claim land, take it from your neighbours, dig in. {}",
+                how_it_is_won(rules)
+            ),
             Style::default().fg(theme::TEXT_DIM()),
         )),
         Line::from(Span::styled(
-            "2-10 players \u{b7} a few moves a day \u{b7} a new world rises the day one falls",
+            format!(
+                "{}-{} players \u{b7} {} \u{b7} a new world rises the day one falls",
+                rules.min_players.max(2),
+                rules.max_players,
+                rules.tagline
+            ),
             Style::default().fg(theme::AMBER_DIM()),
         )),
         Line::raw(""),
@@ -94,7 +108,26 @@ pub(crate) fn landing_lines(realm: &RealmState, width: usize) -> Vec<Line<'stati
             .winner_user_id
             .and_then(|w| last.players.iter().find(|p| p.user_id == w))
         {
-            Some(winner) => format!("season {} · conquered by {}", last.season, winner.username),
+            Some(winner) => {
+                // News written before there was more than one way to win
+                // carries no kind, and the one way was the conquest.
+                let kind = last
+                    .news
+                    .as_ref()
+                    .and_then(|news| {
+                        let RealmNewsKind::Ended { win_kind, .. } = news.kind else {
+                            return None;
+                        };
+                        win_kind
+                    })
+                    .unwrap_or(WinKind::LastStanding);
+                format!(
+                    "season {} · {} {}",
+                    last.season,
+                    winner.username,
+                    kind.lounge_phrase()
+                )
+            }
             None => format!("season {} · dissolved, nobody held it", last.season),
         };
         lines.push(landing::stat("last", &ended, LABEL_PAD));
@@ -153,11 +186,16 @@ pub(crate) fn landing_lines(realm: &RealmState, width: usize) -> Vec<Line<'stati
     lines.extend([
         Line::raw(""),
         landing::heading("Once Inside"),
-        landing::hint("a", "claim or attack the selected land", LABEL_PAD),
+        landing::hint("a", "take the selected land, or order the take", LABEL_PAD),
         landing::hint("f", "dig in: raise the walls on land you hold", LABEL_PAD),
         landing::hint(
+            "o",
+            "tonight's orders, and what the last night did",
+            LABEL_PAD,
+        ),
+        landing::hint(
             "tab",
-            "map \u{b7} targets \u{b7} overview \u{b7} log \u{b7} history",
+            "map \u{b7} targets \u{b7} orders \u{b7} overview \u{b7} log \u{b7} history",
             LABEL_PAD,
         ),
         landing::hint("c", "the world's chat, beside the map", LABEL_PAD),
@@ -165,6 +203,27 @@ pub(crate) fn landing_lines(realm: &RealmState, width: usize) -> Vec<Line<'stati
         landing::hint("q", "back to the hub; your land stays yours", LABEL_PAD),
     ]);
     lines
+}
+
+/// The pitch's last sentence: how this world is won, as its rules say.
+fn how_it_is_won(rules: &super::rulesets::RealmRuleset) -> String {
+    let dominate = rules.domination_share_tiers.last().map(|(_, share)| *share);
+    match (rules.domination_nights, dominate, rules.season_days) {
+        (nights @ 1.., Some(share), 1..) => format!(
+            "Hold {:.0}% of it (more in a small realm) for {nights} nights running and the \
+             world is yours, or have the most of it when the season runs out.",
+            share * 100.0
+        ),
+        (nights @ 1.., Some(share), 0) => format!(
+            "Hold {:.0}% of it (more in a small realm) for {nights} nights running and the \
+             world is yours.",
+            share * 100.0
+        ),
+        (_, _, 1..) => {
+            "Have the most of it when the season runs out and the world is yours.".to_string()
+        }
+        (_, _, 0) => "Conquer every rival and the world is yours.".to_string(),
+    }
 }
 
 /// What Enter does right now, in the card's own words.
@@ -287,15 +346,15 @@ fn land_strip() -> Line<'static> {
     let free = |cells: &'static str| Span::styled(cells, Style::default().fg(theme::TEXT_FAINT()));
     Line::from(vec![
         free("  ░░░"),
-        land("█████", shade(YOU, 2)),
-        land("██", shade(YOU, 4)),
-        land("███", shade(YOU, 2)),
-        free("░░░░"),
-        land("████", shade(RIVAL, 2)),
-        land("███", shade(RIVAL, 4)),
-        land("██████", shade(RIVAL, 2)),
-        free("░░"),
+        land("█████", shade(YOU, 1)),
         land("██", shade(YOU, 2)),
+        land("███", shade(YOU, 1)),
+        free("░░░░"),
+        land("████", shade(RIVAL, 1)),
+        land("███", shade(RIVAL, 2)),
+        land("██████", shade(RIVAL, 1)),
+        free("░░"),
+        land("██", shade(YOU, 1)),
         free("░░░"),
     ])
 }
@@ -306,11 +365,11 @@ fn land_legend() -> Line<'static> {
     let swatch = |color: Color| Span::styled("█", Style::default().fg(color));
     Line::from(vec![
         word("  "),
-        swatch(shade(YOU, 2)),
+        swatch(shade(YOU, 1)),
         word(" your land   "),
-        swatch(shade(RIVAL, 2)),
+        swatch(shade(RIVAL, 1)),
         word(" a rival   "),
-        swatch(shade(YOU, 4)),
+        swatch(shade(YOU, 2)),
         word(" walled up   "),
         Span::styled("░", Style::default().fg(theme::TEXT_FAINT())),
         word(" free ground"),
