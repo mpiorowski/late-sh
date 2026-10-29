@@ -258,6 +258,59 @@ pub struct RealmRuleset {
     /// for it would make it the cheapest chips on the platform.
     pub min_payout_days: u8,
     pub min_payout_territories: u16,
+    /// Which engine plays this ruleset: every action rolled the moment it is
+    /// taken, or orders written by day and resolved together at the night.
+    pub resolution: Resolution,
+    /// The knobs below are the `Orders` engine's (`night.rs`, `RULES.md`
+    /// "Orders"). The instant engine never reads them, so `STANDARD` carries
+    /// zeros.
+    ///
+    /// How much a territory's size adds to its garrison:
+    /// `g = walls_eff × (1 + garrison_weight × weight)`.
+    pub garrison_weight: f64,
+    /// How much each wall level of front behind a take adds to its force:
+    /// `force = points × (1 + front_factor × front) × …`.
+    pub front_factor: f64,
+    /// What a coastal holding within `sea_reach_km` counts for on the front,
+    /// against a land border's 1.
+    pub sea_front: f64,
+    /// How far a take can sail, centre to centre.
+    pub sea_reach_km: f64,
+    /// A take with no land front at all lands from the sea at this fraction
+    /// of its force.
+    pub landing_factor: f64,
+    /// A take on a territory whose every land neighbour is the taker's.
+    pub encircle_factor: f64,
+    /// How much of each unengaged neighbouring garrison stands behind a held
+    /// territory's defence.
+    pub support_factor: f64,
+    /// Nobody's land defends at this fraction of its garrison.
+    pub neutral_factor: f64,
+    /// The odds are `force^k / (force^k + defence^k)`; this is `k`.
+    pub contest_exponent: f64,
+    /// `(max_start_player_count_inclusive, share)` tiers, the lookup the
+    /// budget tiers use: the share of the world a player has to hold to be
+    /// dominating it.
+    pub domination_share_tiers: &'static [(u8, f64)],
+    /// Consecutive nights at or above the share that win the game.
+    pub domination_nights: u8,
+    /// The season clock in days, as written: the night that closes the last
+    /// one ends the game. Zero means no clock.
+    pub season_days: u16,
+}
+
+/// How a ruleset turns moves into results. Closed: the engine and the
+/// service each branch on it in exactly one place (`CONTEXT.md`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Resolution {
+    /// Every action is rolled the moment it is taken (`resolver::apply_action`).
+    /// What every game frozen before orders existed was.
+    #[default]
+    Instant,
+    /// Orders are written during the day and resolved together at the reset
+    /// (`night::resolve_night`).
+    Orders,
 }
 
 pub const STANDARD: RealmRuleset = RealmRuleset {
@@ -299,9 +352,49 @@ pub const STANDARD: RealmRuleset = RealmRuleset {
     prob_ceil: 0.95,
     min_payout_days: 3,
     min_payout_territories: 8,
+    resolution: Resolution::Instant,
+    garrison_weight: 0.0,
+    front_factor: 0.0,
+    sea_front: 0.0,
+    sea_reach_km: 0.0,
+    landing_factor: 0.0,
+    encircle_factor: 0.0,
+    support_factor: 0.0,
+    neutral_factor: 0.0,
+    contest_exponent: 0.0,
+    domination_share_tiers: &[],
+    domination_nights: 0,
+    season_days: 0,
 };
 
-pub const RULESETS: &[RealmRuleset] = &[STANDARD];
+/// Season 2 on: orders by day, the night resolves them, and a share of the
+/// world held for three nights wins inside a season clock. The budget, the
+/// banking, the protection phases, decay, the doors and the payouts are the
+/// standard ruleset's, which is why everything not named here is copied
+/// from it.
+pub const CAMPAIGN: RealmRuleset = RealmRuleset {
+    id: "campaign",
+    display_name: "Campaign",
+    tagline: "write your orders by day, the night resolves them",
+    max_players: 20,
+    actions_per_day_tiers: &[(4, 7), (7, 5), (10, 4), (20, 3)],
+    resolution: Resolution::Orders,
+    garrison_weight: 1.0,
+    front_factor: 0.5,
+    sea_front: 0.5,
+    sea_reach_km: 1_500.0,
+    landing_factor: 0.75,
+    encircle_factor: 1.5,
+    support_factor: 0.5,
+    neutral_factor: 0.6,
+    contest_exponent: 2.0,
+    domination_share_tiers: &[(4, 0.50), (10, 0.40), (20, 0.33)],
+    domination_nights: 3,
+    season_days: 80,
+    ..STANDARD
+};
+
+pub const RULESETS: &[RealmRuleset] = &[STANDARD, CAMPAIGN];
 
 pub fn ruleset_by_id(id: &str) -> Option<&'static RealmRuleset> {
     RULESETS.iter().find(|rs| rs.id == id)
@@ -400,6 +493,36 @@ pub struct RealmRulesetSnapshot {
     /// rest, so a generated realm is as re-derivable in a year as it is now.
     #[serde(default)]
     pub map_spec: Option<super::mapgen::GeneratedMapSpec>,
+    /// Instant on every game frozen before orders existed, which is what
+    /// they were. The `Orders` knobs below default to zero, the standard
+    /// ruleset's own values, and the instant engine never reads them.
+    #[serde(default)]
+    pub resolution: Resolution,
+    #[serde(default)]
+    pub garrison_weight: f64,
+    #[serde(default)]
+    pub front_factor: f64,
+    #[serde(default)]
+    pub sea_front: f64,
+    #[serde(default)]
+    pub sea_reach_km: f64,
+    #[serde(default)]
+    pub landing_factor: f64,
+    #[serde(default)]
+    pub encircle_factor: f64,
+    #[serde(default)]
+    pub support_factor: f64,
+    #[serde(default)]
+    pub neutral_factor: f64,
+    #[serde(default)]
+    pub contest_exponent: f64,
+    #[serde(default)]
+    pub domination_share_tiers: Vec<(u8, f64)>,
+    #[serde(default)]
+    pub domination_nights: u8,
+    /// Already scaled by the pace.
+    #[serde(default)]
+    pub season_days: u16,
 }
 
 impl From<&RealmRuleset> for RealmRulesetSnapshot {
@@ -454,6 +577,19 @@ impl From<&RealmRuleset> for RealmRulesetSnapshot {
             min_payout_territories: rs.min_payout_territories,
             map_id: default_map_id(),
             map_spec: None,
+            resolution: rs.resolution,
+            garrison_weight: rs.garrison_weight,
+            front_factor: rs.front_factor,
+            sea_front: rs.sea_front,
+            sea_reach_km: rs.sea_reach_km,
+            landing_factor: rs.landing_factor,
+            encircle_factor: rs.encircle_factor,
+            support_factor: rs.support_factor,
+            neutral_factor: rs.neutral_factor,
+            contest_exponent: rs.contest_exponent,
+            domination_share_tiers: rs.domination_share_tiers.to_vec(),
+            domination_nights: rs.domination_nights,
+            season_days: rs.season_days,
         }
     }
 }
@@ -614,8 +750,26 @@ impl RealmRulesetSnapshot {
             newcomer_shield_max_days: scale_days_u8(rs.newcomer_shield_max_days, 1),
             bank_cap_days: scale_days_u8(rs.bank_cap_days, 1),
             bank_missed_cutoff: scale_days_u8(rs.bank_missed_cutoff, 1),
+            // A week is the shortest season worth fighting. A ruleset with no
+            // clock keeps none.
+            season_days: match rs.season_days {
+                0 => 0,
+                days => scale_days_u16(days, 7),
+            },
             ..Self::from(rs)
         }
+    }
+
+    /// The share of the world a player must hold to be dominating it, for a
+    /// game whose roster has held `start_player_count` players at most. The
+    /// same lookup as the budget tiers, falling back to the last tier.
+    pub fn domination_share(&self, start_player_count: u8) -> f64 {
+        self.domination_share_tiers
+            .iter()
+            .find(|(max, _)| start_player_count <= *max)
+            .or(self.domination_share_tiers.last())
+            .map(|(_, share)| *share)
+            .unwrap_or(1.0)
     }
 
     /// Daily action points for a game of `player_count` players (count at
@@ -926,9 +1080,85 @@ mod tests {
 
     #[test]
     fn snapshot_serde_round_trips() {
-        let rs = snap();
-        let json = serde_json::to_string(&rs).unwrap();
-        let back: RealmRulesetSnapshot = serde_json::from_str(&json).unwrap();
-        assert_eq!(back, rs);
+        for rs in RULESETS {
+            for pace in PACES {
+                let snapshot = RealmRulesetSnapshot::at_pace(rs, pace);
+                let json = serde_json::to_string(&snapshot).unwrap();
+                let back: RealmRulesetSnapshot = serde_json::from_str(&json).unwrap();
+                assert_eq!(back, snapshot, "{} at {}", rs.id, pace.id);
+            }
+        }
+    }
+
+    #[test]
+    fn the_campaign_is_on_the_roster_and_takes_orders() {
+        assert_eq!(ruleset_by_id("campaign").map(|rs| rs.id), Some("campaign"));
+        assert_eq!(ruleset_by_id("standard").map(|rs| rs.id), Some("standard"));
+        let campaign: RealmRulesetSnapshot = (&CAMPAIGN).into();
+        assert_eq!(campaign.resolution, Resolution::Orders);
+        assert_eq!(campaign.max_players, 20);
+        // Eleven to twenty involved players get the fourth tier.
+        assert_eq!(campaign.actions_per_day(10), 4);
+        assert_eq!(campaign.actions_per_day(11), 3);
+        assert_eq!(campaign.actions_per_day(20), 3);
+        // The share a domination needs falls as the roster that ever held
+        // grows, so twenty players are not asked for half the world.
+        assert_eq!(campaign.domination_share(2), 0.50);
+        assert_eq!(campaign.domination_share(10), 0.40);
+        assert_eq!(campaign.domination_share(15), 0.33);
+        assert_eq!(snap().resolution, Resolution::Instant);
+    }
+
+    #[test]
+    fn the_season_clock_scales_with_the_pace_and_keeps_its_floor() {
+        let days = |pace: &str| {
+            RealmRulesetSnapshot::at_pace(&CAMPAIGN, pace_by_id(pace).expect("pace")).season_days
+        };
+        assert_eq!(days("slow"), 80, "slow is the rules as written");
+        assert_eq!(days("normal"), 48);
+        assert_eq!(days("fast"), 28);
+        assert_eq!(days("epic"), 120);
+        assert_eq!(days("blitz"), 16);
+        // A tiny clock stops at a week.
+        let tiny = RealmRuleset {
+            season_days: 10,
+            ..CAMPAIGN
+        };
+        let blitz = pace_by_id("blitz").expect("blitz");
+        assert_eq!(RealmRulesetSnapshot::at_pace(&tiny, blitz).season_days, 7);
+        // And a ruleset with no clock keeps none at any pace.
+        for pace in PACES {
+            assert_eq!(RealmRulesetSnapshot::at_pace(&STANDARD, pace).season_days, 0);
+        }
+    }
+
+    /// Season 1 froze its snapshot before any of the orders knobs existed.
+    /// It has to keep parsing as what it was: the instant engine, with the
+    /// standard ruleset's numbers.
+    #[test]
+    fn a_snapshot_from_before_orders_parses_as_instant() {
+        let frozen = RealmRulesetSnapshot::at_pace(&STANDARD, pace_by_id("fast").expect("fast"));
+        let mut json = serde_json::to_value(&frozen).unwrap();
+        let fields = json.as_object_mut().unwrap();
+        for key in [
+            "resolution",
+            "garrison_weight",
+            "front_factor",
+            "sea_front",
+            "sea_reach_km",
+            "landing_factor",
+            "encircle_factor",
+            "support_factor",
+            "neutral_factor",
+            "contest_exponent",
+            "domination_share_tiers",
+            "domination_nights",
+            "season_days",
+        ] {
+            assert!(fields.remove(key).is_some(), "{key} is serialized");
+        }
+        let back: RealmRulesetSnapshot = serde_json::from_value(json).unwrap();
+        assert_eq!(back, frozen);
+        assert_eq!(back.resolution, Resolution::Instant);
     }
 }
