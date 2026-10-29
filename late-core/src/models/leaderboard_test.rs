@@ -1330,6 +1330,74 @@ async fn a_days_tallies_count_the_days_finishes_by_game() {
     );
 }
 
+/// A day's Lobby starts are the claims made that day, by game in roster
+/// order, whatever the match did after: finished or still active both
+/// count, an open or cancelled challenge never does, and a match claimed
+/// on another day is that day's.
+#[tokio::test]
+async fn a_days_lobby_starts_count_the_days_claims_by_game() {
+    use crate::models::daily_match::DailyMatch;
+    use crate::models::leaderboard::{LobbyStarts, day_lobby_starts};
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let host = create_test_user(&test_db.db, "starts_host").await;
+    let guest = create_test_user(&test_db.db, "starts_guest").await;
+    let today = Utc::now().date_naive();
+    let state = json!({});
+
+    lobby_win(&client, LobbyGame::Snooker, host.id, guest.id, "paid").await;
+    let mut claimed = Vec::new();
+    for game in [LobbyGame::Chess, LobbyGame::Chess, LobbyGame::Reversi] {
+        let challenge = DailyMatch::create_challenge(&client, game.kind(), host.id)
+            .await
+            .expect("create challenge");
+        DailyMatch::claim(
+            &client,
+            challenge.id,
+            guest.id,
+            host.id,
+            Utc::now() + Duration::hours(1),
+            &state,
+        )
+        .await
+        .expect("claim")
+        .expect("challenge was open");
+        claimed.push(challenge.id);
+    }
+    DailyMatch::create_challenge(&client, LobbyGame::Chess.kind(), host.id)
+        .await
+        .expect("an open challenge");
+    let cancelled = DailyMatch::create_challenge(&client, LobbyGame::Reversi.kind(), host.id)
+        .await
+        .expect("a cancelled challenge");
+    DailyMatch::cancel_challenge(&client, cancelled.id, host.id)
+        .await
+        .expect("cancel");
+    client
+        .execute(
+            "UPDATE daily_matches SET started_at = started_at - INTERVAL '10 days' WHERE id = $1",
+            &[&claimed[2]],
+        )
+        .await
+        .expect("a reversi match claimed ten days ago");
+
+    let started = |game, started| LobbyStarts { game, started };
+    assert_eq!(
+        day_lobby_starts(&client, today).await.expect("today"),
+        vec![
+            started(LobbyGame::Chess, 2),
+            started(LobbyGame::Snooker, 1)
+        ],
+        "chess: two claims still active; snooker: claimed and finished; the open and cancelled challenges never started"
+    );
+    assert_eq!(
+        day_lobby_starts(&client, today - Duration::days(10))
+            .await
+            .expect("ten days ago"),
+        vec![started(LobbyGame::Reversi, 1)]
+    );
+}
+
 /// A shelf's most played game is the one with the most plays, the first
 /// in tally order on a tie, never one with none; the arcade's comes with
 /// its finishes and as an arcade game.

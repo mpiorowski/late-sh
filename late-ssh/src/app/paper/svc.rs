@@ -28,7 +28,9 @@ use late_core::models::article::Article;
 use late_core::models::chat_message::ChatMessage;
 use late_core::models::chat_room::ChatRoom;
 use late_core::models::job_posting::JobPosting;
-use late_core::models::leaderboard::{DayTally, Shelf, day_tallies};
+use late_core::models::leaderboard::{
+    DayGame, DayTally, LobbyGame, LobbyStarts, Shelf, day_lobby_starts, day_tallies,
+};
 use late_core::models::media_queue_item::MediaQueueItem;
 use late_core::models::paper::{
     ANNOUNCEMENTS_SLUG, EditionStep, PaperCandidate, PaperEdition, PaperRoomEdition, PaperRoomPage,
@@ -632,9 +634,9 @@ impl PaperService {
     }
 
     /// "Yesterday on late.sh": the covered day in numbers, from late.sh's
-    /// own rows and no model call: the games finished on each shelf, the
-    /// radio's top stations by listener, the booth's listeners and the
-    /// tracks queued in it. The games and the listeners are read by the
+    /// own rows and no model call: the games finished on each shelf and the
+    /// Lobby's matches started, the radio's top stations by listener, the
+    /// booth's listeners and the tracks queued in it. The games and the listeners are read by the
     /// covered day (their tables are kept by UTC day), the queue over the
     /// edition's window, which is the same day. `Ok(None)` on a day nothing
     /// happened.
@@ -649,13 +651,14 @@ impl PaperService {
             .expect("the day before an edition exists");
         let client = self.db.get().await?;
         let tallies = day_tallies(&client, covered).await?;
+        let starts = day_lobby_starts(&client, covered).await?;
         let stations =
             RadioListen::top_stations_on(&client, covered, PAPER_YESTERDAY_STATIONS).await?;
         let booth = Booth {
             listeners: YoutubeListen::listeners_on(&client, covered).await?,
             queued: MediaQueueItem::count_queued_between(&client, floor, ceiling).await?,
         };
-        Ok(yesterday_column(&tallies, &stations, booth))
+        Ok(yesterday_column(&tallies, &starts, &stations, booth))
     }
 
     /// "What we were reading": the day's News shares, editorialized.
@@ -1238,14 +1241,16 @@ pub(crate) struct Booth {
 /// The YESTERDAY column's lines: the radio first (its stations by
 /// listener, the most listened first), then the booth (its listeners next
 /// to its tracks queued), then one per
-/// shelf anyone played on: the arcade's and the Lobby's finishes, and
-/// which game had the most of them, or that one game had them all; the
-/// doors opened, per door by openings, and the runs won. The radio, the
+/// shelf anyone played on: the arcade's finishes, and which game had the
+/// most of them, or that one game had them all; the Lobby's matches
+/// started and finished, and its busiest game (`lobby_line`); the doors
+/// opened, per door by openings, and the runs won. The radio, the
 /// booth or a shelf with nothing is not a line, and a day with nothing at
 /// all is `None`. Plain sentences, no bullets: late.sh's own words, like
 /// NEW WORK, not the press's column.
 pub(crate) fn yesterday_column(
     tallies: &[DayTally],
+    starts: &[LobbyStarts],
     stations: &[StationListeners],
     booth: Booth,
 ) -> Option<String> {
@@ -1288,7 +1293,12 @@ pub(crate) fn yesterday_column(
         let plays: i64 = on_shelf.iter().map(|tally| tally.plays).sum();
         let (noun, verb) = match shelf {
             Shelf::Arcade => ("game", "finished"),
-            Shelf::Lobby => ("match", "finished"),
+            Shelf::Lobby => {
+                if let Some(line) = lobby_line(&on_shelf, starts) {
+                    lines.push(line);
+                }
+                continue;
+            }
             Shelf::Doors => {
                 if let Some(line) = doors_line(&on_shelf) {
                     lines.push(line);
@@ -1325,6 +1335,62 @@ pub(crate) fn yesterday_column(
     } else {
         Some(lines.join("\n"))
     }
+}
+
+/// The Lobby's line: the matches started (`LobbyStarts`, the claims) and
+/// finished (`DayTally::plays`), each half alone when the other is none,
+/// and the busiest game by the two together, the roster's order on a tie,
+/// or the one game that had it all; `None` when nothing started or
+/// finished. With no starts it reads the shelf's finishes alone, the
+/// arcade line's rule.
+fn lobby_line(finished: &[&DayTally], starts: &[LobbyStarts]) -> Option<String> {
+    let matches = |count: i64| match count {
+        1 => "1 match".to_string(),
+        count => format!("{count} matches"),
+    };
+    let started: i64 = starts.iter().map(|start| start.started).sum();
+    let ended: i64 = finished.iter().map(|tally| tally.plays).sum();
+    let count = match (started, ended) {
+        (0, 0) => return None,
+        (0, ended) => format!("{} finished", matches(ended)),
+        (started, 0) => format!("{} started", matches(started)),
+        (started, ended) => format!("{} started, {ended} finished", matches(started)),
+    };
+    let busy: Vec<(LobbyGame, i64)> = LobbyGame::ALL
+        .iter()
+        .map(|&game| {
+            let started: i64 = starts
+                .iter()
+                .filter(|start| start.game == game)
+                .map(|start| start.started)
+                .sum();
+            let ended: i64 = finished
+                .iter()
+                .filter(|tally| tally.game == DayGame::Lobby(game))
+                .map(|tally| tally.plays)
+                .sum();
+            (game, started + ended)
+        })
+        .filter(|(_, activity)| *activity > 0)
+        .collect();
+    let top = busy
+        .iter()
+        .fold(None, |best: Option<&(LobbyGame, i64)>, game| match best {
+            Some(best) if best.1 >= game.1 => Some(best),
+            Some(_) | None => Some(game),
+        })
+        .expect("a Lobby with matches has a game")
+        .0;
+    let line = match (busy.len(), started + ended) {
+        (1, 1) => format!("{}: {count}: {}", Shelf::Lobby.title(), top.title()),
+        (1, _) => format!("{}: {count}, all {}", Shelf::Lobby.title(), top.title()),
+        (_, _) => format!(
+            "{}: {count}, {} most played",
+            Shelf::Lobby.title(),
+            top.title()
+        ),
+    };
+    Some(line)
 }
 
 /// The most doors the line names; past that the rest fold into `others N`.
