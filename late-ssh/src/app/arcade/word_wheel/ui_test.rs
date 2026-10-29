@@ -40,10 +40,7 @@ fn a_click_lands_on_the_wheel_letter_drawn() {
 fn the_wheel_and_its_words_sit_mid_board() {
     let board = Rect::new(0, 2, 100, 48);
     let tall = layout(board);
-    let (above, below) = (
-        tall.wheel.y - board.y,
-        board.bottom() - tall.words.bottom(),
-    );
+    let (above, below) = (tall.wheel.y - board.y, board.bottom() - tall.words.bottom());
     assert!(above.abs_diff(below) <= 1, "{above} above, {below} below");
     assert_eq!(tall.words.height, WORDS_HEIGHT);
 

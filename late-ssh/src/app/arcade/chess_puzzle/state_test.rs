@@ -352,7 +352,10 @@ fn a_finished_puzzle_draws_ascii_pieces_whatever_the_choice() {
     state.set_puzzle_for_test(Difficulty::Easy, mate_in_two());
     assert_eq!(
         (state.piece_render_mode(), state.board_render_mode()),
-        (ChessPieceRenderMode::Graphics, ChessPieceRenderMode::Graphics)
+        (
+            ChessPieceRenderMode::Graphics,
+            ChessPieceRenderMode::Graphics
+        )
     );
     state.toggle_piece_render_mode();
     assert_eq!(

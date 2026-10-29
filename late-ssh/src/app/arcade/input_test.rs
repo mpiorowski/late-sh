@@ -38,7 +38,7 @@ fn lobby_navigation_walks_the_roster_order_and_wraps() {
     );
     assert_eq!(
         prev_lobby_selection(ArcadeGame::Score(ScoreGame::TwentyFortyEight)),
-        ArcadeGame::Puzzle(DailyPuzzle::Quartets)
+        ArcadeGame::Puzzle(DailyPuzzle::RubiksCube)
     );
 }
 
