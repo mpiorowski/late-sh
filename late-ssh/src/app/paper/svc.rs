@@ -1290,45 +1290,14 @@ pub(crate) fn yesterday_column(
             .iter()
             .filter(|tally| tally.game.shelf() == *shelf)
             .collect();
-        let plays: i64 = on_shelf.iter().map(|tally| tally.plays).sum();
-        let (noun, verb) = match shelf {
-            Shelf::Arcade => ("game", "finished"),
-            Shelf::Lobby => {
-                if let Some(line) = lobby_line(&on_shelf, starts) {
-                    lines.push(line);
-                }
-                continue;
-            }
-            Shelf::Doors => {
-                if let Some(line) = doors_line(&on_shelf) {
-                    lines.push(line);
-                }
-                continue;
-            }
+        let line = match shelf {
+            Shelf::Arcade => arcade_line(tallies, &on_shelf),
+            Shelf::Lobby => lobby_line(&on_shelf, starts),
+            Shelf::Doors => doors_line(&on_shelf),
         };
-        if plays == 0 {
-            continue;
+        if let Some(line) = line {
+            lines.push(line);
         }
-        let count = match (plays, noun) {
-            (1, noun) => format!("1 {noun}"),
-            (plays, "match") => format!("{plays} matches"),
-            (plays, noun) => format!("{plays} {noun}s"),
-        };
-        let top = DayTally::most_played(tallies, *shelf).expect("a shelf with plays has a game");
-        let line = match (on_shelf.len(), plays) {
-            (1, 1) => format!("{}: {count} {verb}: {}", shelf.title(), top.game.title()),
-            (1, _) => format!(
-                "{}: {count} {verb}, all {}",
-                shelf.title(),
-                top.game.title()
-            ),
-            (_, _) => format!(
-                "{}: {count} {verb}, {} most played",
-                shelf.title(),
-                top.game.title()
-            ),
-        };
-        lines.push(line);
     }
     if lines.is_empty() {
         None
@@ -1381,16 +1350,43 @@ fn lobby_line(finished: &[&DayTally], starts: &[LobbyStarts]) -> Option<String> 
         })
         .expect("a Lobby with matches has a game")
         .0;
-    let line = match (busy.len(), started + ended) {
-        (1, 1) => format!("{}: {count}: {}", Shelf::Lobby.title(), top.title()),
-        (1, _) => format!("{}: {count}, all {}", Shelf::Lobby.title(), top.title()),
-        (_, _) => format!(
-            "{}: {count}, {} most played",
-            Shelf::Lobby.title(),
-            top.title()
-        ),
+    Some(shelf_line(
+        Shelf::Lobby,
+        &count,
+        busy.len(),
+        started + ended,
+        top.title(),
+    ))
+}
+
+/// The arcade's line: its games finished, and the most played of them
+/// (`DayTally::most_played`), or the one game that had them all; `None`
+/// when nothing finished.
+fn arcade_line(tallies: &[DayTally], on_shelf: &[&DayTally]) -> Option<String> {
+    let plays: i64 = on_shelf.iter().map(|tally| tally.plays).sum();
+    let count = match plays {
+        0 => return None,
+        1 => "1 game finished".to_string(),
+        plays => format!("{plays} games finished"),
     };
-    Some(line)
+    let top = DayTally::most_played(tallies, Shelf::Arcade).expect("a shelf with plays has a game");
+    Some(shelf_line(
+        Shelf::Arcade,
+        &count,
+        on_shelf.len(),
+        plays,
+        top.game.title(),
+    ))
+}
+
+/// A counted shelf's line after its count: the one game that had it all
+/// (`: X` for a lone play, `, all X` for more), else the busiest one.
+fn shelf_line(shelf: Shelf, count: &str, games: usize, total: i64, top: &str) -> String {
+    match (games, total) {
+        (1, 1) => format!("{}: {count}: {top}", shelf.title()),
+        (1, _) => format!("{}: {count}, all {top}", shelf.title()),
+        (_, _) => format!("{}: {count}, {top} most played", shelf.title()),
+    }
 }
 
 /// The most doors the line names; past that the rest fold into `others N`.

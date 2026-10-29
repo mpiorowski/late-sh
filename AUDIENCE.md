@@ -271,7 +271,8 @@ Live, in order of evidence behind them:
   its snapshot, both drawn server-side as PNG (`late-web/CONTEXT.md`).
   The paper opens with YESTERDAY ON LATE.SH, the covered day in numbers
   (the radio's top stations by paired listener, the tracks queued, the
-  games finished in the arcade and the Lobby, the doors opened), drawn
+  games finished in the arcade, the Lobby's matches started and
+  finished, the doors opened), drawn
   from the rows and no model
   (`late-ssh/src/app/paper/CONTEXT.md`): the one paper section that
   answers a newcomer's "is anyone here?", on the web and on the herald's

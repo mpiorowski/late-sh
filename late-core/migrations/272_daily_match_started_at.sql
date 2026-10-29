@@ -7,8 +7,9 @@
 -- NULL for an open or cancelled challenge, and for a match claimed before
 -- this column whose chat room is gone. The backfill reads the match's chat
 -- room, which the claim creates in its own transaction, so the room's
--- `created` is the claim's `current_timestamp`; rooms older than the chat
--- sweep's 30 days were already dropped and their matches stay NULL.
+-- `created` is the claim's `current_timestamp`. The chat sweep drops the
+-- rooms of matches finished over 30 days ago, so those matches stay NULL;
+-- an active match keeps its room and is always backfilled.
 ALTER TABLE daily_matches
     ADD COLUMN started_at TIMESTAMPTZ;
 
