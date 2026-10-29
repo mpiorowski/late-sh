@@ -22,7 +22,7 @@ use super::history_ui::day_label;
 use super::log_ui::{entry_lines, fought_line};
 use super::map::WorldMap;
 use super::map_ui::RAIL_WIDTH;
-use super::night::Projection;
+use super::night::{self, Projection};
 use super::resolver::{DayResult, LogEntry, Order, RealmGameState, TakerRoll};
 use super::state::{
     RealmState, ViewerRole, dispatch_line, player_color, points_label, points_left,
@@ -48,6 +48,12 @@ pub fn draw_orders_view(frame: &mut Frame, area: Rect, realm: &RealmState) {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let mut lines: Vec<Line<'static>> = Vec::new();
 
+    // The orders take at most the top half of the view, the list scrolling
+    // under its heading to keep the cursor row on screen, so a day's worth
+    // of one-point orders never pushes the dispatch off the bottom. The
+    // dispatch gets the rest and clips there on its own.
+    let height = usize::from(area.height);
+    let room = (height / 2).max(4).saturating_sub(2).max(1);
     match role {
         ViewerRole::Playing => {
             let points = points_left(board, realm.user_id)
@@ -70,7 +76,10 @@ pub fn draw_orders_view(frame: &mut Frame, area: Rect, realm: &RealmState) {
                 )));
             }
             let cursor = board.orders_cursor.min(orders.len().saturating_sub(1));
-            for (idx, order) in orders.iter().enumerate() {
+            let start = cursor
+                .saturating_sub(room / 2)
+                .min(orders.len().saturating_sub(room));
+            for (idx, order) in orders.iter().enumerate().skip(start).take(room) {
                 lines.push(order_line(
                     *order,
                     realm.order_projection(*order),
@@ -92,17 +101,26 @@ pub fn draw_orders_view(frame: &mut Frame, area: Rect, realm: &RealmState) {
             )));
         }
     }
-    lines.push(Line::raw(""));
+    let top = Rect {
+        height: lines.len().min(height) as u16,
+        ..area
+    };
+    let rest = Rect {
+        y: area.y + top.height,
+        height: area.height - top.height,
+        ..area
+    };
+    frame.render_widget(Paragraph::new(lines), top);
 
+    let mut dispatch: Vec<Line<'static>> = vec![Line::raw("")];
     match state.last_night.as_ref() {
-        None => lines.push(Line::from(Span::styled(
+        None => dispatch.push(Line::from(Span::styled(
             "no night has passed yet · the first resolves when the day turns",
             dim,
         ))),
-        Some(night) => lines.extend(dispatch_lines(night, state, &map, realm.user_id, role)),
+        Some(night) => dispatch.extend(dispatch_lines(night, state, &map, realm.user_id, role)),
     }
-
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+    frame.render_widget(Paragraph::new(dispatch).wrap(Wrap { trim: false }), rest);
 }
 
 /// One order in the list: what it is, what it costs, and its odds now.
@@ -359,15 +377,7 @@ pub fn draw_prompt(frame: &mut Frame, body: Rect, realm: &RealmState) {
         .territory(order.target())
         .map(|t| t.name.clone())
         .unwrap_or_default();
-    let replaced = realm
-        .my_orders()
-        .iter()
-        .find(|o| o.target() == order.target())
-        .map(Order::cost)
-        .unwrap_or(0);
-    let after = points_left(board, realm.user_id)
-        .map(|(left, _)| (left + usize::from(replaced)).saturating_sub(usize::from(order.cost())))
-        .unwrap_or(0);
+    let after = night::order_quote(state, realm.user_id, order, detail.today()).left_after;
 
     let mut lines: Vec<Line<'static>> = Vec::new();
     match order {

@@ -1160,8 +1160,10 @@ impl RealmService {
                 Resolution::Instant => bail!("this realm takes actions, not orders"),
                 Resolution::Orders => {}
             }
-            let day = realm_day(now, game.reset_hour_utc);
-            match self.close_day(&client, &game, day).await? {
+            match self
+                .close_day(&client, &game, realm_day(now, game.reset_hour_utc))
+                .await?
+            {
                 // The day on the row is the day the order is for.
                 DayTurn::Open => {}
                 // A night ran, this replica's or another's: the order lands
@@ -1171,6 +1173,15 @@ impl RealmService {
                     bail!("the night could not be resolved, try again in a minute")
                 }
             }
+            // The order is for the night the row is open on, not for the
+            // clock as it stood when the order was given: around the hour
+            // the row can have turned between the two, and an order spent
+            // on the day before would rewind its player's budget.
+            let day = state
+                .last_day
+                .as_ref()
+                .expect("an orders game always has an open day")
+                .day;
             let map = self.map_for(&state)?;
             let expected = state.revision as i64;
             let answer = match change(&mut state, &map, day) {

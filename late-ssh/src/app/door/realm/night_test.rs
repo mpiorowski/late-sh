@@ -327,6 +327,45 @@ fn walls_crumble_back_towards_one_as_their_holder_goes_quiet() {
 }
 
 #[test]
+fn the_quote_counts_a_replaced_order_back_in_and_stops_walls_at_the_ceiling() {
+    let map = map_by_id("testmap").unwrap();
+    let mut state = campaign(&[(1, "a"), (2, "b")]);
+    state.ruleset.sea_reach_km = 40_000.0;
+    hold(&mut state, 1, &[0, 1]);
+    hold(&mut state, 2, &[3, 7]);
+    let quote = |state: &RealmGameState, order: Order| order_quote(state, uid(1), order, DAY);
+
+    // Seven points, nothing ordered: a take can carry them all.
+    assert_eq!(
+        quote(&state, take(2, 3)),
+        OrderQuote {
+            max: 7,
+            left_after: 4
+        }
+    );
+    order(&mut state, &map, 1, take(2, 3));
+    // Another target draws on what is left; the same target gets its own
+    // three back, so resizing it is never refused for the points it holds.
+    assert_eq!(quote(&state, take(4, 1)).max, 4);
+    assert_eq!(
+        quote(&state, take(2, 5)),
+        OrderQuote {
+            max: 7,
+            left_after: 2
+        }
+    );
+    // Walls stop at the ceiling however many points stand behind them.
+    let ceiling = state.ruleset.fort_max_level;
+    state.forts.insert(0, ceiling - 1);
+    assert_eq!(quote(&state, fortify(0, 1)).max, 1);
+    // Four points left and four levels of room: the ceiling is not what binds.
+    assert_eq!(quote(&state, fortify(1, 1)).max, 4);
+    // What the quote offers, the engine takes.
+    place_order(&mut state, &map, uid(1), take(2, 7), DAY).expect("the whole budget on one take");
+    assert_eq!(quote(&state, take(4, 1)).max, 0);
+}
+
+#[test]
 fn every_refusal_is_free_and_says_why() {
     let map = map_by_id("testmap").unwrap();
     let mut base = campaign(&[(1, "a"), (2, "b")]);

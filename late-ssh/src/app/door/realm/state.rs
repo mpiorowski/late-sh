@@ -1336,34 +1336,16 @@ impl RealmState {
             .unwrap_or_default()
     }
 
-    /// The most the prompt's order can be sized to: today's points, with
-    /// those of the order it would replace counted back in, and for walls
-    /// no further than the ceiling.
+    /// The most the prompt's order can be sized to, as the engine counts it
+    /// (`night::order_quote`): never below one, so the prompt always has a
+    /// size to show and the engine's refusal says why.
     fn prompt_max(&self, order: Order) -> u8 {
         let Some(detail) = self.board.as_ref().and_then(|b| b.detail.as_ref()) else {
             return 1;
         };
-        let state = &detail.state;
-        let target = order.target();
-        let replaced = self
-            .my_orders()
-            .iter()
-            .find(|o| o.target() == target)
-            .map(Order::cost)
-            .unwrap_or(0);
-        let left = state
-            .points_left(self.user_id, detail.today())
-            .saturating_add(replaced);
-        let most = match order {
-            Order::Take { .. } => left,
-            Order::Fortify { .. } => left.min(
-                state
-                    .ruleset
-                    .fort_max_level
-                    .saturating_sub(state.fort_level(target)),
-            ),
-        };
-        most.max(1)
+        night::order_quote(&detail.state, self.user_id, order, detail.today())
+            .max
+            .max(1)
     }
 
     /// Size the prompt's order, held between one and what can be afforded.
@@ -1593,6 +1575,15 @@ impl RealmState {
         self.board
             .as_mut()
             .is_some_and(|board| board.replay.take().is_some())
+    }
+
+    /// A lone Esc on the board peels what is on top, one layer a press: the
+    /// colour picker, then the results card, then the order prompt, then a
+    /// replaying night. Returns true when a layer went, so the key was
+    /// spent here and the board stays up. The one order, read by the root's
+    /// Esc and by the board's own `q`/Esc alike.
+    pub fn peel_overlay(&mut self) -> bool {
+        self.join_cancel() || self.close_results() || self.prompt_cancel() || self.replay_stop()
     }
 
     /// How many fights the playing replay has.

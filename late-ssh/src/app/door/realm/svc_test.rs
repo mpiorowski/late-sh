@@ -2692,6 +2692,42 @@ async fn an_order_after_the_hour_runs_the_night_first() {
 }
 
 #[tokio::test]
+async fn an_order_read_after_the_day_turned_lands_on_the_open_day() {
+    let test_db = new_test_db().await;
+    let svc = realm_service(&test_db);
+    let (game_id, ids) = started_on(&svc, &test_db, &campaign_spec(), &["alice", "bob"]).await;
+    let alice = ids[0];
+    let now = Utc::now();
+    let today = realm_day(now, RESET_HOUR);
+    let state = load_state(&svc, game_id).await;
+    let target = free_border(&state, alice);
+    let spawn = state.holdings(alice)[0];
+    let walls = Order::Fortify {
+        target: spawn,
+        levels: NonZeroU8::MIN,
+    };
+    // The day has turned and alice has already spent on the new one.
+    svc.place_order_at(alice, game_id, walls, now + Duration::days(1))
+        .await
+        .expect("tomorrow's order");
+
+    // An order whose clock was read just before the hour, but whose row is
+    // read after it: it is an order for the open day, the one it resolves on.
+    svc.place_order_at(alice, game_id, take(target, 2), now)
+        .await
+        .expect("the late order stands");
+    let state = load_state(&svc, game_id).await;
+    let player = state.player(alice).unwrap();
+    assert_eq!(player.actions_day, today + 1);
+    assert_eq!(player.orders, vec![walls, take(target, 2)]);
+    assert_eq!(
+        state.points_left(alice, today + 1),
+        2,
+        "five points, one on walls, two on the take"
+    );
+}
+
+#[tokio::test]
 async fn two_replicas_closing_one_day_run_its_night_once() {
     let test_db = new_test_db().await;
     let svc = realm_service(&test_db);

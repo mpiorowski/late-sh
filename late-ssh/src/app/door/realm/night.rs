@@ -15,7 +15,8 @@ use uuid::Uuid;
 use super::map::{Territory, TerritoryId, WorldMap};
 use super::resolver::{
     FizzleReason, LogEntry, Order, OrderRejected, PlayerPhase, RealmAction, RealmGameState,
-    RealmPlayerStatus, ResolveEnd, SplitMix64, TakerRoll, WinKind, final_ranking, spend_points,
+    RealmPlayer, RealmPlayerStatus, ResolveEnd, SplitMix64, TakerRoll, WinKind, final_ranking,
+    spend_points,
 };
 use super::rulesets::{OPTION_FORTIFY, OPTION_LANDLOCKED_SEA, RealmRulesetSnapshot};
 
@@ -395,12 +396,7 @@ pub fn place_order(
         return Err(OrderRejected::NotPlaying);
     };
     let target = order.target();
-    let replaced = player
-        .orders
-        .iter()
-        .find(|o| o.target() == target)
-        .map(Order::cost)
-        .unwrap_or(0);
+    let replaced = replaced_cost(player, target);
     if map.territory(target).is_none() {
         return Err(OrderRejected::UnknownTerritory);
     }
@@ -413,10 +409,11 @@ pub fn place_order(
             if state.ownership.get(&target) != Some(&actor) {
                 return Err(OrderRejected::NotYours);
             }
-            let level = state.fort_level(target);
-            let max = state.ruleset.fort_max_level;
-            if u16::from(level) + u16::from(levels.get()) > u16::from(max) {
-                return Err(OrderRejected::FullyFortified { level, max });
+            if levels.get() > wall_room(state, target) {
+                return Err(OrderRejected::FullyFortified {
+                    level: state.fort_level(target),
+                    max: state.ruleset.fort_max_level,
+                });
             }
         }
     }
@@ -439,6 +436,56 @@ pub fn place_order(
         projection,
         points_left: state.points_left(actor, day),
     })
+}
+
+/// What an order can be sized to and what placing it would leave, counted
+/// exactly as `place_order` counts it: today's points with those of the
+/// order it replaces (the one already standing on its target) counted back
+/// in, and for walls no further than the ceiling. The prompt and the orders
+/// rail read this, so the sizes offered are the sizes the night accepts.
+/// It does not say whether the order stands at all; `place_order` does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OrderQuote {
+    /// The most the order can carry. Zero when nothing is left.
+    pub max: u8,
+    /// What placing the order as it is sized would leave for tonight.
+    pub left_after: u8,
+}
+
+pub fn order_quote(state: &RealmGameState, actor: Uuid, order: Order, day: i32) -> OrderQuote {
+    let target = order.target();
+    let replaced = state
+        .player(actor)
+        .map(|player| replaced_cost(player, target))
+        .unwrap_or(0);
+    let left = state.points_left(actor, day).saturating_add(replaced);
+    let max = match order {
+        Order::Take { .. } => left,
+        Order::Fortify { .. } => left.min(wall_room(state, target)),
+    };
+    OrderQuote {
+        max,
+        left_after: left.saturating_sub(order.cost()),
+    }
+}
+
+/// What the player's standing order on `target` cost, counted back in when
+/// another replaces it. Zero without one.
+fn replaced_cost(player: &RealmPlayer, target: TerritoryId) -> u8 {
+    player
+        .orders
+        .iter()
+        .find(|o| o.target() == target)
+        .map(Order::cost)
+        .unwrap_or(0)
+}
+
+/// How many levels the walls on `target` can still go up.
+fn wall_room(state: &RealmGameState, target: TerritoryId) -> u8 {
+    state
+        .ruleset
+        .fort_max_level
+        .saturating_sub(state.fort_level(target))
 }
 
 /// Take an order back, and its points with it. The day stays played: it

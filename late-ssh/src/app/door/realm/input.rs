@@ -82,8 +82,9 @@ pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
             true
         }
         b'q' | b'Q' | 0x1B => {
-            // A replay on screen goes first: q stops it before it leaves.
-            if !app.realm.replay_stop() {
+            // Whatever is on top goes first: q peels a layer before it
+            // leaves, in the same order the root's Esc does.
+            if !app.realm.peel_overlay() {
                 close_board(app);
             }
             true
