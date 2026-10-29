@@ -168,6 +168,15 @@ async fn run_bridge(
         // NETHACKDIR: the binary self-locates via its compiled-in HACKDIR, and
         // overriding NETHACKDIR to an empty dir makes nethack fail to chdir.
         .env("HOME", &cfg.data_dir)
+        // The curses windowport draws borders and walls through ncurses ACS.
+        // Under the C locale ncurses emits those as DEC Special Graphics
+        // (smacs + `lqkxmj~`), which our vt100 parser has no charset for, so
+        // players see raw letters. A UTF-8 locale (same as the dcss/dopewars
+        // hosts) plus NCURSES_NO_UTF8_ACS makes ncurses send Unicode
+        // box-drawing instead. The tty windowport never touches ACS.
+        .env("LANG", "C.UTF-8")
+        .env("LC_ALL", "C.UTF-8")
+        .env("NCURSES_NO_UTF8_ACS", "1")
         .env("LINES", cfg.rows.max(1).to_string())
         .env("COLUMNS", cfg.cols.max(1).to_string())
         .stdin(Stdio::from(
