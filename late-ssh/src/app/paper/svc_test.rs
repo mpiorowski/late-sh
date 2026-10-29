@@ -71,6 +71,7 @@ fn yesterday_counts_each_shelf_the_radio_and_the_booth() {
     assert_eq!(
         yesterday_column(
             &tallies,
+            &[],
             &stations,
             Booth {
                 listeners: 7,
@@ -89,6 +90,7 @@ fn yesterday_counts_each_shelf_the_radio_and_the_booth() {
     assert_eq!(
         yesterday_column(
             &[tally(DayGame::Lobby(LobbyGame::Snooker), 3, 2)],
+            &[],
             &[station("nightride", 1)],
             Booth {
                 listeners: 1,
@@ -104,6 +106,7 @@ fn yesterday_counts_each_shelf_the_radio_and_the_booth() {
         yesterday_column(
             &[],
             &[],
+            &[],
             Booth {
                 listeners: 3,
                 queued: 0
@@ -115,6 +118,7 @@ fn yesterday_counts_each_shelf_the_radio_and_the_booth() {
     );
     assert_eq!(
         yesterday_column(
+            &[],
             &[],
             &[],
             Booth {
@@ -130,6 +134,7 @@ fn yesterday_counts_each_shelf_the_radio_and_the_booth() {
         yesterday_column(
             &[tally(DayGame::Door(DoorCard::Dcss), 3, 0)],
             &[],
+            &[],
             Booth::default()
         )
         .as_deref(),
@@ -138,6 +143,7 @@ fn yesterday_counts_each_shelf_the_radio_and_the_booth() {
     assert_eq!(
         yesterday_column(
             &[tally(DayGame::Door(DoorCard::Zork), 1, 0)],
+            &[],
             &[],
             Booth::default()
         )
@@ -150,6 +156,7 @@ fn yesterday_counts_each_shelf_the_radio_and_the_booth() {
                 tally(DayGame::Door(DoorCard::Dcss), 0, 1),
                 tally(DayGame::Door(DoorCard::Brogue), 0, 2),
             ],
+            &[],
             &[],
             Booth::default()
         )
@@ -167,20 +174,71 @@ fn yesterday_counts_each_shelf_the_radio_and_the_booth() {
         tally(DayGame::Door(DoorCard::Darkroom), 2, 0),
     ];
     assert_eq!(
-        yesterday_column(&busy, &[], Booth::default()).as_deref(),
+        yesterday_column(&busy, &[], &[], Booth::default()).as_deref(),
         Some(
             "Doors: 40 opened, Lateania 12, NetHack 9, DCSS 7, Zork Trilogy 5, Brogue 3, others 4, 1 run won"
         ),
         "every card counts, the five most opened by name, the roster's order on a tie, the rest folded"
     );
     assert_eq!(
-        yesterday_column(&busy[..6], &[], Booth::default()).as_deref(),
+        yesterday_column(&busy[..6], &[], &[], Booth::default()).as_deref(),
         Some(
             "Doors: 38 opened, Lateania 12, NetHack 9, DCSS 7, Zork Trilogy 5, Brogue 3, Green Dragon 2, 1 run won"
         ),
         "one card past the five is named, not folded"
     );
-    assert_eq!(yesterday_column(&[], &[], Booth::default()), None);
+    assert_eq!(yesterday_column(&[], &[], &[], Booth::default()), None);
+}
+
+/// YESTERDAY's Lobby line counts the matches started next to the ones
+/// finished, either alone when the other is none, and names the busiest
+/// game by the two together, the roster's order on a tie, or the one game
+/// that had it all.
+#[test]
+fn yesterday_counts_the_lobby_by_its_starts_and_finishes() {
+    use late_core::models::leaderboard::{DayGame, DayTally, LobbyGame, LobbyStarts};
+    let finished = |game, plays| DayTally {
+        game: DayGame::Lobby(game),
+        plays,
+        won: plays,
+    };
+    let started = |game, started| LobbyStarts { game, started };
+    let lobby = |tallies: &[DayTally], starts: &[LobbyStarts]| {
+        yesterday_column(tallies, starts, &[], Booth::default())
+    };
+    assert_eq!(
+        lobby(
+            &[
+                finished(LobbyGame::Chess, 1),
+                finished(LobbyGame::Snooker, 2)
+            ],
+            &[
+                started(LobbyGame::Chess, 3),
+                started(LobbyGame::Reversi, 1)
+            ],
+        )
+        .as_deref(),
+        Some("Lobby: 4 matches started, 3 finished, Chess most played"),
+        "chess: three started and one finished outweighs snooker's two finishes"
+    );
+    assert_eq!(
+        lobby(&[], &[started(LobbyGame::Backgammon, 1)]).as_deref(),
+        Some("Lobby: 1 match started: Backgammon")
+    );
+    assert_eq!(
+        lobby(&[], &[started(LobbyGame::Chess, 2)]).as_deref(),
+        Some("Lobby: 2 matches started, all Chess"),
+        "a day of starts and no finishes still has its line"
+    );
+    assert_eq!(
+        lobby(
+            &[finished(LobbyGame::Snooker, 1)],
+            &[started(LobbyGame::Chess, 1)]
+        )
+        .as_deref(),
+        Some("Lobby: 1 match started, 1 finished, Chess most played"),
+        "a tie goes to the roster's order"
+    );
 }
 
 #[test]

@@ -103,6 +103,8 @@ fn new_state(
                 last_action_day: None,
                 active_days: 0,
                 color: None,
+                orders: Vec::new(),
+                dominating_nights: 0,
                 joined_claimed: 0,
             })
             .collect(),
@@ -112,6 +114,7 @@ fn new_state(
         start_player_count: players.len() as u8,
         start_day: START_DAY,
         news: None,
+        last_night: None,
     };
     // Spawn everyone on distinct random territories, the way `start_game`
     // and `join_game` do.
@@ -307,7 +310,7 @@ impl Sim {
                 self.map_full_day = Some(self.day - START_DAY);
             }
             match end {
-                ResolveEnd::Won(winner) => {
+                ResolveEnd::Won { winner, .. } => {
                     return Outcome {
                         days: self.day - START_DAY,
                         winner: Some(winner),
@@ -762,6 +765,8 @@ fn latecomer_week(seed: u64) -> (u16, u16, bool, f64) {
         last_action_day: None,
         active_days: 0,
         color: None,
+        orders: Vec::new(),
+        dominating_nights: 0,
         // The world they are walking into, the way `join_game` records it —
         // this is what buys them their longer shield.
         joined_claimed: (claimed * 100.0).round().clamp(0.0, 100.0) as u8,

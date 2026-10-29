@@ -1,7 +1,7 @@
-//! `Screen::Realm` renderer: one-line header (game, points, next refill),
-//! the active view (map/targets/overview/log), the world's chat in a right
-//! column while it is up (in place of the map's rail), and the pinned
-//! key-hint footer.
+//! `Screen::Realm` renderer: one-line header (game, the season's clock,
+//! points, when night falls), the active view, the order prompt over it
+//! while one is being written, the world's chat in a right column while it
+//! is up (in place of the map's rail), and the pinned key-hint footer.
 
 use chrono::Utc;
 use ratatui::{
@@ -24,8 +24,19 @@ use super::state::{RealmState, RealmView, points_left};
 use super::svc::{next_reset, reset_hour_label};
 use super::targets_ui::draw_targets_view;
 
+/// "day 12 of 28" on a game with a season clock.
+fn season_label(state: &super::resolver::RealmGameState, today: i32) -> Option<String> {
+    super::night::season_last_day(state).map(|_| {
+        format!(
+            "day {} of {}",
+            super::night::season_day(state, today),
+            state.ruleset.season_days
+        )
+    })
+}
+
 /// The world in the board header. A generated one has no name anybody knows,
-/// so it says what it is instead: "Uncharted · 5 continents · 8 islands · 240
+/// so it says what it is instead: "Uncharted · 5 continents · 8 islands · 300
 /// lands" tells a player what they are looking at before they have panned
 /// across it.
 fn map_label(detail: &super::state::RealmDetail) -> String {
@@ -179,17 +190,20 @@ pub(crate) fn draw(
                     ));
                 }
                 "active" if role.acts() => {
-                    // Actions land immediately, so the clock that matters is
-                    // when this game's points come back.
+                    // The clock that matters is the night: it resolves the
+                    // orders and brings the points back.
+                    let clock = season_label(state, detail.today())
+                        .map(|label| format!("{label} · "))
+                        .unwrap_or_default();
                     let points = points_left(board, realm.user_id)
-                        .map(|(left, cap)| format!("{left}/{cap} points"))
+                        .map(|(left, cap)| format!("{left}/{cap} pts left"))
                         .unwrap_or_default();
                     let secs = (next_reset(Utc::now(), detail.reset_hour_utc) - Utc::now())
                         .num_seconds()
                         .max(0);
                     spans.push(Span::styled(
                         format!(
-                            "{points} · refill in {:02}:{:02}:{:02} ({})",
+                            "{clock}{points} · night falls in {:02}:{:02}:{:02} ({})",
                             secs / 3600,
                             (secs % 3600) / 60,
                             secs % 60,
@@ -202,9 +216,12 @@ pub(crate) fn draw(
                 // them what they are looking at instead.
                 "active" => {
                     let map_size = detail.map().map(|m| m.territories.len()).unwrap_or(0);
+                    let clock = season_label(state, detail.today())
+                        .map(|label| format!(" · {label}"))
+                        .unwrap_or_default();
                     spans.push(Span::styled(
                         format!(
-                            "{} · {} players · {}/{} claimed",
+                            "{}{clock} · {} players · {}/{} claimed",
                             role.label(),
                             state.players.len(),
                             state.ownership.len(),
@@ -256,6 +273,7 @@ pub(crate) fn draw(
         match board.view {
             RealmView::Map => draw_map_view(frame, body, realm, rail),
             RealmView::Targets => draw_targets_view(frame, body, realm),
+            RealmView::Orders => super::orders_ui::draw_orders_view(frame, body, realm),
             RealmView::Overview => draw_overview_view(frame, body, realm),
             RealmView::Log => draw_log_view(frame, body, realm),
             RealmView::History => super::history_ui::draw(frame, body, realm),
@@ -281,6 +299,12 @@ pub(crate) fn draw(
         draw_embedded_room_chat(frame, chat_area, *view, terminal_images);
     }
 
+    // The order being written goes over whatever view it was opened from,
+    // where the map's rail stands.
+    if board.prompt.is_some() && !body.is_empty() {
+        super::orders_ui::draw_prompt(frame, body, realm);
+    }
+
     // The result goes over the top of everything: it is the one thing on
     // this screen that someone might have been waiting weeks for.
     if board.results_open {
@@ -292,23 +316,41 @@ pub(crate) fn draw(
     }
 
     // Footer.
-    let hints = if role.acts() {
-        match board.view {
+    let history_hints = match board.replay {
+        Some(_) => "p play/hold · . , step the night · esc stop · [ ] walk the days".to_string(),
+        None if realm.replay_available() => {
+            "p play the night · [ ] or ←/→ walk the days · g/G first/last · tab view · q back"
+                .to_string()
+        }
+        None => "[ ] or ←/→ walk the days · g/G first/last · tab view · q back".to_string(),
+    };
+    let hints = if board.prompt.is_some() {
+        "+/- or 1-9 size it · enter place · esc cancel".to_string()
+    } else if role.acts() {
+        // The orders lead on every view: what is left to order is the
+        // number a player acts on.
+        let orders = points_left(board, realm.user_id)
+            .map(|(left, _)| format!("o orders ({left} pts left) · "))
+            .unwrap_or_default();
+        let keys = match board.view {
             RealmView::Map => {
-                "arrows/drag pan · +/- zoom · a attack · f dig in · n next of yours · tab view · q back"
+                "arrows/drag pan · +/- zoom · a take · f dig in · n next of yours · tab view · q back"
                     .to_string()
             }
             RealmView::Targets => {
-                "j/k move · enter/a attack · f dig in · g show on map · tab view · q back".to_string()
+                "j/k move · enter/a take · f dig in · g show on map · tab view · q back".to_string()
+            }
+            RealmView::Orders => {
+                "j/k move · enter resize · x withdraw · g show on map · tab view · q back"
+                    .to_string()
             }
             RealmView::Overview => {
                 "j/k walk your land · g show on map · tab view · q back".to_string()
             }
             RealmView::Log => "j/k scroll · tab view · q back".to_string(),
-            RealmView::History => {
-                "[ ] or ←/→ walk the days · g/G first/last · tab view · q back".to_string()
-            }
-        }
+            RealmView::History => history_hints,
+        };
+        format!("{orders}{keys}")
     } else if board
         .detail
         .as_ref()
@@ -328,12 +370,14 @@ pub(crate) fn draw(
             RealmView::Targets => {
                 "watching · j/k move · g show on map · tab view · q back".to_string()
             }
+            RealmView::Orders => {
+                "watching · the night's fights · the log has the rest · tab view · q back"
+                    .to_string()
+            }
             RealmView::Overview | RealmView::Log => {
                 "watching · j/k scroll · tab view · q back".to_string()
             }
-            RealmView::History => {
-                "[ ] or ←/→ walk the days · g/G first/last · tab view · q back".to_string()
-            }
+            RealmView::History => history_hints,
         }
     };
     let faint = Style::default().fg(theme::TEXT_FAINT());

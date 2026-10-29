@@ -14,6 +14,7 @@
 //! Days also drive dormancy decay and the abandoned-realm dissolve.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroU8;
 
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -60,6 +61,12 @@ pub struct RealmGameState {
     /// before it existed, and until the first such moment.
     #[serde(default)]
     pub news: Option<RealmNews>,
+    /// The last night an `Orders` game resolved: its day and only what the
+    /// night wrote. Kept on the row so the dispatch a player reads after the
+    /// night is one read, and survives an archive write that was lost. Never
+    /// set on an instant game.
+    #[serde(default)]
+    pub last_night: Option<DayResult>,
 }
 
 /// A moment the live strip shows, with the wall-clock instant it happened.
@@ -105,6 +112,11 @@ pub enum RealmNewsKind {
     Ended {
         winner_user_id: Option<Uuid>,
         winner_username: Option<String>,
+        /// How the winner won. `None` on a dissolve, and on news written
+        /// before there was more than one way, which was the last one
+        /// standing.
+        #[serde(default)]
+        win_kind: Option<WinKind>,
     },
 }
 
@@ -157,13 +169,22 @@ pub struct RealmPlayer {
     /// drawn in, so no live game changes colour under its players.
     #[serde(default)]
     pub color: Option<u8>,
+    /// What this player has ordered for `actions_day`, one order per target,
+    /// secret until the night resolves them. Orders left over from an earlier
+    /// day are stale and ignored. Empty on instant games.
+    #[serde(default)]
+    pub orders: Vec<Order>,
+    /// Consecutive nights this player has ended at or above the domination
+    /// share. Reset by a night below it.
+    #[serde(default)]
+    pub dominating_nights: u8,
 }
 
 /// How many colours a realm can be played in. Presentation lives in the UI,
 /// but the count is a rule the service enforces when someone picks one —
 /// `state::PLAYER_PALETTES` must have exactly this many, which a test holds
 /// it to.
-pub const PALETTE_SLOTS: u8 = 10;
+pub const PALETTE_SLOTS: u8 = 20;
 
 impl RealmPlayer {
     /// Points already spent on `day` (zero once the day has rolled).
@@ -193,6 +214,8 @@ impl RealmPlayer {
 pub struct DayStanding {
     /// Base points for the game's size.
     pub base: u8,
+    /// Points the land they hold pays (`land_points`), on top of the base.
+    pub land: u8,
     /// Points banked from missed days, after the penalty ladder.
     pub banked: u8,
     /// Everything they may spend today (base + banked).
@@ -253,6 +276,117 @@ impl RealmAction {
             RealmAction::Claim { target }
             | RealmAction::Attack { target }
             | RealmAction::Fortify { target } => *target,
+        }
+    }
+}
+
+/// One order for tonight, on an `Orders` game. Written during the day,
+/// resolved at the night (`night::resolve_night`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Order {
+    /// Take the target with this many points. Whether it is a claim or an
+    /// attack is decided at the night from who holds it then, so ground that
+    /// changes hands during the day never strands an order.
+    Take {
+        target: TerritoryId,
+        points: NonZeroU8,
+    },
+    /// Raise the walls on land you hold, one point per level.
+    Fortify {
+        target: TerritoryId,
+        levels: NonZeroU8,
+    },
+}
+
+impl Order {
+    pub fn target(&self) -> TerritoryId {
+        match self {
+            Order::Take { target, .. } | Order::Fortify { target, .. } => *target,
+        }
+    }
+
+    /// The points this order spends.
+    pub fn cost(&self) -> u8 {
+        match self {
+            Order::Take { points, .. } => points.get(),
+            Order::Fortify { levels, .. } => levels.get(),
+        }
+    }
+}
+
+/// Why an order was refused when it was placed. Nothing is spent and
+/// nothing is logged, the instant engine's rule: the player is told and
+/// picks again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OrderRejected {
+    /// Not an alive player in this game.
+    NotPlaying,
+    UnknownTerritory,
+    /// A take on your own land.
+    AlreadyYours,
+    /// A fortify on land you do not hold.
+    NotYours,
+    /// Digging in is switched off in this realm.
+    NoFortifying,
+    /// The walls would pass the ruleset's ceiling.
+    FullyFortified {
+        level: u8,
+        max: u8,
+    },
+    /// Nothing of yours borders the target, by land or within sea reach.
+    NoFront,
+    /// More points than are left today.
+    NotEnoughPoints {
+        left: u8,
+    },
+    /// You are new: free land only. Carries the days left.
+    AttacksLocked(u8),
+    /// You are ramping up: land neighbours only, no landings. Carries the
+    /// days left.
+    LandingsLocked(u8),
+    /// The holder just arrived and is untouchable. Carries the days left.
+    TargetIsNew(u8),
+    /// The holder is ramping up: only a land neighbour may come for them.
+    TargetIsRamping(u8),
+    /// Withdrawing an order that is not there.
+    NoSuchOrder,
+}
+
+impl OrderRejected {
+    pub fn message(self) -> String {
+        match self {
+            OrderRejected::NotPlaying => "you are not playing in this realm".into(),
+            OrderRejected::UnknownTerritory => "no such territory on this map".into(),
+            OrderRejected::AlreadyYours => "that territory is already yours, dig in instead".into(),
+            OrderRejected::NotYours => "you can only dig in on your own land".into(),
+            OrderRejected::NoFortifying => {
+                "this realm has no fortifications, take ground instead".into()
+            }
+            OrderRejected::FullyFortified { level, max } => {
+                format!("the walls are at level {level} and {max} is as deep as they go")
+            }
+            OrderRejected::NoFront => {
+                "nothing of yours borders it, by land or within sailing reach".into()
+            }
+            OrderRejected::NotEnoughPoints { left } => match left {
+                0 => "no points left to order until the night".into(),
+                1 => "only 1 point left to order today".into(),
+                left => format!("only {left} points left to order today"),
+            },
+            OrderRejected::AttacksLocked(days) => {
+                format!("you are new here for {days}d, take free land first")
+            }
+            OrderRejected::LandingsLocked(days) => {
+                format!("you can land from the sea in {days}d, for now your land borders only")
+            }
+            OrderRejected::TargetIsNew(days) => {
+                format!("they only just arrived, untouchable for another {days}d")
+            }
+            OrderRejected::TargetIsRamping(days) => format!(
+                "they are still finding their feet for {days}d, only a land neighbour may come for them"
+            ),
+            OrderRejected::NoSuchOrder => "there is no order on that territory".into(),
         }
     }
 }
@@ -412,9 +546,9 @@ pub enum LogEntry {
         target: TerritoryId,
         level: u8,
     },
-    /// Retired: the queue era's "your queued order was no longer legal at
-    /// midnight" row. Nothing writes it now — an illegal action is refused on
-    /// the spot and costs nothing — but archived days still hold them.
+    /// An order that was no longer legal when the night came: the queue
+    /// era's row, back for the orders engine. The instant engine never writes
+    /// it, since an illegal action is refused on the spot.
     Fizzled {
         user_id: Uuid,
         action: RealmAction,
@@ -447,15 +581,84 @@ pub enum LogEntry {
     },
     Won {
         user_id: Uuid,
+        /// How it was won. Absent on days archived before there was more
+        /// than one way, and those were all the last one standing.
+        #[serde(default)]
+        kind: WinKind,
     },
+    /// One target's fights at a night: everyone who ordered a take on it,
+    /// what they rolled, and who holds it now.
+    Fought {
+        target: TerritoryId,
+        /// Who held it when the night began; `None` for free land.
+        holder: Option<Uuid>,
+        /// Who took it; `None` when it held or the strongest bounced.
+        taken_by: Option<Uuid>,
+        defence: f64,
+        takers: Vec<TakerRoll>,
+        /// The strongest successful takes were exactly level, so nobody
+        /// took it and the holder kept it.
+        bounced: bool,
+    },
+}
+
+/// One taker's roll in a `Fought` entry.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TakerRoll {
+    pub user_id: Uuid,
+    pub points: u8,
+    /// The taker's strongest front territory: where the replay draws the
+    /// take from.
+    pub from: TerritoryId,
+    pub force: f64,
+    /// The odds rolled.
+    pub probability: f64,
+    /// The odds the taker's own board showed for this take with their own
+    /// orders counted in. Differs from `probability` only by what the board
+    /// could not see: walls others raised tonight, neighbours others engaged.
+    pub shown: f64,
+    pub success: bool,
+}
+
+/// How a game was won.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WinKind {
+    /// Held the domination share for the ruleset's run of nights.
+    Dominated,
+    /// Held the most when the season clock ran out.
+    SeasonOver,
+    /// Every rival off the board.
+    #[default]
+    LastStanding,
+}
+
+impl WinKind {
+    /// How the win reads in a sentence after the winner's name.
+    pub fn phrase(self) -> &'static str {
+        match self {
+            WinKind::Dominated => "dominated the world",
+            WinKind::SeasonOver => "held the most when the season ran out",
+            WinKind::LastStanding => "is the last one standing",
+        }
+    }
+
+    /// The same, as the #lounge headline says it.
+    pub fn lounge_phrase(self) -> &'static str {
+        match self {
+            WinKind::Dominated => "dominated the realm",
+            WinKind::SeasonOver => "won the realm on the clock",
+            WinKind::LastStanding => "conquered the realm",
+        }
+    }
 }
 
 fn one_hop() -> u32 {
     1
 }
 
-/// Why a queued action was skipped, back when actions were queued. Retained
-/// only so archived `realm_days` rows keep parsing.
+/// Why an order did nothing at the night: the queue era's reasons, which
+/// archived `realm_days` rows still carry, and the orders engine's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FizzleReason {
@@ -465,6 +668,10 @@ pub enum FizzleReason {
     NotAdjacent,
     PlayerEliminated,
     UnknownTerritory,
+    /// The target's holder, or the taker, is protected tonight.
+    TargetProtected,
+    /// The taker no longer borders the target.
+    NoFront,
 }
 
 /// Why an action was refused. Nothing is spent and nothing is logged: the
@@ -589,8 +796,10 @@ impl PlayerPhase {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolveEnd {
     Ongoing,
-    /// Every rival conquered, or the whole map held.
-    Won(Uuid),
+    Won {
+        winner: Uuid,
+        kind: WinKind,
+    },
     /// Everyone exited; no winner.
     Dissolved,
 }
@@ -689,7 +898,7 @@ impl RealmGameState {
         self.players.iter().find(|p| p.user_id == user_id)
     }
 
-    fn player_mut(&mut self, user_id: Uuid) -> Option<&mut RealmPlayer> {
+    pub(super) fn player_mut(&mut self, user_id: Uuid) -> Option<&mut RealmPlayer> {
         self.players.iter_mut().find(|p| p.user_id == user_id)
     }
 
@@ -789,6 +998,30 @@ impl RealmGameState {
     /// days) falls on the most generous tier.
     pub fn daily_base(&self, day: i32) -> u8 {
         self.ruleset.actions_per_day(self.involved_count(day))
+    }
+
+    /// What this player's land pays on top of the base: `land_points` per
+    /// hundred territories held, rounded down. Nothing on a ruleset that
+    /// pays the same whatever you hold.
+    pub fn land_points(&self, user_id: Uuid) -> u8 {
+        let held = f64::from(self.territory_count(user_id));
+        (held * self.ruleset.land_points / 100.0)
+            .floor()
+            .clamp(0.0, f64::from(u8::MAX)) as u8
+    }
+
+    /// Everyone who has been properly in the war by `day`, the fallen
+    /// included: the count the domination bar is sized against. A newcomer
+    /// lowers the bar only once they are out of protection and able to fight
+    /// the leader, so a late arrival is never a gift to whoever is ahead;
+    /// knocking a rival out never raises it, so a winner is not punished
+    /// for winning.
+    pub fn war_roster(&self, day: i32) -> u8 {
+        self.players
+            .iter()
+            .filter(|p| (day - p.joined_day).max(0) >= self.rampup_until(p.user_id))
+            .count()
+            .min(u8::MAX as usize) as u8
     }
 
     /// Living players who are past their opening days — the count the daily
@@ -913,16 +1146,17 @@ impl RealmGameState {
 
     /// What a day opens with for this player: base plus the bank. Computed
     /// from the gap since their last action, so it must be read *before*
-    /// they act on `day` — which is why the first action freezes it.
-    fn opening_allowance(&self, player: &RealmPlayer, day: i32) -> (u8, u8) {
+    /// they act on `day` — which is why the first action freezes it. The
+    /// land's points come on top and bank nothing: a day away is a day the
+    /// land was not ordered to anything.
+    fn opening_banked(&self, player: &RealmPlayer, day: i32) -> u8 {
         let base = self.daily_base(day);
         // Days between their last action and today are the missed ones; the
         // ladder decides what each of them is still worth, one rung a day.
         let missed = (player.quiet_days(day) - 1).max(0);
         let rungs: f64 = (1..=missed).map(|nth| self.bank_rate(nth)).sum();
         let cap = f64::from(base) * f64::from(self.ruleset.bank_cap_days);
-        let banked = (f64::from(base) * rungs).min(cap).floor() as u8;
-        (base, banked)
+        (f64::from(base) * rungs).min(cap).floor() as u8
     }
 
     /// Everything about a player's day: allowance, banking, decay.
@@ -931,6 +1165,7 @@ impl RealmGameState {
         let Some(player) = self.player(user_id) else {
             return DayStanding {
                 base,
+                land: 0,
                 banked: 0,
                 allowance: 0,
                 used: 0,
@@ -939,18 +1174,23 @@ impl RealmGameState {
                 decay: 1.0,
             };
         };
+        let land = self.land_points(user_id);
         let (allowance, banked) = if player.actions_day == day && player.actions_allowance > 0 {
             // Already playing today: the day's worth was settled when it
             // opened and does not shift underneath them.
             let allowance = player.actions_allowance;
-            (allowance, allowance.saturating_sub(base))
+            (
+                allowance,
+                allowance.saturating_sub(base).saturating_sub(land),
+            )
         } else {
-            let (base, banked) = self.opening_allowance(player, day);
-            (base.saturating_add(banked), banked)
+            let banked = self.opening_banked(player, day);
+            (base.saturating_add(land).saturating_add(banked), banked)
         };
         let missed = (player.quiet_days(day) - 1).max(0);
         DayStanding {
             base,
+            land,
             banked,
             allowance,
             used: player.used_on(day),
@@ -1074,7 +1314,7 @@ impl RealmGameState {
     /// territories themselves rather than a count: the log is what the
     /// history replays from, and "three territories went somewhere" cannot be
     /// replayed.
-    fn exit_player(
+    pub(super) fn exit_player(
         &mut self,
         user_id: Uuid,
         status: RealmPlayerStatus,
@@ -1292,6 +1532,12 @@ impl ReachIndex {
 /// first action on it. Every action pays the same, whether it takes ground
 /// or digs into it.
 fn spend_point(state: &mut RealmGameState, actor: Uuid, day: i32) {
+    spend_points(state, actor, day, 1);
+}
+
+/// Take `points` off this player's day, opening the day if this is their
+/// first spend on it: an action is one point, an order is what it carries.
+pub(super) fn spend_points(state: &mut RealmGameState, actor: Uuid, day: i32, points: u8) {
     // Today's allowance is the base plus whatever missed days banked, read
     // before acting closes the gap it was computed from.
     let allowance = state.standing(actor, day).allowance;
@@ -1301,7 +1547,7 @@ fn spend_point(state: &mut RealmGameState, actor: Uuid, day: i32) {
             p.actions_used = 0;
             p.actions_allowance = allowance;
         }
-        p.actions_used = p.actions_used.saturating_add(1).min(allowance);
+        p.actions_used = p.actions_used.saturating_add(points).min(allowance);
         // A day you acted on is a day you played — the clock that gates
         // winning and being paid.
         if p.last_action_day != Some(day) {
@@ -1581,10 +1827,19 @@ pub const REALM_ABANDON_DAYS: i32 = 5;
 /// that everyone has abandoned, so a dead world does not stand forever in
 /// place of the next one — and that path pays nothing, so it cannot be farmed.
 pub fn sweep_idle(state: &mut RealmGameState, map: &WorldMap, day: i32) -> (Vec<Uuid>, ResolveEnd) {
+    if let Some(kicked) = dissolve_if_abandoned(state, day) {
+        return (kicked, ResolveEnd::Dissolved);
+    }
     let day_seed = day_seed_of(state, day);
-    // Long-abandoned: every living player quiet for `REALM_ABANDON_DAYS`.
-    // A player who never acted at all counts from the day they joined, so a
-    // realm nobody ever played clears itself the same way.
+    (Vec::new(), check_end(state, map, day, day_seed))
+}
+
+/// The abandoned-realm dissolve, for both engines: every living player quiet
+/// for `REALM_ABANDON_DAYS` is kicked and their land freed. A player who
+/// never acted at all counts from the day they joined, so a realm nobody ever
+/// played clears itself the same way. `None` while anybody still comes back.
+pub fn dissolve_if_abandoned(state: &mut RealmGameState, day: i32) -> Option<Vec<Uuid>> {
+    let day_seed = day_seed_of(state, day);
     let abandon_days = REALM_ABANDON_DAYS;
     let living: Vec<&RealmPlayer> = state
         .players
@@ -1592,24 +1847,24 @@ pub fn sweep_idle(state: &mut RealmGameState, map: &WorldMap, day: i32) -> (Vec<
         .filter(|p| p.status == RealmPlayerStatus::Alive)
         .collect();
     let abandoned = !living.is_empty() && living.iter().all(|p| p.quiet_days(day) >= abandon_days);
-    if abandoned {
-        let ids: Vec<Uuid> = living.iter().map(|p| p.user_id).collect();
-        for user_id in &ids {
-            let freed = state.exit_player(*user_id, RealmPlayerStatus::Kicked, day);
-            state.log(
-                day,
-                day_seed,
-                LogEntry::Kicked {
-                    user_id: *user_id,
-                    freed_territories: freed.len() as u16,
-                    freed,
-                },
-            );
-        }
-        state.revision += 1;
-        return (ids, ResolveEnd::Dissolved);
+    if !abandoned {
+        return None;
     }
-    (Vec::new(), check_end(state, map, day, day_seed))
+    let ids: Vec<Uuid> = living.iter().map(|p| p.user_id).collect();
+    for user_id in &ids {
+        let freed = state.exit_player(*user_id, RealmPlayerStatus::Kicked, day);
+        state.log(
+            day,
+            day_seed,
+            LogEntry::Kicked {
+                user_id: *user_id,
+                freed_territories: freed.len() as u16,
+                freed,
+            },
+        );
+    }
+    state.revision += 1;
+    Some(ids)
 }
 
 /// Has anyone won? Two ways, and they are the same idea from either end:
@@ -1665,9 +1920,19 @@ fn check_end(state: &mut RealmGameState, map: &WorldMap, day: i32, seed: u64) ->
         .as_ref()
         .is_some_and(|d| d.entries.iter().any(|e| matches!(e, LogEntry::Won { .. })));
     if !already {
-        state.log(day, seed, LogEntry::Won { user_id: winner });
+        state.log(
+            day,
+            seed,
+            LogEntry::Won {
+                user_id: winner,
+                kind: WinKind::LastStanding,
+            },
+        );
     }
-    ResolveEnd::Won(winner)
+    ResolveEnd::Won {
+        winner,
+        kind: WinKind::LastStanding,
+    }
 }
 
 /// The seed stamped on the current day's log (kept stable across a day).

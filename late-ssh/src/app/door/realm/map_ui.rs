@@ -21,8 +21,11 @@ use crate::app::common::worldmap::{
 };
 
 use super::map::WorldMap;
-use super::resolver::RealmPlayerStatus;
-use super::state::{RealmBoardState, RealmState, ownership_colors, points_left};
+use super::resolver::{Order, RealmPlayerStatus};
+use super::state::{
+    FORT_SHADES, RealmBoardState, RealmState, ownership_colors, palette_index, palette_shades,
+    points_left, shade_index,
+};
 
 pub const RAIL_WIDTH: u16 = 34;
 
@@ -113,9 +116,53 @@ pub fn draw_map_view(frame: &mut Frame, area: Rect, realm: &RealmState, rail: bo
             crosshair: true,
         },
     );
+    if view.scale <= BORDER_MAX_SCALE {
+        draw_wall_digits(frame, map_area, &map, &view, &detail.state);
+    }
 
     if let Some(rail) = rail_area {
         draw_rail(frame, rail, realm, board);
+    }
+}
+
+/// Walls of 2 and up as a digit on the territory's centre cell, at the zoom
+/// where borders are drawn and a country is more than a pixel: the shade
+/// says roughly how dug in a place is, the digit says exactly. Inked in the
+/// owner's dark shade, or their pale one on a fill that is already dark.
+fn draw_wall_digits(
+    frame: &mut Frame,
+    area: Rect,
+    map: &WorldMap,
+    view: &Viewport,
+    state: &super::resolver::RealmGameState,
+) {
+    let max = state.ruleset.fort_max_level;
+    let buf = frame.buffer_mut();
+    for (territory, owner) in &state.ownership {
+        let level = state.fort_level(*territory);
+        if level < 2 {
+            continue;
+        }
+        let Some(t) = map.territory(*territory) else {
+            continue;
+        };
+        let px = ((f32::from(t.center.0) - view.vx) / view.scale).floor() as i32;
+        let py = ((f32::from(t.center.1) - view.vy) / view.scale).floor() as i32;
+        let (col, row) = (px, py.div_euclid(2));
+        if col < 0 || row < 0 || col >= i32::from(area.width) || row >= i32::from(area.height) {
+            continue;
+        }
+        let shades = palette_shades(palette_index(state, *owner) as u8);
+        let at = shade_index(level, max);
+        let (fill, ink) = match at == FORT_SHADES - 1 {
+            true => (shades[at], shades[0]),
+            false => (shades[at], shades[FORT_SHADES - 1]),
+        };
+        if let Some(cell) = buf.cell_mut((area.x + col as u16, area.y + row as u16)) {
+            cell.set_symbol(&level.to_string())
+                .set_fg(Color::Rgb(ink.0, ink.1, ink.2))
+                .set_bg(Color::Rgb(fill.0, fill.1, fill.2));
+        }
     }
 }
 
@@ -163,15 +210,14 @@ fn draw_rail(frame: &mut Frame, area: Rect, realm: &RealmState, board: &RealmBoa
                 None => Line::from(Span::styled("unclaimed", dim)),
             };
             lines.push(owner_line);
-            // Walls, and what they are doing to whoever wants this place.
+            // Walls: the same bars the target table draws, so a glance at
+            // either reads the same way.
             let level = state.fort_level(t.id);
+            let max = state.ruleset.fort_max_level;
             if state.option(super::rulesets::OPTION_FORTIFY) {
-                let bite = 1.0 - state.fortification(t.id, detail.today());
-                // The same bars the target table draws, so a glance at
-                // either reads the same way.
                 lines.push(Line::from(vec![
                     Span::styled(
-                        format!("{} ", fort_bar(level, state.ruleset.fort_max_level)),
+                        format!("{} ", fort_bar(level, max)),
                         Style::default().fg(if level > 1 {
                             theme::AMBER_DIM()
                         } else {
@@ -180,7 +226,7 @@ fn draw_rail(frame: &mut Frame, area: Rect, realm: &RealmState, board: &RealmBoa
                     ),
                     Span::styled(
                         if level > 1 {
-                            format!("dug in ×{level} · costs an attacker {:.0}%", bite * 100.0)
+                            format!("dug in · walls {level} of {max}")
                         } else {
                             "open ground".to_string()
                         },
@@ -195,38 +241,41 @@ fn draw_rail(frame: &mut Frame, area: Rect, realm: &RealmState, board: &RealmBoa
                 Span::styled("", dim)
             } else if state.ownership.get(&t.id) == Some(&realm.user_id) {
                 Span::styled("yours", dim)
-            } else if let Some(p) =
-                realm.projected_probability(&super::resolver::RealmAction::Claim { target: t.id })
-            {
+            } else {
                 let label = if state.ownership.contains_key(&t.id) {
                     "attack"
                 } else {
                     "claim"
                 };
-                // How the route gets there is the whole story now, so the
-                // card says it in words rather than a bare number.
-                let note = realm
-                    .selected_reach()
-                    .map(|r| format!(" · {}", r.describe()))
-                    .unwrap_or_default();
-                // The opening truce outranks the odds: say so plainly.
-                let locked = state.ownership.get(&t.id).and_then(|defender| {
-                    realm.selected_reach().and_then(|r| {
-                        state
-                            .attack_allowed(realm.user_id, *defender, r, detail.today())
-                            .err()
-                    })
-                });
-                match locked {
-                    Some(reason) => {
-                        Span::styled(reason.message(), Style::default().fg(theme::AMBER_DIM()))
-                    }
-                    None => Span::styled(format!("{label} odds ~{:.0}%{note}", p * 100.0), text),
+                // A rule standing in the way outranks the odds; past it, how
+                // the take gets there is the story, in words rather than a
+                // bare number.
+                match realm.target_row(t.id) {
+                    Some(row) => match (row.locked, row.probability) {
+                        (Some(lock), _) => {
+                            Span::styled(lock.message(), Style::default().fg(theme::AMBER_DIM()))
+                        }
+                        (None, Some(p)) => Span::styled(
+                            format!("{label} odds ~{:.0}% · {}", p * 100.0, row.route.describe()),
+                            text,
+                        ),
+                        (None, None) => Span::styled("", dim),
+                    },
+                    None => Span::styled("", dim),
                 }
-            } else {
-                Span::styled("", dim)
             };
             lines.push(Line::from(action));
+            // Your order on it for tonight, priced as the board now stands.
+            if let Some(order) = realm
+                .my_orders()
+                .into_iter()
+                .find(|order| order.target() == t.id)
+            {
+                lines.push(Line::from(Span::styled(
+                    order_label(order, realm.order_projection(order)),
+                    bright,
+                )));
+            }
         }
         None => {
             lines.push(Line::from(Span::styled("no territory selected", dim)));
@@ -266,14 +315,14 @@ fn draw_rail(frame: &mut Frame, area: Rect, realm: &RealmState, board: &RealmBoa
             ""
         };
         lines.push(Line::from(Span::styled(
-            format!("action points  {left}/{cap} left today{flight}"),
+            format!("points  {left}/{cap} left today{flight}"),
             bright,
         )));
         let reset = super::svc::next_reset(chrono::Utc::now(), detail.reset_hour_utc);
         let secs = (reset - chrono::Utc::now()).num_seconds().max(0);
         lines.push(Line::from(Span::styled(
             format!(
-                "refills in {:02}:{:02}:{:02} · {}",
+                "night falls in {:02}:{:02}:{:02} · {}",
                 secs / 3600,
                 (secs % 3600) / 60,
                 secs % 60,
@@ -297,14 +346,18 @@ fn draw_rail(frame: &mut Frame, area: Rect, realm: &RealmState, board: &RealmBoa
         lines.push(Line::from(""));
     }
 
-    // What just happened, newest first: with instant resolution the log is
-    // the pulse of the game, so a few lines of it live on the map.
-    if let Some(day) = state.last_day.as_ref()
-        && !day.entries.is_empty()
-    {
-        lines.push(Line::from(Span::styled("latest", bright)));
+    // What just happened, newest first: the day's own log while it has
+    // any, else the last night's, so a few lines of the war live on the map.
+    let latest = [
+        ("latest", state.last_day.as_ref()),
+        ("last night", state.last_night.as_ref()),
+    ]
+    .into_iter()
+    .find_map(|(heading, day)| day.filter(|d| !d.entries.is_empty()).map(|d| (heading, d)));
+    if let Some((heading, day)) = latest {
+        lines.push(Line::from(Span::styled(heading, bright)));
         for entry in day.entries.iter().rev().take(4) {
-            lines.push(super::log_ui::entry_line_public(entry, state, &map));
+            lines.extend(super::log_ui::entry_lines(entry, state, &map));
         }
         lines.push(Line::from(""));
     }
@@ -352,6 +405,25 @@ pub fn player_line(
             Style::default().fg(theme::TEXT_DIM()),
         ),
     ])
+}
+
+/// A standing order in a line: "your order: take with 3 pts · 61% now".
+pub fn order_label(order: Order, projection: Option<super::night::Projection>) -> String {
+    match (order, projection) {
+        (Order::Take { points, .. }, Some(p)) => format!(
+            "your order: take with {} · {:.0}% now",
+            super::state::points_label(points.get()),
+            p.probability * 100.0
+        ),
+        (Order::Take { points, .. }, None) => format!(
+            "your order: take with {} · no front now",
+            super::state::points_label(points.get())
+        ),
+        (Order::Fortify { levels, .. }, _) => match levels.get() {
+            1 => "your order: a level of walls tonight".to_string(),
+            n => format!("your order: {n} levels of walls tonight"),
+        },
+    }
 }
 
 /// Fortification as bars: at a glance you want "how solid", not arithmetic.
@@ -410,8 +482,8 @@ mod tests {
         ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2) + (a.2 - b.2).powi(2)).sqrt()
     }
 
-    /// Fifty fills share the map — ten players by five levels of digging in
-    /// — plus water, open ground and the selection ring. Two of them looking
+    /// Sixty fills share the map, twenty players by three shades of digging
+    /// in, plus water, open ground and the selection ring. Two of them looking
     /// alike is a player misreading who owns what, which is the one thing
     /// the map exists to say. Guarded by measurement, because the last
     /// hand-picked table had a silver and a brown that were all but the same

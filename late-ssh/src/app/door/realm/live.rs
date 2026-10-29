@@ -21,7 +21,7 @@ use crate::app::{
     },
 };
 
-use super::resolver::{RealmNews, RealmNewsKind, RealmPlayerStatus};
+use super::resolver::{RealmNews, RealmNewsKind, RealmPlayerStatus, WinKind};
 use super::state::PLAYER_PALETTES;
 use super::svc::{RealmGameItem, RealmSnapshot, countdown_label, muster_left};
 
@@ -133,10 +133,18 @@ pub(crate) fn headline(strip: &RealmStripView) -> String {
             ..
         } => format!("{username} fell to {by_username}"),
         RealmNewsKind::Ended {
-            winner_username, ..
-        } => match winner_username {
-            Some(winner) => format!("the world fell to {winner}"),
-            None => "the world fell silent".to_string(),
+            winner_username,
+            win_kind,
+            ..
+        } => match (winner_username, win_kind) {
+            (Some(winner), Some(WinKind::Dominated)) => format!("{winner} dominated the world"),
+            (Some(winner), Some(WinKind::SeasonOver)) => {
+                format!("the season ran out with the world {winner}'s")
+            }
+            (Some(winner), Some(WinKind::LastStanding) | None) => {
+                format!("the world fell to {winner}")
+            }
+            (None, _) => "the world fell silent".to_string(),
         },
     }
 }

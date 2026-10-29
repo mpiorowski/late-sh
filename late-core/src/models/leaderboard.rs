@@ -655,8 +655,9 @@ pub struct DayTally {
 impl DayTally {
     /// The shelf's most played game of the day: the most plays, the first
     /// in tally order on a tie; `None` when nothing on the shelf was
-    /// played. The paper's YESTERDAY line and the front page's headline
-    /// read this one rule.
+    /// played. The paper's YESTERDAY arcade line and the front page's
+    /// headline read this one rule; the Lobby's line weighs its starts
+    /// too (`day_lobby_starts`).
     pub fn most_played(tallies: &[Self], shelf: Shelf) -> Option<&Self> {
         tallies
             .iter()
@@ -912,6 +913,54 @@ pub async fn day_tallies(client: &Client, day: NaiveDate) -> Result<Vec<DayTally
         .collect::<Result<Vec<_>>>()?;
     tallies.sort_by_key(|(position, _)| *position);
     Ok(tallies.into_iter().map(|(_, tally)| tally).collect())
+}
+
+/// One Lobby game's matches started on one UTC day: the claims that took
+/// a challenge to a match. The day's other side of `DayTally`, which
+/// counts the Lobby by its finishes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LobbyStarts {
+    pub game: LobbyGame,
+    pub started: i64,
+}
+
+/// The UTC day `day` in the Lobby, one count per game a match of was
+/// started (`daily_matches.started_at`, stamped by the claim; migration
+/// 272), in roster order. Whatever the match did after, finished, still
+/// active or forfeited, it started that day.
+pub async fn day_lobby_starts(client: &Client, day: NaiveDate) -> Result<Vec<LobbyStarts>> {
+    let floor = day.and_hms_opt(0, 0, 0).expect("midnight").and_utc();
+    let ceiling = floor + chrono::Duration::days(1);
+    let rows = client
+        .query(
+            "SELECT game_kind, count(*)::bigint AS started
+             FROM daily_matches
+             WHERE started_at >= $1 AND started_at < $2
+             GROUP BY game_kind",
+            &[&floor, &ceiling],
+        )
+        .await?;
+    let mut starts = rows
+        .into_iter()
+        .map(|row| {
+            let kind: String = row.get("game_kind");
+            let (position, game) = match LobbyGame::ALL
+                .iter()
+                .enumerate()
+                .find(|(_, game)| game.kind() == kind)
+            {
+                Some((position, game)) => (position, *game),
+                None => anyhow::bail!("day_lobby_starts found an unknown game kind {kind:?}"),
+            };
+            let started = LobbyStarts {
+                game,
+                started: row.get("started"),
+            };
+            Ok((position, started))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    starts.sort_by_key(|(position, _)| *position);
+    Ok(starts.into_iter().map(|(_, started)| started).collect())
 }
 
 pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> {

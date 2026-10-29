@@ -175,7 +175,9 @@ impl DailyMatch {
     /// Claim an open challenge. Guarded so two simultaneous claims can't both
     /// win: only one UPDATE sees `status = 'open' AND opponent_id IS NULL`.
     /// Generic over the client so it can run inside the claim transaction
-    /// that also creates the match chat room.
+    /// that also creates the match chat room. Stamps `started_at` (migration
+    /// 272), the one record of when the match began; the struct does not
+    /// carry it, since only `leaderboard::day_lobby_starts` reads it.
     pub async fn claim(
         client: &impl GenericClient,
         match_id: Uuid,
@@ -192,6 +194,7 @@ impl DailyMatch {
                      turn_user_id = $4,
                      turn_deadline_at = $5,
                      state = $6,
+                     started_at = current_timestamp,
                      updated = current_timestamp
                  WHERE id = $1
                    AND status = $7

@@ -1,14 +1,18 @@
 //! Input for `Screen::Realm`. Map view: arrows or a left-button drag pan,
 //! `+`/`-` zoom around the center, Enter/Space selects the territory under
 //! the center crosshair, a click selects directly, `a` (or `f` on your own
-//! land) acts on the selection
-//! (resolved on the spot). Target view: `j`/`k` walk the table, Enter or `a`
-//! acts on the highlighted row. Tab cycles map -> targets -> overview -> log.
-//! `n`/`N` walks your own territories, framing each on the map, and `g` in
-//! either list does the same for the highlighted row. `j` on the map, for a
-//! visitor while the gates are open, is the colour picker and the way in.
-//! `q`/Esc returns to the Games hub with nothing to confirm: closing the
-//! board is not leaving the game, and a running realm cannot be left.
+//! land) acts on the selection: resolved on the spot, or on a game that
+//! takes orders, the order prompt (`+`/`-` or a digit sizes it, Enter places
+//! it, Esc puts it away). Target view: `j`/`k` walk the table, Enter or `a`
+//! acts on the highlighted row. Tab cycles map -> targets -> orders ->
+//! overview -> log -> history, and `o` jumps to the orders from anywhere,
+//! where `x` withdraws the highlighted order. In the history `p` plays the
+//! day's night back, `.`/`,` step it. `n`/`N` walks your own territories,
+//! framing each on the map, and `g` in any list does the same for the
+//! highlighted row. `j` on the map, for a visitor while the gates are open,
+//! is the colour picker and the way in. `q`/Esc returns to the Games hub
+//! with nothing to confirm: closing the board is not leaving the game, and a
+//! running realm cannot be left.
 
 use crate::app::common::primitives::Screen;
 use crate::app::input::{MouseButton, MouseEvent, MouseEventKind, ParsedInput};
@@ -16,12 +20,17 @@ use crate::app::state::App;
 use uuid::Uuid;
 
 use super::map_ui::cell_at;
+use super::resolver::Order;
 use super::state::RealmView;
 
 pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
-    // The colour picker owns the keys while it is up.
+    // The colour picker owns the keys while it is up, and so does the order
+    // prompt: a digit there is a size, not a page.
     if app.realm.join_draft.is_some() {
         return handle_join_input(app, event);
+    }
+    if app.realm.board.as_ref().is_some_and(|b| b.prompt.is_some()) {
+        return handle_prompt_input(app, event);
     }
     match event {
         ParsedInput::Byte(byte) => handle_key(app, *byte),
@@ -73,7 +82,26 @@ pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
             true
         }
         b'q' | b'Q' | 0x1B => {
-            close_board(app);
+            // Whatever is on top goes first: q peels a layer before it
+            // leaves, in the same order the root's Esc does.
+            if !app.realm.peel_overlay() {
+                close_board(app);
+            }
+            true
+        }
+        // Tonight's orders, from whatever view you are on.
+        b'o' | b'O' => {
+            if let Some(b) = app.realm.board.as_mut() {
+                b.view = RealmView::Orders;
+            }
+            true
+        }
+        // On the orders list `x` takes the highlighted order back; anywhere
+        // else it is the question of leaving, answered below.
+        b'x' | b'X' if view == RealmView::Orders && app.realm.selected_order().is_some() => {
+            if let Some(banner) = app.realm.withdraw_selected() {
+                app.banner = Some(banner);
+            }
             true
         }
         // The way in for a visitor: pick a colour, march in. The map is the
@@ -122,6 +150,41 @@ pub(crate) fn handle_key(app: &mut App, byte: u8) -> bool {
                     // long way to walk one day at a time.
                     b'g' => app.realm.history_jump(false),
                     b'G' => app.realm.history_jump(true),
+                    // The day's night, a fight at a time: `p` puts it up on
+                    // its first fight and then plays or holds it, `.`/`,`
+                    // step it by hand.
+                    b'p' | b'P' => {
+                        if let Some(banner) = app.realm.replay_toggle() {
+                            app.banner = Some(banner);
+                        }
+                    }
+                    b'.' => app.realm.replay_step(1),
+                    b',' => app.realm.replay_step(-1),
+                    _ => return false,
+                }
+                true
+            }
+            RealmView::Orders => {
+                match byte {
+                    b'j' | b'J' => app.realm.move_orders_cursor(1),
+                    b'k' | b'K' => app.realm.move_orders_cursor(-1),
+                    b'g' | b'G' => {
+                        if let Some(order) = app.realm.selected_order() {
+                            focus_territory(app, order.target());
+                        }
+                    }
+                    // Enter puts the highlighted order back in the prompt,
+                    // to be resized or left as it was.
+                    b'\r' | b'\n' | b' ' => {
+                        let banner = match app.realm.selected_order() {
+                            Some(Order::Take { target, .. }) => app.realm.act_on(target),
+                            Some(Order::Fortify { target, .. }) => app.realm.fortify_on(target),
+                            None => None,
+                        };
+                        if let Some(banner) = banner {
+                            app.banner = Some(banner);
+                        }
+                    }
                     _ => return false,
                 }
                 true
@@ -308,6 +371,11 @@ pub(crate) fn handle_arrow(app: &mut App, key: u8) {
         RealmView::Targets => match key {
             b'A' => app.realm.move_targets_cursor(-1),
             b'B' => app.realm.move_targets_cursor(1),
+            _ => {}
+        },
+        RealmView::Orders => match key {
+            b'A' => app.realm.move_orders_cursor(-1),
+            b'B' => app.realm.move_orders_cursor(1),
             _ => {}
         },
         RealmView::Overview => match key {
@@ -598,6 +666,36 @@ fn handle_join_input(app: &mut App, event: &ParsedInput) -> bool {
         ParsedInput::Mouse(mouse) => match mouse.kind {
             MouseEventKind::ScrollUp => app.realm.join_move_selection(-1),
             MouseEventKind::ScrollDown => app.realm.join_move_selection(1),
+            _ => {}
+        },
+        _ => {}
+    }
+    true
+}
+
+/// The order prompt: `+`/`-`, the arrows or the wheel size it a step at a
+/// time, a digit sizes it outright, Enter places it, Esc puts it away.
+fn handle_prompt_input(app: &mut App, event: &ParsedInput) -> bool {
+    match event {
+        ParsedInput::Byte(0x1B | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
+            app.realm.prompt_cancel();
+        }
+        ParsedInput::Byte(b'\r' | b'\n') => {
+            if let Some(banner) = app.realm.prompt_confirm() {
+                app.banner = Some(banner);
+            }
+        }
+        ParsedInput::Byte(b'+' | b'=')
+        | ParsedInput::Char('+' | '=')
+        | ParsedInput::Arrow(b'A' | b'C') => app.realm.prompt_adjust(1),
+        ParsedInput::Byte(b'-' | b'_')
+        | ParsedInput::Char('-' | '_')
+        | ParsedInput::Arrow(b'B' | b'D') => app.realm.prompt_adjust(-1),
+        ParsedInput::Byte(digit @ b'1'..=b'9') => app.realm.prompt_resize(*digit - b'0'),
+        ParsedInput::Char(digit @ '1'..='9') => app.realm.prompt_resize(*digit as u8 - b'0'),
+        ParsedInput::Mouse(mouse) => match mouse.kind {
+            MouseEventKind::ScrollUp => app.realm.prompt_adjust(1),
+            MouseEventKind::ScrollDown => app.realm.prompt_adjust(-1),
             _ => {}
         },
         _ => {}

@@ -1,7 +1,7 @@
 //! The target table: every territory you could act on, as a list rather than
-//! a map. Nearest first, so your borders are at the top and the far-flung
-//! gambles sink to the bottom, each with the hops it would cost, who holds
-//! it, and the odds the engine would actually roll.
+//! a map. Nearest first (or, on a game that takes orders, the open ones with
+//! the best odds), each with the route it would take or the front behind
+//! it, who holds it, and the odds the engine would actually roll.
 
 use ratatui::{
     Frame,
@@ -14,8 +14,8 @@ use ratatui::{
 use crate::app::common::theme;
 
 use super::map_ui::compact;
-use super::resolver::ActionRejected;
-use super::state::{RealmState, TargetRow, points_left};
+use super::resolver::{ActionRejected, OrderRejected};
+use super::state::{Lock, RealmState, Route, TargetRow, points_left};
 use super::ui::truncate;
 
 /// Which columns fit, and how wide the name gets. A table cannot wrap
@@ -122,7 +122,10 @@ pub fn draw_targets_view(frame: &mut Frame, area: Rect, realm: &RealmState) {
         header.push_str(&format!("{:<holder$}", "held by", holder = holder));
     }
     if columns.hops {
-        header.push_str(&format!("{:>6}", "reach"));
+        // Every row of one table is priced by the same engine, so the first
+        // says what the column is.
+        let heading = rows.first().map(|r| r.route.heading()).unwrap_or("reach");
+        header.push_str(&format!("{heading:>6}"));
     }
     if columns.walls {
         header.push_str(&format!("{:>7}", "walls"));
@@ -176,24 +179,46 @@ fn target_line(row: &TargetRow, selected: bool, columns: Columns, width: usize) 
     } else {
         Style::default().fg(theme::TEXT())
     };
-    // Hops carry the whole distance rule, so they are coloured like a
-    // warning once they stop being a border move.
     // The route cost is the whole distance rule in one number, so it is
-    // coloured like a warning once it stops being a border move.
-    let hop_style = if row.reach.cost <= 1.0001 {
-        Style::default().fg(theme::TEXT_DIM())
-    } else if row.reach.cost <= 3.0 {
-        Style::default().fg(theme::AMBER_DIM())
-    } else {
-        Style::default().fg(theme::ERROR())
-    };
-    let hops = if row.mine {
-        format!("{:>6}", "—")
-    } else if row.reach.by_sea() {
-        // `~` for the water it crossed.
-        format!("{:>5}~", format!("{:.1}", row.reach.cost))
-    } else {
-        format!("{:>6}", format!("{:.1}", row.reach.cost))
+    // coloured like a warning once it stops being a border move. A front is
+    // the other way round: the more land behind a take, the better.
+    let (hop_style, hops) = match row.route {
+        _ if row.mine => (
+            Style::default().fg(theme::TEXT_DIM()),
+            format!("{:>6}", "—"),
+        ),
+        Route::Reach(reach) => {
+            let style = if reach.cost <= 1.0001 {
+                Style::default().fg(theme::TEXT_DIM())
+            } else if reach.cost <= 3.0 {
+                Style::default().fg(theme::AMBER_DIM())
+            } else {
+                Style::default().fg(theme::ERROR())
+            };
+            // `~` for the water it crossed.
+            let text = match reach.by_sea() {
+                true => format!("{:>5}~", format!("{:.1}", reach.cost)),
+                false => format!("{:>6}", format!("{:.1}", reach.cost)),
+            };
+            (style, text)
+        }
+        Route::Front { strength, landing } => {
+            let style = if landing {
+                Style::default().fg(theme::AMBER_DIM())
+            } else {
+                Style::default().fg(theme::TEXT_DIM())
+            };
+            // `~` for a take that comes off the sea.
+            let text = match landing {
+                true => format!("{:>5}~", format!("{strength:.1}")),
+                false => format!("{:>6}", format!("{strength:.1}")),
+            };
+            (style, text)
+        }
+        Route::NoFront => (
+            Style::default().fg(theme::TEXT_FAINT()),
+            format!("{:>6}", "—"),
+        ),
     };
     let glyph = if row.mine {
         // Your own ground: the action here is to dig in.
@@ -291,7 +316,7 @@ fn target_line(row: &TargetRow, selected: bool, columns: Columns, width: usize) 
 
 /// Fill the rest of the row with blanks, so a row style covers the row rather
 /// than the words in it.
-fn pad_to(spans: &mut Vec<Span<'static>>, width: usize) {
+pub(super) fn pad_to(spans: &mut Vec<Span<'static>>, width: usize) {
     use unicode_width::UnicodeWidthStr;
     let used: usize = spans.iter().map(|span| span.content.width()).sum();
     if used < width {
@@ -299,14 +324,31 @@ fn pad_to(spans: &mut Vec<Span<'static>>, width: usize) {
     }
 }
 
-/// Short why-not for a locked attack, in the odds column.
-fn lock_label(locked: &ActionRejected) -> String {
+/// Short why-not for a locked row, in the odds column.
+fn lock_label(locked: &Lock) -> String {
     match locked {
-        ActionRejected::OutOfRange => "too far".to_string(),
-        ActionRejected::NoRoute => "no route".to_string(),
-        ActionRejected::AttacksLocked(days) => format!("war {days}d"),
-        ActionRejected::DistantAttacksLocked(days) => format!("near {days}d"),
-        _ => "locked".to_string(),
+        Lock::Action(rejected) => match rejected {
+            ActionRejected::OutOfRange => "too far".to_string(),
+            ActionRejected::NoRoute => "no route".to_string(),
+            ActionRejected::AttacksLocked(days) => format!("war {days}d"),
+            ActionRejected::DistantAttacksLocked(days) => format!("near {days}d"),
+            _ => "locked".to_string(),
+        },
+        Lock::Order(rejected) => match rejected {
+            OrderRejected::NoFront => "no front".to_string(),
+            OrderRejected::AttacksLocked(days) => format!("war {days}d"),
+            OrderRejected::LandingsLocked(days) => format!("shore {days}d"),
+            OrderRejected::TargetIsNew(days) => format!("new {days}d"),
+            OrderRejected::TargetIsRamping(days) => format!("near {days}d"),
+            OrderRejected::NotEnoughPoints { .. } => "no pts".to_string(),
+            OrderRejected::FullyFortified { .. } => "walled".to_string(),
+            OrderRejected::NotPlaying
+            | OrderRejected::UnknownTerritory
+            | OrderRejected::AlreadyYours
+            | OrderRejected::NotYours
+            | OrderRejected::NoFortifying
+            | OrderRejected::NoSuchOrder => "locked".to_string(),
+        },
     }
 }
 
