@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Utc};
 use serde_json::json;
 use uuid::Uuid;
@@ -11,8 +13,9 @@ use crate::{
         le_word,
         leaderboard::{
             DailyPuzzle, DoorGame, LATEANIA_XP_AT_LEVEL_CAP, LATEANIA_XP_PER_PARAGON_LEVEL,
-            LobbyGame, OnlineTimeIncrement, RankedEntry, ScoreGame, WeekBest, WeekGame,
-            apply_online_time_batch, fetch_leaderboard_data, online_time_credit, week_bests,
+            CountedSpan, LobbyGame, OnlineTimeFold, OnlineTimeIncrement, RankedEntry, ScoreGame,
+            WeekBest, WeekGame,
+            apply_online_time_batch, fetch_leaderboard_data, fold_online_time_credits, week_bests,
         },
         minesweeper,
         mud_character::MudCharacter,
@@ -36,52 +39,135 @@ fn online_span(
     month_start: NaiveDate,
     span_start: DateTime<Utc>,
     span_seconds: i64,
-    milliseconds: i64,
 ) -> OnlineTimeIncrement {
     OnlineTimeIncrement {
         user_id,
         month_start,
         span_start,
         span_end: span_start + Duration::seconds(span_seconds),
-        milliseconds,
     }
 }
 
+fn counted(start: DateTime<Utc>, from_second: i64, to_second: i64) -> CountedSpan {
+    CountedSpan {
+        start: start + Duration::seconds(from_second),
+        end: start + Duration::seconds(to_second),
+    }
+}
+
+/// Two pods report the same user: the second to land earns only what the
+/// first did not cover, whichever order the batches arrive in, and a span
+/// with a gap beside an overlap never earns the gap.
 #[test]
-fn online_time_credit_counts_only_what_is_past_the_counted_mark() {
+fn online_time_credits_each_moment_once_whatever_order_the_pods_land_in() {
     let user_id = Uuid::from_u128(1);
     let month_start = NaiveDate::from_ymd_opt(2026, 10, 1).expect("month");
     let start = Utc.with_ymd_and_hms(2026, 10, 5, 12, 0, 0).unwrap();
-    // A continuous minute.
-    let full = online_span(user_id, month_start, start, 60, 60_000);
-    // The same minute with a 20s gap in it: 40s present.
-    let gapped = online_span(user_id, month_start, start, 60, 40_000);
+    let keep_from = start - Duration::days(1);
 
-    assert_eq!(online_time_credit(&full, None), 60_000, "nothing counted yet");
-    assert_eq!(
-        online_time_credit(&full, Some(start - Duration::seconds(5))),
-        60_000,
-        "a mark before the span leaves it whole"
+    // The new pod landed first with 0..10 of a handoff; the old pod's
+    // earlier span 0..10 and a span of its own 20..30 then land, the first
+    // already counted, the second new.
+    let fold = fold_online_time_credits(
+        HashMap::from([(user_id, vec![counted(start, 0, 10)])]),
+        &[
+            online_span(user_id, month_start, start + Duration::seconds(20), 10),
+            online_span(user_id, month_start, start, 10),
+        ],
+        keep_from,
     );
     assert_eq!(
-        online_time_credit(&full, Some(start + Duration::seconds(45))),
-        15_000,
-        "another pod already counted the first 45s"
+        fold,
+        OnlineTimeFold {
+            counted: HashMap::from([(
+                user_id,
+                vec![counted(start, 0, 10), counted(start, 20, 30)]
+            )]),
+            all_time: HashMap::from([(user_id, 10_000)]),
+            monthly: HashMap::from([((user_id, month_start), 10_000)]),
+        },
+        "the earlier span earns nothing twice, the later one in full"
+    );
+
+    // A span straddling two counted spans earns only the gap between them,
+    // and the three merge into one.
+    let fold = fold_online_time_credits(
+        fold.counted,
+        &[online_span(user_id, month_start, start + Duration::seconds(5), 20)],
+        keep_from,
     );
     assert_eq!(
-        online_time_credit(&full, Some(start + Duration::seconds(90))),
-        0,
-        "a span wholly behind the mark earns nothing"
+        fold,
+        OnlineTimeFold {
+            counted: HashMap::from([(user_id, vec![counted(start, 0, 30)])]),
+            all_time: HashMap::from([(user_id, 10_000)]),
+            monthly: HashMap::from([((user_id, month_start), 10_000)]),
+        }
+    );
+
+    // The same batch again, after an uncertain commit: nothing, and no
+    // month row to write.
+    let fold = fold_online_time_credits(
+        fold.counted,
+        &[online_span(user_id, month_start, start + Duration::seconds(5), 20)],
+        keep_from,
     );
     assert_eq!(
-        online_time_credit(&gapped, Some(start + Duration::seconds(30))),
-        30_000,
-        "never more than the uncounted wall clock"
+        fold,
+        OnlineTimeFold {
+            counted: HashMap::from([(user_id, vec![counted(start, 0, 30)])]),
+            all_time: HashMap::from([(user_id, 0)]),
+            monthly: HashMap::new(),
+        }
+    );
+}
+
+/// A span flushed late, behind everything counted so far, still earns in
+/// full: the old pod's last minutes land after the new pod's first.
+#[test]
+fn online_time_credits_a_span_flushed_after_a_later_one() {
+    let user_id = Uuid::from_u128(2);
+    let month_start = NaiveDate::from_ymd_opt(2026, 10, 1).expect("month");
+    let start = Utc.with_ymd_and_hms(2026, 10, 5, 12, 0, 0).unwrap();
+
+    let fold = fold_online_time_credits(
+        HashMap::from([(user_id, vec![counted(start, 180, 240)])]),
+        &[online_span(user_id, month_start, start, 180)],
+        start - Duration::days(1),
+    );
+    assert_eq!(fold.all_time, HashMap::from([(user_id, 180_000)]));
+    assert_eq!(
+        fold.counted,
+        HashMap::from([(user_id, vec![counted(start, 0, 240)])]),
+        "touching spans merge"
+    );
+}
+
+/// Counted spans are kept for a day; older ones leave the row, and a user
+/// deleted since the batch was prepared earns nothing.
+#[test]
+fn online_time_keeps_a_day_of_counted_spans() {
+    let kept = Uuid::from_u128(3);
+    let deleted = Uuid::from_u128(4);
+    let month_start = NaiveDate::from_ymd_opt(2026, 10, 1).expect("month");
+    let start = Utc.with_ymd_and_hms(2026, 10, 5, 12, 0, 0).unwrap();
+    let old = start - Duration::days(2);
+
+    let fold = fold_online_time_credits(
+        HashMap::from([(kept, vec![counted(old, 0, 60)])]),
+        &[
+            online_span(kept, month_start, start, 60),
+            online_span(deleted, month_start, start, 60),
+        ],
+        start - Duration::days(1),
     );
     assert_eq!(
-        online_time_credit(&gapped, Some(start + Duration::seconds(10))),
-        40_000,
-        "never more than the presence inside the span"
+        fold,
+        OnlineTimeFold {
+            counted: HashMap::from([(kept, vec![counted(start, 0, 60)])]),
+            all_time: HashMap::from([(kept, 60_000)]),
+            monthly: HashMap::from([((kept, month_start), 60_000)]),
+        }
     );
 }
 
@@ -109,20 +195,20 @@ async fn online_time_batches_never_count_one_moment_twice_and_rank_both_windows(
 
     // Pod A, the old pod draining: alice for 100s, bob for 90s.
     let pod_a = [
-        online_span(alice.id, current_month, start, 100, 100_000),
-        online_span(bob.id, current_month, start, 90, 90_000),
-        online_span(deleted.id, current_month, start, 500, 500_000),
+        online_span(alice.id, current_month, start, 100),
+        online_span(bob.id, current_month, start, 90),
+        online_span(deleted.id, current_month, start, 500),
     ];
     let pod_a_flush = Uuid::now_v7();
     assert_eq!(
-        apply_online_time_batch(&mut client, pod_a_flush, &pod_a)
+        apply_online_time_batch(&mut client, pod_a_flush, now, &pod_a)
             .await
             .expect("apply pod A batch"),
         2,
         "deleted users are skipped"
     );
     // An uncertain retry of the same batch.
-    apply_online_time_batch(&mut client, pod_a_flush, &pod_a)
+    apply_online_time_batch(&mut client, pod_a_flush, now, &pod_a)
         .await
         .expect("retry pod A batch");
     // Pod B, the new pod: alice reconnected there at 40s and stayed to 140s.
@@ -130,27 +216,29 @@ async fn online_time_batches_never_count_one_moment_twice_and_rank_both_windows(
     apply_online_time_batch(
         &mut client,
         Uuid::now_v7(),
+        now,
         &[online_span(
             alice.id,
             current_month,
             start + Duration::seconds(40),
             100,
-            100_000,
         )],
     )
     .await
     .expect("apply pod B batch");
-    // Last month, long before either pod: counted in full.
+    // A pod that flushes late: last month's spans land after this month's
+    // were counted. Nothing counted them before, so they count in full.
     apply_online_time_batch(
         &mut client,
         Uuid::now_v7(),
+        now,
         &[
-            online_span(alice.id, previous_month, earlier, 50, 50_000),
-            online_span(bob.id, previous_month, earlier, 200, 200_000),
+            online_span(alice.id, previous_month, earlier, 50),
+            online_span(bob.id, previous_month, earlier, 200),
         ],
     )
     .await
-    .expect("apply a batch the mark is already past");
+    .expect("apply a batch that lands out of order");
 
     let alice_total: i64 = client
         .query_one(
@@ -161,8 +249,8 @@ async fn online_time_batches_never_count_one_moment_twice_and_rank_both_windows(
         .expect("alice online time")
         .get(0);
     assert_eq!(
-        alice_total, 140_000,
-        "the overlap and the retry count once, and time behind the mark not at all"
+        alice_total, 190_000,
+        "the overlap and the retry count once, and a span flushed late in full"
     );
 
     let alice_monthly: i64 = client
@@ -176,15 +264,17 @@ async fn online_time_batches_never_count_one_moment_twice_and_rank_both_windows(
         .expect("alice monthly online time")
         .get(0);
     assert_eq!(alice_monthly, 140_000);
-    let previous_rows: i64 = client
+    let alice_previous: i64 = client
         .query_one(
-            "SELECT COUNT(*) FROM user_online_time_monthly WHERE month_start = $1 AND user_id = ANY($2)",
-            &[&previous_month, &vec![alice.id, bob.id]],
+            "SELECT total_milliseconds
+             FROM user_online_time_monthly
+             WHERE month_start = $1 AND user_id = $2",
+            &[&previous_month, &alice.id],
         )
         .await
-        .expect("previous month rows")
+        .expect("alice previous month online time")
         .get(0);
-    assert_eq!(previous_rows, 0, "a batch that earns nothing writes no month row");
+    assert_eq!(alice_previous, 50_000, "the late span lands in its own month");
 
     let data = fetch_leaderboard_data(&client)
         .await
@@ -195,7 +285,11 @@ async fn online_time_batches_never_count_one_moment_twice_and_rank_both_windows(
         140_000
     );
     assert_eq!(entry_for(&data.online_time.monthly, bob.id).rank, 2);
-    assert_eq!(entry_for(&data.online_time.all_time, bob.id).value, 90_000);
+    assert_eq!(
+        entry_for(&data.online_time.all_time, bob.id).value,
+        290_000,
+        "all time holds both months"
+    );
     assert!(
         !data
             .online_time

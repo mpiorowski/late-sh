@@ -245,7 +245,6 @@ fn online_time_checkpoints_one_continuous_presence_interval() {
             month_start: august,
             span_start: start,
             span_end: start + chrono::Duration::seconds(10),
-            milliseconds: 10_000,
         }
     );
 
@@ -265,7 +264,10 @@ fn online_time_checkpoints_one_continuous_presence_interval() {
         start + chrono::Duration::seconds(10),
         "the next span starts where the checkpoint left off"
     );
-    assert_eq!(increment_for(&follow_up, user_id, august).milliseconds, 5_000);
+    assert_eq!(
+        increment_for(&follow_up, user_id, august).span_end,
+        start + chrono::Duration::seconds(15)
+    );
     tracker.acknowledge(follow_up.batch.id);
 
     // Past midnight: the next checkpoint's span begins in September.
@@ -275,8 +277,13 @@ fn online_time_checkpoints_one_continuous_presence_interval() {
         .begin_batch_at(midnight + chrono::Duration::seconds(30))
         .expect("the segment that crossed midnight");
     assert_eq!(
-        increment_for(&spill, user_id, august).milliseconds,
-        3_600_000 - 15_000 + 20_000,
+        increment_for(&spill, user_id, august),
+        OnlineTimeIncrement {
+            user_id,
+            month_start: august,
+            span_start: start + chrono::Duration::seconds(15),
+            span_end: midnight + chrono::Duration::seconds(20),
+        },
         "a segment counts in the month it began"
     );
     tracker.acknowledge(spill.batch.id);
@@ -287,14 +294,22 @@ fn online_time_checkpoints_one_continuous_presence_interval() {
         .begin_batch_at(midnight + chrono::Duration::seconds(50))
         .expect("a September segment");
     assert_eq!(
-        increment_for(&september_batch, user_id, september).milliseconds,
-        5_000
+        increment_for(&september_batch, user_id, september),
+        OnlineTimeIncrement {
+            user_id,
+            month_start: september,
+            span_start: midnight + chrono::Duration::seconds(40),
+            span_end: midnight + chrono::Duration::seconds(45),
+        }
     );
     assert!(!tracker.is_active(user_id));
 }
 
+/// Two stretches with a gap between them are reported as two spans: the
+/// flush credits a span's whole wall clock, so the gap must not be inside
+/// one.
 #[test]
-fn online_time_folds_reconnections_into_one_span_with_the_gap_left_out() {
+fn online_time_reports_each_stretch_of_presence_as_its_own_span() {
     let tracker = OnlineTimeTracker::default();
     let user_id = Uuid::from_u128(11);
     let start = at(2, 12, 0);
@@ -310,13 +325,20 @@ fn online_time_folds_reconnections_into_one_span_with_the_gap_left_out() {
         .expect("two completed intervals");
     assert_eq!(
         batch.batch.increments,
-        vec![OnlineTimeIncrement {
-            user_id,
-            month_start: september,
-            span_start: start,
-            span_end: start + chrono::Duration::seconds(25),
-            milliseconds: 15_000,
-        }]
+        vec![
+            OnlineTimeIncrement {
+                user_id,
+                month_start: september,
+                span_start: start,
+                span_end: start + chrono::Duration::seconds(10),
+            },
+            OnlineTimeIncrement {
+                user_id,
+                month_start: september,
+                span_start: start + chrono::Duration::seconds(20),
+                span_end: start + chrono::Duration::seconds(25),
+            },
+        ]
     );
 }
 

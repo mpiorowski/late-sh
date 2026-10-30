@@ -38,7 +38,6 @@ fn online(
         month_start,
         span_start: start,
         span_end: start + Duration::milliseconds(milliseconds),
-        milliseconds,
     }
 }
 
@@ -157,6 +156,7 @@ async fn the_award_announcement_is_claimed_once_per_month() {
     apply_online_time_batch(
         &mut client,
         uuid::Uuid::now_v7(),
+        Utc::now(),
         &[online(
             holder.id,
             last_month,
@@ -225,6 +225,7 @@ async fn late_time_first_place_gets_the_badge_once_per_month() {
     apply_online_time_batch(
         &mut client,
         uuid::Uuid::now_v7(),
+        Utc::now(),
         &[
             online(leader.id, last_month, at(0), hours(40)),
             online(runner_up.id, last_month, at(0), hours(30)),
@@ -242,6 +243,7 @@ async fn late_time_first_place_gets_the_badge_once_per_month() {
     apply_online_time_batch(
         &mut client,
         uuid::Uuid::now_v7(),
+        Utc::now(),
         &[online(runner_up.id, last_month, at(140), hours(20))],
     )
     .await

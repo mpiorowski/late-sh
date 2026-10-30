@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
-use anyhow::Result;
-use chrono::{DateTime, NaiveDate, Utc};
+use anyhow::{Context, Result};
+use chrono::{DateTime, Duration, NaiveDate, Utc};
+use serde::{Deserialize, Serialize};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -382,36 +383,106 @@ pub struct MonthYearWindows {
     pub yearly: Vec<RankedEntry>,
 }
 
-/// One user's presence on one process inside one UTC month since the last
-/// checkpoint: the wall-clock span it covers and the milliseconds present
-/// inside it (fewer than the span when the user left and came back within
-/// it). A batch can carry more than one month when it checkpoints sessions
-/// spanning a month boundary.
+/// One stretch of a user's presence on one process: the wall-clock span the
+/// user was connected throughout, in the UTC month it began. A batch can
+/// carry a user more than once: a reconnect inside one checkpoint, or
+/// sessions spanning a month boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OnlineTimeIncrement {
     pub user_id: Uuid,
     pub month_start: NaiveDate,
     pub span_start: DateTime<Utc>,
     pub span_end: DateTime<Utc>,
-    pub milliseconds: i64,
 }
 
-/// What an increment still earns when the user's time is already counted up
-/// to `counted_until`, by this process or another pod: the present
-/// milliseconds, capped at the wall clock left in the span past the mark.
-/// Credits can then never add up to more than the wall clock, however many
-/// pods report the same moment. A gapped span that straddles the mark may
-/// earn less than it was present for; the board errs low, never high.
-pub fn online_time_credit(
-    increment: &OnlineTimeIncrement,
-    counted_until: Option<DateTime<Utc>>,
-) -> i64 {
-    let from = match counted_until {
-        Some(mark) if mark > increment.span_start => mark,
-        Some(_) | None => increment.span_start,
-    };
-    let uncounted = (increment.span_end - from).num_milliseconds().max(0);
-    increment.milliseconds.min(uncounted)
+/// A wall-clock span already credited to a user, as kept in
+/// `user_online_time.counted_spans`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CountedSpan {
+    pub start: DateTime<Utc>,
+    pub end: DateTime<Utc>,
+}
+
+/// One batch folded into the users' counted spans: the spans after the batch,
+/// and what the batch earned, all-time and per month. Users with no entry in
+/// the counted map (deleted since the batch was prepared) earn nothing.
+#[derive(Debug, PartialEq, Eq)]
+pub struct OnlineTimeFold {
+    pub counted: HashMap<Uuid, Vec<CountedSpan>>,
+    pub all_time: HashMap<Uuid, i64>,
+    pub monthly: HashMap<(Uuid, NaiveDate), i64>,
+}
+
+/// The credit rule of Late Time, in one place. Each increment earns the part
+/// of its span outside what is already counted, by this process or another
+/// pod, then joins the counted spans. Credits can therefore never add up to
+/// more than the wall clock, however many pods report the same moment and
+/// whichever order their batches land in; a resent batch earns nothing its
+/// first attempt committed. Counted spans ending before `keep_from` are
+/// dropped afterwards, which bounds the row: a batch older than that cannot
+/// be deduplicated any more.
+pub fn fold_online_time_credits(
+    mut counted: HashMap<Uuid, Vec<CountedSpan>>,
+    increments: &[OnlineTimeIncrement],
+    keep_from: DateTime<Utc>,
+) -> OnlineTimeFold {
+    let mut ordered: Vec<&OnlineTimeIncrement> = increments.iter().collect();
+    ordered.sort_unstable_by_key(|value| (value.user_id, value.span_start));
+    let mut all_time: HashMap<Uuid, i64> = HashMap::new();
+    let mut monthly: HashMap<(Uuid, NaiveDate), i64> = HashMap::new();
+    for increment in ordered {
+        let Some(spans) = counted.get_mut(&increment.user_id) else {
+            continue;
+        };
+        let span = CountedSpan {
+            start: increment.span_start,
+            end: increment.span_end,
+        };
+        let credit = uncounted_milliseconds(span, spans);
+        add_counted_span(spans, span);
+        *all_time.entry(increment.user_id).or_default() += credit;
+        if credit > 0 {
+            *monthly
+                .entry((increment.user_id, increment.month_start))
+                .or_default() += credit;
+        }
+    }
+    for spans in counted.values_mut() {
+        spans.retain(|span| span.end >= keep_from);
+    }
+    OnlineTimeFold {
+        counted,
+        all_time,
+        monthly,
+    }
+}
+
+/// The milliseconds of `span` outside `counted` (disjoint, in time order).
+fn uncounted_milliseconds(span: CountedSpan, counted: &[CountedSpan]) -> i64 {
+    let overlap: i64 = counted
+        .iter()
+        .map(|other| {
+            let start = span.start.max(other.start);
+            let end = span.end.min(other.end);
+            (end - start).num_milliseconds().max(0)
+        })
+        .sum();
+    (span.end - span.start).num_milliseconds().max(0) - overlap
+}
+
+/// Join `span` into `counted`, keeping it disjoint and in time order:
+/// overlapping and touching spans merge into one.
+fn add_counted_span(counted: &mut Vec<CountedSpan>, span: CountedSpan) {
+    counted.push(span);
+    counted.sort_unstable_by_key(|span| span.start);
+    let mut merged: Vec<CountedSpan> = Vec::with_capacity(counted.len());
+    for span in counted.drain(..) {
+        match merged.last_mut() {
+            Some(last) if span.start <= last.end => last.end = last.end.max(span.end),
+            Some(_) | None => merged.push(span),
+        }
+    }
+    *counted = merged;
 }
 
 /// The uniform board triple of one roguelike door, over `door_runs` (and,
@@ -1128,16 +1199,18 @@ pub async fn total_online_milliseconds(client: &Client, user_id: Uuid) -> Result
 
 /// Adds one process checkpoint of connected time for every user, in one
 /// transaction that locks each user's all-time row and credits only what lies
-/// past its `counted_until` mark (`online_time_credit`). Two pods holding
+/// outside its counted spans (`fold_online_time_credits`). Two pods holding
 /// sessions for one user (a deploy's draining pod beside the new one) both
 /// report the same minutes; whichever lands second earns only what the first
 /// did not cover. The same rule makes an uncertain retry of a batch earn
-/// nothing the first attempt committed. `flush_id` is stamped on the rows
-/// written, for tracing a row to its batch. Returns the live users written;
-/// deleted users are skipped.
+/// nothing the first attempt committed. `now` bounds the counted spans each
+/// row keeps (the last day). `flush_id` is stamped on the rows written, for
+/// tracing a row to its batch. Returns the live users written; deleted users
+/// are skipped.
 pub async fn apply_online_time_batch(
     client: &mut Client,
     flush_id: Uuid,
+    now: DateTime<Utc>,
     increments: &[OnlineTimeIncrement],
 ) -> Result<u64> {
     if increments.is_empty() {
@@ -1152,8 +1225,8 @@ pub async fn apply_online_time_batch(
     // Every live user gets a row to lock; a deleted user has none and is
     // skipped. Sorted, so two pods flushing the same users lock in one order.
     tx.execute(
-        "INSERT INTO user_online_time (user_id, total_milliseconds, last_flush_id)
-         SELECT u.id, 0, $2
+        "INSERT INTO user_online_time (user_id, total_milliseconds, last_flush_id, counted_spans)
+         SELECT u.id, 0, $2, '[]'::jsonb
          FROM users u
          WHERE u.id = ANY($1)
          ORDER BY u.id
@@ -1163,7 +1236,7 @@ pub async fn apply_online_time_batch(
     .await?;
     let rows = tx
         .query(
-            "SELECT user_id, counted_until
+            "SELECT user_id, counted_spans
              FROM user_online_time
              WHERE user_id = ANY($1)
              ORDER BY user_id
@@ -1171,57 +1244,40 @@ pub async fn apply_online_time_batch(
             &[&user_ids],
         )
         .await?;
-    let mut marks: HashMap<Uuid, Option<DateTime<Utc>>> = rows
-        .iter()
-        .map(|row| (row.get("user_id"), row.get("counted_until")))
-        .collect();
-
-    // Each user's spans in time order, so one batch holding a user twice
-    // (a month boundary, a reconnect) moves the mark forward as it goes.
-    let mut ordered: Vec<&OnlineTimeIncrement> = increments.iter().collect();
-    ordered.sort_unstable_by_key(|value| (value.user_id, value.span_start));
-    let mut all_time: HashMap<Uuid, i64> = HashMap::new();
-    let mut monthly: HashMap<(Uuid, NaiveDate), i64> = HashMap::new();
-    for increment in ordered {
-        let Some(mark) = marks.get_mut(&increment.user_id) else {
-            continue;
-        };
-        let credit = online_time_credit(increment, *mark);
-        *mark = Some(match *mark {
-            Some(counted) if counted > increment.span_end => counted,
-            Some(_) | None => increment.span_end,
-        });
-        *all_time.entry(increment.user_id).or_default() += credit;
-        if credit > 0 {
-            *monthly
-                .entry((increment.user_id, increment.month_start))
-                .or_default() += credit;
-        }
+    let mut counted: HashMap<Uuid, Vec<CountedSpan>> = HashMap::with_capacity(rows.len());
+    for row in &rows {
+        let user_id: Uuid = row.get("user_id");
+        let spans: serde_json::Value = row.get("counted_spans");
+        let spans: Vec<CountedSpan> = serde_json::from_value(spans)
+            .with_context(|| format!("counted spans of user {user_id}"))?;
+        counted.insert(user_id, spans);
     }
 
-    let (mark_user_ids, mark_values): (Vec<Uuid>, Vec<DateTime<Utc>>) = marks
-        .iter()
-        .filter_map(|(user_id, mark)| mark.map(|mark| (*user_id, mark)))
-        .unzip();
-    let credits: Vec<i64> = mark_user_ids
-        .iter()
-        .map(|user_id| all_time.get(user_id).copied().unwrap_or(0))
-        .collect();
+    let fold = fold_online_time_credits(counted, increments, now - Duration::days(1));
+
+    let mut written_user_ids: Vec<Uuid> = fold.counted.keys().copied().collect();
+    written_user_ids.sort_unstable();
+    let mut credits: Vec<i64> = Vec::with_capacity(written_user_ids.len());
+    let mut counted_values: Vec<serde_json::Value> = Vec::with_capacity(written_user_ids.len());
+    for user_id in &written_user_ids {
+        credits.push(fold.all_time.get(user_id).copied().unwrap_or(0));
+        counted_values.push(serde_json::to_value(&fold.counted[user_id])?);
+    }
     let written = tx
         .execute(
             "UPDATE user_online_time AS t
              SET total_milliseconds = t.total_milliseconds + c.milliseconds,
-                 counted_until = c.counted_until,
+                 counted_spans = c.counted_spans,
                  last_flush_id = $4
-             FROM unnest($1::uuid[], $2::bigint[], $3::timestamptz[])
-                 AS c(user_id, milliseconds, counted_until)
+             FROM unnest($1::uuid[], $2::bigint[], $3::jsonb[])
+                 AS c(user_id, milliseconds, counted_spans)
              WHERE t.user_id = c.user_id",
-            &[&mark_user_ids, &credits, &mark_values, &flush_id],
+            &[&written_user_ids, &credits, &counted_values, &flush_id],
         )
         .await?;
 
     let (month_keys, month_credits): (Vec<(Uuid, NaiveDate)>, Vec<i64>) =
-        monthly.into_iter().unzip();
+        fold.monthly.into_iter().unzip();
     let (month_user_ids, month_starts): (Vec<Uuid>, Vec<NaiveDate>) =
         month_keys.into_iter().unzip();
     tx.execute(

@@ -79,29 +79,29 @@ stops it, so overlapping sessions for one user on one process count once.
 Ghost users never enter this path.
 
 The accumulator keeps wall-clock spans: each closed or checkpointed interval
-folds into the user's pending span for the UTC month it began in (the span it
-covers, and the milliseconds present inside it). It checkpoints on the same
+is one span of presence, in the UTC month it began. It checkpoints on the same
 five-minute timer as the leaderboard, performs no DB work on
-connect/disconnect, and hands every changed user to `apply_online_time_batch`
+connect/disconnect, and hands every span to `apply_online_time_batch`
 (`late-core/src/models/leaderboard.rs`) in one transaction; no pending time
 means no transaction. Shutdown performs a final serialized flush.
 
 Every pod counts its own sessions, and a deploy keeps the old pod's sessions
 up for hours (the 6 h grace) beside the new pod's, so two pods report the same
 minutes for one user. The flush dedupes in the database: it locks the user's
-`user_online_time` row and credits only what lies past its `counted_until`
-mark (`online_time_credit`), then moves the mark to the span's end. Whichever
-pod lands second earns only what the first did not cover, so a user's credited
-time never exceeds the wall clock. A gapped span (the user left and came back
-inside one checkpoint) that straddles the mark may earn less than it was
-present for: the board errs low, never high. The same rule makes an uncertain
-retry idempotent: a resent batch earns nothing its first attempt committed.
+`user_online_time` row, credits only the part of each span outside the row's
+`counted_spans` (`fold_online_time_credits`, the pure rule), then joins the
+span into them. Whichever pod lands second earns only what the first did not
+cover, in whatever order the batches arrive: the old pod's last minutes still
+count when they land after the new pod's first. A user's credited time never
+exceeds the wall clock, and a resent batch earns nothing its first attempt
+committed. Counted spans are kept for a day and merged when they touch, so a
+row holds a handful; a batch older than a day is past deduplication.
 
-Tracking starts with migrations 142-143, the mark with 274; neither has an
-invented backfill, and the totals counted before 274 keep the old overlap
-overcount. The regular checkpoint bounds month-boundary spill to five minutes
-while Postgres is healthy. A hard process crash can lose the current interval
-since the last checkpoint.
+Tracking starts with migrations 142-143, the counted spans with 274; neither
+has an invented backfill, and the totals counted before 274 keep the old
+overlap overcount. The regular checkpoint bounds month-boundary spill to five
+minutes while Postgres is healthy. A hard process crash can lose the current
+interval since the last checkpoint.
 
 ## Data model (roster-generated)
 

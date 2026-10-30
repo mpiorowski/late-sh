@@ -103,19 +103,12 @@ struct OnlineTimeState {
     /// `active_users` map owns connection ref-counting; this map only sees its
     /// zero-to-one and one-to-zero transitions.
     active_since: HashMap<Uuid, DateTime<Utc>>,
-    /// Closed intervals not yet flushed, folded per user and UTC month into
-    /// the span they cover and the time present inside it.
-    pending: HashMap<(Uuid, NaiveDate), PendingSpan>,
+    /// Closed intervals not yet flushed, one per stretch of presence, in
+    /// the UTC month it began.
+    pending: Vec<OnlineTimeIncrement>,
     /// Retained until Postgres confirms it. A retry resends the same spans,
-    /// which earn nothing the first attempt committed (`counted_until`).
+    /// which earn nothing the first attempt committed (`counted_spans`).
     in_flight: Option<OnlineTimeBatch>,
-}
-
-#[derive(Clone, Copy)]
-struct PendingSpan {
-    start: DateTime<Utc>,
-    end: DateTime<Utc>,
-    milliseconds: i64,
 }
 
 #[derive(Clone, Default)]
@@ -171,17 +164,7 @@ impl OnlineTimeTracker {
             add_interval(&mut state.pending, user_id, since, now);
         }
 
-        let pending = std::mem::take(&mut state.pending);
-        let mut increments: Vec<_> = pending
-            .into_iter()
-            .map(|((user_id, month_start), span)| OnlineTimeIncrement {
-                user_id,
-                month_start,
-                span_start: span.start,
-                span_end: span.end,
-                milliseconds: span.milliseconds,
-            })
-            .collect();
+        let mut increments = std::mem::take(&mut state.pending);
         if increments.is_empty() {
             return None;
         }
@@ -225,33 +208,25 @@ fn month_start_of(at: DateTime<Utc>) -> NaiveDate {
         .expect("every UTC month has a first day")
 }
 
-/// Fold the interval `since..now` into the user's pending span for the UTC
+/// Queue the interval `since..now` as one stretch of presence in the UTC
 /// month it began in, so a segment that crosses midnight at a month's end
 /// counts in the month it started (a checkpoint bounds that spill to one
 /// flush interval).
 fn add_interval(
-    pending: &mut HashMap<(Uuid, NaiveDate), PendingSpan>,
+    pending: &mut Vec<OnlineTimeIncrement>,
     user_id: Uuid,
     since: DateTime<Utc>,
     now: DateTime<Utc>,
 ) {
-    let milliseconds = (now - since).num_milliseconds();
-    if milliseconds <= 0 {
+    if now <= since {
         return;
     }
-    let month_start = month_start_of(since);
-    let span = pending.entry((user_id, month_start)).or_insert(PendingSpan {
-        start: since,
-        end: now,
-        milliseconds: 0,
+    pending.push(OnlineTimeIncrement {
+        user_id,
+        month_start: month_start_of(since),
+        span_start: since,
+        span_end: now,
     });
-    if since < span.start {
-        span.start = since;
-    }
-    if now > span.end {
-        span.end = now;
-    }
-    span.milliseconds = span.milliseconds.saturating_add(milliseconds);
 }
 
 /// What woke the refresh loop.
@@ -495,9 +470,9 @@ impl LeaderboardService {
         let milliseconds: i64 = batch
             .increments
             .iter()
-            .map(|value| value.milliseconds)
+            .map(|value| (value.span_end - value.span_start).num_milliseconds())
             .sum();
-        apply_online_time_batch(client, batch.id, &batch.increments).await?;
+        apply_online_time_batch(client, batch.id, Utc::now(), &batch.increments).await?;
         self.online_time.acknowledge(batch.id);
         tracing::debug!(rows, milliseconds, "flushed online time");
         Ok(())
