@@ -904,10 +904,15 @@ pub struct App {
     pub(crate) away_watches: Vec<crate::app::door::spectate::state::State>,
     pub(crate) live_games: crate::app::door::spectate::svc::LiveGamesService,
     /// This player's ties to the watch-chat rooms of their own running games,
-    /// one per watchable door with a game running, held while it runs and the
-    /// `show_watch_chat` setting is on (`door::spectate::chat`): the rooms
+    /// one per watchable door with a game running, held while it runs and
+    /// `own_watch_chat_shown` is on (`door::spectate::chat`): the rooms
     /// behind the read-only pane beside each game.
     pub(crate) own_watch_chats: Vec<crate::app::door::spectate::state::ChatLink>,
+    /// Whether this player sees their watchers' chat beside their own
+    /// running games, flipped with F4 in game (`door::spectate::input`).
+    /// For the session only, shown by default, one switch for every door;
+    /// off hides it from the player, the watchers keep talking.
+    pub(crate) own_watch_chat_shown: bool,
     /// The pane beside this player's own running game, as the last frame
     /// drew it (`None` after a frame with the one-row form, or no chat):
     /// where a click opens their composer (`door::spectate::input`).
@@ -1974,6 +1979,7 @@ impl App {
             away_watches: Vec::new(),
             live_games: config.live_games,
             own_watch_chats: Vec::new(),
+            own_watch_chat_shown: true,
             own_chat_hit: std::cell::Cell::new(None),
             brogue_state: None,
             brogue_term: config.term.clone(),
@@ -3190,11 +3196,19 @@ impl App {
             state.forward_input(data);
             return;
         }
-        // The player's own watch chat (`door/spectate`): while its composer
+        // The player's own watch chat (`door/spectate`): F4 in their running
+        // game shows or hides it, composer open or not. While its composer
         // is open the keys are the composer's, not the running game's (Enter
         // sends and hands them back, Esc discards), and F2 or a click on the
         // pane opens it. Only where the last frame drew the pane: the one-row
         // form stays read-only, and there F2 is the game's.
+        if let Some(game) = crate::app::door::spectate::state::SpectateGame::of_screen(self.screen)
+            && crate::app::door::spectate::input::is_f4(data)
+            && crate::app::door::spectate::chat::own_running_handle(self, game).is_some()
+        {
+            crate::app::door::spectate::input::toggle_own_chat(self);
+            return;
+        }
         if let Some(game) = crate::app::door::spectate::state::SpectateGame::of_screen(self.screen)
             && let Some(room_id) = self.own_watch_chat_room_id(game)
         {

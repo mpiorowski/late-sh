@@ -884,7 +884,7 @@ fn the_road_shows_the_sleeper_at_the_crossing_and_the_answer_owed() {
         "{owed}"
     );
     assert!(
-        owed.contains("owed an answer: tomas is on the wire, 45 bits to take. no ration. even"),
+        owed.contains("owed an answer: tomas is up, 45 bits to take. no ration. even"),
         "{owed}"
     );
     assert!(owed.contains("[r] answer tomas"), "{owed}");
@@ -903,7 +903,7 @@ fn the_road_shows_the_sleeper_at_the_crossing_and_the_answer_owed() {
         },
     );
     assert!(
-        off.contains("tomas is off the wire. it keeps two days."),
+        off.contains("tomas has gone dark. it keeps two days."),
         "{off}"
     );
     assert!(!off.contains("[r]"), "{off}");

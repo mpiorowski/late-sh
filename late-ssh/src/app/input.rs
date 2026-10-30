@@ -160,6 +160,10 @@ pub enum ParsedInput {
     /// Alt+K samples the Artboard colour under the cursor.
     AltK,
     Paste(Vec<u8>),
+    /// F4 (SS3 `ESC O S`, CSI `ESC [ 14 ~`): show or hide the chat beside a
+    /// game, Realm's board here and the watchable doors' own pane (which
+    /// read it off raw input, `door::spectate::input::is_f4`).
+    F4,
     PageUp,
     PageDown,
     End,
@@ -346,6 +350,10 @@ impl Perform for VtCollector {
                     self.events.push(ParsedInput::Home);
                     return;
                 }
+                'S' => {
+                    self.events.push(ParsedInput::F4);
+                    return;
+                }
                 _ => {}
             }
         }
@@ -434,6 +442,7 @@ impl Perform for VtCollector {
             // PageUp / PageDown / End (numeric form: CSI n ~). rxvt/linux
             // console encode End as 4~; xterm uses 8~. Home is parsed below
             // for text inputs and surfaces that opt into it.
+            '~' if p0 == Some(14) => self.events.push(ParsedInput::F4),
             '~' if p0 == Some(5) => self.events.push(ParsedInput::PageUp),
             '~' if p0 == Some(6) => self.events.push(ParsedInput::PageDown),
             '~' if p0 == Some(4) || p0 == Some(8) => self.events.push(ParsedInput::End),
@@ -1095,6 +1104,8 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
             }
         }
         ParsedInput::AltA | ParsedInput::AltC | ParsedInput::AltK => {}
+        // Realm's own handler takes F4 (above); nothing else binds it.
+        ParsedInput::F4 => {}
         // Mouse events feed global hit tests first, then vertical wheel
         // fallback for screens that scroll outside richer local handlers.
         ParsedInput::Mouse(mouse) => {

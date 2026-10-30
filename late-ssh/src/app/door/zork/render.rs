@@ -54,13 +54,7 @@ fn slot_line(label: &str, slot: Option<&Slot>) -> Line<'static> {
         Style::default().fg(theme::TEXT_DIM()),
     )
 }
-pub fn draw_landing(
-    frame: &mut Frame,
-    area: Rect,
-    enabled: bool,
-    show_watch_chat: bool,
-    scroll: u16,
-) -> u16 {
+pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool, scroll: u16) -> u16 {
     let mut lines = vec![Line::raw("")];
     lines.extend(zork_logo());
     lines.extend([
@@ -98,7 +92,7 @@ pub fn draw_landing(
         Line::raw("You play under your arcade name, and anyone can watch live from the Games hub."),
         Line::raw("Watchers suggest a command by starting a chat line with >. F3 types it at"),
         Line::raw("your empty prompt; Enter sends it, as if you had typed it yourself."),
-        crate::app::door::landing::watch_chat_hint(show_watch_chat),
+        crate::app::door::landing::watch_chat_hint(),
     ]);
     crate::app::door::landing::render_scrolled(
         frame,

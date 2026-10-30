@@ -51,17 +51,10 @@ pub fn action(marker: &str, key: &str, label: &str, color: Color) -> Line<'stati
     ])
 }
 
-/// The watchable doors' `t` line: whether this player sees their watchers'
-/// chat beside their own running game.
-pub fn watch_chat_hint(show_watch_chat: bool) -> Line<'static> {
-    hint(
-        "t",
-        match show_watch_chat {
-            true => "watcher chat beside your game: shown",
-            false => "watcher chat beside your game: hidden",
-        },
-        8,
-    )
+/// The watchable doors' F4 line: how this player shows or hides their
+/// watchers' chat beside their own running game.
+pub fn watch_chat_hint() -> Line<'static> {
+    hint("F4", "in game: show or hide watcher chat beside you", 8)
 }
 
 /// A `key  label` hint row. `pad` sizes the key column to the landing's longest

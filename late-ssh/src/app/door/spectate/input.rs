@@ -12,11 +12,12 @@
 // (`dispatch_escape`). While the composer is open no key reaches this
 // handler at all (the composer gate in `app/input.rs`).
 //
-// The player's own pane, beside their running game, has two inputs of its
-// own, read ahead of the game's passthrough in `App::handle_input`: F2 or a
-// click on the pane (`wants_own_chat`) opens the chat composer in their
-// watchers' room. From there the composer owns the keys until Enter sends
-// or Esc discards, and the game has them again.
+// The player's own pane, beside their running game, has its inputs read
+// ahead of the game's passthrough in `App::handle_input`: F4 (`is_f4`) shows
+// or hides it (`toggle_own_chat`), and F2 or a click on the pane
+// (`wants_own_chat`) opens the chat composer in their watchers' room. From
+// there the composer owns the keys until Enter sends or Esc discards, and
+// the game has them again.
 
 use ratatui::layout::Rect;
 use uuid::Uuid;
@@ -24,6 +25,7 @@ use uuid::Uuid;
 use super::state::{LiveGameKey, WatchMode};
 use super::ui::{ChatDock, chat_dock};
 use crate::app::chat::input as chat_input;
+use crate::app::common::primitives::Banner;
 use crate::app::input::{MouseEventKind, ParsedInput};
 use crate::app::state::App;
 
@@ -147,6 +149,26 @@ pub fn open_live_game(app: &mut App, key: LiveGameKey) -> bool {
     app.open_watch();
     app.set_screen(crate::app::common::primitives::Screen::Games);
     true
+}
+
+/// F4 in both encodings a terminal sends it (SS3 `ESC O S`, CSI
+/// `ESC [ 14 ~`), matched as a whole input chunk like F2. None of the
+/// watchable doors binds it (F1 is the roguelikes' help remap, F3 Zork's
+/// suggestion).
+pub fn is_f4(data: &[u8]) -> bool {
+    data == b"\x1bOS" || data == b"\x1b[14~"
+}
+
+/// F4 in a running game: show or hide the watchers' chat beside it, for
+/// this session. Hiding drops the room links (`chat::tick`), so an open
+/// composer closes with them.
+pub fn toggle_own_chat(app: &mut App) {
+    app.own_watch_chat_shown ^= true;
+    let message = match app.own_watch_chat_shown {
+        true => "Watcher chat shown beside your game.",
+        false => "Watcher chat hidden; F4 brings it back. Your watchers can still talk.",
+    };
+    app.banner = Some(Banner::success(message));
 }
 
 /// F2 in both encodings a terminal sends it (SS3 `ESC O Q`, CSI

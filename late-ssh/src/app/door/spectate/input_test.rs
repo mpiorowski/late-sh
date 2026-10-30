@@ -1,6 +1,6 @@
 use ratatui::layout::Rect;
 
-use super::{is_f2, wants_own_chat};
+use super::{is_f2, is_f4, wants_own_chat};
 
 #[test]
 fn f2_matches_both_encodings() {
@@ -8,6 +8,14 @@ fn f2_matches_both_encodings() {
     assert!(is_f2(b"\x1b[12~"));
     assert!(!is_f2(b"\x1bOP"), "F1 stays the game's help key");
     assert!(!is_f2(b"Q"));
+}
+
+#[test]
+fn f4_matches_both_encodings() {
+    assert!(is_f4(b"\x1bOS"));
+    assert!(is_f4(b"\x1b[14~"));
+    assert!(!is_f4(b"\x1bOR"), "F3 stays Zork's suggestion key");
+    assert!(!is_f4(b"S"));
 }
 
 /// A left press inside the pane asks for the composer; presses outside it,

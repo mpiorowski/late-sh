@@ -242,8 +242,8 @@ struct DrawContext<'a> {
     /// door's screen. `None` until this session is in the room.
     watch_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
     /// Whether this player's running game makes room for watcher chat (the
-    /// `show_watch_chat` setting), and the newest line for the one-row form
-    /// of it.
+    /// session's F4 switch, `App::own_watch_chat_shown`), and the newest
+    /// line for the one-row form of it.
     show_watch_chat: bool,
     own_watch_line: Option<crate::app::door::spectate::chat::WatchLine>,
     /// The watcher suggestion waiting beside this player's own Zork game.
@@ -1749,7 +1749,7 @@ impl App {
                         own_watchers,
                         held_watchers,
                         watch_chat_view,
-                        show_watch_chat: self.profile_state.profile().show_watch_chat,
+                        show_watch_chat: self.own_watch_chat_shown,
                         own_watch_line,
                         own_suggestion,
                         greendragon_state: self.greendragon_state.as_ref(),
@@ -2342,7 +2342,6 @@ impl App {
                         live: &ctx.live_rows,
                         live_selected,
                         watching: ctx.spectate_state.is_some(),
-                        show_watch_chat: ctx.show_watch_chat,
                         rc_modal: ctx.door_rc_modal.map(|(game, content)| {
                             crate::app::door::hub::ui::RcModalView { game, content }
                         }),

@@ -23,7 +23,7 @@ pub fn draw_page(frame: &mut Frame, area: Rect, state: &State) {
 /// `landing::handle_launch_block`).
 fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
     if !state.is_enabled() {
-        draw_landing(frame, area, false, false, false, 0);
+        draw_landing(frame, area, false, false, 0);
         return;
     }
     let launch = landing::handle_launch_block(
@@ -37,17 +37,10 @@ fn draw_launcher(frame: &mut Frame, area: Rect, state: &State) {
 /// NetHack landing copy with the classic one-line Launch block, used by the
 /// Games hub when NetHack is selected. `live` marks a detached game in
 /// progress this session, which turns the launch line into a resume line.
-/// The player's own `t` switch for seeing watcher chat beside their game
+/// The F4 hint for showing or hiding watcher chat beside their game
 /// closes the Launch block; who is playing right now is the hub rail's
 /// `live` section, not this page.
-pub fn draw_landing(
-    frame: &mut Frame,
-    area: Rect,
-    enabled: bool,
-    live: bool,
-    show_watch_chat: bool,
-    scroll: u16,
-) -> u16 {
+pub fn draw_landing(frame: &mut Frame, area: Rect, enabled: bool, live: bool, scroll: u16) -> u16 {
     let action_line = if live {
         landing::action(
             ">",
@@ -64,7 +57,7 @@ pub fn draw_landing(
         ))
     };
     let watch_chat = if enabled {
-        vec![landing::watch_chat_hint(show_watch_chat)]
+        vec![landing::watch_chat_hint()]
     } else {
         Vec::new()
     };

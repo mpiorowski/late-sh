@@ -40,6 +40,12 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
             true
         }
         ParsedInput::Mouse(mouse) => handle_mouse(app, mouse),
+        // The same key shows or hides the chat beside a watchable door's
+        // game (`door::spectate::input::toggle_own_chat`).
+        ParsedInput::F4 if app.realm.board.is_some() => {
+            toggle_chat(app);
+            true
+        }
         _ => false,
     }
 }
@@ -317,7 +323,7 @@ fn handle_chat_key(app: &mut App, byte: u8) -> bool {
     to_chat && crate::app::chat::input::handle_message_action_in_room(app, room_id, byte)
 }
 
-/// `c`: put the chat up in place of the rail, or away again.
+/// `c` or F4: put the chat up in place of the rail, or away again.
 fn toggle_chat(app: &mut App) {
     if app.realm.chat_room_id().is_none() {
         app.banner = Some(crate::app::common::primitives::Banner::info(

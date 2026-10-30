@@ -11,8 +11,9 @@
 //   run and feed the read-only pane beside the game on screen (one line
 //   under it on a narrow terminal). The player reads, and answers from the
 //   pane: F2 or a click there opens the room's composer, the one time keys
-//   leave the game (`App::handle_input`). The `show_watch_chat` profile
-//   setting turns their side off; the watchers keep talking either way.
+//   leave the game (`App::handle_input`). F4 in game turns their side off
+//   and on (`App::own_watch_chat_shown`); the watchers keep talking either
+//   way.
 //
 // `tick` drives both links from `App::tick`.
 
@@ -48,8 +49,8 @@ pub fn tick(app: &mut App) -> bool {
     }
 
     // The player's own links follow their running games: one made when a
-    // game starts (or the setting comes on), dropped when it ends (or the
-    // setting goes off).
+    // game starts (or F4 shows the chat), dropped when it ends (or F4 hides
+    // it).
     let wanted = own_games(app);
     let (kept, dropped): (Vec<ChatLink>, Vec<ChatLink>) = std::mem::take(&mut app.own_watch_chats)
         .into_iter()
@@ -60,8 +61,8 @@ pub fn tick(app: &mut App) -> bool {
         });
     app.own_watch_chats = kept;
     changed |= !dropped.is_empty();
-    // A composer open in a dropped link's room (the game ended, or `t`
-    // turned the pane off) has nowhere left to send: it closes with the link.
+    // A composer open in a dropped link's room (the game ended, or F4
+    // hid the pane) has nowhere left to send: it closes with the link.
     for link in dropped {
         if let Some(room_id) = link.room_id()
             && app.chat.composer_room_id() == Some(room_id)
@@ -88,7 +89,7 @@ pub fn tick(app: &mut App) -> bool {
 
 /// The running games this session's player should see watcher chat beside.
 fn own_games(app: &App) -> Vec<(SpectateGame, String)> {
-    match app.profile_state.profile().show_watch_chat {
+    match app.own_watch_chat_shown {
         true => own_running_games(app),
         false => Vec::new(),
     }

@@ -425,6 +425,15 @@ fn vt_parser_parses_end_ss3_form() {
     assert_eq!(parser.feed(b"\x1bOF"), vec![ParsedInput::End]);
 }
 
+/// F4 in both forms is the chat toggle, never a stray `S` typed into the
+/// page.
+#[test]
+fn vt_parser_parses_f4_forms() {
+    let mut parser = VtInputParser::default();
+    assert_eq!(parser.feed(b"\x1bOS"), vec![ParsedInput::F4]);
+    assert_eq!(parser.feed(b"\x1b[14~"), vec![ParsedInput::F4]);
+}
+
 #[test]
 fn vt_parser_parses_home_forms() {
     let mut parser = VtInputParser::default();

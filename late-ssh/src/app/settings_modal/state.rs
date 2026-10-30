@@ -2771,7 +2771,6 @@ impl SettingsModalState {
             paper_at_login: draft.paper_at_login,
             auto_restart: draft.auto_restart,
             screensaver: draft.screensaver,
-            show_watch_chat: draft.show_watch_chat,
             artboard_disclaimer: draft.artboard_disclaimer,
             terminal_images: draft.terminal_images,
             hidden_award_categories: draft.hidden_award_categories.clone(),

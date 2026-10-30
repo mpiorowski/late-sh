@@ -2802,7 +2802,7 @@ fn an_answer_spends_nothing_and_is_refused_down_waiting_or_with_nobody_to_answer
     assert_eq!(off.applied, Applied::Refused(Refusal::NotOnTheWire));
     assert_eq!(
         off.lines,
-        vec!["they are off the wire. the answer keeps.".to_string()]
+        vec!["they have gone dark. the answer keeps.".to_string()]
     );
 
     // No ration needed: the day can be spent.

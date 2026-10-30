@@ -54,7 +54,6 @@ Usurper's menus, `S` save in the roguelikes).
 | `Enter` | Launch the card, written down as a door opened (below); on a live row, open the watch |
 | `Ctrl+J`/`Ctrl+K`, `Ctrl+Down`/`Ctrl+Up` | Scroll the selected landing (`Enter` matches CR only, since `Ctrl+J` is a bare LF) |
 | `d` | Reset the Green Dragon or A Dark Room save, after confirmation (Lateania resets from its own landing) |
-| `t` | On a watchable door's card: show or hide your watchers' chat beside your own game |
 | `c` | On NetHack or DCSS: the per-account config paste box (`.nethackrc` / `init.txt`) |
 | `Esc` | From a live row back to the cards |
 

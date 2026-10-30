@@ -1283,10 +1283,10 @@ fn lookout_lines(lookout: &Lookout, picker: &Picker) -> (Vec<Line<'static>>, Vec
                     Span::styled(
                         match prey.stake {
                             0 => format!(
-                                "owed an answer: {them} is on the wire, nothing to take. no ration. "
+                                "owed an answer: {them} is up, nothing to take. no ration. "
                             ),
                             n => format!(
-                                "owed an answer: {them} is on the wire, {n} bits to take. no ration. "
+                                "owed an answer: {them} is up, {n} bits to take. no ration. "
                             ),
                         },
                         dim_text,
@@ -1303,9 +1303,7 @@ fn lookout_lines(lookout: &Lookout, picker: &Picker) -> (Vec<Line<'static>>, Vec
                 lines.push(Line::from(vec![
                     Span::styled("    ", text),
                     Span::styled(
-                        format!(
-                            "you are owed an answer. {them} is off the wire. it keeps two days."
-                        ),
+                        format!("you are owed an answer. {them} has gone dark. it keeps two days."),
                         dim_text,
                     ),
                 ]));
@@ -1723,7 +1721,7 @@ fn node_lines(
                 ]),
                 Line::from(vec![
                     Span::styled("      ", text),
-                    Span::styled("is off the wire, or could not answer you back.", muted),
+                    Span::styled("has gone dark, or could not answer you back.", muted),
                 ]),
             ],
         },

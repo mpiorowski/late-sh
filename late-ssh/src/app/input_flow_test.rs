@@ -5282,6 +5282,75 @@ async fn f2_or_a_click_on_the_pane_lets_a_player_write_to_their_watchers() {
     );
 }
 
+/// F4 in a running game hides the watchers' chat beside it, an open
+/// composer closing with it, and F4 again brings it back: the game gets the
+/// whole screen meanwhile, and the key never reaches the game.
+#[tokio::test]
+async fn f4_hides_and_shows_the_watcher_chat_beside_a_running_game() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::door::spectate::state::SpectateGame;
+    use late_core::models::chat_room::{ChatRoom, WatchDoor};
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "own-chat-f4").await;
+    let client = test_db.db.get().await.expect("db client");
+    let room = ChatRoom::get_or_create_watch_room(&client, WatchDoor::Nethack, "tester")
+        .await
+        .expect("the player's watch room");
+    ChatRoomMember::join(&client, room.id, user.id)
+        .await
+        .expect("join the watch room");
+    let mut app = make_app(test_db.db.clone(), user.id, "own-chat-f4-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_app(&mut app, "the room list", |app| {
+        app.chat.room_by_id(room.id).is_some()
+    })
+    .await;
+    app.live_games
+        .publish_chat_room_for_tests(SpectateGame::Nethack, "tester", room.id);
+
+    // A running game under a claimed handle. Nothing awaits from here on, as
+    // in the F2 flow above: the fabricated proxy would end the game.
+    app.set_screen(Screen::Games);
+    app.enter_nethack();
+    let state = app.nethack_state.as_mut().expect("nethack state");
+    state.force_claimed_handle_for_test("tester");
+    state.force_running_for_test();
+    app.set_screen(Screen::Nethack);
+    app.tick();
+    assert_eq!(
+        app.own_watch_chat_room_id(SpectateGame::Nethack),
+        Some(room.id)
+    );
+    let plain = render_plain(&mut app);
+    assert!(plain.contains("Compose (F2 or click)"), "{plain}");
+    app.handle_input(b"\x1bOQ");
+    assert!(app.chat.is_composing(), "F2 opens the composer");
+
+    app.handle_input(b"\x1bOS");
+    app.tick();
+    assert!(
+        !app.chat.is_composing(),
+        "hiding the chat closes its composer"
+    );
+    assert_eq!(app.own_watch_chat_room_id(SpectateGame::Nethack), None);
+    let plain = render_plain(&mut app);
+    assert_eq!(app.own_chat_hit.get(), None, "no pane while hidden");
+    assert!(!plain.contains("Compose (F2 or click)"), "{plain}");
+    assert_eq!(app.screen, Screen::Nethack, "still in the game");
+
+    app.handle_input(b"\x1b[14~");
+    app.tick();
+    assert_eq!(
+        app.own_watch_chat_room_id(SpectateGame::Nethack),
+        Some(room.id),
+        "F4 again brings the room back"
+    );
+    let plain = render_plain(&mut app);
+    assert!(plain.contains("Compose (F2 or click)"), "{plain}");
+}
+
 /// Zork's player writes to their watchers the same way: F2 opens the
 /// composer in their own room, typing and Enter are the composer's, and Esc
 /// hands the keys back to the story.

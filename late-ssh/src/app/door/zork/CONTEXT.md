@@ -60,8 +60,8 @@ edition when the claim lands, so one Enter still starts the game, and a New
 confirmed for one edition never starts on another the player browsed to
 meanwhile. `play` carries the handle and the host lists
 the game under it. The player's watcher pane sits beside the game only while
-the game is on screen, never beside the menus, under the same
-`show_watch_chat` setting the `t` key on the Zork card flips.
+the game is on screen, never beside the menus, and F4 shows or hides it
+as on the roguelikes.
 
 Watchers suggest a command by starting a watch-chat line with `>`
 (`>open mailbox`). The watch chat's header says how from each side
@@ -77,8 +77,8 @@ a lone `>`), so the letters never land in a half-typed command, a pagination
 wait, the SAVE editor or the RESTORE confirmation. A command is printable
 ASCII only, whitespace collapsed, at most 60 characters; once typed it is
 not offered again, and an older one does not take its place. Frotz ignores
-function keys at a V3 prompt, so F3 (and the watch chat's F2) cost the story
-nothing.
+function keys at a V3 prompt, so F3 (and the watch chat's F2 and F4) cost
+the story nothing.
 
 ## Module map
 

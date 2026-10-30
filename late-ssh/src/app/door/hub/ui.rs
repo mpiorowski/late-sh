@@ -69,9 +69,6 @@ pub struct HubView<'a> {
     /// This session previews a live game: no card is selected, and the
     /// landing pane is left to the preview (`watch_pane_area`).
     pub watching: bool,
-    /// The `show_watch_chat` setting, shown (and flipped with `t`) on the
-    /// watchable doors' landings.
-    pub show_watch_chat: bool,
     /// The rc config modal, drawn over the hub while open.
     pub rc_modal: Option<RcModalView<'a>>,
     /// What Night City's landing reads. Only drawn when it is on the roster.
@@ -342,7 +339,6 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
             body[1],
             view.nethack_enabled,
             view.nethack_live,
-            view.show_watch_chat,
             scroll,
         ),
         HubGame::Dcss => crate::app::door::dcss::render::draw_landing(
@@ -350,7 +346,6 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
             body[1],
             view.dcss_enabled,
             view.dcss_live,
-            view.show_watch_chat,
             scroll,
         ),
         HubGame::Brogue => crate::app::door::brogue::render::draw_landing(
@@ -358,7 +353,6 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
             body[1],
             view.brogue_enabled,
             view.brogue_live,
-            view.show_watch_chat,
             scroll,
         ),
         HubGame::Usurper => crate::app::door::usurper::render::draw_landing(
@@ -391,13 +385,9 @@ pub fn draw_games_hub(frame: &mut Frame, area: Rect, view: &HubView<'_>) {
             view.delete_confirm,
             scroll,
         ),
-        HubGame::Zork => crate::app::door::zork::render::draw_landing(
-            frame,
-            body[1],
-            view.zork_enabled,
-            view.show_watch_chat,
-            scroll,
-        ),
+        HubGame::Zork => {
+            crate::app::door::zork::render::draw_landing(frame, body[1], view.zork_enabled, scroll)
+        }
         HubGame::Codekeep => crate::app::door::codekeep::render::draw_landing(
             frame,
             body[1],
