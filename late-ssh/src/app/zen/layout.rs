@@ -3,8 +3,76 @@
 
 use ratatui::layout::Rect;
 
-use super::state::{BorderKind, Dir, Look, Node, TileKind};
+use super::state::{BorderKind, Dir, Look, Node, Share, TileKind};
 use crate::app::pet::ui::{Neighbours, WatchSide};
+
+/// The cells between siblings: `row` between the children of a row split
+/// (side by side), `col` between those of a column split (stacked).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Gaps {
+    pub row: u16,
+    pub col: u16,
+}
+
+impl Gaps {
+    pub fn uniform(gap: u16) -> Self {
+        Self { row: gap, col: gap }
+    }
+
+    pub fn along(self, dir: Dir) -> u16 {
+        match dir {
+            Dir::Row => self.row,
+            Dir::Column => self.col,
+        }
+    }
+}
+
+/// What a tile wears. Zen boxes every tile in its look; Home draws rules:
+/// a `── title ──` row on top of a tile that has a title, a column of air
+/// on each side, and the gutters between columns painted as one line.
+/// In arrange mode every tile wears a title, so the focus has a ring to
+/// land on; outside it the page's chat and the rail draw their own chrome.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Chrome {
+    Boxed(Look),
+    Rules { arrange: bool },
+}
+
+impl Chrome {
+    /// Whether a tile of `kind` wears a title row under this chrome;
+    /// `page_chat` marks the page's chat of the moment (Home's card).
+    pub fn titled(&self, kind: TileKind, page_chat: bool) -> bool {
+        match self {
+            Chrome::Boxed(look) => look.titles,
+            Chrome::Rules { arrange } => *arrange || !bare_under_rules(kind, page_chat),
+        }
+    }
+}
+
+/// The tiles that draw their own chrome on Home (the rail's hints, the
+/// card's ticker and composer), so a title rule is only arrange mode's.
+fn bare_under_rules(kind: TileKind, page_chat: bool) -> bool {
+    match kind {
+        TileKind::Chat => page_chat,
+        TileKind::Rooms | TileKind::Presence => true,
+        TileKind::Bonsai
+        | TileKind::Aquarium
+        | TileKind::Tank
+        | TileKind::Ascii
+        | TileKind::Pet
+        | TileKind::Music
+        | TileKind::Clock
+        | TileKind::Visualizer
+        | TileKind::Lobby
+        | TileKind::Activity
+        | TileKind::Friends
+        | TileKind::Pulse
+        | TileKind::Inbox
+        | TileKind::Headlines
+        | TileKind::Live
+        | TileKind::Blank => false,
+    }
+}
 
 /// The pet box at its smallest: its three art rows.
 pub const FLOOR_ROWS: u16 = crate::app::pet::ui::PET_BOX_MIN_ROWS;
@@ -50,11 +118,11 @@ pub fn rice_areas(area: Rect, status_row: bool) -> (Rect, Option<Rect>) {
 pub fn tile_rects(
     root: &Node,
     area: Rect,
-    gap: u16,
+    gaps: Gaps,
     zoomed: Option<usize>,
 ) -> Vec<(TileKind, Rect)> {
     let mut out = Vec::with_capacity(root.leaf_count());
-    collect_rects(root, area, gap, &mut out);
+    collect_rects(root, area, gaps, &mut out);
     match zoomed {
         Some(ordinal) => match out.get(ordinal) {
             Some((kind, _)) => vec![(*kind, area)],
@@ -64,7 +132,7 @@ pub fn tile_rects(
     }
 }
 
-fn collect_rects(node: &Node, area: Rect, gap: u16, out: &mut Vec<(TileKind, Rect)>) {
+fn collect_rects(node: &Node, area: Rect, gaps: Gaps, out: &mut Vec<(TileKind, Rect)>) {
     match node {
         Node::Leaf { kind, .. } => out.push((*kind, area)),
         Node::Split {
@@ -73,25 +141,57 @@ fn collect_rects(node: &Node, area: Rect, gap: u16, out: &mut Vec<(TileKind, Rec
             first,
             second,
         } => {
-            let (a, b) = split_rect(area, *dir, *share, gap);
-            collect_rects(first, a, gap, out);
-            collect_rects(second, b, gap, out);
+            let (a, b) = split_rect(area, *dir, *share, gaps);
+            collect_rects(first, a, gaps, out);
+            collect_rects(second, b, gaps, out);
         }
     }
 }
 
+/// The gutters of every row split, in tree order: the column between two
+/// side-by-side children, full height of the split. Empty when the row
+/// gap is zero. The rules chrome paints a line down each.
+pub fn row_gutters(root: &Node, area: Rect, gaps: Gaps) -> Vec<Rect> {
+    let mut out = Vec::new();
+    collect_gutters(root, area, gaps, &mut out);
+    out
+}
+
+fn collect_gutters(node: &Node, area: Rect, gaps: Gaps, out: &mut Vec<Rect>) {
+    let Node::Split {
+        dir,
+        share,
+        first,
+        second,
+    } = node
+    else {
+        return;
+    };
+    let (a, b) = split_rect(area, *dir, *share, gaps);
+    if *dir == Dir::Row && gaps.row > 0 && b.x > a.right() {
+        out.push(Rect::new(a.right(), area.y, b.x - a.right(), area.height));
+    }
+    collect_gutters(first, a, gaps, out);
+    collect_gutters(second, b, gaps, out);
+}
+
 /// The cells a split can hand out along its direction: its length minus the
 /// gap between the two children.
-pub fn usable_len(area: Rect, dir: Dir, gap: u16) -> u16 {
+pub fn usable_len(area: Rect, dir: Dir, gaps: Gaps) -> u16 {
     match dir {
-        Dir::Row => area.width.saturating_sub(gap),
-        Dir::Column => area.height.saturating_sub(gap),
+        Dir::Row => area.width.saturating_sub(gaps.row),
+        Dir::Column => area.height.saturating_sub(gaps.col),
     }
 }
 
-/// How many of `usable` cells the first child gets for a per-mille `share`.
-pub fn first_len(usable: u16, share: u16) -> u16 {
-    (usable as u32 * share as u32 / 1000) as u16
+/// How many of `usable` cells the first child gets: its per-mille share,
+/// or the fixed count of whichever child holds one.
+pub fn first_len(usable: u16, share: Share) -> u16 {
+    match share {
+        Share::Mille(share) => (usable as u32 * share as u32 / 1000) as u16,
+        Share::First { first } => first.min(usable),
+        Share::Second { second } => usable.saturating_sub(second),
+    }
 }
 
 /// The per-mille share that lays out exactly `target` first-child cells out
@@ -105,7 +205,8 @@ pub fn share_for(usable: u16, target: u16) -> u16 {
     (target as u32 * 1000).div_ceil(usable as u32) as u16
 }
 
-pub fn split_rect(area: Rect, dir: Dir, share: u16, gap: u16) -> (Rect, Rect) {
+pub fn split_rect(area: Rect, dir: Dir, share: Share, gaps: Gaps) -> (Rect, Rect) {
+    let gap = gaps.along(dir);
     match dir {
         Dir::Row => {
             let usable = area.width.saturating_sub(gap);
@@ -138,48 +239,63 @@ pub fn split_rect(area: Rect, dir: Dir, share: u16, gap: u16) -> (Rect, Rect) {
     }
 }
 
-/// The area left inside a tile once its chrome is drawn: a border takes one
-/// cell on every side, a bare title takes the top row, nothing else.
-pub fn tile_inner(rect: Rect, look: &Look) -> Rect {
-    match look.border {
-        BorderKind::None => {
-            if look.titles {
-                Rect::new(
-                    rect.x,
-                    rect.y + 1.min(rect.height),
-                    rect.width,
-                    rect.height.saturating_sub(1),
-                )
-            } else {
-                rect
+/// The area left inside a tile of `kind` once its chrome is drawn. Boxed:
+/// a border takes one cell on every side, a bare title takes the top row,
+/// nothing else. Rules: a title takes the top row, and every tile but
+/// the page's chat and the rail (which keep their own insets) gives up a
+/// column on each side.
+pub fn tile_inner(rect: Rect, chrome: &Chrome, kind: TileKind, page_chat: bool) -> Rect {
+    let titled = chrome.titled(kind, page_chat);
+    match chrome {
+        Chrome::Boxed(look) => match look.border {
+            BorderKind::None => {
+                if titled {
+                    Rect::new(
+                        rect.x,
+                        rect.y + 1.min(rect.height),
+                        rect.width,
+                        rect.height.saturating_sub(1),
+                    )
+                } else {
+                    rect
+                }
             }
+            _ => Rect::new(
+                rect.x + 1.min(rect.width),
+                rect.y + 1.min(rect.height),
+                rect.width.saturating_sub(2),
+                rect.height.saturating_sub(2),
+            ),
+        },
+        Chrome::Rules { .. } => {
+            let top = if titled { 1.min(rect.height) } else { 0 };
+            let (x, width) = match (kind, page_chat) {
+                (TileKind::Chat, true) | (TileKind::Rooms, _) => (rect.x, rect.width),
+                _ => (rect.x + 1.min(rect.width), rect.width.saturating_sub(2)),
+            };
+            Rect::new(x, rect.y + top, width, rect.height.saturating_sub(top))
         }
-        _ => Rect::new(
-            rect.x + 1.min(rect.width),
-            rect.y + 1.min(rect.height),
-            rect.width.saturating_sub(2),
-            rect.height.saturating_sub(2),
-        ),
     }
 }
 
 /// Which side of `from` the tile `to` sits against, if the two share an
-/// edge: touching across exactly the layout gap, and overlapping along that
-/// edge. Tiles that only meet at a corner, or with another tile between
-/// them, are not neighbours.
-pub fn neighbour_side(from: Rect, to: Rect, gap: u16) -> Option<WatchSide> {
+/// edge: touching across exactly the layout gap (the row gap for a side,
+/// the column gap above and below), and overlapping along that edge.
+/// Tiles that only meet at a corner, or with another tile between them,
+/// are not neighbours.
+pub fn neighbour_side(from: Rect, to: Rect, gaps: Gaps) -> Option<WatchSide> {
     let rows_overlap = to.y < from.bottom() && from.y < to.bottom();
     let cols_overlap = to.x < from.right() && from.x < to.right();
-    if rows_overlap && to.x == from.right() + gap {
+    if rows_overlap && to.x == from.right() + gaps.row {
         return Some(WatchSide::Right);
     }
-    if rows_overlap && from.x == to.right() + gap {
+    if rows_overlap && from.x == to.right() + gaps.row {
         return Some(WatchSide::Left);
     }
-    if cols_overlap && to.y == from.bottom() + gap {
+    if cols_overlap && to.y == from.bottom() + gaps.col {
         return Some(WatchSide::Below);
     }
-    if cols_overlap && from.y == to.bottom() + gap {
+    if cols_overlap && from.y == to.bottom() + gaps.col {
         return Some(WatchSide::Above);
     }
     None
@@ -188,19 +304,21 @@ pub fn neighbour_side(from: Rect, to: Rect, gap: u16) -> Option<WatchSide> {
 /// Where the pet's tile sees a tank and a bonsai tile, among `rects` as
 /// `tile_rects` returns them. No pet tile, or no tank or bonsai sharing an
 /// edge with it, leaves that side empty.
-pub fn pet_neighbours(rects: &[(TileKind, Rect)], gap: u16) -> Neighbours {
+pub fn pet_neighbours(rects: &[(TileKind, Rect)], gaps: Gaps) -> Neighbours {
     match rects.iter().find(|(kind, _)| *kind == TileKind::Pet) {
         None => Neighbours::default(),
         Some((_, pet_rect)) => {
-            let side_of = |want: TileKind| {
+            let side_of = |want: &[TileKind]| {
                 rects
                     .iter()
-                    .filter(|(kind, _)| *kind == want)
-                    .find_map(|(_, other)| neighbour_side(*pet_rect, *other, gap))
+                    .filter(|(kind, _)| want.contains(kind))
+                    .find_map(|(_, other)| neighbour_side(*pet_rect, *other, gaps))
             };
+            // The reef and the small tank are the one tank: the pet
+            // watches either.
             Neighbours {
-                tank: side_of(TileKind::Aquarium),
-                bonsai: side_of(TileKind::Bonsai),
+                tank: side_of(&[TileKind::Aquarium, TileKind::Tank]),
+                bonsai: side_of(&[TileKind::Bonsai]),
             }
         }
     }

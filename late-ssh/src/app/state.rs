@@ -415,6 +415,9 @@ pub struct SessionConfig {
     pub presence: crate::app::presence::svc::PresenceService,
     /// The stored Rice layout (`app/zen`), `None` until first edited.
     pub zen_layout: Option<serde_json::Value>,
+    /// The stored Home layout (`app/zen`, the Home page), `None` until
+    /// first arranged.
+    pub home_layout: Option<serde_json::Value>,
     /// Fingerprint of the SSH key this session authenticated with: the only
     /// device identity late.sh has, and what per-device settings key off.
     /// `None` for sessions with no key of their own (ghost bots, tests), which
@@ -569,6 +572,12 @@ pub struct App {
     pub(crate) aquarium_service: hub::aquarium::svc::AquariumService,
     /// Zen (`Ctrl+F`): the tiling layout and its focus.
     pub(crate) zen: crate::app::zen::state::ZenState,
+    /// Home as a tile tree (`app/zen`, `RicePage::Home`): the stock Home
+    /// until arranged (`Ctrl+E`).
+    pub(crate) home: crate::app::zen::state::ZenState,
+    /// Whether the account ever arranged Home: a stock page follows the
+    /// sidebar list in Settings, an arranged one is its own.
+    pub(crate) home_edited: bool,
     /// Where `Ctrl+F` was pressed, so the chord hands the page back; cleared
     /// whenever Zen is left, and `None` on a session that landed on Zen.
     pub(crate) zen_return_screen: Option<Screen>,
@@ -580,6 +589,8 @@ pub struct App {
     /// one-hertz edge and on leaving the page, so a held resize key costs
     /// one row update rather than one per key repeat.
     pub(crate) zen_layout_dirty: bool,
+    /// The same for Home's layout.
+    pub(crate) home_layout_dirty: bool,
     pub(crate) mod_modal_state: mod_modal::state::ModModalState,
     pub(crate) pending_escape: bool,
     pub(crate) pending_escape_started_at: Option<Instant>,
@@ -1226,28 +1237,6 @@ impl App {
         device_rails_or_profile(self.device_rails, self.profile_state.profile())
     }
 
-    /// Cycle this device through the rail layouts: both rails, room list
-    /// hidden, sidebar hidden, both hidden, then `Auto` (terminal width
-    /// decides). Persists onto the SSH key, never onto the account, so the
-    /// other device's layout is untouched. Returns the new modes for the banner.
-    pub(crate) fn cycle_device_rails(&mut self) -> (RoomListMode, RightSidebarMode) {
-        const CYCLE: [(RoomListMode, RightSidebarMode); 5] = [
-            (RoomListMode::On, RightSidebarMode::On),
-            (RoomListMode::Off, RightSidebarMode::On),
-            (RoomListMode::On, RightSidebarMode::Off),
-            (RoomListMode::Off, RightSidebarMode::Off),
-            (RoomListMode::Auto, RightSidebarMode::Auto),
-        ];
-        let current = self.rail_modes();
-        let idx = CYCLE
-            .iter()
-            .position(|modes| *modes == current)
-            .unwrap_or(0);
-        let next = CYCLE[(idx + 1) % CYCLE.len()];
-        self.set_device_rails(next);
-        next
-    }
-
     /// Adopt the two rail rows from the settings-modal draft as this device's
     /// layout. A no-op when they already match, so unrelated tweaks in the same
     /// modal do not write to the key.
@@ -1287,7 +1276,8 @@ impl App {
 
     fn current_visible_chat_room_id(&self) -> Option<Uuid> {
         match self.screen {
-            Screen::Dashboard => self.chat.selected_room_id,
+            // Home: a focused chat tile's room, else the center's selection.
+            Screen::Dashboard => self.zen_chat_room_id(),
             // The clubhouse pins the embedded chat to #lounge.
             Screen::Clubhouse => self.chat.lounge_room_id(),
             // The bar out back reads and writes its own hidden room.
@@ -1322,6 +1312,7 @@ impl App {
     }
 
     pub(crate) fn sync_visible_chat_room(&mut self) {
+        self.steer_active_chat_from_rail();
         let visible_room_id = self.current_visible_chat_room_id();
         let changed = self.chat.visible_room_id() != visible_room_id;
         self.chat.set_visible_room_id(visible_room_id);
@@ -1742,6 +1733,22 @@ impl App {
             zen: crate::app::zen::state::ZenState::new(
                 crate::app::zen::state::RiceLayout::from_json(config.zen_layout.as_ref()),
             ),
+            home: {
+                let stock = crate::app::zen::state::RiceLayout::home(
+                    &initial_profile.right_sidebar_components,
+                    shop_state.entitlements().has_pet_companion(),
+                    shop_state.entitlements().has_aquarium(),
+                );
+                crate::app::zen::state::ZenState::for_page(
+                    crate::app::zen::state::RicePage::Home,
+                    crate::app::zen::state::RiceLayout::from_json_or(
+                        config.home_layout.as_ref(),
+                        stock.clone(),
+                    ),
+                    stock,
+                )
+            },
+            home_edited: config.home_layout.is_some(),
             zen_return_screen: None,
             workspace_base: match landing {
                 LandingPage::Zen => crate::app::workspace::cycle::WorkspaceBase::Zen { back: None },
@@ -1750,6 +1757,7 @@ impl App {
                 }
             },
             zen_layout_dirty: false,
+            home_layout_dirty: false,
             mod_modal_state: mod_modal::state::ModModalState::new(),
             pending_escape: false,
             pending_escape_started_at: None,
@@ -2895,9 +2903,27 @@ impl App {
             self.zen.leave();
             self.zen_return_screen = None;
         }
+        // Leaving Home the same way: the layout written, arrange mode and
+        // its pickers closed, the ascii tiles' playback dropped.
+        if screen_changed && self.screen == Screen::Dashboard {
+            self.flush_home_layout();
+            self.home.arrange = false;
+            self.home.close_kind_picker();
+            self.home.close_guest_picker();
+            self.home.leave();
+        }
         self.screen = screen;
         if screen == Screen::Zen {
             self.zen.enter(Instant::now(), &mut rand::thread_rng());
+        }
+        if screen == Screen::Dashboard {
+            self.home.note_opened();
+            self.home.enter(Instant::now(), &mut rand::thread_rng());
+        }
+        // A rice page opens on its active chat tile's room: the rail
+        // follows the page, never the other way round on arrival.
+        if self.on_rice_page() {
+            self.sync_rail_to_active_chat();
         }
         // The aquarium sim is sized for whichever surface shows it next.
         self.sync_aquarium_bounds();
@@ -3555,16 +3581,166 @@ impl App {
     /// room the composer, the message keys, the mouse, and the read marking
     /// act on.
     pub(crate) fn zen_chat_room_id(&self) -> Option<Uuid> {
-        match self.zen.active_chat_index() {
+        // Home's active chat tile shows the rail's synthetic entries
+        // (Mentions, News, feeds): no room then, as Home has always read it.
+        if self.rice().page == crate::app::zen::state::RicePage::Home
+            && self.chat.synthetic_entry_selected()
+        {
+            return None;
+        }
+        match self.rice().active_chat_index() {
             Some(index) => self.zen_chat_rooms()[index],
+            None if self.rice().page == crate::app::zen::state::RicePage::Home => {
+                self.chat.selected_room_id
+            }
             None => self.zen_current_room_id(),
         }
+    }
+
+    /// The rice page the current screen draws: Home's tree on Home, Zen's
+    /// everywhere else (Zen itself, and the pages Zen's keys never reach).
+    pub(crate) fn rice(&self) -> &crate::app::zen::state::ZenState {
+        match self.screen {
+            Screen::Dashboard => &self.home,
+            _ => &self.zen,
+        }
+    }
+
+    pub(crate) fn rice_mut(&mut self) -> &mut crate::app::zen::state::ZenState {
+        match self.screen {
+            Screen::Dashboard => &mut self.home,
+            _ => &mut self.zen,
+        }
+    }
+
+    /// Whether the current screen is a rice page.
+    pub(crate) fn on_rice_page(&self) -> bool {
+        matches!(self.screen, Screen::Dashboard | Screen::Zen)
+    }
+
+    /// The area the current rice page lays its tiles out on: the whole
+    /// terminal less the status row on Zen, the frame's content area on
+    /// Home. The renderer, the clicks and the reef's bounds all read it.
+    pub(crate) fn rice_tiles_area(&self) -> Rect {
+        use crate::app::zen::layout as zen_layout;
+        match self.screen {
+            Screen::Dashboard => self.content_area(),
+            _ => {
+                let (cols, rows) = self.size;
+                let full = Rect::new(0, 0, cols, rows);
+                zen_layout::rice_areas(full, zen_layout::rice_row(full, self.zen.zoomed)).0
+            }
+        }
+    }
+
+    /// Every tile's rect on the current rice page, in layout order (the
+    /// zoomed tile alone while one is), with the chrome's inner rect.
+    pub(crate) fn rice_tile_rects(&self) -> Vec<(crate::app::zen::state::TileKind, Rect, Rect)> {
+        use crate::app::zen::layout as zen_layout;
+        let rice = self.rice();
+        let area = self.rice_tiles_area();
+        let zoomed = rice.zoomed_tile(area.width);
+        let chrome = rice.chrome();
+        zen_layout::tile_rects(&rice.rice.root, area, rice.gaps(), zoomed)
+            .into_iter()
+            .enumerate()
+            .map(|(idx, (kind, rect))| {
+                let page_chat = self.screen == Screen::Dashboard
+                    && rice.active_chat_ordinal() == Some(zoomed.unwrap_or(idx));
+                let inner = match zoomed {
+                    Some(_) => rect,
+                    None => zen_layout::tile_inner(rect, &chrome, kind, page_chat),
+                };
+                (kind, rect, inner)
+            })
+            .collect()
+    }
+
+    /// Whether Home's now strip shows this frame: the center hosts it and
+    /// the #lounge card is up (the strip is the lounge's), or furniture
+    /// hosts it, where it shows whatever the room.
+    pub(crate) fn home_strip_hosted(&self) -> bool {
+        use crate::app::zen::state::Guest;
+        self.screen == Screen::Dashboard
+            && self.home.draws_guest(Guest::Now)
+            && (!self.home.active_chat_hosts(Guest::Now) || self.lounge_card_shown())
+    }
+
+    /// The rail follows the active chat tile: the focus landing on a
+    /// chat tile bound to a room makes that room Home's selection. A tile
+    /// bound to no room shows the rail's room and moves nothing.
+    pub(crate) fn sync_rail_to_active_chat(&mut self) {
+        let Some(Some(room_id)) = self.rice().active_chat_room() else {
+            return;
+        };
+        if !self.chat.rooms.iter().any(|(room, _)| room.id == room_id) {
+            return;
+        }
+        if self.chat.selected_room_id == Some(room_id) && !self.chat.synthetic_entry_selected() {
+            return;
+        }
+        if self
+            .chat
+            .select_room_slot(crate::app::chat::state::RoomSlot::Room(room_id))
+        {
+            self.chat.reset_composer();
+            self.chat.request_list();
+        }
+    }
+
+    /// The active chat tile follows the rail: a tile bound to a room is
+    /// rebound when the rail moves to another real room (a layout edit,
+    /// saved). The synthetic entries (Mentions, News, feeds) are views
+    /// the active tile shows, never bindings, so they move nothing; nor
+    /// does a tile bound to no room, which shows the rail's room as is.
+    fn steer_active_chat_from_rail(&mut self) {
+        if !self.on_rice_page() || self.chat.synthetic_entry_selected() {
+            return;
+        }
+        let Some(selected) = self.chat.selected_room_id else {
+            return;
+        };
+        let Some(Some(bound)) = self.rice().active_chat_room() else {
+            return;
+        };
+        if bound == selected {
+            return;
+        }
+        if self.rice_mut().bind_active_chat_room(Some(selected)) {
+            self.mark_zen_layout_dirty();
+        }
+    }
+
+    /// A tile that just became a chat is pinned to the room of the moment,
+    /// so it keeps it when the rail moves on; and so is every chat tile
+    /// bound to no room, since a page with two chats has nothing left for
+    /// a tile that follows the rail to show but the other tile's room.
+    pub(crate) fn pin_chat_tiles_on_pick(&mut self) {
+        if self.rice().focused_kind() != Some(crate::app::zen::state::TileKind::Chat) {
+            return;
+        }
+        let Some(room_id) = self.zen_current_room_id() else {
+            return;
+        };
+        self.rice_mut().pin_unbound_chats(room_id);
+    }
+
+    /// Keep Home's stock layout in step with the account: the sidebar
+    /// list in Settings and the companions it owns. An arranged Home
+    /// keeps its own tree and only its `R` reset follows.
+    pub(crate) fn sync_home_stock(&mut self) {
+        let stock = crate::app::zen::state::RiceLayout::home(
+            &self.profile_state.profile().right_sidebar_components,
+            self.shop_state.entitlements().has_pet_companion(),
+            self.shop_state.entitlements().has_aquarium(),
+        );
+        self.home.set_stock(stock, self.home_edited);
     }
 
     /// Every chat tile's room in layout order, resolved: a tile bound to a
     /// room the account has since left shows the current room instead.
     pub(crate) fn zen_chat_rooms(&self) -> Vec<Option<Uuid>> {
-        self.zen
+        self.rice()
             .chat_tiles()
             .into_iter()
             .map(|(_, bound)| self.zen_room_or_current(bound))
@@ -3603,33 +3779,29 @@ impl App {
     }
 
     /// The rect the aquarium simulation should fill on the current screen:
-    /// the tank tile's inner rect on Zen (the whole page, zoomed), the
-    /// launch band elsewhere.
+    /// the first reef-form tank tile's inner rect on a rice page (the
+    /// whole page, zoomed; a sidebar-sized tank tile draws the small tank
+    /// and binds nothing), the launch band elsewhere.
     fn aquarium_area_for_screen(&self) -> Rect {
-        use crate::app::zen::{layout as zen_layout, state::TileKind};
         let (cols, rows) = self.size;
-        let full = Rect::new(0, 0, cols, rows);
-        match self.screen {
-            Screen::Zen => {
-                let (tiles, _) =
-                    zen_layout::rice_areas(full, zen_layout::rice_row(full, self.zen.zoomed));
-                let zoomed = self.zen.zoomed.then_some(self.zen.focus);
-                zen_layout::tile_rects(
-                    &self.zen.rice.root,
-                    tiles,
-                    self.zen.rice.look.gap as u16,
-                    zoomed,
-                )
-                .into_iter()
-                .find(|(kind, _)| *kind == TileKind::Aquarium)
-                .map(|(_, rect)| match zoomed {
-                    Some(_) => rect,
-                    None => zen_layout::tile_inner(rect, &self.zen.rice.look),
-                })
-                .unwrap_or_else(|| aquarium_area_for_terminal(cols, rows))
-            }
-            _ => aquarium_area_for_terminal(cols, rows),
+        match self.reef_tile_inner() {
+            Some(inner) => inner,
+            None => aquarium_area_for_terminal(cols, rows),
         }
+    }
+
+    /// The inner rect of the first aquarium tile drawn in the reef form on
+    /// the current rice page, if any.
+    pub(crate) fn reef_tile_inner(&self) -> Option<Rect> {
+        use crate::app::zen::state::TileKind;
+        if !self.on_rice_page() {
+            return None;
+        }
+        self.rice_tile_rects()
+            .into_iter()
+            .filter(|(kind, _, _)| *kind == TileKind::Aquarium)
+            .map(|(_, _, inner)| inner)
+            .find(|inner| crate::app::zen::ui::reef_form(*inner))
     }
 
     /// Put the owned population back in the water after the care state
@@ -3648,10 +3820,16 @@ impl App {
         self.aquarium_state.handle_resize(area.width, area.height);
     }
 
-    /// Note a Zen layout edit. The write itself is debounced: see
-    /// `flush_zen_layout`.
+    /// Note a layout edit on the current rice page. The write itself is
+    /// debounced: see `flush_rice_layouts`.
     pub(crate) fn mark_zen_layout_dirty(&mut self) {
-        self.zen_layout_dirty = true;
+        match self.screen {
+            Screen::Dashboard => {
+                self.home_layout_dirty = true;
+                self.home_edited = true;
+            }
+            _ => self.zen_layout_dirty = true,
+        }
     }
 
     /// Write the Zen layout if an edit is pending (fire-and-forget). Called
@@ -3664,6 +3842,23 @@ impl App {
         self.profile_state
             .service()
             .set_zen_layout(self.user_id, self.zen.rice.to_json());
+    }
+
+    /// Write Home's layout if an edit is pending, the same way.
+    pub(crate) fn flush_home_layout(&mut self) {
+        if !self.home_layout_dirty {
+            return;
+        }
+        self.home_layout_dirty = false;
+        self.profile_state
+            .service()
+            .set_home_layout(self.user_id, self.home.rice.to_json());
+    }
+
+    /// Both pages' pending writes.
+    pub(crate) fn flush_rice_layouts(&mut self) {
+        self.flush_zen_layout();
+        self.flush_home_layout();
     }
 
     /// Open the profile modal for a user, closing the sheet modal that shares

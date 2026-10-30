@@ -10,18 +10,28 @@ use ratatui::layout::Rect;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::layout;
+use super::layout::{self, Gaps};
 use crate::app::ascii::playback::Playback;
+use late_core::models::user::{RightSidebarComponent, RightSidebarComponentSetting};
 
 /// What a tile shows. Closed set: a new kind is a new arm in `ui.rs`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TileKind {
     Bonsai,
+    /// The reef: the whole simulation, bound to the tile.
     Aquarium,
+    /// The sidebar's small tank: the fish in a six-row band, whatever
+    /// the tile's size. The same tank two ways.
+    Tank,
     /// An animated ascii piece (`app/ascii`); `z` zooms it to a screensaver.
     Ascii,
     Pet,
+    /// A room's chat. The active one (the focused chat tile, else the
+    /// first) is the page's chat: the composer, the selection, the read
+    /// marking, and on Home the rail's selection, synthetic entries
+    /// included. Stored `center` layouts read as this kind.
+    #[serde(alias = "center")]
     Chat,
     Music,
     Clock,
@@ -29,9 +39,6 @@ pub enum TileKind {
     Lobby,
     Activity,
     Friends,
-    /// Stored layouts from before Pulse still name the retired presence
-    /// tile; they read as Pulse instead of resetting the whole page.
-    #[serde(alias = "presence")]
     Pulse,
     Inbox,
     Headlines,
@@ -39,11 +46,18 @@ pub enum TileKind {
     /// them.
     Live,
     Blank,
+    /// Home's room rail. One per page, Home only.
+    Rooms,
+    /// The sidebar's pinned rows: the online count and the clock, then
+    /// the connected friends.
+    Presence,
 }
 
 impl TileKind {
     /// Every kind, alphabetical by label: the tile picker's rows.
-    pub const ALL: [TileKind; 16] = [
+    /// The picker's rows: the kinds both pages take, by name, then the
+    /// Home only ones.
+    pub const ALL: [TileKind; 19] = [
         TileKind::Activity,
         TileKind::Aquarium,
         TileKind::Ascii,
@@ -58,14 +72,71 @@ impl TileKind {
         TileKind::Lobby,
         TileKind::Music,
         TileKind::Pet,
+        TileKind::Presence,
         TileKind::Pulse,
+        TileKind::Tank,
         TileKind::Visualizer,
+        TileKind::Rooms,
     ];
+
+    /// The kinds Home draws from its own render input (`chat_view`), and
+    /// Zen cannot: each is allowed once per page, on Home alone.
+    pub fn home_only(self) -> bool {
+        match self {
+            TileKind::Rooms => true,
+            TileKind::Bonsai
+            | TileKind::Aquarium
+            | TileKind::Tank
+            | TileKind::Ascii
+            | TileKind::Pet
+            | TileKind::Chat
+            | TileKind::Music
+            | TileKind::Clock
+            | TileKind::Visualizer
+            | TileKind::Lobby
+            | TileKind::Activity
+            | TileKind::Friends
+            | TileKind::Pulse
+            | TileKind::Inbox
+            | TileKind::Headlines
+            | TileKind::Live
+            | TileKind::Blank
+            | TileKind::Presence => false,
+        }
+    }
+
+    /// A tile that holds the keys: the chat you type in. Outside arrange
+    /// mode only these take the focus; everything else is furniture, drawn
+    /// and clicked for its one gesture, never focused.
+    pub fn takes_focus(self) -> bool {
+        match self {
+            TileKind::Chat => true,
+            TileKind::Bonsai
+            | TileKind::Aquarium
+            | TileKind::Tank
+            | TileKind::Ascii
+            | TileKind::Pet
+            | TileKind::Music
+            | TileKind::Clock
+            | TileKind::Visualizer
+            | TileKind::Lobby
+            | TileKind::Activity
+            | TileKind::Friends
+            | TileKind::Pulse
+            | TileKind::Inbox
+            | TileKind::Headlines
+            | TileKind::Live
+            | TileKind::Blank
+            | TileKind::Rooms
+            | TileKind::Presence => false,
+        }
+    }
 
     pub fn label(self) -> &'static str {
         match self {
             TileKind::Bonsai => "bonsai",
             TileKind::Aquarium => "aquarium",
+            TileKind::Tank => "tank",
             TileKind::Ascii => "ascii",
             TileKind::Pet => "pet",
             TileKind::Chat => "chat",
@@ -80,6 +151,48 @@ impl TileKind {
             TileKind::Headlines => "headlines",
             TileKind::Live => "live",
             TileKind::Blank => "blank",
+            TileKind::Rooms => "rooms",
+            TileKind::Presence => "presence",
+        }
+    }
+}
+
+/// A dynamic widget a static tile hosts: invisible while it has nothing,
+/// painted over the top of its host while it does, under its own rule.
+/// Each is on the page once, as a guest somewhere or not at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Guest {
+    /// The now strip (`app/live`): one thing just happened in the house.
+    Now,
+    /// The lobby panel, while a game waits on your move.
+    Lobby,
+    /// The Live panel, while something is joinable.
+    Live,
+    /// The board's all-day post for today.
+    Banner,
+}
+
+impl Guest {
+    /// Every guest, the guest picker's rows.
+    pub const ALL: [Guest; 4] = [Guest::Now, Guest::Lobby, Guest::Live, Guest::Banner];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Guest::Now => "now strip",
+            Guest::Lobby => "lobby",
+            Guest::Live => "live",
+            Guest::Banner => "banner",
+        }
+    }
+
+    /// When the picker says it shows.
+    pub fn when(self) -> &'static str {
+        match self {
+            Guest::Now => "something just happened",
+            Guest::Lobby => "a game waits on you",
+            Guest::Live => "something is on",
+            Guest::Banner => "the board has a day",
         }
     }
 }
@@ -103,14 +216,30 @@ impl Dir {
     }
 }
 
+/// How a split divides its length: the first child's share in per-mille,
+/// fine enough that one row or column of any split a terminal can hold is
+/// a distinct value (see `resize_leaf`), or a fixed cell count for one
+/// child, the way Home's rail and sidebar hold their width whatever the
+/// terminal does. Untagged, so a stored bare number reads as per-mille.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Share {
+    Mille(u16),
+    First { first: u16 },
+    Second { second: u16 },
+}
+
 /// The layout tree. Leaves are tiles; splits carry the direction and the
-/// first child's share in per-mille, fine enough that one row or column of
-/// any split a terminal can hold is a distinct value (see `resize_leaf`).
+/// share (`Share`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "node", rename_all = "snake_case")]
 pub enum Node {
     Leaf {
         kind: TileKind,
+        /// The dynamic widgets this tile hosts, painted over its top while
+        /// they have something to show, in this order. Empty for most.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        guests: Vec<Guest>,
         /// The room a chat tile is bound to; `None` (the stored default,
         /// and every layout saved before rooms were per tile) means the
         /// current room, Home's selection or #lounge. Other kinds ignore it.
@@ -130,7 +259,7 @@ pub enum Node {
     },
     Split {
         dir: Dir,
-        share: u16,
+        share: Share,
         first: Box<Node>,
         second: Box<Node>,
     },
@@ -170,6 +299,17 @@ impl Node {
     pub fn leaf(kind: TileKind) -> Self {
         Node::Leaf {
             kind,
+            guests: Vec::new(),
+            room: None,
+            piece: None,
+        }
+    }
+
+    /// A leaf hosting `guests`.
+    pub fn hosting(kind: TileKind, guests: &[Guest]) -> Self {
+        Node::Leaf {
+            kind,
+            guests: guests.to_vec(),
             room: None,
             piece: None,
         }
@@ -178,7 +318,27 @@ impl Node {
     pub fn split(dir: Dir, share: u16, first: Node, second: Node) -> Self {
         Node::Split {
             dir,
-            share: share.clamp(MIN_SHARE, MAX_SHARE),
+            share: Share::Mille(share.clamp(MIN_SHARE, MAX_SHARE)),
+            first: Box::new(first),
+            second: Box::new(second),
+        }
+    }
+
+    /// A split whose first child is `cells` long, the rest to the second.
+    pub fn split_first(dir: Dir, cells: u16, first: Node, second: Node) -> Self {
+        Node::Split {
+            dir,
+            share: Share::First { first: cells },
+            first: Box::new(first),
+            second: Box::new(second),
+        }
+    }
+
+    /// A split whose second child is `cells` long, the rest to the first.
+    pub fn split_second(dir: Dir, cells: u16, first: Node, second: Node) -> Self {
+        Node::Split {
+            dir,
+            share: Share::Second { second: cells },
             first: Box::new(first),
             second: Box::new(second),
         }
@@ -227,6 +387,61 @@ impl Node {
 
     pub fn kind_at(&self, ordinal: usize) -> Option<TileKind> {
         self.leaf_kinds().get(ordinal).copied()
+    }
+
+    /// Every leaf's guests in layout order, parallel to `leaf_kinds`.
+    pub fn leaf_guests(&self) -> Vec<Vec<Guest>> {
+        let mut out = Vec::with_capacity(self.leaf_count());
+        self.collect_guests(&mut out);
+        out
+    }
+
+    fn collect_guests(&self, out: &mut Vec<Vec<Guest>>) {
+        match self {
+            Node::Leaf { guests, .. } => out.push(guests.clone()),
+            Node::Split { first, second, .. } => {
+                first.collect_guests(out);
+                second.collect_guests(out);
+            }
+        }
+    }
+
+    /// The leaf hosting `guest`, if any: a guest is on the page once.
+    pub fn host_of(&self, guest: Guest) -> Option<usize> {
+        self.leaf_guests()
+            .iter()
+            .position(|guests| guests.contains(&guest))
+    }
+
+    /// Put `guest` on the leaf at `ordinal`, taking it off whichever leaf
+    /// held it; on its own host already, take it off instead. `false`
+    /// when `ordinal` is no leaf.
+    pub fn toggle_guest(&mut self, ordinal: usize, guest: Guest) -> bool {
+        let host = self.host_of(guest);
+        if host == Some(ordinal) {
+            let mut remaining = ordinal;
+            return match self.leaf_mut(&mut remaining) {
+                Some(Node::Leaf { guests, .. }) => {
+                    guests.retain(|g| *g != guest);
+                    true
+                }
+                _ => false,
+            };
+        }
+        if let Some(host) = host {
+            let mut remaining = host;
+            if let Some(Node::Leaf { guests, .. }) = self.leaf_mut(&mut remaining) {
+                guests.retain(|g| *g != guest);
+            }
+        }
+        let mut remaining = ordinal;
+        match self.leaf_mut(&mut remaining) {
+            Some(Node::Leaf { guests, .. }) => {
+                guests.push(guest);
+                true
+            }
+            _ => false,
+        }
     }
 
     /// The configured selection of the leaf at `ordinal`, when it is an ascii tile.
@@ -315,15 +530,22 @@ impl Node {
         let Some(leaf) = self.leaf_mut(&mut remaining) else {
             return false;
         };
-        let Node::Leaf { kind, room, piece } = *leaf else {
+        let Node::Leaf {
+            kind,
+            guests,
+            room,
+            piece,
+        } = leaf
+        else {
             return false;
         };
-        *leaf = Node::split(
-            dir,
-            500,
-            Node::Leaf { kind, room, piece },
-            Node::leaf(new_kind),
-        );
+        let kept = Node::Leaf {
+            kind: *kind,
+            guests: std::mem::take(guests),
+            room: *room,
+            piece: *piece,
+        };
+        *leaf = Node::split(dir, 500, kept, Node::leaf(new_kind));
         true
     }
 
@@ -333,7 +555,9 @@ impl Node {
     pub fn set_kind(&mut self, ordinal: usize, new_kind: TileKind) -> bool {
         let mut remaining = ordinal;
         match self.leaf_mut(&mut remaining) {
-            Some(Node::Leaf { kind, room, piece }) => {
+            Some(Node::Leaf {
+                kind, room, piece, ..
+            }) => {
                 *kind = new_kind;
                 if new_kind != TileKind::Chat {
                     *room = None;
@@ -401,10 +625,10 @@ impl Node {
         dir: Dir,
         delta_cells: i16,
         area: Rect,
-        gap: u16,
+        gaps: Gaps,
     ) -> bool {
         let mut remaining = ordinal;
-        self.resize_toward(&mut remaining, dir, delta_cells, area, gap)
+        self.resize_toward(&mut remaining, dir, delta_cells, area, gaps)
     }
 
     fn resize_toward(
@@ -413,7 +637,7 @@ impl Node {
         dir: Dir,
         delta_cells: i16,
         area: Rect,
-        gap: u16,
+        gaps: Gaps,
     ) -> bool {
         let Node::Split {
             dir: my_dir,
@@ -424,7 +648,7 @@ impl Node {
         else {
             return false;
         };
-        let (first_area, second_area) = layout::split_rect(area, *my_dir, *share, gap);
+        let (first_area, second_area) = layout::split_rect(area, *my_dir, *share, gaps);
         let first_count = first.leaf_count();
         let (child, child_area, is_first) = if *ordinal < first_count {
             (first, first_area, true)
@@ -433,19 +657,28 @@ impl Node {
             (second, second_area, false)
         };
         // Deeper first: the split nearest the tile is the one that moves.
-        if child.resize_toward(ordinal, dir, delta_cells, child_area, gap) {
+        if child.resize_toward(ordinal, dir, delta_cells, child_area, gaps) {
             return true;
         }
         if *my_dir != dir {
             return false;
         }
-        let usable = layout::usable_len(area, *my_dir, gap);
+        let usable = layout::usable_len(area, *my_dir, gaps);
         let signed = if is_first { delta_cells } else { -delta_cells };
         // A split too small for two floors splits what it has evenly.
         let floor = MIN_TILE_CELLS.min(usable / 2);
         let target = (layout::first_len(usable, *share) as i32 + signed as i32)
             .clamp(floor as i32, (usable - floor) as i32) as u16;
-        *share = layout::share_for(usable, target).clamp(MIN_SHARE, MAX_SHARE);
+        // A fixed split keeps its shape: the fixed child's count moves.
+        *share = match *share {
+            Share::Mille(_) => {
+                Share::Mille(layout::share_for(usable, target).clamp(MIN_SHARE, MAX_SHARE))
+            }
+            Share::First { .. } => Share::First { first: target },
+            Share::Second { .. } => Share::Second {
+                second: usable - target,
+            },
+        };
         true
     }
 
@@ -569,13 +802,114 @@ impl Default for RiceLayout {
     }
 }
 
+/// Home's rail width, the gutter beside it included.
+pub const HOME_RAIL_COLS: u16 = 24;
+/// The narrowest Home that lays its whole tree out: under it the page is
+/// its chat alone (`ZenState::zoomed_tile`). At 96 the stock Home keeps
+/// 46 columns of chat beside its two rails; phone-sized sessions (Termux
+/// is commonly 40-55 columns) get the chat's full width.
+pub const HOME_FULL_MIN_COLS: u16 = 96;
+/// Home's sidebar width, the gutter beside it included.
+pub const HOME_SIDEBAR_COLS: u16 = 24;
+/// The sidebar's pinned rows: the online count with the clock, the friends.
+pub const PRESENCE_ROWS: u16 = 2;
+
+/// Which page a `ZenState` drives. Home draws from its own render input
+/// (the rail, the chat center) and edits only in arrange mode; Zen has
+/// no frame and is always arranging.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RicePage {
+    Zen,
+    Home,
+}
+
 impl RiceLayout {
-    /// Parse a stored layout; anything unreadable falls back to the default,
+    /// Parse a stored layout; anything unreadable falls back to `fallback`,
     /// so a bad row never locks someone out of the page.
-    pub fn from_json(value: Option<&serde_json::Value>) -> Self {
+    pub fn from_json_or(value: Option<&serde_json::Value>, fallback: RiceLayout) -> Self {
         match value {
-            Some(value) => serde_json::from_value(value.clone()).unwrap_or_default(),
-            None => Self::default(),
+            Some(value) => serde_json::from_value(value.clone()).unwrap_or(fallback),
+            None => fallback,
+        }
+    }
+
+    /// Parse a stored Zen layout; anything unreadable falls back to the
+    /// default, so a bad row never locks someone out of the page.
+    pub fn from_json(value: Option<&serde_json::Value>) -> Self {
+        Self::from_json_or(value, Self::default())
+    }
+
+    /// Home as it has always drawn: the room rail, the chat center hosting
+    /// the now strip and the board's banner, and the sidebar column: the
+    /// pinned presence rows, then the account's panels in its sidebar
+    /// order (`users.settings.right_sidebar_components`), each at its
+    /// panel height, the last taking the rest. Panels switched off, or
+    /// not owned (`owned_pet`, `owned_tank`), are left out; the spacer is
+    /// nothing here, since the last panel takes the rest anyway. This is
+    /// what `R` resets to on Home.
+    pub fn home(
+        components: &[RightSidebarComponentSetting],
+        owned_pet: bool,
+        owned_tank: bool,
+    ) -> Self {
+        let panels: Vec<(TileKind, u16)> = components
+            .iter()
+            .filter(|setting| setting.enabled)
+            .filter_map(|setting| match setting.component {
+                RightSidebarComponent::Live => {
+                    Some((TileKind::Live, crate::app::live::panel::LIVE_PANEL_HEIGHT))
+                }
+                RightSidebarComponent::Music => Some((
+                    TileKind::Music,
+                    crate::app::common::sidebar::MUSIC_STAGE_HEIGHT,
+                )),
+                RightSidebarComponent::Bonsai => {
+                    Some((TileKind::Bonsai, crate::app::common::sidebar::BONSAI_HEIGHT))
+                }
+                RightSidebarComponent::Daily => Some((
+                    TileKind::Lobby,
+                    crate::app::lobby::daily::panel::DAILY_PANEL_HEIGHT,
+                )),
+                RightSidebarComponent::Pet if owned_pet => {
+                    Some((TileKind::Pet, crate::app::pet::ui::PET_BOX_MIN_ROWS))
+                }
+                RightSidebarComponent::Tank if owned_tank => Some((
+                    TileKind::Tank,
+                    crate::app::hub::aquarium::ui::MINI_TANK_HEIGHT,
+                )),
+                RightSidebarComponent::Pet
+                | RightSidebarComponent::Tank
+                | RightSidebarComponent::Spacer => None,
+            })
+            .collect();
+        // Each panel's rows plus its title rule; the last one takes the
+        // rest of the column.
+        let mut column = match panels.last() {
+            Some((kind, _)) => Node::leaf(*kind),
+            None => Node::leaf(TileKind::Blank),
+        };
+        for (kind, rows) in panels.iter().rev().skip(1) {
+            column = Node::split_first(Dir::Column, rows + 1, Node::leaf(*kind), column);
+        }
+        let sidebar = Node::split_first(
+            Dir::Column,
+            PRESENCE_ROWS,
+            Node::leaf(TileKind::Presence),
+            column,
+        );
+        let center = Node::hosting(TileKind::Chat, &[Guest::Now, Guest::Banner]);
+        Self {
+            root: Node::split_first(
+                Dir::Row,
+                HOME_RAIL_COLS - 1,
+                Node::leaf(TileKind::Rooms),
+                Node::split_second(Dir::Row, HOME_SIDEBAR_COLS - 1, center, sidebar),
+            ),
+            look: Look {
+                border: BorderKind::None,
+                gap: 0,
+                titles: true,
+            },
         }
     }
 
@@ -596,9 +930,27 @@ pub enum KindPick {
     ChatFull,
 }
 
-/// Session state for the Zen page.
+/// What Enter in the guest picker did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GuestPick {
+    /// The guest moved onto, or off, the focused tile; the layout is dirty.
+    Changed,
+    /// Nothing to pick (no picker, or the focus is not on a tile).
+    Unchanged,
+}
+
+/// Session state for a rice page (Zen, or Home).
 pub struct ZenState {
+    pub page: RicePage,
     pub rice: RiceLayout,
+    /// What `R` resets to.
+    stock: RiceLayout,
+    /// Whether the layout keys are live: always on Zen; on Home only while
+    /// arrange mode is up (`Ctrl+E`).
+    pub arrange: bool,
+    /// The guest picker `+` opens over the focused tile in arrange mode:
+    /// the selected row, an index into `Guest::ALL`, while it is open.
+    pub guest_picker: Option<usize>,
     /// Session-only playback slots in leaf order. Structural edits move these
     /// with their leaves; serialization only ever sees `rice`.
     playback: Vec<Option<Playback>>,
@@ -622,11 +974,32 @@ pub struct ZenState {
 
 impl ZenState {
     pub fn new(rice: RiceLayout) -> Self {
+        Self::for_page(RicePage::Zen, rice, RiceLayout::default())
+    }
+
+    /// A page's state: `rice` is what it shows, `stock` what `R` resets
+    /// to. Zen is always arranging; Home starts with its keys as Home's.
+    pub fn for_page(page: RicePage, rice: RiceLayout, stock: RiceLayout) -> Self {
+        // Home opens on its chat from the first frame; Zen's focus lands
+        // on its chat when the page is first opened (`note_opened`).
+        let focus = match page {
+            RicePage::Zen => 0,
+            RicePage::Home => rice
+                .root
+                .leaf_kinds()
+                .iter()
+                .position(|kind| *kind == TileKind::Chat)
+                .unwrap_or(0),
+        };
         Self {
+            page,
             playback: vec![None; rice.root.leaf_count()],
             visiting: false,
             rice,
-            focus: 0,
+            stock,
+            arrange: page == RicePage::Zen,
+            guest_picker: None,
+            focus,
             zoomed: false,
             kind_picker: None,
             inbox_selected: 0,
@@ -652,6 +1025,7 @@ impl ZenState {
             TileKind::Music | TileKind::Visualizer => true,
             TileKind::Bonsai
             | TileKind::Aquarium
+            | TileKind::Tank
             | TileKind::Ascii
             | TileKind::Pet
             | TileKind::Chat
@@ -663,8 +1037,54 @@ impl ZenState {
             | TileKind::Inbox
             | TileKind::Headlines
             | TileKind::Live
-            | TileKind::Blank => false,
+            | TileKind::Blank
+            | TileKind::Rooms
+            | TileKind::Presence => false,
         })
+    }
+
+    /// The tile hosting `guest`, if any.
+    pub fn host_of(&self, guest: Guest) -> Option<usize> {
+        self.rice.root.host_of(guest)
+    }
+
+    /// Whether `guest` is on the page at all.
+    pub fn hosts(&self, guest: Guest) -> bool {
+        self.host_of(guest).is_some()
+    }
+
+    /// Whether the active chat tile hosts `guest`: there it inserts above
+    /// the messages, the way Home's card has always carried the strip.
+    pub fn active_chat_hosts(&self, guest: Guest) -> bool {
+        self.host_of(guest).is_some() && self.host_of(guest) == self.active_chat_ordinal()
+    }
+
+    /// Whether `guest` is hosted by a tile drawn this frame.
+    pub fn draws_guest(&self, guest: Guest) -> bool {
+        match self.host_of(guest) {
+            None => false,
+            Some(ordinal) => !self.zoomed || ordinal == self.focus,
+        }
+    }
+
+    /// The layout's gaps: Zen's uniform look gap, Home's one-column gutter
+    /// between columns and none between rows (a tile's title rule is the
+    /// row divider).
+    pub fn gaps(&self) -> Gaps {
+        match self.page {
+            RicePage::Zen => Gaps::uniform(self.rice.look.gap as u16),
+            RicePage::Home => Gaps { row: 1, col: 0 },
+        }
+    }
+
+    /// The chrome tiles wear: Zen's look, Home's rules.
+    pub fn chrome(&self) -> layout::Chrome {
+        match self.page {
+            RicePage::Zen => layout::Chrome::Boxed(self.rice.look.clone()),
+            RicePage::Home => layout::Chrome::Rules {
+                arrange: self.arrange,
+            },
+        }
     }
 
     /// Whether any tile on the page is `kind`, zoomed or not.
@@ -806,36 +1226,54 @@ impl ZenState {
 
     /// Which chat tile is the active one, as an index into `chat_tiles`:
     /// the focused tile when it is a chat, else the first chat tile. The
-    /// active tile has the composer, the selection, and the read marking;
-    /// the others only watch their rooms.
+    /// active tile is the page's chat: it has the composer, the selection
+    /// and the read marking, and on Home it is what the rail shows; every
+    /// other chat tile only watches its room.
     pub fn active_chat_index(&self) -> Option<usize> {
         let tiles = self.chat_tiles();
         if tiles.is_empty() {
             return None;
         }
-        Some(
-            tiles
-                .iter()
-                .position(|(ordinal, _)| *ordinal == self.focus)
-                .unwrap_or(0),
-        )
-    }
-
-    /// The focused tile's bound room, when the focused tile is a chat.
-    pub fn focused_chat_room(&self) -> Option<Option<Uuid>> {
-        self.chat_tiles()
-            .into_iter()
-            .find(|(ordinal, _)| *ordinal == self.focus)
-            .map(|(_, room)| room)
-    }
-
-    /// Bind the focused chat tile to `room`; `false` when the focus is not
-    /// on a chat tile.
-    pub fn bind_focused_chat_room(&mut self, room: Option<Uuid>) -> bool {
-        if self.focused_kind() != Some(TileKind::Chat) {
-            return false;
+        match tiles.iter().position(|(ordinal, _)| *ordinal == self.focus) {
+            Some(index) => Some(index),
+            None => Some(0),
         }
-        self.rice.root.set_room(self.focus, room)
+    }
+
+    /// The active chat tile's ordinal in the layout.
+    pub fn active_chat_ordinal(&self) -> Option<usize> {
+        let index = self.active_chat_index()?;
+        Some(self.chat_tiles()[index].0)
+    }
+
+    /// Whether the keys belong to a chat tile: the focus is on one.
+    pub fn chat_tile_focused(&self) -> bool {
+        self.focused_kind() == Some(TileKind::Chat)
+    }
+
+    /// The active chat tile's bound room (`None` for the rail's room),
+    /// when the page has a chat tile.
+    pub fn active_chat_room(&self) -> Option<Option<Uuid>> {
+        let index = self.active_chat_index()?;
+        Some(self.chat_tiles()[index].1)
+    }
+
+    /// Bind the active chat tile to `room`; `false` when the page has no
+    /// chat tile.
+    pub fn bind_active_chat_room(&mut self, room: Option<Uuid>) -> bool {
+        match self.active_chat_ordinal() {
+            Some(ordinal) => self.rice.root.set_room(ordinal, room),
+            None => false,
+        }
+    }
+
+    /// Bind every chat tile bound to no room to `room_id`.
+    pub fn pin_unbound_chats(&mut self, room_id: Uuid) {
+        for (ordinal, bound) in self.chat_tiles() {
+            if bound.is_none() {
+                self.rice.root.set_room(ordinal, Some(room_id));
+            }
+        }
     }
 
     fn clamp_focus(&mut self) {
@@ -914,14 +1352,60 @@ impl ZenState {
 
     /// Whether the focused tile may become `kind`. Chat is refused once
     /// the page holds `MAX_CHAT_TILES` of them (a tile that already is a
-    /// chat counts itself out, so it can leave and come back).
+    /// chat counts itself out, so it can leave and come back); the Home
+    /// only kinds are refused on Zen, and once the page holds one.
     pub fn kind_allowed(&self, kind: TileKind) -> bool {
+        if kind.home_only() {
+            return self.page == RicePage::Home
+                && (self.focused_kind() == Some(kind) || !self.shows(kind));
+        }
         if kind != TileKind::Chat {
             return true;
         }
         let others =
             self.chat_tile_count() - usize::from(self.focused_kind() == Some(TileKind::Chat));
         others < MAX_CHAT_TILES
+    }
+
+    /// Open the guest picker over the focused tile, on its first row.
+    pub fn open_guest_picker(&mut self) {
+        if self.focused_kind().is_some() {
+            self.guest_picker = Some(0);
+        }
+    }
+
+    pub fn close_guest_picker(&mut self) {
+        self.guest_picker = None;
+    }
+
+    pub fn move_guest_picker(&mut self, delta: isize) {
+        let Some(selected) = self.guest_picker else {
+            return;
+        };
+        let len = Guest::ALL.len() as isize;
+        self.guest_picker = Some((selected as isize + delta).rem_euclid(len) as usize);
+    }
+
+    /// The guests of the focused tile, in their order.
+    pub fn focused_guests(&self) -> Vec<Guest> {
+        self.rice
+            .root
+            .leaf_guests()
+            .get(self.focus)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Put the picker's guest on the focused tile, or take it off when it
+    /// is there already. The picker stays open, so several can be set.
+    pub fn pick_guest(&mut self) -> GuestPick {
+        let Some(index) = self.guest_picker else {
+            return GuestPick::Unchanged;
+        };
+        match self.rice.root.toggle_guest(self.focus, Guest::ALL[index]) {
+            true => GuestPick::Changed,
+            false => GuestPick::Unchanged,
+        }
     }
 
     /// Set the focused tile to the picker's row and close the picker.
@@ -951,10 +1435,10 @@ impl ZenState {
     /// Move the focused tile's edge by `delta_cells` along `dir`, on the
     /// tiles area the page currently lays out.
     pub fn resize_focused(&mut self, dir: Dir, delta_cells: i16, tiles_area: Rect) -> bool {
-        let gap = self.rice.look.gap as u16;
+        let gaps = self.gaps();
         self.rice
             .root
-            .resize_leaf(self.focus, dir, delta_cells, tiles_area, gap)
+            .resize_leaf(self.focus, dir, delta_cells, tiles_area, gaps)
     }
 
     pub fn flip_focused(&mut self) -> bool {
@@ -963,6 +1447,26 @@ impl ZenState {
 
     pub fn toggle_zoom(&mut self) {
         self.zoomed = !self.zoomed;
+    }
+
+    /// The one tile the page shows alone, if it shows one: Zen's focused
+    /// tile while zoomed; on Home the chat (`home_chat_ordinal`) while
+    /// zoomed (`\\`) or while the page is narrower than
+    /// `HOME_FULL_MIN_COLS`, so a phone lands on the chat alone without
+    /// arranging anything.
+    pub fn zoomed_tile(&self, width: u16) -> Option<usize> {
+        match self.page {
+            RicePage::Zen => self.zoomed.then_some(self.focus),
+            RicePage::Home => {
+                (self.zoomed || width < HOME_FULL_MIN_COLS).then(|| self.home_chat_ordinal())
+            }
+        }
+    }
+
+    /// Home's chat tile of the moment: the active chat tile, else the
+    /// focus on a page with no chat.
+    fn home_chat_ordinal(&self) -> usize {
+        self.active_chat_ordinal().unwrap_or(self.focus)
     }
 
     pub fn cycle_border(&mut self) {
@@ -977,14 +1481,30 @@ impl ZenState {
         self.rice.look.titles = !self.rice.look.titles;
     }
 
-    /// Back to the default layout, with the focus on its chat tile so the
-    /// chat keys work at once, as on the first opening.
+    /// Back to the stock layout (Zen's default, Home as it always drew),
+    /// with the focus on its chat so the chat keys work at once, as on the
+    /// first opening.
     pub fn reset(&mut self) {
-        self.rice = RiceLayout::default();
-        // Default leaves carry no random selection, so nothing needs a draw.
+        self.rice = self.stock.clone();
+        // Stock leaves carry no random selection, so nothing needs a draw.
         self.playback = vec![None; self.leaf_count()];
         self.zoomed = false;
         self.focus = self.first_tile_of(TileKind::Chat).unwrap_or(0);
+    }
+
+    /// A fresh stock layout (the account's sidebar list changed in
+    /// Settings): what the next `R` resets to, and the page itself when
+    /// it has never been edited (`edited`).
+    pub fn set_stock(&mut self, stock: RiceLayout, edited: bool) {
+        if self.stock == stock {
+            return;
+        }
+        self.stock = stock;
+        if !edited {
+            let focus = self.focus;
+            self.reset();
+            self.focus = focus.min(self.leaf_count().saturating_sub(1));
+        }
     }
 
     /// Ordinal of the first tile of `kind`, for surfaces that can only be

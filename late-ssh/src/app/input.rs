@@ -4,7 +4,6 @@ use super::{
     room_info_modal, room_search_modal, settings_modal, sheet_modal,
     state::{App, IconPickerTarget},
 };
-use late_core::models::user::{RightSidebarMode, RoomListMode};
 
 use crate::app::chat::state::RoomSection;
 use crate::app::chat::ui::{ChatRowHit, ChatRowKind, HeaderTarget};
@@ -40,6 +39,9 @@ const CTRL_V: u8 = 0x16;
 /// Zen: the one page that is a chord, not a tab, so it is reachable from
 /// anywhere and hands you back where you were.
 const CTRL_F: u8 = 0x06;
+/// Home's arrange mode (`app/zen`, the Home page): the layout keys on
+/// the page you are on.
+const CTRL_E: u8 = 0x05;
 
 #[derive(Clone, Copy)]
 struct InputContext {
@@ -1349,6 +1351,12 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         return crate::app::zen::input::handle_event(app, event);
     }
 
+    // Home's tiles first: arrange mode's layout keys, or a focused chat
+    // tile's own keys; everything else is Home's as before.
+    if ctx.screen == Screen::Dashboard && crate::app::zen::input::handle_home_event(app, event) {
+        return true;
+    }
+
     if ctx.screen == Screen::Rebels {
         // Running-mode bytes never reach here (intercepted in handle_input), so
         // this only handles the Launcher. Enter launches the game; every other
@@ -2116,6 +2124,19 @@ fn dispatch_escape(app: &mut App) {
     // Esc on Zen peels the tile picker, the composer, or a selected message,
     // and otherwise does nothing: only Ctrl+F (or `/zen`) leaves the page,
     // so a stray Esc never throws away the layout you sat down in.
+    // Esc on Home in arrange mode peels a picker, then leaves the mode.
+    if ctx.screen == Screen::Dashboard && app.home.arrange {
+        if app.home.kind_picker.is_some() {
+            app.home.close_kind_picker();
+            return;
+        }
+        if app.home.guest_picker.is_some() {
+            app.home.close_guest_picker();
+            return;
+        }
+        crate::app::zen::input::toggle_home_arrange(app);
+        return;
+    }
     if ctx.screen == Screen::Zen {
         if app.zen.kind_picker.is_some() {
             app.zen.close_kind_picker();
@@ -2656,9 +2677,11 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
     }
     // A click on a Zen tile focuses it, then falls through so the composer
     // and the messages of that tile still take the click. A modal over the
-    // page takes the click itself, the same guard the pet click uses.
-    if screen == Screen::Zen && !chat_scroll_clicks_blocked(app) {
-        focus_zen_tile_at(app, x, y);
+    // page takes the click itself, the same guard the pet click uses. On
+    // Home only a chat takes the focus this way (every tile in arrange
+    // mode): furniture is clicked for its gesture and the keys stay put.
+    if app.on_rice_page() && !chat_scroll_clicks_blocked(app) {
+        focus_rice_tile_at(app, x, y);
     }
     if handle_chat_composer_click(app, screen, x, y) {
         return true;
@@ -2830,7 +2853,8 @@ pub(crate) struct PendingChatProfileOpen {
 /// Games hub with no open watch).
 fn embedded_chat_room_id(app: &App, screen: Screen) -> Option<Uuid> {
     match screen {
-        Screen::Dashboard => app.chat.selected_room_id,
+        // A focused chat tile's room, else the center's selection.
+        Screen::Dashboard => app.zen_chat_room_id(),
         Screen::DailyMatch => app.daily.board_chat_room_id(),
         Screen::HouseTable => app.house.chat_room_id(),
         Screen::Zen => app.zen_chat_room_id(),
@@ -2997,19 +3021,17 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
     true
 }
 
+/// The rail's rect on Home: its tile's inner area, when the layout holds
+/// one and it is on show.
 fn dashboard_room_rail_area(app: &App) -> Option<Rect> {
-    let (room_list_mode, _) = app.rail_modes();
-    if !crate::app::render::resolve_room_list_enabled(room_list_mode, app.size.0) {
+    if app.screen != Screen::Dashboard {
         return None;
     }
-    const HOME_RAIL_WIDTH: u16 = 24;
-    let content_area = app_content_area(app);
-    (content_area.width > HOME_RAIL_WIDTH + 20).then_some(Rect {
-        x: content_area.x,
-        y: content_area.y,
-        width: HOME_RAIL_WIDTH,
-        height: content_area.height,
-    })
+    app.rice_tile_rects()
+        .into_iter()
+        .find(|(kind, _, _)| *kind == crate::app::zen::state::TileKind::Rooms)
+        .map(|(_, _, inner)| inner)
+        .filter(|inner| inner.width > 0 && inner.height > 0)
 }
 
 /// Route a click on a status bar (either frame bar, or Zen's row) to the
@@ -3711,6 +3733,12 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
             toggle_zen_globally(app);
             true
         }
+        // Arrange mode on Home: a chord, so it works from a chat tile and
+        // the center alike; nowhere else, since no other page is a tree.
+        CTRL_E if app.screen == Screen::Dashboard && !app.chat.is_composing() => {
+            crate::app::zen::input::toggle_home_arrange(app);
+            true
+        }
         // Games keep their controls; these editors own Ctrl+S for save/post.
         // Their tag picker also keeps input until it closes, leaving the draft
         // underneath.
@@ -3731,31 +3759,36 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
     }
 }
 
-/// Move the Zen focus to the tile under a click. Nothing happens on the
-/// footer, on a gap, or on the tile already focused.
-fn focus_zen_tile_at(app: &mut App, x: u16, y: u16) {
-    use crate::app::zen::layout as zen_layout;
-    let (cols, rows) = app.size;
-    let page = Rect::new(0, 0, cols, rows);
-    let (tiles_area, _) = zen_layout::rice_areas(page, zen_layout::rice_row(page, app.zen.zoomed));
-    let zoomed = app.zen.zoomed.then_some(app.zen.focus);
-    let rects = zen_layout::tile_rects(
-        &app.zen.rice.root,
-        tiles_area,
-        app.zen.rice.look.gap as u16,
-        zoomed,
-    );
-    let hit = rects
+/// Move the rice page's focus to the tile under a click. Nothing happens
+/// on the footer, on a gap, on the tile already focused, or, outside
+/// arrange mode, on furniture (`TileKind::takes_focus`).
+fn focus_rice_tile_at(app: &mut App, x: u16, y: u16) {
+    let zoomed = app
+        .rice()
+        .zoomed_tile(app.rice_tiles_area().width)
+        .is_some();
+    let hit = app
+        .rice_tile_rects()
         .iter()
-        .position(|(_, rect)| rect_contains(*rect, x, y));
+        .position(|(_, rect, _)| rect_contains(*rect, x, y));
     let Some(ordinal) = hit else {
         return;
     };
     // Zoomed, the one rect on show is the focused tile whatever its index.
-    if zoomed.is_some() || ordinal == app.zen.focus {
+    if zoomed || ordinal == app.rice().focus {
         return;
     }
-    app.zen.focus = ordinal;
+    if !app.rice().arrange
+        && !app
+            .rice()
+            .rice
+            .root
+            .kind_at(ordinal)
+            .is_some_and(crate::app::zen::state::TileKind::takes_focus)
+    {
+        return;
+    }
+    app.rice_mut().focus = ordinal;
     crate::app::zen::input::focus_moved(app);
 }
 
@@ -4100,22 +4133,16 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && !ctx.feeds_processing
                 && !ctx.news_composing =>
         {
-            // Per device: this writes the layout onto the SSH key the session
-            // authenticated with, so cycling on a phone leaves the desktop's
-            // layout alone. The banner says so, since the same account can now
-            // legitimately look different in two places.
-            let label = match app.cycle_device_rails() {
-                (RoomListMode::Auto, _) | (_, RightSidebarMode::Auto) => {
-                    "Sidebars: auto for this terminal size (this device)"
-                }
-                (RoomListMode::On, RightSidebarMode::On) => "Sidebars: both shown (this device)",
-                (RoomListMode::Off, RightSidebarMode::On) => {
-                    "Sidebars: room list hidden (this device)"
-                }
-                (RoomListMode::On, RightSidebarMode::Off) => {
-                    "Sidebars: info panel hidden (this device)"
-                }
-                (RoomListMode::Off, RightSidebarMode::Off) => "Sidebars: both hidden (this device)",
+            // Chat only: the active chat tile over the whole page, and
+            // back. The rails are tiles now; a layout without one is
+            // arranged (`Ctrl+E`) and saved as such.
+            app.home.toggle_zoom();
+            app.sync_aquarium_bounds();
+            let narrow = app.rice_tiles_area().width < crate::app::zen::state::HOME_FULL_MIN_COLS;
+            let label = match (app.home.zoomed, narrow) {
+                (_, true) => "Chat only: the page needs 96 columns for its tiles",
+                (true, false) => "Chat only; \\ brings the page back",
+                (false, false) => "The whole page",
             };
             app.banner = Some(crate::app::common::primitives::Banner::success(label));
             true
@@ -4134,7 +4161,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && !ctx.chat_composing
                 && !ctx.feeds_processing
                 && !ctx.news_composing
-                && app.lounge_card_shown() =>
+                && app.home_strip_hosted() =>
         {
             crate::app::live::input::open_from_key(app)
         }

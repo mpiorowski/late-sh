@@ -43,12 +43,12 @@ const MUSIC_VIZ_HEIGHT: u16 = 3;
 // `MUSIC_YOUTUBE_DETAIL_HEIGHT` detail rows.
 const MUSIC_DOCK_HEIGHT: u16 = 12;
 // Full music stage: the wave strip on top of the dock.
-const MUSIC_STAGE_HEIGHT: u16 = MUSIC_VIZ_HEIGHT + MUSIC_DOCK_HEIGHT;
+pub(crate) const MUSIC_STAGE_HEIGHT: u16 = MUSIC_VIZ_HEIGHT + MUSIC_DOCK_HEIGHT;
 const MUSIC_QUEUE_HEIGHT: u16 = 4;
 // YouTube detail rows: progress, skip meter, `next` header, the queue rows.
 const MUSIC_YOUTUBE_DETAIL_HEIGHT: u16 = 3 + MUSIC_QUEUE_HEIGHT;
 /// The bonsai preview block plus its footer row.
-const BONSAI_HEIGHT: u16 = crate::app::bonsai::render::PREVIEW_HEIGHT as u16 + 1;
+pub(crate) const BONSAI_HEIGHT: u16 = crate::app::bonsai::render::PREVIEW_HEIGHT as u16 + 1;
 /// The pet's three-row box, nothing else: no name or mood row.
 const PET_HEIGHT: u16 = crate::app::pet::ui::PET_BOX_MIN_ROWS;
 const TANK_HEIGHT: u16 = aquarium_ui::MINI_TANK_HEIGHT;
@@ -388,7 +388,7 @@ fn visible_components(
 /// now, not a panel: row one is the online count (left) and the clock
 /// (right); row two is connected friends, an away one carrying the away
 /// glyph. Both rows always render so the panel list below never shifts.
-fn draw_core_block(
+pub(crate) fn draw_core_block(
     frame: &mut Frame,
     area: Rect,
     clock_text: &str,
@@ -572,7 +572,7 @@ fn panel_rule_label(component: RightSidebarComponent) -> &'static str {
 
 /// `── label ────` separator-with-title above each panel. `active` swaps the
 /// label to bold amber for attention (the lobby's your-turn glow).
-fn draw_panel_rule(frame: &mut Frame, area: Rect, label: &str, active: bool) {
+pub(crate) fn draw_panel_rule(frame: &mut Frame, area: Rect, label: &str, active: bool) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -599,18 +599,18 @@ fn draw_panel_rule(frame: &mut Frame, area: Rect, label: &str, active: bool) {
 
 /// Inputs for the music stage, bundled so the pure line builder is easy to
 /// drive from tests.
-struct MusicStageProps<'a> {
-    paired_client: Option<&'a ClientAudioState>,
-    queue: &'a QueueSnapshot,
-    source: AudioSource,
-    selected_station: RadioStation,
-    radio_slots: RadioSlots,
-    radio_now_playing: Option<&'a str>,
-    youtube_source_count: usize,
-    radio_source_count: usize,
+pub(crate) struct MusicStageProps<'a> {
+    pub paired_client: Option<&'a ClientAudioState>,
+    pub queue: &'a QueueSnapshot,
+    pub source: AudioSource,
+    pub selected_station: RadioStation,
+    pub radio_slots: RadioSlots,
+    pub radio_now_playing: Option<&'a str>,
+    pub youtube_source_count: usize,
+    pub radio_source_count: usize,
     /// Free-running frame counter driving the marquee on now-playing rows
     /// too long for the rail.
-    marquee_tick: usize,
+    pub marquee_tick: usize,
 }
 
 /// Music stage: a small equalizer strip pinned on top, then the dock.
@@ -639,7 +639,12 @@ struct MusicStageProps<'a> {
 /// client is currently paired — the sidebar reflects it from the first
 /// frame, before the browser has finished pairing. `v+x` toggles between
 /// the two sources, so the amber `▌` accent hops between the title bars.
-fn draw_music_stage(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>, eq_state: EqState) {
+pub(crate) fn draw_music_stage(
+    frame: &mut Frame,
+    area: Rect,
+    props: &MusicStageProps<'_>,
+    eq_state: EqState,
+) {
     if area.width == 0 || area.height == 0 {
         return;
     }

@@ -511,7 +511,7 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Par
     match view.inert {
         ComposerInert::ZenTile => {
             return Paragraph::new(Line::from(Span::styled(
-                "Tab or a click focuses this tile · i writes",
+                "A click focuses this tile · i writes",
                 dim,
             )));
         }
@@ -4308,10 +4308,8 @@ pub(crate) fn room_list_panel_contains(
 /// separator on its RIGHT edge; the rest is borderless. Quiet section labels,
 /// left-bar accent on the active row, dim trailing unread numbers.
 pub fn draw_room_list_rail(frame: &mut Frame, area: Rect, view: &ChatRenderInput<'_>) {
-    // Right-edge vertical separator anchors the rail visually.
-    let sep_x = area.right().saturating_sub(1);
-    crate::app::common::sidebar::paint_vertical_separator(frame, sep_x, area.y, area.height);
-
+    // The gutter beside the rail tile is its separator (`zen::ui`); the
+    // rail keeps a column of air on its right.
     let room_list_view = room_list_view_from_render_input(view);
     let room_rows = build_cozy_room_rail_rows(&room_list_view, area.width.saturating_sub(2));
 

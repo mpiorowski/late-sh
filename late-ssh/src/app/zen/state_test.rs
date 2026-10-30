@@ -2,17 +2,17 @@ use ratatui::layout::Rect;
 use uuid::Uuid;
 
 use super::*;
-use crate::app::zen::layout::tile_rects;
+use crate::app::zen::layout::{Gaps, tile_rects};
 
 fn widths(root: &Node, area: Rect, gap: u16) -> Vec<u16> {
-    tile_rects(root, area, gap, None)
+    tile_rects(root, area, Gaps::uniform(gap), None)
         .into_iter()
         .map(|(_, rect)| rect.width)
         .collect()
 }
 
 fn heights(root: &Node, area: Rect, gap: u16) -> Vec<u16> {
-    tile_rects(root, area, gap, None)
+    tile_rects(root, area, Gaps::uniform(gap), None)
         .into_iter()
         .map(|(_, rect)| rect.height)
         .collect()
@@ -30,7 +30,7 @@ fn one_press_moves_a_row_split_by_exactly_one_column_at_every_width() {
                 Node::leaf(TileKind::Chat),
             );
             let before = widths(&root, area, gap);
-            assert!(root.resize_leaf(0, Dir::Row, 1, area, gap));
+            assert!(root.resize_leaf(0, Dir::Row, 1, area, Gaps::uniform(gap)));
             let grown = widths(&root, area, gap);
             assert_eq!(
                 grown[0],
@@ -40,7 +40,7 @@ fn one_press_moves_a_row_split_by_exactly_one_column_at_every_width() {
             assert_eq!(grown[1], before[1] - 1, "and the second gives it up");
 
             // Shrinking from the second tile's side lands back where it was.
-            assert!(root.resize_leaf(1, Dir::Row, 1, area, gap));
+            assert!(root.resize_leaf(1, Dir::Row, 1, area, Gaps::uniform(gap)));
             assert_eq!(widths(&root, area, gap), before);
         }
     }
@@ -55,7 +55,7 @@ fn a_deep_column_split_moves_one_row_and_a_row_only_tree_has_no_height() {
     // split directly above it moves, so the tiles above it and the left
     // column stay put, and music alone gives up the row.
     let before = heights(&root, area, 1);
-    assert!(root.resize_leaf(6, Dir::Column, 1, area, 1));
+    assert!(root.resize_leaf(6, Dir::Column, 1, area, Gaps::uniform(1)));
     let after = heights(&root, area, 1);
     assert_eq!(after[6], before[6] + 1, "live gains one row");
     for leaf in 0..6 {
@@ -70,7 +70,7 @@ fn a_deep_column_split_moves_one_row_and_a_row_only_tree_has_no_height() {
         Node::leaf(TileKind::Chat),
     );
     assert!(
-        !row_only.resize_leaf(0, Dir::Column, 1, area, 1),
+        !row_only.resize_leaf(0, Dir::Column, 1, area, Gaps::uniform(1)),
         "no column split above the tile: nothing to trade height with"
     );
 }
@@ -85,7 +85,7 @@ fn a_tile_shrinks_to_a_border_and_one_row_and_never_past_it() {
         Node::leaf(TileKind::Chat),
     );
     for _ in 0..40 {
-        assert!(root.resize_leaf(0, Dir::Column, -1, area, 0));
+        assert!(root.resize_leaf(0, Dir::Column, -1, area, Gaps::uniform(0)));
     }
     assert_eq!(
         heights(&root, area, 0),
@@ -93,7 +93,7 @@ fn a_tile_shrinks_to_a_border_and_one_row_and_never_past_it() {
         "the clock keeps its border and one row"
     );
     for _ in 0..80 {
-        assert!(root.resize_leaf(0, Dir::Column, 1, area, 0));
+        assert!(root.resize_leaf(0, Dir::Column, 1, area, Gaps::uniform(0)));
     }
     assert_eq!(
         heights(&root, area, 0),
@@ -103,7 +103,7 @@ fn a_tile_shrinks_to_a_border_and_one_row_and_never_past_it() {
 
     // A split too small for two floors splits evenly instead of panicking.
     let tiny = Rect::new(0, 0, 100, 4);
-    assert!(root.resize_leaf(0, Dir::Column, 1, tiny, 0));
+    assert!(root.resize_leaf(0, Dir::Column, 1, tiny, Gaps::uniform(0)));
     assert_eq!(heights(&root, tiny, 0), vec![2, 2]);
 }
 
@@ -141,15 +141,13 @@ fn a_chat_tile_keeps_its_room_through_the_stored_json_and_old_layouts_still_read
         .first_tile_of(TileKind::Chat)
         .expect("the default has a chat");
     let room = Uuid::now_v7();
-    // Only a focused chat tile takes a room.
-    assert!(
-        !zen.bind_focused_chat_room(Some(room)),
-        "bonsai has no room"
-    );
-    zen.focus = chat;
-    assert!(zen.bind_focused_chat_room(Some(room)));
-    assert_eq!(zen.focused_chat_room(), Some(Some(room)));
+    // The active chat tile takes the room: the focused one, else the
+    // first chat on the page while the focus is on the bonsai.
+    assert_ne!(zen.focus, chat);
+    assert!(zen.bind_active_chat_room(Some(room)));
+    assert_eq!(zen.active_chat_room(), Some(Some(room)));
     assert_eq!(zen.chat_tiles(), vec![(chat, Some(room))]);
+    zen.focus = chat;
 
     let read_back = RiceLayout::from_json(Some(&zen.rice.to_json()));
     assert_eq!(read_back, zen.rice, "the binding is part of the layout");
@@ -163,15 +161,16 @@ fn a_chat_tile_keeps_its_room_through_the_stored_json_and_old_layouts_still_read
     let old = RiceLayout::from_json(Some(&old));
     assert_eq!(old.root.leaf_rooms(), vec![None]);
 
-    // The retired presence tile reads as Pulse, not as an unreadable row
-    // that would reset the whole page to the default.
+    // A layout from before Pulse names the presence tile, which is a tile
+    // again (the online count, the clock, the friends): it reads as such,
+    // not as an unreadable row that would reset the whole page.
     let retired = serde_json::json!({
         "root": { "node": "leaf", "kind": "presence" },
         "look": { "border": "rounded", "gap": 0, "titles": true }
     });
     assert_eq!(
         RiceLayout::from_json(Some(&retired)).root.leaf_kinds(),
-        vec![TileKind::Pulse]
+        vec![TileKind::Presence]
     );
 
     // Leaving chat forgets the room, so coming back lands on the current one.
@@ -183,7 +182,7 @@ fn a_chat_tile_keeps_its_room_through_the_stored_json_and_old_layouts_still_read
     zen.move_kind_picker(-1);
     assert_eq!(zen.pick_kind(), KindPick::Changed);
     assert_eq!(zen.focused_kind(), Some(TileKind::Chat));
-    assert_eq!(zen.focused_chat_room(), Some(None));
+    assert_eq!(zen.active_chat_room(), Some(None));
 }
 
 #[test]
@@ -577,4 +576,156 @@ fn leaving_zen_ends_random_instances_and_returning_resolves_them_again() {
     assert!(!zen.sync_playback(later + Duration::from_secs(299), &mut rng));
     assert!(zen.sync_playback(later + Duration::from_secs(300), &mut rng));
     assert_eq!(zen.rice.to_json(), saved);
+}
+
+#[test]
+fn a_fixed_split_keeps_its_cells_at_every_width_and_a_share_still_reads_as_a_number() {
+    // Home's rail: 23 cells beside a chat that takes the rest, at every
+    // page width; a resize moves its edge by exactly one cell and the
+    // edge stays put when the page grows.
+    let mut root = Node::split_first(
+        Dir::Row,
+        23,
+        Node::leaf(TileKind::Rooms),
+        Node::leaf(TileKind::Chat),
+    );
+    for width in [60u16, 100, 200] {
+        let area = Rect::new(0, 0, width, 30);
+        assert_eq!(widths(&root, area, 1), vec![23, width - 24], "{width}");
+    }
+    let area = Rect::new(0, 0, 100, 30);
+    assert!(root.resize_leaf(0, Dir::Row, 1, area, Gaps::uniform(1)));
+    assert_eq!(widths(&root, area, 1), vec![24, 75]);
+    assert_eq!(
+        widths(&root, Rect::new(0, 0, 200, 30), 1),
+        vec![24, 175],
+        "fixed from the first child's side after the resize too"
+    );
+
+    // The sidebar is fixed from the other end: the chat takes the rest.
+    let mut root = Node::split_second(
+        Dir::Row,
+        23,
+        Node::leaf(TileKind::Chat),
+        Node::leaf(TileKind::Music),
+    );
+    assert_eq!(widths(&root, area, 1), vec![76, 23]);
+    assert!(root.resize_leaf(1, Dir::Row, 1, area, Gaps::uniform(1)));
+    assert_eq!(widths(&root, area, 1), vec![75, 24]);
+    assert_eq!(widths(&root, Rect::new(0, 0, 200, 30), 1), vec![175, 24]);
+
+    // A per-mille share is still written as a bare number, so a layout
+    // stored before fixed splits reads unchanged, and a fixed split reads
+    // back as itself.
+    let look = RiceLayout::default().look;
+    let mille = RiceLayout {
+        root: Node::split(
+            Dir::Row,
+            640,
+            Node::leaf(TileKind::Chat),
+            Node::leaf(TileKind::Clock),
+        ),
+        look: look.clone(),
+    };
+    let json = mille.to_json();
+    assert_eq!(json["root"]["share"], serde_json::json!(640));
+    assert_eq!(RiceLayout::from_json(Some(&json)), mille);
+    let fixed = RiceLayout { root, look };
+    let json = fixed.to_json();
+    assert_eq!(json["root"]["share"], serde_json::json!({ "second": 24 }));
+    assert_eq!(RiceLayout::from_json(Some(&json)), fixed);
+}
+
+#[test]
+fn a_guest_lives_on_one_tile_and_toggling_moves_it_or_takes_it_off() {
+    let mut root = Node::split(
+        Dir::Column,
+        500,
+        Node::hosting(TileKind::Chat, &[Guest::Now, Guest::Banner]),
+        Node::leaf(TileKind::Aquarium),
+    );
+    assert_eq!(root.host_of(Guest::Now), Some(0));
+    // Toggled on the tank, the strip moves there: one host per page.
+    assert!(root.toggle_guest(1, Guest::Now));
+    assert_eq!(root.host_of(Guest::Now), Some(1));
+    assert_eq!(
+        root.leaf_guests(),
+        vec![vec![Guest::Banner], vec![Guest::Now]]
+    );
+    // Toggled on its host, it goes.
+    assert!(root.toggle_guest(1, Guest::Now));
+    assert_eq!(root.host_of(Guest::Now), None);
+    assert_eq!(root.leaf_guests(), vec![vec![Guest::Banner], vec![]]);
+
+    // Guests are part of the stored layout; a leaf without any writes
+    // none, so Zen layouts stay as they were.
+    let layout = RiceLayout {
+        root,
+        look: RiceLayout::default().look,
+    };
+    let json = layout.to_json();
+    assert_eq!(RiceLayout::from_json(Some(&json)), layout);
+    assert!(
+        json["root"]["second"].get("guests").is_none(),
+        "an empty guest list is not written: {json}"
+    );
+}
+
+#[test]
+fn the_stock_home_is_the_rail_the_chat_and_the_sidebar_list_in_order() {
+    use late_core::models::user::{RightSidebarComponent, RightSidebarComponentSetting};
+    let components: Vec<RightSidebarComponentSetting> = [
+        RightSidebarComponent::Live,
+        RightSidebarComponent::Music,
+        RightSidebarComponent::Bonsai,
+        RightSidebarComponent::Daily,
+        RightSidebarComponent::Pet,
+        RightSidebarComponent::Tank,
+    ]
+    .into_iter()
+    .map(|component| RightSidebarComponentSetting {
+        component,
+        enabled: component != RightSidebarComponent::Bonsai,
+    })
+    .collect();
+    // The bonsai is off in Settings, the pet is not owned: neither gets
+    // a tile. The tank is owned, so it does.
+    let home = RiceLayout::home(&components, false, true);
+    assert_eq!(
+        home.root.leaf_kinds(),
+        vec![
+            TileKind::Rooms,
+            TileKind::Chat,
+            TileKind::Presence,
+            TileKind::Live,
+            TileKind::Music,
+            TileKind::Lobby,
+            TileKind::Tank,
+        ]
+    );
+    assert_eq!(
+        home.root.leaf_guests()[1],
+        vec![Guest::Now, Guest::Banner],
+        "the chat carries the strip and the board's day, as the card always did"
+    );
+
+    let zen = ZenState::for_page(RicePage::Home, home.clone(), home);
+    assert_eq!(
+        zen.focused_kind(),
+        Some(TileKind::Chat),
+        "Home opens on its chat"
+    );
+    assert_eq!(
+        zen.active_chat_room(),
+        Some(None),
+        "the stock chat is bound to no room: it shows the rail's"
+    );
+    assert!(!zen.arrange, "Home is furniture until Ctrl+E");
+    assert!(zen.active_chat_hosts(Guest::Now));
+    assert!(!zen.kind_allowed(TileKind::Rooms), "one rail per page");
+
+    // Zen never takes the Home only kind.
+    let on_zen = ZenState::new(RiceLayout::default());
+    assert!(!on_zen.kind_allowed(TileKind::Rooms));
+    assert!(on_zen.kind_allowed(TileKind::Presence));
 }

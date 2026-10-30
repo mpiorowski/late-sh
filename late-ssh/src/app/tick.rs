@@ -69,7 +69,8 @@ impl App {
         // A Zen layout edit is written at most once a second (and when the
         // page is left), whatever the key repeat rate did to it.
         if one_hz {
-            self.flush_zen_layout();
+            self.flush_rice_layouts();
+            self.sync_home_stock();
             self.record_attention();
             if let Some(minute) = self.newcomer_clock.take_minute() {
                 self.referral_service
@@ -327,6 +328,10 @@ impl App {
         // News state is ticked inside chat.tick()
         let profile_tick = self.profile_state.tick();
         changed |= profile_tick.changed;
+        if profile_tick.changed {
+            // The sidebar list in Settings shapes the stock Home.
+            self.sync_home_stock();
+        }
         if let Some(b) = profile_tick.banner {
             self.banner = Some(b);
             changed = true;
@@ -532,7 +537,14 @@ impl App {
                 ) => {}
             }
         }
-        let reading = self.lounge_card_shown() && self.chat.selected_message_id.is_some();
+        // The strip waits for a reader only where it moves the messages:
+        // on the page's chat card. On furniture it covers, and nothing
+        // waits.
+        let reading = self.lounge_card_shown()
+            && self
+                .home
+                .active_chat_hosts(crate::app::zen::state::Guest::Now)
+            && self.chat.selected_message_id.is_some();
         let daily_tick = self.daily.tick();
         changed |= daily_tick.changed;
         let picture_settings = self.inline_image_render_settings();
@@ -1042,9 +1054,7 @@ impl App {
             }
             // Mentions load only when asked for. An Inbox tile on the page
             // asks whenever the unread count moves, so a new mention lands.
-            if self.screen == crate::app::common::primitives::Screen::Zen
-                && self.zen.shows(crate::app::zen::state::TileKind::Inbox)
-            {
+            if self.on_rice_page() && self.rice().shows(crate::app::zen::state::TileKind::Inbox) {
                 let unread = self.chat.notifications.unread_count();
                 if self.zen_inbox_listed_unread != Some(unread) {
                     self.chat.notifications.list();
@@ -1223,8 +1233,8 @@ impl App {
             let now = Instant::now();
             let mut rng = rand::thread_rng();
             changed |= self.sync_screensaver(now, &mut rng);
-            if self.screen == Screen::Zen {
-                let zen_changed = self.zen.sync_playback(now, &mut rng);
+            if self.on_rice_page() {
+                let zen_changed = self.rice_mut().sync_playback(now, &mut rng);
                 changed |= zen_changed && self.screensaver().is_none();
             }
         }
@@ -1384,8 +1394,7 @@ impl App {
         // animating: the bonsai sway holds this edge on its own, and Bonsai
         // is enabled by default. An unpaired session repaints a static eq
         // strip, which the frame diff then drops.
-        changed |=
-            anim_half && (sidebar_visible || self.show_bonsai_modal || self.screen == Screen::Zen);
+        changed |= anim_half && (sidebar_visible || self.show_bonsai_modal || self.on_rice_page());
         // The live strip draws a shooter's cue: the aim is stored, the
         // half-tick edge paints it.
         changed |= anim_half && self.live_strip_shown() && self.live.aiming();
@@ -1396,7 +1405,7 @@ impl App {
         // so only those boundary ticks need a frame.
         if self.marquee_tick / crate::app::common::marquee::MARQUEE_STEP_TICKS
             != prev_marquee_tick / crate::app::common::marquee::MARQUEE_STEP_TICKS
-            && sidebar_visible
+            && (sidebar_visible || self.on_rice_page())
         {
             let selected_radio_station = self.selected_radio_station;
             let radio_now_playing = self.station_now_playing(selected_radio_station);
@@ -1525,7 +1534,7 @@ impl App {
             || crate::app::deadchannel::lounge::svc::animates(self)
             || self.right_sidebar_visible()
             || (self.live_strip_shown() && self.live.aiming())
-            || (self.screen == Screen::Zen && self.zen.shows_equalizer())
+            || (self.on_rice_page() && self.rice().shows_equalizer())
             || self.lively_ascii_visible()
             || self.last_pet_frame.get().is_some()
             || self.show_bonsai_modal
@@ -1547,7 +1556,7 @@ impl App {
     fn visible_pieces(&self) -> Vec<late_core::models::user::AsciiPiece> {
         match (self.screensaver(), self.screen) {
             (Some(piece), _) => vec![piece],
-            (None, Screen::Zen) => self.zen.drawn_pieces(),
+            (None, Screen::Zen | Screen::Dashboard) => self.rice().drawn_pieces(),
             (None, _) => Vec::new(),
         }
     }
@@ -1587,11 +1596,16 @@ impl App {
 
     /// Whether the reef is actually on screen: the Zen page draws it for
     /// everyone, owned or not (an unowned tank swims empty under a shop
-    /// caption), and no other page draws it at all. Shared by the sim's
-    /// step gate in tick() and the wake cadence, so an aquarium owner
-    /// browsing other screens pays no fish frames.
+    /// caption), Home draws it in a reef-form tank tile, and no other page
+    /// draws it at all. Shared by the sim's step gate in tick() and the
+    /// wake cadence, so an aquarium owner browsing other screens pays no
+    /// fish frames.
     fn aquarium_visible(&self) -> bool {
-        self.screen == Screen::Zen
+        match self.screen {
+            Screen::Zen => true,
+            Screen::Dashboard => self.reef_tile_inner().is_some(),
+            _ => false,
+        }
     }
 
     /// A paired client is playing and unmuted: the same reading the Zen
@@ -1615,10 +1629,10 @@ impl App {
             )
     }
 
-    /// Whether the live strip is on screen: the #lounge card (Zen's Live
-    /// tile is the panel, which does not animate).
+    /// Whether the live strip is on screen: on Home, wherever its host
+    /// tile draws it (Zen's Live tile is the panel, which does not animate).
     fn live_strip_shown(&self) -> bool {
-        self.lounge_card_shown()
+        self.home_strip_hosted()
     }
 
     /// Whether the right sidebar draws this frame (the settings draft

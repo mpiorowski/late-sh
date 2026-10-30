@@ -11,7 +11,7 @@ use std::time::Instant;
 use uuid::Uuid;
 
 use super::rows::InboxRow;
-use super::state::{Dir, KindPick, MAX_TILES, TileKind};
+use super::state::{Dir, GuestPick, KindPick, MAX_TILES, TileKind};
 use crate::app::{
     chat::state::RoomSlot, common::primitives::Banner, input::ParsedInput, state::App,
 };
@@ -22,16 +22,83 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
     if app.music_prefix_armed {
         return false;
     }
-    // The tile picker owns every key while it is up (Esc closes it in
+    // The pickers own every key while one is up (Esc closes it in
     // `dispatch_escape`), so nothing under it moves.
-    if app.zen.kind_picker.is_some() {
+    if app.rice().kind_picker.is_some() {
         handle_kind_picker(app, event);
+        return true;
+    }
+    if app.rice().guest_picker.is_some() {
+        handle_guest_picker(app, event);
         return true;
     }
     if handle_common(app, event) {
         return true;
     }
     handle_rice(app, event)
+}
+
+/// Home's keys for its tiles, ahead of Home's own handling. In arrange
+/// mode (`Ctrl+E`) the layout keys are live and every tile takes the
+/// focus; outside it only a focused chat tile has keys of its own (the
+/// chat keys of its room, as on Zen), and everything else falls through
+/// to Home, whose center is the current room.
+pub fn handle_home_event(app: &mut App, event: &ParsedInput) -> bool {
+    if app.music_prefix_armed {
+        return false;
+    }
+    if app.rice().kind_picker.is_some() {
+        handle_kind_picker(app, event);
+        return true;
+    }
+    if app.rice().guest_picker.is_some() {
+        handle_guest_picker(app, event);
+        return true;
+    }
+    if app.rice().arrange {
+        // Arrange mode is a layout mode: a focused chat tile's room keys
+        // (`[` `]`, Ctrl+/) still bind it, the rest of the chat waits.
+        if let Some(byte) = event_byte(event)
+            && matches!(byte, b'[' | b']')
+        {
+            cycle_tile(app, app.rice().chat_tile_focused(), byte == b']');
+            return true;
+        }
+        if handle_rice(app, event) {
+            return true;
+        }
+        // Every other key is swallowed, so a stray letter never reaches
+        // the chat while the page is being arranged.
+        return event_byte(event).is_some();
+    }
+    // Outside arrange mode the active chat tile is Home's chat, and the
+    // rail its room, so Home's own keys serve it.
+    false
+}
+
+/// Enter or leave Home's arrange mode. Leaving writes the layout at once
+/// and closes the pickers; entering says what the keys are now.
+pub(crate) fn toggle_home_arrange(app: &mut App) {
+    let arrange = !app.rice().arrange;
+    let rice = app.rice_mut();
+    rice.arrange = arrange;
+    rice.close_kind_picker();
+    rice.close_guest_picker();
+    if arrange {
+        app.banner = Some(Banner::info(
+            "Arrange: arrows move · S split · X close · F flip · <>{} resize · space tile · + guests · R reset · Esc done",
+        ));
+    } else {
+        // Leaving puts the focus back on a chat, the only tiles that keep
+        // it outside arrange mode.
+        if !app.rice().focused_kind().is_some_and(TileKind::takes_focus)
+            && let Some(ordinal) = app.rice().first_tile_of(TileKind::Chat)
+        {
+            app.rice_mut().focus = ordinal;
+            focus_moved(app);
+        }
+        app.flush_rice_layouts();
+    }
 }
 
 /// The chat keys, the Live tile's `s` prefix, the ascii tile's pieces, and
@@ -58,13 +125,13 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
         crate::app::live::input::open_from_prefix(app, byte);
         return true;
     }
-    if app.zen.focused_kind() == Some(TileKind::Inbox) && handle_inbox(app, byte) {
+    if app.rice().focused_kind() == Some(TileKind::Inbox) && handle_inbox(app, byte) {
         return true;
     }
-    if app.zen.focused_kind() == Some(TileKind::Headlines) && handle_headlines(app, byte) {
+    if app.rice().focused_kind() == Some(TileKind::Headlines) && handle_headlines(app, byte) {
         return true;
     }
-    let chat_focused = app.zen.focused_kind() == Some(TileKind::Chat);
+    let chat_focused = app.rice().focused_kind() == Some(TileKind::Chat);
     // The focused chat tile's message keys, the way the house table routes
     // them to its embedded chat: `i`, `j` `k`, Ctrl+D/U, and the reaction
     // leader always; `d` `r` `e` `p` `c` `t` `G` and Enter only while a
@@ -83,7 +150,7 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
         }
     }
     // Lowercase only: `S` is the split.
-    if byte == b's' && app.zen.draws(TileKind::Live) {
+    if byte == b's' && app.rice().draws(TileKind::Live) {
         app.live_prefix_armed = true;
         return true;
     }
@@ -101,7 +168,7 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
                 app.chat.start_composing_in_room(room_id);
             }
             // Enter on an ascii tile picks its piece from the list.
-            if byte != b'i' && app.zen.focused_kind() == Some(TileKind::Ascii) {
+            if byte != b'i' && app.rice().focused_kind() == Some(TileKind::Ascii) {
                 crate::app::ascii::picker::input::open(app);
             }
             true
@@ -140,11 +207,11 @@ fn handle_inbox(app: &mut App, byte: u8) -> bool {
     match byte {
         b'j' | b'J' => {
             let last = inbox_rows(app).len().saturating_sub(1);
-            app.zen.inbox_selected = (app.zen.inbox_selected + 1).min(last);
+            app.rice_mut().inbox_selected = (app.rice().inbox_selected + 1).min(last);
             true
         }
         b'k' | b'K' => {
-            app.zen.inbox_selected = app.zen.inbox_selected.saturating_sub(1);
+            app.rice_mut().inbox_selected = app.rice().inbox_selected.saturating_sub(1);
             true
         }
         b'\r' | b'\n' => {
@@ -173,7 +240,7 @@ fn inbox_rows(app: &App) -> Vec<InboxRow> {
 /// joined has no tile to land in and reads in the history modal instead.
 fn open_inbox_row(app: &mut App) {
     let rows = inbox_rows(app);
-    let Some(row) = rows.get(app.zen.inbox_selected.min(rows.len().saturating_sub(1))) else {
+    let Some(row) = rows.get(app.rice().inbox_selected.min(rows.len().saturating_sub(1))) else {
         return;
     };
     let (room_id, message_id) = match row {
@@ -190,13 +257,13 @@ fn open_inbox_row(app: &mut App) {
         app.chat.open_history_at_message(room_id, message_id);
         return;
     }
-    let Some(chat_tile) = app.zen.first_tile_of(TileKind::Chat) else {
+    let Some(chat_tile) = app.rice().first_tile_of(TileKind::Chat) else {
         app.banner = Some(Banner::info("Add a chat tile to open it here"));
         return;
     };
-    app.zen.focus = chat_tile;
+    app.rice_mut().focus = chat_tile;
     focus_moved(app);
-    bind_focused_chat_to_room(app, room_id);
+    bind_active_chat_to_room(app, room_id);
     let Some(message_id) = message_id else {
         return;
     };
@@ -215,18 +282,20 @@ fn handle_headlines(app: &mut App, byte: u8) -> bool {
     match byte {
         b'j' | b'J' => {
             let last = headline_rows(app).len().saturating_sub(1);
-            app.zen.headlines_selected = (app.zen.headlines_selected + 1).min(last);
+            app.rice_mut().headlines_selected = (app.rice().headlines_selected + 1).min(last);
             true
         }
         b'k' | b'K' => {
-            app.zen.headlines_selected = app.zen.headlines_selected.saturating_sub(1);
+            app.rice_mut().headlines_selected = app.rice().headlines_selected.saturating_sub(1);
             true
         }
         b'\r' | b'\n' => {
             let rows = headline_rows(app);
-            if let Some(row) =
-                rows.get(app.zen.headlines_selected.min(rows.len().saturating_sub(1)))
-            {
+            if let Some(row) = rows.get(
+                app.rice()
+                    .headlines_selected
+                    .min(rows.len().saturating_sub(1)),
+            ) {
                 app.pending_clipboard = Some(row.url.clone());
                 app.banner = Some(Banner::success("Link copied to clipboard!"));
             }
@@ -246,12 +315,12 @@ fn headline_rows(app: &App) -> Vec<super::rows::Headline> {
 fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
     match event {
         ParsedInput::Arrow(b'D') | ParsedInput::Arrow(b'A') | ParsedInput::BackTab => {
-            app.zen.focus_prev();
+            app.rice_mut().focus_prev();
             focus_moved(app);
             return true;
         }
         ParsedInput::Arrow(b'C') | ParsedInput::Arrow(b'B') => {
-            app.zen.focus_next();
+            app.rice_mut().focus_next();
             focus_moved(app);
             return true;
         }
@@ -262,61 +331,66 @@ fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
     };
     let changed = match byte {
         b'\t' => {
-            app.zen.focus_next();
+            app.rice_mut().focus_next();
             focus_moved(app);
             return true;
         }
         b' ' => {
-            app.zen.open_kind_picker();
+            app.rice_mut().open_kind_picker();
+            return true;
+        }
+        b'+' => {
+            app.rice_mut().open_guest_picker();
             return true;
         }
         b'S' => {
-            if app.zen.leaf_count() >= MAX_TILES {
+            if app.rice().leaf_count() >= MAX_TILES {
                 app.banner = Some(Banner::info("That is every tile the page holds"));
                 return true;
             }
             let wide = focused_tile_is_wide(app);
-            app.zen.split_focused(wide)
+            app.rice_mut().split_focused(wide)
         }
         b'X' => {
-            if app.zen.leaf_count() <= 1 {
+            if app.rice().leaf_count() <= 1 {
                 app.banner = Some(Banner::info("The last tile stays"));
                 return true;
             }
-            app.zen.close_focused()
+            app.rice_mut().close_focused()
         }
         b'<' | b',' => resize_or_explain(app, Dir::Row, -1),
         b'>' | b'.' => resize_or_explain(app, Dir::Row, 1),
         b'{' => resize_or_explain(app, Dir::Column, -1),
         b'}' => resize_or_explain(app, Dir::Column, 1),
-        b'F' => app.zen.flip_focused(),
+        b'F' => app.rice_mut().flip_focused(),
         b'z' => {
-            app.zen.toggle_zoom();
+            app.rice_mut().toggle_zoom();
             // The zoom is a view, not a layout edit; still resizes the tank.
             app.sync_aquarium_bounds();
             return true;
         }
         b'b' => {
-            app.zen.cycle_border();
+            app.rice_mut().cycle_border();
             true
         }
         b'g' => {
-            app.zen.cycle_gap();
+            app.rice_mut().cycle_gap();
             true
         }
         b't' => {
-            app.zen.toggle_titles();
+            app.rice_mut().toggle_titles();
             true
         }
         b'R' => {
-            app.zen.reset();
+            app.rice_mut().reset();
             true
         }
         _ => return false,
     };
     if changed {
         app.sync_aquarium_bounds();
-        app.sync_visible_chat_room();
+        // An edit can land the focus, and so the active chat, elsewhere.
+        focus_moved(app);
         app.mark_zen_layout_dirty();
     }
     true
@@ -328,18 +402,38 @@ fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
 fn handle_kind_picker(app: &mut App, event: &ParsedInput) {
     let byte = event_byte(event);
     match (event, byte) {
-        (ParsedInput::Arrow(b'A'), _) | (_, Some(b'k')) => app.zen.move_kind_picker(-1),
-        (ParsedInput::Arrow(b'B'), _) | (_, Some(b'j')) => app.zen.move_kind_picker(1),
-        (_, Some(b'\r' | b'\n' | b' ')) => match app.zen.pick_kind() {
+        (ParsedInput::Arrow(b'A'), _) | (_, Some(b'k')) => app.rice_mut().move_kind_picker(-1),
+        (ParsedInput::Arrow(b'B'), _) | (_, Some(b'j')) => app.rice_mut().move_kind_picker(1),
+        (_, Some(b'\r' | b'\n' | b' ')) => match app.rice_mut().pick_kind() {
             KindPick::Changed => {
+                app.pin_chat_tiles_on_pick();
                 app.sync_aquarium_bounds();
-                app.sync_visible_chat_room();
+                focus_moved(app);
                 app.mark_zen_layout_dirty();
             }
             KindPick::Unchanged => {}
             KindPick::ChatFull => {
                 app.banner = Some(Banner::info("That is every chat tile the page holds"));
             }
+        },
+        _ => {}
+    }
+}
+
+/// The guest picker: `j` `k` and the arrows move, Enter or `space`
+/// toggles the row's guest on the focused tile and keeps the picker up,
+/// everything else is swallowed.
+fn handle_guest_picker(app: &mut App, event: &ParsedInput) {
+    let byte = event_byte(event);
+    match (event, byte) {
+        (ParsedInput::Arrow(b'A'), _) | (_, Some(b'k')) => app.rice_mut().move_guest_picker(-1),
+        (ParsedInput::Arrow(b'B'), _) | (_, Some(b'j')) => app.rice_mut().move_guest_picker(1),
+        (_, Some(b'\r' | b'\n' | b' ')) => match app.rice_mut().pick_guest() {
+            GuestPick::Changed => {
+                app.sync_aquarium_bounds();
+                app.mark_zen_layout_dirty();
+            }
+            GuestPick::Unchanged => {}
         },
         _ => {}
     }
@@ -353,6 +447,7 @@ fn handle_kind_picker(app: &mut App, event: &ParsedInput) {
 /// the two must never differ.
 pub(crate) fn focus_moved(app: &mut App) {
     app.chat.clear_message_selection();
+    app.sync_rail_to_active_chat();
     if app.chat.composing && app.chat.composer_room_id() != app.zen_chat_room_id() {
         app.chat.reset_composer();
     }
@@ -363,10 +458,8 @@ pub(crate) fn focus_moved(app: &mut App) {
 /// nothing moved: a tile with no split of that direction above it has
 /// nothing to trade.
 fn resize_or_explain(app: &mut App, dir: Dir, delta_cells: i16) -> bool {
-    let (cols, rows) = app.size;
-    let page = ratatui::layout::Rect::new(0, 0, cols, rows);
-    let (tiles_area, _) = super::layout::rice_areas(page, super::layout::rice_fits(page));
-    if app.zen.resize_focused(dir, delta_cells, tiles_area) {
+    let tiles_area = app.rice_tiles_area();
+    if app.rice_mut().resize_focused(dir, delta_cells, tiles_area) {
         return true;
     }
     let axis = match dir {
@@ -382,17 +475,11 @@ fn resize_or_explain(app: &mut App, dir: Dir, delta_cells: i16) -> bool {
 /// Whether the focused tile is wider than tall in cells (a cell is about
 /// twice as tall as wide, so width is halved before comparing).
 fn focused_tile_is_wide(app: &App) -> bool {
-    let (cols, rows) = app.size;
-    let page = ratatui::layout::Rect::new(0, 0, cols, rows);
-    let (tiles_area, _) = super::layout::rice_areas(page, super::layout::rice_fits(page));
-    let rects = super::layout::tile_rects(
-        &app.zen.rice.root,
-        tiles_area,
-        app.zen.rice.look.gap as u16,
-        None,
-    );
+    let tiles_area = app.rice_tiles_area();
+    let rects =
+        super::layout::tile_rects(&app.rice().rice.root, tiles_area, app.rice().gaps(), None);
     rects
-        .get(app.zen.focus)
+        .get(app.rice().focus)
         .map(|(_, rect)| rect.width / 2 >= rect.height)
         .unwrap_or(true)
 }
@@ -429,19 +516,21 @@ fn cycle_room(app: &mut App, delta: isize) {
         .and_then(|id| ids.iter().position(|room_id| *room_id == id))
         .unwrap_or(0);
     let next = (current as isize + delta).rem_euclid(ids.len() as isize) as usize;
-    bind_focused_chat_to_room(app, ids[next]);
+    bind_active_chat_to_room(app, ids[next]);
 }
 
-/// Bind the focused chat tile to `room_id` (a layout edit, saved) and drop
-/// the draft and selection that belonged to its old room. `false` when the
-/// focus is not on a chat tile, so the caller can fall back to Home's
-/// selection; the `Ctrl+/` picker and `[` `]` both land here.
-pub(crate) fn bind_focused_chat_to_room(app: &mut App, room_id: Uuid) -> bool {
-    if !app.zen.bind_focused_chat_room(Some(room_id)) {
+/// Bind the active chat tile to `room_id` (a layout edit, saved), move
+/// the rail there, and drop the draft and selection that belonged to its
+/// old room. `false` when the page has no chat tile, so the caller can
+/// fall back to Home's selection; the `Ctrl+/` picker and `[` `]` both
+/// land here.
+pub(crate) fn bind_active_chat_to_room(app: &mut App, room_id: Uuid) -> bool {
+    if !app.rice_mut().bind_active_chat_room(Some(room_id)) {
         return false;
     }
     app.chat.reset_composer();
     app.chat.clear_message_selection();
+    app.sync_rail_to_active_chat();
     app.sync_visible_chat_room();
     app.mark_zen_layout_dirty();
     true

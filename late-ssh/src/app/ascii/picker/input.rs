@@ -7,10 +7,10 @@ use super::state::{PiecePickerState, Target};
 use crate::app::input::{MouseButton, MouseEventKind, ParsedInput};
 use crate::app::state::App;
 
-/// Open on the focused Zen ascii tile's piece; nothing when the focused
-/// tile is not an ascii tile.
+/// Open on the focused ascii tile's piece (Zen's, or Home's in arrange
+/// mode); nothing when the focused tile is not an ascii tile.
 pub(crate) fn open(app: &mut App) {
-    let Some(piece) = app.zen.focused_selection() else {
+    let Some(piece) = app.rice().focused_selection() else {
         return;
     };
     app.piece_picker.open(piece);
@@ -22,7 +22,7 @@ fn pick(app: &mut App) {
     let piece = app.piece_picker.selected();
     app.piece_picker.close();
     if app
-        .zen
+        .rice_mut()
         .set_focused_selection(piece, Instant::now(), &mut rand::thread_rng())
     {
         app.mark_zen_layout_dirty();

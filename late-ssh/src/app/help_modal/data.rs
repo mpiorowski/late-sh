@@ -234,6 +234,7 @@ pub(crate) fn bartender_app_context() -> String {
     - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games, daily quests at the top), 3 Games hub (Lateania, the Realm, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels, Zork Trilogy, Minecraft, Vintage Story), 4 Artboard (shared ASCII canvas), 5 People (three sections: the map of who is where, the people's projects and open-to-work cards, and the job feed), 6 Leaderboards (every board, monthly and all-time), 7 Calendars (the events board: anyone posts, i says I'm in; your own private events beside it).\n\
     - Tab / Shift+Tab cycles screens; number keys 0-7 jump straight to one.\n\
     - Ctrl+F opens Zen from anywhere and the same chord hands you back (Esc does not leave it): Rice, your bonsai, the reef (live for everyone, fish once the Shop unlocks them), pet, the room Home has selected, music, a clock, and the lobby as tiles you arrange yourself: Tab and the arrows focus, space opens the tile picker for a tile, S splits, X closes, < > change width and { } height, F flips, z zooms it over the whole screen, b g t restyle borders, gaps, and titles, R resets, ? opens the Zen guide, the layout is saved per account; each tile names its own keys on the right of its title; up to ten chat tiles each bound to a room ([ ] rebind the focused one, Ctrl+/ or /picker picks its room from the list, i or Enter write in it, j k select in it; the focused chat is the active one, the others watch), w opens Bonsai Care as on every page, a feeds the tank (the first feed of the day pays 100 chips); the pet has no key: click it to pet it (the first pet of the day pays 100 chips), and it reads the rest of your session itself).\n\
+    - Home is tiles too: Ctrl+E arranges it (the room rail, the chat and the sidebar panels; a second chat tile is a room of its own, and the rail shows whichever chat is focused; the same keys as Zen, Esc when done, + puts the now strip, the lobby, the live rows or the board's day on a tile where they show only while they have something), \\ shows the chat alone and brings the page back.\n\
     - Ctrl+O opens Settings from anywhere. Ctrl+G opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake). Ctrl+S opens the Shop (active games, profile/job editors, and Artboard input keep their local binding); /shop is its typed fallback.\n\
     - The top of the #lounge chat on Home is the now strip (its `── now ──` rule), up whenever something just happened in the house; it cannot be turned off. Things take turns in the order they happened: a track queued in the YouTube booth stays at least two minutes, a daily move or result at least one, and with nothing waiting the last one stays up to five. A pool player lining up a shot is shown over whatever is up while the cue moves. A link shared to News is not on the strip: it goes into #lounge as the sharer's own line, drawn as a card with the story's title, summary points and art, and Enter on the card opens the story. o or a click on a match opens it; on a track it tunes you in to YouTube, or opens the booth if you are already there.\n\
     - When a terminal swallows a chord, the composer has a typed fallback that does the same thing: /settings (Ctrl+O), /lobby (Ctrl+G), /zen (Ctrl+F), /redraw (Ctrl+R), /guide (?).\n\
@@ -657,6 +658,8 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  Ctrl+O             open your settings modal anywhere",
         "  Ctrl+G             open / close the Lobby (daily games + house tables)",
         "  Ctrl+F             open / close Zen (your bonsai, tank, lobby, chat, and clock as tiles)",
+        "  Ctrl+E             arrange Home: its rail, chat and panels are tiles (Zen's keys; + adds the now strip, lobby, live rows or board day to a tile; Esc when done)",
+        "  \\                  Home: the chat alone, and back",
         "  Ctrl+R             redraw the screen if something outside late.sh scribbled on it",
         "  Ctrl+S / /shop     open the Shop (games keep controls; editors save/post; Artboard keeps slot 2)",
         "  /aquarium feed     feed your Aquarium (free, once a day, +100 chips); 14 days running hatch a fry, 14 days unfed starve a fish; the tank lives on the Zen page (Ctrl+F)",
@@ -1447,6 +1450,8 @@ fn overview_lines() -> Vec<String> {
         "  Ctrl+O            open Settings",
         "  Ctrl+G            open / close the Lobby (daily games + house tables)",
         "  Ctrl+F            open / close Zen",
+        "  Ctrl+E            arrange Home (its rail, chat and panels as tiles; Esc when done)",
+        "  \\                 Home: the chat alone, and back",
         "  Ctrl+R            redraw the screen after outside terminal damage",
         "  /settings /lobby  typed fallbacks for Ctrl+O, Ctrl+G, Ctrl+F, Ctrl+R,",
         "  /zen /redraw      and ?, for terminals that swallow those keys",
@@ -1673,7 +1678,7 @@ fn zen_help_lines() -> Vec<String> {
     [
         "Zen",
         "",
-        "Zen is the clubhouse cut down to the things you keep alive: your bonsai, the reef, the pet, your rooms' chat, music, a clock, the lobby, and an ascii piece, as tiles you arrange yourself. Ctrl+F opens it from any page and the same chord hands you back; Esc stays on the page. The layout is saved per account, the rooms your chat tiles are bound to included.",
+        "Zen is the clubhouse cut down to the things you keep alive: your bonsai, the reef (or its small tank), the pet, your rooms' chat, music, a clock, the lobby, and an ascii piece, as tiles you arrange yourself. Ctrl+F opens it from any page and the same chord hands you back; Esc stays on the page. The layout is saved per account, the rooms your chat tiles are bound to included. Home is the same kind of tree: Ctrl+E arranges its rail, chat and sidebar panels with these keys (a second chat tile is a room of its own, the rail following whichever chat is focused) (Esc when done), + hosts the now strip, the lobby, the live rows or the board's day on a tile, and \\ shows the chat alone.",
         "",
         "Each tile names its own keys on the right of its title (t hides the titles). The bottom row is your status line (Settings, Statusline) on the left and the layout keys on the right. ? opens this list, with every key.",
         "",
@@ -1828,15 +1833,18 @@ fn settings_help_lines() -> Vec<String> {
         "    Sync terminal background  paint your terminal's background to match the theme; off (or the Terminal theme) leaves your terminal's own background alone. Selections and highlights inside the app are part of the theme itself, not this toggle"
             .to_string(),
         "    Text Brightness         nudge overall text brightness up or down; click ◂ / ▸ to decrease / increase".to_string(),
-        "    Right sidebar           on / off / auto for Home and Arcade; Enter opens a panel checklist"
+        "    Right sidebar           on / off / auto for the Arcade; Enter opens the panel checklist, which"
             .to_string(),
-        "    Room list               on / off / auto for the Home room-list rail".to_string(),
-        "                            auto hides a rail on terminals too narrow to carry it, so one"
+        "                            is also what a stock Home (never arranged, Ctrl+E) shows as tiles"
+            .to_string(),
+        "    Room list               on / off / auto; no page reads it now that Home's rail is a tile"
+            .to_string(),
+        "                            auto hides the sidebar on terminals too narrow to carry it, so one"
             .to_string(),
         "                            account works on both a desktop and a phone".to_string(),
         "                            both rows apply to this device (this SSH key) only, never the"
             .to_string(),
-        "                            account default; `\\` on Home cycles the same two".to_string(),
+        "                            account default".to_string(),
         "  Input".to_string(),
         "    Send and keep open on Enter   Enter sends without closing the composer; while on, Alt+S becomes a no-op"
             .to_string(),

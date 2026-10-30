@@ -12,7 +12,7 @@ use ratatui::{
 
 use late_core::models::leaderboard::{ArcadeGame, LeaderboardData, ScoreGame};
 use late_core::models::statusline::StatusComponentSetting;
-use late_core::models::user::{RightSidebarComponentSetting, RightSidebarMode, RoomListMode};
+use late_core::models::user::{RightSidebarComponentSetting, RightSidebarMode};
 
 use super::{
     artboard,
@@ -30,13 +30,9 @@ use super::{
 use crate::app::door::game::DoorGame;
 use crate::app::files::terminal_image::TerminalImageFrame;
 
-/// Narrowest terminal that still carries a rail set to `Auto`. Home is three
-/// columns and each rail costs 24 of them, so these decide when a rail folds
-/// away instead of squeezing the chat: at 96 the chat keeps 48 columns with both
-/// rails up, and at 72 it keeps 48 with the sidebar alone. Below that the chat
-/// takes the whole width. Phone-sized sessions (Termux is commonly 40-55
-/// columns) therefore land on chat-only without the user configuring anything.
-pub(crate) const AUTO_ROOM_LIST_MIN_COLS: u16 = 96;
+/// Narrowest terminal that still carries the Arcade's sidebar set to
+/// `Auto`: the sidebar costs 24 columns, under 72 the page takes the whole
+/// width. (Home's rails are its tiles: `zen::state::HOME_FULL_MIN_COLS`.)
 pub(crate) const AUTO_RIGHT_SIDEBAR_MIN_COLS: u16 = 72;
 
 pub(crate) const RIGHT_SIDEBAR_WIDTH: u16 = 24;
@@ -76,8 +72,10 @@ fn sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bo
     }
 }
 
+/// The Arcade keeps the panel sidebar; Home's sidebar is its tiles now
+/// (`app/zen`, the Home page).
 fn right_sidebar_allowed_on_screen(screen: Screen) -> bool {
-    matches!(screen, Screen::Dashboard | Screen::Arcade)
+    matches!(screen, Screen::Arcade)
 }
 
 /// Resolve whether the right sidebar should render on `screen`, given the mode
@@ -97,28 +95,6 @@ pub(crate) fn resolve_right_sidebar_enabled(
         RightSidebarMode::On => true,
         RightSidebarMode::Off => false,
         RightSidebarMode::Auto => cols >= AUTO_RIGHT_SIDEBAR_MIN_COLS,
-    }
-}
-
-/// Resolve whether the Home room-list rail should render, from the mode this
-/// session ended up with and the live terminal width.
-pub(crate) fn resolve_room_list_enabled(mode: RoomListMode, cols: u16) -> bool {
-    match mode {
-        RoomListMode::On => true,
-        RoomListMode::Off => false,
-        RoomListMode::Auto => cols >= AUTO_ROOM_LIST_MIN_COLS,
-    }
-}
-
-fn room_list_sidebar_enabled(
-    show_settings: bool,
-    draft_enabled: bool,
-    profile_enabled: bool,
-) -> bool {
-    if show_settings {
-        draft_enabled
-    } else {
-        profile_enabled
     }
 }
 
@@ -356,7 +332,6 @@ struct DrawContext<'a> {
     /// Resolved ordered sidebar panels (draft while the settings modal is open,
     /// else the saved profile). Order is render order, top to bottom.
     right_sidebar_components: Vec<RightSidebarComponentSetting>,
-    show_room_list_sidebar: bool,
     show_settings: bool,
     settings_modal_state: &'a settings_modal::state::SettingsModalState,
     show_quit_confirm: bool,
@@ -474,6 +449,11 @@ struct DrawContext<'a> {
     /// (drawn at most once per frame), and the strings their status rows show.
     zen: &'a crate::app::zen::state::ZenState,
     zen_chat_tiles: Vec<crate::app::zen::ui::ZenChatTile<'a>>,
+    /// The now strip for the Home tile hosting it as a guest, and the
+    /// board's day for the banner's host (`None` on the center: the card
+    /// carries them itself).
+    guest_live_strip: Option<crate::app::live::state::LiveStripView<'a>>,
+    guest_board_day: Option<String>,
     zen_track: String,
     zen_date: String,
     zen_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
@@ -594,18 +574,12 @@ impl App {
         // open, otherwise the session's modes (this device's stored layout, else
         // the account default). `Auto` resolves against the live width, so a
         // rotate or a window drag reflows on the next frame.
-        let (session_room_list_mode, session_right_sidebar_mode) = self.rail_modes();
-        let (draft_room_list_mode, draft_right_sidebar_mode) =
-            self.settings_modal_state.device_rails();
+        let (_, session_right_sidebar_mode) = self.rail_modes();
+        let (_, draft_right_sidebar_mode) = self.settings_modal_state.device_rails();
         let show_right_sidebar = sidebar_enabled(
             self.show_settings,
             resolve_right_sidebar_enabled(draft_right_sidebar_mode, self.screen, self.size.0),
             resolve_right_sidebar_enabled(session_right_sidebar_mode, self.screen, self.size.0),
-        );
-        let show_room_list_sidebar = room_list_sidebar_enabled(
-            self.show_settings,
-            resolve_room_list_enabled(draft_room_list_mode, self.size.0),
-            resolve_room_list_enabled(session_room_list_mode, self.size.0),
         );
         // Live-preview the component list from the draft while the settings
         // modal is open; otherwise use the saved profile.
@@ -636,7 +610,13 @@ impl App {
         // active tile is the one the keys, the mouse, and the read marking
         // act on; the others only watch.
         let zen_chat_rooms = self.zen_chat_rooms();
-        let zen_active_chat = self.zen.active_chat_index();
+        // A field borrow, not `rice()`: the draw closure also holds
+        // `usermap` mutably.
+        let rice = match self.screen {
+            Screen::Dashboard => &self.home,
+            _ => &self.zen,
+        };
+        let zen_active_chat = rice.active_chat_index();
         let zen_room_labels: Vec<String> = zen_chat_rooms
             .iter()
             .map(|room_id| {
@@ -799,9 +779,17 @@ impl App {
             self.live_games.open_watches(),
             live_panel_now,
         );
-        // The strip is the #lounge card's alone; another room's card, or
-        // the chat center, never carries it.
-        let dashboard_live_strip = if home_selected {
+        // The strip is drawn where Home hosts it: on the page's chat it is
+        // the #lounge card's alone (another room's card never carries it);
+        // on furniture it shows whatever the room.
+        let strip_hosted = self.home_strip_hosted();
+        let chat_hosts_strip = self
+            .home
+            .active_chat_hosts(crate::app::zen::state::Guest::Now);
+        let chat_hosts_banner = self
+            .home
+            .active_chat_hosts(crate::app::zen::state::Guest::Banner);
+        let home_live_strip = if strip_hosted {
             self.live.view(
                 &self.daily,
                 &self.audio,
@@ -814,6 +802,27 @@ impl App {
             )
         } else {
             None
+        };
+        let (dashboard_live_strip, guest_live_strip) = match chat_hosts_strip {
+            true => (home_live_strip, None),
+            false => (None, home_live_strip),
+        };
+        // The board's day, on the #lounge card like the strip, or on the
+        // tile hosting the banner.
+        let home_board_day = if screen == Screen::Dashboard
+            && self.home.draws_guest(crate::app::zen::state::Guest::Banner)
+            && (!chat_hosts_banner || home_selected)
+        {
+            crate::app::calendar::live::day_text(
+                &self.calendar.live_at(live_panel_now),
+                live_panel_now,
+            )
+        } else {
+            None
+        };
+        let (dashboard_board_day, guest_board_day) = match chat_hosts_banner {
+            true => (home_board_day, None),
+            false => (None, home_board_day),
         };
         let dashboard_voice_channel_id = shell_active_room
             .and_then(|room_id| self.chat.voice_channels_by_room_id.get(&room_id))
@@ -960,15 +969,7 @@ impl App {
             active_poll: dashboard_active_poll,
             live_strip: dashboard_live_strip,
             live_strip_hit: &self.live.hit,
-            // The board's day, on the #lounge card alone like the strip.
-            board_day: if home_selected {
-                crate::app::calendar::live::day_text(
-                    &self.calendar.live_at(live_panel_now),
-                    live_panel_now,
-                )
-            } else {
-                None
-            },
+            board_day: dashboard_board_day,
             inline_images: &self.chat.inline_image_cache,
             news_cards: self.chat.news.lounge_cards(),
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
@@ -1836,7 +1837,6 @@ impl App {
                         is_moderator: self.is_moderator,
                         show_right_sidebar,
                         right_sidebar_components,
-                        show_room_list_sidebar,
                         show_settings: self.show_settings,
                         settings_modal_state: &self.settings_modal_state,
                         show_quit_confirm: self.show_quit_confirm,
@@ -1955,8 +1955,10 @@ impl App {
                         },
                         status_hits: &self.last_status_hits,
                         home_selected,
-                        zen: &self.zen,
+                        zen: rice,
                         zen_chat_tiles,
+                        guest_live_strip,
+                        guest_board_day,
                         zen_track,
                         zen_date,
                         zen_pet_strip,
@@ -2230,32 +2232,117 @@ impl App {
             (Some(_), _) | (None, _) => content_area,
         };
         match screen {
-            Screen::Dashboard => {
-                const HOME_RAIL_WIDTH: u16 = 24;
-                let (rail_area, center_area) = if ctx.show_room_list_sidebar {
-                    let split = Layout::horizontal([
-                        Constraint::Length(HOME_RAIL_WIDTH),
-                        Constraint::Fill(1),
-                    ])
-                    .split(content_area);
-                    (Some(split[0]), split[1])
-                } else {
-                    (None, content_area)
+            // Both rice pages: Home inside the frame, with its rail and
+            // center as tiles; Zen full-bleed with its status row.
+            Screen::Dashboard | Screen::Zen => {
+                let strip_hit = ctx.dashboard_view.live_strip_hit;
+                let home = match screen {
+                    Screen::Dashboard => Some(crate::app::zen::ui::HomeView {
+                        chat_view: ctx.chat_view,
+                        dashboard_view: ctx.dashboard_view,
+                        home_selected: ctx.home_selected,
+                    }),
+                    _ => None,
                 };
-                if let Some(rail_area) = rail_area {
-                    chat::ui::draw_room_list_rail(frame, rail_area, &ctx.chat_view);
+                // A page too small to draw has no row, so it keeps no
+                // click target either; nor does a zoomed one, the tile
+                // takes the whole page. Home has no row at all: the frame
+                // carries its status bars.
+                let status_row = match screen {
+                    Screen::Zen => {
+                        let (_, row) = crate::app::zen::layout::rice_areas(
+                            content_area,
+                            crate::app::zen::layout::rice_row(content_area, ctx.zen.zoomed),
+                        );
+                        row.map(|row| {
+                            crate::app::statusline::bar::build_zen_status_row(
+                                &ctx.statusline_components,
+                                &ctx.status_data,
+                                row,
+                            )
+                        })
+                    }
+                    _ => None,
+                };
+                if screen == Screen::Zen {
+                    *ctx.status_hits.borrow_mut() = match &status_row {
+                        Some(status_row) => status_row.hits.clone(),
+                        None => Vec::new(),
+                    };
                 }
-
-                if ctx.home_selected {
-                    chat::ui::draw_dashboard_chat_card(
-                        frame,
-                        center_area,
-                        ctx.dashboard_view,
-                        terminal_images,
-                    );
-                } else {
-                    chat::ui::draw_chat_center(frame, center_area, ctx.chat_view, terminal_images);
-                }
+                let view = crate::app::zen::ui::ZenView {
+                    status_row,
+                    zen: ctx.zen,
+                    home,
+                    music_stage: crate::app::common::sidebar::MusicStageProps {
+                        paired_client: ctx.paired_client,
+                        queue: &ctx.booth_snapshot,
+                        source: ctx.paired_source,
+                        selected_station: ctx.selected_radio_station,
+                        radio_slots: ctx.radio_slots,
+                        radio_now_playing: ctx.radio_now_playing,
+                        youtube_source_count: ctx.youtube_source_count,
+                        radio_source_count: ctx.radio_source_count,
+                        marquee_tick: ctx.marquee_tick,
+                    },
+                    strip: ctx.guest_live_strip.take().map(|strip| {
+                        crate::app::zen::ui::StripGuest {
+                            strip,
+                            hit: strip_hit,
+                        }
+                    }),
+                    board_day: ctx.guest_board_day.take(),
+                    bonsai: ctx.bonsai,
+                    aquarium: ctx.aquarium_state,
+                    aquarium_owned: ctx.shop_state.entitlements().has_aquarium(),
+                    aquarium_care: ctx.aquarium_care,
+                    pet_strip: ctx.zen_pet_strip.take(),
+                    chats: std::mem::take(&mut ctx.zen_chat_tiles),
+                    track: ctx.zen_track.clone(),
+                    station: crate::app::zen::ui::station_text(
+                        ctx.paired_source,
+                        ctx.selected_radio_station,
+                    ),
+                    eq_state: ctx.eq_state,
+                    clock: ctx.sidebar_clock,
+                    date: ctx.zen_date.clone(),
+                    online_count: ctx.online_count,
+                    mentions_unread: ctx.status_data.mentions_unread,
+                    daily: ctx.daily,
+                    lobby_glow: ctx.lobby.glow(),
+                    activity: ctx.chat_state.activity_ticker(),
+                    active_friends: ctx.zen_active_friends,
+                    chip_balance: ctx.status_data.chip_balance,
+                    care: ctx.zen_care,
+                    inbox: if ctx.zen.shows(crate::app::zen::state::TileKind::Inbox) {
+                        crate::app::zen::rows::inbox_rows(
+                            ctx.user_id,
+                            &ctx.chat_state.rooms,
+                            &ctx.chat_state.unread_counts,
+                            ctx.chat_state.usernames(),
+                            ctx.chat_state.ignored_user_ids(),
+                            ctx.chat_state.notifications.all_items(),
+                        )
+                    } else {
+                        Vec::new()
+                    },
+                    headlines: if ctx.zen.shows(crate::app::zen::state::TileKind::Headlines) {
+                        crate::app::zen::rows::headlines(
+                            ctx.chat_state.news.all_articles(),
+                            ctx.chat_state.feeds.all_entries(),
+                        )
+                    } else {
+                        Vec::new()
+                    },
+                    live_panel: crate::app::live::panel::LivePanelProps {
+                        rows: &ctx.live_panel_rows,
+                        hit: ctx.live_panel_hit,
+                        now: ctx.live_panel_now,
+                    },
+                    wall_tick: ctx.marquee_tick,
+                    ascii_clock: ctx.ascii_clock,
+                };
+                crate::app::zen::ui::draw_rice(frame, content_area, view, terminal_images);
             }
             Screen::Artboard => {
                 if ctx.artboard_disclaimer_visible {
@@ -2659,80 +2746,6 @@ impl App {
                     composer: ctx.nightcap_composer.take(),
                 },
             ),
-            Screen::Zen => {
-                // A page too small to draw has no row, so it keeps no
-                // click target either; nor does a zoomed one, the tile
-                // takes the whole page.
-                let (_, row) = crate::app::zen::layout::rice_areas(
-                    content_area,
-                    crate::app::zen::layout::rice_row(content_area, ctx.zen.zoomed),
-                );
-                let status_row = row.map(|row| {
-                    crate::app::statusline::bar::build_zen_status_row(
-                        &ctx.statusline_components,
-                        &ctx.status_data,
-                        row,
-                    )
-                });
-                *ctx.status_hits.borrow_mut() = match &status_row {
-                    Some(status_row) => status_row.hits.clone(),
-                    None => Vec::new(),
-                };
-                let view = crate::app::zen::ui::ZenView {
-                    status_row,
-                    zen: ctx.zen,
-                    bonsai: ctx.bonsai,
-                    aquarium: ctx.aquarium_state,
-                    aquarium_owned: ctx.shop_state.entitlements().has_aquarium(),
-                    aquarium_care: ctx.aquarium_care,
-                    pet_strip: ctx.zen_pet_strip.take(),
-                    chats: std::mem::take(&mut ctx.zen_chat_tiles),
-                    track: ctx.zen_track.clone(),
-                    station: crate::app::zen::ui::station_text(
-                        ctx.paired_source,
-                        ctx.selected_radio_station,
-                    ),
-                    eq_state: ctx.eq_state,
-                    clock: ctx.sidebar_clock,
-                    date: ctx.zen_date.clone(),
-                    online_count: ctx.online_count,
-                    mentions_unread: ctx.status_data.mentions_unread,
-                    daily: ctx.daily,
-                    lobby_glow: ctx.lobby.glow(),
-                    activity: ctx.chat_state.activity_ticker(),
-                    active_friends: ctx.zen_active_friends,
-                    chip_balance: ctx.status_data.chip_balance,
-                    care: ctx.zen_care,
-                    inbox: if ctx.zen.shows(crate::app::zen::state::TileKind::Inbox) {
-                        crate::app::zen::rows::inbox_rows(
-                            ctx.user_id,
-                            &ctx.chat_state.rooms,
-                            &ctx.chat_state.unread_counts,
-                            ctx.chat_state.usernames(),
-                            ctx.chat_state.ignored_user_ids(),
-                            ctx.chat_state.notifications.all_items(),
-                        )
-                    } else {
-                        Vec::new()
-                    },
-                    headlines: if ctx.zen.shows(crate::app::zen::state::TileKind::Headlines) {
-                        crate::app::zen::rows::headlines(
-                            ctx.chat_state.news.all_articles(),
-                            ctx.chat_state.feeds.all_entries(),
-                        )
-                    } else {
-                        Vec::new()
-                    },
-                    live_panel: crate::app::live::panel::LivePanelProps {
-                        rows: &ctx.live_panel_rows,
-                        hit: ctx.live_panel_hit,
-                        now: ctx.live_panel_now,
-                    },
-                    wall_tick: ctx.marquee_tick,
-                    ascii_clock: ctx.ascii_clock,
-                };
-                crate::app::zen::ui::draw_rice(frame, content_area, view, terminal_images);
-            }
             Screen::DailyMatch => crate::app::lobby::daily::board_ui::draw(
                 frame,
                 board_area,

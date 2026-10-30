@@ -639,6 +639,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         runner_looks_rx: state.runner_looks.subscribe(),
         presence: state.presence.clone(),
         zen_layout: late_core::models::user::extract_zen_layout(&user.settings),
+        home_layout: late_core::models::user::extract_home_layout(&user.settings),
         username_directory: Some(state.username_directory.clone()),
         flair_directory: Some(state.flair_directory.clone()),
         pot_service: Some(state.pot_service.clone()),

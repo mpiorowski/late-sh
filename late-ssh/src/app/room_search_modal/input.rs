@@ -154,14 +154,14 @@ fn close_into_room(app: &mut App, slot: RoomSlot) {
     app.chat.news.stop_composing();
     crate::app::input::close_reader_and_player(app);
     app.room_search_modal_state.close();
-    // On Zen with a chat tile focused, a room pick is that tile's: it
-    // rebinds the tile the way `[` `]` do and Home's selection stays put.
-    // Any other pick there (a feed, News, a chat tile not focused) moves
-    // Home's selection and stays on the page; everywhere else the room
-    // opens on Home.
+    // On Zen a room pick is the active chat tile's: it rebinds the tile
+    // the way `[` `]` do. Any other pick there (a feed, News, a page with
+    // no chat tile) moves Home's selection and stays on the page;
+    // everywhere else the room opens on Home, where the rail steers the
+    // active chat tile (`App::sync_visible_chat_room`).
     if app.screen == Screen::Zen
         && let RoomSlot::Room(room_id) = slot
-        && crate::app::zen::input::bind_focused_chat_to_room(app, room_id)
+        && crate::app::zen::input::bind_active_chat_to_room(app, room_id)
     {
         return;
     }

@@ -739,6 +739,7 @@ const STATUSLINE_COMPONENTS_KEY: &str = "statusline_components";
 /// The Rice page's tiling layout and look (`late-ssh/src/app/zen`), stored
 /// as the JSON the page itself serializes; absent until first edited.
 const ZEN_LAYOUT_KEY: &str = "zen_layout";
+const HOME_LAYOUT_KEY: &str = "home_layout";
 const SHOW_ROOM_LIST_SIDEBAR_KEY: &str = "show_room_list_sidebar";
 const ROOM_LIST_MODE_KEY: &str = "room_list_mode";
 const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
@@ -1326,15 +1327,24 @@ impl User {
         Ok(())
     }
 
-    /// Store the Rice page's layout JSON in the settings blob.
+    /// Store the Zen page's layout JSON in the settings blob.
     pub async fn set_zen_layout(client: &Client, user_id: Uuid, layout: &Value) -> Result<()> {
+        Self::set_layout(client, user_id, ZEN_LAYOUT_KEY, layout).await
+    }
+
+    /// Store Home's layout JSON in the settings blob.
+    pub async fn set_home_layout(client: &Client, user_id: Uuid, layout: &Value) -> Result<()> {
+        Self::set_layout(client, user_id, HOME_LAYOUT_KEY, layout).await
+    }
+
+    async fn set_layout(client: &Client, user_id: Uuid, key: &str, layout: &Value) -> Result<()> {
         let updated = client
             .execute(
                 "UPDATE users
                  SET settings = settings || jsonb_build_object($1::text, $2::jsonb),
                      updated = current_timestamp
                  WHERE id = $3",
-                &[&ZEN_LAYOUT_KEY, layout, &user_id],
+                &[&key, layout, &user_id],
             )
             .await?;
         if updated == 0 {
@@ -2379,6 +2389,12 @@ pub fn extract_artboard_disclaimer(settings: &Value) -> bool {
 /// page, which falls back to its default on anything unreadable.
 pub fn extract_zen_layout(settings: &Value) -> Option<Value> {
     settings.get(ZEN_LAYOUT_KEY).cloned()
+}
+
+/// The stored Home layout, if the account ever arranged one. Parsed by
+/// the page, which falls back to the stock Home on anything unreadable.
+pub fn extract_home_layout(settings: &Value) -> Option<Value> {
+    settings.get(HOME_LAYOUT_KEY).cloned()
 }
 
 /// True once the user has finished (or skipped) the clubhouse first-visit

@@ -1,11 +1,10 @@
 use super::{
-    AUTO_RIGHT_SIDEBAR_MIN_COLS, AUTO_ROOM_LIST_MIN_COLS, FRAME_TABS, app_frame_bottom_titles,
-    app_frame_sponsor_title, chat_title_hint, dashboard_home_selected, line_width,
-    resolve_right_sidebar_enabled, resolve_room_list_enabled, room_list_sidebar_enabled,
+    AUTO_RIGHT_SIDEBAR_MIN_COLS, FRAME_TABS, app_frame_bottom_titles, app_frame_sponsor_title,
+    chat_title_hint, dashboard_home_selected, line_width, resolve_right_sidebar_enabled,
     sidebar_enabled, sponsor_line, tab_is_lit,
 };
 use crate::app::common::primitives::Screen;
-use late_core::models::user::{RightSidebarMode, RoomListMode};
+use late_core::models::user::RightSidebarMode;
 use uuid::Uuid;
 
 /// A terminal wide enough that `Auto` keeps every rail, so the `On`/`Off` cases
@@ -29,8 +28,9 @@ fn sidebar_enabled_uses_saved_profile_when_modal_is_closed() {
 }
 
 #[test]
-fn right_sidebar_is_only_available_on_first_three_pages() {
-    assert!(resolve_right_sidebar_enabled(
+fn right_sidebar_is_the_arcades_alone() {
+    // Home's sidebar is its tiles (`app/zen`, the Home page).
+    assert!(!resolve_right_sidebar_enabled(
         RightSidebarMode::On,
         Screen::Dashboard,
         WIDE_TERMINAL,
@@ -72,74 +72,47 @@ fn right_sidebar_off_hides_on_allowed_pages() {
 }
 
 #[test]
-fn auto_rails_fold_away_as_the_terminal_narrows() {
-    // A desktop keeps both rails; a landscape phone drops the room rail but
-    // keeps the ambient sidebar; a portrait phone gets the chat's full width.
-    for cols in [200, AUTO_ROOM_LIST_MIN_COLS] {
+fn auto_sidebar_folds_away_as_the_terminal_narrows() {
+    // The Arcade keeps its sidebar on a desktop and a landscape phone; a
+    // portrait phone gets the page's full width.
+    for cols in [200, AUTO_RIGHT_SIDEBAR_MIN_COLS] {
         assert!(
-            resolve_room_list_enabled(RoomListMode::Auto, cols),
-            "{cols}"
-        );
-        assert!(
-            resolve_right_sidebar_enabled(RightSidebarMode::Auto, Screen::Dashboard, cols),
-            "{cols}"
-        );
-    }
-    for cols in [AUTO_ROOM_LIST_MIN_COLS - 1, AUTO_RIGHT_SIDEBAR_MIN_COLS] {
-        assert!(
-            !resolve_room_list_enabled(RoomListMode::Auto, cols),
-            "{cols}"
-        );
-        assert!(
-            resolve_right_sidebar_enabled(RightSidebarMode::Auto, Screen::Dashboard, cols),
+            resolve_right_sidebar_enabled(RightSidebarMode::Auto, Screen::Arcade, cols),
             "{cols}"
         );
     }
     for cols in [AUTO_RIGHT_SIDEBAR_MIN_COLS - 1, 50, 0] {
         assert!(
-            !resolve_room_list_enabled(RoomListMode::Auto, cols),
-            "{cols}"
-        );
-        assert!(
-            !resolve_right_sidebar_enabled(RightSidebarMode::Auto, Screen::Dashboard, cols),
+            !resolve_right_sidebar_enabled(RightSidebarMode::Auto, Screen::Arcade, cols),
             "{cols}"
         );
     }
 }
 
 #[test]
-fn explicit_rail_modes_ignore_terminal_width() {
-    // Only `Auto` consults the width: someone who asked for a rail on a narrow
-    // terminal keeps it, and `Off` stays off however wide the window gets.
+fn explicit_sidebar_modes_ignore_terminal_width() {
+    // Only `Auto` consults the width: someone who asked for the sidebar on
+    // a narrow terminal keeps it, and `Off` stays off however wide the
+    // window gets.
     for cols in [0, 40, 200] {
-        assert!(resolve_room_list_enabled(RoomListMode::On, cols), "{cols}");
         assert!(
-            !resolve_room_list_enabled(RoomListMode::Off, cols),
+            resolve_right_sidebar_enabled(RightSidebarMode::On, Screen::Arcade, cols),
             "{cols}"
         );
         assert!(
-            resolve_right_sidebar_enabled(RightSidebarMode::On, Screen::Dashboard, cols),
+            !resolve_right_sidebar_enabled(RightSidebarMode::Off, Screen::Arcade, cols),
             "{cols}"
         );
     }
-    // Auto still never puts the sidebar on a page that has no sidebar.
-    assert!(!resolve_right_sidebar_enabled(
-        RightSidebarMode::Auto,
-        Screen::Artboard,
-        200,
-    ));
-}
-
-#[test]
-fn room_list_sidebar_enabled_prefers_settings_draft_while_modal_is_open() {
-    assert!(!room_list_sidebar_enabled(true, false, true));
-    assert!(room_list_sidebar_enabled(true, true, false));
-}
-
-#[test]
-fn room_list_sidebar_enabled_uses_saved_profile_when_modal_is_closed() {
-    assert!(room_list_sidebar_enabled(false, false, true));
-    assert!(!room_list_sidebar_enabled(false, true, false));
+    // Auto still never puts the sidebar on a page that has no sidebar:
+    // Home's sidebar is its tiles now.
+    for screen in [Screen::Artboard, Screen::Dashboard] {
+        assert!(!resolve_right_sidebar_enabled(
+            RightSidebarMode::Auto,
+            screen,
+            200,
+        ));
+    }
 }
 
 #[test]

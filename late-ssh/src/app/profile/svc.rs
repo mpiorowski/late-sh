@@ -840,6 +840,24 @@ impl ProfileService {
         );
     }
 
+    /// Fire-and-forget: persist Home's layout JSON, the same way.
+    pub fn set_home_layout(&self, user_id: Uuid, layout: serde_json::Value) {
+        let service = self.clone();
+        tokio::spawn(
+            async move {
+                let result = async {
+                    let client = service.db.get().await?;
+                    User::set_home_layout(&client, user_id, &layout).await
+                }
+                .await;
+                if let Err(e) = result {
+                    tracing::warn!(error = ?e, "failed to persist home layout");
+                }
+            }
+            .in_current_span(),
+        );
+    }
+
     /// Persist the latest interaction mode with one background writer per user.
     pub fn set_interaction_mode(&self, user_id: Uuid, mode: InteractionMode) {
         let mut writers = self.interaction_mode_writes.lock_recover();

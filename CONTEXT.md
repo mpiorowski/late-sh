@@ -150,7 +150,7 @@ round, the pot, invites).
 | Key | Page | Lives in |
 |-----|------|----------|
 | `0` | Clubhouse, the walkable tavern; the default landing page. `0` again goes down to the undercity (runners only) | `app/clubhouse`, `app/deadchannel` |
-| `1` | Home: room rail, chat center (rooms plus News, Mentions, RSS, Voice, Discover), the live strip on #lounge, the right sidebar | `app/chat`, `app/live`, `late-ssh/CONTEXT.md` (sidebar) |
+| `1` | Home: room rail, chat (rooms plus News, Mentions, RSS, Voice, Discover; more chat tiles for more rooms), the live strip on #lounge, the sidebar panels; all tiles of one tree, arranged with `Ctrl+E` | `app/chat`, `app/live`, `app/zen` (the tree) |
 | `2` | The Arcade: solo games, daily puzzles, the quest strip | `app/arcade`, `app/hub` |
 | `3` | Games hub: door games, servers, live games to watch | `app/door` |
 | `4` | Artboard: the shared ASCII canvas and its gallery | `app/artboard` |
@@ -203,7 +203,7 @@ otherwise.
 | `settings_modal` | Settings (`Ctrl+O`): tabs, pickers, mouse, save rules |
 | `handoff` | Drain handoff: a quiet native-CLI session moved off an updating pod onto its page, the "Auto restart on update" tweak |
 | `statusline` | The frame status bars and their customizer |
-| `zen` | Zen (`Ctrl+F`): the tiling layout, the pet and tank tiles |
+| `zen` | The tile tree behind Zen (`Ctrl+F`) and Home (`Ctrl+E` arranges it), the pet and tank tiles |
 | `ascii` | The animated ascii pieces, the Zen ascii tile, the away screensaver |
 | `bonsai` | The bonsai: branch graph, care modal, daily chips; the per-user state reference |
 | `hub` | The Shop (`Ctrl+S`), quests, pet unlock (the marketplace, rentals and flair in `shop/CONTEXT.md`, the reef in `aquarium/CONTEXT.md`) |
@@ -252,8 +252,9 @@ small modals.
 - `THEME.md`: adding a theme. `CONTRIBUTING.md`, `LICENSING.md`: for
   contributors.
 - `devdocs/`: research and design notes (door candidates, the parked feed
-  budget, the IRC design and IRCv3 ideas, the parked audio leader, the CLI
-  YouTube backend plan, the permissions matrix).
+  budget, the Home layouts design (`HOME-LAYOUTS.md`), the IRC design and
+  IRCv3 ideas, the parked audio leader, the CLI YouTube backend plan, the
+  permissions matrix).
 
 ## 7. Telemetry
 
