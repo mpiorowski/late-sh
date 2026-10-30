@@ -46,29 +46,40 @@ fn no_image(image_err: arboard::Error) -> anyhow::Error {
 }
 
 /// A copied image file, decoded and re-encoded as PNG under the same caps as
-/// clipboard pixels. The file size is checked before anything is decoded.
+/// clipboard pixels. The file size, then the dimensions in its header, are
+/// checked before any pixel is decoded, and the decoder is held to the RGBA
+/// cap, so a small file claiming a huge picture never gets its memory.
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
 pub(crate) fn png_from_file(path: &Path) -> Result<Vec<u8>> {
+    use image::ImageDecoder;
+
     let size = std::fs::metadata(path)
         .with_context(|| format!("reading copied file {}", path.display()))?
         .len();
     if size > IMAGE_MAX_FILE_BYTES {
         anyhow::bail!("copied image file is too large");
     }
-    let image = image::ImageReader::open(path)
+    let mut reader = image::ImageReader::open(path)
         .with_context(|| format!("opening copied file {}", path.display()))?
         .with_guessed_format()
-        .with_context(|| format!("reading copied file {}", path.display()))?
-        .decode()
+        .with_context(|| format!("reading copied file {}", path.display()))?;
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(IMAGE_MAX_RGBA_BYTES as u64);
+    reader.limits(limits);
+    let decoder = reader
+        .into_decoder()
+        .with_context(|| format!("copied file {} is not an image", path.display()))?;
+    let (width, height) = decoder.dimensions();
+    check_pixel_caps(width as usize, height as usize)?;
+    let image = image::DynamicImage::from_decoder(decoder)
         .with_context(|| format!("copied file {} is not an image", path.display()))?
         .into_rgba8();
-    let (width, height) = image.dimensions();
     png_from_rgba(width as usize, height as usize, image.into_raw())
 }
 
-/// RGBA8 pixels as PNG, refusing images past the size caps.
+/// The pixel count of an image within the caps, else why not.
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-fn png_from_rgba(width: usize, height: usize, rgba: Vec<u8>) -> Result<Vec<u8>> {
+fn check_pixel_caps(width: usize, height: usize) -> Result<usize> {
     let pixel_count = width
         .checked_mul(height)
         .context("clipboard image dimensions overflowed")?;
@@ -78,15 +89,21 @@ fn png_from_rgba(width: usize, height: usize, rgba: Vec<u8>) -> Result<Vec<u8>> 
     if pixel_count > IMAGE_MAX_PIXELS {
         anyhow::bail!("clipboard image dimensions are too large");
     }
-
-    let expected_len = pixel_count
+    let rgba_len = pixel_count
         .checked_mul(4)
         .context("clipboard image byte length overflowed")?;
-    if rgba.len() != expected_len {
-        anyhow::bail!("clipboard image data had unexpected length");
-    }
-    if rgba.len() > IMAGE_MAX_RGBA_BYTES {
+    if rgba_len > IMAGE_MAX_RGBA_BYTES {
         anyhow::bail!("clipboard image dimensions are too large");
+    }
+    Ok(pixel_count)
+}
+
+/// RGBA8 pixels as PNG, refusing images past the size caps.
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+fn png_from_rgba(width: usize, height: usize, rgba: Vec<u8>) -> Result<Vec<u8>> {
+    let pixel_count = check_pixel_caps(width, height)?;
+    if rgba.len() != pixel_count * 4 {
+        anyhow::bail!("clipboard image data had unexpected length");
     }
 
     let mut png = Vec::new();

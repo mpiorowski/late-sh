@@ -149,37 +149,12 @@ async fn run_bridge(
         }
     }
 
-    // Materialize the per-account rc pushed by the client. When a file lands,
-    // NETHACKOPTIONS points nethack at it (the `@` prefix means "config file
-    // path"), overriding the shared `$HOME/.nethackrc` defaults.
+    // Materialize the per-account rc pushed by the client; when a file lands,
+    // the child's NETHACKOPTIONS points at it.
     let rc_path = materialize_rc(&cfg.data_dir, &cfg.playname, cfg.rc.as_deref());
 
-    let mut cmd = TokioCommand::new(&cfg.bin);
-    // Spawn with a cleared environment and an explicit allowlist. Even though
-    // this process is a dedicated host (not late-ssh), keep the env minimal so
-    // the child only ever sees what it needs. NetHack's shell ('!') and suspend
-    // ('^Z') escapes are compiled out in the nethack-build stage; clearing the
-    // env is additional defense in depth.
-    cmd.env_clear()
-        .arg("-u")
-        .arg(&cfg.playname)
-        .env("TERM", &cfg.term)
-        // HOME holds the per-player `.nethackrc`. We deliberately do NOT set
-        // NETHACKDIR: the binary self-locates via its compiled-in HACKDIR, and
-        // overriding NETHACKDIR to an empty dir makes nethack fail to chdir.
-        .env("HOME", &cfg.data_dir)
-        // The curses windowport draws borders and walls through ncurses ACS.
-        // Under the C locale ncurses emits those as DEC Special Graphics
-        // (smacs + `lqkxmj~`), which our vt100 parser has no charset for, so
-        // players see raw letters. A UTF-8 locale (same as the dcss/dopewars
-        // hosts) plus NCURSES_NO_UTF8_ACS makes ncurses send Unicode
-        // box-drawing instead. The tty windowport never touches ACS.
-        .env("LANG", "C.UTF-8")
-        .env("LC_ALL", "C.UTF-8")
-        .env("NCURSES_NO_UTF8_ACS", "1")
-        .env("LINES", cfg.rows.max(1).to_string())
-        .env("COLUMNS", cfg.cols.max(1).to_string())
-        .stdin(Stdio::from(
+    let mut cmd = TokioCommand::from(child_command(&cfg, rc_path.as_deref()));
+    cmd.stdin(Stdio::from(
             slave
                 .try_clone()
                 .context("clone nethack pty slave for stdin")?,
@@ -195,9 +170,6 @@ async fn run_bridge(
                 .context("clone nethack pty slave for stderr")?,
         ))
         .kill_on_drop(true);
-    if let Some(path) = &rc_path {
-        cmd.env("NETHACKOPTIONS", format!("@{path}"));
-    }
 
     // Give the child its own session and make the PTY its controlling terminal,
     // so curses sizing and job control behave.
@@ -363,6 +335,45 @@ async fn bridge_loop(
             },
         }
     }
+}
+
+/// The nethack child's program, args, and environment; the caller wires the
+/// PTY as stdio.
+fn child_command(cfg: &HostConfig, rc_path: Option<&str>) -> std::process::Command {
+    let mut cmd = std::process::Command::new(&cfg.bin);
+    // Spawn with a cleared environment and an explicit allowlist. Even though
+    // this process is a dedicated host (not late-ssh), keep the env minimal so
+    // the child only ever sees what it needs. NetHack's shell ('!') and suspend
+    // ('^Z') escapes are compiled out in the nethack-build stage; clearing the
+    // env is additional defense in depth.
+    cmd.env_clear()
+        .arg("-u")
+        .arg(&cfg.playname)
+        .env("TERM", &cfg.term)
+        // HOME holds the per-player `.nethackrc`. We deliberately do NOT set
+        // NETHACKDIR: the binary self-locates via its compiled-in HACKDIR, and
+        // overriding NETHACKDIR to an empty dir makes nethack fail to chdir.
+        .env("HOME", &cfg.data_dir)
+        // The curses windowport draws borders and walls through ncurses ACS.
+        // Under the C locale ncurses emits those as DEC Special Graphics
+        // (smacs + `lqkxmj~`), which our vt100 parser has no charset for, so
+        // players see raw letters. A UTF-8 locale (same as the dcss/dopewars
+        // hosts) plus NCURSES_NO_UTF8_ACS makes ncurses send Unicode
+        // box-drawing instead. The tty windowport never touches ACS.
+        .env("LANG", "C.UTF-8")
+        .env("LC_ALL", "C.UTF-8")
+        .env("NCURSES_NO_UTF8_ACS", "1");
+    // The window size comes ONLY from the pty (openpty winsize + TIOCSWINSZ):
+    // LINES/COLUMNS must NOT be exported, because ncurses treats them as an
+    // override of the OS size and then ignores SIGWINCH, freezing the curses
+    // windowport at its spawn-time geometry while late.sh's vt100 grid follows
+    // the resize (same rule as the dcss/brogue hosts).
+    // Materialized per-account rc: the `@` prefix means "config file path",
+    // overriding the shared `$HOME/.nethackrc` defaults.
+    if let Some(path) = rc_path {
+        cmd.env("NETHACKOPTIONS", format!("@{path}"));
+    }
+    cmd
 }
 
 /// Where a player's pushed rc lives. Keyed by the (already sanitized,

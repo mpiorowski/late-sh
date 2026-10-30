@@ -917,6 +917,10 @@ pub struct App {
     /// frame drew it (`None` while it is closed): only a drawn column takes
     /// the keys (`door::spectate::input::own_chat_takes_keys`).
     pub(crate) own_chat_hit: std::cell::Cell<Option<Rect>>,
+    /// The chat was opened since the last frame: it takes the keys before
+    /// any frame has drawn it, so nothing queued behind F4 reaches the game.
+    /// Every frame clears it.
+    pub(crate) own_chat_undrawn: std::cell::Cell<bool>,
     pub(crate) brogue_state: Option<crate::app::door::brogue::state::State>,
     /// Per-session TERM string (from the PTY request), forwarded to the Brogue
     /// host so curses gets a real terminfo entry.
@@ -1301,11 +1305,8 @@ impl App {
             // The watchers' chat over this player's own running game, only
             // while F4 has it open: closed, it counts what is said as unread.
             Screen::Dcss | Screen::Nethack | Screen::Brogue | Screen::Zork => {
-                let game = self.own_watch_chat_open?;
-                match crate::app::door::spectate::state::SpectateGame::of_screen(self.screen) {
-                    Some(screen_game) if screen_game == game => self.own_watch_chat_room_id(game),
-                    Some(_) | None => None,
-                }
+                let game = crate::app::door::spectate::input::open_own_chat_game(self)?;
+                self.own_watch_chat_room_id(game)
             }
             // The Zen pages show the selected room, else #lounge.
             Screen::Zen => self.zen_chat_room_id(),
@@ -1978,6 +1979,7 @@ impl App {
             own_watch_chats: Vec::new(),
             own_watch_chat_open: None,
             own_chat_hit: std::cell::Cell::new(None),
+            own_chat_undrawn: std::cell::Cell::new(false),
             brogue_state: None,
             brogue_term: config.term.clone(),
             brogue_enabled: config.brogue_enabled,
@@ -3110,6 +3112,33 @@ impl App {
         Ok(())
     }
 
+    /// Whether an app-wide modal covers the screen this frame: the one list
+    /// the render (`render.rs`, where every one of these is drawn) and the
+    /// input paths that must not act under a modal read.
+    pub(crate) fn foreground_overlay_open(&self) -> bool {
+        self.calendar.modal.is_some()
+            || self.calendar.context_menu.is_some()
+            || self.show_settings
+            || self.show_quit_confirm
+            || self.show_mod_modal
+            || self.show_hub_modal
+            || self.show_profile_modal
+            || self.show_poll_modal
+            || self.show_gild_modal
+            || self.chat.cyberspace.modal_active()
+            || self.show_bonsai_modal
+            || self.paper.modal.is_some()
+            || self.stream_modal.is_some()
+            || self.show_help
+            || self.show_ultimate_modal
+            || self.chat.reader().is_some()
+            || self.video.modal().is_some()
+            || self.room_search_modal_state.is_open()
+            || self.chat.history_modal.is_open()
+            || self.booth_modal_state.is_open()
+            || self.icon_picker_open
+    }
+
     pub fn handle_input(&mut self, data: &[u8]) {
         use crate::app::common::away::{PresenceInput, paste_end, presence_input};
         if !data.is_empty() {
@@ -3193,29 +3222,14 @@ impl App {
             state.forward_input(data);
             return;
         }
-        // The player's own watch chat (`door/spectate`): F4 in their running
-        // game opens it over the game or closes it, composer open or not.
-        // While it is open (and drawn) every key is the chat's, through the
-        // ordinary parser and the chat gates, never the game's. Zork's F3 is
-        // the one exception: taking a watcher's suggestion closes the chat
-        // and types it, so Enter is the game's again.
+        // The player's own watch chat over their running game
+        // (`door/spectate`): F4 and, while it is open, every key are the
+        // chat's, ahead of the game's passthrough below.
         if let Some(game) = crate::app::door::spectate::state::SpectateGame::of_screen(self.screen)
             && crate::app::door::spectate::chat::own_running_handle(self, game).is_some()
+            && crate::app::door::spectate::input::handle_own_raw(self, game, data)
         {
-            if crate::app::door::spectate::input::is_f4(data) {
-                crate::app::door::spectate::input::toggle_own_chat(self, game);
-                return;
-            }
-            if crate::app::door::spectate::input::own_chat_takes_keys(self) {
-                if game == crate::app::door::spectate::state::SpectateGame::Zork
-                    && crate::app::door::zork::input::is_f3(data)
-                {
-                    crate::app::door::spectate::input::close_own_chat(self);
-                } else {
-                    crate::app::input::handle(self, data);
-                    return;
-                }
-            }
+            return;
         }
         // Same passthrough for the locally-hosted nethack process, except F1,
         // which late.sh remaps to nethack's own `?` help (so the raw F1 escape

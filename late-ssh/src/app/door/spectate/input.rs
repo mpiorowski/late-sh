@@ -158,12 +158,52 @@ pub fn is_f4(data: &[u8]) -> bool {
     data == b"\x1bOS" || data == b"\x1b[14~"
 }
 
+/// One raw input chunk on a watchable door whose game this player runs,
+/// read ahead of the game's passthrough: `true` when the chat took it (or
+/// swallowed it), `false` when the game gets it. F4 opens the chat over the
+/// game or closes it, composer open or not, except under a modal the
+/// chat's keys opened (Settings on Ctrl+O): closing the chat there would
+/// hand the modal's keys to the game, so F4 waits for it to close. While
+/// the chat takes the keys they go through the ordinary parser and the
+/// chat gates. Zork's F3 is the one exception: taking a watcher's
+/// suggestion closes the chat and types it, so Enter is the game's again.
+pub fn handle_own_raw(app: &mut App, game: SpectateGame, data: &[u8]) -> bool {
+    if is_f4(data) {
+        if !app.foreground_overlay_open() {
+            toggle_own_chat(app, game);
+        }
+        return true;
+    }
+    if !own_chat_takes_keys(app) {
+        return false;
+    }
+    if game == SpectateGame::Zork && crate::app::door::zork::input::is_f3(data) {
+        close_own_chat(app);
+        return false;
+    }
+    crate::app::input::handle(app, data);
+    true
+}
+
 /// F4 in a running game: open the watchers' chat over it, taking every key,
 /// or close it and hand the keys back to the game.
 pub fn toggle_own_chat(app: &mut App, game: SpectateGame) {
     match app.own_watch_chat_open {
         Some(_) => close_own_chat(app),
-        None => app.own_watch_chat_open = Some(game),
+        None => {
+            app.own_watch_chat_open = Some(game);
+            app.own_chat_undrawn.set(true);
+        }
+    }
+}
+
+/// The game whose chat is open on this screen: the door F4 opened it over,
+/// while that door is the screen. `None` shut, and on every other screen.
+pub fn open_own_chat_game(app: &App) -> Option<SpectateGame> {
+    let game = SpectateGame::of_screen(app.screen)?;
+    match app.own_watch_chat_open {
+        Some(open) if open == game => Some(game),
+        Some(_) | None => None,
     }
 }
 
@@ -186,13 +226,13 @@ pub fn close_own_chat(app: &mut App) {
 }
 
 /// Whether the player's chat is open over their running game on screen and
-/// takes every key: open for this screen's door, and drawn by the last frame
-/// (`App::own_chat_hit`), so keys never go to a column nobody can see.
+/// takes every key: open for this screen's door, and drawn by the last
+/// frame (`App::own_chat_hit`) or opened since it (`App::own_chat_undrawn`,
+/// keys queued behind F4 in one input batch). Keys never go to a column a
+/// frame chose not to draw (Zork's menus).
 pub fn own_chat_takes_keys(app: &App) -> bool {
-    let Some(game) = SpectateGame::of_screen(app.screen) else {
-        return false;
-    };
-    app.own_watch_chat_open == Some(game) && app.own_chat_hit.get().is_some()
+    open_own_chat_game(app).is_some()
+        && (app.own_chat_undrawn.get() || app.own_chat_hit.get().is_some())
 }
 
 /// The room of the player's open chat, once this session is in it: the

@@ -5356,6 +5356,80 @@ async fn f4_opens_the_watcher_chat_over_a_running_game_and_it_takes_every_key() 
     assert_eq!(app.own_watch_chat_open, None, "the game ended");
 }
 
+/// Keys typed right behind F4, before a frame has drawn the column, are the
+/// chat's as well: in a permadeath game a chat line must never reach the
+/// game as commands. And a modal the chat's keys opened (Settings on
+/// Ctrl+O) keeps the screen: F4 does not close the chat under it, which
+/// would hand the modal's keys to the game.
+#[tokio::test]
+async fn the_watcher_chat_takes_keys_before_its_first_frame_and_keeps_them_under_a_modal() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::door::spectate::state::SpectateGame;
+    use late_core::models::chat_room::{ChatRoom, WatchDoor};
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "own-chat-f4-batch").await;
+    let client = test_db.db.get().await.expect("db client");
+    let room = ChatRoom::get_or_create_watch_room(&client, WatchDoor::Nethack, "batcher")
+        .await
+        .expect("the player's watch room");
+    ChatRoomMember::join(&client, room.id, user.id)
+        .await
+        .expect("join the watch room");
+    let mut app = make_app(test_db.db.clone(), user.id, "own-chat-f4-batch-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_app(&mut app, "the room list", |app| {
+        app.chat.room_by_id(room.id).is_some()
+    })
+    .await;
+    app.live_games
+        .publish_chat_room_for_tests(SpectateGame::Nethack, "batcher", room.id);
+    app.set_screen(Screen::Games);
+    app.enter_nethack();
+    let state = app.nethack_state.as_mut().expect("nethack state");
+    state.force_claimed_handle_for_test("batcher");
+    state.force_running_for_test();
+    app.set_screen(Screen::Nethack);
+    app.tick();
+    render_plain(&mut app);
+
+    // F4 and `i` in one input batch: no frame between them.
+    app.handle_input(b"OS");
+    app.handle_input(b"i");
+    assert!(
+        app.chat.is_composing(),
+        "i is the chat's before the column is drawn"
+    );
+    assert_eq!(app.chat.composer_room_id(), Some(room.id));
+    flush_lone_escape(&mut app);
+    assert!(!app.chat.is_composing(), "Esc leaves the composer");
+    assert_eq!(
+        app.own_watch_chat_open,
+        Some(SpectateGame::Nethack),
+        "and the chat stays open"
+    );
+    render_plain(&mut app);
+
+    // Settings opens over the chat; F4 waits for it to close.
+    app.handle_input(b"");
+    assert!(app.show_settings, "Ctrl+O opens Settings over the chat");
+    app.handle_input(b"OS");
+    assert!(app.show_settings, "Settings stays");
+    assert_eq!(
+        app.own_watch_chat_open,
+        Some(SpectateGame::Nethack),
+        "the chat stays open under the modal"
+    );
+    app.handle_input(b"q");
+    assert_eq!(app.screen, Screen::Nethack);
+    assert!(!app.show_quit_confirm);
+    flush_lone_escape(&mut app);
+    assert!(!app.show_settings, "Esc closes Settings");
+    app.handle_input(b"OS");
+    assert_eq!(app.own_watch_chat_open, None, "then F4 closes the chat");
+}
+
 /// Zork's player opens their watchers' chat the same way, and F3, which
 /// types a watcher's suggestion, closes it on the way so the story has the
 /// keys for Enter.

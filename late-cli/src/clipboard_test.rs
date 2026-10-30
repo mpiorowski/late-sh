@@ -48,6 +48,51 @@ fn a_copied_image_file_becomes_png_with_its_pixels() {
     assert_eq!(decoded.get_pixel(2, 1), &Rgba([0, 0, 255, 255]));
 }
 
+/// A PNG of nothing but a header: the dimensions it claims are read, no
+/// pixel is decoded.
+fn png_header_only(width: u32, height: u32) -> Vec<u8> {
+    let mut chunk = Vec::new();
+    chunk.extend_from_slice(b"IHDR");
+    chunk.extend_from_slice(&width.to_be_bytes());
+    chunk.extend_from_slice(&height.to_be_bytes());
+    // 8-bit RGBA, deflate, no filter, no interlace.
+    chunk.extend_from_slice(&[8, 6, 0, 0, 0]);
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend_from_slice(&13u32.to_be_bytes());
+    png.extend_from_slice(&chunk);
+    png.extend_from_slice(&crc32(&chunk).to_be_bytes());
+    png
+}
+
+fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = 0xFFFF_FFFFu32;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = match crc & 1 {
+                1 => (crc >> 1) ^ 0xEDB8_8320,
+                _ => crc >> 1,
+            };
+        }
+    }
+    !crc
+}
+
+/// A small file claiming a huge picture is refused on its header, before
+/// the decoder is given the memory for it.
+#[test]
+fn a_copied_file_claiming_a_huge_picture_is_refused_before_decoding() {
+    let scratch = Scratch::new("huge.png");
+    std::fs::write(&scratch.0, png_header_only(100_000, 100_000)).expect("write fixture");
+
+    let err = png_from_file(&scratch.0).expect_err("over the caps");
+
+    assert!(
+        format!("{err:#}").contains("dimensions are too large"),
+        "got: {err:#}"
+    );
+}
+
 /// A copied file that is not a picture says so, naming the file.
 #[test]
 fn a_copied_file_that_is_not_an_image_is_refused() {

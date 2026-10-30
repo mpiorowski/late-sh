@@ -2447,12 +2447,26 @@ fn chat_state_with_cyberspace(
     ChatState,
     crate::app::chat::cyberspace::svc::CyberspaceService,
 ) {
+    let ai = crate::app::ai::svc::AiService::new(false, None);
+    let summary = crate::app::ai::summary::SummaryService::new(test_db.db.clone(), ai);
+    chat_state_sharing_summary(test_db, user_id, summary)
+}
+
+/// A session on `summary`: two of these on one service see the same
+/// summary events, as two sessions of one account on one process do.
+fn chat_state_sharing_summary(
+    test_db: &late_core::test_utils::TestDb,
+    user_id: Uuid,
+    summary: crate::app::ai::summary::SummaryService,
+) -> (
+    ChatState,
+    crate::app::chat::cyberspace::svc::CyberspaceService,
+) {
     let db = test_db.db.clone();
     let notifications = crate::app::chat::notifications::svc::NotificationService::new(db.clone());
     let chat = crate::app::chat::svc::ChatService::new(db.clone(), notifications.clone());
     let ai = crate::app::ai::svc::AiService::new(false, None);
     let translation = crate::app::ai::translate::TranslationService::new(db.clone(), ai.clone());
-    let summary = crate::app::ai::summary::SummaryService::new(db.clone(), ai.clone());
     let articles = crate::app::chat::news::svc::ArticleService::new(db.clone(), ai, chat.clone());
     let (notifier, _outbox) = crate::app::notify::channel();
     // Dead base URL: state logic under test never talks to the network.
@@ -4288,7 +4302,8 @@ async fn a_summary_lands_only_on_the_session_that_asked() {
     let test_db = crate::test_helpers::new_test_db().await;
     let user = late_core::test_utils::create_test_user(&test_db.db, "sum_session").await;
     let mut asking = chat_state_with_cyberspace(&test_db, user.id).0;
-    let mut other = chat_state_with_cyberspace(&test_db, user.id).0;
+    let mut other =
+        chat_state_sharing_summary(&test_db, user.id, asking.summary_service.clone()).0;
     let request_id = Uuid::now_v7();
     asking.summary_requests.insert(request_id);
 

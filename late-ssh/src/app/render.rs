@@ -241,9 +241,11 @@ struct DrawContext<'a> {
     /// this player's own room beside their running game on a watchable
     /// door's screen. `None` until this session is in the room.
     watch_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
-    /// The door whose running game has this player's watch chat open over
-    /// it (`App::own_watch_chat_open`, F4).
-    own_watch_chat_open: Option<crate::app::door::spectate::state::SpectateGame>,
+    /// This screen's door, when this player's watch chat is open over its
+    /// game (`spectate::input::open_own_chat_game`, F4).
+    own_chat_open: Option<crate::app::door::spectate::state::SpectateGame>,
+    /// An app-wide modal covers the screen (`App::foreground_overlay_open`).
+    foreground_overlay_open: bool,
     /// What was said in the chat F4 opens on this screen since it was last
     /// open, for the frame title's `F4 chat` hint: the player's watch room
     /// over their running door game, the world's chat on the Realm board.
@@ -500,6 +502,8 @@ impl App {
         // game shows its watchers and their chat.
         let own_screen_game =
             crate::app::door::spectate::state::SpectateGame::of_screen(self.screen);
+        let own_chat_open = crate::app::door::spectate::input::open_own_chat_game(self);
+        let foreground_overlay_open = self.foreground_overlay_open();
         let own_game_key = own_screen_game.and_then(|game| {
             let handle = crate::app::door::spectate::chat::own_running_handle(self, game)?;
             crate::app::door::spectate::state::LiveGameKey::new(game, &handle)
@@ -525,6 +529,7 @@ impl App {
         self.live.hit.set(None);
         self.live.panel_hit.set(None);
         self.own_chat_hit.set(None);
+        self.own_chat_undrawn.set(false);
         self.chat.last_composer_rect.set(None);
         // `last_composer_viewport_top` is intentionally NOT reset here: it
         // replays ratatui-textarea's minimal-scroll rule, which needs the
@@ -727,9 +732,7 @@ impl App {
                 Some(_) => None,
                 None => self.realm.chat_room_id(),
             },
-            (_, Some(game)) if self.own_watch_chat_open != Some(game) => {
-                self.own_watch_chat_room_id(game)
-            }
+            (_, Some(game)) if own_chat_open.is_none() => self.own_watch_chat_room_id(game),
             (_, Some(_) | None) => None,
         };
         let chat_title_unread = shut_chat_room_id
@@ -1743,7 +1746,8 @@ impl App {
                         own_watchers,
                         held_watchers,
                         watch_chat_view,
-                        own_watch_chat_open: self.own_watch_chat_open,
+                        own_chat_open,
+                        foreground_overlay_open,
                         chat_title_unread,
                         own_suggestion,
                         greendragon_state: self.greendragon_state.as_ref(),
@@ -2209,7 +2213,7 @@ impl App {
         } else {
             app_content_and_sidebar_areas(inner, ctx.show_right_sidebar)
         };
-        let foreground_overlay_open = foreground_terminal_overlay_open(&ctx);
+        let foreground_overlay_open = ctx.foreground_overlay_open;
         // The tour stops that write into a real surface: the two modals take
         // the header themselves, the practice table and the dungeon fight
         // get it drawn across the top of the page.
@@ -2417,9 +2421,7 @@ impl App {
                 if let Some(state) = ctx.nethack_state.as_deref_mut() {
                     let (game_area, own_chat) = own_chat_split(
                         crate::app::door::spectate::state::SpectateGame::Nethack,
-                        ctx.own_watch_chat_open
-                            == Some(crate::app::door::spectate::state::SpectateGame::Nethack)
-                            && state.is_running(),
+                        ctx.own_chat_open.is_some() && state.is_running(),
                         content_area,
                     );
                     // Size the child PTY to the exact widget area before blitting.
@@ -2443,9 +2445,7 @@ impl App {
                 if let Some(state) = ctx.dcss_state.as_deref_mut() {
                     let (game_area, own_chat) = own_chat_split(
                         crate::app::door::spectate::state::SpectateGame::Dcss,
-                        ctx.own_watch_chat_open
-                            == Some(crate::app::door::spectate::state::SpectateGame::Dcss)
-                            && state.is_running(),
+                        ctx.own_chat_open.is_some() && state.is_running(),
                         content_area,
                     );
                     // Size the child PTY to the exact widget area before blitting.
@@ -2469,9 +2469,7 @@ impl App {
                 if let Some(state) = ctx.brogue_state.as_deref_mut() {
                     let (game_area, own_chat) = own_chat_split(
                         crate::app::door::spectate::state::SpectateGame::Brogue,
-                        ctx.own_watch_chat_open
-                            == Some(crate::app::door::spectate::state::SpectateGame::Brogue)
-                            && state.is_running(),
+                        ctx.own_chat_open.is_some() && state.is_running(),
                         content_area,
                     );
                     // Size the child PTY to the exact widget area before blitting.
@@ -2518,9 +2516,7 @@ impl App {
                     // menus keep the whole area.
                     let (game_area, own_chat) = own_chat_split(
                         crate::app::door::spectate::state::SpectateGame::Zork,
-                        ctx.own_watch_chat_open
-                            == Some(crate::app::door::spectate::state::SpectateGame::Zork)
-                            && state.game_visible(),
+                        ctx.own_chat_open.is_some() && state.game_visible(),
                         content_area,
                     );
                     state.set_viewport(game_area);
@@ -3157,30 +3153,6 @@ impl App {
             crate::app::deadchannel::haunt::ui::draw_breakthrough(frame, area, breakthrough);
         }
     }
-}
-
-fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
-    ctx.calendar.modal.is_some()
-        || ctx.calendar.context_menu.is_some()
-        || ctx.show_settings
-        || ctx.show_quit_confirm
-        || ctx.show_mod_modal
-        || ctx.show_hub_modal
-        || ctx.show_profile_modal
-        || ctx.show_poll_modal
-        || ctx.show_gild_modal
-        || ctx.cyberspace_modal.is_some()
-        || ctx.show_bonsai_modal
-        || ctx.paper_modal.is_some()
-        || ctx.stream_modal.is_some()
-        || ctx.show_help
-        || ctx.show_ultimate_modal
-        || ctx.news_reader.is_some()
-        || ctx.video_modal.is_some()
-        || ctx.room_search_modal_open
-        || ctx.chat_state.history_modal.is_open()
-        || ctx.booth_modal_open
-        || ctx.icon_picker_open
 }
 
 /// A watchable door's content area split between its game and the player's
