@@ -4302,8 +4302,7 @@ async fn a_summary_lands_only_on_the_session_that_asked() {
     let test_db = crate::test_helpers::new_test_db().await;
     let user = late_core::test_utils::create_test_user(&test_db.db, "sum_session").await;
     let mut asking = chat_state_with_cyberspace(&test_db, user.id).0;
-    let mut other =
-        chat_state_sharing_summary(&test_db, user.id, asking.summary_service.clone()).0;
+    let mut other = chat_state_sharing_summary(&test_db, user.id, asking.summary_service.clone()).0;
     let request_id = Uuid::now_v7();
     asking.summary_requests.insert(request_id);
 
@@ -4330,7 +4329,10 @@ async fn a_summary_lands_only_on_the_session_that_asked() {
         asking.overlay.as_ref().map(|o| o.title.as_str()),
         Some("#lounge catch-up")
     );
-    assert!(asking.summary_requests.is_empty(), "the answer settles the request");
+    assert!(
+        asking.summary_requests.is_empty(),
+        "the answer settles the request"
+    );
 }
 
 /// The catch-up head is the one absolute time in the overlay, so it is

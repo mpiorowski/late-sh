@@ -405,7 +405,7 @@ pub fn own_game_split(area: Rect, game: SpectateGame) -> (Rect, OwnChat) {
         width: 1,
         ..area
     };
-    let game_area = match area.width >= min_cols + width + 1 {
+    let game_area = match area.width > min_cols + width {
         true => Rect {
             width: area.width - width - 1,
             ..area

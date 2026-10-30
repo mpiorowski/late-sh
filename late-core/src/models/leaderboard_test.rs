@@ -12,10 +12,10 @@ use crate::{
         drinks::{UserDrinks, WELCOME_DRINK_POINTS},
         le_word,
         leaderboard::{
-            DailyPuzzle, DoorGame, LATEANIA_XP_AT_LEVEL_CAP, LATEANIA_XP_PER_PARAGON_LEVEL,
-            CountedSpan, LobbyGame, OnlineTimeFold, OnlineTimeIncrement, RankedEntry, ScoreGame,
-            WeekBest, WeekGame,
-            apply_online_time_batch, fetch_leaderboard_data, fold_online_time_credits, week_bests,
+            CountedSpan, DailyPuzzle, DoorGame, LATEANIA_XP_AT_LEVEL_CAP,
+            LATEANIA_XP_PER_PARAGON_LEVEL, LobbyGame, OnlineTimeFold, OnlineTimeIncrement,
+            RankedEntry, ScoreGame, WeekBest, WeekGame, apply_online_time_batch,
+            fetch_leaderboard_data, fold_online_time_credits, week_bests,
         },
         minesweeper,
         mud_character::MudCharacter,
@@ -93,7 +93,12 @@ fn online_time_credits_each_moment_once_whatever_order_the_pods_land_in() {
     // and the three merge into one.
     let fold = fold_online_time_credits(
         fold.counted,
-        &[online_span(user_id, month_start, start + Duration::seconds(5), 20)],
+        &[online_span(
+            user_id,
+            month_start,
+            start + Duration::seconds(5),
+            20,
+        )],
         keep_from,
     );
     assert_eq!(
@@ -109,7 +114,12 @@ fn online_time_credits_each_moment_once_whatever_order_the_pods_land_in() {
     // month row to write.
     let fold = fold_online_time_credits(
         fold.counted,
-        &[online_span(user_id, month_start, start + Duration::seconds(5), 20)],
+        &[online_span(
+            user_id,
+            month_start,
+            start + Duration::seconds(5),
+            20,
+        )],
         keep_from,
     );
     assert_eq!(
@@ -274,7 +284,10 @@ async fn online_time_batches_never_count_one_moment_twice_and_rank_both_windows(
         .await
         .expect("alice previous month online time")
         .get(0);
-    assert_eq!(alice_previous, 50_000, "the late span lands in its own month");
+    assert_eq!(
+        alice_previous, 50_000,
+        "the late span lands in its own month"
+    );
 
     let data = fetch_leaderboard_data(&client)
         .await

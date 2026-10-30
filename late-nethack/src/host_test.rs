@@ -59,8 +59,7 @@ fn child_curses_sees_the_pty_resized_after_spawn() {
     // Stands in for nethack: waits for a key, then asks curses for its size.
     let bin = format!("{data_dir}/fake-nethack");
     std::fs::write(&bin, "#!/bin/sh\nread _\ntput cols\ntput lines\n").expect("write fake bin");
-    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755))
-        .expect("chmod fake bin");
+    std::fs::set_permissions(&bin, std::fs::Permissions::from_mode(0o755)).expect("chmod fake bin");
     let cfg = HostConfig {
         bin,
         data_dir,
@@ -101,6 +100,10 @@ fn child_curses_sees_the_pty_resized_after_spawn() {
         out.extend_from_slice(&buf[..n]);
     }
     let out = String::from_utf8(out).expect("utf-8 output");
-    let sizes: Vec<&str> = out.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    let sizes: Vec<&str> = out
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect();
     assert_eq!(sizes, ["60", "20"]);
 }

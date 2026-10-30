@@ -9,10 +9,9 @@ struct Scratch(PathBuf);
 
 impl Scratch {
     fn new(name: &str) -> Self {
-        Self(std::env::temp_dir().join(format!(
-            "late-clipboard-test-{}-{name}",
-            std::process::id()
-        )))
+        Self(
+            std::env::temp_dir().join(format!("late-clipboard-test-{}-{name}", std::process::id())),
+        )
     }
 }
 
@@ -38,30 +37,35 @@ fn a_copied_image_file_becomes_png_with_its_pixels() {
 
     let png = png_from_file(&scratch.0).expect("an image file");
 
-    assert_eq!(
-        image::guess_format(&png).expect("format"),
-        ImageFormat::Png
-    );
+    assert_eq!(image::guess_format(&png).expect("format"), ImageFormat::Png);
     let decoded = image::load_from_memory(&png).expect("decode").into_rgba8();
     assert_eq!(decoded.dimensions(), (3, 2));
     assert_eq!(decoded.get_pixel(0, 0), &Rgba([255, 0, 0, 255]));
     assert_eq!(decoded.get_pixel(2, 1), &Rgba([0, 0, 255, 255]));
 }
 
-/// A PNG of nothing but a header: the dimensions it claims are read, no
-/// pixel is decoded.
-fn png_header_only(width: u32, height: u32) -> Vec<u8> {
-    let mut chunk = Vec::new();
-    chunk.extend_from_slice(b"IHDR");
-    chunk.extend_from_slice(&width.to_be_bytes());
-    chunk.extend_from_slice(&height.to_be_bytes());
+/// A PNG with a header and an empty pixel stream: the dimensions it claims
+/// are read, no pixel is decoded. The decoder reads on to the first IDAT
+/// chunk before it reports dimensions, so the file needs one.
+fn png_without_pixels(width: u32, height: u32) -> Vec<u8> {
+    let mut ihdr = Vec::new();
+    ihdr.extend_from_slice(&width.to_be_bytes());
+    ihdr.extend_from_slice(&height.to_be_bytes());
     // 8-bit RGBA, deflate, no filter, no interlace.
-    chunk.extend_from_slice(&[8, 6, 0, 0, 0]);
+    ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
     let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
-    png.extend_from_slice(&13u32.to_be_bytes());
+    push_chunk(&mut png, b"IHDR", &ihdr);
+    push_chunk(&mut png, b"IDAT", &[]);
+    push_chunk(&mut png, b"IEND", &[]);
+    png
+}
+
+fn push_chunk(png: &mut Vec<u8>, kind: &[u8; 4], data: &[u8]) {
+    let mut chunk = kind.to_vec();
+    chunk.extend_from_slice(data);
+    png.extend_from_slice(&(data.len() as u32).to_be_bytes());
     png.extend_from_slice(&chunk);
     png.extend_from_slice(&crc32(&chunk).to_be_bytes());
-    png
 }
 
 fn crc32(bytes: &[u8]) -> u32 {
@@ -83,7 +87,7 @@ fn crc32(bytes: &[u8]) -> u32 {
 #[test]
 fn a_copied_file_claiming_a_huge_picture_is_refused_before_decoding() {
     let scratch = Scratch::new("huge.png");
-    std::fs::write(&scratch.0, png_header_only(100_000, 100_000)).expect("write fixture");
+    std::fs::write(&scratch.0, png_without_pixels(100_000, 100_000)).expect("write fixture");
 
     let err = png_from_file(&scratch.0).expect_err("over the caps");
 

@@ -41,7 +41,6 @@ fn online(
     }
 }
 
-
 #[test]
 fn lateania_boss_awards_have_profile_badge_codes() {
     assert_eq!(award_badge(LATEANIA_ARCHDEMON_AWARD_CATEGORY, 1), "LMG");

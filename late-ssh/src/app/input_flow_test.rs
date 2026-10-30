@@ -5421,11 +5421,16 @@ async fn the_watcher_chat_takes_keys_before_its_first_frame_and_keeps_them_under
         Some(SpectateGame::Nethack),
         "the chat stays open under the modal"
     );
+    // `q` is the modal's: it closes Settings, not the app or the screen.
     app.handle_input(b"q");
+    assert!(!app.show_settings, "q closes Settings");
     assert_eq!(app.screen, Screen::Nethack);
     assert!(!app.show_quit_confirm);
-    flush_lone_escape(&mut app);
-    assert!(!app.show_settings, "Esc closes Settings");
+    assert_eq!(
+        app.own_watch_chat_open,
+        Some(SpectateGame::Nethack),
+        "the chat outlives the modal"
+    );
     app.handle_input(b"OS");
     assert_eq!(app.own_watch_chat_open, None, "then F4 closes the chat");
 }

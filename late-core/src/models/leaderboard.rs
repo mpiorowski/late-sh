@@ -520,8 +520,7 @@ impl DailyStatuses {
     /// The marks for `today`: none at all once `today` has moved past the
     /// day the snapshot was read for, since every board has rolled over.
     pub fn on(&self, today: NaiveDate) -> &HashMap<Uuid, DailyCompletionStatus> {
-        static NOBODY: LazyLock<HashMap<Uuid, DailyCompletionStatus>> =
-            LazyLock::new(HashMap::new);
+        static NOBODY: LazyLock<HashMap<Uuid, DailyCompletionStatus>> = LazyLock::new(HashMap::new);
         match self.day == today {
             true => &self.by_user,
             false => &NOBODY,

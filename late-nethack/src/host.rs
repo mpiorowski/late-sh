@@ -155,21 +155,21 @@ async fn run_bridge(
 
     let mut cmd = TokioCommand::from(child_command(&cfg, rc_path.as_deref()));
     cmd.stdin(Stdio::from(
-            slave
-                .try_clone()
-                .context("clone nethack pty slave for stdin")?,
-        ))
-        .stdout(Stdio::from(
-            slave
-                .try_clone()
-                .context("clone nethack pty slave for stdout")?,
-        ))
-        .stderr(Stdio::from(
-            slave
-                .try_clone()
-                .context("clone nethack pty slave for stderr")?,
-        ))
-        .kill_on_drop(true);
+        slave
+            .try_clone()
+            .context("clone nethack pty slave for stdin")?,
+    ))
+    .stdout(Stdio::from(
+        slave
+            .try_clone()
+            .context("clone nethack pty slave for stdout")?,
+    ))
+    .stderr(Stdio::from(
+        slave
+            .try_clone()
+            .context("clone nethack pty slave for stderr")?,
+    ))
+    .kill_on_drop(true);
 
     // Give the child its own session and make the PTY its controlling terminal,
     // so curses sizing and job control behave.

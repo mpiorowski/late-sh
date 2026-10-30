@@ -308,7 +308,11 @@ fn daily_share(app: &App, puzzle: DailyPuzzle) -> Option<ShareCard> {
 /// with this session's own wins, so a puzzle solved a moment ago counts.
 pub(crate) fn day_card(app: &App) -> ShareCard {
     let today = chrono::Utc::now().date_naive();
-    let snapshot = app.leaderboard.user_daily_statuses.on(today).get(&app.user_id);
+    let snapshot = app
+        .leaderboard
+        .user_daily_statuses
+        .on(today)
+        .get(&app.user_id);
     let session = app.session_daily_wins.today();
     let streak = app.quest_state.snapshot().daily_streak.consecutive_days;
     share::day_card(
