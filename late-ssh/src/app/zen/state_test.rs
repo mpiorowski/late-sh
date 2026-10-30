@@ -292,6 +292,18 @@ fn the_equalizer_shows_through_a_music_or_visualizer_tile_and_zoom_keeps_only_th
         look: Look::default(),
     });
     assert!(!no_eq.shows_equalizer());
+    assert!(
+        !no_eq.paints_on_half_edge(),
+        "a clock and a reef hold no half-edge motion"
+    );
+
+    // The bonsai sways on the half edge without an equalizer.
+    let bonsai_only = ZenState::new(RiceLayout {
+        root: Node::leaf(TileKind::Bonsai),
+        look: Look::default(),
+    });
+    assert!(!bonsai_only.shows_equalizer());
+    assert!(bonsai_only.paints_on_half_edge());
 }
 
 #[test]
@@ -673,33 +685,20 @@ fn a_guest_lives_on_one_tile_and_toggling_moves_it_or_takes_it_off() {
 
 #[test]
 fn the_stock_home_is_the_rail_the_chat_and_the_sidebar_list_in_order() {
-    use late_core::models::user::{RightSidebarComponent, RightSidebarComponentSetting};
-    let components: Vec<RightSidebarComponentSetting> = [
-        RightSidebarComponent::Live,
-        RightSidebarComponent::Music,
-        RightSidebarComponent::Bonsai,
-        RightSidebarComponent::Daily,
-        RightSidebarComponent::Pet,
-        RightSidebarComponent::Tank,
-    ]
-    .into_iter()
-    .map(|component| RightSidebarComponentSetting {
-        component,
-        enabled: component != RightSidebarComponent::Bonsai,
-    })
-    .collect();
-    // The bonsai is off in Settings, the pet is not owned: neither gets
-    // a tile. The tank is owned, so it does.
-    let home = RiceLayout::home(&components, false, true);
+    // The stock is fixed: the sidebar's panels in its order, then the
+    // owned companions. The pet is not owned, so it gets no tile; the
+    // tank is, so it does.
+    let home = RiceLayout::home(false, true);
     assert_eq!(
         home.root.leaf_kinds(),
         vec![
             TileKind::Rooms,
             TileKind::Chat,
             TileKind::Presence,
-            TileKind::Live,
             TileKind::Music,
             TileKind::Lobby,
+            TileKind::Live,
+            TileKind::Bonsai,
             TileKind::Tank,
         ]
     );

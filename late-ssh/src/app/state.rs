@@ -19,7 +19,7 @@ use uuid::Uuid;
 
 use late_core::models::leaderboard::{ArcadeGame, DailyPuzzle, LeaderboardData};
 use late_core::models::profile::Profile;
-use late_core::models::user::{LandingPage, RightSidebarMode, RoomListMode, TerminalImagesMode};
+use late_core::models::user::{LandingPage, RightSidebarMode, TerminalImagesMode};
 use late_core::models::user_ssh_key::KeyLayout;
 
 use crate::{
@@ -106,16 +106,13 @@ fn voice_toggle_intent(
     }
 }
 
-/// Rail modes in force: this device's stored layout when its key has one, else
-/// the account default. Free-standing so `App::new` can seed the settings draft
-/// with it before the `App` itself exists.
-fn device_rails_or_profile(
-    device_rails: Option<KeyLayout>,
-    profile: &Profile,
-) -> (RoomListMode, RightSidebarMode) {
+/// The Arcade sidebar mode in force: this device's stored mode when its key
+/// has one, else the account default. Free-standing so `App::new` can seed
+/// the settings draft with it before the `App` itself exists.
+fn device_rails_or_profile(device_rails: Option<KeyLayout>, profile: &Profile) -> RightSidebarMode {
     match device_rails {
-        Some(layout) => (layout.room_list_mode, layout.right_sidebar_mode),
-        None => (profile.room_list_mode, profile.right_sidebar_mode),
+        Some(layout) => layout.right_sidebar_mode,
+        None => profile.right_sidebar_mode,
     }
 }
 
@@ -575,8 +572,8 @@ pub struct App {
     /// Home as a tile tree (`app/zen`, `RicePage::Home`): the stock Home
     /// until arranged (`Ctrl+E`).
     pub(crate) home: crate::app::zen::state::ZenState,
-    /// Whether the account ever arranged Home: a stock page follows the
-    /// sidebar list in Settings, an arranged one is its own.
+    /// Whether this device ever arranged Home: a stock page follows the
+    /// companions the account owns, an arranged one is its own.
     pub(crate) home_edited: bool,
     /// Where `Ctrl+F` was pressed, so the chord hands the page back; cleared
     /// whenever Zen is left, and `None` on a session that landed on Zen.
@@ -1233,12 +1230,12 @@ impl App {
     /// its key has one, else the live account profile. The single read path for
     /// rail visibility, so render, input, and the settings modal can never
     /// disagree about which layout is in force.
-    pub(crate) fn rail_modes(&self) -> (RoomListMode, RightSidebarMode) {
+    pub(crate) fn rail_modes(&self) -> RightSidebarMode {
         device_rails_or_profile(self.device_rails, self.profile_state.profile())
     }
 
-    /// Adopt the two rail rows from the settings-modal draft as this device's
-    /// layout. A no-op when they already match, so unrelated tweaks in the same
+    /// Adopt the sidebar row from the settings-modal draft as this device's
+    /// mode. A no-op when it already matches, so unrelated tweaks in the same
     /// modal do not write to the key.
     pub(crate) fn sync_device_rails_from_settings(&mut self) {
         let edited = self.settings_modal_state.device_rails();
@@ -1247,10 +1244,9 @@ impl App {
         }
     }
 
-    fn set_device_rails(&mut self, modes: (RoomListMode, RightSidebarMode)) {
+    fn set_device_rails(&mut self, mode: RightSidebarMode) {
         let layout = KeyLayout {
-            room_list_mode: modes.0,
-            right_sidebar_mode: modes.1,
+            right_sidebar_mode: mode,
         };
         self.device_rails = Some(layout);
         // Keyless sessions (ghost bots, tests) have no device to remember: the
@@ -1735,7 +1731,6 @@ impl App {
             ),
             home: {
                 let stock = crate::app::zen::state::RiceLayout::home(
-                    &initial_profile.right_sidebar_components,
                     shop_state.entitlements().has_pet_companion(),
                     shop_state.entitlements().has_aquarium(),
                 );
@@ -3639,7 +3634,7 @@ impl App {
         use crate::app::zen::layout as zen_layout;
         let rice = self.rice();
         let area = self.rice_tiles_area();
-        let zoomed = rice.zoomed_tile(area.width);
+        let zoomed = rice.zoomed_tile();
         let chrome = rice.chrome();
         zen_layout::tile_rects(&rice.rice.root, area, rice.gaps(), zoomed)
             .into_iter()
@@ -3725,12 +3720,11 @@ impl App {
         self.rice_mut().pin_unbound_chats(room_id);
     }
 
-    /// Keep Home's stock layout in step with the account: the sidebar
-    /// list in Settings and the companions it owns. An arranged Home
-    /// keeps its own tree and only its `R` reset follows.
+    /// Keep Home's stock layout in step with the companions the account
+    /// owns (a pet or a tank bought mid-session gets its tile). An arranged
+    /// Home keeps its own tree and only its `R` reset follows.
     pub(crate) fn sync_home_stock(&mut self) {
         let stock = crate::app::zen::state::RiceLayout::home(
-            &self.profile_state.profile().right_sidebar_components,
             self.shop_state.entitlements().has_pet_companion(),
             self.shop_state.entitlements().has_aquarium(),
         );
@@ -3839,9 +3833,12 @@ impl App {
             return;
         }
         self.zen_layout_dirty = false;
-        self.profile_state
-            .service()
-            .set_zen_layout(self.user_id, self.zen.rice.to_json());
+        // The layout is this device's: it goes on the SSH key. A keyless
+        // session (ghost bots, tests) keeps the edit for the session alone.
+        if let Some(fingerprint) = self.key_fingerprint.clone() {
+            self.profile_state
+                .set_device_zen_layout(fingerprint, self.zen.rice.to_json());
+        }
     }
 
     /// Write Home's layout if an edit is pending, the same way.
@@ -3850,9 +3847,10 @@ impl App {
             return;
         }
         self.home_layout_dirty = false;
-        self.profile_state
-            .service()
-            .set_home_layout(self.user_id, self.home.rice.to_json());
+        if let Some(fingerprint) = self.key_fingerprint.clone() {
+            self.profile_state
+                .set_device_home_layout(fingerprint, self.home.rice.to_json());
+        }
     }
 
     /// Both pages' pending writes.

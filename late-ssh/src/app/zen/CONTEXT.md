@@ -12,7 +12,9 @@
 
 One top-level page with no app frame, no HUD, no sidebar: **Rice**, a
 binary split tree of tiles (`state.rs`), edited in place and persisted per
-account in `users.settings.zen_layout` as the JSON `RiceLayout` serializes
+device, on the SSH key the session authenticated with
+(`user_ssh_keys.settings.zen_layout`; the account's `users.settings.zen_layout`
+is only the seed for a key with none), as the JSON `RiceLayout` serializes
 to. A chat leaf also carries the room it is bound to (`room`, absent for
 the current room), so a page can hold several rooms side by side, up to
 `MAX_CHAT_TILES` (10): each chat tile is a room drawn and row-cached every
@@ -137,13 +139,16 @@ Home (`RiceLayout::home`) is the page as it always was: the room rail
 (`rooms`, `HOME_RAIL_COLS` fixed), the chat hosting the now strip and the
 board's day (a `chat` bound to no room, so it shows the rail's; a stored
 `center` reads as one), and the sidebar column (`HOME_SIDEBAR_COLS`):
-`presence`, then one panel tile per enabled sidebar component the account
-can draw (`live`, `music`, `bonsai`, `lobby`, owned `pet` and `tank`),
-each at the sidebar panel's height, the last taking the rest. The stock
-follows Settings (`App::sync_home_stock`, on the profile snapshot and the
-one-hertz edge) until the account arranges the page; from then on the
-stored layout (`users.settings.home_layout`, `home_edited`) is its own and
-`R` resets to the current stock.
+`presence`, then the fixed panel list (`music`, `lobby`, `live`, `bonsai`,
+then the owned `pet` and `tank`), each at the sidebar panel's height, the
+last taking the rest. The Settings panel list is the Arcade's alone. The
+stock follows the companions the account owns (`App::sync_home_stock`, on
+the one-hertz edge) until the page is arranged; from then on the stored
+layout is its own and `R` resets to the current stock. The layout is this
+device's (`user_ssh_keys.settings.home_layout`, the account's `home_layout`
+the seed for a key with none; `home_edited`), and nothing about the
+terminal's size changes it: a page is drawn as arranged at every width, so
+a phone arranges its own Home once and keeps it on its key.
 
 The look is Home's, not Zen's (`layout::Chrome::Rules`): no boxes, a
 `── title ──` rule over a panel tile (`sidebar::draw_panel_rule`, lit while
@@ -185,11 +190,10 @@ simulation, `App::reef_tile_inner`) only in `ui::reef_form` (wider than
 tile narrower than half the canvas draws the sidebar's preview; a music
 tile tall enough draws the sidebar's stage, else Zen's rows.
 
-Chat only: `\` zooms Home's chat of the moment (the active chat tile)
-over the page and back (`ZenState::zoomed_tile`), and a
-page narrower than `HOME_FULL_MIN_COLS` (96) is chat only on its own, so
-a phone lands on the chat without arranging anything. The device rail
-modes (Settings, Appearance) no longer reach Home.
+Zoom: `z` in arrange mode shows the focused tile alone
+(`ZenState::zoomed_tile`) as a preview; leaving the mode shows the page
+whole. There is no chat-only key and no narrow fold: a device that wants
+the chat alone arranges it so.
 
 ## 2. File map
 
@@ -213,9 +217,11 @@ of Home's keys, `Ctrl+E` among the reserved chords, `\` and the Esc arm);
 `rice_tile_rects`, `App::zen_chat_rows_cache`, `sync_aquarium_bounds`,
 `sync_home_stock`, and `mark_zen_layout_dirty` / `flush_rice_layouts` in
 `state.rs`; the aquarium stepping, the ascii tile's cadence edge
-(`ascii_edge`), and anim edge in `tick.rs`; `extract_zen_layout` /
-`User::set_zen_layout` and `extract_home_layout` / `User::set_home_layout`
-in `late-core/src/models/user.rs`. The Home arm of `render.rs` builds the
+(`ascii_edge`), and anim edge in `tick.rs`; `extract_key_zen_layout` /
+`UserSshKey::set_zen_layout` and `extract_key_home_layout` /
+`UserSshKey::set_home_layout` in `late-core/src/models/user_ssh_key.rs`,
+the account seeds `extract_zen_layout` / `extract_home_layout` in
+`user.rs`. The Home arm of `render.rs` builds the
 same `ZenView` with a `HomeView` (the chat and card views the page's chat
 and the rail draw from) and the guests' inputs (`StripGuest`, `board_day`).
 

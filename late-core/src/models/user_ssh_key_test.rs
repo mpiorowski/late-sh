@@ -1,7 +1,7 @@
-use crate::models::user::{RightSidebarMode, RoomListMode};
+use crate::models::user::RightSidebarMode;
 use crate::models::user_ssh_key::{
     KeyAudio, KeyLayout, UserSshKey, extract_key_artboard_disclaimer, extract_key_audio,
-    extract_key_layout,
+    extract_key_home_layout, extract_key_layout, extract_key_zen_layout,
 };
 use crate::test_utils::{create_test_user, test_db};
 use serde_json::json;
@@ -18,7 +18,6 @@ async fn stored_layout(
 
 fn phone_layout() -> KeyLayout {
     KeyLayout {
-        room_list_mode: RoomListMode::Off,
         right_sidebar_mode: RightSidebarMode::Auto,
     }
 }
@@ -128,13 +127,56 @@ fn stored_layout_round_trips_and_partial_blobs_inherit() {
     let layout = phone_layout();
     assert_eq!(extract_key_layout(&layout.to_value()), Some(layout));
 
-    // Nothing stored, or only half a pair, means "follow the account default".
+    // Nothing stored, or a mangled mode, means "follow the account default".
     assert_eq!(extract_key_layout(&json!({})), None);
-    assert_eq!(extract_key_layout(&json!({"room_list_mode": "off"})), None);
     assert_eq!(
-        extract_key_layout(&json!({"room_list_mode": "off", "right_sidebar_mode": "sideways"})),
+        extract_key_layout(&json!({"right_sidebar_mode": "sideways"})),
         None
     );
+}
+
+#[tokio::test]
+async fn tile_layouts_are_per_key_and_scoped_to_their_owner() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "tileowner").await;
+    let stranger = create_test_user(&test_db.db, "tilestranger").await;
+    UserSshKey::ensure(&client, user.id, "SHA256:tiles-phone")
+        .await
+        .expect("phone key");
+    UserSshKey::ensure(&client, user.id, "SHA256:tiles-desk")
+        .await
+        .expect("desk key");
+
+    let phone_home = json!({ "root": { "node": "leaf", "kind": "chat" } });
+    let phone_zen = json!({ "root": { "node": "leaf", "kind": "bonsai" } });
+    UserSshKey::set_home_layout(&client, user.id, "SHA256:tiles-phone", &phone_home)
+        .await
+        .expect("store home layout");
+    UserSshKey::set_zen_layout(&client, user.id, "SHA256:tiles-phone", &phone_zen)
+        .await
+        .expect("store zen layout");
+
+    let phone = UserSshKey::find_by_fingerprint(&client, user.id, "SHA256:tiles-phone")
+        .await
+        .expect("read phone")
+        .expect("phone row");
+    assert_eq!(extract_key_home_layout(&phone.settings), Some(phone_home));
+    assert_eq!(extract_key_zen_layout(&phone.settings), Some(phone_zen));
+    let desk = UserSshKey::find_by_fingerprint(&client, user.id, "SHA256:tiles-desk")
+        .await
+        .expect("read desk")
+        .expect("desk row");
+    assert_eq!(
+        extract_key_home_layout(&desk.settings),
+        None,
+        "the desk follows the account seed"
+    );
+
+    // Another account cannot write onto this key even knowing its fingerprint.
+    let denied =
+        UserSshKey::set_home_layout(&client, stranger.id, "SHA256:tiles-phone", &json!({})).await;
+    assert!(denied.is_err(), "cross-account write is refused");
 }
 
 #[tokio::test]
@@ -221,7 +263,6 @@ async fn layout_is_per_key_and_scoped_to_its_owner() {
         stranger.id,
         "SHA256:phone",
         KeyLayout {
-            room_list_mode: RoomListMode::On,
             right_sidebar_mode: RightSidebarMode::On,
         },
     )

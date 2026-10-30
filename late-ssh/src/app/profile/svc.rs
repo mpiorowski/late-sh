@@ -823,38 +823,50 @@ impl ProfileService {
     /// Fire-and-forget: persist the Zen page's layout JSON. A failure is
     /// only logged (the page would start from its last stored layout next
     /// session).
-    pub fn set_zen_layout(&self, user_id: Uuid, layout: serde_json::Value) {
+    /// Store this device's Zen tile layout on its SSH key, fire and forget.
+    pub fn set_key_zen_layout(
+        &self,
+        user_id: Uuid,
+        fingerprint: String,
+        layout: serde_json::Value,
+    ) {
         let service = self.clone();
         tokio::spawn(
             async move {
                 let result = async {
                     let client = service.db.get().await?;
-                    User::set_zen_layout(&client, user_id, &layout).await
+                    UserSshKey::set_zen_layout(&client, user_id, &fingerprint, &layout).await
                 }
                 .await;
                 if let Err(e) = result {
-                    tracing::warn!(error = ?e, "failed to persist zen layout");
+                    tracing::warn!(error = ?e, "failed to persist device zen layout");
                 }
             }
-            .in_current_span(),
+            .instrument(info_span!("profile.device_zen_layout_task", user_id = %user_id)),
         );
     }
 
     /// Fire-and-forget: persist Home's layout JSON, the same way.
-    pub fn set_home_layout(&self, user_id: Uuid, layout: serde_json::Value) {
+    /// Store this device's Home tile layout on its SSH key, fire and forget.
+    pub fn set_key_home_layout(
+        &self,
+        user_id: Uuid,
+        fingerprint: String,
+        layout: serde_json::Value,
+    ) {
         let service = self.clone();
         tokio::spawn(
             async move {
                 let result = async {
                     let client = service.db.get().await?;
-                    User::set_home_layout(&client, user_id, &layout).await
+                    UserSshKey::set_home_layout(&client, user_id, &fingerprint, &layout).await
                 }
                 .await;
                 if let Err(e) = result {
-                    tracing::warn!(error = ?e, "failed to persist home layout");
+                    tracing::warn!(error = ?e, "failed to persist device home layout");
                 }
             }
-            .in_current_span(),
+            .instrument(info_span!("profile.device_home_layout_task", user_id = %user_id)),
         );
     }
 

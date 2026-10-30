@@ -297,16 +297,20 @@ Some settings belong to the SSH key a session authenticated with
 (`ClientHandler::auth_fingerprint`, not `users.fingerprint`), stored in
 `user_ssh_keys.settings` and scoped by `user_id` as well:
 
-- **The Arcade's right sidebar** (and the room-list row beside it, which no
-  page reads any more: Home's rail and sidebar are tiles of its own layout,
-  `app/zen/CONTEXT.md`). `App::rail_modes()` is the only resolver: this key's
-  layout, else the account's. The two Settings Appearance rows write the key,
-  never the account (the account value is only the seed for a key with none).
-  The settings modal keeps them in `device_rails`, outside the draft `save()`
-  writes, pinned by `cycling_rails_persists_only_to_authenticating_key_and_survives_unrelated_settings`.
+- **The Arcade's right sidebar.** `App::rail_modes()` is the only resolver:
+  this key's mode, else the account's. The Settings Appearance row writes
+  the key, never the account (the account value is only the seed for a key
+  with none). The settings modal keeps it in `device_rails`, outside the
+  draft `save()` writes, pinned by
+  `cycling_rails_persists_only_to_authenticating_key_and_survives_unrelated_settings`.
   `auto` resolves against the live width each frame
-  (`AUTO_RIGHT_SIDEBAR_MIN_COLS` 72). The `show_*` bools are still written
-  next to the `*_mode` strings for rollback safety.
+  (`AUTO_RIGHT_SIDEBAR_MIN_COLS` 72). `show_right_sidebar` is still written
+  next to the mode for rollback safety.
+- **The Home and Zen tile layouts** (`app/zen/CONTEXT.md`): `zen_layout` and
+  `home_layout` on the key, written by `App::flush_rice_layouts` through
+  `ProfileState::set_device_zen_layout` / `set_device_home_layout`. The
+  account's `users.settings.zen_layout` / `home_layout` are only the seed for
+  a key that has never arranged the page; nothing writes them any more.
 - **The Artboard content disclaimer.** Same shape (`artboard_disclaimer` on the
   key, `App::artboard_disclaimer_enabled`), except a failed key read fails
   closed to on.
@@ -417,7 +421,6 @@ interaction mode ignores mouse reports.
 | `m`, `+`/`=`, `-`/`_` | Paired client mute and volume |
 | `w` | Bonsai care modal |
 | `` ` `` | Workspace cycle (`app/workspace/CONTEXT.md`) |
-| `\` | Home: the chat alone, and back (a terminal under 96 columns is chat alone anyway) |
 | `/settings` `/lobby` `/zen` `/redraw` `/guide` `/picker` `/shop` | Composer fallbacks for chords a terminal swallows; each runs the key's function |
 | `Esc` | Close the top modal |
 

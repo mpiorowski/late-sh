@@ -523,43 +523,6 @@ impl TerminalImagesMode {
     }
 }
 
-/// Master on/off for the Home room-list rail, the left column. Mirrors
-/// [`RightSidebarMode`], including `Auto`: the rail folds away on terminals too
-/// narrow to carry three columns.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RoomListMode {
-    On,
-    Off,
-    Auto,
-}
-
-impl RoomListMode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::On => "on",
-            Self::Off => "off",
-            Self::Auto => "auto",
-        }
-    }
-
-    pub fn from_key(key: &str) -> Option<Self> {
-        match key.trim() {
-            "on" => Some(Self::On),
-            "off" => Some(Self::Off),
-            "auto" => Some(Self::Auto),
-            _ => None,
-        }
-    }
-
-    pub fn cycle(self, forward: bool) -> Self {
-        match (self, forward) {
-            (Self::On, true) | (Self::Auto, false) => Self::Off,
-            (Self::Off, true) | (Self::On, false) => Self::Auto,
-            (Self::Auto, true) | (Self::Off, false) => Self::On,
-        }
-    }
-}
-
 /// Number of reorderable/toggleable panels in the right sidebar (the clock is
 /// always pinned at the top and is not part of this list).
 pub const RIGHT_SIDEBAR_COMPONENT_COUNT: usize = 7;
@@ -740,8 +703,6 @@ const STATUSLINE_COMPONENTS_KEY: &str = "statusline_components";
 /// as the JSON the page itself serializes; absent until first edited.
 const ZEN_LAYOUT_KEY: &str = "zen_layout";
 const HOME_LAYOUT_KEY: &str = "home_layout";
-const SHOW_ROOM_LIST_SIDEBAR_KEY: &str = "show_room_list_sidebar";
-const ROOM_LIST_MODE_KEY: &str = "room_list_mode";
 const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
 const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
 const LANDING_PAGE_KEY: &str = "landing_page";
@@ -1319,32 +1280,6 @@ impl User {
                      updated = current_timestamp
                  WHERE id = $3",
                 &[&INTERACTION_MODE_KEY, &value, &user_id],
-            )
-            .await?;
-        if updated == 0 {
-            bail!("user not found");
-        }
-        Ok(())
-    }
-
-    /// Store the Zen page's layout JSON in the settings blob.
-    pub async fn set_zen_layout(client: &Client, user_id: Uuid, layout: &Value) -> Result<()> {
-        Self::set_layout(client, user_id, ZEN_LAYOUT_KEY, layout).await
-    }
-
-    /// Store Home's layout JSON in the settings blob.
-    pub async fn set_home_layout(client: &Client, user_id: Uuid, layout: &Value) -> Result<()> {
-        Self::set_layout(client, user_id, HOME_LAYOUT_KEY, layout).await
-    }
-
-    async fn set_layout(client: &Client, user_id: Uuid, key: &str, layout: &Value) -> Result<()> {
-        let updated = client
-            .execute(
-                "UPDATE users
-                 SET settings = settings || jsonb_build_object($1::text, $2::jsonb),
-                     updated = current_timestamp
-                 WHERE id = $3",
-                &[&key, layout, &user_id],
             )
             .await?;
         if updated == 0 {
@@ -2236,31 +2171,6 @@ pub fn extract_statusline_components(settings: &Value) -> Vec<StatusComponentSet
     parse_statusline_components(values)
 }
 
-pub fn extract_show_room_list_sidebar(settings: &Value) -> bool {
-    settings
-        .get(SHOW_ROOM_LIST_SIDEBAR_KEY)
-        .and_then(Value::as_bool)
-        .unwrap_or(true)
-}
-
-/// The account default for the room-list rail. Mirrors
-/// `extract_right_sidebar_mode`, including its legacy bool fallback: accounts
-/// that predate the mode key only stored `show_room_list_sidebar`, and the bool
-/// is still written alongside the mode so a rollback keeps working.
-pub fn extract_room_list_mode(settings: &Value) -> RoomListMode {
-    match settings
-        .get(ROOM_LIST_MODE_KEY)
-        .and_then(Value::as_str)
-        .map(str::trim)
-    {
-        Some("off") => RoomListMode::Off,
-        Some("auto") => RoomListMode::Auto,
-        Some("on") => RoomListMode::On,
-        _ if extract_show_room_list_sidebar(settings) => RoomListMode::On,
-        _ => RoomListMode::Off,
-    }
-}
-
 /// Tweak: when true, pressing Enter in the chat composer sends the message
 /// but keeps the composer focused (same behavior as Alt+S, which becomes a
 /// no-op while the tweak is on). Opt-in; defaults to false so existing
@@ -2385,14 +2295,16 @@ pub fn extract_artboard_disclaimer(settings: &Value) -> bool {
         .unwrap_or(true)
 }
 
-/// The stored Rice layout, if the account ever edited one. Parsed by the
-/// page, which falls back to its default on anything unreadable.
+/// The account's stored Rice layout, from before layouts were per device:
+/// only the seed for an SSH key with none (`user_ssh_key::extract_key_zen_layout`).
+/// Parsed by the page, which falls back to its default on anything unreadable.
 pub fn extract_zen_layout(settings: &Value) -> Option<Value> {
     settings.get(ZEN_LAYOUT_KEY).cloned()
 }
 
-/// The stored Home layout, if the account ever arranged one. Parsed by
-/// the page, which falls back to the stock Home on anything unreadable.
+/// The account's stored Home layout, the seed for an SSH key with none
+/// (`user_ssh_key::extract_key_home_layout`). Parsed by the page, which
+/// falls back to the stock Home on anything unreadable.
 pub fn extract_home_layout(settings: &Value) -> Option<Value> {
     settings.get(HOME_LAYOUT_KEY).cloned()
 }

@@ -967,8 +967,6 @@ async fn profile_username_change_projects_to_live_irc_session() {
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_components: default_right_sidebar_components(),
             statusline_components: default_statusline_components(),
-            show_room_list_sidebar: true,
-            room_list_mode: late_core::models::user::RoomListMode::On,
             keep_composer_focused: false,
             start_with_music_muted: false,
             landing_page: late_core::models::user::LandingPage::Clubhouse,

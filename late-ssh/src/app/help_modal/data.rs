@@ -659,7 +659,6 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  Ctrl+G             open / close the Lobby (daily games + house tables)",
         "  Ctrl+F             open / close Zen (your bonsai, tank, lobby, chat, and clock as tiles)",
         "  Ctrl+E             arrange Home: its rail, chat and panels are tiles (Zen's keys; + adds the now strip, lobby, live rows or board day to a tile; Esc when done)",
-        "  \\                  Home: the chat alone, and back",
         "  Ctrl+R             redraw the screen if something outside late.sh scribbled on it",
         "  Ctrl+S / /shop     open the Shop (games keep controls; editors save/post; Artboard keeps slot 2)",
         "  /aquarium feed     feed your Aquarium (free, once a day, +100 chips); 14 days running hatch a fry, 14 days unfed starve a fish; the tank lives on the Zen page (Ctrl+F)",
@@ -1451,7 +1450,6 @@ fn overview_lines() -> Vec<String> {
         "  Ctrl+G            open / close the Lobby (daily games + house tables)",
         "  Ctrl+F            open / close Zen",
         "  Ctrl+E            arrange Home (its rail, chat and panels as tiles; Esc when done)",
-        "  \\                 Home: the chat alone, and back",
         "  Ctrl+R            redraw the screen after outside terminal damage",
         "  /settings /lobby  typed fallbacks for Ctrl+O, Ctrl+G, Ctrl+F, Ctrl+R,",
         "  /zen /redraw      and ?, for terminals that swallow those keys",
@@ -1760,7 +1758,7 @@ fn settings_help_lines() -> Vec<String> {
         "  country via picker, with Unicode flag rendering".to_string(),
         "  timezone via picker".to_string(),
         "  IDE, terminal, OS, and languages for profile/late.fetch surfaces".to_string(),
-        "  Tweaks: terminal background sync, text brightness, right sidebar mode, room list, composer send behavior, plain glyphs, terminal images, chat badges, landing page, input mode"
+        "  Tweaks: terminal background sync, text brightness, right sidebar mode, composer send behavior, plain glyphs, terminal images, chat badges, landing page, input mode"
             .to_string(),
         "  Statusline: bottom status bar components, their order, and display options".to_string(),
         "  private RSS/Atom subscriptions".to_string(),
@@ -1835,14 +1833,12 @@ fn settings_help_lines() -> Vec<String> {
         "    Text Brightness         nudge overall text brightness up or down; click ◂ / ▸ to decrease / increase".to_string(),
         "    Right sidebar           on / off / auto for the Arcade; Enter opens the panel checklist, which"
             .to_string(),
-        "                            is also what a stock Home (never arranged, Ctrl+E) shows as tiles"
-            .to_string(),
-        "    Room list               on / off / auto; no page reads it now that Home's rail is a tile"
+        "                            orders the Arcade's panels (Home's tiles are arranged in place, Ctrl+E)"
             .to_string(),
         "                            auto hides the sidebar on terminals too narrow to carry it, so one"
             .to_string(),
         "                            account works on both a desktop and a phone".to_string(),
-        "                            both rows apply to this device (this SSH key) only, never the"
+        "                            the row applies to this device (this SSH key) only, never the"
             .to_string(),
         "                            account default".to_string(),
         "  Input".to_string(),

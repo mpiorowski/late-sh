@@ -84,6 +84,10 @@ pub(crate) fn toggle_home_arrange(app: &mut App) {
     rice.arrange = arrange;
     rice.close_kind_picker();
     rice.close_guest_picker();
+    // `z` is a preview while arranging; the page leaves the mode whole.
+    if !arrange {
+        rice.zoomed = false;
+    }
     if arrange {
         app.banner = Some(Banner::info(
             "Arrange: arrows move · S split · X close · F flip · <>{} resize · space tile · + guests · R reset · Esc done",

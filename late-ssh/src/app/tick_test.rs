@@ -8,7 +8,7 @@ use crate::app::chat::svc::ChatEvent;
 use crate::app::common::primitives::Screen;
 use crate::app::state::App;
 use crate::app::tick::{ANIM_HALF_TICK, ANIM_QUARTER_TICK, HOT_TICK, IDLE_TICK};
-use crate::app::zen::state::{Dir, Look, Node, RiceLayout, TileKind, ZenState};
+use crate::app::zen::state::{Dir, Look, Node, RiceLayout, RicePage, TileKind, ZenState};
 use crate::test_helpers::chat_compose_app;
 
 const CLEAN_SETTLE_WINDOW: Duration = Duration::from_millis(250);
@@ -37,22 +37,37 @@ const CLEAN_SETTLE_TIMEOUT: Duration = Duration::from_secs(30);
 /// (~132ms) and can never hold the 250ms window, at any timeout. `device_rails`
 /// takes precedence over the profile in `device_rails_or_profile` and nothing
 /// async overwrites it, so the sidebar stays off for the whole test.
+///
+/// Home's panels are tiles of its own layout now, not the sidebar, so the
+/// same quiet needs a Home without an animated tile: the rail and the chat
+/// alone. `home_edited` keeps the stock sync from putting the panels back.
 fn hide_sidebar(app: &mut App) {
     app.device_rails = Some(KeyLayout {
-        room_list_mode: app.rail_modes().0,
         right_sidebar_mode: RightSidebarMode::Off,
     });
+    let quiet = RiceLayout {
+        root: Node::split_first(
+            Dir::Row,
+            23,
+            Node::leaf(TileKind::Rooms),
+            Node::leaf(TileKind::Chat),
+        ),
+        look: Look::default(),
+    };
+    app.home = ZenState::for_page(RicePage::Home, quiet.clone(), quiet);
+    app.home_edited = true;
 }
 
-/// Undo [`hide_sidebar`] for the visible-sidebar case, which shares the settled
-/// app. It has to go back through the rails for the same reason: they outrank
-/// the profile in `device_rails_or_profile`, so writing the profile alone would
-/// leave the sidebar off and its animated panels silent.
+/// Undo [`hide_sidebar`] for the animated case, which shares the settled
+/// app: the stock Home, whose music tile paints its equalizer on the
+/// anim_half edge.
 fn show_sidebar(app: &mut App) {
     app.device_rails = Some(KeyLayout {
-        room_list_mode: app.rail_modes().0,
         right_sidebar_mode: RightSidebarMode::On,
     });
+    let stock = RiceLayout::home(false, false);
+    app.home = ZenState::for_page(RicePage::Home, stock.clone(), stock);
+    app.home_edited = true;
 }
 
 /// Mirror the render loop's frame path: a changed tick renders and drains
@@ -208,29 +223,29 @@ async fn idle_ticks_settle_clean_and_wake_for_relevant_events() {
 
     settle_clean(&mut app).await;
 
-    // The sidebar's animated panels hold the half-rate tier. Drive the
-    // wall-clock frame counter across known phases instead of sleeping through
-    // several real animation periods: ticks inside a half-rate period stay
-    // clean, and the boundary itself paints.
+    // Home's music tile holds the half-rate tier for its equalizer. Drive
+    // the wall-clock frame counter across known phases instead of sleeping
+    // through several real animation periods: ticks inside a half-rate
+    // period stay clean, and the boundary itself paints.
     app.show_settings = false;
     show_sidebar(&mut app);
     app.last_input_at = Instant::now() - Duration::from_secs(10);
     assert_eq!(
         app.wake_hint(),
         ANIM_HALF_TICK,
-        "visible sidebar holds the half-rate tier for its animated panels"
+        "the music tile holds the half-rate tier for its equalizer"
     );
 
     let even_tick = app.marquee_tick + app.marquee_tick % 2;
     set_marquee_transition(&mut app, even_tick, even_tick + 1);
     assert!(
         !app.tick(),
-        "sidebar paid a frame between anim_half boundaries"
+        "the music tile paid a frame between anim_half boundaries"
     );
     set_marquee_transition(&mut app, even_tick + 1, even_tick + 2);
     assert!(
         app.tick(),
-        "sidebar did not pay a frame on an anim_half boundary"
+        "the music tile did not pay a frame on an anim_half boundary"
     );
 }
 

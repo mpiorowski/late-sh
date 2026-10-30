@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use late_core::models::user_ssh_key::{
-    KeyLayout, UserSshKey, extract_key_artboard_disclaimer, extract_key_layout,
+    KeyLayout, UserSshKey, extract_key_artboard_disclaimer, extract_key_home_layout,
+    extract_key_layout, extract_key_zen_layout,
 };
 use late_core::models::{artboard_ban::ArtboardBan, user::User};
 use tokio::sync::{broadcast, mpsc};
@@ -281,9 +282,13 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
 /// which is a content gate and fails closed (`Some(true)`): a device that
 /// turned the gate on must not lose it to a dropped query when the account
 /// seed is off.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct DeviceState {
     pub layout: Option<KeyLayout>,
+    /// This device's Zen and Home tile layouts (`app/zen`), `None` to
+    /// follow the account's stored layout as the seed.
+    pub zen_layout: Option<serde_json::Value>,
+    pub home_layout: Option<serde_json::Value>,
     /// This device's Artboard content disclaimer, `None` to follow the account.
     /// `Some(true)` when the key could not be read.
     pub artboard_disclaimer: Option<bool>,
@@ -311,16 +316,18 @@ pub async fn load_device_state(
             };
         }
     };
-    let (layout, artboard_disclaimer) =
+    let (layout, artboard_disclaimer, zen_layout, home_layout) =
         match UserSshKey::find_by_fingerprint(&client, user_id, fingerprint).await {
             Ok(Some(key)) => (
                 extract_key_layout(&key.settings),
                 extract_key_artboard_disclaimer(&key.settings),
+                extract_key_zen_layout(&key.settings),
+                extract_key_home_layout(&key.settings),
             ),
-            Ok(None) => (None, None),
+            Ok(None) => (None, None, None, None),
             Err(e) => {
                 tracing::warn!(error = ?e, "failed to load device settings");
-                (None, Some(true))
+                (None, Some(true), None, None)
             }
         };
     let left_at = match UserSshKey::take_left_at(&client, user_id, fingerprint).await {
@@ -332,6 +339,8 @@ pub async fn load_device_state(
     };
     DeviceState {
         layout,
+        zen_layout,
+        home_layout,
         artboard_disclaimer,
         left_at,
     }
@@ -638,8 +647,16 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         first_contact_gate,
         runner_looks_rx: state.runner_looks.subscribe(),
         presence: state.presence.clone(),
-        zen_layout: late_core::models::user::extract_zen_layout(&user.settings),
-        home_layout: late_core::models::user::extract_home_layout(&user.settings),
+        // This device's tile layouts, the account's stored ones as the seed
+        // for a key that has never arranged a page.
+        zen_layout: device
+            .zen_layout
+            .clone()
+            .or_else(|| late_core::models::user::extract_zen_layout(&user.settings)),
+        home_layout: device
+            .home_layout
+            .clone()
+            .or_else(|| late_core::models::user::extract_home_layout(&user.settings)),
         username_directory: Some(state.username_directory.clone()),
         flair_directory: Some(state.flair_directory.clone()),
         pot_service: Some(state.pot_service.clone()),

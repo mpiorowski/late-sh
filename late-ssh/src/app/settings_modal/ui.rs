@@ -7,7 +7,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
 };
 
-use late_core::models::user::{RightSidebarMode, RoomListMode};
+use late_core::models::user::RightSidebarMode;
 
 use crate::app::common::{
     markdown::render_body_to_lines, primitives::thousands, sidebar::SidebarOwnership, theme,
@@ -362,10 +362,9 @@ fn settings_body_rows() -> usize {
 
 fn tweak_lines() -> Vec<BodyLine<TweakRow>> {
     grouped_lines(&TweakRow::ALL, |row| match row {
-        TweakRow::BackgroundColor
-        | TweakRow::TextBrightness
-        | TweakRow::RightSidebar
-        | TweakRow::RoomListSidebar => "Appearance",
+        TweakRow::BackgroundColor | TweakRow::TextBrightness | TweakRow::RightSidebar => {
+            "Appearance"
+        }
         TweakRow::ComposerKeepFocused | TweakRow::InteractionMode => "Input",
         TweakRow::FlagFallback | TweakRow::TerminalImages | TweakRow::ChatBadges => "Display",
         TweakRow::LandingPage | TweakRow::PaperAtLogin | TweakRow::AutoRestart => "Startup",
@@ -976,12 +975,7 @@ fn draw_tweak_row(frame: &mut Surface<'_>, rect: Rect, state: &SettingsModalStat
         ),
         TweakRow::RightSidebar => (
             "Right sidebar",
-            right_sidebar_mode_span(state.device_rails().1),
-            true,
-        ),
-        TweakRow::RoomListSidebar => (
-            "Room list",
-            room_list_mode_span(state.device_rails().0),
+            right_sidebar_mode_span(state.device_rails()),
             true,
         ),
         TweakRow::ComposerKeepFocused => (
@@ -3681,19 +3675,6 @@ fn cycle_value_span(label: &str, choices: &[&str]) -> ValueSpan {
             .fg(theme::AMBER())
             .add_modifier(Modifier::BOLD),
     }
-}
-
-/// The room-list rail row. Mirrors `right_sidebar_mode_span` without the panel
-/// editor affordance: the rail has no panel list of its own.
-fn room_list_mode_span(mode: RoomListMode) -> ValueSpan {
-    cycle_value_span(
-        match mode {
-            RoomListMode::On => "On",
-            RoomListMode::Off => "Off",
-            RoomListMode::Auto => "Auto",
-        },
-        &["On", "Off", "Auto"],
-    )
 }
 
 fn text_brightness_span(adjustment: i32) -> ValueSpan {

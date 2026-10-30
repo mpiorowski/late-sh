@@ -126,7 +126,7 @@ In `ROOMS.md`, Rooms and selection: `RoomSlot`, the rail's visual order (favorit
 There is no top-level `Screen::Chat`. `Screen::Dashboard` renders as Home and owns both the room rail and the chat center:
 - If `chat.selected_room_id` is `#lounge` and no synthetic entry is selected, the center renders `chat::ui::draw_dashboard_chat_card`: the lounge chat card, full height. It is the one chat surface carrying the live strip (`DashboardChatView.live_strip`, drawn in the topic's place under any stream or voice row and above the poll strip; owned by `app/live/`, see that domain's CONTEXT).
 - If any other real room or synthetic entry is selected, the center renders `chat::ui::draw_chat_center`.
-- On wide terminals, `chat::ui::draw_room_list_rail` renders a borderless left rail. On narrow terminals, the center owns the available width.
+- `chat::ui::draw_room_list_rail` renders the borderless room rail in Home's `rooms` tile (`app/zen/CONTEXT.md`); the page is laid out as arranged at every width.
 
 Room favorites:
 - Press `f` on a selected real room, or on Mentions, News, RSS or `+ browse rooms`, to toggle it in `ProfileState::toggle_favorite_room`. The four synthetic entries are stored under fixed sentinel ids (`state.rs` `synthetic_favorite_id` / `synthetic_slot_for_favorite_id`, the only code that interprets them; version nibble 0, so no v7 room id can collide). A favorited entry moves from Core into Favorites in both rail builders through the same pushed-id exclusion the rooms use; RSS stays hidden everywhere while feeds are unavailable.

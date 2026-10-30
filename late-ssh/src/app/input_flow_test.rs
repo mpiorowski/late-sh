@@ -512,7 +512,7 @@ use crate::test_helpers::{
     with_session_key,
 };
 use late_core::models::cyberspace_account::CyberspaceAccount;
-use late_core::models::user::{RightSidebarMode, RoomListMode};
+use late_core::models::user::RightSidebarMode;
 use late_core::models::user_ssh_key::{KeyLayout, UserSshKey, extract_key_layout};
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
@@ -3270,73 +3270,6 @@ async fn sheet_command_opens_character_sheet_modal_in_dnd_room() {
 }
 
 #[tokio::test]
-async fn backslash_shows_the_chat_alone_and_a_narrow_terminal_folds_the_page() {
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "rails-it").await;
-    let client = test_db.db.get().await.expect("db client");
-    let lounge = ChatRoom::ensure_lounge(&client)
-        .await
-        .expect("ensure lounge room");
-    ChatRoomMember::join(&client, lounge.id, user.id)
-        .await
-        .expect("join lounge room");
-    let mut app = make_app(test_db.db.clone(), user.id, "rails-flow-it");
-    wait_for_render_contains(&mut app, " Home ").await;
-    // The stock Home: the rail (its footer hints) and the sidebar tiles
-    // (the music tile's source shortcut) beside the chat.
-    wait_for_render_contains(&mut app, "sort/fold").await;
-    let frame = render_plain(&mut app);
-    assert!(frame.contains("v+x"), "sidebar missing; frame={frame:?}");
-
-    // `\` is chat only: the chat takes the page, the tiles wait.
-    app.handle_input(b"\\");
-    let frame = render_plain(&mut app);
-    assert!(
-        frame.contains("Chat only"),
-        "expected the chat-only banner; frame={frame:?}"
-    );
-    assert!(
-        !frame.contains("sort/fold") && !frame.contains("v+x"),
-        "expected the chat alone; frame={frame:?}"
-    );
-    assert!(
-        !app.home_layout_dirty && !app.home_edited,
-        "chat only is a view, not an edit of the layout"
-    );
-
-    // Pressed again, the page comes back.
-    app.handle_input(b"\\");
-    let frame = render_plain(&mut app);
-    assert!(
-        frame.contains("sort/fold") && frame.contains("v+x"),
-        "expected the whole page back; frame={frame:?}"
-    );
-
-    // A phone-sized terminal shows the chat alone without touching anything,
-    // and widening brings the tiles back: the width is read every frame.
-    app.resize(50, 32).expect("resize narrow");
-    let frame = render_plain(&mut app);
-    assert!(
-        !frame.contains("sort/fold") && !frame.contains("v+x"),
-        "a narrow terminal should fold the page to the chat; frame={frame:?}"
-    );
-    app.resize(100, 32).expect("resize wide");
-    let frame = render_plain(&mut app);
-    assert!(
-        frame.contains("sort/fold") && frame.contains("v+x"),
-        "the tiles should come back when the terminal grows; frame={frame:?}"
-    );
-
-    // The account is untouched throughout: nothing here is a setting.
-    let profile = app.profile_state.profile();
-    assert!(profile.show_room_list_sidebar);
-    assert_eq!(
-        profile.room_list_mode,
-        late_core::models::user::RoomListMode::On
-    );
-}
-
-#[tokio::test]
 async fn cycling_rails_persists_only_to_authenticating_key_and_survives_unrelated_settings() {
     // End-to-end for both sides of the device-layout boundary: cycling the rails
     // writes only the authenticating key, and a later account-settings save does
@@ -3376,7 +3309,7 @@ async fn cycling_rails_persists_only_to_authenticating_key_and_survives_unrelate
     app.sync_device_rails_from_settings();
     assert_eq!(
         app.rail_modes(),
-        (RoomListMode::On, RightSidebarMode::Off),
+        RightSidebarMode::Off,
         "expected the sidebar hidden for this device"
     );
 
@@ -3390,7 +3323,6 @@ async fn cycling_rails_persists_only_to_authenticating_key_and_survives_unrelate
                     .await
                     .expect("phone layout")
                     == Some(KeyLayout {
-                        room_list_mode: RoomListMode::On,
                         right_sidebar_mode: RightSidebarMode::Off,
                     })
             }
@@ -3441,20 +3373,15 @@ async fn cycling_rails_persists_only_to_authenticating_key_and_survives_unrelate
         .expect("load user")
         .expect("user exists");
     assert_eq!(
-        late_core::models::user::extract_room_list_mode(&stored.settings),
-        late_core::models::user::RoomListMode::On,
-        "an unrelated tweak must not republish this device's rails"
-    );
-    assert!(
-        late_core::models::user::extract_show_room_list_sidebar(&stored.settings),
-        "the legacy mirror must stay in step with the account default"
+        late_core::models::user::extract_right_sidebar_mode(&stored.settings),
+        RightSidebarMode::On,
+        "an unrelated tweak must not republish this device's sidebar mode"
     );
     assert_eq!(
         stored_layout(&client, user.id, "SHA256:phone")
             .await
             .expect("phone layout after settings save"),
         Some(KeyLayout {
-            room_list_mode: RoomListMode::On,
             right_sidebar_mode: RightSidebarMode::Off,
         }),
         "the unrelated account save must preserve this device's layout"
@@ -3471,7 +3398,7 @@ async fn cycling_rails_persists_only_to_authenticating_key_and_survives_unrelate
     app.handle_input(b"\x1b");
     assert_eq!(
         app.rail_modes(),
-        (RoomListMode::On, RightSidebarMode::Off),
+        RightSidebarMode::Off,
         "expected the device's sidebar to stay hidden"
     );
 }
@@ -5010,7 +4937,14 @@ async fn ctrl_e_arranges_home_and_the_layout_keys_are_arrange_modes_alone() {
     ChatRoomMember::join(&client, lounge.id, user.id)
         .await
         .expect("join lounge room");
-    let mut app = make_app(test_db.db.clone(), user.id, "home-arrange-flow-it");
+    // The layout is this device's: it needs the SSH key a session has.
+    UserSshKey::ensure(&client, user.id, "SHA256:arrange")
+        .await
+        .expect("arrange key");
+    let mut app = with_session_key(
+        make_app(test_db.db.clone(), user.id, "home-arrange-flow-it"),
+        "SHA256:arrange",
+    );
     wait_for_render_contains(&mut app, "sort/fold").await;
     let tiles = app.home.leaf_count();
     assert_eq!(app.home.focused_kind(), Some(TileKind::Chat));
@@ -5051,16 +4985,25 @@ async fn ctrl_e_arranges_home_and_the_layout_keys_are_arrange_modes_alone() {
             let db = db.clone();
             async move {
                 let client = db.get().await.expect("db client");
-                let stored = User::get(&client, user.id)
+                let key = UserSshKey::find_by_fingerprint(&client, user.id, "SHA256:arrange")
                     .await
-                    .expect("load user")
-                    .expect("user exists");
-                late_core::models::user::extract_home_layout(&stored.settings).is_some()
+                    .expect("load key")
+                    .expect("key exists");
+                late_core::models::user_ssh_key::extract_key_home_layout(&key.settings).is_some()
             }
         },
-        "the arranged Home to reach the account",
+        "the arranged Home to reach this device's key",
     )
     .await;
+    let stored = User::get(&client, user.id)
+        .await
+        .expect("load user")
+        .expect("user exists");
+    assert_eq!(
+        late_core::models::user::extract_home_layout(&stored.settings),
+        None,
+        "the account keeps no layout of its own: it is only the seed"
+    );
     // Ctrl+F is still Zen, its own page with its own tree.
     app.handle_input(b"\x06");
     assert_eq!(app.screen, crate::app::common::primitives::Screen::Zen);
@@ -6209,12 +6152,9 @@ async fn home_pet_tile_is_petted_without_moving_the_focus() {
     use crate::app::hub::shop::{
         entitlements::ShopEntitlements, state::ShopState, svc::ShopSnapshot,
     };
-    use crate::app::profile::state::profile_params_from_profile;
-    use crate::app::zen::state::TileKind;
+    use crate::app::zen::state::{Dir, Look, Node, RiceLayout, RicePage, TileKind, ZenState};
     use late_core::models::marketplace::PET_COMPANION_SKU;
     use late_core::models::pet::PetMood;
-    use late_core::models::profile::Profile;
-    use late_core::models::user::{RightSidebarComponent, RightSidebarComponentSetting};
 
     let test_db = new_test_db().await;
     let viewer = create_test_user(&test_db.db, "rail-pet-viewer").await;
@@ -6225,21 +6165,6 @@ async fn home_pet_tile_is_petted_without_moving_the_focus() {
     ChatRoomMember::join(&client, lounge.id, viewer.id)
         .await
         .expect("join lounge");
-    // The pet panel alone on the rail.
-    let profile = Profile::load(&client, viewer.id)
-        .await
-        .expect("load profile");
-    let mut params = profile_params_from_profile(&profile);
-    params.right_sidebar_components = RightSidebarComponent::ALL
-        .into_iter()
-        .map(|component| RightSidebarComponentSetting {
-            component,
-            enabled: component == RightSidebarComponent::Pet,
-        })
-        .collect();
-    Profile::update(&client, viewer.id, params)
-        .await
-        .expect("save the rail");
 
     let (cols, rows) = (160u16, 40u16);
     let mut app = make_app(test_db.db.clone(), viewer.id, "rail-pet-flow-it");
@@ -6247,6 +6172,24 @@ async fn home_pet_tile_is_petted_without_moving_the_focus() {
         entitlements: ShopEntitlements::from_owned_skus([PET_COMPANION_SKU.to_string()]),
         ..Default::default()
     });
+    // A Home arranged with the pet alone beside the chat, as its owner
+    // would with Ctrl+E (`home_edited` keeps the stock sync off it).
+    let arranged = RiceLayout {
+        root: Node::split_first(
+            Dir::Row,
+            23,
+            Node::leaf(TileKind::Rooms),
+            Node::split_second(
+                Dir::Row,
+                23,
+                Node::leaf(TileKind::Chat),
+                Node::leaf(TileKind::Pet),
+            ),
+        ),
+        look: Look::default(),
+    };
+    app.home = ZenState::for_page(RicePage::Home, arranged.clone(), arranged);
+    app.home_edited = true;
     app.resize(cols, rows).expect("resize test terminal");
     wait_for_render_contains(&mut app, "── pet").await;
 
@@ -6659,9 +6602,9 @@ async fn chat_badges_picker_hides_a_whole_game_ladder() {
     app.handle_input(b"\t\t\t");
     wait_for_render_contains(&mut app, "Chat badges").await;
     wait_for_render_contains(&mut app, "all shown").await;
-    // Tweaks rows: background, brightness, right rail, room rail, composer,
+    // Tweaks rows: background, brightness, right sidebar, composer,
     // interaction mode, plain glyphs, terminal images, then Chat badges.
-    app.handle_input(b"jjjjjjjj\r");
+    app.handle_input(b"jjjjjjj\r");
     // The heading fits the dialog whole, not cut at its border.
     wait_for_render_contains(&mut app, "Earn it, hide it. Games show their top badge.").await;
     wait_for_render_contains(&mut app, "LMG LKN LYS LKA").await;

@@ -328,10 +328,6 @@ impl App {
         // News state is ticked inside chat.tick()
         let profile_tick = self.profile_state.tick();
         changed |= profile_tick.changed;
-        if profile_tick.changed {
-            // The sidebar list in Settings shapes the stock Home.
-            self.sync_home_stock();
-        }
         if let Some(b) = profile_tick.banner {
             self.banner = Some(b);
             changed = true;
@@ -1387,14 +1383,18 @@ impl App {
         let sidebar_visible = self.right_sidebar_visible();
         // Ambient equalizer + bonsai sway: both are stateless, derived from
         // the wall clock at draw time (viz::render_eq, the bonsai sway sines),
-        // so there is nothing to advance here — the anim_half edge itself is
+        // so there is nothing to advance here: the anim_half edge itself is
         // the change, paid only while a surface showing them is visible (the
         // sidebar carries the eq strip and both bonsai panels; the modals
-        // sway). Deliberately NOT narrowed to sessions whose eq is actually
-        // animating: the bonsai sway holds this edge on its own, and Bonsai
-        // is enabled by default. An unpaired session repaints a static eq
-        // strip, which the frame diff then drops.
-        changed |= anim_half && (sidebar_visible || self.show_bonsai_modal || self.on_rice_page());
+        // sway; a rice page pays it while it draws a music, visualizer or
+        // bonsai tile, so a rail and a chat alone settle). Deliberately NOT
+        // narrowed to sessions whose eq is actually animating: the bonsai
+        // sway holds this edge on its own. An unpaired session repaints a
+        // static eq strip, which the frame diff then drops.
+        changed |= anim_half
+            && (sidebar_visible
+                || self.show_bonsai_modal
+                || (self.on_rice_page() && self.rice().paints_on_half_edge()));
         // The live strip draws a shooter's cue: the aim is stored, the
         // half-tick edge paints it.
         changed |= anim_half && self.live_strip_shown() && self.live.aiming();
@@ -1534,7 +1534,7 @@ impl App {
             || crate::app::deadchannel::lounge::svc::animates(self)
             || self.right_sidebar_visible()
             || (self.live_strip_shown() && self.live.aiming())
-            || (self.on_rice_page() && self.rice().shows_equalizer())
+            || (self.on_rice_page() && self.rice().paints_on_half_edge())
             || self.lively_ascii_visible()
             || self.last_pet_frame.get().is_some()
             || self.show_bonsai_modal
@@ -1640,9 +1640,9 @@ impl App {
     /// wake cadence.
     pub(crate) fn right_sidebar_visible(&self) -> bool {
         let mode = if self.show_settings {
-            self.settings_modal_state.device_rails().1
+            self.settings_modal_state.device_rails()
         } else {
-            self.rail_modes().1
+            self.rail_modes()
         };
         crate::app::render::resolve_right_sidebar_enabled(mode, self.screen, self.size.0)
     }

@@ -1163,8 +1163,14 @@ impl russh::server::Handler for ClientHandler {
             first_contact_gate,
             runner_looks_rx: self.state.runner_looks.subscribe(),
             presence: self.state.presence.clone(),
-            zen_layout: late_core::models::user::extract_zen_layout(&user.settings),
-            home_layout: late_core::models::user::extract_home_layout(&user.settings),
+            zen_layout: device
+                .zen_layout
+                .clone()
+                .or_else(|| late_core::models::user::extract_zen_layout(&user.settings)),
+            home_layout: device
+                .home_layout
+                .clone()
+                .or_else(|| late_core::models::user::extract_home_layout(&user.settings)),
             key_fingerprint,
             key_layout: device.layout,
             key_artboard_disclaimer: device.artboard_disclaimer,

@@ -374,14 +374,12 @@ async fn settings_mouse_toggles_reorders_and_scrolls_status_panes_independently(
     let rails = app.rail_modes();
     let default_sidebar = app.settings_modal_state.draft().right_sidebar_mode;
     click(&mut app, Target::SidebarMode);
-    assert_ne!(app.rail_modes().1, rails.1);
+    assert_ne!(app.rail_modes(), rails);
     assert_eq!(app.settings_modal_state.device_rails(), app.rail_modes());
     assert_eq!(
         app.settings_modal_state.draft().right_sidebar_mode,
         default_sidebar
     );
-    click(&mut app, Target::Tweak(TweakRow::RoomListSidebar));
-    assert_ne!(app.rail_modes().0, rails.0);
     click(&mut app, Target::Tweak(TweakRow::RightSidebar));
     let components = app.settings_modal_state.right_sidebar_components().to_vec();
     click(&mut app, Target::SidebarMove(0, 1));
@@ -1118,7 +1116,7 @@ async fn sidebar_arrows_preserve_device_only_persistence_and_always_offer_panels
     app.settings_modal_state.select_tab(Tab::Tweaks);
     for size in [(120, 40), (48, 14)] {
         app.resize(size.0, size.1).unwrap();
-        for row in [TweakRow::RightSidebar, TweakRow::RoomListSidebar] {
+        for row in [TweakRow::RightSidebar] {
             app.settings_modal_state
                 .select_mouse_target(Target::Tweak(row));
             app.settings_modal_state.mouse.reveal_selection();
@@ -1179,7 +1177,7 @@ async fn sidebar_arrows_preserve_device_only_persistence_and_always_offer_panels
         .is_none()
     );
     let stored = Profile::load(&client, app.user_id).await.unwrap();
-    assert_eq!((stored.room_list_mode, stored.right_sidebar_mode), original);
+    assert_eq!(stored.right_sidebar_mode, original);
     click(&mut app, Target::Tweak(TweakRow::RightSidebar));
     assert!(app.settings_modal_state.right_sidebar_components_open());
 }

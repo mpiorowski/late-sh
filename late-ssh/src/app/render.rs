@@ -32,7 +32,8 @@ use crate::app::files::terminal_image::TerminalImageFrame;
 
 /// Narrowest terminal that still carries the Arcade's sidebar set to
 /// `Auto`: the sidebar costs 24 columns, under 72 the page takes the whole
-/// width. (Home's rails are its tiles: `zen::state::HOME_FULL_MIN_COLS`.)
+/// width. (Home has no such fold: its rails are tiles, laid out as
+/// arranged at every width.)
 pub(crate) const AUTO_RIGHT_SIDEBAR_MIN_COLS: u16 = 72;
 
 pub(crate) const RIGHT_SIDEBAR_WIDTH: u16 = 24;
@@ -574,8 +575,8 @@ impl App {
         // open, otherwise the session's modes (this device's stored layout, else
         // the account default). `Auto` resolves against the live width, so a
         // rotate or a window drag reflows on the next frame.
-        let (_, session_right_sidebar_mode) = self.rail_modes();
-        let (_, draft_right_sidebar_mode) = self.settings_modal_state.device_rails();
+        let session_right_sidebar_mode = self.rail_modes();
+        let draft_right_sidebar_mode = self.settings_modal_state.device_rails();
         let show_right_sidebar = sidebar_enabled(
             self.show_settings,
             resolve_right_sidebar_enabled(draft_right_sidebar_mode, self.screen, self.size.0),

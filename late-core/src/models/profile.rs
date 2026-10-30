@@ -10,15 +10,14 @@ use super::statusline::{
     StatusComponentSetting, default_statusline_components, statusline_components_json,
 };
 use super::user::{
-    LandingPage, RightSidebarComponentSetting, RightSidebarMode, RoomListMode, Screensaver,
-    TerminalImagesMode, User, extract_artboard_disclaimer, extract_auto_restart,
-    extract_auto_translate, extract_bio, extract_country, extract_enable_background_color,
-    extract_favorite_room_ids, extract_favorite_theme_ids, extract_hidden_award_categories,
-    extract_ide, extract_keep_composer_focused, extract_landing_page, extract_langs,
-    extract_notify_bell, extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds,
-    extract_os, extract_paper_at_login, extract_right_sidebar_components,
-    extract_right_sidebar_mode, extract_room_list_mode, extract_screensaver,
-    extract_show_flag_fallback, extract_show_right_sidebar, extract_show_room_list_sidebar,
+    LandingPage, RightSidebarComponentSetting, RightSidebarMode, Screensaver, TerminalImagesMode,
+    User, extract_artboard_disclaimer, extract_auto_restart, extract_auto_translate, extract_bio,
+    extract_country, extract_enable_background_color, extract_favorite_room_ids,
+    extract_favorite_theme_ids, extract_hidden_award_categories, extract_ide,
+    extract_keep_composer_focused, extract_landing_page, extract_langs, extract_notify_bell,
+    extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds, extract_os,
+    extract_paper_at_login, extract_right_sidebar_components, extract_right_sidebar_mode,
+    extract_screensaver, extract_show_flag_fallback, extract_show_right_sidebar,
     extract_start_with_music_muted, extract_statusline_components, extract_terminal,
     extract_terminal_images, extract_text_brightness_adjustment, extract_theme_id,
     extract_timezone, extract_translate_mine_to_en, extract_translate_to,
@@ -57,10 +56,6 @@ pub struct Profile {
     /// the app frame's bottom border row. The top bar (pot, chips) is fixed UI
     /// policy and is not stored here.
     pub statusline_components: Vec<StatusComponentSetting>,
-    /// Legacy mirror of `room_list_mode`, kept in sync on write so an older
-    /// binary rolled back onto new data still shows the right rail.
-    pub show_room_list_sidebar: bool,
-    pub room_list_mode: RoomListMode,
     /// Tweak: pressing Enter in the chat composer sends without closing it.
     /// While on, the Alt+S shortcut becomes a no-op.
     pub keep_composer_focused: bool,
@@ -125,8 +120,6 @@ impl Default for Profile {
             right_sidebar_mode: RightSidebarMode::On,
             right_sidebar_components: super::user::default_right_sidebar_components(),
             statusline_components: default_statusline_components(),
-            show_room_list_sidebar: true,
-            room_list_mode: RoomListMode::On,
             keep_composer_focused: false,
             start_with_music_muted: false,
             landing_page: LandingPage::Clubhouse,
@@ -167,8 +160,6 @@ pub struct ProfileParams {
     pub right_sidebar_mode: RightSidebarMode,
     pub right_sidebar_components: Vec<RightSidebarComponentSetting>,
     pub statusline_components: Vec<StatusComponentSetting>,
-    pub show_room_list_sidebar: bool,
-    pub room_list_mode: RoomListMode,
     pub keep_composer_focused: bool,
     pub start_with_music_muted: bool,
     pub landing_page: LandingPage,
@@ -240,7 +231,7 @@ impl Profile {
     /// bio/country/timezone/theme_id/notify_kinds/notify_bell/notify_cooldown_mins/
     /// enable_background_color/text_brightness_adjustment/
     /// show_right_sidebar/right_sidebar_mode/right_sidebar_components/
-    /// show_room_list_sidebar/room_list_mode/keep_composer_focused/
+    /// keep_composer_focused/
     /// start_with_music_muted/show_flag_fallback/screensaver into settings via
     /// `settings || jsonb_build_object(...)`, so concurrent writes to
     /// unrelated keys (ignored_user_ids) are preserved.
@@ -324,31 +315,29 @@ impl Profile {
                          'show_right_sidebar', $12::bool,
                          'right_sidebar_mode', $13::text,
                          'right_sidebar_components', $14::jsonb,
-                         'show_room_list_sidebar', $15::bool,
-                         'room_list_mode', $16::text,
-                         'favorite_room_ids', $17::jsonb,
-                         'ide', $18::text,
-                         'terminal', $19::text,
-                         'os', $20::text,
-                         'langs', $21::jsonb,
-                         'keep_composer_focused', $22::bool,
-                         'start_with_music_muted', $23::bool,
-                         'show_flag_fallback', $24::bool,
-                         'landing_page', $25::text,
-                         'translate_to', $26::text,
-                         'auto_translate', $27::bool,
-                         'translate_mine_to_en', $28::bool,
-                         'favorite_theme_ids', $29::jsonb,
-                         'paper_at_login', $30::bool,
-                         'terminal_images', $31::text,
-                         'hidden_award_categories', $32::jsonb,
-                         'statusline_components', $33::jsonb,
-                         'artboard_disclaimer', $34::bool,
-                         'screensaver', $35::text,
-                         'auto_restart', $36::bool
+                         'favorite_room_ids', $15::jsonb,
+                         'ide', $16::text,
+                         'terminal', $17::text,
+                         'os', $18::text,
+                         'langs', $19::jsonb,
+                         'keep_composer_focused', $20::bool,
+                         'start_with_music_muted', $21::bool,
+                         'show_flag_fallback', $22::bool,
+                         'landing_page', $23::text,
+                         'translate_to', $24::text,
+                         'auto_translate', $25::bool,
+                         'translate_mine_to_en', $26::bool,
+                         'favorite_theme_ids', $27::jsonb,
+                         'paper_at_login', $28::bool,
+                         'terminal_images', $29::text,
+                         'hidden_award_categories', $30::jsonb,
+                         'statusline_components', $31::jsonb,
+                         'artboard_disclaimer', $32::bool,
+                         'screensaver', $33::text,
+                         'auto_restart', $34::bool
                      ),
                      updated = current_timestamp
-                 WHERE id = $37
+                 WHERE id = $35
                  RETURNING *",
                 &[
                     &params.username,
@@ -365,8 +354,6 @@ impl Profile {
                     &params.show_right_sidebar,
                     &params.right_sidebar_mode.as_str(),
                     &right_sidebar_components_json,
-                    &params.show_room_list_sidebar,
-                    &params.room_list_mode.as_str(),
                     &favorite_room_ids_json,
                     &ide,
                     &terminal,
@@ -418,8 +405,6 @@ impl Profile {
             right_sidebar_mode: extract_right_sidebar_mode(&user.settings),
             right_sidebar_components: extract_right_sidebar_components(&user.settings),
             statusline_components: extract_statusline_components(&user.settings),
-            show_room_list_sidebar: extract_show_room_list_sidebar(&user.settings),
-            room_list_mode: extract_room_list_mode(&user.settings),
             keep_composer_focused: extract_keep_composer_focused(&user.settings),
             start_with_music_muted: extract_start_with_music_muted(&user.settings),
             landing_page: extract_landing_page(&user.settings),

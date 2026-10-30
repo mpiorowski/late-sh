@@ -178,7 +178,7 @@ pub(crate) fn draw_rice(
         .collect();
     let mut next_chat = 0usize;
     let zen = view.zen;
-    let zoomed = zen.zoomed_tile(tiles_area.width);
+    let zoomed = zen.zoomed_tile();
     let gaps = zen.gaps();
     let chrome = zen.chrome();
     let rects = layout::tile_rects(&zen.rice.root, tiles_area, gaps, zoomed);

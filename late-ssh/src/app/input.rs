@@ -3089,7 +3089,7 @@ fn handle_status_bar_click(app: &mut App, mouse: MouseEvent) -> bool {
 pub(crate) fn app_content_area(app: &App) -> Rect {
     let area = Rect::new(0, 0, app.size.0, app.size.1);
     let inner = Block::default().borders(Borders::ALL).inner(area);
-    let (_, right_sidebar_mode) = app.rail_modes();
+    let right_sidebar_mode = app.rail_modes();
     if crate::app::render::resolve_right_sidebar_enabled(right_sidebar_mode, app.screen, app.size.0)
     {
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner)[0]
@@ -3763,10 +3763,7 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
 /// on the footer, on a gap, on the tile already focused, or, outside
 /// arrange mode, on furniture (`TileKind::takes_focus`).
 fn focus_rice_tile_at(app: &mut App, x: u16, y: u16) {
-    let zoomed = app
-        .rice()
-        .zoomed_tile(app.rice_tiles_area().width)
-        .is_some();
+    let zoomed = app.rice().zoomed_tile().is_some();
     let hit = app
         .rice_tile_rects()
         .iter()
@@ -4125,26 +4122,6 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && !app.chat.news_selected =>
         {
             app.live_prefix_armed = true;
-            true
-        }
-        b'\\'
-            if ctx.screen == Screen::Dashboard
-                && !ctx.chat_composing
-                && !ctx.feeds_processing
-                && !ctx.news_composing =>
-        {
-            // Chat only: the active chat tile over the whole page, and
-            // back. The rails are tiles now; a layout without one is
-            // arranged (`Ctrl+E`) and saved as such.
-            app.home.toggle_zoom();
-            app.sync_aquarium_bounds();
-            let narrow = app.rice_tiles_area().width < crate::app::zen::state::HOME_FULL_MIN_COLS;
-            let label = match (app.home.zoomed, narrow) {
-                (_, true) => "Chat only: the page needs 96 columns for its tiles",
-                (true, false) => "Chat only; \\ brings the page back",
-                (false, false) => "The whole page",
-            };
-            app.banner = Some(crate::app::common::primitives::Banner::success(label));
             true
         }
         b'w' | b'W'

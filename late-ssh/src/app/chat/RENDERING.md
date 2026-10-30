@@ -3,7 +3,7 @@
 How chat draws: the rows cache, message and author rendering, images, and the layout rules every chat surface shares. Part of the chat domain; the rest is `CONTEXT.md`.
 
 Home chat center:
-- The room rail is rendered by `draw_room_list_rail` outside the center pane when the terminal is wide enough.
+- The room rail is rendered by `draw_room_list_rail` in Home's `rooms` tile, whatever the terminal's width (the page is a tile tree, `app/zen/CONTEXT.md`).
 - The center pane renders messages or a synthetic entry, with the composer at the bottom.
 - Composer height is dynamic but capped at 8 lines.
 

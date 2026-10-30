@@ -12,7 +12,6 @@ use uuid::Uuid;
 
 use super::layout::{self, Gaps};
 use crate::app::ascii::playback::Playback;
-use late_core::models::user::{RightSidebarComponent, RightSidebarComponentSetting};
 
 /// What a tile shows. Closed set: a new kind is a new arm in `ui.rs`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -804,11 +803,6 @@ impl Default for RiceLayout {
 
 /// Home's rail width, the gutter beside it included.
 pub const HOME_RAIL_COLS: u16 = 24;
-/// The narrowest Home that lays its whole tree out: under it the page is
-/// its chat alone (`ZenState::zoomed_tile`). At 96 the stock Home keeps
-/// 46 columns of chat beside its two rails; phone-sized sessions (Termux
-/// is commonly 40-55 columns) get the chat's full width.
-pub const HOME_FULL_MIN_COLS: u16 = 96;
 /// Home's sidebar width, the gutter beside it included.
 pub const HOME_SIDEBAR_COLS: u16 = 24;
 /// The sidebar's pinned rows: the online count with the clock, the friends.
@@ -839,49 +833,35 @@ impl RiceLayout {
         Self::from_json_or(value, Self::default())
     }
 
-    /// Home as it has always drawn: the room rail, the chat center hosting
-    /// the now strip and the board's banner, and the sidebar column: the
-    /// pinned presence rows, then the account's panels in its sidebar
-    /// order (`users.settings.right_sidebar_components`), each at its
-    /// panel height, the last taking the rest. Panels switched off, or
-    /// not owned (`owned_pet`, `owned_tank`), are left out; the spacer is
-    /// nothing here, since the last panel takes the rest anyway. This is
-    /// what `R` resets to on Home.
-    pub fn home(
-        components: &[RightSidebarComponentSetting],
-        owned_pet: bool,
-        owned_tank: bool,
-    ) -> Self {
-        let panels: Vec<(TileKind, u16)> = components
-            .iter()
-            .filter(|setting| setting.enabled)
-            .filter_map(|setting| match setting.component {
-                RightSidebarComponent::Live => {
-                    Some((TileKind::Live, crate::app::live::panel::LIVE_PANEL_HEIGHT))
-                }
-                RightSidebarComponent::Music => Some((
-                    TileKind::Music,
-                    crate::app::common::sidebar::MUSIC_STAGE_HEIGHT,
-                )),
-                RightSidebarComponent::Bonsai => {
-                    Some((TileKind::Bonsai, crate::app::common::sidebar::BONSAI_HEIGHT))
-                }
-                RightSidebarComponent::Daily => Some((
-                    TileKind::Lobby,
-                    crate::app::lobby::daily::panel::DAILY_PANEL_HEIGHT,
-                )),
-                RightSidebarComponent::Pet if owned_pet => {
-                    Some((TileKind::Pet, crate::app::pet::ui::PET_BOX_MIN_ROWS))
-                }
-                RightSidebarComponent::Tank if owned_tank => Some((
-                    TileKind::Tank,
-                    crate::app::hub::aquarium::ui::MINI_TANK_HEIGHT,
-                )),
-                RightSidebarComponent::Pet
-                | RightSidebarComponent::Tank
-                | RightSidebarComponent::Spacer => None,
-            })
-            .collect();
+    /// Home as it has always drawn: the room rail, the chat hosting the now
+    /// strip and the board's banner, and the sidebar column: the pinned
+    /// presence rows, then the panels in the sidebar's order (music, the
+    /// lobby, live, the bonsai, then the owned companions: `owned_pet`,
+    /// `owned_tank`), each at its panel height, the last taking the rest.
+    /// Fixed: the page is arranged in place (`Ctrl+E`), not through a
+    /// settings list. This is what `R` resets to on Home.
+    pub fn home(owned_pet: bool, owned_tank: bool) -> Self {
+        let mut panels: Vec<(TileKind, u16)> = vec![
+            (
+                TileKind::Music,
+                crate::app::common::sidebar::MUSIC_STAGE_HEIGHT,
+            ),
+            (
+                TileKind::Lobby,
+                crate::app::lobby::daily::panel::DAILY_PANEL_HEIGHT,
+            ),
+            (TileKind::Live, crate::app::live::panel::LIVE_PANEL_HEIGHT),
+            (TileKind::Bonsai, crate::app::common::sidebar::BONSAI_HEIGHT),
+        ];
+        if owned_pet {
+            panels.push((TileKind::Pet, crate::app::pet::ui::PET_BOX_MIN_ROWS));
+        }
+        if owned_tank {
+            panels.push((
+                TileKind::Tank,
+                crate::app::hub::aquarium::ui::MINI_TANK_HEIGHT,
+            ));
+        }
         // Each panel's rows plus its title rule; the last one takes the
         // rest of the column.
         let mut column = match panels.last() {
@@ -1041,6 +1021,17 @@ impl ZenState {
             | TileKind::Rooms
             | TileKind::Presence => false,
         })
+    }
+
+    /// Whether the page paints something on the anim_half edge: an
+    /// equalizer, or a bonsai tile's sway. The render loop pays that edge
+    /// only while a page shows one; a rail and a chat alone settle.
+    pub fn paints_on_half_edge(&self) -> bool {
+        self.shows_equalizer()
+            || self
+                .drawn_kinds()
+                .into_iter()
+                .any(|kind| kind == TileKind::Bonsai)
     }
 
     /// The tile hosting `guest`, if any.
@@ -1449,24 +1440,12 @@ impl ZenState {
         self.zoomed = !self.zoomed;
     }
 
-    /// The one tile the page shows alone, if it shows one: Zen's focused
-    /// tile while zoomed; on Home the chat (`home_chat_ordinal`) while
-    /// zoomed (`\\`) or while the page is narrower than
-    /// `HOME_FULL_MIN_COLS`, so a phone lands on the chat alone without
-    /// arranging anything.
-    pub fn zoomed_tile(&self, width: u16) -> Option<usize> {
-        match self.page {
-            RicePage::Zen => self.zoomed.then_some(self.focus),
-            RicePage::Home => {
-                (self.zoomed || width < HOME_FULL_MIN_COLS).then(|| self.home_chat_ordinal())
-            }
-        }
-    }
-
-    /// Home's chat tile of the moment: the active chat tile, else the
-    /// focus on a page with no chat.
-    fn home_chat_ordinal(&self) -> usize {
-        self.active_chat_ordinal().unwrap_or(self.focus)
+    /// The one tile the page shows alone, if it shows one: the focused
+    /// tile while zoomed (`z`). Nothing about the terminal's size changes
+    /// the layout: a page is laid out as its owner arranged it, at every
+    /// width.
+    pub fn zoomed_tile(&self) -> Option<usize> {
+        self.zoomed.then_some(self.focus)
     }
 
     pub fn cycle_border(&mut self) {
@@ -1492,9 +1471,9 @@ impl ZenState {
         self.focus = self.first_tile_of(TileKind::Chat).unwrap_or(0);
     }
 
-    /// A fresh stock layout (the account's sidebar list changed in
-    /// Settings): what the next `R` resets to, and the page itself when
-    /// it has never been edited (`edited`).
+    /// A fresh stock layout (the account bought a companion): what the
+    /// next `R` resets to, and the page itself when it has never been
+    /// edited (`edited`).
     pub fn set_stock(&mut self, stock: RiceLayout, edited: bool) {
         if self.stock == stock {
             return;
