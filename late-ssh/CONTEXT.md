@@ -319,7 +319,7 @@ Keyless sessions (ghost bots, tests) apply a change for the session only.
 `late-ssh/src/config.rs` and `late-web/src/config.rs` hold `dev`, `dev2` and
 `prod` profiles as code, selected by `LATE_ENV` (missing or unknown is a startup
 error). The only other env reads are secrets (DB, LiveKit, door secrets) and
-dev opt-ins keyed on presence: `LATE_AI_API_KEY`, the R2 pair
+dev opt-ins keyed on presence: `LATE_AI_API_KEY` (or `GEMINI_API_KEY`), the R2 pair
 `LATE_FILES_S3_ACCESS_KEY_ID`/`..._SECRET_ACCESS_KEY` (half set is an error),
 `LATE_YOUTUBE_API_KEY`, the herald's pairs `LATE_HERALD_MASTODON_INSTANCE`/
 `..._MASTODON_TOKEN` and `LATE_HERALD_BLUESKY_IDENTIFIER`/`..._BLUESKY_PASSWORD`

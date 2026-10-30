@@ -459,7 +459,7 @@ impl Config {
             ws_pair_max_attempts_per_ip: 30,
             ws_pair_rate_limit_window_secs: 60,
             // Personal opt-in: AI features stay off without a key.
-            ai: dev_ai(optional("LATE_AI_API_KEY")),
+            ai: dev_ai(optional("LATE_AI_API_KEY").or_else(|| optional("GEMINI_API_KEY"))),
             // Personal opt-in: a network posts only with its pair set, and
             // Mastodon then unlisted.
             herald: dev_herald(

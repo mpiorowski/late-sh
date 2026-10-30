@@ -239,6 +239,24 @@ fleet-logs:
 fleet-expire:
 	scripts/fleet.sh expire
 
+
+# Barebones multi-arch (`arm64` + `amd64`) stack: only `postgres` and
+# `late-ssh` (`cargo-watch`), without the door hosts, radio, LiveKit, edge, or
+# web containers.
+BAREBONES_COMPOSE = docker compose -f docker-compose.barebones.yml
+.PHONY: start-barebones barebones-up barebones-stop barebones-down barebones-logs barebones-ps
+start-barebones: .env keys
+	$(BAREBONES_COMPOSE) up --build
+barebones-up: .env keys
+	$(BAREBONES_COMPOSE) up -d --build
+barebones-stop:
+	$(BAREBONES_COMPOSE) stop
+barebones-down:
+	$(BAREBONES_COMPOSE) down
+barebones-logs:
+	$(BAREBONES_COMPOSE) logs -f
+barebones-ps:
+	$(BAREBONES_COMPOSE) ps
 # Stops every running container on this machine, not just this project's.
 .PHONY: stop-all
 stop-all:

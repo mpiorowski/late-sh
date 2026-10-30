@@ -274,6 +274,11 @@ query gotchas: `infra/RUNBOOK.md`.
   localhost -p 2222`. The dev profiles pin compose hostnames, so the apps run
   only inside compose. Config is compiled per profile (`late-ssh/CONTEXT.md`,
   Config).
+- `make start-barebones` runs a barebones multi-arch (`arm64` + `amd64`) compose
+  stack with only `postgres` and `late-ssh` (`cargo-watch`) from
+  `docker-compose.barebones.yml` (`make barebones-up`, `barebones-stop`,
+  `barebones-down`, `barebones-logs`, `barebones-ps`; optional `GEMINI_API_KEY`
+  or `LATE_AI_API_KEY` in `.env.local` enables the LLM bots).
 - late-ssh runs locally the way prod runs it: pods behind a local copy of the
   prod SSH edge (`docker-compose.yml` `service-ssh` and `ssh-pod`,
   `scripts/fleet.sh`). `make start` builds the working tree as a generation,
