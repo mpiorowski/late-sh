@@ -4340,13 +4340,23 @@ impl ChatState {
         // #bugs and #suggestions take report cards only. A regular user's
         // plain message there is the report, filed as if typed after `/bug`
         // or `/suggest`, instead of being refused by the send gate after the
-        // composer already cleared. A reply is refused here, composer kept:
-        // reports get reactions, not threads.
+        // composer already cleared. A reply, or text too short to be a
+        // report, is refused here with the composer kept: reports get
+        // reactions, not threads, and a draft is never lost to a command
+        // the user never typed.
         let body = match (self.report_room_kind(), is_command_draft(&body)) {
             (Some(kind), false) if self.reply_target.is_some() => {
                 return Some(Banner::error(
                     &super::svc::SendRefusal::ReportOnly(kind).message(),
                 ));
+            }
+            (Some(kind), false)
+                if !body.trim().is_empty() && body.trim().chars().count() < REPORT_MIN_CHARS =>
+            {
+                return Some(Banner::error(&format!(
+                    "#{} takes reports: describe it in a few words or more",
+                    kind.slug()
+                )));
             }
             (Some(kind), false) if !body.trim().is_empty() => {
                 format!("{} {}", kind.command(), body.trim())
@@ -4391,13 +4401,14 @@ impl ChatState {
 
         // `/buy` posts the bar's own spending phrase to @bartender, so the
         // purchase, its price, refusals and his answer all run exactly as if
-        // the phrase had been typed. Public rooms only: he auto-joins those,
+        // the phrase had been typed. Only where he sits: he is joined to the
+        // auto-join public rooms and no others (`auto_join_public_rooms`),
         // and anywhere else the order would go unanswered.
         if let Some(parsed) = parse_buy_command(&body) {
             let room = self
                 .composer_room_id
                 .and_then(|room_id| self.room_by_id(room_id))
-                .map(|room| (room.id, room.visibility == "public"));
+                .map(|room| (room.id, room.visibility == "public" && room.auto_join));
             self.clear_composer_after_submit();
             let order = match parsed {
                 BuyParse::Invalid => {
@@ -4409,7 +4420,7 @@ impl ChatState {
                 Some((room_id, true)) => room_id,
                 Some((_, false)) | None => {
                     return Some(Banner::error(
-                        "Use /buy from a public room, where @bartender pours",
+                        "Use /buy from a room @bartender is in, like #lounge",
                     ));
                 }
             };
@@ -4890,13 +4901,13 @@ impl ChatState {
 
     /// The report kind the composer's room enforces on this user: `None` for
     /// staff (they reply under reports in free text), while editing, and
-    /// outside #bugs and #suggestions.
+    /// outside the public #bugs and #suggestions.
     fn report_room_kind(&self) -> Option<ReportKind> {
         if self.is_admin || self.is_moderator || self.edited_message_id.is_some() {
             return None;
         }
         let room = self.room_by_id(self.composer_room_id?)?;
-        ReportKind::for_room_slug(room.slug.as_deref()?)
+        ReportKind::for_room(room)
     }
 
     /// Posts a command's generated body to `room_id` as a plain message

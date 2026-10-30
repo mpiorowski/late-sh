@@ -267,15 +267,11 @@ fn stored_action_reaches_irc_as_ctcp_action_without_repeating_the_nick() {
 
 #[test]
 fn channel_body_rewrites_leading_mentions_only_in_plain_text() {
-    let directory = std::collections::HashMap::from([(
-        uuid::Uuid::new_v4(),
-        "Alice.Smith".to_string(),
-    )]);
+    let directory =
+        std::collections::HashMap::from([(uuid::Uuid::new_v4(), "Alice.Smith".to_string())]);
     assert_eq!(
         channel_body_for_irc("@alice.smith hello", &directory),
-        IrcBody::Text(rewrite_leading_mention_for_irc("@alice.smith hello", |_| {
-            Some("Alice.Smith".to_string())
-        }))
+        IrcBody::Text("@Alice^Smith hello".to_string())
     );
     assert_eq!(
         channel_body_for_irc(&action_to_body("@alice.smith waves"), &directory),

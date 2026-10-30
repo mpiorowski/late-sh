@@ -339,7 +339,12 @@ fn board_lines_multiline(state: &State) -> Vec<Line<'static>> {
     let gap = " ";
     let waste_pad = waste_fan_offset(state);
     lines.push(Line::from(vec![
-        header_span("ST", matches!(cursor(state), Some(Focus::Stock)), false, None),
+        header_span(
+            "ST",
+            matches!(cursor(state), Some(Focus::Stock)),
+            false,
+            None,
+        ),
         Span::raw(gap),
         Span::raw(" ".repeat(waste_pad)),
         header_span(

@@ -612,7 +612,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /active            list active users",
         "  /map               where people are, on a world map: the Map section of People",
         "  /gift @user <n>    send chips, with an optional note after the amount",
-        "  /buy round         buy the house a round from @bartender (public rooms)",
+        "  /buy round         buy the house a round from @bartender (where he sits)",
         "  /buy @user         put one drink on someone's tab",
         "  /pot               the weekly pot; /pot buy N buys N tickets",
         "  /friends           list friends",

@@ -98,6 +98,45 @@ fn report_kind_maps_room_slugs() {
     assert_eq!(ReportKind::for_room_slug("lounge"), None);
 }
 
+/// Only the public topic rooms are report-only: a private room may share
+/// the slug and stays free text.
+#[test]
+fn report_kind_enforces_public_topic_rooms_only() {
+    let room = |kind: &str, visibility: &str, slug: &str| ChatRoom {
+        id: Uuid::from_u128(1),
+        created: chrono::Utc::now(),
+        updated: chrono::Utc::now(),
+        kind: kind.to_string(),
+        visibility: visibility.to_string(),
+        auto_join: false,
+        permanent: false,
+        slug: Some(slug.to_string()),
+        language_code: None,
+        dm_user_a: None,
+        dm_user_b: None,
+        topic: None,
+        rules: None,
+        created_by: None,
+    };
+    assert_eq!(
+        ReportKind::for_room(&room("topic", "public", "bugs")),
+        Some(ReportKind::Bug)
+    );
+    assert_eq!(
+        ReportKind::for_room(&room("topic", "public", "suggestions")),
+        Some(ReportKind::Suggestion)
+    );
+    assert_eq!(
+        ReportKind::for_room(&room("topic", "private", "bugs")),
+        None
+    );
+    assert_eq!(ReportKind::for_room(&room("game", "public", "bugs")), None);
+    assert_eq!(
+        ReportKind::for_room(&room("topic", "public", "lounge")),
+        None
+    );
+}
+
 #[test]
 fn format_cooldown_is_compact() {
     assert_eq!(format_cooldown(0), "1s");

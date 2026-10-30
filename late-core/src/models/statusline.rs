@@ -146,7 +146,9 @@ impl StatusComponent {
                 "What the #lounge now strip shows: a stream, a match, a booth track, a board event."
             }
             Self::Date => "Today's date in your chosen timezone.",
-            Self::Username => "The name you are logged in as, for anyone with several keys or accounts.",
+            Self::Username => {
+                "The name you are logged in as, for anyone with several keys or accounts."
+            }
         }
     }
 
