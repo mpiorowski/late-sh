@@ -1,8 +1,8 @@
 use super::{
     AUTO_RIGHT_SIDEBAR_MIN_COLS, AUTO_ROOM_LIST_MIN_COLS, FRAME_TABS, app_frame_bottom_titles,
-    app_frame_sponsor_title, dashboard_home_selected, line_width, resolve_right_sidebar_enabled,
-    resolve_room_list_enabled, room_list_sidebar_enabled, sidebar_enabled, sponsor_line,
-    tab_is_lit,
+    app_frame_sponsor_title, chat_title_hint, dashboard_home_selected, line_width,
+    resolve_right_sidebar_enabled, resolve_room_list_enabled, room_list_sidebar_enabled,
+    sidebar_enabled, sponsor_line, tab_is_lit,
 };
 use crate::app::common::primitives::Screen;
 use late_core::models::user::{RightSidebarMode, RoomListMode};
@@ -284,4 +284,25 @@ fn the_lit_tab_is_the_page_the_screen_belongs_to() {
         assert_eq!(lit(screen), vec![tab], "{screen:?}");
     }
     assert_eq!(lit(Screen::Zen), Vec::<Screen>::new());
+}
+
+/// The frame title's word for a game's shut chat: dim with nothing new,
+/// bright with the count once somebody has talked, nothing while there is no
+/// chat to open.
+#[test]
+fn the_chat_title_hint_counts_what_was_said_while_the_chat_was_shut() {
+    use crate::app::common::theme;
+    let text = |unread: Option<i64>| {
+        chat_title_hint(unread).map(|span| (span.content.to_string(), span.style.fg))
+    };
+
+    assert_eq!(
+        text(Some(0)),
+        Some(("\u{b7} F4 chat ".to_string(), Some(theme::TEXT_DIM())))
+    );
+    assert_eq!(
+        text(Some(3)),
+        Some(("\u{b7} F4 chat (3 new) ".to_string(), Some(theme::AMBER())))
+    );
+    assert_eq!(text(None), None);
 }

@@ -183,6 +183,7 @@ Behavior:
 - Allows OpenSSH to own terminal prompts for PIN/passphrase/touch/agent/config handling
 - Fetches the token with `late-cli-token-v1` over the control socket using `BatchMode=yes`
 - Opens the interactive shell through the same control socket with `BatchMode=yes -tt`
+- The master carries native mode's keepalive (`ServerAliveInterval=15`, `ServerAliveCountMax=3`), so a dead link ends the session within a minute instead of hanging; this mode still cannot follow a drain handoff, so a server update ends its session and the user runs `late` again
 - Cleans up the control socket directory on close/drop
 
 If no explicit key is supplied, OpenSSH mode lets OpenSSH use normal `~/.ssh/config`, agent, and default identity discovery.

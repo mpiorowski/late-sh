@@ -8,19 +8,13 @@
 //   browsing the live rows joins nobody's room;
 // - a player's links (`App::own_watch_chats`, one per watchable door with a
 //   game of theirs running, detached ones included) live while those games
-//   run and feed the read-only pane beside the game on screen (one line
-//   under it on a narrow terminal). The player reads, and answers from the
-//   pane: F2 or a click there opens the room's composer, the one time keys
-//   leave the game (`App::handle_input`). F4 in game turns their side off
-//   and on (`App::own_watch_chat_shown`); the watchers keep talking either
-//   way.
+//   run, so the room is joined and ready the moment F4 opens the chat over
+//   the game (`spectate::input`), where it takes every key until F4 or Esc
+//   closes it. The game ending closes it too.
 //
 // `tick` drives both links from `App::tick`.
 
 use std::sync::Arc;
-
-use chrono::{DateTime, Duration, Utc};
-use late_core::models::chat_message::ChatMessage;
 
 use super::state::{ChatLink, ChatLinkStep, SpectateGame};
 use super::svc::LiveGamesService;
@@ -28,11 +22,6 @@ use crate::app::chat::state::ChatState;
 use crate::app::door::arcade::HandleStatus;
 use crate::app::state::App;
 use crate::render_signal::RenderSignal;
-use crate::usernames::UsernameLookup;
-
-/// How long a watcher's message stays under the player's game. Past this the
-/// line clears, so a remark from an hour ago never reads as a live one.
-const LINE_FRESH_MINUTES: i64 = 10;
 
 /// Drive this session's watch-chat links. Returns whether the watch pane or
 /// the player's own pane gained or lost its room.
@@ -49,9 +38,15 @@ pub fn tick(app: &mut App) -> bool {
     }
 
     // The player's own links follow their running games: one made when a
-    // game starts (or F4 shows the chat), dropped when it ends (or F4 hides
-    // it).
-    let wanted = own_games(app);
+    // game starts, dropped when it ends. A chat open over a game that ended
+    // closes first, while its link still names the room.
+    let wanted = own_running_games(app);
+    if let Some(open) = app.own_watch_chat_open
+        && !wanted.iter().any(|(game, _)| *game == open)
+    {
+        super::input::close_own_chat(app);
+        changed = true;
+    }
     let (kept, dropped): (Vec<ChatLink>, Vec<ChatLink>) = std::mem::take(&mut app.own_watch_chats)
         .into_iter()
         .partition(|link| {
@@ -61,8 +56,8 @@ pub fn tick(app: &mut App) -> bool {
         });
     app.own_watch_chats = kept;
     changed |= !dropped.is_empty();
-    // A composer open in a dropped link's room (the game ended, or F4
-    // hid the pane) has nowhere left to send: it closes with the link.
+    // A composer open in a dropped link's room (the game ended) has nowhere
+    // left to send: it closes with the link.
     for link in dropped {
         if let Some(room_id) = link.room_id()
             && app.chat.composer_room_id() == Some(room_id)
@@ -85,14 +80,6 @@ pub fn tick(app: &mut App) -> bool {
     }
 
     changed
-}
-
-/// The running games this session's player should see watcher chat beside.
-fn own_games(app: &App) -> Vec<(SpectateGame, String)> {
-    match app.own_watch_chat_shown {
-        true => own_running_games(app),
-        false => Vec::new(),
-    }
 }
 
 /// This session's own running games on the watchable doors, by door and the
@@ -157,56 +144,3 @@ fn drive(
         ChatLinkStep::Idle => false,
     }
 }
-
-/// The newest watcher message, as the player reads it on the one row under
-/// their game when the terminal is too narrow for the pane.
-#[derive(Debug, PartialEq, Eq)]
-pub struct WatchLine {
-    pub author: String,
-    pub body: String,
-    /// A `/me` action, read as `* author body` rather than `author: body`.
-    pub is_action: bool,
-    /// `now`, `3m`: how long ago it was said.
-    pub age: String,
-}
-
-/// The line for a room's messages (newest first), or `None` when the newest
-/// one is no longer fresh.
-pub fn latest_line(
-    messages: &[ChatMessage],
-    usernames: &UsernameLookup<'_>,
-    now: DateTime<Utc>,
-) -> Option<WatchLine> {
-    let message = messages.first()?;
-    let age = now.signed_duration_since(message.created);
-    if age > Duration::minutes(LINE_FRESH_MINUTES) {
-        return None;
-    }
-    let author = match usernames.get(&message.user_id) {
-        Some(name) => name.clone(),
-        None => "someone".to_string(),
-    };
-    let (text, is_action) = match crate::app::chat::action::parse_action_body(&message.body) {
-        Some(action) => (action, true),
-        None => (message.body.as_str(), false),
-    };
-    Some(WatchLine {
-        author,
-        body: one_line(text),
-        is_action,
-        age: match age.num_minutes() {
-            ..=0 => "now".to_string(),
-            minutes => format!("{minutes}m"),
-        },
-    })
-}
-
-/// Text on one row: every run of whitespace (line breaks included) collapses
-/// to one space.
-fn one_line(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-#[cfg(test)]
-#[path = "chat_test.rs"]
-mod chat_test;

@@ -1,4 +1,4 @@
-use chrono::{Datelike, Duration, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Utc};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -12,7 +12,7 @@ use crate::{
         leaderboard::{
             DailyPuzzle, DoorGame, LATEANIA_XP_AT_LEVEL_CAP, LATEANIA_XP_PER_PARAGON_LEVEL,
             LobbyGame, OnlineTimeIncrement, RankedEntry, ScoreGame, WeekBest, WeekGame,
-            apply_online_time_batch, fetch_leaderboard_data, week_bests,
+            apply_online_time_batch, fetch_leaderboard_data, online_time_credit, week_bests,
         },
         minesweeper,
         mud_character::MudCharacter,
@@ -31,10 +31,64 @@ fn entry_for(entries: &[RankedEntry], user_id: Uuid) -> &RankedEntry {
         .expect("user on board")
 }
 
+fn online_span(
+    user_id: Uuid,
+    month_start: NaiveDate,
+    span_start: DateTime<Utc>,
+    span_seconds: i64,
+    milliseconds: i64,
+) -> OnlineTimeIncrement {
+    OnlineTimeIncrement {
+        user_id,
+        month_start,
+        span_start,
+        span_end: span_start + Duration::seconds(span_seconds),
+        milliseconds,
+    }
+}
+
+#[test]
+fn online_time_credit_counts_only_what_is_past_the_counted_mark() {
+    let user_id = Uuid::from_u128(1);
+    let month_start = NaiveDate::from_ymd_opt(2026, 10, 1).expect("month");
+    let start = Utc.with_ymd_and_hms(2026, 10, 5, 12, 0, 0).unwrap();
+    // A continuous minute.
+    let full = online_span(user_id, month_start, start, 60, 60_000);
+    // The same minute with a 20s gap in it: 40s present.
+    let gapped = online_span(user_id, month_start, start, 60, 40_000);
+
+    assert_eq!(online_time_credit(&full, None), 60_000, "nothing counted yet");
+    assert_eq!(
+        online_time_credit(&full, Some(start - Duration::seconds(5))),
+        60_000,
+        "a mark before the span leaves it whole"
+    );
+    assert_eq!(
+        online_time_credit(&full, Some(start + Duration::seconds(45))),
+        15_000,
+        "another pod already counted the first 45s"
+    );
+    assert_eq!(
+        online_time_credit(&full, Some(start + Duration::seconds(90))),
+        0,
+        "a span wholly behind the mark earns nothing"
+    );
+    assert_eq!(
+        online_time_credit(&gapped, Some(start + Duration::seconds(30))),
+        30_000,
+        "never more than the uncounted wall clock"
+    );
+    assert_eq!(
+        online_time_credit(&gapped, Some(start + Duration::seconds(10))),
+        40_000,
+        "never more than the presence inside the span"
+    );
+}
+
 #[tokio::test]
-async fn online_time_batches_are_idempotent_and_rank_both_windows() {
+async fn online_time_batches_never_count_one_moment_twice_and_rank_both_windows() {
     let test_db = test_db().await;
-    let client = test_db.db.get().await.expect("db client");
+    let mut client = test_db.db.get().await.expect("db client");
     let alice = create_test_user(&test_db.db, "lb_online_alice").await;
     let bob = create_test_user(&test_db.db, "lb_online_bob").await;
     let deleted = create_test_user(&test_db.db, "lb_online_deleted").await;
@@ -43,51 +97,60 @@ async fn online_time_batches_are_idempotent_and_rank_both_windows() {
         .await
         .expect("delete user before batch");
 
-    let first_flush = Uuid::now_v7();
-    let today = Utc::now().date_naive();
+    let now = Utc::now();
+    let today = now.date_naive();
     let current_month =
         NaiveDate::from_ymd_opt(today.year(), today.month(), 1).expect("current month");
     let previous_day = current_month - Duration::days(1);
     let previous_month = NaiveDate::from_ymd_opt(previous_day.year(), previous_day.month(), 1)
         .expect("previous month");
-    let increment = |user_id, month_start, milliseconds| OnlineTimeIncrement {
-        user_id,
-        month_start,
-        milliseconds,
-    };
-    let increments = [
-        increment(alice.id, current_month, 60_000),
-        increment(alice.id, current_month, 40_000),
-        increment(bob.id, current_month, 90_000),
-        increment(deleted.id, current_month, 500_000),
+    let earlier = now - Duration::days(40);
+    let start = now - Duration::hours(1);
+
+    // Pod A, the old pod draining: alice for 100s, bob for 90s.
+    let pod_a = [
+        online_span(alice.id, current_month, start, 100, 100_000),
+        online_span(bob.id, current_month, start, 90, 90_000),
+        online_span(deleted.id, current_month, start, 500, 500_000),
     ];
+    let pod_a_flush = Uuid::now_v7();
     assert_eq!(
-        apply_online_time_batch(&client, first_flush, &increments)
+        apply_online_time_batch(&mut client, pod_a_flush, &pod_a)
             .await
-            .expect("apply first batch"),
+            .expect("apply pod A batch"),
         2,
-        "duplicate input users are folded and deleted users are skipped"
+        "deleted users are skipped"
     );
-    apply_online_time_batch(&client, first_flush, &increments)
+    // An uncertain retry of the same batch.
+    apply_online_time_batch(&mut client, pod_a_flush, &pod_a)
         .await
-        .expect("retry first batch");
+        .expect("retry pod A batch");
+    // Pod B, the new pod: alice reconnected there at 40s and stayed to 140s.
+    // Only 100s..140s is new.
     apply_online_time_batch(
-        &client,
+        &mut client,
         Uuid::now_v7(),
-        &[increment(alice.id, current_month, 10_000)],
+        &[online_span(
+            alice.id,
+            current_month,
+            start + Duration::seconds(40),
+            100,
+            100_000,
+        )],
     )
     .await
-    .expect("apply later batch");
+    .expect("apply pod B batch");
+    // Last month, long before either pod: counted in full.
     apply_online_time_batch(
-        &client,
+        &mut client,
         Uuid::now_v7(),
         &[
-            increment(alice.id, previous_month, 50_000),
-            increment(bob.id, previous_month, 200_000),
+            online_span(alice.id, previous_month, earlier, 50, 50_000),
+            online_span(bob.id, previous_month, earlier, 200, 200_000),
         ],
     )
     .await
-    .expect("apply previous-month batch");
+    .expect("apply a batch the mark is already past");
 
     let alice_total: i64 = client
         .query_one(
@@ -97,7 +160,10 @@ async fn online_time_batches_are_idempotent_and_rank_both_windows() {
         .await
         .expect("alice online time")
         .get(0);
-    assert_eq!(alice_total, 160_000, "retry must not add the batch twice");
+    assert_eq!(
+        alice_total, 140_000,
+        "the overlap and the retry count once, and time behind the mark not at all"
+    );
 
     let alice_monthly: i64 = client
         .query_one(
@@ -109,7 +175,16 @@ async fn online_time_batches_are_idempotent_and_rank_both_windows() {
         .await
         .expect("alice monthly online time")
         .get(0);
-    assert_eq!(alice_monthly, 110_000);
+    assert_eq!(alice_monthly, 140_000);
+    let previous_rows: i64 = client
+        .query_one(
+            "SELECT COUNT(*) FROM user_online_time_monthly WHERE month_start = $1 AND user_id = ANY($2)",
+            &[&previous_month, &vec![alice.id, bob.id]],
+        )
+        .await
+        .expect("previous month rows")
+        .get(0);
+    assert_eq!(previous_rows, 0, "a batch that earns nothing writes no month row");
 
     let data = fetch_leaderboard_data(&client)
         .await
@@ -117,12 +192,10 @@ async fn online_time_batches_are_idempotent_and_rank_both_windows() {
     assert_eq!(entry_for(&data.online_time.monthly, alice.id).rank, 1);
     assert_eq!(
         entry_for(&data.online_time.monthly, alice.id).value,
-        110_000
+        140_000
     );
     assert_eq!(entry_for(&data.online_time.monthly, bob.id).rank, 2);
-    assert_eq!(entry_for(&data.online_time.all_time, bob.id).rank, 1);
-    assert_eq!(entry_for(&data.online_time.all_time, bob.id).value, 290_000);
-    assert_eq!(entry_for(&data.online_time.all_time, alice.id).rank, 2);
+    assert_eq!(entry_for(&data.online_time.all_time, bob.id).value, 90_000);
     assert!(
         !data
             .online_time
@@ -228,6 +301,7 @@ async fn daily_boards_and_arcade_points_follow_the_roster() {
     assert_eq!(entry_for(&sliding_board.monthly, rival.id).value, 1);
     let rival_status = data
         .user_daily_statuses
+        .on(Utc::now().date_naive())
         .get(&rival.id)
         .expect("rival has a daily status");
     assert!(rival_status.completed(DailyPuzzle::RubiksCube));

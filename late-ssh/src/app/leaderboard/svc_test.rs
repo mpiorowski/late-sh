@@ -198,74 +198,126 @@ fn previous_utc_month_crosses_the_year_boundary() {
     assert_eq!(previous_utc_month(today), month(2025, 12));
 }
 
-fn increment_for(batch: &PreparedOnlineTimeBatch, user_id: Uuid, month_start: NaiveDate) -> i64 {
-    batch
+fn increment_for(
+    batch: &PreparedOnlineTimeBatch,
+    user_id: Uuid,
+    month_start: NaiveDate,
+) -> OnlineTimeIncrement {
+    *batch
         .batch
         .increments
         .iter()
-        .find_map(|value| {
-            (value.user_id == user_id && value.month_start == month_start)
-                .then_some(value.milliseconds)
-        })
+        .find(|value| value.user_id == user_id && value.month_start == month_start)
         .expect("user increment in batch")
+}
+
+fn at(day: u32, hour: u32, second: u32) -> DateTime<Utc> {
+    use chrono::TimeZone;
+    let (month, day) = match day {
+        0 => (8, 31),
+        day => (9, day),
+    };
+    Utc.with_ymd_and_hms(2026, month, day, hour, 0, second)
+        .single()
+        .expect("fixture time")
 }
 
 #[test]
 fn online_time_checkpoints_one_continuous_presence_interval() {
     let tracker = OnlineTimeTracker::default();
     let user_id = Uuid::from_u128(10);
-    let start = Instant::now();
+    // Connected on the last evening of August.
+    let start = at(0, 23, 0);
     let august = month(2026, 8);
     let september = month(2026, 9);
 
-    tracker.connected_at(user_id, start, august);
-    // A defensive duplicate start cannot reset the first-online timestamp or
-    // move its elapsed time into another UTC month.
-    tracker.connected_at(user_id, start + Duration::from_secs(5), september);
+    tracker.connected_at(user_id, start);
+    // A defensive duplicate start cannot reset the first-online timestamp.
+    tracker.connected_at(user_id, start + chrono::Duration::seconds(5));
     let first = tracker
-        .begin_batch_at(start + Duration::from_secs(10), september)
+        .begin_batch_at(start + chrono::Duration::seconds(10))
         .expect("first checkpoint");
     assert!(!first.was_retry);
-    assert_eq!(increment_for(&first, user_id, august), 10_000);
+    assert_eq!(
+        increment_for(&first, user_id, august),
+        OnlineTimeIncrement {
+            user_id,
+            month_start: august,
+            span_start: start,
+            span_end: start + chrono::Duration::seconds(10),
+            milliseconds: 10_000,
+        }
+    );
 
     let retry = tracker
-        .begin_batch_at(start + Duration::from_secs(15), september)
+        .begin_batch_at(start + chrono::Duration::seconds(15))
         .expect("retained uncertain batch");
     assert!(retry.was_retry);
     assert_eq!(retry.batch.id, first.batch.id);
-    assert_eq!(increment_for(&retry, user_id, august), 10_000);
+    assert_eq!(retry.batch.increments, first.batch.increments);
 
     tracker.acknowledge(retry.batch.id);
     let follow_up = tracker
-        .begin_batch_at(start + Duration::from_secs(15), september)
+        .begin_batch_at(start + chrono::Duration::seconds(15))
         .expect("time accrued while batch was uncertain");
-    assert_eq!(increment_for(&follow_up, user_id, september), 5_000);
+    assert_eq!(
+        increment_for(&follow_up, user_id, august).span_start,
+        start + chrono::Duration::seconds(10),
+        "the next span starts where the checkpoint left off"
+    );
+    assert_eq!(increment_for(&follow_up, user_id, august).milliseconds, 5_000);
     tracker.acknowledge(follow_up.batch.id);
 
-    tracker.disconnected_at(user_id, start + Duration::from_secs(20));
-    let final_batch = tracker
-        .begin_batch_at(start + Duration::from_secs(30), september)
-        .expect("completed interval");
-    assert_eq!(increment_for(&final_batch, user_id, september), 5_000);
+    // Past midnight: the next checkpoint's span begins in September.
+    let midnight = at(1, 0, 0);
+    tracker.disconnected_at(user_id, midnight + chrono::Duration::seconds(20));
+    let spill = tracker
+        .begin_batch_at(midnight + chrono::Duration::seconds(30))
+        .expect("the segment that crossed midnight");
+    assert_eq!(
+        increment_for(&spill, user_id, august).milliseconds,
+        3_600_000 - 15_000 + 20_000,
+        "a segment counts in the month it began"
+    );
+    tracker.acknowledge(spill.batch.id);
+
+    tracker.connected_at(user_id, midnight + chrono::Duration::seconds(40));
+    tracker.disconnected_at(user_id, midnight + chrono::Duration::seconds(45));
+    let september_batch = tracker
+        .begin_batch_at(midnight + chrono::Duration::seconds(50))
+        .expect("a September segment");
+    assert_eq!(
+        increment_for(&september_batch, user_id, september).milliseconds,
+        5_000
+    );
     assert!(!tracker.is_active(user_id));
 }
 
 #[test]
-fn online_time_adds_disjoint_reconnections() {
+fn online_time_folds_reconnections_into_one_span_with_the_gap_left_out() {
     let tracker = OnlineTimeTracker::default();
     let user_id = Uuid::from_u128(11);
-    let start = Instant::now();
-    let august = month(2026, 8);
+    let start = at(2, 12, 0);
+    let september = month(2026, 9);
 
-    tracker.connected_at(user_id, start, august);
-    tracker.disconnected_at(user_id, start + Duration::from_secs(10));
-    tracker.connected_at(user_id, start + Duration::from_secs(20), august);
-    tracker.disconnected_at(user_id, start + Duration::from_secs(25));
+    tracker.connected_at(user_id, start);
+    tracker.disconnected_at(user_id, start + chrono::Duration::seconds(10));
+    tracker.connected_at(user_id, start + chrono::Duration::seconds(20));
+    tracker.disconnected_at(user_id, start + chrono::Duration::seconds(25));
 
     let batch = tracker
-        .begin_batch_at(start + Duration::from_secs(30), august)
+        .begin_batch_at(start + chrono::Duration::seconds(30))
         .expect("two completed intervals");
-    assert_eq!(increment_for(&batch, user_id, august), 15_000);
+    assert_eq!(
+        batch.batch.increments,
+        vec![OnlineTimeIncrement {
+            user_id,
+            month_start: september,
+            span_start: start,
+            span_end: start + chrono::Duration::seconds(25),
+            milliseconds: 15_000,
+        }]
+    );
 }
 
 fn placement(username: &str, category: &str, rank: i32, score_value: i64) -> AwardRollEntry {

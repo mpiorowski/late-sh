@@ -1,4 +1,4 @@
-use chrono::{Datelike, Duration, Months, Utc};
+use chrono::{DateTime, Datelike, Duration, Months, NaiveDate, Utc};
 
 use crate::models::artboard_piece::{ApplauseOutcome, ArtboardPiece, HangOutcome, PieceListing};
 use crate::models::artboard_piece_test::hang_params;
@@ -24,6 +24,24 @@ use crate::test_utils::{
     create_test_user, roll_artboard_pieces_back_a_month, roll_drink_pours_back_a_month,
     roll_high_scores_back_a_month, test_db,
 };
+
+/// Online time for a fixture: `milliseconds` of unbroken presence from
+/// `start`. The month is the board's, whatever `start` says.
+fn online(
+    user_id: uuid::Uuid,
+    month_start: NaiveDate,
+    start: DateTime<Utc>,
+    milliseconds: i64,
+) -> OnlineTimeIncrement {
+    OnlineTimeIncrement {
+        user_id,
+        month_start,
+        span_start: start,
+        span_end: start + Duration::milliseconds(milliseconds),
+        milliseconds,
+    }
+}
+
 
 #[test]
 fn lateania_boss_awards_have_profile_badge_codes() {
@@ -137,13 +155,14 @@ async fn the_award_announcement_is_claimed_once_per_month() {
     );
 
     apply_online_time_batch(
-        &client,
+        &mut client,
         uuid::Uuid::now_v7(),
-        &[OnlineTimeIncrement {
-            user_id: holder.id,
-            month_start: last_month,
-            milliseconds: 7_500,
-        }],
+        &[online(
+            holder.id,
+            last_month,
+            Utc::now() - Duration::days(40),
+            7_500,
+        )],
     )
     .await
     .expect("online time");
@@ -202,26 +221,15 @@ async fn late_time_first_place_gets_the_badge_once_per_month() {
         .checked_sub_months(Months::new(1))
         .expect("previous month");
     let hours = |count: i64| count * 3_600_000;
+    let at = |hour: i64| Utc::now() - Duration::days(60) + Duration::hours(hour);
     apply_online_time_batch(
-        &client,
+        &mut client,
         uuid::Uuid::now_v7(),
         &[
-            OnlineTimeIncrement {
-                user_id: leader.id,
-                month_start: last_month,
-                milliseconds: hours(40),
-            },
-            OnlineTimeIncrement {
-                user_id: runner_up.id,
-                month_start: last_month,
-                milliseconds: hours(30),
-            },
+            online(leader.id, last_month, at(0), hours(40)),
+            online(runner_up.id, last_month, at(0), hours(30)),
             // This month's time is not last month's standings.
-            OnlineTimeIncrement {
-                user_id: runner_up.id,
-                month_start: this_month,
-                milliseconds: hours(100),
-            },
+            online(runner_up.id, this_month, at(31), hours(100)),
         ],
     )
     .await
@@ -232,13 +240,9 @@ async fn late_time_first_place_gets_the_badge_once_per_month() {
         .expect("snapshot");
     // The runner-up overtakes in last month's post-rollover spill.
     apply_online_time_batch(
-        &client,
+        &mut client,
         uuid::Uuid::now_v7(),
-        &[OnlineTimeIncrement {
-            user_id: runner_up.id,
-            month_start: last_month,
-            milliseconds: hours(20),
-        }],
+        &[online(runner_up.id, last_month, at(140), hours(20))],
     )
     .await
     .expect("spill");

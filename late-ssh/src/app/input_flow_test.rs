@@ -1787,8 +1787,9 @@ async fn the_idle_deadline_closes_a_forgotten_realm_board() {
 }
 
 /// The world's chat is put away when the board opens, so the map has the
-/// screen; `c` puts it up in the rail's place and `i` types into the
-/// world's own room, and `c` again hides it.
+/// screen, and the frame title names its key; F4 (not `c`) puts it up in
+/// the rail's place and `i` types into the world's own room, and F4 again
+/// hides it.
 #[tokio::test]
 async fn the_realm_chat_is_hidden_until_asked_for() {
     use crate::app::activity::lounge::{SYSTEM_FINGERPRINT, SYSTEM_USERNAME};
@@ -1823,12 +1824,19 @@ async fn the_realm_chat_is_hidden_until_asked_for() {
     app.set_screen(Screen::Games);
     app.realm.open_board(game.id, Screen::Games);
     app.set_screen(Screen::Realm);
-    wait_for_render_contains(&mut app, "c chat").await;
+    wait_for_render_contains(&mut app, "Realm \u{b7} F4 chat").await;
     assert_eq!(app.realm.shown_chat_room_id(), None, "hidden by default");
-
     app.handle_input(b"c");
+    assert_eq!(
+        app.realm.shown_chat_room_id(),
+        None,
+        "c is not the chat key: F4 is, on every game"
+    );
+
+    app.handle_input(b"\x1bOS");
     wait_for_render_contains(&mut app, "No messages yet").await;
-    wait_for_render_contains(&mut app, "c hide chat").await;
+    wait_for_render_contains(&mut app, "F4 hide chat").await;
+    wait_for_render_not_contains(&mut app, "Realm \u{b7} F4 chat").await;
     assert_eq!(app.realm.shown_chat_room_id(), Some(room_id));
 
     app.handle_input(b"i");
@@ -1839,8 +1847,9 @@ async fn the_realm_chat_is_hidden_until_asked_for() {
     app.pending_escape_started_at = Some(std::time::Instant::now() - Duration::from_secs(1));
     crate::app::input::flush_pending_escape(&mut app);
     assert!(!app.chat.composing, "Esc puts the composer away");
-    app.handle_input(b"c");
+    app.handle_input(b"\x1b[14~");
     wait_for_render_not_contains(&mut app, "No messages yet").await;
+    assert_eq!(app.realm.shown_chat_room_id(), None, "F4 hides it again");
     assert_eq!(app.screen, Screen::Realm, "and the board stays up");
 }
 
@@ -1896,8 +1905,8 @@ async fn a_lone_esc_lets_go_of_a_picked_realm_chat_message_before_closing_the_bo
     app.set_screen(Screen::Games);
     app.realm.open_board(game.id, Screen::Games);
     app.set_screen(Screen::Realm);
-    wait_for_render_contains(&mut app, "c chat").await;
-    app.handle_input(b"c");
+    wait_for_render_contains(&mut app, "F4 chat").await;
+    app.handle_input(b"\x1bOS");
     wait_for_render_contains(&mut app, "the walls of season one").await;
     assert!(
         app.chat.select_message_by_id_in_room(room_id, message.id),
@@ -4205,6 +4214,48 @@ async fn onboard_command_starts_the_tour_again() {
     assert_eq!(app.clubhouse.tutorial, Tutorial::VisitChat);
 }
 
+/// A `/me` line edits as an action: `e` puts the command back in the
+/// composer, and sending it rewrites that message instead of posting a new
+/// one beside it.
+#[tokio::test]
+async fn editing_a_me_action_rewrites_it_in_place() {
+    use late_core::models::chat_message::ChatMessage;
+
+    let (test_db, mut app) = chat_compose_app("me-edit").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    let bodies = || async {
+        ChatMessage::list_recent(&client, lounge.id, 10)
+            .await
+            .expect("list lounge")
+            .into_iter()
+            .map(|message| message.body)
+            .collect::<Vec<_>>()
+    };
+
+    app.handle_input(b"/me waves");
+    app.handle_input(b"\r");
+    wait_until(
+        || async { bodies().await == ["\x01ACTION waves\x01"] },
+        "the action is posted",
+    )
+    .await;
+    wait_for_render_contains(&mut app, "waves").await;
+    assert!(!app.chat.composing, "sending closed the composer");
+
+    app.handle_input(b"k");
+    app.handle_input(b"e");
+    assert_eq!(app.chat.composer().lines().join("\n"), "/me waves");
+
+    app.handle_input(b" again");
+    app.handle_input(b"\r");
+    wait_until(
+        || async { bodies().await == ["\x01ACTION waves again\x01"] },
+        "the action is rewritten, and nothing new is posted",
+    )
+    .await;
+}
+
 /// The Lounge composer is plain speech: a `/` draft is refused with a
 /// banner and kept for editing, never run and never posted.
 #[tokio::test]
@@ -4233,6 +4284,26 @@ async fn clubhouse_composer_refuses_commands() {
     );
     assert_eq!(app.chat.composer().lines().join("\n"), "/active");
     assert_eq!(app.screen, Screen::Clubhouse);
+}
+
+/// The tavern's idle composer names the tavern's keys: j/k walk the figure
+/// there, so it must not offer them as message selection the way Home does.
+#[tokio::test]
+async fn clubhouse_composer_hint_names_the_tavern_keys() {
+    use crate::app::clubhouse::state::Tutorial;
+    use crate::app::common::primitives::Screen;
+
+    let (_test_db, mut app) = chat_compose_app("clubhouse-hint").await;
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(&mut app, |app| !app.chat.composing, "composer closed").await;
+    app.set_screen(Screen::Clubhouse);
+    app.clubhouse.tutorial = Tutorial::Done;
+    app.clubhouse
+        .enter_screen(crate::app::presence::svc::now_ms());
+
+    let frame = render_plain(&mut app);
+    assert!(!frame.contains("j/k select"), "frame={frame:?}");
+    assert!(frame.contains("i to say something"), "frame={frame:?}");
 }
 
 /// A chat overlay owns input in the Lounge, and one can still arrive there
@@ -5160,20 +5231,29 @@ async fn a_watch_opened_from_zen_comes_home_to_zen_on_backtick() {
     );
 }
 
-/// A player answers their watchers without leaving the game: F2, or a click
-/// on the pane, opens the chat composer in their own watch-chat room, the
-/// keys are the composer's until Esc hands them back, and the one-row form
-/// on a narrow terminal has no composer at all.
+/// Lone Esc is held for escape-sequence disambiguation and dispatches on a
+/// later tick: backdate it and flush, since an await in a flow over a
+/// fabricated door game would end the game.
+fn flush_lone_escape(app: &mut crate::app::state::App) {
+    app.handle_input(b"\x1b");
+    app.pending_escape_started_at = Some(std::time::Instant::now() - Duration::from_secs(1));
+    crate::app::input::flush_pending_escape(app);
+}
+
+/// A player's watch chat is shut while they play. F4 opens it over the
+/// running game, a column beside it, and from then every key is the chat's,
+/// never the game's or a global shortcut's: `i` writes, Enter sends and the
+/// chat keeps the keys. Esc closes it back to the game, F4 closes it from
+/// the composer too (the draft goes with it), and so does the game ending.
 #[tokio::test]
-async fn f2_or_a_click_on_the_pane_lets_a_player_write_to_their_watchers() {
+async fn f4_opens_the_watcher_chat_over_a_running_game_and_it_takes_every_key() {
     use crate::app::common::primitives::Screen;
     use crate::app::door::spectate::state::SpectateGame;
-    use late_core::models::chat_room::ChatRoom;
-    use late_core::models::chat_room::WatchDoor;
+    use late_core::models::chat_room::{ChatRoom, WatchDoor};
     use late_core::models::chat_room_member::ChatRoomMember;
 
     let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "own-chat-f2").await;
+    let user = create_test_user(&test_db.db, "own-chat-f4").await;
     // The player's watch-chat room, joined ahead of the session the way a
     // returning player's is, so the room list the app loads carries it.
     let client = test_db.db.get().await.expect("db client");
@@ -5183,14 +5263,13 @@ async fn f2_or_a_click_on_the_pane_lets_a_player_write_to_their_watchers() {
     ChatRoomMember::join(&client, room.id, user.id)
         .await
         .expect("join the watch room");
-    let mut app = make_app(test_db.db.clone(), user.id, "own-chat-f2-flow-it");
-    // Wide enough for NetHack's 80 columns, the rule and the 40-column pane.
+    let mut app = make_app(test_db.db.clone(), user.id, "own-chat-f4-flow-it");
+    // Wide enough for NetHack's 80 columns beside a 52-column chat.
     app.resize(160, 40).expect("resize test terminal");
     wait_for_app(&mut app, "the room list", |app| {
         app.chat.room_by_id(room.id).is_some()
     })
     .await;
-    // The service has the room resolved, as after its lookup.
     app.live_games
         .publish_chat_room_for_tests(SpectateGame::Nethack, "tester", room.id);
 
@@ -5203,166 +5282,92 @@ async fn f2_or_a_click_on_the_pane_lets_a_player_write_to_their_watchers() {
     state.force_claimed_handle_for_test("tester");
     state.force_running_for_test();
     app.set_screen(Screen::Nethack);
-    // One tick makes the player's link and takes its room.
-    app.tick();
-    let room_id = app
-        .own_watch_chat_room_id(SpectateGame::Nethack)
-        .expect("the player's own room");
-    assert_eq!(room_id, room.id);
-
-    // The frame draws the pane with its inert composer strip, which names
-    // the way in, and records where the pane is.
-    let plain = render_plain(&mut app);
-    assert!(plain.contains("Compose (F2 or click)"), "{plain}");
-    assert!(
-        plain.contains("F2 or click: write to your watchers"),
-        "{plain}"
-    );
-    let pane = app.own_chat_hit.get().expect("the pane was drawn");
-
-    // Until F2 every key is the game's: nothing composes.
-    app.handle_input(b"j");
-    assert!(!app.chat.is_composing());
-
-    app.handle_input(b"\x1bOQ");
-    assert!(app.chat.is_composing(), "F2 opens the composer");
-    assert_eq!(
-        app.chat.composer_room_id(),
-        Some(room_id),
-        "in the player's own room"
-    );
-    app.handle_input(b"hi all");
-    assert_eq!(
-        app.chat.composer().lines().join("\n"),
-        "hi all",
-        "typed keys are the composer's, not the game's"
-    );
-    let plain = render_plain(&mut app);
-    assert!(
-        plain.contains("hi all") && !plain.contains("Compose (F2 or click)"),
-        "the same strip, now open: {plain}"
-    );
-
-    // Esc discards and hands the keys back to the game. A lone Esc is held
-    // for escape-sequence disambiguation and dispatches on a later tick;
-    // backdate it and flush, since an await here would end the fabricated
-    // game.
-    app.handle_input(b"\x1b");
-    app.pending_escape_started_at = Some(std::time::Instant::now() - Duration::from_secs(1));
-    crate::app::input::flush_pending_escape(&mut app);
-    assert!(!app.chat.is_composing(), "Esc closes the composer");
-    app.handle_input(b"j");
-    assert!(
-        !app.chat.is_composing(),
-        "and the keys are the game's again"
-    );
-    assert_eq!(app.screen, Screen::Nethack);
-
-    // A click on the pane opens it too (SGR coordinates are 1-based).
-    app.handle_input(format!("\x1b[<0;{};{}M", pane.x + 1, pane.y + 1).as_bytes());
-    assert!(
-        app.chat.is_composing(),
-        "a click on the pane opens the composer"
-    );
-    assert_eq!(app.chat.composer_room_id(), Some(room_id));
-    app.handle_input(b"\x1b");
-    app.pending_escape_started_at = Some(std::time::Instant::now() - Duration::from_secs(1));
-    crate::app::input::flush_pending_escape(&mut app);
-    assert!(!app.chat.is_composing());
-
-    // A terminal with room for the one-row form only has no composer: F2
-    // stays the game's.
-    app.resize(100, 30).expect("resize test terminal");
-    render_plain(&mut app);
-    assert_eq!(app.own_chat_hit.get(), None, "no pane on a narrow terminal");
-    app.handle_input(b"\x1bOQ");
-    assert!(
-        !app.chat.is_composing(),
-        "F2 stays with the game without a pane"
-    );
-}
-
-/// F4 in a running game hides the watchers' chat beside it, an open
-/// composer closing with it, and F4 again brings it back: the game gets the
-/// whole screen meanwhile, and the key never reaches the game.
-#[tokio::test]
-async fn f4_hides_and_shows_the_watcher_chat_beside_a_running_game() {
-    use crate::app::common::primitives::Screen;
-    use crate::app::door::spectate::state::SpectateGame;
-    use late_core::models::chat_room::{ChatRoom, WatchDoor};
-    use late_core::models::chat_room_member::ChatRoomMember;
-
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "own-chat-f4").await;
-    let client = test_db.db.get().await.expect("db client");
-    let room = ChatRoom::get_or_create_watch_room(&client, WatchDoor::Nethack, "tester")
-        .await
-        .expect("the player's watch room");
-    ChatRoomMember::join(&client, room.id, user.id)
-        .await
-        .expect("join the watch room");
-    let mut app = make_app(test_db.db.clone(), user.id, "own-chat-f4-flow-it");
-    app.resize(160, 40).expect("resize test terminal");
-    wait_for_app(&mut app, "the room list", |app| {
-        app.chat.room_by_id(room.id).is_some()
-    })
-    .await;
-    app.live_games
-        .publish_chat_room_for_tests(SpectateGame::Nethack, "tester", room.id);
-
-    // A running game under a claimed handle. Nothing awaits from here on, as
-    // in the F2 flow above: the fabricated proxy would end the game.
-    app.set_screen(Screen::Games);
-    app.enter_nethack();
-    let state = app.nethack_state.as_mut().expect("nethack state");
-    state.force_claimed_handle_for_test("tester");
-    state.force_running_for_test();
-    app.set_screen(Screen::Nethack);
+    // One tick makes the player's link and takes its room, ready for F4.
     app.tick();
     assert_eq!(
         app.own_watch_chat_room_id(SpectateGame::Nethack),
         Some(room.id)
     );
     let plain = render_plain(&mut app);
-    assert!(plain.contains("Compose (F2 or click)"), "{plain}");
-    app.handle_input(b"\x1bOQ");
-    assert!(app.chat.is_composing(), "F2 opens the composer");
+    assert_eq!(app.own_chat_hit.get(), None, "shut while the player plays");
+    assert!(!plain.contains("Esc to the game"), "{plain}");
+    assert!(
+        plain.contains("\u{b7} F4 chat \u{b7} ? help"),
+        "the frame title names the key ahead of the game's own: {plain}"
+    );
 
     app.handle_input(b"\x1bOS");
-    app.tick();
+    assert_eq!(app.own_watch_chat_open, Some(SpectateGame::Nethack));
+    let plain = render_plain(&mut app);
     assert!(
-        !app.chat.is_composing(),
-        "hiding the chat closes its composer"
+        plain.contains("0 watching \u{b7} Esc to the game"),
+        "{plain}"
     );
-    assert_eq!(app.own_watch_chat_room_id(SpectateGame::Nethack), None);
-    let plain = render_plain(&mut app);
-    assert_eq!(app.own_chat_hit.get(), None, "no pane while hidden");
-    assert!(!plain.contains("Compose (F2 or click)"), "{plain}");
-    assert_eq!(app.screen, Screen::Nethack, "still in the game");
-
-    app.handle_input(b"\x1b[14~");
-    app.tick();
+    assert!(plain.contains("Compose (press i)"), "{plain}");
+    assert!(
+        !plain.contains("F4 chat"),
+        "no title hint while open: {plain}"
+    );
+    let pane = app.own_chat_hit.get().expect("the column was drawn");
     assert_eq!(
-        app.own_watch_chat_room_id(SpectateGame::Nethack),
-        Some(room.id),
-        "F4 again brings the room back"
+        pane.width, 52,
+        "Realm's width: a third of the 158-column content area"
     );
-    let plain = render_plain(&mut app);
-    assert!(plain.contains("Compose (F2 or click)"), "{plain}");
+
+    // The page and quit keys are the chat's now: nothing leaves the game.
+    app.handle_input(b"3");
+    app.handle_input(b"q");
+    assert_eq!(app.screen, Screen::Nethack);
+    assert!(!app.show_quit_confirm, "q is not the global quit here");
+
+    app.handle_input(b"i");
+    assert!(app.chat.is_composing(), "i writes");
+    assert_eq!(app.chat.composer_room_id(), Some(room.id));
+    app.handle_input(b"hi all");
+    assert_eq!(app.chat.composer().lines().join("\n"), "hi all");
+    app.handle_input(b"\r");
+    assert!(!app.chat.is_composing(), "Enter sends");
+    assert_eq!(
+        app.own_watch_chat_open,
+        Some(SpectateGame::Nethack),
+        "and the chat keeps the keys"
+    );
+
+    flush_lone_escape(&mut app);
+    assert_eq!(app.own_watch_chat_open, None, "Esc closes it");
+    render_plain(&mut app);
+    assert_eq!(app.own_chat_hit.get(), None);
+    assert_eq!(app.screen, Screen::Nethack, "back in the game");
+
+    // F4 closes it from the composer, the draft with it.
+    app.handle_input(b"\x1b[14~");
+    render_plain(&mut app);
+    app.handle_input(b"i");
+    app.handle_input(b"draft");
+    app.handle_input(b"\x1bOS");
+    assert_eq!(app.own_watch_chat_open, None);
+    assert!(!app.chat.is_composing(), "the draft goes with the chat");
+
+    // The game ending closes an open chat.
+    app.handle_input(b"\x1bOS");
+    assert_eq!(app.own_watch_chat_open, Some(SpectateGame::Nethack));
+    app.leave_nethack();
+    app.tick();
+    assert_eq!(app.own_watch_chat_open, None, "the game ended");
 }
 
-/// Zork's player writes to their watchers the same way: F2 opens the
-/// composer in their own room, typing and Enter are the composer's, and Esc
-/// hands the keys back to the story.
+/// Zork's player opens their watchers' chat the same way, and F3, which
+/// types a watcher's suggestion, closes it on the way so the story has the
+/// keys for Enter.
 #[tokio::test]
-async fn a_zork_player_writes_to_their_watchers_with_f2() {
+async fn a_zork_player_opens_their_watchers_chat_with_f4_and_f3_closes_it() {
     use crate::app::common::primitives::Screen;
     use crate::app::door::spectate::state::SpectateGame;
     use late_core::models::chat_room::{ChatRoom, WatchDoor};
     use late_core::models::chat_room_member::ChatRoomMember;
 
     let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "zork-own-chat-f2").await;
+    let user = create_test_user(&test_db.db, "zork-own-chat-f4").await;
     let client = test_db.db.get().await.expect("db client");
     let room = ChatRoom::get_or_create_watch_room(&client, WatchDoor::Zork, "tester")
         .await
@@ -5370,7 +5375,7 @@ async fn a_zork_player_writes_to_their_watchers_with_f2() {
     ChatRoomMember::join(&client, room.id, user.id)
         .await
         .expect("join the watch room");
-    let mut app = make_app(test_db.db.clone(), user.id, "zork-own-chat-f2-flow-it");
+    let mut app = make_app(test_db.db.clone(), user.id, "zork-own-chat-f4-flow-it");
     app.resize(160, 40).expect("resize test terminal");
     wait_for_app(&mut app, "the room list", |app| {
         app.chat.room_by_id(room.id).is_some()
@@ -5388,15 +5393,12 @@ async fn a_zork_player_writes_to_their_watchers_with_f2() {
         .expect("zork state")
         .force_running_for_test();
     app.tick();
-    let room_id = app
-        .own_watch_chat_room_id(SpectateGame::Zork)
-        .expect("the player's own room");
-    let plain = render_plain(&mut app);
-    assert!(plain.contains("Compose (F2 or click)"), "{plain}");
 
-    app.handle_input(b"\x1bOQ");
-    assert!(app.chat.is_composing(), "F2 opens the composer");
-    assert_eq!(app.chat.composer_room_id(), Some(room_id));
+    app.handle_input(b"\x1bOS");
+    let plain = render_plain(&mut app);
+    assert!(plain.contains("F3 takes a >suggestion"), "{plain}");
+    app.handle_input(b"i");
+    assert_eq!(app.chat.composer_room_id(), Some(room.id), "i writes");
     app.handle_input(b"hi all");
     assert_eq!(
         app.chat.composer().lines().join("\n"),
@@ -5404,17 +5406,10 @@ async fn a_zork_player_writes_to_their_watchers_with_f2() {
         "typed keys are the composer's, not the story's"
     );
     app.handle_input(b"\r");
-    assert!(
-        !app.chat.is_composing(),
-        "Enter sends and hands the keys back"
-    );
+    assert!(!app.chat.is_composing(), "Enter sends");
 
-    app.handle_input(b"\x1bOQ");
-    app.handle_input(b"draft");
-    app.handle_input(b"\x1b");
-    app.pending_escape_started_at = Some(std::time::Instant::now() - Duration::from_secs(1));
-    crate::app::input::flush_pending_escape(&mut app);
-    assert!(!app.chat.is_composing(), "Esc closes the composer");
+    app.handle_input(b"\x1bOR");
+    assert_eq!(app.own_watch_chat_open, None, "F3 closes the chat");
     assert_eq!(app.screen, Screen::Zork);
 }
 

@@ -113,10 +113,12 @@ const MAX_CONCURRENT_CALLS: usize = 2;
 
 const EVENT_CHANNEL_CAP: usize = 64;
 
-/// The result of one `/summary` request, delivered to the requesting user's
-/// sessions only (consumers filter on `user_id`).
+/// The result of one `/summary` request. The broadcast carries every
+/// session's results; the session that asked keeps `request_id` and takes
+/// only its own, so the account's other sessions are left alone.
 #[derive(Clone, Debug)]
 pub struct SummaryEvent {
+    pub request_id: Uuid,
     pub user_id: Uuid,
     pub room_id: Uuid,
     /// The room name as the requesting session knew it, echoed back for the
@@ -196,9 +198,11 @@ impl SummaryService {
     /// the session's AFK line, or the duration the user typed; the service
     /// resolves both to a start and clamps to [`SUMMARY_MAX_WINDOW_HOURS`]
     /// as cost policy).
-    /// Fire-and-forget: the result arrives as a [`SummaryEvent`].
+    /// Fire-and-forget: the result arrives as a [`SummaryEvent`] carrying
+    /// `request_id`.
     pub fn request(
         &self,
+        request_id: Uuid,
         user_id: Uuid,
         room_id: Uuid,
         room_label: String,
@@ -212,6 +216,7 @@ impl SummaryService {
                     .resolve(user_id, room_id, window, exclude_user_ids)
                     .await;
                 let _ = service.event_tx.send(SummaryEvent {
+                    request_id,
                     user_id,
                     room_id,
                     room_label,

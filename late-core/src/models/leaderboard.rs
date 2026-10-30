@@ -1,7 +1,8 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
 
 use anyhow::Result;
-use chrono::NaiveDate;
+use chrono::{DateTime, NaiveDate, Utc};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
@@ -381,13 +382,36 @@ pub struct MonthYearWindows {
     pub yearly: Vec<RankedEntry>,
 }
 
-/// One UTC-month slice of a connected-time checkpoint. A batch can carry more
-/// than one month when it checkpoints sessions spanning a month boundary.
+/// One user's presence on one process inside one UTC month since the last
+/// checkpoint: the wall-clock span it covers and the milliseconds present
+/// inside it (fewer than the span when the user left and came back within
+/// it). A batch can carry more than one month when it checkpoints sessions
+/// spanning a month boundary.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct OnlineTimeIncrement {
     pub user_id: Uuid,
     pub month_start: NaiveDate,
+    pub span_start: DateTime<Utc>,
+    pub span_end: DateTime<Utc>,
     pub milliseconds: i64,
+}
+
+/// What an increment still earns when the user's time is already counted up
+/// to `counted_until`, by this process or another pod: the present
+/// milliseconds, capped at the wall clock left in the span past the mark.
+/// Credits can then never add up to more than the wall clock, however many
+/// pods report the same moment. A gapped span that straddles the mark may
+/// earn less than it was present for; the board errs low, never high.
+pub fn online_time_credit(
+    increment: &OnlineTimeIncrement,
+    counted_until: Option<DateTime<Utc>>,
+) -> i64 {
+    let from = match counted_until {
+        Some(mark) if mark > increment.span_start => mark,
+        Some(_) | None => increment.span_start,
+    };
+    let uncounted = (increment.span_end - from).num_milliseconds().max(0);
+    increment.milliseconds.min(uncounted)
 }
 
 /// The uniform board triple of one roguelike door, over `door_runs` (and,
@@ -407,10 +431,37 @@ pub struct DoorBoards {
     pub score: BoardWindows,
 }
 
+/// Every user's daily marks, stamped with the UTC day they were read for. The
+/// snapshot refreshes every few minutes, so for a while after midnight it
+/// still holds yesterday's; reading through [`DailyStatuses::on`] keeps those
+/// off today's puzzles.
+#[derive(Clone, Default)]
+pub struct DailyStatuses {
+    day: NaiveDate,
+    by_user: HashMap<Uuid, DailyCompletionStatus>,
+}
+
+impl DailyStatuses {
+    pub fn new(day: NaiveDate, by_user: HashMap<Uuid, DailyCompletionStatus>) -> Self {
+        Self { day, by_user }
+    }
+
+    /// The marks for `today`: none at all once `today` has moved past the
+    /// day the snapshot was read for, since every board has rolled over.
+    pub fn on(&self, today: NaiveDate) -> &HashMap<Uuid, DailyCompletionStatus> {
+        static NOBODY: LazyLock<HashMap<Uuid, DailyCompletionStatus>> =
+            LazyLock::new(HashMap::new);
+        match self.day == today {
+            true => &self.by_user,
+            false => &NOBODY,
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct LeaderboardData {
     pub today_champions: Vec<LeaderboardEntry>,
-    pub user_daily_statuses: HashMap<Uuid, DailyCompletionStatus>,
+    pub user_daily_statuses: DailyStatuses,
     pub user_chips: HashMap<Uuid, i64>,
     pub monthly_chip_earners: Vec<RankedEntry>,
     pub arcade_champions: Vec<RankedEntry>,
@@ -982,7 +1033,7 @@ pub async fn fetch_leaderboard_data(client: &Client) -> Result<LeaderboardData> 
         door_all_time,
     ) = tokio::try_join!(
         fetch_today_champions(client, 10),
-        fetch_today_daily_statuses(client),
+        fetch_daily_statuses(client, Utc::now().date_naive()),
         UserChips::all_balances(client),
         fetch_monthly_chip_earners(client, BOARD_DEPTH),
         fetch_arcade_champions(client, BOARD_DEPTH),
@@ -1075,12 +1126,17 @@ pub async fn total_online_milliseconds(client: &Client, user_id: Uuid) -> Result
     Ok(row.map(|row| row.get("total_milliseconds")).unwrap_or(0))
 }
 
-/// Adds one process checkpoint of connected time for every user in a single
-/// statement. `flush_id` makes retrying the same uncertain statement
-/// idempotent: the service never advances to another batch until this one is
-/// confirmed.
+/// Adds one process checkpoint of connected time for every user, in one
+/// transaction that locks each user's all-time row and credits only what lies
+/// past its `counted_until` mark (`online_time_credit`). Two pods holding
+/// sessions for one user (a deploy's draining pod beside the new one) both
+/// report the same minutes; whichever lands second earns only what the first
+/// did not cover. The same rule makes an uncertain retry of a batch earn
+/// nothing the first attempt committed. `flush_id` is stamped on the rows
+/// written, for tracing a row to its batch. Returns the live users written;
+/// deleted users are skipped.
 pub async fn apply_online_time_batch(
-    client: &Client,
+    client: &mut Client,
     flush_id: Uuid,
     increments: &[OnlineTimeIncrement],
 ) -> Result<u64> {
@@ -1088,55 +1144,101 @@ pub async fn apply_online_time_batch(
         return Ok(0);
     }
 
-    let user_ids: Vec<Uuid> = increments.iter().map(|value| value.user_id).collect();
-    let month_starts: Vec<NaiveDate> = increments.iter().map(|value| value.month_start).collect();
-    let milliseconds: Vec<i64> = increments.iter().map(|value| value.milliseconds).collect();
-    Ok(client
-        .execute(
-            "WITH raw_increments AS (
-                SELECT user_id, month_start, milliseconds
-                FROM unnest($1::uuid[], $2::date[], $3::bigint[])
-                    AS value(user_id, month_start, milliseconds)
-                WHERE milliseconds > 0
-            ),
-            increments AS (
-                SELECT raw.user_id,
-                       raw.month_start,
-                       SUM(raw.milliseconds)::bigint AS milliseconds
-                FROM raw_increments raw
-                JOIN users u ON u.id = raw.user_id
-                GROUP BY raw.user_id, raw.month_start
-            ),
-            all_time_increments AS (
-                SELECT user_id, SUM(milliseconds)::bigint AS milliseconds
-                FROM increments
-                GROUP BY user_id
-            ),
-            all_time_upsert AS (
-                INSERT INTO user_online_time (user_id, total_milliseconds, last_flush_id)
-                SELECT user_id, milliseconds, $4 FROM all_time_increments
-                ON CONFLICT (user_id) DO UPDATE SET
-                    total_milliseconds = user_online_time.total_milliseconds
-                        + CASE
-                            WHEN user_online_time.last_flush_id = EXCLUDED.last_flush_id THEN 0
-                            ELSE EXCLUDED.total_milliseconds
-                          END,
-                    last_flush_id = EXCLUDED.last_flush_id
-                RETURNING user_id
-            )
-            INSERT INTO user_online_time_monthly
-                (month_start, user_id, total_milliseconds, last_flush_id)
-            SELECT month_start, user_id, milliseconds, $4 FROM increments
-            ON CONFLICT (month_start, user_id) DO UPDATE SET
-                total_milliseconds = user_online_time_monthly.total_milliseconds
-                    + CASE
-                        WHEN user_online_time_monthly.last_flush_id = EXCLUDED.last_flush_id THEN 0
-                        ELSE EXCLUDED.total_milliseconds
-                      END,
-                last_flush_id = EXCLUDED.last_flush_id",
-            &[&user_ids, &month_starts, &milliseconds, &flush_id],
+    let mut user_ids: Vec<Uuid> = increments.iter().map(|value| value.user_id).collect();
+    user_ids.sort_unstable();
+    user_ids.dedup();
+
+    let tx = client.transaction().await?;
+    // Every live user gets a row to lock; a deleted user has none and is
+    // skipped. Sorted, so two pods flushing the same users lock in one order.
+    tx.execute(
+        "INSERT INTO user_online_time (user_id, total_milliseconds, last_flush_id)
+         SELECT u.id, 0, $2
+         FROM users u
+         WHERE u.id = ANY($1)
+         ORDER BY u.id
+         ON CONFLICT (user_id) DO NOTHING",
+        &[&user_ids, &flush_id],
+    )
+    .await?;
+    let rows = tx
+        .query(
+            "SELECT user_id, counted_until
+             FROM user_online_time
+             WHERE user_id = ANY($1)
+             ORDER BY user_id
+             FOR UPDATE",
+            &[&user_ids],
         )
-        .await?)
+        .await?;
+    let mut marks: HashMap<Uuid, Option<DateTime<Utc>>> = rows
+        .iter()
+        .map(|row| (row.get("user_id"), row.get("counted_until")))
+        .collect();
+
+    // Each user's spans in time order, so one batch holding a user twice
+    // (a month boundary, a reconnect) moves the mark forward as it goes.
+    let mut ordered: Vec<&OnlineTimeIncrement> = increments.iter().collect();
+    ordered.sort_unstable_by_key(|value| (value.user_id, value.span_start));
+    let mut all_time: HashMap<Uuid, i64> = HashMap::new();
+    let mut monthly: HashMap<(Uuid, NaiveDate), i64> = HashMap::new();
+    for increment in ordered {
+        let Some(mark) = marks.get_mut(&increment.user_id) else {
+            continue;
+        };
+        let credit = online_time_credit(increment, *mark);
+        *mark = Some(match *mark {
+            Some(counted) if counted > increment.span_end => counted,
+            Some(_) | None => increment.span_end,
+        });
+        *all_time.entry(increment.user_id).or_default() += credit;
+        if credit > 0 {
+            *monthly
+                .entry((increment.user_id, increment.month_start))
+                .or_default() += credit;
+        }
+    }
+
+    let (mark_user_ids, mark_values): (Vec<Uuid>, Vec<DateTime<Utc>>) = marks
+        .iter()
+        .filter_map(|(user_id, mark)| mark.map(|mark| (*user_id, mark)))
+        .unzip();
+    let credits: Vec<i64> = mark_user_ids
+        .iter()
+        .map(|user_id| all_time.get(user_id).copied().unwrap_or(0))
+        .collect();
+    let written = tx
+        .execute(
+            "UPDATE user_online_time AS t
+             SET total_milliseconds = t.total_milliseconds + c.milliseconds,
+                 counted_until = c.counted_until,
+                 last_flush_id = $4
+             FROM unnest($1::uuid[], $2::bigint[], $3::timestamptz[])
+                 AS c(user_id, milliseconds, counted_until)
+             WHERE t.user_id = c.user_id",
+            &[&mark_user_ids, &credits, &mark_values, &flush_id],
+        )
+        .await?;
+
+    let (month_keys, month_credits): (Vec<(Uuid, NaiveDate)>, Vec<i64>) =
+        monthly.into_iter().unzip();
+    let (month_user_ids, month_starts): (Vec<Uuid>, Vec<NaiveDate>) =
+        month_keys.into_iter().unzip();
+    tx.execute(
+        "INSERT INTO user_online_time_monthly
+             (month_start, user_id, total_milliseconds, last_flush_id)
+         SELECT month_start, user_id, milliseconds, $4
+         FROM unnest($1::uuid[], $2::date[], $3::bigint[])
+             AS c(user_id, month_start, milliseconds)
+         ON CONFLICT (month_start, user_id) DO UPDATE SET
+             total_milliseconds = user_online_time_monthly.total_milliseconds
+                 + EXCLUDED.total_milliseconds,
+             last_flush_id = EXCLUDED.last_flush_id",
+        &[&month_user_ids, &month_starts, &month_credits, &flush_id],
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(written)
 }
 
 #[derive(Clone, Copy)]
@@ -1816,16 +1918,16 @@ async fn fetch_today_champions(client: &Client, limit: i64) -> Result<Vec<Leader
         .collect())
 }
 
-async fn fetch_today_daily_statuses(
-    client: &Client,
-) -> Result<HashMap<Uuid, DailyCompletionStatus>> {
+/// Every user's marks on `day`, a UTC date the caller reads once so the
+/// stamp and the rows name the same day.
+async fn fetch_daily_statuses(client: &Client, day: NaiveDate) -> Result<DailyStatuses> {
     let arms: String = DailyPuzzle::ALL
         .iter()
         .map(|puzzle| {
             format!(
                 "SELECT DISTINCT user_id, '{key}' AS game, {difficulty} AS difficulty
                  FROM {table}
-                 WHERE puzzle_date = CURRENT_DATE",
+                 WHERE puzzle_date = $1",
                 key = puzzle.key(),
                 difficulty = puzzle.status_difficulty_sql(),
                 table = puzzle.wins_table(),
@@ -1836,7 +1938,7 @@ async fn fetch_today_daily_statuses(
     let rows = client
         .query(
             &format!("WITH all_today AS ({arms}) SELECT user_id, game, difficulty FROM all_today"),
-            &[],
+            &[&day],
         )
         .await?;
 
@@ -1851,5 +1953,5 @@ async fn fetch_today_daily_statuses(
             .mark_completed(game, difficulty);
     }
 
-    Ok(statuses)
+    Ok(DailyStatuses::new(day, statuses))
 }

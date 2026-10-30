@@ -12,20 +12,19 @@
 // (`dispatch_escape`). While the composer is open no key reaches this
 // handler at all (the composer gate in `app/input.rs`).
 //
-// The player's own pane, beside their running game, has its inputs read
-// ahead of the game's passthrough in `App::handle_input`: F4 (`is_f4`) shows
-// or hides it (`toggle_own_chat`), and F2 or a click on the pane
-// (`wants_own_chat`) opens the chat composer in their watchers' room. From
-// there the composer owns the keys until Enter sends or Esc discards, and
-// the game has them again.
+// The player's own chat, over their running game, is shut until F4
+// (`is_f4`, read off raw input ahead of the game's passthrough in
+// `App::handle_input`) opens it, and while it is open it takes every key
+// (`handle_own_chat_event`): `i` writes, j/k and the arrows select messages
+// and the message keys act on them, reactions and gilding included, the page
+// keys scroll. Esc peels a selection, then closes it (`handle_own_escape`);
+// F4 closes it from anywhere, the composer included.
 
-use ratatui::layout::Rect;
 use uuid::Uuid;
 
-use super::state::{LiveGameKey, WatchMode};
+use super::state::{LiveGameKey, SpectateGame, WatchMode};
 use super::ui::{ChatDock, chat_dock};
 use crate::app::chat::input as chat_input;
-use crate::app::common::primitives::Banner;
 use crate::app::input::{MouseEventKind, ParsedInput};
 use crate::app::state::App;
 
@@ -152,81 +151,125 @@ pub fn open_live_game(app: &mut App, key: LiveGameKey) -> bool {
 }
 
 /// F4 in both encodings a terminal sends it (SS3 `ESC O S`, CSI
-/// `ESC [ 14 ~`), matched as a whole input chunk like F2. None of the
-/// watchable doors binds it (F1 is the roguelikes' help remap, F3 Zork's
-/// suggestion).
+/// `ESC [ 14 ~`), matched as a whole input chunk, read off raw input ahead
+/// of a running game's passthrough. None of the watchable doors binds it
+/// (F1 is the roguelikes' help remap, F3 Zork's suggestion).
 pub fn is_f4(data: &[u8]) -> bool {
     data == b"\x1bOS" || data == b"\x1b[14~"
 }
 
-/// F4 in a running game: show or hide the watchers' chat beside it, for
-/// this session. Hiding drops the room links (`chat::tick`), so an open
-/// composer closes with them.
-pub fn toggle_own_chat(app: &mut App) {
-    app.own_watch_chat_shown ^= true;
-    let message = match app.own_watch_chat_shown {
-        true => "Watcher chat shown beside your game.",
-        false => "Watcher chat hidden; F4 brings it back. Your watchers can still talk.",
+/// F4 in a running game: open the watchers' chat over it, taking every key,
+/// or close it and hand the keys back to the game.
+pub fn toggle_own_chat(app: &mut App, game: SpectateGame) {
+    match app.own_watch_chat_open {
+        Some(_) => close_own_chat(app),
+        None => app.own_watch_chat_open = Some(game),
+    }
+}
+
+/// Close the player's open chat, with anything of it still in hand: a
+/// half-typed line and a picked message would otherwise keep the keys of a
+/// room that is no longer on screen.
+pub fn close_own_chat(app: &mut App) {
+    let Some(game) = app.own_watch_chat_open.take() else {
+        return;
     };
-    app.banner = Some(Banner::success(message));
+    let Some(room_id) = app.own_watch_chat_room_id(game) else {
+        return;
+    };
+    if app.chat.composer_room_id() == Some(room_id) {
+        app.chat.reset_composer();
+    }
+    if app.chat.selected_message_body_in_room(room_id).is_some() {
+        app.chat.clear_message_selection();
+    }
 }
 
-/// F2 in both encodings a terminal sends it (SS3 `ESC O Q`, CSI
-/// `ESC [ 12 ~`), matched as a whole input chunk like the doors' F1 remap.
-/// None of the three roguelikes binds it.
-pub fn is_f2(data: &[u8]) -> bool {
-    data == b"\x1bOQ" || data == b"\x1b[12~"
+/// Whether the player's chat is open over their running game on screen and
+/// takes every key: open for this screen's door, and drawn by the last frame
+/// (`App::own_chat_hit`), so keys never go to a column nobody can see.
+pub fn own_chat_takes_keys(app: &App) -> bool {
+    let Some(game) = SpectateGame::of_screen(app.screen) else {
+        return false;
+    };
+    app.own_watch_chat_open == Some(game) && app.own_chat_hit.get().is_some()
 }
 
-/// Whether a chunk of raw input, read ahead of a running game's
-/// passthrough, asks for the player's own watch-chat composer: F2, or a left
-/// click on `pane` (the pane as the last frame drew it). Everything else is
-/// the game's.
-pub fn wants_own_chat(data: &[u8], pane: Rect) -> bool {
-    if is_f2(data) {
+/// The room of the player's open chat, once this session is in it: the
+/// room every chat gate on a watchable door's screen addresses
+/// (`app/input.rs` `embedded_chat_room_id`). `None` while it is closed.
+pub fn own_chat_room_id(app: &App) -> Option<Uuid> {
+    if !own_chat_takes_keys(app) {
+        return None;
+    }
+    app.own_watch_chat_room_id(SpectateGame::of_screen(app.screen)?)
+}
+
+/// One event while the player's chat is open over their game: it is the
+/// chat's or nobody's, so nothing reaches the game or a global shortcut.
+/// The backtick still hops along the workspace cycle; mouse reports and
+/// terminal replies go on to the shared chat gates.
+pub fn handle_own_chat_event(app: &mut App, event: &ParsedInput) -> bool {
+    match event {
+        ParsedInput::Byte(byte) => handle_own_chat_key(app, *byte),
+        ParsedInput::Char(ch) if ch.is_ascii() => handle_own_chat_key(app, *ch as u8),
+        ParsedInput::Arrow(key) => {
+            if let Some(room_id) = own_chat_room_id(app) {
+                chat_input::handle_message_arrow_in_room(app, room_id, *key);
+            }
+            true
+        }
+        ParsedInput::PageUp => {
+            scroll_own_chat(app, page_step(app));
+            true
+        }
+        ParsedInput::PageDown => {
+            scroll_own_chat(app, -page_step(app));
+            true
+        }
+        ParsedInput::Mouse(_)
+        | ParsedInput::FocusGained
+        | ParsedInput::FocusLost
+        | ParsedInput::TerminalVersion(_)
+        | ParsedInput::TerminalCapabilities(_)
+        | ParsedInput::DeviceAttributes(_) => false,
+        _ => true,
+    }
+}
+
+fn handle_own_chat_key(app: &mut App, byte: u8) -> bool {
+    if byte == b'`' {
+        crate::app::workspace::cycle::cycle_game_workspace(app);
         return true;
     }
-    match sgr_left_press(data) {
-        Some((x, y)) => {
-            x >= pane.x
-                && x < pane.x.saturating_add(pane.width)
-                && y >= pane.y
-                && y < pane.y.saturating_add(pane.height)
-        }
-        None => false,
+    let Some(room_id) = own_chat_room_id(app) else {
+        return true;
+    };
+    // `i`, j/k, Ctrl+D/Ctrl+U and a reaction leader's follow-up always go to
+    // the chat; the message-action keys while a message is selected.
+    if chat_input::chat_priority_key(app, byte) || chat_input::selected_chat_key(app, room_id, byte)
+    {
+        chat_input::handle_message_action_in_room(app, room_id, byte);
+    }
+    true
+}
+
+fn scroll_own_chat(app: &mut App, delta: isize) {
+    if let Some(room_id) = own_chat_room_id(app) {
+        chat_input::handle_scroll_in_room(app, room_id, delta);
     }
 }
 
-/// The first SGR left-button press in `data` (`ESC [ < 0 ; x ; y M`, with
-/// any modifier), as 0-based cells. Motion, drags, releases and the wheel
-/// are not presses. The games strip every mouse report, so nothing read
-/// here is taken from them.
-fn sgr_left_press(data: &[u8]) -> Option<(u16, u16)> {
-    let mut rest = data;
-    while let Some(start) = rest.windows(3).position(|window| window == b"\x1b[<") {
-        let seq = &rest[start + 3..];
-        let end = seq.iter().position(|byte| *byte == b'M' || *byte == b'm')?;
-        let (params, action) = (&seq[..end], seq[end]);
-        rest = &seq[end + 1..];
-        if action != b'M' {
-            continue;
-        }
-        let mut fields = params
-            .split(|byte| *byte == b';')
-            .map(|field| std::str::from_utf8(field).ok()?.parse::<u16>().ok());
-        let (Some(Some(button)), Some(Some(x)), Some(Some(y))) =
-            (fields.next(), fields.next(), fields.next())
-        else {
-            continue;
-        };
-        // The low bits name the button (0 is left); 32 marks motion, 64 the
-        // wheel. Shift, Alt and Ctrl (4, 8, 16) still click.
-        if button & 0b0110_0011 != 0 {
-            continue;
-        }
-        return Some((x.checked_sub(1)?, y.checked_sub(1)?));
+/// Esc in the player's open chat: drop a selected message first, then close
+/// the chat back to the game.
+pub fn handle_own_escape(app: &mut App) {
+    if let Some(room_id) = own_chat_room_id(app)
+        && app.chat.selected_message_body_in_room(room_id).is_some()
+    {
+        app.chat.clear_message_selection();
+        return;
     }
-    None
+    close_own_chat(app);
 }
 
 #[cfg(test)]

@@ -23,7 +23,7 @@ badges are in [`AWARDS.md`](AWARDS.md).
 - `state.rs`: `Board` (the closed page-board enum; page order: Top Drinkers, Top Chips, Arcade Wins, Late Time, then the game boards, the two Lateania snapshot boards then the per-door triples, then the daily/score rosters), `Standings` (one arm per window shape: `MonthlyOnly`, `AllTimeOnly`, `Snapshot`, `Paired`, `MonthlyYearly`; the renderer matches all, so a new shape cannot fall through to a wrong heading), titles/hints/value formatting, and the selection state.
 - `input.rs`: rail navigation keys/clicks and pointer-targeted wheel scrolling; Ctrl+J/K scrolls the detail pane.
 - `ui.rs`: the board rail (Boards group leading, then Games, Daily Wins, High Scores) and the detail pane with per-window standings columns and the around-you ellipsis tail.
-- `svc.rs`: `LeaderboardService` — the refresh loop, subscriber gate, connect-triggered top-up, process-local online-time accumulator/five-minute batch writer, and the rollover-aware `profile_awards` snapshot loop.
+- `svc.rs`: `LeaderboardService` — the refresh loop, subscriber gate, connect-triggered top-up, online-time accumulator (wall-clock spans)/five-minute batch writer, and the rollover-aware `profile_awards` snapshot loop.
 - Data model: `late-core/src/models/leaderboard.rs` (rosters, queries, `LeaderboardData`); awards in `late-core/src/models/profile_award.rs`.
 - Read-only from here: `app/door/ingest/` (the pipe filling `door_runs`/`door_milestones`; `door/ingest/CONTEXT.md`).
 
@@ -64,29 +64,44 @@ is marked from the session's own `GameWon` Activity events, which the daily
 services publish only after the win row commits, and the card ORs it with the
 snapshot's `user_daily_statuses`, which also feeds the Arcade card's `N solved`
 count and its `o` roster (`arcade/solvers.rs`, named through the app's username
-directory). Other players' standings still wait.
+directory). Other players' standings still wait. The statuses carry the UTC
+day they were read for (`DailyStatuses`), and every reader goes through
+`DailyStatuses::on(today)`, which is empty once the day has moved on: for the
+few minutes after midnight before the next pass, every card shows today's
+puzzles open rather than yesterday's ticks.
 
 ### Late Time persistence
 
 Late Time counts authenticated human presence across SSH and IRC, including
 idle/AFK time. `active_users` remains the authoritative cross-protocol
-connection ref-count: only its 0→1 transition starts a monotonic `Instant`, and
-only 1→0 stops it, so overlapping sessions for one user count once. Ghost users
-never enter this path.
+connection ref-count: only its 0→1 transition starts the clock, and only 1→0
+stops it, so overlapping sessions for one user on one process count once.
+Ghost users never enter this path.
 
-The accumulator checkpoints on the same five-minute timer as the leaderboard.
-It performs no DB work on connect/disconnect and writes every changed user in
-one `UNNEST` statement that atomically updates `user_online_time` (one all-time
-row per user) and `user_online_time_monthly` (one row per user and UTC month);
-no pending time means no statement. A retained flush UUID and month make an
-uncertain retry idempotent, and shutdown performs a final serialized flush.
-Tracking starts with migrations 142-143 and has no invented historical
-backfill. A connected segment is attributed to the UTC month in which that
-segment began; the regular checkpoint bounds month-boundary spill to five
-minutes while Postgres is healthy. A hard process crash can lose the current
-interval since the last checkpoint. Deduplication is process-local, matching
-the one-replica service; a rolling deployment's brief old/new-pod overlap may
-overcount.
+The accumulator keeps wall-clock spans: each closed or checkpointed interval
+folds into the user's pending span for the UTC month it began in (the span it
+covers, and the milliseconds present inside it). It checkpoints on the same
+five-minute timer as the leaderboard, performs no DB work on
+connect/disconnect, and hands every changed user to `apply_online_time_batch`
+(`late-core/src/models/leaderboard.rs`) in one transaction; no pending time
+means no transaction. Shutdown performs a final serialized flush.
+
+Every pod counts its own sessions, and a deploy keeps the old pod's sessions
+up for hours (the 6 h grace) beside the new pod's, so two pods report the same
+minutes for one user. The flush dedupes in the database: it locks the user's
+`user_online_time` row and credits only what lies past its `counted_until`
+mark (`online_time_credit`), then moves the mark to the span's end. Whichever
+pod lands second earns only what the first did not cover, so a user's credited
+time never exceeds the wall clock. A gapped span (the user left and came back
+inside one checkpoint) that straddles the mark may earn less than it was
+present for: the board errs low, never high. The same rule makes an uncertain
+retry idempotent: a resent batch earns nothing its first attempt committed.
+
+Tracking starts with migrations 142-143, the mark with 274; neither has an
+invented backfill, and the totals counted before 274 keep the old overlap
+overcount. The regular checkpoint bounds month-boundary spill to five minutes
+while Postgres is healthy. A hard process crash can lose the current interval
+since the last checkpoint.
 
 ## Data model (roster-generated)
 
@@ -170,4 +185,4 @@ pass a username to target that enrichment explicitly.
 ## Known gaps
 
 - No notify-driven refresh; up to one `REFRESH_INTERVAL` of staleness by design (see Refresh model).
-- Online-time crash loss is bounded by the last successful five-minute checkpoint while the DB is healthy; cross-pod overlap is intentionally not deduplicated.
+- Online-time crash loss is bounded by the last successful five-minute checkpoint while the DB is healthy. Totals written before migration 274 include the old cross-pod overcount.

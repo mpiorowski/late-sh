@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::Result;
-use chrono::{Datelike, Months, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Months, NaiveDate, Utc};
 use late_core::db::Db;
 use late_core::models::leaderboard::{
     LeaderboardData, OnlineTimeIncrement, apply_online_time_batch, fetch_leaderboard_data,
@@ -102,17 +102,20 @@ struct OnlineTimeState {
     /// The first authenticated connection's start time. The shared
     /// `active_users` map owns connection ref-counting; this map only sees its
     /// zero-to-one and one-to-zero transitions.
-    active_since: HashMap<Uuid, ActiveOnlineTime>,
-    pending_milliseconds: HashMap<(Uuid, NaiveDate), i64>,
-    /// Retained until Postgres confirms it. A retry uses the same id so the
-    /// upsert can distinguish it from a new increment.
+    active_since: HashMap<Uuid, DateTime<Utc>>,
+    /// Closed intervals not yet flushed, folded per user and UTC month into
+    /// the span they cover and the time present inside it.
+    pending: HashMap<(Uuid, NaiveDate), PendingSpan>,
+    /// Retained until Postgres confirms it. A retry resends the same spans,
+    /// which earn nothing the first attempt committed (`counted_until`).
     in_flight: Option<OnlineTimeBatch>,
 }
 
 #[derive(Clone, Copy)]
-struct ActiveOnlineTime {
-    since: Instant,
-    month_start: NaiveDate,
+struct PendingSpan {
+    start: DateTime<Utc>,
+    end: DateTime<Utc>,
+    milliseconds: i64,
 }
 
 #[derive(Clone, Default)]
@@ -122,48 +125,35 @@ struct OnlineTimeTracker {
 
 impl OnlineTimeTracker {
     fn connected(&self, user_id: Uuid) {
-        self.connected_at(user_id, Instant::now(), current_month_start());
+        self.connected_at(user_id, Utc::now());
     }
 
-    fn connected_at(&self, user_id: Uuid, now: Instant, month_start: NaiveDate) {
+    fn connected_at(&self, user_id: Uuid, now: DateTime<Utc>) {
         self.state
             .lock()
             .expect("online time tracker poisoned")
             .active_since
             .entry(user_id)
-            .or_insert(ActiveOnlineTime {
-                since: now,
-                month_start,
-            });
+            .or_insert(now);
     }
 
     fn disconnected(&self, user_id: Uuid) {
-        self.disconnected_at(user_id, Instant::now());
+        self.disconnected_at(user_id, Utc::now());
     }
 
-    fn disconnected_at(&self, user_id: Uuid, now: Instant) {
+    fn disconnected_at(&self, user_id: Uuid, now: DateTime<Utc>) {
         let mut state = self.state.lock().expect("online time tracker poisoned");
-        let Some(active) = state.active_since.remove(&user_id) else {
+        let Some(since) = state.active_since.remove(&user_id) else {
             return;
         };
-        add_elapsed(
-            &mut state.pending_milliseconds,
-            user_id,
-            active.month_start,
-            active.since,
-            now,
-        );
+        add_interval(&mut state.pending, user_id, since, now);
     }
 
     fn begin_batch(&self) -> Option<PreparedOnlineTimeBatch> {
-        self.begin_batch_at(Instant::now(), current_month_start())
+        self.begin_batch_at(Utc::now())
     }
 
-    fn begin_batch_at(
-        &self,
-        now: Instant,
-        month_start: NaiveDate,
-    ) -> Option<PreparedOnlineTimeBatch> {
+    fn begin_batch_at(&self, now: DateTime<Utc>) -> Option<PreparedOnlineTimeBatch> {
         let mut state = self.state.lock().expect("online time tracker poisoned");
         if let Some(batch) = state.in_flight.clone() {
             return Some(PreparedOnlineTimeBatch {
@@ -173,38 +163,29 @@ impl OnlineTimeTracker {
         }
 
         let mut checkpoints = Vec::with_capacity(state.active_since.len());
-        for (&user_id, active) in &mut state.active_since {
-            checkpoints.push((user_id, *active));
-            *active = ActiveOnlineTime {
-                since: now,
-                month_start,
-            };
+        for (&user_id, since) in &mut state.active_since {
+            checkpoints.push((user_id, *since));
+            *since = now;
         }
-        for (user_id, active) in checkpoints {
-            add_elapsed(
-                &mut state.pending_milliseconds,
-                user_id,
-                active.month_start,
-                active.since,
-                now,
-            );
+        for (user_id, since) in checkpoints {
+            add_interval(&mut state.pending, user_id, since, now);
         }
 
-        let pending = std::mem::take(&mut state.pending_milliseconds);
+        let pending = std::mem::take(&mut state.pending);
         let mut increments: Vec<_> = pending
             .into_iter()
-            .filter_map(|((user_id, month_start), milliseconds)| {
-                (milliseconds > 0).then_some(OnlineTimeIncrement {
-                    user_id,
-                    month_start,
-                    milliseconds,
-                })
+            .map(|((user_id, month_start), span)| OnlineTimeIncrement {
+                user_id,
+                month_start,
+                span_start: span.start,
+                span_end: span.end,
+                milliseconds: span.milliseconds,
             })
             .collect();
         if increments.is_empty() {
             return None;
         }
-        increments.sort_unstable_by_key(|value| (value.user_id, value.month_start));
+        increments.sort_unstable_by_key(|value| (value.user_id, value.span_start));
 
         let batch = OnlineTimeBatch {
             id: Uuid::now_v7(),
@@ -238,24 +219,39 @@ impl OnlineTimeTracker {
     }
 }
 
-fn current_month_start() -> NaiveDate {
-    let today = Utc::now().date_naive();
-    today.with_day(1).expect("every UTC month has a first day")
+fn month_start_of(at: DateTime<Utc>) -> NaiveDate {
+    at.date_naive()
+        .with_day(1)
+        .expect("every UTC month has a first day")
 }
 
-fn add_elapsed(
-    pending: &mut HashMap<(Uuid, NaiveDate), i64>,
+/// Fold the interval `since..now` into the user's pending span for the UTC
+/// month it began in, so a segment that crosses midnight at a month's end
+/// counts in the month it started (a checkpoint bounds that spill to one
+/// flush interval).
+fn add_interval(
+    pending: &mut HashMap<(Uuid, NaiveDate), PendingSpan>,
     user_id: Uuid,
-    month_start: NaiveDate,
-    since: Instant,
-    now: Instant,
+    since: DateTime<Utc>,
+    now: DateTime<Utc>,
 ) {
-    let milliseconds = now.saturating_duration_since(since).as_millis();
-    let milliseconds = i64::try_from(milliseconds).unwrap_or(i64::MAX);
-    if milliseconds > 0 {
-        let total = pending.entry((user_id, month_start)).or_default();
-        *total = total.saturating_add(milliseconds);
+    let milliseconds = (now - since).num_milliseconds();
+    if milliseconds <= 0 {
+        return;
     }
+    let month_start = month_start_of(since);
+    let span = pending.entry((user_id, month_start)).or_insert(PendingSpan {
+        start: since,
+        end: now,
+        milliseconds: 0,
+    });
+    if since < span.start {
+        span.start = since;
+    }
+    if now > span.end {
+        span.end = now;
+    }
+    span.milliseconds = span.milliseconds.saturating_add(milliseconds);
 }
 
 /// What woke the refresh loop.
@@ -479,12 +475,12 @@ impl LeaderboardService {
             return Ok(());
         };
         let retrying = prepared.was_retry;
-        let client = self.db.get().await?;
-        self.apply_online_time_batch(&client, prepared.batch)
+        let mut client = self.db.get().await?;
+        self.apply_online_time_batch(&mut client, prepared.batch)
             .await?;
 
         if retrying && let Some(follow_up) = self.online_time.begin_batch() {
-            self.apply_online_time_batch(&client, follow_up.batch)
+            self.apply_online_time_batch(&mut client, follow_up.batch)
                 .await?;
         }
         Ok(())
@@ -492,7 +488,7 @@ impl LeaderboardService {
 
     async fn apply_online_time_batch(
         &self,
-        client: &tokio_postgres::Client,
+        client: &mut tokio_postgres::Client,
         batch: OnlineTimeBatch,
     ) -> Result<()> {
         let rows = batch.increments.len();

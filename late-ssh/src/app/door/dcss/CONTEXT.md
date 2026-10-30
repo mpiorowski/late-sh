@@ -40,7 +40,7 @@ Core shape:
 
 - **The crawl files are also published read-only over HTTP** at `late.sh/crawl/...` (`late-dcss/src/publish.rs`, port 2329) for the public DCSS tooling (dcss-stats.com, Sequell): the two xlog files with `Range` support and the morgue tree. The surface, its path-handling security, the fixed morgue layout and the pending ecosystem registration are in [`PUBLISH.md`](PUBLISH.md).
 
-- **Live spectating and the watch chat** are shared with NetHack, Brogue and Zork and live in `../spectate/CONTEXT.md`. DCSS's part is its host's `watch.rs` (the mirror, the `late_watch` sessions, `hud_status` reading `XL3 Lair:2` off crawl's HUD) and the DCSS screen drawing the player's watch chat beside the game, with the composer F2 or a click opens there.
+- **Live spectating and the watch chat** are shared with NetHack, Brogue and Zork and live in `../spectate/CONTEXT.md`. DCSS's part is its host's `watch.rs` (the mirror, the `late_watch` sessions, `hud_status` reading `XL3 Lair:2` off crawl's HUD) and the DCSS screen drawing the player's watch chat F4 opens over the game.
 
 The door is gated by the `dcss_enabled` profile flag in `late-ssh/src/config.rs` (enabled in every current profile); when disabled, `connect` is a no-op and the launcher shows "Currently unavailable". The host pod is deployed unconditionally (the flag gates only the client), and the publish listener runs with it: whether the files are reachable from outside the cluster is the ingress's call, not the host's.
 

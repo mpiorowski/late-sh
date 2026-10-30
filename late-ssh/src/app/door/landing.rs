@@ -51,10 +51,10 @@ pub fn action(marker: &str, key: &str, label: &str, color: Color) -> Line<'stati
     ])
 }
 
-/// The watchable doors' F4 line: how this player shows or hides their
-/// watchers' chat beside their own running game.
+/// The watchable doors' F4 line: how this player opens their watchers'
+/// chat over their own running game.
 pub fn watch_chat_hint() -> Line<'static> {
-    hint("F4", "in game: show or hide watcher chat beside you", 8)
+    hint("F4", "in game: talk with your watchers (F4 or Esc back)", 8)
 }
 
 /// A `key  label` hint row. `pad` sizes the key column to the landing's longest

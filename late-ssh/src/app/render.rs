@@ -241,11 +241,14 @@ struct DrawContext<'a> {
     /// this player's own room beside their running game on a watchable
     /// door's screen. `None` until this session is in the room.
     watch_chat_view: Option<chat::ui::EmbeddedRoomChatView<'a>>,
-    /// Whether this player's running game makes room for watcher chat (the
-    /// session's F4 switch, `App::own_watch_chat_shown`), and the newest
-    /// line for the one-row form of it.
-    show_watch_chat: bool,
-    own_watch_line: Option<crate::app::door::spectate::chat::WatchLine>,
+    /// The door whose running game has this player's watch chat open over
+    /// it (`App::own_watch_chat_open`, F4).
+    own_watch_chat_open: Option<crate::app::door::spectate::state::SpectateGame>,
+    /// What was said in the chat F4 opens on this screen since it was last
+    /// open, for the frame title's `F4 chat` hint: the player's watch room
+    /// over their running door game, the world's chat on the Realm board.
+    /// `None` while that chat is open or there is none to open.
+    chat_title_unread: Option<i64>,
     /// The watcher suggestion waiting beside this player's own Zork game.
     own_suggestion: Option<String>,
     greendragon_state: Option<&'a crate::app::door::greendragon::state::State>,
@@ -710,30 +713,27 @@ impl App {
         );
         let chat_usernames = &render_usernames;
         // One watch chat is on show at a time: the watched player's room on
-        // the Games hub, this player's own room beside their running game.
+        // the Games hub, this player's own room over their running game.
         let watch_chat_room_id = match (self.screen, own_screen_game) {
             (Screen::Games, _) => self.spectate_chat_room_id(),
             (_, Some(game)) => self.own_watch_chat_room_id(game),
             (_, None) => None,
         };
-        // The player's own composer: open in their room, on their game's
-        // screen (`App::handle_input` opens it on F2 or a click on the pane).
-        // Until then their pane's strip is inert and says so.
-        let own_chat_composing = own_screen_game.is_some()
-            && watch_chat_room_id.is_some()
-            && self.chat.is_composing()
-            && self.chat.composer_room_id() == watch_chat_room_id;
-        // The newest thing a watcher said, for the one-row form of the chat
-        // a narrow terminal shows under this player's own running game.
-        let own_watch_line = own_screen_game
-            .and_then(|game| self.own_watch_chat_room_id(game))
-            .and_then(|room_id| {
-                crate::app::door::spectate::chat::latest_line(
-                    self.chat.messages_for_room(room_id),
-                    chat_usernames,
-                    chrono::Utc::now(),
-                )
-            });
+        // Unread in the chat F4 opens here while it is shut, for the frame
+        // title's `F4 chat` hint: the player's own watch room over their
+        // game on screen, the world's chat on the Realm board.
+        let shut_chat_room_id = match (self.screen, own_screen_game) {
+            (Screen::Realm, _) => match self.realm.shown_chat_room_id() {
+                Some(_) => None,
+                None => self.realm.chat_room_id(),
+            },
+            (_, Some(game)) if self.own_watch_chat_open != Some(game) => {
+                self.own_watch_chat_room_id(game)
+            }
+            (_, Some(_) | None) => None,
+        };
+        let chat_title_unread = shut_chat_room_id
+            .map(|room_id| self.chat.unread_counts.get(&room_id).copied().unwrap_or(0));
         // The command a watcher suggested for this player's own Zork game,
         // which F3 types (`door/zork/suggest.rs`).
         let own_suggestion = match own_screen_game {
@@ -1269,12 +1269,10 @@ impl App {
                     selection_scroll: Some(&self.chat.selection_scroll),
                 });
         // The world's chat on the realm board, while it is up; hidden, the
-        // board only needs to know how much has been said since.
+        // frame title counts what has been said since (`chat_title_unread`).
         let realm_chat = match (self.realm.chat_room_id(), self.realm.shown_chat_room_id()) {
             (None, _) => crate::app::door::realm::ui::RealmChatPane::Absent,
-            (Some(room_id), None) => crate::app::door::realm::ui::RealmChatPane::Hidden {
-                unread: self.chat.unread_counts.get(&room_id).copied().unwrap_or(0),
-            },
+            (Some(_), None) => crate::app::door::realm::ui::RealmChatPane::Hidden,
             (Some(_), Some(chat_room_id)) => crate::app::door::realm::ui::RealmChatPane::Shown(
                 Box::new(chat::ui::EmbeddedRoomChatView {
                     messages_inset: 1,
@@ -1342,7 +1340,7 @@ impl App {
             ),
         };
         // The watch chat: docked beside the watched screen for a watcher,
-        // read-only beside their own game for the player.
+        // open over their own game for the player.
         let watch_chat_view =
             watch_chat_room_id.map(|chat_room_id| chat::ui::EmbeddedRoomChatView {
                 messages_inset: 1,
@@ -1385,12 +1383,7 @@ impl App {
                 highlighted_message_id: self.chat.highlighted_message_id,
                 reaction_picker_active: self.chat.is_reaction_leader_active(),
                 composer: self.chat.composer(),
-                // The player's own pane keeps the strip inert until F2 or a
-                // click opens it; a watcher's pane (Games) composes as is.
-                composer_inert: match (own_screen_game.is_some(), own_chat_composing) {
-                    (true, false) => chat::ui::ComposerInert::OwnWatchChat,
-                    (true, true) | (false, _) => chat::ui::ComposerInert::No,
-                },
+                composer_inert: chat::ui::ComposerInert::No,
                 composing: self.chat.composing,
                 mention_matches: &self.chat.mention_ac.matches,
                 mention_selected: self.chat.mention_ac.selected,
@@ -1593,6 +1586,7 @@ impl App {
             mention_selected: self.chat.mention_ac.selected,
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
             inert: chat::ui::ComposerInert::No,
+            idle_hint: chat::ui::ComposerIdleHint::Scene,
         });
         let (clubhouse_composer, nightcap_composer) = match screen {
             Screen::Clubhouse => (embedded_composer, None),
@@ -1749,8 +1743,8 @@ impl App {
                         own_watchers,
                         held_watchers,
                         watch_chat_view,
-                        show_watch_chat: self.own_watch_chat_shown,
-                        own_watch_line,
+                        own_watch_chat_open: self.own_watch_chat_open,
+                        chat_title_unread,
                         own_suggestion,
                         greendragon_state: self.greendragon_state.as_ref(),
                         darkroom_state: self.darkroom_state.as_ref(),
@@ -2415,77 +2409,86 @@ impl App {
                     crate::app::door::rebels::render::draw_page(frame, content_area, state);
                 }
             }
-            // The watchable doors: a running game makes room for its
-            // watchers' chat when the player keeps that on, a read-only pane
-            // on the right or one row underneath on a narrow terminal. The
-            // room comes off the PTY, never over the game.
+            // The watchable doors: while F4 has the watchers' chat open over
+            // a running game it is a column on the right, off the PTY where
+            // the game keeps its minimum screen beside it, else drawn over
+            // the game's right side.
             Screen::Nethack => {
                 if let Some(state) = ctx.nethack_state.as_deref_mut() {
                     let (game_area, own_chat) = own_chat_split(
                         crate::app::door::spectate::state::SpectateGame::Nethack,
-                        ctx.show_watch_chat && state.is_running(),
+                        ctx.own_watch_chat_open
+                            == Some(crate::app::door::spectate::state::SpectateGame::Nethack)
+                            && state.is_running(),
                         content_area,
                     );
                     // Size the child PTY to the exact widget area before blitting.
                     state.set_viewport(game_area);
                     crate::app::door::nethack::render::draw_page(frame, game_area, state);
-                    ctx.own_chat_hit.set(own_chat.pane());
-                    crate::app::door::spectate::ui::draw_own_chat(
-                        frame,
-                        crate::app::door::spectate::state::SpectateGame::Nethack,
-                        own_chat,
-                        ctx.watch_chat_view.take(),
-                        ctx.own_watch_line.as_ref(),
-                        None,
-                        ctx.own_watchers,
-                        terminal_images,
-                    );
+                    ctx.own_chat_hit.set(own_chat.map(|own_chat| own_chat.pane));
+                    if let Some(own_chat) = own_chat {
+                        crate::app::door::spectate::ui::draw_own_chat(
+                            frame,
+                            crate::app::door::spectate::state::SpectateGame::Nethack,
+                            own_chat,
+                            ctx.watch_chat_view.take(),
+                            None,
+                            ctx.own_watchers,
+                            terminal_images,
+                        );
+                    }
                 }
             }
             Screen::Dcss => {
                 if let Some(state) = ctx.dcss_state.as_deref_mut() {
                     let (game_area, own_chat) = own_chat_split(
                         crate::app::door::spectate::state::SpectateGame::Dcss,
-                        ctx.show_watch_chat && state.is_running(),
+                        ctx.own_watch_chat_open
+                            == Some(crate::app::door::spectate::state::SpectateGame::Dcss)
+                            && state.is_running(),
                         content_area,
                     );
                     // Size the child PTY to the exact widget area before blitting.
                     state.set_viewport(game_area);
                     crate::app::door::dcss::render::draw_page(frame, game_area, state);
-                    ctx.own_chat_hit.set(own_chat.pane());
-                    crate::app::door::spectate::ui::draw_own_chat(
-                        frame,
-                        crate::app::door::spectate::state::SpectateGame::Dcss,
-                        own_chat,
-                        ctx.watch_chat_view.take(),
-                        ctx.own_watch_line.as_ref(),
-                        None,
-                        ctx.own_watchers,
-                        terminal_images,
-                    );
+                    ctx.own_chat_hit.set(own_chat.map(|own_chat| own_chat.pane));
+                    if let Some(own_chat) = own_chat {
+                        crate::app::door::spectate::ui::draw_own_chat(
+                            frame,
+                            crate::app::door::spectate::state::SpectateGame::Dcss,
+                            own_chat,
+                            ctx.watch_chat_view.take(),
+                            None,
+                            ctx.own_watchers,
+                            terminal_images,
+                        );
+                    }
                 }
             }
             Screen::Brogue => {
                 if let Some(state) = ctx.brogue_state.as_deref_mut() {
                     let (game_area, own_chat) = own_chat_split(
                         crate::app::door::spectate::state::SpectateGame::Brogue,
-                        ctx.show_watch_chat && state.is_running(),
+                        ctx.own_watch_chat_open
+                            == Some(crate::app::door::spectate::state::SpectateGame::Brogue)
+                            && state.is_running(),
                         content_area,
                     );
                     // Size the child PTY to the exact widget area before blitting.
                     state.set_viewport(game_area);
                     crate::app::door::brogue::render::draw_page(frame, game_area, state);
-                    ctx.own_chat_hit.set(own_chat.pane());
-                    crate::app::door::spectate::ui::draw_own_chat(
-                        frame,
-                        crate::app::door::spectate::state::SpectateGame::Brogue,
-                        own_chat,
-                        ctx.watch_chat_view.take(),
-                        ctx.own_watch_line.as_ref(),
-                        None,
-                        ctx.own_watchers,
-                        terminal_images,
-                    );
+                    ctx.own_chat_hit.set(own_chat.map(|own_chat| own_chat.pane));
+                    if let Some(own_chat) = own_chat {
+                        crate::app::door::spectate::ui::draw_own_chat(
+                            frame,
+                            crate::app::door::spectate::state::SpectateGame::Brogue,
+                            own_chat,
+                            ctx.watch_chat_view.take(),
+                            None,
+                            ctx.own_watchers,
+                            terminal_images,
+                        );
+                    }
                 }
             }
             Screen::Usurper => {
@@ -2515,22 +2518,25 @@ impl App {
                     // menus keep the whole area.
                     let (game_area, own_chat) = own_chat_split(
                         crate::app::door::spectate::state::SpectateGame::Zork,
-                        ctx.show_watch_chat && state.game_visible(),
+                        ctx.own_watch_chat_open
+                            == Some(crate::app::door::spectate::state::SpectateGame::Zork)
+                            && state.game_visible(),
                         content_area,
                     );
                     state.set_viewport(game_area);
                     crate::app::door::zork::render::draw_page(frame, game_area, state);
-                    ctx.own_chat_hit.set(own_chat.pane());
-                    crate::app::door::spectate::ui::draw_own_chat(
-                        frame,
-                        crate::app::door::spectate::state::SpectateGame::Zork,
-                        own_chat,
-                        ctx.watch_chat_view.take(),
-                        ctx.own_watch_line.as_ref(),
-                        ctx.own_suggestion.as_deref(),
-                        ctx.own_watchers,
-                        terminal_images,
-                    );
+                    ctx.own_chat_hit.set(own_chat.map(|own_chat| own_chat.pane));
+                    if let Some(own_chat) = own_chat {
+                        crate::app::door::spectate::ui::draw_own_chat(
+                            frame,
+                            crate::app::door::spectate::state::SpectateGame::Zork,
+                            own_chat,
+                            ctx.watch_chat_view.take(),
+                            ctx.own_suggestion.as_deref(),
+                            ctx.own_watchers,
+                            terminal_images,
+                        );
+                    }
                 }
             }
             Screen::Codekeep => {
@@ -2560,39 +2566,45 @@ impl App {
                     },
                 );
             }
-            Screen::Arcade => crate::app::arcade::ui::draw_arcade_hub(
-                frame,
-                content_area,
-                &crate::app::arcade::ui::ArcadeHubView {
-                    game_selection: ctx.game_selection,
-                    is_playing_game: ctx.is_playing_game,
-                    twenty_forty_eight_state: ctx.twenty_forty_eight_state,
-                    tetris_state: ctx.tetris_state,
-                    snake_state: ctx.snake_state,
-                    rubiks_cube_state: ctx.rubiks_cube_state,
-                    sliding_puzzle_state: ctx.sliding_puzzle_state,
-                    le_word_state: ctx.le_word_state,
-                    traffic_state: ctx.traffic_state,
-                    sudoku_state: ctx.sudoku_state,
-                    nonogram_state: ctx.nonogram_state,
-                    solitaire_state: ctx.solitaire_state,
-                    minesweeper_state: ctx.minesweeper_state,
-                    netwalk_state: ctx.netwalk_state,
-                    chess_puzzle_state: ctx.chess_puzzle_state,
-                    word_wheel_state: ctx.word_wheel_state,
-                    quartets_state: ctx.quartets_state,
-                    daily_completion: ctx.leaderboard.user_daily_statuses.get(&ctx.user_id),
-                    session_daily_completion: ctx.session_daily_wins.today(),
-                    quest_state: ctx.quest_state,
-                    today_statuses: &ctx.leaderboard.user_daily_statuses,
-                    usernames: ctx.usernames,
-                    user_id: ctx.user_id,
-                    username: ctx.clubhouse_own_username,
-                    show_solvers: ctx.arcade_solvers_open,
-                    image_protocol: ctx.terminal_image_protocol,
-                },
-                terminal_images,
-            ),
+            Screen::Arcade => {
+                let today_statuses = ctx
+                    .leaderboard
+                    .user_daily_statuses
+                    .on(chrono::Utc::now().date_naive());
+                crate::app::arcade::ui::draw_arcade_hub(
+                    frame,
+                    content_area,
+                    &crate::app::arcade::ui::ArcadeHubView {
+                        game_selection: ctx.game_selection,
+                        is_playing_game: ctx.is_playing_game,
+                        twenty_forty_eight_state: ctx.twenty_forty_eight_state,
+                        tetris_state: ctx.tetris_state,
+                        snake_state: ctx.snake_state,
+                        rubiks_cube_state: ctx.rubiks_cube_state,
+                        sliding_puzzle_state: ctx.sliding_puzzle_state,
+                        le_word_state: ctx.le_word_state,
+                        traffic_state: ctx.traffic_state,
+                        sudoku_state: ctx.sudoku_state,
+                        nonogram_state: ctx.nonogram_state,
+                        solitaire_state: ctx.solitaire_state,
+                        minesweeper_state: ctx.minesweeper_state,
+                        netwalk_state: ctx.netwalk_state,
+                        chess_puzzle_state: ctx.chess_puzzle_state,
+                        word_wheel_state: ctx.word_wheel_state,
+                        quartets_state: ctx.quartets_state,
+                        daily_completion: today_statuses.get(&ctx.user_id),
+                        session_daily_completion: ctx.session_daily_wins.today(),
+                        quest_state: ctx.quest_state,
+                        today_statuses,
+                        usernames: ctx.usernames,
+                        user_id: ctx.user_id,
+                        username: ctx.clubhouse_own_username,
+                        show_solvers: ctx.arcade_solvers_open,
+                        image_protocol: ctx.terminal_image_protocol,
+                    },
+                    terminal_images,
+                );
+            }
             Screen::Leaderboard => crate::app::leaderboard::ui::draw(
                 frame,
                 content_area,
@@ -3172,15 +3184,38 @@ fn foreground_terminal_overlay_open(ctx: &DrawContext<'_>) -> bool {
 }
 
 /// A watchable door's content area split between its game and the player's
-/// own watch chat, when `chat_wanted` (the setting is on and the game runs).
+/// own watch chat, when `chat_open` (F4 has it open and the game runs).
 fn own_chat_split(
     game: crate::app::door::spectate::state::SpectateGame,
-    chat_wanted: bool,
+    chat_open: bool,
     area: Rect,
-) -> (Rect, crate::app::door::spectate::ui::OwnChat) {
-    match chat_wanted {
-        true => crate::app::door::spectate::ui::own_game_split(area, game),
-        false => (area, crate::app::door::spectate::ui::OwnChat::Hidden),
+) -> (Rect, Option<crate::app::door::spectate::ui::OwnChat>) {
+    match chat_open {
+        true => {
+            let (game_area, own_chat) = crate::app::door::spectate::ui::own_game_split(area, game);
+            (game_area, Some(own_chat))
+        }
+        false => (area, None),
+    }
+}
+
+/// The frame title's word for a game's shut chat (the watchable doors'
+/// watch chat, the Realm board's), leading the game's own keys there so it
+/// costs the game no row: `F4 chat`, or bright with what was said since it
+/// was last open (`F4 chat (3 new)`). `unread` is `None` while there is
+/// nothing to open (no room yet, or the chat is open).
+fn chat_title_hint(unread: Option<i64>) -> Option<Span<'static>> {
+    match unread? {
+        0 => Some(Span::styled(
+            "\u{b7} F4 chat ",
+            Style::default().fg(theme::TEXT_DIM()),
+        )),
+        unread => Some(Span::styled(
+            format!("\u{b7} F4 chat ({unread} new) "),
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        )),
     }
 }
 
@@ -3304,6 +3339,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .as_deref()
             .is_some_and(|state| state.is_running());
         if in_game {
+            spans.extend(chat_title_hint(ctx.chat_title_unread));
             spans.push(Span::styled(
                 "· ? help · S save · ` step out · Ctrl-C quit ",
                 Style::default().fg(theme::TEXT_DIM()),
@@ -3324,6 +3360,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .as_deref()
             .is_some_and(|state| state.is_running());
         if in_game {
+            spans.extend(chat_title_hint(ctx.chat_title_unread));
             spans.push(Span::styled(
                 "· ? help · S save · ` step out · Ctrl-Q abandon ",
                 Style::default().fg(theme::TEXT_DIM()),
@@ -3344,6 +3381,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .as_deref()
             .is_some_and(|state| state.is_running());
         if in_game {
+            spans.extend(chat_title_hint(ctx.chat_title_unread));
             spans.push(Span::styled(
                 "\u{b7} ? help \u{b7} S save \u{b7} ` step out \u{b7} Q abandon ",
                 Style::default().fg(theme::TEXT_DIM()),
@@ -3417,12 +3455,18 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .as_deref()
             .is_some_and(|state| state.game_visible())
     {
-        // The ways out lead: every key belongs to the story, and an 80
-        // column title cuts the tail.
+        // The ways out lead after the chat's word: every key belongs to the
+        // story, and an 80 column title cuts the tail.
+        spans.extend(chat_title_hint(ctx.chat_title_unread));
         spans.push(Span::styled(
             "· ` step out · QUIT quit · RESTORE menu · SAVE manual save ",
             Style::default().fg(theme::TEXT_DIM()),
         ));
+    }
+    // The Realm board's chat, put away: the same word every game with a
+    // chat carries in the title.
+    if screen == Screen::Realm {
+        spans.extend(chat_title_hint(ctx.chat_title_unread));
     }
     if screen == Screen::Codekeep {
         spans.push(Span::styled(

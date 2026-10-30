@@ -176,7 +176,9 @@ async fn ai_disabled_answers_unavailable_without_touching_the_db() {
     let service = inert_service(false);
     let mut events = service.subscribe();
 
+    let request_id = Uuid::from_u128(9);
     service.request(
+        request_id,
         Uuid::from_u128(1),
         Uuid::from_u128(2),
         "#lounge".to_string(),
@@ -188,6 +190,7 @@ async fn ai_disabled_answers_unavailable_without_touching_the_db() {
         .await
         .expect("event within timeout")
         .expect("channel open");
+    assert_eq!(event.request_id, request_id);
     assert_eq!(event.user_id, Uuid::from_u128(1));
     assert!(matches!(event.outcome, SummaryOutcome::Unavailable));
 }
@@ -201,6 +204,7 @@ async fn an_armed_cooldown_refuses_before_any_work() {
     let mut events = service.subscribe();
 
     service.request(
+        Uuid::now_v7(),
         user,
         room,
         "#lounge".to_string(),
@@ -239,6 +243,7 @@ async fn an_in_flight_request_collapses_duplicates_without_spending() {
     // A duplicate submitted while it runs answers InFlight before any work:
     // no fetch, no daily-cap spend, no model call.
     service.request(
+        Uuid::now_v7(),
         user,
         room,
         "#lounge".to_string(),

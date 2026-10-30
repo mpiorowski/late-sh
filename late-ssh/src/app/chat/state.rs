@@ -953,6 +953,9 @@ pub struct ChatState {
     /// fire-and-forget contract as translation.
     summary_service: SummaryService,
     summary_rx: tokio::sync::broadcast::Receiver<SummaryEvent>,
+    /// This session's `/summary` requests still waiting for an answer. The
+    /// feed carries every session's results; only these are taken.
+    pub(crate) summary_requests: HashSet<Uuid>,
     /// This session's translations for the current target language, keyed by
     /// message id. Cleared when the target language changes.
     pub(crate) translations: HashMap<Uuid, TranslationDisplay>,
@@ -1360,6 +1363,7 @@ impl ChatState {
             translation_service,
             summary_rx: summary_service.subscribe(),
             summary_service,
+            summary_requests: HashSet::new(),
             translations: HashMap::new(),
             translation_hidden: HashSet::new(),
             translation_manual: HashSet::new(),
@@ -1882,7 +1886,8 @@ impl ChatState {
     /// (the `/rules` surface); when another overlay is already up it waits
     /// in `pending_summary_overlay` instead of clobbering it, and takes the
     /// surface here as soon as it frees. Every other outcome banners. The
-    /// broadcast carries all users' results, so foreign events are dropped.
+    /// broadcast carries every session's results, so only this session's
+    /// own requests are taken.
     /// Returns the banner plus whether a waiting summary was promoted (a
     /// render-visible change `tick` cannot see from the queues).
     fn drain_summary_events(&mut self) -> (Option<Banner>, bool) {
@@ -1901,7 +1906,8 @@ impl ChatState {
                 Err(TryRecvError::Lagged(_)) => continue,
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             };
-            if event.user_id != self.user_id {
+            // Another session's answer, the same account's included.
+            if !self.summary_requests.remove(&event.request_id) {
                 continue;
             }
             match event.outcome {
@@ -2626,7 +2632,12 @@ impl ChatState {
         }
         self.edited_message_id = Some(selected_id);
         self.composer = new_chat_textarea();
-        self.composer.insert_str(body);
+        // An action line is stored CTCP-wrapped; it edits as the command
+        // that wrote it, and submitting that command rewrites it in place.
+        match super::action::parse_action_body(body) {
+            Some(action) => self.composer.insert_str(format!("/me {action}")),
+            None => self.composer.insert_str(body),
+        };
         self.composing = true;
         self.composer_room_id = Some(room_id);
         composer::set_themed_textarea_cursor_visible(&mut self.composer, true);
@@ -3960,7 +3971,10 @@ impl ChatState {
                 }
             };
             let exclude_user_ids: Vec<Uuid> = self.ignored_user_ids.iter().copied().collect();
+            let request_id = Uuid::now_v7();
+            self.summary_requests.insert(request_id);
             self.summary_service.request(
+                request_id,
                 self.user_id,
                 room_id,
                 self.history_room_label(room_id),
@@ -4741,11 +4755,25 @@ impl ChatState {
                 return Some(Banner::error("Usage: /me <action>"));
             };
             let room_id = self.composer_room_id;
+            let edited_message_id = self.edited_message_id;
             self.clear_composer_after_submit();
             let Some(room_id) = room_id else {
                 return Some(Banner::error("Send actions from inside a room"));
             };
-            self.send_command_message(room_id, action_body);
+            match edited_message_id {
+                Some(message_id) => {
+                    let request_id = Uuid::now_v7();
+                    self.service.edit_message_task(
+                        self.user_id,
+                        message_id,
+                        action_body,
+                        request_id,
+                        self.permissions,
+                    );
+                    self.pending_send_notices.push_back(request_id);
+                }
+                None => self.send_command_message(room_id, action_body),
+            }
             return None;
         }
 

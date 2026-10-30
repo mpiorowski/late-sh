@@ -85,12 +85,18 @@ fn screen_has_chat_pane(screen: Screen) -> bool {
         // Games draws a pane only while this session has a watch open (the
         // watch chat); the hub proper and a preview resolve to no room.
         // Realm draws one only while its chat is shown in place of the rail.
+        // A watchable door draws one only while F4 has the player's own
+        // watch chat open over their running game.
         Screen::Dashboard
             | Screen::DailyMatch
             | Screen::HouseTable
             | Screen::Zen
             | Screen::Games
             | Screen::Realm
+            | Screen::Nethack
+            | Screen::Dcss
+            | Screen::Brogue
+            | Screen::Zork
     )
 }
 
@@ -98,21 +104,7 @@ fn screen_has_chat_pane(screen: Screen) -> bool {
 /// plus the Clubhouse, which composes into #lounge (speech bubbles) without
 /// drawing a pane. Used for the composer-priority gate and chat overlays.
 fn screen_composes_chat(screen: Screen) -> bool {
-    screen_has_chat_pane(screen)
-        || matches!(
-            screen,
-            Screen::Clubhouse
-                | Screen::Nightcap
-                // A watchable door's player composes into their own
-                // watch-chat room, opened by F2 or a click on its pane ahead
-                // of the game's passthrough (`App::handle_input`). The
-                // composer only opens from a running game, so with none open
-                // these screens behave as before.
-                | Screen::Nethack
-                | Screen::Dcss
-                | Screen::Brogue
-                | Screen::Zork
-        )
+    screen_has_chat_pane(screen) || matches!(screen, Screen::Clubhouse | Screen::Nightcap)
 }
 
 fn is_chat_composer_context(ctx: InputContext) -> bool {
@@ -1330,6 +1322,13 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         return false;
     }
 
+    // The player's own watch chat, open over their running game: every key
+    // is the chat's or nobody's, ahead of the door's launcher keys and the
+    // global shortcuts (`door/spectate/input.rs`).
+    if crate::app::door::spectate::input::own_chat_takes_keys(app) {
+        return crate::app::door::spectate::input::handle_own_chat_event(app, event);
+    }
+
     if ctx.screen == Screen::Games {
         return crate::app::door::hub::input::handle_event(app, event);
     }
@@ -2017,6 +2016,12 @@ fn dispatch_escape(app: &mut App) {
     }
     if screen_composes_chat(ctx.screen) && app.chat.has_overlay() {
         app.chat.close_overlay();
+        return;
+    }
+    // The player's own watch chat open over their game: a picked message
+    // goes first, then the chat, and the game has the keys again.
+    if crate::app::door::spectate::input::own_chat_takes_keys(app) {
+        crate::app::door::spectate::input::handle_own_escape(app);
         return;
     }
     if ctx.screen == Screen::Artboard {
@@ -2831,6 +2836,9 @@ fn embedded_chat_room_id(app: &App, screen: Screen) -> Option<Uuid> {
         Screen::Zen => app.zen_chat_room_id(),
         Screen::Games => crate::app::door::spectate::input::chat_room_id(app),
         Screen::Realm => app.realm.shown_chat_room_id(),
+        Screen::Nethack | Screen::Dcss | Screen::Brogue | Screen::Zork => {
+            crate::app::door::spectate::input::own_chat_room_id(app)
+        }
         _ => None,
     }
 }

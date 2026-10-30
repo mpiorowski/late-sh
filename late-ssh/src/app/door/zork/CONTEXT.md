@@ -59,25 +59,25 @@ that opened it is kept with its edition (`after_claim`) and launched on that
 edition when the claim lands, so one Enter still starts the game, and a New
 confirmed for one edition never starts on another the player browsed to
 meanwhile. `play` carries the handle and the host lists
-the game under it. The player's watcher pane sits beside the game only while
-the game is on screen, never beside the menus, and F4 shows or hides it
-as on the roguelikes.
+the game under it. F4 opens the player's watch chat over the game as on the
+roguelikes, drawn only while the game is on screen, never over the menus.
 
 Watchers suggest a command by starting a watch-chat line with `>`
 (`>open mailbox`). The watch chat's header says how from each side
 (`spectate/ui.rs::suggestion_hint`): `type >look to suggest` for watchers,
-`F3 takes a >suggestion` for the player, also on the player's one-row
-fallback. The newest fresh one
+`F3 takes a >suggestion` for the player. The newest fresh one
 (ten minutes) from anyone but the player waits on its own row under the
-pane's header, or takes the one-row form (`suggest.rs`). F3 types it onto
+open chat's header (`suggest.rs`). F3 types it onto
 the story's prompt without Enter, so the player still reads, edits or sends
-it; nothing a watcher writes reaches the game without that key. F3 types
+it; nothing a watcher writes reaches the game without that key. F3 is the
+one key an open chat does not take: it closes the chat on the way, so the
+story has the keys for Enter. F3 types
 only at an empty prompt (`suggest::at_empty_prompt`: the cursor right after
 a lone `>`), so the letters never land in a half-typed command, a pagination
 wait, the SAVE editor or the RESTORE confirmation. A command is printable
 ASCII only, whitespace collapsed, at most 60 characters; once typed it is
 not offered again, and an older one does not take its place. Frotz ignores
-function keys at a V3 prompt, so F3 (and the watch chat's F2 and F4) cost
+function keys at a V3 prompt, so F3 (and the watch chat's F4) cost
 the story nothing.
 
 ## Module map
@@ -239,8 +239,8 @@ the host's watch path (every game in the roster under its handle and on
 screen, a launch without a handle refused, `late_watch` unable to play, the
 status bar reader), the claim prompt standing in for a launch without a
 handle, a launch chosen during the handle lookup starting the edition it was
-chosen on, the player's F2 composer taking typing, Enter and Esc
-(`input_flow_test.rs`), and the suggestions (`suggest_test.rs`: which chat
+chosen on, the player's F4 chat taking typing and Enter, and F3 closing
+it (`input_flow_test.rs`), and the suggestions (`suggest_test.rs`: which chat
 lines are commands, a reply's quote never one, the newest fresh one from a
 watcher, typed once, only at an empty prompt).
 The opt-in runtime script creates and removes its own container/volume,

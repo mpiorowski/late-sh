@@ -934,6 +934,7 @@ fn composer_view<'a>(textarea: &'a TextArea<'static>) -> ComposerBlockView<'a> {
         mention_selected: 0,
         keep_composer_focused: false,
         inert: ComposerInert::No,
+        idle_hint: ComposerIdleHint::Room,
     }
 }
 

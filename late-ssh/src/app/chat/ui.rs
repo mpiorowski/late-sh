@@ -226,6 +226,18 @@ pub(crate) struct ComposerBlockView<'a> {
     pub keep_composer_focused: bool,
     /// Whether the composer takes keys, and if not, what focuses it.
     pub inert: ComposerInert,
+    /// What the idle placeholder offers.
+    pub idle_hint: ComposerIdleHint,
+}
+
+/// What an idle composer's placeholder offers. A room's composer sits over
+/// its message list, so it names j/k selection; a scene's (the Clubhouse,
+/// the Nightcap) sits under a floor where those keys move you, so it names
+/// only how to start talking.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ComposerIdleHint {
+    Room,
+    Scene,
 }
 
 /// A composer that takes no keys keeps its strip so the rows never jump,
@@ -238,10 +250,6 @@ pub enum ComposerInert {
     /// A Zen chat tile that is not the focused one: `i`, `j` and `k` act on
     /// the focused tile.
     ZenTile,
-    /// The pane beside a player's own running roguelike: every key is the
-    /// game's until F2 or a click on the pane opens the composer
-    /// (`door/spectate`).
-    OwnWatchChat,
 }
 
 /// Pick the longest tier whose display width fits inside a titled `Block`
@@ -286,13 +294,6 @@ fn pick_composer_title_text(view: &ComposerBlockView<'_>, block_width: u16) -> S
     match view.inert {
         ComposerInert::ZenTile => {
             return pick_title_that_fits(block_width, &[" watching ", ""]).to_string();
-        }
-        ComposerInert::OwnWatchChat => {
-            return pick_title_that_fits(
-                block_width,
-                &[" Compose (F2 or click) ", " (F2 or click) ", " F2 ", ""],
-            )
-            .to_string();
         }
         ComposerInert::No => {}
     }
@@ -514,13 +515,6 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Par
                 dim,
             )));
         }
-        ComposerInert::OwnWatchChat => {
-            return Paragraph::new(Line::from(Span::styled(
-                // Fits the 40-column pane: 38 cells of text.
-                "F2 or click: write to your watchers",
-                dim,
-            )));
-        }
         ComposerInert::No => {}
     }
 
@@ -544,10 +538,13 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Par
             dim,
         ))]
     } else {
-        vec![Line::from(Span::styled(
-            "Type a message · j/k select · Ctrl+] icon picker · or just ask @bot about anything",
-            dim,
-        ))]
+        let hint = match view.idle_hint {
+            ComposerIdleHint::Room => {
+                "Type a message · j/k select · Ctrl+] icon picker · or just ask @bot about anything"
+            }
+            ComposerIdleHint::Scene => "Press i to say something · Ctrl+] icon picker",
+        };
+        vec![Line::from(Span::styled(hint, dim))]
     };
 
     Paragraph::new(placeholder)
@@ -1116,6 +1113,7 @@ pub fn draw_dashboard_chat_card(
                 mention_selected: view.mention_selected,
                 keep_composer_focused: view.keep_composer_focused,
                 inert: ComposerInert::No,
+                idle_hint: ComposerIdleHint::Room,
             },
             composer_text_width,
         ));
@@ -1285,6 +1283,7 @@ pub fn draw_dashboard_chat_card(
             mention_selected: view.mention_selected,
             keep_composer_focused: view.keep_composer_focused,
             inert: ComposerInert::No,
+            idle_hint: ComposerIdleHint::Room,
         },
     );
     record_composer_mouse_target(
@@ -3361,6 +3360,7 @@ pub fn draw_embedded_room_chat(
                 mention_selected: view.mention_selected,
                 keep_composer_focused: view.keep_composer_focused,
                 inert: view.composer_inert,
+                idle_hint: ComposerIdleHint::Room,
             },
             composer_text_width,
         ));
@@ -3384,6 +3384,7 @@ pub fn draw_embedded_room_chat(
             mention_selected: view.mention_selected,
             keep_composer_focused: view.keep_composer_focused,
             inert: view.composer_inert,
+            idle_hint: ComposerIdleHint::Room,
         },
     );
     record_composer_mouse_target(
@@ -3609,6 +3610,7 @@ fn chat_selection_mode(view: &ChatRenderInput<'_>, area: Rect) -> ChatSelectionM
                         mention_selected: view.mention_selected,
                         keep_composer_focused: view.keep_composer_focused,
                         inert: ComposerInert::No,
+                        idle_hint: ComposerIdleHint::Room,
                     },
                     composer_text_width,
                 ),
@@ -5734,6 +5736,7 @@ fn draw_selected_content(
                 mention_selected: view.mention_selected,
                 keep_composer_focused: view.keep_composer_focused,
                 inert: ComposerInert::No,
+                idle_hint: ComposerIdleHint::Room,
             },
         );
         record_composer_mouse_target(

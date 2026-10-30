@@ -457,6 +457,13 @@ fn openssh_master_command_spec(
     }
     spec.arg("-o");
     spec.arg("StrictHostKeyChecking=accept-new");
+    // The master owns the connection, so it carries the keepalive native
+    // mode runs (15s, three misses): a dead link ends the session within a
+    // minute instead of hanging until TCP gives up.
+    spec.arg("-o");
+    spec.arg("ServerAliveInterval=15");
+    spec.arg("-o");
+    spec.arg("ServerAliveCountMax=3");
     append_openssh_destination_args(&mut spec, config);
     Ok(spec)
 }

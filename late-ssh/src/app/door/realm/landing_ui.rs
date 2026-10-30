@@ -198,7 +198,7 @@ pub(crate) fn landing_lines(realm: &RealmState, width: usize) -> Vec<Line<'stati
             "map \u{b7} targets \u{b7} orders \u{b7} overview \u{b7} log \u{b7} history",
             LABEL_PAD,
         ),
-        landing::hint("c", "the world's chat, beside the map", LABEL_PAD),
+        landing::hint("F4", "the world's chat, beside the map", LABEL_PAD),
         landing::hint("`", "step out to chat; the board stays open", LABEL_PAD),
         landing::hint("q", "back to the hub; your land stays yours", LABEL_PAD),
     ]);
