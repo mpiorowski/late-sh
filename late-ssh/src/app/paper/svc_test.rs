@@ -212,10 +212,7 @@ fn yesterday_counts_the_lobby_by_its_starts_and_finishes() {
                 finished(LobbyGame::Chess, 1),
                 finished(LobbyGame::Snooker, 2)
             ],
-            &[
-                started(LobbyGame::Chess, 3),
-                started(LobbyGame::Reversi, 1)
-            ],
+            &[started(LobbyGame::Chess, 3), started(LobbyGame::Reversi, 1)],
         )
         .as_deref(),
         Some("Lobby: 4 matches started, 3 finished, Chess most played"),

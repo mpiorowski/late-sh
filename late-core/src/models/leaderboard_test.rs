@@ -1384,10 +1384,7 @@ async fn a_days_lobby_starts_count_the_days_claims_by_game() {
     let started = |game, started| LobbyStarts { game, started };
     assert_eq!(
         day_lobby_starts(&client, today).await.expect("today"),
-        vec![
-            started(LobbyGame::Chess, 2),
-            started(LobbyGame::Snooker, 1)
-        ],
+        vec![started(LobbyGame::Chess, 2), started(LobbyGame::Snooker, 1)],
         "chess: two claims still active; snooker: claimed and finished; the open and cancelled challenges never started"
     );
     assert_eq!(
