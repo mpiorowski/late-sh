@@ -48,3 +48,21 @@ async fn ctrl_y_on_a_station_without_metadata_preserves_the_clipboard() {
         Some("No track info for Classical")
     );
 }
+
+#[tokio::test]
+async fn j_and_k_move_the_station_selection() {
+    let test = test_db().await;
+    let user = create_test_user(&test.db, "stations-jk").await;
+    let mut app = make_app(test.db.clone(), user.id, "stations-jk");
+    app.stations_modal_state
+        .open(RadioStation::from_key("datawave").unwrap());
+    let start = app.stations_modal_state.selected();
+    let len = app.stations_modal_state.stations().len();
+
+    app.handle_input(b"j");
+    assert_eq!(app.stations_modal_state.selected(), (start + 1) % len);
+
+    app.handle_input(b"k");
+    assert_eq!(app.stations_modal_state.selected(), start);
+    assert!(app.stations_modal_state.is_open());
+}

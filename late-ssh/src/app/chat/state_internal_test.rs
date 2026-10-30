@@ -3130,6 +3130,75 @@ async fn report_success_banners_its_room() {
     assert_eq!(messages, ["Posted to #bugs"]);
 }
 
+/// A regular user in #bugs, composing with the room's own messages loaded.
+async fn composing_in_bugs(username: &str) -> (late_core::test_utils::TestDb, ChatState) {
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = late_core::test_utils::create_test_user(&test_db.db, username).await;
+    let bugs = ChatRoom::get_or_create_public_room(&client, ReportKind::Bug.slug())
+        .await
+        .expect("bugs room");
+    ChatRoomMember::join(&client, bugs.id, user.id)
+        .await
+        .expect("join bugs");
+    let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
+    state.rooms.push((bugs.clone(), Vec::new()));
+    state.start_composing_in_room(bugs.id);
+    (test_db, state)
+}
+
+/// #bugs takes reports only, so plain text typed there is filed as one
+/// instead of being refused after the composer cleared.
+#[tokio::test]
+async fn plain_text_in_bugs_files_a_report() {
+    let (_test_db, mut state) = composing_in_bugs("report_plain").await;
+    state.composer.insert_str("the door ate my hat");
+    assert!(
+        state
+            .submit_composer(false, ComposerCommands::Enabled)
+            .is_none()
+    );
+
+    let mut banners = Vec::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while state.last_own_send_at.is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for the report to post"
+        );
+        banners.extend(state.drain_events());
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    }
+    let messages: Vec<_> = banners.iter().map(|b| b.message.as_str()).collect();
+    assert_eq!(messages, ["Posted to #bugs"]);
+}
+
+/// Reports get reactions, not threads: a reply in #bugs is refused before
+/// anything is sent, and the typed text stays in the composer.
+#[tokio::test]
+async fn reply_in_bugs_is_refused_and_keeps_the_draft() {
+    let (_test_db, mut state) = composing_in_bugs("report_reply").await;
+    state.reply_target = Some(ReplyTarget {
+        to: ReplyTo::Message(Uuid::now_v7()),
+        author: "someone".to_string(),
+        preview: "the door ate my hat".to_string(),
+    });
+    state.composer.insert_str("same here");
+
+    let banner = state
+        .submit_composer(false, ComposerCommands::Enabled)
+        .expect("refusal banner");
+
+    assert_eq!(
+        banner.message,
+        super::super::svc::SendRefusal::ReportOnly(ReportKind::Bug).message()
+    );
+    assert_eq!(state.composer.lines().join("\n"), "same here");
+}
+
 #[test]
 fn format_cooldown_rounds_minutes_up() {
     assert_eq!(format_cooldown(Duration::from_secs(45)), "45s");
@@ -4648,4 +4717,43 @@ async fn a_tail_that_lands_before_its_room_waits_for_the_room_list() {
         .map(|message| message.body.as_str())
         .collect();
     assert_eq!(bodies, vec!["dealt before the list"]);
+}
+
+#[test]
+fn parse_buy_command_reads_a_round_or_one_named_patron() {
+    assert_eq!(
+        parse_buy_command("/buy round"),
+        Some(BuyParse::Order(BuyOrder::Round))
+    );
+    assert_eq!(
+        parse_buy_command("/buy Round "),
+        Some(BuyParse::Order(BuyOrder::Round))
+    );
+    assert_eq!(
+        parse_buy_command("/buy @mossy"),
+        Some(BuyParse::Order(BuyOrder::Gift("mossy")))
+    );
+    assert_eq!(parse_buy_command("/buy"), Some(BuyParse::Invalid));
+    assert_eq!(parse_buy_command("/buy mossy"), Some(BuyParse::Invalid));
+    assert_eq!(parse_buy_command("/buy @"), Some(BuyParse::Invalid));
+    assert_eq!(parse_buy_command("/buy @a @b"), Some(BuyParse::Invalid));
+    assert_eq!(parse_buy_command("/buyer"), None);
+    assert_eq!(parse_buy_command("buy round"), None);
+}
+
+/// `/buy` only works because the bar rings its text up like a typed order,
+/// so what it posts is checked against the bar's own matcher.
+#[test]
+fn buy_posts_the_order_the_bar_rings_up() {
+    use late_core::models::drink_round::{BarOrder, bar_order};
+
+    let round = buy_order_body(BuyOrder::Round);
+    assert_eq!(bar_order(&round, "bartender"), BarOrder::Round, "{round}");
+
+    let gift = buy_order_body(BuyOrder::Gift("mossy"));
+    assert_eq!(
+        bar_order(&gift, "bartender"),
+        BarOrder::Gift("mossy"),
+        "{gift}"
+    );
 }

@@ -159,6 +159,15 @@ fn rect_contains(rect: Rect, x: u16, y: u16) -> bool {
         && y < rect.y.saturating_add(rect.height)
 }
 
+/// Where the cursor highlight goes: nowhere while the win cascade plays, so
+/// an amber slot does not sit under the bouncing cards.
+fn cursor(state: &State) -> Option<Focus> {
+    match state.win_cascade_running() {
+        true => None,
+        false => Some(state.cursor),
+    }
+}
+
 fn board_lines(state: &State) -> Vec<Line<'static>> {
     if SOLITAIRE_CARD_THEME.card_height() > 1 {
         return board_lines_multiline(state);
@@ -173,7 +182,7 @@ fn board_lines_compact(state: &State) -> Vec<Line<'static>> {
         stock_span(
             "ST",
             state.stock.len(),
-            matches!(state.cursor, Focus::Stock),
+            matches!(cursor(state), Some(Focus::Stock)),
             false,
         ),
         Span::raw("  "),
@@ -182,28 +191,28 @@ fn board_lines_compact(state: &State) -> Vec<Line<'static>> {
         pile_span(
             "F1",
             state.foundation_top(0),
-            matches!(state.cursor, Focus::Foundation(0)),
+            matches!(cursor(state), Some(Focus::Foundation(0))),
             matches!(state.selection, Some(Selection::Foundation(0))),
         ),
         Span::raw("  "),
         pile_span(
             "F2",
             state.foundation_top(1),
-            matches!(state.cursor, Focus::Foundation(1)),
+            matches!(cursor(state), Some(Focus::Foundation(1))),
             matches!(state.selection, Some(Selection::Foundation(1))),
         ),
         Span::raw("  "),
         pile_span(
             "F3",
             state.foundation_top(2),
-            matches!(state.cursor, Focus::Foundation(2)),
+            matches!(cursor(state), Some(Focus::Foundation(2))),
             matches!(state.selection, Some(Selection::Foundation(2))),
         ),
         Span::raw("  "),
         pile_span(
             "F4",
             state.foundation_top(3),
-            matches!(state.cursor, Focus::Foundation(3)),
+            matches!(cursor(state), Some(Focus::Foundation(3))),
             matches!(state.selection, Some(Selection::Foundation(3))),
         ),
     ]));
@@ -285,7 +294,7 @@ fn waste_span(state: &State) -> Span<'static> {
     Span::styled(
         text,
         block_style(
-            matches!(state.cursor, Focus::Waste),
+            matches!(cursor(state), Some(Focus::Waste)),
             matches!(state.selection, Some(Selection::Waste)),
             cards.last().map(|card| card.suit),
         ),
@@ -304,7 +313,7 @@ fn pile_span(label: &str, value: Option<Card>, focused: bool, selected: bool) ->
 }
 
 fn tableau_span(state: &State, col: usize, row: usize, card: Option<TableauCard>) -> Span<'static> {
-    let focused = matches!(state.cursor, Focus::Tableau(cursor_col, cursor_row) if cursor_col == col && cursor_row == row);
+    let focused = matches!(cursor(state), Some(Focus::Tableau(cursor_col, cursor_row)) if cursor_col == col && cursor_row == row);
     let selected = matches!(state.selection, Some(Selection::Tableau { col: selected_col, row: selected_row }) if selected_col == col && selected_row == row);
     match card {
         Some(TableauCard {
@@ -330,40 +339,40 @@ fn board_lines_multiline(state: &State) -> Vec<Line<'static>> {
     let gap = " ";
     let waste_pad = waste_fan_offset(state);
     lines.push(Line::from(vec![
-        header_span("ST", matches!(state.cursor, Focus::Stock), false, None),
+        header_span("ST", matches!(cursor(state), Some(Focus::Stock)), false, None),
         Span::raw(gap),
         Span::raw(" ".repeat(waste_pad)),
         header_span(
             "WA",
-            matches!(state.cursor, Focus::Waste),
+            matches!(cursor(state), Some(Focus::Waste)),
             matches!(state.selection, Some(Selection::Waste)),
             state.visible_waste().last().map(|card| card.suit),
         ),
         Span::raw(gap),
         header_span(
             "F1",
-            matches!(state.cursor, Focus::Foundation(0)),
+            matches!(cursor(state), Some(Focus::Foundation(0))),
             matches!(state.selection, Some(Selection::Foundation(0))),
             state.displayed_foundation_top(0).map(|card| card.suit),
         ),
         Span::raw(gap),
         header_span(
             "F2",
-            matches!(state.cursor, Focus::Foundation(1)),
+            matches!(cursor(state), Some(Focus::Foundation(1))),
             matches!(state.selection, Some(Selection::Foundation(1))),
             state.displayed_foundation_top(1).map(|card| card.suit),
         ),
         Span::raw(gap),
         header_span(
             "F3",
-            matches!(state.cursor, Focus::Foundation(2)),
+            matches!(cursor(state), Some(Focus::Foundation(2))),
             matches!(state.selection, Some(Selection::Foundation(2))),
             state.displayed_foundation_top(2).map(|card| card.suit),
         ),
         Span::raw(gap),
         header_span(
             "F4",
-            matches!(state.cursor, Focus::Foundation(3)),
+            matches!(cursor(state), Some(Focus::Foundation(3))),
             matches!(state.selection, Some(Selection::Foundation(3))),
             state.displayed_foundation_top(3).map(|card| card.suit),
         ),
@@ -381,7 +390,7 @@ fn board_lines_multiline(state: &State) -> Vec<Line<'static>> {
         let mut row: Vec<Span<'static>> = vec![
             styled_span(
                 stock_lines[idx].clone(),
-                matches!(state.cursor, Focus::Stock),
+                matches!(cursor(state), Some(Focus::Stock)),
                 false,
                 None,
             ),
@@ -392,28 +401,28 @@ fn board_lines_multiline(state: &State) -> Vec<Line<'static>> {
         row.extend([
             styled_span(
                 foundation_lines[0][idx].clone(),
-                matches!(state.cursor, Focus::Foundation(0)),
+                matches!(cursor(state), Some(Focus::Foundation(0))),
                 matches!(state.selection, Some(Selection::Foundation(0))),
                 state.displayed_foundation_top(0).map(|card| card.suit),
             ),
             Span::raw(gap),
             styled_span(
                 foundation_lines[1][idx].clone(),
-                matches!(state.cursor, Focus::Foundation(1)),
+                matches!(cursor(state), Some(Focus::Foundation(1))),
                 matches!(state.selection, Some(Selection::Foundation(1))),
                 state.displayed_foundation_top(1).map(|card| card.suit),
             ),
             Span::raw(gap),
             styled_span(
                 foundation_lines[2][idx].clone(),
-                matches!(state.cursor, Focus::Foundation(2)),
+                matches!(cursor(state), Some(Focus::Foundation(2))),
                 matches!(state.selection, Some(Selection::Foundation(2))),
                 state.displayed_foundation_top(2).map(|card| card.suit),
             ),
             Span::raw(gap),
             styled_span(
                 foundation_lines[3][idx].clone(),
-                matches!(state.cursor, Focus::Foundation(3)),
+                matches!(cursor(state), Some(Focus::Foundation(3))),
                 matches!(state.selection, Some(Selection::Foundation(3))),
                 state.displayed_foundation_top(3).map(|card| card.suit),
             ),
@@ -602,7 +611,7 @@ fn waste_line_spans(state: &State, line_idx: usize) -> Vec<Span<'static>> {
     if cards.is_empty() {
         return vec![styled_span(
             SOLITAIRE_CARD_THEME.render_empty_lines()[line_idx].clone(),
-            matches!(state.cursor, Focus::Waste),
+            matches!(cursor(state), Some(Focus::Waste)),
             matches!(state.selection, Some(Selection::Waste)),
             None,
         )];
@@ -615,7 +624,7 @@ fn waste_line_spans(state: &State, line_idx: usize) -> Vec<Span<'static>> {
         if i == last {
             spans.push(styled_span(
                 line.clone(),
-                matches!(state.cursor, Focus::Waste),
+                matches!(cursor(state), Some(Focus::Waste)),
                 matches!(state.selection, Some(Selection::Waste)),
                 Some(card.suit),
             ));
@@ -634,7 +643,7 @@ fn tableau_span_multiline(
     card: Option<TableauCard>,
     line_idx: usize,
 ) -> Span<'static> {
-    let focused = matches!(state.cursor, Focus::Tableau(cursor_col, cursor_row) if cursor_col == col && cursor_row == row);
+    let focused = matches!(cursor(state), Some(Focus::Tableau(cursor_col, cursor_row)) if cursor_col == col && cursor_row == row);
     let selected = matches!(state.selection, Some(Selection::Tableau { col: selected_col, row: selected_row }) if selected_col == col && selected_row == row);
     match card {
         Some(TableauCard {

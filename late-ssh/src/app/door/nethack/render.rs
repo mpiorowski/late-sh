@@ -142,7 +142,7 @@ fn render_landing(
         landing::hint("? or F1", "NetHack's own in-game help menu", 8),
         landing::hint("S", "save and continue another night", 8),
         landing::hint("`", "step out to chat; the game keeps running", 8),
-        landing::hint("Ctrl-C", "quit back to the Games hub", 8),
+        landing::hint("#quit", "end this character for good", 8),
         Line::from(""),
         Line::from(Span::styled(
             "https://www.nethack.org/",

@@ -275,7 +275,7 @@ fn footer_line() -> Line<'static> {
     let label = Style::default().fg(theme::TEXT_DIM());
     Line::from(vec![
         Span::raw("  "),
-        Span::styled("↑↓", key),
+        Span::styled("↑↓/jk", key),
         Span::styled(" move  ", label),
         Span::styled("↵", key),
         Span::styled(" listen  ", label),

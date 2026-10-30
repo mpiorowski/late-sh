@@ -250,3 +250,35 @@ fn leading_mention_projection_ignores_non_matches() {
         "@missing.user hello"
     );
 }
+
+#[test]
+fn stored_action_reaches_irc_as_ctcp_action_without_repeating_the_nick() {
+    let stored = action_to_body("waves at the bar");
+    assert_eq!(
+        body_for_irc(&stored),
+        IrcBody::Action("waves at the bar".to_string())
+    );
+    assert_eq!(
+        ctcp_action("waves at the bar"),
+        "\u{1}ACTION waves at the bar\u{1}"
+    );
+    assert_eq!(ctcp_action("x").len(), "x".len() + CTCP_ACTION_OVERHEAD);
+}
+
+#[test]
+fn channel_body_rewrites_leading_mentions_only_in_plain_text() {
+    let directory = std::collections::HashMap::from([(
+        uuid::Uuid::new_v4(),
+        "Alice.Smith".to_string(),
+    )]);
+    assert_eq!(
+        channel_body_for_irc("@alice.smith hello", &directory),
+        IrcBody::Text(rewrite_leading_mention_for_irc("@alice.smith hello", |_| {
+            Some("Alice.Smith".to_string())
+        }))
+    );
+    assert_eq!(
+        channel_body_for_irc(&action_to_body("@alice.smith waves"), &directory),
+        IrcBody::Action("@alice.smith waves".to_string())
+    );
+}

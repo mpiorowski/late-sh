@@ -293,7 +293,8 @@ fn resting_value(component: StatusComponent) -> String {
         | StatusComponent::Date
         | StatusComponent::Chips
         | StatusComponent::Users
-        | StatusComponent::Station => {
+        | StatusComponent::Station
+        | StatusComponent::Username => {
             unreachable!("{} always has a reading", component.as_str())
         }
     }
@@ -344,7 +345,7 @@ fn accent(component: StatusComponent) -> ratatui::style::Color {
         | StatusComponent::Care
         | StatusComponent::Live => theme::AMBER_GLOW(),
         StatusComponent::Users | StatusComponent::Station | StatusComponent::Date => theme::TEXT(),
-        StatusComponent::Time => theme::TEXT_BRIGHT(),
+        StatusComponent::Time | StatusComponent::Username => theme::TEXT_BRIGHT(),
     }
 }
 
@@ -503,11 +504,12 @@ pub(crate) fn click_action(component: StatusComponent) -> Option<StatusClick> {
         StatusComponent::Quests => Some(StatusClick::Arcade),
         StatusComponent::Users => Some(StatusClick::Profiles),
         StatusComponent::Live => Some(StatusClick::Live),
-        // The clock, the date, the pot and the mic badge are readouts: there
-        // is no screen a click on them obviously means.
+        // The clock, the date, the pot, the mic badge and your own name are
+        // readouts: there is no screen a click on them obviously means.
         StatusComponent::Time
         | StatusComponent::Date
         | StatusComponent::Voice
-        | StatusComponent::Pot => None,
+        | StatusComponent::Pot
+        | StatusComponent::Username => None,
     }
 }

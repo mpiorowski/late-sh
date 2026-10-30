@@ -1951,6 +1951,7 @@ impl App {
                             care_due: zen_care.due_count(),
                             voice: voice_badge.as_deref(),
                             live: status_live.as_deref(),
+                            username: self.profile_state.profile().username.as_str(),
                         },
                         status_hits: &self.last_status_hits,
                         home_selected,
@@ -3313,7 +3314,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         if in_game {
             spans.extend(chat_title_hint(ctx.chat_title_unread));
             spans.push(Span::styled(
-                "· ? help · S save · ` step out · Ctrl-C quit ",
+                "· ? help · S save · ` step out · #quit ",
                 Style::default().fg(theme::TEXT_DIM()),
             ));
         }

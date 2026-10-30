@@ -16,7 +16,7 @@
 
 use serde_json::Value;
 
-pub const STATUS_COMPONENT_COUNT: usize = 13;
+pub const STATUS_COMPONENT_COUNT: usize = 14;
 
 /// A segment the user can place on the status bar. Order in the stored list is
 /// the paint order, left to right.
@@ -35,6 +35,7 @@ pub enum StatusComponent {
     Voice,
     Live,
     Date,
+    Username,
 }
 
 impl StatusComponent {
@@ -49,7 +50,8 @@ impl StatusComponent {
     /// the user today (games to move in, daily care, quests), the station,
     /// then the pot and the chips, which live on the fixed top bar until a
     /// user places them here (that moves them down rather than showing them
-    /// twice), then the ambient readings.
+    /// twice), then the ambient readings, last of all the name you are
+    /// logged in as.
     pub const ALL: [StatusComponent; STATUS_COMPONENT_COUNT] = [
         Self::Shortcuts,
         Self::Mentions,
@@ -64,6 +66,7 @@ impl StatusComponent {
         Self::Chips,
         Self::Users,
         Self::Time,
+        Self::Username,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -81,6 +84,7 @@ impl StatusComponent {
             Self::Voice => "voice",
             Self::Live => "live",
             Self::Date => "date",
+            Self::Username => "username",
         }
     }
 
@@ -99,6 +103,7 @@ impl StatusComponent {
             "voice" => Some(Self::Voice),
             "live" => Some(Self::Live),
             "date" => Some(Self::Date),
+            "username" => Some(Self::Username),
             _ => None,
         }
     }
@@ -119,6 +124,7 @@ impl StatusComponent {
             Self::Voice => "Voice",
             Self::Live => "Now",
             Self::Date => "Date",
+            Self::Username => "Username",
         }
     }
 
@@ -140,6 +146,7 @@ impl StatusComponent {
                 "What the #lounge now strip shows: a stream, a match, a booth track, a board event."
             }
             Self::Date => "Today's date in your chosen timezone.",
+            Self::Username => "The name you are logged in as, for anyone with several keys or accounts.",
         }
     }
 
@@ -160,6 +167,7 @@ impl StatusComponent {
             Self::Voice => "mic",
             Self::Live => "now",
             Self::Date => "",
+            Self::Username => "as",
         }
     }
 
@@ -189,6 +197,7 @@ impl StatusComponent {
             Self::Voice => "🔊",
             Self::Live => "🔴",
             Self::Date => "📅",
+            Self::Username => "👤",
         }
     }
 
@@ -204,7 +213,8 @@ impl StatusComponent {
             | Self::Date
             | Self::Chips
             | Self::Users
-            | Self::Station => false,
+            | Self::Station
+            | Self::Username => false,
             Self::Mentions
             | Self::Pot
             | Self::Turns
@@ -230,7 +240,8 @@ impl StatusComponent {
             | Self::Users
             | Self::Turns
             | Self::Quests
-            | Self::Care => false,
+            | Self::Care
+            | Self::Username => false,
         }
     }
 
@@ -240,8 +251,8 @@ impl StatusComponent {
             // only cost columns.
             Self::Shortcuts | Self::Time | Self::Date => LabelMode::None,
             // A station name says what it is, and the note costs four
-            // columns fewer than `on air`.
-            Self::Station => LabelMode::Icon,
+            // columns fewer than `on air`. So does a name.
+            Self::Station | Self::Username => LabelMode::Icon,
             Self::Chips
             | Self::Mentions
             | Self::Pot
@@ -282,7 +293,8 @@ impl StatusComponent {
             | Self::Turns
             | Self::Station
             | Self::Quests
-            | Self::Care => false,
+            | Self::Care
+            | Self::Username => false,
         }
     }
 
@@ -307,7 +319,8 @@ impl StatusComponent {
             | Self::Turns
             | Self::Care
             | Self::Voice
-            | Self::Live => &[],
+            | Self::Live
+            | Self::Username => &[],
         }
     }
 
@@ -326,7 +339,8 @@ impl StatusComponent {
             | Self::Turns
             | Self::Care
             | Self::Voice
-            | Self::Live => None,
+            | Self::Live
+            | Self::Username => None,
         }
     }
 

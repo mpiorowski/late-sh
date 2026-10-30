@@ -46,3 +46,35 @@ fn dim_darkens_rgb_and_passes_other_colours_through() {
     assert_eq!(dim(Color::Rgb(200, 100, 50), 50), Color::Rgb(100, 50, 25));
     assert_eq!(dim(Color::Reset, 50), Color::Reset);
 }
+
+fn blank_state() -> State {
+    let db = late_core::db::Db::new(&late_core::db::DbConfig::default()).expect("lazy db");
+    let mut state = State::new(
+        uuid::Uuid::nil(),
+        super::super::svc::SudokuService::new(db, tokio::sync::broadcast::channel(4).0),
+        Vec::new(),
+    );
+    state.show_personal();
+    state.grid = [[0; 9]; 9];
+    state.fixed_mask = [[false; 9]; 9];
+    state
+}
+
+/// The cursor is a solid amber fill like Solitaire's, and a conflicting entry
+/// under it fills red instead.
+#[test]
+fn cursor_is_a_solid_fill_that_turns_red_on_a_conflict() {
+    let mut state = blank_state();
+    state.cursor = (0, 0);
+    state.grid[0][0] = 5;
+    assert_eq!(
+        cell_span(&state, 0, 0).style,
+        theme::punch_through(theme::AMBER()).add_modifier(Modifier::BOLD)
+    );
+
+    state.grid[0][8] = 5;
+    assert_eq!(
+        cell_span(&state, 0, 0).style,
+        theme::punch_through(theme::ERROR()).add_modifier(Modifier::BOLD)
+    );
+}

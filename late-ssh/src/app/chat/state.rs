@@ -4337,6 +4337,23 @@ impl ChatState {
             return None;
         }
 
+        // #bugs and #suggestions take report cards only. A regular user's
+        // plain message there is the report, filed as if typed after `/bug`
+        // or `/suggest`, instead of being refused by the send gate after the
+        // composer already cleared. A reply is refused here, composer kept:
+        // reports get reactions, not threads.
+        let body = match (self.report_room_kind(), is_command_draft(&body)) {
+            (Some(kind), false) if self.reply_target.is_some() => {
+                return Some(Banner::error(
+                    &super::svc::SendRefusal::ReportOnly(kind).message(),
+                ));
+            }
+            (Some(kind), false) if !body.trim().is_empty() => {
+                format!("{} {}", kind.command(), body.trim())
+            }
+            (Some(_), _) | (None, _) => body,
+        };
+
         if let Some((kind, text)) = parse_report_command(&body) {
             self.clear_composer_after_submit();
             let Some(text) = text else {
@@ -4369,6 +4386,34 @@ impl ChatState {
                 return Some(Banner::error("No member-list room selected"));
             };
             self.service.list_room_members_task(self.user_id, room_id);
+            return None;
+        }
+
+        // `/buy` posts the bar's own spending phrase to @bartender, so the
+        // purchase, its price, refusals and his answer all run exactly as if
+        // the phrase had been typed. Public rooms only: he auto-joins those,
+        // and anywhere else the order would go unanswered.
+        if let Some(parsed) = parse_buy_command(&body) {
+            let room = self
+                .composer_room_id
+                .and_then(|room_id| self.room_by_id(room_id))
+                .map(|room| (room.id, room.visibility == "public"));
+            self.clear_composer_after_submit();
+            let order = match parsed {
+                BuyParse::Invalid => {
+                    return Some(Banner::error("Usage: /buy round, or /buy @user"));
+                }
+                BuyParse::Order(order) => buy_order_body(order),
+            };
+            let room_id = match room {
+                Some((room_id, true)) => room_id,
+                Some((_, false)) | None => {
+                    return Some(Banner::error(
+                        "Use /buy from a public room, where @bartender pours",
+                    ));
+                }
+            };
+            self.send_command_message(room_id, order);
             return None;
         }
 
@@ -4841,6 +4886,17 @@ impl ChatState {
             self.clear_composer_after_submit();
         }
         cooldown_banner
+    }
+
+    /// The report kind the composer's room enforces on this user: `None` for
+    /// staff (they reply under reports in free text), while editing, and
+    /// outside #bugs and #suggestions.
+    fn report_room_kind(&self) -> Option<ReportKind> {
+        if self.is_admin || self.is_moderator || self.edited_message_id.is_some() {
+            return None;
+        }
+        let room = self.room_by_id(self.composer_room_id?)?;
+        ReportKind::for_room_slug(room.slug.as_deref()?)
     }
 
     /// Posts a command's generated body to `room_id` as a plain message
@@ -8317,6 +8373,53 @@ fn room_slug_for(rooms: &[(ChatRoom, Vec<ChatMessage>)], room_id: Uuid) -> Optio
 /// Minimum characters of report text, so `/bug lol` bounces with usage help
 /// instead of posting a useless card.
 const REPORT_MIN_CHARS: usize = 10;
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum BuyParse<'a> {
+    Invalid,
+    Order(BuyOrder<'a>),
+}
+
+/// What `/buy` asked the bar for.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum BuyOrder<'a> {
+    /// `/buy round`: a round for the house.
+    Round,
+    /// `/buy @user`: one drink on that user's tab.
+    Gift(&'a str),
+}
+
+/// Parse `/buy round` or `/buy @user`. `None` means not a `/buy` command.
+pub(crate) fn parse_buy_command(input: &str) -> Option<BuyParse<'_>> {
+    let rest = input.trim().strip_prefix("/buy")?;
+    if !(rest.is_empty() || rest.starts_with(char::is_whitespace)) {
+        return None;
+    }
+    let mut words = rest.split_whitespace();
+    match (words.next(), words.next()) {
+        (Some(word), None) if word.eq_ignore_ascii_case("round") => {
+            Some(BuyParse::Order(BuyOrder::Round))
+        }
+        (Some(word), None) => match word.strip_prefix('@') {
+            Some(username) if !username.is_empty() => {
+                Some(BuyParse::Order(BuyOrder::Gift(username)))
+            }
+            Some(_) | None => Some(BuyParse::Invalid),
+        },
+        (Some(_), Some(_)) | (None, _) => Some(BuyParse::Invalid),
+    }
+}
+
+/// The message `/buy` posts: @bartender plus one of the bar's own spending
+/// phrases (`late_core::models::drink_round`), which he rings up exactly as
+/// if it had been typed.
+pub(crate) fn buy_order_body(order: BuyOrder<'_>) -> String {
+    let bartender = crate::app::ai::ladder::LadderBot::Bartender.handle();
+    match order {
+        BuyOrder::Round => format!("@{bartender} round for everyone"),
+        BuyOrder::Gift(username) => format!("@{bartender} buy @{username} a drink"),
+    }
+}
 
 /// Parse `/bug <text>` or `/suggest <text>` from the composer. Outer `None`
 /// means not a report command; inner `None` means missing or too-short text

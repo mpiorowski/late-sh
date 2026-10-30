@@ -1281,9 +1281,9 @@ impl Session {
                 canonical
             };
             let body = if is_dm {
-                proj::body_for_irc(&item.message.body, &author)
+                proj::body_for_irc(&item.message.body)
             } else {
-                proj::channel_body_for_irc(&item.message.body, &author, &directory)
+                proj::channel_body_for_irc(&item.message.body, &directory)
             };
             messages.extend(self.privmsg_lines(&author, target, &item.message, &body, false));
         }
@@ -2689,7 +2689,7 @@ impl Session {
             };
             let author = proj::nick_for_username(&author);
             let channel_name = channel.name.clone();
-            let body = proj::channel_body_for_irc(&message.body, &author, &directory);
+            let body = proj::channel_body_for_irc(&message.body, &directory);
             self.deliver_privmsg(framed, &author, &channel_name, &message, &body, is_edit)
                 .await?;
             return Ok(());
@@ -2733,7 +2733,7 @@ impl Session {
         };
         let author = peer.peer_nick.clone();
         let target = self.nick.clone();
-        let body = proj::body_for_irc(&message.body, &author);
+        let body = proj::body_for_irc(&message.body);
         self.deliver_privmsg(framed, &author, &target, &message, &body, is_edit)
             .await?;
         Ok(())
@@ -2745,7 +2745,7 @@ impl Session {
         author: &str,
         target: &str,
         message: &late_core::models::chat_message::ChatMessage,
-        body: &str,
+        body: &proj::IrcBody,
         is_edit: bool,
     ) -> Result<()> {
         send_all(
@@ -2760,9 +2760,13 @@ impl Session {
         author: &str,
         target: &str,
         message: &ChatMessage,
-        body: &str,
+        body: &proj::IrcBody,
         is_edit: bool,
     ) -> Vec<Message> {
+        let (text, ctcp_overhead) = match body {
+            proj::IrcBody::Text(text) => (text, 0),
+            proj::IrcBody::Action(action) => (action, proj::CTCP_ACTION_OVERHEAD),
+        };
         // IRCv3 tags have a separate size budget. Keep the command, prefix,
         // trailing colon and CRLF within 512 bytes even for maximum-length
         // nicks/channels; use the same split for live traffic and replay.
@@ -2770,14 +2774,20 @@ impl Session {
             replies::from_user(author, Command::PRIVMSG(target.to_string(), String::new()))
                 .to_string()
                 .len()
-                + if is_edit { "[edit] ".len() } else { 0 };
+                + if is_edit { "[edit] ".len() } else { 0 }
+                + ctcp_overhead;
         let chunk_bytes = proj::PRIVMSG_CHUNK_BYTES.min(512usize.saturating_sub(overhead).max(4));
-        let mut lines = proj::split_body(body, chunk_bytes);
+        let mut lines = proj::split_body(text, chunk_bytes);
         if is_edit {
             lines = lines
                 .into_iter()
                 .map(|line| format!("[edit] {line}"))
                 .collect();
+        }
+        // Every split line of an action is its own ACTION, so a long `/me`
+        // still reads as the author's action on each line.
+        if let proj::IrcBody::Action(_) = body {
+            lines = lines.iter().map(|line| proj::ctcp_action(line)).collect();
         }
         lines
             .into_iter()

@@ -246,12 +246,14 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
                 .add_modifier(Modifier::BOLD),
         ),
         _ => {
-            let glyph = if state.use_dot_style {
-                " \u{00b7} ".to_string()
-            } else {
-                "\u{2588}\u{2588}\u{2588}".to_string()
+            // Block style's full blocks would punch the cursor's whole fill
+            // out, so under the cursor a hidden cell draws blank: solid amber.
+            let glyph = match (state.use_dot_style, is_selected) {
+                (true, _) => " \u{00b7} ",
+                (false, true) => "   ",
+                (false, false) => "\u{2588}\u{2588}\u{2588}",
             };
-            (glyph, Style::default().fg(theme::TEXT_FAINT()))
+            (glyph.to_string(), Style::default().fg(theme::TEXT_FAINT()))
         }
     };
 
@@ -259,11 +261,10 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
         apply_chord_preview_style(&mut glyph, &mut style);
     }
 
+    // The cursor is Solitaire's solid amber fill with the glyph punched
+    // through, so it reads on every palette; a background tint did not.
     if is_selected {
-        style = style
-            .bg(theme::BG_HIGHLIGHT())
-            .fg(theme::TEXT_BRIGHT())
-            .add_modifier(Modifier::BOLD);
+        style = theme::punch_through(theme::AMBER()).add_modifier(Modifier::BOLD);
     }
 
     Span::styled(glyph, style)

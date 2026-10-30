@@ -138,8 +138,10 @@ fn board_lines(state: &State, puzzle: &late_core::nonogram::NonogramPuzzle) -> V
         .unwrap_or(0);
 
     let num_cols = puzzle.width as usize;
+    let num_rows = puzzle.height as usize;
     let clue_pad = max_row_clues * 3;
     let dim = Style::default().fg(theme::BORDER_DIM());
+    let guide = Style::default().fg(theme::BORDER());
 
     let mut lines = Vec::new();
 
@@ -183,13 +185,10 @@ fn board_lines(state: &State, puzzle: &late_core::nonogram::NonogramPuzzle) -> V
     }
 
     // Top border
-    let mut top = " ".repeat(clue_pad);
-    top.push('┌');
-    for ci in 0..num_cols {
-        top.push_str("───");
-        top.push(if ci < num_cols - 1 { '┬' } else { '┐' });
-    }
-    lines.push(Line::from(Span::styled(top, dim)));
+    lines.push(Line::from(Span::styled(
+        border_line(clue_pad, num_cols, '┌', '┬', '┰', '┐'),
+        dim,
+    )));
 
     // Cell rows
     for row in 0..puzzle.height as usize {
@@ -216,28 +215,66 @@ fn board_lines(state: &State, puzzle: &late_core::nonogram::NonogramPuzzle) -> V
             spans.push(Span::styled(format!("{clue:>2} "), row_style));
         }
 
-        // Leading border
+        // Leading border, then cells with │ separators: every fifth column
+        // boundary is a heavy guide, and every fifth row is underlined, the
+        // way paper nonograms are ruled so runs can be counted by eye.
+        let underline = |style: Style| match is_guide(row, num_rows) {
+            true => style
+                .add_modifier(Modifier::UNDERLINED)
+                .underline_color(theme::BORDER()),
+            false => style,
+        };
         spans.push(Span::styled("│", dim));
-
-        // Cells with │ separators
         for col in 0..num_cols {
-            spans.push(cell_span(state, row, col));
-            spans.push(Span::styled("│", dim));
+            let cell = cell_span(state, row, col);
+            spans.push(Span::styled(cell.content, underline(cell.style)));
+            let separator = match (col + 1 < num_cols, is_guide(col, num_cols)) {
+                (true, true) => Span::styled("┃", underline(guide)),
+                (true, false) => Span::styled("│", underline(dim)),
+                (false, _) => Span::styled("│", dim),
+            };
+            spans.push(separator);
         }
 
         lines.push(Line::from(spans));
     }
 
     // Bottom border
-    let mut bot = " ".repeat(clue_pad);
-    bot.push('└');
-    for ci in 0..num_cols {
-        bot.push_str("───");
-        bot.push(if ci < num_cols - 1 { '┴' } else { '┘' });
-    }
-    lines.push(Line::from(Span::styled(bot, dim)));
+    lines.push(Line::from(Span::styled(
+        border_line(clue_pad, num_cols, '└', '┴', '┸', '┘'),
+        dim,
+    )));
 
     lines
+}
+
+/// A horizontal border under the clue gutter: `tee` at each column boundary,
+/// `guide_tee` at every fifth, `left` and `right` at the outer corners.
+fn border_line(
+    clue_pad: usize,
+    num_cols: usize,
+    left: char,
+    tee: char,
+    guide_tee: char,
+    right: char,
+) -> String {
+    let mut line = " ".repeat(clue_pad);
+    line.push(left);
+    for ci in 0..num_cols {
+        line.push_str("───");
+        line.push(match (ci + 1 == num_cols, is_guide(ci, num_cols)) {
+            (true, _) => right,
+            (false, true) => guide_tee,
+            (false, false) => tee,
+        });
+    }
+    line
+}
+
+/// Whether the boundary after line `index` (of `len`) is a guide: every fifth
+/// one, never the outer edge.
+fn is_guide(index: usize, len: usize) -> bool {
+    (index + 1) % 5 == 0 && index + 1 < len
 }
 
 fn clue_style(
@@ -285,11 +322,10 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
         Style::default().fg(theme::TEXT_FAINT())
     };
 
+    // The cursor is Solitaire's solid amber fill with the mark punched
+    // through, so it reads on every palette; a background tint did not.
     if is_selected {
-        style = style
-            .bg(theme::BG_HIGHLIGHT())
-            .fg(theme::TEXT_BRIGHT())
-            .add_modifier(Modifier::BOLD);
+        style = theme::punch_through(theme::AMBER()).add_modifier(Modifier::BOLD);
     }
 
     let glyph = match filled {
@@ -300,3 +336,7 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
 
     Span::styled(glyph, style)
 }
+
+#[cfg(test)]
+#[path = "ui_test.rs"]
+mod ui_test;

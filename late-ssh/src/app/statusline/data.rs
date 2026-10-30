@@ -57,6 +57,8 @@ pub(crate) struct StatusData<'a> {
     /// What the live strip shows, in a line (`live::ui::status_text`, laid
     /// out for `TITLE_COLS`); `None` while the strip is down.
     pub live: Option<&'a str>,
+    /// The name this session is logged in as, current after a rename.
+    pub username: &'a str,
 }
 
 /// The hour hand matching `hour`, so the clock icon reads as the current time
@@ -131,6 +133,7 @@ impl<'a> StatusData<'a> {
             StatusComponent::Care => (self.care_due > 0).then(|| self.care_due.to_string()),
             StatusComponent::Voice => self.voice.map(str::to_string),
             StatusComponent::Live => self.live.map(|live| truncate_cells(live, TITLE_COLS)),
+            StatusComponent::Username => Some(self.username.to_string()),
             StatusComponent::Date => Some(
                 match date_format(variant) {
                     DateFormat::Short => self.date_short,

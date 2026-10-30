@@ -167,7 +167,7 @@ Behavior:
 Message send:
 - `PRIVMSG #channel ...` uses `ChatService::send_message_task`.
 - `PRIVMSG nick ...` resolves the late.sh username and uses/creates the normal DM room.
-- NOTICE uses the same send path as PRIVMSG but suppresses error replies. CTCP ACTION is converted to a conventional chat body like `*waves*`; late.sh chat has no separate `/me` concept. CTCP VERSION and PING get minimal NOTICE replies, and other CTCP messages are dropped.
+- NOTICE uses the same send path as PRIVMSG but suppresses error replies. CTCP ACTION maps onto the chat `/me` action body both ways: inbound ACTIONs are stored as action messages, and stored actions go out as CTCP ACTION (`proj::IrcBody::Action`, one ACTION per split line) so clients draw `* nick waves` without the nick repeated in the text. CTCP VERSION and PING get minimal NOTICE replies, and other CTCP messages are dropped.
 - IRC line length limits require splitting long late.sh messages into multiple IRC `PRIVMSG` lines.
 - Self-echo suppression applies only to the exact body sent by the same IRC connection; other clients/TUI sessions should still receive normal bouncer-like echoes.
 

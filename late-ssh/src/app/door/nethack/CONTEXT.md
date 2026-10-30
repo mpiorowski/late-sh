@@ -115,13 +115,13 @@ Input capture contract (client side):
 
 ### Render
 - `draw_running` blits the current `vt100` screen via `rebels::render::blit_screen`. Before the proxy reports `Running` it shows "Starting nethack...".
-- The app frame title bar (`app/render.rs::app_frame_title`) shows `· ? help · S save · Ctrl-C quit` **only while running**, outside the game grid.
+- The app frame title bar (`app/render.rs::app_frame_title`) shows `` · ? help · S save · ` step out · #quit `` **only while running**, outside the game grid. Quit is advertised as NetHack's own `#quit` extended command, not `Ctrl-C`: the curses windowport puts the PTY in raw mode, so `Ctrl-C` arrives as a plain key ("Unknown command '^C'"), while `#quit` works under both windowports.
 
 ---
 
 ## 5. Launcher And In-Game Help UI [VOLATILE]
 
-- `draw_launcher`: ASCII `NETHACK` logo, a one-line blurb, `saves`/`bones`/`style` stat lines, a Launch action line (`Enter` when enabled, "Currently unavailable" in red when disabled), an "Once Inside" hint block (`? or F1`, `S`, `Ctrl-C`), and the `nethack.org` URL.
+- `draw_launcher`: ASCII `NETHACK` logo, a one-line blurb, `saves`/`bones`/`style` stat lines, a Launch action line (`Enter` when enabled, "Currently unavailable" in red when disabled), an "Once Inside" hint block (`? or F1`, `S`, `` ` ``, `#quit`), and the `nethack.org` URL.
 - **No late.sh-authored cheat sheet.** In-game help is NetHack's own `?` (and `F1`, remapped to `?`). There is deliberately no hand-maintained keybinding card or movement hint: point at `?`; the game teaches its own controls.
 - The app frame title shows a dimmed "by nethack.org" credit on this screen, plus the in-game leave/help-key hint while running.
 

@@ -309,14 +309,16 @@ fn cell_span(state: &State, row: usize, col: usize) -> Span<'static> {
     };
 
     // Background: selected cell strongest, then all cells sharing its number -
-    // the modern-sudoku "light up the board" feel.
+    // the modern-sudoku "light up the board" feel. The cursor is Solitaire's
+    // solid amber fill with the digit punched through: a background tint got
+    // lost among the same-number cells it lights up. A conflict under the
+    // cursor fills red, so a wrong entry still shows the moment it is typed.
     if is_selected {
-        style = style
-            .patch(theme::selection_style())
-            .add_modifier(Modifier::BOLD);
-        if value == 0 {
-            style = style.fg(theme::TEXT_BRIGHT());
-        }
+        let fill = match is_conflict {
+            true => theme::ERROR(),
+            false => theme::AMBER(),
+        };
+        style = theme::punch_through(fill).add_modifier(Modifier::BOLD);
     } else if is_same_num {
         style = style
             .bg(theme::SUDOKU_SAME_NUM_BG())
