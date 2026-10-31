@@ -1,4 +1,4 @@
-use dartboard_core::{Canvas, CellValue, Pos};
+use dartboard_core::{Canvas, CellValue, Pos, RgbColor};
 use dartboard_editor::{Clipboard, SWATCH_CAPACITY, Swatch};
 use dartboard_tui::{CanvasStyle, CanvasWidgetState, SelectionView};
 use ratatui::{
@@ -121,7 +121,7 @@ pub(crate) fn render_piece_canvas(buf: &mut Buffer, area: Rect, canvas: &Canvas)
         return;
     }
     let state = CanvasWidgetState::new(canvas, Pos { x: 0, y: 0 });
-    render_canvas_widget(buf, area, &state, dartboard_canvas_style());
+    render_canvas_widget(buf, area, &state, None, dartboard_canvas_style());
 }
 
 fn dartboard_canvas_style() -> CanvasStyle {
@@ -383,6 +383,7 @@ fn draw_canvas(
         frame.buffer_mut(),
         canvas_area,
         &canvas_state,
+        state.floating_colors(),
         dartboard_canvas_style(),
     );
 
@@ -438,6 +439,7 @@ fn render_canvas_widget(
     buf: &mut Buffer,
     area: Rect,
     state: &CanvasWidgetState<'_>,
+    floating_colors: Option<&[Option<RgbColor>]>,
     style: CanvasStyle,
 ) {
     let canvas = state.canvas;
@@ -524,7 +526,11 @@ fn render_canvas_widget(
                 let screen_x = area.x + dx;
                 let screen_y = area.y + dy;
                 let cell = &mut buf[(screen_x, screen_y)];
-                let cell_style = Style::default().bg(style.floating_bg).fg(active_fg);
+                let fg = floating_colors
+                    .and_then(|c| c.get(cy * floating.width + cx).copied().flatten())
+                    .map(rgb)
+                    .unwrap_or(active_fg);
+                let cell_style = Style::default().bg(style.floating_bg).fg(fg);
                 match floating.cells[cy * floating.width + cx] {
                     Some(CellValue::Narrow(ch)) => {
                         buf.set_string(screen_x, screen_y, ch.to_string(), cell_style);
@@ -546,7 +552,7 @@ fn render_canvas_widget(
     }
 }
 
-fn selection_covers_cell(canvas: &Canvas, selection: SelectionView, pos: Pos) -> bool {
+pub(crate) fn selection_covers_cell(canvas: &Canvas, selection: SelectionView, pos: Pos) -> bool {
     if selection.contains(pos) {
         return true;
     }
@@ -638,6 +644,7 @@ fn render_swatch_strip(
             *rect,
             idx,
             state.swatches()[idx].as_ref(),
+            state.swatch_colors(idx),
             active_idx == Some(idx),
             active_idx == Some(idx) && is_transparent,
         );
@@ -752,6 +759,7 @@ fn render_swatch_box_contents(
     rect: Rect,
     idx: usize,
     swatch: Option<&Swatch>,
+    swatch_colors: Option<&[Option<RgbColor>]>,
     _is_active: bool,
     is_transparent: bool,
 ) {
@@ -766,7 +774,7 @@ fn render_swatch_box_contents(
     }
 
     if let Some(swatch) = swatch {
-        render_swatch_preview(buf, inner, &swatch.clipboard);
+        render_swatch_preview(buf, inner, &swatch.clipboard, swatch_colors);
         let pin_rect = swatch_pin_rect(rect);
         if idx == PRIMARY_SWATCH_IDX {
             let label_style = Style::default()
@@ -834,9 +842,13 @@ fn swatch_divider_style(
     }
 }
 
-fn render_swatch_preview(buf: &mut Buffer, inner: Rect, clipboard: &Clipboard) {
+fn render_swatch_preview(
+    buf: &mut Buffer,
+    inner: Rect,
+    clipboard: &Clipboard,
+    swatch_colors: Option<&[Option<RgbColor>]>,
+) {
     let (crop_x, crop_y) = clipboard_preview_offset(clipboard);
-    let preview_style = Style::default().fg(theme::TEXT()).bg(theme::BG_HIGHLIGHT());
 
     for dy in 0..inner.height {
         let cy = crop_y + dy as usize;
@@ -850,6 +862,12 @@ fn render_swatch_preview(buf: &mut Buffer, inner: Rect, clipboard: &Clipboard) {
             if cx >= clipboard.width {
                 break;
             }
+
+            let fg = swatch_colors
+                .and_then(|c| c.get(cy * clipboard.width + cx).copied().flatten())
+                .map(rgb)
+                .unwrap_or_else(theme::TEXT);
+            let preview_style = Style::default().fg(fg).bg(theme::BG_HIGHLIGHT());
 
             match clipboard.get(cx, cy) {
                 Some(CellValue::Narrow(ch)) => {

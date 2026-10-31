@@ -853,3 +853,143 @@ fn brush_strokes_beside_wide_glyphs_reach_the_other_half() {
     }
     assert_eq!(state.snapshot.canvas, expected);
 }
+
+#[test]
+fn copy_and_paste_preserves_cell_colors_across_stamp_paths() {
+    let mut state = test_state();
+    state.snapshot.canvas = Canvas::with_size(40, 20);
+    state.editor.set_viewport(
+        Viewport {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 20,
+        },
+        &state.snapshot.canvas,
+    );
+    let red = RgbColor::new(255, 40, 40);
+    let blue = RgbColor::new(40, 120, 255);
+    let _ = state
+        .snapshot
+        .canvas
+        .put_glyph_colored(Pos { x: 0, y: 0 }, 'A', red);
+    let _ = state
+        .snapshot
+        .canvas
+        .put_glyph_colored(Pos { x: 1, y: 0 }, 'B', blue);
+
+    state.editor.cursor = Pos { x: 0, y: 0 };
+    state.begin_selection_from_cursor();
+    state.editor.cursor = Pos { x: 1, y: 0 };
+    let dispatch = state.handle_editor_action(EditorAction::CopySelection);
+    assert!(dispatch.handled);
+    assert!(state.has_floating());
+
+    // Change active paint color to green so any fallback to active_user_color is detected.
+    state.paint_color = Some(PAINT_PALETTE[3]);
+
+    // 1. Stamp floating (Enter) at (0, 1).
+    state.editor.cursor = Pos { x: 0, y: 1 };
+    assert!(state.stamp_floating());
+    assert_eq!(state.snapshot.canvas.get(Pos { x: 0, y: 1 }), 'A');
+    assert_eq!(state.snapshot.canvas.fg(Pos { x: 0, y: 1 }), Some(red));
+    assert_eq!(state.snapshot.canvas.get(Pos { x: 1, y: 1 }), 'B');
+    assert_eq!(state.snapshot.canvas.fg(Pos { x: 1, y: 1 }), Some(blue));
+
+    // 2. StrokeFloating Right at (0, 2).
+    state.editor.cursor = Pos { x: 0, y: 2 };
+    let _ = state.handle_editor_action(EditorAction::StrokeFloating {
+        dir: MoveDir::Right,
+    });
+    assert_eq!(state.snapshot.canvas.get(Pos { x: 0, y: 2 }), 'A');
+    assert_eq!(state.snapshot.canvas.fg(Pos { x: 0, y: 2 }), Some(red));
+    assert_eq!(state.snapshot.canvas.get(Pos { x: 1, y: 2 }), 'A');
+    assert_eq!(state.snapshot.canvas.fg(Pos { x: 1, y: 2 }), Some(red));
+    assert_eq!(state.snapshot.canvas.get(Pos { x: 2, y: 2 }), 'B');
+    assert_eq!(state.snapshot.canvas.fg(Pos { x: 2, y: 2 }), Some(blue));
+
+    // 3. Mouse Down(Left) at (0, 3) and Drag(Left) to (4, 3).
+    let pointer = |column, row, kind| AppPointerEvent {
+        column,
+        row,
+        kind,
+        modifiers: AppModifiers::default(),
+    };
+    let _ = state.handle_pointer_event(pointer(0, 3, AppPointerKind::Down(AppPointerButton::Left)));
+    let _ = state.handle_pointer_event(pointer(4, 3, AppPointerKind::Drag(AppPointerButton::Left)));
+    let _ = state.handle_pointer_event(pointer(4, 3, AppPointerKind::Up(AppPointerButton::Left)));
+    assert_eq!(state.snapshot.canvas.get(Pos { x: 0, y: 3 }), 'A');
+    assert_eq!(state.snapshot.canvas.fg(Pos { x: 0, y: 3 }), Some(red));
+    assert_eq!(state.snapshot.canvas.get(Pos { x: 1, y: 3 }), 'B');
+    assert_eq!(state.snapshot.canvas.fg(Pos { x: 1, y: 3 }), Some(blue));
+    assert_eq!(state.snapshot.canvas.get(Pos { x: 4, y: 3 }), 'A');
+    assert_eq!(state.snapshot.canvas.fg(Pos { x: 4, y: 3 }), Some(red));
+    assert_eq!(state.snapshot.canvas.get(Pos { x: 5, y: 3 }), 'B');
+    assert_eq!(state.snapshot.canvas.fg(Pos { x: 5, y: 3 }), Some(blue));
+
+    // 4. Dismiss floating and run PastePrimarySwatch at (0, 4).
+    assert!(state.dismiss_floating());
+    state.editor.cursor = Pos { x: 0, y: 4 };
+    let _ = state.handle_editor_action(EditorAction::PastePrimarySwatch);
+    assert_eq!(state.snapshot.canvas.get(Pos { x: 0, y: 4 }), 'A');
+    assert_eq!(state.snapshot.canvas.fg(Pos { x: 0, y: 4 }), Some(red));
+    assert_eq!(state.snapshot.canvas.get(Pos { x: 1, y: 4 }), 'B');
+    assert_eq!(state.snapshot.canvas.fg(Pos { x: 1, y: 4 }), Some(blue));
+}
+
+#[test]
+fn cut_and_lift_preserve_cell_colors() {
+    let mut state = test_state();
+    state.snapshot.canvas = Canvas::with_size(40, 20);
+    state.editor.set_viewport(
+        Viewport {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 20,
+        },
+        &state.snapshot.canvas,
+    );
+    let red = RgbColor::new(255, 40, 40);
+    let blue = RgbColor::new(40, 120, 255);
+    let _ = state
+        .snapshot
+        .canvas
+        .put_glyph_colored(Pos { x: 1, y: 1 }, 'A', red);
+    let _ = state
+        .snapshot
+        .canvas
+        .put_glyph_colored(Pos { x: 2, y: 1 }, 'B', blue);
+
+    // 1. Lift selection and commit at (0, 0).
+    state.editor.cursor = Pos { x: 1, y: 1 };
+    state.begin_selection_from_cursor();
+    state.editor.cursor = Pos { x: 2, y: 1 };
+    assert!(state.lift_selection_to_floating());
+    state.paint_color = Some(PAINT_PALETTE[3]);
+    state.editor.cursor = Pos { x: 0, y: 0 };
+    assert!(state.commit_floating());
+
+    assert_eq!(state.snapshot.canvas.get(Pos { x: 0, y: 0 }), 'A');
+    assert_eq!(state.snapshot.canvas.fg(Pos { x: 0, y: 0 }), Some(red));
+    assert_eq!(state.snapshot.canvas.get(Pos { x: 1, y: 0 }), 'B');
+    assert_eq!(state.snapshot.canvas.fg(Pos { x: 1, y: 0 }), Some(blue));
+    assert_eq!(state.snapshot.canvas.cell(Pos { x: 1, y: 1 }), None);
+    assert_eq!(state.snapshot.canvas.cell(Pos { x: 2, y: 1 }), None);
+
+    // 2. Cut selection at (0, 0)..=(1, 0) and stamp at (3, 2).
+    state.editor.cursor = Pos { x: 0, y: 0 };
+    state.begin_selection_from_cursor();
+    state.editor.cursor = Pos { x: 1, y: 0 };
+    let dispatch = state.handle_editor_action(EditorAction::CutSelection);
+    assert!(dispatch.handled);
+    assert_eq!(state.snapshot.canvas.cell(Pos { x: 0, y: 0 }), None);
+    assert_eq!(state.snapshot.canvas.cell(Pos { x: 1, y: 0 }), None);
+
+    state.editor.cursor = Pos { x: 3, y: 2 };
+    assert!(state.stamp_floating());
+    assert_eq!(state.snapshot.canvas.get(Pos { x: 3, y: 2 }), 'A');
+    assert_eq!(state.snapshot.canvas.fg(Pos { x: 3, y: 2 }), Some(red));
+    assert_eq!(state.snapshot.canvas.get(Pos { x: 4, y: 2 }), 'B');
+    assert_eq!(state.snapshot.canvas.fg(Pos { x: 4, y: 2 }), Some(blue));
+}

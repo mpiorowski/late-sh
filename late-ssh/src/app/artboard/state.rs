@@ -3,12 +3,13 @@ use dartboard_editor::{
     AppKey, AppModifiers, AppPointerButton, AppPointerEvent, AppPointerKind, Bounds, Clipboard,
     EditorAction, EditorContext, EditorKeyDispatch, EditorPointerDispatch, EditorSession,
     FloatingSelection as EditorFloatingSelection, KeyMap, Mode as EditorMode, MoveDir,
-    SWATCH_CAPACITY, Selection as EditorSelection, SelectionShape as EditorSelectionShape, Swatch,
-    SwatchActivation, Viewport, backspace as editor_backspace, capture_bounds, capture_selection,
-    diff_canvas_op, dismiss_floating as editor_dismiss_floating,
+    PointerOutcome, PointerStrokeHint, SWATCH_CAPACITY, Selection as EditorSelection,
+    SelectionShape as EditorSelectionShape, Swatch, SwatchActivation, Viewport,
+    backspace as editor_backspace, begin_paint_stroke as editor_begin_paint_stroke, capture_bounds,
+    capture_selection, diff_canvas_op, dismiss_floating as editor_dismiss_floating,
     export_system_clipboard_text as editor_export_system_clipboard_text,
     handle_editor_action as editor_handle_action, handle_editor_pointer as editor_handle_pointer,
-    paste_text_block, stamp_floating as editor_stamp_floating,
+    paste_text_block,
 };
 use dartboard_tui::{FloatingView, SelectionShape as TuiSelectionShape, SelectionView};
 use ratatui::layout::Rect;
@@ -47,6 +48,8 @@ pub struct State {
     /// The local paint colour; `None` paints in the peer colour.
     paint_color: Option<RgbColor>,
     color_picker: Option<ColorPicker>,
+    swatch_colors: [Option<Vec<Option<RgbColor>>>; SWATCH_CAPACITY],
+    floating_colors: Option<Vec<Option<RgbColor>>>,
     floating_source_selection: Option<EditorSelection>,
     floating_source_bounds: Option<Bounds>,
     suppress_swatch_preview: bool,
@@ -91,6 +94,8 @@ impl State {
             drag_brush: None,
             paint_color: None,
             color_picker: None,
+            swatch_colors: Default::default(),
+            floating_colors: None,
             floating_source_selection: None,
             floating_source_bounds: None,
             suppress_swatch_preview: false,
@@ -330,18 +335,85 @@ impl State {
     }
 
     pub fn handle_editor_action(&mut self, action: EditorAction) -> EditorKeyDispatch {
-        let copied_to_slot = matches!(
-            action,
-            EditorAction::CopySelection | EditorAction::CutSelection
-        )
+        if self.is_archive_view_active() && matches!(action, EditorAction::CutSelection) {
+            return EditorKeyDispatch::default();
+        }
+        let copied_to_slot = (self.editor.floating.is_none()
+            && matches!(
+                action,
+                EditorAction::CopySelection | EditorAction::CutSelection
+            ))
         .then_some(PRIMARY_SWATCH_IDX);
         if copied_to_slot.is_some() {
             self.prepare_primary_clipboard_slot();
+            let colors = match self.editor.selection() {
+                Some(selection) => capture_selection_colors(&self.snapshot.canvas, selection),
+                None => capture_bounds_colors(
+                    &self.snapshot.canvas,
+                    self.editor
+                        .selection_or_cursor_bounds()
+                        .normalized_for_canvas(&self.snapshot.canvas),
+                ),
+            };
+            push_swatch_colors(&mut self.swatch_colors, &self.editor.swatches, colors);
         }
+        let primary_colors = matches!(action, EditorAction::PastePrimarySwatch)
+            .then(|| self.swatch_colors[PRIMARY_SWATCH_IDX].clone())
+            .flatten();
+        let floating_colors = matches!(action, EditorAction::StrokeFloating { .. })
+            .then(|| self.floating_colors.clone())
+            .flatten();
         let reach = self.action_reach(action);
-        let (dispatch, _) = self.edit_board(reach, |editor, canvas, color| {
-            editor_handle_action(editor, canvas, action, color)
+        let (dispatch, _) = self.edit_board(reach, |editor, canvas, color| match action {
+            EditorAction::PastePrimarySwatch => {
+                if let Some(swatch) = editor.swatches[PRIMARY_SWATCH_IDX].as_ref() {
+                    stamp_clipboard_colored(
+                        canvas,
+                        &swatch.clipboard,
+                        primary_colors.as_deref(),
+                        editor.cursor,
+                        color,
+                        false,
+                    );
+                }
+                EditorKeyDispatch {
+                    handled: true,
+                    effects: Vec::new(),
+                }
+            }
+            EditorAction::StrokeFloating { dir } => {
+                if editor.floating.is_some() {
+                    let start = editor.cursor;
+                    let _ = paint_floating_at_cursor_colored(
+                        editor,
+                        canvas,
+                        floating_colors.as_deref(),
+                        color,
+                    );
+                    editor.move_dir(canvas, dir);
+                    if editor.cursor != start {
+                        let _ = paint_floating_at_cursor_colored(
+                            editor,
+                            canvas,
+                            floating_colors.as_deref(),
+                            color,
+                        );
+                    }
+                }
+                EditorKeyDispatch {
+                    handled: true,
+                    effects: Vec::new(),
+                }
+            }
+            _ => editor_handle_action(editor, canvas, action, color),
         });
+        if let EditorAction::ActivateSwatch(idx) = action {
+            self.floating_colors = if self.active_swatch_index() == Some(idx) {
+                self.swatch_colors.get(idx).and_then(Clone::clone)
+            } else {
+                None
+            };
+        }
         self.sync_floating_source_selection();
 
         if dispatch.handled
@@ -360,10 +432,31 @@ impl State {
             .editor
             .canvas_pos_for_pointer(pointer.column, pointer.row, &self.snapshot.canvas)
             .is_some();
+        let floating_colors = (had_floating
+            && matches!(
+                pointer.kind,
+                AppPointerKind::Down(AppPointerButton::Left)
+                    | AppPointerKind::Drag(AppPointerButton::Left)
+            ))
+        .then(|| self.floating_colors.clone())
+        .flatten();
         let reach = self.pointer_reach(pointer);
         let (dispatch, _) = self.edit_board(reach, |editor, canvas, color| {
-            editor_handle_pointer(editor, canvas, pointer, color)
+            if floating_colors.is_some() {
+                paint_floating_pointer_colored(
+                    editor,
+                    canvas,
+                    pointer,
+                    floating_colors.as_deref(),
+                    color,
+                )
+            } else {
+                editor_handle_pointer(editor, canvas, pointer, color)
+            }
         });
+        if self.editor.floating.is_none() {
+            self.floating_colors = None;
+        }
         self.sync_floating_source_selection();
         if had_floating && had_local_floating && self.editor.floating.is_none() {
             self.restore_floating_source_selection();
@@ -397,7 +490,7 @@ impl State {
         };
 
         self.drag_brush = None;
-        self.arm_transparent_floating(clipboard, None, None);
+        self.arm_transparent_floating(clipboard, None, None, None);
     }
 
     pub fn move_to_screen_point(&mut self, screen_size: (u16, u16), x: u16, y: u16) -> bool {
@@ -565,6 +658,7 @@ impl State {
             return false;
         };
         let clipboard = capture_selection(&self.snapshot.canvas, selection);
+        let colors = capture_selection_colors(&self.snapshot.canvas, selection);
         let bounds = selection
             .bounds()
             .normalized_for_canvas(&self.snapshot.canvas);
@@ -579,6 +673,7 @@ impl State {
             transparent: false,
             source_index: None,
         });
+        self.floating_colors = Some(colors);
         self.floating_source_selection = Some(selection);
         self.floating_source_bounds = Some(bounds);
         self.suppress_swatch_preview = false;
@@ -613,13 +708,15 @@ impl State {
             Some(source) => union_bounds(source, stamp),
             None => stamp,
         };
+        let floating_colors = std::mem::take(&mut self.floating_colors);
         let _ = self.edit_board(EditReach::Within(reach), |_, canvas, color| {
             if let Some(source) = source {
                 clear_bounds_on(canvas, source);
             }
-            dartboard_editor::stamp_clipboard(
+            stamp_clipboard_colored(
                 canvas,
                 &floating.clipboard,
+                floating_colors.as_deref(),
                 cursor,
                 color,
                 floating.transparent,
@@ -649,6 +746,7 @@ impl State {
             self.editor.mode = EditorMode::Select;
             self.editor.cursor = selection.cursor;
         }
+        self.floating_colors = None;
         self.floating_source_bounds = None;
         if was_temp_brush {
             self.active_brush = None;
@@ -666,6 +764,7 @@ impl State {
         self.drag_brush = None;
         self.editor.clear_selection();
         editor_dismiss_floating(&mut self.editor);
+        self.floating_colors = None;
         self.floating_source_selection = None;
         self.floating_source_bounds = None;
         self.suppress_swatch_preview = false;
@@ -750,6 +849,14 @@ impl State {
         &self.editor.swatches
     }
 
+    pub fn swatch_colors(&self, idx: usize) -> Option<&[Option<RgbColor>]> {
+        self.swatch_colors.get(idx).and_then(Option::as_deref)
+    }
+
+    pub fn floating_colors(&self) -> Option<&[Option<RgbColor>]> {
+        self.floating_colors.as_deref()
+    }
+
     pub fn active_swatch_index(&self) -> Option<usize> {
         self.editor
             .floating
@@ -772,7 +879,10 @@ impl State {
             if let Some(floating) = self.editor.floating.as_mut() {
                 floating.transparent = true;
             }
+            self.floating_colors = self.swatch_colors.get(idx).and_then(Clone::clone);
             self.suppress_swatch_preview = false;
+        } else if self.editor.floating.is_none() {
+            self.floating_colors = None;
         }
         self.sync_floating_source_selection();
     }
@@ -792,9 +902,14 @@ impl State {
 
     pub fn clear_swatch(&mut self, idx: usize) {
         self.editor.clear_swatch(idx);
+        if let Some(slot) = self.swatch_colors.get_mut(idx) {
+            *slot = None;
+        }
+        if self.editor.floating.is_none() {
+            self.floating_colors = None;
+        }
         self.suppress_swatch_preview = false;
     }
-
     pub fn is_in_normal_brush_mode(&self) -> bool {
         self.editor.floating.is_none() && self.active_brush.is_none()
     }
@@ -1242,7 +1357,7 @@ impl State {
             &self.snapshot.canvas,
             Bounds::single(glyph.pos).normalized_for_canvas(&self.snapshot.canvas),
         );
-        self.arm_transparent_floating(clipboard, None, Some(Brush::Glyph(glyph.ch)));
+        self.arm_transparent_floating(clipboard, None, None, Some(Brush::Glyph(glyph.ch)));
         // The sampler is the eyedropper too: the glyph's colour becomes the
         // paint colour, so Esc and typing carry it on.
         if let Some(fg) = self.snapshot.canvas.fg(glyph.pos) {
@@ -1576,14 +1691,21 @@ impl State {
     }
 
     fn stamp_floating(&mut self) -> bool {
-        let reach = match self.editor.floating.as_ref() {
-            Some(floating) => {
-                EditReach::Within(stamp_bounds(self.editor.cursor, &floating.clipboard))
-            }
-            None => EditReach::Nothing,
+        let Some(floating) = self.editor.floating.clone() else {
+            return true;
         };
+        let floating_colors = self.floating_colors.clone();
+        let reach = EditReach::Within(stamp_bounds(self.editor.cursor, &floating.clipboard));
         let _ = self.edit_canvas(reach, |editor, canvas, color| {
-            editor_stamp_floating(editor, canvas, color)
+            stamp_clipboard_colored(
+                canvas,
+                &floating.clipboard,
+                floating_colors.as_deref(),
+                editor.cursor,
+                color,
+                floating.transparent,
+            );
+            true
         });
         true
     }
@@ -1604,7 +1726,8 @@ impl State {
         else {
             return false;
         };
-        self.arm_transparent_floating(clipboard, Some(idx), None);
+        let colors = self.swatch_colors.get(idx).and_then(Clone::clone);
+        self.arm_transparent_floating(clipboard, colors, Some(idx), None);
         true
     }
 
@@ -1613,6 +1736,7 @@ impl State {
     fn arm_transparent_floating(
         &mut self,
         clipboard: Clipboard,
+        colors: Option<Vec<Option<RgbColor>>>,
         source_index: Option<usize>,
         active_brush: Option<Brush>,
     ) {
@@ -1622,6 +1746,7 @@ impl State {
             transparent: true,
             source_index,
         });
+        self.floating_colors = colors;
         self.floating_source_selection = None;
         self.floating_source_bounds = None;
         self.active_brush = active_brush;
@@ -2122,6 +2247,301 @@ fn canvas_pos_for_screen_point(
         return None;
     }
     Some(next)
+}
+
+fn capture_bounds_colors(canvas: &Canvas, bounds: Bounds) -> Vec<Option<RgbColor>> {
+    let mut colors = Vec::with_capacity(bounds.width() * bounds.height());
+    for y in bounds.min_y..=bounds.max_y {
+        for x in bounds.min_x..=bounds.max_x {
+            colors.push(canvas.fg(Pos { x, y }));
+        }
+    }
+    colors
+}
+
+fn selection_covers_cell(canvas: &Canvas, selection: EditorSelection, pos: Pos) -> bool {
+    super::ui::selection_covers_cell(
+        canvas,
+        SelectionView {
+            anchor: selection.anchor,
+            cursor: selection.cursor,
+            shape: selection_shape_to_tui(selection.shape),
+        },
+        pos,
+    )
+}
+
+fn capture_selection_colors(canvas: &Canvas, selection: EditorSelection) -> Vec<Option<RgbColor>> {
+    let bounds = selection.bounds().normalized_for_canvas(canvas);
+    let mut colors = Vec::with_capacity(bounds.width() * bounds.height());
+    for y in bounds.min_y..=bounds.max_y {
+        for x in bounds.min_x..=bounds.max_x {
+            let pos = Pos { x, y };
+            let include = selection_covers_cell(canvas, selection, pos);
+            colors.push(include.then(|| canvas.fg(pos)).flatten());
+        }
+    }
+    colors
+}
+
+fn push_swatch_colors(
+    swatch_colors: &mut [Option<Vec<Option<RgbColor>>>; SWATCH_CAPACITY],
+    swatches: &[Option<Swatch>; SWATCH_CAPACITY],
+    colors: Vec<Option<RgbColor>>,
+) {
+    let unpinned_slots: Vec<usize> = (0..SWATCH_CAPACITY)
+        .filter(|&i| !matches!(&swatches[i], Some(swatch) if swatch.pinned))
+        .collect();
+    if unpinned_slots.is_empty() {
+        return;
+    }
+
+    let mut queue: Vec<Option<Vec<Option<RgbColor>>>> = unpinned_slots
+        .iter()
+        .filter(|&&i| swatches[i].is_some())
+        .map(|&i| swatch_colors[i].take())
+        .collect();
+    queue.insert(0, Some(colors));
+    queue.truncate(unpinned_slots.len());
+
+    for &slot_idx in &unpinned_slots {
+        swatch_colors[slot_idx] = None;
+    }
+    for (slot_idx, slot_colors) in unpinned_slots.iter().zip(queue) {
+        swatch_colors[*slot_idx] = slot_colors;
+    }
+}
+
+fn stamp_clipboard_colored(
+    canvas: &mut Canvas,
+    clipboard: &Clipboard,
+    colors: Option<&[Option<RgbColor>]>,
+    pos: Pos,
+    fallback_color: RgbColor,
+    transparent: bool,
+) {
+    for y in 0..clipboard.height {
+        for x in 0..clipboard.width {
+            let target_x = pos.x + x;
+            let target_y = pos.y + y;
+            if target_x >= canvas.width || target_y >= canvas.height {
+                continue;
+            }
+            let target = Pos {
+                x: target_x,
+                y: target_y,
+            };
+            match clipboard.get(x, y) {
+                Some(CellValue::Narrow(ch) | CellValue::Wide(ch)) => {
+                    let fg = colors
+                        .and_then(|c| c.get(y * clipboard.width + x).copied().flatten())
+                        .unwrap_or(fallback_color);
+                    let _ = canvas.put_glyph_colored(target, ch, fg);
+                }
+                Some(CellValue::WideCont) => {}
+                None if !transparent => canvas.clear(target),
+                None => {}
+            }
+        }
+    }
+}
+
+fn paint_floating_pointer_colored(
+    editor: &mut EditorSession,
+    canvas: &mut Canvas,
+    mouse: AppPointerEvent,
+    colors: Option<&[Option<RgbColor>]>,
+    fallback_color: RgbColor,
+) -> EditorPointerDispatch {
+    let canvas_pos = editor.canvas_pos_for_pointer(mouse.column, mouse.row, canvas);
+    match mouse.kind {
+        AppPointerKind::Down(AppPointerButton::Left) => {
+            if let Some(pos) = canvas_pos {
+                editor.cursor = pos;
+                editor_begin_paint_stroke(editor);
+                paint_floating_drag_colored(editor, canvas, pos, colors, fallback_color);
+                return EditorPointerDispatch {
+                    outcome: PointerOutcome::Consumed,
+                    stroke_hint: Some(PointerStrokeHint::Begin),
+                };
+            }
+            EditorPointerDispatch::default()
+        }
+        AppPointerKind::Drag(AppPointerButton::Left) => {
+            if let Some(pos) = canvas_pos {
+                paint_floating_drag_colored(editor, canvas, pos, colors, fallback_color);
+                return EditorPointerDispatch {
+                    outcome: PointerOutcome::Consumed,
+                    stroke_hint: None,
+                };
+            }
+            if editor.paint_stroke_anchor.is_some() {
+                return EditorPointerDispatch {
+                    outcome: PointerOutcome::Consumed,
+                    stroke_hint: None,
+                };
+            }
+            EditorPointerDispatch::default()
+        }
+        _ => editor_handle_pointer(editor, canvas, mouse, fallback_color),
+    }
+}
+
+fn paint_floating_at_cursor_colored(
+    editor: &mut EditorSession,
+    canvas: &mut Canvas,
+    colors: Option<&[Option<RgbColor>]>,
+    fallback_color: RgbColor,
+) -> bool {
+    let Some(floating) = editor.floating.as_ref() else {
+        return false;
+    };
+    stamp_clipboard_colored(
+        canvas,
+        &floating.clipboard,
+        colors,
+        editor.cursor,
+        fallback_color,
+        floating.transparent,
+    );
+    editor.paint_stroke_last = Some(editor.cursor);
+    true
+}
+
+fn paint_floating_drag_colored(
+    editor: &mut EditorSession,
+    canvas: &mut Canvas,
+    raw_pos: Pos,
+    colors: Option<&[Option<RgbColor>]>,
+    fallback_color: RgbColor,
+) -> bool {
+    let Some(last) = editor.paint_stroke_last else {
+        editor.cursor = raw_pos;
+        return paint_floating_at_cursor_colored(editor, canvas, colors, fallback_color);
+    };
+
+    let anchor = editor.paint_stroke_anchor.unwrap_or(last);
+    let brush_width = editor.floating_brush_width();
+    let is_pure_horizontal =
+        brush_width > 1 && raw_pos.y == last.y && raw_pos.y == anchor.y && last.y == anchor.y;
+
+    if is_pure_horizontal {
+        let target = Pos {
+            x: snap_horizontal_brush_x(anchor.x, raw_pos.x, brush_width),
+            y: raw_pos.y,
+        };
+        if target == last {
+            return false;
+        }
+        editor.cursor = target;
+        return paint_floating_at_cursor_colored(editor, canvas, colors, fallback_color);
+    }
+
+    if brush_width > 1 && raw_pos.y == last.y {
+        if raw_pos.x.abs_diff(last.x) < brush_width {
+            return false;
+        }
+        editor.cursor = raw_pos;
+        return paint_floating_at_cursor_colored(editor, canvas, colors, fallback_color);
+    }
+
+    if brush_width > 1 && raw_pos.y != last.y {
+        return paint_floating_diagonal_segment_colored(
+            editor,
+            canvas,
+            last,
+            raw_pos,
+            brush_width,
+            colors,
+            fallback_color,
+        );
+    }
+
+    if raw_pos == last {
+        return false;
+    }
+
+    editor.cursor = raw_pos;
+    paint_floating_at_cursor_colored(editor, canvas, colors, fallback_color)
+}
+
+fn paint_floating_diagonal_segment_colored(
+    editor: &mut EditorSession,
+    canvas: &mut Canvas,
+    start: Pos,
+    end: Pos,
+    brush_width: usize,
+    colors: Option<&[Option<RgbColor>]>,
+    fallback_color: RgbColor,
+) -> bool {
+    let mut changed = false;
+    let mut last_stamped = start;
+    for point in line_points(start, end).into_iter().skip(1) {
+        let should_stamp =
+            point.y != last_stamped.y || point.x.abs_diff(last_stamped.x) >= brush_width;
+        if !should_stamp {
+            continue;
+        }
+
+        editor.cursor = point;
+        changed |= paint_floating_at_cursor_colored(editor, canvas, colors, fallback_color);
+        last_stamped = point;
+    }
+
+    let should_stamp_end = end.y != last_stamped.y || end.x.abs_diff(last_stamped.x) >= brush_width;
+    if should_stamp_end {
+        editor.cursor = end;
+        changed |= paint_floating_at_cursor_colored(editor, canvas, colors, fallback_color);
+    }
+    changed
+}
+
+fn snap_horizontal_brush_x(anchor_x: usize, raw_x: usize, brush_width: usize) -> usize {
+    if brush_width <= 1 {
+        return raw_x;
+    }
+
+    if raw_x >= anchor_x {
+        anchor_x + ((raw_x - anchor_x) / brush_width) * brush_width
+    } else {
+        anchor_x - ((anchor_x - raw_x) / brush_width) * brush_width
+    }
+}
+
+fn line_points(start: Pos, end: Pos) -> Vec<Pos> {
+    let mut points = Vec::new();
+    let mut x = start.x as isize;
+    let mut y = start.y as isize;
+    let target_x = end.x as isize;
+    let target_y = end.y as isize;
+    let dx = (target_x - x).abs();
+    let sx = if x < target_x { 1 } else { -1 };
+    let dy = -(target_y - y).abs();
+    let sy = if y < target_y { 1 } else { -1 };
+    let mut err = dx + dy;
+
+    loop {
+        points.push(Pos {
+            x: x as usize,
+            y: y as usize,
+        });
+
+        if x == target_x && y == target_y {
+            break;
+        }
+
+        let twice_err = 2 * err;
+        if twice_err >= dy {
+            err += dy;
+            x += sx;
+        }
+        if twice_err <= dx {
+            err += dx;
+            y += sy;
+        }
+    }
+
+    points
 }
 
 #[cfg(test)]
