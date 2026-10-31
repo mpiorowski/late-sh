@@ -2,15 +2,17 @@
 // the hub keeps the rail keys (Up/Down, j/k, h/l step along the rail, which
 // is how one browses the live games) and offers each event here first for
 // the one key a preview adds: Enter opens it. An open watch owns the page,
-// so the hub hands it every event: `i` writes, j/k and the arrows select
-// messages, Ctrl+D/Ctrl+U, the page keys and the wheel scroll, the
-// message-action keys act on a selected message, and backtick hops away on
-// the workspace cycle with the watch kept open (`App::away_watches`: the hub
-// shows its cards until the cycle or the live strip brings one back). Esc
-// peels a chat selection, then closes the watch back to its preview, then
-// leaves the preview
-// (`dispatch_escape`). While the composer is open no key reaches this
-// handler at all (the composer gate in `app/input.rs`).
+// so the hub hands it every event: F4 hides and shows its chat column
+// (`toggle_watch_chat`, reached from the generic F4 arm of `app/input.rs`,
+// so it works from the composer too), and while the column is up `i`
+// writes, j/k and the arrows select messages, Ctrl+D/Ctrl+U, the page keys
+// and the wheel scroll, the message-action keys act on a selected message.
+// Backtick hops away on the workspace cycle with the watch kept open
+// (`App::away_watches`: the hub shows its cards until the cycle or the live
+// strip brings one back). Esc peels a chat selection, then closes the watch
+// back to its preview, then leaves the preview (`dispatch_escape`). While
+// the composer is open no other key reaches this handler (the composer gate
+// in `app/input.rs`).
 //
 // The player's own chat, over their running game, is shut until F4
 // (`is_f4`, read off raw input ahead of the game's passthrough in
@@ -23,20 +25,36 @@
 use uuid::Uuid;
 
 use super::state::{LiveGameKey, SpectateGame, WatchMode};
-use super::ui::{ChatDock, chat_dock};
 use crate::app::chat::input as chat_input;
 use crate::app::input::{MouseEventKind, ParsedInput};
 use crate::app::state::App;
 
 /// The chat room the open watch has on screen: the watched player's room,
-/// once this session is in it and the terminal has room to dock the pane.
-/// `None` for a preview, or when this session is not watching.
+/// once this session is in it, while F4 leaves its column up. `None` for a
+/// preview, or when this session is not watching.
 pub fn chat_room_id(app: &App) -> Option<Uuid> {
-    let room_id = app.spectate_chat_room_id()?;
-    let game = app.spectate_state.as_ref()?.game();
-    match chat_dock(crate::app::input::app_content_area(app), game) {
-        ChatDock::Right | ChatDock::Below => Some(room_id),
-        ChatDock::Hidden => None,
+    app.spectate_chat_room_id()
+}
+
+/// F4 in an open watch: hide the chat column, with anything of it still in
+/// hand, or show it again. Nothing without an open watch.
+pub fn toggle_watch_chat(app: &mut App) {
+    if let Some(room_id) = chat_room_id(app) {
+        drop_chat_focus(app, room_id);
+    }
+    if let Some(state) = app.spectate_state.as_mut().filter(|state| state.is_open()) {
+        state.toggle_chat();
+    }
+}
+
+/// A watch chat going off screen: a half-typed line and a picked message in
+/// `room_id` would otherwise keep the keys of a room no longer drawn.
+pub fn drop_chat_focus(app: &mut App, room_id: Uuid) {
+    if app.chat.composer_room_id() == Some(room_id) {
+        app.chat.reset_composer();
+    }
+    if app.chat.selected_message_body_in_room(room_id).is_some() {
+        app.chat.clear_message_selection();
     }
 }
 
@@ -207,21 +225,14 @@ pub fn open_own_chat_game(app: &App) -> Option<SpectateGame> {
     }
 }
 
-/// Close the player's open chat, with anything of it still in hand: a
-/// half-typed line and a picked message would otherwise keep the keys of a
-/// room that is no longer on screen.
+/// Close the player's open chat, with anything of it still in hand
+/// (`drop_chat_focus`).
 pub fn close_own_chat(app: &mut App) {
     let Some(game) = app.own_watch_chat_open.take() else {
         return;
     };
-    let Some(room_id) = app.own_watch_chat_room_id(game) else {
-        return;
-    };
-    if app.chat.composer_room_id() == Some(room_id) {
-        app.chat.reset_composer();
-    }
-    if app.chat.selected_message_body_in_room(room_id).is_some() {
-        app.chat.clear_message_selection();
+    if let Some(room_id) = app.own_watch_chat_room_id(game) {
+        drop_chat_focus(app, room_id);
     }
 }
 

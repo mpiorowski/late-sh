@@ -1120,6 +1120,60 @@ async fn an_open_watch_counts_its_watcher_until_it_closes() {
     assert_eq!(app.live_games.watchers_of(key), 0);
 }
 
+/// The watcher's chat is the player's column: up beside the watched screen
+/// when the watch opens, F4 hides it (out of the chat keys and the read
+/// mark, the screen taking the page) and F4 brings it back.
+#[tokio::test]
+async fn f4_hides_and_shows_an_open_watchs_chat() {
+    use crate::app::door::spectate::{
+        proxy::LiveGame,
+        state::{SpectateGame, WatchMode},
+    };
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "watch-f4-me").await;
+    let mut app = make_app(test_db.db.clone(), me.id, "watch-f4-flow-it");
+    app.resize(160, 40).expect("resize");
+    app.live_games.publish_roster_for_tests(
+        SpectateGame::Dcss,
+        vec![LiveGame {
+            playname: "crawler".to_string(),
+            started_unix: 1_790_000_000,
+            watchers: 0,
+            status: String::new(),
+        }],
+    );
+
+    app.handle_input(b"3");
+    app.handle_input(b"k");
+    app.handle_input(b"\r");
+    assert_eq!(
+        app.spectate_state.as_ref().map(|state| state.mode()),
+        Some(WatchMode::Open)
+    );
+    assert!(
+        render_plain(&mut app).contains(" 1 watching"),
+        "the chat column is up when the watch opens"
+    );
+
+    app.handle_input(b"\x1bOS");
+    assert!(
+        !render_plain(&mut app).contains(" 1 watching"),
+        "F4 hides it"
+    );
+    assert_eq!(
+        app.spectate_state.as_ref().map(|state| state.mode()),
+        Some(WatchMode::Open),
+        "the watch stays open"
+    );
+
+    app.handle_input(b"\x1b[14~");
+    assert!(
+        render_plain(&mut app).contains(" 1 watching"),
+        "F4 brings it back"
+    );
+}
+
 /// The sidebar's Live panel lists the live door games under its rule, who
 /// and where, and a click on a row opens that game's watch, as the strip's
 /// click does. A click on a blank slot opens nothing.

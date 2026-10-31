@@ -2,12 +2,12 @@
 // read-only stream doing it. A watch starts as a preview: the Games hub's
 // rail sitting on one of its live rows, the watched screen alone where the
 // selected card's landing would be. Enter opens it: the watched screen
-// across the whole page with the watch chat docked beside it. A preview ends
-// when the session leaves the hub. An open watch is a stop on the backtick
-// cycle: leaving the hub steps away from it (`App::away_watches`, every one
-// still streaming, so the hub shows its cards on the next visit), and it
-// ends on Esc, when the game does, or once it has been off screen for
-// `AWAY_WINDOW` (`App::tick`).
+// across the whole page with the watch chat beside it until F4 hides it. A
+// preview ends when the session leaves the hub. An open watch is a stop on
+// the backtick cycle: leaving the hub steps away from it
+// (`App::away_watches`, every one still streaming, so the hub shows its
+// cards on the next visit), and it ends on Esc, when the game does, or once
+// it has been off screen for `AWAY_WINDOW` (`App::tick`).
 //
 // `ChatLink` is a session's tie to a player's watch-chat room. A watch holds
 // one (the pane beside the watched screen); a player holds one for their own
@@ -231,7 +231,7 @@ pub enum WatchMode {
     /// rail. No chat.
     Preview,
     /// Enter on the live row: the watched screen across the whole page, the
-    /// watch chat docked beside it.
+    /// watch chat beside it until F4 hides it.
     Open,
 }
 
@@ -247,6 +247,9 @@ pub struct State {
     /// The watched player's chat room, beside their screen once the watch is
     /// open.
     chat: ChatLink,
+    /// Whether the open watch shows its chat column: F4 hides and shows it,
+    /// shown to start.
+    chat_shown: bool,
 }
 
 impl State {
@@ -263,6 +266,7 @@ impl State {
             process,
             open: None,
             seen_at: Instant::now(),
+            chat_shown: true,
         }
     }
 
@@ -301,6 +305,17 @@ impl State {
 
     pub fn chat_mut(&mut self) -> &mut ChatLink {
         &mut self.chat
+    }
+
+    /// Whether the chat column is up beside the screen once the watch is
+    /// open.
+    pub fn chat_shown(&self) -> bool {
+        self.chat_shown
+    }
+
+    /// F4 in an open watch: hide the chat column, or show it again.
+    pub fn toggle_chat(&mut self) {
+        self.chat_shown = !self.chat_shown;
     }
 
     pub fn game(&self) -> SpectateGame {

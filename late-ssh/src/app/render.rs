@@ -726,12 +726,18 @@ impl App {
         };
         // Unread in the chat F4 opens here while it is shut, for the frame
         // title's `F4 chat` hint: the player's own watch room over their
-        // game on screen, the world's chat on the Realm board.
+        // game on screen, the watched player's room beside an open watch,
+        // the world's chat on the Realm board.
         let shut_chat_room_id = match (self.screen, own_screen_game) {
             (Screen::Realm, _) => match self.realm.shown_chat_room_id() {
                 Some(_) => None,
                 None => self.realm.chat_room_id(),
             },
+            (Screen::Games, _) => self
+                .spectate_state
+                .as_ref()
+                .filter(|state| state.is_open() && !state.chat_shown())
+                .and_then(|state| state.chat().room_id()),
             (_, Some(game)) if own_chat_open.is_none() => self.own_watch_chat_room_id(game),
             (_, Some(_) | None) => None,
         };
@@ -1342,8 +1348,8 @@ impl App {
                 }),
             ),
         };
-        // The watch chat: docked beside the watched screen for a watcher,
-        // open over their own game for the player.
+        // The watch chat: the column beside the watched screen for a
+        // watcher, over their own game for the player, while F4 has it up.
         let watch_chat_view =
             watch_chat_room_id.map(|chat_room_id| chat::ui::EmbeddedRoomChatView {
                 messages_inset: 1,
@@ -2430,9 +2436,10 @@ impl App {
                     crate::app::door::nethack::render::draw_page(frame, game_area, state);
                     ctx.own_chat_hit.set(own_chat.map(|own_chat| own_chat.pane));
                     if let Some(own_chat) = own_chat {
-                        crate::app::door::spectate::ui::draw_own_chat(
+                        crate::app::door::spectate::ui::draw_chat_column(
                             frame,
                             crate::app::door::spectate::state::SpectateGame::Nethack,
+                            crate::app::door::spectate::ui::ChatSide::Player,
                             own_chat,
                             ctx.watch_chat_view.take(),
                             None,
@@ -2454,9 +2461,10 @@ impl App {
                     crate::app::door::dcss::render::draw_page(frame, game_area, state);
                     ctx.own_chat_hit.set(own_chat.map(|own_chat| own_chat.pane));
                     if let Some(own_chat) = own_chat {
-                        crate::app::door::spectate::ui::draw_own_chat(
+                        crate::app::door::spectate::ui::draw_chat_column(
                             frame,
                             crate::app::door::spectate::state::SpectateGame::Dcss,
+                            crate::app::door::spectate::ui::ChatSide::Player,
                             own_chat,
                             ctx.watch_chat_view.take(),
                             None,
@@ -2478,9 +2486,10 @@ impl App {
                     crate::app::door::brogue::render::draw_page(frame, game_area, state);
                     ctx.own_chat_hit.set(own_chat.map(|own_chat| own_chat.pane));
                     if let Some(own_chat) = own_chat {
-                        crate::app::door::spectate::ui::draw_own_chat(
+                        crate::app::door::spectate::ui::draw_chat_column(
                             frame,
                             crate::app::door::spectate::state::SpectateGame::Brogue,
+                            crate::app::door::spectate::ui::ChatSide::Player,
                             own_chat,
                             ctx.watch_chat_view.take(),
                             None,
@@ -2524,9 +2533,10 @@ impl App {
                     crate::app::door::zork::render::draw_page(frame, game_area, state);
                     ctx.own_chat_hit.set(own_chat.map(|own_chat| own_chat.pane));
                     if let Some(own_chat) = own_chat {
-                        crate::app::door::spectate::ui::draw_own_chat(
+                        crate::app::door::spectate::ui::draw_chat_column(
                             frame,
                             crate::app::door::spectate::state::SpectateGame::Zork,
+                            crate::app::door::spectate::ui::ChatSide::Player,
                             own_chat,
                             ctx.watch_chat_view.take(),
                             ctx.own_suggestion.as_deref(),
@@ -3162,10 +3172,10 @@ fn own_chat_split(
     game: crate::app::door::spectate::state::SpectateGame,
     chat_open: bool,
     area: Rect,
-) -> (Rect, Option<crate::app::door::spectate::ui::OwnChat>) {
+) -> (Rect, Option<crate::app::door::spectate::ui::ChatColumn>) {
     match chat_open {
         true => {
-            let (game_area, own_chat) = crate::app::door::spectate::ui::own_game_split(area, game);
+            let (game_area, own_chat) = crate::app::door::spectate::ui::chat_split(area, game);
             (game_area, Some(own_chat))
         }
         false => (area, None),
@@ -3436,9 +3446,9 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             Style::default().fg(theme::TEXT_DIM()),
         ));
     }
-    // The Realm board's chat, put away: the same word every game with a
-    // chat carries in the title.
-    if screen == Screen::Realm {
+    // The Realm board's chat and an open watch's, put away: the same word
+    // every game with a chat carries in the title.
+    if screen == Screen::Realm || screen == Screen::Games {
         spans.extend(chat_title_hint(ctx.chat_title_unread));
     }
     if screen == Screen::Codekeep {
