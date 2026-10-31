@@ -1300,7 +1300,8 @@ impl App {
             // The world's chat, only while it is shown: hidden, it counts
             // what is said as unread.
             Screen::Realm => self.realm.shown_chat_room_id(),
-            // The watched player's chat, while this session watches one.
+            // The watched player's chat, while this session watches one with
+            // its column up: hidden, it counts what is said as unread.
             Screen::Games => self.spectate_chat_room_id(),
             // The watchers' chat over this player's own running game, only
             // while F4 has it open: closed, it counts what is said as unread.
@@ -2405,23 +2406,15 @@ impl App {
     /// outlive the pane it belonged to.
     fn clear_watch_chat_focus(&mut self) {
         if let Some(room_id) = self.spectate_chat_room_id() {
-            if self.chat.composer_room_id() == Some(room_id) {
-                self.chat.reset_composer();
-            }
-            if self.chat.selected_message_body_in_room(room_id).is_some() {
-                self.chat.clear_message_selection();
-            }
+            crate::app::door::spectate::input::drop_chat_focus(self, room_id);
         }
     }
 
     /// The chat room the open watch shows: the watched player's room, once
-    /// this session is in it. `None` for a preview, which has no chat.
+    /// this session is in it, while F4 leaves its column up. `None` for a
+    /// preview, which has no chat.
     pub(crate) fn spectate_chat_room_id(&self) -> Option<Uuid> {
-        let state = self
-            .spectate_state
-            .as_ref()
-            .filter(|state| state.is_open())?;
-        let room_id = state.chat().room_id()?;
+        let room_id = self.spectate_state.as_ref()?.shown_chat_room_id()?;
         self.chat.room_by_id(room_id).map(|room| room.id)
     }
 

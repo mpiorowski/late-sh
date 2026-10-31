@@ -1120,6 +1120,106 @@ async fn an_open_watch_counts_its_watcher_until_it_closes() {
     assert_eq!(app.live_games.watchers_of(key), 0);
 }
 
+/// The watcher's chat is the player's column: up beside the watched screen
+/// when the watch opens, F4 hides it (out of the chat keys and the read
+/// mark, the screen taking the page) and F4 brings it back. F4 hides it from
+/// the composer too, the half-typed line going with it, so no keys are left
+/// typing into a chat that is not drawn.
+#[tokio::test]
+async fn f4_hides_and_shows_an_open_watchs_chat() {
+    use crate::app::door::spectate::{
+        proxy::LiveGame,
+        state::{SpectateGame, WatchMode},
+    };
+    use late_core::models::chat_room::WatchDoor;
+
+    let test_db = new_test_db().await;
+    let me = create_test_user(&test_db.db, "watch-f4-me").await;
+    // The watched player's room, joined ahead of the session so the room
+    // list the app loads carries it.
+    let client = test_db.db.get().await.expect("db client");
+    let room = ChatRoom::get_or_create_watch_room(&client, WatchDoor::Dcss, "crawler")
+        .await
+        .expect("the watched player's room");
+    ChatRoomMember::join(&client, room.id, me.id)
+        .await
+        .expect("join the watch room");
+    let mut app = make_app(test_db.db.clone(), me.id, "watch-f4-flow-it");
+    app.resize(160, 40).expect("resize");
+    wait_for_app(&mut app, "the room list", |app| {
+        app.chat.room_by_id(room.id).is_some()
+    })
+    .await;
+    app.live_games
+        .publish_chat_room_for_tests(SpectateGame::Dcss, "crawler", room.id);
+    app.live_games.publish_roster_for_tests(
+        SpectateGame::Dcss,
+        vec![LiveGame {
+            playname: "crawler".to_string(),
+            started_unix: 1_790_000_000,
+            watchers: 0,
+            status: String::new(),
+        }],
+    );
+
+    app.handle_input(b"3");
+    app.handle_input(b"k");
+    app.handle_input(b"\r");
+    assert_eq!(
+        app.spectate_state.as_ref().map(|state| state.mode()),
+        Some(WatchMode::Open)
+    );
+    assert!(
+        render_plain(&mut app).contains(" 1 watching"),
+        "the chat column is up when the watch opens"
+    );
+    // One tick takes the watch's room, so the column's chat keys are live.
+    app.tick();
+    assert_eq!(app.spectate_chat_room_id(), Some(room.id));
+
+    app.handle_input(b"\x1bOS");
+    assert!(
+        !render_plain(&mut app).contains(" 1 watching"),
+        "F4 hides it"
+    );
+    assert_eq!(
+        app.spectate_state.as_ref().map(|state| state.mode()),
+        Some(WatchMode::Open),
+        "the watch stays open"
+    );
+    assert_eq!(app.spectate_chat_room_id(), None, "out of the chat keys");
+
+    app.handle_input(b"\x1b[14~");
+    assert!(
+        render_plain(&mut app).contains(" 1 watching"),
+        "F4 brings it back"
+    );
+
+    app.handle_input(b"i");
+    assert_eq!(
+        app.chat.composer_room_id(),
+        Some(room.id),
+        "i writes in the watch room"
+    );
+    app.handle_input(b"draft");
+    app.handle_input(b"\x1bOS");
+    assert!(
+        !render_plain(&mut app).contains(" 1 watching"),
+        "F4 hides it from the composer"
+    );
+    assert!(!app.chat.is_composing(), "the draft goes with the column");
+
+    app.handle_input(b"\x1b[14~");
+    assert!(render_plain(&mut app).contains(" 1 watching"));
+    assert!(!app.chat.is_composing(), "it comes back with nothing in hand");
+    app.handle_input(b"i");
+    assert_eq!(
+        app.chat.composer().lines().join("\n"),
+        "",
+        "the draft did not come back"
+    );
+}
+
 /// The sidebar's Live panel lists the live door games under its rule, who
 /// and where, and a click on a row opens that game's watch, as the strip's
 /// click does. A click on a blank slot opens nothing.

@@ -1,24 +1,20 @@
 // The watch view. As a preview it draws beside the Games hub's rail (in the
 // landing's place) while the rail sits on a live row: one header row, then
 // the player's screen alone. Opened (Enter on the row) it takes the whole
-// page: the header over the screen, and the watch chat docked beside it
-// (`chat_dock`) under its `N watching` row. The screen is the player's size, not ours: a smaller one is
+// page: the header over the screen, and the watch chat beside it until F4
+// hides it. The screen is the player's size, not ours: a smaller one is
 // pinned top-left, the way every door draws its own game, a larger one is
 // cropped to a window around the game's cursor (crawl and NetHack park it on
 // the `@`), or pinned top-left while the game hides its cursor
 // (`crop_anchor`; Brogue). Brogue's black canvas is keyed
 // out the way its own door screen keys it, so the theme shows through.
 //
-// The chat only ever docks where the game keeps its whole minimum screen
-// (`SpectateGame::screen_min`): 80x24 for crawl and NetHack, Brogue's fixed
-// 100x34.
-//
-// `own_game_split` and `draw_own_chat` are the other end of the same chat:
-// what a player sees of it over their own running game, a column on the
-// right as wide as the Realm board's chat, there only while F4 has it open
-// (`input::toggle_own_chat`), and taking every key meanwhile. Beside the
-// game where the game keeps its whole minimum screen, else drawn over the
-// game's right side, so the PTY is never squeezed below what the game needs.
+// The chat is one column for both ends of it (`chat_split`,
+// `draw_chat_column`): a watcher's beside the watched screen, a player's
+// over their own running game while F4 has it open. As wide as the Realm
+// board's chat, beside the game where the game keeps its whole minimum
+// screen (`SpectateGame::screen_min`), else drawn over the game's right
+// side, so the game is never squeezed below what it needs.
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
@@ -33,107 +29,13 @@ use crate::app::common::theme;
 use crate::app::door::rebels::render::blit_screen_from;
 use crate::app::files::terminal_image::TerminalImageFrame;
 
-const DOCK_RIGHT_WIDTH: u16 = 40;
-const DOCK_BELOW_HEIGHT: u16 = 8;
-
-/// Where the watch chat sits around the watched screen.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ChatDock {
-    /// A column on the right, behind a one-column rule.
-    Right,
-    /// A strip underneath, under a one-row rule.
-    Below,
-    /// The terminal has no room for both: the screen keeps all of it.
-    Hidden,
-}
-
-/// The dock for a watch of `game` drawn into `area` (header row included).
-/// The renderer and the input layer both ask this, so the chat keys are live
-/// exactly when the pane is on screen.
-pub fn chat_dock(area: Rect, game: SpectateGame) -> ChatDock {
-    let (min_cols, min_rows) = game.screen_min();
-    let body_height = area.height.saturating_sub(1);
-    if area.width > min_cols + DOCK_RIGHT_WIDTH {
-        ChatDock::Right
-    } else if body_height > min_rows + DOCK_BELOW_HEIGHT {
-        ChatDock::Below
-    } else {
-        ChatDock::Hidden
-    }
-}
-
-/// The watch view's pieces inside its `area`.
-#[derive(Debug, PartialEq, Eq)]
-struct WatchLayout {
-    header: Rect,
-    screen: Rect,
-    /// The rule and the chat pane, when the chat is docked.
-    chat: Option<(Rect, Rect)>,
-}
-
-/// Lay the watch view out. A chat docked on the right takes the full height
-/// of the view, so its rule runs from the frame's top border down and the
-/// header sits over the watched screen alone; a chat docked below leaves the
-/// header the full width.
-fn watch_layout(area: Rect, dock: ChatDock) -> WatchLayout {
-    let header_over = |area: Rect| {
-        let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(area);
-        (rows[0], rows[1])
-    };
-    match dock {
-        ChatDock::Right => {
-            let (left, chat) = dock_areas(area, ChatDock::Right);
-            let (header, screen) = header_over(left);
-            WatchLayout {
-                header,
-                screen,
-                chat,
-            }
-        }
-        ChatDock::Below | ChatDock::Hidden => {
-            let (header, body) = header_over(area);
-            let (screen, chat) = dock_areas(body, dock);
-            WatchLayout {
-                header,
-                screen,
-                chat,
-            }
-        }
-    }
-}
-
-/// The watched screen's area, then the rule and the chat pane when docked.
-fn dock_areas(body: Rect, dock: ChatDock) -> (Rect, Option<(Rect, Rect)>) {
-    match dock {
-        ChatDock::Right => {
-            let cols = Layout::horizontal([
-                Constraint::Min(0),
-                Constraint::Length(1),
-                Constraint::Length(DOCK_RIGHT_WIDTH),
-            ])
-            .split(body);
-            (cols[0], Some((cols[1], cols[2])))
-        }
-        ChatDock::Below => {
-            let rows = Layout::vertical([
-                Constraint::Min(0),
-                Constraint::Length(1),
-                Constraint::Length(DOCK_BELOW_HEIGHT),
-            ])
-            .split(body);
-            (rows[0], Some((rows[1], rows[2])))
-        }
-        ChatDock::Hidden => (body, None),
-    }
-}
-
 pub struct SpectateView<'a> {
     pub state: &'a State,
     /// The watched game's live row, for who is playing, where they are and
     /// how long they have run; `None` once the roster no longer lists it.
     pub row: Option<&'a LiveRow>,
     /// People with this watch open, this session's user included
-    /// (`LiveGamesService::watchers_of`), for the docked chat's header row.
+    /// (`LiveGamesService::watchers_of`), for the chat column's header row.
     pub watchers: usize,
 }
 
@@ -183,8 +85,9 @@ pub fn crop_anchor(screen: &vt100::Screen) -> (u16, u16) {
 pub enum WatchPane<'a> {
     /// The preview beside the hub's rail: the screen alone.
     Preview,
-    /// An open watch: the chat docked beside the screen. The chat view is
-    /// `None` until this session is in the room; the dock stays reserved.
+    /// An open watch: the chat column beside the screen unless F4 hid it.
+    /// The chat view is `None` until this session is in the room, or while
+    /// the column is hidden; a shown column stays reserved meanwhile.
     /// Boxed: the view dwarfs the data-less `Preview`.
     Open(Option<Box<EmbeddedRoomChatView<'a>>>),
 }
@@ -196,37 +99,29 @@ pub fn draw(
     pane: WatchPane<'_>,
     terminal_images: &mut TerminalImageFrame,
 ) {
-    let dock = match pane {
-        WatchPane::Preview => ChatDock::Hidden,
-        WatchPane::Open(_) => chat_dock(area, view.state.game()),
-    };
-    let layout = watch_layout(area, dock);
-    let body = layout.screen;
-    if let (WatchPane::Open(chat), Some((rule, chat_area))) = (pane, layout.chat) {
-        draw_rule(frame, rule);
-        let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(chat_area);
-        draw_chat_header(
-            frame,
-            rows[0],
-            view.watchers,
-            view.state.game(),
-            ChatSide::Watcher,
-        );
-        if let Some(chat) = chat {
-            let composer = draw_embedded_room_chat(frame, rows[1], *chat, terminal_images);
-            join_rule_to_composer(frame, rule, composer);
+    let game = view.state.game();
+    let (left, column) = match pane {
+        WatchPane::Open(_) if view.state.chat_shown() => {
+            let (left, column) = chat_split(area, game);
+            (left, Some(column))
         }
-    }
+        WatchPane::Open(_) | WatchPane::Preview => (area, None),
+    };
+    let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(left);
+    // The header stops at the column, even where the column is drawn over
+    // the screen.
+    let header = match column {
+        Some(column) => Rect {
+            width: column.rule.x.saturating_sub(rows[0].x).min(rows[0].width),
+            ..rows[0]
+        },
+        None => rows[0],
+    };
+    let body = rows[1];
 
     let (rows, cols) = view.state.with_screen(|screen| screen.size());
     let cropped = cols > body.width || rows > body.height;
-    draw_header(
-        frame,
-        layout.header,
-        view,
-        cropped.then_some((cols, rows)),
-        dock,
-    );
+    draw_header(frame, header, view, cropped.then_some((cols, rows)));
 
     let playname = view.state.playname();
     match view.state.status() {
@@ -248,7 +143,7 @@ pub fn draw(
                 };
                 blit_screen_from(buf, target, screen, y.src, x.src);
             });
-            match view.state.game() {
+            match game {
                 SpectateGame::Brogue => {
                     crate::app::door::brogue::render::clear_canvas_black(buf, body);
                 }
@@ -259,6 +154,18 @@ pub fn draw(
             }
         }
     }
+
+    if let (WatchPane::Open(chat), Some(column)) = (pane, column) {
+        draw_chat_column(
+            frame,
+            game,
+            ChatSide::Watcher,
+            column,
+            chat.map(|chat| *chat),
+            view.watchers,
+            terminal_images,
+        );
+    }
 }
 
 fn draw_header(
@@ -266,7 +173,6 @@ fn draw_header(
     area: Rect,
     view: &SpectateView<'_>,
     cropped: Option<(u16, u16)>,
-    dock: ChatDock,
 ) {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let faint = Style::default().fg(theme::TEXT_FAINT());
@@ -304,14 +210,11 @@ fn draw_header(
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 
     // A preview leaves its keys to the hub's footer. An open watch has the
-    // whole page, so its keys ride the header's right end, with a word when
-    // the chat has no room to dock (`i` then does nothing).
-    let keys = match (view.state.mode(), dock) {
-        (WatchMode::Preview, _) => return,
-        (WatchMode::Open, ChatDock::Right | ChatDock::Below) => "` hop out \u{b7} Esc back ",
-        (WatchMode::Open, ChatDock::Hidden) => {
-            "widen the terminal to chat \u{b7} ` hop out \u{b7} Esc back "
-        }
+    // whole page, so its keys ride the header's right end; the chat's F4
+    // rides the frame title, as on the player's side.
+    let keys = match view.state.mode() {
+        WatchMode::Preview => return,
+        WatchMode::Open => "` hop out \u{b7} Esc back ",
     };
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(keys, faint))).alignment(Alignment::Right),
@@ -355,45 +258,36 @@ fn join_rule_to_composer(frame: &mut Frame, rule: Rect, composer: Rect) {
     }
 }
 
-/// The line between the watched screen and the chat: a column when the rule
-/// area is one cell wide, a row otherwise.
+/// The line between the game and the chat column.
 fn draw_rule(frame: &mut Frame, area: Rect) {
     let style = Style::default().fg(theme::BORDER());
-    let lines: Vec<Line<'static>> = if area.width == 1 {
-        (0..area.height)
-            .map(|_| Line::from(Span::styled("\u{2502}", style)))
-            .collect()
-    } else {
-        vec![Line::from(Span::styled(
-            "\u{2500}".repeat(area.width as usize),
-            style,
-        ))]
-    };
+    let lines: Vec<Line<'static>> = (0..area.height)
+        .map(|_| Line::from(Span::styled("\u{2502}", style)))
+        .collect();
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// The player's chat column, as wide as the Realm board's
-/// (`realm::ui::chat_width`): a third of the screen, at least 34 columns
-/// and at most 64.
-const OWN_CHAT_MIN_WIDTH: u16 = 34;
-const OWN_CHAT_MAX_WIDTH: u16 = 64;
+/// The chat column, as wide as the Realm board's (`realm::ui::chat_width`):
+/// a third of the screen, at least 34 columns and at most 64.
+const CHAT_MIN_WIDTH: u16 = 34;
+const CHAT_MAX_WIDTH: u16 = 64;
 
-/// Where the watchers' chat sits over a player's own running game: the rule
-/// and the column right of it.
+/// Where the watch chat sits beside a game: the rule and the column right
+/// of it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct OwnChat {
+pub struct ChatColumn {
     pub rule: Rect,
     pub pane: Rect,
 }
 
-/// Split a player's own `game` area into the game and the open chat column.
-/// The column comes off the game's PTY where the game keeps its whole
-/// minimum screen beside it; on a narrower terminal the game keeps the whole
-/// area and the column is drawn over its right side.
-pub fn own_game_split(area: Rect, game: SpectateGame) -> (Rect, OwnChat) {
+/// Split `area` into `game` and the chat column. The column comes off the
+/// game where the game keeps its whole minimum screen beside it; on a
+/// narrower terminal the game keeps the whole area and the column is drawn
+/// over its right side.
+pub fn chat_split(area: Rect, game: SpectateGame) -> (Rect, ChatColumn) {
     let (min_cols, _) = game.screen_min();
     let width = (area.width / 3)
-        .clamp(OWN_CHAT_MIN_WIDTH, OWN_CHAT_MAX_WIDTH)
+        .clamp(CHAT_MIN_WIDTH, CHAT_MAX_WIDTH)
         .min(area.width.saturating_sub(1));
     let pane = Rect {
         x: area.x + area.width - width,
@@ -412,32 +306,33 @@ pub fn own_game_split(area: Rect, game: SpectateGame) -> (Rect, OwnChat) {
         },
         false => area,
     };
-    (game_area, OwnChat { rule, pane })
+    (game_area, ChatColumn { rule, pane })
 }
 
-/// The open chat column over a player's own running game: their watchers'
-/// chat, taking every key. One faint header row says how many are watching
-/// and how to get back to the game, then the room's ordinary embedded chat,
+/// The watch chat column, the same on both ends of it: one faint header row
+/// saying how many are watching, then the room's ordinary embedded chat,
 /// composer included. Drawn after the game, over it when the two overlap.
-///
-/// `suggestion` is a command a watcher suggested for a Zork game
-/// (`door/zork/suggest.rs`), which F3 types: it rides its own row under the
-/// header.
-pub fn draw_own_chat(
+/// A player's suggested command (`ChatSide::Player`) rides its own row under
+/// the header.
+pub fn draw_chat_column(
     frame: &mut Frame,
     game: SpectateGame,
-    own_chat: OwnChat,
+    side: ChatSide<'_>,
+    column: ChatColumn,
     chat: Option<EmbeddedRoomChatView<'_>>,
-    suggestion: Option<&str>,
     watchers: usize,
     terminal_images: &mut TerminalImageFrame,
 ) {
-    let OwnChat { rule, pane } = own_chat;
+    let ChatColumn { rule, pane } = column;
     frame.render_widget(Clear, rule);
     frame.render_widget(Clear, pane);
     draw_rule(frame, rule);
     let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(pane);
-    draw_chat_header(frame, rows[0], watchers, game, ChatSide::Player);
+    draw_chat_header(frame, rows[0], watchers, game, side);
+    let suggestion = match side {
+        ChatSide::Player { suggestion } => suggestion,
+        ChatSide::Watcher => None,
+    };
     let body = match suggestion {
         Some(command) => {
             let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(rows[1]);
@@ -481,26 +376,31 @@ fn draw_suggestion(frame: &mut Frame, area: Rect, command: &str) {
 
 /// Which end of a game's watch chat is reading it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ChatSide {
+pub enum ChatSide<'a> {
     /// Someone watching the game.
     Watcher,
-    /// The player whose game it is.
-    Player,
+    /// The player whose game it is. `suggestion` is a command a watcher
+    /// suggested for their own Zork game (`door/zork/suggest.rs`), which F3
+    /// types; only the player's side ever has one.
+    Player { suggestion: Option<&'a str> },
 }
 
 /// What the watch chat says after its count: on the player's side, how to
 /// get back to the game, and on Zork how a suggested command works from this
 /// side of the chat (`door/zork/suggest.rs`).
-fn suggestion_hint(game: SpectateGame, side: ChatSide) -> &'static str {
+fn suggestion_hint(game: SpectateGame, side: ChatSide<'_>) -> &'static str {
     match (game, side) {
-        (SpectateGame::Zork, ChatSide::Watcher) => " \u{b7} type >look to suggest",
-        (SpectateGame::Zork, ChatSide::Player) => {
+        (SpectateGame::Zork, ChatSide::Watcher) => " \u{b7} >look to suggest",
+        (SpectateGame::Zork, ChatSide::Player { .. }) => {
             " \u{b7} F3 takes a >suggestion \u{b7} Esc to the game"
         }
         (SpectateGame::Dcss | SpectateGame::Nethack | SpectateGame::Brogue, ChatSide::Watcher) => {
             ""
         }
-        (SpectateGame::Dcss | SpectateGame::Nethack | SpectateGame::Brogue, ChatSide::Player) => {
+        (
+            SpectateGame::Dcss | SpectateGame::Nethack | SpectateGame::Brogue,
+            ChatSide::Player { .. },
+        ) => {
             " \u{b7} Esc to the game"
         }
     }
@@ -508,14 +408,14 @@ fn suggestion_hint(game: SpectateGame, side: ChatSide) -> &'static str {
 
 /// The watch chat's header row, the one place a watch view or a player's
 /// own game says how many are watching: everyone with the watch open, even
-/// when that is nobody. The watcher's fits the 40-column dock, the
-/// player's their 34-column minimum (Zork's wants the widest column).
+/// when that is nobody. Fits the column's 34-column minimum (Zork's wants
+/// the widest column).
 fn draw_chat_header(
     frame: &mut Frame,
     area: Rect,
     watchers: usize,
     game: SpectateGame,
-    side: ChatSide,
+    side: ChatSide<'_>,
 ) {
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
