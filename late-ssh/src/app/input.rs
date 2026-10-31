@@ -2839,7 +2839,7 @@ fn embedded_chat_room_id(app: &App, screen: Screen) -> Option<Uuid> {
         Screen::DailyMatch => app.daily.board_chat_room_id(),
         Screen::HouseTable => app.house.chat_room_id(),
         Screen::Zen => app.zen_chat_room_id(),
-        Screen::Games => crate::app::door::spectate::input::chat_room_id(app),
+        Screen::Games => app.spectate_chat_room_id(),
         Screen::Realm => app.realm.shown_chat_room_id(),
         Screen::Nethack | Screen::Dcss | Screen::Brogue | Screen::Zork => {
             crate::app::door::spectate::input::own_chat_room_id(app)

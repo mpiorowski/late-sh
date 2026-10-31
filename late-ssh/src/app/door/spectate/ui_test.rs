@@ -152,7 +152,7 @@ fn drawn_row(width: u16, draw: impl FnOnce(&mut Frame, Rect)) -> String {
 /// the other games the count alone. Whole in the narrowest column.
 #[test]
 fn the_zork_chat_header_says_how_to_suggest() {
-    let header = |watchers: usize, game: SpectateGame, side: ChatSide| {
+    let header = |watchers: usize, game: SpectateGame, side: ChatSide<'_>| {
         drawn_row(CHAT_MIN_WIDTH, |frame, area| {
             draw_chat_header(frame, area, watchers, game, side)
         })
@@ -167,7 +167,7 @@ fn the_zork_chat_header_says_how_to_suggest() {
         " 2 watching"
     );
     assert_eq!(
-        header(100, SpectateGame::Nethack, ChatSide::Player),
+        header(100, SpectateGame::Nethack, ChatSide::Player { suggestion: None }),
         " 100 watching \u{b7} Esc to the game",
         "whole in the player's narrowest column"
     );
@@ -177,7 +177,7 @@ fn the_zork_chat_header_says_how_to_suggest() {
             area,
             100,
             SpectateGame::Zork,
-            ChatSide::Player
+            ChatSide::Player { suggestion: None }
         )),
         " 100 watching \u{b7} F3 takes a >suggestion \u{b7} Esc to the game",
         "whole in the widest column"

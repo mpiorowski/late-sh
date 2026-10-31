@@ -2414,11 +2414,7 @@ impl App {
     /// this session is in it, while F4 leaves its column up. `None` for a
     /// preview, which has no chat.
     pub(crate) fn spectate_chat_room_id(&self) -> Option<Uuid> {
-        let state = self
-            .spectate_state
-            .as_ref()
-            .filter(|state| state.is_open() && state.chat_shown())?;
-        let room_id = state.chat().room_id()?;
+        let room_id = self.spectate_state.as_ref()?.shown_chat_room_id()?;
         self.chat.room_by_id(room_id).map(|room| room.id)
     }
 

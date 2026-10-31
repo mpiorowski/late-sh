@@ -313,6 +313,25 @@ impl State {
         self.chat_shown
     }
 
+    /// The open watch's chat room, shown or not. `None` for a preview, or
+    /// while the room is still resolving.
+    pub fn chat_room_id(&self) -> Option<Uuid> {
+        match self.open {
+            Some(_) => self.chat.room_id(),
+            None => None,
+        }
+    }
+
+    /// The chat room the open watch is drawing a column for: its room while
+    /// F4 leaves the column up, `None` while it is hidden or there is no
+    /// room.
+    pub fn shown_chat_room_id(&self) -> Option<Uuid> {
+        match self.chat_shown {
+            true => self.chat_room_id(),
+            false => None,
+        }
+    }
+
     /// F4 in an open watch: hide the chat column, or show it again.
     pub fn toggle_chat(&mut self) {
         self.chat_shown = !self.chat_shown;

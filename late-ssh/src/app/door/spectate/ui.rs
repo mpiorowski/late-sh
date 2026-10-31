@@ -162,7 +162,6 @@ pub fn draw(
             ChatSide::Watcher,
             column,
             chat.map(|chat| *chat),
-            None,
             view.watchers,
             terminal_images,
         );
@@ -313,18 +312,14 @@ pub fn chat_split(area: Rect, game: SpectateGame) -> (Rect, ChatColumn) {
 /// The watch chat column, the same on both ends of it: one faint header row
 /// saying how many are watching, then the room's ordinary embedded chat,
 /// composer included. Drawn after the game, over it when the two overlap.
-///
-/// `suggestion` is a command a watcher suggested for the player's own Zork
-/// game (`door/zork/suggest.rs`), which F3 types: it rides its own row under
+/// A player's suggested command (`ChatSide::Player`) rides its own row under
 /// the header.
-#[allow(clippy::too_many_arguments)]
 pub fn draw_chat_column(
     frame: &mut Frame,
     game: SpectateGame,
-    side: ChatSide,
+    side: ChatSide<'_>,
     column: ChatColumn,
     chat: Option<EmbeddedRoomChatView<'_>>,
-    suggestion: Option<&str>,
     watchers: usize,
     terminal_images: &mut TerminalImageFrame,
 ) {
@@ -334,6 +329,10 @@ pub fn draw_chat_column(
     draw_rule(frame, rule);
     let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(pane);
     draw_chat_header(frame, rows[0], watchers, game, side);
+    let suggestion = match side {
+        ChatSide::Player { suggestion } => suggestion,
+        ChatSide::Watcher => None,
+    };
     let body = match suggestion {
         Some(command) => {
             let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).split(rows[1]);
@@ -377,26 +376,31 @@ fn draw_suggestion(frame: &mut Frame, area: Rect, command: &str) {
 
 /// Which end of a game's watch chat is reading it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ChatSide {
+pub enum ChatSide<'a> {
     /// Someone watching the game.
     Watcher,
-    /// The player whose game it is.
-    Player,
+    /// The player whose game it is. `suggestion` is a command a watcher
+    /// suggested for their own Zork game (`door/zork/suggest.rs`), which F3
+    /// types; only the player's side ever has one.
+    Player { suggestion: Option<&'a str> },
 }
 
 /// What the watch chat says after its count: on the player's side, how to
 /// get back to the game, and on Zork how a suggested command works from this
 /// side of the chat (`door/zork/suggest.rs`).
-fn suggestion_hint(game: SpectateGame, side: ChatSide) -> &'static str {
+fn suggestion_hint(game: SpectateGame, side: ChatSide<'_>) -> &'static str {
     match (game, side) {
         (SpectateGame::Zork, ChatSide::Watcher) => " \u{b7} >look to suggest",
-        (SpectateGame::Zork, ChatSide::Player) => {
+        (SpectateGame::Zork, ChatSide::Player { .. }) => {
             " \u{b7} F3 takes a >suggestion \u{b7} Esc to the game"
         }
         (SpectateGame::Dcss | SpectateGame::Nethack | SpectateGame::Brogue, ChatSide::Watcher) => {
             ""
         }
-        (SpectateGame::Dcss | SpectateGame::Nethack | SpectateGame::Brogue, ChatSide::Player) => {
+        (
+            SpectateGame::Dcss | SpectateGame::Nethack | SpectateGame::Brogue,
+            ChatSide::Player { .. },
+        ) => {
             " \u{b7} Esc to the game"
         }
     }
@@ -411,7 +415,7 @@ fn draw_chat_header(
     area: Rect,
     watchers: usize,
     game: SpectateGame,
-    side: ChatSide,
+    side: ChatSide<'_>,
 ) {
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(

@@ -733,11 +733,13 @@ impl App {
                 Some(_) => None,
                 None => self.realm.chat_room_id(),
             },
-            (Screen::Games, _) => self
-                .spectate_state
-                .as_ref()
-                .filter(|state| state.is_open() && !state.chat_shown())
-                .and_then(|state| state.chat().room_id()),
+            (Screen::Games, _) => match self.spectate_state.as_ref() {
+                Some(state) => match state.shown_chat_room_id() {
+                    Some(_) => None,
+                    None => state.chat_room_id(),
+                },
+                None => None,
+            },
             (_, Some(game)) if own_chat_open.is_none() => self.own_watch_chat_room_id(game),
             (_, Some(_) | None) => None,
         };
@@ -2439,10 +2441,9 @@ impl App {
                         crate::app::door::spectate::ui::draw_chat_column(
                             frame,
                             crate::app::door::spectate::state::SpectateGame::Nethack,
-                            crate::app::door::spectate::ui::ChatSide::Player,
+                            crate::app::door::spectate::ui::ChatSide::Player { suggestion: None },
                             own_chat,
                             ctx.watch_chat_view.take(),
-                            None,
                             ctx.own_watchers,
                             terminal_images,
                         );
@@ -2464,10 +2465,9 @@ impl App {
                         crate::app::door::spectate::ui::draw_chat_column(
                             frame,
                             crate::app::door::spectate::state::SpectateGame::Dcss,
-                            crate::app::door::spectate::ui::ChatSide::Player,
+                            crate::app::door::spectate::ui::ChatSide::Player { suggestion: None },
                             own_chat,
                             ctx.watch_chat_view.take(),
-                            None,
                             ctx.own_watchers,
                             terminal_images,
                         );
@@ -2489,10 +2489,9 @@ impl App {
                         crate::app::door::spectate::ui::draw_chat_column(
                             frame,
                             crate::app::door::spectate::state::SpectateGame::Brogue,
-                            crate::app::door::spectate::ui::ChatSide::Player,
+                            crate::app::door::spectate::ui::ChatSide::Player { suggestion: None },
                             own_chat,
                             ctx.watch_chat_view.take(),
-                            None,
                             ctx.own_watchers,
                             terminal_images,
                         );
@@ -2536,10 +2535,11 @@ impl App {
                         crate::app::door::spectate::ui::draw_chat_column(
                             frame,
                             crate::app::door::spectate::state::SpectateGame::Zork,
-                            crate::app::door::spectate::ui::ChatSide::Player,
+                            crate::app::door::spectate::ui::ChatSide::Player {
+                                suggestion: ctx.own_suggestion.as_deref(),
+                            },
                             own_chat,
                             ctx.watch_chat_view.take(),
-                            ctx.own_suggestion.as_deref(),
                             ctx.own_watchers,
                             terminal_images,
                         );

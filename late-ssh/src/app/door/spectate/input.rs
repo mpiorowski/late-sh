@@ -29,17 +29,10 @@ use crate::app::chat::input as chat_input;
 use crate::app::input::{MouseEventKind, ParsedInput};
 use crate::app::state::App;
 
-/// The chat room the open watch has on screen: the watched player's room,
-/// once this session is in it, while F4 leaves its column up. `None` for a
-/// preview, or when this session is not watching.
-pub fn chat_room_id(app: &App) -> Option<Uuid> {
-    app.spectate_chat_room_id()
-}
-
 /// F4 in an open watch: hide the chat column, with anything of it still in
 /// hand, or show it again. Nothing without an open watch.
 pub fn toggle_watch_chat(app: &mut App) {
-    if let Some(room_id) = chat_room_id(app) {
+    if let Some(room_id) = app.spectate_chat_room_id() {
         drop_chat_focus(app, room_id);
     }
     if let Some(state) = app.spectate_state.as_mut().filter(|state| state.is_open()) {
@@ -80,7 +73,7 @@ pub fn handle_open_event(app: &mut App, event: &ParsedInput) -> bool {
     match event {
         ParsedInput::Byte(byte) => handle_open_key(app, *byte),
         ParsedInput::Char(ch) if ch.is_ascii() => handle_open_key(app, *ch as u8),
-        ParsedInput::Arrow(key) => match chat_room_id(app) {
+        ParsedInput::Arrow(key) => match app.spectate_chat_room_id() {
             Some(room_id) => chat_input::handle_message_arrow_in_room(app, room_id, *key),
             None => false,
         },
@@ -99,7 +92,7 @@ fn handle_open_key(app: &mut App, byte: u8) -> bool {
     if byte == b'`' {
         return crate::app::workspace::cycle::cycle_game_workspace(app);
     }
-    let Some(room_id) = chat_room_id(app) else {
+    let Some(room_id) = app.spectate_chat_room_id() else {
         return false;
     };
     // `i`, j/k, Ctrl+D/Ctrl+U and a reaction leader's follow-up always go to
@@ -112,7 +105,7 @@ fn handle_open_key(app: &mut App, byte: u8) -> bool {
 }
 
 fn scroll_chat(app: &mut App, delta: isize) -> bool {
-    match chat_room_id(app) {
+    match app.spectate_chat_room_id() {
         Some(room_id) => {
             chat_input::handle_scroll_in_room(app, room_id, delta);
             true
@@ -128,7 +121,7 @@ fn page_step(app: &App) -> isize {
 /// Esc in a watch: drop a selected chat message first, then close an open
 /// watch back to its preview, then leave the preview.
 pub fn handle_escape(app: &mut App) {
-    if let Some(room_id) = chat_room_id(app)
+    if let Some(room_id) = app.spectate_chat_room_id()
         && app.chat.selected_message_body_in_room(room_id).is_some()
     {
         app.chat.clear_message_selection();
