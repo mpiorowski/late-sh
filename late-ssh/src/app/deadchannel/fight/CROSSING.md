@@ -105,7 +105,9 @@ window, worded with the names the row kept that night), all `None` while
 a fight is on the row. A lookout that fails to read is logged and
 counted (`lookout_failed`) and the session gets the empty one: the
 answer that landed is never reported failed for it. The road draws the
-lookout under the legend and the threat words come from
+lookout under the legend, in two rows it keeps whether or not there is
+news or an answer owed, the answer's row with its own `[r]` key; the
+threat words come from
 `sim::odds_rival`. The news is read once a connection: the session
 (`news_read`) remembers the fight it told of when the runner acts on the
 road (a step, the crossing, the answer, a draft) or goes back to the

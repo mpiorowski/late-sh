@@ -15,9 +15,10 @@ scene's width, opened by `FightSession::step_up` (`f`, or Enter at the
 screen) unless the mirror shows a fight waiting on the row. The road
 itself (the map, the steps, the rests and caches) is `CONTEXT.md`; this is the part of it that warns.
 
-- On top, your face and sheet: level, signal bar, attack and defense with
-  the kit, rations, bits, crystals, exp toward the next level, the
-  static in the deck and the debt when there are any.
+- On top, your face and sheet: level, signal bar with the exp toward the
+  next level beside it, attack and defense with the kit, then the budget
+  row: rations, bits, crystals, the static in the deck and the debt when
+  there are any. Every row fits the panel's fixed width at its widest.
 - Under the map, what waits on the lane the cursor is on. For a glyph:
   its face, level, signal, what it hits you for, its moves in the order
   they come, its pay, and its threat word. `[g]` in the key row is the

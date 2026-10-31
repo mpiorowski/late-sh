@@ -884,10 +884,9 @@ fn the_road_shows_the_sleeper_at_the_crossing_and_the_answer_owed() {
         "{owed}"
     );
     assert!(
-        owed.contains("owed an answer: tomas is up, 45 bits to take. no ration. even"),
+        owed.contains("[r] answer tomas: 45 bits to take. no ration. even"),
         "{owed}"
     );
-    assert!(owed.contains("[r] answer tomas"), "{owed}");
 
     let off = render_road_with(
         &at,
@@ -907,6 +906,123 @@ fn the_road_shows_the_sleeper_at_the_crossing_and_the_answer_owed() {
         "{off}"
     );
     assert!(!off.contains("[r]"), "{off}");
+}
+
+/// The rows the road's box spans on a rendered screen, borders included.
+fn panel_rows(screen: &str) -> usize {
+    screen
+        .lines()
+        .filter(|row| matches!(row.trim_start().chars().next(), Some('┌' | '│' | '└')))
+        .count()
+}
+
+#[test]
+fn every_number_on_the_roads_sheet_fits_inside_the_panel() {
+    let mut sheet = Sheet::fresh(Uuid::nil(), september(24));
+    sheet.level = 6;
+    sheet.draft_up();
+    sheet.signal = 20;
+    sheet.exp = 3656;
+    sheet.bits = 2999;
+    sheet.crystals = 5;
+    sheet.debt = 120;
+    sheet.road.static_cards = 4;
+    let picker = Picker {
+        lane: 1,
+        fair: Some(Threat::Even),
+        lower: Some(Threat::Easy),
+        bright: Some(Threat::Risky),
+        crossing: None,
+        answer: None,
+    };
+
+    let text = render_road(&sheet, &picker, 30, None);
+    assert!(text.contains("exp 3656/4707"), "{text}");
+    assert!(
+        text.contains("rations 10/10 · bits 2999 · crystals 5 · static 4 · owed 120"),
+        "{text}"
+    );
+
+    // At the top of the ladder the exp line is the Old Signal's, whole.
+    sheet.level = MAX_LEVEL;
+    sheet.draft_up();
+    sheet.exp = exp_to_seek();
+    let top = render_road(&sheet, &picker, 30, None);
+    assert!(
+        top.contains(&format!("exp {}  the Old Signal hears you", exp_to_seek())),
+        "{top}"
+    );
+    assert!(
+        top.contains("rations 10/10 · bits 2999 · crystals 5 · static 4 · owed 120"),
+        "{top}"
+    );
+}
+
+#[test]
+fn the_answer_owed_has_its_own_row_and_the_panel_holds_its_size() {
+    let mut sheet = Sheet::fresh(Uuid::nil(), september(24));
+    sheet.level = 6;
+    sheet.draft_up();
+    sheet.signal = 20;
+    let picker = Picker {
+        lane: lane_of(&sheet, 1, Node::Glyph).expect("the first step has a glyph"),
+        fair: Some(Threat::Even),
+        lower: Some(Threat::Easy),
+        bright: Some(Threat::Risky),
+        crossing: None,
+        answer: Some(Threat::Risky),
+    };
+    let now = chrono::Utc::now();
+    let crossed = Ambush {
+        id: Uuid::from_u128(1),
+        day: september(24),
+        attacker_user_id: Uuid::from_u128(7),
+        defender_user_id: Uuid::nil(),
+        attacker_username: "tomas".to_string(),
+        defender_username: "mira".to_string(),
+        step: Some(6),
+        stake: 340,
+        answer_to: None,
+        started_at: now,
+        ended_at: Some(now),
+        outcome: Some(AmbushOutcome::Won),
+        bits_moved: 340,
+    };
+
+    let quiet = render_road_with(&sheet, &picker, &Lookout::default());
+    let owed = render_road_with(
+        &sheet,
+        &picker,
+        &Lookout {
+            crossing: None,
+            token: Some(Token {
+                ambush: crossed.clone(),
+                crosser: "tomas".to_string(),
+                prey: Some(tom(90)),
+            }),
+            news: Some(crossed),
+        },
+    );
+
+    // The step down keeps the key row; the answer is a row of its own,
+    // its key with it.
+    assert!(
+        owed.contains("[Enter] fight   [g] step down, half pay easy  esc back"),
+        "{owed}"
+    );
+    assert!(
+        owed.contains("[r] answer tomas: 45 bits to take. no ration. risky"),
+        "{owed}"
+    );
+    assert!(
+        owed.contains("tomas crossed you while you were gone. 340 bits gone."),
+        "{owed}"
+    );
+    assert_eq!(
+        panel_rows(&owed),
+        panel_rows(&quiet),
+        "the news and the answer take rows the panel always keeps\n{quiet}\n{owed}"
+    );
 }
 
 #[test]
