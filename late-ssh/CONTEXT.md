@@ -387,9 +387,9 @@ removes a required secret follows the deploy skew rule in `infra/RUNBOOK.md`.
   (`normalize_right_sidebar_components`). Stored `"activity"` and `"pot"` keys
   are dropped on read. The Live panel is `app/live`. Home draws the same
   rows and panels as tiles of its own tree (`app/zen/CONTEXT.md`): its stock
-  layout is built from this component list, so the Settings checklist shapes
-  Home until the account arranges it, and the panel widgets (`draw_core_block`,
-  `draw_music_stage`, `draw_panel_rule`) are shared with the tiles.
+  layout is fixed (the Settings checklist shapes the Arcade's sidebar alone),
+  and the panel widgets (`draw_core_block`, `draw_music_stage`,
+  `draw_panel_rule`) are shared with the tiles.
 - **Frame.** Status bars on both borders through `app/statusline`; the toast is
   a 3-row block top-center of the content area, under the settings overlay.
   The sponsor link `late.sh/thanks` redirects through late-web.

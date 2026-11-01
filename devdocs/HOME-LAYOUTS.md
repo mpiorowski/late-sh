@@ -14,7 +14,8 @@ What is in the code now, and where it stops short of the sections below
 delta against the design):
 
 - Home renders through the tree (`RicePage::Home`, `App::home`), with the
-  stock Home fixed (the sidebar's panel order, then the owned companions). Zen stays its own
+  stock Home fixed: the rail, the reef over the chat, and the sidebar
+  column (presence, music, lobby, live, bonsai, pet). Zen stays its own
   screen on `Ctrl+F` with its boxed look; arrange mode on Home is `Ctrl+E`
   (Esc is done), since Ctrl+F still means Zen.
 - Static kinds `rooms`, `presence` and `tank` exist (the tank is the
@@ -41,8 +42,9 @@ delta against the design):
 - No chat-only key and no narrow fold: a page is drawn as arranged at
   every width, and a phone arranges its own Home. The room-list setting is
   gone, row and storage; the sidebar row is the Arcade's. The stock Home
-  is fixed (the sidebar's panel order plus the owned companions), not read
-  from the Settings panel list, which the Arcade alone uses.
+  is fixed (the sidebar's panel order with the pet in the tank's slot,
+  owned or not), not read from the Settings panel list, which the Arcade
+  alone uses.
 
 ## Why
 
@@ -184,10 +186,9 @@ Each dynamic kind appears once on the page, as a tile or as a guest, so
 the `s` prefix, `Ctrl+G` and the clicks have one target. Clicks on a
 guest work as on its panel. Guests never take focus.
 
-The stock Home places `now` and `banner` as guests on `center` and
-`lobby` and `live` as tiles in the sidebar: today's page. The use this was
-drawn for: the reef across the top of the chat, hosting `now`, so the
-strip lands on the fish and the chat never loses a row.
+The stock Home places `now` on the reef across the top of the chat, so
+the strip lands on the fish and the chat never loses a row, and `banner`
+on the chat.
 
 Candidates for later, once the guest list exists: `inbox` while anything
 is unread, `headlines` while a story is under an hour old. The model does
@@ -220,11 +221,11 @@ changes:
   keys skip them. Without this the sidebar is five nested per-mille
   splits that are miserable to edit.
 - **A `hidden` flag is not added.** The rail modes (`\`, `auto`, the
-  `AUTO_*_MIN_COLS` thresholds) are replaced by one rule: `\` zooms the
-  active chat tile over the whole page and back, the same as `z` on it in
-  arrange mode, and a page narrower than `ZOOM_BELOW_COLS` zooms it by
-  itself. The half states (rail hidden, sidebar hidden) are gone; a
-  layout without a rail is a layout, saved as one.
+  `AUTO_*_MIN_COLS` thresholds) are gone with nothing in their place: the
+  half states (rail hidden, sidebar hidden) are gone, and a layout
+  without a rail is a layout, saved as one. There is no zoom either;
+  layout presets are the planned way to switch between a full page and
+  a chat alone.
 
 `MAX_TILES` (32), `MIN_TILE_CELLS` and the lenient parse stay. The now
 strip's old home, the topic row of the #lounge card, is the `center`
@@ -267,7 +268,7 @@ The Settings landing page keeps Clubhouse and Home; "Zen" there becomes
 ## Keys
 
 Outside arrange mode: Home's keys, exactly. `Ctrl+F` enters arrange mode
-instead of leaving for Zen. `\` zooms the chat.
+instead of leaving for Zen.
 
 Arrange mode:
 
@@ -278,8 +279,8 @@ Arrange mode:
 | `<` `>` `{` `}` | resize, as Zen; refused on a fit split |
 | `space` | the kind picker over the focused tile |
 | `+` | the guest list over the focused tile: the four dynamic kinds, a check beside the placed ones, toggled in place |
+| `t` | the focused tile's title rule on or off, its own say from then on (the rail, presence and the page's chat start bare, the rest with a rule) |
 | `[` `]` | a chat tile walks the rail's rooms, an ascii tile its pieces, as Zen |
-| `z` | zoom the focused tile; `z` again unzooms |
 | `f` | frame on, frame off |
 | `1`..`9` | load that layout and leave arrange mode |
 | `L` | the layouts list |

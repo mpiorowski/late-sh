@@ -1,5 +1,5 @@
-//! Drawing a piece into any rect: the Zen ascii tile, zoomed or not, and the
-//! away screensaver over the whole terminal.
+//! Drawing a piece into any rect: the Zen ascii tile and the away
+//! screensaver over the whole terminal.
 
 use late_core::models::user::{AsciiPiece, SceneStyle};
 use ratatui::{Frame, layout::Rect, style::Color};

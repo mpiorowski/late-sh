@@ -273,7 +273,7 @@ async fn an_event_about_to_start_opens_from_the_live_strip() {
     })
     .await;
     // The test database has no #lounge, so no card carries the strip; the
-    // Live panel on the sidebar lists it with its start.
+    // stock Live tile lists it with its start.
     let rendered = render_plain(&mut app);
     let time = start.format("%H:%M").to_string();
     assert!(

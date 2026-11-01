@@ -70,7 +70,6 @@ impl App {
         // page is left), whatever the key repeat rate did to it.
         if one_hz {
             self.flush_rice_layouts();
-            self.sync_home_stock();
             self.record_attention();
             if let Some(minute) = self.newcomer_clock.take_minute() {
                 self.referral_service
@@ -1551,12 +1550,12 @@ impl App {
         IDLE_TICK
     }
 
-    /// The ascii pieces on screen: the away screensaver's, or the Zen ascii
-    /// tiles' that are drawn (not zoomed away).
+    /// The ascii pieces on screen: the away screensaver's, or the rice
+    /// page's ascii tiles'.
     fn visible_pieces(&self) -> Vec<late_core::models::user::AsciiPiece> {
         match (self.screensaver(), self.screen) {
             (Some(piece), _) => vec![piece],
-            (None, Screen::Zen | Screen::Dashboard) => self.rice().drawn_pieces(),
+            (None, Screen::Zen | Screen::Dashboard) => self.rice().pieces(),
             (None, _) => Vec::new(),
         }
     }

@@ -13,7 +13,7 @@ fn a_tank_tile_touching_the_pet_tile_is_a_neighbour_on_that_side() {
         Node::leaf(TileKind::Pet),
         Node::leaf(TileKind::Aquarium),
     );
-    let rects = tile_rects(&side_by_side, area, Gaps::uniform(1), None);
+    let rects = tile_rects(&side_by_side, area, Gaps::uniform(1));
     assert_eq!(
         neighbour_side(rects[0].1, rects[1].1, Gaps::uniform(1)),
         Some(WatchSide::Right)
@@ -30,7 +30,7 @@ fn a_tank_tile_touching_the_pet_tile_is_a_neighbour_on_that_side() {
         Node::leaf(TileKind::Aquarium),
         Node::leaf(TileKind::Pet),
     );
-    let rects = tile_rects(&stacked, area, Gaps::uniform(0), None);
+    let rects = tile_rects(&stacked, area, Gaps::uniform(0));
     assert_eq!(
         neighbour_side(rects[1].1, rects[0].1, Gaps::uniform(0)),
         Some(WatchSide::Above)
@@ -51,7 +51,7 @@ fn a_tile_across_the_page_or_on_a_diagonal_is_not_a_neighbour() {
             Node::leaf(TileKind::Aquarium),
         ),
     );
-    let rects = tile_rects(&row, Rect::new(0, 0, 90, 30), Gaps::uniform(1), None);
+    let rects = tile_rects(&row, Rect::new(0, 0, 90, 30), Gaps::uniform(1));
     assert_eq!(
         neighbour_side(rects[0].1, rects[2].1, Gaps::uniform(1)),
         None
@@ -67,7 +67,7 @@ fn a_tile_across_the_page_or_on_a_diagonal_is_not_a_neighbour() {
 fn the_default_page_puts_the_tank_to_the_pets_left_and_the_bonsai_out_of_reach() {
     let rice = RiceLayout::default();
     for area in [Rect::new(0, 0, 200, 50), Rect::new(0, 0, 120, 30)] {
-        let rects = tile_rects(&rice.root, area, Gaps::uniform(rice.look.gap as u16), None);
+        let rects = tile_rects(&rice.root, area, Gaps::uniform(rice.look.gap as u16));
         assert_eq!(
             pet_neighbours(&rects, Gaps::uniform(rice.look.gap as u16)),
             Neighbours {
@@ -79,27 +79,6 @@ fn the_default_page_puts_the_tank_to_the_pets_left_and_the_bonsai_out_of_reach()
             area.height
         );
     }
-}
-
-#[test]
-fn a_zoomed_pet_tile_has_no_neighbours() {
-    let rice = RiceLayout::default();
-    let area = Rect::new(0, 0, 200, 50);
-    let rects = tile_rects(&rice.root, area, Gaps::uniform(rice.look.gap as u16), None);
-    let pet = rects
-        .iter()
-        .position(|(kind, _)| *kind == TileKind::Pet)
-        .expect("the default page holds a pet tile");
-    let zoomed = tile_rects(
-        &rice.root,
-        area,
-        Gaps::uniform(rice.look.gap as u16),
-        Some(pet),
-    );
-    assert_eq!(
-        pet_neighbours(&zoomed, Gaps::uniform(rice.look.gap as u16)),
-        Neighbours::default()
-    );
 }
 
 #[test]
@@ -130,20 +109,32 @@ fn the_rules_chrome_paints_gutters_between_columns_and_insets_every_tile_but_the
     // title row and a column of air on each side.
     let rules = Chrome::Rules { arrange: false };
     let rect = Rect::new(0, 0, 23, 30);
-    assert_eq!(tile_inner(rect, &rules, TileKind::Chat, true), rect);
-    assert_eq!(tile_inner(rect, &rules, TileKind::Rooms, false), rect);
+    assert_eq!(tile_inner(rect, &rules, TileKind::Chat, true, None), rect);
+    assert_eq!(tile_inner(rect, &rules, TileKind::Rooms, false, None), rect);
     assert_eq!(
-        tile_inner(rect, &rules, TileKind::Chat, false),
+        tile_inner(rect, &rules, TileKind::Chat, false, None),
         Rect::new(1, 1, 21, 29)
     );
     assert_eq!(
-        tile_inner(rect, &rules, TileKind::Music, false),
+        tile_inner(rect, &rules, TileKind::Music, false, None),
         Rect::new(1, 1, 21, 29)
     );
-    // In arrange mode every tile wears a title, so the focus has a ring.
+    // A tile's own say outranks its kind's default: a panel told to go
+    // bare keeps only its air, the page's chat told to wear a rule gets
+    // the row.
+    assert_eq!(
+        tile_inner(rect, &rules, TileKind::Music, false, Some(false)),
+        Rect::new(1, 0, 21, 30)
+    );
+    assert_eq!(
+        tile_inner(rect, &rules, TileKind::Chat, true, Some(true)),
+        Rect::new(0, 1, 23, 29)
+    );
+    // In arrange mode every tile wears a title, so the focus has a ring,
+    // whatever the tile says.
     let arrange = Chrome::Rules { arrange: true };
     assert_eq!(
-        tile_inner(rect, &arrange, TileKind::Chat, true),
+        tile_inner(rect, &arrange, TileKind::Chat, true, Some(false)),
         Rect::new(0, 1, 23, 29)
     );
 }

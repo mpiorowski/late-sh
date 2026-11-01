@@ -40,18 +40,24 @@ pub enum Chrome {
 
 impl Chrome {
     /// Whether a tile of `kind` wears a title row under this chrome;
-    /// `page_chat` marks the page's chat of the moment (Home's card).
-    pub fn titled(&self, kind: TileKind, page_chat: bool) -> bool {
+    /// `page_chat` marks the page's chat of the moment (Home's card), and
+    /// `title` is the tile's own say (`Node::title_at`), which outranks
+    /// the kind's default outside arrange mode. Arrange mode titles every
+    /// tile, so the focus always has a rule to light.
+    pub fn titled(&self, kind: TileKind, page_chat: bool, title: Option<bool>) -> bool {
         match self {
-            Chrome::Boxed(look) => look.titles,
-            Chrome::Rules { arrange } => *arrange || !bare_under_rules(kind, page_chat),
+            Chrome::Boxed(look) => look.titles && title.unwrap_or(true),
+            Chrome::Rules { arrange } => {
+                *arrange || title.unwrap_or(!bare_under_rules(kind, page_chat))
+            }
         }
     }
 }
 
 /// The tiles that draw their own chrome on Home (the rail's hints, the
-/// card's ticker and composer), so a title rule is only arrange mode's.
-fn bare_under_rules(kind: TileKind, page_chat: bool) -> bool {
+/// card's ticker and composer), so a title rule is only arrange mode's
+/// unless the tile says otherwise.
+pub(crate) fn bare_under_rules(kind: TileKind, page_chat: bool) -> bool {
     match kind {
         TileKind::Chat => page_chat,
         TileKind::Rooms | TileKind::Presence => true,
@@ -86,17 +92,15 @@ pub fn rice_fits(area: Rect) -> bool {
 }
 
 /// Whether the page gives its bottom row to the status line: whenever it
-/// is drawn at all (`rice_fits`), unless a tile is zoomed, when that tile
-/// is the whole page, the way the screensaver is. Every caller of
-/// `rice_areas` that draws, clicks, or sizes what is on show reads it
-/// from here.
-pub fn rice_row(area: Rect, zoomed: bool) -> bool {
-    rice_fits(area) && !zoomed
+/// is drawn at all (`rice_fits`). Every caller of `rice_areas` that
+/// draws, clicks, or sizes what is on show reads it from here.
+pub fn rice_row(area: Rect) -> bool {
+    rice_fits(area)
 }
 
 /// The Rice page: the tiles, then the status row at the bottom (the user's
 /// status line and the page's keys) when `status_row` (`rice_row`); a page
-/// too small to draw has no row, nor does a zoomed one.
+/// too small to draw has no row.
 pub fn rice_areas(area: Rect, status_row: bool) -> (Rect, Option<Rect>) {
     match status_row {
         true => {
@@ -114,22 +118,10 @@ pub fn rice_areas(area: Rect, status_row: bool) -> (Rect, Option<Rect>) {
 }
 
 /// Every tile's rect in layout order, with `gap` cells between siblings.
-/// With `zoomed` set only that tile is returned, on the whole area.
-pub fn tile_rects(
-    root: &Node,
-    area: Rect,
-    gaps: Gaps,
-    zoomed: Option<usize>,
-) -> Vec<(TileKind, Rect)> {
+pub fn tile_rects(root: &Node, area: Rect, gaps: Gaps) -> Vec<(TileKind, Rect)> {
     let mut out = Vec::with_capacity(root.leaf_count());
     collect_rects(root, area, gaps, &mut out);
-    match zoomed {
-        Some(ordinal) => match out.get(ordinal) {
-            Some((kind, _)) => vec![(*kind, area)],
-            None => out,
-        },
-        None => out,
-    }
+    out
 }
 
 fn collect_rects(node: &Node, area: Rect, gaps: Gaps, out: &mut Vec<(TileKind, Rect)>) {
@@ -244,8 +236,14 @@ pub fn split_rect(area: Rect, dir: Dir, share: Share, gaps: Gaps) -> (Rect, Rect
 /// nothing else. Rules: a title takes the top row, and every tile but
 /// the page's chat and the rail (which keep their own insets) gives up a
 /// column on each side.
-pub fn tile_inner(rect: Rect, chrome: &Chrome, kind: TileKind, page_chat: bool) -> Rect {
-    let titled = chrome.titled(kind, page_chat);
+pub fn tile_inner(
+    rect: Rect,
+    chrome: &Chrome,
+    kind: TileKind,
+    page_chat: bool,
+    title: Option<bool>,
+) -> Rect {
+    let titled = chrome.titled(kind, page_chat, title);
     match chrome {
         Chrome::Boxed(look) => match look.border {
             BorderKind::None => {

@@ -572,8 +572,8 @@ pub struct App {
     /// Home as a tile tree (`app/zen`, `RicePage::Home`): the stock Home
     /// until arranged (`Ctrl+E`).
     pub(crate) home: crate::app::zen::state::ZenState,
-    /// Whether this device ever arranged Home: a stock page follows the
-    /// companions the account owns, an arranged one is its own.
+    /// Whether this device ever arranged Home: a stock page is the fixed
+    /// stock, an arranged one is its own.
     pub(crate) home_edited: bool,
     /// Where `Ctrl+F` was pressed, so the chord hands the page back; cleared
     /// whenever Zen is left, and `None` on a session that landed on Zen.
@@ -1731,10 +1731,7 @@ impl App {
                 crate::app::zen::state::RiceLayout::from_json(config.zen_layout.as_ref()),
             ),
             home: {
-                let stock = crate::app::zen::state::RiceLayout::home(
-                    shop_state.entitlements().has_pet_companion(),
-                    shop_state.entitlements().has_aquarium(),
-                );
+                let stock = crate::app::zen::state::RiceLayout::home();
                 crate::app::zen::state::ZenState::for_page(
                     crate::app::zen::state::RicePage::Home,
                     crate::app::zen::state::RiceLayout::from_json_or(
@@ -3617,29 +3614,31 @@ impl App {
             _ => {
                 let (cols, rows) = self.size;
                 let full = Rect::new(0, 0, cols, rows);
-                zen_layout::rice_areas(full, zen_layout::rice_row(full, self.zen.zoomed)).0
+                zen_layout::rice_areas(full, zen_layout::rice_row(full)).0
             }
         }
     }
 
-    /// Every tile's rect on the current rice page, in layout order (the
-    /// zoomed tile alone while one is), with the chrome's inner rect.
+    /// Every tile's rect on the current rice page, in layout order, with
+    /// the chrome's inner rect.
     pub(crate) fn rice_tile_rects(&self) -> Vec<(crate::app::zen::state::TileKind, Rect, Rect)> {
         use crate::app::zen::layout as zen_layout;
         let rice = self.rice();
         let area = self.rice_tiles_area();
-        let zoomed = rice.zoomed_tile();
         let chrome = rice.chrome();
-        zen_layout::tile_rects(&rice.rice.root, area, rice.gaps(), zoomed)
+        zen_layout::tile_rects(&rice.rice.root, area, rice.gaps())
             .into_iter()
             .enumerate()
             .map(|(idx, (kind, rect))| {
-                let page_chat = self.screen == Screen::Dashboard
-                    && rice.active_chat_ordinal() == Some(zoomed.unwrap_or(idx));
-                let inner = match zoomed {
-                    Some(_) => rect,
-                    None => zen_layout::tile_inner(rect, &chrome, kind, page_chat),
-                };
+                let page_chat =
+                    self.screen == Screen::Dashboard && rice.active_chat_ordinal() == Some(idx);
+                let inner = zen_layout::tile_inner(
+                    rect,
+                    &chrome,
+                    kind,
+                    page_chat,
+                    rice.rice.root.title_at(idx),
+                );
                 (kind, rect, inner)
             })
             .collect()
@@ -3651,7 +3650,7 @@ impl App {
     pub(crate) fn home_strip_hosted(&self) -> bool {
         use crate::app::zen::state::Guest;
         self.screen == Screen::Dashboard
-            && self.home.draws_guest(Guest::Now)
+            && self.home.hosts_guest(Guest::Now)
             && (!self.home.active_chat_hosts(Guest::Now) || self.lounge_card_shown())
     }
 
@@ -3714,17 +3713,6 @@ impl App {
         self.rice_mut().pin_unbound_chats(room_id);
     }
 
-    /// Keep Home's stock layout in step with the companions the account
-    /// owns (a pet or a tank bought mid-session gets its tile). An arranged
-    /// Home keeps its own tree and only its `R` reset follows.
-    pub(crate) fn sync_home_stock(&mut self) {
-        let stock = crate::app::zen::state::RiceLayout::home(
-            self.shop_state.entitlements().has_pet_companion(),
-            self.shop_state.entitlements().has_aquarium(),
-        );
-        self.home.set_stock(stock, self.home_edited);
-    }
-
     /// Every chat tile's room in layout order, resolved: a tile bound to a
     /// room the account has since left shows the current room instead.
     pub(crate) fn zen_chat_rooms(&self) -> Vec<Option<Uuid>> {
@@ -3767,9 +3755,9 @@ impl App {
     }
 
     /// The rect the aquarium simulation should fill on the current screen:
-    /// the first reef-form tank tile's inner rect on a rice page (the
-    /// whole page, zoomed; a sidebar-sized tank tile draws the small tank
-    /// and binds nothing), the launch band elsewhere.
+    /// the first reef-form tank tile's inner rect on a rice page (a
+    /// sidebar-sized tank tile draws the small tank and binds nothing),
+    /// the launch band elsewhere.
     fn aquarium_area_for_screen(&self) -> Rect {
         let (cols, rows) = self.size;
         match self.reef_tile_inner() {

@@ -5,14 +5,14 @@ use super::*;
 use crate::app::zen::layout::{Gaps, tile_rects};
 
 fn widths(root: &Node, area: Rect, gap: u16) -> Vec<u16> {
-    tile_rects(root, area, Gaps::uniform(gap), None)
+    tile_rects(root, area, Gaps::uniform(gap))
         .into_iter()
         .map(|(_, rect)| rect.width)
         .collect()
 }
 
 fn heights(root: &Node, area: Rect, gap: u16) -> Vec<u16> {
-    tile_rects(root, area, Gaps::uniform(gap), None)
+    tile_rects(root, area, Gaps::uniform(gap))
         .into_iter()
         .map(|(_, rect)| rect.height)
         .collect()
@@ -259,22 +259,10 @@ fn the_page_holds_ten_chats_and_the_first_opening_lands_on_the_first_one() {
 }
 
 #[test]
-fn the_equalizer_shows_through_a_music_or_visualizer_tile_and_zoom_keeps_only_the_focused_one() {
+fn the_equalizer_shows_through_a_music_or_visualizer_tile() {
     // Leaves run bonsai, aquarium, chat, clock, pet, lobby, live, music.
-    let mut zen = ZenState::new(RiceLayout::default());
+    let zen = ZenState::new(RiceLayout::default());
     assert!(zen.shows_equalizer(), "the default page has a music tile");
-
-    zen.zoomed = true;
-    zen.focus = 0;
-    assert!(
-        !zen.shows_equalizer(),
-        "zoomed on the bonsai hides the music tile"
-    );
-    zen.focus = 7;
-    assert!(
-        zen.shows_equalizer(),
-        "zoomed on the music tile keeps its eq"
-    );
 
     let visualizer_only = ZenState::new(RiceLayout {
         root: Node::leaf(TileKind::Visualizer),
@@ -304,26 +292,6 @@ fn the_equalizer_shows_through_a_music_or_visualizer_tile_and_zoom_keeps_only_th
     });
     assert!(!bonsai_only.shows_equalizer());
     assert!(bonsai_only.paints_on_half_edge());
-}
-
-#[test]
-fn a_placed_tile_shows_whatever_the_zoom_but_only_draws_while_on_show() {
-    // Leaves run bonsai, aquarium, chat, clock, pet, lobby, live, music.
-    let mut zen = ZenState::new(RiceLayout::default());
-    let lobby = zen.first_tile_of(TileKind::Lobby).expect("a lobby tile");
-    assert!(zen.shows(TileKind::Lobby));
-    assert!(zen.draws(TileKind::Lobby), "unzoomed, every tile draws");
-
-    zen.zoomed = true;
-    zen.focus = 0;
-    assert!(zen.shows(TileKind::Lobby), "the tile is still on the page");
-    assert!(
-        !zen.draws(TileKind::Lobby),
-        "zoomed on the bonsai, the lobby tile is not drawn"
-    );
-    zen.focus = lobby;
-    assert!(zen.draws(TileKind::Lobby), "zoomed on it, it draws");
-    assert!(!zen.draws(TileKind::Bonsai), "and the bonsai does not");
 }
 
 /// An ascii tile plays the screensaver's piece, the slow earthrise,
@@ -489,19 +457,25 @@ fn random_tiles_keep_runtime_separate_from_the_saved_layout() {
     let initial = zen.playback.clone();
     assert!(zen.piece_label(0).unwrap().starts_with("random · "));
     assert!(zen.piece_label(1).unwrap().starts_with("randomer · "));
-    zen.toggle_zoom();
     zen.cycle_border();
     zen.cycle_gap();
     zen.flip_focused();
     zen.resize_focused(Dir::Column, 1, Rect::new(0, 0, 100, 40));
-    // The focused Random tile holds; the hidden Randomer tile still rotates.
-    assert!(!zen.sync_playback(now + Duration::from_secs(300), &mut rng));
+    // The Random tile holds; the Randomer tile rotates, and since every
+    // tile is on screen that rotation is a frame worth paying.
+    assert!(
+        zen.sync_playback(now + Duration::from_secs(300), &mut rng),
+        "a rotating piece on show dirties the frame"
+    );
     assert_eq!(zen.playback[0], initial[0]);
     assert_ne!(
         zen.piece_at(1).unwrap().scene,
         initial[1].unwrap().piece().scene
     );
-    assert_eq!(zen.drawn_pieces(), vec![zen.piece_at(0).unwrap()]);
+    assert_eq!(
+        zen.pieces(),
+        vec![zen.piece_at(0).unwrap(), zen.piece_at(1).unwrap()]
+    );
     let rotated = zen.playback.clone();
     zen.focus = 1;
     assert!(!zen.set_focused_selection(
@@ -684,28 +658,34 @@ fn a_guest_lives_on_one_tile_and_toggling_moves_it_or_takes_it_off() {
 }
 
 #[test]
-fn the_stock_home_is_the_rail_the_chat_and_the_sidebar_list_in_order() {
-    // The stock is fixed: the sidebar's panels in its order, then the
-    // owned companions. The pet is not owned, so it gets no tile; the
-    // tank is, so it does.
-    let home = RiceLayout::home(false, true);
+fn the_stock_home_is_the_rail_the_reef_over_the_chat_and_the_sidebar_column() {
+    // The stock is fixed and the same for every account: the sidebar's
+    // panels with the pet in the tank's old slot, and an unowned reef or
+    // pet draws the shop's note in its tile.
+    let home = RiceLayout::home();
     assert_eq!(
         home.root.leaf_kinds(),
         vec![
             TileKind::Rooms,
+            TileKind::Aquarium,
             TileKind::Chat,
             TileKind::Presence,
             TileKind::Music,
             TileKind::Lobby,
             TileKind::Live,
             TileKind::Bonsai,
-            TileKind::Tank,
+            TileKind::Pet,
         ]
     );
     assert_eq!(
         home.root.leaf_guests()[1],
-        vec![Guest::Now, Guest::Banner],
-        "the chat carries the strip and the board's day, as the card always did"
+        vec![Guest::Now],
+        "the reef carries the strip, so the chat never loses a row to it"
+    );
+    assert_eq!(
+        home.root.leaf_guests()[2],
+        vec![Guest::Banner],
+        "the chat carries the board's day, as the card always did"
     );
 
     let zen = ZenState::for_page(RicePage::Home, home.clone(), home);
@@ -720,11 +700,42 @@ fn the_stock_home_is_the_rail_the_chat_and_the_sidebar_list_in_order() {
         "the stock chat is bound to no room: it shows the rail's"
     );
     assert!(!zen.arrange, "Home is furniture until Ctrl+E");
-    assert!(zen.active_chat_hosts(Guest::Now));
+    assert!(!zen.active_chat_hosts(Guest::Now));
+    assert!(zen.hosts_guest(Guest::Now));
     assert!(!zen.kind_allowed(TileKind::Rooms), "one rail per page");
 
     // Zen never takes the Home only kind.
     let on_zen = ZenState::new(RiceLayout::default());
     assert!(!on_zen.kind_allowed(TileKind::Rooms));
     assert!(on_zen.kind_allowed(TileKind::Presence));
+}
+
+#[test]
+fn a_tile_owns_its_title_rule_on_home_and_the_say_rides_the_layout() {
+    let home = RiceLayout::home();
+    let mut zen = ZenState::for_page(RicePage::Home, home.clone(), home);
+    let rooms = zen.first_tile_of(TileKind::Rooms).expect("a rail");
+    let reef = zen.first_tile_of(TileKind::Aquarium).expect("a reef");
+    let chat = zen.first_tile_of(TileKind::Chat).expect("a chat");
+    // The kinds' defaults: the rail, the presence row and the page's chat
+    // go bare, a panel wears its rule.
+    assert!(!zen.rule_shown(rooms));
+    assert!(!zen.rule_shown(chat));
+    assert!(zen.rule_shown(reef));
+    assert_eq!(zen.rice.root.title_at(reef), None, "no say until `t`");
+
+    // `t` gives the focused tile its own say, which the layout stores
+    // and a reload keeps; a new kind starts over on its own default.
+    zen.focus = reef;
+    assert!(zen.toggle_focused_title());
+    assert!(!zen.rule_shown(reef));
+    assert_eq!(zen.rice.root.title_at(reef), Some(false));
+    zen.focus = rooms;
+    assert!(zen.toggle_focused_title());
+    assert!(zen.rule_shown(rooms));
+    let saved = zen.rice.to_json();
+    assert_eq!(RiceLayout::from_json(Some(&saved)), zen.rice);
+    assert!(zen.rice.root.set_kind(reef, TileKind::Clock));
+    assert_eq!(zen.rice.root.title_at(reef), None);
+    assert!(zen.rule_shown(reef));
 }

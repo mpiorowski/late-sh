@@ -132,20 +132,15 @@ pub(crate) struct ZenStatusRow {
 }
 
 /// The layout keys worth knowing by heart, on the right end of Zen's row:
-/// the guide, split, flip, close, and zoom. The rest are in the guide.
-pub(crate) const ZEN_ROW_KEYS: [(&str, &str); 5] = [
-    ("?", "help"),
-    ("S", "split"),
-    ("F", "flip"),
-    ("X", "close"),
-    ("z", "zoom"),
-];
+/// the guide, split, flip, and close. The rest are in the guide.
+pub(crate) const ZEN_ROW_KEYS: [(&str, &str); 4] =
+    [("?", "help"), ("S", "split"), ("F", "flip"), ("X", "close")];
 
 /// Every key of Home's arrange mode (`Ctrl+E`), on its footer while the
 /// mode is on: the mode has no guide of its own, so the row is the guide.
 /// The way out first, then by use, so a row too narrow for all of them
 /// keeps the ones that matter.
-pub(crate) const HOME_ARRANGE_KEYS: [(&str, &str); 12] = [
+pub(crate) const HOME_ARRANGE_KEYS: [(&str, &str); 11] = [
     ("Esc", "done"),
     ("arrows", "move"),
     ("S", "split"),
@@ -154,8 +149,7 @@ pub(crate) const HOME_ARRANGE_KEYS: [(&str, &str); 12] = [
     ("<>{}", "resize"),
     ("space", "tile"),
     ("+", "guests"),
-    ("[]", "room"),
-    ("z", "zoom"),
+    ("t", "title"),
     ("R", "reset"),
     ("Tab", "next"),
 ];

@@ -3768,7 +3768,6 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
 /// on the footer, on a gap, on the tile already focused, or, outside
 /// arrange mode, on furniture (`TileKind::takes_focus`).
 fn focus_rice_tile_at(app: &mut App, x: u16, y: u16) {
-    let zoomed = app.rice().zoomed_tile().is_some();
     let hit = app
         .rice_tile_rects()
         .iter()
@@ -3776,8 +3775,7 @@ fn focus_rice_tile_at(app: &mut App, x: u16, y: u16) {
     let Some(ordinal) = hit else {
         return;
     };
-    // Zoomed, the one rect on show is the focused tile whatever its index.
-    if zoomed || ordinal == app.rice().focus {
+    if ordinal == app.rice().focus {
         return;
     }
     if !app.rice().arrange

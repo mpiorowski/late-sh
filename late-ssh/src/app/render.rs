@@ -819,7 +819,7 @@ impl App {
         // The board's day, on the #lounge card like the strip, or on the
         // tile hosting the banner.
         let home_board_day = if screen == Screen::Dashboard
-            && self.home.draws_guest(crate::app::zen::state::Guest::Banner)
+            && self.home.hosts_guest(crate::app::zen::state::Guest::Banner)
             && (!chat_hosts_banner || home_selected)
         {
             crate::app::calendar::live::day_text(
@@ -2254,15 +2254,14 @@ impl App {
                     _ => None,
                 };
                 // A page too small to draw has no row, so it keeps no
-                // click target either; nor does a zoomed one, the tile
-                // takes the whole page. Home has no status row, the frame
+                // click target either. Home has no status row, the frame
                 // carries its bars; while it is being arranged (`Ctrl+E`)
                 // its bottom row is the mode's key footer instead.
                 let status_row = match screen {
                     Screen::Zen => {
                         let (_, row) = crate::app::zen::layout::rice_areas(
                             content_area,
-                            crate::app::zen::layout::rice_row(content_area, ctx.zen.zoomed),
+                            crate::app::zen::layout::rice_row(content_area),
                         );
                         row.map(|row| {
                             crate::app::statusline::bar::build_zen_status_row(

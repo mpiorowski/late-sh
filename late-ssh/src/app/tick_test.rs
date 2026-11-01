@@ -59,14 +59,27 @@ fn hide_sidebar(app: &mut App) {
 }
 
 /// Undo [`hide_sidebar`] for the animated case, which shares the settled
-/// app: the stock Home, whose music tile paints its equalizer on the
+/// app: a Home with a music tile, which paints its equalizer on the
 /// anim_half edge.
 fn show_sidebar(app: &mut App) {
     app.device_rails = Some(KeyLayout {
         right_sidebar_mode: RightSidebarMode::On,
     });
-    let stock = RiceLayout::home(false, false);
-    app.home = ZenState::for_page(RicePage::Home, stock.clone(), stock);
+    let with_music = RiceLayout {
+        root: Node::split_first(
+            Dir::Row,
+            23,
+            Node::leaf(TileKind::Rooms),
+            Node::split_second(
+                Dir::Row,
+                23,
+                Node::leaf(TileKind::Chat),
+                Node::leaf(TileKind::Music),
+            ),
+        ),
+        look: Look::default(),
+    };
+    app.home = ZenState::for_page(RicePage::Home, with_music.clone(), with_music);
     app.home_edited = true;
 }
 

@@ -1211,7 +1211,10 @@ async fn f4_hides_and_shows_an_open_watchs_chat() {
 
     app.handle_input(b"\x1b[14~");
     assert!(render_plain(&mut app).contains(" 1 watching"));
-    assert!(!app.chat.is_composing(), "it comes back with nothing in hand");
+    assert!(
+        !app.chat.is_composing(),
+        "it comes back with nothing in hand"
+    );
     app.handle_input(b"i");
     assert_eq!(
         app.chat.composer().lines().join("\n"),
@@ -1448,6 +1451,9 @@ async fn opening_a_watch_from_the_strip_drops_a_lounge_draft() {
         }],
     );
     wait_for_render_contains(&mut app, "o or click to watch").await;
+    // The strip sits on the reef, up before the room list lands; the
+    // composer needs the rail's #lounge.
+    wait_for_render_contains(&mut app, "lounge").await;
 
     app.handle_input(b"i");
     app.handle_input(b"nice sling");

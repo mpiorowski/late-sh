@@ -85,10 +85,6 @@ pub(crate) fn toggle_home_arrange(app: &mut App) {
     rice.arrange = arrange;
     rice.close_kind_picker();
     rice.close_guest_picker();
-    // `z` is a preview while arranging; the page leaves the mode whole.
-    if !arrange {
-        rice.zoomed = false;
-    }
     if !arrange {
         // Leaving puts the focus back on a chat, the only tiles that keep
         // it outside arrange mode.
@@ -118,7 +114,7 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
     };
     // The Live prefix, as on Home: `s` then a row's number opens that row
     // of the Live tile, from whichever tile has the focus, while the page
-    // draws one (one zoomed away is not shown). Any other key after `s` is
+    // draws one. Any other key after `s` is
     // swallowed, as on Home, so it is spent here, ahead of the focused
     // tile's own keys.
     if app.live_prefix_armed {
@@ -151,7 +147,7 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
         }
     }
     // Lowercase only: `S` is the split.
-    if byte == b's' && app.rice().draws(TileKind::Live) {
+    if byte == b's' && app.rice().shows(TileKind::Live) {
         app.live_prefix_armed = true;
         return true;
     }
@@ -364,12 +360,6 @@ fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
         b'{' => resize_or_explain(app, Dir::Column, -1),
         b'}' => resize_or_explain(app, Dir::Column, 1),
         b'F' => app.rice_mut().flip_focused(),
-        b'z' => {
-            app.rice_mut().toggle_zoom();
-            // The zoom is a view, not a layout edit; still resizes the tank.
-            app.sync_aquarium_bounds();
-            return true;
-        }
         b'b' => {
             app.rice_mut().cycle_border();
             true
@@ -378,10 +368,15 @@ fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
             app.rice_mut().cycle_gap();
             true
         }
-        b't' => {
-            app.rice_mut().toggle_titles();
-            true
-        }
+        // Zen's `t` is the look's: every title on or off. Home's is the
+        // focused tile's own rule, since Home has no look to speak of.
+        b't' => match app.rice().page {
+            super::state::RicePage::Zen => {
+                app.rice_mut().toggle_titles();
+                true
+            }
+            super::state::RicePage::Home => app.rice_mut().toggle_focused_title(),
+        },
         b'R' => {
             app.rice_mut().reset();
             true
@@ -477,8 +472,7 @@ fn resize_or_explain(app: &mut App, dir: Dir, delta_cells: i16) -> bool {
 /// twice as tall as wide, so width is halved before comparing).
 fn focused_tile_is_wide(app: &App) -> bool {
     let tiles_area = app.rice_tiles_area();
-    let rects =
-        super::layout::tile_rects(&app.rice().rice.root, tiles_area, app.rice().gaps(), None);
+    let rects = super::layout::tile_rects(&app.rice().rice.root, tiles_area, app.rice().gaps());
     rects
         .get(app.rice().focus)
         .map(|(_, rect)| rect.width / 2 >= rect.height)

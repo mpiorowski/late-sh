@@ -42,7 +42,7 @@ kubectl exec deploy/vintagestory -- cat /data/serverconfig.json
 echo '/worldconfig landcover' | kubectl attach -i deploy/vintagestory     # the answer lands in the pod log
 ```
 
-The seed is fixed: `-915463208`, in `WorldConfig.Seed` and in the save.
+The seed is fixed: `-1224630403`, in `WorldConfig.Seed` and in the save.
 The boot log prints it (`Using world seed: ...`); `/seed` on the console
 prints nothing, an admin types it in game.
 Spawn is the default (the world centre), not moved.
@@ -64,9 +64,9 @@ reverts on restart):
 | `PassTimeWhenEmpty` | `false` |
 
 World: `PlayStyle` `surviveandbuild`, `WorldType` `standard`, `Seed`
-`"-915463208"`, and this block in `WorldConfig.WorldConfiguration`, written
+`"-1224630403"`, and this block in `WorldConfig.WorldConfiguration`, written
 before the world was generated. A reset that keeps this seed and block
-(`scripts/vintagestory_reroll.sh -915463208 0.4 0.75`) regenerates the same
+(`scripts/vintagestory_reroll.sh -1224630403 0.4 0.75`) regenerates the same
 terrain; any other seed is a different world:
 
 ```json
@@ -94,8 +94,10 @@ gives bigger landmasses and bigger oceans, a lower one many small islands (the
 wiki's World Configuration table and our own renders agree). On 1.22.7, 0.4 /
 0.75 gives landmasses a few kilometres across with straits of about 100-200
 blocks between them; 0.4 / 3 gives continents wider than 20k blocks. The seed
-was picked with vs-seedmap (Finding a seed) at 0.4 / 0.75 over a scout radius
-of 12 (12.8k blocks across): land is 39% of that map. The polar distance is our own addition, not part of that set: half
+(the amazing seed in Finding a seed) was picked among many at 0.4 with scales
+from 0.75 to 3, by flying over each in game; vs-seedmap at 0.4 / 0.75 over a
+scout radius of 12 (12.8k blocks across) puts land at 43% of that map. The
+polar distance is our own addition, not part of that set: half
 the preset's, so a sea crossing reaches a different climate in half the
 distance and gives the boat a second reason to exist. Those four are locked.
 
@@ -106,6 +108,14 @@ on most cubic blocks instead of only stone and wood, a death keeps the
 inventory, lightning starts fires (they spread because `AllowFireSpread` is
 on in Terraform), no temporal storms or rifts for now (the stability meter
 itself stays on), and the world map shows the real terrain colors.
+
+One unlocked key was set later on the live save with `/worldconfig`, so it
+sits in the save but not in the block on disk: `foodSpoilSpeed 0.5`, food
+lasts twice as long (the Exploration preset's value). Every perishable ages
+on the shared world clock, so food a player leaves in a chest or carries
+when logging out keeps rotting while others play; the slower rate softens
+that. A reset generates from the block alone, so add the key to it (or
+re-run the command and restart) to keep the rule.
 
 Every other world key is the `surviveandbuild` preset or the attribute
 default.

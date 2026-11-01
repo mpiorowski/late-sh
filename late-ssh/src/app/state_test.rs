@@ -354,7 +354,6 @@ async fn zen_navigation_and_overlays_preserve_only_the_current_visit() {
     app.show_help = true;
     app.render().unwrap();
     app.show_help = false;
-    app.zen.toggle_zoom();
     app.resize(120, 40).unwrap();
     app.render().unwrap();
     assert_eq!(app.zen.focused_piece(), Some(initial));

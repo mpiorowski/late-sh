@@ -23,7 +23,7 @@ pub enum TileKind {
     /// The sidebar's small tank: the fish in a six-row band, whatever
     /// the tile's size. The same tank two ways.
     Tank,
-    /// An animated ascii piece (`app/ascii`); `z` zooms it to a screensaver.
+    /// An animated ascii piece (`app/ascii`), the screensaver's kind in a tile.
     Ascii,
     Pet,
     /// A room's chat. The active one (the focused chat tile, else the
@@ -255,6 +255,13 @@ pub enum Node {
             skip_serializing_if = "Option::is_none"
         )]
         piece: Option<AsciiSelection>,
+        /// Whether the tile wears its title rule on Home, outside arrange
+        /// mode; `None` (the stored default) is the kind's own: the rail,
+        /// the presence row and the page's chat go bare, the rest wear
+        /// one (`layout::bare_under_rules`). `t` in arrange mode sets it.
+        /// Under Zen's boxed chrome `Some(false)` drops the title text.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<bool>,
     },
     Split {
         dir: Dir,
@@ -301,6 +308,7 @@ impl Node {
             guests: Vec::new(),
             room: None,
             piece: None,
+            title: None,
         }
     }
 
@@ -311,6 +319,7 @@ impl Node {
             guests: guests.to_vec(),
             room: None,
             piece: None,
+            title: None,
         }
     }
 
@@ -492,6 +501,27 @@ impl Node {
         }
     }
 
+    /// The leaf's own say on its title rule, `None` for the kind's default.
+    pub fn title_at(&self, ordinal: usize) -> Option<bool> {
+        let mut remaining = ordinal;
+        match self.leaf_ref(&mut remaining) {
+            Some(Node::Leaf { title, .. }) => *title,
+            _ => None,
+        }
+    }
+
+    /// Give the leaf at `ordinal` its own say on its title rule.
+    pub fn set_title(&mut self, ordinal: usize, new_title: Option<bool>) -> bool {
+        let mut remaining = ordinal;
+        match self.leaf_mut(&mut remaining) {
+            Some(Node::Leaf { title, .. }) => {
+                *title = new_title;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Bind the leaf at `ordinal` to a room (or back to the current room).
     pub fn set_room(&mut self, ordinal: usize, new_room: Option<Uuid>) -> bool {
         let mut remaining = ordinal;
@@ -534,6 +564,7 @@ impl Node {
             guests,
             room,
             piece,
+            title,
         } = leaf
         else {
             return false;
@@ -543,6 +574,7 @@ impl Node {
             guests: std::mem::take(guests),
             room: *room,
             piece: *piece,
+            title: *title,
         };
         *leaf = Node::split(dir, 500, kept, Node::leaf(new_kind));
         true
@@ -550,12 +582,17 @@ impl Node {
 
     /// Change what the leaf at `ordinal` shows. A tile that stops being a
     /// chat forgets its room, so cycling back lands on the current room;
-    /// one that stops being an ascii tile forgets its piece the same way.
+    /// one that stops being an ascii tile forgets its piece the same way,
+    /// and a new kind starts with its own default title rule.
     pub fn set_kind(&mut self, ordinal: usize, new_kind: TileKind) -> bool {
         let mut remaining = ordinal;
         match self.leaf_mut(&mut remaining) {
             Some(Node::Leaf {
-                kind, room, piece, ..
+                kind,
+                room,
+                piece,
+                title,
+                ..
             }) => {
                 *kind = new_kind;
                 if new_kind != TileKind::Chat {
@@ -564,6 +601,7 @@ impl Node {
                 if new_kind != TileKind::Ascii {
                     *piece = None;
                 }
+                *title = None;
                 true
             }
             _ => false,
@@ -807,6 +845,9 @@ pub const HOME_RAIL_COLS: u16 = 24;
 pub const HOME_SIDEBAR_COLS: u16 = 24;
 /// The sidebar's pinned rows: the online count with the clock, the friends.
 pub const PRESENCE_ROWS: u16 = 2;
+/// The stock Home's reef, across the top of the chat: tall enough for the
+/// reef form (`zen::ui::reef_form`) with the now strip over it.
+pub const HOME_AQUARIUM_ROWS: u16 = 14;
 
 /// Which page a `ZenState` drives. Home draws from its own render input
 /// (the rail, the chat center) and edits only in arrange mode; Zen has
@@ -833,15 +874,22 @@ impl RiceLayout {
         Self::from_json_or(value, Self::default())
     }
 
-    /// Home as it has always drawn: the room rail, the chat hosting the now
-    /// strip and the board's banner, and the sidebar column: the pinned
-    /// presence rows, then the panels in the sidebar's order (music, the
-    /// lobby, live, the bonsai, then the owned companions: `owned_pet`,
-    /// `owned_tank`), each at its panel height, the last taking the rest.
-    /// Fixed: the page is arranged in place (`Ctrl+E`), not through a
-    /// settings list. This is what `R` resets to on Home.
-    pub fn home(owned_pet: bool, owned_tank: bool) -> Self {
-        let mut panels: Vec<(TileKind, u16)> = vec![
+    /// The stock Home: the room rail, then the reef across the top of the
+    /// chat hosting the now strip (the shop's note while no tank is
+    /// owned), the chat under it hosting the board's banner, and a
+    /// sidebar column of the presence row over the pet (the shop's note
+    /// while none is owned). Fixed, the same for every account: the page
+    /// is arranged in place (`Ctrl+E`), and this is what `R` resets to.
+    pub fn home() -> Self {
+        let center = Node::split_first(
+            Dir::Column,
+            HOME_AQUARIUM_ROWS + 1,
+            Node::hosting(TileKind::Aquarium, &[Guest::Now]),
+            Node::hosting(TileKind::Chat, &[Guest::Banner]),
+        );
+        // The sidebar's panels, each at its rows plus its title rule; the
+        // pet, last, takes the rest of the column.
+        let panels: [(TileKind, u16); 4] = [
             (
                 TileKind::Music,
                 crate::app::common::sidebar::MUSIC_STAGE_HEIGHT,
@@ -853,22 +901,8 @@ impl RiceLayout {
             (TileKind::Live, crate::app::live::panel::LIVE_PANEL_HEIGHT),
             (TileKind::Bonsai, crate::app::common::sidebar::BONSAI_HEIGHT),
         ];
-        if owned_pet {
-            panels.push((TileKind::Pet, crate::app::pet::ui::PET_BOX_MIN_ROWS));
-        }
-        if owned_tank {
-            panels.push((
-                TileKind::Tank,
-                crate::app::hub::aquarium::ui::MINI_TANK_HEIGHT,
-            ));
-        }
-        // Each panel's rows plus its title rule; the last one takes the
-        // rest of the column.
-        let mut column = match panels.last() {
-            Some((kind, _)) => Node::leaf(*kind),
-            None => Node::leaf(TileKind::Blank),
-        };
-        for (kind, rows) in panels.iter().rev().skip(1) {
+        let mut column = Node::leaf(TileKind::Pet);
+        for (kind, rows) in panels.iter().rev() {
             column = Node::split_first(Dir::Column, rows + 1, Node::leaf(*kind), column);
         }
         let sidebar = Node::split_first(
@@ -877,7 +911,6 @@ impl RiceLayout {
             Node::leaf(TileKind::Presence),
             column,
         );
-        let center = Node::hosting(TileKind::Chat, &[Guest::Now, Guest::Banner]);
         Self {
             root: Node::split_first(
                 Dir::Row,
@@ -937,8 +970,6 @@ pub struct ZenState {
     visiting: bool,
     /// Focused tile, as an ordinal into `rice.root.leaf_kinds()`.
     pub focus: usize,
-    /// The focused tile takes the whole page while set.
-    pub zoomed: bool,
     /// The tile picker `space` opens over the focused tile: the selected
     /// row, an index into `TileKind::ALL`, while it is open.
     pub kind_picker: Option<usize>,
@@ -980,7 +1011,6 @@ impl ZenState {
             arrange: page == RicePage::Zen,
             guest_picker: None,
             focus,
-            zoomed: false,
             kind_picker: None,
             inbox_selected: 0,
             headlines_selected: 0,
@@ -997,41 +1027,40 @@ impl ZenState {
     }
 
     /// Whether the page draws a music equalizer: a music tile's eq strip or
-    /// a visualizer tile, among every tile or, while zoomed, the focused one
-    /// alone. Those paint on the anim_half edge, so the render loop has to
-    /// wake that often while one is up.
+    /// a visualizer tile. Those paint on the anim_half edge, so the render
+    /// loop has to wake that often while one is up.
     pub fn shows_equalizer(&self) -> bool {
-        self.drawn_kinds().into_iter().any(|kind| match kind {
-            TileKind::Music | TileKind::Visualizer => true,
-            TileKind::Bonsai
-            | TileKind::Aquarium
-            | TileKind::Tank
-            | TileKind::Ascii
-            | TileKind::Pet
-            | TileKind::Chat
-            | TileKind::Clock
-            | TileKind::Lobby
-            | TileKind::Activity
-            | TileKind::Friends
-            | TileKind::Pulse
-            | TileKind::Inbox
-            | TileKind::Headlines
-            | TileKind::Live
-            | TileKind::Blank
-            | TileKind::Rooms
-            | TileKind::Presence => false,
-        })
+        self.rice
+            .root
+            .leaf_kinds()
+            .into_iter()
+            .any(|kind| match kind {
+                TileKind::Music | TileKind::Visualizer => true,
+                TileKind::Bonsai
+                | TileKind::Aquarium
+                | TileKind::Tank
+                | TileKind::Ascii
+                | TileKind::Pet
+                | TileKind::Chat
+                | TileKind::Clock
+                | TileKind::Lobby
+                | TileKind::Activity
+                | TileKind::Friends
+                | TileKind::Pulse
+                | TileKind::Inbox
+                | TileKind::Headlines
+                | TileKind::Live
+                | TileKind::Blank
+                | TileKind::Rooms
+                | TileKind::Presence => false,
+            })
     }
 
     /// Whether the page paints something on the anim_half edge: an
     /// equalizer, or a bonsai tile's sway. The render loop pays that edge
     /// only while a page shows one; a rail and a chat alone settle.
     pub fn paints_on_half_edge(&self) -> bool {
-        self.shows_equalizer()
-            || self
-                .drawn_kinds()
-                .into_iter()
-                .any(|kind| kind == TileKind::Bonsai)
+        self.shows_equalizer() || self.shows(TileKind::Bonsai)
     }
 
     /// The tile hosting `guest`, if any.
@@ -1050,12 +1079,9 @@ impl ZenState {
         self.host_of(guest).is_some() && self.host_of(guest) == self.active_chat_ordinal()
     }
 
-    /// Whether `guest` is hosted by a tile drawn this frame.
-    pub fn draws_guest(&self, guest: Guest) -> bool {
-        match self.host_of(guest) {
-            None => false,
-            Some(ordinal) => !self.zoomed || ordinal == self.focus,
-        }
+    /// Whether a tile on the page hosts `guest`.
+    pub fn hosts_guest(&self, guest: Guest) -> bool {
+        self.host_of(guest).is_some()
     }
 
     /// The layout's gaps: Zen's uniform look gap, Home's one-column gutter
@@ -1078,24 +1104,11 @@ impl ZenState {
         }
     }
 
-    /// Whether any tile on the page is `kind`, zoomed or not.
+    /// Whether any tile on the page is `kind`: every tile on the page is
+    /// drawn, so this is also the gate for work that only pays off on
+    /// screen (the live strip's view and its wake tier).
     pub fn shows(&self, kind: TileKind) -> bool {
         self.rice.root.leaf_kinds().contains(&kind)
-    }
-
-    /// Whether a tile of `kind` is drawn this frame: among every tile, or,
-    /// while zoomed, the focused one alone. The gate for work that only
-    /// pays off on screen (the live strip's view and its wake tier).
-    pub fn draws(&self, kind: TileKind) -> bool {
-        self.drawn_kinds().contains(&kind)
-    }
-
-    /// The kinds on show: every leaf, or the focused one while zoomed.
-    fn drawn_kinds(&self) -> Vec<TileKind> {
-        match self.zoomed {
-            true => self.focused_kind().into_iter().collect(),
-            false => self.rice.root.leaf_kinds(),
-        }
     }
 
     /// Resolve all tiles when a visit begins, before the first frame.
@@ -1111,8 +1124,8 @@ impl ZenState {
         self.playback.fill(None);
     }
 
-    /// Covered and zoomed-away tiles still belong to this visit. Advancing
-    /// them costs no rendering or persistence work.
+    /// Covered tiles still belong to this visit. Advancing them costs no
+    /// rendering or persistence work.
     pub(crate) fn sync_playback(&mut self, now: Instant, rng: &mut impl Rng) -> bool {
         if !self.visiting {
             return false;
@@ -1121,7 +1134,7 @@ impl ZenState {
         let mut changed = false;
         for (ordinal, slot) in self.playback.iter_mut().enumerate() {
             let moved = Playback::sync(slot, self.rice.root.selection_at(ordinal), now, rng);
-            changed |= moved && (!self.zoomed || ordinal == self.focus);
+            changed |= moved;
         }
         changed
     }
@@ -1151,14 +1164,11 @@ impl ZenState {
         })
     }
 
-    /// Only drawn pieces contribute to the animation wake tier.
-    pub fn drawn_pieces(&self) -> Vec<AsciiPiece> {
-        match self.zoomed {
-            true => self.focused_piece().into_iter().collect(),
-            false => (0..self.leaf_count())
-                .filter_map(|i| self.piece_at(i))
-                .collect(),
-        }
+    /// The pieces the page's ascii tiles play, for the animation wake tier.
+    pub fn pieces(&self) -> Vec<AsciiPiece> {
+        (0..self.leaf_count())
+            .filter_map(|i| self.piece_at(i))
+            .collect()
     }
 
     /// Give the focused ascii tile `selection`, a random one drawn before the
@@ -1309,7 +1319,6 @@ impl ZenState {
         if done {
             self.playback.remove(self.focus);
         }
-        self.zoomed = false;
         self.clamp_focus();
         done
     }
@@ -1436,18 +1445,6 @@ impl ZenState {
         self.rice.root.flip_parent(self.focus)
     }
 
-    pub fn toggle_zoom(&mut self) {
-        self.zoomed = !self.zoomed;
-    }
-
-    /// The one tile the page shows alone, if it shows one: the focused
-    /// tile while zoomed (`z`). Nothing about the terminal's size changes
-    /// the layout: a page is laid out as its owner arranged it, at every
-    /// width.
-    pub fn zoomed_tile(&self) -> Option<usize> {
-        self.zoomed.then_some(self.focus)
-    }
-
     pub fn cycle_border(&mut self) {
         self.rice.look.border = self.rice.look.border.next();
     }
@@ -1460,6 +1457,28 @@ impl ZenState {
         self.rice.look.titles = !self.rice.look.titles;
     }
 
+    /// Whether the tile at `ordinal` wears its title outside arrange mode:
+    /// its own say (`Node::title_at`), else its kind's default under the
+    /// page's chrome.
+    pub fn rule_shown(&self, ordinal: usize) -> bool {
+        let Some(kind) = self.rice.root.kind_at(ordinal) else {
+            return false;
+        };
+        let page_chat = self.page == RicePage::Home && self.active_chat_ordinal() == Some(ordinal);
+        let chrome = match self.page {
+            RicePage::Zen => layout::Chrome::Boxed(self.rice.look.clone()),
+            RicePage::Home => layout::Chrome::Rules { arrange: false },
+        };
+        chrome.titled(kind, page_chat, self.rice.root.title_at(ordinal))
+    }
+
+    /// `t` in Home's arrange mode: the focused tile's title rule, on or
+    /// off, as its own say from now on.
+    pub fn toggle_focused_title(&mut self) -> bool {
+        let shown = self.rule_shown(self.focus);
+        self.rice.root.set_title(self.focus, Some(!shown))
+    }
+
     /// Back to the stock layout (Zen's default, Home as it always drew),
     /// with the focus on its chat so the chat keys work at once, as on the
     /// first opening.
@@ -1467,23 +1486,7 @@ impl ZenState {
         self.rice = self.stock.clone();
         // Stock leaves carry no random selection, so nothing needs a draw.
         self.playback = vec![None; self.leaf_count()];
-        self.zoomed = false;
         self.focus = self.first_tile_of(TileKind::Chat).unwrap_or(0);
-    }
-
-    /// A fresh stock layout (the account bought a companion): what the
-    /// next `R` resets to, and the page itself when it has never been
-    /// edited (`edited`).
-    pub fn set_stock(&mut self, stock: RiceLayout, edited: bool) {
-        if self.stock == stock {
-            return;
-        }
-        self.stock = stock;
-        if !edited {
-            let focus = self.focus;
-            self.reset();
-            self.focus = focus.min(self.leaf_count().saturating_sub(1));
-        }
     }
 
     /// Ordinal of the first tile of `kind`, for surfaces that can only be

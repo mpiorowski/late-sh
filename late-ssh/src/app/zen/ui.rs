@@ -178,13 +178,12 @@ pub(crate) fn draw_rice(
         .collect();
     let mut next_chat = 0usize;
     let zen = view.zen;
-    let zoomed = zen.zoomed_tile();
     let gaps = zen.gaps();
     let chrome = zen.chrome();
-    let rects = layout::tile_rects(&zen.rice.root, tiles_area, gaps, zoomed);
+    let rects = layout::tile_rects(&zen.rice.root, tiles_area, gaps);
     // Under the rules chrome the gutter between two columns is one line,
     // owned by the split, so neither tile draws its own.
-    if matches!(chrome, Chrome::Rules { .. }) && zoomed.is_none() {
+    if matches!(chrome, Chrome::Rules { .. }) {
         for gutter in layout::row_gutters(&zen.rice.root, tiles_area, gaps) {
             crate::app::common::sidebar::paint_vertical_separator(
                 frame,
@@ -206,25 +205,16 @@ pub(crate) fn draw_rice(
     };
     // A pet tile sharing an edge with a tank or a bonsai tile: the pet
     // goes and sits against that edge to watch, and alternates when it
-    // touches both (zoomed, a lone tile has no neighbour at all).
+    // touches both.
     let neighbours = layout::pet_neighbours(&rects, gaps);
-    for (idx, (kind, rect)) in rects.iter().enumerate() {
-        let focused = if zoomed.is_some() {
-            true
-        } else {
-            idx == zen.focus
-        };
-        // Zoomed, the one rect drawn is the focused tile's.
-        let ordinal = zoomed.unwrap_or(idx);
+    for (ordinal, (kind, rect)) in rects.iter().enumerate() {
+        let focused = ordinal == zen.focus;
         // Each chat tile takes the next frame in layout order and names
         // its room in the title, so `[` `]` walking the rooms shows where
         // you landed without reading the messages.
         let chat_tile = match kind {
             TileKind::Chat => {
-                let index = match zoomed {
-                    Some(_) => zen.active_chat_index().unwrap_or(next_chat),
-                    None => next_chat,
-                };
+                let index = next_chat;
                 next_chat += 1;
                 chats.get_mut(index).and_then(Option::take)
             }
@@ -280,6 +270,13 @@ pub(crate) fn draw_rice(
                 _,
             ) => kind.label().to_string(),
         };
+        // Arranging, a tile that goes bare outside the mode says so in
+        // the rule it wears for the mode.
+        let title_override = zen.rice.root.title_at(ordinal);
+        let title = match zen.arrange && !zen.rule_shown(ordinal) {
+            true => format!("{title} · hidden"),
+            false => title,
+        };
         // The tank's title carries its care bar: fourteen dots, green
         // for the feeding streak or red for the days unfed.
         let title_tail = match kind {
@@ -310,23 +307,19 @@ pub(crate) fn draw_rice(
         // The lobby's rule glows while a game waits on you, as the
         // sidebar's does.
         let glow = *kind == TileKind::Lobby && view.lobby_glow;
-        // Zoomed, the tile is the page: no border, no title, no keys, the
-        // way the screensaver draws a piece.
-        let inner = match zoomed {
-            Some(_) => *rect,
-            None => draw_tile_chrome(
-                frame,
-                *rect,
-                *kind,
-                is_page_chat,
-                &title,
-                title_tail,
-                keys,
-                focused,
-                glow,
-                &chrome,
-            ),
-        };
+        let inner = draw_tile_chrome(
+            frame,
+            *rect,
+            *kind,
+            is_page_chat,
+            title_override,
+            &title,
+            title_tail,
+            keys,
+            focused,
+            glow,
+            &chrome,
+        );
         if inner.width == 0 || inner.height == 0 {
             continue;
         }
@@ -338,7 +331,7 @@ pub(crate) fn draw_rice(
             frame,
             inner,
             is_page_chat,
-            guests.get(idx).map(Vec::as_slice).unwrap_or(&[]),
+            guests.get(ordinal).map(Vec::as_slice).unwrap_or(&[]),
             &mut view,
         );
         if inner.width == 0 || inner.height == 0 {
@@ -805,6 +798,7 @@ fn draw_tile_chrome(
     rect: Rect,
     kind: TileKind,
     page_chat: bool,
+    title_override: Option<bool>,
     title: &str,
     title_tail: Option<Vec<Span<'static>>>,
     keys: &[(&str, &str)],
@@ -818,8 +812,8 @@ fn draw_tile_chrome(
     let look = match chrome {
         Chrome::Boxed(look) => look,
         Chrome::Rules { arrange } => {
-            let inner = layout::tile_inner(rect, chrome, kind, page_chat);
-            if !chrome.titled(kind, page_chat) {
+            let inner = layout::tile_inner(rect, chrome, kind, page_chat, title_override);
+            if !chrome.titled(kind, page_chat, title_override) {
                 return inner;
             }
             // The sidebar's rule, the title italic and dim, lit amber while
@@ -870,7 +864,7 @@ fn draw_tile_chrome(
                 .borders(Borders::ALL)
                 .border_type(border_type)
                 .border_style(ring);
-            if look.titles {
+            if chrome.titled(kind, page_chat, title_override) {
                 let mut spans = vec![Span::styled(format!(" {title} "), title_style)];
                 if let Some(tail) = title_tail {
                     spans.extend(tail);
@@ -890,7 +884,7 @@ fn draw_tile_chrome(
                 }
             }
             frame.render_widget(block, rect);
-            layout::tile_inner(rect, chrome, kind, page_chat)
+            layout::tile_inner(rect, chrome, kind, page_chat, title_override)
         }
         None => {
             if !look.titles {
@@ -917,7 +911,7 @@ fn draw_tile_chrome(
                 Paragraph::new(Line::from(line_spans)),
                 Rect::new(rect.x, rect.y, rect.width, 1),
             );
-            layout::tile_inner(rect, chrome, kind, page_chat)
+            layout::tile_inner(rect, chrome, kind, page_chat, title_override)
         }
     }
 }

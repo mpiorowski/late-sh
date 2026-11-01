@@ -2730,6 +2730,9 @@ async fn chat_reaction_leader_second_f_shows_reaction_owners_modal() {
     }
 
     let mut app = make_app(test_db.db.clone(), viewer.id, "f-owners-flow-it");
+    // The modal sits in the chat tile, under the stock Home's reef; a
+    // tall terminal gives its owner lines their rows.
+    app.resize(160, 50).expect("resize test terminal");
     wait_for_render_contains(&mut app, "owner reaction target").await;
 
     app.handle_input(b"j");
@@ -3703,7 +3706,7 @@ async fn zen_guide_opens_on_zen_keys_and_the_row_keeps_its_keys_with_every_compo
     assert!(
         last_row
             .trim_end()
-            .ends_with("? help  S split  F flip  X close  z zoom"),
+            .ends_with("? help  S split  F flip  X close"),
         "the layout keys hold the last row's right end: {last_row:?}"
     );
     assert!(
@@ -6002,7 +6005,7 @@ async fn zen_clicks_under_the_open_tile_picker_reach_nothing() {
 }
 
 #[tokio::test]
-async fn zen_a_draft_stays_in_its_room_when_the_focus_moves_and_zoom_shows_the_focused_chat() {
+async fn zen_a_draft_stays_in_its_room_when_the_focus_moves() {
     use crate::app::zen::state::TileKind;
 
     let test_db = new_test_db().await;
@@ -6054,7 +6057,6 @@ async fn zen_a_draft_stays_in_its_room_when_the_focus_moves_and_zoom_shows_the_f
         &app.zen.rice.root,
         tiles_area,
         crate::app::zen::layout::Gaps::uniform(app.zen.rice.look.gap as u16),
-        None,
     );
     let (_, rect) = rects[first];
     let click = format!(
@@ -6079,32 +6081,6 @@ async fn zen_a_draft_stays_in_its_room_when_the_focus_moves_and_zoom_shows_the_f
         "a new draft belongs to the focused tile's room"
     );
     app.chat.reset_composer();
-
-    // Zoom the second tile: the one pane on show is its room, and it is
-    // the whole screen, no tile chrome and no status row, as the
-    // screensaver draws.
-    app.handle_input(b"\x1b[C");
-    assert_eq!(app.zen.focus, second);
-    app.handle_input(b"z");
-    assert!(app.zen.zoomed);
-    assert_eq!(
-        app.zen.active_chat_index(),
-        Some(1),
-        "the zoomed pane is the focused tile's chat, the second, not the first"
-    );
-    let rendered = strip_ansi(&render_plain(&mut app));
-    assert!(
-        !rendered.contains("z zoom")
-            && !rendered.contains("#lounge")
-            && !rendered.contains("#zen-quiet"),
-        "zoomed, the status row and every tile's chrome are gone:\n{rendered}"
-    );
-    assert!(
-        app.last_status_hits.borrow().is_empty(),
-        "no status row, no click targets"
-    );
-    app.handle_input(b"z");
-    assert!(!app.zen.zoomed, "z again unzooms");
 }
 
 #[tokio::test]
@@ -7611,7 +7587,7 @@ async fn zen_swallows_the_key_after_the_live_prefix_from_a_focused_inbox() {
     assert_eq!(app.zen.pick_kind(), KindPick::Changed);
     assert_eq!(app.zen.focused_kind(), Some(TileKind::Inbox));
     assert!(
-        app.zen.draws(TileKind::Live),
+        app.zen.shows(TileKind::Live),
         "the live tile is still drawn"
     );
 
