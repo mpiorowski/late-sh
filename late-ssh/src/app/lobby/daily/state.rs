@@ -1096,6 +1096,12 @@ impl DailyState {
             .collect()
     }
 
+    /// Whether something waits on you: a match on your move, or a result
+    /// you have not acknowledged. The lobby guest takes its tile while so.
+    pub fn awaits_me(&self) -> bool {
+        !self.my_turn_matches().is_empty() || !self.my_finished().is_empty()
+    }
+
     /// Every open challenge, newest first (snapshot order).
     pub fn lobby(&self) -> Vec<&DailyChallengeItem> {
         self.snapshot.open_challenges.iter().collect()

@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use late_core::models::user_ssh_key::{
     KeyLayout, UserSshKey, extract_key_artboard_disclaimer, extract_key_home_layout,
-    extract_key_layout, extract_key_zen_layout,
+    extract_key_home_layouts, extract_key_layout, extract_key_zen_layout,
 };
 use late_core::models::{artboard_ban::ArtboardBan, user::User};
 use tokio::sync::{broadcast, mpsc};
@@ -289,6 +289,9 @@ pub struct DeviceState {
     /// follow the account's stored layout as the seed.
     pub zen_layout: Option<serde_json::Value>,
     pub home_layout: Option<serde_json::Value>,
+    /// This device's named Home layouts (`app/zen/presets`), `None` until
+    /// it saved or switched one; the two above then seed the set.
+    pub home_layouts: Option<serde_json::Value>,
     /// This device's Artboard content disclaimer, `None` to follow the account.
     /// `Some(true)` when the key could not be read.
     pub artboard_disclaimer: Option<bool>,
@@ -316,18 +319,19 @@ pub async fn load_device_state(
             };
         }
     };
-    let (layout, artboard_disclaimer, zen_layout, home_layout) =
+    let (layout, artboard_disclaimer, zen_layout, home_layout, home_layouts) =
         match UserSshKey::find_by_fingerprint(&client, user_id, fingerprint).await {
             Ok(Some(key)) => (
                 extract_key_layout(&key.settings),
                 extract_key_artboard_disclaimer(&key.settings),
                 extract_key_zen_layout(&key.settings),
                 extract_key_home_layout(&key.settings),
+                extract_key_home_layouts(&key.settings),
             ),
-            Ok(None) => (None, None, None, None),
+            Ok(None) => (None, None, None, None, None),
             Err(e) => {
                 tracing::warn!(error = ?e, "failed to load device settings");
-                (None, Some(true), None, None)
+                (None, Some(true), None, None, None)
             }
         };
     let left_at = match UserSshKey::take_left_at(&client, user_id, fingerprint).await {
@@ -341,6 +345,7 @@ pub async fn load_device_state(
         layout,
         zen_layout,
         home_layout,
+        home_layouts,
         artboard_disclaimer,
         left_at,
     }
@@ -657,6 +662,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
             .home_layout
             .clone()
             .or_else(|| late_core::models::user::extract_home_layout(&user.settings)),
+        home_layouts: device.home_layouts.clone(),
         username_directory: Some(state.username_directory.clone()),
         flair_directory: Some(state.flair_directory.clone()),
         pot_service: Some(state.pot_service.clone()),

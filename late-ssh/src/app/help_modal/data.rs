@@ -233,8 +233,8 @@ pub(crate) fn bartender_app_context() -> String {
     "APP CONTEXT (basic navigation):\n\
     - Screens: 0 Clubhouse (this room, the Late Lounge tavern), 1 Home (chat + music), 2 The Arcade (single-player games, daily quests at the top), 3 Games hub (Lateania, the Realm, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels, Zork Trilogy, Minecraft, Vintage Story), 4 Artboard (shared ASCII canvas), 5 People (three sections: the map of who is where, the people's projects and open-to-work cards, and the job feed), 6 Leaderboards (every board, monthly and all-time), 7 Calendars (the events board: anyone posts, i says I'm in; your own private events beside it).\n\
     - Tab / Shift+Tab cycles screens; number keys 0-7 jump straight to one.\n\
-    - Ctrl+F opens Zen from anywhere and the same chord hands you back (Esc does not leave it): Rice, your bonsai, the reef (live for everyone, fish once the Shop unlocks them), pet, the room Home has selected, music, a clock, and the lobby as tiles you arrange yourself: Tab and the arrows focus, space opens the tile picker for a tile, S splits, X closes, < > change width and { } height, F flips, z zooms it over the whole screen, b g t restyle borders, gaps, and titles, R resets, ? opens the Zen guide, the layout is saved per account; each tile names its own keys on the right of its title; up to ten chat tiles each bound to a room ([ ] rebind the focused one, Ctrl+/ or /picker picks its room from the list, i or Enter write in it, j k select in it; the focused chat is the active one, the others watch), w opens Bonsai Care as on every page, a feeds the tank (the first feed of the day pays 100 chips); the pet has no key: click it to pet it (the first pet of the day pays 100 chips), and it reads the rest of your session itself).\n\
-    - Home is tiles too: Ctrl+E arranges it (the room rail, the chat and the sidebar panels; a second chat tile is a room of its own, and the rail shows whichever chat is focused; the same keys as Zen, Esc when done, + puts the now strip, the lobby, the live rows or the board's day on a tile where they show only while they have something; t turns a tile's title rule off or on).\n\
+    - /zen opens Zen from anywhere and Ctrl+F on it hands you back (Esc does not leave it): Rice, your bonsai, the reef (live for everyone, fish once the Shop unlocks them), pet, the room Home has selected, music, a clock, and the lobby as tiles you arrange yourself: Tab and the arrows focus, space opens the tile picker for a tile, S splits, X closes, < > change width and { } height, F flips, b g t restyle borders, gaps, and titles, R resets, ? opens the Zen guide, the layout is saved per device; each tile names its own keys on the right of its title; up to ten chat tiles each bound to a room ([ ] rebind the focused one, Ctrl+/ or /picker picks its room from the list, i or Enter write in it, j k select in it; the focused chat is the active one, the others watch), w opens Bonsai Care as on every page, a feeds the tank (the first feed of the day pays 100 chips); the pet has no key: click it to pet it (the first pet of the day pays 100 chips), and it reads the rest of your session itself).\n\
+    - Home is tiles too: Ctrl+F or Ctrl+E arranges it (the room rail, the chat and the sidebar panels; a second chat tile is a room of its own, and the rail shows whichever chat is focused; the same keys as Zen, Esc when done, + gives a tile a guest, the now strip or the lobby, which takes the tile over only while it has something; t turns a tile's title rule off or on; b gives the page a border, which boxes it like Zen). Home keeps up to nine named layouts per device: Ctrl+F then a digit loads one (1 is Home, 2 is Zen's page), Ctrl+F L lists them (Enter loads, n saves the page as a new layout, r renames, d deletes, R resets one), and /layout, /layout <name>, /layout save <name> do the same from any composer. Nothing switches a layout for you.\n\
     - Ctrl+O opens Settings from anywhere. Ctrl+G opens the Lobby (daily correspondence games plus the fixed house tables: Poker, Blackjack, Asterion, Tron, Super Snake). Ctrl+S opens the Shop (active games, profile/job editors, and Artboard input keep their local binding); /shop is its typed fallback.\n\
     - The top of the #lounge chat on Home is the now strip (its `── now ──` rule), up whenever something just happened in the house; it cannot be turned off. Things take turns in the order they happened: a track queued in the YouTube booth stays at least two minutes, a daily move or result at least one, and with nothing waiting the last one stays up to five. A pool player lining up a shot is shown over whatever is up while the cue moves. A link shared to News is not on the strip: it goes into #lounge as the sharer's own line, drawn as a card with the story's title, summary points and art, and Enter on the card opens the story. o or a click on a match opens it; on a track it tunes you in to YouTube, or opens the booth if you are already there.\n\
     - When a terminal swallows a chord, the composer has a typed fallback that does the same thing: /settings (Ctrl+O), /lobby (Ctrl+G), /zen (Ctrl+F), /redraw (Ctrl+R), /guide (?).\n\
@@ -586,7 +586,8 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /guide             open the guide (same as ?)",
         "  /settings          open your settings modal (same as Ctrl+O)",
         "  /lobby             open / close the Lobby (same as Ctrl+G)",
-        "  /zen               open / close Zen (same as Ctrl+F)",
+        "  /zen               open / close Zen (Ctrl+F on Zen hands you back)",
+        "  /layout            Home's layouts list; /layout <name or 1-9> loads one, /layout save <name> saves the page as a new one",
         "  /redraw            repaint the screen (same as Ctrl+R)",
         "  /icons             open emoji / nerd font picker",
         "  /picker            open the room picker (same as Ctrl+/)",
@@ -657,11 +658,11 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "Global chat keys",
         "  Ctrl+O             open your settings modal anywhere",
         "  Ctrl+G             open / close the Lobby (daily games + house tables)",
-        "  Ctrl+F             open / close Zen (your bonsai, tank, lobby, chat, and clock as tiles)",
-        "  Ctrl+E             arrange Home: its rail, chat and panels are tiles (Zen's keys; + adds the now strip, lobby, live rows or board day to a tile; t hides or shows a tile's title rule; Esc when done)",
+        "  Ctrl+F             Home's layouts: arrange mode on Home (from any page), then 1-9 loads that layout (2 is Zen's page) and L lists them; on Zen, back to the page it was opened over",
+        "  Ctrl+E             arrange Home: its rail, chat and panels are tiles (Zen's keys; + gives a tile the now strip or the lobby as its guest; t hides or shows a tile's title rule; Esc when done)",
         "  Ctrl+R             redraw the screen if something outside late.sh scribbled on it",
         "  Ctrl+S / /shop     open the Shop (games keep controls; editors save/post; Artboard keeps slot 2)",
-        "  /aquarium feed     feed your Aquarium (free, once a day, +100 chips); 14 days running hatch a fry, 14 days unfed starve a fish; the tank lives on the Zen page (Ctrl+F)",
+        "  /aquarium feed     feed your Aquarium (free, once a day, +100 chips); 14 days running hatch a fry, 14 days unfed starve a fish; the reef is a tile of Home and Zen",
         "  Sprout             comes up on the tank floor every 14 days, fed or not; cut it on its Shop row (Companions, -) within 7 days, or it roots as a plant; plants never die",
         "  Ctrl+/             jump to a room or DM; type ?query to search messages (/picker types it)",
         "  ?                  open this guide; Pair and terminal-specific tabs live here",
@@ -1448,14 +1449,14 @@ fn overview_lines() -> Vec<String> {
         "  q                 open quit confirm (press q again to leave; r restarts the session in the late CLI)",
         "  Ctrl+O            open Settings",
         "  Ctrl+G            open / close the Lobby (daily games + house tables)",
-        "  Ctrl+F            open / close Zen",
+        "  Ctrl+F            on Zen, back to the page it was opened over; elsewhere, Home's layouts (Ctrl+F 2 is this page as a layout of Home)",
         "  Ctrl+E            arrange Home (its rail, chat and panels as tiles; Esc when done)",
         "  Ctrl+R            redraw the screen after outside terminal damage",
         "  /settings /lobby  typed fallbacks for Ctrl+O, Ctrl+G, Ctrl+F, Ctrl+R,",
         "  /zen /redraw      and ?, for terminals that swallow those keys",
         "  /guide",
         "  Ctrl+S / /shop    open the Shop (games keep controls; editors save/post; Artboard keeps slot 2)",
-        "  /aquarium feed    feed your Aquarium (free, once a day, +100 chips); 14 days running hatch a fry, 14 days unfed starve a fish; the tank lives on the Zen page (Ctrl+F)",
+        "  /aquarium feed    feed your Aquarium (free, once a day, +100 chips); 14 days running hatch a fry, 14 days unfed starve a fish; the reef is a tile of Home and Zen",
         "  Sprout            comes up on the tank floor every 14 days, fed or not; cut it on its Shop row (Companions, -) within 7 days, or it roots as a plant; plants never die",
         "  Ctrl+/            jump to a room, DM, or Home entry; ?query searches messages",
         "  ?                 open this guide; Pair and terminal-specific tabs live here",
@@ -1676,7 +1677,7 @@ fn zen_help_lines() -> Vec<String> {
     [
         "Zen",
         "",
-        "Zen is the clubhouse cut down to the things you keep alive: your bonsai, the reef (or its small tank), the pet, your rooms' chat, music, a clock, the lobby, and an ascii piece, as tiles you arrange yourself. Ctrl+F opens it from any page and the same chord hands you back; Esc stays on the page. The layout is saved per account, the rooms your chat tiles are bound to included. Home is the same kind of tree: Ctrl+E arranges its rail, chat and sidebar panels with these keys (a second chat tile is a room of its own, the rail following whichever chat is focused) (Esc when done), + hosts the now strip, the lobby, the live rows or the board's day on a tile, and \\ shows the chat alone.",
+        "Zen is the clubhouse cut down to the things you keep alive: your bonsai, the reef (or its small tank), the pet, your rooms' chat, music, a clock, the lobby, and an ascii piece, as tiles you arrange yourself. /zen opens it from any page and Ctrl+F hands you back; Esc stays on the page. The layout is saved per device, the rooms your chat tiles are bound to included. Home is the same kind of tree: Ctrl+F or Ctrl+E arranges its rail, chat and sidebar panels with these keys (a second chat tile is a room of its own, the rail following whichever chat is focused) (Esc when done), + gives a tile the now strip or the lobby as its guest, which takes the tile over while it has something. Home also keeps up to nine named layouts per device, and Zen's page is its layout 2: Ctrl+F then a digit loads one, Ctrl+F L lists them (n saves the page as a new layout, r renames, d deletes, R resets one), /layout does the same from any composer.",
         "",
         "Each tile names its own keys on the right of its title (t hides the titles). The bottom row is your status line (Settings, Statusline) on the left and the layout keys on the right. ? opens this list, with every key.",
         "",
@@ -1690,6 +1691,8 @@ fn zen_help_lines() -> Vec<String> {
         "  { }               trade one row of height with the nearest stacked split",
         "  F                 flip the focused tile's parent split",
         "  R                 reset to the default layout",
+        "  1-9 (Home)        load that layout and leave arrange mode",
+        "  L (Home)          the layouts list: Enter loads, n saves the page as a new layout, r renames, d deletes, R resets one, Esc closes",
         "",
         "Look",
         "  b                 cycle the border style",
@@ -2186,7 +2189,7 @@ fn bonsai_help_lines() -> Vec<String> {
         "",
         "Pet Companion",
         "  Unlock            Shop companion bought with Late Chips (/shop); t there picks cat, dog, or bird",
-        "  tile              lives on the Zen page (Ctrl+F) once unlocked, beside the tank if you put it there",
+        "  tile              a tile of Home or Zen once unlocked, beside the tank if you put it there",
         "  nothing to feed   it reads your session: a win makes it proud for half an hour, a loss makes it sulk for ten minutes,",
         "                    a message you send makes it chatty, music makes it vibe, ten quiet minutes and it sleeps",
         "  click it          and it purrs for a couple of minutes (the first pet of the day pays 100 chips); move the cursor in its tile and it walks after it",

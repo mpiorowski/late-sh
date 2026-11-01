@@ -136,11 +136,12 @@ pub(crate) struct ZenStatusRow {
 pub(crate) const ZEN_ROW_KEYS: [(&str, &str); 4] =
     [("?", "help"), ("S", "split"), ("F", "flip"), ("X", "close")];
 
-/// Every key of Home's arrange mode (`Ctrl+E`), on its footer while the
-/// mode is on: the mode has no guide of its own, so the row is the guide.
+/// Every key of Home's arrange mode (`Ctrl+F`, `Ctrl+E`), on its footer
+/// while the mode is on: the mode has no guide of its own, so the row is
+/// the guide.
 /// The way out first, then by use, so a row too narrow for all of them
 /// keeps the ones that matter.
-pub(crate) const HOME_ARRANGE_KEYS: [(&str, &str); 11] = [
+pub(crate) const HOME_ARRANGE_KEYS: [(&str, &str); 14] = [
     ("Esc", "done"),
     ("arrows", "move"),
     ("S", "split"),
@@ -148,8 +149,11 @@ pub(crate) const HOME_ARRANGE_KEYS: [(&str, &str); 11] = [
     ("F", "flip"),
     ("<>{}", "resize"),
     ("space", "tile"),
-    ("+", "guests"),
+    ("+", "guest"),
     ("t", "title"),
+    ("b", "frame"),
+    ("1-9", "layout"),
+    ("L", "layouts"),
     ("R", "reset"),
     ("Tab", "next"),
 ];

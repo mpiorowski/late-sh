@@ -199,7 +199,7 @@ pub enum TourMove {
     NextSection,
     /// To the practice pool table.
     Table,
-    /// Into Zen, through the same toggle `Ctrl+F` runs.
+    /// Into Zen, through the same toggle `/zen` runs.
     Zen,
     /// The tour just ended and should be persisted.
     Finished,

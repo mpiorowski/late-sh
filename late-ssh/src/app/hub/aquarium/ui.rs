@@ -49,7 +49,7 @@ fn render_tank(buf: &mut Buffer, area: Rect, app: &AquariumState, tank_state: &T
                 tank_state.width, tank_state.height
             )),
             Line::from(format!("Current size: {}x{}", area.width, area.height)),
-            Line::from("Resize the terminal, or /aquarium to hide."),
+            Line::from("Resize the terminal, or the tile (Ctrl+E, then })."),
         ])
         .style(Style::new().fg(theme::TEXT_MUTED()));
         render_widget(buf, message, area);
@@ -112,7 +112,7 @@ fn render_size_warning(buf: &mut Buffer, area: Rect, min_height: u16) {
         Line::from("Aquarium reef mode needs more rows."),
         Line::from(format!("Minimum rows: {min_height}")),
         Line::from(format!("Current rows: {}", area.height)),
-        Line::from("Resize the terminal, or /aquarium to hide."),
+        Line::from("Resize the terminal, or the tile (Ctrl+E, then })."),
     ])
     .style(Style::new().fg(theme::TEXT_MUTED()));
     render_widget(buf, message, area);

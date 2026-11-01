@@ -627,21 +627,19 @@ fn a_guest_lives_on_one_tile_and_toggling_moves_it_or_takes_it_off() {
     let mut root = Node::split(
         Dir::Column,
         500,
-        Node::hosting(TileKind::Chat, &[Guest::Now, Guest::Banner]),
-        Node::leaf(TileKind::Aquarium),
+        Node::hosting(TileKind::Chat, Guest::Now),
+        Node::hosting(TileKind::Aquarium, Guest::Lobby),
     );
     assert_eq!(root.host_of(Guest::Now), Some(0));
-    // Toggled on the tank, the strip moves there: one host per page.
+    // Toggled on the reef, the strip moves there and takes the reef's
+    // lobby off: one host per guest, one guest per tile.
     assert!(root.toggle_guest(1, Guest::Now));
     assert_eq!(root.host_of(Guest::Now), Some(1));
-    assert_eq!(
-        root.leaf_guests(),
-        vec![vec![Guest::Banner], vec![Guest::Now]]
-    );
+    assert_eq!(root.leaf_guests(), vec![None, Some(Guest::Now)]);
     // Toggled on its host, it goes.
     assert!(root.toggle_guest(1, Guest::Now));
     assert_eq!(root.host_of(Guest::Now), None);
-    assert_eq!(root.leaf_guests(), vec![vec![Guest::Banner], vec![]]);
+    assert_eq!(root.leaf_guests(), vec![None, None]);
 
     // Guests are part of the stored layout; a leaf without any writes
     // none, so Zen layouts stay as they were.
@@ -652,8 +650,32 @@ fn a_guest_lives_on_one_tile_and_toggling_moves_it_or_takes_it_off() {
     let json = layout.to_json();
     assert_eq!(RiceLayout::from_json(Some(&json)), layout);
     assert!(
-        json["root"]["second"].get("guests").is_none(),
-        "an empty guest list is not written: {json}"
+        json["root"]["second"].get("guest").is_none(),
+        "a tile without a guest writes none: {json}"
+    );
+}
+
+#[test]
+fn a_layout_saved_with_a_guest_list_keeps_the_first_guest_still_known() {
+    // Layouts saved while a tile hosted several guests, `live` and
+    // `banner` among them, read as the one guest this build knows.
+    let stored = serde_json::json!({
+        "root": {
+            "node": "leaf",
+            "kind": "aquarium",
+            "guests": ["live", "banner", "now", "lobby"],
+        },
+        "look": RiceLayout::default().look,
+    });
+    let layout = RiceLayout::from_json(Some(&stored));
+    assert_eq!(layout.root.leaf_guests(), vec![Some(Guest::Now)]);
+    let only_gone = serde_json::json!({
+        "root": { "node": "leaf", "kind": "chat", "guests": ["banner"] },
+        "look": RiceLayout::default().look,
+    });
+    assert_eq!(
+        RiceLayout::from_json(Some(&only_gone)).root.leaf_guests(),
+        vec![None]
     );
 }
 
@@ -679,13 +701,13 @@ fn the_stock_home_is_the_rail_the_reef_over_the_chat_and_the_sidebar_column() {
     );
     assert_eq!(
         home.root.leaf_guests()[1],
-        vec![Guest::Now],
-        "the reef carries the strip, so the chat never loses a row to it"
+        Some(Guest::Now),
+        "the reef hosts the strip, so the chat never loses a row to it"
     );
     assert_eq!(
         home.root.leaf_guests()[2],
-        vec![Guest::Banner],
-        "the chat carries the board's day, as the card always did"
+        None,
+        "the board's day is the chat card's own row, not a guest"
     );
 
     let zen = ZenState::for_page(RicePage::Home, home.clone(), home);

@@ -156,32 +156,30 @@ impl TileKind {
     }
 }
 
-/// A dynamic widget a static tile hosts: invisible while it has nothing,
-/// painted over the top of its host while it does, under its own rule.
-/// Each is on the page once, as a guest somewhere or not at all.
+/// A widget that comes and goes, hosted by a tile that is otherwise
+/// something else: invisible while it has nothing to say, the whole tile
+/// while it does, then gone again. Each is on the page once, as a guest
+/// somewhere or not at all, and a tile hosts one. Both end: the strip on
+/// the queue's clock, the lobby when you act. Widgets that stay up for an
+/// evening (the Live roster) are tile kinds, never guests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Guest {
     /// The now strip (`app/live`): one thing just happened in the house.
     Now,
-    /// The lobby panel, while a game waits on your move.
+    /// The lobby panel, while a match waits on your move or a result
+    /// waits on your look.
     Lobby,
-    /// The Live panel, while something is joinable.
-    Live,
-    /// The board's all-day post for today.
-    Banner,
 }
 
 impl Guest {
     /// Every guest, the guest picker's rows.
-    pub const ALL: [Guest; 4] = [Guest::Now, Guest::Lobby, Guest::Live, Guest::Banner];
+    pub const ALL: [Guest; 2] = [Guest::Now, Guest::Lobby];
 
     pub fn label(self) -> &'static str {
         match self {
-            Guest::Now => "now strip",
+            Guest::Now => "now",
             Guest::Lobby => "lobby",
-            Guest::Live => "live",
-            Guest::Banner => "banner",
         }
     }
 
@@ -189,11 +187,39 @@ impl Guest {
     pub fn when(self) -> &'static str {
         match self {
             Guest::Now => "something just happened",
-            Guest::Lobby => "a game waits on you",
-            Guest::Live => "something is on",
-            Guest::Banner => "the board has a day",
+            Guest::Lobby => "your move, or a result",
         }
     }
+
+    /// A stored guest key this build knows; `live` and `banner`, guests
+    /// once, read as none.
+    fn from_key(key: &str) -> Option<Guest> {
+        match key {
+            "now" => Some(Guest::Now),
+            "lobby" => Some(Guest::Lobby),
+            _ => None,
+        }
+    }
+}
+
+/// A stored `guest`: one key, or the list a layout saved while a tile
+/// hosted several (`guests`), of which the first this build knows stays.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StoredGuest {
+    One(String),
+    Many(Vec<String>),
+}
+
+fn known_guest<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Guest>, D::Error> {
+    let stored: Option<StoredGuest> = Option::deserialize(deserializer)?;
+    Ok(match stored {
+        None => None,
+        Some(StoredGuest::One(key)) => Guest::from_key(&key),
+        Some(StoredGuest::Many(keys)) => keys.iter().find_map(|key| Guest::from_key(key)),
+    })
 }
 
 /// How a split lays its two children out.
@@ -235,10 +261,17 @@ pub enum Share {
 pub enum Node {
     Leaf {
         kind: TileKind,
-        /// The dynamic widgets this tile hosts, painted over its top while
-        /// they have something to show, in this order. Empty for most.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        guests: Vec<Guest>,
+        /// The guest this tile hosts, the whole tile while it has
+        /// something to show. `None` for most. Read leniently: a layout
+        /// saved with a `guests` list keeps the first guest this build
+        /// knows.
+        #[serde(
+            default,
+            alias = "guests",
+            deserialize_with = "known_guest",
+            skip_serializing_if = "Option::is_none"
+        )]
+        guest: Option<Guest>,
         /// The room a chat tile is bound to; `None` (the stored default,
         /// and every layout saved before rooms were per tile) means the
         /// current room, Home's selection or #lounge. Other kinds ignore it.
@@ -305,18 +338,18 @@ impl Node {
     pub fn leaf(kind: TileKind) -> Self {
         Node::Leaf {
             kind,
-            guests: Vec::new(),
+            guest: None,
             room: None,
             piece: None,
             title: None,
         }
     }
 
-    /// A leaf hosting `guests`.
-    pub fn hosting(kind: TileKind, guests: &[Guest]) -> Self {
+    /// A leaf hosting `guest`.
+    pub fn hosting(kind: TileKind, guest: Guest) -> Self {
         Node::Leaf {
             kind,
-            guests: guests.to_vec(),
+            guest: Some(guest),
             room: None,
             piece: None,
             title: None,
@@ -397,16 +430,16 @@ impl Node {
         self.leaf_kinds().get(ordinal).copied()
     }
 
-    /// Every leaf's guests in layout order, parallel to `leaf_kinds`.
-    pub fn leaf_guests(&self) -> Vec<Vec<Guest>> {
+    /// Every leaf's guest in layout order, parallel to `leaf_kinds`.
+    pub fn leaf_guests(&self) -> Vec<Option<Guest>> {
         let mut out = Vec::with_capacity(self.leaf_count());
         self.collect_guests(&mut out);
         out
     }
 
-    fn collect_guests(&self, out: &mut Vec<Vec<Guest>>) {
+    fn collect_guests(&self, out: &mut Vec<Option<Guest>>) {
         match self {
-            Node::Leaf { guests, .. } => out.push(guests.clone()),
+            Node::Leaf { guest, .. } => out.push(*guest),
             Node::Split { first, second, .. } => {
                 first.collect_guests(out);
                 second.collect_guests(out);
@@ -418,34 +451,27 @@ impl Node {
     pub fn host_of(&self, guest: Guest) -> Option<usize> {
         self.leaf_guests()
             .iter()
-            .position(|guests| guests.contains(&guest))
+            .position(|hosted| *hosted == Some(guest))
     }
 
     /// Put `guest` on the leaf at `ordinal`, taking it off whichever leaf
-    /// held it; on its own host already, take it off instead. `false`
-    /// when `ordinal` is no leaf.
+    /// held it and replacing the one `ordinal` hosted; on its own host
+    /// already, take it off instead. `false` when `ordinal` is no leaf.
     pub fn toggle_guest(&mut self, ordinal: usize, guest: Guest) -> bool {
         let host = self.host_of(guest);
-        if host == Some(ordinal) {
-            let mut remaining = ordinal;
-            return match self.leaf_mut(&mut remaining) {
-                Some(Node::Leaf { guests, .. }) => {
-                    guests.retain(|g| *g != guest);
-                    true
-                }
-                _ => false,
-            };
-        }
         if let Some(host) = host {
             let mut remaining = host;
-            if let Some(Node::Leaf { guests, .. }) = self.leaf_mut(&mut remaining) {
-                guests.retain(|g| *g != guest);
+            if let Some(Node::Leaf { guest, .. }) = self.leaf_mut(&mut remaining) {
+                *guest = None;
             }
+        }
+        if host == Some(ordinal) {
+            return true;
         }
         let mut remaining = ordinal;
         match self.leaf_mut(&mut remaining) {
-            Some(Node::Leaf { guests, .. }) => {
-                guests.push(guest);
+            Some(Node::Leaf { guest: hosted, .. }) => {
+                *hosted = Some(guest);
                 true
             }
             _ => false,
@@ -561,7 +587,7 @@ impl Node {
         };
         let Node::Leaf {
             kind,
-            guests,
+            guest,
             room,
             piece,
             title,
@@ -571,7 +597,7 @@ impl Node {
         };
         let kept = Node::Leaf {
             kind: *kind,
-            guests: std::mem::take(guests),
+            guest: guest.take(),
             room: *room,
             piece: *piece,
             title: *title,
@@ -884,8 +910,8 @@ impl RiceLayout {
         let center = Node::split_first(
             Dir::Column,
             HOME_AQUARIUM_ROWS + 1,
-            Node::hosting(TileKind::Aquarium, &[Guest::Now]),
-            Node::hosting(TileKind::Chat, &[Guest::Banner]),
+            Node::hosting(TileKind::Aquarium, Guest::Now),
+            Node::leaf(TileKind::Chat),
         );
         // The sidebar's panels, each at its rows plus its title rule; the
         // pet, last, takes the rest of the column.
@@ -1073,8 +1099,9 @@ impl ZenState {
         self.host_of(guest).is_some()
     }
 
-    /// Whether the active chat tile hosts `guest`: there it inserts above
-    /// the messages, the way Home's card has always carried the strip.
+    /// Whether the active chat tile hosts `guest`: there the strip inserts
+    /// above the messages, the way Home's card has always carried it,
+    /// instead of taking the tile.
     pub fn active_chat_hosts(&self, guest: Guest) -> bool {
         self.host_of(guest).is_some() && self.host_of(guest) == self.active_chat_ordinal()
     }
@@ -1084,21 +1111,31 @@ impl ZenState {
         self.host_of(guest).is_some()
     }
 
-    /// The layout's gaps: Zen's uniform look gap, Home's one-column gutter
-    /// between columns and none between rows (a tile's title rule is the
-    /// row divider).
-    pub fn gaps(&self) -> Gaps {
+    /// Whether the page draws its look's boxes: always on Zen; on Home
+    /// when the layout has a border (the stock `zen` layout, or `b` in
+    /// arrange mode), since a Home layout with none draws rules instead.
+    fn boxed(&self) -> bool {
         match self.page {
-            RicePage::Zen => Gaps::uniform(self.rice.look.gap as u16),
-            RicePage::Home => Gaps { row: 1, col: 0 },
+            RicePage::Zen => true,
+            RicePage::Home => self.rice.look.border != BorderKind::None,
         }
     }
 
-    /// The chrome tiles wear: Zen's look, Home's rules.
+    /// The layout's gaps: the look's uniform gap when boxed; under rules
+    /// a one-column gutter between columns and none between rows (a
+    /// tile's title rule is the row divider).
+    pub fn gaps(&self) -> Gaps {
+        match self.boxed() {
+            true => Gaps::uniform(self.rice.look.gap as u16),
+            false => Gaps { row: 1, col: 0 },
+        }
+    }
+
+    /// The chrome tiles wear: the look's boxes, or Home's rules.
     pub fn chrome(&self) -> layout::Chrome {
-        match self.page {
-            RicePage::Zen => layout::Chrome::Boxed(self.rice.look.clone()),
-            RicePage::Home => layout::Chrome::Rules {
+        match self.boxed() {
+            true => layout::Chrome::Boxed(self.rice.look.clone()),
+            false => layout::Chrome::Rules {
                 arrange: self.arrange,
             },
         }
@@ -1386,18 +1423,19 @@ impl ZenState {
         self.guest_picker = Some((selected as isize + delta).rem_euclid(len) as usize);
     }
 
-    /// The guests of the focused tile, in their order.
-    pub fn focused_guests(&self) -> Vec<Guest> {
+    /// The guest of the focused tile, if it hosts one.
+    pub fn focused_guest(&self) -> Option<Guest> {
         self.rice
             .root
             .leaf_guests()
             .get(self.focus)
-            .cloned()
-            .unwrap_or_default()
+            .copied()
+            .flatten()
     }
 
-    /// Put the picker's guest on the focused tile, or take it off when it
-    /// is there already. The picker stays open, so several can be set.
+    /// Put the picker's guest on the focused tile, replacing the one it
+    /// hosted, or take it off when it is there already. The picker stays
+    /// open.
     pub fn pick_guest(&mut self) -> GuestPick {
         let Some(index) = self.guest_picker else {
             return GuestPick::Unchanged;
@@ -1487,6 +1525,25 @@ impl ZenState {
         // Stock leaves carry no random selection, so nothing needs a draw.
         self.playback = vec![None; self.leaf_count()];
         self.focus = self.first_tile_of(TileKind::Chat).unwrap_or(0);
+    }
+
+    /// What `R` puts back from now on: a page just saved under a new name
+    /// keeps its tree and takes that name's stock.
+    pub fn set_stock(&mut self, stock: RiceLayout) {
+        self.stock = stock;
+    }
+
+    /// Show another layout (`presets`): `rice` is the page now, `stock`
+    /// what `R` puts back. The pickers close, the focus lands on its chat,
+    /// and its ascii tiles are drawn afresh on the next playback sync.
+    pub fn load(&mut self, rice: RiceLayout, stock: RiceLayout, now: Instant, rng: &mut impl Rng) {
+        self.rice = rice;
+        self.stock = stock;
+        self.playback = vec![None; self.leaf_count()];
+        self.focus = self.first_tile_of(TileKind::Chat).unwrap_or(0);
+        self.kind_picker = None;
+        self.guest_picker = None;
+        self.sync_playback(now, rng);
     }
 
     /// Ordinal of the first tile of `kind`, for surfaces that can only be

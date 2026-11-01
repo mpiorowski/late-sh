@@ -40,7 +40,7 @@ const CLEAN_SETTLE_TIMEOUT: Duration = Duration::from_secs(30);
 ///
 /// Home's panels are tiles of its own layout now, not the sidebar, so the
 /// same quiet needs a Home without an animated tile: the rail and the chat
-/// alone. `home_edited` keeps the stock sync from putting the panels back.
+/// alone.
 fn hide_sidebar(app: &mut App) {
     app.device_rails = Some(KeyLayout {
         right_sidebar_mode: RightSidebarMode::Off,
@@ -55,7 +55,6 @@ fn hide_sidebar(app: &mut App) {
         look: Look::default(),
     };
     app.home = ZenState::for_page(RicePage::Home, quiet.clone(), quiet);
-    app.home_edited = true;
 }
 
 /// Undo [`hide_sidebar`] for the animated case, which shares the settled
@@ -80,7 +79,6 @@ fn show_sidebar(app: &mut App) {
         look: Look::default(),
     };
     app.home = ZenState::for_page(RicePage::Home, with_music.clone(), with_music);
-    app.home_edited = true;
 }
 
 /// Mirror the render loop's frame path: a changed tick renders and drains

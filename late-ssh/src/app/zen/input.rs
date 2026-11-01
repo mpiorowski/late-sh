@@ -10,6 +10,7 @@ use std::time::Instant;
 
 use uuid::Uuid;
 
+use super::presets::{LayoutCommand, LayoutList, Layouts, LayoutsError, NameEdit, NamePurpose};
 use super::rows::InboxRow;
 use super::state::{Dir, GuestPick, KindPick, MAX_TILES, TileKind};
 use crate::app::{
@@ -39,7 +40,7 @@ pub fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
 }
 
 /// Home's keys for its tiles, ahead of Home's own handling. In arrange
-/// mode (`Ctrl+E`) the layout keys are live and every tile takes the
+/// mode (`Ctrl+F`, `Ctrl+E`) the layout keys are live and every tile takes the
 /// focus; outside it only a focused chat tile has keys of its own (the
 /// chat keys of its room, as on Zen), and everything else falls through
 /// to Home, whose center is the current room.
@@ -56,13 +57,36 @@ pub fn handle_home_event(app: &mut App, event: &ParsedInput) -> bool {
         return true;
     }
     if app.rice().arrange {
+        // The layouts list owns every key while it is up (Esc closes it
+        // in `dispatch_escape`).
+        if app.layout_list.is_some() {
+            handle_layout_list(app, event);
+            return true;
+        }
         // Arrange mode is a layout mode: a focused chat tile's room keys
         // (`[` `]`, Ctrl+/) still bind it, the rest of the chat waits.
-        if let Some(byte) = event_byte(event)
-            && matches!(byte, b'[' | b']')
-        {
-            cycle_tile(app, app.rice().chat_tile_focused(), byte == b']');
-            return true;
+        if let Some(byte) = event_byte(event) {
+            match byte {
+                b'[' | b']' => {
+                    cycle_tile(app, app.rice().chat_tile_focused(), byte == b']');
+                    return true;
+                }
+                // `Ctrl+F` then a digit: that layout, and the mode is done.
+                b'1'..=b'9' => {
+                    let index = usize::from(byte - b'1');
+                    if load_layout(app, index) {
+                        toggle_home_arrange(app);
+                    } else {
+                        app.banner = Some(Banner::info(LayoutsError::NoSuchLayout.message()));
+                    }
+                    return true;
+                }
+                b'L' => {
+                    app.layout_list = Some(LayoutList::open(app.home_layouts.current()));
+                    return true;
+                }
+                _ => {}
+            }
         }
         if handle_rice(app, event) {
             return true;
@@ -81,6 +105,7 @@ pub fn handle_home_event(app: &mut App, event: &ParsedInput) -> bool {
 /// footer with every key (`statusline::bar::HOME_ARRANGE_KEYS`).
 pub(crate) fn toggle_home_arrange(app: &mut App) {
     let arrange = !app.rice().arrange;
+    app.layout_list = None;
     let rice = app.rice_mut();
     rice.arrange = arrange;
     rice.close_kind_picker();
@@ -95,6 +120,190 @@ pub(crate) fn toggle_home_arrange(app: &mut App) {
             focus_moved(app);
         }
         app.flush_rice_layouts();
+    }
+}
+
+/// Show the layout at `index` (`home_layouts`): the page as it is goes
+/// into its own slot first, so nothing arranged is lost, then the slot
+/// becomes current and the page draws it. False past the end. Home only.
+pub(crate) fn load_layout(app: &mut App, index: usize) -> bool {
+    if index >= app.home_layouts.len() {
+        return false;
+    }
+    app.home_layouts.store_current(app.home.rice.clone());
+    app.home_layouts.switch(index);
+    show_current_layout(app);
+    true
+}
+
+/// Draw the current slot on the page: after a switch, a delete of the
+/// one that was up, or a reset of it.
+fn show_current_layout(app: &mut App) {
+    let rice = app.home_layouts.current_layout().clone();
+    let stock = app.home_layouts.current_stock();
+    app.home
+        .load(rice, stock, Instant::now(), &mut rand::thread_rng());
+    app.sync_aquarium_bounds();
+    focus_moved(app);
+    app.mark_zen_layout_dirty();
+}
+
+/// Save the page as a new layout under `name`, which becomes current; the
+/// page keeps showing it, with stock Home as what `R` puts back.
+pub(crate) fn save_layout_as(app: &mut App, name: &str) -> Result<usize, LayoutsError> {
+    app.home_layouts.store_current(app.home.rice.clone());
+    let index = app.home_layouts.save_new(name, app.home.rice.clone())?;
+    app.home.set_stock(Layouts::stock_of(name));
+    app.mark_zen_layout_dirty();
+    Ok(index)
+}
+
+/// `/layout` from any composer: the list, a layout by name or digit, or
+/// the page saved under a name. Every form runs on Home, so another page
+/// walks there first.
+pub(crate) fn run_layout_command(app: &mut App, command: LayoutCommand) {
+    crate::app::input::go_home_for_layouts(app);
+    match command {
+        LayoutCommand::List => {
+            if !app.home.arrange {
+                toggle_home_arrange(app);
+            }
+            app.layout_list = Some(LayoutList::open(app.home_layouts.current()));
+        }
+        LayoutCommand::Load(target) => {
+            let index = match target.parse::<usize>() {
+                Ok(digit) if (1..=app.home_layouts.len()).contains(&digit) => Some(digit - 1),
+                Ok(_) => None,
+                Err(_) => app.home_layouts.index_of(&target),
+            };
+            match index {
+                Some(index) => {
+                    load_layout(app, index);
+                }
+                None => {
+                    app.banner = Some(Banner::info(LayoutsError::NoSuchLayout.message()));
+                }
+            }
+        }
+        LayoutCommand::Save(name) => match save_layout_as(app, &name) {
+            Ok(index) => {
+                app.banner = Some(Banner::info(&format!(
+                    "Saved as layout {}: Ctrl+F {} brings it back",
+                    index + 1,
+                    index + 1
+                )));
+            }
+            Err(error) => {
+                app.banner = Some(Banner::info(error.message()));
+            }
+        },
+    }
+}
+
+/// The layouts list: `j` `k` and the arrows move, Enter loads the row and
+/// leaves arrange mode, `n` types a name for the page as a new layout,
+/// `r` retypes the row's name, `d` deletes the row (never the last), `R`
+/// puts the row back to its stock. While a name is being typed the
+/// printable keys spell it, Backspace erases, Enter keeps it and Esc
+/// drops it (`dispatch_escape`). Everything else is swallowed.
+fn handle_layout_list(app: &mut App, event: &ParsedInput) {
+    let Some(list) = app.layout_list.as_mut() else {
+        return;
+    };
+    if let Some(edit) = list.editing.as_mut() {
+        match (event, event_byte(event)) {
+            (_, Some(b'\r' | b'\n')) => confirm_name_edit(app),
+            (_, Some(0x7f | 0x08)) => edit.pop(),
+            (_, Some(byte)) if byte.is_ascii_graphic() || byte == b' ' => edit.push(byte as char),
+            (ParsedInput::Char(ch), None) if !ch.is_control() => edit.push(*ch),
+            _ => {}
+        }
+        return;
+    }
+    let len = app.home_layouts.len();
+    let selected = list.selected;
+    match (event, event_byte(event)) {
+        (ParsedInput::Arrow(b'A'), _) | (_, Some(b'k')) => list.move_by(-1, len),
+        (ParsedInput::Arrow(b'B'), _) | (_, Some(b'j')) => list.move_by(1, len),
+        (_, Some(b'\r' | b'\n')) => {
+            app.layout_list = None;
+            if load_layout(app, selected) {
+                toggle_home_arrange(app);
+            }
+        }
+        (_, Some(b'n')) => {
+            if app.home_layouts.is_full() {
+                app.banner = Some(Banner::info(LayoutsError::Full.message()));
+            } else {
+                list.editing = Some(NameEdit::new(NamePurpose::SaveNew, String::new()));
+            }
+        }
+        (_, Some(b'r')) => {
+            let name = app
+                .home_layouts
+                .get(selected)
+                .map(|item| item.name.clone())
+                .unwrap_or_default();
+            list.editing = Some(NameEdit::new(NamePurpose::Rename(selected), name));
+        }
+        (_, Some(b'd')) => {
+            let was_current = app.home_layouts.current() == selected;
+            match app.home_layouts.delete(selected) {
+                Ok(()) => {
+                    list.move_by(0, app.home_layouts.len());
+                    if was_current {
+                        show_current_layout(app);
+                    } else {
+                        app.mark_zen_layout_dirty();
+                    }
+                }
+                Err(error) => {
+                    app.banner = Some(Banner::info(error.message()));
+                }
+            }
+        }
+        (_, Some(b'R')) => {
+            if app.home_layouts.reset(selected) {
+                if app.home_layouts.current() == selected {
+                    show_current_layout(app);
+                } else {
+                    app.mark_zen_layout_dirty();
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Enter on a typed name: the page saved under it, or the row renamed.
+/// A refused name says why in a banner and the field stays up with the
+/// text, so one more key fixes it.
+fn confirm_name_edit(app: &mut App) {
+    let Some(list) = app.layout_list.as_mut() else {
+        return;
+    };
+    let Some(edit) = list.editing.take() else {
+        return;
+    };
+    let result = match edit.purpose {
+        NamePurpose::SaveNew => save_layout_as(app, &edit.text).map(|index| {
+            if let Some(list) = app.layout_list.as_mut() {
+                list.selected = index;
+            }
+        }),
+        NamePurpose::Rename(index) => {
+            let renamed = app.home_layouts.rename(index, &edit.text);
+            if renamed.is_ok() {
+                app.mark_zen_layout_dirty();
+            }
+            renamed
+        }
+    };
+    if let Err(error) = result {
+        app.banner = Some(Banner::info(error.message()));
+        if let Some(list) = app.layout_list.as_mut() {
+            list.editing = Some(edit);
+        }
     }
 }
 
@@ -416,9 +625,9 @@ fn handle_kind_picker(app: &mut App, event: &ParsedInput) {
     }
 }
 
-/// The guest picker: `j` `k` and the arrows move, Enter or `space`
-/// toggles the row's guest on the focused tile and keeps the picker up,
-/// everything else is swallowed.
+/// The guest picker: `j` `k` and the arrows move, Enter or `space` puts
+/// the row's guest on the focused tile (or takes the tile's own off) and
+/// keeps the picker up, everything else is swallowed.
 fn handle_guest_picker(app: &mut App, event: &ParsedInput) {
     let byte = event_byte(event);
     match (event, byte) {

@@ -2129,8 +2129,15 @@ fn dispatch_escape(app: &mut App) {
     // Esc on Zen peels the tile picker, the composer, or a selected message,
     // and otherwise does nothing: only Ctrl+F (or `/zen`) leaves the page,
     // so a stray Esc never throws away the layout you sat down in.
-    // Esc on Home in arrange mode peels a picker, then leaves the mode.
+    // Esc on Home in arrange mode peels a typed layout name, the layouts
+    // list, then a picker, then leaves the mode.
     if ctx.screen == Screen::Dashboard && app.home.arrange {
+        if let Some(list) = app.layout_list.as_mut() {
+            if list.editing.take().is_none() {
+                app.layout_list = None;
+            }
+            return;
+        }
         if app.home.kind_picker.is_some() {
             app.home.close_kind_picker();
             return;
@@ -3735,7 +3742,7 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
             true
         }
         CTRL_F => {
-            toggle_zen_globally(app);
+            layout_chord_globally(app);
             true
         }
         // Arrange mode on Home: a chord, so it works from a chat tile and
@@ -3830,7 +3837,43 @@ pub(crate) fn toggle_zen_globally(app: &mut App) {
     }
 }
 
-fn open_zen_globally(app: &mut App) {
+/// `Ctrl+F`: Home's layouts. On Zen the chord still hands the page back;
+/// on Home it toggles arrange mode, where a digit loads a layout and `L`
+/// lists them (so `Ctrl+F 2` is two keystrokes, like a tmux prefix);
+/// anywhere else it opens Home in arrange mode, the way it used to open
+/// Zen. The modals close under it either way. Not while Home's composer
+/// holds a draft, as `Ctrl+E`.
+pub(crate) fn layout_chord_globally(app: &mut App) {
+    if app.screen == Screen::Zen {
+        close_zen(app);
+        return;
+    }
+    if app.screen == Screen::Dashboard && app.chat.is_composing() {
+        return;
+    }
+    match app.screen {
+        Screen::Dashboard => close_modals_for_page_change(app),
+        _ => go_home_for_layouts(app),
+    }
+    crate::app::zen::input::toggle_home_arrange(app);
+}
+
+/// Home, for a layout key or command pressed elsewhere: the modals close
+/// and the composers reset as for any page change; on Home already,
+/// nothing moves.
+pub(crate) fn go_home_for_layouts(app: &mut App) {
+    if app.screen == Screen::Dashboard {
+        return;
+    }
+    close_modals_for_page_change(app);
+    reset_composers_for_page_change(app);
+    app.set_screen(Screen::Dashboard);
+    app.chat.clear_message_selection();
+}
+
+/// Every modal a page change pulls out from under: a chord that opens a
+/// page over them closes them first.
+fn close_modals_for_page_change(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
     app.show_mod_modal = false;
@@ -3844,6 +3887,10 @@ fn open_zen_globally(app: &mut App) {
     app.show_bonsai_modal = false;
     app.show_settings = false;
     app.show_lobby_modal = false;
+}
+
+fn open_zen_globally(app: &mut App) {
+    close_modals_for_page_change(app);
     app.zen_return_screen = zen_return_screen(app);
     reset_composers_for_page_change(app);
     // The first opening this session lands on the first chat tile, so the

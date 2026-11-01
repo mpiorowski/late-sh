@@ -1,7 +1,7 @@
 use crate::models::user::RightSidebarMode;
 use crate::models::user_ssh_key::{
     KeyAudio, KeyLayout, UserSshKey, extract_key_artboard_disclaimer, extract_key_audio,
-    extract_key_home_layout, extract_key_layout, extract_key_zen_layout,
+    extract_key_home_layouts, extract_key_layout, extract_key_zen_layout,
 };
 use crate::test_utils::{create_test_user, test_db};
 use serde_json::json;
@@ -148,11 +148,14 @@ async fn tile_layouts_are_per_key_and_scoped_to_their_owner() {
         .await
         .expect("desk key");
 
-    let phone_home = json!({ "root": { "node": "leaf", "kind": "chat" } });
+    let phone_home = json!({
+        "current": 0,
+        "items": [{ "name": "home", "layout": { "root": { "node": "leaf", "kind": "chat" } } }]
+    });
     let phone_zen = json!({ "root": { "node": "leaf", "kind": "bonsai" } });
-    UserSshKey::set_home_layout(&client, user.id, "SHA256:tiles-phone", &phone_home)
+    UserSshKey::set_home_layouts(&client, user.id, "SHA256:tiles-phone", &phone_home)
         .await
-        .expect("store home layout");
+        .expect("store home layouts");
     UserSshKey::set_zen_layout(&client, user.id, "SHA256:tiles-phone", &phone_zen)
         .await
         .expect("store zen layout");
@@ -161,21 +164,21 @@ async fn tile_layouts_are_per_key_and_scoped_to_their_owner() {
         .await
         .expect("read phone")
         .expect("phone row");
-    assert_eq!(extract_key_home_layout(&phone.settings), Some(phone_home));
+    assert_eq!(extract_key_home_layouts(&phone.settings), Some(phone_home));
     assert_eq!(extract_key_zen_layout(&phone.settings), Some(phone_zen));
     let desk = UserSshKey::find_by_fingerprint(&client, user.id, "SHA256:tiles-desk")
         .await
         .expect("read desk")
         .expect("desk row");
     assert_eq!(
-        extract_key_home_layout(&desk.settings),
+        extract_key_home_layouts(&desk.settings),
         None,
         "the desk follows the account seed"
     );
 
     // Another account cannot write onto this key even knowing its fingerprint.
     let denied =
-        UserSshKey::set_home_layout(&client, stranger.id, "SHA256:tiles-phone", &json!({})).await;
+        UserSshKey::set_home_layouts(&client, stranger.id, "SHA256:tiles-phone", &json!({})).await;
     assert!(denied.is_err(), "cross-account write is refused");
 }
 

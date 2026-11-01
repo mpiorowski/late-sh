@@ -3,7 +3,7 @@
 ## Metadata
 - Scope: `late-ssh/src/app/zen`
 - Purpose: the tile tree behind two pages: Zen, the full-bleed page that cuts the clubhouse down to the things you keep alive, and Home, whose room rail, chat and sidebar panels are tiles of the same tree (`RicePage::Home`, `App::home`; the design and what v1 left out: `devdocs/HOME-LAYOUTS.md`).
-- Status: Experimental. Reached with `Ctrl+F` from any page, or `/zen` from any composer (same toggle); a surface over that page, absent from the Tab cycle. The chord returns to the page it was opened from (`App::zen_return_screen`), or to the Clubhouse when the session landed on Zen (Settings, Tweaks, "Land on"). A daily board or a house table closes on the way in, so over one of those Zen remembers the page the board or table was opened from, and Zen's own page when that was Zen (`input.rs::zen_return_screen`). Leaving by any route (a digit, a tour step) clears the return page in `App::set_screen`, so a later chord never hands back a stale page. The one route back that is not the chord is the backtick chain: going into the games from Zen makes Zen the chain's base (`App::workspace_base`), which carries the return page and refills it when the wrap or an Esc off a board or table lands back here. The first-visit tour's `VisitZen` stop is reached and left with Enter: arriving runs this same toggle, leaving walks back to the Clubhouse.
+- Status: Experimental. Zen's page is also Home's stock layout 2 (`Ctrl+F 2`; the Home section below), which is where it is going: the Zen screen is reached with `/zen` from any composer, the status line's Zen click, or the tour, a surface over that page, absent from the Tab cycle. `Ctrl+F` on Zen returns to the page it was opened from (`App::zen_return_screen`), or to the Clubhouse when the session landed on Zen (Settings, Tweaks, "Land on"); anywhere else `Ctrl+F` is Home's layouts chord. A daily board or a house table closes on the way in, so over one of those Zen remembers the page the board or table was opened from, and Zen's own page when that was Zen (`input.rs::zen_return_screen`). Leaving by any route (a digit, a tour step) clears the return page in `App::set_screen`, so a later chord never hands back a stale page. The one route back that is not the chord is the backtick chain: going into the games from Zen makes Zen the chain's base (`App::workspace_base`), which carries the return page and refills it when the wrap or an Esc off a board or table lands back here. The first-visit tour's `VisitZen` stop is reached and left with Enter: arriving runs this same toggle, leaving walks back to the Clubhouse.
 - Parent context: `../../../../CONTEXT.md`
 
 ---
@@ -143,20 +143,39 @@ the rail's; a stored `center` reads as one), and the sidebar column
 (`HOME_SIDEBAR_COLS`): `presence`, then `music`, `lobby`, `live` and
 `bonsai` at their panel rows, and `pet` taking the rest. An unowned reef
 or pet draws the shop's note in its tile. The Settings panel list is the
-Arcade's alone. `R` resets to the stock. The layout is this
-device's (`user_ssh_keys.settings.home_layout`, the account's `home_layout`
-the seed for a key with none; `home_edited`), and nothing about the
-terminal's size changes it: a page is drawn as arranged at every width, so
-a phone arranges its own Home once and keeps it on its key.
+Arcade's alone. `R` resets to the stock. Nothing about the terminal's size
+changes a layout: a page is drawn as arranged at every width, so a phone
+arranges its own Home once and keeps it on its key.
 
-The look is Home's, not Zen's (`layout::Chrome::Rules`): no boxes, a
-`── title ──` rule over a panel tile (`sidebar::draw_panel_rule`, lit while
-the lobby glows or, in arrange mode, the focus is on it), a column of air
-on each side of every tile but the page's chat and the rail, and the
-gutter of each row split painted as one `│` (`layout::row_gutters`,
-`Gaps { row: 1, col: 0 }`). Outside arrange mode the page's chat, the rail
-and the presence rows wear no rule at all (`bare_under_rules`); in arrange
-mode every tile has one, so the focus has a ring to land on.
+Layouts (`presets.rs`): a device holds up to nine named layouts
+(`Layouts`, `MAX_LAYOUTS`), each a `RiceLayout`, and which one Home shows
+(`App::home_layouts`; `App::home` is the current one, written back into
+its slot by `Layouts::store_current` on every flush and before every
+switch, so nothing arranged is lost). Stored whole on the SSH key
+(`user_ssh_keys.settings.home_layouts`); a key with none seeds the set
+from the single layouts it stored before they had names (`home_layout`
+as `home`, `zen_layout` as `zen`, the account's as their seeds), and a
+blob that does not parse, is empty, or points past its items reads as
+that seed. Every device has the two stock layouts to start: `home` (the
+stock Home) and `zen` (Zen's default page, `RiceLayout::default`, boxed
+in its look); `R` puts a layout back to the stock its name says
+(`Layouts::stock_of`: `zen` to Zen's page, anything else to stock Home).
+Names are trimmed, one to `MAX_LAYOUT_NAME_CHARS` (16) characters,
+unique case aside. Nothing switches a layout but the keys and `/layout`:
+not `/golive`, not a game waiting, not the screensaver.
+
+The look is Home's rules (`layout::Chrome::Rules`) while the layout's
+border is `none`, Home's stock and every layout arranged from it: no
+boxes, a `── title ──` rule over a panel tile (`sidebar::draw_panel_rule`,
+lit while the lobby glows or, in arrange mode, the focus is on it), a
+column of air on each side of every tile but the page's chat and the
+rail, and the gutter of each row split painted as one `│`
+(`layout::row_gutters`, `Gaps { row: 1, col: 0 }`). Outside arrange mode
+the page's chat, the rail and the presence rows wear no rule at all
+(`bare_under_rules`); in arrange mode every tile has one, so the focus has
+a ring to land on. A layout with a border (the stock `zen`, or `b` in
+arrange mode) is boxed in its look with its gap, as Zen draws
+(`ZenState::chrome`, `gaps`).
 
 Furniture and focus: outside arrange mode only chat tiles take the focus
 (`TileKind::takes_focus`), by click or the arrows of arrange mode; a
@@ -170,20 +189,26 @@ a synthetic entry is up. Every other chat tile watches its room under a
 `chat · #room` rule, a click away from being the page's chat, so a stream
 night is two chats: the stream room and #lounge.
 
-Guests (`Guest`: now, lobby, live, banner) are the widgets that only show
-while they have something: the now strip (`LiveState::shown`), the lobby
-while a game waits (`lobby.glow()`), the live rows while any are up, the
-board's day while there is one. A guest lives on one tile per page
-(`Node::toggle_guest`), listed on the leaf; `draw_guests` paints it over
-the top of its host's inner area (the strip in its full or compact form
-over the host's top rows, the others under a rule) and hands the rest to
-the host, so the aquarium under the strip shows whole the moment the
-strip goes. The active chat tile hosts the strip and the banner as the
-#lounge card always did (the card draws them itself, gated to #lounge,
-`active_chat_hosts`);
-on any other host the strip shows whatever room is selected
-(`App::home_strip_hosted`, which also gates the strip's animation edge and
-`o`). The forms by size: a tank tile draws the reef (and binds the
+Guests (`Guest`: now, lobby) are the two widgets that come and go: the
+now strip while the queue has something up (`LiveState::shown`, down on
+its clock), the lobby while a match waits on your move or a result on
+your look (`DailyState::awaits_me`, down when you act). Both end, which
+is what makes them guests; a widget that stays up for an evening (the
+Live roster, the bonsai) is a tile kind. A tile hosts one guest (`guest`
+on the leaf, `Node::toggle_guest`; a guest is on the page once), and the
+guest is the tile while it is up: its label in the rule, its panel in
+place of the host's (`draw_guest`: the strip in its full form where the
+tile is at least `MIN_FULL_WIDTH` by `LIVE_STRIP_HEIGHT`, else its one
+row, centred down the tile; the lobby's compact panel), nothing of the
+host underneath, so the host shows whole the moment the guest goes. A
+layout saved with a `guests` list reads as its first guest still known
+(`live` and `banner` were guests once and read as none). The active chat
+tile hosting the strip is the exception: there it inserts above the
+messages as the #lounge card always did (the card draws it itself, gated
+to #lounge, `active_chat_hosts`); the board's day is the card's own topic
+row, never a guest. On any other host the strip shows whatever room is
+selected (`App::home_strip_hosted`, which also gates the strip's animation
+edge and `o`). The forms by size: a tank tile draws the reef (and binds the
 simulation, `App::reef_tile_inner`) only in `ui::reef_form` (wider than
 30, taller than the mini tank), else the sidebar's mini tank; a bonsai
 tile narrower than half the canvas draws the sidebar's preview; a music
@@ -200,9 +225,10 @@ late-ssh/src/app/zen/
 |-- mod.rs        # module declarations only
 |-- state.rs      # TileKind, Node (split tree), Look, RiceLayout (serde), ZenState + edits
 |-- layout.rs     # pure rect math: Gaps, Chrome (Zen's boxes, Home's rules), rice_fits (the 40x12 floor under which the page is its too-small notice alone), rice_areas (tiles + the status row, there whenever the page draws), tile_rects, row_gutters, tile_inner, neighbour_side, pet_neighbours
+|-- presets.rs    # Home's named layouts: Layouts (serde, the nine slots and the current), LayoutList (the L list and its typed name), LayoutCommand (/layout)
 |-- rows.rs       # pure row builders for the Inbox and Headlines tiles
-|-- ui.rs         # ZenView, draw_rice, the tile widgets
-|-- input.rs      # feed keys, room walk, focus and layout keys
+|-- ui.rs         # ZenView, draw_rice, the tile widgets, the pickers and the layouts list
+|-- input.rs      # feed keys, room walk, focus and layout keys, the layouts (load, save, the list, /layout)
 `-- bigclock.rs   # block digit font for the clock tile
 ```
 
@@ -210,18 +236,21 @@ Glue: `Screen::Zen` in `common/primitives.rs`; the frame skip, `ZenView`
 assembly, the status row build, and `zen_chat_view` in `render.rs`; the digit `7`, the top-bar
 hit test, the picker staying put in `room_search_modal/input.rs`, and the
 dedicated-input hook in `input.rs` (and Home's: `handle_home_event` ahead
-of Home's keys, `Ctrl+E` among the reserved chords, `\` and the Esc arm);
-`App::zen`, `App::home`, `rice()` / `rice_mut()`, `rice_tiles_area` /
-`rice_tile_rects`, `App::zen_chat_rows_cache`, `sync_aquarium_bounds`,
-and `mark_zen_layout_dirty` / `flush_rice_layouts` in
-`state.rs`; the aquarium stepping, the ascii tile's cadence edge
-(`ascii_edge`), and anim edge in `tick.rs`; `extract_key_zen_layout` /
-`UserSshKey::set_zen_layout` and `extract_key_home_layout` /
-`UserSshKey::set_home_layout` in `late-core/src/models/user_ssh_key.rs`,
+of Home's keys, `Ctrl+F` (`layout_chord_globally`, `go_home_for_layouts`)
+and `Ctrl+E` among the reserved chords, and the Esc arm); `/layout`
+parsed in `chat/state.rs` and handed over in `chat/input.rs`;
+`App::zen`, `App::home`, `App::home_layouts`, `App::layout_list`,
+`rice()` / `rice_mut()`, `rice_tiles_area` / `rice_tile_rects`,
+`App::zen_chat_rows_cache`, `sync_aquarium_bounds`, and
+`mark_zen_layout_dirty` / `flush_rice_layouts` in `state.rs`; the
+aquarium stepping, the ascii tile's cadence edge (`ascii_edge`), and anim
+edge in `tick.rs`; `extract_key_zen_layout` / `UserSshKey::set_zen_layout`
+and `extract_key_home_layouts` / `UserSshKey::set_home_layouts` (and the
+seed `extract_key_home_layout`) in `late-core/src/models/user_ssh_key.rs`,
 the account seeds `extract_zen_layout` / `extract_home_layout` in
 `user.rs`. The Home arm of `render.rs` builds the
 same `ZenView` with a `HomeView` (the chat and card views the page's chat
-and the rail draw from) and the guests' inputs (`StripGuest`, `board_day`).
+and the rail draw from) and the guests' inputs (`StripGuest`, `lobby_awaits`).
 
 ## 3. Keys
 
@@ -303,24 +332,42 @@ leaving the page, so a held resize key costs one row update. The layout
 keys that change the tree are uppercase (`S` `X` `F` `R`), keeping the
 lowercase letters free for the tiles' own keys.
 
-On Home the layout keys are arrange mode's alone: `Ctrl+E` enters it
-(`zen::input::toggle_home_arrange`; while it is on, Home's bottom row is
-a footer naming every key, `HOME_ARRANGE_KEYS`, trimmed from the right on
-a narrow page), and in it
+On Home the layout keys are arrange mode's alone: `Ctrl+F` or `Ctrl+E`
+enters it (`zen::input::toggle_home_arrange`; `Ctrl+F` from any other
+page walks Home into it first, closing the modals, the way it used to
+open Zen; while it is on, Home's bottom row is a footer naming every key,
+`HOME_ARRANGE_KEYS`, trimmed from the right on a narrow page), and in it
 Tab and the arrows walk every tile, `S` `X` `F` `<` `>` `{` `}` `space` `R`
-work as above, `t` gives the focused tile its own say on its title rule
+work as above (`R` to the current layout's stock), `b` cycles the border
+(a border boxes the layout in its look, none draws Home's rules), a digit
+`1`..`9` loads that layout and leaves the mode (`zen::input::load_layout`:
+the page goes into its own slot first; so `Ctrl+F 2` is Zen's page in two
+keystrokes, like a tmux prefix), `L` opens the layouts list
+(`App::layout_list`, `presets::LayoutList`, drawn over the page: one row
+per layout with its digit and name, the current marked; `j` `k` and the
+arrows move, Enter loads the row and leaves the mode, `n` types a name and
+saves the page as a new layout, current from then on, `r` retypes the
+row's name, `d` deletes the row, never the last, the page showing its
+neighbor when it was the current one, `R` puts the row back to its stock;
+a refused name says why in a banner and keeps the field up; Esc drops a
+typed name, then closes the list), `t` gives the focused tile its own say on its title rule
 (`Node::title_at`, stored on the leaf; `None` is the kind's default, bare
 for the rail, the presence row and the page's chat, a rule for the rest,
 `layout::bare_under_rules`; arrange mode titles every tile and marks one
 that goes bare outside it `· hidden`), `+` opens the guest picker over the focused tile
-(`ZenState::guest_picker`: one row per `Guest`, marked where the tile
-hosts it, Enter or `space` toggles and the picker stays up), and every
+(`ZenState::guest_picker`: one row per `Guest`, marked on the tile's own,
+Enter or `space` picks it, replacing the tile's guest, or takes the
+tile's own off, and the picker stays up), and every
 other key is swallowed so a stray letter never reaches the chat; Esc
-peels a picker, then leaves the mode, puts the focus back on a chat and
-writes the layout at once. Outside it Home's keys are Home's: the active
-chat tile is Home's chat, and the rail its room. The Home only kind
-(rooms) sits at the bottom of the tile picker and is refused on Zen, and
-once the page holds one.
+peels a typed name, the list, a picker, then leaves the mode, puts the
+focus back on a chat and writes the layouts at once. Outside it Home's
+keys are Home's: the active chat tile is Home's chat, and the rail its
+room. From any composer, `/layout` opens the list (walking Home into
+arrange mode), `/layout <name or digit>` loads that layout, and `/layout
+save <name>` saves the page as a new one (`presets::LayoutCommand`,
+`zen::input::run_layout_command`; a banner names the digit it got). The
+Home only kind (rooms) sits at the bottom of the tile picker and is
+refused on Zen, and once the page holds one.
 
 The page's bottom row is the user's status line on the left and the
 layout keys worth knowing by heart on the right, `? help  S split  F flip

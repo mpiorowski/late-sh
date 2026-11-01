@@ -1636,7 +1636,7 @@ pub fn draw_tour_overlay(
         ),
         Tutorial::VisitZen => (
             Screen::Zen,
-            " ✦ the tour · [Ctrl+F] zen ",
+            " ✦ the tour · zen ",
             vec![
                 Line::from(Span::styled(
                     "one page with just the things you want to keep an eye on.",
@@ -1657,10 +1657,16 @@ pub fn draw_tour_overlay(
                 )),
                 Line::default(),
                 Line::from(vec![
+                    Span::styled("[/zen] ", key),
+                    Span::styled("opens it from any page. ", text),
                     Span::styled("[Ctrl+F] ", key),
-                    Span::styled("opens it from any page. the same chord", text),
+                    Span::styled("on it takes you back;", text),
                 ]),
-                Line::from(Span::styled("takes you back to where you were.", text)),
+                Line::from(vec![
+                    Span::styled("on home, ", text),
+                    Span::styled("[Ctrl+F] [2] ", key),
+                    Span::styled("is this page as a layout of home.", text),
+                ]),
                 Line::default(),
                 Line::from(vec![
                     Span::styled("[Tab] ", key),

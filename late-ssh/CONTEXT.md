@@ -306,11 +306,13 @@ Some settings belong to the SSH key a session authenticated with
   `auto` resolves against the live width each frame
   (`AUTO_RIGHT_SIDEBAR_MIN_COLS` 72). `show_right_sidebar` is still written
   next to the mode for rollback safety.
-- **The Home and Zen tile layouts** (`app/zen/CONTEXT.md`): `zen_layout` and
-  `home_layout` on the key, written by `App::flush_rice_layouts` through
-  `ProfileState::set_device_zen_layout` / `set_device_home_layout`. The
-  account's `users.settings.zen_layout` / `home_layout` are only the seed for
-  a key that has never arranged the page; nothing writes them any more.
+- **The Home and Zen tile layouts** (`app/zen/CONTEXT.md`): `home_layouts`
+  (Home's named layouts, up to nine, and the current one) and `zen_layout`
+  on the key, written by `App::flush_rice_layouts` through
+  `ProfileState::set_device_home_layouts` / `set_device_zen_layout`. A key
+  with no `home_layouts` seeds the set from its own `home_layout` and
+  `zen_layout`, and those from the account's `users.settings.zen_layout` /
+  `home_layout`; nothing writes `home_layout` or the account's any more.
 - **The Artboard content disclaimer.** Same shape (`artboard_disclaimer` on the
   key, `App::artboard_disclaimer_enabled`), except a failed key read fails
   closed to on.
@@ -414,7 +416,7 @@ interaction mode ignores mouse reports.
 | `?` | Global guide (not while composing; Artboard keeps its own help) |
 | `Ctrl+O` | Settings, from anywhere but active Artboard editing |
 | `Ctrl+G` | Lobby modal (daily games and house tables) |
-| `Ctrl+F` | Zen over the current page, and back |
+| `Ctrl+F` | Home's layouts: arrange mode on Home (from any other page, Home first), then a digit loads layout 1..9 and `L` lists them (`app/zen/CONTEXT.md`); on the Zen screen, back to the page it was opened over |
 | `Ctrl+E` | Arrange Home: its rail, chat and panels are tiles (`app/zen/CONTEXT.md`); `Esc` is done |
 | `Ctrl+S` | Shop (active games and editors keep their own `Ctrl+S`) |
 | `Ctrl+R` | Full repaint (redo inside the chat composer) |

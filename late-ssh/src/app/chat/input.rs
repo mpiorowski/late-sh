@@ -221,6 +221,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     if app.chat.take_requested_zen_toggle() {
         crate::app::input::toggle_zen_globally(app);
     }
+    if let Some(command) = app.chat.take_requested_layout_command() {
+        crate::app::zen::input::run_layout_command(app, command);
+    }
     if app.chat.take_requested_guide() {
         crate::app::input::open_guide_globally(app);
     }

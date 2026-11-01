@@ -51,6 +51,7 @@ crate::user_scoped_model! {
 const RIGHT_SIDEBAR_MODE_KEY: &str = "right_sidebar_mode";
 const ZEN_LAYOUT_KEY: &str = "zen_layout";
 const HOME_LAYOUT_KEY: &str = "home_layout";
+const HOME_LAYOUTS_KEY: &str = "home_layouts";
 const AUDIO_MUTED_KEY: &str = "audio_muted";
 const AUDIO_VOLUME_KEY: &str = "audio_volume_percent";
 const ARTBOARD_DISCLAIMER_KEY: &str = "artboard_disclaimer";
@@ -137,10 +138,18 @@ pub fn extract_key_zen_layout(settings: &Value) -> Option<Value> {
     settings.get(ZEN_LAYOUT_KEY).cloned()
 }
 
-/// This device's Home tile layout, or `None` to follow the account's
-/// `home_layout` seed.
+/// This device's Home tile layout from before Home had named layouts, or
+/// `None` to follow the account's `home_layout` seed. Read only as the
+/// seed for a key with no `home_layouts` yet; nothing writes it any more.
 pub fn extract_key_home_layout(settings: &Value) -> Option<Value> {
     settings.get(HOME_LAYOUT_KEY).cloned()
+}
+
+/// This device's named Home layouts (`zen::presets::Layouts` JSON, parsed
+/// by `late-ssh`), or `None` when the key has never saved or switched one
+/// and Home should seed its set from the single stored layouts.
+pub fn extract_key_home_layouts(settings: &Value) -> Option<Value> {
+    settings.get(HOME_LAYOUTS_KEY).cloned()
 }
 
 impl UserSshKey {
@@ -215,14 +224,14 @@ impl UserSshKey {
         Self::merge_settings(client, user_id, fingerprint, value).await
     }
 
-    /// Store this device's Home tile layout, scoped like `set_layout`.
-    pub async fn set_home_layout(
+    /// Store this device's named Home layouts, scoped like `set_layout`.
+    pub async fn set_home_layouts(
         client: &Client,
         user_id: Uuid,
         fingerprint: &str,
-        layout: &Value,
+        layouts: &Value,
     ) -> Result<()> {
-        let value = json!({ HOME_LAYOUT_KEY: layout });
+        let value = json!({ HOME_LAYOUTS_KEY: layouts });
         Self::merge_settings(client, user_id, fingerprint, value).await
     }
 

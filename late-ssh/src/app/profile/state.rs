@@ -114,10 +114,11 @@ impl ProfileState {
             .set_key_zen_layout(self.user_id, fingerprint, layout);
     }
 
-    /// Store this device's Home tile layout, the same way.
-    pub fn set_device_home_layout(&self, fingerprint: String, layout: serde_json::Value) {
+    /// Store this device's named Home layouts (`zen::presets::Layouts`),
+    /// the same way.
+    pub fn set_device_home_layouts(&self, fingerprint: String, layouts: serde_json::Value) {
         self.profile_service
-            .set_key_home_layout(self.user_id, fingerprint, layout);
+            .set_key_home_layouts(self.user_id, fingerprint, layouts);
     }
 
     /// Store whether this device shows the Artboard content disclaimer. Fire

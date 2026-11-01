@@ -15,9 +15,13 @@ delta against the design):
 
 - Home renders through the tree (`RicePage::Home`, `App::home`), with the
   stock Home fixed: the rail, the reef over the chat, and the sidebar
-  column (presence, music, lobby, live, bonsai, pet). Zen stays its own
-  screen on `Ctrl+F` with its boxed look; arrange mode on Home is `Ctrl+E`
-  (Esc is done), since Ctrl+F still means Zen.
+  column (presence, music, lobby, live, bonsai, pet). `Ctrl+F` is Home's
+  layouts chord (arrange mode, then a digit or `L`), and `Ctrl+E` still
+  enters arrange mode too. The Zen screen is still in the code, reached by
+  `/zen`, the status line click, the tour and "Land on"; `Ctrl+F` on it
+  still hands back. Its tree is also Home's stock layout 2, so the screen,
+  `zen_return_screen`, the workspace base dance and the tour stop are the
+  migration still to do.
 - Static kinds `rooms`, `presence` and `tank` exist (the tank is the
   aquarium's small form as its own kind, the stock sidebar's; the
   `aquarium` kind is the reef alone); there is no `center` kind.
@@ -26,19 +30,25 @@ delta against the design):
   views, and the rail shows its room (a stored `center` reads as `chat`).
   The cut list (pulse, friends, activity, visualizer, blank) is not cut:
   Zen keeps them.
-- Dynamic kinds are guests only (`+` on a tile), the four of the design:
-  now, lobby, live, banner. There is no dynamic tile of its own kind.
+- Guests are the two that end, now and lobby (`+` on a tile, one a
+  tile), and a guest takes its host over while it is up. The live panel
+  is a tile kind only; the board's day is the chat card's own row.
 - Fixed splits (`Share::First` / `Share::Second`) carry the rails; the Fit
   shares are not built.
 - Chat tiles on Home bind rooms as on Zen: a tile that becomes a chat is
   pinned to the room of the moment, the rail steers the active tile and
   follows the focus onto another. The MyStream binding is not built.
-- No named layouts, no layout switching: one Home layout and one Zen
-  layout per device, on the SSH key (`user_ssh_keys.settings.home_layout`
-  / `zen_layout`), the account's stored layouts the seed for a key with
-  none.
-- The borders stay as they are: Home draws rules, Zen draws its look. No
-  per-page border toggle.
+- Named layouts as below (`zen/presets.rs`): nine per device on the key
+  (`user_ssh_keys.settings.home_layouts`), stock `home` and `zen`,
+  `Ctrl+F` digit, the `L` list with save, rename, delete and reset,
+  `/layout`. `R` in the list resets a layout to the stock its name says
+  (`zen` to Zen's page), not always to stock Home. The status line
+  `layout` component is not built. A key with no `home_layouts` seeds the
+  set from its `home_layout` and `zen_layout`; the Zen screen still reads
+  and writes `zen_layout` on its own.
+- The border is the layout's: a border of `none` draws Home's rules, any
+  other boxes the page in its look (`b` cycles them in arrange mode; the
+  stock `zen` is boxed). There is no separate `f` frame key.
 - No chat-only key and no narrow fold: a page is drawn as arranged at
   every width, and a phone arranges its own Home. The room-list setting is
   gone, row and storage; the sidebar row is the Arcade's. The stock Home
@@ -155,9 +165,8 @@ A dynamic widget has one yes/no question the session already answers:
 | Kind | Active while | The answer today |
 |---|---|---|
 | `now` (the now strip) | the queue has something up | `LiveState::shown` |
-| `lobby` | a game waits on your move | `lobby.glow()` |
+| `lobby` | a match waits on your move, or a result on your look | `DailyState::awaits_me` |
 | `live` (the live panel) | at least one row is joinable | `live_panel_rows` non-empty |
-| `banner` (the calendar banner) | an event is today | Home's top row |
 
 "Now strip" is the name from here on; "live" is the panel. The two were
 confused for long enough.
@@ -167,32 +176,29 @@ A dynamic kind is placed one of two ways:
 - **As a tile.** Always drawn, with its idle text (`nobody playing`, the
   lobby's `11 open`). Today's sidebar panels.
 - **As a guest on a static tile.** Invisible while idle; while active it
-  paints over the top of the host under its own title rule
-  (`── now ──`, `── lobby ──`), so the reader knows what landed. The host
-  keeps its rect: the reef keeps swimming underneath and the simulation
-  is never rebound (`sync_aquarium_bounds` stays as it is).
+  *is* the tile: its label in the title rule, its panel where the host's
+  was, nothing of the host underneath. The host keeps its rect, so the
+  reef's simulation is never rebound (`sync_aquarium_bounds` stays as it
+  is) and shows whole the moment the guest goes.
 
-A host holds guests in a list. Active guests stack from the top in list
-order, each at its natural height (the strip's `LIVE_STRIP_HEIGHT`, the
-panel's `LIVE_PANEL_HEIGHT`, the lobby's compact rows, one row for the
-banner); a guest that does not fit is dropped from the bottom, the
-sidebar's rule. The `center` and `chat` tiles are the one kind of host
-that inserts instead of covering: a guest on them pushes the messages
-down, which is the strip's and the banner's behavior on Home today,
-"wait while a message is selected" rule included. On furniture nothing
-waits, as in a Zen tile.
+Only widgets that end are guests: `now` comes down on the queue's clock
+(five minutes at most), `lobby` when you move or acknowledge. The live
+panel stays up as long as anything is on, an evening at a time, so it is
+a tile kind only. A tile hosts one guest, and a guest is on the page
+once, so the `s` prefix, `Ctrl+G` and the clicks have one target. Clicks
+on a guest work as on its panel. Guests never take focus.
 
-Each dynamic kind appears once on the page, as a tile or as a guest, so
-the `s` prefix, `Ctrl+G` and the clicks have one target. Clicks on a
-guest work as on its panel. Guests never take focus.
+The `chat` tile is the one host that inserts instead of taking over: the
+strip on the page's chat pushes the messages down, which is the strip's
+behavior on the #lounge card, "wait while a message is selected" rule
+included. The board's all-day line is the card's own topic row, not a
+guest.
 
 The stock Home places `now` on the reef across the top of the chat, so
-the strip lands on the fish and the chat never loses a row, and `banner`
-on the chat.
+the strip lands on the fish and the chat never loses a row.
 
-Candidates for later, once the guest list exists: `inbox` while anything
-is unread, `headlines` while a story is under an hour old. The model does
-not change for them.
+Candidates for later: `inbox` while anything is unread, `headlines` while
+a story is under an hour old. The model does not change for them.
 
 ### Chat bindings
 
@@ -281,7 +287,7 @@ Arrange mode:
 | `+` | the guest list over the focused tile: the four dynamic kinds, a check beside the placed ones, toggled in place |
 | `t` | the focused tile's title rule on or off, its own say from then on (the rail, presence and the page's chat start bare, the rest with a rule) |
 | `[` `]` | a chat tile walks the rail's rooms, an ascii tile its pieces, as Zen |
-| `f` | frame on, frame off |
+| `b` | the border: none is Home's rules, the rest box the page in its look |
 | `1`..`9` | load that layout and leave arrange mode |
 | `L` | the layouts list |
 | `R` | reset the current layout to stock Home |
@@ -346,8 +352,7 @@ refused with a message. It would make layouts shareable in chat
 2. Fit shares and the one look.
 3. The `center`, `rooms`, `music` kinds and the stock `home` tree behind
    the snapshot test; the Home arm switches over.
-4. Guests, with `now` and `banner` on `center` first so the stock page
-   does not change, then the reef as a host.
+4. Guests, `now` on the reef and `lobby` wherever its owner puts it.
 5. Layouts per device, the stock `zen`, `Ctrl+F` digit, the list,
    `/layout`.
 6. Migration, the contexts, the help topic, the tips.

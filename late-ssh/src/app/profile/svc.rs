@@ -846,27 +846,27 @@ impl ProfileService {
         );
     }
 
-    /// Fire-and-forget: persist Home's layout JSON, the same way.
-    /// Store this device's Home tile layout on its SSH key, fire and forget.
-    pub fn set_key_home_layout(
+    /// Store this device's named Home layouts on its SSH key, fire and
+    /// forget, the same way.
+    pub fn set_key_home_layouts(
         &self,
         user_id: Uuid,
         fingerprint: String,
-        layout: serde_json::Value,
+        layouts: serde_json::Value,
     ) {
         let service = self.clone();
         tokio::spawn(
             async move {
                 let result = async {
                     let client = service.db.get().await?;
-                    UserSshKey::set_home_layout(&client, user_id, &fingerprint, &layout).await
+                    UserSshKey::set_home_layouts(&client, user_id, &fingerprint, &layouts).await
                 }
                 .await;
                 if let Err(e) = result {
-                    tracing::warn!(error = ?e, "failed to persist device home layout");
+                    tracing::warn!(error = ?e, "failed to persist device home layouts");
                 }
             }
-            .instrument(info_span!("profile.device_home_layout_task", user_id = %user_id)),
+            .instrument(info_span!("profile.device_home_layouts_task", user_id = %user_id)),
         );
     }
 

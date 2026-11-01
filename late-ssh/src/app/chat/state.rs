@@ -1115,6 +1115,8 @@ pub struct ChatState {
     opened_stream_room: Option<Uuid>,
     /// Set by /aquarium [feed]; consumed by `App` (which owns the tank).
     requested_aquarium_command: Option<AquariumCommand>,
+    /// `/layout`, run by Home (`zen::input::run_layout_command`).
+    requested_layout_command: Option<crate::app::zen::presets::LayoutCommand>,
     requested_poll_room: Option<Uuid>,
     pending_mod_outputs: VecDeque<ModCommandOutput>,
 
@@ -1444,6 +1446,7 @@ impl ChatState {
             requested_watch: None,
             opened_stream_room: None,
             requested_aquarium_command: None,
+            requested_layout_command: None,
             requested_audio_url: None,
             requested_audio_fallback_url: None,
             requested_audio_skip: false,
@@ -2325,6 +2328,12 @@ impl ChatState {
         self.live_streams
             .iter()
             .find(|stream| stream.room_id == room_id)
+    }
+
+    pub(crate) fn take_requested_layout_command(
+        &mut self,
+    ) -> Option<crate::app::zen::presets::LayoutCommand> {
+        self.requested_layout_command.take()
     }
 
     pub(crate) fn take_requested_aquarium_command(&mut self) -> Option<AquariumCommand> {
@@ -3827,6 +3836,14 @@ impl ChatState {
             return None;
         }
 
+        // Home's layouts: the list, one by name or digit, or the page
+        // saved under a name (`Ctrl+F` has the same three).
+        if let Some(command) = crate::app::zen::presets::LayoutCommand::parse(&body) {
+            self.clear_composer_after_submit();
+            self.requested_layout_command = Some(command);
+            return None;
+        }
+
         if body.trim() == "/guide" {
             self.clear_composer_after_submit();
             self.requested_guide = true;
@@ -4203,7 +4220,7 @@ impl ChatState {
         if matches!(body.trim(), "/aquarium" | "/aq") {
             self.clear_composer_after_submit();
             return Some(Banner::info(
-                "The tank lives on the Zen page (Ctrl+F): /aquarium feed; its sprout is cut in /shop",
+                "The reef is a tile of Home and Zen: /aquarium feed; its sprout is cut in /shop",
             ));
         }
 

@@ -449,12 +449,13 @@ struct DrawContext<'a> {
     /// The Zen pages (`app/zen`): layout state, the current room's chat
     /// (drawn at most once per frame), and the strings their status rows show.
     zen: &'a crate::app::zen::state::ZenState,
+    /// Home's named layouts and the list over them while it is up.
+    home_layouts: &'a crate::app::zen::presets::Layouts,
+    layout_list: Option<&'a crate::app::zen::presets::LayoutList>,
     zen_chat_tiles: Vec<crate::app::zen::ui::ZenChatTile<'a>>,
-    /// The now strip for the Home tile hosting it as a guest, and the
-    /// board's day for the banner's host (`None` on the center: the card
-    /// carries them itself).
+    /// The now strip for the Home tile hosting it as a guest (`None` on
+    /// the page's chat: the card carries it itself).
     guest_live_strip: Option<crate::app::live::state::LiveStripView<'a>>,
-    guest_board_day: Option<String>,
     zen_track: String,
     zen_date: String,
     zen_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
@@ -795,9 +796,6 @@ impl App {
         let chat_hosts_strip = self
             .home
             .active_chat_hosts(crate::app::zen::state::Guest::Now);
-        let chat_hosts_banner = self
-            .home
-            .active_chat_hosts(crate::app::zen::state::Guest::Banner);
         let home_live_strip = if strip_hosted {
             self.live.view(
                 &self.daily,
@@ -816,22 +814,14 @@ impl App {
             true => (home_live_strip, None),
             false => (None, home_live_strip),
         };
-        // The board's day, on the #lounge card like the strip, or on the
-        // tile hosting the banner.
-        let home_board_day = if screen == Screen::Dashboard
-            && self.home.hosts_guest(crate::app::zen::state::Guest::Banner)
-            && (!chat_hosts_banner || home_selected)
-        {
+        // The board's day is the #lounge card's topic row.
+        let dashboard_board_day = if screen == Screen::Dashboard && home_selected {
             crate::app::calendar::live::day_text(
                 &self.calendar.live_at(live_panel_now),
                 live_panel_now,
             )
         } else {
             None
-        };
-        let (dashboard_board_day, guest_board_day) = match chat_hosts_banner {
-            true => (home_board_day, None),
-            false => (None, home_board_day),
         };
         let dashboard_voice_channel_id = shell_active_room
             .and_then(|room_id| self.chat.voice_channels_by_room_id.get(&room_id))
@@ -1965,9 +1955,10 @@ impl App {
                         status_hits: &self.last_status_hits,
                         home_selected,
                         zen: rice,
+                        home_layouts: &self.home_layouts,
+                        layout_list: self.layout_list.as_ref(),
                         zen_chat_tiles,
                         guest_live_strip,
-                        guest_board_day,
                         zen_track,
                         zen_date,
                         zen_pet_strip,
@@ -2286,6 +2277,8 @@ impl App {
                 let view = crate::app::zen::ui::ZenView {
                     status_row,
                     zen: ctx.zen,
+                    home_layouts: ctx.home_layouts,
+                    layout_list: ctx.layout_list,
                     home,
                     music_stage: crate::app::common::sidebar::MusicStageProps {
                         paired_client: ctx.paired_client,
@@ -2304,7 +2297,7 @@ impl App {
                             hit: strip_hit,
                         }
                     }),
-                    board_day: ctx.guest_board_day.take(),
+                    lobby_awaits: ctx.daily.awaits_me(),
                     bonsai: ctx.bonsai,
                     aquarium: ctx.aquarium_state,
                     aquarium_owned: ctx.shop_state.entitlements().has_aquarium(),

@@ -412,9 +412,13 @@ pub struct SessionConfig {
     pub presence: crate::app::presence::svc::PresenceService,
     /// The stored Rice layout (`app/zen`), `None` until first edited.
     pub zen_layout: Option<serde_json::Value>,
-    /// The stored Home layout (`app/zen`, the Home page), `None` until
-    /// first arranged.
+    /// The stored Home layout from before Home had named layouts, `None`
+    /// when the device never arranged it; the seed for `home_layouts`.
     pub home_layout: Option<serde_json::Value>,
+    /// This device's named Home layouts (`app/zen/presets`), `None` until
+    /// one is saved or switched, when `home_layout` and `zen_layout` seed
+    /// the set.
+    pub home_layouts: Option<serde_json::Value>,
     /// Fingerprint of the SSH key this session authenticated with: the only
     /// device identity late.sh has, and what per-device settings key off.
     /// `None` for sessions with no key of their own (ghost bots, tests), which
@@ -569,12 +573,15 @@ pub struct App {
     pub(crate) aquarium_service: hub::aquarium::svc::AquariumService,
     /// Zen (`Ctrl+F`): the tiling layout and its focus.
     pub(crate) zen: crate::app::zen::state::ZenState,
-    /// Home as a tile tree (`app/zen`, `RicePage::Home`): the stock Home
-    /// until arranged (`Ctrl+E`).
+    /// Home as a tile tree (`app/zen`, `RicePage::Home`): the current
+    /// layout of `home_layouts`, arranged in place (`Ctrl+F`, `Ctrl+E`).
     pub(crate) home: crate::app::zen::state::ZenState,
-    /// Whether this device ever arranged Home: a stock page is the fixed
-    /// stock, an arranged one is its own.
-    pub(crate) home_edited: bool,
+    /// This device's named Home layouts and which one `home` shows. The
+    /// current slot is written back from `home.rice` on every flush and
+    /// switch (`Layouts::store_current`).
+    pub(crate) home_layouts: crate::app::zen::presets::Layouts,
+    /// The layouts list `L` opens in arrange mode, while it is up.
+    pub(crate) layout_list: Option<crate::app::zen::presets::LayoutList>,
     /// Where `Ctrl+F` was pressed, so the chord hands the page back; cleared
     /// whenever Zen is left, and `None` on a session that landed on Zen.
     pub(crate) zen_return_screen: Option<Screen>,
@@ -1665,6 +1672,15 @@ impl App {
             LandingPage::Home => Screen::Dashboard,
             LandingPage::Zen => Screen::Zen,
         };
+        // This device's named Home layouts; a device from before they had
+        // names keeps its arranged Home and Zen as the two stock slots.
+        let home_layouts = crate::app::zen::presets::Layouts::from_json_or(
+            config.home_layouts.as_ref(),
+            crate::app::zen::presets::Layouts::seeded(
+                config.home_layout.as_ref(),
+                config.zen_layout.as_ref(),
+            ),
+        );
         let haunt = crate::app::deadchannel::haunt::svc::arm(
             config.user_id,
             &config.username,
@@ -1730,18 +1746,13 @@ impl App {
             zen: crate::app::zen::state::ZenState::new(
                 crate::app::zen::state::RiceLayout::from_json(config.zen_layout.as_ref()),
             ),
-            home: {
-                let stock = crate::app::zen::state::RiceLayout::home();
-                crate::app::zen::state::ZenState::for_page(
-                    crate::app::zen::state::RicePage::Home,
-                    crate::app::zen::state::RiceLayout::from_json_or(
-                        config.home_layout.as_ref(),
-                        stock.clone(),
-                    ),
-                    stock,
-                )
-            },
-            home_edited: config.home_layout.is_some(),
+            home: crate::app::zen::state::ZenState::for_page(
+                crate::app::zen::state::RicePage::Home,
+                home_layouts.current_layout().clone(),
+                home_layouts.current_stock(),
+            ),
+            home_layouts,
+            layout_list: None,
             zen_return_screen: None,
             workspace_base: match landing {
                 LandingPage::Zen => crate::app::workspace::cycle::WorkspaceBase::Zen { back: None },
@@ -3800,10 +3811,7 @@ impl App {
     /// debounced: see `flush_rice_layouts`.
     pub(crate) fn mark_zen_layout_dirty(&mut self) {
         match self.screen {
-            Screen::Dashboard => {
-                self.home_layout_dirty = true;
-                self.home_edited = true;
-            }
+            Screen::Dashboard => self.home_layout_dirty = true,
             _ => self.zen_layout_dirty = true,
         }
     }
@@ -3823,15 +3831,17 @@ impl App {
         }
     }
 
-    /// Write Home's layout if an edit is pending, the same way.
+    /// Write Home's layouts if an edit is pending, the same way: the page
+    /// as it is goes into the current slot, and the whole set is stored.
     pub(crate) fn flush_home_layout(&mut self) {
         if !self.home_layout_dirty {
             return;
         }
         self.home_layout_dirty = false;
+        self.home_layouts.store_current(self.home.rice.clone());
         if let Some(fingerprint) = self.key_fingerprint.clone() {
             self.profile_state
-                .set_device_home_layout(fingerprint, self.home.rice.to_json());
+                .set_device_home_layouts(fingerprint, self.home_layouts.to_json());
         }
     }
 

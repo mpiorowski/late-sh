@@ -17,6 +17,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use super::{
     bigclock,
     layout::{self, Chrome, FLOOR_ROWS},
+    presets::{LayoutList, Layouts, MAX_LAYOUT_NAME_CHARS, NamePurpose},
     rows::{Headline, InboxRow},
     state::{BorderKind, Guest, TileKind, ZenState},
 };
@@ -95,6 +96,10 @@ pub(crate) struct StripGuest<'a> {
 /// Everything a rice page reads, assembled once per frame in `render.rs`.
 pub(crate) struct ZenView<'a> {
     pub zen: &'a ZenState,
+    /// Home's named layouts, and the list `L` opens over them while it is
+    /// up (arrange mode only).
+    pub home_layouts: &'a Layouts,
+    pub layout_list: Option<&'a LayoutList>,
     /// Home's rail and chat; `None` on Zen, which draws every chat tile
     /// from `chats`.
     pub home: Option<HomeView<'a>>,
@@ -102,10 +107,12 @@ pub(crate) struct ZenView<'a> {
     /// and keys included); a short one keeps the track and the equalizer.
     pub music_stage: MusicStageProps<'a>,
     /// The now strip for the tile hosting it as a guest, while something
-    /// is up. The center hosts it inside its card instead (`dashboard_view`).
+    /// is up. The page's chat hosts it inside its card instead
+    /// (`dashboard_view`).
     pub strip: Option<StripGuest<'a>>,
-    /// The board's day for the tile hosting the banner as a guest.
-    pub board_day: Option<String>,
+    /// Whether a daily match waits on your move or a result on your look:
+    /// the lobby guest takes its host while so.
+    pub lobby_awaits: bool,
     /// The bottom row: the user's status line and the page's keys. `None`
     /// only on a page too small to draw.
     pub status_row: Option<ZenStatusRow>,
@@ -270,6 +277,19 @@ pub(crate) fn draw_rice(
                 _,
             ) => kind.label().to_string(),
         };
+        // The tile's guest, while it has something to say, is the tile:
+        // its label in the rule and its panel in place of the host's. On
+        // the page's chat the strip inserts into the card instead.
+        let guest = guests.get(ordinal).copied().flatten();
+        let guest_up = match guest {
+            Some(Guest::Now) => view.strip.is_some() && !is_page_chat,
+            Some(Guest::Lobby) => view.lobby_awaits,
+            None => false,
+        };
+        let title = match (guest, guest_up, zen.arrange) {
+            (Some(guest), true, false) => guest.label().to_string(),
+            (Some(_), true, true) | (Some(_), false, _) | (None, _, _) => title,
+        };
         // Arranging, a tile that goes bare outside the mode says so in
         // the rule it wears for the mode.
         let title_override = zen.rice.root.title_at(ordinal);
@@ -323,18 +343,8 @@ pub(crate) fn draw_rice(
         if inner.width == 0 || inner.height == 0 {
             continue;
         }
-        // The guests this tile hosts paint over its top, in order, each
-        // at its own height; on the page's chat they insert instead, the
-        // card drawing under them. The strip and the banner there are the
-        // card's own (`dashboard_view` carries them).
-        let inner = draw_guests(
-            frame,
-            inner,
-            is_page_chat,
-            guests.get(ordinal).map(Vec::as_slice).unwrap_or(&[]),
-            &mut view,
-        );
-        if inner.width == 0 || inner.height == 0 {
+        if let (Some(guest), true) = (guest, guest_up) {
+            draw_guest(frame, inner, guest, &mut view);
             continue;
         }
         // The rules chrome already set every tile but the page's chat and
@@ -457,142 +467,159 @@ pub(crate) fn draw_rice(
     }
     draw_kind_picker(frame, area, zen);
     draw_guest_picker(frame, area, zen);
+    if let Some(list) = view.layout_list {
+        draw_layout_list(frame, area, view.home_layouts, list);
+    }
+}
+
+/// The layouts list `L` opens in arrange mode: one row per layout with
+/// its digit and name, the current one marked, the selected row lit;
+/// while a name is being typed (`n`, `r`) the field sits under the rows
+/// with its cursor.
+fn draw_layout_list(frame: &mut Frame, area: Rect, layouts: &Layouts, list: &LayoutList) {
+    let rows = layouts.len() as u16;
+    // The rows, a blank, the hint, the two border rows; two more rows
+    // while a name is typed.
+    let edit_rows = match list.editing {
+        Some(_) => 2,
+        None => 0,
+    };
+    let height = (rows + 4 + edit_rows).min(area.height);
+    let width = 50u16.min(area.width);
+    if height < 4 || width < 12 {
+        return;
+    }
+    let popup = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(" layouts ")
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    let mut lines: Vec<Line<'static>> = layouts
+        .items()
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let picked = index == list.selected;
+            let current = index == layouts.current();
+            let name_style = if picked {
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme::TEXT())
+            };
+            let note = if current { "current" } else { "" };
+            Line::from(vec![
+                Span::styled(
+                    if picked { "▌ " } else { "  " },
+                    Style::default().fg(theme::AMBER()),
+                ),
+                Span::styled(
+                    format!("{} ", index + 1),
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+                Span::styled(
+                    format!("{:<width$} ", item.name, width = MAX_LAYOUT_NAME_CHARS),
+                    name_style,
+                ),
+                Span::styled(note.to_string(), Style::default().fg(theme::TEXT_FAINT())),
+            ])
+        })
+        .collect();
+    if let Some(edit) = &list.editing {
+        let label = match edit.purpose {
+            NamePurpose::SaveNew => "save as: ",
+            NamePurpose::Rename(_) => "rename to: ",
+        };
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("  ".to_string(), Style::default()),
+            Span::styled(label.to_string(), Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                edit.text.clone(),
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("▏".to_string(), Style::default().fg(theme::AMBER())),
+        ]));
+    }
+    lines.push(Line::from(""));
+    let hints: &[(&str, &str)] = match list.editing {
+        Some(_) => &[("enter", "keep"), ("esc", "drop")],
+        None => &[
+            ("jk", "move"),
+            ("enter", "load"),
+            ("n", "new"),
+            ("r", "rename"),
+            ("d", "delete"),
+            ("R", "reset"),
+            ("esc", "close"),
+        ],
+    };
+    lines.push(hint_line_fitting(hints, inner.width as usize));
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 /// The narrowest tile the music stage reads in: the station rows with
 /// their keys.
 const MUSIC_STAGE_MIN_COLS: u16 = 18;
 
-/// Paint the guests a tile hosts over its top, in order, each at its
-/// natural height while it has something to show, and return what the
-/// host keeps. On the center the strip and the banner are the card's own
-/// and are skipped here; its other guests insert above the card the same
-/// way the strip does.
-fn draw_guests(
-    frame: &mut Frame,
-    area: Rect,
-    page_chat: bool,
-    guests: &[Guest],
-    view: &mut ZenView<'_>,
-) -> Rect {
-    let mut rest = area;
-    for guest in guests {
-        if rest.height == 0 {
-            break;
+/// Paint the guest that has taken its host's tile. The strip sits in its
+/// full form where the tile is wide and tall enough, its one-row form
+/// otherwise, centred down the tile; the lobby is the daily panel at the
+/// top. The host draws nothing underneath, so the moment the guest goes
+/// the host shows whole.
+fn draw_guest(frame: &mut Frame, area: Rect, guest: Guest, view: &mut ZenView<'_>) {
+    match guest {
+        Guest::Now => {
+            let Some(strip) = &view.strip else {
+                return;
+            };
+            let size = if area.width >= crate::app::live::ui::MIN_FULL_WIDTH
+                && area.height >= crate::app::live::ui::LIVE_STRIP_HEIGHT
+            {
+                crate::app::live::ui::StripSize::Full
+            } else {
+                crate::app::live::ui::StripSize::Compact
+            };
+            let height = match size {
+                crate::app::live::ui::StripSize::Full => crate::app::live::ui::LIVE_STRIP_HEIGHT,
+                crate::app::live::ui::StripSize::Compact => {
+                    crate::app::live::ui::LIVE_STRIP_COMPACT_HEIGHT
+                }
+            }
+            .min(area.height);
+            let strip_area = Rect::new(
+                area.x,
+                area.y + (area.height - height) / 2,
+                area.width,
+                height,
+            );
+            crate::app::live::ui::draw_live_strip(frame, strip_area, size, &strip.strip, strip.hit);
         }
-        let taken = match guest {
-            Guest::Now => match (&view.strip, page_chat) {
-                (_, true) | (None, false) => 0,
-                (Some(guest), false) => {
-                    let size = if rest.width >= crate::app::live::ui::MIN_FULL_WIDTH
-                        && rest.height >= crate::app::live::ui::LIVE_STRIP_HEIGHT
-                    {
-                        crate::app::live::ui::StripSize::Full
-                    } else {
-                        crate::app::live::ui::StripSize::Compact
-                    };
-                    let height = match size {
-                        crate::app::live::ui::StripSize::Full => {
-                            crate::app::live::ui::LIVE_STRIP_HEIGHT
-                        }
-                        crate::app::live::ui::StripSize::Compact => {
-                            crate::app::live::ui::LIVE_STRIP_COMPACT_HEIGHT
-                        }
-                    };
-                    let strip_area = Rect::new(rest.x, rest.y, rest.width, height.min(rest.height));
-                    frame.render_widget(Clear, strip_area);
-                    crate::app::live::ui::draw_live_strip(
-                        frame,
-                        strip_area,
-                        size,
-                        &guest.strip,
-                        guest.hit,
-                    );
-                    strip_area.height
-                }
-            },
-            Guest::Banner => match (&view.board_day, page_chat) {
-                (_, true) | (None, false) => 0,
-                (Some(day), false) => {
-                    let row = Rect::new(rest.x, rest.y, rest.width, 1);
-                    frame.render_widget(Clear, row);
-                    frame.render_widget(
-                        Paragraph::new(Line::from(vec![
-                            Span::styled("── ", Style::default().fg(theme::BORDER_DIM())),
-                            Span::styled(
-                                crate::app::chat::ui::truncate_cells(
-                                    day,
-                                    (rest.width as usize).saturating_sub(4),
-                                ),
-                                Style::default()
-                                    .fg(theme::AMBER())
-                                    .add_modifier(Modifier::BOLD),
-                            ),
-                        ])),
-                        row,
-                    );
-                    1
-                }
-            },
-            Guest::Lobby => {
-                if !view.lobby_glow {
-                    0
-                } else {
-                    let height =
-                        (crate::app::lobby::daily::panel::DAILY_PANEL_HEIGHT + 1).min(rest.height);
-                    let block = Rect::new(rest.x, rest.y, rest.width, height);
-                    frame.render_widget(Clear, block);
-                    draw_panel_rule(
-                        frame,
-                        Rect::new(block.x, block.y, block.width, 1),
-                        "lobby",
-                        true,
-                    );
-                    draw_lobby_tile(
-                        frame,
-                        Rect::new(block.x, block.y + 1, block.width, height - 1),
-                        view.daily,
-                        true,
-                    );
-                    height
-                }
-            }
-            Guest::Live => {
-                if view.live_panel.rows.is_empty() {
-                    0
-                } else {
-                    let height = (crate::app::live::panel::LIVE_PANEL_HEIGHT + 1).min(rest.height);
-                    let block = Rect::new(rest.x, rest.y, rest.width, height);
-                    frame.render_widget(Clear, block);
-                    draw_panel_rule(
-                        frame,
-                        Rect::new(block.x, block.y, block.width, 1),
-                        "live",
-                        false,
-                    );
-                    crate::app::live::panel::draw_live_inline(
-                        frame,
-                        Rect::new(block.x, block.y + 1, block.width, height - 1),
-                        &view.live_panel,
-                    );
-                    height
-                }
-            }
-        };
-        rest = Rect::new(
-            rest.x,
-            rest.y + taken,
-            rest.width,
-            rest.height.saturating_sub(taken),
-        );
+        Guest::Lobby => draw_lobby_tile(frame, area, view.daily, view.lobby_glow),
     }
-    rest
 }
 
 /// The guest picker `+` opens in arrange mode: one row per guest, a check
-/// beside the ones on the focused tile, `elsewhere` beside one another
-/// tile hosts (picking it moves it here). Space or Enter toggles and the
-/// picker stays up, so several can be set in one visit.
+/// beside the focused tile's, `elsewhere` beside one another tile hosts
+/// (picking it moves it here). Space or Enter picks, or takes the tile's
+/// own off, and the picker stays up.
 fn draw_guest_picker(frame: &mut Frame, area: Rect, zen: &ZenState) {
     let Some(selected) = zen.guest_picker else {
         return;
@@ -610,7 +637,7 @@ fn draw_guest_picker(frame: &mut Frame, area: Rect, zen: &ZenState) {
     );
     frame.render_widget(Clear, popup);
     let block = Block::default()
-        .title(" guests ")
+        .title(" guest ")
         .title_style(
             Style::default()
                 .fg(theme::AMBER_GLOW())
@@ -621,13 +648,13 @@ fn draw_guest_picker(frame: &mut Frame, area: Rect, zen: &ZenState) {
         .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
-    let here = zen.focused_guests();
+    let here = zen.focused_guest();
     let mut lines: Vec<Line<'static>> = Guest::ALL
         .iter()
         .enumerate()
         .map(|(index, guest)| {
             let picked = index == selected;
-            let on_tile = here.contains(guest);
+            let on_tile = here == Some(*guest);
             let elsewhere = !on_tile && zen.hosts(*guest);
             let label_style = if picked {
                 Style::default()
@@ -651,7 +678,7 @@ fn draw_guest_picker(frame: &mut Frame, area: Rect, zen: &ZenState) {
         .collect();
     lines.push(Line::from(""));
     lines.push(hint_line_fitting(
-        &[("jk", "move"), ("space", "toggle"), ("esc", "close")],
+        &[("jk", "move"), ("space", "pick"), ("esc", "close")],
         inner.width as usize,
     ));
     frame.render_widget(Paragraph::new(lines), inner);

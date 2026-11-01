@@ -4979,7 +4979,7 @@ async fn ctrl_e_arranges_home_and_the_layout_keys_are_arrange_modes_alone() {
         "the footer stays through the mode; frame={frame:?}"
     );
     assert!(
-        app.home_layout_dirty && app.home_edited,
+        app.home_layout_dirty,
         "an edit marks the layout for writing"
     );
 
@@ -5004,7 +5004,7 @@ async fn ctrl_e_arranges_home_and_the_layout_keys_are_arrange_modes_alone() {
                     .await
                     .expect("load key")
                     .expect("key exists");
-                late_core::models::user_ssh_key::extract_key_home_layout(&key.settings).is_some()
+                late_core::models::user_ssh_key::extract_key_home_layouts(&key.settings).is_some()
             }
         },
         "the arranged Home to reach this device's key",
@@ -5019,15 +5019,50 @@ async fn ctrl_e_arranges_home_and_the_layout_keys_are_arrange_modes_alone() {
         None,
         "the account keeps no layout of its own: it is only the seed"
     );
-    // Ctrl+F is still Zen, its own page with its own tree.
+    // Ctrl+F is the layouts chord: it enters arrange mode, and a digit
+    // loads that layout and leaves the mode. Layout 2 is Zen's page as a
+    // layout of Home, so Home stays the screen and shows Zen's tree.
     app.handle_input(b"\x06");
-    assert_eq!(app.screen, crate::app::common::primitives::Screen::Zen);
+    assert!(app.home.arrange, "Ctrl+F enters arrange mode");
+    app.handle_input(b"2");
+    assert!(!app.home.arrange, "a digit leaves the mode");
     assert_eq!(
-        app.zen.leaf_count(),
+        app.screen,
+        crate::app::common::primitives::Screen::Dashboard,
+        "Zen is a layout of Home, not a page"
+    );
+    assert_eq!(app.home_layouts.current_name(), "zen");
+    assert_eq!(
+        app.home.leaf_count(),
         crate::app::zen::state::RiceLayout::default()
             .root
             .leaf_count()
     );
+    assert!(!app.home_layout_dirty, "leaving the mode wrote the switch");
+    let db = test_db.db.clone();
+    wait_until(
+        || {
+            let db = db.clone();
+            async move {
+                let client = db.get().await.expect("db client");
+                let key = UserSshKey::find_by_fingerprint(&client, user.id, "SHA256:arrange")
+                    .await
+                    .expect("load key")
+                    .expect("key exists");
+                late_core::models::user_ssh_key::extract_key_home_layouts(&key.settings)
+                    .and_then(|layouts| layouts.get("current").and_then(|c| c.as_u64()))
+                    == Some(1)
+            }
+        },
+        "the switch to reach this device's key",
+    )
+    .await;
+    // Back on layout 1, the split from before the switch is still there:
+    // a page goes into its slot before another is loaded.
+    app.handle_input(b"\x06");
+    app.handle_input(b"1");
+    assert_eq!(app.home_layouts.current_name(), "home");
+    assert_eq!(app.home.leaf_count(), tiles + 1);
 }
 
 #[tokio::test]
@@ -5341,10 +5376,11 @@ async fn a_watch_opened_from_zen_comes_home_to_zen_on_backtick() {
         }],
     );
 
-    // Zen opened over the Leaderboards; the default's Live tile lists the
-    // game on its first row, with its key.
+    // Zen opened over the Leaderboards (the `/zen` toggle: Ctrl+F is
+    // Home's layouts chord); the default's Live tile lists the game on its
+    // first row, with its key.
     app.set_screen(Screen::Leaderboard);
-    app.handle_input(b"\x06");
+    crate::app::input::toggle_zen_globally(&mut app);
     wait_for_render_contains(&mut app, "w tend").await;
     wait_for_render_contains(&mut app, "dcss").await;
     wait_for_render_contains(&mut app, "s1").await;
@@ -6161,7 +6197,7 @@ async fn home_pet_tile_is_petted_without_moving_the_focus() {
         ..Default::default()
     });
     // A Home arranged with the pet alone beside the chat, as its owner
-    // would with Ctrl+E (`home_edited` keeps the stock sync off it).
+    // would with Ctrl+E.
     let arranged = RiceLayout {
         root: Node::split_first(
             Dir::Row,
@@ -6177,7 +6213,6 @@ async fn home_pet_tile_is_petted_without_moving_the_focus() {
         look: Look::default(),
     };
     app.home = ZenState::for_page(RicePage::Home, arranged.clone(), arranged);
-    app.home_edited = true;
     app.resize(cols, rows).expect("resize test terminal");
     wait_for_render_contains(&mut app, "── pet").await;
 

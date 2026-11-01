@@ -71,12 +71,11 @@ impl LobbyState {
             .map(|challenge| challenge.id)
             .collect();
         self.seen_open_ids.extend(own_ids);
-        if challenges
+        // Lit while an open challenge is one you have not looked at, so a
+        // challenge claimed before you looked takes its glow with it.
+        self.glow = challenges
             .iter()
-            .any(|challenge| !self.seen_open_ids.contains(&challenge.id))
-        {
-            self.glow = true;
-        }
+            .any(|challenge| !self.seen_open_ids.contains(&challenge.id));
         // Drop ids that left the lobby so the set can't grow unbounded.
         self.seen_open_ids.retain(|id| open_ids.contains(id));
     }

@@ -395,10 +395,10 @@ async fn clicking_the_live_segment_on_another_board_keeps_that_boards_way_out() 
     );
 }
 
-/// Ctrl+F on a board goes to Zen and closes the board, so the chord back
-/// hands over the page the board was opened from, never an empty board.
+/// Ctrl+F on a board is the layouts chord: it closes the board and walks
+/// Home in arrange mode, where a digit picks a layout and Esc is done.
 #[tokio::test]
-async fn ctrl_f_twice_on_a_board_lands_where_the_board_was_opened_from() {
+async fn ctrl_f_on_a_board_walks_home_into_arrange_mode() {
     use crate::app::activity::{event::ActivityEvent, publisher::ActivityPublisher};
     use crate::app::common::primitives::Screen;
     use crate::app::games::chips::svc::ChipService;
@@ -431,17 +431,18 @@ async fn ctrl_f_twice_on_a_board_lands_where_the_board_was_opened_from() {
     app.daily.claim_challenge(posted.id);
     wait_for_render_contains(&mut app, "strip-zen-them · strip-zen-me").await;
 
-    // Opened from Home: Ctrl+F twice comes back to Home.
     app.handle_input(b"o");
     assert_eq!(app.screen, Screen::DailyMatch);
-    app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Zen, "Ctrl+F on the board opens Zen");
     app.handle_input(b"\x06");
     assert_eq!(
         app.screen,
         Screen::Dashboard,
-        "the board was opened from Home"
+        "Ctrl+F on the board walks Home"
     );
+    assert!(app.home.arrange, "in arrange mode, ready for a digit");
+    app.handle_input(b"\x06");
+    assert!(!app.home.arrange, "the chord again is done");
+    assert_eq!(app.screen, Screen::Dashboard);
 }
 
 /// A track somebody queued in the booth goes up on the live strip, and `o`
