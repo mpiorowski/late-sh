@@ -167,11 +167,7 @@ fn the_zork_chat_header_says_how_to_suggest() {
         " 2 watching"
     );
     assert_eq!(
-        header(
-            100,
-            SpectateGame::Nethack,
-            ChatSide::Player { suggestion: None }
-        ),
+        header(100, SpectateGame::Nethack, ChatSide::Player { suggestion: None }),
         " 100 watching \u{b7} Esc to the game",
         "whole in the player's narrowest column"
     );
