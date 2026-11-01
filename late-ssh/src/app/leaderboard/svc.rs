@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::Result;
-use chrono::{DateTime, Datelike, Months, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Months, NaiveDate, Timelike, Utc};
 use late_core::db::Db;
 use late_core::models::leaderboard::{
     LeaderboardData, OnlineTimeIncrement, apply_online_time_batch, fetch_leaderboard_data,
@@ -50,8 +50,16 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(300);
 /// How often the award snapshot loop checks whether a pass is due. The check
 /// itself is a clock read; the DB pass runs only on a UTC month rollover or
 /// the fallback below, so this cadence bounds how long freshly-completed
-/// monthly badges stay missing after the 1st, not how often we query.
-const AWARD_SNAPSHOT_CHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
+/// monthly badges stay missing after the 1st and how late after
+/// `AWARD_ROLL_HOUR_UTC` the #lounge roll goes out, not how often we query.
+const AWARD_SNAPSHOT_CHECK_INTERVAL: Duration = Duration::from_secs(5 * 60);
+
+/// UTC hour on the 1st from which last month's roll is posted to #lounge.
+/// 18:00 UTC is the overlap of US and European waking hours: 19:00-20:00 in
+/// Central Europe, 13:00-14:00 on the US East Coast, 10:00-11:00 on the West
+/// Coast. The badges themselves still land at the rollover; only the
+/// announcement waits.
+const AWARD_ROLL_HOUR_UTC: u32 = 18;
 
 /// Fallback cadence for the award snapshot when no rollover happened. Existing
 /// rows are frozen, so this pass is a cheap re-confirmation kept as a safety
@@ -65,7 +73,7 @@ pub enum AwardAnnouncementOutcome {
     /// Claimed and posted to #lounge.
     Posted,
     /// The system user lookup or the claim errored; nothing was claimed, so
-    /// the next hourly tick retries.
+    /// the next tick retries.
     ClaimFailed,
     /// Claimed, but the post to #lounge errored. The claim is spent, so
     /// nobody retries and the month's roll is lost.
@@ -277,6 +285,13 @@ fn should_snapshot_awards(
         // Same month already written: rows are frozen, a pass is a no-op.
         Some((_, elapsed)) => elapsed >= AWARD_SNAPSHOT_FALLBACK,
     }
+}
+
+/// Whether last month's #lounge roll may go out at `now`: from
+/// `AWARD_ROLL_HOUR_UTC` on the 1st, and any time later in the month so a
+/// process that was down at that hour still catches up.
+fn award_roll_due(now: DateTime<Utc>) -> bool {
+    now.day() > 1 || now.hour() >= AWARD_ROLL_HOUR_UTC
 }
 
 /// A month's roll this process won the claim for, with the author to post
@@ -536,34 +551,43 @@ impl LeaderboardService {
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut last_run: Option<(NaiveDate, Instant)> = None;
+            // The month whose roll this process has finished with (posted,
+            // already claimed elsewhere, or lost to a failed post).
+            let mut announced: Option<NaiveDate> = None;
             let mut interval = tokio::time::interval(AWARD_SNAPSHOT_CHECK_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
                 // The first tick completes immediately, so startup snapshots.
                 interval.tick().await;
-                let target_month = previous_utc_month(Utc::now().date_naive());
+                let now = Utc::now();
+                let target_month = previous_utc_month(now.date_naive());
                 let due = should_snapshot_awards(
                     target_month,
                     last_run.map(|(month, at)| (month, at.elapsed())),
                 );
-                if !due {
-                    continue;
-                }
-                match self.snapshot_profile_awards().await {
-                    Ok(()) => {}
-                    // `last_run` is untouched, so the next hourly tick retries
-                    // instead of waiting out the fallback.
-                    Err(e) => {
-                        tracing::warn!(error = ?e, "profile award snapshot failed");
-                        continue;
+                if due {
+                    match self.snapshot_profile_awards().await {
+                        Ok(()) => last_run = Some((target_month, Instant::now())),
+                        // `last_run` is untouched, so the next tick retries
+                        // instead of waiting out the fallback.
+                        Err(e) => {
+                            tracing::warn!(error = ?e, "profile award snapshot failed");
+                            continue;
+                        }
                     }
                 }
+                // The roll needs this month's rows, and waits for the posting
+                // hour so it lands while both the US and Europe are awake.
+                let snapshotted = last_run.is_some_and(|(month, _)| month == target_month);
+                if !snapshotted || announced == Some(target_month) || !award_roll_due(now) {
+                    continue;
+                }
                 match self.announce_award_roll().await {
-                    Ok(None) => last_run = Some((target_month, Instant::now())),
+                    Ok(None) => announced = Some(target_month),
                     Ok(Some(claimed)) => {
                         // The month is claimed whatever the post does, so the
                         // pass is done either way: a retry could not post it.
-                        last_run = Some((target_month, Instant::now()));
+                        announced = Some(target_month);
                         let posted = chat
                             .send_lounge_message(
                                 claimed.system_user_id,
@@ -594,8 +618,7 @@ impl LeaderboardService {
                             }
                         }
                     }
-                    // Unclaimed, so the next hourly tick retries the roll; the
-                    // snapshot above is idempotent and re-runs harmlessly.
+                    // Unclaimed, so the next tick retries the roll.
                     Err(e) => {
                         metrics::record_award_announcement(AwardAnnouncementOutcome::ClaimFailed);
                         tracing::warn!(error = ?e, "monthly award roll claim failed");
