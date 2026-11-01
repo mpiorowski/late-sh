@@ -2247,8 +2247,9 @@ impl App {
                 };
                 // A page too small to draw has no row, so it keeps no
                 // click target either; nor does a zoomed one, the tile
-                // takes the whole page. Home has no row at all: the frame
-                // carries its status bars.
+                // takes the whole page. Home has no status row, the frame
+                // carries its bars; while it is being arranged (`Ctrl+E`)
+                // its bottom row is the mode's key footer instead.
                 let status_row = match screen {
                     Screen::Zen => {
                         let (_, row) = crate::app::zen::layout::rice_areas(
@@ -2262,6 +2263,10 @@ impl App {
                                 row,
                             )
                         })
+                    }
+                    Screen::Dashboard if ctx.zen.arrange => {
+                        let (_, row) = crate::app::zen::layout::rice_areas(content_area, true);
+                        row.map(crate::app::statusline::bar::build_home_arrange_row)
                     }
                     _ => None,
                 };

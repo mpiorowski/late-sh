@@ -141,20 +141,57 @@ pub(crate) const ZEN_ROW_KEYS: [(&str, &str); 5] = [
     ("z", "zoom"),
 ];
 
+/// Every key of Home's arrange mode (`Ctrl+E`), on its footer while the
+/// mode is on: the mode has no guide of its own, so the row is the guide.
+/// The way out first, then by use, so a row too narrow for all of them
+/// keeps the ones that matter.
+pub(crate) const HOME_ARRANGE_KEYS: [(&str, &str); 12] = [
+    ("Esc", "done"),
+    ("arrows", "move"),
+    ("S", "split"),
+    ("X", "close"),
+    ("F", "flip"),
+    ("<>{}", "resize"),
+    ("space", "tile"),
+    ("+", "guests"),
+    ("[]", "room"),
+    ("z", "zoom"),
+    ("R", "reset"),
+    ("Tab", "next"),
+];
+
 /// The keys as one compact line: each key amber, its word dim, two spaces
 /// between pairs and nothing around them.
 pub(crate) fn zen_keys_line() -> Line<'static> {
+    keys_line(&ZEN_ROW_KEYS)
+}
+
+fn keys_line(keys: &[(&str, &str)]) -> Line<'static> {
     let key = Style::default()
         .fg(theme::AMBER_DIM())
         .add_modifier(Modifier::BOLD);
     let word = Style::default().fg(theme::TEXT_DIM());
-    let mut spans = Vec::with_capacity(ZEN_ROW_KEYS.len() * 2);
-    for (index, (k, w)) in ZEN_ROW_KEYS.iter().enumerate() {
+    let mut spans = Vec::with_capacity(keys.len() * 2);
+    for (index, (k, w)) in keys.iter().enumerate() {
         let gap = if index == 0 { "" } else { "  " };
         spans.push(Span::styled(format!("{gap}{k}"), key));
         spans.push(Span::styled(format!(" {w}"), word));
     }
     Line::from(spans)
+}
+
+/// Home's footer while arranging: the arrange keys alone, as many leading
+/// ones as fit the row, no status bar (the frame carries the bars).
+pub(crate) fn build_home_arrange_row(row: Rect) -> ZenStatusRow {
+    let mut keep = HOME_ARRANGE_KEYS.len();
+    while keep > 0 && keys_line(&HOME_ARRANGE_KEYS[..keep]).width() > row.width as usize {
+        keep -= 1;
+    }
+    ZenStatusRow {
+        bar: None,
+        keys: (keep > 0).then(|| keys_line(&HOME_ARRANGE_KEYS[..keep])),
+        hits: Vec::new(),
+    }
 }
 
 /// Build Zen's bottom row. The keys claim the right end first, a cell of gap

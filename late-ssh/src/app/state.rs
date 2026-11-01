@@ -3619,7 +3619,8 @@ impl App {
     pub(crate) fn rice_tiles_area(&self) -> Rect {
         use crate::app::zen::layout as zen_layout;
         match self.screen {
-            Screen::Dashboard => self.content_area(),
+            // Arrange mode gives Home's bottom row to its key footer.
+            Screen::Dashboard => zen_layout::rice_areas(self.content_area(), self.home.arrange).0,
             _ => {
                 let (cols, rows) = self.size;
                 let full = Rect::new(0, 0, cols, rows);

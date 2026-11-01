@@ -132,7 +132,9 @@ never the count (`chat_tile_title`, `ui_test.rs`).
 
 Home (`Screen::Dashboard`) is the same tree with its own `ZenState`
 (`App::home`, `RicePage::Home`), drawn by the same `draw_rice` inside the
-app frame (no status row, the frame carries the bars); `App::rice()` /
+app frame (no status row, the frame carries the bars; in arrange mode the
+bottom row is the key footer, `statusline::bar::build_home_arrange_row`);
+`App::rice()` /
 `rice_mut()` pick the page's state by screen, so `zen::input` and the
 geometry (`App::rice_tiles_area`, `rice_tile_rects`) serve both. The stock
 Home (`RiceLayout::home`) is the page as it always was: the room rail
@@ -311,7 +313,9 @@ lowercase letters free for the tiles' own keys; the zoom is the one view
 key pressed often enough to be lowercase, `z`.
 
 On Home the layout keys are arrange mode's alone: `Ctrl+E` enters it
-(`zen::input::toggle_home_arrange`, a banner names the keys), and in it
+(`zen::input::toggle_home_arrange`; while it is on, Home's bottom row is
+a footer naming every key, `HOME_ARRANGE_KEYS`, trimmed from the right on
+a narrow page), and in it
 Tab and the arrows walk every tile, `S` `X` `F` `<` `>` `{` `}` `space` `R`
 work as above, `+` opens the guest picker over the focused tile
 (`ZenState::guest_picker`: one row per `Guest`, marked where the tile

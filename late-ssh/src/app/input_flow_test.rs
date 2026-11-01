@@ -4954,19 +4954,26 @@ async fn ctrl_e_arranges_home_and_the_layout_keys_are_arrange_modes_alone() {
     assert_eq!(app.home.leaf_count(), tiles);
     assert!(!app.home.arrange);
 
-    // Ctrl+E: the layout keys are live, and every tile has a title rule.
+    // Ctrl+E: the layout keys are live, every tile has a title rule, and
+    // the bottom row is a footer naming the keys for as long as the mode
+    // is on, not a toast that goes away.
     app.handle_input(b"\x05");
     assert!(app.home.arrange, "Ctrl+E enters arrange mode");
     let frame = render_plain(&mut app);
     assert!(
-        frame.contains("Arrange:"),
-        "the banner says what the keys are; frame={frame:?}"
+        frame.contains("S split") && frame.contains("Esc done"),
+        "the footer names the keys; frame={frame:?}"
     );
     app.handle_input(b"S");
     assert_eq!(
         app.home.leaf_count(),
         tiles + 1,
         "S splits the focused tile"
+    );
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("S split"),
+        "the footer stays through the mode; frame={frame:?}"
     );
     assert!(
         app.home_layout_dirty && app.home_edited,
@@ -4979,6 +4986,11 @@ async fn ctrl_e_arranges_home_and_the_layout_keys_are_arrange_modes_alone() {
     wait_for_esc_effect(&mut app, |app| !app.home.arrange, "arrange mode").await;
     assert_eq!(app.home.focused_kind(), Some(TileKind::Chat));
     assert!(!app.home_layout_dirty);
+    let frame = render_plain(&mut app);
+    assert!(
+        !frame.contains("S split"),
+        "the footer leaves with the mode; frame={frame:?}"
+    );
     let db = test_db.db.clone();
     wait_until(
         || {

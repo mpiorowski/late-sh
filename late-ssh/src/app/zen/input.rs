@@ -77,7 +77,8 @@ pub fn handle_home_event(app: &mut App, event: &ParsedInput) -> bool {
 }
 
 /// Enter or leave Home's arrange mode. Leaving writes the layout at once
-/// and closes the pickers; entering says what the keys are now.
+/// and closes the pickers; while the mode is on, Home's bottom row is a
+/// footer with every key (`statusline::bar::HOME_ARRANGE_KEYS`).
 pub(crate) fn toggle_home_arrange(app: &mut App) {
     let arrange = !app.rice().arrange;
     let rice = app.rice_mut();
@@ -88,11 +89,7 @@ pub(crate) fn toggle_home_arrange(app: &mut App) {
     if !arrange {
         rice.zoomed = false;
     }
-    if arrange {
-        app.banner = Some(Banner::info(
-            "Arrange: arrows move · S split · X close · F flip · <>{} resize · space tile · + guests · R reset · Esc done",
-        ));
-    } else {
+    if !arrange {
         // Leaving puts the focus back on a chat, the only tiles that keep
         // it outside arrange mode.
         if !app.rice().focused_kind().is_some_and(TileKind::takes_focus)
