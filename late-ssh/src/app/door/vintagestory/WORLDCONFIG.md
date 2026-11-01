@@ -42,8 +42,9 @@ kubectl exec deploy/vintagestory -- cat /data/serverconfig.json
 echo '/worldconfig landcover' | kubectl attach -i deploy/vintagestory     # the answer lands in the pod log
 ```
 
-The seed is fixed: `-1224630403`, in `WorldConfig.Seed` and in the save.
-`/seed` on the console prints nothing; an admin types it in game to check.
+The seed is fixed: `-915463208`, in `WorldConfig.Seed` and in the save.
+The boot log prints it (`Using world seed: ...`); `/seed` on the console
+prints nothing, an admin types it in game.
 Spawn is the default (the world centre), not moved.
 
 Server keys, forced on every boot by `--withconfig` from
@@ -63,9 +64,9 @@ reverts on restart):
 | `PassTimeWhenEmpty` | `false` |
 
 World: `PlayStyle` `surviveandbuild`, `WorldType` `standard`, `Seed`
-`"-1224630403"`, and this block in `WorldConfig.WorldConfiguration`, written
+`"-915463208"`, and this block in `WorldConfig.WorldConfiguration`, written
 before the world was generated. A reset that keeps this seed and block
-(`scripts/vintagestory_reroll.sh -1224630403 0.4 0.75`) regenerates the same
+(`scripts/vintagestory_reroll.sh -915463208 0.4 0.75`) regenerates the same
 terrain; any other seed is a different world:
 
 ```json
@@ -93,8 +94,8 @@ gives bigger landmasses and bigger oceans, a lower one many small islands (the
 wiki's World Configuration table and our own renders agree). On 1.22.7, 0.4 /
 0.75 gives landmasses a few kilometres across with straits of about 100-200
 blocks between them; 0.4 / 3 gives continents wider than 20k blocks. The seed
-was picked among many at 0.4 with scales from 0.75 to 3, by flying over each
-in game. The polar distance is our own addition, not part of that set: half
+was picked with vs-seedmap (Finding a seed) at 0.4 / 0.75 over a scout radius
+of 12 (12.8k blocks across): land is 39% of that map. The polar distance is our own addition, not part of that set: half
 the preset's, so a sea crossing reaches a different climate in half the
 distance and gives the boat a second reason to exist. Those four are locked.
 
@@ -119,6 +120,13 @@ singleplayer world on the same version with the same settings works too
 (creative mode and the world map). Reset the server with the winner:
 `scripts/vintagestory_reroll.sh <seed> <landcover> <oceanscale> [backup-file]`
 (`CONTEXT.md`, Operations).
+
+Seeds worth keeping, each with the rest of the What prod runs block
+unchanged:
+
+| Name | Seed | landcover / oceanscale | vs-seedmap, radius 12 (12.8k blocks across) | Reroll |
+|------|------|------------------------|---------------------------------------------|--------|
+| amazing seed | `-1224630403` | 0.4 / 0.75 | land 43% of the map | `scripts/vintagestory_reroll.sh -1224630403 0.4 0.75` |
 
 ## Is there a new version?
 
