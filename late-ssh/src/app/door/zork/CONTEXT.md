@@ -65,7 +65,7 @@ roguelikes, drawn only while the game is on screen, never over the menus.
 
 Watchers suggest a command by starting a watch-chat line with `>`
 (`>open mailbox`). The watch chat's header says how from each side
-(`spectate/ui.rs::suggestion_hint`): `type >look to suggest` for watchers,
+(`spectate/ui.rs::suggestion_hint`): `>look to suggest` for watchers,
 `F3 takes a >suggestion` for the player. The newest fresh one
 (ten minutes) from anyone but the player waits on its own row under the
 open chat's header (`suggest.rs`). F3 types it onto

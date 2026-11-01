@@ -42,8 +42,10 @@ kubectl exec deploy/vintagestory -- cat /data/serverconfig.json
 echo '/worldconfig landcover' | kubectl attach -i deploy/vintagestory     # the answer lands in the pod log
 ```
 
-The seed is random and only the save holds it. `/seed` on the console prints
-nothing; an admin types it in game.
+The seed is fixed: `-915463208`, in `WorldConfig.Seed` and in the save.
+The boot log prints it (`Using world seed: ...`); `/seed` on the console
+prints nothing, an admin types it in game.
+Spawn is the default (the world centre), not moved.
 
 Server keys, forced on every boot by `--withconfig` from
 `local.vintagestory_config` in `infra/vintagestory.tf` (a runtime change
@@ -61,10 +63,11 @@ reverts on restart):
 | `AllowFireSpread` | `true` |
 | `PassTimeWhenEmpty` | `false` |
 
-World: `PlayStyle` `surviveandbuild`, `WorldType` `standard`, `Seed` `null`,
-and this block in `WorldConfig.WorldConfiguration`, written by hand before the
-world was generated. A reset writes the same block, so each reset rolls a new
-random seed with the same settings:
+World: `PlayStyle` `surviveandbuild`, `WorldType` `standard`, `Seed`
+`"-915463208"`, and this block in `WorldConfig.WorldConfiguration`, written
+before the world was generated. A reset that keeps this seed and block
+(`scripts/vintagestory_reroll.sh -915463208 0.4 0.75`) regenerates the same
+terrain; any other seed is a different world:
 
 ```json
 "WorldConfiguration": {
@@ -83,17 +86,18 @@ random seed with the same settings:
 }
 ```
 
-The first three are one player's tested set for an ocean-travel world with
-real continents (Bruno Willis, "Ocean with continents on 1.21?",
-vintagestory.at/forums/topic/17088): continents one or two in-game days of
-riding across, split by ocean wide enough that sailing is the way over.
-Below about 50% land the land stops connecting up, so separate continents are
-forced. `oceanscale` reads backwards: a low value clumps the land into a few
-big masses, a high one scatters it into small islands (30% / 3.0 gave islands
-too small to find reeds on). The polar distance is our own addition, not part
-of that set: half the preset's, so a sea crossing reaches a different climate
-in half the distance and gives the boat a second reason to exist. Those four
-are locked.
+The first three come from one player's set for an ocean-travel world (Bruno
+Willis, "Ocean with continents on 1.21?", vintagestory.at/forums/topic/17088).
+`landcover` is how much of the world is land. `oceanscale` ("Landcover scale"
+in the create-world screen) is a zoom on the land/ocean noise: a higher value
+gives bigger landmasses and bigger oceans, a lower one many small islands (the
+wiki's World Configuration table and our own renders agree). On 1.22.7, 0.4 /
+0.75 gives landmasses a few kilometres across with straits of about 100-200
+blocks between them; 0.4 / 3 gives continents wider than 20k blocks. The seed
+was picked with vs-seedmap (Finding a seed) at 0.4 / 0.75 over a scout radius
+of 12 (12.8k blocks across): land is 39% of that map. The polar distance is our own addition, not part of that set: half
+the preset's, so a sea crossing reaches a different climate in half the
+distance and gives the boat a second reason to exist. Those four are locked.
 
 The rest are unlocked, so `/worldconfig` can still move them on the live
 world: tools last 150%, saplings grow in 75% of the time
@@ -109,9 +113,20 @@ default.
 ## Finding a seed
 
 Generation is deterministic for the same game version, seed and locked
-keys, so seeds can be scouted in a singleplayer world on the same client
-version with the same settings (creative mode and the world map make it
-quick). Reset the server once with the winner.
+keys. vs-seedmap (the owner's separate repo, `~/projects/vs-seedmap`) draws a
+seed's oceans, terrain, climate, story locations and trader camps from the
+game's own worldgen on a local headless server, without playing it. A
+singleplayer world on the same version with the same settings works too
+(creative mode and the world map). Reset the server with the winner:
+`scripts/vintagestory_reroll.sh <seed> <landcover> <oceanscale> [backup-file]`
+(`CONTEXT.md`, Operations).
+
+Seeds worth keeping, each with the rest of the What prod runs block
+unchanged:
+
+| Name | Seed | landcover / oceanscale | vs-seedmap, radius 12 (12.8k blocks across) | Reroll |
+|------|------|------------------------|---------------------------------------------|--------|
+| amazing seed | `-1224630403` | 0.4 / 0.75 | land 43% of the map | `scripts/vintagestory_reroll.sh -1224630403 0.4 0.75` |
 
 ## Is there a new version?
 
