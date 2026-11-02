@@ -192,6 +192,8 @@ pub mod server_ban;
 pub mod shop_consumable_effect;
 pub mod showcase;
 pub mod showcase_feed_read;
+#[cfg(test)]
+mod showcase_test;
 pub mod sliding_puzzle;
 #[cfg(test)]
 mod sliding_puzzle_test;

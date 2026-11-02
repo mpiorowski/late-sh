@@ -126,10 +126,12 @@ pub(crate) fn save_banner(outcome: NewsSaveOutcome) -> Banner {
 }
 
 /// The News list in display order: the reader's shelf first, newest save
-/// first, then the feed's stories that are not on it, newest first. A
-/// saved story appears once, on the shelf, whatever the feed holds; the
-/// feed's copy of it is the one shown, since the snapshot carries the
-/// freshest body status. The mine-only filter applies to both parts.
+/// first, then the feed's stories that are not on it, oldest first, so the
+/// newest share is at the bottom of the page like the newest line of a
+/// room. A saved story appears once, on the shelf, whatever the feed
+/// holds; the feed's copy of it is the one shown, since the snapshot
+/// carries the freshest body status. The mine-only filter applies to both
+/// parts.
 pub(crate) fn display_order(
     saved: &[ArticleFeedItem],
     feed: &[ArticleFeedItem],
@@ -153,6 +155,7 @@ pub(crate) fn display_order(
     let saved_len = rows.len();
     rows.extend(
         feed.iter()
+            .rev()
             .filter(|item| !saved_ids.contains(&item.article.id) && shown(item))
             .cloned(),
     );
@@ -335,12 +338,14 @@ impl State {
 
         self.articles = next;
         self.saved_len = saved_len;
-        if let Some(id) = prev_id
-            && let Some(idx) = self.articles.iter().position(|item| item.article.id == id)
-        {
-            self.selected = idx;
-        } else {
-            self.selected = clamp_index(self.selected, self.articles.len());
+        match prev_id {
+            Some(id) => match self.articles.iter().position(|item| item.article.id == id) {
+                Some(idx) => self.selected = idx,
+                None => self.selected = clamp_index(self.selected, self.articles.len()),
+            },
+            // Nothing was selected (the first fill): land on the newest
+            // story, the last row.
+            None => self.selected = self.articles.len().saturating_sub(1),
         }
     }
 
