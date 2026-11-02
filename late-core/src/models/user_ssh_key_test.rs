@@ -135,6 +135,18 @@ fn stored_layout_round_trips_and_partial_blobs_inherit() {
     );
 }
 
+/// A key's stored `zen_layout` is only read: it seeds the device's stock
+/// `zen` Home layout, and nothing writes it.
+#[test]
+fn a_stored_zen_layout_reads_back_as_the_seed() {
+    let zen = json!({ "root": { "node": "leaf", "kind": "bonsai" } });
+    assert_eq!(
+        extract_key_zen_layout(&json!({ "zen_layout": zen.clone() })),
+        Some(zen)
+    );
+    assert_eq!(extract_key_zen_layout(&json!({})), None);
+}
+
 #[tokio::test]
 async fn tile_layouts_are_per_key_and_scoped_to_their_owner() {
     let test_db = test_db().await;
@@ -152,20 +164,15 @@ async fn tile_layouts_are_per_key_and_scoped_to_their_owner() {
         "current": 0,
         "items": [{ "name": "home", "layout": { "root": { "node": "leaf", "kind": "chat" } } }]
     });
-    let phone_zen = json!({ "root": { "node": "leaf", "kind": "bonsai" } });
     UserSshKey::set_home_layouts(&client, user.id, "SHA256:tiles-phone", &phone_home)
         .await
         .expect("store home layouts");
-    UserSshKey::set_zen_layout(&client, user.id, "SHA256:tiles-phone", &phone_zen)
-        .await
-        .expect("store zen layout");
 
     let phone = UserSshKey::find_by_fingerprint(&client, user.id, "SHA256:tiles-phone")
         .await
         .expect("read phone")
         .expect("phone row");
     assert_eq!(extract_key_home_layouts(&phone.settings), Some(phone_home));
-    assert_eq!(extract_key_zen_layout(&phone.settings), Some(phone_zen));
     let desk = UserSshKey::find_by_fingerprint(&client, user.id, "SHA256:tiles-desk")
         .await
         .expect("read desk")

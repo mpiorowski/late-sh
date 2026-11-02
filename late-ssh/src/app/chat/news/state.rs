@@ -243,7 +243,7 @@ impl State {
     }
 
     /// The shared snapshot, ignoring the shelf and any mine-only filter:
-    /// what the Live panel, the Zen headlines and the paper read. The shelf
+    /// what the Live panel, the Home headlines tile and the paper read. The shelf
     /// is the reader's own and never rides these.
     pub fn all_articles(&self) -> &[ArticleFeedItem] {
         &self.source_articles

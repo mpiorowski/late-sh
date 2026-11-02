@@ -11,6 +11,14 @@ fn widths(root: &Node, area: Rect, gap: u16) -> Vec<u16> {
         .collect()
 }
 
+/// A page showing `rice`, with the focus moved to its first tile: the
+/// edits below act on a known tile, whatever the layout opens on.
+fn focused_on_first_tile(rice: RiceLayout) -> ZenState {
+    let mut page = ZenState::new(rice, RiceLayout::default());
+    page.focus = 0;
+    page
+}
+
 fn heights(root: &Node, area: Rect, gap: u16) -> Vec<u16> {
     tile_rects(root, area, Gaps::uniform(gap))
         .into_iter()
@@ -114,7 +122,7 @@ fn holding_split_stops_at_the_tile_cap_and_the_layout_still_round_trips() {
     // is read back through serde_json, which refuses to parse past 128
     // nested levels; a layout that deep would lock the account out at
     // login. The cap keeps the tree far below that and the JSON readable.
-    let mut zen = ZenState::new(RiceLayout::default());
+    let mut zen = focused_on_first_tile(RiceLayout::default());
     let mut accepted = 0;
     for _ in 0..400 {
         if zen.split_focused(true) {
@@ -127,16 +135,23 @@ fn holding_split_stops_at_the_tile_cap_and_the_layout_still_round_trips() {
         MAX_TILES,
         "every press past the cap is refused"
     );
-    // Nested inside the settings blob (one more level) it must still parse.
-    let stored = serde_json::json!({ "zen_layout": zen.rice.to_json() });
-    let read_back: RiceLayout = serde_json::from_value(stored["zen_layout"].clone())
-        .expect("a layout built by holding S parses back");
+    // Nested inside the key's settings the way Home's layouts are stored,
+    // and read back from text, it must still parse.
+    let stored = serde_json::json!({
+        "home_layouts": { "current": 0, "items": [{ "name": "held", "layout": zen.rice.to_json() }] }
+    })
+    .to_string();
+    let stored: serde_json::Value =
+        serde_json::from_str(&stored).expect("a layout built by holding S parses back");
+    let read_back: RiceLayout =
+        serde_json::from_value(stored["home_layouts"]["items"][0]["layout"].clone())
+            .expect("and reads as a layout");
     assert_eq!(read_back, zen.rice);
 }
 
 #[test]
 fn a_chat_tile_keeps_its_room_through_the_stored_json_and_old_layouts_still_read() {
-    let mut zen = ZenState::new(RiceLayout::default());
+    let mut zen = focused_on_first_tile(RiceLayout::default());
     let chat = zen
         .first_tile_of(TileKind::Chat)
         .expect("the default has a chat");
@@ -186,8 +201,8 @@ fn a_chat_tile_keeps_its_room_through_the_stored_json_and_old_layouts_still_read
 }
 
 #[test]
-fn the_page_holds_ten_chats_and_the_first_opening_lands_on_the_first_one() {
-    let mut zen = ZenState::new(RiceLayout::default());
+fn the_page_holds_ten_chats_and_opens_on_the_first_one() {
+    let mut zen = focused_on_first_tile(RiceLayout::default());
     // Split the bonsai again and again and pick Chat for each new tile in
     // the picker (the tile is set to Bonsai first, the row before Chat, so
     // one move down lands on it): Chat until the cap, then the row is
@@ -243,13 +258,12 @@ fn the_page_holds_ten_chats_and_the_first_opening_lands_on_the_first_one() {
     assert_eq!(zen.kind_picker_selection(), Some(TileKind::Chat));
     zen.close_kind_picker();
 
-    // The first opening focuses the first chat tile; later ones keep focus.
-    let mut fresh = ZenState::new(RiceLayout::default());
-    fresh.note_opened();
+    // A page opens on its first chat tile, outside arrange mode.
+    let mut fresh = ZenState::new(RiceLayout::default(), RiceLayout::default());
     assert_eq!(fresh.focused_kind(), Some(TileKind::Chat));
     assert_eq!(fresh.active_chat_index(), Some(0));
+    assert!(!fresh.arrange);
     fresh.focus = 0;
-    fresh.note_opened();
     assert_eq!(fresh.focused_kind(), Some(TileKind::Bonsai));
     // With the bonsai focused the first chat tile is still the active one.
     assert_eq!(fresh.active_chat_index(), Some(0));
@@ -261,16 +275,16 @@ fn the_page_holds_ten_chats_and_the_first_opening_lands_on_the_first_one() {
 #[test]
 fn the_equalizer_shows_through_a_music_or_visualizer_tile() {
     // Leaves run bonsai, aquarium, chat, clock, pet, lobby, live, music.
-    let zen = ZenState::new(RiceLayout::default());
+    let zen = focused_on_first_tile(RiceLayout::default());
     assert!(zen.shows_equalizer(), "the default page has a music tile");
 
-    let visualizer_only = ZenState::new(RiceLayout {
+    let visualizer_only = focused_on_first_tile(RiceLayout {
         root: Node::leaf(TileKind::Visualizer),
         look: Look::default(),
     });
     assert!(visualizer_only.shows_equalizer());
 
-    let no_eq = ZenState::new(RiceLayout {
+    let no_eq = focused_on_first_tile(RiceLayout {
         root: Node::split(
             Dir::Row,
             500,
@@ -286,7 +300,7 @@ fn the_equalizer_shows_through_a_music_or_visualizer_tile() {
     );
 
     // The bonsai sways on the half edge without an equalizer.
-    let bonsai_only = ZenState::new(RiceLayout {
+    let bonsai_only = focused_on_first_tile(RiceLayout {
         root: Node::leaf(TileKind::Bonsai),
         look: Look::default(),
     });
@@ -313,7 +327,7 @@ fn an_ascii_tile_keeps_its_piece_until_it_changes_kind() {
         scene: Scene::AlpineDawn,
         style: SceneStyle::Pixels,
     };
-    let mut zen = ZenState::new(RiceLayout {
+    let mut zen = focused_on_first_tile(RiceLayout {
         root: Node::leaf(TileKind::Ascii),
         look: Look::default(),
     });
@@ -435,7 +449,7 @@ fn random_tiles() -> ZenState {
     );
     root.set_selection(0, AsciiSelection::Random);
     root.set_selection(1, AsciiSelection::Randomer);
-    ZenState::new(RiceLayout {
+    focused_on_first_tile(RiceLayout {
         root,
         look: Look::default(),
     })
@@ -646,7 +660,7 @@ fn a_guest_lives_on_one_tile_and_toggling_moves_it_or_takes_it_off() {
     assert_eq!(root.leaf_guests(), vec![vec![], vec![Guest::Attention]]);
 
     // Guests are part of the stored layout; a leaf without any writes
-    // none, so Zen layouts stay as they were.
+    // none, so layouts stored before guests stay as they were.
     let layout = RiceLayout {
         root,
         look: RiceLayout::default().look,
@@ -727,7 +741,7 @@ fn the_stock_home_is_the_rail_the_reef_over_the_chat_and_the_sidebar_column() {
         "the board's day is the chat card's own row, not a guest"
     );
 
-    let zen = ZenState::for_page(RicePage::Home, home.clone(), home);
+    let zen = ZenState::new(home.clone(), home);
     assert_eq!(
         zen.focused_kind(),
         Some(TileKind::Chat),
@@ -743,16 +757,16 @@ fn the_stock_home_is_the_rail_the_reef_over_the_chat_and_the_sidebar_column() {
     assert!(zen.hosts_guest(Guest::Now));
     assert!(!zen.kind_allowed(TileKind::Rooms), "one rail per page");
 
-    // Zen never takes the Home only kind.
-    let on_zen = ZenState::new(RiceLayout::default());
-    assert!(!on_zen.kind_allowed(TileKind::Rooms));
-    assert!(on_zen.kind_allowed(TileKind::Presence));
+    // The stock zen layout has no rail, so any tile of it may become one.
+    let zen_layout = ZenState::new(RiceLayout::default(), RiceLayout::default());
+    assert!(zen_layout.kind_allowed(TileKind::Rooms));
+    assert!(zen_layout.kind_allowed(TileKind::Presence));
 }
 
 #[test]
 fn a_tile_owns_its_title_rule_on_home_and_the_say_rides_the_layout() {
     let home = RiceLayout::home();
-    let mut zen = ZenState::for_page(RicePage::Home, home.clone(), home);
+    let mut zen = ZenState::new(home.clone(), home);
     let rooms = zen.first_tile_of(TileKind::Rooms).expect("a rail");
     let reef = zen.first_tile_of(TileKind::Aquarium).expect("a reef");
     let chat = zen.first_tile_of(TileKind::Chat).expect("a chat");

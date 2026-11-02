@@ -1,7 +1,7 @@
 # late-ssh Attention Context
 
 ## Metadata
-- Domain: the attention guest, the list of what waits on you that takes a Home or Zen tile while it has rows and hands it back when it does not
+- Domain: the attention guest, the list of what waits on you that takes a Home tile while it has rows and hands it back when it does not
 - Primary audience: LLM agents working in `late-ssh/src/app/attention` and on the pages that host it
 - Status: Active
 - Parent context: `../../../../CONTEXT.md`

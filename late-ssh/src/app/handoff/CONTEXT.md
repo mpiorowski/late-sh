@@ -67,7 +67,7 @@ CLI carries it back verbatim. Anything else (another version's format, a
 hand-set `LATE_RESUME`) parses to `None` and the session starts fresh. The
 page is `Screen::page` of the screen the session was on
 (`app/common/primitives.rs`, the same rule as the tab cycle and the lit tab):
-one of the eight numbered pages or Zen, a screen off the cycle on the page it
+one of the eight numbered pages, a screen off the cycle on the page it
 is reached from. What was open on the page (modals, scroll positions, arcade
 runs, house seats, door connections) does not survive.
 

@@ -102,7 +102,7 @@ Each session spawns one render task (`ssh.rs`) with two triggers:
   sleeps that long unless input or a `RenderSignal` wake lands first. Tiers
   (`app/tick.rs`): `HOT_TICK` 66 ms (splash, 2 s after any input, an active
   ultimate, house tables, an open arcade game); `ANIM_HALF_TICK` 132 ms (the
-  Clubhouse, a visible right sidebar, a rice page (Home or Zen), the live
+  Clubhouse, a visible right sidebar, Home with a bonsai or eq tile, the live
   strip while it draws, the bonsai modal and a profile showing a tree, the pet
   box, ascii pieces in dots); `ANIM_QUARTER_TICK` 264 ms (aquarium surfaces,
   ascii pieces in pixels); `IDLE_TICK` 500 ms otherwise. The away screensaver
@@ -306,13 +306,13 @@ Some settings belong to the SSH key a session authenticated with
   `auto` resolves against the live width each frame
   (`AUTO_RIGHT_SIDEBAR_MIN_COLS` 72). `show_right_sidebar` is still written
   next to the mode for rollback safety.
-- **The Home and Zen tile layouts** (`app/zen/CONTEXT.md`): `home_layouts`
-  (Home's named layouts, up to nine, and the current one) and `zen_layout`
-  on the key, written by `App::flush_rice_layouts` through
-  `ProfileState::set_device_home_layouts` / `set_device_zen_layout`. A key
-  with no `home_layouts` seeds the set from its own `home_layout` and
-  `zen_layout`, and those from the account's `users.settings.zen_layout` /
-  `home_layout`; nothing writes `home_layout` or the account's any more.
+- **Home's tile layouts** (`app/zen/CONTEXT.md`): `home_layouts` (Home's
+  named layouts, up to nine, and the current one) on the key, written by
+  `App::flush_home_layout` through `ProfileState::set_device_home_layouts`.
+  A key with no `home_layouts` seeds the set from its own `home_layout` and
+  `zen_layout`, and those from the account's `users.settings.home_layout` /
+  `zen_layout`; nothing writes `home_layout`, `zen_layout` or the account's
+  copies.
 - **The Artboard content disclaimer.** Same shape (`artboard_disclaimer` on the
   key, `App::artboard_disclaimer_enabled`), except a failed key read fails
   closed to on.
@@ -416,14 +416,15 @@ interaction mode ignores mouse reports.
 | `?` | Global guide (not while composing; Artboard keeps its own help) |
 | `Ctrl+O` | Settings, from anywhere but active Artboard editing |
 | `Ctrl+G` | Lobby modal (daily games and house tables) |
-| `Ctrl+F` | Home's layouts: arrange mode on Home (from any other page, Home first), then a digit loads layout 1..9 and `L` lists them (`app/zen/CONTEXT.md`); on the Zen screen, back to the page it was opened over |
+| `Ctrl+F` | Home's layouts: arrange mode on Home (from any other page, Home first), then a digit loads layout 1..9 and `L` lists them (`app/zen/CONTEXT.md`) |
 | `Ctrl+E` | Arrange Home: its rail, chat and panels are tiles (`app/zen/CONTEXT.md`); `Esc` is done |
 | `Ctrl+S` | Shop (active games and editors keep their own `Ctrl+S`) |
 | `Ctrl+R` | Full repaint (redo inside the chat composer) |
 | `m`, `+`/`=`, `-`/`_` | Paired client mute and volume |
 | `w` | Bonsai care modal |
 | `` ` `` | Workspace cycle (`app/workspace/CONTEXT.md`) |
-| `/settings` `/lobby` `/zen` `/redraw` `/guide` `/picker` `/shop` | Composer fallbacks for chords a terminal swallows; each runs the key's function |
+| `/settings` `/lobby` `/redraw` `/guide` `/picker` `/shop` | Composer fallbacks for chords a terminal swallows; each runs the key's function |
+| `/layout` `/zen` | Home's layouts from any composer, Home first: `/layout` lists them, `/layout <name or 1-9>` loads one, `/layout save <name>` saves the page as one; `/zen` is `/layout zen` |
 | `Esc` | Close the top modal |
 
 `Ctrl+O/G/F/S` are ignored while a Settings text field is being edited.

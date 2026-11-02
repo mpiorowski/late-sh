@@ -4,7 +4,7 @@
 //
 // The row is also where *per-device* preferences live. A session knows exactly
 // which key it authenticated with, which is the only device identity late.sh
-// has, so the Home and Zen tile layouts and the Arcade's sidebar mode are
+// has, so the Home tile layouts and the Arcade's sidebar mode are
 // stored here rather than on the account: a 50-column phone and a 200-column
 // desktop on one account no longer overwrite each other's pages. `settings` is
 // empty for a key that has never been configured, and an empty override means
@@ -131,8 +131,9 @@ pub fn extract_key_layout(settings: &Value) -> Option<KeyLayout> {
     Some(KeyLayout { right_sidebar_mode })
 }
 
-/// This device's Zen tile layout as stored (`RiceLayout` JSON, parsed by
-/// `late-ssh`), or `None` when the key has never arranged Zen and should
+/// This device's single stored `zen` tile layout (`RiceLayout` JSON,
+/// parsed by `late-ssh`): only the seed for the device's stock `zen` Home
+/// layout; nothing writes it. `None` when the key has none and should
 /// follow the account's `zen_layout` seed.
 pub fn extract_key_zen_layout(settings: &Value) -> Option<Value> {
     settings.get(ZEN_LAYOUT_KEY).cloned()
@@ -211,17 +212,6 @@ impl UserSshKey {
         layout: KeyLayout,
     ) -> Result<()> {
         Self::merge_settings(client, user_id, fingerprint, layout.to_value()).await
-    }
-
-    /// Store this device's Zen tile layout, scoped like `set_layout`.
-    pub async fn set_zen_layout(
-        client: &Client,
-        user_id: Uuid,
-        fingerprint: &str,
-        layout: &Value,
-    ) -> Result<()> {
-        let value = json!({ ZEN_LAYOUT_KEY: layout });
-        Self::merge_settings(client, user_id, fingerprint, value).await
     }
 
     /// Store this device's named Home layouts, scoped like `set_layout`.

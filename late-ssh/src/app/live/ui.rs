@@ -119,7 +119,7 @@ pub(crate) fn draw_live_strip(
 
 /// The picture in its column with the words beside it. On the #lounge card
 /// the hint row and the rule, which parts the strip from the chat below,
-/// make it `LIVE_STRIP_HEIGHT` lines; in a Zen tile it is the
+/// make it `LIVE_STRIP_HEIGHT` lines; in a Home tile it is the
 /// `PICTURE_ROWS` alone (`StripHost`). `background` is what a painted
 /// picture blends into.
 pub(crate) fn live_strip_lines(

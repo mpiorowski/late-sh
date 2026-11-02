@@ -16,7 +16,7 @@ use crate::app::common::theme;
 pub const PET_BOX_MIN_ROWS: u16 = PET_HEIGHT as u16;
 
 /// Where the tank is, seen from the pet's box, when the two share an edge
-/// on the Zen page. The pet goes and sits against that edge to watch.
+/// on Home. The pet goes and sits against that edge to watch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WatchSide {
     Left,
@@ -33,7 +33,7 @@ pub enum WatchTarget {
     Bonsai,
 }
 
-/// What the pet's box touches on the Zen page, with the side each one is
+/// What the pet's box touches on Home, with the side each one is
 /// on. The pet spends one watch window of the round on each, so with both
 /// beside it the fish and the tree alternate; with one, that one takes
 /// both windows, and its time at the glass never depends on what else the
@@ -110,7 +110,7 @@ impl PetPose {
     }
 }
 
-/// Pet box inputs threaded through the Zen render view. The rect slot
+/// Pet box inputs threaded through Home's tile view. The rect slot
 /// receives this frame's click target (a click is a pet), the frame slot
 /// what the tick needs to walk it and gate its frames.
 pub struct PetView<'a> {
@@ -158,7 +158,7 @@ pub fn draw_pet_box(frame: &mut Frame, area: Rect, view: &PetView<'_>, neighbour
 }
 
 /// The row over the pet's box: its name, its mood, and what it is up to
-/// when that is more than a stroll. Drawn centred over the Zen tile; the
+/// when that is more than a stroll. Drawn centred over the Home tile; the
 /// sidebar panel has no such row.
 pub fn status_line(state: &PetState, neighbours: Neighbours) -> Line<'static> {
     let dim = Style::default().fg(theme::TEXT_DIM());

@@ -15,10 +15,10 @@ use crate::session::SessionMessage;
 /// full rate run here.
 pub(crate) const HOT_TICK: Duration = Duration::from_millis(66);
 /// Half-rate cadence (~7.5fps): Clubhouse ambience and the ascii pieces
-/// (a drawn Zen ascii tile, the away screensaver), riding the shared
+/// (a drawn ascii tile on Home, the away screensaver), riding the shared
 /// `anim_half` /2 edge in tick().
 pub(crate) const ANIM_HALF_TICK: Duration = Duration::from_millis(132);
-/// Quarter-rate cadence (~3.8fps): the aquarium surfaces (the Zen tank
+/// Quarter-rate cadence (~3.8fps): the aquarium surfaces (Home's reef
 /// tile + profile-modal reef) and the lively ascii pieces in pixels,
 /// stepping on the `anim_quarter` /4 edge in tick().
 pub(crate) const ANIM_QUARTER_TICK: Duration = Duration::from_millis(264);
@@ -66,10 +66,11 @@ impl App {
             Some(prev) => self.marquee_tick / 15 != prev,
         };
         self.last_one_hz_index = Some(self.marquee_tick / 15);
-        // A Zen layout edit is written at most once a second (and when the
-        // page is left), whatever the key repeat rate did to it.
+        // A Home layout edit is written at most once a second (and when the
+        // page or arrange mode is left), whatever the key repeat rate did
+        // to it.
         if one_hz {
-            self.flush_rice_layouts();
+            self.flush_home_layout();
             self.record_attention();
             if let Some(minute) = self.newcomer_clock.take_minute() {
                 self.referral_service
@@ -1049,11 +1050,11 @@ impl App {
             }
             // Mentions load only when asked for. An Inbox tile on the page
             // asks whenever the unread count moves, so a new mention lands.
-            if self.on_rice_page() && self.rice().shows(crate::app::zen::state::TileKind::Inbox) {
+            if self.on_home() && self.home.shows(crate::app::zen::state::TileKind::Inbox) {
                 let unread = self.chat.notifications.unread_count();
-                if self.zen_inbox_listed_unread != Some(unread) {
+                if self.home_inbox_listed_unread != Some(unread) {
                     self.chat.notifications.list();
-                    self.zen_inbox_listed_unread = Some(unread);
+                    self.home_inbox_listed_unread = Some(unread);
                 }
             }
             // The username directory swaps its Arc on every real change, so
@@ -1211,7 +1212,7 @@ impl App {
                 );
         }
         // The aquarium has no clock of its own: one step per quarter edge,
-        // and only while the Zen page is actually up (the sim pauses
+        // and only while a reef tile is actually up (the sim pauses
         // off-screen; the screen switch back forces its catch-up frame).
         // Hunger is the day's care read fresh each step, so the UTC
         // rollover sinks the fish without any event.
@@ -1228,9 +1229,9 @@ impl App {
             let now = Instant::now();
             let mut rng = rand::thread_rng();
             changed |= self.sync_screensaver(now, &mut rng);
-            if self.on_rice_page() {
-                let zen_changed = self.rice_mut().sync_playback(now, &mut rng);
-                changed |= zen_changed && self.screensaver().is_none();
+            if self.on_home() {
+                let tiles_changed = self.home.sync_playback(now, &mut rng);
+                changed |= tiles_changed && self.screensaver().is_none();
             }
         }
         changed |= self.ascii_edge(anim_half, anim_quarter, one_hz);
@@ -1393,7 +1394,7 @@ impl App {
         changed |= anim_half
             && (sidebar_visible
                 || self.show_bonsai_modal
-                || (self.on_rice_page() && self.rice().paints_on_half_edge()));
+                || (self.on_home() && self.home.paints_on_half_edge()));
         // The live strip draws a shooter's cue: the aim is stored, the
         // half-tick edge paints it.
         changed |= anim_half && self.live_strip_shown() && self.live.aiming();
@@ -1404,7 +1405,7 @@ impl App {
         // so only those boundary ticks need a frame.
         if self.marquee_tick / crate::app::common::marquee::MARQUEE_STEP_TICKS
             != prev_marquee_tick / crate::app::common::marquee::MARQUEE_STEP_TICKS
-            && (sidebar_visible || self.on_rice_page())
+            && (sidebar_visible || self.on_home())
         {
             let selected_radio_station = self.selected_radio_station;
             let radio_now_playing = self.station_now_playing(selected_radio_station);
@@ -1523,7 +1524,7 @@ impl App {
         // so the pet box rides the half tier it paints on. The
         // bonsai care modal and the profile's bonsai sway on the same edge as
         // the sidebar, which always carries the eq strip and that sway. A
-        // Zen music or visualizer tile paints its eq on that edge too; left
+        // music or visualizer tile paints its eq on that edge too; left
         // to the aquarium's quarter tier it drops to ~3.8fps. A drawn ascii
         // tile in dots plays its frames on this edge too; one in pixels
         // rides the quarter tier below.
@@ -1533,7 +1534,7 @@ impl App {
             || crate::app::deadchannel::lounge::svc::animates(self)
             || self.right_sidebar_visible()
             || (self.live_strip_shown() && self.live.aiming())
-            || (self.on_rice_page() && self.rice().paints_on_half_edge())
+            || (self.on_home() && self.home.paints_on_half_edge())
             || self.lively_ascii_visible()
             || self.last_pet_frame.get().is_some()
             || self.show_bonsai_modal
@@ -1550,12 +1551,12 @@ impl App {
         IDLE_TICK
     }
 
-    /// The ascii pieces on screen: the away screensaver's, or the rice
-    /// page's ascii tiles'.
+    /// The ascii pieces on screen: the away screensaver's, or Home's ascii
+    /// tiles'.
     fn visible_pieces(&self) -> Vec<late_core::models::user::AsciiPiece> {
         match (self.screensaver(), self.screen) {
             (Some(piece), _) => vec![piece],
-            (None, Screen::Zen | Screen::Dashboard) => self.rice().pieces(),
+            (None, Screen::Dashboard) => self.home.pieces(),
             (None, _) => Vec::new(),
         }
     }
@@ -1593,22 +1594,17 @@ impl App {
             .any(|piece| cadence(piece) == Cadence::Quarter)
     }
 
-    /// Whether the reef is actually on screen: the Zen page draws it for
-    /// everyone, owned or not (an unowned tank swims empty under a shop
-    /// caption), Home draws it in a reef-form tank tile, and no other page
-    /// draws it at all. Shared by the sim's step gate in tick() and the
-    /// wake cadence, so an aquarium owner browsing other screens pays no
-    /// fish frames.
+    /// Whether the reef is actually on screen: Home draws it in a
+    /// reef-form aquarium tile, owned or not (an unowned tank steps under
+    /// the shop note), and no other page draws it at all. Shared by the
+    /// sim's step gate in tick() and the wake cadence, so an aquarium owner
+    /// browsing other screens pays no fish frames.
     fn aquarium_visible(&self) -> bool {
-        match self.screen {
-            Screen::Zen => true,
-            Screen::Dashboard => self.reef_tile_inner().is_some(),
-            _ => false,
-        }
+        self.reef_tile_inner().is_some()
     }
 
-    /// A paired client is playing and unmuted: the same reading the Zen
-    /// page's equalizer paints as moving (`EqState::Live` or `Ambient`),
+    /// A paired client is playing and unmuted: the same reading a music
+    /// tile's equalizer paints as moving (`EqState::Live` or `Ambient`),
     /// handed to the pet.
     fn music_playing(&self) -> bool {
         match self.paired_client_state() {
@@ -1629,7 +1625,7 @@ impl App {
     }
 
     /// Whether the live strip is on screen: on Home, wherever its host
-    /// tile draws it (Zen's Live tile is the panel, which does not animate).
+    /// tile draws it (a Live tile is the panel, which does not animate).
     fn live_strip_shown(&self) -> bool {
         self.home_strip_hosted()
     }
@@ -1763,7 +1759,6 @@ impl App {
             | Screen::Clubhouse
             | Screen::Nightcap
             | Screen::City
-            | Screen::Zen
             | Screen::DailyMatch
             | Screen::Realm
             | Screen::Scratchpad => Place::Whole,

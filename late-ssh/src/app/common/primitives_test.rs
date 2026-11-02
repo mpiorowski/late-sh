@@ -66,7 +66,6 @@ fn a_screen_off_the_cycle_belongs_to_the_page_it_is_reached_from() {
         Page::Profiles,
         Page::Leaderboard,
         Page::Calendars,
-        Page::Zen,
     ] {
         assert_eq!(page.screen().page(), page);
     }
@@ -85,12 +84,6 @@ fn a_screen_off_the_cycle_belongs_to_the_page_it_is_reached_from() {
         assert_eq!(screen.next(), page.screen(), "{screen:?} next");
         assert_eq!(screen.prev(), page.screen(), "{screen:?} prev");
     }
-}
-
-#[test]
-fn zen_is_a_page_off_the_cycle_that_tabs_to_home() {
-    assert_eq!(Screen::Zen.next(), Screen::Dashboard);
-    assert_eq!(Screen::Zen.prev(), Screen::Dashboard);
 }
 
 #[test]

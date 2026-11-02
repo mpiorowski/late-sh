@@ -14,7 +14,8 @@ pub const MAX_LAYOUTS: usize = 9;
 /// The longest name a layout takes; the list and the status row read it.
 pub const MAX_LAYOUT_NAME_CHARS: usize = 16;
 /// The two stock layouts every device starts with: Home as it always
-/// drew, and Zen's page as a layout of Home.
+/// drew, and `zen`: the bonsai and the reef over a chat, with the clock,
+/// pet, lobby, live and music, boxed.
 pub const STOCK_HOME_NAME: &str = "home";
 pub const STOCK_ZEN_NAME: &str = "zen";
 
@@ -67,14 +68,15 @@ impl LayoutsError {
 }
 
 impl Layouts {
-    /// A device's first set: stock Home current, Zen's page second.
+    /// A device's first set: stock `home` current, stock `zen` second.
     pub fn stock() -> Self {
         Self::seeded(None, None)
     }
 
-    /// A device that arranged its pages before they had names: its Home as
-    /// `home`, its Zen as `zen`, each the stock page when it never did. A
-    /// stored page that no longer parses reads as its stock.
+    /// A device with single stored layouts from before layouts had names:
+    /// its Home layout as `home`, its stored `zen_layout` as `zen`, each the
+    /// stock when it has none. A stored layout that no longer parses reads
+    /// as its stock.
     pub fn seeded(home: Option<&serde_json::Value>, zen: Option<&serde_json::Value>) -> Self {
         Self {
             current: 0,
@@ -146,8 +148,8 @@ impl Layouts {
         &self.items[self.current].name
     }
 
-    /// What `R` puts back: Zen's page for the layout named `zen`, stock
-    /// Home for every other name.
+    /// What `R` puts back: the stock `zen` for the layout named `zen`,
+    /// stock Home for every other name.
     pub fn stock_of(name: &str) -> RiceLayout {
         match name == STOCK_ZEN_NAME {
             true => RiceLayout::default(),

@@ -408,7 +408,7 @@ fn row_style(row: usize, rows: usize) -> Style {
     Style::default().fg(color)
 }
 
-/// Equalizer for the sidebar's music stage and the Zen music tile: the
+/// Equalizer for the sidebar's music stage and Home's music tile: the
 /// dancing band at [`EQ_ROWS`] rows, or the muted and unpaired strips.
 pub(crate) fn render_eq(frame: &mut Frame, area: Rect, wall_tick: usize, state: EqState) {
     if area.height == 0 || area.width == 0 {

@@ -1329,8 +1329,8 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
             "settle in",
         ),
         // Mid-loop stages never render in the tavern: the forced gate only
-        // lets the route's keys through, and `0` from Zen lands straight on
-        // Homecoming.
+        // lets the route's keys through, and the last stop's Enter lands
+        // straight on Homecoming.
         Tutorial::VisitChat
         | Tutorial::VisitMusic
         | Tutorial::VisitArcade
@@ -1344,7 +1344,6 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
         | Tutorial::VisitJobs
         | Tutorial::VisitLeaderboard
         | Tutorial::VisitCalendar
-        | Tutorial::VisitZen
         | Tutorial::Off
         | Tutorial::Pending
         | Tutorial::Done => return false,
@@ -1632,65 +1631,6 @@ pub fn draw_tour_overlay(
                 ]),
                 Line::from(Span::styled("in green, and only you see them.", text)),
             ],
-            "zen",
-        ),
-        Tutorial::VisitZen => (
-            Screen::Zen,
-            " ✦ the tour · zen ",
-            vec![
-                Line::from(Span::styled(
-                    "one page with just the things you want to keep an eye on.",
-                    text,
-                )),
-                Line::from(vec![
-                    Span::styled("your ", text),
-                    Span::styled("bonsai", name),
-                    Span::styled(", the ", text),
-                    Span::styled("reef", name),
-                    Span::styled(", a ", text),
-                    Span::styled("pet", name),
-                    Span::styled(", your rooms, music and a clock,", text),
-                ]),
-                Line::from(Span::styled(
-                    "as tiles you arrange yourself. the layout is saved.",
-                    text,
-                )),
-                Line::default(),
-                Line::from(vec![
-                    Span::styled("[/zen] ", key),
-                    Span::styled("opens it from any page. ", text),
-                    Span::styled("[Ctrl+F] ", key),
-                    Span::styled("on it takes you back;", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("on home, ", text),
-                    Span::styled("[Ctrl+F] [2] ", key),
-                    Span::styled("is this page as a layout of home.", text),
-                ]),
-                Line::default(),
-                Line::from(vec![
-                    Span::styled("[Tab] ", key),
-                    Span::styled("focus a tile · ", text),
-                    Span::styled("[space] ", key),
-                    Span::styled("pick what it shows", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("[S] ", key),
-                    Span::styled("split · ", text),
-                    Span::styled("[X] ", key),
-                    Span::styled("close · ", text),
-                    Span::styled("[z] ", key),
-                    Span::styled("zoom · ", text),
-                    Span::styled("[R] ", key),
-                    Span::styled("reset", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("[i] ", key),
-                    Span::styled("write in the focused chat · ", text),
-                    Span::styled("[?] ", key),
-                    Span::styled("the zen guide", text),
-                ]),
-            ],
             "home to the lounge",
         ),
         // The music, lobby, practice-table and dungeon stops write their
@@ -1956,7 +1896,6 @@ pub(crate) fn tour_header(
         | Tutorial::VisitJobs
         | Tutorial::VisitLeaderboard
         | Tutorial::VisitCalendar
-        | Tutorial::VisitZen
         | Tutorial::Homecoming
         | Tutorial::Done => None,
     }

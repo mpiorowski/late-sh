@@ -233,7 +233,7 @@ fn keyhints_too_wide_for_the_row_are_dropped_like_any_other_segment() {
 }
 
 /// The lit tab is the page a screen belongs to, the one Tab steps back to:
-/// a screen off the cycle lights exactly that tab, and Zen lights none.
+/// a screen off the cycle lights exactly that tab.
 #[test]
 fn the_lit_tab_is_the_page_the_screen_belongs_to() {
     let lit = |screen: Screen| -> Vec<Screen> {
@@ -256,7 +256,6 @@ fn the_lit_tab_is_the_page_the_screen_belongs_to() {
     ] {
         assert_eq!(lit(screen), vec![tab], "{screen:?}");
     }
-    assert_eq!(lit(Screen::Zen), Vec::<Screen>::new());
 }
 
 /// The frame title's word for a game's shut chat: dim with nothing new,

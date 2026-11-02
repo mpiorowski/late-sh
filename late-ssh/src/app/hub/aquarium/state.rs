@@ -94,7 +94,7 @@ pub(crate) enum CutOutcome {
     Rooted,
 }
 
-/// What the Zen tile's fourteen dots show.
+/// What the Home tank tile's fourteen dots show.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CareBar {
     /// Fed today: this many dots green, the way to the next fry (a full bar

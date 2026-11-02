@@ -1695,7 +1695,7 @@ async fn ctrl_s_stays_in_native_games() {
 }
 
 #[tokio::test]
-async fn realm_keeps_the_originating_page_when_switching_games_or_visiting_zen() {
+async fn realm_keeps_the_originating_page_when_switching_games_or_visiting_home() {
     use crate::app::common::primitives::Screen;
     use crate::app::lobby::modal_input::return_screen_for_opening;
 
@@ -1707,10 +1707,17 @@ async fn realm_keeps_the_originating_page_when_switching_games_or_visiting_zen()
     app.realm.open_board(uuid::Uuid::new_v4(), Screen::Profiles);
     app.set_screen(Screen::Realm);
     assert_eq!(return_screen_for_opening(&app), Screen::Profiles);
+    // Ctrl+F takes the board's player Home to arrange it; the backtick
+    // brings them back to a board that still returns where it was opened.
     app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Zen);
-    app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Profiles);
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert!(app.home.arrange);
+    // No tick here: the board is a fabricated one.
+    flush_lone_escape(&mut app);
+    assert!(!app.home.arrange);
+    app.handle_input(b"`");
+    assert_eq!(app.screen, Screen::Realm);
+    assert_eq!(return_screen_for_opening(&app), Screen::Profiles);
 }
 
 /// The realm board is a stop on the backtick cycle like a detached
@@ -2031,8 +2038,6 @@ async fn ctrl_s_keeps_profile_save_and_job_post_bindings() {
 /// matters most: it is a save habit.
 #[tokio::test]
 async fn modal_chords_leave_a_settings_text_editor_alone() {
-    use crate::app::common::primitives::Screen;
-
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "chords-bio-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "chords-bio-flow-it");
@@ -2058,15 +2063,16 @@ async fn modal_chords_leave_a_settings_text_editor_alone() {
         );
         assert!(!app.show_lobby_modal, "{name} opens no Lobby");
         assert!(!app.show_hub_modal, "{name} opens no Shop");
-        assert_ne!(app.screen, Screen::Zen, "{name} opens no Zen");
+        assert!(!app.home.arrange, "{name} arranges no Home");
     }
 
     app.handle_input(b"\r"); // Enter leaves edit mode and saves
     assert_eq!(app.settings_modal_state.draft().bio, "late night coder");
 }
 
-/// `/lobby`, `/zen`, and `/guide` are the typed fallbacks for Ctrl+G, Ctrl+F,
-/// and `?`, for terminals that swallow the chords.
+/// `/lobby` and `/guide` are the typed fallbacks for Ctrl+G and `?`, for
+/// terminals that swallow the chords; `/zen` loads Home's zen layout, the
+/// same as `Ctrl+F 2` on a stock device.
 #[tokio::test]
 async fn slash_lobby_zen_and_guide_mirror_their_keys() {
     use crate::app::common::primitives::Screen;
@@ -2100,9 +2106,12 @@ async fn slash_lobby_zen_and_guide_mirror_their_keys() {
     assert!(!app.show_help, "? should close the guide /guide opened");
 
     app.handle_input(b"i/zen\r");
-    assert_eq!(app.screen, Screen::Zen);
-    app.handle_input(b"\x06");
     assert_eq!(app.screen, Screen::Dashboard);
+    assert_eq!(app.home_layouts.current_name(), "zen");
+    assert!(!app.home.arrange);
+    app.handle_input(b"\x06");
+    app.handle_input(b"1");
+    assert_eq!(app.home_layouts.current_name(), "home");
 
     // /redraw re-emits every cell, the way Ctrl+R does: the frame after it
     // carries more than a settled diff.
@@ -2147,7 +2156,7 @@ async fn global_w_opens_bonsai_care() {
 }
 
 #[tokio::test]
-async fn zen_yields_the_music_chord_and_w_to_bonsai_care() {
+async fn arranging_home_yields_the_music_chord_and_w_still_tends_the_bonsai() {
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "zen-chords-it").await;
     let client = test_db.db.get().await.expect("db client");
@@ -2165,31 +2174,34 @@ async fn zen_yields_the_music_chord_and_w_to_bonsai_care() {
     );
     wait_for_render_contains(&mut app, " Home ").await;
     app.handle_input(b"\x06");
-    wait_for_render_contains(&mut app, "w tend").await;
-    let tiles = app.zen.leaf_count();
+    assert!(app.home.arrange);
+    let tiles = app.home.leaf_count();
     let source = app.paired_source;
 
-    // `v x` is the global audio-source chord. The page used to claim `x`
-    // (and `X` still closes a tile), so the suffix must reach the chord.
+    // `v x` is the global audio-source chord. Arrange mode swallows stray
+    // letters (and `X` closes a tile), so the suffix must reach the chord.
     app.handle_input(b"v");
     app.handle_input(b"x");
     assert_ne!(
         app.paired_source, source,
-        "v x swaps the audio source on Zen"
+        "v x swaps the audio source while arranging"
     );
     assert_eq!(
-        app.zen.leaf_count(),
+        app.home.leaf_count(),
         tiles,
         "the chord suffix closes no tile"
     );
 
-    // The bonsai is tended in the same modal as everywhere else.
+    // Done arranging, the bonsai is tended in the same modal as everywhere
+    // else.
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(&mut app, |app| !app.home.arrange, "arrange mode").await;
     app.handle_input(b"w");
     wait_for_render_contains(&mut app, " Bonsai ").await;
     let frame = render_plain(&mut app);
     assert!(
         frame.contains("Day 0") && frame.contains("vigor"),
-        "expected w on Zen to open the bonsai care modal; frame={frame:?}"
+        "expected w on Home to open the bonsai care modal; frame={frame:?}"
     );
 }
 
@@ -3466,7 +3478,7 @@ async fn default_bottom_bar_shows_every_default_component_even_while_idle() {
     }
     assert!(
         frame.contains("Settings ^O")
-            && frame.contains("Zen ^F")
+            && frame.contains("Layouts ^F")
             && frame.contains("Shop ^S")
             && frame.contains("Exit qq"),
         "Keyhints should render from the default component: {frame:?}"
@@ -3585,8 +3597,7 @@ async fn keyhints_brief_property_toggles_and_persists_in_settings() {
 }
 
 #[tokio::test]
-async fn runner_stays_off_the_fixed_bar_and_zen_paints_its_own_row() {
-    use crate::app::common::primitives::Screen;
+async fn runner_stays_off_the_fixed_bar() {
     use crate::app::deadchannel::fight::state::Sheet;
 
     let render_top_row = |app: &mut crate::app::state::App| {
@@ -3604,8 +3615,8 @@ async fn runner_stays_off_the_fixed_bar_and_zen_paints_its_own_row() {
     };
 
     let test_db = new_test_db().await;
-    let viewer = create_test_user(&test_db.db, "status-zen-viewer").await;
-    let mut app = make_app(test_db.db.clone(), viewer.id, "status-zen-flow-it");
+    let viewer = create_test_user(&test_db.db, "status-runner-viewer").await;
+    let mut app = make_app(test_db.db.clone(), viewer.id, "status-runner-flow-it");
     app.resize(200, 40).expect("resize test terminal");
     app.fight.sheet = Some(Sheet::fresh(viewer.id, chrono::Utc::now().date_naive()));
     let top_row = render_top_row(&mut app);
@@ -3613,116 +3624,31 @@ async fn runner_stays_off_the_fixed_bar_and_zen_paints_its_own_row() {
     assert!(!top_row.contains("rations"));
     assert!(!top_row.contains("signal"));
     assert!(!app.last_status_hits.borrow().is_empty());
-
-    // Zen has no frame and so no top bar: the user's bar moves to the page's
-    // own bottom row.
-    app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Zen);
-    let top_row = render_top_row(&mut app);
-    assert!(!top_row.contains("chips"));
-    let frame = render_plain(&mut app);
-    assert!(frame.contains("Settings ^O"));
-    assert!(!app.last_status_hits.borrow().is_empty());
-
-    app.handle_input(b"\x06");
-    let top_row = render_top_row(&mut app);
-    assert!(top_row.contains("chips"));
-    assert!(!top_row.contains("rations"));
-    assert!(!top_row.contains("signal"));
-    assert!(!app.last_status_hits.borrow().is_empty());
 }
 
-/// Under 40x12 Zen draws its too-small notice and nothing else: the status
-/// row is not painted, so no click target is left behind on the page.
+/// `?` while arranging Home opens the guide on the Layouts topic, which
+/// lists the arrange keys.
 #[tokio::test]
-async fn zen_too_small_to_draw_keeps_no_status_click_targets() {
-    use crate::app::common::primitives::Screen;
-
-    let test_db = new_test_db().await;
-    let viewer = create_test_user(&test_db.db, "zen-small-viewer").await;
-    let mut app = make_app(test_db.db.clone(), viewer.id, "zen-small-flow-it");
-    app.resize(120, 40).expect("resize test terminal");
-    app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Zen);
-    wait_for_render_contains(&mut app, "w tend").await;
-    assert!(!app.last_status_hits.borrow().is_empty());
-
-    app.resize(39, 40).expect("resize test terminal");
-    let frame = render_plain(&mut app);
-    assert!(frame.contains("Rice needs at least"), "{frame:?}");
-    assert!(!frame.contains("unread"), "{frame:?}");
-    assert!(app.last_status_hits.borrow().is_empty());
-}
-
-/// `?` on Zen opens the guide on the Zen topic, which lists the layout keys;
-/// with every status line component off Zen's bottom row stays, holding
-/// the layout keys alone with nothing to click, and the tiles end one row
-/// above it.
-#[tokio::test]
-async fn zen_guide_opens_on_zen_keys_and_the_row_keeps_its_keys_with_every_component_off() {
+async fn the_guide_opens_on_the_layouts_topic_while_arranging_home() {
     use crate::app::common::primitives::Screen;
     use crate::app::help_modal::data::HelpTopic;
-    use crate::app::profile::state::profile_params_from_profile;
-    use late_core::models::profile::Profile;
 
-    const COLS: u16 = 120;
-    const ROWS: u16 = 40;
     let test_db = new_test_db().await;
-    let viewer = create_test_user(&test_db.db, "zen-row-viewer").await;
-    let mut app = make_app(test_db.db.clone(), viewer.id, "zen-row-flow-it");
-    app.resize(COLS, ROWS).expect("resize test terminal");
+    let viewer = create_test_user(&test_db.db, "layouts-guide-viewer").await;
+    let mut app = make_app(test_db.db.clone(), viewer.id, "layouts-guide-flow-it");
+    app.resize(120, 40).expect("resize test terminal");
     app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Zen);
-    wait_for_render_contains(&mut app, "w tend").await;
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert!(app.home.arrange);
 
     app.handle_input(b"?");
     assert!(app.show_help);
-    assert_eq!(app.help_modal_state.selected_topic(), HelpTopic::Zen);
-
-    let client = test_db.db.get().await.expect("db client");
-    let profile = Profile::load(&client, viewer.id)
-        .await
-        .expect("load profile");
-    let mut params = profile_params_from_profile(&profile);
-    for setting in &mut params.statusline_components {
-        setting.enabled = false;
-    }
-    Profile::update(&client, viewer.id, params)
-        .await
-        .expect("save the status line");
-    let mut app = make_app(test_db.db.clone(), viewer.id, "zen-row-off-flow-it");
-    app.resize(COLS, ROWS).expect("resize test terminal");
-    app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Zen);
-    // The profile lands after the first frames, which paint the defaults.
-    wait_for_render_not_contains(&mut app, "Settings ^O").await;
-    assert!(app.last_status_hits.borrow().is_empty());
-    let mut terminal = vt100::Parser::new(ROWS, COLS, 0);
-    app.reset_render();
-    terminal.process(&app.render().expect("render"));
-    let screen = terminal.screen().contents();
-    let mut rows = screen.lines().rev();
-    let last_row = rows.next().expect("last row");
-    assert!(
-        last_row
-            .trim_end()
-            .ends_with("? help  S split  F flip  X close"),
-        "the layout keys hold the last row's right end: {last_row:?}"
-    );
-    assert!(
-        !last_row.contains('╰'),
-        "no tile border on the keys' row: {last_row:?}"
-    );
-    let above = rows.next().expect("row above");
-    assert!(
-        above.starts_with('╰'),
-        "the tiles end one row above the keys: {above:?}"
-    );
+    assert_eq!(app.help_modal_state.selected_topic(), HelpTopic::Layouts);
 }
 
-/// The piece picker is the Zen page's. A chord off the page (Ctrl+F) or
-/// into a modal (Ctrl+O) closes it, so it never owns the next surface's
-/// keys or writes a pick to a tile that is no longer on screen.
+/// The piece picker belongs to arrange mode on Home. Leaving the mode
+/// (Ctrl+F) or a chord into a modal (Ctrl+O) closes it, so it never owns the
+/// next surface's keys or writes a pick to a tile that lost the focus.
 #[tokio::test]
 async fn the_piece_picker_closes_when_the_page_or_a_modal_takes_over() {
     use crate::app::common::primitives::Screen;
@@ -3733,9 +3659,10 @@ async fn the_piece_picker_closes_when_the_page_or_a_modal_takes_over() {
     let mut app = make_app(test_db.db.clone(), viewer.id, "piece-picker-flow-it");
     app.resize(120, 40).expect("resize test terminal");
     app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Zen);
-    app.zen.rice.root = Node::leaf(TileKind::Ascii);
-    app.zen.focus = 0;
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert!(app.home.arrange);
+    app.home.rice.root = Node::leaf(TileKind::Ascii);
+    app.home.focus = 0;
 
     app.handle_input(b"\r");
     assert!(
@@ -3743,11 +3670,11 @@ async fn the_piece_picker_closes_when_the_page_or_a_modal_takes_over() {
         "Enter on the ascii tile opens it"
     );
     app.handle_input(b"\x06");
-    assert_ne!(app.screen, Screen::Zen, "Ctrl+F leaves the page");
+    assert!(!app.home.arrange, "Ctrl+F leaves arrange mode");
     assert!(!app.piece_picker.is_open(), "and the picker goes with it");
 
     app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Zen);
+    assert!(app.home.arrange);
     app.handle_input(b"\r");
     assert!(app.piece_picker.is_open());
     app.handle_input(b"\x0f");
@@ -3861,7 +3788,7 @@ async fn forced_tour_walks_the_house_on_enter_with_one_shot_of_pool() {
     assert_eq!(app.clubhouse.tutorial, Tutorial::Welcome);
 
     // The gate swallows everything but Enter: no page hopping, no Tab, no
-    // help modal, no reserved chords (Zen's included), no composer.
+    // help modal, no reserved chords (Home's layouts included), no composer.
     for bytes in [&b"2"[..], b"\t", b"?", b"\x0f", b"\x07", b"\x06", b"i"] {
         app.handle_input(bytes);
     }
@@ -3955,12 +3882,7 @@ async fn forced_tour_walks_the_house_on_enter_with_one_shot_of_pool() {
         assert_eq!(app.directory_state.shelf(), shelf);
     }
 
-    for screen in [
-        Screen::Leaderboard,
-        Screen::Calendars,
-        Screen::Zen,
-        Screen::Clubhouse,
-    ] {
+    for screen in [Screen::Leaderboard, Screen::Calendars, Screen::Clubhouse] {
         app.handle_input(b"\r");
         assert_eq!(app.screen, screen);
     }
@@ -3997,7 +3919,8 @@ async fn forced_tour_can_skip_artboard_without_viewing_it() {
     assert!(!frame.contains("Mode       view"));
     assert!(!frame.contains("Back to Chat"));
 
-    // Esc, the dialog's own Back key and the reserved chords (settings, zen)
+    // Esc, the dialog's own Back key and the reserved chords (settings,
+    // layouts)
     // all stay with the gate: the stop cannot be left sideways.
     app.handle_input(b"\x1b");
     app.pending_escape_started_at = Some(std::time::Instant::now() - Duration::from_secs(1));
@@ -4018,7 +3941,6 @@ async fn forced_tour_can_skip_artboard_without_viewing_it() {
         Screen::Profiles,
         Screen::Leaderboard,
         Screen::Calendars,
-        Screen::Zen,
         Screen::Clubhouse,
     ] {
         app.handle_input(b"\r");
@@ -4261,43 +4183,6 @@ async fn clubhouse_draws_a_chat_overlay_that_lands_there() {
     app.handle_input(b"q");
     assert!(!app.chat.has_overlay(), "q closes it");
     assert_eq!(app.screen, Screen::Clubhouse);
-}
-
-/// Zen chat tiles draw real rooms only, so the picker there offers nothing
-/// else: a pick of Mentions or News would move Home's selection and leave
-/// the page looking untouched.
-#[tokio::test]
-async fn zen_room_picker_lists_real_rooms_only() {
-    use crate::app::common::primitives::Screen;
-
-    let (_test_db, mut app) = chat_compose_app("zen-picker-rooms").await;
-    app.handle_input(b"\x1b");
-    wait_for_esc_effect(&mut app, |app| !app.chat.composing, "composer closed").await;
-
-    // Home lists the synthetic entry, so the query itself is a real match.
-    app.handle_input(b"\x1f");
-    assert!(app.room_search_modal_state.is_open());
-    app.handle_input(b"mentions");
-    assert_render_not_contains_for(&mut app, "No matching rooms", Duration::from_millis(60)).await;
-    app.handle_input(b"\x1b");
-    wait_for_esc_effect(
-        &mut app,
-        |app| !app.room_search_modal_state.is_open(),
-        "picker closed",
-    )
-    .await;
-
-    app.set_screen(Screen::Zen);
-    app.handle_input(b"\x1f");
-    assert!(app.room_search_modal_state.is_open());
-    app.handle_input(b"mentions");
-    wait_for_render_contains(&mut app, "No matching rooms").await;
-    app.handle_input(b"\r");
-    assert!(
-        !app.chat.synthetic_entry_selected(),
-        "a Zen pick never lands on a synthetic entry"
-    );
-    assert_eq!(app.screen, Screen::Zen);
 }
 
 #[tokio::test]
@@ -5020,8 +4905,8 @@ async fn ctrl_e_arranges_home_and_the_layout_keys_are_arrange_modes_alone() {
         "the account keeps no layout of its own: it is only the seed"
     );
     // Ctrl+F is the layouts chord: it enters arrange mode, and a digit
-    // loads that layout and leaves the mode. Layout 2 is Zen's page as a
-    // layout of Home, so Home stays the screen and shows Zen's tree.
+    // loads that layout and leaves the mode. Layout 2 is the stock zen
+    // layout, drawn on Home like any other.
     app.handle_input(b"\x06");
     assert!(app.home.arrange, "Ctrl+F enters arrange mode");
     app.handle_input(b"2");
@@ -5029,7 +4914,7 @@ async fn ctrl_e_arranges_home_and_the_layout_keys_are_arrange_modes_alone() {
     assert_eq!(
         app.screen,
         crate::app::common::primitives::Screen::Dashboard,
-        "Zen is a layout of Home, not a page"
+        "zen is a layout of Home, not a page"
     );
     assert_eq!(app.home_layouts.current_name(), "zen");
     assert_eq!(
@@ -5136,7 +5021,7 @@ async fn a_second_chat_tile_on_home_keeps_its_room_and_the_rail_follows_the_acti
 
     // A click on the first tile makes it the active chat and moves the
     // rail to its room; the second tile stays on the stream.
-    let (_, rect, _) = app.rice_tile_rects()[first];
+    let (_, rect, _) = app.home_tile_rects()[first];
     let click = format!("\x1b[<0;{};{}M", rect.x + 2, rect.y + 2);
     app.handle_input(click.as_bytes());
     assert_eq!(app.home.focus, first);
@@ -5166,8 +5051,10 @@ async fn a_second_chat_tile_on_home_keeps_its_room_and_the_rail_follows_the_acti
     assert!(app.home_layout_dirty, "a rebind is a layout edit");
 }
 
+/// In arrange mode every tile takes the focus, and Tab walks them instead
+/// of switching pages.
 #[tokio::test]
-async fn zen_tab_cycles_tile_focus_instead_of_switching_pages() {
+async fn home_arrange_tab_cycles_tile_focus_instead_of_switching_pages() {
     use crate::app::common::primitives::Screen;
 
     let test_db = new_test_db().await;
@@ -5182,31 +5069,34 @@ async fn zen_tab_cycles_tile_focus_instead_of_switching_pages() {
     let mut app = make_app(test_db.db.clone(), user.id, "zen-tab-flow-it");
     wait_for_render_contains(&mut app, " Home ").await;
     app.handle_input(b"\x06");
-    wait_for_render_contains(&mut app, "w tend").await;
-    let tiles = app.zen.leaf_count();
-    let start = app.zen.focus;
+    assert!(app.home.arrange);
+    let tiles = app.home.leaf_count();
+    let start = app.home.focus;
 
-    // Tab walks the tiles in layout order and stays on the page: Zen is
-    // not in the page cycle, so the global Tab would drop back to Home.
+    // Tab walks the tiles in layout order and stays on the page.
     app.handle_input(b"\t");
-    assert_eq!(app.screen, Screen::Zen, "Tab on Zen stays on Zen");
     assert_eq!(
-        app.zen.focus,
+        app.screen,
+        Screen::Dashboard,
+        "Tab while arranging stays Home"
+    );
+    assert_eq!(
+        app.home.focus,
         (start + 1) % tiles,
         "Tab focuses the next tile"
     );
 
     // Shift+Tab walks back.
     app.handle_input(b"\x1b[Z");
-    assert_eq!(app.screen, Screen::Zen, "Shift+Tab on Zen stays on Zen");
-    assert_eq!(app.zen.focus, start, "Shift+Tab focuses the previous tile");
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert_eq!(app.home.focus, start, "Shift+Tab focuses the previous tile");
 
     // Tab wraps past the last tile to the first.
     for _ in 0..tiles {
         app.handle_input(b"\t");
     }
-    assert_eq!(app.zen.focus, start, "Tab wraps around the tiles");
-    assert_eq!(app.screen, Screen::Zen);
+    assert_eq!(app.home.focus, start, "Tab wraps around the tiles");
+    assert_eq!(app.screen, Screen::Dashboard);
 }
 
 #[tokio::test]
@@ -5219,14 +5109,11 @@ async fn landing_page_tweak_picks_the_first_screen_except_for_new_users() {
     for (idx, (page, is_new_user, tour_pending, expected)) in [
         (LandingPage::Clubhouse, false, false, Screen::Clubhouse),
         (LandingPage::Home, false, false, Screen::Dashboard),
-        (LandingPage::Zen, false, false, Screen::Zen),
         // A first session always starts in the tavern, where the tour runs.
-        (LandingPage::Zen, true, false, Screen::Clubhouse),
         (LandingPage::Home, true, false, Screen::Clubhouse),
         // So does a regular whose tour flag was reset: the tour only fires
-        // in the tavern, and a Home or Zen landing would never show it.
+        // in the tavern, and a Home landing would never show it.
         (LandingPage::Home, false, true, Screen::Clubhouse),
-        (LandingPage::Zen, false, true, Screen::Clubhouse),
     ]
     .into_iter()
     .enumerate()
@@ -5257,93 +5144,10 @@ async fn landing_page_tweak_picks_the_first_screen_except_for_new_users() {
     }
 }
 
+/// A watch opened from Home (`s1` on the row its Live tile lists the game
+/// on) is a trip into the games like any other stop: backtick comes home.
 #[tokio::test]
-async fn zen_is_left_only_by_ctrl_f_which_returns_where_it_was_opened() {
-    use crate::app::common::primitives::Screen;
-    use crate::test_helpers::SessionWorld;
-    use late_core::models::user::LandingPage;
-
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "zen-leave-it").await;
-    let mut app = make_app_in_world(
-        test_db.db.clone(),
-        user.id,
-        "zen-leave-flow-it",
-        SessionWorld {
-            landing_page: Some(LandingPage::Zen),
-            ..SessionWorld::default()
-        },
-    );
-    assert_eq!(app.screen, Screen::Zen);
-
-    // Landed on Zen: there is no page to hand back, so the chord walks
-    // into the tavern.
-    app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Clubhouse);
-
-    // Opened from The Arcade, a lone Esc stays on the page.
-    app.handle_input(b"2");
-    app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Zen);
-    app.handle_input(b"\x1b");
-    wait_for_esc_effect(&mut app, |app| !app.pending_escape, "esc flushes on zen").await;
-    assert_eq!(app.screen, Screen::Zen, "Esc never leaves Zen");
-
-    // The chord hands the page back to where it was opened.
-    app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Arcade);
-
-    // Leaving by a digit forgets the return page: a later chord on Zen
-    // must not jump back to The Arcade.
-    app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Zen);
-    app.handle_input(b"1");
-    assert_eq!(app.screen, Screen::Dashboard);
-    app.set_screen(Screen::Zen);
-    app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Clubhouse);
-}
-
-#[tokio::test]
-async fn backtick_from_zen_hops_through_the_games_and_comes_home_to_zen() {
-    use crate::app::common::primitives::Screen;
-
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "zen-backtick-flow").await;
-    let mut app = make_app(test_db.db.clone(), user.id, "zen-backtick-flow-it");
-
-    // Zen opened over the Leaderboards, nothing waiting: the hop stays put.
-    app.set_screen(Screen::Leaderboard);
-    app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Zen);
-    app.handle_input(b"`");
-    assert_eq!(app.screen, Screen::Zen);
-
-    // A loaded Dark Room is a stop: the hop goes in, and the same key comes
-    // home to Zen rather than Home chat.
-    app.enter_darkroom();
-    app.handle_input(b"`");
-    assert_eq!(app.screen, Screen::Darkroom);
-    app.handle_input(b"`");
-    assert_eq!(app.screen, Screen::Zen);
-
-    // The trip through the games kept Zen's own way back.
-    app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Leaderboard);
-
-    // Going in from Home comes home to Home.
-    app.set_screen(Screen::Dashboard);
-    app.handle_input(b"`");
-    assert_eq!(app.screen, Screen::Darkroom);
-    app.handle_input(b"`");
-    assert_eq!(app.screen, Screen::Dashboard);
-}
-
-/// A watch opened from Zen (`s1` on the row its Live tile lists the game
-/// on) is a trip into the games like any other stop: backtick comes home
-/// to Zen, and Zen still knows the page its `Ctrl+F` hands back.
-#[tokio::test]
-async fn a_watch_opened_from_zen_comes_home_to_zen_on_backtick() {
+async fn a_watch_opened_from_home_comes_home_on_backtick() {
     use crate::app::common::primitives::Screen;
     use crate::app::door::spectate::{
         proxy::LiveGame,
@@ -5376,12 +5180,10 @@ async fn a_watch_opened_from_zen_comes_home_to_zen_on_backtick() {
         }],
     );
 
-    // Zen opened over the Leaderboards (the `/zen` toggle: Ctrl+F is
-    // Home's layouts chord); the default's Live tile lists the game on its
-    // first row, with its key.
-    app.set_screen(Screen::Leaderboard);
-    crate::app::input::toggle_zen_globally(&mut app);
-    wait_for_render_contains(&mut app, "w tend").await;
+    // The zen layout's Live tile lists the game on its first row, with its
+    // key.
+    crate::app::zen::input::load_zen_layout(&mut app);
+    assert_eq!(app.screen, Screen::Dashboard);
     wait_for_render_contains(&mut app, "dcss").await;
     wait_for_render_contains(&mut app, "s1").await;
 
@@ -5395,13 +5197,8 @@ async fn a_watch_opened_from_zen_comes_home_to_zen_on_backtick() {
     );
 
     app.handle_input(b"`");
-    assert_eq!(app.screen, Screen::Zen, "backtick comes home to Zen");
-    app.handle_input(b"\x06");
-    assert_eq!(
-        app.screen,
-        Screen::Leaderboard,
-        "and Zen still hands back the page it was opened over"
-    );
+    assert_eq!(app.screen, Screen::Dashboard, "backtick comes home");
+    assert_eq!(app.home_layouts.current_name(), "zen", "on its layout");
 }
 
 /// Lone Esc is held for escape-sequence disambiguation and dispatches on a
@@ -5666,96 +5463,7 @@ async fn a_zork_player_opens_their_watchers_chat_with_f4_and_f3_closes_it() {
 }
 
 #[tokio::test]
-async fn a_table_opened_from_zen_hands_back_to_zen_on_esc_and_on_backtick() {
-    use crate::app::common::primitives::Screen;
-    use crate::app::lobby::house::tables::HouseTable;
-
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "zen-table-base").await;
-    let mut app = make_app(test_db.db.clone(), user.id, "zen-table-base-it");
-
-    app.set_screen(Screen::Leaderboard);
-    app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Zen);
-
-    // Opened from Zen the way the Lobby modal opens it; Esc hands back to
-    // Zen with the Lobby reopened over it, and Zen still knows its way out.
-    assert!(
-        app.house
-            .enter(HouseTable::Blackjack, Screen::Zen, app.chip_balance)
-    );
-    app.set_screen(Screen::HouseTable);
-    app.handle_input(b"\x1b");
-    wait_for_esc_effect(
-        &mut app,
-        |app| app.screen != Screen::HouseTable,
-        "esc leaves the table",
-    )
-    .await;
-    assert_eq!(app.screen, Screen::Zen);
-    assert!(app.show_lobby_modal, "expected Esc to reopen the Lobby");
-    app.handle_input(b"\x07");
-    assert!(!app.show_lobby_modal);
-    app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Leaderboard);
-
-    // Backtick off the same table, nothing else waiting, wraps to Zen too.
-    app.handle_input(b"\x06");
-    assert!(
-        app.house
-            .enter(HouseTable::Blackjack, Screen::Zen, app.chip_balance)
-    );
-    app.set_screen(Screen::HouseTable);
-    app.handle_input(b"`");
-    assert_eq!(app.screen, Screen::Zen);
-    assert!(!app.show_lobby_modal, "the wrap never opens the Lobby");
-    app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Leaderboard);
-}
-
-/// Zen opened over a table, then a Lobby jump from Zen onto a table: going
-/// in from Zen, not closing it. Esc and backtick must agree that home is
-/// Zen.
-#[tokio::test]
-async fn a_lobby_jump_from_zen_opened_over_a_table_comes_home_to_zen() {
-    use crate::app::common::primitives::Screen;
-    use crate::app::lobby::house::tables::HouseTable;
-
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "zen-jump-base").await;
-    let mut app = make_app(test_db.db.clone(), user.id, "zen-jump-base-it");
-
-    // Went into the table from Home, so the chain's base is Home.
-    app.set_screen(Screen::Dashboard);
-    assert!(
-        app.house
-            .enter(HouseTable::Blackjack, Screen::Dashboard, app.chip_balance)
-    );
-    app.set_screen(Screen::HouseTable);
-    app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Zen);
-
-    // Jumped onto a table from Zen the way the Lobby modal does it.
-    assert!(
-        app.house
-            .enter(HouseTable::Blackjack, Screen::Zen, app.chip_balance)
-    );
-    app.set_screen(Screen::HouseTable);
-    app.handle_input(b"`");
-    assert_eq!(
-        app.screen,
-        Screen::Zen,
-        "backtick wraps to Zen, where Esc would go"
-    );
-
-    // Zen still hands back what it was first opened over: not the table,
-    // which closed on the way in, but Home, where the table was opened.
-    app.handle_input(b"\x06");
-    assert_eq!(app.screen, Screen::Dashboard);
-}
-
-#[tokio::test]
-async fn zen_chat_keys_belong_to_the_focused_chat_tile() {
+async fn arranging_home_keeps_the_chat_keys_off_a_tile_that_is_not_a_chat() {
     let test_db = new_test_db().await;
     let viewer = create_test_user(&test_db.db, "zen-jk-viewer").await;
     let author = create_test_user(&test_db.db, "zen-jk-author").await;
@@ -5783,12 +5491,12 @@ async fn zen_chat_keys_belong_to_the_focused_chat_tile() {
     let mut app = make_app(test_db.db.clone(), viewer.id, "zen-jk-flow-it");
     app.resize(160, 40).expect("resize test terminal");
     wait_for_render_contains(&mut app, "zen select target").await;
-    app.handle_input(b"\x06");
+    crate::app::zen::input::load_zen_layout(&mut app);
     wait_for_render_contains(&mut app, "w tend").await;
 
-    // The first opening lands on the chat tile: `j` selects in its room.
+    // The layout opens on its chat tile: `j` selects in its room.
     assert_eq!(
-        app.zen.focused_kind(),
+        app.home.focused_kind(),
         Some(crate::app::zen::state::TileKind::Chat)
     );
     app.handle_input(b"j");
@@ -5798,11 +5506,14 @@ async fn zen_chat_keys_belong_to_the_focused_chat_tile() {
         "j on the focused chat tile selects the newest message"
     );
 
-    // Focus moves off the chat: the selection is dropped and `j` is
-    // swallowed rather than scrolling a chat nobody is looking at.
+    // Arranging, the focus moves off the chat: the selection is dropped
+    // and `j` is swallowed rather than scrolling a chat nobody is looking
+    // at.
+    app.handle_input(b"\x06");
+    assert!(app.home.arrange);
     app.handle_input(b"\x1b[D");
     assert_ne!(
-        app.zen.focused_kind(),
+        app.home.focused_kind(),
         Some(crate::app::zen::state::TileKind::Chat)
     );
     assert_eq!(app.chat.selected_message_id, None);
@@ -5812,19 +5523,25 @@ async fn zen_chat_keys_belong_to_the_focused_chat_tile() {
         "j with the bonsai focused selects nothing"
     );
 
-    // `i` on the chat tile composes in its room; elsewhere it does nothing.
+    // `i` composes nothing while arranging; done, the focus is back on the
+    // chat tile and `i` composes in its room.
     app.handle_input(b"i");
     assert!(
         !app.chat.composing,
         "i with the bonsai focused composes nothing"
     );
-    app.handle_input(b"\x1b[C");
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(&mut app, |app| !app.home.arrange, "arrange mode").await;
+    assert_eq!(
+        app.home.focused_kind(),
+        Some(crate::app::zen::state::TileKind::Chat)
+    );
     app.handle_input(b"i");
     assert!(app.chat.composing, "i on the focused chat tile composes");
 }
 
 #[tokio::test]
-async fn zen_inbox_enter_opens_an_unread_dm_in_the_first_chat_tile() {
+async fn arranging_home_inbox_enter_opens_an_unread_dm_in_the_first_chat_tile() {
     use crate::app::zen::state::{KindPick, TileKind};
 
     let test_db = new_test_db().await;
@@ -5860,39 +5577,41 @@ async fn zen_inbox_enter_opens_an_unread_dm_in_the_first_chat_tile() {
     let mut app = make_app(test_db.db.clone(), viewer.id, "zen-inbox-flow-it");
     app.resize(160, 40).expect("resize test terminal");
     wait_for_render_contains(&mut app, "lounge").await;
-    app.handle_input(b"\x06");
+    crate::app::zen::input::load_zen_layout(&mut app);
     wait_for_render_contains(&mut app, "w tend").await;
 
-    // The lobby tile becomes an Inbox, which lists the unread DM.
-    app.zen.focus = app
-        .zen
+    // Arranging, the lobby tile becomes an Inbox, which lists the unread
+    // DM.
+    app.handle_input(b"\x06");
+    assert!(app.home.arrange);
+    app.home.focus = app
+        .home
         .first_tile_of(TileKind::Lobby)
         .expect("the default has a lobby");
-    app.zen.open_kind_picker();
-    while app.zen.kind_picker_selection() != Some(TileKind::Inbox) {
-        app.zen.move_kind_picker(1);
+    app.home.open_kind_picker();
+    while app.home.kind_picker_selection() != Some(TileKind::Inbox) {
+        app.home.move_kind_picker(1);
     }
-    assert_eq!(app.zen.pick_kind(), KindPick::Changed);
+    assert_eq!(app.home.pick_kind(), KindPick::Changed);
     wait_for_render_contains(&mut app, "@zen-inbox-peer").await;
 
     app.handle_input(b"\r");
     assert_eq!(
-        app.zen.focused_kind(),
+        app.home.focused_kind(),
         Some(TileKind::Chat),
         "Enter moves the focus to the chat tile"
     );
     assert_eq!(
-        app.zen_chat_room_id(),
+        app.home_chat_room_id(),
         Some(dm.id),
         "the chat tile now shows the DM"
     );
 }
 
-/// A Live tile draws the Live panel's rows on Zen. `s` then the row's
-/// number opens the row from whichever tile has the focus, as the sidebar's
-/// panel does on Home; a stray suffix is swallowed.
+/// A Live tile draws the Live panel's rows on Home. `s` then the row's
+/// number opens the row; a stray suffix is swallowed.
 #[tokio::test]
-async fn zen_s_then_a_digit_opens_the_live_tiles_row_from_any_tile() {
+async fn home_s_then_a_digit_opens_the_live_tiles_row() {
     use crate::app::zen::state::TileKind;
     use late_core::models::article::{Article, ArticleParams};
 
@@ -5923,14 +5642,11 @@ async fn zen_s_then_a_digit_opens_the_live_tiles_row_from_any_tile() {
     let mut app = make_app(test_db.db.clone(), viewer.id, "zen-live-flow-it");
     app.resize(160, 40).expect("resize test terminal");
     wait_for_render_contains(&mut app, "lounge").await;
-    app.handle_input(b"\x06");
+    crate::app::zen::input::load_zen_layout(&mut app);
     wait_for_render_contains(&mut app, "w tend").await;
 
-    // The default's Live tile shows the shared link.
-    app.zen.focus = app
-        .zen
-        .first_tile_of(TileKind::Live)
-        .expect("the default has a live tile");
+    // The zen layout's Live tile shows the shared link.
+    assert!(app.home.shows(TileKind::Live));
     wait_for_render_contains(&mut app, "news    The terminal renaissance").await;
 
     app.handle_input(b"sx");
@@ -5948,24 +5664,10 @@ async fn zen_s_then_a_digit_opens_the_live_tiles_row_from_any_tile() {
         "s1 opens the article"
     );
     assert!(!app.chat.is_composing(), "the key never reaches a composer");
-
-    // `s1` with a chat tile focused opens the same article.
-    app.chat.close_reader();
-    app.zen.focus = app
-        .zen
-        .first_tile_of(TileKind::Chat)
-        .expect("the default has a chat");
-    app.handle_input(b"s1");
-    assert_eq!(
-        app.chat.reader().map(|reader| reader.url()),
-        Some("https://example.com/terminal-renaissance"),
-        "s1 opens the article from a chat tile"
-    );
-    assert!(!app.chat.is_composing(), "the key never reaches a composer");
 }
 
 #[tokio::test]
-async fn zen_clicks_under_the_open_tile_picker_reach_nothing() {
+async fn home_clicks_under_the_open_tile_picker_reach_nothing() {
     use crate::app::zen::state::TileKind;
     use late_core::models::article::{Article, ArticleParams};
 
@@ -5996,22 +5698,24 @@ async fn zen_clicks_under_the_open_tile_picker_reach_nothing() {
     let mut app = make_app(test_db.db.clone(), viewer.id, "zen-picker-click-flow-it");
     app.resize(160, 40).expect("resize test terminal");
     wait_for_render_contains(&mut app, "lounge").await;
-    app.handle_input(b"\x06");
+    crate::app::zen::input::load_zen_layout(&mut app);
     wait_for_render_contains(&mut app, "w tend").await;
 
-    app.zen.focus = app
-        .zen
+    app.handle_input(b"\x06");
+    assert!(app.home.arrange);
+    app.home.focus = app
+        .home
         .first_tile_of(TileKind::Live)
         .expect("the default has a live tile");
     wait_for_render_contains(&mut app, "Under the picker").await;
-    let live = app.zen.focus;
+    let live = app.home.focus;
 
     // The picker is up over the page. The Live tile under it still records
     // its rows' click rect, but a click there belongs to the picker:
     // nothing opens and the focus stays put, so the picker converts the
     // tile it opened on.
     app.handle_input(b" ");
-    assert!(app.zen.kind_picker.is_some(), "space opens the picker");
+    assert!(app.home.kind_picker.is_some(), "space opens the picker");
     render_plain(&mut app);
     let (rows, _) = app
         .live
@@ -6026,11 +5730,11 @@ async fn zen_clicks_under_the_open_tile_picker_reach_nothing() {
         None,
         "a click under the picker opens nothing"
     );
-    assert!(app.zen.kind_picker.is_some(), "the picker stays up");
-    assert_eq!(app.zen.focus, live, "the focus stays under the picker");
+    assert!(app.home.kind_picker.is_some(), "the picker stays up");
+    assert_eq!(app.home.focus, live, "the focus stays under the picker");
 
     // With the picker closed the same click opens the article.
-    app.zen.close_kind_picker();
+    app.home.close_kind_picker();
     render_plain(&mut app);
     app.handle_input(click.as_bytes());
     assert_eq!(
@@ -6041,7 +5745,7 @@ async fn zen_clicks_under_the_open_tile_picker_reach_nothing() {
 }
 
 #[tokio::test]
-async fn zen_a_draft_stays_in_its_room_when_the_focus_moves() {
+async fn home_a_draft_stays_in_its_room_when_the_focus_moves() {
     use crate::app::zen::state::TileKind;
 
     let test_db = new_test_db().await;
@@ -6063,20 +5767,25 @@ async fn zen_a_draft_stays_in_its_room_when_the_focus_moves() {
     let mut app = make_app(test_db.db.clone(), viewer.id, "zen-draft-flow-it");
     app.resize(160, 40).expect("resize test terminal");
     wait_for_render_contains(&mut app, "zen-quiet").await;
-    app.handle_input(b"\x06");
+    crate::app::zen::input::load_zen_layout(&mut app);
     wait_for_render_contains(&mut app, "w tend").await;
 
-    // A second chat tile beside the default one, bound to the second room;
-    // the first keeps the current room, #lounge.
+    // A second chat tile beside the zen layout's, bound to the second
+    // room; the first is bound to #lounge.
     let first = app
-        .zen
+        .home
         .first_tile_of(TileKind::Chat)
         .expect("the default has a chat");
-    assert_eq!(app.zen.focus, first);
-    assert!(app.zen.split_focused(true));
-    let second = app.zen.focus;
-    assert!(app.zen.rice.root.set_kind(second, TileKind::Chat));
-    assert!(app.zen.bind_active_chat_room(Some(quiet.id)));
+    assert_eq!(app.home.focus, first);
+    assert!(crate::app::zen::input::bind_active_chat_to_room(
+        &mut app, lounge.id
+    ));
+    assert!(app.home.split_focused(true));
+    let second = app.home.focus;
+    assert!(app.home.rice.root.set_kind(second, TileKind::Chat));
+    assert!(crate::app::zen::input::bind_active_chat_to_room(
+        &mut app, quiet.id
+    ));
 
     // A draft written in the second tile, then a click on the first: the
     // draft is closed rather than carried under #lounge, where Enter would
@@ -6085,16 +5794,8 @@ async fn zen_a_draft_stays_in_its_room_when_the_focus_moves() {
     app.handle_input(b"secret");
     assert!(app.chat.composing);
     assert_eq!(app.chat.composer_room_id(), Some(quiet.id));
-    let (cols, rows) = app.size;
-    let page = ratatui::layout::Rect::new(0, 0, cols, rows);
-    let (tiles_area, _) =
-        crate::app::zen::layout::rice_areas(page, crate::app::zen::layout::rice_fits(page));
-    let rects = crate::app::zen::layout::tile_rects(
-        &app.zen.rice.root,
-        tiles_area,
-        crate::app::zen::layout::Gaps::uniform(app.zen.rice.look.gap as u16),
-    );
-    let (_, rect) = rects[first];
+    render_plain(&mut app);
+    let (_, rect, _) = app.home_tile_rects()[first];
     let click = format!(
         "\x1b[<0;{};{}M",
         rect.x + rect.width / 2 + 1,
@@ -6102,7 +5803,7 @@ async fn zen_a_draft_stays_in_its_room_when_the_focus_moves() {
     );
     app.handle_input(click.as_bytes());
     assert_eq!(
-        app.zen.focus, first,
+        app.home.focus, first,
         "the click focused the first chat tile"
     );
     assert!(
@@ -6120,63 +5821,11 @@ async fn zen_a_draft_stays_in_its_room_when_the_focus_moves() {
 }
 
 #[tokio::test]
-async fn zen_petting_the_pet_leaves_the_focus_on_the_chat() {
-    use crate::app::hub::shop::{
-        entitlements::ShopEntitlements, state::ShopState, svc::ShopSnapshot,
-    };
-    use crate::app::zen::state::TileKind;
-    use late_core::models::marketplace::PET_COMPANION_SKU;
-    use late_core::models::pet::PetMood;
-
-    let test_db = new_test_db().await;
-    let viewer = create_test_user(&test_db.db, "zen-pet-viewer").await;
-    let client = test_db.db.get().await.expect("db client");
-    let lounge = ChatRoom::ensure_lounge(&client)
-        .await
-        .expect("ensure lounge room");
-    ChatRoomMember::join(&client, lounge.id, viewer.id)
-        .await
-        .expect("join lounge");
-
-    let mut app = make_app(test_db.db.clone(), viewer.id, "zen-pet-flow-it");
-    app.shop_state = ShopState::for_test_snapshot(ShopSnapshot {
-        entitlements: ShopEntitlements::from_owned_skus([PET_COMPANION_SKU.to_string()]),
-        ..Default::default()
-    });
-    app.resize(160, 40).expect("resize test terminal");
-    wait_for_render_contains(&mut app, "lounge").await;
-    app.handle_input(b"\x06");
-    wait_for_render_contains(&mut app, "w tend").await;
-
-    let chat = app
-        .zen
-        .first_tile_of(TileKind::Chat)
-        .expect("the default has a chat");
-    assert_eq!(app.zen.focus, chat, "the page opens on its chat tile");
-
-    // The pet sits on the rail, in a tile of its own. Petting it is a
-    // passing gesture: the keys stay with the chat.
-    let pet = app.last_pet_rect.get().expect("the pet drew on its tile");
-    let click = format!("\x1b[<0;{};{}M", pet.x + 1, pet.y + 1);
-    app.handle_input(click.as_bytes());
-    assert_eq!(
-        app.zen.focus, chat,
-        "petting the pet leaves the focus on the chat tile"
-    );
-    render_plain(&mut app);
-    assert_eq!(
-        app.pet_state.mood(),
-        PetMood::Purring,
-        "the click landed on the pet"
-    );
-}
-
-#[tokio::test]
 async fn home_pet_tile_is_petted_without_moving_the_focus() {
     use crate::app::hub::shop::{
         entitlements::ShopEntitlements, state::ShopState, svc::ShopSnapshot,
     };
-    use crate::app::zen::state::{Dir, Look, Node, RiceLayout, RicePage, TileKind, ZenState};
+    use crate::app::zen::state::{Dir, Look, Node, RiceLayout, TileKind, ZenState};
     use late_core::models::marketplace::PET_COMPANION_SKU;
     use late_core::models::pet::PetMood;
 
@@ -6212,12 +5861,12 @@ async fn home_pet_tile_is_petted_without_moving_the_focus() {
         ),
         look: Look::default(),
     };
-    app.home = ZenState::for_page(RicePage::Home, arranged.clone(), arranged);
+    app.home = ZenState::new(arranged.clone(), arranged);
     app.resize(cols, rows).expect("resize test terminal");
     wait_for_render_contains(&mut app, "── pet").await;
 
-    // The pet sits on Home's rail in a tile of its own, as on Zen. Petting
-    // it is a passing gesture: the keys stay with the chat.
+    // The pet sits on Home's rail in a tile of its own. Petting it is a
+    // passing gesture: the keys stay with the chat.
     let center = app
         .home
         .first_tile_of(TileKind::Chat)
@@ -6239,7 +5888,7 @@ async fn home_pet_tile_is_petted_without_moving_the_focus() {
 }
 
 #[tokio::test]
-async fn zen_every_chat_tile_keeps_its_composer_whatever_is_focused() {
+async fn home_every_chat_tile_keeps_its_composer_whatever_is_focused() {
     use crate::app::zen::state::TileKind;
 
     let test_db = new_test_db().await;
@@ -6261,17 +5910,19 @@ async fn zen_every_chat_tile_keeps_its_composer_whatever_is_focused() {
     let mut app = make_app(test_db.db.clone(), viewer.id, "zen-composer-flow-it");
     app.resize(160, 40).expect("resize test terminal");
     wait_for_render_contains(&mut app, "lounge").await;
-    app.handle_input(b"\x06");
+    crate::app::zen::input::load_zen_layout(&mut app);
     wait_for_render_contains(&mut app, "w tend").await;
 
     let first = app
-        .zen
+        .home
         .first_tile_of(TileKind::Chat)
         .expect("the default has a chat");
-    assert!(app.zen.split_focused(true));
-    let second = app.zen.focus;
-    assert!(app.zen.rice.root.set_kind(second, TileKind::Chat));
-    assert!(app.zen.bind_active_chat_room(Some(quiet.id)));
+    assert!(app.home.split_focused(true));
+    let second = app.home.focus;
+    assert!(app.home.rice.root.set_kind(second, TileKind::Chat));
+    assert!(crate::app::zen::input::bind_active_chat_to_room(
+        &mut app, quiet.id
+    ));
 
     // Both tiles carry a composer, and walking the focus moves nothing:
     // an input box that comes and goes is the layout jumping under you.
@@ -6292,7 +5943,7 @@ async fn zen_every_chat_tile_keeps_its_composer_whatever_is_focused() {
         "only the live composer names the chat keys; frame={frame:?}"
     );
 
-    app.zen.focus = first;
+    app.home.focus = first;
     crate::app::zen::input::focus_moved(&mut app);
     let frame = render_plain(&mut app);
     assert_eq!(
@@ -6305,11 +5956,11 @@ async fn zen_every_chat_tile_keeps_its_composer_whatever_is_focused() {
     );
 }
 
-/// `[` `]` on a Zen chat tile walk the rooms in the rail's order, top to
-/// bottom, not the order they were loaded in: Core's fixed order puts
+/// `[` `]` on a chat tile in arrange mode walk the rooms in the rail's
+/// order, top to bottom, not the order they were loaded in: Core's fixed order puts
 /// suggestions before bugs, though bugs loads first alphabetically.
 #[tokio::test]
-async fn zen_brackets_cycle_rooms_in_rail_order() {
+async fn home_arrange_brackets_cycle_rooms_in_rail_order() {
     use crate::app::zen::state::TileKind;
 
     let test_db = new_test_db().await;
@@ -6342,28 +5993,30 @@ async fn zen_brackets_cycle_rooms_in_rail_order() {
     let mut app = make_app(test_db.db.clone(), viewer.id, "zen-cycle-flow-it");
     app.resize(160, 40).expect("resize test terminal");
     wait_for_render_contains(&mut app, "zen-cycle").await;
-    app.handle_input(b"\x06");
+    crate::app::zen::input::load_zen_layout(&mut app);
     wait_for_render_contains(&mut app, "w tend").await;
-    assert_eq!(app.zen.focused_kind(), Some(TileKind::Chat));
-    assert_eq!(app.zen_chat_room_id(), Some(lounge));
+    app.handle_input(b"\x06");
+    assert!(app.home.arrange);
+    assert_eq!(app.home.focused_kind(), Some(TileKind::Chat));
+    assert_eq!(app.home_chat_room_id(), Some(lounge));
 
     let mut forward = Vec::new();
     for _ in 0..4 {
         app.handle_input(b"]");
-        forward.push(app.zen_chat_room_id().expect("bound room"));
+        forward.push(app.home_chat_room_id().expect("bound room"));
     }
     assert_eq!(forward, vec![suggestions, bugs, channel, lounge]);
 
     app.handle_input(b"[");
     assert_eq!(
-        app.zen_chat_room_id(),
+        app.home_chat_room_id(),
         Some(channel),
         "[ wraps to the bottom"
     );
 }
 
 #[tokio::test]
-async fn zen_room_picker_binds_the_focused_chat_tile_and_slash_picker_opens_it() {
+async fn slash_picker_opens_the_room_picker_and_the_pick_moves_homes_chat() {
     use crate::app::common::primitives::Screen;
     use crate::app::zen::state::TileKind;
 
@@ -6387,13 +6040,13 @@ async fn zen_room_picker_binds_the_focused_chat_tile_and_slash_picker_opens_it()
     app.resize(160, 40).expect("resize test terminal");
     wait_for_render_contains(&mut app, "zen-picked").await;
     let home_selection = app.chat.selected_room_id;
-    app.handle_input(b"\x06");
+    crate::app::zen::input::load_zen_layout(&mut app);
     wait_for_render_contains(&mut app, "w tend").await;
-    assert_eq!(app.zen.focused_kind(), Some(TileKind::Chat));
+    assert_eq!(app.home.focused_kind(), Some(TileKind::Chat));
     assert_eq!(
-        app.zen.active_chat_room(),
+        app.home.active_chat_room(),
         Some(None),
-        "the default chat tile follows Home's selection"
+        "the stock zen chat tile follows Home's selection"
     );
 
     // `/picker` from the tile's composer opens the same modal as Ctrl+/.
@@ -6403,44 +6056,23 @@ async fn zen_room_picker_binds_the_focused_chat_tile_and_slash_picker_opens_it()
         "/picker opens the room picker"
     );
 
-    // A room picked with a chat tile focused binds that tile, like [ ]:
-    // the page stays up and Home's selection is untouched.
+    // The pick moves the rail, and the page's chat shows the room.
     app.handle_input(b"zen-picked\r");
     assert!(
         !app.room_search_modal_state.is_open(),
         "the pick closes the picker"
     );
-    assert_eq!(app.screen, Screen::Zen, "the pick stays on Zen");
-    assert_eq!(
-        app.zen.active_chat_room(),
-        Some(Some(quiet.id)),
-        "the focused chat tile is bound to the picked room"
-    );
-    assert_eq!(app.zen_chat_room_id(), Some(quiet.id));
+    assert_eq!(app.screen, Screen::Dashboard, "the pick stays on Home");
+    assert_eq!(app.home_chat_room_id(), Some(quiet.id));
     assert_eq!(
         app.chat.selected_room_id,
         Some(quiet.id),
         "the rail follows the active chat tile; it was on {home_selection:?}"
     );
-
-    // With the focus off the chat tiles the pick is still the active
-    // tile's, the first chat on the page: it rebinds it and the rail
-    // follows.
-    app.handle_input(b"\x1b[D");
-    assert_ne!(app.zen.focused_kind(), Some(TileKind::Chat));
-    app.handle_input(b"\x1f");
-    assert!(
-        app.room_search_modal_state.is_open(),
-        "Ctrl+/ opens the picker"
-    );
-    app.handle_input(b"lounge\r");
-    assert_eq!(app.screen, Screen::Zen);
-    assert_eq!(app.zen.active_chat_room(), Some(Some(lounge.id)));
-    assert_eq!(app.chat.selected_room_id, Some(lounge.id));
 }
 
 #[tokio::test]
-async fn zen_space_opens_a_tile_picker_that_owns_the_keys_until_a_pick_or_esc() {
+async fn home_arrange_space_opens_a_tile_picker_that_owns_the_keys_until_a_pick_or_esc() {
     use crate::app::common::primitives::Screen;
     use crate::app::zen::state::TileKind;
 
@@ -6456,14 +6088,16 @@ async fn zen_space_opens_a_tile_picker_that_owns_the_keys_until_a_pick_or_esc() 
     let mut app = make_app(test_db.db.clone(), user.id, "zen-tile-picker-flow-it");
     app.resize(160, 40).expect("resize test terminal");
     wait_for_render_contains(&mut app, " Home ").await;
-    app.handle_input(b"\x06");
+    crate::app::zen::input::load_zen_layout(&mut app);
     wait_for_render_contains(&mut app, "w tend").await;
-    assert_eq!(app.zen.focused_kind(), Some(TileKind::Chat));
-    let tiles = app.zen.leaf_count();
+    app.handle_input(b"\x06");
+    assert!(app.home.arrange);
+    assert_eq!(app.home.focused_kind(), Some(TileKind::Chat));
+    let tiles = app.home.leaf_count();
 
     // Space opens the list on the tile's own kind, and names it.
     app.handle_input(b" ");
-    assert_eq!(app.zen.kind_picker_selection(), Some(TileKind::Chat));
+    assert_eq!(app.home.kind_picker_selection(), Some(TileKind::Chat));
     let frame = render_plain(&mut app);
     assert!(
         frame.contains(" tile ") && frame.contains("current") && frame.contains("visualizer"),
@@ -6478,19 +6112,19 @@ async fn zen_space_opens_a_tile_picker_that_owns_the_keys_until_a_pick_or_esc() 
     app.handle_input(b"S");
     app.handle_input(b"q");
     assert_eq!(
-        app.zen.leaf_count(),
+        app.home.leaf_count(),
         tiles,
         "S under the picker splits nothing"
     );
     assert!(!app.show_quit_confirm, "q under the picker quits nothing");
-    assert!(app.zen.kind_picker.is_some());
+    assert!(app.home.kind_picker.is_some());
 
     // One row down and Enter: the tile is a clock, the picker is gone.
     app.handle_input(b"j");
     app.handle_input(b"\r");
-    assert!(app.zen.kind_picker.is_none(), "a pick closes the picker");
-    assert_eq!(app.zen.focused_kind(), Some(TileKind::Clock));
-    assert_eq!(app.screen, Screen::Zen);
+    assert!(app.home.kind_picker.is_none(), "a pick closes the picker");
+    assert_eq!(app.home.focused_kind(), Some(TileKind::Clock));
+    assert_eq!(app.screen, Screen::Dashboard);
 
     // Esc closes it without a change and stays on the page.
     app.handle_input(b" ");
@@ -6498,16 +6132,13 @@ async fn zen_space_opens_a_tile_picker_that_owns_the_keys_until_a_pick_or_esc() 
     app.handle_input(b"\x1b");
     wait_for_esc_effect(
         &mut app,
-        |app| app.zen.kind_picker.is_none(),
+        |app| app.home.kind_picker.is_none(),
         "esc closes the tile picker",
     )
     .await;
-    assert_eq!(app.zen.focused_kind(), Some(TileKind::Clock));
-    assert_eq!(
-        app.screen,
-        Screen::Zen,
-        "Esc under the picker does not leave Zen"
-    );
+    assert_eq!(app.home.focused_kind(), Some(TileKind::Clock));
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert!(app.home.arrange, "Esc under the picker keeps the mode");
 }
 
 #[tokio::test]
@@ -7586,53 +7217,6 @@ async fn profiles_mouse_search_selects_person_and_profile_popup_owns_input() {
     app.handle_input(b"\x1b[<0;15;1M");
     assert_eq!(app.screen, Screen::Profiles, "popup blocks page switches");
     assert!(!app.show_profile_modal, "outside click dismisses the popup");
-}
-
-/// On Zen too, any key after `s` is swallowed, whichever tile has the
-/// focus: with the Inbox focused, `s` then `j` moves nothing and leaves
-/// nothing armed, so a digit typed later opens no Live row.
-#[tokio::test]
-async fn zen_swallows_the_key_after_the_live_prefix_from_a_focused_inbox() {
-    use crate::app::zen::state::{KindPick, TileKind};
-
-    let test_db = new_test_db().await;
-    let viewer = create_test_user(&test_db.db, "zen-prefix-inbox").await;
-    let client = test_db.db.get().await.expect("db client");
-    let lounge = ChatRoom::ensure_lounge(&client)
-        .await
-        .expect("ensure lounge room");
-    ChatRoomMember::join(&client, lounge.id, viewer.id)
-        .await
-        .expect("join lounge");
-    let mut app = make_app(test_db.db.clone(), viewer.id, "zen-prefix-inbox-it");
-    app.resize(160, 40).expect("resize test terminal");
-    wait_for_render_contains(&mut app, "lounge").await;
-    app.handle_input(b"\x06");
-    wait_for_render_contains(&mut app, "w tend").await;
-
-    // Turn the Lobby tile into the Inbox and focus it; the Live tile stays.
-    app.zen.focus = app
-        .zen
-        .first_tile_of(TileKind::Lobby)
-        .expect("the default has a lobby");
-    app.zen.open_kind_picker();
-    while app.zen.kind_picker_selection() != Some(TileKind::Inbox) {
-        app.zen.move_kind_picker(1);
-    }
-    assert_eq!(app.zen.pick_kind(), KindPick::Changed);
-    assert_eq!(app.zen.focused_kind(), Some(TileKind::Inbox));
-    assert!(
-        app.zen.shows(TileKind::Live),
-        "the live tile is still drawn"
-    );
-
-    app.handle_input(b"s");
-    assert!(app.live_prefix_armed, "s arms the prefix");
-    app.handle_input(b"j");
-    assert!(
-        !app.live_prefix_armed,
-        "j is swallowed and spends the prefix"
-    );
 }
 
 /// `/map` typed into a composer lands on the People page, on its Map

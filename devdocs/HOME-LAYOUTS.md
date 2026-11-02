@@ -1,7 +1,8 @@
 # Home layouts (design)
 
-Home and Zen become one page. Home stays exactly as it is for anyone who
-never touches it; underneath, it is a tile tree like Zen's, and a chord
+Home and Zen are one page: Zen is Home's stock layout `zen`, not a screen.
+Home stays exactly as it is for anyone who never touches it; underneath,
+it is a tile tree, and a chord
 switches the keys into arrange mode on the page you are already on. The
 code it talks about is `late-ssh/src/app/zen` (the tree, `state.rs`,
 `layout.rs`), the Home arm of `late-ssh/src/app/render.rs`, the sidebar in
@@ -13,15 +14,21 @@ What is in the code now, and where it stops short of the sections below
 (the current state lives in `late-ssh/src/app/zen/CONTEXT.md`; this is the
 delta against the design):
 
-- Home renders through the tree (`RicePage::Home`, `App::home`), with the
-  stock Home fixed: the rail, the reef over the chat, and the sidebar
-  column (presence, music, lobby, live, bonsai, pet). `Ctrl+F` is Home's
-  layouts chord (arrange mode, then a digit or `L`), and `Ctrl+E` still
-  enters arrange mode too. The Zen screen is still in the code, reached by
-  `/zen`, the status line click, the tour and "Land on"; `Ctrl+F` on it
-  still hands back. Its tree is also Home's stock layout 2, so the screen,
-  `zen_return_screen`, the workspace base dance and the tour stop are the
-  migration still to do.
+- Home renders through the tree (`App::home`), with the stock Home fixed:
+  the rail, the reef over the chat, and the sidebar column (presence,
+  music, lobby, live, bonsai, pet). `Ctrl+F` is Home's layouts chord
+  (arrange mode, then a digit or `L`), and `Ctrl+E` enters arrange mode
+  too. There is no Zen screen: its tree is the stock layout `zen`
+  (layout 2), which `/zen` (`/layout zen`) and the status line's care
+  click load, Home first; a device that renamed or deleted it gets the
+  `No layout by that name or number` banner. The tour has no Zen stop
+  (Calendars walks home to the lounge), Settings "Land on" is Clubhouse or
+  Home (a stored `zen` lands in the Clubhouse and switches no layout), and
+  the backtick cycle's base is always Home.
+- Arrange mode also takes the tile keys the Zen screen had: `j` `k` and
+  Enter on attention, the Inbox and Headlines, `[` `]` and Enter on an
+  ascii tile, `a` on the reef or tank. Outside it the furniture takes no
+  keys.
 - Static kinds `rooms`, `presence` and `tank` exist (the tank is the
   aquarium's small form as its own kind, the stock sidebar's; the
   `aquarium` kind is the reef alone); there is no `center` kind.
@@ -29,23 +36,23 @@ delta against the design):
   the first) is the page's chat, draws Home's card with the synthetic
   views, and the rail shows its room (a stored `center` reads as `chat`).
   The cut list (pulse, friends, activity, visualizer, blank) is not cut:
-  Zen keeps them.
+  they stay tile kinds.
 - Guests are the two that end, now and attention (`+` on a tile, one a
   tile), and a guest takes its host over while it is up. The live panel
   is a tile kind only; the board's day is the chat card's own row.
 - Fixed splits (`Share::First` / `Share::Second`) carry the rails; the Fit
   shares are not built.
-- Chat tiles on Home bind rooms as on Zen: a tile that becomes a chat is
+- Chat tiles on Home bind rooms: a tile that becomes a chat is
   pinned to the room of the moment, the rail steers the active tile and
   follows the focus onto another. The MyStream binding is not built.
 - Named layouts as below (`zen/presets.rs`): nine per device on the key
   (`user_ssh_keys.settings.home_layouts`), stock `home` and `zen`,
   `Ctrl+F` digit, the `L` list with save, rename, delete and reset,
   `/layout`. `R` in the list resets a layout to the stock its name says
-  (`zen` to Zen's page), not always to stock Home. The status line
+  (`zen` to the stock `zen`), not always to stock Home. The status line
   `layout` component is not built. A key with no `home_layouts` seeds the
-  set from its `home_layout` and `zen_layout`; the Zen screen still reads
-  and writes `zen_layout` on its own.
+  set from its `home_layout` and `zen_layout`; nothing writes either any
+  more.
 - The border is the layout's: a border of `none` draws Home's rules, any
   other boxes the page in its look (`b` cycles them in arrange mode; the
   stock `zen` is boxed). There is no separate `f` frame key.
@@ -88,25 +95,25 @@ hold focus. Every other tile is furniture: drawn, clickable for its one
 gesture (pet, feed, a live row, a lobby row), never focused. A click on
 furniture performs the gesture and leaves the focus where it was, the way
 the pet click already does (`handle_pet_click` runs before
-`focus_zen_tile_at`). Typing always lands in the active chat. There is no
+`focus_home_tile_at`). Typing always lands in the active chat. There is no
 "chat lock" mode because there is nothing to lock: it is how the page
 works.
 
 **Arrange mode is where the layout keys live.** `Ctrl+F` enters it; Esc or
 `Ctrl+F` leaves it. In arrange mode the focused tile gets a ring, the
-arrows walk every tile including furniture, and the Zen layout keys edit
-the tree. Outside it the keys are Home's keys, unchanged. Tab stays the
-page cycle everywhere, so the Tab conflict Zen carries today is gone;
-focus between several chat tiles moves in arrange mode.
+arrows and Tab walk every tile including furniture, and the layout keys
+edit the tree. Outside it the keys are Home's keys, unchanged, and Tab is
+the page cycle; focus between several chat tiles moves in arrange mode or
+by a click.
 
 **The frame stays.** Tabs, both status bars and the sponsor line are the
-frame, and the tiles live inside it. A frameless look is a toggle on the
-layout for people who want the Zen feel. Zen's own status row
-(`build_zen_status_row`) goes away with the screen.
+frame, and the tiles live inside it. A boxed look is a toggle on the
+layout for people who want the Zen feel. The page has no status row of
+its own.
 
 ## The look: Home's, everywhere
 
-Boxed tiles eat two rows and two columns each; on a Zen page of eight
+Boxed tiles eat two rows and two columns each; on a page of eight boxed
 tiles that is a sidebar's worth of screen. Home draws no boxes: a vertical
 rule between columns, a `── music ──` title rule above a panel, one column
 of air after the rule. That is the one look, for every tile, in every
@@ -123,7 +130,7 @@ layout.
   `── now ──` rule are the chat's chrome, as today.
 
 `Look` keeps `frame: bool` and nothing else. `BorderKind`, `gap` and
-`titles`, and their keys `b` `g` `t`, are cut. A stored Zen layout's look
+`titles`, and their keys `b` `g` `t`, are cut. A stored `zen_layout`'s look
 is ignored on migration.
 
 ## Tiles
@@ -132,20 +139,20 @@ is ignored on migration.
 
 Always drawn. The closed `TileKind` becomes:
 
-| Kind | What it is | Today |
+| Kind | What it is | Drawn before as |
 |---|---|---|
-| `chat` | A room, with the composer when active | Zen chat tile |
+| `chat` | A room, with the composer when active | a chat tile |
 | `center` | Home's chat center: the selected rail entry, synthetic views included, the strip and the banner inserted at the top | `draw_chat_center` / `draw_dashboard_chat_card` |
 | `rooms` | The room rail with its sections, counts and nav hints | `draw_room_list_rail` |
-| `aquarium` | The reef, or the shop note | Zen tile |
+| `aquarium` | The reef, or the shop note | a tile |
 | `tank` | The sidebar's small tank, the same aquarium in a six-row band | sidebar Tank |
-| `bonsai` | The 81x26 canvas, cut to fit | Zen tile, sidebar Bonsai |
-| `pet` | The box | Zen tile, sidebar Pet |
+| `bonsai` | The 81x26 canvas, cut to fit | a tile, sidebar Bonsai |
+| `pet` | The box | a tile, sidebar Pet |
 | `music` | The full stage: equalizer, volume, stations, the v keys | sidebar Music |
-| `clock` | Block digits, the date under seven rows or more | Zen tile |
-| `ascii` | An animated piece | Zen tile |
-| `inbox` | Unread DMs, then mentions | Zen tile |
-| `headlines` | News and feeds merged | Zen tile |
+| `clock` | Block digits, the date under seven rows or more | a tile |
+| `ascii` | An animated piece | a tile |
+| `inbox` | Unread DMs, then mentions | a tile |
+| `headlines` | News and feeds merged | a tile |
 
 The sidebar's pinned rows (online count, clock, friends) are the top of
 the stock sidebar column and not a kind of their own: they draw at the
@@ -191,7 +198,7 @@ them in the rule, `reef +now +attention`), and a guest is on the page
 once, so the
 `s` prefix and the clicks have one target. Clicks on the strip work as
 on its panel; attention has rows instead, `j` `k` and Enter where tile
-keys run (Zen, Home's arrange mode). Guests never take focus.
+keys run (Home's arrange mode). Guests never take focus.
 
 The `chat` tile is the one host that inserts instead of taking over: the
 strip on the page's chat pushes the messages down, which is the strip's
@@ -217,12 +224,12 @@ A chat tile binds to one of a closed set, replacing `room: Option<Uuid>`:
   the first `/golive` and across a rename.
 
 A `center` tile is `Current` by definition and draws the synthetic views;
-a `chat` tile draws real rooms only, as Zen's does. `MAX_CHAT_TILES` (10)
+a `chat` tile draws real rooms only. `MAX_CHAT_TILES` (10)
 stays.
 
 ## The tree
 
-Zen's binary split tree (`Node`, `Dir`, per-mille `share`) is kept. Two
+The binary split tree (`Node`, `Dir`, per-mille `share`) is kept. Two
 changes:
 
 - **Fit shares.** `share` becomes a closed enum: a per-mille value, or
@@ -253,8 +260,8 @@ is a tree plus its look. Stored on `user_ssh_keys.settings`, the account's
 Stock, on every device:
 
 1. `home`: today's Home, the default.
-2. `zen`: today's Zen default (the reef and the bonsai over one chat, the
-   clock, pet, lobby, live and music rail), frameless.
+2. `zen`: the reef and the bonsai over one chat, the clock, pet, lobby,
+   live and music rail, boxed: the page the Zen screen drew.
 
 Switching:
 
@@ -274,25 +281,24 @@ guests cover "show me when it matters" without moving anything the reader
 is holding. A streamer who wants #lounge beside their stream room saves a
 `stream` layout and presses `Ctrl+F 3`.
 
-The Settings landing page keeps Clubhouse and Home; "Zen" there becomes
-"Home, layout N".
+The Settings landing page keeps Clubhouse and Home; a stored "Zen" lands
+in the Clubhouse, and login never switches a layout.
 
 ## Keys
 
-Outside arrange mode: Home's keys, exactly. `Ctrl+F` enters arrange mode
-instead of leaving for Zen.
+Outside arrange mode: Home's keys, exactly. `Ctrl+F` enters arrange mode.
 
 Arrange mode:
 
 | Key | Does |
 |---|---|
 | arrows, Tab, Shift+Tab | move the focus, every tile |
-| `S` `X` `F` | split, close, flip, as Zen |
-| `<` `>` `{` `}` | resize, as Zen; refused on a fit split |
+| `S` `X` `F` | split, close, flip |
+| `<` `>` `{` `}` | resize; refused on a fit split |
 | `space` | the kind picker over the focused tile |
 | `+` | the guest list over the focused tile: the four dynamic kinds, a check beside the placed ones, toggled in place |
 | `t` | the focused tile's title rule on or off, its own say from then on (the rail, presence and the page's chat start bare, the rest with a rule) |
-| `[` `]` | a chat tile walks the rail's rooms, an ascii tile its pieces, as Zen |
+| `[` `]` | a chat tile walks the rail's rooms, an ascii tile its pieces |
 | `b` | the border: none is Home's rules, the rest box the page in its look |
 | `1`..`9` | load that layout and leave arrange mode |
 | `L` | the layouts list |
@@ -322,8 +328,9 @@ Zen ever earned.
   left out. The list and the rail modes are then dead keys, dropped on
   read the way `activity` and `pot` are today.
 - `Screen::Zen`, `zen_return_screen`, the workspace base dance in
-  `input.rs::zen_return_screen` and the tour's `VisitZen` stop go away.
-  The tour stop becomes a `Ctrl+F` stop on Home.
+  `input.rs::zen_return_screen` and the tour's `VisitZen` stop are gone
+  (built). The tour stop was dropped rather than made a `Ctrl+F` stop on
+  Home, so a newcomer's layout never changes under them.
 
 ## What this costs
 
@@ -353,7 +360,7 @@ refused with a message. It would make layouts shareable in chat
 
 ## Build order
 
-1. Chat lock and arrange mode inside Zen as it is today. Shippable alone,
+1. Chat lock and arrange mode inside the Zen screen. Shippable alone,
    and it tells whether the two complaints were the real reason.
 2. Fit shares and the one look.
 3. The `center`, `rooms`, `music` kinds and the stock `home` tree behind
@@ -361,4 +368,5 @@ refused with a message. It would make layouts shareable in chat
 4. Guests, `now` on the reef and `lobby` wherever its owner puts it.
 5. Layouts per device, the stock `zen`, `Ctrl+F` digit, the list,
    `/layout`.
-6. Migration, the contexts, the help topic, the tips.
+6. Migration, the contexts, the help topic, the tips. Built: the Zen
+   screen is gone (see Built: v1).

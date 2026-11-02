@@ -336,7 +336,7 @@ async fn random_screensavers_end_on_wake_and_restart_on_next_activation() {
 }
 
 #[tokio::test]
-async fn zen_navigation_and_overlays_preserve_only_the_current_visit() {
+async fn home_navigation_and_overlays_preserve_only_the_current_visit() {
     use crate::app::common::primitives::Screen;
     use crate::app::zen::state::{Node, RiceLayout, TileKind, ZenState};
     use late_core::models::user::AsciiSelection;
@@ -347,35 +347,40 @@ async fn zen_navigation_and_overlays_preserve_only_the_current_visit() {
         ..RiceLayout::default()
     };
     layout.root.set_selection(0, AsciiSelection::Random);
-    app.zen = ZenState::new(layout);
-    app.set_screen(Screen::Zen);
-    let initial = app.zen.focused_piece().expect("resolved before rendering");
-    let saved = app.zen.rice.to_json();
+    // Off Home and back, so the visit starts with this layout up.
+    app.set_screen(Screen::Arcade);
+    app.home = ZenState::new(layout, RiceLayout::default());
+    app.set_screen(Screen::Dashboard);
+    let initial = app.home.focused_piece().expect("resolved before rendering");
+    let saved = app.home.rice.to_json();
     app.show_help = true;
     app.render().unwrap();
     app.show_help = false;
     app.resize(120, 40).unwrap();
     app.render().unwrap();
-    assert_eq!(app.zen.focused_piece(), Some(initial));
-    assert!(!app.zen_layout_dirty);
+    assert_eq!(app.home.focused_piece(), Some(initial));
+    assert!(!app.home_layout_dirty);
+    app.set_screen(Screen::Arcade);
+    assert_eq!(app.home.focused_piece(), None, "the visit ended");
     app.set_screen(Screen::Dashboard);
-    assert_eq!(app.zen.focused_piece(), None, "the visit ended");
-    app.set_screen(Screen::Zen);
-    assert!(app.zen.focused_piece().is_some());
-    assert_eq!(app.zen.rice.to_json(), saved);
-    assert!(!app.zen_layout_dirty);
-    // The picker highlights the configured mode and applies a new one before
-    // the next frame; returning to the same mode leaves the instance alone.
+    assert!(app.home.focused_piece().is_some());
+    assert_eq!(app.home.rice.to_json(), saved);
+    assert!(!app.home_layout_dirty);
+    // In arrange mode, Enter on the tile opens the picker on the configured
+    // mode, which applies a new one before the next frame; returning to the
+    // same mode leaves the instance alone.
+    app.handle_input(b"\x06");
+    assert!(app.home.arrange);
     app.handle_input(b"\r");
     assert!(app.piece_picker.is_open());
     assert_eq!(app.piece_picker.selected(), AsciiSelection::Random);
     app.handle_input(b"j");
     app.handle_input(b"\r");
-    assert_eq!(app.zen.focused_selection(), Some(AsciiSelection::Randomer));
-    assert!(app.zen.focused_piece().is_some());
-    assert!(app.zen_layout_dirty);
-    let chosen = app.zen.focused_piece();
+    assert_eq!(app.home.focused_selection(), Some(AsciiSelection::Randomer));
+    assert!(app.home.focused_piece().is_some());
+    assert!(app.home_layout_dirty);
+    let chosen = app.home.focused_piece();
     app.handle_input(b"\r");
     app.handle_input(b"\r");
-    assert_eq!(app.zen.focused_piece(), chosen);
+    assert_eq!(app.home.focused_piece(), chosen);
 }

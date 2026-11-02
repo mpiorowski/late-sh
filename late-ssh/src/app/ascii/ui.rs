@@ -1,4 +1,4 @@
-//! Drawing a piece into any rect: the Zen ascii tile and the away
+//! Drawing a piece into any rect: a Home ascii tile and the away
 //! screensaver over the whole terminal.
 
 use late_core::models::user::{AsciiPiece, SceneStyle};

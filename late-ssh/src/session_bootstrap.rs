@@ -285,8 +285,9 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
 #[derive(Clone, Debug, Default)]
 pub struct DeviceState {
     pub layout: Option<KeyLayout>,
-    /// This device's Zen and Home tile layouts (`app/zen`), `None` to
-    /// follow the account's stored layout as the seed.
+    /// This device's single `zen` and Home tile layouts, stored before Home
+    /// had named layouts (`app/zen`), `None` to follow the account's stored
+    /// layout. Read only as the seed for `home_layouts`.
     pub zen_layout: Option<serde_json::Value>,
     pub home_layout: Option<serde_json::Value>,
     /// This device's named Home layouts (`app/zen/presets`), `None` until

@@ -165,7 +165,7 @@ fn reset_puts_back_the_stock_that_matches_the_name() {
     assert_eq!(
         layouts.current_layout(),
         &RiceLayout::default(),
-        "zen resets to Zen's page"
+        "zen resets to the stock zen layout"
     );
     assert!(!layouts.reset(7));
     assert!(!layouts.switch(7));

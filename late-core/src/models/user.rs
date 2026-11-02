@@ -154,11 +154,12 @@ impl RightSidebarMode {
 
 /// The page a session starts on (Settings, Tweaks, Startup). Brand-new users
 /// always start in the Clubhouse regardless, so the first-visit tour runs.
+/// A stored `zen` is not a landing (`zen` is a Home layout) and reads as
+/// the Clubhouse, as every unknown value does.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LandingPage {
     Clubhouse,
     Home,
-    Zen,
 }
 
 impl LandingPage {
@@ -166,7 +167,6 @@ impl LandingPage {
         match self {
             Self::Clubhouse => "clubhouse",
             Self::Home => "home",
-            Self::Zen => "zen",
         }
     }
 
@@ -174,19 +174,14 @@ impl LandingPage {
         match key.trim() {
             "clubhouse" => Some(Self::Clubhouse),
             "home" => Some(Self::Home),
-            "zen" => Some(Self::Zen),
             _ => None,
         }
     }
 
     pub fn cycle(self, forward: bool) -> Self {
         match (self, forward) {
-            (Self::Clubhouse, true) => Self::Home,
-            (Self::Home, true) => Self::Zen,
-            (Self::Zen, true) => Self::Clubhouse,
-            (Self::Clubhouse, false) => Self::Zen,
-            (Self::Home, false) => Self::Clubhouse,
-            (Self::Zen, false) => Self::Home,
+            (Self::Clubhouse, true) | (Self::Clubhouse, false) => Self::Home,
+            (Self::Home, true) | (Self::Home, false) => Self::Clubhouse,
         }
     }
 }
@@ -253,10 +248,10 @@ impl SceneStyle {
     }
 }
 
-/// An animated ascii piece (`late-ssh/src/app/ascii`): what a Zen ascii tile
+/// An animated ascii piece (`late-ssh/src/app/ascii`): what a Home ascii tile
 /// shows and what the away screensaver plays, a scene in one of its styles.
 /// Ported from ascii.rest by @bas3line (MIT). Stored by key (`as_str`) in
-/// `users.settings` and in the Zen layout: a scene's key is its name for
+/// `users.settings` and in Home's layouts: a scene's key is its name for
 /// dots, `<name>_pixels` for pixels.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AsciiPiece {
@@ -265,7 +260,7 @@ pub struct AsciiPiece {
 }
 
 impl AsciiPiece {
-    /// What plays when nothing was picked, on a Zen ascii tile and as the
+    /// What plays when nothing was picked, on a Home ascii tile and as the
     /// screensaver alike: earthrise in dots, a slow piece, a frame a second
     /// that moves a few cells, so a tile left up or an away session costs
     /// about what idling does.
@@ -699,8 +694,9 @@ const SHOW_RIGHT_SIDEBAR_KEY: &str = "show_right_sidebar";
 const RIGHT_SIDEBAR_MODE_KEY: &str = "right_sidebar_mode";
 const RIGHT_SIDEBAR_COMPONENTS_KEY: &str = "right_sidebar_components";
 const STATUSLINE_COMPONENTS_KEY: &str = "statusline_components";
-/// The Rice page's tiling layout and look (`late-ssh/src/app/zen`), stored
-/// as the JSON the page itself serializes; absent until first edited.
+/// A single stored `zen` tiling layout, from before layouts had names: read
+/// only as the seed for a device's stock `zen` Home layout
+/// (`late-ssh/src/app/zen/presets.rs`).
 const ZEN_LAYOUT_KEY: &str = "zen_layout";
 const HOME_LAYOUT_KEY: &str = "home_layout";
 const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
@@ -2295,9 +2291,10 @@ pub fn extract_artboard_disclaimer(settings: &Value) -> bool {
         .unwrap_or(true)
 }
 
-/// The account's stored Rice layout, from before layouts were per device:
-/// only the seed for an SSH key with none (`user_ssh_key::extract_key_zen_layout`).
-/// Parsed by the page, which falls back to its default on anything unreadable.
+/// The account's stored `zen` layout, from before layouts were per device:
+/// only the seed for an SSH key with none (`user_ssh_key::extract_key_zen_layout`),
+/// which seeds the device's stock `zen` Home layout. Parsed by the layouts,
+/// which fall back to the stock on anything unreadable.
 pub fn extract_zen_layout(settings: &Value) -> Option<Value> {
     settings.get(ZEN_LAYOUT_KEY).cloned()
 }

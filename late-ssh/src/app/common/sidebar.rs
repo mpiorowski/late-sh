@@ -284,7 +284,7 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
                 };
                 // View only, like the tank: no click target and no frame
                 // for the tick, so the pet is petted and walks after the
-                // cursor on the Zen page alone.
+                // cursor on a Home pet tile alone.
                 let view = PetView {
                     state,
                     pet_rect_slot: None,
@@ -310,7 +310,7 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
 }
 
 /// The pet goes and watches a bonsai or tank panel right above or below
-/// its own, the sidebar twin of the Zen tile's edge contact. A spacer
+/// its own, the sidebar twin of the Home pet tile's edge contact. A spacer
 /// between them breaks the contact.
 fn pet_neighbours(visible: &[RightSidebarComponent], pet_idx: usize) -> Neighbours {
     let above = pet_idx.checked_sub(1).map(|idx| visible[idx]);

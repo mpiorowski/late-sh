@@ -2788,7 +2788,6 @@ mod inner {
             Screen::Clubhouse => "clubhouse",
             Screen::Nightcap => "nightcap",
             Screen::City => "city",
-            Screen::Zen => "zen",
             Screen::DailyMatch => "daily_match",
             Screen::HouseTable => "house_table",
             Screen::Realm => "realm",
@@ -2902,7 +2901,6 @@ mod inner {
             Tutorial::VisitJobs => "jobs",
             Tutorial::VisitLeaderboard => "leaderboard",
             Tutorial::VisitCalendar => "calendar",
-            Tutorial::VisitZen => "zen",
             Tutorial::Homecoming => "homecoming",
             Tutorial::Done => "done",
         }

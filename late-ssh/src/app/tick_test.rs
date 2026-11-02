@@ -8,7 +8,7 @@ use crate::app::chat::svc::ChatEvent;
 use crate::app::common::primitives::Screen;
 use crate::app::state::App;
 use crate::app::tick::{ANIM_HALF_TICK, ANIM_QUARTER_TICK, HOT_TICK, IDLE_TICK};
-use crate::app::zen::state::{Dir, Look, Node, RiceLayout, RicePage, TileKind, ZenState};
+use crate::app::zen::state::{Dir, Look, Node, RiceLayout, TileKind, ZenState};
 use crate::test_helpers::chat_compose_app;
 
 const CLEAN_SETTLE_WINDOW: Duration = Duration::from_millis(250);
@@ -54,7 +54,7 @@ fn hide_sidebar(app: &mut App) {
         ),
         look: Look::default(),
     };
-    app.home = ZenState::for_page(RicePage::Home, quiet.clone(), quiet);
+    app.home = ZenState::new(quiet.clone(), quiet);
 }
 
 /// Undo [`hide_sidebar`] for the animated case, which shares the settled
@@ -78,7 +78,7 @@ fn show_sidebar(app: &mut App) {
         ),
         look: Look::default(),
     };
-    app.home = ZenState::for_page(RicePage::Home, with_music.clone(), with_music);
+    app.home = ZenState::new(with_music.clone(), with_music);
 }
 
 /// Mirror the render loop's frame path: a changed tick renders and drains
@@ -260,53 +260,59 @@ async fn idle_ticks_settle_clean_and_wake_for_relevant_events() {
     );
 }
 
-/// The Zen page paints its equalizer tiles on the anim_half edge, so a page
+/// Home paints its equalizer tiles on the anim_half edge, so a layout
 /// showing one has to wake that often too. Waking on the aquarium's quarter
 /// tier instead halved the visualizer to ~3.8fps once the post-input hot
 /// window ran out.
 #[tokio::test]
-async fn zen_equalizer_tiles_hold_the_half_rate_tier() {
+async fn home_equalizer_tiles_hold_the_half_rate_tier() {
     let (_test_db, mut app) = chat_compose_app("tick-zen-eq").await;
-    app.screen = Screen::Zen;
+    app.screen = Screen::Dashboard;
     app.last_input_at = Instant::now() - Duration::from_secs(10);
 
-    // The default page carries a music tile, whose eq strip animates.
-    app.zen = ZenState::new(RiceLayout::default());
+    // The stock zen layout carries a music tile, whose eq strip animates.
+    app.home = ZenState::new(RiceLayout::default(), RiceLayout::default());
     assert_eq!(
         app.wake_hint(),
         ANIM_HALF_TICK,
-        "zen page with a music tile wakes on its eq's paint edge"
+        "a layout with a music tile wakes on its eq's paint edge"
     );
 
-    app.zen = ZenState::new(RiceLayout {
-        root: Node::split(
-            Dir::Row,
-            500,
-            Node::leaf(TileKind::Visualizer),
-            Node::leaf(TileKind::Aquarium),
-        ),
-        look: Look::default(),
-    });
+    app.home = ZenState::new(
+        RiceLayout {
+            root: Node::split(
+                Dir::Row,
+                500,
+                Node::leaf(TileKind::Visualizer),
+                Node::leaf(TileKind::Aquarium),
+            ),
+            look: Look::default(),
+        },
+        RiceLayout::default(),
+    );
     assert_eq!(
         app.wake_hint(),
         ANIM_HALF_TICK,
-        "zen page with a visualizer tile wakes on its eq's paint edge"
+        "a layout with a visualizer tile wakes on its eq's paint edge"
     );
 
     // No eq tile: the reef's own quarter tier is enough.
-    app.zen = ZenState::new(RiceLayout {
-        root: Node::split(
-            Dir::Row,
-            500,
-            Node::leaf(TileKind::Clock),
-            Node::leaf(TileKind::Aquarium),
-        ),
-        look: Look::default(),
-    });
+    app.home = ZenState::new(
+        RiceLayout {
+            root: Node::split(
+                Dir::Row,
+                500,
+                Node::leaf(TileKind::Clock),
+                Node::leaf(TileKind::Aquarium),
+            ),
+            look: Look::default(),
+        },
+        RiceLayout::default(),
+    );
     assert_eq!(
         app.wake_hint(),
         ANIM_QUARTER_TICK,
-        "zen page without an eq tile stays on the aquarium tier"
+        "a layout without an eq tile stays on the aquarium tier"
     );
 }
 
@@ -532,7 +538,7 @@ async fn randomer_screensaver_rotation_updates_the_wake_tier_without_input() {
         Cadence::Slow { .. } => IDLE_TICK,
     };
     assert_eq!(app.wake_hint(), tier);
-    assert!(!app.zen_layout_dirty);
+    assert!(!app.home_layout_dirty);
     assert_eq!(
         app.profile_state.profile.screensaver,
         Screensaver::On(AsciiSelection::Randomer)

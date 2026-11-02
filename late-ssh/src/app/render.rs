@@ -446,21 +446,20 @@ struct DrawContext<'a> {
     /// frame, read by the hit test in `input.rs`.
     status_hits: &'a std::cell::RefCell<Vec<(crate::app::statusline::bar::StatusClick, Rect)>>,
     home_selected: bool,
-    /// The Zen pages (`app/zen`): layout state, the current room's chat
-    /// (drawn at most once per frame), and the strings their status rows show.
-    zen: &'a crate::app::zen::state::ZenState,
+    /// Home's tile tree (`app/zen`): the current layout and its focus.
+    home: &'a crate::app::zen::state::ZenState,
     /// Home's named layouts and the list over them while it is up.
     home_layouts: &'a crate::app::zen::presets::Layouts,
     layout_list: Option<&'a crate::app::zen::presets::LayoutList>,
-    zen_chat_tiles: Vec<crate::app::zen::ui::ZenChatTile<'a>>,
+    home_chat_tiles: Vec<crate::app::zen::ui::ZenChatTile<'a>>,
     /// The now strip for the Home tile hosting it as a guest (`None` on
     /// the page's chat: the card carries it itself).
     guest_live_strip: Option<crate::app::live::state::LiveStripView<'a>>,
-    zen_track: String,
-    zen_date: String,
-    zen_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
-    zen_active_friends: &'a [crate::app::chat::state::ActiveFriend],
-    zen_care: crate::app::zen::ui::Care,
+    home_track: String,
+    home_date: String,
+    home_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
+    home_active_friends: &'a [crate::app::chat::state::ActiveFriend],
+    home_care: crate::app::zen::ui::Care,
     /// What waits on you, for the attention guest (`App::attention_items`).
     attention: Vec<crate::app::attention::state::Item>,
     /// The pane beside this player's own running game, published for the
@@ -475,7 +474,7 @@ impl App {
         // collide with the mutable field borrows the view structs hold below
         // (some door states are even taken out of `self` for the draw).
         use crate::app::door::hub::state::HubGame;
-        let zen_care = self.care_today();
+        let home_care = self.care_today();
         let attention = self.attention_items();
         let lateania_live = HubGame::Lateania.live_screen(self).is_some();
         let realm_live = HubGame::Realm.live_screen(self).is_some();
@@ -611,19 +610,15 @@ impl App {
             synthetic_selected,
         );
         let screen = self.screen;
-        // The Zen page's chat tiles: each one's room (resolved, so a room
-        // the account left reads as the current room) and its label. The
-        // active tile is the one the keys, the mouse, and the read marking
-        // act on; the others only watch.
-        let zen_chat_rooms = self.zen_chat_rooms();
-        // A field borrow, not `rice()`: the draw closure also holds
-        // `usermap` mutably.
-        let rice = match self.screen {
-            Screen::Dashboard => &self.home,
-            _ => &self.zen,
-        };
-        let zen_active_chat = rice.active_chat_index();
-        let zen_room_labels: Vec<String> = zen_chat_rooms
+        // Home's chat tiles: each one's room (resolved, so a room the
+        // account left reads as the current room) and its label. The active
+        // tile is the one the keys, the mouse, and the read marking act on;
+        // the others only watch.
+        let home_chat_rooms = self.home_chat_rooms();
+        // A field borrow: the draw closure also holds `usermap` mutably.
+        let rice = &self.home;
+        let home_active_chat = rice.active_chat_index();
+        let home_room_labels: Vec<String> = home_chat_rooms
             .iter()
             .map(|room_id| {
                 room_id
@@ -635,8 +630,8 @@ impl App {
                     .unwrap_or_else(|| "#lounge".to_string())
             })
             .collect();
-        self.zen_chat_rows_caches
-            .resize_with(zen_chat_rooms.len(), Default::default);
+        self.home_chat_rows_caches
+            .resize_with(home_chat_rooms.len(), Default::default);
         // The house jukebox for the clubhouse and nightcap pages: the
         // USER'S SELECTED station when it is a house mount, else the house
         // `chill` mount (the jukebox never goes quiet because someone is
@@ -1417,13 +1412,13 @@ impl App {
         // under the reader. Only the active tile's composer is live, so the
         // rest measure this empty one and keep a fixed height.
         let idle_composer = ratatui_textarea::TextArea::default();
-        let zen_chat_tiles: Vec<crate::app::zen::ui::ZenChatTile<'_>> = zen_chat_rooms
+        let home_chat_tiles: Vec<crate::app::zen::ui::ZenChatTile<'_>> = home_chat_rooms
             .iter()
-            .zip(zen_room_labels.iter())
-            .zip(self.zen_chat_rows_caches.iter_mut())
+            .zip(home_room_labels.iter())
+            .zip(self.home_chat_rows_caches.iter_mut())
             .enumerate()
             .map(|(index, ((room_id, label), rows_cache))| {
-                let active = Some(index) == zen_active_chat;
+                let active = Some(index) == home_active_chat;
                 let view = room_id.map(|chat_room_id| chat::ui::EmbeddedRoomChatView {
                     // The tile's border is already the column of air.
                     messages_inset: 0,
@@ -1522,15 +1517,15 @@ impl App {
                 }
             })
             .collect();
-        let zen_track = crate::app::common::sidebar::current_track_text(
+        let home_track = crate::app::common::sidebar::current_track_text(
             self.paired_source,
             &self.audio.queue_snapshot(),
             self.selected_radio_station,
             radio_now_playing.as_deref(),
         );
-        let zen_date = status_date_full.clone();
+        let home_date = status_date_full.clone();
 
-        let zen_pet_strip = self
+        let home_pet_strip = self
             .shop_state
             .entitlements()
             .has_pet_companion()
@@ -1937,23 +1932,23 @@ impl App {
                             station_track: status_station_track,
                             quests_open_daily: status_quests_daily,
                             quests_open_weekly: status_quests_weekly,
-                            care_due: zen_care.due_count(),
+                            care_due: home_care.due_count(),
                             voice: voice_badge.as_deref(),
                             live: status_live.as_deref(),
                             username: self.profile_state.profile().username.as_str(),
                         },
                         status_hits: &self.last_status_hits,
                         home_selected,
-                        zen: rice,
+                        home: rice,
                         home_layouts: &self.home_layouts,
                         layout_list: self.layout_list.as_ref(),
-                        zen_chat_tiles,
+                        home_chat_tiles,
                         guest_live_strip,
-                        zen_track,
-                        zen_date,
-                        zen_pet_strip,
-                        zen_active_friends: &self.active_friends,
-                        zen_care,
+                        home_track,
+                        home_date,
+                        home_pet_strip,
+                        home_active_friends: &self.active_friends,
+                        home_care,
                         attention,
                         own_chat_hit: &self.own_chat_hit,
                     },
@@ -2158,14 +2153,7 @@ impl App {
             return;
         }
 
-        // The Zen pages are full-bleed: no frame, no HUD, no tab bar. Every
-        // other page keeps the app frame. Zen paints its own status row and
-        // fills the click slots below.
-        let zen_page = screen == Screen::Zen;
-        let inner = if zen_page {
-            frame.render_widget(Clear, area);
-            area
-        } else {
+        let inner = {
             let title = app_frame_title(screen, &ctx);
             let title_width = line_width(&title) as u16;
             let mut block = Block::default()
@@ -2202,11 +2190,8 @@ impl App {
             inner
         };
 
-        let (content_area, sidebar_area) = if zen_page {
-            (inner, None)
-        } else {
-            app_content_and_sidebar_areas(inner, ctx.show_right_sidebar)
-        };
+        let (content_area, sidebar_area) =
+            app_content_and_sidebar_areas(inner, ctx.show_right_sidebar);
         let foreground_overlay_open = ctx.foreground_overlay_open;
         // The tour stops that write into a real surface: the two modals take
         // the header themselves, the practice table and the dungeon fight
@@ -2223,54 +2208,29 @@ impl App {
             (Some(_), _) | (None, _) => content_area,
         };
         match screen {
-            // Both rice pages: Home inside the frame, with its rail and
-            // center as tiles; Zen full-bleed with its status row.
-            Screen::Dashboard | Screen::Zen => {
+            // Home: its rail, chat and sidebar panels as tiles, inside the
+            // frame.
+            Screen::Dashboard => {
                 let strip_hit = ctx.dashboard_view.live_strip_hit;
-                let home = match screen {
-                    Screen::Dashboard => Some(crate::app::zen::ui::HomeView {
-                        chat_view: ctx.chat_view,
-                        dashboard_view: ctx.dashboard_view,
-                        home_selected: ctx.home_selected,
-                    }),
-                    _ => None,
+                let home = crate::app::zen::ui::HomeView {
+                    chat_view: ctx.chat_view,
+                    dashboard_view: ctx.dashboard_view,
+                    home_selected: ctx.home_selected,
                 };
-                // A page too small to draw has no row, so it keeps no
-                // click target either. Home has no status row, the frame
-                // carries its bars; while it is being arranged (`Ctrl+E`)
-                // its bottom row is the mode's key footer instead.
-                let status_row = match screen {
-                    Screen::Zen => {
-                        let (_, row) = crate::app::zen::layout::rice_areas(
-                            content_area,
-                            crate::app::zen::layout::rice_row(content_area),
-                        );
-                        row.map(|row| {
-                            crate::app::statusline::bar::build_zen_status_row(
-                                &ctx.statusline_components,
-                                &ctx.status_data,
-                                row,
-                            )
-                        })
-                    }
-                    Screen::Dashboard if ctx.zen.arrange => {
-                        let (_, row) = crate::app::zen::layout::rice_areas(content_area, true);
-                        row.map(crate::app::statusline::bar::build_home_arrange_row)
-                    }
-                    _ => None,
+                // The frame carries Home's bars; while it is being arranged
+                // (`Ctrl+F`, `Ctrl+E`) its bottom row is the mode's key
+                // footer.
+                let arrange_keys = match ctx.home.arrange {
+                    true => crate::app::zen::layout::rice_areas(content_area, true)
+                        .1
+                        .and_then(crate::app::statusline::bar::build_home_arrange_row),
+                    false => None,
                 };
-                if screen == Screen::Zen {
-                    *ctx.status_hits.borrow_mut() = match &status_row {
-                        Some(status_row) => status_row.hits.clone(),
-                        None => Vec::new(),
-                    };
-                }
                 let view = crate::app::zen::ui::ZenView {
-                    status_row,
-                    zen: ctx.zen,
+                    arrange_keys,
+                    zen: ctx.home,
                     home_layouts: ctx.home_layouts,
                     layout_list: ctx.layout_list,
-                    home,
                     music_stage: crate::app::common::sidebar::MusicStageProps {
                         paired_client: ctx.paired_client,
                         queue: &ctx.booth_snapshot,
@@ -2293,25 +2253,25 @@ impl App {
                     aquarium: ctx.aquarium_state,
                     aquarium_owned: ctx.shop_state.entitlements().has_aquarium(),
                     aquarium_care: ctx.aquarium_care,
-                    pet_strip: ctx.zen_pet_strip.take(),
-                    chats: std::mem::take(&mut ctx.zen_chat_tiles),
-                    track: ctx.zen_track.clone(),
+                    pet_strip: ctx.home_pet_strip.take(),
+                    chats: std::mem::take(&mut ctx.home_chat_tiles),
+                    track: ctx.home_track.clone(),
                     station: crate::app::zen::ui::station_text(
                         ctx.paired_source,
                         ctx.selected_radio_station,
                     ),
                     eq_state: ctx.eq_state,
                     clock: ctx.sidebar_clock,
-                    date: ctx.zen_date.clone(),
+                    date: ctx.home_date.clone(),
                     online_count: ctx.online_count,
                     mentions_unread: ctx.status_data.mentions_unread,
                     daily: ctx.daily,
                     lobby_glow: ctx.lobby.glow(),
                     activity: ctx.chat_state.activity_ticker(),
-                    active_friends: ctx.zen_active_friends,
+                    active_friends: ctx.home_active_friends,
                     chip_balance: ctx.status_data.chip_balance,
-                    care: ctx.zen_care,
-                    inbox: if ctx.zen.shows(crate::app::zen::state::TileKind::Inbox) {
+                    care: ctx.home_care,
+                    inbox: if ctx.home.shows(crate::app::zen::state::TileKind::Inbox) {
                         crate::app::zen::rows::inbox_rows(
                             ctx.user_id,
                             &ctx.chat_state.rooms,
@@ -2323,7 +2283,7 @@ impl App {
                     } else {
                         Vec::new()
                     },
-                    headlines: if ctx.zen.shows(crate::app::zen::state::TileKind::Headlines) {
+                    headlines: if ctx.home.shows(crate::app::zen::state::TileKind::Headlines) {
                         crate::app::zen::rows::headlines(
                             ctx.chat_state.news.all_articles(),
                             ctx.chat_state.feeds.all_entries(),
@@ -2339,7 +2299,7 @@ impl App {
                     wall_tick: ctx.marquee_tick,
                     ascii_clock: ctx.ascii_clock,
                 };
-                crate::app::zen::ui::draw_rice(frame, content_area, view, terminal_images);
+                crate::app::zen::ui::draw_rice(frame, content_area, view, home, terminal_images);
             }
             Screen::Artboard => {
                 if ctx.artboard_disclaimer_visible {
@@ -2813,7 +2773,7 @@ impl App {
                     },
                     lobby_glow: ctx.lobby.glow(),
                     online_count: ctx.online_count,
-                    active_friends: ctx.zen_active_friends,
+                    active_friends: ctx.home_active_friends,
                     marquee_tick: ctx.marquee_tick,
                 },
             );
@@ -3051,7 +3011,6 @@ impl App {
                 ctx.room_search_modal_state,
                 ctx.chat_state,
                 ctx.user_id,
-                room_search_modal::state::PickerScope::for_screen(screen),
             );
         }
 
@@ -3089,7 +3048,7 @@ impl App {
             crate::app::tag_picker::ui::draw(frame, inner, ctx.tag_picker);
         }
 
-        // Over the Zen page, from its ascii tile.
+        // Over Home, from an ascii tile.
         if ctx.piece_picker.is_open() {
             crate::app::ascii::picker::ui::draw(frame, inner, ctx.piece_picker);
         }
@@ -3217,8 +3176,7 @@ const FRAME_TABS: [(Screen, &str); 8] = [
 ];
 
 /// A screen off the tab cycle lights the tab of its page (`Screen::page`): a
-/// door keeps Games lit, the daily board keeps Home lit. Zen is a page with
-/// no tab.
+/// door keeps Games lit, the daily board keeps Home lit.
 fn tab_is_lit(tab_screen: Screen, screen: Screen) -> bool {
     tab_screen == screen.page().screen()
 }
@@ -3275,7 +3233,6 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
         Screen::HouseTable => "House Table",
         Screen::Realm => "Realm",
         Screen::Scratchpad => "Scratchpad",
-        Screen::Zen => "Zen",
     };
     spans.push(Span::styled(
         " | ",

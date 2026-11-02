@@ -86,10 +86,6 @@ pub enum Screen {
     /// the Clubhouse. `0` again on the Clubhouse goes down, runners only;
     /// `0` or Enter at the wire comes back up. Not in the Tab cycle.
     City,
-    /// Zen (`Ctrl+F` from anywhere): the tiling layout you arrange yourself
-    /// (`app/zen`). A surface over the page you were on, absent from the Tab
-    /// cycle; only the chord returns there (Esc stays).
-    Zen,
     /// Full-screen daily-match board. Entered only from the Daily Games
     /// modal, absent from the Tab cycle; Esc returns to the modal.
     DailyMatch,
@@ -106,7 +102,7 @@ pub enum Screen {
     Scratchpad,
 }
 
-/// The page a screen belongs to: one of the eight numbered pages, or Zen. A
+/// The page a screen belongs to: one of the eight numbered pages. A
 /// screen off the tab cycle belongs to the page it is reached from. Decided
 /// once, in [`Screen::page`]: the tab cycle, the lit tab in the frame title
 /// and a drain handoff's resume page (`app/handoff`) all read it.
@@ -120,7 +116,6 @@ pub enum Page {
     Profiles,
     Leaderboard,
     Calendars,
-    Zen,
 }
 
 impl Page {
@@ -135,7 +130,6 @@ impl Page {
             Page::Profiles => Screen::Profiles,
             Page::Leaderboard => Screen::Leaderboard,
             Page::Calendars => Screen::Calendars,
-            Page::Zen => Screen::Zen,
         }
     }
 }
@@ -169,14 +163,12 @@ impl Screen {
             Screen::Profiles => Page::Profiles,
             Screen::Leaderboard => Page::Leaderboard,
             Screen::Calendars => Page::Calendars,
-            Screen::Zen => Page::Zen,
         }
     }
 
     /// Tab cycles the top-level pages, Clubhouse (`0`, the landing screen)
     /// through Calendars (`7`). A screen off the cycle (a door, the daily
-    /// board, the Nightcap) steps back to its page first, and Zen steps to
-    /// Home either way.
+    /// board, the Nightcap) steps back to its page first.
     pub fn next(self) -> Self {
         let page = self.page();
         if page.screen() != self {
@@ -191,7 +183,6 @@ impl Screen {
             Page::Profiles => Screen::Leaderboard,
             Page::Leaderboard => Screen::Calendars,
             Page::Calendars => Screen::Clubhouse,
-            Page::Zen => Screen::Dashboard,
         }
     }
 
@@ -209,7 +200,6 @@ impl Screen {
             Page::Profiles => Screen::Artboard,
             Page::Leaderboard => Screen::Profiles,
             Page::Calendars => Screen::Leaderboard,
-            Page::Zen => Screen::Dashboard,
         }
     }
 }
@@ -271,7 +261,6 @@ pub fn draw_tabs(frame: &mut Frame, area: Rect, current: Screen) {
         Screen::HouseTable => "House Table",
         Screen::Realm => "Realm",
         Screen::Scratchpad => "Scratchpad",
-        Screen::Zen => "Zen",
     };
 
     let current_line = Paragraph::new(Line::from(vec![

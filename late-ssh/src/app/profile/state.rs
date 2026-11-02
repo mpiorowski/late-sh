@@ -106,16 +106,10 @@ impl ProfileState {
             .set_key_layout(self.user_id, fingerprint, layout);
     }
 
-    /// Store this device's Zen tile layout, per device like the rails: a
-    /// phone and a desktop on one account each keep their own page. The
-    /// account's stored layout is only the seed for a key with none.
-    pub fn set_device_zen_layout(&self, fingerprint: String, layout: serde_json::Value) {
-        self.profile_service
-            .set_key_zen_layout(self.user_id, fingerprint, layout);
-    }
-
     /// Store this device's named Home layouts (`zen::presets::Layouts`),
-    /// the same way.
+    /// per device like the rails: a phone and a desktop on one account each
+    /// keep their own Home. The account's stored layouts are only the seed
+    /// for a key with none.
     pub fn set_device_home_layouts(&self, fingerprint: String, layouts: serde_json::Value) {
         self.profile_service
             .set_key_home_layouts(self.user_id, fingerprint, layouts);

@@ -3657,9 +3657,8 @@ fn landing_page_span(page: late_core::models::user::LandingPage) -> ValueSpan {
     let label = match page {
         LandingPage::Clubhouse => "Clubhouse",
         LandingPage::Home => "Home",
-        LandingPage::Zen => "Zen",
     };
-    cycle_value_span(label, &["Clubhouse", "Home", "Zen"])
+    cycle_value_span(label, &["Clubhouse", "Home"])
 }
 
 fn cycle_value_span(label: &str, choices: &[&str]) -> ValueSpan {

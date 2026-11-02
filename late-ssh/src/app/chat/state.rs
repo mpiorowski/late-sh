@@ -257,7 +257,6 @@ impl ComposerCommands {
             | Screen::Calendars
             | Screen::Leaderboard
             | Screen::City
-            | Screen::Zen
             | Screen::DailyMatch
             | Screen::HouseTable
             | Screen::Realm
@@ -1042,7 +1041,6 @@ pub struct ChatState {
     requested_shop_modal: bool,
     requested_onboard: bool,
     requested_lobby_toggle: bool,
-    requested_zen_toggle: bool,
     requested_guide: bool,
     requested_redraw: bool,
     requested_mod_modal: bool,
@@ -1416,7 +1414,6 @@ impl ChatState {
             requested_shop_modal: false,
             requested_onboard: false,
             requested_lobby_toggle: false,
-            requested_zen_toggle: false,
             requested_guide: false,
             requested_redraw: false,
             requested_mod_modal: false,
@@ -2146,10 +2143,6 @@ impl ChatState {
 
     pub fn take_requested_lobby_toggle(&mut self) -> bool {
         std::mem::take(&mut self.requested_lobby_toggle)
-    }
-
-    pub fn take_requested_zen_toggle(&mut self) -> bool {
-        std::mem::take(&mut self.requested_zen_toggle)
     }
 
     pub fn take_requested_guide(&mut self) -> bool {
@@ -2973,7 +2966,7 @@ impl ChatState {
     }
 
     /// Open the reader on a News article by id (a News card, a #lounge
-    /// card, the Live panel, a Zen Live tile), marking that article read.
+    /// card, the Live panel, a Home Live tile), marking that article read.
     /// False when this session no longer knows it (deleted).
     pub(crate) fn open_reader_for_article(&mut self, article_id: Uuid) -> bool {
         self.reaction_leader_active = false;
@@ -3821,18 +3814,21 @@ impl ChatState {
             return None;
         }
 
-        // Typed fallbacks for the global chords (Ctrl+G, Ctrl+F, Ctrl+R, ?), for
+        // Typed fallbacks for the global chords (Ctrl+G, Ctrl+R, ?), for
         // terminals and multiplexers that swallow those keys. Each one runs
-        // exactly what its key runs.
+        // exactly what its key runs; `/layout` below stands in for Ctrl+F.
         if body.trim() == "/lobby" {
             self.clear_composer_after_submit();
             self.requested_lobby_toggle = true;
             return None;
         }
 
+        // Home's layout named `zen`: `/layout zen` by a shorter name.
         if body.trim() == "/zen" {
             self.clear_composer_after_submit();
-            self.requested_zen_toggle = true;
+            self.requested_layout_command = Some(crate::app::zen::presets::LayoutCommand::Load(
+                crate::app::zen::presets::STOCK_ZEN_NAME.to_string(),
+            ));
             return None;
         }
 
@@ -4220,7 +4216,7 @@ impl ChatState {
         if matches!(body.trim(), "/aquarium" | "/aq") {
             self.clear_composer_after_submit();
             return Some(Banner::info(
-                "The reef is a tile of Home and Zen: /aquarium feed; its sprout is cut in /shop",
+                "The reef is a tile of Home: /aquarium feed; its sprout is cut in /shop",
             ));
         }
 
@@ -7434,7 +7430,7 @@ pub struct ActivityTickerEntry {
     pub at: DateTime<Utc>,
 }
 
-/// A connected friend, as the sidebar friends row and the Zen Friends tile
+/// A connected friend, as the sidebar friends row and the Home Friends tile
 /// draw them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActiveFriend {
@@ -7447,7 +7443,7 @@ pub struct ActiveFriend {
 }
 
 /// The ticker queue length: enough to fill the one-row ticker on any sane
-/// width and a tall Zen Activity tile, without hoarding history.
+/// width and a tall Home Activity tile, without hoarding history.
 const ACTIVITY_TICKER_CAP: usize = 40;
 
 /// Insert into the newest-first ticker queue, deduped by message id (tails

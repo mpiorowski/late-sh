@@ -159,7 +159,7 @@ round, the pot, invites).
 | `7` | Calendars: the events board | `app/calendar` |
 
 `Tab`/`Shift+Tab` cycle the numbered pages. `users.settings.landing_page`
-picks Clubhouse, Home or Zen for returning sessions; a session with the tour
+picks Clubhouse or Home for returning sessions; a session with the tour
 still to walk always lands in the Clubhouse, and one a drain handoff moved
 off an updating pod lands on the page it left (`handoff`).
 
@@ -204,8 +204,8 @@ otherwise.
 | `settings_modal` | Settings (`Ctrl+O`): tabs, pickers, mouse, save rules |
 | `handoff` | Drain handoff: a quiet native-CLI session moved off an updating pod onto its page, the "Auto restart on update" tweak |
 | `statusline` | The frame status bars and their customizer |
-| `zen` | The tile tree behind Home (`Ctrl+F` arranges it and switches its nine named layouts) and Zen (`/zen`, also Home's layout 2), the pet and tank tiles |
-| `ascii` | The animated ascii pieces, the Zen ascii tile, the away screensaver |
+| `zen` | The tile tree behind Home (`Ctrl+F` arranges it and switches its nine named layouts) and its stock `zen` layout (`/zen`, layout 2), the pet and tank tiles |
+| `ascii` | The animated ascii pieces, the Home ascii tile, the away screensaver |
 | `bonsai` | The bonsai: branch graph, care modal, daily chips; the per-user state reference |
 | `hub` | The Shop (`Ctrl+S`), quests, pet unlock (the marketplace, rentals and flair in `shop/CONTEXT.md`, the reef in `aquarium/CONTEXT.md`) |
 | `games` | Shared game primitives: cards, the chips service, `chess_core`, `pool_core` (each kernel has its own `CONTEXT.md`) |

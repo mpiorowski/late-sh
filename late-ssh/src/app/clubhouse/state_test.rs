@@ -256,7 +256,6 @@ fn tutorial_tours_every_page_then_comes_home() {
             Tutorial::VisitCalendar,
             TourModal::None,
         ),
-        (TourMove::Zen, Tutorial::VisitZen, TourModal::None),
         (
             TourMove::Page(Screen::Clubhouse),
             Tutorial::Homecoming,

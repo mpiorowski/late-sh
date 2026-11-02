@@ -718,9 +718,11 @@ fn landing_page_reads_the_choice_and_falls_back_to_the_clubhouse() {
         extract_landing_page(&json!({ "landing_page": "home" })),
         LandingPage::Home
     );
+    // `zen` is a Home layout, not a page: a stored `zen` lands in the
+    // Clubhouse, and never switches the device's Home layout.
     assert_eq!(
         extract_landing_page(&json!({ "landing_page": "zen" })),
-        LandingPage::Zen
+        LandingPage::Clubhouse
     );
     assert_eq!(
         extract_landing_page(&json!({ "landing_page": "clubhouse" })),

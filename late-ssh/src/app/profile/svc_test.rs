@@ -485,7 +485,7 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
             statusline_components: components.clone(),
             keep_composer_focused: false,
             start_with_music_muted: false,
-            landing_page: LandingPage::Zen,
+            landing_page: LandingPage::Home,
             paper_at_login: true,
             auto_restart: false,
             screensaver: late_core::models::user::Screensaver::Off,
@@ -522,7 +522,7 @@ async fn edit_profile_emits_saved_event_and_refreshes_snapshot() {
 
     assert_eq!(updated.username, "night-owl");
     assert_eq!(updated.statusline_components, components);
-    assert_eq!(updated.landing_page, LandingPage::Zen);
+    assert_eq!(updated.landing_page, LandingPage::Home);
     assert_eq!(updated.terminal_images, TerminalImagesMode::Off);
     assert_eq!(updated.hidden_award_categories, hidden_awards);
     assert!(!updated.artboard_disclaimer);

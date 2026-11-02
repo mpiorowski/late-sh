@@ -820,34 +820,9 @@ impl ProfileService {
         );
     }
 
-    /// Fire-and-forget: persist the Zen page's layout JSON. A failure is
-    /// only logged (the page would start from its last stored layout next
-    /// session).
-    /// Store this device's Zen tile layout on its SSH key, fire and forget.
-    pub fn set_key_zen_layout(
-        &self,
-        user_id: Uuid,
-        fingerprint: String,
-        layout: serde_json::Value,
-    ) {
-        let service = self.clone();
-        tokio::spawn(
-            async move {
-                let result = async {
-                    let client = service.db.get().await?;
-                    UserSshKey::set_zen_layout(&client, user_id, &fingerprint, &layout).await
-                }
-                .await;
-                if let Err(e) = result {
-                    tracing::warn!(error = ?e, "failed to persist device zen layout");
-                }
-            }
-            .instrument(info_span!("profile.device_zen_layout_task", user_id = %user_id)),
-        );
-    }
-
     /// Store this device's named Home layouts on its SSH key, fire and
-    /// forget, the same way.
+    /// forget. A failure is only logged (Home starts from its last stored
+    /// layouts next session).
     pub fn set_key_home_layouts(
         &self,
         user_id: Uuid,

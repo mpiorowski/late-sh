@@ -27,9 +27,10 @@ impl Gaps {
     }
 }
 
-/// What a tile wears. Zen boxes every tile in its look; Home draws rules:
-/// a `── title ──` row on top of a tile that has a title, a column of air
-/// on each side, and the gutters between columns painted as one line.
+/// What a tile wears. A look with a border boxes every tile; without one
+/// Home draws rules: a `── title ──` row on top of a tile that has a
+/// title, a column of air on each side, and the gutters between columns
+/// painted as one line.
 /// In arrange mode every tile wears a title, so the focus has a ring to
 /// land on; outside it the page's chat and the rail draw their own chrome.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,7 +84,7 @@ pub(crate) fn bare_under_rules(kind: TileKind, page_chat: bool) -> bool {
 /// The pet box at its smallest: its three art rows.
 pub const FLOOR_ROWS: u16 = crate::app::pet::ui::PET_BOX_MIN_ROWS;
 /// The smallest page Rice draws. Under it the page is its too-small notice
-/// alone: no tiles, and no status row to click.
+/// alone: no tiles.
 pub const RICE_MIN_COLS: u16 = 40;
 pub const RICE_MIN_ROWS: u16 = 12;
 
@@ -91,18 +92,12 @@ pub fn rice_fits(area: Rect) -> bool {
     area.width >= RICE_MIN_COLS && area.height >= RICE_MIN_ROWS
 }
 
-/// Whether the page gives its bottom row to the status line: whenever it
-/// is drawn at all (`rice_fits`). Every caller of `rice_areas` that
-/// draws, clicks, or sizes what is on show reads it from here.
-pub fn rice_row(area: Rect) -> bool {
-    rice_fits(area)
-}
-
-/// The Rice page: the tiles, then the status row at the bottom (the user's
-/// status line and the page's keys) when `status_row` (`rice_row`); a page
-/// too small to draw has no row.
-pub fn rice_areas(area: Rect, status_row: bool) -> (Rect, Option<Rect>) {
-    match status_row {
+/// Home's content area: the tiles, then the arrange mode's key footer at
+/// the bottom when `footer_row` (the mode is on). Every caller that draws,
+/// clicks, or sizes what is on show passes the same flag
+/// (`App::home_tiles_area`).
+pub fn rice_areas(area: Rect, footer_row: bool) -> (Rect, Option<Rect>) {
+    match footer_row {
         true => {
             let row = Rect::new(
                 area.x,

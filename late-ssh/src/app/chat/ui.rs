@@ -247,8 +247,8 @@ pub enum ComposerIdleHint {
 pub enum ComposerInert {
     /// The composer takes keys (or is the screen's one composer).
     No,
-    /// A Zen chat tile that is not the focused one: `i`, `j` and `k` act on
-    /// the focused tile.
+    /// A Home chat tile that is not the active one: `i`, `j` and `k` act on
+    /// the active tile.
     ZenTile,
 }
 
@@ -656,7 +656,7 @@ pub(crate) fn composer_placeholder_lines(view: &ComposerBlockView<'_>, width: us
     )
 }
 
-/// Vertical layout for an embedded chat (Zen tiles, house tables, daily
+/// Vertical layout for an embedded chat (Home tiles, house tables, daily
 /// boards): messages fill, one blank breather, then the composer. These
 /// surfaces draw no activity ticker, so its row goes to the messages.
 fn split_chat_and_composer(area: Rect, composer_height: u16) -> (Rect, Rect) {
@@ -3222,7 +3222,7 @@ pub(crate) struct ChatRoomListView<'a> {
 
 pub struct EmbeddedRoomChatView<'a> {
     /// Columns kept clear on each side of the messages. A surface that
-    /// draws its own border around the chat (a Zen tile) passes 0, so the
+    /// draws its own border around the chat (a boxed Home tile) passes 0, so the
     /// text sits one column in, as on Home; a bare panel passes 1.
     pub messages_inset: u16,
     pub title: &'a str,
@@ -4951,7 +4951,7 @@ fn stream_on_air_view(
 
 /// A stream's watcher count in brackets, `[3]` (zero included), or `[…]`
 /// while it is pending: the watch count only means something once frames
-/// flow. Shared by the rail row and the Zen chat tile title, so the two
+/// flow. Shared by the rail row and the Home chat tile title, so the two
 /// surfaces read the same number the same way.
 pub(crate) fn stream_count_badge(stream: &crate::app::stream::registry::LiveStreamView) -> String {
     match stream.live {

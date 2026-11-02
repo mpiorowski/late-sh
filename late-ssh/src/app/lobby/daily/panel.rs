@@ -66,7 +66,7 @@ pub(crate) fn draw_daily_inline(
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// The Zen tile's shape: only the games actually running, then one footer
+/// The Home lobby tile's shape: only the games actually running, then one footer
 /// row carrying the open count, your entries, and the two keys. No empty
 /// slots, so the tile can be as short as its content. Top-aligned; rows
 /// past the area are dropped, the footer never is.
@@ -269,7 +269,7 @@ fn status_line(width: u16, props: &DailyPanelProps) -> Line<'static> {
 /// `ctrl+g · \` toggle` — the two keys that front the Lobby: `ctrl+g` opens
 /// the modal, and the backtick toggles you through the games waiting on you
 /// (boards on your move, seated tables, unfinished dailies) and back to chat.
-/// Constant chrome of the sidebar panel; the Zen tile names them on its title.
+/// Constant chrome of the sidebar panel; the Home tile names them on its title.
 fn hints_line() -> Line<'static> {
     let key_style = Style::default()
         .fg(theme::AMBER_DIM())

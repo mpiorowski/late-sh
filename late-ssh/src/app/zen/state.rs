@@ -1,6 +1,6 @@
 //! The Rice layout: a binary split tree of tiles, the look that dresses it,
 //! and the focus that edits it. Everything here is pure data; persistence is
-//! the orchestration layer's job (`App::flush_zen_layout`).
+//! the orchestration layer's job (`App::flush_home_layout`).
 
 use std::time::Instant;
 
@@ -45,7 +45,7 @@ pub enum TileKind {
     /// them.
     Live,
     Blank,
-    /// Home's room rail. One per page, Home only.
+    /// Home's room rail. One per page.
     Rooms,
     /// The sidebar's pinned rows: the online count and the clock, then
     /// the connected friends.
@@ -53,9 +53,8 @@ pub enum TileKind {
 }
 
 impl TileKind {
-    /// Every kind, alphabetical by label: the tile picker's rows.
-    /// The picker's rows: the kinds both pages take, by name, then the
-    /// Home only ones.
+    /// The tile picker's rows: every kind by name, then the ones a page
+    /// holds once.
     pub const ALL: [TileKind; 19] = [
         TileKind::Activity,
         TileKind::Aquarium,
@@ -78,9 +77,9 @@ impl TileKind {
         TileKind::Rooms,
     ];
 
-    /// The kinds Home draws from its own render input (`chat_view`), and
-    /// Zen cannot: each is allowed once per page, on Home alone.
-    pub fn home_only(self) -> bool {
+    /// The kinds Home draws from its own render input (`chat_view`): each
+    /// is allowed once per page.
+    pub fn one_per_page(self) -> bool {
         match self {
             TileKind::Rooms => true,
             TileKind::Bonsai
@@ -297,7 +296,7 @@ pub enum Node {
         /// mode; `None` (the stored default) is the kind's own: the rail,
         /// the presence row and the page's chat go bare, the rest wear
         /// one (`layout::bare_under_rules`). `t` in arrange mode sets it.
-        /// Under Zen's boxed chrome `Some(false)` drops the title text.
+        /// Under the boxed chrome `Some(false)` drops the title text.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<bool>,
     },
@@ -831,7 +830,8 @@ pub struct RiceLayout {
 }
 
 impl Default for RiceLayout {
-    /// The out-of-the-box page, also what `R` resets to: on the left, the
+    /// The stock `zen` Home layout (`presets.rs`), also what `R` resets it
+    /// to: on the left, the
     /// bonsai beside the reef over the current room's chat; on the right a
     /// rail of clock, pet, lobby, live, then music (the pet sits against
     /// the tank, to its left, and watches it; unowned, the pet and the tank
@@ -889,15 +889,6 @@ pub const PRESENCE_ROWS: u16 = 2;
 /// reef form (`zen::ui::reef_form`) with the now strip over it.
 pub const HOME_AQUARIUM_ROWS: u16 = 14;
 
-/// Which page a `ZenState` drives. Home draws from its own render input
-/// (the rail, the chat center) and edits only in arrange mode; Zen has
-/// no frame and is always arranging.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RicePage {
-    Zen,
-    Home,
-}
-
 impl RiceLayout {
     /// Parse a stored layout; anything unreadable falls back to `fallback`,
     /// so a bad row never locks someone out of the page.
@@ -908,8 +899,8 @@ impl RiceLayout {
         }
     }
 
-    /// Parse a stored Zen layout; anything unreadable falls back to the
-    /// default, so a bad row never locks someone out of the page.
+    /// Parse a stored layout; anything unreadable falls back to the stock
+    /// `zen` layout, so a bad row never locks someone out of the page.
     pub fn from_json(value: Option<&serde_json::Value>) -> Self {
         Self::from_json_or(value, Self::default())
     }
@@ -992,14 +983,13 @@ pub enum GuestPick {
     Unchanged,
 }
 
-/// Session state for a rice page (Zen, or Home).
+/// Session state for Home's tile tree: the current layout and its focus.
 pub struct ZenState {
-    pub page: RicePage,
     pub rice: RiceLayout,
     /// What `R` resets to.
     stock: RiceLayout,
-    /// Whether the layout keys are live: always on Zen; on Home only while
-    /// arrange mode is up (`Ctrl+E`).
+    /// Whether the layout keys are live: only while arrange mode is up
+    /// (`Ctrl+F`, `Ctrl+E`).
     pub arrange: bool,
     /// The guest picker `+` opens over the focused tile in arrange mode:
     /// the selected row, an index into `Guest::ALL`, while it is open.
@@ -1020,44 +1010,31 @@ pub struct ZenState {
     pub headlines_selected: usize,
     /// The attention guest's selected row, clamped the same way.
     pub attention_selected: usize,
-    /// Whether the page has been opened this session; the first opening
-    /// lands the focus on the first chat tile so the chat keys work at once.
-    opened: bool,
 }
 
 impl ZenState {
-    pub fn new(rice: RiceLayout) -> Self {
-        Self::for_page(RicePage::Zen, rice, RiceLayout::default())
-    }
-
-    /// A page's state: `rice` is what it shows, `stock` what `R` resets
-    /// to. Zen is always arranging; Home starts with its keys as Home's.
-    pub fn for_page(page: RicePage, rice: RiceLayout, stock: RiceLayout) -> Self {
-        // Home opens on its chat from the first frame; Zen's focus lands
-        // on its chat when the page is first opened (`note_opened`).
-        let focus = match page {
-            RicePage::Zen => 0,
-            RicePage::Home => rice
-                .root
-                .leaf_kinds()
-                .iter()
-                .position(|kind| *kind == TileKind::Chat)
-                .unwrap_or(0),
-        };
+    /// The page's state: `rice` is what it shows, `stock` what `R` resets
+    /// to. It starts outside arrange mode, its keys Home's, with the focus
+    /// on its first chat tile from the first frame.
+    pub fn new(rice: RiceLayout, stock: RiceLayout) -> Self {
+        let focus = rice
+            .root
+            .leaf_kinds()
+            .iter()
+            .position(|kind| *kind == TileKind::Chat)
+            .unwrap_or(0);
         Self {
-            page,
             playback: vec![None; rice.root.leaf_count()],
             visiting: false,
             rice,
             stock,
-            arrange: page == RicePage::Zen,
+            arrange: false,
             guest_picker: None,
             focus,
             kind_picker: None,
             inbox_selected: 0,
             headlines_selected: 0,
             attention_selected: 0,
-            opened: false,
         }
     }
 
@@ -1128,14 +1105,11 @@ impl ZenState {
         self.host_of(guest).is_some()
     }
 
-    /// Whether the page draws its look's boxes: always on Zen; on Home
-    /// when the layout has a border (the stock `zen` layout, or `b` in
-    /// arrange mode), since a Home layout with none draws rules instead.
+    /// Whether the page draws its look's boxes: when the layout has a
+    /// border (the stock `zen` layout, or `b` in arrange mode), since a
+    /// layout with none draws Home's rules instead.
     fn boxed(&self) -> bool {
-        match self.page {
-            RicePage::Zen => true,
-            RicePage::Home => self.rice.look.border != BorderKind::None,
-        }
+        self.rice.look.border != BorderKind::None
     }
 
     /// The layout's gaps: the look's uniform gap when boxed; under rules
@@ -1247,18 +1221,6 @@ impl ZenState {
             return false;
         };
         self.set_focused_selection(selection.cycle(forward), now, rng)
-    }
-
-    /// The page opening: the first time this session, the focus moves to
-    /// the first chat tile (when there is one); later openings keep it.
-    pub fn note_opened(&mut self) {
-        if self.opened {
-            return;
-        }
-        self.opened = true;
-        if let Some(ordinal) = self.first_tile_of(TileKind::Chat) {
-            self.focus = ordinal;
-        }
     }
 
     /// The chat tiles in layout order: each one's ordinal and bound room
@@ -1406,12 +1368,11 @@ impl ZenState {
 
     /// Whether the focused tile may become `kind`. Chat is refused once
     /// the page holds `MAX_CHAT_TILES` of them (a tile that already is a
-    /// chat counts itself out, so it can leave and come back); the Home
-    /// only kinds are refused on Zen, and once the page holds one.
+    /// chat counts itself out, so it can leave and come back); a kind the
+    /// page holds once is refused once it holds one.
     pub fn kind_allowed(&self, kind: TileKind) -> bool {
-        if kind.home_only() {
-            return self.page == RicePage::Home
-                && (self.focused_kind() == Some(kind) || !self.shows(kind));
+        if kind.one_per_page() {
+            return self.focused_kind() == Some(kind) || !self.shows(kind);
         }
         if kind != TileKind::Chat {
             return true;
@@ -1508,35 +1469,30 @@ impl ZenState {
         self.rice.look.gap = (self.rice.look.gap + 1) % (MAX_GAP + 1);
     }
 
-    pub fn toggle_titles(&mut self) {
-        self.rice.look.titles = !self.rice.look.titles;
-    }
-
     /// Whether the tile at `ordinal` wears its title outside arrange mode:
-    /// its own say (`Node::title_at`), else its kind's default under the
-    /// page's chrome.
+    /// its own say (`Node::title_at`), else its kind's default under
+    /// Home's rules.
     pub fn rule_shown(&self, ordinal: usize) -> bool {
         let Some(kind) = self.rice.root.kind_at(ordinal) else {
             return false;
         };
-        let page_chat = self.page == RicePage::Home && self.active_chat_ordinal() == Some(ordinal);
-        let chrome = match self.page {
-            RicePage::Zen => layout::Chrome::Boxed(self.rice.look.clone()),
-            RicePage::Home => layout::Chrome::Rules { arrange: false },
-        };
-        chrome.titled(kind, page_chat, self.rice.root.title_at(ordinal))
+        let page_chat = self.active_chat_ordinal() == Some(ordinal);
+        layout::Chrome::Rules { arrange: false }.titled(
+            kind,
+            page_chat,
+            self.rice.root.title_at(ordinal),
+        )
     }
 
-    /// `t` in Home's arrange mode: the focused tile's title rule, on or
-    /// off, as its own say from now on.
+    /// `t` in arrange mode: the focused tile's title rule, on or off, as
+    /// its own say from now on.
     pub fn toggle_focused_title(&mut self) -> bool {
         let shown = self.rule_shown(self.focus);
         self.rice.root.set_title(self.focus, Some(!shown))
     }
 
-    /// Back to the stock layout (Zen's default, Home as it always drew),
-    /// with the focus on its chat so the chat keys work at once, as on the
-    /// first opening.
+    /// Back to the stock layout (`zen`'s page, or Home as it always drew),
+    /// with the focus on its chat so the chat keys work at once.
     pub fn reset(&mut self) {
         self.rice = self.stock.clone();
         // Stock leaves carry no random selection, so nothing needs a draw.

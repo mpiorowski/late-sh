@@ -49,7 +49,7 @@ without the analyzer. The CLI sends nothing while silent, so no case needs an
 explicit off message.
 
 `viz::eq_state` is the single reading every eq surface (sidebar music stage,
-Zen music and visualizer tiles) draws. The bars and caps are one renderer,
+Home's music and visualizer tiles) draws. The bars and caps are one renderer,
 `viz::dance_lines`, at any height: the music stage and music tile at three
 rows, the visualizer tile at its full height:
 

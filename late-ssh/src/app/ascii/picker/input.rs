@@ -1,5 +1,5 @@
-//! Keys on the picker, and its two doors: `open` from the focused Zen ascii
-//! tile, `pick` hands the piece under the cursor to that tile.
+//! Keys on the picker, and its two doors: `open` from the focused ascii
+//! tile on Home, `pick` hands the piece under the cursor to that tile.
 
 use std::time::Instant;
 
@@ -7,10 +7,10 @@ use super::state::{PiecePickerState, Target};
 use crate::app::input::{MouseButton, MouseEventKind, ParsedInput};
 use crate::app::state::App;
 
-/// Open on the focused ascii tile's piece (Zen's, or Home's in arrange
+/// Open on the focused ascii tile's piece (Enter on it in Home's arrange
 /// mode); nothing when the focused tile is not an ascii tile.
 pub(crate) fn open(app: &mut App) {
-    let Some(piece) = app.rice().focused_selection() else {
+    let Some(piece) = app.home.focused_selection() else {
         return;
     };
     app.piece_picker.open(piece);
@@ -22,10 +22,10 @@ fn pick(app: &mut App) {
     let piece = app.piece_picker.selected();
     app.piece_picker.close();
     if app
-        .rice_mut()
+        .home
         .set_focused_selection(piece, Instant::now(), &mut rand::thread_rng())
     {
-        app.mark_zen_layout_dirty();
+        app.mark_home_layout_dirty();
     }
 }
 

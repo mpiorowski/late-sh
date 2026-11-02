@@ -279,7 +279,7 @@ impl StatusComponent {
     /// backfills it disabled, leaving a customized bar untouched; `true`
     /// forces it on, and is reserved for what the frame shows nowhere else:
     /// the keyboard hint, the voice badge, the unread counter, the live
-    /// strip's reading (drawn only on the Home #lounge card and a Zen tile),
+    /// strip's reading (drawn only on the Home #lounge card and a Home tile hosting it),
     /// and the date. Diverges on
     /// purpose from `normalize_right_sidebar_components`, which backfills
     /// everything enabled: a sidebar panel that appears costs a user rows in a

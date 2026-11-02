@@ -12,8 +12,8 @@ use crate::app::{
     common::primitives::format_relative_time_short,
     common::theme,
     room_search_modal::state::{
-        MessageQuery, ModalQuery, PickerScope, RoomSearchModalState, filtered_items,
-        hit_room_label, parse_modal_query, resolve_message_scope,
+        MessageQuery, ModalQuery, RoomSearchModalState, filtered_items, hit_room_label,
+        parse_modal_query, resolve_message_scope,
     },
 };
 use uuid::Uuid;
@@ -33,7 +33,6 @@ pub(crate) fn draw(
     state: &RoomSearchModalState,
     chat: &ChatState,
     user_id: Uuid,
-    scope: PickerScope,
 ) {
     let popup = centered_rect(
         area,
@@ -74,7 +73,7 @@ pub(crate) fn draw(
             .split(inner);
 
             draw_query(frame, layout[0], state);
-            draw_results(frame, layout[1], state, chat, user_id, scope);
+            draw_results(frame, layout[1], state, chat, user_id);
             draw_footer(frame, layout[2], false);
         }
         ModalQuery::Messages(message_query) => {
@@ -123,9 +122,8 @@ fn draw_results(
     state: &RoomSearchModalState,
     chat: &ChatState,
     user_id: Uuid,
-    scope: PickerScope,
 ) {
-    let items = filtered_items(chat, user_id, scope, state.query());
+    let items = filtered_items(chat, user_id, state.query());
     let selected = state.selected().min(items.len().saturating_sub(1));
     if items.is_empty() {
         frame.render_widget(

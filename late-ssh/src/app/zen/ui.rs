@@ -1,4 +1,4 @@
-//! Rendering for both Zen pages. Every widget here is a thin frame around a
+//! Rendering for Home's tile tree. Every widget here is a thin frame around a
 //! renderer another domain already owns (the bonsai canvas, the aquarium
 //! reef, the pet box, the embedded room chat, the equalizer); what this
 //! file adds is the composition and the chrome.
@@ -46,7 +46,6 @@ use crate::app::{
     live::panel::LivePanelProps,
     lobby::daily::{panel::draw_daily_compact, state::DailyState},
     pet::ui::{Neighbours, PetView, draw_pet_box, status_line},
-    statusline::bar::ZenStatusRow,
 };
 
 /// A chat tile's frame: its room's label, the watcher count badge when the
@@ -81,7 +80,7 @@ pub(crate) fn chat_tile_title(label: &str, stream_badge: Option<&str>, width: u1
 
 /// What Home's own tiles read: the rail and the page's chat draw from
 /// the same render input Home has always built, the chat as the #lounge
-/// card while the lounge is selected. Built on Home alone.
+/// card while the lounge is selected.
 pub(crate) struct HomeView<'a> {
     pub chat_view: ChatRenderInput<'a>,
     pub dashboard_view: DashboardChatView<'a>,
@@ -94,16 +93,14 @@ pub(crate) struct StripGuest<'a> {
     pub hit: &'a std::cell::Cell<Option<(Rect, crate::app::live::pick::LiveSource)>>,
 }
 
-/// Everything a rice page reads, assembled once per frame in `render.rs`.
+/// Everything Home's tiles read but its rail and chat, assembled once per
+/// frame in `render.rs`.
 pub(crate) struct ZenView<'a> {
     pub zen: &'a ZenState,
     /// Home's named layouts, and the list `L` opens over them while it is
     /// up (arrange mode only).
     pub home_layouts: &'a Layouts,
     pub layout_list: Option<&'a LayoutList>,
-    /// Home's rail and chat; `None` on Zen, which draws every chat tile
-    /// from `chats`.
-    pub home: Option<HomeView<'a>>,
     /// The music stage a tall music tile draws (the sidebar's, stations
     /// and keys included); a short one keeps the track and the equalizer.
     pub music_stage: MusicStageProps<'a>,
@@ -114,9 +111,10 @@ pub(crate) struct ZenView<'a> {
     /// What waits on you (`App::attention_items`): the attention guest
     /// takes its host while the list has rows.
     pub attention: &'a [AttentionItem],
-    /// The bottom row: the user's status line and the page's keys. `None`
-    /// only on a page too small to draw.
-    pub status_row: Option<ZenStatusRow>,
+    /// Arrange mode's key footer (`statusline::bar::build_home_arrange_row`),
+    /// `None` on a row too narrow for any key. The row is the footer's
+    /// whenever `zen.arrange` is on, as `App::home_tiles_area` lays it out.
+    pub arrange_keys: Option<Line<'static>>,
     pub bonsai: &'a BonsaiState,
     /// The reef is drawn for everyone; `aquarium_owned` says whether the
     /// account has fish in it or gets the shop caption instead.
@@ -159,10 +157,13 @@ pub(crate) struct ZenView<'a> {
     pub ascii_clock: u64,
 }
 
+/// Home's page: every tile of the layout, `home` drawing the rail and the
+/// page's chat.
 pub(crate) fn draw_rice(
     frame: &mut Frame,
     area: Rect,
     mut view: ZenView<'_>,
+    home: HomeView<'_>,
     terminal_images: &mut TerminalImageFrame,
 ) {
     if !layout::rice_fits(area) {
@@ -175,11 +176,9 @@ pub(crate) fn draw_rice(
         );
         return;
     }
-    let status_row = view.status_row.take();
-    let (tiles_area, row_area) = layout::rice_areas(area, status_row.is_some());
-    // One frame per chat tile in layout order. Zoomed, the one tile drawn
-    // is the focused one, so it takes the active chat's frame, not the
-    // first.
+    let arrange_keys = view.arrange_keys.take();
+    let (tiles_area, row_area) = layout::rice_areas(area, view.zen.arrange);
+    // One frame per chat tile in layout order.
     let mut chats: Vec<Option<ZenChatTile<'_>>> = std::mem::take(&mut view.chats)
         .into_iter()
         .map(Some)
@@ -202,15 +201,12 @@ pub(crate) fn draw_rice(
         }
     }
     let guests = zen.rice.root.leaf_guests();
-    let mut home = view.home.take();
-    // Home's active chat tile is the page's chat: it draws Home's card
-    // (the rail's selection, synthetic entries included) with the card's
-    // own chrome, where every other chat tile watches its room under a
-    // rule. Zen's active tile is a chat tile like the rest.
-    let page_chat = match home {
-        Some(_) => zen.active_chat_ordinal(),
-        None => None,
-    };
+    // Taken by the page's chat, the one tile that draws from it whole.
+    let mut home = Some(home);
+    // The active chat tile is the page's chat: it draws Home's card (the
+    // rail's selection, synthetic entries included) with the card's own
+    // chrome, where every other chat tile watches its room under a rule.
+    let page_chat = zen.active_chat_ordinal();
     // A pet tile sharing an edge with a tank or a bonsai tile: the pet
     // goes and sits against that edge to watch, and alternates when it
     // touches both.
@@ -490,8 +486,8 @@ pub(crate) fn draw_rice(
             TileKind::Blank => draw_blank_tile(frame, inner, focused),
         }
     }
-    if let (Some(row), Some(row_area)) = (status_row, row_area) {
-        draw_status_row(frame, row_area, row);
+    if let (Some(keys), Some(row_area)) = (arrange_keys, row_area) {
+        frame.render_widget(Paragraph::new(keys).right_aligned(), row_area);
     }
     draw_kind_picker(frame, area, zen);
     draw_guest_picker(frame, area, zen);
@@ -844,8 +840,8 @@ fn draw_kind_picker(frame: &mut Frame, area: Rect, zen: &ZenState) {
                 ));
             } else if !allowed {
                 spans.push(Span::styled(
-                    if kind.home_only() {
-                        "home only"
+                    if kind.one_per_page() {
+                        "one per page"
                     } else {
                         "full"
                     },
@@ -864,8 +860,10 @@ fn draw_kind_picker(frame: &mut Frame, area: Rect, zen: &ZenState) {
 }
 
 /// The keys a tile answers to, named on the right of its title so the
-/// page explains itself in one place per tile; `t` hides the titles and
-/// the keys with them. The layout keys are the guide's (`?`).
+/// page explains itself in one place per tile; `t` hides the title and the
+/// keys with it. The tile keys of an ascii, tank, Inbox or Headlines tile
+/// run in arrange mode, where those tiles take the focus, so they are named
+/// only there. The layout keys are the guide's (`?`).
 fn tile_keys(
     kind: TileKind,
     page_chat: bool,
@@ -873,18 +871,22 @@ fn tile_keys(
 ) -> &'static [(&'static str, &'static str)] {
     match kind {
         TileKind::Bonsai => &[("w", "tend")],
-        TileKind::Ascii => &[("[ ]", "piece"), ("Enter", "pick"), ("z", "full")],
-        TileKind::Aquarium | TileKind::Tank if view.aquarium_owned => &[("a", "feed")],
+        TileKind::Ascii if view.zen.arrange => &[("[ ]", "piece"), ("Enter", "pick")],
+        TileKind::Ascii => &[],
+        TileKind::Aquarium | TileKind::Tank if view.aquarium_owned && view.zen.arrange => {
+            &[("a", "feed")]
+        }
         TileKind::Aquarium | TileKind::Tank => &[],
         TileKind::Pet if view.pet_strip.is_some() => &[("click", "pet")],
         TileKind::Pet => &[],
         // Home's chat keys are the rail's outside arrange mode; a chat
         // tile that only watches is a click away from being the page's.
-        TileKind::Chat if view.home.is_some() && !view.zen.arrange => match page_chat {
+        TileKind::Chat if !view.zen.arrange => match page_chat {
             true => &[("h l ctrl+/", "room"), ("i", "write")],
             false => &[("click", "focus")],
         },
-        TileKind::Chat => &[("[ ] ctrl+/", "room"), ("i", "write")],
+        // Arranging, a focused chat tile's room keys still bind it.
+        TileKind::Chat => &[("[ ] ctrl+/", "room")],
         TileKind::Music => &[
             ("m", "mute"),
             ("-=", "vol"),
@@ -892,8 +894,9 @@ fn tile_keys(
             ("v1-5", "tune"),
         ],
         TileKind::Lobby => &[("ctrl+g", "open"), ("`", "toggle")],
-        TileKind::Inbox => &[("jk", "pick"), ("enter", "open")],
-        TileKind::Headlines => &[("jk", "pick"), ("enter", "copy")],
+        TileKind::Inbox if view.zen.arrange => &[("jk", "pick"), ("enter", "open")],
+        TileKind::Headlines if view.zen.arrange => &[("jk", "pick"), ("enter", "copy")],
+        TileKind::Inbox | TileKind::Headlines => &[],
         TileKind::Live => &[("s1-4", "open")],
         TileKind::Clock
         | TileKind::Visualizer
@@ -1048,17 +1051,6 @@ pub(crate) fn care_bar_spans(bar: CareBar) -> Vec<Span<'static>> {
         Span::styled("●".repeat(filled), Style::default().fg(color)),
         Span::styled("○".repeat(empty), Style::default().fg(theme::TEXT_FAINT())),
     ]
-}
-
-/// The user's status line on the left, the layout keys on the right (the
-/// rest are in the guide, `?`); each tile names its own in its title.
-fn draw_status_row(frame: &mut Frame, area: Rect, row: ZenStatusRow) {
-    if let Some(bar) = row.bar {
-        frame.render_widget(Paragraph::new(bar), area);
-    }
-    if let Some(keys) = row.keys {
-        frame.render_widget(Paragraph::new(keys).right_aligned(), area);
-    }
 }
 
 /// `hint_line` with as many leading hints as fit in `width` cells.
