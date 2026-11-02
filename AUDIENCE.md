@@ -314,11 +314,12 @@ Live, in order of evidence behind them:
     Edition's front page as a card (the most played arcade game with its
     ASCII picture, the day in numbers, then the heads of the prose
     columns; linking the edition); on Sunday the week in every game (a
-    scoreboard card, one line per game anyone played with its best and
-    no name: the arcade's daily puzzles and high scores, the Lobby's
-    chess, pool and card games by wins that paid, the doors by their top
-    run). A day whose kind has nothing falls through to the next, and a
-    day with nothing at all posts nothing.
+    scoreboard card, one line per game anyone played with everyone's
+    plays added up and no name: the arcade's daily puzzles solved and
+    score runs finished, the Lobby's chess, pool and card games by matches
+    finished, the doors by every hub card's openings). A day whose kind
+    has nothing falls through to the next, and a day with nothing at all
+    posts nothing.
     The wall moves on every day whatever the herald posts, so a piece
     whose day is a paper day or a Sunday hangs over the door unposted,
     and no piece is posted twice. Alt text and the kind's tags. The first design alternated the board with

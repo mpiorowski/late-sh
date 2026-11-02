@@ -33,7 +33,7 @@ pub enum HeraldKind {
     Artboard,
     /// A piece a member hung in the gallery, once.
     Piece,
-    /// The week's best in every game, on Sundays.
+    /// Everything played in the week, game by game, on Sundays.
     Scoreboard,
     /// The Late Edition's card, on its paper days.
     Paper,

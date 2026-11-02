@@ -7,7 +7,7 @@
 use chrono::{DateTime, Datelike, Duration, NaiveDate, NaiveTime, Utc, Weekday};
 use dartboard_core::{Canvas, CellValue};
 use late_core::models::herald::HeraldKind;
-use late_core::models::leaderboard::{ArcadeGame, WeekBest, week_first_day};
+use late_core::models::leaderboard::{ArcadeGame, DayTally, week_first_day};
 use late_core::models::paper::PaperSectionKind;
 use serde::{Deserialize, Serialize};
 use tokio::sync::broadcast;
@@ -255,9 +255,9 @@ pub(crate) struct PieceCandidate {
     pub(crate) artist: String,
 }
 
-/// The week's best in every game (the arcade, the Lobby, the doors), one
-/// line per game anyone played, nobody named: the card is public and the
-/// names stay on the terminal's boards.
+/// The week in every game (the arcade, the Lobby, the doors): one line
+/// per game anyone played with everyone's plays added up, nobody named:
+/// the card is public and the names stay on the terminal's boards.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ScoreboardCandidate {
     /// The week's last day; it runs `WEEK_DAYS` back from here.
@@ -268,23 +268,25 @@ pub(crate) struct ScoreboardCandidate {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct ScoreLine {
     pub(crate) game: String,
-    /// `6 wins`, `12,340`.
-    pub(crate) best: String,
+    /// `1 play`, `1,234 plays`. Rows picked before the week counted
+    /// plays stored the field as `best`.
+    #[serde(alias = "best")]
+    pub(crate) plays: String,
 }
 
 impl ScoreboardCandidate {
     /// The week ending `last`, if anyone played in it.
-    pub(crate) fn of(last: NaiveDate, bests: &[WeekBest]) -> Option<Self> {
-        if bests.is_empty() {
+    pub(crate) fn of(last: NaiveDate, tallies: &[DayTally]) -> Option<Self> {
+        if tallies.is_empty() {
             return None;
         }
         Some(Self {
             last,
-            lines: bests
+            lines: tallies
                 .iter()
-                .map(|best| ScoreLine {
-                    game: best.game.title().to_string(),
-                    best: best.shown_value(),
+                .map(|tally| ScoreLine {
+                    game: tally.game.title().to_string(),
+                    plays: tally.shown_plays(),
                 })
                 .collect(),
         })
@@ -810,7 +812,7 @@ fn speech(picture: &Picture) -> (String, &'static [&'static str]) {
         ),
         Picture::Scoreboard(scoreboard) => (
             format!(
-                "The week's best in every late.sh game, {}: the daily puzzles, the arcade's high scores, chess and pool in the Lobby, the roguelike doors, all played in a terminal.",
+                "Everything played on late.sh, {}: the daily puzzles, the arcade, chess and pool in the Lobby, the doors, all in a terminal.",
                 week_span(scoreboard.last),
             ),
             &SCOREBOARD_TAGS,
@@ -874,7 +876,7 @@ pub(crate) fn note_text(picture: &Picture, web_url: &str) -> String {
             piece.artist
         ),
         Picture::Scoreboard(scoreboard) => format!(
-            "The week's best in every late.sh game, to {}",
+            "Everything played on late.sh in the week to {}",
             long_date(scoreboard.last)
         ),
         Picture::Paper(paper) => format!("The Late Edition for {}", long_date(paper.edition)),
@@ -922,12 +924,12 @@ pub(crate) fn alt_text(picture: &Picture, look: &Look) -> Option<String> {
             piece.title,
         ),
         (Picture::Scoreboard(scoreboard), _) => cut_alt(&format!(
-            "A scoreboard in green and grey terminal text: the week's best in every late.sh game, {}. {}.",
+            "A scoreboard in green and grey terminal text: everything played on late.sh, {}, game by game. {}.",
             week_span(scoreboard.last),
             scoreboard
                 .lines
                 .iter()
-                .map(|line| format!("{}: {}", line.game, line.best))
+                .map(|line| format!("{}: {}", line.game, line.plays))
                 .collect::<Vec<_>>()
                 .join("; "),
         )),

@@ -52,11 +52,11 @@ fn scoreboard() -> ScoreboardCandidate {
         lines: vec![
             ScoreLine {
                 game: "Sudoku".to_string(),
-                best: "6 wins".to_string(),
+                plays: "61 plays".to_string(),
             },
             ScoreLine {
                 game: "Lateris".to_string(),
-                best: "12,340".to_string(),
+                plays: "1,234 plays".to_string(),
             },
         ],
     }
@@ -456,7 +456,7 @@ fn the_look_round_trips_and_writes_the_alt() {
             "ASCII art: A burning refinery across the top.",
             "ASCII art: the late.sh Artboard, a shared terminal canvas, as it stood at the end of 22 October 2026 UTC. Coloured text glyphs on a dark background.",
             "ASCII art: \"harbour at dusk\", a piece hung in the late.sh gallery. Coloured text glyphs on a dark background.",
-            "A scoreboard in green and grey terminal text: the week's best in every late.sh game, 18 October to 24 October 2026. Sudoku: 6 wins; Lateris: 12,340.",
+            "A scoreboard in green and grey terminal text: everything played on late.sh, 18 October to 24 October 2026, game by game. Sudoku: 61 plays; Lateris: 1,234 plays.",
             "The front page of the Late Edition, late.sh's daily paper, for 24 October 2026, in terminal text. Most played yesterday: Sudoku, 3 games finished. Yesterday on late.sh: Booth: 2 tracks queued; Arcade: 3 games finished, all Sudoku. What we were reading: Someone shared a fine link. Outside: The world turned.",
         ]
     );
