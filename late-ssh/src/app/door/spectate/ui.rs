@@ -400,9 +400,7 @@ fn suggestion_hint(game: SpectateGame, side: ChatSide<'_>) -> &'static str {
         (
             SpectateGame::Dcss | SpectateGame::Nethack | SpectateGame::Brogue,
             ChatSide::Player { .. },
-        ) => {
-            " \u{b7} Esc to the game"
-        }
+        ) => " \u{b7} Esc to the game",
     }
 }
 

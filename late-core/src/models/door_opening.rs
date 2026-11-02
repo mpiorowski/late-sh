@@ -4,9 +4,11 @@
 //! A row is one Enter on a hub card that launches, by one account, at one
 //! moment: late-ssh's `app/door/hub` writes it after the card's gate and
 //! before the connect. A member who quits and comes back opens the door
-//! again, so a day's rows count openings, never runs or people. The
-//! paper's YESTERDAY column reads them per card through
-//! `leaderboard::day_tallies` (`DayGame::Door`).
+//! again, and a launch that then fails still counts, so the rows count
+//! openings, never runs or people. Two readers take them per card
+//! (`DayGame::Door`): the paper's YESTERDAY column through
+//! `leaderboard::day_tallies`, and the herald's public Sunday card through
+//! `leaderboard::week_tallies`.
 
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -78,8 +80,8 @@ impl DoorCard {
         Self::ALL.iter().copied().find(|card| card.key() == key)
     }
 
-    /// The card's name as the hub prints it, for the paper's Doors line.
-    /// The roguelikes' match `leaderboard::DoorGame::title`.
+    /// The card's name as the hub prints it, for the paper's Doors line and
+    /// the herald's public Sunday card. The roguelikes' match `leaderboard::DoorGame::title`.
     pub const fn title(self) -> &'static str {
         match self {
             Self::NightCity => "Night City",
