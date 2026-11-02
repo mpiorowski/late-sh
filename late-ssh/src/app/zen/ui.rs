@@ -18,7 +18,7 @@ use super::{
     bigclock,
     layout::{self, Chrome, FLOOR_ROWS},
     presets::{LayoutList, Layouts, MAX_LAYOUT_NAME_CHARS, NamePurpose},
-    state::{BorderKind, Guest, TileKind, ZenState},
+    state::{BorderKind, Guest, TileKind, TileTitle, ZenState},
 };
 use late_core::models::aquarium_care::CARE_DAYS;
 use late_core::models::presence_sample::HeadcountPoint;
@@ -121,7 +121,7 @@ pub(crate) struct ZenView<'a> {
     /// account has fish in it or gets the shop caption instead.
     pub aquarium: &'a AquariumState,
     pub aquarium_owned: bool,
-    /// The owner's care: the title bar's fourteen dots read off it.
+    /// The owner's care: the care bar's fourteen dots read off it.
     pub aquarium_care: &'a AquariumCare,
     /// `None` when the account owns no pet.
     pub pet_strip: Option<PetView<'a>>,
@@ -306,8 +306,10 @@ pub(crate) fn draw_rice(
                     title.push_str(" +");
                     title.push_str(guest.label());
                 }
-                if !zen.rule_shown(ordinal) {
-                    title.push_str(" · hidden");
+                match zen.rice.root.title_at(ordinal) {
+                    TileTitle::Named => {}
+                    TileTitle::Rule => title.push_str(" · rule"),
+                    TileTitle::Hidden => title.push_str(" · hidden"),
                 }
                 title
             }
@@ -904,7 +906,7 @@ fn draw_tile_chrome(
     rect: Rect,
     kind: TileKind,
     page_chat: bool,
-    title_override: Option<bool>,
+    title_override: TileTitle,
     title: &str,
     keys: &[(&str, &str)],
     focused: bool,
@@ -918,13 +920,18 @@ fn draw_tile_chrome(
         Chrome::Boxed(look) => look,
         Chrome::Rules { arrange } => {
             let inner = layout::tile_inner(rect, chrome, kind, page_chat, title_override);
-            if !chrome.titled(title_override) {
-                return inner;
+            let row = Rect::new(inner.x, rect.y, inner.width, 1);
+            match chrome.wears(title_override) {
+                TileTitle::Hidden => return inner,
+                TileTitle::Rule => {
+                    crate::app::common::sidebar::draw_bare_rule(frame, row, glow);
+                    return inner;
+                }
+                TileTitle::Named => {}
             }
             // The sidebar's rule, the title italic and dim, lit amber while
             // the focus is on it in arrange mode or the lobby glows, with
             // the tile's keys and tail on its right end.
-            let row = Rect::new(inner.x, rect.y, inner.width, 1);
             draw_panel_rule(frame, row, title, glow || (*arrange && focused));
             let mut right: Vec<Span<'static>> = Vec::new();
             let hints = hint_line(keys);
@@ -934,7 +941,7 @@ fn draw_tile_chrome(
             }
             let right = Line::from(right);
             let used = 3 + title.chars().count() + 1;
-            if right.width() > 0 && right.width() + used < row.width as usize {
+            if right.width() > 0 && right.width() + used <= row.width as usize {
                 frame.render_widget(Paragraph::new(right).right_aligned(), row);
             }
             return inner;
@@ -965,7 +972,7 @@ fn draw_tile_chrome(
                 .borders(Borders::ALL)
                 .border_type(border_type)
                 .border_style(ring);
-            if chrome.titled(title_override) {
+            if chrome.wears(title_override) == TileTitle::Named {
                 let left = Line::from(vec![Span::styled(format!(" {title} "), title_style)]);
                 // The corners take two cells; the keys need a cell of
                 // border on each side of them to read as a second title.
@@ -1306,8 +1313,14 @@ fn draw_visualizer_tile(frame: &mut Frame, area: Rect, wall_tick: usize, eq_stat
 
 /// The board's day across the top of Home, over every tile: today's
 /// all-day posts in amber, the board's colour, the board's key flush right
-/// in the strip's key style.
+/// in the strip's key style, one column in from each edge.
 fn draw_board_day(frame: &mut Frame, row: Rect, text: &str) {
+    let row = Rect::new(
+        row.x.saturating_add(1),
+        row.y,
+        row.width.saturating_sub(2),
+        row.height,
+    );
     let width = usize::from(row.width);
     let hint = crate::app::live::ui::key_hint_spans(
         width,
@@ -1691,9 +1704,13 @@ fn draw_centered_note(frame: &mut Frame, area: Rect, rows: &[&str]) {
         return;
     }
     let faint = Style::default().fg(theme::TEXT_FAINT());
+    // A row wider than the tile wraps at its words, so a narrow tile never
+    // cuts the note off. The wrap keeps the space it broke at; a trailing
+    // one would pull the centred row off centre.
     let mut lines: Vec<Line<'static>> = rows
         .iter()
-        .map(|row| Line::from(Span::styled(row.to_string(), faint)))
+        .flat_map(|row| crate::app::common::markdown::wrap_plain_line(row, usize::from(area.width)))
+        .map(|row| Line::from(Span::styled(row.trim_end().to_string(), faint)))
         .collect();
     let top_pad = (area.height as usize).saturating_sub(lines.len()) / 2;
     let mut padded = Vec::with_capacity(top_pad + lines.len());

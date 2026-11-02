@@ -285,12 +285,14 @@ pub enum Node {
             skip_serializing_if = "Option::is_none"
         )]
         piece: Option<AsciiSelection>,
-        /// Whether the tile wears its title rule on Home, outside arrange
-        /// mode; `None` (the stored default) is on, for every kind. `t`
-        /// in arrange mode sets it. Under the boxed chrome `Some(false)`
-        /// drops the title text.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        title: Option<bool>,
+        /// What the tile wears on its top row on Home, outside arrange
+        /// mode. `t` in arrange mode walks the three.
+        #[serde(
+            default,
+            deserialize_with = "known_title",
+            skip_serializing_if = "TileTitle::is_named"
+        )]
+        title: TileTitle,
     },
     Split {
         dir: Dir,
@@ -298,6 +300,59 @@ pub enum Node {
         first: Box<Node>,
         second: Box<Node>,
     },
+}
+
+/// What a tile wears on its top row on Home, outside arrange mode. Arrange
+/// mode names every tile whatever it says, so the focus has a rule to light.
+/// Under the boxed chrome only `Named` draws text; the border is already a
+/// rule, so `Rule` and `Hidden` look the same there.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TileTitle {
+    /// `── name ───── keys`: the rule with the tile's name and key hints.
+    #[default]
+    Named,
+    /// `─────────────────`: the rule alone, no text.
+    Rule,
+    /// No row at all: the tile starts at its rect's top.
+    Hidden,
+}
+
+impl TileTitle {
+    /// The next one `t` lands on.
+    pub fn next(self) -> Self {
+        match self {
+            TileTitle::Named => TileTitle::Rule,
+            TileTitle::Rule => TileTitle::Hidden,
+            TileTitle::Hidden => TileTitle::Named,
+        }
+    }
+
+    fn is_named(&self) -> bool {
+        match self {
+            TileTitle::Named => true,
+            TileTitle::Rule | TileTitle::Hidden => false,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StoredTitle {
+    Mode(TileTitle),
+    /// What `t` wrote when a title was only on or off.
+    OnOrOff(bool),
+    Unknown(serde::de::IgnoredAny),
+}
+
+/// A stored `title`: a mode this build knows, the older on or off, or the
+/// name for anything else, so the rest of the layout reads as stored.
+fn known_title<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<TileTitle, D::Error> {
+    Ok(match StoredTitle::deserialize(deserializer)? {
+        StoredTitle::Mode(title) => title,
+        StoredTitle::OnOrOff(true) | StoredTitle::Unknown(_) => TileTitle::Named,
+        StoredTitle::OnOrOff(false) => TileTitle::Hidden,
+    })
 }
 
 /// A stored `piece` key: a piece this build knows, or `None` for one it
@@ -337,7 +392,7 @@ impl Node {
             guests: Vec::new(),
             room: None,
             piece: None,
-            title: None,
+            title: TileTitle::Named,
         }
     }
 
@@ -351,7 +406,7 @@ impl Node {
                 .collect(),
             room: None,
             piece: None,
-            title: None,
+            title: TileTitle::Named,
         }
     }
 
@@ -532,17 +587,23 @@ impl Node {
         }
     }
 
-    /// The leaf's own say on its title rule, `None` for the kind's default.
-    pub fn title_at(&self, ordinal: usize) -> Option<bool> {
+    /// What the leaf at `ordinal` wears on its top row outside arrange mode.
+    pub fn title_at(&self, ordinal: usize) -> TileTitle {
         let mut remaining = ordinal;
         match self.leaf_ref(&mut remaining) {
             Some(Node::Leaf { title, .. }) => *title,
-            _ => None,
+            _ => TileTitle::Named,
         }
     }
 
-    /// Give the leaf at `ordinal` its own say on its title rule.
-    pub fn set_title(&mut self, ordinal: usize, new_title: Option<bool>) -> bool {
+    /// This leaf with no top row outside arrange mode.
+    pub fn untitled(mut self) -> Self {
+        self.set_title(0, TileTitle::Hidden);
+        self
+    }
+
+    /// Set what the leaf at `ordinal` wears on its top row.
+    pub fn set_title(&mut self, ordinal: usize, new_title: TileTitle) -> bool {
         let mut remaining = ordinal;
         match self.leaf_mut(&mut remaining) {
             Some(Node::Leaf { title, .. }) => {
@@ -614,7 +675,7 @@ impl Node {
     /// Change what the leaf at `ordinal` shows. A tile that stops being a
     /// chat forgets its room, so cycling back lands on the current room;
     /// one that stops being an ascii tile forgets its piece the same way,
-    /// and a new kind starts with its own default title rule.
+    /// and a new kind starts with its name in its title.
     pub fn set_kind(&mut self, ordinal: usize, new_kind: TileKind) -> bool {
         let mut remaining = ordinal;
         match self.leaf_mut(&mut remaining) {
@@ -632,7 +693,7 @@ impl Node {
                 if new_kind != TileKind::Ascii {
                     *piece = None;
                 }
-                *title = None;
+                *title = TileTitle::Named;
                 true
             }
             _ => false,
@@ -877,9 +938,13 @@ pub const HOME_RAIL_COLS: u16 = 24;
 pub const HOME_SIDEBAR_COLS: u16 = 24;
 /// The sidebar's pinned rows: the online count with the clock, the friends.
 pub const PRESENCE_ROWS: u16 = 2;
-/// The stock Home's reef, across the top of the chat: tall enough for the
-/// reef form (`zen::ui::reef_form`) with the now strip over it.
-pub const HOME_AQUARIUM_ROWS: u16 = 14;
+/// The stock Home's reef, across the top of the chat: the reef's minimum,
+/// its surface and floor around the tallest creature (`ReefState::min_height`,
+/// eleven rows while that is Bigbert), so the fish swim in arrange mode too,
+/// where the title takes the extra row this tile has outside it.
+pub const HOME_AQUARIUM_ROWS: u16 = 11;
+/// The stock lobby tile: two tables over the status line.
+pub const HOME_LOBBY_ROWS: u16 = 3;
 
 impl RiceLayout {
     /// Parse a stored layout; anything unreadable falls back to `fallback`,
@@ -908,7 +973,9 @@ impl RiceLayout {
         let center = Node::split_first(
             Dir::Column,
             HOME_AQUARIUM_ROWS + 1,
-            Node::hosting(TileKind::Aquarium, &[Guest::Now]),
+            // The row the title takes in arrange mode stays the reef's
+            // outside it, so nothing moves when the mode comes up.
+            Node::hosting(TileKind::Aquarium, &[Guest::Now]).untitled(),
             Node::leaf(TileKind::Chat),
         );
         // The sidebar's panels, each at its rows plus its title rule; the
@@ -922,13 +989,10 @@ impl RiceLayout {
                 TileKind::Music,
                 crate::app::common::sidebar::MUSIC_DOCK_HEIGHT,
             ),
-            (
-                TileKind::Lobby,
-                crate::app::lobby::daily::panel::DAILY_PANEL_HEIGHT,
-            ),
+            (TileKind::Lobby, HOME_LOBBY_ROWS),
             (TileKind::Live, crate::app::live::panel::LIVE_PANEL_HEIGHT),
-            // The pet's mood row over its box.
-            (TileKind::Pet, super::layout::FLOOR_ROWS + 1),
+            // The pet's box and nothing else: no mood row.
+            (TileKind::Pet, super::layout::FLOOR_ROWS),
         ];
         // The lobby hosts attention: what waits on you takes its tile over
         // and the latest tables come back when the list clears.
@@ -958,14 +1022,14 @@ impl RiceLayout {
         let sidebar = Node::split_first(
             Dir::Column,
             PRESENCE_ROWS,
-            Node::leaf(TileKind::Presence),
+            Node::leaf(TileKind::Presence).untitled(),
             column,
         );
         Self {
             root: Node::split_first(
                 Dir::Row,
                 HOME_RAIL_COLS - 1,
-                Node::leaf(TileKind::Rooms),
+                Node::leaf(TileKind::Rooms).untitled(),
                 Node::split_second(Dir::Row, HOME_SIDEBAR_COLS - 1, center, sidebar),
             ),
             look: Look {
@@ -1479,20 +1543,11 @@ impl ZenState {
         self.rice.look.gap = (self.rice.look.gap + 1) % (MAX_GAP + 1);
     }
 
-    /// Whether the tile at `ordinal` wears its title outside arrange mode:
-    /// its own say (`Node::title_at`), else on.
-    pub fn rule_shown(&self, ordinal: usize) -> bool {
-        if self.rice.root.kind_at(ordinal).is_none() {
-            return false;
-        }
-        layout::Chrome::Rules { arrange: false }.titled(self.rice.root.title_at(ordinal))
-    }
-
-    /// `t` in arrange mode: the focused tile's title rule, on or off, as
-    /// its own say from now on.
-    pub fn toggle_focused_title(&mut self) -> bool {
-        let shown = self.rule_shown(self.focus);
-        self.rice.root.set_title(self.focus, Some(!shown))
+    /// `t` in arrange mode: the focused tile's title moves on to the next
+    /// mode: named, the rule alone, no row.
+    pub fn cycle_focused_title(&mut self) -> bool {
+        let next = self.rice.root.title_at(self.focus).next();
+        self.rice.root.set_title(self.focus, next)
     }
 
     /// Back to the stock layout (`zen`'s page, or Home as it always drew),

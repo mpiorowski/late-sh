@@ -335,9 +335,6 @@
   .h-0 {
     height: calc(var(--spacing) * 0);
   }
-  .h-1 {
-    height: calc(var(--spacing) * 1);
-  }
   .h-1\.5 {
     height: calc(var(--spacing) * 1.5);
   }
@@ -346,9 +343,6 @@
   }
   .min-h-screen {
     min-height: 100vh;
-  }
-  .w-1 {
-    width: calc(var(--spacing) * 1);
   }
   .w-1\.5 {
     width: calc(var(--spacing) * 1.5);
@@ -392,9 +386,6 @@
   .grow {
     flex-grow: 1;
   }
-  .border-collapse {
-    border-collapse: collapse;
-  }
   .transform {
     transform: var(--tw-rotate-x,) var(--tw-rotate-y,) var(--tw-rotate-z,) var(--tw-skew-x,) var(--tw-skew-y,);
   }
@@ -428,13 +419,6 @@
   .gap-4 {
     gap: calc(var(--spacing) * 4);
   }
-  .space-y-1 {
-    :where(& > :not(:last-child)) {
-      --tw-space-y-reverse: 0;
-      margin-block-start: calc(calc(var(--spacing) * 1) * var(--tw-space-y-reverse));
-      margin-block-end: calc(calc(var(--spacing) * 1) * calc(1 - var(--tw-space-y-reverse)));
-    }
-  }
   .space-y-1\.5 {
     :where(& > :not(:last-child)) {
       --tw-space-y-reverse: 0;
@@ -455,9 +439,6 @@
       margin-block-start: calc(calc(var(--spacing) * 3) * var(--tw-space-y-reverse));
       margin-block-end: calc(calc(var(--spacing) * 3) * calc(1 - var(--tw-space-y-reverse)));
     }
-  }
-  .gap-x-2 {
-    column-gap: calc(var(--spacing) * 2);
   }
   .gap-x-2\.5 {
     column-gap: calc(var(--spacing) * 2.5);
@@ -518,9 +499,6 @@
   .border-green-700 {
     border-color: var(--color-green-700);
   }
-  .border-red-900 {
-    border-color: var(--color-red-900);
-  }
   .border-red-900\/60 {
     border-color: color-mix(in srgb, oklch(39.6% 0.141 25.723) 60%, transparent);
     @supports (color: color-mix(in lab, red, red)) {
@@ -557,9 +535,6 @@
   .bg-green-400 {
     background-color: var(--color-green-400);
   }
-  .bg-red-950 {
-    background-color: var(--color-red-950);
-  }
   .bg-red-950\/20 {
     background-color: color-mix(in srgb, oklch(25.8% 0.092 26.042) 20%, transparent);
     @supports (color: color-mix(in lab, red, red)) {
@@ -583,9 +558,6 @@
   }
   .px-5 {
     padding-inline: calc(var(--spacing) * 5);
-  }
-  .py-0 {
-    padding-block: calc(var(--spacing) * 0);
   }
   .py-0\.5 {
     padding-block: calc(var(--spacing) * 0.5);

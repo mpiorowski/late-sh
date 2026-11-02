@@ -3,7 +3,7 @@
 
 use ratatui::layout::Rect;
 
-use super::state::{BorderKind, Dir, Look, Node, Share, TileKind};
+use super::state::{BorderKind, Dir, Look, Node, Share, TileKind, TileTitle};
 use crate::app::pet::ui::{Neighbours, WatchSide};
 
 /// The cells between siblings: `row` between the children of a row split
@@ -40,14 +40,18 @@ pub enum Chrome {
 }
 
 impl Chrome {
-    /// Whether a tile of `kind` wears a title row under this chrome;
-    /// Every tile wears a title unless it says otherwise (`title`, the
-    /// leaf's own say from `t`, `Node::title_at`). Arrange mode titles
-    /// every tile, so the focus always has a rule to light.
-    pub fn titled(&self, title: Option<bool>) -> bool {
+    /// What a tile wearing `title` (`Node::title_at`, set with `t`) draws on
+    /// its top row under this chrome. Arrange mode names every tile, so the
+    /// focus always has a rule to light. A border is already a rule, so boxed
+    /// tiles have only the name or nothing.
+    pub fn wears(&self, title: TileTitle) -> TileTitle {
         match self {
-            Chrome::Boxed(look) => look.titles && title.unwrap_or(true),
-            Chrome::Rules { arrange } => *arrange || title.unwrap_or(true),
+            Chrome::Boxed(look) => match (look.titles, title) {
+                (true, TileTitle::Named) => TileTitle::Named,
+                (true, TileTitle::Rule | TileTitle::Hidden) | (false, _) => TileTitle::Hidden,
+            },
+            Chrome::Rules { arrange: true } => TileTitle::Named,
+            Chrome::Rules { arrange: false } => title,
         }
     }
 }
@@ -241,13 +245,13 @@ pub fn tile_inner(
     chrome: &Chrome,
     kind: TileKind,
     page_chat: bool,
-    title: Option<bool>,
+    title: TileTitle,
 ) -> Rect {
-    let titled = chrome.titled(title);
+    let wears = chrome.wears(title);
     match chrome {
         Chrome::Boxed(look) => match look.border {
             BorderKind::None => {
-                if titled {
+                if wears == TileTitle::Named {
                     Rect::new(
                         rect.x,
                         rect.y + 1.min(rect.height),
@@ -266,7 +270,10 @@ pub fn tile_inner(
             ),
         },
         Chrome::Rules { .. } => {
-            let top = if titled { 1.min(rect.height) } else { 0 };
+            let top = match wears {
+                TileTitle::Named | TileTitle::Rule => 1.min(rect.height),
+                TileTitle::Hidden => 0,
+            };
             let (x, width) = match (kind, page_chat) {
                 (TileKind::Chat, true) | (TileKind::Rooms, _) => (rect.x, rect.width),
                 _ => (rect.x + 1.min(rect.width), rect.width.saturating_sub(2)),

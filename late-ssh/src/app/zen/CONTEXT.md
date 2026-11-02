@@ -122,8 +122,12 @@ chat (`aquarium`, `HOME_AQUARIUM_ROWS`) hosting the now strip, the chat
 under it (a `chat` bound to no room, so it shows the rail's; a stored
 `center` reads as one), and the sidebar column (`HOME_SIDEBAR_COLS`):
 `presence`, then `visualizer` (the band's three rows), `music` (the dock's
-twelve), `lobby` hosting attention, `live` at its panel rows, `pet` (its
-mood row over its box) and `bonsai` taking the rest. An unowned reef
+twelve), `lobby` hosting attention (three rows: two tables over the status
+line), `live` at its panel rows, `pet` (its three-row box, no mood row) and
+`bonsai` taking the rest. The rail, the reef and `presence` take their
+title off outside arrange mode (`Node::untitled`, `Node::title_at`): the
+reef keeps the row for water, so nothing moves when the mode comes up, and
+`presence` gets both its rows. An unowned reef
 or pet draws the shop's note in its tile. The Settings panel list is the
 Arcade's alone. `R` resets to the stock. Nothing about the terminal's size
 changes a layout: a page is drawn as arranged at every width, so a phone
@@ -158,8 +162,9 @@ lit while the lobby glows or, in arrange mode, the focus is on it), a
 column of air on each side of every tile but the page's chat and the
 rail, and the gutter of each row split painted as one `│`
 (`layout::row_gutters`, `Gaps { row: 1, col: 0 }`). Every tile wears a
-title rule unless `t` took it off (`Chrome::titled`); in arrange mode
-every tile has one whatever it says, so the focus has a ring to land on.
+title rule, and `t` picks one of three for it (`TileTitle`, `Chrome::wears`):
+named, the rule alone with no text, or no row at all. In arrange mode every
+tile is named whatever it says, so the focus has a ring to land on.
 The rule is the tile's name on the left and its key hint on the right
 (`tile_keys`: the key that matters most on the tile, `w tend`, `m mute`,
 `ctrl+/ room`), nothing else. A hint says when it works (`HintWhen`): a
@@ -269,7 +274,7 @@ and the debounced flush. `late-core`: `extract_key_home_layouts` /
 Where they are shown: each tile names its own keys on the right of its
 title (`tile_keys`, drawn with `hint_line` so the key is amber and the
 word dim), the arrange-only ones (an ascii tile's pieces, the tank's feed,
-a chat's `[` `]`, the attention guest's rows) only while arranging with the focus on the tile; `t` hides them
+a chat's `[` `]`, the attention guest's rows) only while arranging with the focus on the tile; `t` takes them away
 with the title. In arrange mode `?` opens `HelpTopic::Layouts`, which
 lists every key, and the bottom row is a footer naming the mode's keys
 (`HOME_ARRANGE_KEYS`, trimmed from the right on a narrow page). Nothing
@@ -316,10 +321,13 @@ included. In it:
   parse. The layout keys that change the tree are uppercase (`S` `X` `F`
   `R`), keeping the lowercase letters free for the tiles' own keys.
 - `b` cycles the border (a border boxes the layout in its look, none
-  draws Home's rules), `g` the gap between boxed tiles, and `t` gives the
-  focused tile its own say on its title rule (`Node::title_at`, stored on
-  the leaf; `None` is on, for every kind; arrange mode titles every tile
-  and marks one that goes bare outside it `· hidden`).
+  draws Home's rules), `g` the gap between boxed tiles, and `t` walks the
+  focused tile's title through named, rule, hidden (`TileTitle`,
+  `Node::title_at`, stored on the leaf and absent while named; a stored
+  true or false from before reads as named or hidden). A rule alone costs
+  the row a name does, and a lobby with a game waiting lights it. Arrange
+  mode names every tile and marks the others `· rule` or `· hidden`. Under
+  a border only the name draws: the border is already a rule.
 - A digit `1`..`9` loads that layout and leaves the mode
   (`zen::input::load_layout`: the page goes into its own slot first; so
   `Ctrl+E 2` is the stock `zen` in two keystrokes, like a tmux prefix),

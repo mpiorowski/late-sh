@@ -16,7 +16,7 @@ delta against the design):
 
 - Home renders through the tree (`App::home`), with the stock Home fixed:
   the rail, the reef over the chat, and the sidebar column (presence,
-  music, lobby, live, bonsai, pet). `Ctrl+E` is Home's one layouts chord
+  visualizer, music, lobby, live, pet, bonsai). `Ctrl+E` is Home's one layouts chord
   (arrange mode, then a digit or `L`; `Ctrl+F` is unbound). There is no
   Zen screen: its tree is the stock layout `zen`
   (layout 2), which `/zen` (`/layout zen`) and the status line's care
@@ -125,7 +125,7 @@ layout.
   never doubled (`DESIGN_GUIDE.md` section 8: one pane owns the divider).
 - A horizontal split draws the lower tile's title rule as its divider.
   A tile with no title (chat, the reef) gets a plain faint rule.
-- Every tile wears a title unless `t` took it off, and a title carries
+- Every tile wears a title, a bare rule or nothing, as `t` picks, and a title carries
   its key hint on the right (`w tend`, `m mute`) and nothing else: the
   tank's care bar sits on its water, not in the title. A key that works
   only in arrange mode on the focused tile (`a feed`, `[ ] Enter pick`,
@@ -214,7 +214,9 @@ included. The board's all-day line is the banner over the tree
 The stock Home puts the strip on the reef across the top of the chat, so
 it lands on the fish and the chat never loses a row, and attention on the
 lobby: what waits on you takes the tables' tile and the feed comes back
-when the list clears.
+when the list clears. The stock lobby and pet are three rows each under
+their titles, the bonsai takes the rest of the column, and the rail, the
+reef and the presence rows wear no title outside arrange mode.
 
 Candidates for later: a fresh News story while it is under an hour old.
 The model does not change for it; unread mail is attention's already.
@@ -303,7 +305,7 @@ Arrange mode:
 | `<` `>` `{` `}` | resize; refused on a fit split |
 | `space` | the kind picker over the focused tile |
 | `+` | the guest list over the focused tile: the four dynamic kinds, a check beside the placed ones, toggled in place |
-| `t` | the focused tile's title rule on or off, its own say from then on (every tile starts with one) |
+| `t` | the focused tile's title: named, the rule alone, or no row, its own say from then on (a new tile starts named) |
 | `[` `]` | a chat tile walks the rail's rooms, an ascii tile its pieces |
 | `b` | the border: none is Home's rules, the rest box the page in its look |
 | `1`..`9` | load that layout and leave arrange mode |

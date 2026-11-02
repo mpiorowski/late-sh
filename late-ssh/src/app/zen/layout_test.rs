@@ -4,7 +4,7 @@ use super::{
     Chrome, Gaps, neighbour_side, pet_neighbours, rice_areas, row_gutters, tile_inner, tile_rects,
 };
 use crate::app::pet::ui::{Neighbours, WatchSide};
-use crate::app::zen::state::{Dir, Node, RiceLayout, TileKind};
+use crate::app::zen::state::{Dir, Node, RiceLayout, TileKind, TileTitle};
 
 #[test]
 fn a_tank_tile_touching_the_pet_tile_is_a_neighbour_on_that_side() {
@@ -111,37 +111,41 @@ fn the_rules_chrome_paints_gutters_between_columns_and_insets_every_tile_but_the
     // Every tile wears a title row; the page's chat and the rail keep
     // their full width, the rest give up a column of air on each side.
     assert_eq!(
-        tile_inner(rect, &rules, TileKind::Chat, true, None),
+        tile_inner(rect, &rules, TileKind::Chat, true, TileTitle::Named),
         Rect::new(0, 1, 23, 29)
     );
     assert_eq!(
-        tile_inner(rect, &rules, TileKind::Rooms, false, None),
+        tile_inner(rect, &rules, TileKind::Rooms, false, TileTitle::Named),
         Rect::new(0, 1, 23, 29)
     );
     assert_eq!(
-        tile_inner(rect, &rules, TileKind::Chat, false, None),
+        tile_inner(rect, &rules, TileKind::Chat, false, TileTitle::Named),
         Rect::new(1, 1, 21, 29)
     );
     assert_eq!(
-        tile_inner(rect, &rules, TileKind::Music, false, None),
+        tile_inner(rect, &rules, TileKind::Music, false, TileTitle::Named),
         Rect::new(1, 1, 21, 29)
     );
-    // A tile's own say (`t`) takes the row away: a panel told to go bare
-    // keeps only its air, the page's chat told to go bare has the whole
-    // rect.
+    // The rule alone costs the same row as the name.
     assert_eq!(
-        tile_inner(rect, &rules, TileKind::Music, false, Some(false)),
+        tile_inner(rect, &rules, TileKind::Music, false, TileTitle::Rule),
+        Rect::new(1, 1, 21, 29)
+    );
+    // Hidden takes the row away: a panel told to go bare keeps only its
+    // air, the page's chat told to go bare has the whole rect.
+    assert_eq!(
+        tile_inner(rect, &rules, TileKind::Music, false, TileTitle::Hidden),
         Rect::new(1, 0, 21, 30)
     );
     assert_eq!(
-        tile_inner(rect, &rules, TileKind::Chat, true, Some(false)),
+        tile_inner(rect, &rules, TileKind::Chat, true, TileTitle::Hidden),
         rect
     );
     // In arrange mode every tile wears a title, so the focus has a ring,
     // whatever the tile says.
     let arrange = Chrome::Rules { arrange: true };
     assert_eq!(
-        tile_inner(rect, &arrange, TileKind::Chat, true, Some(false)),
+        tile_inner(rect, &arrange, TileKind::Chat, true, TileTitle::Hidden),
         Rect::new(0, 1, 23, 29)
     );
 }
@@ -159,4 +163,24 @@ fn the_banner_and_the_footer_each_take_one_row_off_the_tiles() {
     assert_eq!(neither.banner, None);
     assert_eq!(neither.tiles, area);
     assert_eq!(neither.footer, None);
+}
+
+/// The stock lobby and pet are three rows each under their title rule,
+/// and the bonsai under them takes whatever the column has left.
+#[test]
+fn the_stock_lobby_and_pet_are_three_rows_and_the_bonsai_takes_the_rest() {
+    let rice = RiceLayout::home();
+    let rects = tile_rects(
+        &rice.root,
+        Rect::new(0, 0, 200, 60),
+        Gaps::uniform(rice.look.gap as u16),
+    );
+    let (lobby, pet, bonsai) = (rects[6], rects[8], rects[9]);
+    assert_eq!(lobby.0, TileKind::Lobby);
+    assert_eq!(lobby.1.height, 4);
+    assert_eq!(pet.0, TileKind::Pet);
+    assert_eq!(pet.1.height, 4);
+    assert_eq!(bonsai.0, TileKind::Bonsai);
+    assert_eq!(bonsai.1.y, pet.1.bottom());
+    assert_eq!(bonsai.1.bottom(), 60);
 }

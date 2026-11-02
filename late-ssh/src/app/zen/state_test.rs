@@ -756,6 +756,25 @@ fn the_stock_home_is_the_rail_the_reef_over_the_chat_and_the_sidebar_column() {
         Vec::<Guest>::new(),
         "the board's day is the banner over the tree, not a guest"
     );
+    let titles: Vec<TileTitle> = (0..home.root.leaf_count())
+        .map(|ordinal| home.root.title_at(ordinal))
+        .collect();
+    assert_eq!(
+        titles,
+        vec![
+            TileTitle::Hidden,
+            TileTitle::Hidden,
+            TileTitle::Named,
+            TileTitle::Hidden,
+            TileTitle::Named,
+            TileTitle::Named,
+            TileTitle::Named,
+            TileTitle::Named,
+            TileTitle::Named,
+            TileTitle::Named,
+        ],
+        "only the rail, the reef and the presence rows take their title off"
+    );
 
     let zen = ZenState::new(home.clone(), home);
     assert_eq!(
@@ -780,31 +799,91 @@ fn the_stock_home_is_the_rail_the_reef_over_the_chat_and_the_sidebar_column() {
 }
 
 #[test]
-fn a_tile_owns_its_title_rule_on_home_and_the_say_rides_the_layout() {
+fn a_tile_owns_its_title_mode_on_home_and_the_mode_rides_the_layout() {
     let home = RiceLayout::home();
     let mut zen = ZenState::new(home.clone(), home);
-    let rooms = zen.first_tile_of(TileKind::Rooms).expect("a rail");
-    let reef = zen.first_tile_of(TileKind::Aquarium).expect("a reef");
     let chat = zen.first_tile_of(TileKind::Chat).expect("a chat");
-    // The default is on for every kind, the rail and the page's chat
-    // included.
-    assert!(zen.rule_shown(rooms));
-    assert!(zen.rule_shown(chat));
-    assert!(zen.rule_shown(reef));
-    assert_eq!(zen.rice.root.title_at(reef), None, "no say until `t`");
+    let music = zen.first_tile_of(TileKind::Music).expect("a music tile");
+    assert_eq!(zen.rice.root.title_at(chat), TileTitle::Named);
 
-    // `t` gives the focused tile its own say, which the layout stores
-    // and a reload keeps; a new kind starts over on its own default.
-    zen.focus = reef;
-    assert!(zen.toggle_focused_title());
-    assert!(!zen.rule_shown(reef));
-    assert_eq!(zen.rice.root.title_at(reef), Some(false));
-    zen.focus = rooms;
-    assert!(zen.toggle_focused_title());
-    assert!(!zen.rule_shown(rooms));
+    // `t` walks the focused tile through the three and back, and stops
+    // nowhere else.
+    zen.focus = chat;
+    assert!(zen.cycle_focused_title());
+    assert_eq!(zen.rice.root.title_at(chat), TileTitle::Rule);
+    assert!(zen.cycle_focused_title());
+    assert_eq!(zen.rice.root.title_at(chat), TileTitle::Hidden);
+    assert!(zen.cycle_focused_title());
+    assert_eq!(zen.rice.root.title_at(chat), TileTitle::Named);
+    assert_eq!(zen.rice.root.title_at(music), TileTitle::Named);
+
+    // The layout stores each one and a reload keeps it; a new kind starts
+    // over with its name.
+    zen.focus = music;
+    assert!(zen.cycle_focused_title());
+    zen.focus = chat;
+    assert!(zen.cycle_focused_title());
+    assert!(zen.cycle_focused_title());
     let saved = zen.rice.to_json();
     assert_eq!(RiceLayout::from_json(Some(&saved)), zen.rice);
-    assert!(zen.rice.root.set_kind(reef, TileKind::Clock));
-    assert_eq!(zen.rice.root.title_at(reef), None);
-    assert!(zen.rule_shown(reef));
+    assert!(zen.rice.root.set_kind(music, TileKind::Clock));
+    assert_eq!(zen.rice.root.title_at(music), TileTitle::Named);
+}
+
+/// A layout saved when a title was only on or off reads as the same page: on
+/// is the name, off is no row, and a mode this build does not know keeps the
+/// layout and shows the name.
+#[test]
+fn a_stored_title_reads_from_its_older_on_or_off() {
+    let leaf = |title: serde_json::Value| -> TileTitle {
+        let stored = serde_json::json!({
+            "root": { "node": "leaf", "kind": "clock", "title": title },
+            "look": { "border": "none", "gap": 0, "titles": true }
+        });
+        let layout = RiceLayout::from_json_or(
+            Some(&stored),
+            RiceLayout {
+                root: Node::leaf(TileKind::Bonsai),
+                look: Look {
+                    border: BorderKind::None,
+                    gap: 0,
+                    titles: true,
+                },
+            },
+        );
+        assert_eq!(layout.root.leaf_kinds(), vec![TileKind::Clock]);
+        layout.root.title_at(0)
+    };
+    assert_eq!(leaf(serde_json::json!(true)), TileTitle::Named);
+    assert_eq!(leaf(serde_json::json!(false)), TileTitle::Hidden);
+    assert_eq!(leaf(serde_json::json!("rule")), TileTitle::Rule);
+    assert_eq!(leaf(serde_json::json!("hidden")), TileTitle::Hidden);
+    assert_eq!(leaf(serde_json::json!("sideways")), TileTitle::Named);
+}
+
+/// Under the reef's minimum the tile shows a size warning and the fish stop,
+/// so the stock reef clears it even in arrange mode, where the title takes a
+/// row. A taller creature raises the minimum and fails here.
+#[test]
+fn the_stock_reef_fits_the_tallest_creature_with_its_title_up() {
+    use crate::app::hub::aquarium::state::{AquariumState, RuntimeMode};
+
+    let aquarium = AquariumState::default_for_area(Rect::new(0, 0, 120, 40)).expect("aquarium");
+    let RuntimeMode::Reef(reef) = &aquarium.mode else {
+        panic!("the default aquarium is a reef");
+    };
+    let home = RiceLayout::home();
+    let rects = tile_rects(
+        &home.root,
+        Rect::new(0, 0, 200, 60),
+        Gaps::uniform(home.look.gap as u16),
+    );
+    let (kind, rect) = rects[1];
+    assert_eq!(kind, TileKind::Aquarium);
+    let rows_under_the_title = rect.height - 1;
+    assert!(
+        rows_under_the_title >= reef.min_height,
+        "{rows_under_the_title} rows under the title, the reef needs {}",
+        reef.min_height
+    );
 }

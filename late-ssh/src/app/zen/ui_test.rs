@@ -1,6 +1,6 @@
 use super::{
-    care_bar_spans, chat_tile_title, draw_board_day, draw_bonsai_tile, draw_music_tile,
-    hint_line_fitting, hints_shown, station_text, tile_keys,
+    care_bar_spans, chat_tile_title, draw_board_day, draw_bonsai_tile, draw_centered_note,
+    draw_music_tile, draw_tile_chrome, hint_line_fitting, hints_shown, station_text, tile_keys,
 };
 use crate::app::bonsai::{
     render::canvas_lines,
@@ -8,7 +8,8 @@ use crate::app::bonsai::{
 };
 use crate::app::common::primitives::hint_line;
 use crate::app::hub::aquarium::state::CareBar;
-use crate::app::zen::state::TileKind;
+use crate::app::zen::layout::Chrome;
+use crate::app::zen::state::{TileKind, TileTitle};
 use late_core::models::aquarium_care::CARE_DAYS;
 use ratatui::{Terminal, backend::TestBackend, layout::Rect};
 use unicode_width::UnicodeWidthStr;
@@ -193,7 +194,8 @@ fn a_roomy_bonsai_tile_centers_the_whole_canvas() {
 }
 
 /// The board's day reads in amber at the left of its row with the board's
-/// key flush right, the text giving way to the key when the row is short.
+/// key flush right, one column in from each edge, the text giving way to
+/// the key when the row is short.
 #[test]
 fn the_boards_day_banner_is_the_text_left_and_the_key_right() {
     let mut terminal = Terminal::new(TestBackend::new(40, 1)).expect("terminal");
@@ -203,7 +205,7 @@ fn the_boards_day_banner_is_the_text_left_and_the_key_right() {
     let row: String = (0..40)
         .map(|x| terminal.backend().buffer()[(x, 0)].symbol().to_string())
         .collect();
-    assert_eq!(row, format!("Hackathon{}7 for the board", " ".repeat(16)));
+    assert_eq!(row, format!(" Hackathon{}7 for the board ", " ".repeat(14)));
 
     let mut terminal = Terminal::new(TestBackend::new(24, 1)).expect("terminal");
     terminal
@@ -212,6 +214,74 @@ fn the_boards_day_banner_is_the_text_left_and_the_key_right() {
     let row: String = (0..24)
         .map(|x| terminal.backend().buffer()[(x, 0)].symbol().to_string())
         .collect();
-    assert!(row.ends_with("7 for the board"), "{row:?}");
-    assert!(row.starts_with("Hackath"), "{row:?}");
+    assert!(row.ends_with("7 for the board "), "{row:?}");
+    assert!(row.starts_with(" Hack"), "{row:?}");
+}
+
+/// The shop note in a sidebar's width: the long row wraps at its words,
+/// centred, and nothing is cut off.
+#[test]
+fn a_note_wider_than_its_tile_wraps_at_the_words() {
+    let mut terminal = Terminal::new(TestBackend::new(20, 3)).expect("terminal");
+    terminal
+        .draw(|frame| {
+            draw_centered_note(
+                frame,
+                Rect::new(0, 0, 20, 3),
+                &["no pet yet", "the Pet Companion is in /shop"],
+            )
+        })
+        .expect("draw");
+    let rows: Vec<String> = (0..3)
+        .map(|y| {
+            (0..20)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string())
+                .collect::<String>()
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            "     no pet yet     ",
+            " the Pet Companion  ",
+            "    is in /shop     ",
+        ]
+    );
+}
+
+/// The top row of a sidebar-wide lobby tile wearing `title`, as text.
+fn lobby_top_row(title: TileTitle) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(23, 4)).expect("terminal");
+    terminal
+        .draw(|frame| {
+            draw_tile_chrome(
+                frame,
+                Rect::new(0, 0, 23, 4),
+                TileKind::Lobby,
+                false,
+                title,
+                "lobby",
+                &[("ctrl+g", "open")],
+                false,
+                false,
+                &Chrome::Rules { arrange: false },
+            );
+        })
+        .expect("draw");
+    (0..23)
+        .map(|x| terminal.backend().buffer()[(x, 0)].symbol().to_string())
+        .collect()
+}
+
+/// In the sidebar's width the lobby's name and its key take the whole rule,
+/// with no room to spare; the rule alone drops every word; hidden draws
+/// nothing on the row.
+#[test]
+fn the_three_title_modes_on_a_sidebar_wide_lobby() {
+    assert_eq!(lobby_top_row(TileTitle::Named), " ── lobby ctrl+g open  ");
+    assert_eq!(
+        lobby_top_row(TileTitle::Rule),
+        format!(" {} ", "─".repeat(21))
+    );
+    assert_eq!(lobby_top_row(TileTitle::Hidden), " ".repeat(23));
 }

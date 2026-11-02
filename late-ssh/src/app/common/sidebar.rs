@@ -597,6 +597,25 @@ pub(crate) fn draw_panel_rule(frame: &mut Frame, area: Rect, label: &str, active
     frame.render_widget(Paragraph::new(line), area);
 }
 
+/// The title rule with no text: a tile's divider and nothing else. `active`
+/// lights it, which is all a lobby with a game waiting has left to say.
+pub(crate) fn draw_bare_rule(frame: &mut Frame, area: Rect, active: bool) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let color = match active {
+        true => theme::AMBER(),
+        false => theme::BORDER_DIM(),
+    };
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            "─".repeat(area.width as usize),
+            Style::default().fg(color),
+        )),
+        area,
+    );
+}
+
 /// Inputs for the music stage, bundled so the pure line builder is easy to
 /// drive from tests.
 pub(crate) struct MusicStageProps<'a> {

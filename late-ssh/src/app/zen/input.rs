@@ -490,7 +490,7 @@ fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
             true
         }
         // The focused tile's own title rule.
-        b't' => app.home.toggle_focused_title(),
+        b't' => app.home.cycle_focused_title(),
         b'R' => {
             app.home.reset();
             true
