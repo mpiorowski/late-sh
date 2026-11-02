@@ -46,6 +46,8 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b'j' | b'J')
         | ParsedInput::Char('j' | 'J')
         | ParsedInput::Arrow(b'B') => steer(app, 0, -1),
+        ParsedInput::Byte(b'y' | b'Y') | ParsedInput::Char('y' | 'Y') => steer(app, -1, 1),
+        ParsedInput::Byte(b'u' | b'U') | ParsedInput::Char('u' | 'U') => steer(app, 1, 1),
         ParsedInput::Mouse(mouse) => match mouse.kind {
             MouseEventKind::ScrollUp => app.bonsai.tree.cycle_selection(-1),
             MouseEventKind::ScrollDown => app.bonsai.tree.cycle_selection(1),
@@ -96,3 +98,7 @@ fn copy_snippet(app: &mut App) {
         "Bonsai copied to clipboard!",
     ));
 }
+
+#[cfg(test)]
+#[path = "modal_input_test.rs"]
+mod modal_input_test;
