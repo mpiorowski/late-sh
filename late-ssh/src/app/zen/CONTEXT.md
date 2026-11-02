@@ -58,7 +58,7 @@ samples are presence's, `../presence/svc.rs`, and so is the drawing,
 `../presence/ui.rs`; a one-row tile is the sparkline alone), live (the Live panel's rows, `../live/PANEL.md`:
 the same four rows the sidebar's panel draws, each with its `s1`-`s4`
 key, wider so less is cut; `nobody playing` while nothing is on), presence
-(the sidebar's pinned rows, `sidebar::draw_core_block`: the online count
+(the sidebar's pinned rows, `presence/ui::draw_core_block`: the online count
 and the clock, then the connected friends), rooms (Home's room rail,
 one per page: below), blank. The look
 (border style, gap, titles) is part of the layout: a layout without a
@@ -262,7 +262,7 @@ domain (`bonsai/render::draw_tile`, `hub/aquarium/ui::draw_reef_tile` /
 `draw_tank_tile`, `pet/ui::draw_tile`, `sidebar::draw_music_tile`,
 `audio/viz::draw_visualizer_tile`, `lobby/daily/panel::draw_daily_compact`,
 `presence/ui::draw_pulse_tile`, `chat/ui::draw_activity_tile` /
-`draw_friends_tile`, `live/panel::draw_live_inline`, `sidebar::draw_core_block`);
+`draw_friends_tile`, `live/panel::draw_live_inline`, `presence/ui::draw_core_block`);
 `ui.rs` only dispatches on the kind. Adding a kind: the variant, its
 row in `TileKind::ALL` (the one list the compiler does not check), and
 the arms the build then asks for (`label`, `one_per_page`, `takes_focus`,

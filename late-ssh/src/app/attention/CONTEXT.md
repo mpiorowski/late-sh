@@ -28,7 +28,7 @@ Order: moves, results, DMs, mentions, tank, tree, pet. The care rows are keyed o
 
 | File | Role |
 |---|---|
-| `state.rs` | `Item` (the row, its `label`, `act` word and `glyph`), `Inputs`, `items(inputs)`: pure ordering, tested in `state_test.rs` |
+| `state.rs` | `Item` (the row, its `label`, `act` word and `glyph`), `Inputs`, `items(inputs)`: pure ordering, tested in `state_test.rs`; `Care` / `Chore`, today's three chores as the glue reads them (`App::care_today`), the care rows' and the status line's Care count's source |
 | `ui.rs` | `draw`: the rows from the top of the tile, the selected one marked while the tile is focused, the act word at the row's end |
 
 The glue is `App::attention_items` (`../state.rs`): it reads the domains' public surfaces (`DailyState`, `zen::rows::unread_rows`, `App::care_today`) into `Inputs` once per frame (`render.rs`, into `ZenView::attention`) and once per key of the guest. The keys are `zen/input.rs::handle_attention`: `j` `k` move `ZenState::attention_selected`, Enter does the row's act through the page's global functions (`open_daily_modal_globally`, the Inbox row opener, `feed_aquarium_globally`, `BonsaiSession::request(Water)`, `pet_the_pet_globally`). They run where tile keys run: Zen, and Home in arrange mode; outside arrange mode Home's keys belong to its chat and the list reads only.

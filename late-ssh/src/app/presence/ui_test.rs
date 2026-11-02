@@ -1,5 +1,43 @@
 use super::*;
+use late_core::models::user::AudioSource;
 use ratatui::{Terminal, backend::TestBackend};
+
+fn friend(username: &str, away: bool) -> ActiveFriend {
+    ActiveFriend {
+        user_id: uuid::Uuid::now_v7(),
+        username: username.to_string(),
+        audio_source: AudioSource::default(),
+        online_since: std::time::Instant::now(),
+        away,
+    }
+}
+
+#[test]
+fn friend_names_text_keeps_every_name_when_the_row_is_wide() {
+    let friends = vec![friend("ada", false), friend("bob", false)];
+    assert_eq!(friend_names_text(&friends, 40, 0), "@ada @bob");
+}
+
+#[test]
+fn friend_names_text_marks_an_away_friend_with_the_glyph_alone() {
+    let friends = vec![friend("ada", false), friend("bob", true)];
+    assert_eq!(friend_names_text(&friends, 40, 0), "@ada @bob 💤");
+}
+
+#[test]
+fn friend_names_text_scrolls_past_the_names_that_do_not_fit() {
+    let friends = vec![
+        friend("ada", false),
+        friend("bob", false),
+        friend("cyd", false),
+    ];
+    // The full 12-wide rail shows names; the marker was retired so no
+    // column is reserved.
+    assert_eq!(friend_names_text(&friends, 12, 0), "@ada @bob @c");
+    // Held at the start, then scrolled to the end: the tail is readable.
+    // With hold 45 and step 15, the far extreme spans ticks 75..120.
+    assert_eq!(friend_names_text(&friends, 12, 90), "da @bob @cyd");
+}
 
 fn pulse_rows(width: u16, height: u16, online: usize) -> Vec<String> {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");

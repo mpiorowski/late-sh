@@ -3751,10 +3751,10 @@ impl App {
         self.home_layout_dirty = true;
     }
 
-    /// Today's care, the pet gated on ownership: what the Pulse tile and
-    /// the attention guest read.
-    pub(crate) fn care_today(&self) -> crate::app::zen::ui::Care {
-        use crate::app::zen::ui::{Care, Chore};
+    /// Today's care, the pet gated on ownership: what the attention guest
+    /// and the status line's Care count read.
+    pub(crate) fn care_today(&self) -> crate::app::attention::state::Care {
+        use crate::app::attention::state::{Care, Chore};
         let today = chrono::Utc::now().date_naive();
         Care {
             bonsai: Chore::of(true, self.bonsai.tree.last_watered == Some(today)),
@@ -3771,9 +3771,8 @@ impl App {
     /// the unread DMs and mentions (`zen::rows::unread_rows`), and today's care
     /// still due. Read each frame and on each of the guest's keys.
     pub(crate) fn attention_items(&self) -> Vec<crate::app::attention::state::Item> {
-        use crate::app::attention::state::{Inputs, Item, Match, items};
+        use crate::app::attention::state::{Chore, Inputs, Item, Match, items};
         use crate::app::zen::rows::UnreadRow;
-        use crate::app::zen::ui::Chore;
         let other_player = |challenger_id: Uuid,
                             challenger: &Option<String>,
                             opponent: &Option<String>|

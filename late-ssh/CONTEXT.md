@@ -367,7 +367,9 @@ removes a required secret follows the deploy skew rule in `infra/RUNBOOK.md`.
   (one row per replica per bucket, pruned past two days) and reads the last
   day back, summed per bucket, onto a second watch the sessions copy on
   their tick (`PresenceSession::history`) for Home's pulse tile; the
-  sparkline maths is `presence/pulse.rs`, the tile `presence/ui.rs`. `late_ssh_pulse_samples_total{outcome}`.
+  sparkline maths is `presence/pulse.rs`; `presence/ui.rs` draws the tile
+  and the pinned presence block (the sidebar's top rows, Home's presence
+  tile). `late_ssh_pulse_samples_total{outcome}`.
 - **Username directory.** `State.username_directory` is the app-wide
   `Uuid -> username` map: loaded at startup, refreshed every 30 minutes, updated
   on login, profile save, mod rename and account delete. Plain name labels read
@@ -396,8 +398,8 @@ removes a required secret follows the deploy skew rule in `infra/RUNBOOK.md`.
   are dropped on read. The Live panel is `app/live`. Home draws the same
   rows and panels as tiles of its own tree (`app/zen/CONTEXT.md`): its stock
   layout is fixed (the Settings checklist shapes the Arcade's sidebar alone),
-  and the panel widgets (`draw_core_block`, `draw_music_stage`,
-  `draw_panel_rule`) are shared with the tiles.
+  and the panel widgets (`draw_music_stage`, `draw_panel_rule`, presence's
+  `draw_core_block`) are shared with the tiles.
 - **Frame.** Status bars on both borders through `app/statusline`; the toast is
   a 3-row block top-center of the content area, under the settings overlay.
   The sponsor link `late.sh/thanks` redirects through late-web.

@@ -140,6 +140,44 @@ pub fn items(inputs: Inputs) -> Vec<Item> {
     rows
 }
 
+/// Today's care for one companion: tended, still due, or not owned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Chore {
+    Done,
+    Due,
+    NotOwned,
+}
+
+impl Chore {
+    pub fn of(owned: bool, done_today: bool) -> Self {
+        match (owned, done_today) {
+            (false, _) => Chore::NotOwned,
+            (true, true) => Chore::Done,
+            (true, false) => Chore::Due,
+        }
+    }
+}
+
+/// The three once-a-day chores, read off the session by the glue
+/// (`App::care_today`): what the care rows and the status line's Care
+/// count come from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Care {
+    pub bonsai: Chore,
+    pub tank: Chore,
+    pub pet: Chore,
+}
+
+impl Care {
+    /// How many owned companions still wait on today's care.
+    pub fn due_count(&self) -> usize {
+        [self.bonsai, self.tank, self.pet]
+            .into_iter()
+            .filter(|chore| *chore == Chore::Due)
+            .count()
+    }
+}
+
 #[cfg(test)]
 #[path = "state_test.rs"]
 mod state_test;

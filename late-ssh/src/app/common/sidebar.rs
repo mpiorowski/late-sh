@@ -18,6 +18,7 @@ use crate::app::chat::state::ActiveFriend;
 use crate::app::hub::aquarium::{state::AquariumState, ui as aquarium_ui};
 use crate::app::pet::state::PetState;
 use crate::app::pet::ui::{Neighbours, PetView, WatchSide, draw_pet_box};
+use crate::app::presence::ui::{draw_core_block, friend_names_joined};
 use late_core::models::user::{
     AudioSource, RadioSlots, RadioStation, RightSidebarComponent, RightSidebarComponentSetting,
 };
@@ -376,110 +377,6 @@ fn visible_components(
         keep.push(setting.component);
     }
     keep
-}
-
-/// The pinned two-row core block at the top of the rail. Presence is chrome
-/// now, not a panel: row one is the online count (left) and the clock
-/// (right); row two is connected friends, an away one carrying the away
-/// glyph. Both rows always render so the panel list below never shifts.
-pub(crate) fn draw_core_block(
-    frame: &mut Frame,
-    area: Rect,
-    clock_text: &str,
-    online_count: usize,
-    active_friends: &[ActiveFriend],
-    tick: usize,
-) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-
-    let row = |offset: u16| Rect {
-        x: area.x,
-        y: area.y + offset,
-        width: area.width,
-        height: 1,
-    };
-
-    // Row 0 — presence left, clock right.
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::styled("● ", Style::default().fg(theme::SUCCESS())),
-            Span::styled(
-                online_count.to_string(),
-                Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(" here", Style::default().fg(theme::TEXT_DIM())),
-        ])),
-        row(0),
-    );
-    let mut parts = clock_text.rsplitn(2, ' ');
-    let time = parts.next().unwrap_or(clock_text);
-    let label = parts.next();
-    // Native `⊙` (U+2299 circled dot operator). Reliably mono across
-    // terminals, reads as a small clock face without competing with digits.
-    let mut clock_spans: Vec<Span<'static>> =
-        vec![Span::styled("⊙ ", Style::default().fg(theme::AMBER_DIM()))];
-    clock_spans.push(Span::styled(
-        time.to_string(),
-        Style::default()
-            .fg(theme::AMBER())
-            .add_modifier(Modifier::BOLD),
-    ));
-    if let Some(label) = label {
-        clock_spans.push(Span::raw(" "));
-        clock_spans.push(Span::styled(
-            label.to_string(),
-            Style::default().fg(theme::TEXT_FAINT()),
-        ));
-    }
-    frame.render_widget(
-        Paragraph::new(Line::from(clock_spans)).right_aligned(),
-        row(0),
-    );
-
-    if area.height < 2 {
-        return;
-    }
-
-    // Row 1 — connected friends. Blank when there are none: the reserved
-    // row is what keeps chrome stable.
-    if !active_friends.is_empty() {
-        frame.render_widget(
-            Paragraph::new(Line::from(vec![Span::styled(
-                friend_names_text(active_friends, area.width as usize, tick),
-                Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD),
-            )])),
-            row(1),
-        );
-    }
-}
-
-/// Every connected friend on the one reserved row, in `active_friends`
-/// order (here before away, then most recent login). The list scrolls
-/// (marquee) when it overruns the rail instead of stopping at the few names
-/// that happen to fit, so the whole crowd can be read.
-fn friend_names_text(friends: &[ActiveFriend], width: usize, tick: usize) -> String {
-    crate::app::common::marquee::marquee_text(&friend_names_joined(friends), width, tick)
-}
-
-fn friend_names_joined(friends: &[ActiveFriend]) -> String {
-    friends
-        .iter()
-        .map(|friend| match friend.away {
-            true => format!(
-                "@{} {}",
-                friend.username,
-                crate::app::common::away::AWAY_GLYPH
-            ),
-            false => format!("@{}", friend.username),
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 /// Conservative lower bound on any marquee rail width in the sidebar. Real

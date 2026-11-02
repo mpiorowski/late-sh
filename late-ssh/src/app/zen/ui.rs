@@ -32,7 +32,7 @@ use crate::app::{
     },
     common::{
         primitives::{center_lines, draw_centered_note, hint_line},
-        sidebar::{MusicStageProps, draw_core_block, draw_music_tile, draw_panel_rule},
+        sidebar::{MusicStageProps, draw_music_tile, draw_panel_rule},
         theme,
     },
     files::terminal_image::TerminalImageFrame,
@@ -40,7 +40,7 @@ use crate::app::{
     live::panel::LivePanelProps,
     lobby::daily::{panel::draw_daily_compact, state::DailyState},
     pet::ui::PetView,
-    presence::ui::PresenceView,
+    presence::ui::{PresenceView, draw_core_block},
 };
 
 /// A chat tile's frame: its room's label, the watcher count badge when the
@@ -1048,43 +1048,6 @@ fn draw_board_day(frame: &mut Frame, row: Rect, text: &str) {
         row,
     );
     frame.render_widget(Paragraph::new(Line::from(hint)).right_aligned(), row);
-}
-
-impl Care {
-    /// How many owned companions still wait on today's care.
-    pub(crate) fn due_count(&self) -> usize {
-        [self.bonsai, self.tank, self.pet]
-            .into_iter()
-            .filter(|chore| *chore == Chore::Due)
-            .count()
-    }
-}
-
-/// Today's care for one companion: tended, still due, or not owned.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Chore {
-    Done,
-    Due,
-    NotOwned,
-}
-
-impl Chore {
-    pub(crate) fn of(owned: bool, done_today: bool) -> Self {
-        match (owned, done_today) {
-            (false, _) => Chore::NotOwned,
-            (true, true) => Chore::Done,
-            (true, false) => Chore::Due,
-        }
-    }
-}
-
-/// The three once-a-day chores: what the attention items and the pet's
-/// mood read.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Care {
-    pub bonsai: Chore,
-    pub tank: Chore,
-    pub pet: Chore,
 }
 
 /// `area` less one column on each side, when it has columns to spare.
