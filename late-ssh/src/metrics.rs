@@ -151,11 +151,14 @@ pub enum HeraldLookResult {
     Clean,
     /// The model put a warning on the picture: it stays unposted.
     Warned,
-    /// No answer: the model failed, or AI is off. It stays unposted.
+    /// AI is off, so nobody looked. It stays unposted.
     Unseen,
     /// A card late.sh drew from its own words (the week's scoreboard, the
     /// paper's front page): nothing for the model to see, so no call.
     Drawn,
+    /// The call failed or answered nothing usable: the post fails, and the next
+    /// check asks again.
+    Failed,
 }
 
 /// What the herald's brief (`app/herald/brief.rs`) came to, once per
@@ -3802,10 +3805,16 @@ mod inner {
         })
     }
 
-    pub fn record_herald_post(result: HeraldPostResult) {
+    pub fn record_herald_post(
+        slot: late_core::models::herald::HeraldSlot,
+        result: HeraldPostResult,
+    ) {
         herald_posts_total().add(
             1,
-            &[KeyValue::new("result", herald_post_result_label(result))],
+            &[
+                KeyValue::new("slot", slot.as_str()),
+                KeyValue::new("result", herald_post_result_label(result)),
+            ],
         );
     }
 
@@ -3845,6 +3854,7 @@ mod inner {
             HeraldLookResult::Warned => "warned",
             HeraldLookResult::Unseen => "unseen",
             HeraldLookResult::Drawn => "drawn",
+            HeraldLookResult::Failed => "failed",
         }
     }
 
@@ -4651,7 +4661,11 @@ mod inner {
     pub fn record_chat_summary(_result: SummaryResult) {}
     pub fn record_paper_print(_result: PaperPrintResult) {}
     pub fn record_paper_open(_result: PaperOpenResult) {}
-    pub fn record_herald_post(_result: HeraldPostResult) {}
+    pub fn record_herald_post(
+        _slot: late_core::models::herald::HeraldSlot,
+        _result: HeraldPostResult,
+    ) {
+    }
     pub fn record_herald_delivery(
         _network: late_core::models::herald::HeraldNetwork,
         _result: HeraldDeliveryResult,

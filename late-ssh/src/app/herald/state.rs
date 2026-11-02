@@ -130,6 +130,15 @@ pub(crate) fn scoreboard_week(day: NaiveDate) -> Option<NaiveDate> {
     }
 }
 
+/// What the words slot can post. Closed, so its schedule cannot name an art kind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WordsKind {
+    Announcement,
+    Project,
+    Scoreboard,
+    Paper,
+}
+
 /// The words slot's week: the kinds a day dated `day` tries after the operator's
 /// announcement, in order, the first with something to show being the post. A
 /// project on Monday, and while it is owed through to Friday (an announcement or
@@ -137,12 +146,12 @@ pub(crate) fn scoreboard_week(day: NaiveDate) -> Option<NaiveDate> {
 /// week has had one); the paper on Wednesday and Saturday, and on Monday when no
 /// project can run; the week's scoreboard on Sunday, else the paper. A day whose
 /// kinds all have nothing posts no words: the art still goes out.
-pub(crate) fn words_schedule(day: NaiveDate) -> &'static [HeraldKind] {
+pub(crate) fn words_schedule(day: NaiveDate) -> &'static [WordsKind] {
     match day.weekday() {
-        Weekday::Mon | Weekday::Wed => &[HeraldKind::Project, HeraldKind::Paper],
-        Weekday::Tue | Weekday::Thu | Weekday::Fri => &[HeraldKind::Project],
-        Weekday::Sat => &[HeraldKind::Paper],
-        Weekday::Sun => &[HeraldKind::Scoreboard, HeraldKind::Paper],
+        Weekday::Mon | Weekday::Wed => &[WordsKind::Project, WordsKind::Paper],
+        Weekday::Tue | Weekday::Thu | Weekday::Fri => &[WordsKind::Project],
+        Weekday::Sat => &[WordsKind::Paper],
+        Weekday::Sun => &[WordsKind::Scoreboard, WordsKind::Paper],
     }
 }
 
@@ -443,13 +452,16 @@ pub(crate) struct LinkCard {
     pub(crate) description: String,
 }
 
+/// Words made safe for the official account and cut to `limit`, whoever wrote
+/// them: markdown markers dropped and paragraphs kept (`plain_lines`), dashes
+/// made commas (`no_dashes`), every `@`, `#` and `scheme:` dead (`dead_words`),
+/// so neither a member, the operator nor the model can tag or mention anyone.
+fn outgoing_words(text: &str, limit: usize) -> String {
+    cut_to(&dead_words(&no_dashes(&plain_lines(text))), limit)
+}
+
 impl AnnouncementCandidate {
-    /// The words made safe for the account and cut to
-    /// `ANNOUNCEMENT_MAX_CHARS`, whoever wrote them: markdown markers
-    /// dropped and paragraphs kept (`plain_lines`), dashes made commas
-    /// (`no_dashes`), every `@`, `#` and `scheme:` dead (`dead_words`), so
-    /// a note as written cannot tag or mention anyone and the model
-    /// cannot either.
+    /// The note or the model's brief as it goes out.
     pub(crate) fn of(
         edition: NaiveDate,
         text: &str,
@@ -458,10 +470,7 @@ impl AnnouncementCandidate {
     ) -> Self {
         Self {
             edition,
-            text: cut_to(
-                &dead_words(&no_dashes(&plain_lines(text))),
-                ANNOUNCEMENT_MAX_CHARS,
-            ),
+            text: outgoing_words(text, ANNOUNCEMENT_MAX_CHARS),
             brief,
             summary,
         }
@@ -584,18 +593,14 @@ pub(crate) struct ProjectCandidate {
 }
 
 impl ProjectCandidate {
-    /// The model's words made safe for the account and cut to what the post has
-    /// room for, the same way an announcement's are.
+    /// The model's words as they go out, cut to what the post has room for.
     pub(crate) fn of(project: &ProjectFound, words: &str) -> Self {
         Self {
             id: project.id,
             title: project.title.clone(),
             url: project.url.clone(),
             artist: project.artist.clone(),
-            text: cut_to(
-                &dead_words(&no_dashes(&plain_lines(words))),
-                project.words_limit(),
-            ),
+            text: outgoing_words(words, project.words_limit()),
         }
     }
 }
@@ -671,23 +676,22 @@ pub(crate) struct WordsFound {
 }
 
 impl WordsFound {
-    /// What was found of one kind. The art kinds are never the words slot's.
-    fn of(&self, kind: HeraldKind) -> Option<Choice> {
+    /// What was found of one kind.
+    fn of(&self, kind: WordsKind) -> Option<Choice> {
         match kind {
-            HeraldKind::Announcement => self.announcement.clone().map(Choice::Announcement),
-            HeraldKind::Project => match self.projects.is_empty() {
+            WordsKind::Announcement => self.announcement.clone().map(Choice::Announcement),
+            WordsKind::Project => match self.projects.is_empty() {
                 true => None,
                 false => Some(Choice::Projects(self.projects.clone())),
             },
-            HeraldKind::Scoreboard => self
+            WordsKind::Scoreboard => self
                 .scoreboard
                 .clone()
                 .map(|scoreboard| Choice::Picture(Picture::Scoreboard(scoreboard))),
-            HeraldKind::Paper => self
+            WordsKind::Paper => self
                 .paper
                 .clone()
                 .map(|paper| Choice::Picture(Picture::Paper(paper))),
-            HeraldKind::Artboard | HeraldKind::Piece => None,
         }
     }
 }
@@ -732,7 +736,7 @@ impl Found {
     /// walks it, since a project the model turns down falls to the next.
     pub(crate) fn choices(&self, day: NaiveDate) -> Vec<Choice> {
         match self {
-            Self::Words(words) => [HeraldKind::Announcement]
+            Self::Words(words) => [WordsKind::Announcement]
                 .iter()
                 .chain(words_schedule(day))
                 .filter_map(|kind| words.of(*kind))
@@ -793,20 +797,19 @@ impl Picture {
         }
     }
 
-    /// The picture's route on late-web (`late-web/CONTEXT.md`, the PNG
-    /// routes); `None` for a post of words alone.
-    pub(crate) fn picture_path(&self) -> Option<String> {
+    /// What the post carries: a picture, or words alone. The one place that says
+    /// which kind is which, so a picture without alt text or words without a
+    /// card cannot be asked for.
+    pub(crate) fn shape(&self) -> Shape<'_> {
         match self {
-            Self::Board(board) => Some(format!(
-                "/gallery/{}/image.png?crop={},{},{},{}",
-                board.key, board.crop.x, board.crop.y, board.crop.width, board.crop.height
-            )),
-            Self::Piece(piece) => Some(format!("/gallery/pieces/{}/image.png", piece.id)),
-            Self::Scoreboard(scoreboard) => {
-                Some(format!("/games/week/{}/image.png", scoreboard.last))
+            Self::Board(board) => Shape::Image(Image::Board(board)),
+            Self::Piece(piece) => Shape::Image(Image::Piece(piece)),
+            Self::Scoreboard(scoreboard) => Shape::Image(Image::Scoreboard(scoreboard)),
+            Self::Paper(paper) => Shape::Image(Image::Paper(paper)),
+            Self::Announcement(announcement) => {
+                Shape::Words(WordsAlone::Announcement(announcement))
             }
-            Self::Paper(paper) => Some(format!("/paper/{}/image.png", paper.edition)),
-            Self::Announcement(_) | Self::Project(_) => None,
+            Self::Project(project) => Shape::Words(WordsAlone::Project(project)),
         }
     }
 
@@ -828,18 +831,114 @@ impl Picture {
             Self::Project(project) => project.url.clone(),
         }
     }
+}
 
-    /// The card under a post of words alone on Bluesky; `None` for a post with
-    /// a picture.
-    pub(crate) fn link_card(&self, web_url: &str) -> Option<LinkCard> {
+/// What a post carries besides its words (`Picture::shape`).
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Shape<'a> {
+    Image(Image<'a>),
+    Words(WordsAlone<'a>),
+}
+
+/// A post with a picture: what members drew, for the look to read, or one of
+/// late.sh's cards.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum Image<'a> {
+    Board(&'a BoardCandidate),
+    Piece(&'a PieceCandidate),
+    Scoreboard(&'a ScoreboardCandidate),
+    Paper(&'a PaperCandidate),
+}
+
+impl Image<'_> {
+    /// The picture's route on late-web (`late-web/CONTEXT.md`, the PNG routes).
+    pub(crate) fn path(self) -> String {
         match self {
-            Self::Announcement(announcement) => Some(announcement.link_card(web_url)),
-            Self::Project(project) => Some(LinkCard {
+            Self::Board(board) => format!(
+                "/gallery/{}/image.png?crop={},{},{},{}",
+                board.key, board.crop.x, board.crop.y, board.crop.width, board.crop.height
+            ),
+            Self::Piece(piece) => format!("/gallery/pieces/{}/image.png", piece.id),
+            Self::Scoreboard(scoreboard) => format!("/games/week/{}/image.png", scoreboard.last),
+            Self::Paper(paper) => format!("/paper/{}/image.png", paper.edition),
+        }
+    }
+
+    /// The picture described for readers who cannot see it: what the look saw,
+    /// else a template that says what the picture is, if not what is on it. A
+    /// card's is its own words.
+    pub(crate) fn alt_text(self, look: &Look) -> String {
+        match (self, look) {
+            (Self::Board(_) | Self::Piece(_), Look::Seen { alt, .. }) => {
+                format!("ASCII art: {alt}")
+            }
+            (Self::Board(board), Look::Unseen | Look::Drawn) => format!(
+                "ASCII art: the late.sh Artboard, a shared terminal canvas, as it stood at the end of {} UTC. Coloured text glyphs on a dark background.",
+                long_date(board.shown),
+            ),
+            (Self::Piece(piece), Look::Unseen | Look::Drawn) => format!(
+                "ASCII art: \"{}\", a piece hung in the late.sh gallery. Coloured text glyphs on a dark background.",
+                piece.title,
+            ),
+            (Self::Scoreboard(scoreboard), _) => cut_alt(&format!(
+                "A scoreboard in green and grey terminal text: everything played on late.sh, {}, game by game. {}.",
+                week_span(scoreboard.last),
+                scoreboard
+                    .lines
+                    .iter()
+                    .map(|line| format!("{}: {}", line.game, line.plays))
+                    .collect::<Vec<_>>()
+                    .join("; "),
+            )),
+            (Self::Paper(paper), _) => {
+                let mut text = format!(
+                    "The front page of the Late Edition, late.sh's daily paper, for {}, in terminal text.",
+                    long_date(paper.edition)
+                );
+                if let Some(most_played) = &paper.most_played {
+                    text.push_str(&format!(" Most played yesterday: {most_played}."));
+                }
+                if let Some(yesterday) = &paper.yesterday {
+                    text.push_str(&format!(
+                        " {}: {yesterday}.",
+                        PaperSectionKind::Yesterday.title()
+                    ));
+                }
+                if let Some(reading) = &paper.reading {
+                    text.push_str(&format!(
+                        " {}: {reading}",
+                        PaperSectionKind::Reading.title()
+                    ));
+                }
+                if let Some(outside) = &paper.outside {
+                    text.push_str(&format!(
+                        " {}: {outside}",
+                        PaperSectionKind::Outside.title()
+                    ));
+                }
+                cut_alt(&text)
+            }
+        }
+    }
+}
+
+/// A post of words alone: an announcement or a project.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum WordsAlone<'a> {
+    Announcement(&'a AnnouncementCandidate),
+    Project(&'a ProjectCandidate),
+}
+
+impl WordsAlone<'_> {
+    /// The card under the words on Bluesky.
+    pub(crate) fn link_card(self, web_url: &str) -> LinkCard {
+        match self {
+            Self::Announcement(announcement) => announcement.link_card(web_url),
+            Self::Project(project) => LinkCard {
                 uri: project.url.clone(),
                 title: cut_to(&project.title, PROJECT_TITLE_MAX_CHARS),
                 description: project.text.clone(),
-            }),
-            Self::Board(_) | Self::Piece(_) | Self::Scoreboard(_) | Self::Paper(_) => None,
+            },
         }
     }
 }
@@ -886,17 +985,18 @@ pub(crate) enum Look {
         warning: Option<Warning>,
         reason: String,
     },
-    /// Nobody looked: the model failed, or AI is off. Never goes out.
+    /// Nobody looked: AI is off. Never goes out. A call that fails is no look at
+    /// all: the post fails and the next check asks again.
     Unseen,
-    /// A card late.sh drew from its own words (the scoreboard, the paper):
-    /// clean by construction, its alt text written from the same words, no
-    /// model asked.
+    /// Nothing for the look to see, no model asked: a card late.sh drew from its
+    /// own words (the scoreboard, the paper), clean by construction, or words
+    /// alone, with no picture.
     Drawn,
 }
 
 impl Look {
-    /// Whether a post with this look goes out. Only a clean look or one of
-    /// late.sh's own cards does: Fosstodon bans adult and violent content even
+    /// Whether a post with this look goes out. Only a clean look or a post with
+    /// nothing to look at does: Fosstodon bans adult and violent content even
     /// behind a warning, so anything flagged, or that nobody could check, stays
     /// off every network and the slot rests for the day.
     pub(crate) fn goes_out(&self) -> bool {
@@ -1045,65 +1145,6 @@ pub(crate) fn cut_to(text: &str, max: usize) -> String {
 /// `text` cut to `ALT_MAX_CHARS`.
 pub(crate) fn cut_alt(text: &str) -> String {
     cut_to(text, ALT_MAX_CHARS)
-}
-
-/// The picture described for readers who cannot see it: what the look
-/// saw, else a template that says what the picture is, if not what is
-/// on it. A card's is its own words. `None` for a post with no picture.
-pub(crate) fn alt_text(picture: &Picture, look: &Look) -> Option<String> {
-    let alt = match (picture, look) {
-        (Picture::Announcement(_) | Picture::Project(_), _) => return None,
-        (Picture::Board(_) | Picture::Piece(_), Look::Seen { alt, .. }) => {
-            format!("ASCII art: {alt}")
-        }
-        (Picture::Board(board), Look::Unseen | Look::Drawn) => format!(
-            "ASCII art: the late.sh Artboard, a shared terminal canvas, as it stood at the end of {} UTC. Coloured text glyphs on a dark background.",
-            long_date(board.shown),
-        ),
-        (Picture::Piece(piece), Look::Unseen | Look::Drawn) => format!(
-            "ASCII art: \"{}\", a piece hung in the late.sh gallery. Coloured text glyphs on a dark background.",
-            piece.title,
-        ),
-        (Picture::Scoreboard(scoreboard), _) => cut_alt(&format!(
-            "A scoreboard in green and grey terminal text: everything played on late.sh, {}, game by game. {}.",
-            week_span(scoreboard.last),
-            scoreboard
-                .lines
-                .iter()
-                .map(|line| format!("{}: {}", line.game, line.plays))
-                .collect::<Vec<_>>()
-                .join("; "),
-        )),
-        (Picture::Paper(paper), _) => {
-            let mut text = format!(
-                "The front page of the Late Edition, late.sh's daily paper, for {}, in terminal text.",
-                long_date(paper.edition)
-            );
-            if let Some(most_played) = &paper.most_played {
-                text.push_str(&format!(" Most played yesterday: {most_played}."));
-            }
-            if let Some(yesterday) = &paper.yesterday {
-                text.push_str(&format!(
-                    " {}: {yesterday}.",
-                    PaperSectionKind::Yesterday.title()
-                ));
-            }
-            if let Some(reading) = &paper.reading {
-                text.push_str(&format!(
-                    " {}: {reading}",
-                    PaperSectionKind::Reading.title()
-                ));
-            }
-            if let Some(outside) = &paper.outside {
-                text.push_str(&format!(
-                    " {}: {outside}",
-                    PaperSectionKind::Outside.title()
-                ));
-            }
-            cut_alt(&text)
-        }
-    };
-    Some(alt)
 }
 
 /// What `/herald` asked for. Every subcommand is admin-only, refused with

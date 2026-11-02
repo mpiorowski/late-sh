@@ -10,8 +10,7 @@ use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
 use dartboard_core::{Canvas, Pos};
 use late_core::models::artboard::Snapshot;
 use late_core::models::herald::{
-    HeraldDay, HeraldDayStatus, HeraldKind, HeraldNetwork, HeraldPick, HeraldPost, HeraldSlot,
-    HeraldSwitch,
+    HeraldDay, HeraldDayStatus, HeraldKind, HeraldNetwork, HeraldPost, HeraldSlot, HeraldSwitch,
 };
 use late_core::models::showcase::{Showcase, ShowcaseParams};
 use tokio::net::TcpListener;
@@ -21,12 +20,11 @@ use uuid::Uuid;
 use super::bluesky::tid_for;
 use super::bluesky_test::png;
 use super::state::{
-    ArtDay, ArtFound, BOARD_MIN_INK, BoardCandidate, BoardFound, BoardInk, Crop, Found,
-    HeraldCommand, Look, Picture, art_day, post_due_day, shown_day,
+    ArtDay, ArtFound, BOARD_MIN_INK, BoardFound, BoardInk, Crop, Found, HeraldCommand, art_day,
+    post_due_day, shown_day,
 };
 use super::svc::{
-    CommandOutcome, DayWorked, HERALD_CLAIM_WINDOW, HERALD_MAX_ATTEMPTS, HERALD_STALE_CLAIM,
-    HeraldService, NextPost,
+    CommandOutcome, DayWorked, HERALD_CLAIM_WINDOW, HERALD_MAX_ATTEMPTS, HeraldService, NextPost,
 };
 use crate::app::ai::svc::AiService;
 use crate::config::{BlueskyConfig, HeraldConfig, HeraldVisibility, MastodonConfig};
@@ -589,10 +587,10 @@ async fn a_flagged_board_stays_off_every_network() {
     assert!(log.records.is_empty());
 }
 
-/// A pick stored with a warning before only clean art went out, still inside its
-/// retry window when the new code lands, rests instead of going out unmarked.
+/// A look that fails is no verdict: nothing goes out, the row is `failed` and
+/// the next check asks again, so one bad answer does not lose the day's picture.
 #[tokio::test]
-async fn a_stored_marked_pick_rests() {
+async fn a_failed_look_is_retried_with_nothing_sent() {
     let test_db = new_test_db().await;
     let db = test_db.db.clone();
     let client = db.get().await.expect("db client");
@@ -600,52 +598,36 @@ async fn a_stored_marked_pick_rests() {
     HeraldSwitch::set(&client, true).await.expect("switch on");
     let now = monday_art();
     let day = now.date_naive();
-    HeraldPost::claim(
-        &client,
-        day,
-        HeraldSlot::Art,
-        Utc::now() - HERALD_STALE_CLAIM,
-        Utc::now() - HERALD_CLAIM_WINDOW,
-        HERALD_MAX_ATTEMPTS,
-    )
-    .await
-    .expect("claim")
-    .expect("wins");
-    HeraldPost::store_pick(
-        &client,
-        day,
-        HeraldSlot::Art,
-        HeraldKind::Artboard,
-        "daily:2026-10-25",
-        &HeraldPick {
-            picture: serde_json::to_value(Picture::Board(BoardCandidate {
-                key: "daily:2026-10-25".to_string(),
-                shown: shown_day(day),
-                crop: Crop {
-                    x: 0,
-                    y: 0,
-                    width: 80,
-                    height: 5,
-                },
-            }))
-            .expect("picture"),
-            look: serde_json::to_value(Look::Unseen).expect("look"),
-        },
-    )
-    .await
-    .expect("store pick");
-    HeraldPost::mark_failed(&client, day, HeraldSlot::Art)
-        .await
-        .expect("fail");
-
+    daily_board(&client, shown_day(day), BOARD_MIN_INK).await;
+    log.lock().expect("log").gemini_reply = "not json".to_string();
     let herald = service(db.clone(), &base, model_on(&base));
     let mut finished = None;
+
     assert!(herald.check(now, HeraldSlot::Art, &mut finished).await);
-    assert_eq!(row(&client, day, HeraldSlot::Art).await.1, "skipped");
+    let (_, status, attempts) = row(&client, day, HeraldSlot::Art).await;
+    assert_eq!((status.as_str(), attempts), ("failed", 1));
+    assert_eq!(finished, None, "not settled");
+    assert_eq!(
+        HeraldPost::stored_pick(&client, day, HeraldSlot::Art)
+            .await
+            .expect("read"),
+        None
+    );
+    {
+        let log = log.lock().expect("log");
+        assert!(log.statuses.is_empty());
+        assert!(log.records.is_empty());
+    }
+
+    log.lock().expect("log").gemini_reply = clean_look();
+    assert!(herald.check(now, HeraldSlot::Art, &mut finished).await);
+    let (_, status, attempts) = row(&client, day, HeraldSlot::Art).await;
+    assert_eq!((status.as_str(), attempts), ("posted", 2));
+    assert_eq!(finished, Some(day));
     let log = log.lock().expect("log");
-    assert!(log.picture_paths.is_empty());
-    assert!(log.statuses.is_empty());
-    assert!(log.records.is_empty());
+    assert_eq!(log.gemini_calls, 2);
+    assert_eq!(log.statuses.len(), 1);
+    assert_eq!(log.records.len(), 1);
 }
 
 /// An admin's `/herald`: the row flips, status and preview read without

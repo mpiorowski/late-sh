@@ -45,3 +45,12 @@ SELECT
     current_timestamp
 FROM herald_posts
 WHERE day >= (current_timestamp AT TIME ZONE 'UTC')::date - 1;
+
+-- A row of those days still open holds a pick from the one-post rules, where a
+-- flagged picture went out behind a warning and an unseen one marked not
+-- reviewed. Nothing here sends a look like that, so the post stays unposted
+-- rather than be retried without its mark.
+UPDATE herald_posts
+SET status = 'skipped', finished_at = current_timestamp
+WHERE status IN ('posting', 'failed')
+  AND day >= (current_timestamp AT TIME ZONE 'UTC')::date - 1;

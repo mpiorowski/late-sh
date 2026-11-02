@@ -54,8 +54,8 @@ use uuid::Uuid;
 
 use super::state::{
     self, AnnouncementCandidate, AnnouncementFound, ArtDay, ArtFound, BoardFound, BoardInk, Brief,
-    Choice, Found, HeraldCommand, Look, PaperCandidate, Picture, PieceCandidate, ProjectCandidate,
-    ProjectFound, ScoreboardCandidate, WordsFound,
+    Choice, Found, HeraldCommand, Image, LinkCard, Look, PaperCandidate, Picture, PieceCandidate,
+    ProjectCandidate, ProjectFound, ScoreboardCandidate, Shape, WordsAlone, WordsFound, WordsKind,
 };
 use super::writeup::{self, Writeup};
 use super::{bluesky, brief, look, mastodon};
@@ -121,10 +121,11 @@ enum Media {
         png: Vec<u8>,
         alt: String,
     },
-    /// An announcement or a project: the words are the post, with the site's
-    /// picture as the thumb of its link card where a network wants one.
+    /// An announcement or a project: the words are the post, with a link card
+    /// where a network wants one, the site's picture its thumb.
     Words {
         thumb: Vec<u8>,
+        card: LinkCard,
     },
 }
 
@@ -461,7 +462,7 @@ impl HeraldService {
                 return match self.finished(day, slot).await {
                     Ok(true) => DayWorked::Finished,
                     Ok(false) => {
-                        metrics::record_herald_post(HeraldPostResult::Lost);
+                        metrics::record_herald_post(slot, HeraldPostResult::Lost);
                         DayWorked::Held
                     }
                     Err(error) => {
@@ -471,7 +472,7 @@ impl HeraldService {
                 };
             }
             Err(error) => {
-                metrics::record_herald_post(HeraldPostResult::Failed);
+                metrics::record_herald_post(slot, HeraldPostResult::Failed);
                 late_core::error_span!(
                     "herald_claim_failed",
                     error = ?error,
@@ -484,7 +485,7 @@ impl HeraldService {
         };
         match self.post_claimed(day, slot, key, now).await {
             Ok(Outcome::Posted { posted, look }) => {
-                metrics::record_herald_post(HeraldPostResult::Posted);
+                metrics::record_herald_post(slot, HeraldPostResult::Posted);
                 tracing::info!(
                     %day,
                     slot = slot_name,
@@ -497,12 +498,12 @@ impl HeraldService {
                 DayWorked::Posted(posted)
             }
             Ok(Outcome::Skipped) => {
-                metrics::record_herald_post(HeraldPostResult::Skipped);
+                metrics::record_herald_post(slot, HeraldPostResult::Skipped);
                 tracing::info!(%day, slot = slot_name, "the herald had nothing worth posting");
                 DayWorked::Skipped
             }
             Err(error) => {
-                metrics::record_herald_post(HeraldPostResult::Failed);
+                metrics::record_herald_post(slot, HeraldPostResult::Failed);
                 late_core::error_span!(
                     "herald_post_failed",
                     error = ?error,
@@ -606,16 +607,14 @@ impl HeraldService {
         if let Some(config) = &self.config.bluesky
             && !delivered.contains(&HeraldNetwork::Bluesky)
         {
-            let card = picture.link_card(&self.web_url);
-            let embed = match (&media, &card) {
-                (Media::Png { png, alt }, _) => bluesky::Embed::Picture { png, alt },
-                (Media::Words { thumb }, Some(card)) => bluesky::Embed::Card {
+            let embed = match &media {
+                Media::Png { png, alt } => bluesky::Embed::Picture { png, alt },
+                Media::Words { thumb, card } => bluesky::Embed::Card {
                     uri: &card.uri,
                     title: &card.title,
                     description: &card.description,
                     thumb,
                 },
-                (Media::Words { .. }, None) => bail!("words alone come with a link card"),
             };
             let sent = bluesky::deliver(
                 &self.http,
@@ -705,7 +704,7 @@ impl HeraldService {
     /// stored, look and all, else a fresh pick briefed, written up or looked at
     /// and stored now, before the first network call. `None` is a slot with
     /// nothing to post, or whose picture the look did not clear: the one place a
-    /// look decides, so a stored pick marked before this rule rests too.
+    /// look decides, and only a pick that goes out is ever stored.
     async fn pick_for(&self, day: NaiveDate, slot: HeraldSlot) -> anyhow::Result<Option<Pick>> {
         let stored = {
             let client = self.db.get().await?;
@@ -716,10 +715,6 @@ impl HeraldService {
                 serde_json::from_value(stored.picture).context("decoding the stored picture")?;
             let look: Look =
                 serde_json::from_value(stored.look).context("decoding the stored look")?;
-            if !look.goes_out() {
-                Self::note_withheld(day, slot, &picture, &look);
-                return Ok(None);
-            }
             let media = self.fetch_media(&picture, &look).await?;
             return Ok(Some(Pick {
                 picture,
@@ -733,7 +728,13 @@ impl HeraldService {
         };
         let (look, media) = self.look_and_media(&picture).await?;
         if !look.goes_out() {
-            Self::note_withheld(day, slot, &picture, &look);
+            tracing::info!(
+                %day,
+                slot = slot.as_str(),
+                subject = %picture.subject(),
+                look = %describe_look(&look),
+                "the herald left a picture unposted"
+            );
             return Ok(None);
         }
         let stored = HeraldPick {
@@ -755,18 +756,6 @@ impl HeraldService {
             look,
             media,
         }))
-    }
-
-    /// The one line a withheld picture gets: the row reads `skipped`, and this
-    /// says why.
-    fn note_withheld(day: NaiveDate, slot: HeraldSlot, picture: &Picture, look: &Look) {
-        tracing::info!(
-            %day,
-            slot = slot.as_str(),
-            subject = %picture.subject(),
-            look = %describe_look(look),
-            "the herald left a picture unposted"
-        );
     }
 
     /// The slot's post from what was found: the first choice that comes to
@@ -851,65 +840,56 @@ impl HeraldService {
         None
     }
 
-    /// A fresh pick's look and media: the picture fetched and looked at,
-    /// or words alone, drawn, with the site's picture for their card.
+    /// A fresh pick's look and media: the picture fetched and looked at, or words
+    /// alone, with nothing to look at. A look that fails is an error like a fetch
+    /// that fails: the next check asks again, and nothing goes out unchecked.
     async fn look_and_media(&self, picture: &Picture) -> anyhow::Result<(Look, Media)> {
-        match picture.picture_path() {
-            Some(path) => {
-                let png = self.fetch_picture(&path).await?;
-                let look = self.look_at(picture, &png).await;
-                let Some(alt) = state::alt_text(picture, &look) else {
-                    bail!("a picture and its alt text come together");
-                };
+        match picture.shape() {
+            Shape::Image(image) => {
+                let png = self.fetch_picture(&image.path()).await?;
+                let look = self
+                    .look_at(image, &png)
+                    .await
+                    .with_context(|| format!("looking at {}", picture.subject()))?;
+                let alt = image.alt_text(&look);
                 Ok((look, Media::Png { png, alt }))
             }
-            None => {
-                let thumb = self.fetch_picture(state::SITE_IMAGE_PATH).await?;
-                Ok((Look::Drawn, Media::Words { thumb }))
-            }
+            Shape::Words(words) => Ok((Look::Drawn, self.words_media(words).await?)),
         }
     }
 
     /// A stored pick's media: the picture fetched again, its alt text from
-    /// the stored look, or words alone with the site's picture.
+    /// the stored look, or words alone.
     async fn fetch_media(&self, picture: &Picture, look: &Look) -> anyhow::Result<Media> {
-        match (picture.picture_path(), state::alt_text(picture, look)) {
-            (Some(path), Some(alt)) => Ok(Media::Png {
-                png: self.fetch_picture(&path).await?,
-                alt,
+        match picture.shape() {
+            Shape::Image(image) => Ok(Media::Png {
+                png: self.fetch_picture(&image.path()).await?,
+                alt: image.alt_text(look),
             }),
-            (None, None) => Ok(Media::Words {
-                thumb: self.fetch_picture(state::SITE_IMAGE_PATH).await?,
-            }),
-            (Some(_), None) | (None, Some(_)) => {
-                bail!("a picture and its alt text come together")
-            }
+            Shape::Words(words) => self.words_media(words).await,
         }
     }
 
-    /// The look at a picture, for a fresh pick or an admin's preview:
-    /// counted here, and a failure logged here, once, and taken as
-    /// `Unseen`, which stays unposted.
-    async fn look_at(&self, picture: &Picture, png: &[u8]) -> Look {
-        let look = match look::look(&self.ai, picture, png).await {
-            Ok(look) => look,
-            Err(error) => {
-                late_core::error_span!(
-                    "herald_look_failed",
-                    error = ?error,
-                    subject = %picture.subject(),
-                    "the herald's look failed; leaving the picture unposted"
-                );
-                Look::Unseen
-            }
-        };
+    /// Words alone: their link card, with the site's picture as its thumb.
+    async fn words_media(&self, words: WordsAlone<'_>) -> anyhow::Result<Media> {
+        Ok(Media::Words {
+            thumb: self.fetch_picture(state::SITE_IMAGE_PATH).await?,
+            card: words.link_card(&self.web_url),
+        })
+    }
+
+    /// The look at a picture, for a fresh pick or an admin's preview, counted
+    /// here. A failed call is passed up for the caller's one log line.
+    async fn look_at(&self, image: Image<'_>, png: &[u8]) -> anyhow::Result<Look> {
+        let look = look::look(&self.ai, image, png).await;
         metrics::record_herald_look(match &look {
-            Look::Seen { warning: None, .. } => HeraldLookResult::Clean,
-            Look::Seen {
+            Ok(Look::Seen { warning: None, .. }) => HeraldLookResult::Clean,
+            Ok(Look::Seen {
                 warning: Some(_), ..
-            } => HeraldLookResult::Warned,
-            Look::Unseen => HeraldLookResult::Unseen,
-            Look::Drawn => HeraldLookResult::Drawn,
+            }) => HeraldLookResult::Warned,
+            Ok(Look::Unseen) => HeraldLookResult::Unseen,
+            Ok(Look::Drawn) => HeraldLookResult::Drawn,
+            Err(_) => HeraldLookResult::Failed,
         });
         look
     }
@@ -955,7 +935,7 @@ impl HeraldService {
         client: &tokio_postgres::Client,
         day: NaiveDate,
     ) -> anyhow::Result<Vec<ProjectFound>> {
-        if !state::words_schedule(day).contains(&HeraldKind::Project) {
+        if !state::words_schedule(day).contains(&WordsKind::Project) {
             return Ok(Vec::new());
         }
         let picked =
@@ -1199,8 +1179,8 @@ fn describe_look(look: &Look) -> String {
             reason,
             ..
         } => format!("warned {} ({reason})", warning.as_str()),
-        Look::Unseen => "not reviewed (the look failed or AI is off)".to_string(),
-        Look::Drawn => "drawn by late.sh from its own words".to_string(),
+        Look::Unseen => "not reviewed (AI is off)".to_string(),
+        Look::Drawn => "nothing for the look to see".to_string(),
     }
 }
 
@@ -1249,20 +1229,16 @@ fn banner_for(outcome: CommandOutcome) -> Banner {
             networks,
         } => match post {
             Some((picture, look)) => {
-                let shown = match &picture {
-                    Picture::Announcement(announcement) => format!(
+                let shown = match picture.shape() {
+                    Shape::Words(WordsAlone::Announcement(announcement)) => format!(
                         "Words ({}): {}",
                         announcement.brief.as_str(),
                         announcement.text
                     ),
-                    Picture::Project(project) => format!("Words: {}", project.text),
-                    Picture::Board(_)
-                    | Picture::Piece(_)
-                    | Picture::Scoreboard(_)
-                    | Picture::Paper(_) => format!(
-                        "Alt: {}",
-                        state::alt_text(&picture, &look).expect("a picture has alt text")
-                    ),
+                    Shape::Words(WordsAlone::Project(project)) => {
+                        format!("Words: {}", project.text)
+                    }
+                    Shape::Image(image) => format!("Alt: {}", image.alt_text(&look)),
                 };
                 match look.goes_out() {
                     true => Banner::info(&format!(

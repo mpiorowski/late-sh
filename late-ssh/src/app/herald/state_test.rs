@@ -9,10 +9,11 @@ use uuid::Uuid;
 use super::state::{
     ALT_MAX_CHARS, ANNOUNCEMENT_MAX_CHARS, AnnouncementCandidate, AnnouncementFound, ArtDay,
     ArtFound, BOARD_MIN_INK, BoardCandidate, BoardFound, BoardInk, Brief, Choice, Crop, Found,
-    HeraldCommand, LinkCard, Look, PROJECT_MIN_WORDS, PROJECT_POST_MAX_CHARS, PaperCandidate,
-    Picture, PieceCandidate, ProjectCandidate, ProjectFound, ScoreLine, ScoreboardCandidate,
-    Warning, WordsFound, alt_text, art_day, drawn_area, ink_cells, parse_herald_command,
-    post_due_day, project_exclusions, scoreboard_week, shown_day, status_text, words_schedule,
+    HeraldCommand, Image, LinkCard, Look, PROJECT_MIN_WORDS, PROJECT_POST_MAX_CHARS,
+    PaperCandidate, Picture, PieceCandidate, ProjectCandidate, ProjectFound, ScoreLine,
+    ScoreboardCandidate, Shape, Warning, WordsAlone, WordsFound, WordsKind, art_day, drawn_area,
+    ink_cells, parse_herald_command, post_due_day, project_exclusions, scoreboard_week, shown_day,
+    status_text, words_schedule,
 };
 
 /// The shortest limit among the networks: Bluesky's 300 graphemes
@@ -140,7 +141,10 @@ fn each_kind_names_its_subject_route_and_page() {
             (
                 picture.kind(),
                 picture.subject(),
-                picture.picture_path(),
+                match picture.shape() {
+                    Shape::Image(image) => Some(image.path()),
+                    Shape::Words(_) => None,
+                },
                 picture.page("https://late.sh"),
             )
         })
@@ -261,17 +265,12 @@ fn the_words_fit_and_never_mention_anyone() {
         "late.sh's daily paper, printed once a day."
     );
     assert_eq!(
-        Picture::Project(project()).link_card("https://late.sh"),
-        Some(LinkCard {
+        WordsAlone::Project(&project()).link_card("https://late.sh"),
+        LinkCard {
             uri: "https://example.com/tinyclock".to_string(),
             title: "tinyclock".to_string(),
             description: "A clock for your terminal that fits in one line.".to_string(),
-        })
-    );
-    assert_eq!(
-        Picture::Board(board()).link_card("https://late.sh"),
-        None,
-        "a picture has no card"
+        }
     );
     let credited = status_text(&Picture::Piece(piece()), "https://late.sh");
     assert!(
@@ -497,16 +496,18 @@ fn the_look_round_trips_and_writes_the_alt() {
         );
     }
     let gore = seen(Some(Warning::Gore));
+    let (the_board, the_piece, the_scoreboard, the_paper) =
+        (board(), piece(), scoreboard(), paper());
     let alts: Vec<String> = [
-        (Picture::Board(board()), gore.clone()),
-        (Picture::Piece(piece()), gore),
-        (Picture::Board(board()), Look::Unseen),
-        (Picture::Piece(piece()), Look::Unseen),
-        (Picture::Scoreboard(scoreboard()), Look::Drawn),
-        (Picture::Paper(paper()), Look::Drawn),
+        (Image::Board(&the_board), gore.clone()),
+        (Image::Piece(&the_piece), gore),
+        (Image::Board(&the_board), Look::Unseen),
+        (Image::Piece(&the_piece), Look::Unseen),
+        (Image::Scoreboard(&the_scoreboard), Look::Drawn),
+        (Image::Paper(&the_paper), Look::Drawn),
     ]
     .iter()
-    .map(|(picture, look)| alt_text(picture, look).expect("a picture has alt text"))
+    .map(|(image, look)| image.alt_text(look))
     .collect();
     assert_eq!(
         alts,
@@ -519,23 +520,13 @@ fn the_look_round_trips_and_writes_the_alt() {
             "The front page of the Late Edition, late.sh's daily paper, for 24 October 2026, in terminal text. Most played yesterday: Sudoku, 3 games finished. Yesterday on late.sh: Booth: 2 tracks queued; Arcade: 3 games finished, all Sudoku. What we were reading: Someone shared a fine link. Outside: The world turned.",
         ]
     );
-    let long = Picture::Paper(PaperCandidate {
+    let long = PaperCandidate {
         reading: Some("word ".repeat(400)),
         ..paper()
-    });
-    let alt = alt_text(&long, &Look::Drawn).expect("a picture has alt text");
+    };
+    let alt = Image::Paper(&long).alt_text(&Look::Drawn);
     assert_eq!(alt.chars().count(), ALT_MAX_CHARS);
     assert!(alt.ends_with('…'));
-    for words in [
-        Picture::Announcement(announcement()),
-        Picture::Project(project()),
-    ] {
-        assert_eq!(
-            alt_text(&words, &Look::Drawn),
-            None,
-            "words alone have no picture to describe"
-        );
-    }
 }
 
 /// The paper's candidate carries the card's headline as the card writes
@@ -668,11 +659,20 @@ fn the_words_slot_walks_the_days_schedule() {
             .collect()
     };
 
-    assert_eq!(words_schedule(day(19)), &[Project, Paper]);
-    assert_eq!(words_schedule(day(20)), &[Project]);
-    assert_eq!(words_schedule(day(21)), &[Project, Paper]);
-    assert_eq!(words_schedule(day(24)), &[Paper]);
-    assert_eq!(words_schedule(day(25)), &[Scoreboard, Paper]);
+    assert_eq!(
+        words_schedule(day(19)),
+        &[WordsKind::Project, WordsKind::Paper]
+    );
+    assert_eq!(words_schedule(day(20)), &[WordsKind::Project]);
+    assert_eq!(
+        words_schedule(day(21)),
+        &[WordsKind::Project, WordsKind::Paper]
+    );
+    assert_eq!(words_schedule(day(24)), &[WordsKind::Paper]);
+    assert_eq!(
+        words_schedule(day(25)),
+        &[WordsKind::Scoreboard, WordsKind::Paper]
+    );
     assert_eq!(
         week(&found(true, true, true)),
         vec![

@@ -5,8 +5,8 @@
 //! `Drawn` without a call. The model gets the picture whole and in four
 //! quarters: a 1536-pixel board reaches it shrunk, and only the quarters
 //! let it see a small piece (a doodle the whole picture hid in the hand
-//! run over the gallery). Returns the `Look` or an error;
-//! `svc.rs` logs and counts, and posts an error as `Look::Unseen`.
+//! run over the gallery). Returns the `Look` or an error; `svc.rs` counts it,
+//! and an error fails the post, so the next check asks again.
 
 use std::io::Cursor;
 
@@ -15,7 +15,7 @@ use image::{ImageFormat, ImageReader};
 use serde::Deserialize;
 use serde_json::json;
 
-use super::state::{Look, Picture, Warning, cut_alt, long_date};
+use super::state::{Image, Look, Warning, cut_alt, long_date};
 use crate::app::ai::svc::{AI_MODEL, AiService};
 
 /// The prompt's opening: what the call is for.
@@ -57,32 +57,27 @@ struct Answer {
     reason: String,
 }
 
-/// Ask the model about `png`, the picture `picture` names. A card
+/// Ask the model about `png`, the picture `image` names. A card
 /// late.sh drew from its own words is `Drawn`, and AI off is `Unseen`,
 /// both without a call; a call that fails or answers nothing usable is an
 /// error.
-pub(crate) async fn look(ai: &AiService, picture: &Picture, png: &[u8]) -> anyhow::Result<Look> {
-    let (what, prompt) = match picture {
-        Picture::Board(board) => (
+pub(crate) async fn look(ai: &AiService, image: Image<'_>, png: &[u8]) -> anyhow::Result<Look> {
+    let (what, prompt) = match image {
+        Image::Board(board) => (
             BOARD_PICTURE,
             format!(
                 "Label this picture: the late.sh Artboard as the room left it on {}, cropped to what is drawn. The first image is the whole board; the next four are its quarters at full detail (top left, top right, bottom left, bottom right), for reading small pieces. Describe and label the whole board.",
                 long_date(board.shown),
             ),
         ),
-        Picture::Piece(piece) => (
+        Image::Piece(piece) => (
             PIECE_PICTURE,
             format!(
                 "Label this picture: a piece from the late.sh gallery, titled {:?}. The first image is the whole piece; the next four are its quarters at full detail (top left, top right, bottom left, bottom right), for reading small details. Describe and label the whole piece.",
                 piece.title,
             ),
         ),
-        Picture::Scoreboard(_)
-        | Picture::Paper(_)
-        | Picture::Announcement(_)
-        | Picture::Project(_) => {
-            return Ok(Look::Drawn);
-        }
+        Image::Scoreboard(_) | Image::Paper(_) => return Ok(Look::Drawn),
     };
     if !ai.is_enabled() {
         return Ok(Look::Unseen);
