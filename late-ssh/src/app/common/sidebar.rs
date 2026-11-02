@@ -33,7 +33,7 @@ const RULE_HEIGHT: u16 = 1;
 // dances while a client is actually paired; muted flatlines it, and an
 // unpaired session gets a pointer to the guide instead. The band scales
 // to whatever height it's given; the stage pins 3.
-const MUSIC_VIZ_HEIGHT: u16 = 3;
+pub(crate) const MUSIC_VIZ_HEIGHT: u16 = 3;
 // Dock portion of the stage: volume row (1) + the two sources as an
 // accordion (10) + keybind footer (1). Constant for BOTH active sources, so
 // the panels below never shift; `music_stage_height_is_constant` locks this
@@ -41,7 +41,7 @@ const MUSIC_VIZ_HEIGHT: u16 = 3;
 // credit) + `RADIO_SLOTS` slot rows, then the youtube title + track. On
 // youtube: the radio title alone, then the youtube title + track +
 // `MUSIC_YOUTUBE_DETAIL_HEIGHT` detail rows.
-const MUSIC_DOCK_HEIGHT: u16 = 12;
+pub(crate) const MUSIC_DOCK_HEIGHT: u16 = 12;
 // Full music stage: the wave strip on top of the dock.
 pub(crate) const MUSIC_STAGE_HEIGHT: u16 = MUSIC_VIZ_HEIGHT + MUSIC_DOCK_HEIGHT;
 const MUSIC_QUEUE_HEIGHT: u16 = 4;
@@ -653,8 +653,17 @@ pub(crate) fn draw_music_stage(
         Layout::vertical([Constraint::Length(MUSIC_VIZ_HEIGHT), Constraint::Fill(1)]).areas(area);
     render_eq(frame, viz_area, props.marquee_tick, eq_state);
 
-    let lines = music_stage_lines(dock_area.width, props);
-    frame.render_widget(Paragraph::new(lines), dock_area);
+    draw_music_dock(frame, dock_area, props);
+}
+
+/// The dock alone, no equalizer: Home's `music` tile, which leaves the
+/// band to a `visualizer` tile of its own.
+pub(crate) fn draw_music_dock(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let lines = music_stage_lines(area.width, props);
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 fn music_stage_lines(width: u16, props: &MusicStageProps<'_>) -> Vec<Line<'static>> {

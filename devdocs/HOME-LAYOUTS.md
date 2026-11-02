@@ -36,7 +36,8 @@ delta against the design):
   the first) is the page's chat, draws Home's card with the synthetic
   views, and the rail shows its room (a stored `center` reads as `chat`).
   The cut list (pulse, friends, activity, visualizer, blank) is not cut:
-  they stay tile kinds.
+  they stay tile kinds, and the stock Home's sidebar puts `visualizer`
+  over `music`, the band and the dock as two tiles.
 - Guests are the two that end, now and attention (`+` on a tile, one a
   tile), and a guest takes its host over while it is up. The live panel
   is a tile kind only; the board's day is the chat card's own row.
@@ -123,11 +124,13 @@ layout.
   never doubled (`DESIGN_GUIDE.md` section 8: one pane owns the divider).
 - A horizontal split draws the lower tile's title rule as its divider.
   A tile with no title (chat, the reef) gets a plain faint rule.
-- Titles carry the tile's keys on the right, as the sidebar panels do
-  (`a feed`, `w tend`, `s1-4 open`), and the care bar where the tank has
-  one.
-- The chat tile draws no rule of its own: the composer block and the
-  `── now ──` rule are the chat's chrome, as today.
+- Every tile wears a title unless `t` took it off, and a title carries
+  its key hint on the right (`w tend`, `m mute`) and nothing else: the
+  tank's care bar sits on its water, not in the title. A key that works
+  only in arrange mode on the focused tile (`a feed`, `[ ] Enter pick`,
+  `enter open`) shows only there; a global key shows in every mode.
+- The chat tile wears its title like every other; the composer block
+  stays the chat's own chrome.
 
 `Look` keeps `frame: bool` and nothing else. `BorderKind`, `gap` and
 `titles`, and their keys `b` `g` `t`, are cut. A stored `zen_layout`'s look
@@ -148,7 +151,8 @@ Always drawn. The closed `TileKind` becomes:
 | `tank` | The sidebar's small tank, the same aquarium in a six-row band | sidebar Tank |
 | `bonsai` | The 81x26 canvas, cut to fit | a tile, sidebar Bonsai |
 | `pet` | The box | a tile, sidebar Pet |
-| `music` | The full stage: equalizer, volume, stations, the v keys | sidebar Music |
+| `music` | The dock alone: volume, stations, the v keys; a short tile shows the track over the station | sidebar Music |
+| `visualizer` | The equalizer at the tile's full height | sidebar Music's band |
 | `clock` | Block digits, the date under seven rows or more | a tile |
 | `ascii` | An animated piece | a tile |
 | `inbox` | Unread DMs, then mentions | a tile |
@@ -297,7 +301,7 @@ Arrange mode:
 | `<` `>` `{` `}` | resize; refused on a fit split |
 | `space` | the kind picker over the focused tile |
 | `+` | the guest list over the focused tile: the four dynamic kinds, a check beside the placed ones, toggled in place |
-| `t` | the focused tile's title rule on or off, its own say from then on (the rail, presence and the page's chat start bare, the rest with a rule) |
+| `t` | the focused tile's title rule on or off, its own say from then on (every tile starts with one) |
 | `[` `]` | a chat tile walks the rail's rooms, an ascii tile its pieces |
 | `b` | the border: none is Home's rules, the rest box the page in its look |
 | `1`..`9` | load that layout and leave arrange mode |

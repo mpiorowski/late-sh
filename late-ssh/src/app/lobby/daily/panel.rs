@@ -145,7 +145,7 @@ fn daily_panel_lines(width: u16, props: &DailyPanelProps) -> Vec<Line<'static>> 
 }
 
 /// Match rows for as many games as fit above the footer (a quiet lobby says
-/// so in one faint row), then `1 open · 1/10 · ctrl+g · \` toggle`.
+/// so in one faint row), then `1 open · 1/10`; the key is the title's.
 fn daily_compact_lines(width: u16, height: u16, props: &DailyPanelProps) -> Vec<Line<'static>> {
     let room = (height as usize).saturating_sub(1);
     let mut lines = Vec::with_capacity(room + 1);

@@ -41,43 +41,14 @@ pub enum Chrome {
 
 impl Chrome {
     /// Whether a tile of `kind` wears a title row under this chrome;
-    /// `page_chat` marks the page's chat of the moment (Home's card), and
-    /// `title` is the tile's own say (`Node::title_at`), which outranks
-    /// the kind's default outside arrange mode. Arrange mode titles every
-    /// tile, so the focus always has a rule to light.
-    pub fn titled(&self, kind: TileKind, page_chat: bool, title: Option<bool>) -> bool {
+    /// Every tile wears a title unless it says otherwise (`title`, the
+    /// leaf's own say from `t`, `Node::title_at`). Arrange mode titles
+    /// every tile, so the focus always has a rule to light.
+    pub fn titled(&self, title: Option<bool>) -> bool {
         match self {
             Chrome::Boxed(look) => look.titles && title.unwrap_or(true),
-            Chrome::Rules { arrange } => {
-                *arrange || title.unwrap_or(!bare_under_rules(kind, page_chat))
-            }
+            Chrome::Rules { arrange } => *arrange || title.unwrap_or(true),
         }
-    }
-}
-
-/// The tiles that draw their own chrome on Home (the rail's hints, the
-/// card's ticker and composer), so a title rule is only arrange mode's
-/// unless the tile says otherwise.
-pub(crate) fn bare_under_rules(kind: TileKind, page_chat: bool) -> bool {
-    match kind {
-        TileKind::Chat => page_chat,
-        TileKind::Rooms | TileKind::Presence => true,
-        TileKind::Bonsai
-        | TileKind::Aquarium
-        | TileKind::Tank
-        | TileKind::Ascii
-        | TileKind::Pet
-        | TileKind::Music
-        | TileKind::Clock
-        | TileKind::Visualizer
-        | TileKind::Lobby
-        | TileKind::Activity
-        | TileKind::Friends
-        | TileKind::Pulse
-        | TileKind::Inbox
-        | TileKind::Headlines
-        | TileKind::Live
-        | TileKind::Blank => false,
     }
 }
 
@@ -238,7 +209,7 @@ pub fn tile_inner(
     page_chat: bool,
     title: Option<bool>,
 ) -> Rect {
-    let titled = chrome.titled(kind, page_chat, title);
+    let titled = chrome.titled(title);
     match chrome {
         Chrome::Boxed(look) => match look.border {
             BorderKind::None => {

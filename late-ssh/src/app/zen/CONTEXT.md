@@ -28,8 +28,9 @@ tank tile; unowned, the tile is a centered
 note pointing at `/shop`, the same shape as the pet's), tank (the same
 aquarium the sidebar's way: the fish in a six-row band across the tile,
 centered in a taller one, `hub/aquarium/ui::draw_mini_tank`; the two are
-the one tank two ways, and both titles carry the care bar once owned, fourteen boxes green for
-the feeding streak or red for the days unfed, see the hub CONTEXT), ascii (an
+the one tank two ways, and both draw the care bar on the water's surface once
+owned, fourteen dots green for the feeding streak or red for the days unfed,
+see the hub CONTEXT), ascii (an
 animated piece ported from ascii.rest, `../ascii/CONTEXT.md`: earthrise
 in dots, the screensaver's default and a slow piece, until `[` `]` step it through the others or Enter picks one from
 the list (`ascii/picker`, over the page), including random and randomer.
@@ -40,7 +41,7 @@ before it when selected. Each tile keeps independent session-only playback in
 clears playback; resizing and overlays preserve it and its timer. Only
 the selection is stored on the leaf beside `room`, absent
 for the default, rides along on a split, and is forgotten when the tile
-changes kind, as a chat tile's room is), pet (the box from `pet/ui.rs`, also drawn by the sidebar Pet panel and as the profile portrait; its top row, `pet::ui::status_line`, reads `name · mood`, the mood inferred from the session by `pet/state.rs` (purring, proud, sulking, chatty, asleep, vibing, idle); when its tile shares an edge with a tank or a bonsai tile and the pet is calm (idle, vibing, or chatty) it strolls for twenty minutes then sits against that edge for five with wide eyes, on the wall clock: `PetPose::for_frame`, `STROLL_TICKS`/`WATCH_TICKS`/`LEG_TICKS`, the side from `layout::neighbour_side` and the target from `Neighbours`. A round is two legs, the tank on the first watch window and the bonsai on the second, so with both beside it they alternate and with one that one takes both windows: its five minutes in twenty-five never depend on what else the page holds. At the glass it gasps at a passing fish; at the tree it leans in for a slower sniff; a click on it pets it (the first pet of the UTC day pays 100 chips, see the hub CONTEXT) and does *not* focus its tile, since petting is a passing gesture and the keys belong to the chat you are typing in (`handle_pet_click` takes the click before `focus_home_tile_at`, `input_flow_test.rs`); while the terminal cursor is inside the tile an awake, unsulking pet walks after it, eyes on the cursor), chat, music (the track, then the source and the station it is tuned to, always the tile's last two rows, with the full-height visualizer filling every row above; `v1`..`v5` retune it), clock (block digits, the date below them when the tile is seven rows
+changes kind, as a chat tile's room is), pet (the box from `pet/ui.rs`, also drawn by the sidebar Pet panel and as the profile portrait; its top row, `pet::ui::status_line`, reads `name · mood`, the mood inferred from the session by `pet/state.rs` (purring, proud, sulking, chatty, asleep, vibing, idle); when its tile shares an edge with a tank or a bonsai tile and the pet is calm (idle, vibing, or chatty) it strolls for twenty minutes then sits against that edge for five with wide eyes, on the wall clock: `PetPose::for_frame`, `STROLL_TICKS`/`WATCH_TICKS`/`LEG_TICKS`, the side from `layout::neighbour_side` and the target from `Neighbours`. A round is two legs, the tank on the first watch window and the bonsai on the second, so with both beside it they alternate and with one that one takes both windows: its five minutes in twenty-five never depend on what else the page holds. At the glass it gasps at a passing fish; at the tree it leans in for a slower sniff; a click on it pets it (the first pet of the UTC day pays 100 chips, see the hub CONTEXT) and does *not* focus its tile, since petting is a passing gesture and the keys belong to the chat you are typing in (`handle_pet_click` takes the click before `focus_home_tile_at`, `input_flow_test.rs`); while the terminal cursor is inside the tile an awake, unsulking pet walks after it, eyes on the cursor), chat, music (the sidebar's dock without its band, `sidebar::draw_music_dock`, once the tile is `MUSIC_DOCK_HEIGHT` rows and eighteen columns; shorter, the track over the station, centred; `v1`..`v5` retune it, `m` mutes), clock (block digits, the date below them when the tile is seven rows
 or more; a one-row tile shows the time alone), visualizer, lobby (the daily games, compact:
 only the running games, starting at the name with no marker column
 (`RowMarker::Bare`; the sidebar panel keeps its `►`), plus one footer row of
@@ -126,8 +127,9 @@ room rail (`rooms`, `HOME_RAIL_COLS`), the reef across the top of the
 chat (`aquarium`, `HOME_AQUARIUM_ROWS`) hosting both guests, the chat
 under it hosting the board's day (a `chat` bound to no room, so it shows
 the rail's; a stored `center` reads as one), and the sidebar column
-(`HOME_SIDEBAR_COLS`): `presence`, then `music`, `lobby`, `live` and
-`bonsai` at their panel rows, and `pet` taking the rest. An unowned reef
+(`HOME_SIDEBAR_COLS`): `presence`, then `visualizer` (the band's three
+rows), `music` (the dock's twelve), `lobby`, `live` and `bonsai` at their
+panel rows, and `pet` taking the rest. An unowned reef
 or pet draws the shop's note in its tile. The Settings panel list is the
 Arcade's alone. `R` resets to the stock. Nothing about the terminal's size
 changes a layout: a page is drawn as arranged at every width, so a phone
@@ -161,10 +163,19 @@ boxes, a `── title ──` rule over a panel tile (`sidebar::draw_panel_rule
 lit while the lobby glows or, in arrange mode, the focus is on it), a
 column of air on each side of every tile but the page's chat and the
 rail, and the gutter of each row split painted as one `│`
-(`layout::row_gutters`, `Gaps { row: 1, col: 0 }`). Outside arrange mode
-the page's chat, the rail and the presence rows wear no rule at all
-(`bare_under_rules`); in arrange mode every tile has one, so the focus has
-a ring to land on. A layout with a border (the stock `zen`, or `b` in
+(`layout::row_gutters`, `Gaps { row: 1, col: 0 }`). Every tile wears a
+title rule unless `t` took it off (`Chrome::titled`); in arrange mode
+every tile has one whatever it says, so the focus has a ring to land on.
+The rule is the tile's name on the left and its key hint on the right
+(`tile_keys`: the key that matters most on the tile, `w tend`, `m mute`,
+`ctrl+/ room`), nothing else. A hint says when it works (`HintWhen`): a
+global key shows in every mode; a key the tile takes only in arrange mode
+with the focus (`[ ] Enter pick` on an ascii tile, `a feed` on the reef
+or tank, `enter` on the Inbox and Headlines, `[ ] cycle` on a chat, and
+`j k Enter act` for the attention guest) shows only then
+(`hints_shown`), so outside the mode no title names a key the composer
+would take. The rail names none: it takes clicks on its rows. A layout with
+a border (the stock `zen`, or `b` in
 arrange mode) is boxed in its look with its gap (`ZenState::chrome`,
 `gaps`).
 
@@ -260,7 +271,8 @@ and the debounced flush. `late-core`: `extract_key_home_layouts` /
 Where they are shown: each tile names its own keys on the right of its
 title (`tile_keys`, drawn with `hint_line` so the key is amber and the
 word dim), the arrange-only ones (an ascii tile's pieces, the tank's feed,
-the Inbox and Headlines rows) only while arranging, so `t` hides them
+the Inbox and Headlines rows, a chat's `[` `]`, the attention guest's
+rows) only while arranging with the focus on the tile; `t` hides them
 with the title. In arrange mode `?` opens `HelpTopic::Layouts`, which
 lists every key, and the bottom row is a footer naming the mode's keys
 (`HOME_ARRANGE_KEYS`, trimmed from the right on a narrow page). Nothing
@@ -309,10 +321,8 @@ included. In it:
 - `b` cycles the border (a border boxes the layout in its look, none
   draws Home's rules), `g` the gap between boxed tiles, and `t` gives the
   focused tile its own say on its title rule (`Node::title_at`, stored on
-  the leaf; `None` is the kind's default, bare for the rail, the presence
-  row and the page's chat, a rule for the rest,
-  `layout::bare_under_rules`; arrange mode titles every tile and marks one
-  that goes bare outside it `· hidden`).
+  the leaf; `None` is on, for every kind; arrange mode titles every tile
+  and marks one that goes bare outside it `· hidden`).
 - A digit `1`..`9` loads that layout and leaves the mode
   (`zen::input::load_layout`: the page goes into its own slot first; so
   `Ctrl+E 2` is the stock `zen` in two keystrokes, like a tmux prefix),
@@ -375,9 +385,12 @@ update.
   It steps on the quarter edge while Home draws a reef tile, owned or not
   (`aquarium_visible`, `App::reef_tile_inner` in `tick.rs`), though the
   tile only draws it once the tank is owned; unowned it is the shop note.
-- The care bar (`care_bar_spans`, `ui_test.rs`) is the tank's only care
-  readout on the page: `CareBar` comes from `AquariumCare::bar` in
-  `hub/aquarium/state.rs`, the aquarium and tank tiles only paint it.
+- The care bar (`care_bar_spans`, `draw_care_bar`, `ui_test.rs`) is the
+  tank's only care readout on the page: `CareBar` comes from
+  `AquariumCare::bar` in `hub/aquarium/state.rs`, the aquarium and tank
+  tiles only paint it, on the top row of the water, right end. A title
+  row holds the title on the left and the tile's keys on the right,
+  nothing else.
   `draw_tile_chrome` takes the optional span tail for exactly this; no
   other tile has one.
 - Arrange mode defers every key while `App::music_prefix_armed` is set,

@@ -2,7 +2,7 @@
 
 The right-rail music stage (`common/sidebar.rs`): the fixed-height accordion, the active-source rule, the title-bar tags, and the helpers behind it. Part of the audio domain; the rest is `CONTEXT.md`, the station table is `STATIONS.md`.
 
-Renders the audio domain into the right rail as a **fixed-height accordion**: a 3-row eq strip, then a dock that is always exactly `MUSIC_DOCK_HEIGHT = 12` rows (`MUSIC_STAGE_HEIGHT = 15` with the strip). The two sources sit in the fixed order radio → youtube (radio leads because it is the default source), and each source's rows sit directly under its own title bar. `v+x` toggles the source. Entry point: `draw_music_stage` (props bundled in `MusicStageProps`); the line builder is `music_stage_lines(width, props)`.
+Renders the audio domain into the right rail as a **fixed-height accordion**: a 3-row eq strip, then a dock that is always exactly `MUSIC_DOCK_HEIGHT = 12` rows (`MUSIC_STAGE_HEIGHT = 15` with the strip). The two sources sit in the fixed order radio → youtube (radio leads because it is the default source), and each source's rows sit directly under its own title bar. `v+x` toggles the source. Entry point: `draw_music_stage` (props bundled in `MusicStageProps`); the line builder is `music_stage_lines(width, props)`. Home's `music` tile draws the dock alone through `draw_music_dock`, its band being Home's `visualizer` tile.
 
 **Product rules (user requirements):**
 1. **Both title bars always show their listener count.** That is the "what's everyone tuned to" board.

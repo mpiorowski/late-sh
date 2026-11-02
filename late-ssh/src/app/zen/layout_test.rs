@@ -104,13 +104,18 @@ fn the_rules_chrome_paints_gutters_between_columns_and_insets_every_tile_but_the
     );
     assert!(row_gutters(&root, area, Gaps::uniform(0)).is_empty());
 
-    // The page's chat and the rail draw their own chrome and keep every
-    // cell; a panel, and a chat tile that only watches its room, wears a
-    // title row and a column of air on each side.
     let rules = Chrome::Rules { arrange: false };
     let rect = Rect::new(0, 0, 23, 30);
-    assert_eq!(tile_inner(rect, &rules, TileKind::Chat, true, None), rect);
-    assert_eq!(tile_inner(rect, &rules, TileKind::Rooms, false, None), rect);
+    // Every tile wears a title row; the page's chat and the rail keep
+    // their full width, the rest give up a column of air on each side.
+    assert_eq!(
+        tile_inner(rect, &rules, TileKind::Chat, true, None),
+        Rect::new(0, 1, 23, 29)
+    );
+    assert_eq!(
+        tile_inner(rect, &rules, TileKind::Rooms, false, None),
+        Rect::new(0, 1, 23, 29)
+    );
     assert_eq!(
         tile_inner(rect, &rules, TileKind::Chat, false, None),
         Rect::new(1, 1, 21, 29)
@@ -119,16 +124,16 @@ fn the_rules_chrome_paints_gutters_between_columns_and_insets_every_tile_but_the
         tile_inner(rect, &rules, TileKind::Music, false, None),
         Rect::new(1, 1, 21, 29)
     );
-    // A tile's own say outranks its kind's default: a panel told to go
-    // bare keeps only its air, the page's chat told to wear a rule gets
-    // the row.
+    // A tile's own say (`t`) takes the row away: a panel told to go bare
+    // keeps only its air, the page's chat told to go bare has the whole
+    // rect.
     assert_eq!(
         tile_inner(rect, &rules, TileKind::Music, false, Some(false)),
         Rect::new(1, 0, 21, 30)
     );
     assert_eq!(
-        tile_inner(rect, &rules, TileKind::Chat, true, Some(true)),
-        Rect::new(0, 1, 23, 29)
+        tile_inner(rect, &rules, TileKind::Chat, true, Some(false)),
+        rect
     );
     // In arrange mode every tile wears a title, so the focus has a ring,
     // whatever the tile says.

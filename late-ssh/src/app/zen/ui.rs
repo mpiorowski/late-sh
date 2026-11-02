@@ -38,7 +38,7 @@ use crate::app::{
     },
     common::{
         primitives::{format_relative_time_short, hint_line},
-        sidebar::{MusicStageProps, draw_core_block, draw_music_stage, draw_panel_rule},
+        sidebar::{MusicStageProps, draw_core_block, draw_music_dock, draw_panel_rule},
         theme,
     },
     files::terminal_image::TerminalImageFrame,
@@ -314,33 +314,15 @@ pub(crate) fn draw_rice(
             }
             false => title,
         };
-        // The tank's title carries its care bar: fourteen dots, green
-        // for the feeding streak or red for the days unfed.
-        let title_tail = match kind {
-            TileKind::Aquarium | TileKind::Tank if view.aquarium_owned => {
-                Some(care_bar_spans(view.aquarium_care.bar()))
-            }
-            TileKind::Aquarium
-            | TileKind::Tank
-            | TileKind::Ascii
-            | TileKind::Chat
-            | TileKind::Bonsai
-            | TileKind::Pet
-            | TileKind::Music
-            | TileKind::Clock
-            | TileKind::Visualizer
-            | TileKind::Lobby
-            | TileKind::Activity
-            | TileKind::Friends
-            | TileKind::Pulse
-            | TileKind::Inbox
-            | TileKind::Headlines
-            | TileKind::Live
-            | TileKind::Blank
-            | TileKind::Rooms
-            | TileKind::Presence => None,
-        };
-        let keys = tile_keys(*kind, is_page_chat, &view);
+
+        // The tile's keys, the attention guest's ahead of them while it
+        // is up here; the focused-only ones show only where they work.
+        let mut hints: Vec<TileHint> = Vec::new();
+        if up.contains(&Guest::Attention) {
+            hints.push(ATTENTION_HINT);
+        }
+        hints.extend_from_slice(tile_keys(*kind));
+        let keys = hints_shown(&hints, zen.arrange, focused);
         // The lobby's rule glows while a game waits on you, as the
         // sidebar's does.
         let glow = *kind == TileKind::Lobby && view.lobby_glow;
@@ -351,8 +333,7 @@ pub(crate) fn draw_rice(
             is_page_chat,
             title_override,
             &title,
-            title_tail,
-            keys,
+            &keys,
             focused,
             glow,
             &chrome,
@@ -379,15 +360,20 @@ pub(crate) fn draw_rice(
         };
         match kind {
             TileKind::Bonsai => draw_bonsai_tile(frame, inner, view.bonsai, view.wall_tick),
-            TileKind::Aquarium => {
-                draw_aquarium_tile(frame, inner, view.aquarium, view.aquarium_owned)
-            }
+            TileKind::Aquarium => draw_aquarium_tile(
+                frame,
+                inner,
+                view.aquarium,
+                view.aquarium_owned,
+                view.aquarium_care.bar(),
+            ),
             TileKind::Tank => draw_tank_tile(
                 frame,
                 inner,
                 view.aquarium,
                 view.aquarium_owned,
                 view.aquarium_care.hungry(),
+                view.aquarium_care.bar(),
                 view.wall_tick,
             ),
             TileKind::Ascii => {
@@ -416,22 +402,16 @@ pub(crate) fn draw_rice(
                 }
             },
             TileKind::Music => {
-                // Tall enough for the stage, the tile is the sidebar's
-                // music panel: stations, volume, the keys. Shorter, the
-                // track over the equalizer.
-                if inner.height >= crate::app::common::sidebar::MUSIC_STAGE_HEIGHT
-                    && inner.width >= MUSIC_STAGE_MIN_COLS
+                // Tall enough for the dock, the tile is the sidebar's
+                // music panel without its band: volume, stations, the
+                // keys. Shorter, the track over the station. The
+                // equalizer is the visualizer tile's.
+                if inner.height >= crate::app::common::sidebar::MUSIC_DOCK_HEIGHT
+                    && inner.width >= MUSIC_DOCK_MIN_COLS
                 {
-                    draw_music_stage(frame, inner, &view.music_stage, view.eq_state);
+                    draw_music_dock(frame, inner, &view.music_stage);
                 } else {
-                    draw_music_tile(
-                        frame,
-                        inner,
-                        &view.track,
-                        &view.station,
-                        view.wall_tick,
-                        view.eq_state,
-                    )
+                    draw_music_tile(frame, inner, &view.track, &view.station)
                 }
             }
             TileKind::Clock => draw_clock_tile(frame, inner, &view),
@@ -599,9 +579,9 @@ fn draw_layout_list(frame: &mut Frame, area: Rect, layouts: &Layouts, list: &Lay
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-/// The narrowest tile the music stage reads in: the station rows with
+/// The narrowest tile the music dock reads in: the station rows with
 /// their keys.
-const MUSIC_STAGE_MIN_COLS: u16 = 18;
+const MUSIC_DOCK_MIN_COLS: u16 = 18;
 
 /// Paint the guests that have taken their host's tile. One guest has the
 /// whole tile; with both up the strip takes its rows at the top and
@@ -859,59 +839,92 @@ fn draw_kind_picker(frame: &mut Frame, area: Rect, zen: &ZenState) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-/// The keys a tile answers to, named on the right of its title so the
-/// page explains itself in one place per tile; `t` hides the title and the
-/// keys with it. The tile keys of an ascii, tank, Inbox or Headlines tile
-/// run in arrange mode, where those tiles take the focus, so they are named
-/// only there. The layout keys are the guide's (`?`).
-fn tile_keys(
-    kind: TileKind,
-    page_chat: bool,
-    view: &ZenView<'_>,
-) -> &'static [(&'static str, &'static str)] {
+/// When a tile's key works: always, as the global keys do with the chat
+/// composer open, or only in arrange mode on the focused tile, where the
+/// tile takes the keys (`input::handle_tile_keys`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HintWhen {
+    Always,
+    Focused,
+}
+
+/// One key hint on a tile's title: the key, the word, and when it works.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct TileHint {
+    key: &'static str,
+    action: &'static str,
+    when: HintWhen,
+}
+
+const fn always(key: &'static str, action: &'static str) -> TileHint {
+    TileHint {
+        key,
+        action,
+        when: HintWhen::Always,
+    }
+}
+
+const fn focused(key: &'static str, action: &'static str) -> TileHint {
+    TileHint {
+        key,
+        action,
+        when: HintWhen::Focused,
+    }
+}
+
+/// The attention guest's keys while it is up on the focused tile in
+/// arrange mode: `j` `k` walk its rows, Enter acts on the selected one.
+const ATTENTION_HINT: TileHint = focused("j k Enter", "act");
+
+/// The key hints a tile's title carries, on the right, the same text
+/// whenever one shows: the key that matters most on it, or none. A key
+/// that works only in arrange mode on the focused tile shows only there,
+/// so outside the mode a title never names a key the composer would
+/// take. The guide has the rest.
+fn tile_keys(kind: TileKind) -> &'static [TileHint] {
     match kind {
-        TileKind::Bonsai => &[("w", "tend")],
-        TileKind::Ascii if view.zen.arrange => &[("[ ]", "piece"), ("Enter", "pick")],
-        TileKind::Ascii => &[],
-        TileKind::Aquarium | TileKind::Tank if view.aquarium_owned && view.zen.arrange => {
-            &[("a", "feed")]
-        }
-        TileKind::Aquarium | TileKind::Tank => &[],
-        TileKind::Pet if view.pet_strip.is_some() => &[("click", "pet")],
-        TileKind::Pet => &[],
-        // Home's chat keys are the rail's outside arrange mode; a chat
-        // tile that only watches is a click away from being the page's.
-        TileKind::Chat if !view.zen.arrange => match page_chat {
-            true => &[("h l ctrl+/", "room"), ("i", "write")],
-            false => &[("click", "focus")],
-        },
-        // Arranging, a focused chat tile's room keys still bind it.
-        TileKind::Chat => &[("[ ] ctrl+/", "room")],
-        TileKind::Music => &[
-            ("m", "mute"),
-            ("-=", "vol"),
-            ("v x", "source"),
-            ("v1-5", "tune"),
-        ],
-        TileKind::Lobby => &[("ctrl+g", "open"), ("`", "toggle")],
-        TileKind::Inbox if view.zen.arrange => &[("jk", "pick"), ("enter", "open")],
-        TileKind::Headlines if view.zen.arrange => &[("jk", "pick"), ("enter", "copy")],
-        TileKind::Inbox | TileKind::Headlines => &[],
-        TileKind::Live => &[("s1-4", "open")],
-        TileKind::Clock
+        TileKind::Bonsai => const { &[always("w", "tend")] },
+        TileKind::Ascii => const { &[focused("[ ] Enter", "pick")] },
+        TileKind::Aquarium | TileKind::Tank => const { &[focused("a", "feed")] },
+        TileKind::Pet => const { &[always("click", "pet")] },
+        TileKind::Chat => const { &[focused("[ ]", "cycle"), always("ctrl+/", "room")] },
+        TileKind::Music => const { &[always("m", "mute")] },
+        TileKind::Lobby => const { &[always("ctrl+g", "open")] },
+        TileKind::Inbox => const { &[focused("enter", "open")] },
+        TileKind::Headlines => const { &[focused("enter", "copy")] },
+        TileKind::Live => const { &[always("s1-4", "open")] },
+        TileKind::Rooms
+        | TileKind::Clock
         | TileKind::Visualizer
         | TileKind::Activity
         | TileKind::Friends
         | TileKind::Pulse
-        | TileKind::Presence => &[],
-        TileKind::Rooms => &[("h l", "jump")],
-        TileKind::Blank => &[],
+        | TileKind::Presence
+        | TileKind::Blank => const { &[] },
     }
 }
 
+/// The hints that show on a tile now: every always-on one, and the
+/// focused-only ones when the page is arranging and this tile has the
+/// focus.
+fn hints_shown(
+    hints: &[TileHint],
+    arrange: bool,
+    focused: bool,
+) -> Vec<(&'static str, &'static str)> {
+    hints
+        .iter()
+        .filter(|hint| match hint.when {
+            HintWhen::Always => true,
+            HintWhen::Focused => arrange && focused,
+        })
+        .map(|hint| (hint.key, hint.action))
+        .collect()
+}
+
 /// Border, title, keys, and focus ring per the look; returns the tile's
-/// inner area. The keys sit on the right of the title row when there is
-/// room for them after the title and its tail.
+/// inner area. A title row is the title on the left and the tile's keys
+/// on the right when there is room for them, nothing else.
 #[allow(clippy::too_many_arguments)]
 fn draw_tile_chrome(
     frame: &mut Frame,
@@ -920,7 +933,6 @@ fn draw_tile_chrome(
     page_chat: bool,
     title_override: Option<bool>,
     title: &str,
-    title_tail: Option<Vec<Span<'static>>>,
     keys: &[(&str, &str)],
     focused: bool,
     glow: bool,
@@ -933,7 +945,7 @@ fn draw_tile_chrome(
         Chrome::Boxed(look) => look,
         Chrome::Rules { arrange } => {
             let inner = layout::tile_inner(rect, chrome, kind, page_chat, title_override);
-            if !chrome.titled(kind, page_chat, title_override) {
+            if !chrome.titled(title_override) {
                 return inner;
             }
             // The sidebar's rule, the title italic and dim, lit amber while
@@ -942,10 +954,6 @@ fn draw_tile_chrome(
             let row = Rect::new(inner.x, rect.y, inner.width, 1);
             draw_panel_rule(frame, row, title, glow || (*arrange && focused));
             let mut right: Vec<Span<'static>> = Vec::new();
-            if let Some(tail) = title_tail {
-                right.extend(tail);
-                right.push(Span::raw(" "));
-            }
             let hints = hint_line(keys);
             if !keys.is_empty() {
                 right.extend(hints.spans);
@@ -984,13 +992,8 @@ fn draw_tile_chrome(
                 .borders(Borders::ALL)
                 .border_type(border_type)
                 .border_style(ring);
-            if chrome.titled(kind, page_chat, title_override) {
-                let mut spans = vec![Span::styled(format!(" {title} "), title_style)];
-                if let Some(tail) = title_tail {
-                    spans.extend(tail);
-                    spans.push(Span::raw(" "));
-                }
-                let left = Line::from(spans);
+            if chrome.titled(title_override) {
+                let left = Line::from(vec![Span::styled(format!(" {title} "), title_style)]);
                 // The corners take two cells; the keys need a cell of
                 // border on each side of them to read as a second title.
                 // Styled like the footer: the key amber, the word dim.
@@ -1011,15 +1014,10 @@ fn draw_tile_chrome(
                 return rect;
             }
             let marker = if focused { "▌" } else { " " };
-            let mut spans = vec![
+            let left = Line::from(vec![
                 Span::styled(marker, ring),
                 Span::styled(title.to_string(), title_style),
-            ];
-            if let Some(tail) = title_tail {
-                spans.push(Span::raw(" "));
-                spans.extend(tail);
-            }
-            let left = Line::from(spans);
+            ]);
             let room = (rect.width as usize).saturating_sub(left.width());
             let mut line_spans = left.spans;
             let right = hint_line(keys);
@@ -1034,6 +1032,17 @@ fn draw_tile_chrome(
             layout::tile_inner(rect, chrome, kind, page_chat, title_override)
         }
     }
+}
+
+/// The care bar on the water's surface: the tile's top row, right end,
+/// over the reef or the tank once they are drawn.
+fn draw_care_bar(frame: &mut Frame, area: Rect, bar: CareBar) {
+    let bar = Line::from(care_bar_spans(bar));
+    if area.height == 0 || (area.width as usize) < bar.width() + 2 {
+        return;
+    }
+    let row = Rect::new(area.x, area.y, area.width.saturating_sub(1), 1);
+    frame.render_widget(Paragraph::new(bar).right_aligned(), row);
 }
 
 /// The care bar: one dot per day of the fourteen both clocks run on.
@@ -1089,12 +1098,18 @@ fn draw_bonsai_tile(frame: &mut Frame, area: Rect, state: &BonsaiState, wall_tic
     frame.render_widget(Paragraph::new(padded).scroll((0, cut_left as u16)), area);
 }
 
-/// The tank. Without the shop unlock the tile reads like the pet's, a
-/// centered note pointing at the shop; owned, it is the live reef, nothing
-/// else: the sprout on its floor is tended on its Shop row.
-/// The reef, bound to the tile (`reef_form`); a tile too small for it
-/// says so and points at the tank tile, the small form.
-fn draw_aquarium_tile(frame: &mut Frame, area: Rect, state: &AquariumState, owned: bool) {
+/// The reef, bound to the tile (`reef_form`), with the care bar on its
+/// surface; a tile too small for it says so and points at the tank tile,
+/// the small form. Without the shop unlock the tile reads like the pet's,
+/// a centered note pointing at the shop. The sprout on the floor is
+/// tended on its Shop row.
+fn draw_aquarium_tile(
+    frame: &mut Frame,
+    area: Rect,
+    state: &AquariumState,
+    owned: bool,
+    care: CareBar,
+) {
     if !owned {
         draw_centered_note(frame, area, &["no tank yet", "the Aquarium is in /shop"]);
         return;
@@ -1108,16 +1123,18 @@ fn draw_aquarium_tile(frame: &mut Frame, area: Rect, state: &AquariumState, owne
         return;
     }
     crate::app::hub::aquarium::ui::draw(frame, area, state);
+    draw_care_bar(frame, area, care);
 }
 
 /// The sidebar's small tank: its six-row band across the tile's width,
-/// centered in a taller tile.
+/// centered in a taller tile, the care bar on the band's surface.
 fn draw_tank_tile(
     frame: &mut Frame,
     area: Rect,
     state: &AquariumState,
     owned: bool,
     hungry: bool,
+    care: CareBar,
     wall_tick: usize,
 ) {
     if !owned {
@@ -1138,6 +1155,7 @@ fn draw_tank_tile(
         hungry,
         wall_tick,
     );
+    draw_care_bar(frame, band, care);
 }
 
 /// Whether an aquarium tile's inner area is big enough for the reef:
@@ -1209,30 +1227,15 @@ fn draw_chat_tile(
     }
 }
 
-/// Track and station always sit on the tile's last two rows, the station
-/// first to go when the tile is a single row. The visualizer takes every
-/// row above them. The keys are on the title.
-fn draw_music_tile(
-    frame: &mut Frame,
-    area: Rect,
-    track: &str,
-    station: &str,
-    wall_tick: usize,
-    eq_state: EqState,
-) {
+/// A music tile too short for the dock: the track over the station,
+/// centred in the tile, the station first to go when the tile is a single
+/// row. No equalizer here; that is the visualizer tile.
+fn draw_music_tile(frame: &mut Frame, area: Rect, track: &str, station: &str) {
     if area.height == 0 {
         return;
     }
     let text_rows: u16 = area.height.min(2);
-    let eq_rows = area.height - text_rows;
-    if eq_rows > 0 {
-        draw_visualizer_tile(
-            frame,
-            Rect::new(area.x, area.y, area.width, eq_rows),
-            wall_tick,
-            eq_state,
-        );
-    }
+    let top = area.y + (area.height - text_rows) / 2;
     let track = Line::from(vec![
         Span::styled("♪ ", Style::default().fg(theme::AMBER())),
         Span::styled(track.to_string(), Style::default().fg(theme::TEXT_BRIGHT())),
@@ -1245,7 +1248,7 @@ fn draw_music_tile(
     .centered();
     frame.render_widget(
         Paragraph::new(vec![track, station]),
-        Rect::new(area.x, area.y + eq_rows, area.width, text_rows),
+        Rect::new(area.x, top, area.width, text_rows),
     );
 }
 

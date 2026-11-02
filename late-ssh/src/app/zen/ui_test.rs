@@ -1,8 +1,7 @@
 use super::{
     Care, Chore, PulseView, care_bar_spans, chat_tile_title, draw_bonsai_tile, draw_headlines_tile,
-    draw_music_tile, draw_pulse_tile, hint_line_fitting, station_text,
+    draw_music_tile, draw_pulse_tile, hint_line_fitting, hints_shown, station_text, tile_keys,
 };
-use crate::app::audio::viz::EqState;
 use crate::app::bonsai::{
     render::canvas_lines,
     state::{BonsaiState, CANVAS_HEIGHT, CANVAS_WIDTH},
@@ -10,6 +9,7 @@ use crate::app::bonsai::{
 use crate::app::common::{primitives::hint_line, theme};
 use crate::app::hub::aquarium::state::CareBar;
 use crate::app::zen::rows::Headline;
+use crate::app::zen::state::TileKind;
 use late_core::models::aquarium_care::CARE_DAYS;
 use ratatui::{Terminal, backend::TestBackend, layout::Rect};
 use unicode_width::UnicodeWidthStr;
@@ -18,16 +18,7 @@ use uuid::Uuid;
 fn music_tile_rows(width: u16, height: u16) -> Vec<String> {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
     terminal
-        .draw(|frame| {
-            draw_music_tile(
-                frame,
-                Rect::new(0, 0, width, height),
-                "Ambition",
-                "youtube",
-                0,
-                EqState::Ambient,
-            )
-        })
+        .draw(|frame| draw_music_tile(frame, Rect::new(0, 0, width, height), "Ambition", "youtube"))
         .expect("draw");
     let buffer = terminal.backend().buffer();
     (0..height)
@@ -36,27 +27,45 @@ fn music_tile_rows(width: u16, height: u16) -> Vec<String> {
 }
 
 #[test]
-fn the_music_tile_pins_track_and_station_to_its_last_two_rows() {
+fn a_short_music_tile_centres_the_track_over_the_station_and_draws_no_band() {
     let rows = music_tile_rows(24, 9);
-    assert!(rows[7].contains("♪ Ambition"), "{rows:#?}");
-    assert!(rows[8].contains("youtube"), "{rows:#?}");
-    // Every row above the text belongs to the visualizer.
-    for row in &rows[..7] {
-        assert!(
-            !row.contains("Ambition") && !row.contains("youtube"),
-            "{rows:#?}"
-        );
+    assert!(rows[3].contains("♪ Ambition"), "{rows:#?}");
+    assert!(rows[4].contains("youtube"), "{rows:#?}");
+    // Nothing else is drawn: the equalizer is the visualizer tile's.
+    for (y, row) in rows.iter().enumerate() {
+        if y != 3 && y != 4 {
+            assert_eq!(row.trim(), "", "{rows:#?}");
+        }
     }
-    let bar_cells = rows[..7]
-        .iter()
-        .flat_map(|row| row.chars())
-        .filter(|ch| !ch.is_whitespace())
-        .count();
-    assert!(bar_cells > 0, "{rows:#?}");
 
     // Two rows is text only; one row keeps the track.
     assert_eq!(music_tile_rows(24, 2)[0].trim(), "♪ Ambition");
+    assert_eq!(music_tile_rows(24, 2)[1].trim(), "youtube");
     assert_eq!(music_tile_rows(24, 1)[0].trim(), "♪ Ambition");
+}
+
+#[test]
+fn a_key_that_works_only_on_the_focused_tile_shows_only_there() {
+    let ascii = tile_keys(TileKind::Ascii);
+    assert_eq!(hints_shown(ascii, false, false), vec![]);
+    assert_eq!(hints_shown(ascii, false, true), vec![]);
+    assert_eq!(hints_shown(ascii, true, false), vec![]);
+    assert_eq!(hints_shown(ascii, true, true), vec![("[ ] Enter", "pick")]);
+
+    // A global key shows in every mode; a chat tile adds its arrange-only
+    // room cycling ahead of it only while focused.
+    assert_eq!(
+        hints_shown(tile_keys(TileKind::Bonsai), false, false),
+        vec![("w", "tend")]
+    );
+    let chat = tile_keys(TileKind::Chat);
+    assert_eq!(hints_shown(chat, false, false), vec![("ctrl+/", "room")]);
+    assert_eq!(
+        hints_shown(chat, true, true),
+        vec![("[ ]", "cycle"), ("ctrl+/", "room")]
+    );
+    // The rail takes clicks on its rows and no key, so it names none.
+    assert_eq!(hints_shown(tile_keys(TileKind::Rooms), true, true), vec![]);
 }
 
 fn glyphs(bar: CareBar) -> String {

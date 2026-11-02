@@ -293,10 +293,9 @@ pub enum Node {
         )]
         piece: Option<AsciiSelection>,
         /// Whether the tile wears its title rule on Home, outside arrange
-        /// mode; `None` (the stored default) is the kind's own: the rail,
-        /// the presence row and the page's chat go bare, the rest wear
-        /// one (`layout::bare_under_rules`). `t` in arrange mode sets it.
-        /// Under the boxed chrome `Some(false)` drops the title text.
+        /// mode; `None` (the stored default) is on, for every kind. `t`
+        /// in arrange mode sets it. Under the boxed chrome `Some(false)`
+        /// drops the title text.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<bool>,
     },
@@ -906,11 +905,12 @@ impl RiceLayout {
     }
 
     /// The stock Home: the room rail, then the reef across the top of the
-    /// chat hosting the now strip (the shop's note while no tank is
-    /// owned), the chat under it hosting the board's banner, and a
-    /// sidebar column of the presence row over the pet (the shop's note
-    /// while none is owned). Fixed, the same for every account: the page
-    /// is arranged in place (`Ctrl+E`), and this is what `R` resets to.
+    /// chat hosting both guests (the shop's note while no tank is owned),
+    /// the chat under it, and a sidebar column of the presence row, the
+    /// visualizer, the music dock, the lobby, live and the bonsai at their
+    /// panel rows, with the pet (the shop's note while none is owned)
+    /// taking the rest. Fixed, the same for every account: the page is
+    /// arranged in place (`Ctrl+E`), and this is what `R` resets to.
     pub fn home() -> Self {
         let center = Node::split_first(
             Dir::Column,
@@ -920,10 +920,14 @@ impl RiceLayout {
         );
         // The sidebar's panels, each at its rows plus its title rule; the
         // pet, last, takes the rest of the column.
-        let panels: [(TileKind, u16); 4] = [
+        let panels: [(TileKind, u16); 5] = [
+            (
+                TileKind::Visualizer,
+                crate::app::common::sidebar::MUSIC_VIZ_HEIGHT,
+            ),
             (
                 TileKind::Music,
-                crate::app::common::sidebar::MUSIC_STAGE_HEIGHT,
+                crate::app::common::sidebar::MUSIC_DOCK_HEIGHT,
             ),
             (
                 TileKind::Lobby,
@@ -1046,9 +1050,9 @@ impl ZenState {
         self.rice.root.kind_at(self.focus)
     }
 
-    /// Whether the page draws a music equalizer: a music tile's eq strip or
-    /// a visualizer tile. Those paint on the anim_half edge, so the render
-    /// loop has to wake that often while one is up.
+    /// Whether the page draws a music equalizer: a visualizer tile, or a
+    /// music tile whose track row marquees. Those paint on the anim_half
+    /// edge, so the render loop has to wake that often while one is up.
     pub fn shows_equalizer(&self) -> bool {
         self.rice
             .root
@@ -1470,18 +1474,12 @@ impl ZenState {
     }
 
     /// Whether the tile at `ordinal` wears its title outside arrange mode:
-    /// its own say (`Node::title_at`), else its kind's default under
-    /// Home's rules.
+    /// its own say (`Node::title_at`), else on.
     pub fn rule_shown(&self, ordinal: usize) -> bool {
-        let Some(kind) = self.rice.root.kind_at(ordinal) else {
+        if self.rice.root.kind_at(ordinal).is_none() {
             return false;
-        };
-        let page_chat = self.active_chat_ordinal() == Some(ordinal);
-        layout::Chrome::Rules { arrange: false }.titled(
-            kind,
-            page_chat,
-            self.rice.root.title_at(ordinal),
-        )
+        }
+        layout::Chrome::Rules { arrange: false }.titled(self.rice.root.title_at(ordinal))
     }
 
     /// `t` in arrange mode: the focused tile's title rule, on or off, as

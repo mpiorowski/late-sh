@@ -723,6 +723,7 @@ fn the_stock_home_is_the_rail_the_reef_over_the_chat_and_the_sidebar_column() {
             TileKind::Aquarium,
             TileKind::Chat,
             TileKind::Presence,
+            TileKind::Visualizer,
             TileKind::Music,
             TileKind::Lobby,
             TileKind::Live,
@@ -770,10 +771,10 @@ fn a_tile_owns_its_title_rule_on_home_and_the_say_rides_the_layout() {
     let rooms = zen.first_tile_of(TileKind::Rooms).expect("a rail");
     let reef = zen.first_tile_of(TileKind::Aquarium).expect("a reef");
     let chat = zen.first_tile_of(TileKind::Chat).expect("a chat");
-    // The kinds' defaults: the rail, the presence row and the page's chat
-    // go bare, a panel wears its rule.
-    assert!(!zen.rule_shown(rooms));
-    assert!(!zen.rule_shown(chat));
+    // The default is on for every kind, the rail and the page's chat
+    // included.
+    assert!(zen.rule_shown(rooms));
+    assert!(zen.rule_shown(chat));
     assert!(zen.rule_shown(reef));
     assert_eq!(zen.rice.root.title_at(reef), None, "no say until `t`");
 
@@ -785,7 +786,7 @@ fn a_tile_owns_its_title_rule_on_home_and_the_say_rides_the_layout() {
     assert_eq!(zen.rice.root.title_at(reef), Some(false));
     zen.focus = rooms;
     assert!(zen.toggle_focused_title());
-    assert!(zen.rule_shown(rooms));
+    assert!(!zen.rule_shown(rooms));
     let saved = zen.rice.to_json();
     assert_eq!(RiceLayout::from_json(Some(&saved)), zen.rice);
     assert!(zen.rice.root.set_kind(reef, TileKind::Clock));
