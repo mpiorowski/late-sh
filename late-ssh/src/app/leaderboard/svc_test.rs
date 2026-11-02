@@ -150,7 +150,7 @@ fn month(year: i32, month: u32) -> NaiveDate {
     NaiveDate::from_ymd_opt(year, month, 1).expect("valid month")
 }
 
-/// The award snapshot gate: the hourly tick must query the DB only at startup,
+/// The award snapshot gate: the periodic tick must query the DB only at startup,
 /// on a UTC month rollover, or on the daily fallback.
 #[test]
 fn award_snapshot_runs_at_startup() {
@@ -184,6 +184,27 @@ fn award_snapshot_falls_back_to_daily() {
         month(2026, 8),
         Some((month(2026, 8), AWARD_SNAPSHOT_FALLBACK))
     ));
+}
+
+fn utc(day: u32, hour: u32, minute: u32) -> DateTime<Utc> {
+    NaiveDate::from_ymd_opt(2026, 9, day)
+        .and_then(|d| d.and_hms_opt(hour, minute, 0))
+        .expect("valid time")
+        .and_utc()
+}
+
+#[test]
+fn award_roll_waits_for_the_posting_hour_on_the_first() {
+    assert!(!award_roll_due(utc(1, 0, 5)));
+    assert!(!award_roll_due(utc(1, AWARD_ROLL_HOUR_UTC - 1, 59)));
+    assert!(award_roll_due(utc(1, AWARD_ROLL_HOUR_UTC, 0)));
+}
+
+#[test]
+fn award_roll_catches_up_after_the_first() {
+    // A process that was down at the posting hour still posts the next day.
+    assert!(award_roll_due(utc(2, 0, 0)));
+    assert!(award_roll_due(utc(15, 3, 0)));
 }
 
 #[test]
