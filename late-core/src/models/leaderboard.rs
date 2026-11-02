@@ -786,7 +786,10 @@ pub async fn week_tallies(client: &Client, last: NaiveDate) -> Result<Vec<DayTal
         .and_utc();
     let ceiling = floor + chrono::Duration::days(WEEK_DAYS as i64);
     let tallies = tallies_between(client, floor, ceiling).await?;
-    Ok(tallies.into_iter().filter(|tally| tally.plays > 0).collect())
+    Ok(tallies
+        .into_iter()
+        .filter(|tally| tally.plays > 0)
+        .collect())
 }
 
 /// Every game's tally over `[floor, ceiling)`, one per game anyone played,
