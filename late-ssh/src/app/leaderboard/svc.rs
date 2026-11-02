@@ -66,8 +66,9 @@ const AWARD_ROLL_HOUR_UTC: u32 = 18;
 /// net against a missed rollover check (clock skew, a long stall).
 const AWARD_SNAPSHOT_FALLBACK: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// How a pass's #lounge award roll ended, for the metric. A pass whose month
-/// was already announced records nothing: that is every pass but one a month.
+/// How a #lounge award roll claim ended, for the metric. A claim that finds
+/// the month already claimed or empty records nothing, and neither does a tick
+/// that makes no claim (before the posting hour, or with the month marked done).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AwardAnnouncementOutcome {
     /// Claimed and posted to #lounge.
@@ -265,8 +266,8 @@ fn should_refresh(wake: Wake, has_subscribers: bool, age: Option<Duration>) -> b
     }
 }
 
-/// The award snapshot loop's entire decision, extracted so it is testable
-/// without a runtime, a DB, or a clock.
+/// The award loop's snapshot decision, extracted so it is testable without a
+/// runtime, a DB, or a clock.
 ///
 /// `target_month` is the previous completed UTC month a pass would write rows
 /// for; `last_run` is the month the last successful pass wrote and how long
@@ -551,8 +552,9 @@ impl LeaderboardService {
     ) -> tokio::task::JoinHandle<()> {
         tokio::spawn(async move {
             let mut last_run: Option<(NaiveDate, Instant)> = None;
-            // The month whose roll this process has finished with (posted,
-            // already claimed elsewhere, or lost to a failed post).
+            // The month whose roll needs no more claims until the next
+            // successful snapshot pass: posted, claimed elsewhere, lost to a
+            // failed post, or no award rows yet.
             let mut announced: Option<NaiveDate> = None;
             let mut interval = tokio::time::interval(AWARD_SNAPSHOT_CHECK_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -567,7 +569,12 @@ impl LeaderboardService {
                 );
                 if due {
                     match self.snapshot_profile_awards().await {
-                        Ok(()) => last_run = Some((target_month, Instant::now())),
+                        // New rows may have landed, so the roll gets another
+                        // look. The claim keeps that from double-posting.
+                        Ok(()) => {
+                            last_run = Some((target_month, Instant::now()));
+                            announced = None;
+                        }
                         // `last_run` is untouched, so the next tick retries
                         // instead of waiting out the fallback.
                         Err(e) => {
@@ -585,8 +592,8 @@ impl LeaderboardService {
                 match self.announce_award_roll().await {
                     Ok(None) => announced = Some(target_month),
                     Ok(Some(claimed)) => {
-                        // The month is claimed whatever the post does, so the
-                        // pass is done either way: a retry could not post it.
+                        // The month is claimed whatever the post does, so this
+                        // roll is done either way: a retry could not post it.
                         announced = Some(target_month);
                         let posted = chat
                             .send_lounge_message(

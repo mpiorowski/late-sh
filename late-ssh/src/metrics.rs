@@ -3650,8 +3650,9 @@ mod inner {
         newcomer_minutes_total().add(1, &[KeyValue::new("result", newcomer_minute_label(result))]);
     }
 
-    /// The award loop's roll arm. Only claims that happened or errored count;
-    /// a pass whose month was already announced is silence, not an outcome.
+    /// The award loop's roll arm. Only claims that won or errored count; a
+    /// claim that finds the month already claimed or empty, or a tick that
+    /// makes no claim, is silence, not an outcome.
     pub fn record_award_announcement(outcome: AwardAnnouncementOutcome) {
         award_announcements_total().add(
             1,
