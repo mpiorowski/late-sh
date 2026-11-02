@@ -151,7 +151,7 @@ month's top 3 per awarded board into `profile_awards` (migrations 077, 081),
 and every board is settled by the first pass that writes a row for it. The
 gallery award pays chips; Late Time and Top Drinkers are
 single-holder and rankless; one-time milestone badges share the table; the roll
-is announced in #lounge once per month. **A new badge has to be added to the
+is announced in #lounge once per month at 18:00 UTC on the 1st. **A new badge has to be added to the
 Leaderboards guide (`app/profile_modal/badges.rs::guide_lines`) and the help
 modal (`app/help_modal/data.rs`) by hand.** The full rules are in
 [`AWARDS.md`](AWARDS.md).
