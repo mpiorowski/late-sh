@@ -119,11 +119,11 @@ functions the renderer uses. The stock
 Home (`RiceLayout::home`) is fixed and the same for every account: the
 room rail (`rooms`, `HOME_RAIL_COLS`), the reef across the top of the
 chat (`aquarium`, `HOME_AQUARIUM_ROWS`) hosting the now strip, the chat
-under it hosting the board's day (a `chat` bound to no room, so it shows
-the rail's; a stored `center` reads as one), and the sidebar column
-(`HOME_SIDEBAR_COLS`): `presence`, then `visualizer` (the band's three
-rows), `music` (the dock's twelve), `lobby` hosting attention, `live` and
-`bonsai` at their panel rows, and `pet` taking the rest. An unowned reef
+under it (a `chat` bound to no room, so it shows the rail's; a stored
+`center` reads as one), and the sidebar column (`HOME_SIDEBAR_COLS`):
+`presence`, then `visualizer` (the band's three rows), `music` (the dock's
+twelve), `lobby` hosting attention, `live` at its panel rows, `pet` (its
+mood row over its box) and `bonsai` taking the rest. An unowned reef
 or pet draws the shop's note in its tile. The Settings panel list is the
 Arcade's alone. `R` resets to the stock. Nothing about the terminal's size
 changes a layout: a page is drawn as arranged at every width, so a phone
@@ -214,8 +214,12 @@ guests once and read as none; `lobby`, the guest attention grew out of,
 reads as attention). The active chat
 tile hosting the strip is the exception: there it inserts above the
 messages as the #lounge card always did (the card draws it itself, gated
-to #lounge, `active_chat_hosts`); the board's day is the card's own topic
-row, never a guest. On any other host the strip shows whatever room is
+to #lounge, `active_chat_hosts`); the board's day is never a guest: on a
+day the board has an all-day post it is a one-row banner across the top of
+the whole tree, over every tile (`draw_board_day`, amber, `7 for the
+board` flush right), and `layout::rice_areas` takes that row off the
+tiles for the renderer, the clicks and the reef's bounds alike
+(`App::home_board_day`). On any other host the strip shows whatever room is
 selected (`App::home_strip_hosted`, which also gates the strip's animation
 edge and `o`). The forms by size: a tank tile draws the reef (and binds the
 simulation, `App::reef_tile_inner`) only in `ui::reef_form` (wider than

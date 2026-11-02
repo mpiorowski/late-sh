@@ -2977,33 +2977,6 @@ fn room_header_omits_the_hint_when_there_are_no_rules() {
     assert!(!row.contains("/rules"));
 }
 
-/// On a day the board has an all-day post the row is the board's day, in
-/// the topic's place, with the board's key where `/rules` would be.
-#[test]
-fn room_header_gives_the_topic_row_to_the_boards_day() {
-    use ratatui::{Terminal, backend::TestBackend, layout::Rect};
-    let mut terminal = Terminal::new(TestBackend::new(40, 20)).expect("term");
-    let area = Rect::new(0, 0, 40, 20);
-    let mut remaining = area;
-    terminal
-        .draw(|f| {
-            remaining = super::draw_room_header(
-                f,
-                area,
-                super::RoomHeader {
-                    stream: None,
-                    voice: None,
-                    row: Some(super::TopicRow::BoardDay("Hackathon")),
-                    closing_rule: true,
-                },
-            )
-        })
-        .unwrap();
-    assert_eq!(remaining.y, 2);
-    let row = row_text(terminal.backend().buffer(), 0, 40);
-    assert_eq!(row, format!(" Hackathon{}7 for the board ", " ".repeat(14)));
-}
-
 fn live_stream(title: &str, watch_url: &str) -> crate::app::stream::registry::LiveStreamView {
     crate::app::stream::registry::LiveStreamView {
         user_id: Uuid::from_u128(1),

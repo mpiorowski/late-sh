@@ -1,6 +1,6 @@
 use super::{
-    care_bar_spans, chat_tile_title, draw_bonsai_tile, draw_music_tile, hint_line_fitting,
-    hints_shown, station_text, tile_keys,
+    care_bar_spans, chat_tile_title, draw_board_day, draw_bonsai_tile, draw_music_tile,
+    hint_line_fitting, hints_shown, station_text, tile_keys,
 };
 use crate::app::bonsai::{
     render::canvas_lines,
@@ -190,4 +190,28 @@ fn a_roomy_bonsai_tile_centers_the_whole_canvas() {
         .map(|row| format!("{:10}{row}{:10}", "", ""))
         .collect();
     assert_eq!(tree_rows, &expected[..]);
+}
+
+/// The board's day reads in amber at the left of its row with the board's
+/// key flush right, the text giving way to the key when the row is short.
+#[test]
+fn the_boards_day_banner_is_the_text_left_and_the_key_right() {
+    let mut terminal = Terminal::new(TestBackend::new(40, 1)).expect("terminal");
+    terminal
+        .draw(|frame| draw_board_day(frame, Rect::new(0, 0, 40, 1), "Hackathon"))
+        .expect("draw");
+    let row: String = (0..40)
+        .map(|x| terminal.backend().buffer()[(x, 0)].symbol().to_string())
+        .collect();
+    assert_eq!(row, format!("Hackathon{}7 for the board", " ".repeat(16)));
+
+    let mut terminal = Terminal::new(TestBackend::new(24, 1)).expect("terminal");
+    terminal
+        .draw(|frame| draw_board_day(frame, Rect::new(0, 0, 24, 1), "Hackathon and more"))
+        .expect("draw");
+    let row: String = (0..24)
+        .map(|x| terminal.backend().buffer()[(x, 0)].symbol().to_string())
+        .collect();
+    assert!(row.ends_with("7 for the board"), "{row:?}");
+    assert!(row.starts_with("Hackath"), "{row:?}");
 }

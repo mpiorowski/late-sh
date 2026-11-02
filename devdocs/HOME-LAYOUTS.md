@@ -40,7 +40,8 @@ delta against the design):
   over `music`, the band and the dock as two tiles.
 - Guests are the two that end, now and attention (`+` on a tile, one a
   tile), and a guest takes its host over while it is up. The live panel
-  is a tile kind only; the board's day is the chat card's own row.
+  is a tile kind only; the board's day is a banner across the top of the
+  whole tree, over every tile, not a tile or a guest.
 - Fixed splits (`Share::First` / `Share::Second`) carry the rails; the Fit
   shares are not built.
 - Chat tiles on Home bind rooms: a tile that becomes a chat is
@@ -207,8 +208,8 @@ keys run (Home's arrange mode). Guests never take focus.
 The `chat` tile is the one host that inserts instead of taking over: the
 strip on the page's chat pushes the messages down, which is the strip's
 behavior on the #lounge card, "wait while a message is selected" rule
-included. The board's all-day line is the card's own topic row, not a
-guest.
+included. The board's all-day line is the banner over the tree
+(`layout::rice_areas`), not a guest.
 
 The stock Home puts the strip on the reef across the top of the chat, so
 it lands on the fish and the chat never loses a row, and attention on the
@@ -253,7 +254,7 @@ changes:
 
 `MAX_TILES` (32), `MIN_TILE_CELLS` and the lenient parse stay. The now
 strip's old home, the topic row of the #lounge card, is the `center`
-tile's own business.
+tile's own business; the board's day left that row for the banner.
 
 ## Layouts
 

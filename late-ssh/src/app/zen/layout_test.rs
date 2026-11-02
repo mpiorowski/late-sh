@@ -1,6 +1,8 @@
 use ratatui::layout::Rect;
 
-use super::{Chrome, Gaps, neighbour_side, pet_neighbours, row_gutters, tile_inner, tile_rects};
+use super::{
+    Chrome, Gaps, neighbour_side, pet_neighbours, rice_areas, row_gutters, tile_inner, tile_rects,
+};
 use crate::app::pet::ui::{Neighbours, WatchSide};
 use crate::app::zen::state::{Dir, Node, RiceLayout, TileKind};
 
@@ -142,4 +144,19 @@ fn the_rules_chrome_paints_gutters_between_columns_and_insets_every_tile_but_the
         tile_inner(rect, &arrange, TileKind::Chat, true, Some(false)),
         Rect::new(0, 1, 23, 29)
     );
+}
+
+/// The board's day takes the top row and the arrange keys the bottom one;
+/// the tiles get what is between, and neither row when it is off.
+#[test]
+fn the_banner_and_the_footer_each_take_one_row_off_the_tiles() {
+    let area = Rect::new(2, 3, 40, 10);
+    let both = rice_areas(area, true, true);
+    assert_eq!(both.banner, Some(Rect::new(2, 3, 40, 1)));
+    assert_eq!(both.tiles, Rect::new(2, 4, 40, 8));
+    assert_eq!(both.footer, Some(Rect::new(2, 12, 40, 1)));
+    let neither = rice_areas(area, false, false);
+    assert_eq!(neither.banner, None);
+    assert_eq!(neither.tiles, area);
+    assert_eq!(neither.footer, None);
 }
