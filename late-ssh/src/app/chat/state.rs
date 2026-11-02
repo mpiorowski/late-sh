@@ -3816,7 +3816,7 @@ impl ChatState {
 
         // Typed fallbacks for the global chords (Ctrl+G, Ctrl+R, ?), for
         // terminals and multiplexers that swallow those keys. Each one runs
-        // exactly what its key runs; `/layout` below stands in for Ctrl+F.
+        // exactly what its key runs; `/layout` below stands in for Ctrl+E.
         if body.trim() == "/lobby" {
             self.clear_composer_after_submit();
             self.requested_lobby_toggle = true;
@@ -3833,7 +3833,7 @@ impl ChatState {
         }
 
         // Home's layouts: the list, one by name or digit, or the page
-        // saved under a name (`Ctrl+F` has the same three).
+        // saved under a name (`Ctrl+E` has the same three).
         if let Some(command) = crate::app::zen::presets::LayoutCommand::parse(&body) {
             self.clear_composer_after_submit();
             self.requested_layout_command = Some(command);

@@ -38,7 +38,7 @@ const CTRL_T: u8 = 0x14;
 const CTRL_V: u8 = 0x16;
 /// Home's layouts (`app/zen`): arrange mode on Home, from any page, so a
 /// digit or `L` after it switches the layout.
-const CTRL_F: u8 = 0x06;
+
 /// Home's arrange mode (`app/zen`, the Home page): the layout keys on
 /// the page you are on.
 const CTRL_E: u8 = 0x05;
@@ -3689,7 +3689,7 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
         // A Settings text field being edited holds typing that is not in the
         // draft yet. Each of these chords closes or reopens the modal and
         // would drop it, so the field keeps the key instead.
-        CTRL_O | CTRL_G | CTRL_F | CTRL_S
+        CTRL_O | CTRL_G | CTRL_E | CTRL_S
             if app.show_settings && app.settings_modal_state.editing_text() =>
         {
             false
@@ -3704,14 +3704,11 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
             toggle_lobby_globally(app);
             true
         }
-        CTRL_F => {
+        // Home's layouts: a chord, so it works from a chat tile and the
+        // center alike, and from any page. A composer being typed in keeps
+        // the key (readline's end of line).
+        CTRL_E if !app.chat.is_composing() => {
             layout_chord_globally(app);
-            true
-        }
-        // Arrange mode on Home: a chord, so it works from a chat tile and
-        // the center alike; nowhere else, since no other page is a tree.
-        CTRL_E if app.screen == Screen::Dashboard && !app.chat.is_composing() => {
-            crate::app::zen::input::toggle_home_arrange(app);
             true
         }
         // Games keep their controls; these editors own Ctrl+S for save/post.
@@ -3790,15 +3787,12 @@ pub(crate) fn open_guide_globally(app: &mut App) {
     app.show_help = true;
 }
 
-/// `Ctrl+F`: Home's layouts. On Home it toggles arrange mode, where a
-/// digit loads a layout and `L` lists them (so `Ctrl+F 2` is two
+/// `Ctrl+E`: Home's layouts. On Home it toggles arrange mode, where a
+/// digit loads a layout and `L` lists them (so `Ctrl+E 2` is two
 /// keystrokes, like a tmux prefix); anywhere else it opens Home in arrange
-/// mode. The modals close under it either way. Not while Home's composer
-/// holds a draft, as `Ctrl+E`.
+/// mode. The modals close under it either way. The caller keeps it off a
+/// composer being typed in.
 pub(crate) fn layout_chord_globally(app: &mut App) {
-    if app.screen == Screen::Dashboard && app.chat.is_composing() {
-        return;
-    }
     match app.screen {
         Screen::Dashboard => close_modals_for_page_change(app),
         _ => go_home_for_layouts(app),

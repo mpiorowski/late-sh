@@ -989,7 +989,7 @@ pub struct ZenState {
     /// What `R` resets to.
     stock: RiceLayout,
     /// Whether the layout keys are live: only while arrange mode is up
-    /// (`Ctrl+F`, `Ctrl+E`).
+    /// (`Ctrl+E`).
     pub arrange: bool,
     /// The guest picker `+` opens over the focused tile in arrange mode:
     /// the selected row, an index into `Guest::ALL`, while it is open.

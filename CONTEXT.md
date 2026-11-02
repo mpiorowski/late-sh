@@ -166,7 +166,7 @@ off an updating pod lands on the page it left (`handoff`).
 Not in the cycle: the door screens (from the hub), the daily match board and
 house tables (from the Lobby), the Realm board, the paired Scratchpad, the
 Nightcap (behind the Clubhouse) and the undercity street. Overlays: Settings
-`Ctrl+O`, Lobby `Ctrl+G`, Home's layouts `Ctrl+F`, Shop `Ctrl+S`, the guide `?`, the
+`Ctrl+O`, Lobby `Ctrl+G`, Home's layouts `Ctrl+E`, Shop `Ctrl+S`, the guide `?`, the
 bonsai `w`, the profile modal, The Late Edition `/paper`. Global keys and the
 keybinding change checklist: `late-ssh/CONTEXT.md`.
 
@@ -204,7 +204,7 @@ otherwise.
 | `settings_modal` | Settings (`Ctrl+O`): tabs, pickers, mouse, save rules |
 | `handoff` | Drain handoff: a quiet native-CLI session moved off an updating pod onto its page, the "Auto restart on update" tweak |
 | `statusline` | The frame status bars and their customizer |
-| `zen` | The tile tree behind Home (`Ctrl+F` arranges it and switches its nine named layouts) and its stock `zen` layout (`/zen`, layout 2), the pet and tank tiles |
+| `zen` | The tile tree behind Home (`Ctrl+E` arranges it and switches its nine named layouts) and its stock `zen` layout (`/zen`, layout 2), the pet and tank tiles |
 | `ascii` | The animated ascii pieces, the Home ascii tile, the away screensaver |
 | `bonsai` | The bonsai: branch graph, care modal, daily chips; the per-user state reference |
 | `hub` | The Shop (`Ctrl+S`), quests, pet unlock (the marketplace, rentals and flair in `shop/CONTEXT.md`, the reef in `aquarium/CONTEXT.md`) |

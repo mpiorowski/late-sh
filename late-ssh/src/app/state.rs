@@ -574,7 +574,7 @@ pub struct App {
     pub(crate) aquarium_care: hub::aquarium::state::AquariumCare,
     pub(crate) aquarium_service: hub::aquarium::svc::AquariumService,
     /// Home as a tile tree (`app/zen`): the current layout of
-    /// `home_layouts`, arranged in place (`Ctrl+F`, `Ctrl+E`).
+    /// `home_layouts`, arranged in place (`Ctrl+E`).
     pub(crate) home: crate::app::zen::state::ZenState,
     /// This device's named Home layouts and which one `home` shows. The
     /// current slot is written back from `home.rice` on every flush and

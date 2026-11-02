@@ -1707,9 +1707,9 @@ async fn realm_keeps_the_originating_page_when_switching_games_or_visiting_home(
     app.realm.open_board(uuid::Uuid::new_v4(), Screen::Profiles);
     app.set_screen(Screen::Realm);
     assert_eq!(return_screen_for_opening(&app), Screen::Profiles);
-    // Ctrl+F takes the board's player Home to arrange it; the backtick
+    // Ctrl+E takes the board's player Home to arrange it; the backtick
     // brings them back to a board that still returns where it was opened.
-    app.handle_input(b"\x06");
+    app.handle_input(b"\x05");
     assert_eq!(app.screen, Screen::Dashboard);
     assert!(app.home.arrange);
     // No tick here: the board is a fabricated one.
@@ -2052,7 +2052,7 @@ async fn modal_chords_leave_a_settings_text_editor_alone() {
     for (chord, name) in [
         (b"\x0f", "Ctrl+O"),
         (b"\x07", "Ctrl+G"),
-        (b"\x06", "Ctrl+F"),
+        (b"\x05", "Ctrl+E"),
         (b"\x13", "Ctrl+S"),
     ] {
         app.handle_input(chord);
@@ -2072,7 +2072,7 @@ async fn modal_chords_leave_a_settings_text_editor_alone() {
 
 /// `/lobby` and `/guide` are the typed fallbacks for Ctrl+G and `?`, for
 /// terminals that swallow the chords; `/zen` loads Home's zen layout, the
-/// same as `Ctrl+F 2` on a stock device.
+/// same as `Ctrl+E 2` on a stock device.
 #[tokio::test]
 async fn slash_lobby_zen_and_guide_mirror_their_keys() {
     use crate::app::common::primitives::Screen;
@@ -2109,7 +2109,7 @@ async fn slash_lobby_zen_and_guide_mirror_their_keys() {
     assert_eq!(app.screen, Screen::Dashboard);
     assert_eq!(app.home_layouts.current_name(), "zen");
     assert!(!app.home.arrange);
-    app.handle_input(b"\x06");
+    app.handle_input(b"\x05");
     app.handle_input(b"1");
     assert_eq!(app.home_layouts.current_name(), "home");
 
@@ -2173,7 +2173,7 @@ async fn arranging_home_yields_the_music_chord_and_w_still_tends_the_bonsai() {
         Permissions::new(false, true),
     );
     wait_for_render_contains(&mut app, " Home ").await;
-    app.handle_input(b"\x06");
+    app.handle_input(b"\x05");
     assert!(app.home.arrange);
     let tiles = app.home.leaf_count();
     let source = app.paired_source;
@@ -3478,7 +3478,7 @@ async fn default_bottom_bar_shows_every_default_component_even_while_idle() {
     }
     assert!(
         frame.contains("Settings ^O")
-            && frame.contains("Layouts ^F")
+            && frame.contains("Layouts ^E")
             && frame.contains("Shop ^S")
             && frame.contains("Exit qq"),
         "Keyhints should render from the default component: {frame:?}"
@@ -3637,7 +3637,7 @@ async fn the_guide_opens_on_the_layouts_topic_while_arranging_home() {
     let viewer = create_test_user(&test_db.db, "layouts-guide-viewer").await;
     let mut app = make_app(test_db.db.clone(), viewer.id, "layouts-guide-flow-it");
     app.resize(120, 40).expect("resize test terminal");
-    app.handle_input(b"\x06");
+    app.handle_input(b"\x05");
     assert_eq!(app.screen, Screen::Dashboard);
     assert!(app.home.arrange);
 
@@ -3647,7 +3647,7 @@ async fn the_guide_opens_on_the_layouts_topic_while_arranging_home() {
 }
 
 /// The piece picker belongs to arrange mode on Home. Leaving the mode
-/// (Ctrl+F) or a chord into a modal (Ctrl+O) closes it, so it never owns the
+/// (Ctrl+E) or a chord into a modal (Ctrl+O) closes it, so it never owns the
 /// next surface's keys or writes a pick to a tile that lost the focus.
 #[tokio::test]
 async fn the_piece_picker_closes_when_the_page_or_a_modal_takes_over() {
@@ -3658,7 +3658,7 @@ async fn the_piece_picker_closes_when_the_page_or_a_modal_takes_over() {
     let viewer = create_test_user(&test_db.db, "piece-picker-viewer").await;
     let mut app = make_app(test_db.db.clone(), viewer.id, "piece-picker-flow-it");
     app.resize(120, 40).expect("resize test terminal");
-    app.handle_input(b"\x06");
+    app.handle_input(b"\x05");
     assert_eq!(app.screen, Screen::Dashboard);
     assert!(app.home.arrange);
     app.home.rice.root = Node::leaf(TileKind::Ascii);
@@ -3669,11 +3669,11 @@ async fn the_piece_picker_closes_when_the_page_or_a_modal_takes_over() {
         app.piece_picker.is_open(),
         "Enter on the ascii tile opens it"
     );
-    app.handle_input(b"\x06");
-    assert!(!app.home.arrange, "Ctrl+F leaves arrange mode");
+    app.handle_input(b"\x05");
+    assert!(!app.home.arrange, "Ctrl+E leaves arrange mode");
     assert!(!app.piece_picker.is_open(), "and the picker goes with it");
 
-    app.handle_input(b"\x06");
+    app.handle_input(b"\x05");
     assert!(app.home.arrange);
     app.handle_input(b"\r");
     assert!(app.piece_picker.is_open());
@@ -3789,7 +3789,7 @@ async fn forced_tour_walks_the_house_on_enter_with_one_shot_of_pool() {
 
     // The gate swallows everything but Enter: no page hopping, no Tab, no
     // help modal, no reserved chords (Home's layouts included), no composer.
-    for bytes in [&b"2"[..], b"\t", b"?", b"\x0f", b"\x07", b"\x06", b"i"] {
+    for bytes in [&b"2"[..], b"\t", b"?", b"\x0f", b"\x07", b"\x05", b"i"] {
         app.handle_input(bytes);
     }
     assert_eq!(app.screen, Screen::Clubhouse);
@@ -3925,7 +3925,7 @@ async fn forced_tour_can_skip_artboard_without_viewing_it() {
     app.handle_input(b"\x1b");
     app.pending_escape_started_at = Some(std::time::Instant::now() - Duration::from_secs(1));
     crate::app::input::flush_pending_escape(&mut app);
-    app.handle_input(b"B\x0f\x06");
+    app.handle_input(b"B\x0f\x05");
     assert_eq!(app.screen, Screen::Artboard);
     assert_eq!(app.clubhouse.tutorial, Tutorial::VisitArtboard);
     assert!(!app.show_settings);
@@ -4904,11 +4904,11 @@ async fn ctrl_e_arranges_home_and_the_layout_keys_are_arrange_modes_alone() {
         None,
         "the account keeps no layout of its own: it is only the seed"
     );
-    // Ctrl+F is the layouts chord: it enters arrange mode, and a digit
+    // Ctrl+E is the layouts chord: it enters arrange mode, and a digit
     // loads that layout and leaves the mode. Layout 2 is the stock zen
     // layout, drawn on Home like any other.
-    app.handle_input(b"\x06");
-    assert!(app.home.arrange, "Ctrl+F enters arrange mode");
+    app.handle_input(b"\x05");
+    assert!(app.home.arrange, "Ctrl+E enters arrange mode");
     app.handle_input(b"2");
     assert!(!app.home.arrange, "a digit leaves the mode");
     assert_eq!(
@@ -4944,7 +4944,7 @@ async fn ctrl_e_arranges_home_and_the_layout_keys_are_arrange_modes_alone() {
     .await;
     // Back on layout 1, the split from before the switch is still there:
     // a page goes into its slot before another is loaded.
-    app.handle_input(b"\x06");
+    app.handle_input(b"\x05");
     app.handle_input(b"1");
     assert_eq!(app.home_layouts.current_name(), "home");
     assert_eq!(app.home.leaf_count(), tiles + 1);
@@ -5068,7 +5068,7 @@ async fn home_arrange_tab_cycles_tile_focus_instead_of_switching_pages() {
         .expect("join lounge room");
     let mut app = make_app(test_db.db.clone(), user.id, "zen-tab-flow-it");
     wait_for_render_contains(&mut app, " Home ").await;
-    app.handle_input(b"\x06");
+    app.handle_input(b"\x05");
     assert!(app.home.arrange);
     let tiles = app.home.leaf_count();
     let start = app.home.focus;
@@ -5509,7 +5509,7 @@ async fn arranging_home_keeps_the_chat_keys_off_a_tile_that_is_not_a_chat() {
     // Arranging, the focus moves off the chat: the selection is dropped
     // and `j` is swallowed rather than scrolling a chat nobody is looking
     // at.
-    app.handle_input(b"\x06");
+    app.handle_input(b"\x05");
     assert!(app.home.arrange);
     app.handle_input(b"\x1b[D");
     assert_ne!(
@@ -5582,7 +5582,7 @@ async fn arranging_home_inbox_enter_opens_an_unread_dm_in_the_first_chat_tile() 
 
     // Arranging, the lobby tile becomes an Inbox, which lists the unread
     // DM.
-    app.handle_input(b"\x06");
+    app.handle_input(b"\x05");
     assert!(app.home.arrange);
     app.home.focus = app
         .home
@@ -5701,7 +5701,7 @@ async fn home_clicks_under_the_open_tile_picker_reach_nothing() {
     crate::app::zen::input::load_zen_layout(&mut app);
     wait_for_render_contains(&mut app, "w tend").await;
 
-    app.handle_input(b"\x06");
+    app.handle_input(b"\x05");
     assert!(app.home.arrange);
     app.home.focus = app
         .home
@@ -5995,7 +5995,7 @@ async fn home_arrange_brackets_cycle_rooms_in_rail_order() {
     wait_for_render_contains(&mut app, "zen-cycle").await;
     crate::app::zen::input::load_zen_layout(&mut app);
     wait_for_render_contains(&mut app, "w tend").await;
-    app.handle_input(b"\x06");
+    app.handle_input(b"\x05");
     assert!(app.home.arrange);
     assert_eq!(app.home.focused_kind(), Some(TileKind::Chat));
     assert_eq!(app.home_chat_room_id(), Some(lounge));
@@ -6090,7 +6090,7 @@ async fn home_arrange_space_opens_a_tile_picker_that_owns_the_keys_until_a_pick_
     wait_for_render_contains(&mut app, " Home ").await;
     crate::app::zen::input::load_zen_layout(&mut app);
     wait_for_render_contains(&mut app, "w tend").await;
-    app.handle_input(b"\x06");
+    app.handle_input(b"\x05");
     assert!(app.home.arrange);
     assert_eq!(app.home.focused_kind(), Some(TileKind::Chat));
     let tiles = app.home.leaf_count();

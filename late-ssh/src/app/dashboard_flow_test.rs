@@ -395,10 +395,10 @@ async fn clicking_the_live_segment_on_another_board_keeps_that_boards_way_out() 
     );
 }
 
-/// Ctrl+F on a board is the layouts chord: it closes the board and walks
+/// Ctrl+E on a board is the layouts chord: it closes the board and walks
 /// Home in arrange mode, where a digit picks a layout and Esc is done.
 #[tokio::test]
-async fn ctrl_f_on_a_board_walks_home_into_arrange_mode() {
+async fn ctrl_e_on_a_board_walks_home_into_arrange_mode() {
     use crate::app::activity::{event::ActivityEvent, publisher::ActivityPublisher};
     use crate::app::common::primitives::Screen;
     use crate::app::games::chips::svc::ChipService;
@@ -433,14 +433,14 @@ async fn ctrl_f_on_a_board_walks_home_into_arrange_mode() {
 
     app.handle_input(b"o");
     assert_eq!(app.screen, Screen::DailyMatch);
-    app.handle_input(b"\x06");
+    app.handle_input(b"\x05");
     assert_eq!(
         app.screen,
         Screen::Dashboard,
-        "Ctrl+F on the board walks Home"
+        "Ctrl+E on the board walks Home"
     );
     assert!(app.home.arrange, "in arrange mode, ready for a digit");
-    app.handle_input(b"\x06");
+    app.handle_input(b"\x05");
     assert!(!app.home.arrange, "the chord again is done");
     assert_eq!(app.screen, Screen::Dashboard);
 }

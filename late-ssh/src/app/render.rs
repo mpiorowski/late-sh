@@ -2218,7 +2218,7 @@ impl App {
                     home_selected: ctx.home_selected,
                 };
                 // The frame carries Home's bars; while it is being arranged
-                // (`Ctrl+F`, `Ctrl+E`) its bottom row is the mode's key
+                // (`Ctrl+E`) its bottom row is the mode's key
                 // footer.
                 let arrange_keys = match ctx.home.arrange {
                     true => crate::app::zen::layout::rice_areas(content_area, true)

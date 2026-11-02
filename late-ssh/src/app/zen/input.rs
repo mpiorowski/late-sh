@@ -19,7 +19,7 @@ use crate::app::{
 };
 
 /// Home's keys for its tiles, ahead of Home's own handling. In arrange
-/// mode (`Ctrl+F`, `Ctrl+E`) the layout keys are live and every tile takes
+/// mode (`Ctrl+E`) the layout keys are live and every tile takes
 /// the focus; outside it the active chat tile is Home's chat and
 /// everything falls through to Home, whose center is that tile's room.
 pub fn handle_home_event(app: &mut App, event: &ParsedInput) -> bool {
@@ -53,7 +53,7 @@ pub fn handle_home_event(app: &mut App, event: &ParsedInput) -> bool {
                     cycle_tile(app, app.home.chat_tile_focused(), byte == b']');
                     return true;
                 }
-                // `Ctrl+F` then a digit: that layout, and the mode is done.
+                // `Ctrl+E` then a digit: that layout, and the mode is done.
                 b'1'..=b'9' => {
                     let index = usize::from(byte - b'1');
                     if load_layout(app, index) {
@@ -180,7 +180,7 @@ pub(crate) fn run_layout_command(app: &mut App, command: LayoutCommand) {
         LayoutCommand::Save(name) => match save_layout_as(app, &name) {
             Ok(index) => {
                 app.banner = Some(Banner::info(&format!(
-                    "Saved as layout {}: Ctrl+F {} brings it back",
+                    "Saved as layout {}: Ctrl+E {} brings it back",
                     index + 1,
                     index + 1
                 )));

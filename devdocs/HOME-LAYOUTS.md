@@ -16,9 +16,9 @@ delta against the design):
 
 - Home renders through the tree (`App::home`), with the stock Home fixed:
   the rail, the reef over the chat, and the sidebar column (presence,
-  music, lobby, live, bonsai, pet). `Ctrl+F` is Home's layouts chord
-  (arrange mode, then a digit or `L`), and `Ctrl+E` enters arrange mode
-  too. There is no Zen screen: its tree is the stock layout `zen`
+  music, lobby, live, bonsai, pet). `Ctrl+E` is Home's one layouts chord
+  (arrange mode, then a digit or `L`; `Ctrl+F` is unbound). There is no
+  Zen screen: its tree is the stock layout `zen`
   (layout 2), which `/zen` (`/layout zen`) and the status line's care
   click load, Home first; a device that renamed or deleted it gets the
   `No layout by that name or number` banner. The tour has no Zen stop
@@ -47,7 +47,7 @@ delta against the design):
   follows the focus onto another. The MyStream binding is not built.
 - Named layouts as below (`zen/presets.rs`): nine per device on the key
   (`user_ssh_keys.settings.home_layouts`), stock `home` and `zen`,
-  `Ctrl+F` digit, the `L` list with save, rename, delete and reset,
+  `Ctrl+E` digit, the `L` list with save, rename, delete and reset,
   `/layout`. `R` in the list resets a layout to the stock its name says
   (`zen` to the stock `zen`), not always to stock Home. The status line
   `layout` component is not built. A key with no `home_layouts` seeds the
@@ -99,8 +99,8 @@ the pet click already does (`handle_pet_click` runs before
 "chat lock" mode because there is nothing to lock: it is how the page
 works.
 
-**Arrange mode is where the layout keys live.** `Ctrl+F` enters it; Esc or
-`Ctrl+F` leaves it. In arrange mode the focused tile gets a ring, the
+**Arrange mode is where the layout keys live.** `Ctrl+E` enters it; Esc or
+`Ctrl+E` leaves it. In arrange mode the focused tile gets a ring, the
 arrows and Tab walk every tile including furniture, and the layout keys
 edit the tree. Outside it the keys are Home's keys, unchanged, and Tab is
 the page cycle; focus between several chat tiles moves in arrange mode or
@@ -265,9 +265,9 @@ Stock, on every device:
 
 Switching:
 
-- `Ctrl+F` then a digit `1`..`9`: enter arrange mode, load that layout,
+- `Ctrl+E` then a digit `1`..`9`: enter arrange mode, load that layout,
   leave arrange mode. Two keystrokes, like a tmux prefix.
-- `Ctrl+F L`: the layouts list. `j` `k` move, Enter loads, `n` saves the
+- `Ctrl+E L`: the layouts list. `j` `k` move, Enter loads, `n` saves the
   page as a new layout, `r` renames, `d` deletes (not the last one), `R`
   resets one to stock Home.
 - `/layout <name>` and `/layout save <name>` from any composer.
@@ -279,14 +279,14 @@ does a game waiting, nor the screensaver. A page that rearranges itself
 on a house event is the keystroke-stealing problem in a new coat; the
 guests cover "show me when it matters" without moving anything the reader
 is holding. A streamer who wants #lounge beside their stream room saves a
-`stream` layout and presses `Ctrl+F 3`.
+`stream` layout and presses `Ctrl+E 3`.
 
 The Settings landing page keeps Clubhouse and Home; a stored "Zen" lands
 in the Clubhouse, and login never switches a layout.
 
 ## Keys
 
-Outside arrange mode: Home's keys, exactly. `Ctrl+F` enters arrange mode.
+Outside arrange mode: Home's keys, exactly. `Ctrl+E` enters arrange mode.
 
 Arrange mode:
 
@@ -304,7 +304,7 @@ Arrange mode:
 | `L` | the layouts list |
 | `R` | reset the current layout to stock Home |
 | `?` | the guide, on the layouts topic |
-| Esc, `Ctrl+F` | leave |
+| Esc, `Ctrl+E` | leave |
 
 Mouse, in either mode: a divider drags to resize; in arrange mode a
 title drags onto another tile to swap the two leaves. The hit geometry is
@@ -329,7 +329,7 @@ Zen ever earned.
   read the way `activity` and `pot` are today.
 - `Screen::Zen`, `zen_return_screen`, the workspace base dance in
   `input.rs::zen_return_screen` and the tour's `VisitZen` stop are gone
-  (built). The tour stop was dropped rather than made a `Ctrl+F` stop on
+  (built). The tour stop was dropped rather than made a `Ctrl+E` stop on
   Home, so a newcomer's layout never changes under them.
 
 ## What this costs
@@ -366,7 +366,7 @@ refused with a message. It would make layouts shareable in chat
 3. The `center`, `rooms`, `music` kinds and the stock `home` tree behind
    the snapshot test; the Home arm switches over.
 4. Guests, `now` on the reef and `lobby` wherever its owner puts it.
-5. Layouts per device, the stock `zen`, `Ctrl+F` digit, the list,
+5. Layouts per device, the stock `zen`, `Ctrl+E` digit, the list,
    `/layout`.
 6. Migration, the contexts, the help topic, the tips. Built: the Zen
    screen is gone (see Built: v1).

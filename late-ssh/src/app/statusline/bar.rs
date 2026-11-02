@@ -115,7 +115,7 @@ pub(crate) fn build_top_status_bar(
     build_status_bar(&components, data, Placement::TopRight, area, title_width)
 }
 
-/// Every key of Home's arrange mode (`Ctrl+F`, `Ctrl+E`), on its footer
+/// Every key of Home's arrange mode (`Ctrl+E`), on its footer
 /// while the mode is on (`?` opens the layouts guide for the rest).
 /// The way out first, then by use, so a row too narrow for all of them
 /// keeps the ones that matter.
@@ -179,7 +179,7 @@ fn shortcut_spans(brief: bool) -> Vec<Span<'static>> {
             &[
                 ("Settings", "^O"),
                 ("Lobby", "^G"),
-                ("Layouts", "^F"),
+                ("Layouts", "^E"),
                 ("Shop", "^S"),
                 ("Guide", "?"),
                 ("Exit", "qq"),

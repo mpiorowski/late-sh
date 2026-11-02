@@ -1,8 +1,8 @@
 //! Home's named layouts: up to nine per device, one of them current, each
 //! a tree with its look (`RiceLayout`). Stored on the SSH key the session
 //! authenticated with (`user_ssh_keys.settings.home_layouts`, the blob
-//! `Layouts` serializes to), switched with `Ctrl+F` then a digit, from the
-//! layouts list (`Ctrl+F L`), or with `/layout`. Nothing switches a layout
+//! `Layouts` serializes to), switched with `Ctrl+E` then a digit, from the
+//! layouts list (`Ctrl+E L`), or with `/layout`. Nothing switches a layout
 //! on its own: not `/golive`, not a game waiting, not the screensaver.
 
 use serde::{Deserialize, Serialize};

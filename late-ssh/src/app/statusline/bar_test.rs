@@ -171,7 +171,7 @@ fn a_reading_painted_on_the_bottom_bar_leaves_the_top_one() {
     );
 
     // Room for the hints only: the chips never made it onto the bottom bar.
-    let hints_only = "─ Settings ^O  Lobby ^G  Layouts ^F  Shop ^S  Guide ?  Exit qq ";
+    let hints_only = "─ Settings ^O  Lobby ^G  Layouts ^E  Shop ^S  Guide ?  Exit qq ";
     let tight = Rect::new(0, 0, Span::raw(hints_only).width() as u16 + 2, 24);
     let bottom =
         build_status_bar(&components, &data, Placement::BottomLeft, tight, 0).expect("bottom bar");
@@ -234,7 +234,7 @@ fn the_voice_badge_is_labelled_once() {
     .expect("bar");
     assert_eq!(
         bar.line.to_string(),
-        "─ Settings ^O  Lobby ^G  Layouts ^F  Shop ^S  Guide ?  Exit qq ─ mic #lounge [muted] "
+        "─ Settings ^O  Lobby ^G  Layouts ^E  Shop ^S  Guide ?  Exit qq ─ mic #lounge [muted] "
     );
 }
 
@@ -242,7 +242,7 @@ fn the_voice_badge_is_labelled_once() {
 #[test]
 fn keyhints_paint_caret_notation_or_nothing() {
     let components = [StatusComponentSetting::new(StatusComponent::Shortcuts)];
-    let caret = "─ Settings ^O  Lobby ^G  Layouts ^F  Shop ^S  Guide ?  Exit qq ";
+    let caret = "─ Settings ^O  Lobby ^G  Layouts ^E  Shop ^S  Guide ?  Exit qq ";
     let width = Span::raw(caret).width() as u16 + 2;
     let render_in = |width: u16| {
         build_status_bar(

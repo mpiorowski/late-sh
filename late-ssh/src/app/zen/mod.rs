@@ -2,7 +2,7 @@
 //! bonsai, the aquarium, the pet) plus your rooms and the current track,
 //! as a tiling layout you split, resize, and restyle yourself, persisted
 //! per device. Home holds up to nine named layouts (`presets`), switched
-//! with `Ctrl+F` then a digit; the stock `zen` one is also `/zen`. The
+//! with `Ctrl+E` then a digit; the stock `zen` one is also `/zen`. The
 //! split tree, the rect math, the tile chrome and the layout set have
 //! tests beside them.
 

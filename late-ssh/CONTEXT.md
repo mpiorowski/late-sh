@@ -416,8 +416,7 @@ interaction mode ignores mouse reports.
 | `?` | Global guide (not while composing; Artboard keeps its own help) |
 | `Ctrl+O` | Settings, from anywhere but active Artboard editing |
 | `Ctrl+G` | Lobby modal (daily games and house tables) |
-| `Ctrl+F` | Home's layouts: arrange mode on Home (from any other page, Home first), then a digit loads layout 1..9 and `L` lists them (`app/zen/CONTEXT.md`) |
-| `Ctrl+E` | Arrange Home: its rail, chat and panels are tiles (`app/zen/CONTEXT.md`); `Esc` is done |
+| `Ctrl+E` | Home's layouts: arrange mode on Home (from any other page, Home first; its rail, chat and panels are tiles, `Esc` is done), then a digit loads layout 1..9 and `L` lists them (`app/zen/CONTEXT.md`) |
 | `Ctrl+S` | Shop (active games and editors keep their own `Ctrl+S`) |
 | `Ctrl+R` | Full repaint (redo inside the chat composer) |
 | `m`, `+`/`=`, `-`/`_` | Paired client mute and volume |

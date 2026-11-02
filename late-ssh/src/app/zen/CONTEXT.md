@@ -241,8 +241,8 @@ views the page's chat and the rail draw from), one chat view per chat
 tile over `App::home_chat_rows_caches`, the arrange footer, and the
 guests' inputs (`StripGuest`, `attention`, the rows `App::attention_items`
 gathers). `input.rs`: `handle_home_event` ahead of Home's own keys,
-`Ctrl+F` (`layout_chord_globally`, `go_home_for_layouts`) and `Ctrl+E`
-among the reserved chords, the Esc arm, `focus_home_tile_at`, the
+`Ctrl+E` (`layout_chord_globally`, `go_home_for_layouts`) among the
+reserved chords, the Esc arm, `focus_home_tile_at`, the
 `StatusClick::ZenLayout` click and the guide's `HelpTopic::Layouts`.
 `/layout` and `/zen` are parsed in `chat/state.rs` and handed over in
 `chat/input.rs`. `state.rs`: `App::home`, `App::home_layouts`,
@@ -276,8 +276,8 @@ Home's own prefix, as the sidebar's Live panel opens; any other key after
 `s` is swallowed), and a click on a row opens it without focusing the
 tile. There is no `o` for the tile: it is the panel, not the strip.
 
-`Ctrl+F` or `Ctrl+E` enters arrange mode
-(`zen::input::toggle_home_arrange`; `Ctrl+F` from any other page walks
+`Ctrl+E` enters arrange mode
+(`zen::input::toggle_home_arrange`; `Ctrl+E` from any other page walks
 Home into it first, closing the modals; not while Home's composer holds
 a draft). Leaving or entering closes the pickers, the ascii piece picker
 included. In it:
@@ -315,7 +315,7 @@ included. In it:
   that goes bare outside it `· hidden`).
 - A digit `1`..`9` loads that layout and leaves the mode
   (`zen::input::load_layout`: the page goes into its own slot first; so
-  `Ctrl+F 2` is the stock `zen` in two keystrokes, like a tmux prefix),
+  `Ctrl+E 2` is the stock `zen` in two keystrokes, like a tmux prefix),
   and `L` opens the layouts list (`App::layout_list`,
   `presets::LayoutList`, drawn over the page: one row per layout with its
   digit and name, the current marked; `j` `k` and the arrows move, Enter
@@ -449,7 +449,7 @@ update.
   bonsai canvas cut (`ui_test.rs`), the resize floor (`state_test.rs`),
   the Inbox and Headlines rows (`rows_test.rs`), and the drawn-kinds gate
   (`state_test.rs`). `input_flow_test.rs` drives `Ctrl+E` and the keys it
-  owns, `Ctrl+F` and a digit, `/zen`, Tab walking the tiles, the tile
+  owns, `Ctrl+E` and a digit, `/zen`, Tab walking the tiles, the tile
   picker owning the keys and the clicks under it, the chat keys staying
   off a tile that is not a chat, Inbox Enter, the Live tile's `s` prefix,
   `[` `]` in rail order, a second chat tile keeping its room with the
