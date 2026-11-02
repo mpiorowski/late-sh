@@ -483,7 +483,7 @@ impl AnnouncementCandidate {
             title: format!("The Late Edition, {}", long_date(self.edition)),
             description: match &self.summary {
                 Some(summary) => summary.clone(),
-                None => "late.sh's daily paper, printed once a day.".to_string(),
+                None => "late.sh's daily paper.".to_string(),
             },
         }
     }
@@ -554,7 +554,7 @@ fn linkable(url: &str) -> bool {
 /// title is a member's, so it goes in dead and cut.
 fn project_head(title: &str, artist: &str) -> String {
     format!(
-        "From the late.sh clubhouse: \"{}\" by ~{artist}.",
+        "\"{}\" by ~{artist}, from late.sh.",
         cut_to(&dead_words(title), PROJECT_TITLE_MAX_CHARS)
     )
 }
@@ -873,15 +873,15 @@ impl Image<'_> {
                 format!("ASCII art: {alt}")
             }
             (Self::Board(board), Look::Unseen | Look::Drawn) => format!(
-                "ASCII art: the late.sh Artboard, a shared terminal canvas, as it stood at the end of {} UTC. Coloured text glyphs on a dark background.",
+                "ASCII art: the late.sh Artboard at the end of {} UTC. Coloured text on a dark background.",
                 long_date(board.shown),
             ),
             (Self::Piece(piece), Look::Unseen | Look::Drawn) => format!(
-                "ASCII art: \"{}\", a piece hung in the late.sh gallery. Coloured text glyphs on a dark background.",
+                "ASCII art: \"{}\", from the late.sh gallery. Coloured text on a dark background.",
                 piece.title,
             ),
             (Self::Scoreboard(scoreboard), _) => cut_alt(&format!(
-                "A scoreboard in green and grey terminal text: everything played on late.sh, {}, game by game. {}.",
+                "A scoreboard in green and grey terminal text. What got played on late.sh, {}, game by game. {}.",
                 week_span(scoreboard.last),
                 scoreboard
                     .lines
@@ -892,7 +892,7 @@ impl Image<'_> {
             )),
             (Self::Paper(paper), _) => {
                 let mut text = format!(
-                    "The front page of the Late Edition, late.sh's daily paper, for {}, in terminal text.",
+                    "Front page of the Late Edition, late.sh's daily paper, {}, in terminal text.",
                     long_date(paper.edition)
                 );
                 if let Some(most_played) = &paper.most_played {
@@ -1071,14 +1071,14 @@ fn speech(picture: &Picture) -> (String, &'static [&'static str]) {
     match picture {
         Picture::Board(board) => (
             format!(
-                "The Artboard yesterday: late.sh's shared ASCII canvas, as the room left it on {}. Anyone in the clubhouse can pick up a brush.",
+                "Yesterday's Artboard on late.sh, {}. A shared ASCII canvas, anyone logged in can draw on it.",
                 long_date(board.shown),
             ),
             &ART_TAGS,
         ),
         Picture::Piece(piece) => (
             format!(
-                "\"{}\" by ~{}, hung in the late.sh gallery: drawn cell by cell on the shared ASCII canvas, over SSH.",
+                "\"{}\" by ~{}, from the late.sh gallery. ASCII art drawn on the shared canvas over SSH.",
                 dead_words(&piece.title),
                 piece.artist,
             ),
@@ -1086,14 +1086,14 @@ fn speech(picture: &Picture) -> (String, &'static [&'static str]) {
         ),
         Picture::Scoreboard(scoreboard) => (
             format!(
-                "Everything played on late.sh, {}: the daily puzzles, the arcade, chess and pool in the Lobby, the doors, all in a terminal.",
+                "What got played on late.sh, {}. Daily puzzles, the arcade, chess and pool, the doors, all in a terminal.",
                 week_span(scoreboard.last),
             ),
             &SCOREBOARD_TAGS,
         ),
         Picture::Paper(paper) => (
             format!(
-                "The Late Edition for {}: late.sh's daily paper, with the day before in numbers, what the clubhouse was reading and a look outside.",
+                "The Late Edition for {}, late.sh's daily paper. Yesterday in numbers, what people were reading, and some news from outside.",
                 long_date(paper.edition),
             ),
             &PAPER_TAGS,

@@ -245,7 +245,7 @@ fn the_words_fit_and_never_mention_anyone() {
     );
     assert_eq!(
         status_text(&Picture::Project(project()), "https://late.sh"),
-        "From the late.sh clubhouse: \"tinyclock\" by ~maker.\n\nA clock for your terminal that fits in one line.\n\nhttps://example.com/tinyclock\n\n#tildeverse #terminal"
+        "\"tinyclock\" by ~maker, from late.sh.\n\nA clock for your terminal that fits in one line.\n\nhttps://example.com/tinyclock\n\n#tildeverse #terminal"
     );
     assert_eq!(
         announcement().link_card("https://late.sh"),
@@ -262,7 +262,7 @@ fn the_words_fit_and_never_mention_anyone() {
         }
         .link_card("https://late.sh")
         .description,
-        "late.sh's daily paper, printed once a day."
+        "late.sh's daily paper."
     );
     assert_eq!(
         WordsAlone::Project(&project()).link_card("https://late.sh"),
@@ -514,10 +514,10 @@ fn the_look_round_trips_and_writes_the_alt() {
         vec![
             "ASCII art: A burning refinery across the top.",
             "ASCII art: A burning refinery across the top.",
-            "ASCII art: the late.sh Artboard, a shared terminal canvas, as it stood at the end of 22 October 2026 UTC. Coloured text glyphs on a dark background.",
-            "ASCII art: \"harbour at dusk\", a piece hung in the late.sh gallery. Coloured text glyphs on a dark background.",
+            "ASCII art: the late.sh Artboard at the end of 22 October 2026 UTC. Coloured text on a dark background.",
+            "ASCII art: \"harbour at dusk\", from the late.sh gallery. Coloured text on a dark background.",
             "A scoreboard in green and grey terminal text: everything played on late.sh, 18 October to 24 October 2026, game by game. Sudoku: 61 plays; Lateris: 1,234 plays.",
-            "The front page of the Late Edition, late.sh's daily paper, for 24 October 2026, in terminal text. Most played yesterday: Sudoku, 3 games finished. Yesterday on late.sh: Booth: 2 tracks queued; Arcade: 3 games finished, all Sudoku. What we were reading: Someone shared a fine link. Outside: The world turned.",
+            "Front page of the Late Edition, late.sh's daily paper, 24 October 2026, in terminal text. Most played yesterday: Sudoku, 3 games finished. Yesterday on late.sh: Booth: 2 tracks queued; Arcade: 3 games finished, all Sudoku. What we were reading: Someone shared a fine link. Outside: The world turned.",
         ]
     );
     let long = PaperCandidate {

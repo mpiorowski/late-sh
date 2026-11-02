@@ -341,7 +341,7 @@ async fn the_monday_board_goes_out_and_a_bare_one_rests() {
     );
     assert_eq!(posted.deliveries[1].network, HeraldNetwork::Mastodon);
     assert_eq!(posted.deliveries[1].url, "https://instance.test/@late/1");
-    let words = "The Artboard yesterday: late.sh's shared ASCII canvas, as the room left it on 25 October 2026. Anyone in the clubhouse can pick up a brush.\n\nhttps://late.sh/gallery\n\n#ASCIIart #MastoArt #tildeverse #terminal";
+    let words = "Yesterday's Artboard on late.sh, 25 October 2026. A shared ASCII canvas, anyone logged in can draw on it.\n\nhttps://late.sh/gallery\n\n#ASCIIart #MastoArt #tildeverse #terminal";
     {
         let log = log.lock().expect("log");
         assert_eq!(
@@ -945,7 +945,7 @@ async fn a_clean_piece_goes_out_and_an_empty_wall_rests() {
         assert_eq!(
             text,
             format!(
-                "\"harbour\" by ~herald-artist, hung in the late.sh gallery: drawn cell by cell on the shared ASCII canvas, over SSH.\n\nhttps://late.sh/gallery/pieces/{piece}\n\n#ASCIIart #MastoArt #tildeverse #terminal"
+                "\"harbour\" by ~herald-artist, from the late.sh gallery. ASCII art drawn on the shared canvas over SSH.\n\nhttps://late.sh/gallery/pieces/{piece}\n\n#ASCIIart #MastoArt #tildeverse #terminal"
             )
         );
         let record = &log.records[0].1["record"];
@@ -1358,7 +1358,7 @@ async fn the_weeks_project_goes_out_once_and_waits_out_its_cooldown() {
         (HeraldKind::Project, format!("project:{tinyclock}"))
     );
     let words = format!(
-        "From the late.sh clubhouse: \"tinyclock\" by ~{}.\n\nA clock for your terminal, by way of someone at https: //other.example.\n\nhttps://example.com/tinyclock\n\n#tildeverse #terminal",
+        "\"tinyclock\" by ~{}, from late.sh.\n\nA clock for your terminal, by way of someone at https: //other.example.\n\nhttps://example.com/tinyclock\n\n#tildeverse #terminal",
         member.username
     );
     {
