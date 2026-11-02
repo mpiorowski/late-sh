@@ -993,6 +993,7 @@ impl App {
             marker: self.chat.news.marker(),
             watch_positions: self.chat.news.watch_positions(),
             mine_only: self.chat.news.mine_only(),
+            scroll: Some(self.chat.news.list_scroll()),
         };
         let feeds_view = chat::feeds::ui::FeedListView {
             entries: self.chat.feeds.all_entries(),

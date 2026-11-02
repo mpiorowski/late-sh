@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -184,6 +185,8 @@ pub struct State {
     saved_len: usize,
     mine_only: bool,
     selected: usize,
+    /// The list's first drawn row, kept between draws (`news::ui::scroll_offset`).
+    list_scroll: Cell<usize>,
     snapshot_rx: watch::Receiver<ArticleSnapshot>,
     event_rx: broadcast::Receiver<ArticleEvent>,
     reads: Reads,
@@ -231,6 +234,7 @@ impl State {
             saved_len: 0,
             mine_only: false,
             selected: 0,
+            list_scroll: Cell::new(0),
             snapshot_rx,
             event_rx,
             reads: Reads::Loading,
@@ -347,6 +351,10 @@ impl State {
             // story, the last row.
             None => self.selected = self.articles.len().saturating_sub(1),
         }
+    }
+
+    pub fn list_scroll(&self) -> &Cell<usize> {
+        &self.list_scroll
     }
 
     pub fn selected_index(&self) -> usize {
