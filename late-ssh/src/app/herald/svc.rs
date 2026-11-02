@@ -43,7 +43,7 @@ use late_core::models::chat_room::ChatRoom;
 use late_core::models::herald::{
     HeraldDay, HeraldDayStatus, HeraldNetwork, HeraldPick, HeraldPost, HeraldPosted, HeraldSwitch,
 };
-use late_core::models::leaderboard::{DayTally, day_tallies, week_bests};
+use late_core::models::leaderboard::{DayTally, day_tallies, week_tallies};
 use late_core::models::paper::{
     ANNOUNCEMENTS_LIMIT, ANNOUNCEMENTS_SLUG, PaperEdition, PaperSectionKind,
 };
@@ -811,7 +811,7 @@ impl HeraldService {
     async fn find(&self, day: NaiveDate) -> anyhow::Result<Found> {
         let client = self.db.get().await?;
         let scoreboard = match state::scoreboard_week(day) {
-            Some(last) => ScoreboardCandidate::of(last, &week_bests(&client, last).await?),
+            Some(last) => ScoreboardCandidate::of(last, &week_tallies(&client, last).await?),
             None => None,
         };
         let issue = PaperEdition::load(&client, day).await?;

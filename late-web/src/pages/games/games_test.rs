@@ -1,51 +1,56 @@
 use chrono::NaiveDate;
-use late_core::models::leaderboard::{
-    DailyPuzzle, DoorGame, LobbyGame, ScoreGame, WeekBest, WeekGame,
+use late_core::models::{
+    door_opening::DoorCard,
+    leaderboard::{DailyPuzzle, DayGame, DayTally, LobbyGame, ScoreGame},
 };
 
 use super::week_card;
 use crate::pages::shared::card::{CardLine, Ink};
 
 /// The card: the masthead, the week, a section per shelf anyone played
-/// on, one line per game with its best and nobody's name, and the way
-/// in.
+/// on, one line per game with everyone's plays and nobody's name, and
+/// the way in.
 #[test]
-fn the_week_card_lists_each_games_best_and_nobody() {
+fn the_week_card_lists_each_games_plays_and_nobody() {
     let last = NaiveDate::from_ymd_opt(2026, 10, 24).unwrap();
-    let best = |game, value| WeekBest { game, value };
-    let bests = [
-        best(WeekGame::Daily(DailyPuzzle::Sudoku), 6),
-        best(WeekGame::Score(ScoreGame::Lateris), 12_340),
-        best(WeekGame::Lobby(LobbyGame::EightBall), 2),
-        best(WeekGame::Door(DoorGame::Nethack), 52_340),
+    let tally = |game, plays| DayTally {
+        game,
+        plays,
+        won: 0,
+    };
+    let tallies = [
+        tally(DayGame::Daily(DailyPuzzle::Sudoku), 61),
+        tally(DayGame::Score(ScoreGame::Lateris), 1_234),
+        tally(DayGame::Lobby(LobbyGame::EightBall), 1),
+        tally(DayGame::Door(DoorCard::Nethack), 52),
     ];
     let line = |ink, text: &str| CardLine::new(ink, text);
     assert_eq!(
-        week_card(last, &bests),
+        week_card(last, &tallies),
         vec![
             line(Ink::Title, "THE LATE.SH GAMES"),
-            line(Ink::Dim, "the week's best, 18 October to 24 October 2026"),
+            line(Ink::Dim, "everything played, 18 October to 24 October 2026"),
             CardLine::blank(),
             line(Ink::Heading, "ARCADE"),
             line(
                 Ink::Body,
-                "Sudoku                                                    6 wins"
+                "Sudoku                                                  61 plays"
             ),
             line(
                 Ink::Body,
-                "Lateris                                                   12,340"
+                "Lateris                                              1,234 plays"
             ),
             CardLine::blank(),
             line(Ink::Heading, "LOBBY"),
             line(
                 Ink::Body,
-                "Eight-Ball                                                2 wins"
+                "Eight-Ball                                                1 play"
             ),
             CardLine::blank(),
             line(Ink::Heading, "DOORS"),
             line(
                 Ink::Body,
-                "NetHack                                                   52,340"
+                "NetHack                                                 52 plays"
             ),
             CardLine::blank(),
             line(Ink::Dim, "ssh late.sh"),
