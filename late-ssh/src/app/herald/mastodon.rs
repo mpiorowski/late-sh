@@ -1,8 +1,7 @@
 //! The Mastodon leg of a delivery: the media upload and the status call
-//! for a picture, the status call alone for a note behind a warning
-//! (`state::mastodon_post`) or for words with no picture (an
-//! announcement), against any server speaking the Mastodon API. Returns
-//! the status's URL or an error; `svc.rs` logs and counts.
+//! for a picture, the status call alone for words with no picture (an
+//! announcement, a project), against any server speaking the Mastodon API.
+//! Returns the status's URL or an error; `svc.rs` logs and counts.
 
 use std::time::Duration;
 
@@ -24,24 +23,20 @@ const UPLOAD_FILE_NAME: &str = "late-sh.png";
 
 /// What goes out.
 pub(crate) struct Post<'a> {
-    /// The day's key: the `Idempotency-Key` on the status call, so a retry
+    /// The post's key: the `Idempotency-Key` on the status call, so a retry
     /// after a lost answer gets the status the instance already made.
     pub(crate) key: Uuid,
     pub(crate) text: &'a str,
     pub(crate) body: Body<'a>,
 }
 
-/// A clean picture, a note in its place, or words alone.
+/// A picture, or words alone.
 pub(crate) enum Body<'a> {
     Picture {
         png: &'a [u8],
         alt: &'a str,
     },
-    /// No media: the status sensitive, `warning` its content warning.
-    Note {
-        warning: &'a str,
-    },
-    /// No media and no warning: the words are the post.
+    /// No media: the words are the post.
     Words,
 }
 
@@ -52,9 +47,6 @@ struct StatusBody<'a> {
     media_ids: Vec<&'a str>,
     visibility: &'a str,
     language: &'a str,
-    sensitive: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    spoiler_text: Option<&'a str>,
 }
 
 #[derive(Deserialize)]
@@ -68,8 +60,8 @@ struct StatusResponse {
     url: Option<String>,
 }
 
-/// Upload the picture, then post the status carrying it; a note and words
-/// alone are the status alone. The status's public URL comes back.
+/// Upload the picture, then post the status carrying it; words alone are the
+/// status alone. The status's public URL comes back.
 pub(crate) async fn deliver(
     http: &reqwest::Client,
     config: &MastodonConfig,
@@ -78,12 +70,9 @@ pub(crate) async fn deliver(
     match post.body {
         Body::Picture { png, alt } => {
             let media_id = upload_media(http, config, png.to_vec(), alt).await?;
-            post_status(http, config, post.key, post.text, Carries::Media(&media_id)).await
+            post_status(http, config, post.key, post.text, vec![&media_id]).await
         }
-        Body::Note { warning } => {
-            post_status(http, config, post.key, post.text, Carries::Warning(warning)).await
-        }
-        Body::Words => post_status(http, config, post.key, post.text, Carries::Nothing).await,
+        Body::Words => post_status(http, config, post.key, post.text, Vec::new()).await,
     }
 }
 
@@ -149,38 +138,21 @@ async fn await_media(
     bail!("media {id} was still processing after {MEDIA_POLL_TRIES} polls")
 }
 
-/// What a status carries besides its words.
-enum Carries<'a> {
-    /// The uploaded picture's id.
-    Media(&'a str),
-    /// A note's content warning.
-    Warning(&'a str),
-    Nothing,
-}
-
-/// `POST /api/v1/statuses` with the day's key as `Idempotency-Key`: the
-/// picture's media, or the note's warning as the status's content
-/// warning, the status marked sensitive, or the words alone.
+/// `POST /api/v1/statuses` with the post's key as `Idempotency-Key`, carrying
+/// the picture's media or nothing.
 async fn post_status(
     http: &reqwest::Client,
     config: &MastodonConfig,
     key: Uuid,
     text: &str,
-    carries: Carries<'_>,
+    media_ids: Vec<&str>,
 ) -> anyhow::Result<String> {
     let url = format!("{}/api/v1/statuses", config.instance);
-    let (media_ids, spoiler_text) = match carries {
-        Carries::Media(id) => (vec![id], None),
-        Carries::Warning(warning) => (Vec::new(), Some(warning)),
-        Carries::Nothing => (Vec::new(), None),
-    };
     let body = StatusBody {
         status: text,
         media_ids,
         visibility: config.visibility.as_str(),
         language: "en",
-        sensitive: spoiler_text.is_some(),
-        spoiler_text,
     };
     let posted: StatusResponse = http
         .post(&url)

@@ -47,7 +47,7 @@ When more than one applies, pick the first in this order: explicit, gore, nudity
 
 reason: for any label but none, the piece that set it and where it sits, in one short sentence; empty for none.
 
-The label is not a verdict on the art: it decides only how readers meet the picture, behind a warning or as a link to it."#;
+The label is not a verdict on the art."#;
 
 /// The model's answer as the schema holds it.
 #[derive(Deserialize)]
@@ -77,7 +77,10 @@ pub(crate) async fn look(ai: &AiService, picture: &Picture, png: &[u8]) -> anyho
                 piece.title,
             ),
         ),
-        Picture::Scoreboard(_) | Picture::Paper(_) | Picture::Announcement(_) => {
+        Picture::Scoreboard(_)
+        | Picture::Paper(_)
+        | Picture::Announcement(_)
+        | Picture::Project(_) => {
             return Ok(Look::Drawn);
         }
     };
