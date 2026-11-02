@@ -311,9 +311,10 @@ Live, in order of evidence behind them:
     picture, the day in numbers, then the heads of the prose columns;
     linking the edition), and on a Monday with no project; on Sunday the
     week in every game (a scoreboard card, one line per game anyone played
-    with its best and no name: the arcade's daily puzzles and high scores,
-    the Lobby's chess, pool and card games by wins that paid, the doors by
-    their top run), else the paper. Tuesday, Thursday and Friday post no
+    with everyone's plays added up and no name: the arcade's daily puzzles
+    solved and score runs finished, the Lobby's chess, pool and card games
+    by matches finished, the doors by every hub card's openings), else the
+    paper. Tuesday, Thursday and Friday post no
     words with nothing owed and nothing announced. Art at 20:00 UTC: on
     Monday yesterday's Artboard snapshot cropped to what is drawn, once it
     has enough ink to be a picture (linking the gallery); every other day

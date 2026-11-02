@@ -1072,7 +1072,7 @@ async fn print_edition(client: &Client, edition: NaiveDate) {
 /// words.
 #[tokio::test]
 async fn the_cards_go_out_drawn_without_the_model() {
-    use late_core::models::le_word;
+    use late_core::models::door_opening::{DoorCard, DoorOpening};
 
     let test_db = new_test_db().await;
     let db = test_db.db.clone();
@@ -1081,9 +1081,14 @@ async fn the_cards_go_out_drawn_without_the_model() {
     HeraldSwitch::set(&client, true).await.expect("switch on");
     let sunday = Utc.with_ymd_and_hms(2026, 10, 25, 15, 30, 0).unwrap();
     let player = late_core::test_utils::create_test_user(&db, "card-player").await;
-    le_word::DailyWin::record_win(&client, player.id, shown_day(sunday.date_naive()), 4)
-        .await
-        .expect("a win in the week");
+    DoorOpening::record(
+        &client,
+        player.id,
+        DoorCard::Nethack,
+        sunday - Duration::days(2),
+    )
+    .await
+    .expect("a play in the week");
     let monday = sunday + Duration::days(1);
     print_edition(&client, monday.date_naive()).await;
     let herald = service(db.clone(), &base, model_on(&base));
@@ -1117,7 +1122,7 @@ async fn the_cards_go_out_drawn_without_the_model() {
         ]
     );
     assert!(
-        log.media_uploads[0].1.contains("Le Word: 1 win"),
+        log.media_uploads[0].1.contains("NetHack: 1 play"),
         "{}",
         log.media_uploads[0].1
     );

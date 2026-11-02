@@ -1211,7 +1211,10 @@ async fn f4_hides_and_shows_an_open_watchs_chat() {
 
     app.handle_input(b"\x1b[14~");
     assert!(render_plain(&mut app).contains(" 1 watching"));
-    assert!(!app.chat.is_composing(), "it comes back with nothing in hand");
+    assert!(
+        !app.chat.is_composing(),
+        "it comes back with nothing in hand"
+    );
     app.handle_input(b"i");
     assert_eq!(
         app.chat.composer().lines().join("\n"),
