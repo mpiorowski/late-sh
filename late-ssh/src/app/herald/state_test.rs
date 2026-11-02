@@ -516,7 +516,7 @@ fn the_look_round_trips_and_writes_the_alt() {
             "ASCII art: A burning refinery across the top.",
             "ASCII art: the late.sh Artboard at the end of 22 October 2026 UTC. Coloured text on a dark background.",
             "ASCII art: \"harbour at dusk\", from the late.sh gallery. Coloured text on a dark background.",
-            "A scoreboard in green and grey terminal text: everything played on late.sh, 18 October to 24 October 2026, game by game. Sudoku: 61 plays; Lateris: 1,234 plays.",
+            "A scoreboard in green and grey terminal text. What got played on late.sh, 18 October to 24 October 2026, game by game. Sudoku: 61 plays; Lateris: 1,234 plays.",
             "Front page of the Late Edition, late.sh's daily paper, 24 October 2026, in terminal text. Most played yesterday: Sudoku, 3 games finished. Yesterday on late.sh: Booth: 2 tracks queued; Arcade: 3 games finished, all Sudoku. What we were reading: Someone shared a fine link. Outside: The world turned.",
         ]
     );

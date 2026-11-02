@@ -339,12 +339,10 @@ impl State {
         self.articles = next;
         self.saved_len = saved_len;
         match prev_id {
-            Some(id) => {
-                match self.articles.iter().position(|item| item.article.id == id) {
-                    Some(idx) => self.selected = idx,
-                    None => self.selected = clamp_index(self.selected, self.articles.len()),
-                }
-            }
+            Some(id) => match self.articles.iter().position(|item| item.article.id == id) {
+                Some(idx) => self.selected = idx,
+                None => self.selected = clamp_index(self.selected, self.articles.len()),
+            },
             // Nothing was selected (the first fill): land on the newest
             // story, the last row.
             None => self.selected = self.articles.len().saturating_sub(1),
