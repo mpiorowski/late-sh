@@ -4045,7 +4045,9 @@ impl ChatState {
                 return Some(Banner::error("Only admins can run the herald"));
             }
             let Some(command) = parsed else {
-                return Some(Banner::error("Usage: /herald on|off|status|preview words|art|post words|art"));
+                return Some(Banner::error(
+                    "Usage: /herald on|off|status|preview words|art|post words|art",
+                ));
             };
             self.requested_herald = Some(command);
             return None;

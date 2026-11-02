@@ -241,8 +241,9 @@ fn the_first_snapshot_a_session_sees_is_not_announced() {
 }
 
 /// The shelf leads, newest save first, then the feed less what is on the
-/// shelf: a saved story appears once, and the feed's copy (the fresher
-/// body) is the one shown. Mine-only filters both parts.
+/// shelf, oldest first so the newest share is the last row: a saved story
+/// appears once, and the feed's copy (the fresher body) is the one shown.
+/// Mine-only filters both parts.
 #[test]
 fn the_display_puts_the_shelf_over_the_feed_once_each() {
     let feed = vec![
@@ -256,7 +257,7 @@ fn the_display_puts_the_shelf_over_the_feed_once_each() {
 
     let (rows, saved_len) = display_order(&saved, &feed, None);
     let ids: Vec<u128> = rows.iter().map(|item| item.article.id.as_u128()).collect();
-    assert_eq!(ids, vec![2, 9, 3, 1]);
+    assert_eq!(ids, vec![2, 9, 1, 3]);
     assert_eq!(saved_len, 2);
     assert_eq!(rows[0].body, feed[1].body, "the feed's copy is shown");
 
@@ -318,6 +319,11 @@ async fn a_save_moves_the_cursor_on_and_a_refused_one_leaves_it() {
         .collect();
     assert_eq!(feed_ids.len(), 3);
     let selected_id = |state: &State| state.selected_item().map(|item| item.article.id);
+    assert_eq!(
+        selected_id(&state),
+        feed_ids.last().copied(),
+        "the cursor lands on the newest story, at the bottom"
+    );
     state.select_article_by_id(feed_ids[0]);
     assert_eq!(state.selected_index(), shelf_len);
 
