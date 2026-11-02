@@ -15,6 +15,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use super::{
+    attention::Item as AttentionItem,
     bigclock,
     layout::{self, Chrome},
     presets::{LayoutList, Layouts, MAX_LAYOUT_NAME_CHARS, NamePurpose},
@@ -22,7 +23,6 @@ use super::{
 };
 
 use crate::app::{
-    attention::state::Item as AttentionItem,
     audio::viz::EqState,
     bonsai::state::BonsaiState,
     chat::state::ActivityTickerEntry,
@@ -629,13 +629,9 @@ fn draw_guest(
             );
             crate::app::live::ui::draw_live_strip(frame, strip_area, size, &strip.strip, strip.hit);
         }
-        Guest::Attention => crate::app::attention::ui::draw(
-            frame,
-            area,
-            view.attention,
-            attention_selected,
-            focused,
-        ),
+        Guest::Attention => {
+            draw_attention_tile(frame, area, view.attention, attention_selected, focused)
+        }
     }
 }
 
@@ -1071,6 +1067,74 @@ fn draw_blank_tile(frame: &mut Frame, area: Rect, focused: bool) {
     if focused {
         draw_centered_note(frame, area, &["space picks what lives here"]);
     }
+}
+
+/// The attention guest's rows into `area`, scrolled so the selected one is in view.
+/// `selected` is clamped to the rows, since they come and go.
+fn draw_attention_tile(
+    frame: &mut Frame,
+    area: Rect,
+    items: &[AttentionItem],
+    selected: usize,
+    focused: bool,
+) {
+    if items.is_empty() || area.width == 0 || area.height == 0 {
+        return;
+    }
+    let width = area.width as usize;
+    let visible = area.height as usize;
+    let selected = selected.min(items.len() - 1);
+    let first = (selected + 1).saturating_sub(visible);
+    let amber = Style::default().fg(theme::AMBER());
+    let faint = Style::default().fg(theme::TEXT_FAINT());
+    let bright = Style::default().fg(theme::TEXT_BRIGHT());
+    let lines: Vec<Line<'static>> = items
+        .iter()
+        .enumerate()
+        .skip(first)
+        .take(visible)
+        .map(|(index, item)| {
+            let marked = focused && index == selected;
+            let words_style = match marked {
+                true => bright.add_modifier(Modifier::BOLD),
+                false => bright,
+            };
+            let act = item.act();
+            let head = format!("{} {} ", if marked { "▌" } else { " " }, item.glyph());
+            let budget = width.saturating_sub(head.width() + act.width() + 1);
+            let words = cut_to(&item.label(), budget);
+            let pad = width.saturating_sub(head.width() + words.width() + act.width());
+            Line::from(vec![
+                Span::styled(head, amber),
+                Span::styled(words, words_style),
+                Span::raw(" ".repeat(pad)),
+                Span::styled(act.to_string(), faint),
+            ])
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// `text` cut to `budget` columns, an ellipsis on the end when it was cut.
+fn cut_to(text: &str, budget: usize) -> String {
+    if text.width() <= budget {
+        return text.to_string();
+    }
+    if budget == 0 {
+        return String::new();
+    }
+    let mut out = String::new();
+    let mut used = 0usize;
+    for ch in text.chars() {
+        let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + w > budget - 1 {
+            break;
+        }
+        out.push(ch);
+        used += w;
+    }
+    out.push('…');
+    out
 }
 
 #[cfg(test)]

@@ -249,7 +249,7 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
         }
     }
     if app.chat.take_requested_mod_modal() {
-        crate::app::mod_modal::input::open(app);
+        crate::app::chat::mod_modal::input::open(app);
     }
     if let Some(room_id) = app.chat.take_requested_poll_room() {
         open_requested_poll_modal(app, room_id, allow_poll_modal);

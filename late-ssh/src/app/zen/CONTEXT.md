@@ -187,17 +187,17 @@ the focus on its first chat tile (`ZenState::new`, `ZenState::load`). Home's cha
 active chat tile (`ZenState::active_chat_ordinal`: the focused chat tile,
 else the first): it draws Home's card (the rail's selection, synthetic
 entries included, `HomeView`) with the card's own chrome, its keys are
-Home's (`dashboard::input`), and `App::home_chat_room_id` is `None` while
+Home's (`input::handle_home_key`), and `App::home_chat_room_id` is `None` while
 a synthetic entry is up. Every other chat tile watches its room under a
 `chat · #room` rule, a click away from being the page's chat, so a stream
 night is two chats: the stream room and #lounge.
 
 Guests (`Guest`: now, attention) are the two widgets that come and go:
 the now strip while the queue has something up (`LiveState::shown`, down
-on its clock), attention while anything waits on you (`app/attention`,
-`../attention/CONTEXT.md`: your move or an unseen result in a daily
-match, an unread DM or mention, a companion uncared for today; down when
-the last row clears). Both end, which is what makes them guests; a widget
+on its clock), attention while anything waits on you (`attention.rs`,
+the table below: your move or an unseen result in a daily match, an
+unread DM or mention, a companion uncared for today; down when the last
+row clears). Both end, which is what makes them guests; a widget
 that stays up for an evening (the Live roster, the bonsai) is a tile
 kind. A tile hosts any of the guests (`guests` on the leaf, in
 `Guest::ALL` order, `Node::toggle_guest`; a guest is on the page once;
@@ -237,6 +237,22 @@ There is no zoom, no chat-only key and no narrow fold: every tile on the
 page is drawn, at every width, and a device that wants the chat alone
 arranges it so.
 
+### The attention guest
+
+Every row is a fact the session already holds, and every row clears on the act that answers it. Nothing here fetches, polls or stores.
+
+| Row | While | Clears on |
+|---|---|---|
+| your move: `game` vs `name` | a daily match's turn is yours (`DailyState::my_turn_matches`) | the move |
+| result in: `game` vs `name` | a finished daily match you have not looked at (`DailyState::my_finished`) | opening the board |
+| `@peer`: n unread | a DM room with unread messages (`attention::unread_rows`) | reading it |
+| `@actor` mentioned you in #room | an unread mention (the same rows, read ones left out) | reading it |
+| the tank is unfed today | `AquariumCare` has no meal today | `/aquarium feed`, `a` on the tank |
+| the tree is unwatered today | `last_watered` is not today | watering |
+| the pet is unpetted today | the pet is owned and not petted today | a pat |
+
+Order: moves, results, DMs, mentions, tank, tree, pet (`attention::items`). The care rows are keyed on the UTC day, so they come back each morning; ownership is gated by the glue (`App::care_today`, a `Care` of three `Chore`s), an unowned pet is never due; everyone has a tank and a tree. The guest is up exactly when the list is non-empty; the page asks nothing else (`guest_up`). Enter does the row's act through the page's global functions (`open_daily_modal_globally`, the Inbox row opener, `feed_aquarium_globally`, `BonsaiSession::request(Water)`, `pet_the_pet_globally`); the list never switches a layout, opens a modal or moves the focus on its own.
+
 ## 2. File map
 
 ```text
@@ -245,9 +261,9 @@ late-ssh/src/app/zen/
 |-- state.rs      # TileKind and its key table (TileHint: TileKey, HouseKey), Guest, Node (split tree), Look, RiceLayout (serde), ZenState + edits
 |-- layout.rs     # pure rect math: Gaps, Chrome (boxes, Home's rules), rice_fits (the 40x12 floor under which the page is its too-small notice alone), rice_areas (tiles + the arrange footer row while the mode is on), tile_rects, row_gutters, tile_inner, neighbour_side, pet_neighbours
 |-- presets.rs    # Home's named layouts: Layouts (serde, the nine slots and the current), LayoutList (the L list and its typed name), LayoutCommand (/layout)
-|-- rows.rs       # pure row builder: the unread DMs and mentions the attention guest lists
-|-- ui.rs         # ZenView (one view per domain), draw_rice (the chrome, and the one match from a kind to its domain's drawer), the guests, the pickers, the layouts list, the clock and blank tiles
-|-- input.rs      # handle_home_event (arrange mode's layout keys, the tiles' keys: act, one arm per TileKey), room walk, focus, the layouts (load, save, the list, /layout, /zen)
+|-- attention.rs  # the attention guest's facts: unread_rows (the DMs and mentions, from the chat state), Item and items (the ordered list), Care / Chore (today's three chores, App::care_today)
+|-- ui.rs         # ZenView (one view per domain), draw_rice (the chrome, and the one match from a kind to its domain's drawer), the guests (draw_attention_tile: the rows, the selected one marked, the act word at the row's end), the pickers, the layouts list, the clock and blank tiles
+|-- input.rs      # handle_home_event (arrange mode's layout keys, the tiles' keys: act, one arm per TileKey), handle_home_key / handle_home_arrow (Home's keys outside arrange mode: the music prefix, backtick, the chat's), room walk, focus, the layouts (load, save, the list, /layout, /zen)
 `-- bigclock.rs   # block digit font for the clock tile
 ```
 
@@ -257,7 +273,8 @@ the rest (`hub/aquarium/ui::TankView`, `presence/ui::PresenceView`,
 `sidebar::MusicStageProps`, `pet/ui::PetView`, `live/panel::LivePanelProps`),
 one chat view per chat tile over `App::home_chat_rows_caches`, the
 arrange footer, and the guests' inputs (`StripGuest`, `attention`, the
-rows `App::attention_items` gathers). Each tile's drawing lives in its
+rows `App::attention_items` gathers from `DailyState`, `unread_rows` and
+`App::care_today` once per frame and once per key of the guest). Each tile's drawing lives in its
 domain (`bonsai/render::draw_tile`, `hub/aquarium/ui::draw_reef_tile` /
 `draw_tank_tile`, `pet/ui::draw_tile`, `sidebar::draw_music_tile`,
 `audio/viz::draw_visualizer_tile`, `lobby/daily/panel::draw_daily_compact`,
@@ -299,7 +316,7 @@ which lists every key, and the bottom row is a footer naming the mode's keys
 still name keys inside the tile in normal mode: the music dock's `v+r tune`
 and the sidebar bonsai's `w care`. The lobby's compact footer has none.
 
-Outside arrange mode Home's keys are Home's (`dashboard::input`): the
+Outside arrange mode Home's keys are Home's (`input::handle_home_key`): the
 active chat tile is Home's chat, the rail its room, `i` / Enter compose
 in it, `j` `k` select in it and the message actions act on its
 selection; the furniture takes no keys. With a Live tile on the page,

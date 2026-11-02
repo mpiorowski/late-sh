@@ -226,7 +226,7 @@ impl App {
             changed = true;
         }
         // Fire a debounced message search for the Ctrl+/ modal's `?` mode.
-        crate::app::room_search_modal::state::tick_message_search(self);
+        crate::app::chat::room_search_modal::state::tick_message_search(self);
         if let Some(room_id) = self.chat.take_requested_poll_room() {
             let allow_poll_modal = self.screen == Screen::Dashboard;
             crate::app::chat::input::open_requested_poll_modal(self, room_id, allow_poll_modal);

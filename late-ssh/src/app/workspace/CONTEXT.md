@@ -23,7 +23,7 @@ The base is Home, the one page that answers backtick, so the loop always closes:
 
 ## 3. Invariants
 
-- The key binding stays with its screens: `dashboard/input.rs` keeps only the binding; `arcade/input.rs` routes backtick out of active daily puzzles; the doors intercept it in their own input paths and re-enter the cycle as a detach; the realm board does the same from `door/realm/input.rs`, with nothing to arm because the board stays open across the hop.
+- The key binding stays with its screens: `zen/input.rs::handle_home_key` keeps only the binding; `arcade/input.rs` routes backtick out of active daily puzzles; the doors intercept it in their own input paths and re-enter the cycle as a detach; the realm board does the same from `door/realm/input.rs`, with nothing to arm because the board stays open across the hop.
 - This domain reads other domains through their queries and open/enter functions, never their internals. Each leg's membership test lives with the leg's domain (`my_turn_matches`, `my_seated_tables`, `has_unfinished_daily`, `HubGame::live_screen`); this domain owns only the leg order and the routing.
 - New workspace kinds go through the `GameWorkspace` enum; do not re-add rooms stops.
 

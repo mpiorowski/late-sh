@@ -1,13 +1,102 @@
-//! Attention: the guest that lists what waits on you and steps back the
-//! moment the list is empty. Every row is a thing the session already
-//! knows about (a daily match on your move or with a result you have not
-//! looked at, a DM or a mention unread, a companion uncared for today),
-//! and each row clears on the act that answers it: the care rows on the
-//! UTC day, so they come back each morning, the rest on the read or the
-//! move. Nothing here fetches: `items` orders what the glue hands it
-//! (`App::attention_items`), and `ui.rs` paints the rows.
+//! The attention guest's facts: what waits on you, as the list the guest
+//! shows and steps back from the moment it is empty. Every row is a thing
+//! the session already knows about (a daily match on your move or with a
+//! result you have not looked at, a DM or a mention unread, a companion
+//! uncared for today), and each row clears on the act that answers it:
+//! the care rows on the UTC day, so they come back each morning, the rest
+//! on the read or the move. Nothing here fetches: `unread_rows` derives
+//! the DM and mention rows from the chat state, `items` orders what the
+//! glue hands it (`App::attention_items`), and `ui.rs` paints the rows.
+//! Pure, so the renderer and Enter read the same rows: the row under the
+//! marker is the row that opens.
 
+use std::collections::{HashMap, HashSet};
+
+use chrono::{DateTime, Utc};
+use late_core::models::{
+    chat_message::ChatMessage, chat_room::ChatRoom, notification::NotificationView,
+};
 use uuid::Uuid;
+
+use crate::app::chat::state::dm_peer_is_ignored;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UnreadRow {
+    /// A DM with unread messages; `peer` is the other person's name.
+    Dm {
+        room_id: Uuid,
+        peer: String,
+        unread: i64,
+    },
+    /// A mention, read or not.
+    Mention {
+        room_id: Uuid,
+        message_id: Uuid,
+        actor: String,
+        room: Option<String>,
+        preview: String,
+        at: DateTime<Utc>,
+        unread: bool,
+    },
+}
+
+/// Unread DMs first, the most unread on top, then the mentions, newest
+/// first. A DM with an ignored peer never shows, as in the room rail.
+pub fn unread_rows(
+    user_id: Uuid,
+    rooms: &[(ChatRoom, Vec<ChatMessage>)],
+    unread_counts: &HashMap<Uuid, i64>,
+    usernames: &HashMap<Uuid, String>,
+    ignored: &HashSet<Uuid>,
+    mentions: &[NotificationView],
+) -> Vec<UnreadRow> {
+    let mut dms: Vec<(i64, String, Uuid)> = Vec::new();
+    for (room, _) in rooms {
+        if room.kind != "dm" || dm_peer_is_ignored(room, user_id, ignored) {
+            continue;
+        }
+        let unread = unread_counts.get(&room.id).copied().unwrap_or(0);
+        if unread == 0 {
+            continue;
+        }
+        let peer_id = if room.dm_user_a == Some(user_id) {
+            room.dm_user_b
+        } else {
+            room.dm_user_a
+        };
+        let peer = match peer_id.and_then(|id| usernames.get(&id)) {
+            Some(name) => name.clone(),
+            None => "someone".to_string(),
+        };
+        dms.push((unread, peer, room.id));
+    }
+    dms.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(&right.1)));
+
+    let mut mentions: Vec<&NotificationView> = mentions.iter().collect();
+    mentions.sort_by_key(|mention| std::cmp::Reverse(mention.created));
+
+    dms.into_iter()
+        .map(|(unread, peer, room_id)| UnreadRow::Dm {
+            room_id,
+            peer,
+            unread,
+        })
+        .chain(mentions.into_iter().map(|mention| UnreadRow::Mention {
+            room_id: mention.room_id,
+            message_id: mention.message_id,
+            actor: mention.actor_username.clone(),
+            room: mention.room_slug.clone(),
+            preview: one_line(&mention.message_preview),
+            at: mention.created,
+            unread: mention.read_at.is_none(),
+        }))
+        .collect()
+}
+
+/// A list row is one line: newlines and runs of spaces fold to one space.
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
 
 /// One row of the list, in the order `items` puts them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -179,5 +268,5 @@ impl Care {
 }
 
 #[cfg(test)]
-#[path = "state_test.rs"]
-mod state_test;
+#[path = "attention_test.rs"]
+mod attention_test;

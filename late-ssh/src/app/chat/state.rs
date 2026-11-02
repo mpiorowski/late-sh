@@ -2874,7 +2874,7 @@ impl ChatState {
     /// the rail has never listed, so an unknown room gets a neutral label
     /// rather than blocking the open.
     fn history_room_label(&self, room_id: Uuid) -> String {
-        crate::app::room_search_modal::state::hit_room_label(self, self.user_id, room_id)
+        crate::app::chat::room_search_modal::state::hit_room_label(self, self.user_id, room_id)
     }
 
     /// Fetch the next page if the viewport has reached that edge. Called

@@ -23,6 +23,7 @@ late-ssh/src/app/chat/
 |-- ui.rs                        # Home room rail/chat center, dashboard-lounge view, embedded room chat, composer, row cache, Home's activity and friends tiles
 |-- ui_text.rs                   # Message/news/reaction wrapping into ratatui Lines
 |-- list_ui.rs                   # Shared "mine only" filtered-list layout and status line for the synthetic entries
+|-- mod_modal/                   # `/mod` console modal: state/input/ui, opened by `take_requested_mod_modal`
 |-- slur.rs                      # Pure drunk-text transform applied to outgoing public-room messages (never touches a spending phrase, `../ai/ROUND.md`, or a memory trigger, `../ai/MEMORY.md`)
 |-- special_badges.rs            # Hardcoded per-username badges in author labels (allowlist, edit and redeploy)
 |-- cyberspace/                  # Cyberspace rail section: personal client for cyberspace.online, incl. their chat (cIRC)
@@ -33,6 +34,9 @@ late-ssh/src/app/chat/
 |-- news/                        # Synthetic News entry: articles, the reader (`reader/`), body fetch (`body.rs`), the #lounge card (`ui.rs::lounge_card_lines`)
 |-- notifications/               # Synthetic Mentions entry: mention notifications
 |-- polls/                       # /poll modal state/input/UI
+|-- room_info_modal/             # Room name/topic/rules form: state/input/ui, opened by `take_requested_room_info_modal` (`/public`, `/private`, `/roominfo`)
+|-- room_search_modal/           # `Ctrl+/` room jump and `?` message search modal: state/input/ui (`ROOMS.md`)
+|-- sheet_modal/                 # `/sheet` character sheet modal (#dnd): state/input/ui, opened by `take_requested_open_sheet`
 |-- showcase/                    # Projects service/state/UI reused by Directory page 5
 `-- work/                        # Profiles service/state/UI reused by Directory page 5
 ```
@@ -334,7 +338,7 @@ Scroll-driven room history (`history_modal/`), opened by `/history` or by a sear
 ### Room Membership Commands
 
 1. `/public #room` gets or creates a public topic room and joins only the caller. A new room starts with `auto_join=false`; an existing room keeps its flag, so `/join` on a room a mod filled never unfills it. `/join #room` is an alias for it, parsed in the same `parse_public_room_command` so the two can never drift; it exists because IRC users type `/join` first. Public rooms are hosted, not owned: opening one grants nothing, and a brand-new one posts two plain system-bot lines (deliberately without the system-line prefix, so they render as messages), one in the room asking the creator to describe it and one in #moderators reporting it.
-2. `/private #room` opens the room-info form (`app/room_info_modal`) and creates the room with its topic/rules and `created_by` in one go.
+2. `/private #room` opens the room-info form (`room_info_modal/`) and creates the room with its topic/rules and `created_by` in one go.
 3. `/roominfo` opens the same form for the selected room. Authority is decided once in `ChatService::set_room_info`: mods for any room, otherwise the derived owner of a private topic room. `ChatState::room_info_authority` mirrors the rule for what the UI offers (and what the refusal banner says); DMs and game rooms have no info at all. A successful write broadcasts `RoomInfoUpdated`, which banners for the editor and refreshes the room list of every session sitting in that room, so no header waits on the 10s snapshot.
 4. `/rules` shows the selected room's rules in the shared overlay (`Overlay`, the same surface `/active` uses), titled `#slug rules`, one entry per stored line: rules are multi-line and a banner is one line. A room with no rules answers with a banner instead of an empty overlay.
 5. `/kick @user` runs the moderation service's room action (`ModerationService::room_command` then `room_action`), so membership removal, voice removal, audit log and the target's live session behave exactly as from the mod surface. A private room's owner is granted `Caps::KICK_FROM_ROOM` for that one room via `Permissions::as_room_owner`, which leaves the tier alone so staff stay out of reach. Chat-originated room actions name the room by id (`RoomRef::Id`), never by slug: slugs are only unique per namespace (a topic room and a stream room can share one), so the id is the only exact name of the room the actor is sitting in. The mod surface still resolves its typed slug.

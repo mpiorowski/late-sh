@@ -77,7 +77,7 @@ pub(crate) fn draw_daily_inline(
 /// The Home lobby tile: the latest tables on the board, newest first, over
 /// the `N open · entries/cap` footer. What waits on you is not this tile's
 /// job: the attention guest hosted on it takes the tile over while it has
-/// something (`../attention/CONTEXT.md`).
+/// something (`../zen/CONTEXT.md`, the attention guest).
 pub(crate) fn draw_daily_compact(
     frame: &mut Frame,
     area: Rect,

@@ -304,7 +304,7 @@ pub enum TakenBy {
 pub enum Guest {
     /// The now strip (`app/live`): one thing just happened in the house.
     Now,
-    /// The attention list (`app/attention`): what waits on you, a row
+    /// The attention list (`attention.rs`): what waits on you, a row
     /// each, while anything does.
     Attention,
 }

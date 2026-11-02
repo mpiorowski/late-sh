@@ -18,13 +18,13 @@ use super::{
     artboard,
     audio::client_state::ClientAudioState,
     bonsai, chat,
+    chat::{mod_modal, room_info_modal, room_search_modal, sheet_modal},
     common::{
         primitives::{Banner, BannerKind, Screen, draw_banner},
         sidebar::{SidebarProps, draw_sidebar, sidebar_clock_text},
         theme,
     },
-    help_modal, icon_picker, mod_modal, profile_modal, quit_confirm, room_info_modal,
-    room_search_modal, settings_modal, sheet_modal,
+    help_modal, icon_picker, profile_modal, quit_confirm, settings_modal,
     state::App,
 };
 use crate::app::door::game::DoorGame;
@@ -463,7 +463,7 @@ struct DrawContext<'a> {
     /// The day of headcount buckets for the pulse tile (`PresenceSession::history`).
     pulse_history: crate::app::presence::svc::History,
     /// What waits on you, for the attention guest (`App::attention_items`).
-    attention: Vec<crate::app::attention::state::Item>,
+    attention: Vec<crate::app::zen::attention::Item>,
     /// The pane beside this player's own running game, published for the
     /// click that opens its composer; cleared every frame like the hits.
     own_chat_hit: &'a std::cell::Cell<Option<Rect>>,

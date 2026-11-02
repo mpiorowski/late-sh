@@ -6,10 +6,10 @@
 //! split tree, the rect math, the tile chrome and the layout set have
 //! tests beside them.
 
+pub mod attention;
 pub mod bigclock;
 pub mod input;
 pub mod layout;
 pub mod presets;
-pub mod rows;
 pub mod state;
 pub mod ui;

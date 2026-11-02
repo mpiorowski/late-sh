@@ -1,7 +1,7 @@
 use super::{
     audio::booth as audio_booth,
-    chat, dashboard, help_modal, hub, icon_picker, mod_modal, profile_modal, quit_confirm,
-    room_info_modal, room_search_modal, settings_modal, sheet_modal,
+    chat::{self, mod_modal, room_info_modal, room_search_modal, sheet_modal},
+    help_modal, hub, icon_picker, profile_modal, quit_confirm, settings_modal,
     state::{App, IconPickerTarget},
 };
 
@@ -3096,7 +3096,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
     }
 
     match screen {
-        Screen::Dashboard => dashboard::input::handle_arrow(app, key),
+        Screen::Dashboard => crate::app::zen::input::handle_home_arrow(app, key),
         // Games hub arrows are handled in handle_dedicated_screen_input.
         Screen::Games => false,
         Screen::Lateania => crate::app::door::lateania::screen::GAME.handle_arrow(app, key),
@@ -4130,7 +4130,7 @@ fn artboard_blocks_global_page_switch(app: &App, screen: Screen) -> bool {
 fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
     match screen {
         Screen::Dashboard => {
-            dashboard::input::handle_key(app, byte);
+            crate::app::zen::input::handle_home_key(app, byte);
         }
         Screen::Calendars => {}
         Screen::Games => {

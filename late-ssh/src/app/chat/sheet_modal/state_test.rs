@@ -1,5 +1,5 @@
+use crate::app::chat::sheet_modal::state::*;
 use crate::app::chat::state::SheetOpenRequest;
-use crate::app::sheet_modal::state::*;
 use late_core::models::character_sheet::SHEET_NAME_MAX_CHARS;
 use uuid::Uuid;
 

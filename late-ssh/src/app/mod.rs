@@ -3,7 +3,6 @@ pub mod ai;
 pub mod arcade;
 pub mod artboard;
 pub mod ascii;
-pub mod attention;
 pub mod audio;
 pub mod bonsai;
 pub mod calendar;
@@ -12,7 +11,6 @@ mod calendar_flow_test;
 pub mod chat;
 pub mod clubhouse;
 pub mod common;
-pub mod dashboard;
 #[cfg(test)]
 mod dashboard_flow_test;
 pub mod deadchannel;
@@ -32,7 +30,6 @@ pub mod jobs;
 pub(crate) mod leaderboard;
 pub mod live;
 pub mod lobby;
-pub(crate) mod mod_modal;
 pub(crate) mod notify;
 pub mod paper;
 pub mod pet;
@@ -43,11 +40,8 @@ pub(crate) mod profile_modal;
 pub(crate) mod quit_confirm;
 pub mod referral;
 mod render;
-pub(crate) mod room_info_modal;
-pub(crate) mod room_search_modal;
 pub mod scratchpad;
 pub(crate) mod settings_modal;
-pub(crate) mod sheet_modal;
 #[cfg(test)]
 mod singleton_isolation_test;
 #[cfg(test)]

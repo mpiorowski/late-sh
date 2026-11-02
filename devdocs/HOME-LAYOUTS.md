@@ -178,7 +178,7 @@ A dynamic widget has one yes/no question the session already answers:
 | Kind | Active while | The answer today |
 |---|---|---|
 | `now` (the now strip) | the queue has something up | `LiveState::shown` |
-| `attention` | anything waits on you: your move or an unseen result in a daily match, an unread DM or mention, the tank, tree or pet uncared for today | `App::attention_items` non-empty (`late-ssh/src/app/attention/CONTEXT.md`) |
+| `attention` | anything waits on you: your move or an unseen result in a daily match, an unread DM or mention, the tank, tree or pet uncared for today | `App::attention_items` non-empty (`late-ssh/src/app/zen/CONTEXT.md`, the attention guest) |
 | `live` (the live panel) | at least one row is joinable | `live_panel_rows` non-empty |
 
 "Now strip" is the name from here on; "live" is the panel. The two were

@@ -11,11 +11,14 @@ use std::time::Instant;
 
 use uuid::Uuid;
 
+use super::attention::Item as AttentionItem;
 use super::presets::{LayoutCommand, LayoutList, Layouts, LayoutsError, NameEdit, NamePurpose};
 use super::state::{Dir, GuestPick, KindPick, MAX_TILES, TakenBy, TileHint, TileKey, TileKind};
-use crate::app::attention::state::Item as AttentionItem;
 use crate::app::{
-    chat::state::RoomSlot, common::primitives::Banner, input::ParsedInput, state::App,
+    chat::{self, state::RoomSlot},
+    common::primitives::Banner,
+    input::ParsedInput,
+    state::App,
 };
 
 /// Home's keys for its tiles, ahead of Home's own handling. In arrange
@@ -99,6 +102,35 @@ pub fn handle_home_event(app: &mut App, event: &ParsedInput) -> bool {
     // Outside arrange mode the active chat tile is Home's chat, and the
     // rail its room, so Home's own keys serve it.
     false
+}
+
+/// Home's keys outside arrange mode, the page's own (`handle_home_event`
+/// runs first and takes arrange mode and the tile keys): `v` arms the
+/// music prefix, backtick hops the workspace cycle, everything else is
+/// the chat's.
+pub fn handle_home_key(app: &mut App, byte: u8) -> bool {
+    if app.music_prefix_armed {
+        app.music_prefix_armed = false;
+        if crate::app::audio::input::handle_music_suffix(app, byte, true) {
+            return true;
+        }
+    }
+
+    if byte == b'`' {
+        return crate::app::workspace::cycle::cycle_game_workspace(app);
+    }
+
+    if matches!(byte, b'v' | b'V') {
+        app.music_prefix_armed = true;
+        return true;
+    }
+
+    chat::input::handle_byte(app, byte)
+}
+
+/// Home's arrow keys outside arrange mode: the chat's.
+pub fn handle_home_arrow(app: &mut App, key: u8) -> bool {
+    chat::input::handle_arrow(app, key)
 }
 
 /// Enter or leave Home's arrange mode. Either way the pickers close (the

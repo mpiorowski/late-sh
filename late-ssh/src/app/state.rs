@@ -38,10 +38,11 @@ use crate::{
         chat::news::svc::ArticleService,
         chat::notifications::svc::NotificationService,
         chat::svc::ChatService,
+        chat::{mod_modal, sheet_modal},
         common::primitives::{Banner, Screen},
-        help_modal, hub, mod_modal, profile,
+        help_modal, hub, profile,
         profile::svc::ProfileService,
-        profile_modal, settings_modal, sheet_modal,
+        profile_modal, settings_modal,
     },
     authz::Permissions,
     paired_clients::{PairControlMessage, PairedClientRegistry},
@@ -756,8 +757,9 @@ pub struct App {
     pub(crate) home_chat_rows_caches: Vec<chat::ui::ChatRowsCache>,
     pub(crate) poll_modal_state: chat::polls::state::PollModalState,
     pub(crate) gild_modal_state: chat::gild::state::GildModalState,
-    pub(crate) room_search_modal_state: crate::app::room_search_modal::state::RoomSearchModalState,
-    pub(crate) room_info_modal_state: crate::app::room_info_modal::state::RoomInfoModalState,
+    pub(crate) room_search_modal_state:
+        crate::app::chat::room_search_modal::state::RoomSearchModalState,
+    pub(crate) room_info_modal_state: crate::app::chat::room_info_modal::state::RoomInfoModalState,
     /// The profile editor opened from page 5 (`app/directory/editor`).
     pub(crate) directory_editor: crate::app::directory::editor::state::EditorState,
     /// The tag picker the settings modal and the profile editor open.
@@ -1882,9 +1884,9 @@ impl App {
             poll_modal_state: chat::polls::state::PollModalState::new(),
             gild_modal_state: chat::gild::state::GildModalState::new(),
             room_search_modal_state:
-                crate::app::room_search_modal::state::RoomSearchModalState::default(),
-            room_info_modal_state: crate::app::room_info_modal::state::RoomInfoModalState::default(
-            ),
+                crate::app::chat::room_search_modal::state::RoomSearchModalState::default(),
+            room_info_modal_state:
+                crate::app::chat::room_info_modal::state::RoomInfoModalState::default(),
             directory_editor: crate::app::directory::editor::state::EditorState::default(),
             tag_picker: super::tag_picker::state::TagPickerState::default(),
             piece_picker: super::ascii::picker::state::PiecePickerState::default(),
@@ -3753,8 +3755,8 @@ impl App {
 
     /// Today's care, the pet gated on ownership: what the attention guest
     /// and the status line's Care count read.
-    pub(crate) fn care_today(&self) -> crate::app::attention::state::Care {
-        use crate::app::attention::state::{Care, Chore};
+    pub(crate) fn care_today(&self) -> crate::app::zen::attention::Care {
+        use crate::app::zen::attention::{Care, Chore};
         let today = chrono::Utc::now().date_naive();
         Care {
             bonsai: Chore::of(true, self.bonsai.tree.last_watered == Some(today)),
@@ -3766,13 +3768,14 @@ impl App {
         }
     }
 
-    /// What waits on you, for the attention guest (`app/attention`): the
+    /// What waits on you, for the attention guest (`zen/attention.rs`): the
     /// daily matches on your move and the results you have not looked at,
-    /// the unread DMs and mentions (`zen::rows::unread_rows`), and today's care
-    /// still due. Read each frame and on each of the guest's keys.
-    pub(crate) fn attention_items(&self) -> Vec<crate::app::attention::state::Item> {
-        use crate::app::attention::state::{Chore, Inputs, Item, Match, items};
-        use crate::app::zen::rows::UnreadRow;
+    /// the unread DMs and mentions (`unread_rows`), and today's care still
+    /// due. Read each frame and on each of the guest's keys.
+    pub(crate) fn attention_items(&self) -> Vec<crate::app::zen::attention::Item> {
+        use crate::app::zen::attention::{
+            Chore, Inputs, Item, Match, UnreadRow, items, unread_rows,
+        };
         let other_player = |challenger_id: Uuid,
                             challenger: &Option<String>,
                             opponent: &Option<String>|
@@ -3811,7 +3814,7 @@ impl App {
             .collect();
         let mut dms = Vec::new();
         let mut mentions = Vec::new();
-        let rows = crate::app::zen::rows::unread_rows(
+        let rows = unread_rows(
             self.user_id,
             &self.chat.rooms,
             &self.chat.unread_counts,
