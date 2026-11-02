@@ -410,9 +410,6 @@ pub struct SessionConfig {
     /// on the Nightcap stools and on the night city street, across every
     /// replica.
     pub presence: crate::app::presence::svc::PresenceService,
-    /// The last day of headcount samples (`app/pulse`), copied into
-    /// `App::pulse_history` on the ~1s tick for Home's pulse tile.
-    pub pulse_rx: tokio::sync::watch::Receiver<crate::app::pulse::svc::History>,
     /// The stored single `zen` layout, `None` when the device never
     /// arranged it; only the seed for the stock `zen` slot of
     /// `home_layouts`.
@@ -648,10 +645,6 @@ pub struct App {
     pub(crate) runner_looks: crate::app::deadchannel::runner::svc::RunnerLooks,
     pub(crate) runner_looks_rx:
         tokio::sync::watch::Receiver<crate::app::deadchannel::runner::svc::RunnerLooks>,
-    /// The last day of headcount samples the pulse tile draws, the owned
-    /// copy of `pulse_rx` taken on the same edge.
-    pub(crate) pulse_history: crate::app::pulse::svc::History,
-    pub(crate) pulse_rx: tokio::sync::watch::Receiver<crate::app::pulse::svc::History>,
     /// Every away user (`common/away.rs`), resolved from the active-users
     /// roster on the ~1s presence edge; chat author labels, the DM list, and
     /// @-completion read this owned set, never the roster mutex.
@@ -1792,8 +1785,6 @@ impl App {
             name_flair: HashMap::new(),
             runner_looks: config.runner_looks_rx.borrow().clone(),
             runner_looks_rx: config.runner_looks_rx.clone(),
-            pulse_history: config.pulse_rx.borrow().clone(),
-            pulse_rx: config.pulse_rx.clone(),
             away_user_ids: HashSet::new(),
             online_count: active_users
                 .as_ref()

@@ -1,4 +1,4 @@
-//! The pulse tile's maths, pure: a day of headcount samples into the
+//! The pulse: a day of headcount samples (`svc.rs` samples them) into the
 //! columns of a sparkline, and the block glyphs each column climbs.
 
 use chrono::{DateTime, Duration, Utc};
@@ -84,5 +84,5 @@ pub fn height(column: Option<i64>, max: i64) -> f32 {
 }
 
 #[cfg(test)]
-#[path = "state_test.rs"]
-mod state_test;
+#[path = "pulse_test.rs"]
+mod pulse_test;

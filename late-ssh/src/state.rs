@@ -207,11 +207,9 @@ pub struct State {
     pub runner_looks: crate::app::deadchannel::runner::svc::RunnerLookService,
     /// Presence (`app/presence`): who is where in the tavern, on the
     /// Nightcap stools and on the night city street, this replica's
-    /// sessions and every other replica's, over Postgres.
+    /// sessions and every other replica's, over Postgres; and the
+    /// headcount sampler behind Home's pulse tile.
     pub presence: crate::app::presence::svc::PresenceService,
-    /// The pulse (`app/pulse`): this replica's headcount sampler and the
-    /// day of samples every session copies.
-    pub pulse: crate::app::pulse::svc::PulseService,
     /// The lounge spawns (`app/deadchannel/lounge`): the spawner and
     /// sweeper on this replica, the live spawn every session copies, and
     /// the hit path.

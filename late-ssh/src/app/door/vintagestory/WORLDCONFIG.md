@@ -82,7 +82,8 @@ terrain; any other seed is a different world:
   "lightningFires": "true",
   "temporalStorms": "off",
   "temporalRifts": "off",
-  "colorAccurateWorldmap": "true"
+  "colorAccurateWorldmap": "true",
+  "foodSpoilSpeed": "0.25"
 }
 ```
 
@@ -107,15 +108,13 @@ world: tools last 150%, saplings grow in 75% of the time
 on most cubic blocks instead of only stone and wood, a death keeps the
 inventory, lightning starts fires (they spread because `AllowFireSpread` is
 on in Terraform), no temporal storms or rifts for now (the stability meter
-itself stays on), and the world map shows the real terrain colors.
-
-One unlocked key was set later on the live save with `/worldconfig`, so it
-sits in the save but not in the block on disk: `foodSpoilSpeed 0.5`, food
-lasts twice as long (the Exploration preset's value). Every perishable ages
-on the shared world clock, so food a player leaves in a chest or carries
-when logging out keeps rotting while others play; the slower rate softens
-that. A reset generates from the block alone, so add the key to it (or
-re-run the command and restart) to keep the rule.
+itself stays on), the world map shows the real terrain colors, and food
+spoils at a quarter of the normal rate (half the Exploration preset's).
+Every perishable ages on the shared world clock, so food a player leaves in
+a chest or carries when logging out keeps rotting while others play; the
+slower rate softens that. `foodSpoilSpeed` was first set on the live save
+with `/worldconfig` and later added to the block on the volume by hand, so
+`/worldconfig <key>` on the console and the file agree on every key.
 
 Every other world key is the `surviveandbuild` preset or the attribute
 default.

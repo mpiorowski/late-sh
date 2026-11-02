@@ -972,9 +972,8 @@ impl App {
             // a pointer bump when the directory changed, and the chat rows
             // rebuild once for every portrait in view.
             // A new headcount bucket lands once in five minutes; the pulse
-            // tile reads the owned copy.
-            if self.pulse_rx.has_changed().unwrap_or(false) {
-                self.pulse_history = self.pulse_rx.borrow_and_update().clone();
+            // tile reads the session's copy.
+            if self.presence.refresh_history() {
                 changed = true;
             }
             if self.runner_looks_rx.has_changed().unwrap_or(false) {

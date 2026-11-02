@@ -653,7 +653,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         first_contact_gate,
         runner_looks_rx: state.runner_looks.subscribe(),
         presence: state.presence.clone(),
-        pulse_rx: state.pulse.subscribe(),
         // This device's tile layouts, the account's stored ones as the seed
         // for a key that has never arranged a page.
         zen_layout: device

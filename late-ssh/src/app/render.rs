@@ -459,7 +459,8 @@ struct DrawContext<'a> {
     home_date: String,
     home_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
     home_active_friends: &'a [crate::app::chat::state::ActiveFriend],
-    pulse_history: crate::app::pulse::svc::History,
+    /// The day of headcount buckets for the pulse tile (`PresenceSession::history`).
+    pulse_history: crate::app::presence::svc::History,
     /// What waits on you, for the attention guest (`App::attention_items`).
     attention: Vec<crate::app::attention::state::Item>,
     /// The pane beside this player's own running game, published for the
@@ -1948,7 +1949,7 @@ impl App {
                         home_date,
                         home_pet_strip,
                         home_active_friends: &self.active_friends,
-                        pulse_history: self.pulse_history.clone(),
+                        pulse_history: self.presence.history.clone(),
                         attention,
                         own_chat_hit: &self.own_chat_hit,
                     },

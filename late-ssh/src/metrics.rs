@@ -35,7 +35,7 @@ use crate::app::leaderboard::svc::AwardAnnouncementOutcome;
 use crate::app::live::input::Origin as LiveOrigin;
 use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome, SnapshotRowError};
 use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
-use crate::app::pulse::svc::PulseSampleOutcome;
+use crate::app::presence::svc::PulseSampleOutcome;
 use crate::app::referral::svc::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement};
 use crate::app::video::state::{WatchOutcome, WatchSource};
 use crate::ircd::conn::{IrcHistoryOutcome, IrcHistoryRequest};

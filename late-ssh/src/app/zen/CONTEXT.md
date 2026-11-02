@@ -53,8 +53,8 @@ and a friend's line in the friend color: the same
 `ChatState::activity_ticker` queue the one-row ticker packs, capped at
 40), friends (connected friends, here before away, then newest login:
 name, the away glyph, audio source, time on), pulse (the people online now over the
-last day of them as a sparkline, the peak named, a time axis under it:
-`../pulse/CONTEXT.md`; a one-row tile is the sparkline alone), live (the Live panel's rows, `../live/PANEL.md`:
+last day of them as a sparkline, the peak named, a time axis under it; the
+samples are presence's, `../presence/svc.rs`; a one-row tile is the sparkline alone), live (the Live panel's rows, `../live/PANEL.md`:
 the same four rows the sidebar's panel draws, each with its `s1`-`s4`
 key, wider so less is cut; `nobody playing` while nothing is on), presence
 (the sidebar's pinned rows, `sidebar::draw_core_block`: the online count
@@ -420,11 +420,13 @@ update.
   The check reads the tile kind only, so an unowned tank (the shop note) is
   watched like a live reef. A sulking or sleeping pet ignores the fish, the
   tree, and the cursor.
-- Pulse draws only owned values: `online_count` and `App::pulse_history`,
-  the day of headcount buckets the tick copies from the pulse service's
-  watch (`../pulse/CONTEXT.md`), so it adds no query and no lock. The
-  drawing is the pulse domain's (`pulse::ui::draw`); the tile only hands
-  it its area.
+- Pulse draws only owned values: `online_count` and
+  `PresenceSession::history`, the day of headcount buckets the tick copies
+  from the presence service's watch (`../presence/svc.rs`), so it adds no
+  query and no lock. The column and glyph maths is `presence/pulse.rs`;
+  `draw_pulse_tile` here lays out the header, the bars and the axis. The
+  last column is live (the current count), so the chart never lags the
+  header, and a bucket with no sample is a gap, never a zero.
 - The list tiles (lobby, activity, friends, pulse) draw one column in from
   each border (`pad_sides` in `draw_rice`); the presence block pads only
   the right (`pad_right`); the chat,
