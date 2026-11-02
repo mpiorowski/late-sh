@@ -12,8 +12,8 @@ fn normalize_duration_accepts_configured_options() {
 
 #[test]
 fn normalize_duration_rejects_unconfigured_values() {
-    assert!(normalize_duration_secs(5 * 60).is_err());
-    assert!(normalize_duration_secs(40 * 60).is_err());
+    assert!(normalize_duration_secs(10 * 60).is_err());
+    assert!(normalize_duration_secs(2 * 60 * 60).is_err());
 }
 
 /// A poll has to carry its author's name out of the query: the strip says who

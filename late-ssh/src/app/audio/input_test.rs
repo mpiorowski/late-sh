@@ -8,6 +8,8 @@ fn poll_vote_suffixes_are_letters() {
     assert_eq!(poll_option_position(b'A'), Some(1));
     assert_eq!(poll_option_position(b'B'), Some(2));
     assert_eq!(poll_option_position(b'C'), Some(3));
+    assert_eq!(poll_option_position(b'd'), Some(4));
+    assert_eq!(poll_option_position(b'D'), Some(4));
 }
 
 #[test]
