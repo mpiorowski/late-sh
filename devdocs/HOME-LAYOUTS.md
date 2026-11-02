@@ -185,7 +185,10 @@ Only widgets that end are guests: `now` comes down on the queue's clock
 (five minutes at most), `attention` when its last row clears (a read, a
 move, a feed; the care rows return each UTC day). The live panel stays
 up as long as anything is on, an evening at a time, so it is a tile kind
-only. A tile hosts one guest, and a guest is on the page once, so the
+only. A tile hosts any of the guests (the stock reef hosts both, the
+strip's rows on top of attention's when both are up; arrange mode names
+them in the rule, `reef +now +attention`), and a guest is on the page
+once, so the
 `s` prefix and the clicks have one target. Clicks on the strip work as
 on its panel; attention has rows instead, `j` `k` and Enter where tile
 keys run (Zen, Home's arrange mode). Guests never take focus.
@@ -196,11 +199,12 @@ behavior on the #lounge card, "wait while a message is selected" rule
 included. The board's all-day line is the card's own topic row, not a
 guest.
 
-The stock Home places `now` on the reef across the top of the chat, so
-the strip lands on the fish and the chat never loses a row.
+The stock Home places both guests on the reef across the top of the
+chat, so the strip and the list land on the fish and the chat never loses
+a row.
 
-Candidates for later: `inbox` while anything is unread, `headlines` while
-a story is under an hour old. The model does not change for them.
+Candidates for later: `headlines` while a story is under an hour old. The
+model does not change for it; unread mail is attention's already.
 
 ### Chat bindings
 

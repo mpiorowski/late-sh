@@ -627,19 +627,23 @@ fn a_guest_lives_on_one_tile_and_toggling_moves_it_or_takes_it_off() {
     let mut root = Node::split(
         Dir::Column,
         500,
-        Node::hosting(TileKind::Chat, Guest::Now),
-        Node::hosting(TileKind::Aquarium, Guest::Attention),
+        Node::hosting(TileKind::Chat, &[Guest::Now]),
+        Node::hosting(TileKind::Aquarium, &[Guest::Attention]),
     );
     assert_eq!(root.host_of(Guest::Now), Some(0));
-    // Toggled on the reef, the strip moves there and takes the reef's
-    // attention off: one host per guest, one guest per tile.
+    // Toggled on the reef, the strip moves there, beside the reef's
+    // attention: one host per guest, any of the guests per tile, kept in
+    // `Guest::ALL` order whichever came first.
     assert!(root.toggle_guest(1, Guest::Now));
     assert_eq!(root.host_of(Guest::Now), Some(1));
-    assert_eq!(root.leaf_guests(), vec![None, Some(Guest::Now)]);
-    // Toggled on its host, it goes.
+    assert_eq!(
+        root.leaf_guests(),
+        vec![vec![], vec![Guest::Now, Guest::Attention]]
+    );
+    // Toggled on its host, it goes; the other stays.
     assert!(root.toggle_guest(1, Guest::Now));
     assert_eq!(root.host_of(Guest::Now), None);
-    assert_eq!(root.leaf_guests(), vec![None, None]);
+    assert_eq!(root.leaf_guests(), vec![vec![], vec![Guest::Attention]]);
 
     // Guests are part of the stored layout; a leaf without any writes
     // none, so Zen layouts stay as they were.
@@ -650,15 +654,15 @@ fn a_guest_lives_on_one_tile_and_toggling_moves_it_or_takes_it_off() {
     let json = layout.to_json();
     assert_eq!(RiceLayout::from_json(Some(&json)), layout);
     assert!(
-        json["root"]["second"].get("guest").is_none(),
-        "a tile without a guest writes none: {json}"
+        json["root"]["first"].get("guests").is_none(),
+        "a tile without guests writes none: {json}"
     );
 }
 
 #[test]
-fn a_layout_saved_with_a_guest_list_keeps_the_first_guest_still_known() {
-    // Layouts saved while a tile hosted several guests, `live` and
-    // `banner` among them, read as the one guest this build knows.
+fn a_layout_saved_with_a_guest_list_keeps_the_guests_still_known() {
+    // Layouts saved with a `guests` list, `live` and `banner` among them,
+    // read as the guests this build knows.
     let stored = serde_json::json!({
         "root": {
             "node": "leaf",
@@ -668,16 +672,19 @@ fn a_layout_saved_with_a_guest_list_keeps_the_first_guest_still_known() {
         "look": RiceLayout::default().look,
     });
     let layout = RiceLayout::from_json(Some(&stored));
-    assert_eq!(layout.root.leaf_guests(), vec![Some(Guest::Now)]);
-    // A tile that hosted the lobby, the guest attention grew out of,
-    // hosts attention.
+    assert_eq!(
+        layout.root.leaf_guests(),
+        vec![vec![Guest::Now, Guest::Attention]]
+    );
+    // A tile that hosted the lobby, the guest attention grew out of, under
+    // the one `guest` key of the builds that hosted one, hosts attention.
     let lobby_host = serde_json::json!({
         "root": { "node": "leaf", "kind": "chat", "guest": "lobby" },
         "look": RiceLayout::default().look,
     });
     assert_eq!(
         RiceLayout::from_json(Some(&lobby_host)).root.leaf_guests(),
-        vec![Some(Guest::Attention)]
+        vec![vec![Guest::Attention]]
     );
     let only_gone = serde_json::json!({
         "root": { "node": "leaf", "kind": "chat", "guests": ["banner"] },
@@ -685,7 +692,7 @@ fn a_layout_saved_with_a_guest_list_keeps_the_first_guest_still_known() {
     });
     assert_eq!(
         RiceLayout::from_json(Some(&only_gone)).root.leaf_guests(),
-        vec![None]
+        vec![Vec::<Guest>::new()]
     );
 }
 
@@ -711,12 +718,12 @@ fn the_stock_home_is_the_rail_the_reef_over_the_chat_and_the_sidebar_column() {
     );
     assert_eq!(
         home.root.leaf_guests()[1],
-        Some(Guest::Now),
-        "the reef hosts the strip, so the chat never loses a row to it"
+        vec![Guest::Now, Guest::Attention],
+        "the reef hosts both guests, so the chat never loses a row to them"
     );
     assert_eq!(
         home.root.leaf_guests()[2],
-        None,
+        Vec::<Guest>::new(),
         "the board's day is the chat card's own row, not a guest"
     );
 

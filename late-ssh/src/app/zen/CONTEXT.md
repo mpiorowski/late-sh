@@ -137,7 +137,7 @@ bottom row is the key footer, `statusline::bar::build_home_arrange_row`);
 geometry (`App::rice_tiles_area`, `rice_tile_rects`) serve both. The stock
 Home (`RiceLayout::home`) is fixed and the same for every account: the
 room rail (`rooms`, `HOME_RAIL_COLS`), the reef across the top of the
-chat (`aquarium`, `HOME_AQUARIUM_ROWS`) hosting the now strip, the chat
+chat (`aquarium`, `HOME_AQUARIUM_ROWS`) hosting both guests, the chat
 under it hosting the board's day (a `chat` bound to no room, so it shows
 the rail's; a stored `center` reads as one), and the sidebar column
 (`HOME_SIDEBAR_COLS`): `presence`, then `music`, `lobby`, `live` and
@@ -196,13 +196,18 @@ on its clock), attention while anything waits on you (`app/attention`,
 match, an unread DM or mention, a companion uncared for today; down when
 the last row clears). Both end, which is what makes them guests; a widget
 that stays up for an evening (the Live roster, the bonsai) is a tile
-kind. A tile hosts one guest (`guest` on the leaf, `Node::toggle_guest`;
-a guest is on the page once), and the guest is the tile while it is up:
-its label in the rule, its panel in place of the host's (`draw_guest`:
-the strip in its full form where the tile is at least `MIN_FULL_WIDTH`
-by `LIVE_STRIP_HEIGHT`, else its one row, centred down the tile;
-attention's rows from the top), nothing of the host underneath, so the
-host shows whole the moment the guest goes. Attention up on the focused
+kind. A tile hosts any of the guests (`guests` on the leaf, in
+`Guest::ALL` order, `Node::toggle_guest`; a guest is on the page once;
+the stock Home's reef hosts both), and a guest is the tile while it is
+up: its label in the rule (both labels when both are up), its panel in
+place of the host's (`draw_guests`: one guest has the whole tile, the
+strip in its full form where the tile is at least `MIN_FULL_WIDTH` by
+`LIVE_STRIP_HEIGHT`, else its one row, centred down the tile, attention's
+rows from the top; with both up the strip takes its rows at the top and
+attention the rest), nothing of the host underneath, so the host shows
+whole the moment the last guest goes. Arranging, a tile's rule names the
+guests it hosts (`reef +now +attention`), so a quiet guest is never a
+surprise. Attention up on the focused
 tile takes `j` `k` and Enter ahead of the host's keys (`handle_attention`,
 `ZenState::attention_selected`; Enter does the row's act), on Zen and in
 Home's arrange mode, where tile keys run; outside arrange mode Home's keys

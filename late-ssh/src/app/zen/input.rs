@@ -334,7 +334,7 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
     }
     // The attention guest, up on the focused tile, is the tile: its rows
     // take `j` `k` and Enter ahead of the host's keys.
-    if app.rice().focused_guest() == Some(Guest::Attention) && handle_attention(app, byte) {
+    if app.rice().focused_guests().contains(&Guest::Attention) && handle_attention(app, byte) {
         return true;
     }
     if app.rice().focused_kind() == Some(TileKind::Inbox) && handle_inbox(app, byte) {

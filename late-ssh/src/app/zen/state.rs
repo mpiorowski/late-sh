@@ -203,24 +203,27 @@ impl Guest {
     }
 }
 
-/// A stored `guest`: one key, or the list a layout saved while a tile
-/// hosted several (`guests`), of which the first this build knows stays.
+/// A stored `guests` list, or the one `guest` key a layout saved while a
+/// tile hosted one. The guests this build knows stay, each once, in
+/// `Guest::ALL` order.
 #[derive(Deserialize)]
 #[serde(untagged)]
-enum StoredGuest {
+enum StoredGuests {
     One(String),
     Many(Vec<String>),
 }
 
-fn known_guest<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<Guest>, D::Error> {
-    let stored: Option<StoredGuest> = Option::deserialize(deserializer)?;
-    Ok(match stored {
-        None => None,
-        Some(StoredGuest::One(key)) => Guest::from_key(&key),
-        Some(StoredGuest::Many(keys)) => keys.iter().find_map(|key| Guest::from_key(key)),
-    })
+fn known_guests<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<Guest>, D::Error> {
+    let stored: Option<StoredGuests> = Option::deserialize(deserializer)?;
+    let keys: Vec<String> = match stored {
+        None => Vec::new(),
+        Some(StoredGuests::One(key)) => vec![key],
+        Some(StoredGuests::Many(keys)) => keys,
+    };
+    Ok(Guest::ALL
+        .into_iter()
+        .filter(|guest| keys.iter().any(|key| Guest::from_key(key) == Some(*guest)))
+        .collect())
 }
 
 /// How a split lays its two children out.
@@ -262,17 +265,18 @@ pub enum Share {
 pub enum Node {
     Leaf {
         kind: TileKind,
-        /// The guest this tile hosts, the whole tile while it has
-        /// something to show. `None` for most. Read leniently: a layout
-        /// saved with a `guests` list keeps the first guest this build
-        /// knows.
+        /// The guests this tile hosts, in `Guest::ALL` order: the whole
+        /// tile while one has something to show, stacked while two do.
+        /// Empty for most. Read leniently: a layout saved with one `guest`
+        /// key reads as that guest, and keys this build does not know are
+        /// dropped.
         #[serde(
             default,
-            alias = "guests",
-            deserialize_with = "known_guest",
-            skip_serializing_if = "Option::is_none"
+            alias = "guest",
+            deserialize_with = "known_guests",
+            skip_serializing_if = "Vec::is_empty"
         )]
-        guest: Option<Guest>,
+        guests: Vec<Guest>,
         /// The room a chat tile is bound to; `None` (the stored default,
         /// and every layout saved before rooms were per tile) means the
         /// current room, Home's selection or #lounge. Other kinds ignore it.
@@ -339,18 +343,21 @@ impl Node {
     pub fn leaf(kind: TileKind) -> Self {
         Node::Leaf {
             kind,
-            guest: None,
+            guests: Vec::new(),
             room: None,
             piece: None,
             title: None,
         }
     }
 
-    /// A leaf hosting `guest`.
-    pub fn hosting(kind: TileKind, guest: Guest) -> Self {
+    /// A leaf hosting `guests`, given in any order.
+    pub fn hosting(kind: TileKind, guests: &[Guest]) -> Self {
         Node::Leaf {
             kind,
-            guest: Some(guest),
+            guests: Guest::ALL
+                .into_iter()
+                .filter(|guest| guests.contains(guest))
+                .collect(),
             room: None,
             piece: None,
             title: None,
@@ -431,16 +438,16 @@ impl Node {
         self.leaf_kinds().get(ordinal).copied()
     }
 
-    /// Every leaf's guest in layout order, parallel to `leaf_kinds`.
-    pub fn leaf_guests(&self) -> Vec<Option<Guest>> {
+    /// Every leaf's guests in layout order, parallel to `leaf_kinds`.
+    pub fn leaf_guests(&self) -> Vec<Vec<Guest>> {
         let mut out = Vec::with_capacity(self.leaf_count());
         self.collect_guests(&mut out);
         out
     }
 
-    fn collect_guests(&self, out: &mut Vec<Option<Guest>>) {
+    fn collect_guests(&self, out: &mut Vec<Vec<Guest>>) {
         match self {
-            Node::Leaf { guest, .. } => out.push(*guest),
+            Node::Leaf { guests, .. } => out.push(guests.clone()),
             Node::Split { first, second, .. } => {
                 first.collect_guests(out);
                 second.collect_guests(out);
@@ -452,18 +459,19 @@ impl Node {
     pub fn host_of(&self, guest: Guest) -> Option<usize> {
         self.leaf_guests()
             .iter()
-            .position(|hosted| *hosted == Some(guest))
+            .position(|hosted| hosted.contains(&guest))
     }
 
     /// Put `guest` on the leaf at `ordinal`, taking it off whichever leaf
-    /// held it and replacing the one `ordinal` hosted; on its own host
-    /// already, take it off instead. `false` when `ordinal` is no leaf.
+    /// held it and beside whatever `ordinal` hosts already; on its own
+    /// host already, take it off instead. `false` when `ordinal` is no
+    /// leaf.
     pub fn toggle_guest(&mut self, ordinal: usize, guest: Guest) -> bool {
         let host = self.host_of(guest);
         if let Some(host) = host {
             let mut remaining = host;
-            if let Some(Node::Leaf { guest, .. }) = self.leaf_mut(&mut remaining) {
-                *guest = None;
+            if let Some(Node::Leaf { guests, .. }) = self.leaf_mut(&mut remaining) {
+                guests.retain(|hosted| *hosted != guest);
             }
         }
         if host == Some(ordinal) {
@@ -471,8 +479,13 @@ impl Node {
         }
         let mut remaining = ordinal;
         match self.leaf_mut(&mut remaining) {
-            Some(Node::Leaf { guest: hosted, .. }) => {
-                *hosted = Some(guest);
+            Some(Node::Leaf { guests, .. }) => {
+                guests.push(guest);
+                let mut ordered: Vec<Guest> = Guest::ALL
+                    .into_iter()
+                    .filter(|known| guests.contains(known))
+                    .collect();
+                std::mem::swap(guests, &mut ordered);
                 true
             }
             _ => false,
@@ -588,7 +601,7 @@ impl Node {
         };
         let Node::Leaf {
             kind,
-            guest,
+            guests,
             room,
             piece,
             title,
@@ -598,7 +611,7 @@ impl Node {
         };
         let kept = Node::Leaf {
             kind: *kind,
-            guest: guest.take(),
+            guests: std::mem::take(guests),
             room: *room,
             piece: *piece,
             title: *title,
@@ -911,7 +924,7 @@ impl RiceLayout {
         let center = Node::split_first(
             Dir::Column,
             HOME_AQUARIUM_ROWS + 1,
-            Node::hosting(TileKind::Aquarium, Guest::Now),
+            Node::hosting(TileKind::Aquarium, &[Guest::Now, Guest::Attention]),
             Node::leaf(TileKind::Chat),
         );
         // The sidebar's panels, each at its rows plus its title rule; the
@@ -1427,18 +1440,18 @@ impl ZenState {
         self.guest_picker = Some((selected as isize + delta).rem_euclid(len) as usize);
     }
 
-    /// The guest of the focused tile, if it hosts one.
-    pub fn focused_guest(&self) -> Option<Guest> {
+    /// The guests of the focused tile, empty when it hosts none.
+    pub fn focused_guests(&self) -> Vec<Guest> {
         self.rice
             .root
             .leaf_guests()
             .get(self.focus)
-            .copied()
-            .flatten()
+            .cloned()
+            .unwrap_or_default()
     }
 
-    /// Put the picker's guest on the focused tile, replacing the one it
-    /// hosted, or take it off when it is there already. The picker stays
+    /// Put the picker's guest on the focused tile, beside the ones it
+    /// hosts, or take it off when it is there already. The picker stays
     /// open.
     pub fn pick_guest(&mut self) -> GuestPick {
         let Some(index) = self.guest_picker else {

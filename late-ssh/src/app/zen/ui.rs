@@ -278,24 +278,44 @@ pub(crate) fn draw_rice(
                 _,
             ) => kind.label().to_string(),
         };
-        // The tile's guest, while it has something to say, is the tile:
-        // its label in the rule and its panel in place of the host's. On
-        // the page's chat the strip inserts into the card instead.
-        let guest = guests.get(ordinal).copied().flatten();
-        let guest_up = match guest {
-            Some(Guest::Now) => view.strip.is_some() && !is_page_chat,
-            Some(Guest::Attention) => !view.attention.is_empty(),
-            None => false,
+        // The tile's guests, while they have something to say, are the
+        // tile: their labels in the rule and their panels in place of the
+        // host's (stacked when both are up). On the page's chat the strip
+        // inserts into the card instead.
+        let hosted: &[Guest] = guests.get(ordinal).map(Vec::as_slice).unwrap_or(&[]);
+        let up: Vec<Guest> = hosted
+            .iter()
+            .copied()
+            .filter(|guest| match guest {
+                Guest::Now => view.strip.is_some() && !is_page_chat,
+                Guest::Attention => !view.attention.is_empty(),
+            })
+            .collect();
+        let title = match (up.is_empty(), zen.arrange) {
+            (false, false) => up
+                .iter()
+                .map(|guest| guest.label())
+                .collect::<Vec<_>>()
+                .join(" · "),
+            (true, _) | (false, true) => title,
         };
-        let title = match (guest, guest_up, zen.arrange) {
-            (Some(guest), true, false) => guest.label().to_string(),
-            (Some(_), true, true) | (Some(_), false, _) | (None, _, _) => title,
-        };
-        // Arranging, a tile that goes bare outside the mode says so in
-        // the rule it wears for the mode.
         let title_override = zen.rice.root.title_at(ordinal);
-        let title = match zen.arrange && !zen.rule_shown(ordinal) {
-            true => format!("{title} · hidden"),
+        // Arranging, the tile names the guests it hosts (`+name`, as the
+        // key that gives it one), so a quiet guest is never a surprise,
+        // and a tile that goes bare outside the mode says so in the rule
+        // it wears for the mode.
+        let title = match zen.arrange {
+            true => {
+                let mut title = title;
+                for guest in hosted {
+                    title.push_str(" +");
+                    title.push_str(guest.label());
+                }
+                if !zen.rule_shown(ordinal) {
+                    title.push_str(" · hidden");
+                }
+                title
+            }
             false => title,
         };
         // The tank's title carries its care bar: fourteen dots, green
@@ -344,11 +364,11 @@ pub(crate) fn draw_rice(
         if inner.width == 0 || inner.height == 0 {
             continue;
         }
-        if let (Some(guest), true) = (guest, guest_up) {
-            draw_guest(
+        if !up.is_empty() {
+            draw_guests(
                 frame,
                 inner,
-                guest,
+                &up,
                 zen.attention_selected,
                 focused,
                 &mut view,
@@ -587,11 +607,73 @@ fn draw_layout_list(frame: &mut Frame, area: Rect, layouts: &Layouts, list: &Lay
 /// their keys.
 const MUSIC_STAGE_MIN_COLS: u16 = 18;
 
-/// Paint the guest that has taken its host's tile. The strip sits in its
-/// full form where the tile is wide and tall enough, its one-row form
-/// otherwise, centred down the tile; attention is its rows from the top,
-/// the selected one marked while the tile is focused. The host draws
-/// nothing underneath, so the moment the guest goes the host shows whole.
+/// Paint the guests that have taken their host's tile. One guest has the
+/// whole tile; with both up the strip takes its rows at the top and
+/// attention the rest. The host draws nothing underneath, so the moment
+/// the last guest goes the host shows whole.
+fn draw_guests(
+    frame: &mut Frame,
+    area: Rect,
+    up: &[Guest],
+    attention_selected: usize,
+    focused: bool,
+    view: &mut ZenView<'_>,
+) {
+    let now = up.contains(&Guest::Now);
+    let attention = up.contains(&Guest::Attention);
+    match (now, attention) {
+        (true, true) => {
+            let (_, strip_height) = now_strip_size(area);
+            let top = Rect::new(area.x, area.y, area.width, strip_height);
+            draw_guest(frame, top, Guest::Now, attention_selected, focused, view);
+            let below = Rect::new(
+                area.x,
+                area.y + strip_height,
+                area.width,
+                area.height - strip_height,
+            );
+            draw_guest(
+                frame,
+                below,
+                Guest::Attention,
+                attention_selected,
+                focused,
+                view,
+            );
+        }
+        (true, false) => draw_guest(frame, area, Guest::Now, attention_selected, focused, view),
+        (false, true) => draw_guest(
+            frame,
+            area,
+            Guest::Attention,
+            attention_selected,
+            focused,
+            view,
+        ),
+        (false, false) => {}
+    }
+}
+
+/// The strip's form in a tile of `area`: full where the tile is wide and
+/// tall enough, its one-row form otherwise, and the rows it takes.
+fn now_strip_size(area: Rect) -> (crate::app::live::ui::StripSize, u16) {
+    let size = if area.width >= crate::app::live::ui::MIN_FULL_WIDTH
+        && area.height >= crate::app::live::ui::LIVE_STRIP_HEIGHT
+    {
+        crate::app::live::ui::StripSize::Full
+    } else {
+        crate::app::live::ui::StripSize::Compact
+    };
+    let height = match size {
+        crate::app::live::ui::StripSize::Full => crate::app::live::ui::LIVE_STRIP_HEIGHT,
+        crate::app::live::ui::StripSize::Compact => crate::app::live::ui::LIVE_STRIP_COMPACT_HEIGHT,
+    }
+    .min(area.height);
+    (size, height)
+}
+
+/// Paint one guest into `area`: the strip centred down it, attention's
+/// rows from its top, the selected one marked while the tile is focused.
 fn draw_guest(
     frame: &mut Frame,
     area: Rect,
@@ -605,20 +687,7 @@ fn draw_guest(
             let Some(strip) = &view.strip else {
                 return;
             };
-            let size = if area.width >= crate::app::live::ui::MIN_FULL_WIDTH
-                && area.height >= crate::app::live::ui::LIVE_STRIP_HEIGHT
-            {
-                crate::app::live::ui::StripSize::Full
-            } else {
-                crate::app::live::ui::StripSize::Compact
-            };
-            let height = match size {
-                crate::app::live::ui::StripSize::Full => crate::app::live::ui::LIVE_STRIP_HEIGHT,
-                crate::app::live::ui::StripSize::Compact => {
-                    crate::app::live::ui::LIVE_STRIP_COMPACT_HEIGHT
-                }
-            }
-            .min(area.height);
+            let (size, height) = now_strip_size(area);
             let strip_area = Rect::new(
                 area.x,
                 area.y + (area.height - height) / 2,
@@ -638,9 +707,9 @@ fn draw_guest(
 }
 
 /// The guest picker `+` opens in arrange mode: one row per guest, a check
-/// beside the focused tile's, `elsewhere` beside one another tile hosts
-/// (picking it moves it here). Space or Enter picks, or takes the tile's
-/// own off, and the picker stays up.
+/// beside each the focused tile hosts, `elsewhere` beside one another
+/// tile hosts (picking it moves it here). Space or Enter picks, or takes
+/// the tile's own off, and the picker stays up.
 fn draw_guest_picker(frame: &mut Frame, area: Rect, zen: &ZenState) {
     let Some(selected) = zen.guest_picker else {
         return;
@@ -669,13 +738,13 @@ fn draw_guest_picker(frame: &mut Frame, area: Rect, zen: &ZenState) {
         .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
     let inner = block.inner(popup);
     frame.render_widget(block, popup);
-    let here = zen.focused_guest();
+    let here = zen.focused_guests();
     let mut lines: Vec<Line<'static>> = Guest::ALL
         .iter()
         .enumerate()
         .map(|(index, guest)| {
             let picked = index == selected;
-            let on_tile = here == Some(*guest);
+            let on_tile = here.contains(guest);
             let elsewhere = !on_tile && zen.hosts(*guest);
             let label_style = if picked {
                 Style::default()
