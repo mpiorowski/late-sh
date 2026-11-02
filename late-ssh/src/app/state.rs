@@ -3726,7 +3726,7 @@ impl App {
             .into_iter()
             .filter(|(kind, _, _)| *kind == TileKind::Aquarium)
             .map(|(_, _, inner)| inner)
-            .find(|inner| crate::app::zen::ui::reef_form(*inner))
+            .find(|inner| crate::app::hub::aquarium::ui::reef_form(*inner))
     }
 
     /// Put the owned population back in the water after the care state

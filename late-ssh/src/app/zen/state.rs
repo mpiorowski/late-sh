@@ -146,6 +146,151 @@ impl TileKind {
             TileKind::Presence => "presence",
         }
     }
+
+    /// The keys a tile of this kind names on its title in arrange mode:
+    /// the ones it takes itself (`TileHint::Takes`, shown with the focus
+    /// on it) and the house keys it only points at (`TileHint::Names`,
+    /// shown on every tile). One table for the hint and the handler
+    /// (`input::act`), so a title never names a key nothing answers.
+    pub fn hints(self) -> &'static [TileHint] {
+        match self {
+            TileKind::Bonsai => &[TileHint::Names(HouseKey::Tend)],
+            TileKind::Ascii => &[TileHint::Takes(TileKey::PickPiece)],
+            TileKind::Aquarium | TileKind::Tank => &[TileHint::Takes(TileKey::Feed)],
+            TileKind::Pet => &[TileHint::Names(HouseKey::PetClick)],
+            TileKind::Chat => &[
+                TileHint::Takes(TileKey::CycleRoom),
+                TileHint::Names(HouseKey::PickRoom),
+            ],
+            TileKind::Music => &[TileHint::Names(HouseKey::Mute)],
+            TileKind::Lobby => &[TileHint::Names(HouseKey::OpenLobby)],
+            TileKind::Live => &[TileHint::Names(HouseKey::OpenLive)],
+            TileKind::Rooms
+            | TileKind::Clock
+            | TileKind::Visualizer
+            | TileKind::Activity
+            | TileKind::Friends
+            | TileKind::Pulse
+            | TileKind::Presence
+            | TileKind::Blank => &[],
+        }
+    }
+}
+
+/// One key hint on a tile's title in arrange mode, and who answers it.
+/// Normal mode names no keys at all.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TileHint {
+    /// A key the focused tile takes itself (`input::act`, `TileKey::takes`).
+    /// Shown only with the focus on the tile, since that is where it works.
+    Takes(TileKey),
+    /// A key the house answers (`app/input.rs`, the mouse): the tile only
+    /// names it, so the key is found from the tile it serves. Shown on
+    /// every tile in arrange mode.
+    Names(HouseKey),
+}
+
+impl TileHint {
+    /// The key and the word, as `hint_line` draws them.
+    pub fn text(self) -> (&'static str, &'static str) {
+        match self {
+            TileHint::Takes(key) => key.text(),
+            TileHint::Names(key) => key.text(),
+        }
+    }
+}
+
+/// A key the focused tile takes in arrange mode. Each is one entry of
+/// `takes` and one arm of `input::act`, so the hint, the bytes and the
+/// handler never drift apart.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TileKey {
+    /// `j` `k` walk the attention guest's rows, Enter acts on the selected
+    /// one.
+    Attend,
+    /// `[` `]` step an ascii tile through the pieces, Enter opens the
+    /// picker.
+    PickPiece,
+    /// `a` feeds the tank, on the reef or the tank tile.
+    Feed,
+    /// `[` `]` rebind a chat tile to the previous or next room.
+    CycleRoom,
+}
+
+impl TileKey {
+    pub fn text(self) -> (&'static str, &'static str) {
+        match self {
+            TileKey::Attend => ("j k Enter", "act"),
+            TileKey::PickPiece => ("[ ] Enter", "pick"),
+            TileKey::Feed => ("a", "feed"),
+            TileKey::CycleRoom => ("[ ]", "cycle"),
+        }
+    }
+
+    /// Whether `byte` is one of this key's.
+    pub fn takes(self, byte: u8) -> bool {
+        match self {
+            TileKey::Attend => matches!(byte, b'j' | b'J' | b'k' | b'K' | b'\r' | b'\n'),
+            TileKey::PickPiece => matches!(byte, b'[' | b']' | b'\r' | b'\n'),
+            TileKey::Feed => byte == b'a',
+            TileKey::CycleRoom => matches!(byte, b'[' | b']'),
+        }
+    }
+}
+
+/// A key or gesture the house answers, not the tile: a tile names it on
+/// its title so it is found from the tile it serves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HouseKey {
+    /// `w`: the bonsai's care modal.
+    Tend,
+    /// `Ctrl+/`: the room picker, for a chat tile.
+    PickRoom,
+    /// `m`: mute the paired client.
+    Mute,
+    /// `Ctrl+G`: the lobby.
+    OpenLobby,
+    /// `s` then `1`..`4`: a row of the Live panel.
+    OpenLive,
+    /// A click on the pet pets it.
+    PetClick,
+}
+
+impl HouseKey {
+    pub fn text(self) -> (&'static str, &'static str) {
+        match self {
+            HouseKey::Tend => ("w", "tend"),
+            HouseKey::PickRoom => ("ctrl+/", "room"),
+            HouseKey::Mute => ("m", "mute"),
+            HouseKey::OpenLobby => ("^G", "open"),
+            HouseKey::OpenLive => ("s1-4", "open"),
+            HouseKey::PetClick => ("click", "pet"),
+        }
+    }
+
+    /// Who answers it. Arrange mode swallows stray letters so none reach
+    /// the chat; a `Letter` here is let through to `app/input.rs`, which
+    /// runs after Home, so a key a title names works while arranging.
+    pub fn taken_by(self) -> TakenBy {
+        match self {
+            HouseKey::Tend => TakenBy::Letter(b'w'),
+            HouseKey::Mute => TakenBy::Letter(b'm'),
+            HouseKey::OpenLive => TakenBy::Letter(b's'),
+            HouseKey::PickRoom | HouseKey::OpenLobby => TakenBy::Chord,
+            HouseKey::PetClick => TakenBy::Click,
+        }
+    }
+}
+
+/// Where a house key is answered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TakenBy {
+    /// A letter `app/input.rs` takes after Home, in either case.
+    Letter(u8),
+    /// A control chord reserved ahead of every page; Home never sees it.
+    Chord,
+    /// The mouse.
+    Click,
 }
 
 /// A widget that comes and goes, hosted by a tile that is otherwise
@@ -180,6 +325,15 @@ impl Guest {
         match self {
             Guest::Now => "something just happened",
             Guest::Attention => "something waits on you",
+        }
+    }
+
+    /// The keys a guest takes while it is up on a tile, ahead of its
+    /// host's: attention's rows take `j` `k` and Enter, the strip none.
+    pub fn hints(self) -> &'static [TileHint] {
+        match self {
+            Guest::Now => &[],
+            Guest::Attention => &[TileHint::Takes(TileKey::Attend)],
         }
     }
 
@@ -887,8 +1041,8 @@ impl Default for RiceLayout {
     /// to: on the left, the
     /// bonsai beside the reef over the current room's chat; on the right a
     /// rail of clock, pet, lobby, live, then music (the pet sits against
-    /// the tank, to its left, and watches it; unowned, the pet and the tank
-    /// tiles point at the shop).
+    /// the tank, to its left, and watches it; unowned, the pet tile points
+    /// at the shop).
     fn default() -> Self {
         Self {
             root: Node::split(
@@ -963,12 +1117,12 @@ impl RiceLayout {
     }
 
     /// The stock Home: the room rail, then the reef across the top of the
-    /// chat hosting the now strip (the shop's note while no tank is
-    /// owned), the chat under it, and a sidebar column of the presence
-    /// row, the visualizer, the music dock, the lobby hosting attention,
-    /// live and the bonsai at their panel rows, with the pet (the shop's
-    /// note while none is owned) taking the rest. Fixed, the same for every account: the page is
-    /// arranged in place (`Ctrl+E`), and this is what `R` resets to.
+    /// chat hosting the now strip, the chat under it, and a sidebar column
+    /// of the presence row, the visualizer, the music dock, the lobby
+    /// hosting attention, live and the pet (the shop's note while none is
+    /// owned) at their panel rows, with the bonsai taking the rest. Fixed,
+    /// the same for every account: the page is arranged in place
+    /// (`Ctrl+E`), and this is what `R` resets to.
     pub fn home() -> Self {
         let center = Node::split_first(
             Dir::Column,

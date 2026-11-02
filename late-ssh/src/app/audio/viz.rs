@@ -461,6 +461,29 @@ pub(crate) fn render_eq(frame: &mut Frame, area: Rect, wall_tick: usize, state: 
     frame.render_widget(Paragraph::new(lines), area);
 }
 
+/// Home's visualizer tile: the equalizer at the tile's full height, the
+/// same bars and peak caps as the music stage, only taller.
+pub(crate) fn draw_visualizer_tile(
+    frame: &mut Frame,
+    area: Rect,
+    wall_tick: usize,
+    eq_state: EqState,
+) {
+    if area.width < 2 || area.height == 0 {
+        return;
+    }
+    let dance = match eq_state {
+        EqState::Live(live) => Dance::Live(live),
+        EqState::Ambient => Dance::Ambient,
+        EqState::Muted | EqState::Unpaired => {
+            render_eq(frame, area, wall_tick, eq_state);
+            return;
+        }
+    };
+    let lines = dance_lines(dance, wall_tick, area.width as usize, area.height as usize);
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
 #[cfg(test)]
 #[path = "viz_test.rs"]
 mod viz_test;

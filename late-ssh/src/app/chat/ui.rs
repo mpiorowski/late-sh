@@ -17,6 +17,7 @@ use ratatui_textarea::TextArea;
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
+    time::{Duration, Instant},
 };
 use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
@@ -25,7 +26,7 @@ use crate::app::common::{
     composer::composer_line_count,
     mentions::mentions_user,
     overlay::{Overlay, draw_overlay},
-    primitives::row_with_hint,
+    primitives::{draw_centered_note, format_relative_time_short, row_with_hint},
     theme,
     username_effect::ResolvedName,
 };
@@ -5714,6 +5715,140 @@ fn draw_selected_content(
 }
 
 // ── Tests ───────────────────────────────────────────────────
+
+/// Home's activity tile: the #lounge activity feed as a list, newest on
+/// top, one event a row with its age flush right, a friend's line in the
+/// friend color. The same queue the one-row ticker packs.
+pub(crate) fn draw_activity_tile(
+    frame: &mut Frame,
+    area: Rect,
+    entries: &[super::state::ActivityTickerEntry],
+    friends: &[super::state::ActiveFriend],
+) {
+    if entries.is_empty() {
+        draw_centered_note(frame, area, &["quiet for now", "wins and joins land here"]);
+        return;
+    }
+    let width = area.width as usize;
+    let lines: Vec<Line<'static>> = entries
+        .iter()
+        .take(area.height as usize)
+        .map(|entry| {
+            let about_a_friend = friends
+                .iter()
+                .any(|friend| names_actor(&entry.text, &friend.username));
+            let style = if about_a_friend {
+                Style::default().fg(theme::SUCCESS())
+            } else {
+                Style::default().fg(theme::TEXT_DIM())
+            };
+            stamped_row(
+                vec![Span::styled(entry.text.clone(), style)],
+                format_relative_time_short(entry.at),
+                width,
+            )
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Whether a feed line is about `username`: feed lines open with the name.
+fn names_actor(text: &str, username: &str) -> bool {
+    text.strip_prefix(username)
+        .is_some_and(|rest| rest.starts_with(' '))
+}
+
+/// Home's friends tile: connected friends, here before away, then the
+/// most recent login: the name, the away glyph when away, their audio
+/// source, and how long they have been on.
+pub(crate) fn draw_friends_tile(
+    frame: &mut Frame,
+    area: Rect,
+    friends: &[super::state::ActiveFriend],
+) {
+    if friends.is_empty() {
+        draw_centered_note(frame, area, &["no friends online"]);
+        return;
+    }
+    let width = area.width as usize;
+    let now = Instant::now();
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let lines: Vec<Line<'static>> = friends
+        .iter()
+        .take(area.height as usize)
+        .map(|friend| {
+            let mut spans = vec![
+                Span::styled("● ", Style::default().fg(theme::SUCCESS())),
+                Span::styled(
+                    friend.username.clone(),
+                    Style::default().fg(theme::TEXT_BRIGHT()),
+                ),
+            ];
+            if friend.away {
+                spans.push(Span::raw(format!(
+                    " {}",
+                    crate::app::common::away::AWAY_GLYPH
+                )));
+            }
+            spans.push(Span::styled(
+                format!("  ♪ {}", audio_source_word(friend.audio_source)),
+                dim,
+            ));
+            stamped_row(
+                spans,
+                compact_elapsed(now.saturating_duration_since(friend.online_since)),
+                width,
+            )
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn audio_source_word(source: late_core::models::user::AudioSource) -> &'static str {
+    match source {
+        late_core::models::user::AudioSource::Youtube => "youtube",
+        late_core::models::user::AudioSource::Radio => "radio",
+    }
+}
+
+fn compact_elapsed(elapsed: Duration) -> String {
+    let secs = elapsed.as_secs();
+    if secs < 60 {
+        "now".to_string()
+    } else if secs < 3_600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h", secs / 3_600)
+    } else {
+        format!("{}d", secs / 86_400)
+    }
+}
+
+/// One list row: `spans` from the left, cut with an ellipsis where the
+/// room runs out, and `stamp` flush right in faint.
+fn stamped_row(spans: Vec<Span<'static>>, stamp: String, width: usize) -> Line<'static> {
+    let stamp_width = stamp.width();
+    let budget = width.saturating_sub(stamp_width + 1);
+    let mut used = 0usize;
+    let mut out: Vec<Span<'static>> = Vec::with_capacity(spans.len() + 2);
+    for span in spans {
+        let room = budget.saturating_sub(used);
+        if room == 0 {
+            break;
+        }
+        let text = truncate_cells(&span.content, room);
+        used += text.width();
+        out.push(Span::styled(text, span.style));
+    }
+    out.push(Span::raw(
+        " ".repeat(width.saturating_sub(used + stamp_width)),
+    ));
+    out.push(Span::styled(
+        stamp,
+        Style::default().fg(theme::TEXT_FAINT()),
+    ));
+    Line::from(out)
+}
 
 #[cfg(test)]
 #[path = "ui_test.rs"]

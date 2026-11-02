@@ -129,7 +129,9 @@ layout.
   is the tile's name, and in arrange mode only its key hint on the right
   (`w tend`, `m mute`) too: the tank's care bar sits on its water, not in
   the title. A key the tile takes itself (`a feed`, `[ ] Enter pick`,
-  `enter open`) shows only on the focused tile; a global key on every tile.
+  `[ ] cycle`, `j k Enter act`) shows only on the focused tile; a house
+  key on every tile. One table, `TileKind::hints`, names the hint and
+  answers the key.
 - The chat tile wears its title like every other; the composer block
   stays the chat's own chrome.
 

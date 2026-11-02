@@ -1,54 +1,14 @@
-use super::{
-    care_bar_spans, chat_tile_title, draw_aquarium_tile, draw_board_day, draw_bonsai_tile,
-    draw_centered_note, draw_music_tile, draw_tank_tile, draw_tile_chrome, hint_line_fitting,
-    hints_shown, station_text, tile_keys,
-};
-use crate::app::bonsai::{
-    render::canvas_lines,
-    state::{BonsaiState, CANVAS_HEIGHT, CANVAS_WIDTH},
-};
+use super::{chat_tile_title, draw_board_day, draw_tile_chrome, hint_line_fitting, hints_shown};
 use crate::app::common::primitives::hint_line;
-use crate::app::hub::aquarium::state::{AquariumState, CareBar};
 use crate::app::zen::layout::Chrome;
 use crate::app::zen::state::{TileKind, TileTitle};
-use late_core::models::aquarium_care::CARE_DAYS;
 use ratatui::{Terminal, backend::TestBackend, layout::Rect};
 use unicode_width::UnicodeWidthStr;
-use uuid::Uuid;
-
-fn music_tile_rows(width: u16, height: u16) -> Vec<String> {
-    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
-    terminal
-        .draw(|frame| draw_music_tile(frame, Rect::new(0, 0, width, height), "Ambition", "youtube"))
-        .expect("draw");
-    let buffer = terminal.backend().buffer();
-    (0..height)
-        .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
-        .collect()
-}
-
-#[test]
-fn a_short_music_tile_centres_the_track_over_the_station_and_draws_no_band() {
-    let rows = music_tile_rows(24, 9);
-    assert!(rows[3].contains("♪ Ambition"), "{rows:#?}");
-    assert!(rows[4].contains("youtube"), "{rows:#?}");
-    // Nothing else is drawn: the equalizer is the visualizer tile's.
-    for (y, row) in rows.iter().enumerate() {
-        if y != 3 && y != 4 {
-            assert_eq!(row.trim(), "", "{rows:#?}");
-        }
-    }
-
-    // Two rows is text only; one row keeps the track.
-    assert_eq!(music_tile_rows(24, 2)[0].trim(), "♪ Ambition");
-    assert_eq!(music_tile_rows(24, 2)[1].trim(), "youtube");
-    assert_eq!(music_tile_rows(24, 1)[0].trim(), "♪ Ambition");
-}
 
 #[test]
 fn no_title_names_a_key_outside_arrange_mode() {
     for kind in TileKind::ALL {
-        let keys = tile_keys(kind);
+        let keys = kind.hints();
         assert_eq!(hints_shown(keys, false, false), vec![], "{kind:?}");
         assert_eq!(hints_shown(keys, false, true), vec![], "{kind:?}");
     }
@@ -56,64 +16,26 @@ fn no_title_names_a_key_outside_arrange_mode() {
 
 #[test]
 fn a_key_that_works_only_on_the_focused_tile_shows_only_there() {
-    let ascii = tile_keys(TileKind::Ascii);
+    let ascii = TileKind::Ascii.hints();
     assert_eq!(hints_shown(ascii, false, false), vec![]);
     assert_eq!(hints_shown(ascii, false, true), vec![]);
     assert_eq!(hints_shown(ascii, true, false), vec![]);
     assert_eq!(hints_shown(ascii, true, true), vec![("[ ] Enter", "pick")]);
 
-    // Arranging, every tile names its global key, focused or not; a chat
+    // Arranging, every tile names its house key, focused or not; a chat
     // tile adds its room cycling ahead of it only while focused.
     assert_eq!(
-        hints_shown(tile_keys(TileKind::Bonsai), true, false),
+        hints_shown(TileKind::Bonsai.hints(), true, false),
         vec![("w", "tend")]
     );
-    let chat = tile_keys(TileKind::Chat);
+    let chat = TileKind::Chat.hints();
     assert_eq!(hints_shown(chat, true, false), vec![("ctrl+/", "room")]);
     assert_eq!(
         hints_shown(chat, true, true),
         vec![("[ ]", "cycle"), ("ctrl+/", "room")]
     );
     // The rail takes clicks on its rows and no key, so it names none.
-    assert_eq!(hints_shown(tile_keys(TileKind::Rooms), true, true), vec![]);
-}
-
-fn glyphs(bar: CareBar) -> String {
-    care_bar_spans(bar)
-        .iter()
-        .map(|span| span.content.to_string())
-        .collect()
-}
-
-#[test]
-fn the_care_bar_is_always_fourteen_dots() {
-    // Five fed days: five full, nine empty.
-    assert_eq!(glyphs(CareBar::Streak(5)), "●●●●●○○○○○○○○○");
-    // Two unfed days: two full (red), the rest empty.
-    assert_eq!(glyphs(CareBar::Dry(2)), "●●○○○○○○○○○○○○");
-    // A minded tank shows nothing filled.
-    assert_eq!(glyphs(CareBar::Minded), "○".repeat(CARE_DAYS as usize));
-    // Nothing past fourteen ever widens the title.
-    assert_eq!(glyphs(CareBar::Dry(40)), "●".repeat(CARE_DAYS as usize));
-}
-
-#[test]
-fn the_player_names_the_station_for_the_streams_that_have_one() {
-    use late_core::models::user::{AudioSource, RadioStation};
-
-    let datawave = RadioStation::from_key("datawave").unwrap();
-    let classical = RadioStation::from_key("classical").unwrap();
-    assert_eq!(
-        station_text(AudioSource::Radio, datawave),
-        "radio · datawave"
-    );
-    // House mounts are stations like any other.
-    assert_eq!(
-        station_text(AudioSource::Radio, classical),
-        "radio · classical"
-    );
-    // YouTube plays the queue, not a station: one word.
-    assert_eq!(station_text(AudioSource::Youtube, datawave), "youtube");
+    assert_eq!(hints_shown(TileKind::Rooms.hints(), true, true), vec![]);
 }
 
 #[test]
@@ -149,60 +71,6 @@ fn a_stream_chat_tile_title_keeps_the_watcher_count_on_a_narrow_tile() {
     assert_eq!(UnicodeWidthStr::width(title.as_str()), 16);
 }
 
-fn bonsai_tile_rows(width: u16, height: u16) -> Vec<String> {
-    let state = BonsaiState::fallback(Uuid::nil(), 42);
-    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
-    terminal
-        .draw(|frame| draw_bonsai_tile(frame, Rect::new(0, 0, width, height), &state, 0))
-        .expect("draw");
-    let buffer = terminal.backend().buffer();
-    (0..height)
-        .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
-        .collect()
-}
-
-/// The care modal's canvas as plain rows, each padded to the canvas width.
-fn canvas_rows() -> Vec<String> {
-    let state = BonsaiState::fallback(Uuid::nil(), 42);
-    canvas_lines(&state, true)
-        .iter()
-        .map(|line| {
-            let text: String = line
-                .spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect();
-            format!("{text:<width$}", width = CANVAS_WIDTH)
-        })
-        .collect()
-}
-
-#[test]
-fn a_small_bonsai_tile_shows_the_true_canvas_cut_evenly_around_the_trunk() {
-    let (width, height) = (41u16, 12u16);
-    let rows = bonsai_tile_rows(width, height);
-    let cut = (CANVAS_WIDTH - width as usize) / 2;
-    let canvas = canvas_rows();
-    let expected: Vec<String> = canvas[canvas.len() - height as usize..]
-        .iter()
-        .map(|row| row.chars().skip(cut).take(width as usize).collect())
-        .collect();
-    assert_eq!(rows, expected);
-}
-
-#[test]
-fn a_roomy_bonsai_tile_centers_the_whole_canvas() {
-    let (width, height) = (CANVAS_WIDTH as u16 + 20, CANVAS_HEIGHT as u16 + 3);
-    let rows = bonsai_tile_rows(width, height);
-    let canvas = canvas_rows();
-    let tree_rows = &rows[rows.len() - canvas.len()..];
-    let expected: Vec<String> = canvas
-        .iter()
-        .map(|row| format!("{:10}{row}{:10}", "", ""))
-        .collect();
-    assert_eq!(tree_rows, &expected[..]);
-}
-
 /// The board's day reads in amber at the left of its row with the board's
 /// key flush right, one column in from each edge, the text giving way to
 /// the key when the row is short.
@@ -228,64 +96,6 @@ fn the_boards_day_banner_is_the_text_left_and_the_key_right() {
     assert!(row.starts_with(" Hack"), "{row:?}");
 }
 
-/// The shop note in a sidebar's width: the long row wraps at its words,
-/// centred, and nothing is cut off. An odd spare cell goes on the left, as
-/// ratatui centres a line; a kept trailing space would pull the row left.
-#[test]
-fn a_note_wider_than_its_tile_wraps_at_the_words() {
-    let mut terminal = Terminal::new(TestBackend::new(20, 3)).expect("terminal");
-    terminal
-        .draw(|frame| {
-            draw_centered_note(
-                frame,
-                Rect::new(0, 0, 20, 3),
-                &["no pet yet", "the Pet Companion is in /shop"],
-            )
-        })
-        .expect("draw");
-    let rows: Vec<String> = (0..3)
-        .map(|y| {
-            (0..20)
-                .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string())
-                .collect::<String>()
-        })
-        .collect();
-    assert_eq!(
-        rows,
-        vec![
-            "     no pet yet     ",
-            "  the Pet Companion ",
-            "     is in /shop    ",
-        ]
-    );
-}
-
-/// Everyone has a tank, so neither of its tiles points anyone at the shop,
-/// even before a fish is in the water: both draw the water and its care bar.
-#[test]
-fn the_tank_tiles_never_send_anyone_to_the_shop() {
-    let area = Rect::new(0, 0, 60, 16);
-    let state = AquariumState::default_for_area(area).expect("aquarium");
-    for tile in [TileKind::Aquarium, TileKind::Tank] {
-        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).expect("term");
-        terminal
-            .draw(|frame| match tile {
-                TileKind::Aquarium => draw_aquarium_tile(frame, area, &state, CareBar::Dry(1)),
-                _ => draw_tank_tile(frame, area, &state, true, CareBar::Dry(1), 0),
-            })
-            .expect("draw");
-        let text: String = terminal
-            .backend()
-            .buffer()
-            .content()
-            .iter()
-            .map(|cell| cell.symbol())
-            .collect();
-        assert!(!text.contains("/shop"), "{tile:?}: {text}");
-        assert!(!text.contains("no tank"), "{tile:?}: {text}");
-    }
-}
-
 /// The top row of a sidebar-wide lobby tile wearing `title`, as text.
 fn lobby_top_row(title: TileTitle) -> String {
     let mut terminal = Terminal::new(TestBackend::new(23, 4)).expect("terminal");
@@ -298,7 +108,7 @@ fn lobby_top_row(title: TileTitle) -> String {
                 false,
                 title,
                 "lobby",
-                &hints_shown(tile_keys(TileKind::Lobby), true, false),
+                &hints_shown(TileKind::Lobby.hints(), true, false),
                 false,
                 false,
                 &Chrome::Rules { arrange: false },

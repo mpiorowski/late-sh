@@ -19,12 +19,12 @@ the current room), so a page can hold several rooms side by side, up to
 frame, and a page of a hundred rooms would swallow every unread count.
 Tile kinds are a closed enum: bonsai (always the care modal's true
 81x26 canvas, never the preview; a smaller tile cuts it, top rows first
-and the sides evenly so the trunk stays centered, `draw_bonsai_tile`,
-`ui_test.rs`; no status row, every row is tree, since day, vigor, and
+and the sides evenly so the trunk stays centered, `../bonsai/render.rs`
+`draw_tile`, `render_test.rs`; no status row, every row is tree, since day, vigor, and
 stress live in the `w` care modal), aquarium (the real reef
 simulation, in a tile wider than the rail and
-taller than the small tank (`ui::reef_form`), else a note pointing at the
-tank tile), tank (the same
+taller than the small tank (`../hub/aquarium/ui.rs` `reef_form`), else a
+note pointing at the tank tile), tank (the same
 aquarium the sidebar's way: the fish in a six-row band across the tile,
 centered in a taller one, `hub/aquarium/ui::draw_mini_tank`; the two are
 the one tank two ways, and both draw the care bar on the water's surface,
@@ -51,9 +51,11 @@ hosts), activity
 and a friend's line in the friend color: the same
 `ChatState::activity_ticker` queue the one-row ticker packs, capped at
 40), friends (connected friends, here before away, then newest login:
-name, the away glyph, audio source, time on), pulse (the people online now over the
+name, the away glyph, audio source, time on; both lists are chat's data,
+drawn in `../chat/ui.rs`), pulse (the people online now over the
 last day of them as a sparkline, the peak named, a time axis under it; the
-samples are presence's, `../presence/svc.rs`; a one-row tile is the sparkline alone), live (the Live panel's rows, `../live/PANEL.md`:
+samples are presence's, `../presence/svc.rs`, and so is the drawing,
+`../presence/ui.rs`; a one-row tile is the sparkline alone), live (the Live panel's rows, `../live/PANEL.md`:
 the same four rows the sidebar's panel draws, each with its `s1`-`s4`
 key, wider so less is cut; `nobody playing` while nothing is on), presence
 (the sidebar's pinned rows, `sidebar::draw_core_block`: the online count
@@ -165,12 +167,13 @@ title rule, and `t` picks one of three for it (`TileTitle`, `Chrome::wears`):
 named, the rule alone with no text, or no row at all. In arrange mode every
 tile is named whatever it says, so the focus has a ring to land on.
 Outside arrange mode the rule is the tile's name and nothing else. In
-arrange mode its key hint comes up on the right (`tile_keys`: the key that
-matters most on the tile, `w tend`, `m mute`, `ctrl+/ room`, `^G open`),
-which `hints_shown` picks by `HintWhen`: a global key on every tile, and a
-key the tile takes itself (`[ ] Enter pick` on an ascii tile, `a feed` on
-the reef or tank, `[ ] cycle` on a chat, and `j k Enter act` for the
-attention guest) only on the focused one. The rail names none: it takes
+arrange mode its key hint comes up on the right (`TileKind::hints`, one
+table with the handler, `TileHint`): a house key the tile only names
+(`HouseKey`: `w tend`, `m mute`, `ctrl+/ room`, `^G open`, `s1-4 open`,
+`click pet`) on every tile, and a key the tile takes itself (`TileKey`:
+`[ ] Enter pick` on an ascii tile, `a feed` on the reef or tank, `[ ]
+cycle` on a chat, and `j k Enter act` for the attention guest,
+`Guest::hints`) only on the focused one. The rail names none: it takes
 clicks on its rows. A layout with
 a border (the stock `zen`, or `b` in
 arrange mode) is boxed in its look with its gap (`ZenState::chrome`,
@@ -225,7 +228,7 @@ tiles for the renderer, the clicks and the reef's bounds alike
 (`App::home_board_day`). On any other host the strip shows whatever room is
 selected (`App::home_strip_hosted`, which also gates the strip's animation
 edge and `o`). The forms by size: a tank tile draws the reef (and binds the
-simulation, `App::reef_tile_inner`) only in `ui::reef_form` (wider than
+simulation, `App::reef_tile_inner`) only in `hub/aquarium/ui::reef_form` (wider than
 30, taller than the mini tank), else the sidebar's mini tank; a bonsai
 tile narrower than half the canvas draws the sidebar's preview; a music
 tile tall enough draws the sidebar's stage, else the tile's own rows.
@@ -239,20 +242,32 @@ arranges it so.
 ```text
 late-ssh/src/app/zen/
 |-- mod.rs        # module declarations only
-|-- state.rs      # TileKind, Node (split tree), Look, RiceLayout (serde), ZenState + edits
+|-- state.rs      # TileKind and its key table (TileHint: TileKey, HouseKey), Guest, Node (split tree), Look, RiceLayout (serde), ZenState + edits
 |-- layout.rs     # pure rect math: Gaps, Chrome (boxes, Home's rules), rice_fits (the 40x12 floor under which the page is its too-small notice alone), rice_areas (tiles + the arrange footer row while the mode is on), tile_rects, row_gutters, tile_inner, neighbour_side, pet_neighbours
 |-- presets.rs    # Home's named layouts: Layouts (serde, the nine slots and the current), LayoutList (the L list and its typed name), LayoutCommand (/layout)
 |-- rows.rs       # pure row builder: the unread DMs and mentions the attention guest lists
-|-- ui.rs         # ZenView, draw_rice, the tile widgets, the pickers and the layouts list
-|-- input.rs      # handle_home_event (arrange mode's layout keys and the tiles' keys), room walk, focus, the layouts (load, save, the list, /layout, /zen)
+|-- ui.rs         # ZenView (one view per domain), draw_rice (the chrome, and the one match from a kind to its domain's drawer), the guests, the pickers, the layouts list, the clock and blank tiles
+|-- input.rs      # handle_home_event (arrange mode's layout keys, the tiles' keys: act, one arm per TileKey), room walk, focus, the layouts (load, save, the list, /layout, /zen)
 `-- bigclock.rs   # block digit font for the clock tile
 ```
 
 Glue: `render.rs` builds `ZenView` with a `HomeView` (the chat and card
-views the page's chat and the rail draw from), one chat view per chat
-tile over `App::home_chat_rows_caches`, the arrange footer, and the
-guests' inputs (`StripGuest`, `attention`, the rows `App::attention_items`
-gathers). `input.rs`: `handle_home_event` ahead of Home's own keys,
+views the page's chat and the rail draw from), one view per domain for
+the rest (`hub/aquarium/ui::TankView`, `presence/ui::PresenceView`,
+`sidebar::MusicStageProps`, `pet/ui::PetView`, `live/panel::LivePanelProps`),
+one chat view per chat tile over `App::home_chat_rows_caches`, the
+arrange footer, and the guests' inputs (`StripGuest`, `attention`, the
+rows `App::attention_items` gathers). Each tile's drawing lives in its
+domain (`bonsai/render::draw_tile`, `hub/aquarium/ui::draw_reef_tile` /
+`draw_tank_tile`, `pet/ui::draw_tile`, `sidebar::draw_music_tile`,
+`audio/viz::draw_visualizer_tile`, `lobby/daily/panel::draw_daily_compact`,
+`presence/ui::draw_pulse_tile`, `chat/ui::draw_activity_tile` /
+`draw_friends_tile`, `live/panel::draw_live_inline`, `sidebar::draw_core_block`);
+`ui.rs` only dispatches on the kind. Adding a kind: the variant, its
+row in `TileKind::ALL` (the one list the compiler does not check), and
+the arms the build then asks for (`label`, `one_per_page`, `takes_focus`,
+`hints`, the stock `home()`, the `draw_rice` match), a `draw_tile` on
+the domain's surface, and the kind table in `devdocs/HOME-LAYOUTS.md`. `input.rs`: `handle_home_event` ahead of Home's own keys,
 `Ctrl+E` (`layout_chord_globally`, `go_home_for_layouts`) among the
 reserved chords, the Esc arm, `focus_home_tile_at`, the
 `StatusClick::ZenLayout` click and the guide's `HelpTopic::Layouts`.
@@ -270,10 +285,15 @@ and the debounced flush. `late-core`: `extract_key_home_layouts` /
 ## 3. Keys
 
 Where they are shown: in arrange mode only, each tile names its own keys on
-the right of its title (`tile_keys`, drawn with `hint_line` so the key is
-amber and the word dim), the ones the tile takes itself (an ascii tile's
-pieces, the tank's feed, a chat's `[` `]`, the attention guest's rows) only
-with the focus on the tile. In arrange mode `?` opens `HelpTopic::Layouts`,
+the right of its title (`TileKind::hints` and `Guest::hints`, drawn with
+`hint_line` so the key is amber and the word dim), the ones the tile takes
+itself (`TileKey`: an ascii tile's pieces, the tank's feed, a chat's `[`
+`]`, the attention guest's rows) only with the focus on the tile. The
+house keys a title names (`HouseKey`) are answered in `app/input.rs`
+after Home, so arrange mode lets their letters (`w`, `m`, `s`) through
+where it swallows every other stray letter (`house_letter`,
+`input_flow_test.rs`); the chords (`Ctrl+/`, `Ctrl+G`) are reserved
+ahead of every page. In arrange mode `?` opens `HelpTopic::Layouts`,
 which lists every key, and the bottom row is a footer naming the mode's keys
 (`HOME_ARRANGE_KEYS`, trimmed from the right on a narrow page). A few panels
 still name keys inside the tile in normal mode: the music dock's `v+r tune`
@@ -337,11 +357,13 @@ included. In it:
   deletes the row, never the last, the page showing its neighbor when it
   was the current one, `R` puts the row back to its stock; a refused name
   says why in a banner and keeps the field up).
-- The focused tile's own keys (`handle_tile_keys`): `[` `]` on a chat
+- The focused tile's own keys (`handle_tile_keys`: the keys of the
+  guests it hosts, then its own, from the same table as the title's
+  hints, each a `TileKey` and an arm of `act`): `[` `]` on a chat
   tile rebind it to the previous or next room in the rail's order, top
   to bottom, wrapping (real rooms only, a collapsed section's skipped, as
   the rail skips them; a layout edit, saved), and on an ascii tile step
-  it through the pieces (`input::cycle_tile`, saved with the layout);
+  it through the pieces (`TileKey::PickPiece`, saved with the layout);
   Enter on an ascii tile opens the piece picker (`../ascii/picker`,
   `App::piece_picker`, routed ahead of the page in `app/input.rs` and
   drawn over it in `render.rs`). Attention up on the focused tile takes
@@ -384,14 +406,12 @@ update.
   layout change like any other.
   It steps on the quarter edge while Home draws a reef tile
   (`aquarium_visible`, `App::reef_tile_inner` in `tick.rs`).
-- The care bar (`care_bar_spans`, `draw_care_bar`, `ui_test.rs`) is the
-  tank's only care readout on the page: `CareBar` comes from
-  `AquariumCare::bar` in `hub/aquarium/state.rs`, the aquarium and tank
-  tiles only paint it, on the top row of the water, right end. A title
-  row holds the title on the left and the tile's keys on the right,
-  nothing else.
-  `draw_tile_chrome` takes the optional span tail for exactly this; no
-  other tile has one.
+- The care bar is the tank's only care readout on the page: `CareBar`
+  comes from `AquariumCare::bar` in `hub/aquarium/state.rs`, and the
+  aquarium and tank tiles paint it (`hub/aquarium/ui.rs`,
+  `care_bar_spans`, `ui_test.rs`) on the top row of the water, right
+  end. A title row holds the title on the left and the tile's keys on
+  the right, nothing else.
 - Arrange mode passes `v` on and defers every key while
   `App::music_prefix_armed` is set, so the `v` chords (`v x` audio source, `v s` skip vote) stay global
   although the mode swallows stray letters and `X` closes a tile. Adding
@@ -432,7 +452,7 @@ update.
   `PresenceSession::history`, the day of headcount buckets the tick copies
   from the presence service's watch (`../presence/svc.rs`), so it adds no
   query and no lock. The column and glyph maths is `presence/pulse.rs`;
-  `draw_pulse_tile` here lays out the header, the bars and the axis. The
+  `presence/ui::draw_pulse_tile` lays out the header, the bars and the axis. The
   last column is live (the current count), so the chart never lags the
   header, and a bucket with no sample is a gap, never a zero.
 - The list tiles (lobby, activity, friends, pulse) draw one column in from
@@ -456,8 +476,8 @@ update.
 - Tests cover the split tree, the fixed splits and the guests' moves, the
   stock Home (`state_test.rs`), neighbour detection, the gutters and the
   rules chrome's insets (`layout_test.rs`), the named layouts and their
-  seeds (`presets_test.rs`), the care bar, the music tile's rows, and the
-  bonsai canvas cut (`ui_test.rs`), the resize floor (`state_test.rs`),
+  seeds (`presets_test.rs`), the title modes, the hints and the chrome
+  (`ui_test.rs`), the resize floor (`state_test.rs`),
   the unread rows (`rows_test.rs`), and the drawn-kinds gate
   (`state_test.rs`). `input_flow_test.rs` drives `Ctrl+E` and the keys it
   owns, `Ctrl+E` and a digit, `/zen`, Tab walking the tiles, the tile
@@ -466,5 +486,9 @@ update.
   `[` `]` in rail order, a second chat tile keeping its room with the
   rail following the active one, a draft staying in its room, the pet
   click leaving Home's focus alone, and `?` opening the Layouts topic.
-  The Live tile's rows are the panel's (`live/panel_test.rs`); the rest
-  of the tile drawing is untested.
+  The Live tile's rows are the panel's (`live/panel_test.rs`), the care
+  bar and the tank tiles the aquarium's (`hub/aquarium/ui_test.rs`), the
+  bonsai cut the bonsai's (`bonsai/render_test.rs`), the music tile's
+  rows the sidebar's (`common/sidebar_test.rs`), the pulse rows
+  presence's (`presence/ui_test.rs`), the note's wrap
+  `common/primitives_test.rs`; the rest of the tile drawing is untested.

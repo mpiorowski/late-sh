@@ -1,17 +1,18 @@
 //! Keys for Home's tiles: arrange mode's layout keys, the keys of the
-//! focused tile while arranging (the attention guest, an ascii tile's
-//! pieces, the tank's feed), and Home's
+//! focused tile while arranging (`TileKey`: the attention guest's rows,
+//! an ascii tile's pieces, a chat's rooms, the tank's feed), and Home's
 //! named layouts (the digit, the `L` list, `/layout`, `/zen`). Outside
 //! arrange mode Home's own keys serve the page's chat, so nothing here
 //! runs. In arrange mode a key not owned here is swallowed, so a stray
-//! letter never reaches the chat; the `v` music chords still pass.
+//! letter never reaches the chat; the letters the titles name for the
+//! house (`HouseKey`) and the `v` music chords still pass.
 
 use std::time::Instant;
 
 use uuid::Uuid;
 
 use super::presets::{LayoutCommand, LayoutList, Layouts, LayoutsError, NameEdit, NamePurpose};
-use super::state::{Dir, Guest, GuestPick, KindPick, MAX_TILES, TileKind};
+use super::state::{Dir, GuestPick, KindPick, MAX_TILES, TakenBy, TileHint, TileKey, TileKind};
 use crate::app::attention::state::Item as AttentionItem;
 use crate::app::{
     chat::state::RoomSlot, common::primitives::Banner, input::ParsedInput, state::App,
@@ -25,6 +26,12 @@ pub fn handle_home_event(app: &mut App, event: &ParsedInput) -> bool {
     // A pressed `v` owns the next key everywhere; the page must not eat the
     // suffix (`v x` swaps the audio source, `X` here closes a tile).
     if app.music_prefix_armed {
+        return false;
+    }
+    // The same for `s`, the Live panel's prefix (`HouseKey::OpenLive`):
+    // `app/input.rs` spends it on the digit after it, which the layout
+    // digits here must not take.
+    if app.live_prefix_armed {
         return false;
     }
     // The pickers own every key while one is up (Esc closes it in
@@ -48,10 +55,6 @@ pub fn handle_home_event(app: &mut App, event: &ParsedInput) -> bool {
         // (`[` `]`, Ctrl+/) still bind it, the rest of the chat waits.
         if let Some(byte) = event_byte(event) {
             match byte {
-                b'[' | b']' => {
-                    cycle_tile(app, app.home.chat_tile_focused(), byte == b']');
-                    return true;
-                }
                 // `Ctrl+E` then a digit: that layout, and the mode is done.
                 b'1'..=b'9' => {
                     let index = usize::from(byte - b'1');
@@ -85,8 +88,13 @@ pub fn handle_home_event(app: &mut App, event: &ParsedInput) -> bool {
             return true;
         }
         // Every other key is swallowed, so a stray letter never reaches
-        // the chat while the page is being arranged.
-        return event_byte(event).is_some();
+        // the chat while the page is being arranged, but for the letters
+        // the titles name: those are the house's, answered in
+        // `app/input.rs` after Home.
+        return match event_byte(event) {
+            Some(byte) => !house_letter(byte),
+            None => false,
+        };
     }
     // Outside arrange mode the active chat tile is Home's chat, and the
     // rail its room, so Home's own keys serve it.
@@ -310,42 +318,73 @@ fn confirm_name_edit(app: &mut App) {
     }
 }
 
+/// Whether `byte` is a letter some tile names for the house (`w`, `m`,
+/// `s`, in either case): arrange mode lets it through to `app/input.rs`
+/// instead of swallowing it, so the key the title names works.
+fn house_letter(byte: u8) -> bool {
+    TileKind::ALL
+        .iter()
+        .flat_map(|kind| kind.hints())
+        .any(|hint| match hint {
+            TileHint::Names(key) => match key.taken_by() {
+                TakenBy::Letter(letter) => byte.eq_ignore_ascii_case(&letter),
+                TakenBy::Chord | TakenBy::Click => false,
+            },
+            TileHint::Takes(_) => false,
+        })
+}
+
 /// The focused tile's own keys in arrange mode, where every tile takes the
-/// focus: the attention guest up on it takes `j` `k` and Enter ahead of
-/// its host, Enter on
-/// an ascii tile picks its piece from the list (`[` `]` step it, with the
-/// layout keys), and `a` on the reef or the tank feeds it. None of these
-/// collide with the layout keys, which are uppercase or punctuation,
-/// `b` `g` `t` aside.
+/// focus: the keys its guests take while hosted (attention's rows ahead
+/// of its host), then the tile's own, the one table the title's hints
+/// come from (`Guest::hints`, `TileKind::hints`). None of them collide
+/// with the layout keys, which are uppercase or punctuation, `b` `g` `t`
+/// aside.
 fn handle_tile_keys(app: &mut App, byte: u8) -> bool {
-    if app.home.focused_guests().contains(&Guest::Attention) && handle_attention(app, byte) {
-        return true;
+    let Some(kind) = app.home.focused_kind() else {
+        return false;
+    };
+    let hosted = app.home.focused_guests();
+    let hints = hosted
+        .iter()
+        .flat_map(|guest| guest.hints())
+        .chain(kind.hints());
+    for hint in hints {
+        let key = match hint {
+            TileHint::Takes(key) if key.takes(byte) => *key,
+            TileHint::Takes(_) | TileHint::Names(_) => continue,
+        };
+        if act(app, key, byte) {
+            return true;
+        }
     }
-    match app.home.focused_kind() {
-        Some(TileKind::Ascii) if matches!(byte, b'\r' | b'\n') => {
-            crate::app::ascii::picker::input::open(app);
+    false
+}
+
+/// What a tile key does with a byte of its own. Attention with no rows is
+/// down, so its keys fall through to the host's.
+fn act(app: &mut App, key: TileKey, byte: u8) -> bool {
+    match key {
+        TileKey::Attend => handle_attention(app, byte),
+        TileKey::PickPiece => {
+            if matches!(byte, b'\r' | b'\n') {
+                crate::app::ascii::picker::input::open(app);
+            } else if app.home.cycle_focused_piece(
+                byte == b']',
+                Instant::now(),
+                &mut rand::thread_rng(),
+            ) {
+                app.mark_home_layout_dirty();
+            }
             true
         }
-        Some(TileKind::Aquarium | TileKind::Tank) if byte == b'a' => {
+        TileKey::Feed => {
             crate::app::input::feed_aquarium_globally(app);
             true
         }
-        Some(_) | None => false,
-    }
-}
-
-/// `[` `]` on the focused tile: a chat walks its joined rooms, an ascii tile
-/// its pieces. Any other tile takes the key and does nothing.
-fn cycle_tile(app: &mut App, chat_focused: bool, forward: bool) {
-    match chat_focused {
-        true => cycle_room(app, if forward { 1 } else { -1 }),
-        false => {
-            if app
-                .home
-                .cycle_focused_piece(forward, Instant::now(), &mut rand::thread_rng())
-            {
-                app.mark_home_layout_dirty();
-            }
+        TileKey::CycleRoom => {
+            cycle_room(app, if byte == b']' { 1 } else { -1 });
+            true
         }
     }
 }

@@ -1,4 +1,5 @@
 use super::*;
+use ratatui::{Terminal, backend::TestBackend};
 
 #[test]
 fn sidebar_clock_text_falls_back_to_utc_when_timezone_missing() {
@@ -346,4 +347,52 @@ fn pet_watches_the_bonsai_and_tank_panels_it_touches() {
             bonsai: None,
         }
     );
+}
+
+fn music_short_rows(width: u16, height: u16) -> Vec<String> {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+    terminal
+        .draw(|frame| {
+            draw_music_short(frame, Rect::new(0, 0, width, height), "Ambition", "youtube")
+        })
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    (0..height)
+        .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect()
+}
+
+#[test]
+fn a_short_music_tile_centres_the_track_over_the_station_and_draws_no_band() {
+    let rows = music_short_rows(24, 9);
+    assert!(rows[3].contains("♪ Ambition"), "{rows:#?}");
+    assert!(rows[4].contains("youtube"), "{rows:#?}");
+    // Nothing else is drawn: the equalizer is the visualizer tile's.
+    for (y, row) in rows.iter().enumerate() {
+        if y != 3 && y != 4 {
+            assert_eq!(row.trim(), "", "{rows:#?}");
+        }
+    }
+
+    // Two rows is text only; one row keeps the track.
+    assert_eq!(music_short_rows(24, 2)[0].trim(), "♪ Ambition");
+    assert_eq!(music_short_rows(24, 2)[1].trim(), "youtube");
+    assert_eq!(music_short_rows(24, 1)[0].trim(), "♪ Ambition");
+}
+
+#[test]
+fn the_player_names_the_station_for_the_streams_that_have_one() {
+    let datawave = RadioStation::from_key("datawave").unwrap();
+    let classical = RadioStation::from_key("classical").unwrap();
+    assert_eq!(
+        station_text(AudioSource::Radio, datawave),
+        "radio · datawave"
+    );
+    // House mounts are stations like any other.
+    assert_eq!(
+        station_text(AudioSource::Radio, classical),
+        "radio · classical"
+    );
+    // YouTube plays the queue, not a station: one word.
+    assert_eq!(station_text(AudioSource::Youtube, datawave), "youtube");
 }

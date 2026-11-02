@@ -1,4 +1,5 @@
 use super::*;
+use ratatui::{Terminal, backend::TestBackend};
 
 fn tank_with(creatures: &[(&str, usize)]) -> AquariumState {
     let mut app = AquariumState::default_for_area(Rect::new(0, 0, 60, 20)).expect("default reef");
@@ -73,4 +74,58 @@ fn mini_tank_surface_keeps_rolling_past_the_u16_wall_tick() {
     // a session, where a u16 sum with the column would overflow.
     let app = tank_with(&[]);
     assert_eq!(mini_rows(&app, false, 131_070)[0], "^~~~^--^^~~~^--^^~~~^");
+}
+
+fn care_glyphs(bar: CareBar) -> String {
+    care_bar_spans(bar)
+        .iter()
+        .map(|span| span.content.to_string())
+        .collect()
+}
+
+#[test]
+fn the_care_bar_is_always_fourteen_dots() {
+    // Five fed days: five full, nine empty.
+    assert_eq!(care_glyphs(CareBar::Streak(5)), "●●●●●○○○○○○○○○");
+    // Two unfed days: two full (red), the rest empty.
+    assert_eq!(care_glyphs(CareBar::Dry(2)), "●●○○○○○○○○○○○○");
+    // A minded tank shows nothing filled.
+    assert_eq!(care_glyphs(CareBar::Minded), "○".repeat(CARE_DAYS as usize));
+    // Nothing past fourteen ever widens the title.
+    assert_eq!(
+        care_glyphs(CareBar::Dry(40)),
+        "●".repeat(CARE_DAYS as usize)
+    );
+}
+
+/// Everyone has a tank, so neither of its tiles points anyone at the shop,
+/// even before a fish is in the water: both draw the water and its care bar.
+#[test]
+fn the_tank_tiles_never_send_anyone_to_the_shop() {
+    let area = Rect::new(0, 0, 60, 16);
+    let state = AquariumState::default_for_area(area).expect("aquarium");
+    let care = AquariumCare::new(None, Vec::new());
+    let view = TankView {
+        state: &state,
+        care: &care,
+    };
+    for reef in [true, false] {
+        let mut terminal =
+            Terminal::new(TestBackend::new(area.width, area.height)).expect("terminal");
+        terminal
+            .draw(|frame| match reef {
+                true => draw_reef_tile(frame, area, &view),
+                false => draw_tank_tile(frame, area, &view, 0),
+            })
+            .expect("draw");
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(!text.contains("/shop"), "reef {reef}: {text}");
+        assert!(!text.contains("no tank"), "reef {reef}: {text}");
+    }
 }

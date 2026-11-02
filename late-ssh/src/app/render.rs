@@ -455,7 +455,6 @@ struct DrawContext<'a> {
     /// The now strip for the Home tile hosting it as a guest (`None` on
     /// the page's chat: the card carries it itself).
     guest_live_strip: Option<crate::app::live::state::LiveStripView<'a>>,
-    home_track: String,
     home_date: String,
     home_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
     home_active_friends: &'a [crate::app::chat::state::ActiveFriend],
@@ -1509,12 +1508,6 @@ impl App {
                 }
             })
             .collect();
-        let home_track = crate::app::common::sidebar::current_track_text(
-            self.paired_source,
-            &self.audio.queue_snapshot(),
-            self.selected_radio_station,
-            radio_now_playing.as_deref(),
-        );
         let home_date = status_date_full.clone();
 
         let home_pet_strip = self
@@ -1936,7 +1929,6 @@ impl App {
                         layout_list: self.layout_list.as_ref(),
                         home_chat_tiles,
                         guest_live_strip,
-                        home_track,
                         home_date,
                         home_pet_strip,
                         home_active_friends: &self.active_friends,
@@ -2228,7 +2220,7 @@ impl App {
                     zen: ctx.home,
                     home_layouts: ctx.home_layouts,
                     layout_list: ctx.layout_list,
-                    music_stage: crate::app::common::sidebar::MusicStageProps {
+                    music: crate::app::common::sidebar::MusicStageProps {
                         paired_client: ctx.paired_client,
                         queue: &ctx.booth_snapshot,
                         source: ctx.paired_source,
@@ -2247,25 +2239,24 @@ impl App {
                     }),
                     attention: &ctx.attention,
                     bonsai: ctx.bonsai,
-                    aquarium: ctx.aquarium_state,
-                    aquarium_care: ctx.aquarium_care,
-                    pet_strip: ctx.home_pet_strip.take(),
+                    tank: crate::app::hub::aquarium::ui::TankView {
+                        state: ctx.aquarium_state,
+                        care: ctx.aquarium_care,
+                    },
+                    pet: ctx.home_pet_strip.take(),
                     chats: std::mem::take(&mut ctx.home_chat_tiles),
-                    track: ctx.home_track.clone(),
-                    station: crate::app::zen::ui::station_text(
-                        ctx.paired_source,
-                        ctx.selected_radio_station,
-                    ),
                     eq_state: ctx.eq_state,
-                    clock: ctx.sidebar_clock,
+                    presence: crate::app::presence::ui::PresenceView {
+                        clock: ctx.sidebar_clock,
+                        online: ctx.online_count,
+                        friends: ctx.home_active_friends,
+                        history: &ctx.pulse_history,
+                    },
                     date: ctx.home_date.clone(),
-                    online_count: ctx.online_count,
                     daily: ctx.daily,
                     lobby_glow: ctx.lobby.glow(),
                     activity: ctx.chat_state.activity_ticker(),
-                    active_friends: ctx.home_active_friends,
                     board_day: ctx.home_board_day.as_deref(),
-                    pulse: &ctx.pulse_history,
                     live_panel: crate::app::live::panel::LivePanelProps {
                         rows: &ctx.live_panel_rows,
                         hit: ctx.live_panel_hit,

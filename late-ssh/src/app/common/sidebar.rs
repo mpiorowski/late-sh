@@ -1247,6 +1247,62 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
     out
 }
 
+/// The narrowest tile the music dock reads in: the station rows with
+/// their keys.
+const MUSIC_DOCK_MIN_COLS: u16 = 18;
+
+/// Home's music tile: tall enough for the dock, it is the sidebar's music
+/// panel without its band (volume, stations, the keys); shorter, the
+/// track over the station. The equalizer is the visualizer tile's.
+pub(crate) fn draw_music_tile(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>) {
+    if area.height >= MUSIC_DOCK_HEIGHT && area.width >= MUSIC_DOCK_MIN_COLS {
+        draw_music_dock(frame, area, props);
+        return;
+    }
+    let track = current_track_text(
+        props.source,
+        props.queue,
+        props.selected_station,
+        props.radio_now_playing,
+    );
+    let station = station_text(props.source, props.selected_station);
+    draw_music_short(frame, area, &track, &station);
+}
+
+/// A music tile too short for the dock: the track over the station,
+/// centred in the tile, the station first to go when the tile is a single
+/// row.
+fn draw_music_short(frame: &mut Frame, area: Rect, track: &str, station: &str) {
+    if area.height == 0 {
+        return;
+    }
+    let text_rows: u16 = area.height.min(2);
+    let top = area.y + (area.height - text_rows) / 2;
+    let track = Line::from(vec![
+        Span::styled("♪ ", Style::default().fg(theme::AMBER())),
+        Span::styled(track.to_string(), Style::default().fg(theme::TEXT_BRIGHT())),
+    ])
+    .centered();
+    let station = Line::from(Span::styled(
+        station.to_string(),
+        Style::default().fg(theme::TEXT_DIM()),
+    ))
+    .centered();
+    frame.render_widget(
+        Paragraph::new(vec![track, station]),
+        Rect::new(area.x, top, area.width, text_rows),
+    );
+}
+
+/// The player's second row: the source, then the station or stream it is
+/// tuned to. YouTube has no station, so it stays one word.
+fn station_text(source: AudioSource, station: RadioStation) -> String {
+    match source {
+        AudioSource::Radio => format!("radio · {}", station.label()),
+        AudioSource::Youtube => "youtube".to_string(),
+    }
+}
+
 #[cfg(test)]
 #[path = "sidebar_test.rs"]
 mod sidebar_test;

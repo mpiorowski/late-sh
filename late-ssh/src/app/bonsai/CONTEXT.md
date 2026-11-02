@@ -29,7 +29,7 @@ late-ssh/src/app/bonsai/
 |-- mod.rs              # Module declarations only
 |-- state.rs            # Pure state machine: branch graph, growth simulation, care actions, badge scoring
 |-- session.rs          # A session's render mirror, its cursor, and the requests it sends the service
-|-- render.rs           # The graph renderer (modal canvas, profile section), the fitted preview (sidebar), the sway
+|-- render.rs           # The graph renderer (modal canvas, profile section), the fitted preview (sidebar), the sway, Home's bonsai tile (draw_tile)
 |-- modal_ui.rs         # Care workbench modal
 |-- modal_input.rs      # Modal key handling
 |-- svc.rs              # The one writer: locked actions, the daily chip payout, the change listener, activity events

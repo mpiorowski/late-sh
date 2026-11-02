@@ -10,7 +10,7 @@ use ratatui::{
 };
 
 use super::state::{Look, PET_HEIGHT, PET_WIDTH, Perch, PetFrameInputs, PetState, PetTravel};
-use crate::app::common::theme;
+use crate::app::common::{primitives::draw_centered_note, theme};
 
 /// The pet's box at its smallest: the three art rows.
 pub const PET_BOX_MIN_ROWS: u16 = PET_HEIGHT as u16;
@@ -500,6 +500,34 @@ fn mood_color(mood: PetMood) -> Color {
         PetMood::Sulking => theme::TEXT_DIM(),
         PetMood::Asleep => theme::TEXT_FAINT(),
     }
+}
+
+/// Home's pet tile: the box at tile size, a name and mood row on top when
+/// there is room, and the whole rest of the tile to roam. `neighbours`
+/// names the side a tank and a bonsai are on; a calm pet goes and watches
+/// them. With no pet owned the tile points at the shop.
+pub fn draw_tile(frame: &mut Frame, area: Rect, pet: Option<&PetView<'_>>, neighbours: Neighbours) {
+    let Some(view) = pet else {
+        draw_centered_note(
+            frame,
+            area,
+            &["no pet yet", "the Pet Companion is in /shop"],
+        );
+        return;
+    };
+    if area.height < PET_BOX_MIN_ROWS {
+        return;
+    }
+    let box_area = if area.height >= PET_BOX_MIN_ROWS + 2 {
+        frame.render_widget(
+            Paragraph::new(status_line(view.state, neighbours).centered()),
+            Rect::new(area.x, area.y, area.width, 1),
+        );
+        Rect::new(area.x, area.y + 1, area.width, area.height - 1)
+    } else {
+        area
+    };
+    draw_pet_box(frame, box_area, view, neighbours);
 }
 
 #[cfg(test)]

@@ -393,3 +393,38 @@ pub(crate) fn thousands(value: i64) -> String {
     }
     out
 }
+
+/// A faint note centred in `area`, one row per entry: what an empty or
+/// unowned tile says. A row wider than the area wraps at its words, so a
+/// narrow tile never cuts the note off. The wrap keeps the space it broke
+/// at; a trailing one would pull the centred row off centre.
+pub(crate) fn draw_centered_note(frame: &mut Frame, area: Rect, rows: &[&str]) {
+    if area.height == 0 || area.width == 0 {
+        return;
+    }
+    let faint = Style::default().fg(theme::TEXT_FAINT());
+    let mut lines: Vec<Line<'static>> = rows
+        .iter()
+        .flat_map(|row| super::markdown::wrap_plain_line(row, usize::from(area.width)))
+        .map(|row| Line::from(Span::styled(row.trim_end().to_string(), faint)))
+        .collect();
+    let top_pad = (area.height as usize).saturating_sub(lines.len()) / 2;
+    let mut padded = Vec::with_capacity(top_pad + lines.len());
+    for _ in 0..top_pad {
+        padded.push(Line::from(""));
+    }
+    padded.append(&mut lines);
+    frame.render_widget(Paragraph::new(padded).alignment(Alignment::Center), area);
+}
+
+/// Lead each line with blanks so a `block_width`-wide block sits centered
+/// in a wider area. A block already wider than the area is left alone.
+pub(crate) fn center_lines(lines: &mut [Line<'static>], width: usize, block_width: usize) {
+    let left = width.saturating_sub(block_width) / 2;
+    if left == 0 {
+        return;
+    }
+    for line in lines.iter_mut() {
+        line.spans.insert(0, Span::raw(" ".repeat(left)));
+    }
+}

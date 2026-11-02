@@ -367,7 +367,7 @@ removes a required secret follows the deploy skew rule in `infra/RUNBOOK.md`.
   (one row per replica per bucket, pruned past two days) and reads the last
   day back, summed per bucket, onto a second watch the sessions copy on
   their tick (`PresenceSession::history`) for Home's pulse tile; the
-  sparkline maths is `presence/pulse.rs`. `late_ssh_pulse_samples_total{outcome}`.
+  sparkline maths is `presence/pulse.rs`, the tile `presence/ui.rs`. `late_ssh_pulse_samples_total{outcome}`.
 - **Username directory.** `State.username_directory` is the app-wide
   `Uuid -> username` map: loaded at startup, refreshed every 30 minutes, updated
   on login, profile save, mod rename and account delete. Plain name labels read

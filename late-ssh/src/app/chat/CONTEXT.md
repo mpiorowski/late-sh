@@ -20,7 +20,7 @@ late-ssh/src/app/chat/
 |-- svc.rs                       # ChatService: DB boundary, snapshots, events, room/message tasks
 |-- state.rs                     # ChatState: local UI state, receivers, composer, room/message selection
 |-- input.rs                     # Home chat input plus shared message actions used by Dashboard and embedded game chat
-|-- ui.rs                        # Home room rail/chat center, dashboard-lounge view, embedded room chat, composer, row cache
+|-- ui.rs                        # Home room rail/chat center, dashboard-lounge view, embedded room chat, composer, row cache, Home's activity and friends tiles
 |-- ui_text.rs                   # Message/news/reaction wrapping into ratatui Lines
 |-- list_ui.rs                   # Shared "mine only" filtered-list layout and status line for the synthetic entries
 |-- slur.rs                      # Pure drunk-text transform applied to outgoing public-room messages (never touches a spending phrase, `../ai/ROUND.md`, or a memory trigger, `../ai/MEMORY.md`)
@@ -61,7 +61,7 @@ Chat-owned moderation commands also use `room_ban.rs`,
 - `svc.rs` is the async boundary between TUI state, DB models, mention notifications, and broadcast/watch channels.
 - `state.rs` owns local chat data, room/message selection, composer state, reply/edit/reaction state, overlays, synthetic-entry substates, unread/read tracking, and cache inputs. It reads no palette: anything it builds for the screen carries ink, and `ui.rs` (or `common/overlay.rs`) picks the colour in the draw.
 - `input.rs` maps Home chat keys to state/service actions. `handle_message_action_in_room` is shared by Home chat and the embedded game-chat panes.
-- `ui.rs` renders Home room rail/chat center surfaces and owns `ChatRowsCache`.
+- `ui.rs` renders Home room rail/chat center surfaces and Home's activity and friends tiles (the lists `ChatState::activity_ticker` and `active_friends` feed), and owns `ChatRowsCache`.
 - `ui_text.rs` centralizes wrapping for normal messages, the small Markdown subset, reply quotes, report cards, and reaction footers.
 
 Keep `mod.rs` declaration-only; no `pub use` re-export layer.

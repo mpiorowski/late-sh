@@ -5550,6 +5550,28 @@ async fn arranging_home_keeps_the_chat_keys_off_a_tile_that_is_not_a_chat() {
     assert!(app.chat.composing, "i on the focused chat tile composes");
 }
 
+/// Arrange mode swallows stray letters, but the ones the titles name are
+/// the house's (`HouseKey`): `w`, which the bonsai's title names, opens
+/// the care modal from the mode, as the title says.
+#[tokio::test]
+async fn arranging_home_lets_the_keys_the_titles_name_through() {
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "zen-house-keys-viewer").await;
+    let mut app = make_app(test_db.db.clone(), viewer.id, "zen-house-keys-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "lounge").await;
+
+    app.handle_input(b"\x05");
+    assert!(app.home.arrange);
+    app.handle_input(b"x");
+    assert!(!app.show_bonsai_modal, "a stray letter opens nothing");
+    app.handle_input(b"w");
+    assert!(
+        app.show_bonsai_modal,
+        "w opens the care modal while arranging"
+    );
+}
+
 #[tokio::test]
 async fn home_s_then_a_digit_opens_the_live_tiles_row() {
     use crate::app::zen::state::TileKind;
