@@ -410,6 +410,9 @@ pub struct SessionConfig {
     /// on the Nightcap stools and on the night city street, across every
     /// replica.
     pub presence: crate::app::presence::svc::PresenceService,
+    /// The last day of headcount samples (`app/pulse`), copied into
+    /// `App::pulse_history` on the ~1s tick for Home's pulse tile.
+    pub pulse_rx: tokio::sync::watch::Receiver<crate::app::pulse::svc::History>,
     /// The stored single `zen` layout, `None` when the device never
     /// arranged it; only the seed for the stock `zen` slot of
     /// `home_layouts`.
@@ -645,6 +648,10 @@ pub struct App {
     pub(crate) runner_looks: crate::app::deadchannel::runner::svc::RunnerLooks,
     pub(crate) runner_looks_rx:
         tokio::sync::watch::Receiver<crate::app::deadchannel::runner::svc::RunnerLooks>,
+    /// The last day of headcount samples the pulse tile draws, the owned
+    /// copy of `pulse_rx` taken on the same edge.
+    pub(crate) pulse_history: crate::app::pulse::svc::History,
+    pub(crate) pulse_rx: tokio::sync::watch::Receiver<crate::app::pulse::svc::History>,
     /// Every away user (`common/away.rs`), resolved from the active-users
     /// roster on the ~1s presence edge; chat author labels, the DM list, and
     /// @-completion read this owned set, never the roster mutex.
@@ -656,8 +663,8 @@ pub struct App {
     pub(crate) online_count: usize,
     pub(crate) active_friends: Vec<crate::app::chat::state::ActiveFriend>,
     /// The unread mention count the mentions list was last requested at
-    /// while an Inbox tile is on Home (the list loads only on ask).
-    pub(super) home_inbox_listed_unread: Option<i64>,
+    /// while Home hosts the attention guest (the list loads only on ask).
+    pub(super) home_attention_listed_unread: Option<i64>,
     /// Last rendered sidebar clock text, compared on the ~1s tick so minute
     /// rollovers count as a render-visible change.
     pub(super) last_sidebar_clock: String,
@@ -1785,13 +1792,15 @@ impl App {
             name_flair: HashMap::new(),
             runner_looks: config.runner_looks_rx.borrow().clone(),
             runner_looks_rx: config.runner_looks_rx.clone(),
+            pulse_history: config.pulse_rx.borrow().clone(),
+            pulse_rx: config.pulse_rx.clone(),
             away_user_ids: HashSet::new(),
             online_count: active_users
                 .as_ref()
                 .map(|users| crate::state::online_human_count(&users.lock_recover()))
                 .unwrap_or(0),
             active_friends: Vec::new(),
-            home_inbox_listed_unread: None,
+            home_attention_listed_unread: None,
             last_sidebar_clock: String::new(),
             chat_ctx_epoch: 0,
             last_username_directory: None,
@@ -3753,11 +3762,11 @@ impl App {
 
     /// What waits on you, for the attention guest (`app/attention`): the
     /// daily matches on your move and the results you have not looked at,
-    /// the unread DMs and mentions the Inbox tile lists, and today's care
+    /// the unread DMs and mentions (`zen::rows::unread_rows`), and today's care
     /// still due. Read each frame and on each of the guest's keys.
     pub(crate) fn attention_items(&self) -> Vec<crate::app::attention::state::Item> {
         use crate::app::attention::state::{Inputs, Item, Match, items};
-        use crate::app::zen::rows::InboxRow;
+        use crate::app::zen::rows::UnreadRow;
         use crate::app::zen::ui::Chore;
         let other_player = |challenger_id: Uuid,
                             challenger: &Option<String>,
@@ -3797,7 +3806,7 @@ impl App {
             .collect();
         let mut dms = Vec::new();
         let mut mentions = Vec::new();
-        let rows = crate::app::zen::rows::inbox_rows(
+        let rows = crate::app::zen::rows::unread_rows(
             self.user_id,
             &self.chat.rooms,
             &self.chat.unread_counts,
@@ -3807,7 +3816,7 @@ impl App {
         );
         for row in rows {
             match row {
-                InboxRow::Dm {
+                UnreadRow::Dm {
                     room_id,
                     peer,
                     unread,
@@ -3816,7 +3825,7 @@ impl App {
                     peer,
                     unread,
                 }),
-                InboxRow::Mention {
+                UnreadRow::Mention {
                     room_id,
                     message_id,
                     actor,
@@ -3829,7 +3838,7 @@ impl App {
                     actor,
                     room,
                 }),
-                InboxRow::Mention { unread: false, .. } => {}
+                UnreadRow::Mention { unread: false, .. } => {}
             }
         }
         let care = self.care_today();

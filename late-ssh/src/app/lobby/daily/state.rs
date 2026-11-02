@@ -1096,6 +1096,18 @@ impl DailyState {
             .collect()
     }
 
+    /// Every active match on the board, anyone's, in snapshot order; the
+    /// Home lobby tile's feed sorts them itself.
+    pub fn all_matches(&self) -> &[DailyMatchItem] {
+        &self.snapshot.active_matches
+    }
+
+    /// Every finished match the snapshot still carries (a player has not
+    /// seen its result yet), newest finish first.
+    pub fn all_finished(&self) -> &[DailyFinishedItem] {
+        &self.snapshot.finished_matches
+    }
+
     /// Every open challenge, newest first (snapshot order).
     pub fn lobby(&self) -> Vec<&DailyChallengeItem> {
         self.snapshot.open_challenges.iter().collect()

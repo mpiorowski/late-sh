@@ -26,7 +26,7 @@ delta against the design):
   Home (a stored `zen` lands in the Clubhouse and switches no layout), and
   the backtick cycle's base is always Home.
 - Arrange mode also takes the tile keys the Zen screen had: `j` `k` and
-  Enter on attention, the Inbox and Headlines, `[` `]` and Enter on an
+  Enter on attention, `[` `]` and Enter on an
   ascii tile, `a` on the reef or tank. Outside it the furniture takes no
   keys.
 - Static kinds `rooms`, `presence` and `tank` exist (the tank is the
@@ -155,8 +155,7 @@ Always drawn. The closed `TileKind` becomes:
 | `visualizer` | The equalizer at the tile's full height | sidebar Music's band |
 | `clock` | Block digits, the date under seven rows or more | a tile |
 | `ascii` | An animated piece | a tile |
-| `inbox` | Unread DMs, then mentions | a tile |
-| `headlines` | News and feeds merged | a tile |
+| `pulse` | People online now over a day of them, a sparkline with the peak and a time axis | a tile |
 
 The sidebar's pinned rows (online count, clock, friends) are the top of
 the stock sidebar column and not a kind of their own: they draw at the
@@ -196,7 +195,8 @@ Only widgets that end are guests: `now` comes down on the queue's clock
 (five minutes at most), `attention` when its last row clears (a read, a
 move, a feed; the care rows return each UTC day). The live panel stays
 up as long as anything is on, an evening at a time, so it is a tile kind
-only. A tile hosts any of the guests (the stock reef hosts both, the
+only. A tile hosts any of the guests (the stock reef hosts now and the
+stock lobby attention; one tile may host both, the
 strip's rows on top of attention's when both are up; arrange mode names
 them in the rule, `reef +now +attention`), and a guest is on the page
 once, so the
@@ -210,12 +210,13 @@ behavior on the #lounge card, "wait while a message is selected" rule
 included. The board's all-day line is the card's own topic row, not a
 guest.
 
-The stock Home places both guests on the reef across the top of the
-chat, so the strip and the list land on the fish and the chat never loses
-a row.
+The stock Home puts the strip on the reef across the top of the chat, so
+it lands on the fish and the chat never loses a row, and attention on the
+lobby: what waits on you takes the tables' tile and the feed comes back
+when the list clears.
 
-Candidates for later: `headlines` while a story is under an hour old. The
-model does not change for it; unread mail is attention's already.
+Candidates for later: a fresh News story while it is under an hour old.
+The model does not change for it; unread mail is attention's already.
 
 ### Chat bindings
 

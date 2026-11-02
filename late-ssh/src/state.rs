@@ -209,6 +209,9 @@ pub struct State {
     /// Nightcap stools and on the night city street, this replica's
     /// sessions and every other replica's, over Postgres.
     pub presence: crate::app::presence::svc::PresenceService,
+    /// The pulse (`app/pulse`): this replica's headcount sampler and the
+    /// day of samples every session copies.
+    pub pulse: crate::app::pulse::svc::PulseService,
     /// The lounge spawns (`app/deadchannel/lounge`): the spawner and
     /// sweeper on this replica, the live spawn every session copies, and
     /// the hit path.

@@ -971,6 +971,12 @@ impl App {
             // Runner looks (the #deadchannel portraits) ride the same edge:
             // a pointer bump when the directory changed, and the chat rows
             // rebuild once for every portrait in view.
+            // A new headcount bucket lands once in five minutes; the pulse
+            // tile reads the owned copy.
+            if self.pulse_rx.has_changed().unwrap_or(false) {
+                self.pulse_history = self.pulse_rx.borrow_and_update().clone();
+                changed = true;
+            }
             if self.runner_looks_rx.has_changed().unwrap_or(false) {
                 self.runner_looks = self.runner_looks_rx.borrow_and_update().clone();
                 self.chat_ctx_epoch += 1;
@@ -1048,13 +1054,14 @@ impl App {
                     changed = true;
                 }
             }
-            // Mentions load only when asked for. An Inbox tile on the page
-            // asks whenever the unread count moves, so a new mention lands.
-            if self.on_home() && self.home.shows(crate::app::zen::state::TileKind::Inbox) {
+            // Mentions load only when asked for. A page hosting the
+            // attention guest asks whenever the unread count moves, so a
+            // new mention lands in its list.
+            if self.on_home() && self.home.hosts(crate::app::zen::state::Guest::Attention) {
                 let unread = self.chat.notifications.unread_count();
-                if self.home_inbox_listed_unread != Some(unread) {
+                if self.home_attention_listed_unread != Some(unread) {
                     self.chat.notifications.list();
-                    self.home_inbox_listed_unread = Some(unread);
+                    self.home_attention_listed_unread = Some(unread);
                 }
             }
             // The username directory swaps its Arc on every real change, so

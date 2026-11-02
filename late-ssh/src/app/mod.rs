@@ -40,6 +40,7 @@ pub mod pot;
 pub mod presence;
 pub mod profile;
 pub(crate) mod profile_modal;
+pub mod pulse;
 pub(crate) mod quit_confirm;
 pub mod referral;
 mod render;

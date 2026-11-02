@@ -39,50 +39,52 @@ fn panel_height_is_stable_across_states() {
     }
 }
 
+fn feed(n: usize, state: DailyFeedState) -> Vec<DailyFeedRow> {
+    (0..n)
+        .map(|i| DailyFeedRow {
+            game: "chess",
+            who: format!("p{i}·q{i}"),
+            state,
+            age: format!("{i}m"),
+        })
+        .collect()
+}
+
 #[test]
-fn compact_shape_is_the_live_rows_and_one_footer() {
+fn compact_shape_is_the_feed_rows_and_one_footer() {
     let quiet = props_with(Vec::new(), 2);
-    let texts: Vec<String> = daily_compact_lines(40, 6, &quiet)
+    let texts: Vec<String> = daily_compact_lines(40, 6, &[], &quiet)
         .iter()
         .map(line_text)
         .collect();
-    // The tile pads the edge, so the compact rows start flush.
-    assert_eq!(texts.len(), 2, "a quiet lobby is one note and the footer");
-    assert_eq!(texts[0].trim_end(), "no games running");
+    assert_eq!(texts.len(), 2, "a quiet board is one note and the footer");
+    assert_eq!(texts[0].trim_end(), "no tables yet");
     assert_eq!(texts[1].trim_end(), "2 open · 1/4");
 
-    let busy = props_with(
-        (0..6)
-            .map(|i| DailyPanelMatchRow {
-                opponent: format!("player{i}"),
-                status: DailyPanelRowStatus::Waiting,
-            })
-            .collect(),
-        0,
-    );
-    let texts: Vec<String> = daily_compact_lines(40, 4, &busy)
+    let busy = props_with(Vec::new(), 0);
+    let texts: Vec<String> = daily_compact_lines(40, 4, &feed(6, DailyFeedState::Playing), &busy)
         .iter()
         .map(line_text)
         .collect();
     assert_eq!(texts.len(), 4, "rows past the area drop, the footer stays");
-    assert!(texts[0].starts_with("player0"));
-    assert!(texts[2].starts_with("player2"));
+    assert_eq!(texts[0], format!("● chess p0·q0{}0m", " ".repeat(40 - 15)));
+    assert!(texts[2].starts_with("● chess p2·q2"));
     assert!(texts[3].starts_with("0 open"));
 
-    let one = props_with(
-        vec![DailyPanelMatchRow {
-            opponent: "mira".to_string(),
-            status: DailyPanelRowStatus::YourTurn,
-        }],
-        0,
-    );
-    let texts: Vec<String> = daily_compact_lines(40, 6, &one)
-        .iter()
-        .map(line_text)
-        .collect();
-    assert_eq!(texts.len(), 2, "no empty slots pad a single game");
-    assert!(texts[0].starts_with("mira"), "no marker column: {texts:?}");
-    assert!(texts[0].trim_end().ends_with("your turn"));
+    // An open challenge names the challenger alone behind the open marker;
+    // a done table is the faint dot. Long names give way to the age.
+    let open = DailyFeedRow {
+        game: "backgammon",
+        who: "someone_with_a_long_name".to_string(),
+        state: DailyFeedState::Open,
+        age: "3h".to_string(),
+    };
+    let line = line_text(&feed_line(21, &open));
+    assert_eq!(line.chars().count(), 21, "{line:?}");
+    assert!(line.starts_with("○ backgammon s"), "{line:?}");
+    assert!(line.ends_with("… 3h"), "{line:?}");
+    let done = line_text(&feed_line(21, &feed(1, DailyFeedState::Done)[0]));
+    assert!(done.starts_with("· chess p0·q0"), "{done:?}");
 }
 
 #[test]

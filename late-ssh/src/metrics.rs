@@ -35,6 +35,7 @@ use crate::app::leaderboard::svc::AwardAnnouncementOutcome;
 use crate::app::live::input::Origin as LiveOrigin;
 use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome, SnapshotRowError};
 use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
+use crate::app::pulse::svc::PulseSampleOutcome;
 use crate::app::referral::svc::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement};
 use crate::app::video::state::{WatchOutcome, WatchSource};
 use crate::ircd::conn::{IrcHistoryOutcome, IrcHistoryRequest};
@@ -124,14 +125,14 @@ pub enum BartenderMemoryWrite {
     WipeFailed,
 }
 
-/// How one day of the herald (`app/herald`) resolved. `Posted` is the
+/// How one post of the herald (`app/herald`) resolved. `Posted` is the
 /// variant that spent the instance's calls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HeraldPostResult {
     Posted,
-    /// Nothing worth posting that day: no board with enough ink.
+    /// Nothing to post in the slot that day, or nothing clean.
     Skipped,
-    /// Another replica held the day's claim.
+    /// Another replica held the slot's claim.
     Lost,
     Failed,
 }
@@ -149,13 +150,16 @@ pub enum HeraldDeliveryResult {
 pub enum HeraldLookResult {
     /// The model saw nothing to warn about.
     Clean,
-    /// The model put a warning on the picture.
+    /// The model put a warning on the picture: it stays unposted.
     Warned,
-    /// No answer: the model failed, or AI is off. Posted not reviewed.
+    /// AI is off, so nobody looked. It stays unposted.
     Unseen,
     /// A card late.sh drew from its own words (the week's scoreboard, the
     /// paper's front page): nothing for the model to see, so no call.
     Drawn,
+    /// The call failed or answered nothing usable: the post fails, and the next
+    /// check asks again.
+    Failed,
 }
 
 /// What the herald's brief (`app/herald/brief.rs`) came to, once per
@@ -167,6 +171,20 @@ pub enum HeraldBriefResult {
     /// AI is off: the note as written, cut.
     AsWritten,
     /// The model failed: the note as written, cut.
+    Failed,
+}
+
+/// What the herald's write-up (`app/herald/writeup.rs`) came to, once per
+/// project it asks about: a day's fresh pick or an admin's preview.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HeraldProjectResult {
+    /// The model wrote the post.
+    Written,
+    /// The model turned the project down; the next one drawn is tried.
+    Refused,
+    /// AI is off: no project post.
+    AiOff,
+    /// The model failed: no project post, and the project stays owed.
     Failed,
 }
 
@@ -801,6 +819,7 @@ mod inner {
     use super::BoothFavoriteOutcome;
     use super::HomeRoom;
     use super::PosterBeat;
+    use super::PulseSampleOutcome;
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
@@ -810,13 +829,13 @@ mod inner {
         DoorGame, DoorOpeningResult, DoorWatchOutcome, FightBeat, FirstContactBeat,
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict,
         GiftDrinkRefusal, GildRefusal, GildTier, HeraldBriefResult, HeraldDeliveryResult,
-        HeraldLookResult, HeraldPostResult, JobsFetchResult, JobsPostResult, JobsPressResult,
-        JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
-        OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult,
-        Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope,
-        PresenceWire, RadioStation, RealmChatRoomAttach, RealmFightResult, RealmNightOutcome,
-        RealmOrderOutcome, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh,
-        RefreshOutcome, RenderReason, RollCallResult, RoundRefusal, RunnerDoor, Screen,
+        HeraldLookResult, HeraldPostResult, HeraldProjectResult, JobsFetchResult, JobsPostResult,
+        JobsPressResult, JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure,
+        NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult,
+        PaperPrintResult, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence,
+        PresenceScope, PresenceWire, RadioStation, RealmChatRoomAttach, RealmFightResult,
+        RealmNightOutcome, RealmOrderOutcome, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError,
+        Refresh, RefreshOutcome, RenderReason, RollCallResult, RoundRefusal, RunnerDoor, Screen,
         SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
         SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
         VizWireBands, WatchDoor,
@@ -1852,6 +1871,18 @@ mod inner {
                 .u64_counter("late_ssh_video_watches_total")
                 .with_description(
                     "Video watches by source (news, chat) and step: opened (the player), setup (the setup box instead), played, ended, failed, lost",
+                )
+                .build()
+        })
+    }
+
+    fn pulse_samples_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pulse_samples_total")
+                .with_description(
+                    "Headcount samples for Home's pulse tile by outcome: recorded, write_failed, or read_failed",
                 )
                 .build()
         })
@@ -3341,6 +3372,20 @@ mod inner {
 
     /// Saved against unsaved is how much the shelf gets used; a run of
     /// full is readers wanting a bigger one.
+    fn pulse_sample_label(outcome: PulseSampleOutcome) -> &'static str {
+        match outcome {
+            PulseSampleOutcome::Recorded => "recorded",
+            PulseSampleOutcome::WriteFailed => "write_failed",
+            PulseSampleOutcome::ReadFailed => "read_failed",
+        }
+    }
+
+    /// One a bucket per replica; a run of failures is the pulse tile going
+    /// stale everywhere.
+    pub fn record_pulse_sample(outcome: PulseSampleOutcome) {
+        pulse_samples_total().add(1, &[KeyValue::new("outcome", pulse_sample_label(outcome))]);
+    }
+
     pub fn record_news_save(outcome: NewsSaveOutcome) {
         news_saves_total().add(1, &[KeyValue::new("outcome", news_save_label(outcome))]);
     }
@@ -3648,8 +3693,9 @@ mod inner {
         newcomer_minutes_total().add(1, &[KeyValue::new("result", newcomer_minute_label(result))]);
     }
 
-    /// The award loop's roll arm. Only claims that happened or errored count;
-    /// a pass whose month was already announced is silence, not an outcome.
+    /// The award loop's roll arm. Only claims that won or errored count; a
+    /// claim that finds the month already claimed or empty, or a tick that
+    /// makes no claim, is silence, not an outcome.
     pub fn record_award_announcement(outcome: AwardAnnouncementOutcome) {
         award_announcements_total().add(
             1,
@@ -3780,15 +3826,21 @@ mod inner {
         METRIC.get_or_init(|| {
             meter()
                 .u64_counter("late_ssh_herald_posts_total")
-                .with_description("The herald's daily post by result")
+                .with_description("The herald's posts by result")
                 .build()
         })
     }
 
-    pub fn record_herald_post(result: HeraldPostResult) {
+    pub fn record_herald_post(
+        slot: late_core::models::herald::HeraldSlot,
+        result: HeraldPostResult,
+    ) {
         herald_posts_total().add(
             1,
-            &[KeyValue::new("result", herald_post_result_label(result))],
+            &[
+                KeyValue::new("slot", slot.as_str()),
+                KeyValue::new("result", herald_post_result_label(result)),
+            ],
         );
     }
 
@@ -3828,6 +3880,7 @@ mod inner {
             HeraldLookResult::Warned => "warned",
             HeraldLookResult::Unseen => "unseen",
             HeraldLookResult::Drawn => "drawn",
+            HeraldLookResult::Failed => "failed",
         }
     }
 
@@ -3870,6 +3923,32 @@ mod inner {
         herald_briefs_total().add(
             1,
             &[KeyValue::new("result", herald_brief_result_label(result))],
+        );
+    }
+
+    fn herald_project_result_label(result: HeraldProjectResult) -> &'static str {
+        match result {
+            HeraldProjectResult::Written => "written",
+            HeraldProjectResult::Refused => "refused",
+            HeraldProjectResult::AiOff => "ai_off",
+            HeraldProjectResult::Failed => "failed",
+        }
+    }
+
+    fn herald_projects_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_herald_projects_total")
+                .with_description("The herald's write-up of a member's project, by result")
+                .build()
+        })
+    }
+
+    pub fn record_herald_project(result: HeraldProjectResult) {
+        herald_projects_total().add(
+            1,
+            &[KeyValue::new("result", herald_project_result_label(result))],
         );
     }
 
@@ -4431,6 +4510,7 @@ mod inner {
     use super::BartenderMemoryWrite;
     use super::BoothFavoriteOutcome;
     use super::PosterBeat;
+    use super::PulseSampleOutcome;
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
@@ -4440,13 +4520,13 @@ mod inner {
         DoorGame, DoorOpeningResult, DoorWatchOutcome, FightBeat, FirstContactBeat,
         GalleryApplauseResult, GalleryHangResult, GalleryTakeDownResult, GateVerdict,
         GiftDrinkRefusal, GildRefusal, GildTier, HeraldBriefResult, HeraldDeliveryResult,
-        HeraldLookResult, HeraldPostResult, JobsFetchResult, JobsPostResult, JobsPressResult,
-        JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure, NightcapOrderResult,
-        OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult, PaperPrintResult,
-        Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence, PresenceScope,
-        PresenceWire, RadioStation, RealmChatRoomAttach, RealmFightResult, RealmNightOutcome,
-        RealmOrderOutcome, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError, Refresh,
-        RefreshOutcome, RenderReason, RollCallResult, RoundRefusal, RunnerDoor, Screen,
+        HeraldLookResult, HeraldPostResult, HeraldProjectResult, JobsFetchResult, JobsPostResult,
+        JobsPressResult, JobsReadResult, LoungeBeat, NewsShareReward, NightcapHouseFailure,
+        NightcapOrderResult, OldSignalPayout, OnlineTimeFlushResult, OutputKind, PaperOpenResult,
+        PaperPrintResult, Place, PoolShotOutcome, PotRefusal, PotReminderOutcome, Presence,
+        PresenceScope, PresenceWire, RadioStation, RealmChatRoomAttach, RealmFightResult,
+        RealmNightOutcome, RealmOrderOutcome, RealmPayout, RealmSeasonOpen, RealmSnapshotRowError,
+        Refresh, RefreshOutcome, RenderReason, RollCallResult, RoundRefusal, RunnerDoor, Screen,
         SendRefusal, SessionStartStage, SessionUser, SnapshotRowError, SongQueueReward,
         SshRejectReason, SummaryResult, TailorBeat, ThumbnailFetch, TranslationResult,
         VizWireBands, WatchDoor,
@@ -4567,6 +4647,7 @@ mod inner {
     pub fn record_news_body_fetch(_outcome: BodyFetchOutcome) {}
     pub fn record_news_reader_opened(_status: BodyStatus) {}
     pub(crate) fn record_video_watch(_source: WatchSource, _outcome: WatchOutcome) {}
+    pub fn record_pulse_sample(_outcome: PulseSampleOutcome) {}
     pub fn record_news_save(_outcome: NewsSaveOutcome) {}
     pub fn record_news_card(_outcome: NewsCardOutcome) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}
@@ -4608,7 +4689,11 @@ mod inner {
     pub fn record_chat_summary(_result: SummaryResult) {}
     pub fn record_paper_print(_result: PaperPrintResult) {}
     pub fn record_paper_open(_result: PaperOpenResult) {}
-    pub fn record_herald_post(_result: HeraldPostResult) {}
+    pub fn record_herald_post(
+        _slot: late_core::models::herald::HeraldSlot,
+        _result: HeraldPostResult,
+    ) {
+    }
     pub fn record_herald_delivery(
         _network: late_core::models::herald::HeraldNetwork,
         _result: HeraldDeliveryResult,
@@ -4616,6 +4701,7 @@ mod inner {
     }
     pub fn record_herald_look(_result: HeraldLookResult) {}
     pub fn record_herald_brief(_result: HeraldBriefResult) {}
+    pub fn record_herald_project(_result: HeraldProjectResult) {}
     pub fn record_jobs_fetch(
         _source: late_core::models::job_posting::JobSource,
         _result: JobsFetchResult,

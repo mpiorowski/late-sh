@@ -195,9 +195,10 @@ otherwise.
 | `stream` | `/golive` and `/watch` streams, the stream registry, the late-web live pages (staff and streamer tools in `MODERATION.md`) |
 | `live` | The live strip (`now`) on #lounge and the Live panel (rows and keys in `PANEL.md`) |
 | `attention` | The attention guest: what waits on you, a row each, gone when the list is empty |
+| `pulse` | Home's pulse tile: a day of headcount samples as a sparkline, and the replica's sampler behind it |
 | `paper` | The Late Edition: the daily paper and its print sweeper |
 | `jobs` | The job feed: nightly press, posts, tags, matches |
-| `herald` | The herald: one post a day on the Fediverse and Bluesky, the daily claim and the post |
+| `herald` | The herald: two posts a day on the Fediverse and Bluesky, words and art, each slot's claim and post |
 | `usermap` | The People map |
 | `directory` | The People page and the profile editor |
 | `profile_modal` | The read-only profile modal and the chips ledger |

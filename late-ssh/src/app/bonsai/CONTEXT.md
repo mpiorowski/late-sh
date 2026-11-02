@@ -182,6 +182,7 @@ tab / n    select next live branch
 shift-tab  select previous live branch
 wheel      scroll-select previous/next live branch
 ←↓↑→ / hjkl steer selected tip's future growth
+y / u      steer selected tip up-left / up-right
 x          prune selected branch
 p          pinch selected tip toward a leaf pad; needs 3 pinches over time
 s          split selected tip on next growth if both target cells are open

@@ -39,11 +39,12 @@ pub enum TileKind {
     Activity,
     Friends,
     Pulse,
-    Inbox,
-    Headlines,
     /// The Live panel's rows (`app/live/panel.rs`), as the sidebar draws
     /// them.
     Live,
+    /// A stored `inbox` or `headlines` (kinds that are gone) reads as
+    /// blank space.
+    #[serde(alias = "inbox", alias = "headlines")]
     Blank,
     /// Home's room rail. One per page.
     Rooms,
@@ -55,7 +56,7 @@ pub enum TileKind {
 impl TileKind {
     /// The tile picker's rows: every kind by name, then the ones a page
     /// holds once.
-    pub const ALL: [TileKind; 19] = [
+    pub const ALL: [TileKind; 17] = [
         TileKind::Activity,
         TileKind::Aquarium,
         TileKind::Ascii,
@@ -64,8 +65,6 @@ impl TileKind {
         TileKind::Chat,
         TileKind::Clock,
         TileKind::Friends,
-        TileKind::Headlines,
-        TileKind::Inbox,
         TileKind::Live,
         TileKind::Lobby,
         TileKind::Music,
@@ -95,8 +94,6 @@ impl TileKind {
             | TileKind::Activity
             | TileKind::Friends
             | TileKind::Pulse
-            | TileKind::Inbox
-            | TileKind::Headlines
             | TileKind::Live
             | TileKind::Blank
             | TileKind::Presence => false,
@@ -121,8 +118,6 @@ impl TileKind {
             | TileKind::Activity
             | TileKind::Friends
             | TileKind::Pulse
-            | TileKind::Inbox
-            | TileKind::Headlines
             | TileKind::Live
             | TileKind::Blank
             | TileKind::Rooms
@@ -145,8 +140,6 @@ impl TileKind {
             TileKind::Activity => "activity",
             TileKind::Friends => "friends",
             TileKind::Pulse => "pulse",
-            TileKind::Inbox => "inbox",
-            TileKind::Headlines => "headlines",
             TileKind::Live => "live",
             TileKind::Blank => "blank",
             TileKind::Rooms => "rooms",
@@ -905,17 +898,17 @@ impl RiceLayout {
     }
 
     /// The stock Home: the room rail, then the reef across the top of the
-    /// chat hosting both guests (the shop's note while no tank is owned),
-    /// the chat under it, and a sidebar column of the presence row, the
-    /// visualizer, the music dock, the lobby, live and the bonsai at their
-    /// panel rows, with the pet (the shop's note while none is owned)
-    /// taking the rest. Fixed, the same for every account: the page is
+    /// chat hosting the now strip (the shop's note while no tank is
+    /// owned), the chat under it, and a sidebar column of the presence
+    /// row, the visualizer, the music dock, the lobby hosting attention,
+    /// live and the bonsai at their panel rows, with the pet (the shop's
+    /// note while none is owned) taking the rest. Fixed, the same for every account: the page is
     /// arranged in place (`Ctrl+E`), and this is what `R` resets to.
     pub fn home() -> Self {
         let center = Node::split_first(
             Dir::Column,
             HOME_AQUARIUM_ROWS + 1,
-            Node::hosting(TileKind::Aquarium, &[Guest::Now, Guest::Attention]),
+            Node::hosting(TileKind::Aquarium, &[Guest::Now]),
             Node::leaf(TileKind::Chat),
         );
         // The sidebar's panels, each at its rows plus its title rule; the
@@ -936,9 +929,30 @@ impl RiceLayout {
             (TileKind::Live, crate::app::live::panel::LIVE_PANEL_HEIGHT),
             (TileKind::Bonsai, crate::app::common::sidebar::BONSAI_HEIGHT),
         ];
+        // The lobby hosts attention: what waits on you takes its tile over
+        // and the latest tables come back when the list clears.
         let mut column = Node::leaf(TileKind::Pet);
         for (kind, rows) in panels.iter().rev() {
-            column = Node::split_first(Dir::Column, rows + 1, Node::leaf(*kind), column);
+            let tile = match kind {
+                TileKind::Lobby => Node::hosting(*kind, &[Guest::Attention]),
+                TileKind::Visualizer
+                | TileKind::Music
+                | TileKind::Live
+                | TileKind::Bonsai
+                | TileKind::Rooms
+                | TileKind::Aquarium
+                | TileKind::Tank
+                | TileKind::Ascii
+                | TileKind::Pet
+                | TileKind::Chat
+                | TileKind::Clock
+                | TileKind::Activity
+                | TileKind::Friends
+                | TileKind::Pulse
+                | TileKind::Blank
+                | TileKind::Presence => Node::leaf(*kind),
+            };
+            column = Node::split_first(Dir::Column, rows + 1, tile, column);
         }
         let sidebar = Node::split_first(
             Dir::Column,
@@ -1007,11 +1021,6 @@ pub struct ZenState {
     /// The tile picker `space` opens over the focused tile: the selected
     /// row, an index into `TileKind::ALL`, while it is open.
     pub kind_picker: Option<usize>,
-    /// The Inbox tile's selected row. Clamped at draw and at Enter, since
-    /// the rows come and go with the mentions and unread DMs.
-    pub inbox_selected: usize,
-    /// The Headlines tile's selected item, clamped the same way.
-    pub headlines_selected: usize,
     /// The attention guest's selected row, clamped the same way.
     pub attention_selected: usize,
 }
@@ -1036,8 +1045,6 @@ impl ZenState {
             guest_picker: None,
             focus,
             kind_picker: None,
-            inbox_selected: 0,
-            headlines_selected: 0,
             attention_selected: 0,
         }
     }
@@ -1071,8 +1078,6 @@ impl ZenState {
                 | TileKind::Activity
                 | TileKind::Friends
                 | TileKind::Pulse
-                | TileKind::Inbox
-                | TileKind::Headlines
                 | TileKind::Live
                 | TileKind::Blank
                 | TileKind::Rooms

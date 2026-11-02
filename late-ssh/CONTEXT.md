@@ -362,6 +362,11 @@ removes a required secret follows the deploy skew rule in `infra/RUNBOOK.md`.
   heartbeat, dropped 10 s after a replica goes quiet. A new room adds a part to
   the record, never a local registry. `late_ssh_presence_total{beat}`,
   `late_ssh_presence_records{scope}`.
+- **Pulse** (`app/pulse`, table in `late-core/src/models/presence_sample.rs`).
+  Each replica writes its human headcount once a five-minute bucket to
+  `presence_samples` (one row per replica per bucket, pruned past two days)
+  and reads the last day back, summed per bucket, onto a watch the sessions
+  copy on their tick for Home's pulse tile. `late_ssh_pulse_samples_total{outcome}`.
 - **Username directory.** `State.username_directory` is the app-wide
   `Uuid -> username` map: loaded at startup, refreshed every 30 minutes, updated
   on login, profile save, mod rename and account delete. Plain name labels read

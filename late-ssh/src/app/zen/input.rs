@@ -1,6 +1,6 @@
 //! Keys for Home's tiles: arrange mode's layout keys, the keys of the
-//! focused tile while arranging (the attention guest, the Inbox and
-//! Headlines rows, an ascii tile's pieces, the tank's feed), and Home's
+//! focused tile while arranging (the attention guest, an ascii tile's
+//! pieces, the tank's feed), and Home's
 //! named layouts (the digit, the `L` list, `/layout`, `/zen`). Outside
 //! arrange mode Home's own keys serve the page's chat, so nothing here
 //! runs. In arrange mode a key not owned here is swallowed, so a stray
@@ -11,7 +11,6 @@ use std::time::Instant;
 use uuid::Uuid;
 
 use super::presets::{LayoutCommand, LayoutList, Layouts, LayoutsError, NameEdit, NamePurpose};
-use super::rows::InboxRow;
 use super::state::{Dir, Guest, GuestPick, KindPick, MAX_TILES, TileKind};
 use crate::app::attention::state::Item as AttentionItem;
 use crate::app::{
@@ -311,7 +310,7 @@ fn confirm_name_edit(app: &mut App) {
 
 /// The focused tile's own keys in arrange mode, where every tile takes the
 /// focus: the attention guest up on it takes `j` `k` and Enter ahead of
-/// its host, an Inbox or Headlines tile walks and opens its rows, Enter on
+/// its host, Enter on
 /// an ascii tile picks its piece from the list (`[` `]` step it, with the
 /// layout keys), and `a` on the reef or the tank feeds it. None of these
 /// collide with the layout keys, which are uppercase or punctuation,
@@ -321,8 +320,6 @@ fn handle_tile_keys(app: &mut App, byte: u8) -> bool {
         return true;
     }
     match app.home.focused_kind() {
-        Some(TileKind::Inbox) => handle_inbox(app, byte),
-        Some(TileKind::Headlines) => handle_headlines(app, byte),
         Some(TileKind::Ascii) if matches!(byte, b'\r' | b'\n') => {
             crate::app::ascii::picker::input::open(app);
             true
@@ -351,58 +348,9 @@ fn cycle_tile(app: &mut App, chat_focused: bool, forward: bool) {
     }
 }
 
-/// The focused Inbox tile: `j` `k` walk its rows, Enter opens the row.
-fn handle_inbox(app: &mut App, byte: u8) -> bool {
-    match byte {
-        b'j' | b'J' => {
-            let last = inbox_rows(app).len().saturating_sub(1);
-            app.home.inbox_selected = (app.home.inbox_selected + 1).min(last);
-            true
-        }
-        b'k' | b'K' => {
-            app.home.inbox_selected = app.home.inbox_selected.saturating_sub(1);
-            true
-        }
-        b'\r' | b'\n' => {
-            open_inbox_row(app);
-            true
-        }
-        _ => false,
-    }
-}
-
-fn inbox_rows(app: &App) -> Vec<InboxRow> {
-    super::rows::inbox_rows(
-        app.user_id,
-        &app.chat.rooms,
-        &app.chat.unread_counts,
-        app.chat.usernames(),
-        app.chat.ignored_user_ids(),
-        app.chat.notifications.all_items(),
-    )
-}
-
-/// Open the selected Inbox row (`open_inbox_target`): a DM lands in its
-/// room, a mention on its message.
-fn open_inbox_row(app: &mut App) {
-    let rows = inbox_rows(app);
-    let Some(row) = rows.get(app.home.inbox_selected.min(rows.len().saturating_sub(1))) else {
-        return;
-    };
-    let (room_id, message_id) = match row {
-        InboxRow::Dm { room_id, .. } => (*room_id, None),
-        InboxRow::Mention {
-            room_id,
-            message_id,
-            ..
-        } => (*room_id, Some(*message_id)),
-    };
-    open_inbox_target(app, room_id, message_id);
-}
-
 /// The attention guest's rows while it is up on the focused tile: `j` `k`
 /// move, Enter does the row's act (`AttentionItem::act`): the lobby for
-/// a match, the room for a DM or a mention (as an Inbox row opens), the
+/// a match, the room for a DM or a mention, the
 /// tank's meal, the tree's water, the pet's pat. False with the list
 /// empty, since the guest is down and the host has the keys.
 fn handle_attention(app: &mut App, byte: u8) -> bool {
@@ -434,12 +382,12 @@ fn act_on_attention(app: &mut App, item: AttentionItem) {
         AttentionItem::YourMove { .. } | AttentionItem::Result { .. } => {
             crate::app::input::open_daily_modal_globally(app);
         }
-        AttentionItem::Dm { room_id, .. } => open_inbox_target(app, room_id, None),
+        AttentionItem::Dm { room_id, .. } => open_message_target(app, room_id, None),
         AttentionItem::Mention {
             room_id,
             message_id,
             ..
-        } => open_inbox_target(app, room_id, Some(message_id)),
+        } => open_message_target(app, room_id, Some(message_id)),
         AttentionItem::FeedTank => crate::app::input::feed_aquarium_globally(app),
         AttentionItem::WaterTree => {
             let _ = app
@@ -454,7 +402,7 @@ fn act_on_attention(app: &mut App, item: AttentionItem) {
 /// there is one, the way a `Ctrl+/` message jump does. A mention in a
 /// room the account never joined has no tile to land in and reads in the
 /// history modal instead.
-fn open_inbox_target(app: &mut App, room_id: Uuid, message_id: Option<Uuid>) {
+fn open_message_target(app: &mut App, room_id: Uuid, message_id: Option<Uuid>) {
     if let Some(message_id) = message_id
         && !app.chat.rooms.iter().any(|(room, _)| room.id == room_id)
     {
@@ -477,40 +425,6 @@ fn open_inbox_target(app: &mut App, room_id: Uuid, message_id: Option<Uuid>) {
         app.chat.set_pending_search_jump(room_id, message_id);
         app.chat.request_room_tail(room_id);
     }
-}
-
-/// The focused Headlines tile: `j` `k` walk its items, Enter copies the
-/// selected link. The rows are the ones the tile draws, so the marked item
-/// is the one copied.
-fn handle_headlines(app: &mut App, byte: u8) -> bool {
-    match byte {
-        b'j' | b'J' => {
-            let last = headline_rows(app).len().saturating_sub(1);
-            app.home.headlines_selected = (app.home.headlines_selected + 1).min(last);
-            true
-        }
-        b'k' | b'K' => {
-            app.home.headlines_selected = app.home.headlines_selected.saturating_sub(1);
-            true
-        }
-        b'\r' | b'\n' => {
-            let rows = headline_rows(app);
-            if let Some(row) = rows.get(
-                app.home
-                    .headlines_selected
-                    .min(rows.len().saturating_sub(1)),
-            ) {
-                app.pending_clipboard = Some(row.url.clone());
-                app.banner = Some(Banner::success("Link copied to clipboard!"));
-            }
-            true
-        }
-        _ => false,
-    }
-}
-
-fn headline_rows(app: &App) -> Vec<super::rows::Headline> {
-    super::rows::headlines(app.chat.news.all_articles(), app.chat.feeds.all_entries())
 }
 
 /// Rice: arrows, Tab, and Shift+Tab move focus and the layout keys edit

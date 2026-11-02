@@ -42,25 +42,19 @@ clears playback; resizing and overlays preserve it and its timer. Only
 the selection is stored on the leaf beside `room`, absent
 for the default, rides along on a split, and is forgotten when the tile
 changes kind, as a chat tile's room is), pet (the box from `pet/ui.rs`, also drawn by the sidebar Pet panel and as the profile portrait; its top row, `pet::ui::status_line`, reads `name · mood`, the mood inferred from the session by `pet/state.rs` (purring, proud, sulking, chatty, asleep, vibing, idle); when its tile shares an edge with a tank or a bonsai tile and the pet is calm (idle, vibing, or chatty) it strolls for twenty minutes then sits against that edge for five with wide eyes, on the wall clock: `PetPose::for_frame`, `STROLL_TICKS`/`WATCH_TICKS`/`LEG_TICKS`, the side from `layout::neighbour_side` and the target from `Neighbours`. A round is two legs, the tank on the first watch window and the bonsai on the second, so with both beside it they alternate and with one that one takes both windows: its five minutes in twenty-five never depend on what else the page holds. At the glass it gasps at a passing fish; at the tree it leans in for a slower sniff; a click on it pets it (the first pet of the UTC day pays 100 chips, see the hub CONTEXT) and does *not* focus its tile, since petting is a passing gesture and the keys belong to the chat you are typing in (`handle_pet_click` takes the click before `focus_home_tile_at`, `input_flow_test.rs`); while the terminal cursor is inside the tile an awake, unsulking pet walks after it, eyes on the cursor), chat, music (the sidebar's dock without its band, `sidebar::draw_music_dock`, once the tile is `MUSIC_DOCK_HEIGHT` rows and eighteen columns; shorter, the track over the station, centred; `v1`..`v5` retune it, `m` mutes), clock (block digits, the date below them when the tile is seven rows
-or more; a one-row tile shows the time alone), visualizer, lobby (the daily games, compact:
-only the running games, starting at the name with no marker column
-(`RowMarker::Bare`; the sidebar panel keeps its `►`), plus one footer row of
-count and keys), activity
+or more; a one-row tile shows the time alone), visualizer, lobby (the latest tables on the
+board, newest change first: open challenges, matches by their last move,
+unseen results, each `○ chess srw 2m` with the state as the marker and the
+age flush right, `panel::daily_feed_rows`, plus the `N open · entries/cap`
+footer; what waits on you is the attention guest's, which the stock lobby
+hosts), activity
 (the #lounge feed as a list, newest on top, each event's age flush right
 and a friend's line in the friend color: the same
 `ChatState::activity_ticker` queue the one-row ticker packs, capped at
 40), friends (connected friends, here before away, then newest login:
-name, the away glyph, audio source, time on), pulse (the numbers worth a glance, one
-`label  value` row each and every row always drawn, zero included: people
-online, your chips, unread mentions, friends online, and today's care, which
-names bonsai, tank, and pet, each green once tended today (watered, fed,
-petted), amber while due, faint when not owned; a short tile keeps the top
-rows; it replaced the first presence tile, whose stored name now reads as
-the presence tile below), inbox (unread DMs by count, then mentions
-newest first; see §3 for its keys), headlines (News articles and the
-viewer's RSS entries merged newest first, two rows each (the title with
-its source and age, then the link), an entry shared to News listed once,
-as the article), live (the Live panel's rows, `../live/PANEL.md`:
+name, the away glyph, audio source, time on), pulse (the people online now over the
+last day of them as a sparkline, the peak named, a time axis under it:
+`../pulse/CONTEXT.md`; a one-row tile is the sparkline alone), live (the Live panel's rows, `../live/PANEL.md`:
 the same four rows the sidebar's panel draws, each with its `s1`-`s4`
 key, wider so less is cut; `nobody playing` while nothing is on), presence
 (the sidebar's pinned rows, `sidebar::draw_core_block`: the online count
@@ -124,12 +118,12 @@ arrange mode the bottom row is the key footer,
 functions the renderer uses. The stock
 Home (`RiceLayout::home`) is fixed and the same for every account: the
 room rail (`rooms`, `HOME_RAIL_COLS`), the reef across the top of the
-chat (`aquarium`, `HOME_AQUARIUM_ROWS`) hosting both guests, the chat
+chat (`aquarium`, `HOME_AQUARIUM_ROWS`) hosting the now strip, the chat
 under it hosting the board's day (a `chat` bound to no room, so it shows
 the rail's; a stored `center` reads as one), and the sidebar column
 (`HOME_SIDEBAR_COLS`): `presence`, then `visualizer` (the band's three
-rows), `music` (the dock's twelve), `lobby`, `live` and `bonsai` at their
-panel rows, and `pet` taking the rest. An unowned reef
+rows), `music` (the dock's twelve), `lobby` hosting attention, `live` and
+`bonsai` at their panel rows, and `pet` taking the rest. An unowned reef
 or pet draws the shop's note in its tile. The Settings panel list is the
 Arcade's alone. `R` resets to the stock. Nothing about the terminal's size
 changes a layout: a page is drawn as arranged at every width, so a phone
@@ -171,7 +165,7 @@ The rule is the tile's name on the left and its key hint on the right
 `ctrl+/ room`), nothing else. A hint says when it works (`HintWhen`): a
 global key shows in every mode; a key the tile takes only in arrange mode
 with the focus (`[ ] Enter pick` on an ascii tile, `a feed` on the reef
-or tank, `enter` on the Inbox and Headlines, `[ ] cycle` on a chat, and
+or tank, `[ ] cycle` on a chat, and
 `j k Enter act` for the attention guest) shows only then
 (`hints_shown`), so outside the mode no title names a key the composer
 would take. The rail names none: it takes clicks on its rows. A layout with
@@ -201,7 +195,7 @@ the last row clears). Both end, which is what makes them guests; a widget
 that stays up for an evening (the Live roster, the bonsai) is a tile
 kind. A tile hosts any of the guests (`guests` on the leaf, in
 `Guest::ALL` order, `Node::toggle_guest`; a guest is on the page once;
-the stock Home's reef hosts both), and a guest is the tile while it is
+the stock Home's reef hosts now and its lobby attention), and a guest is the tile while it is
 up: its label in the rule (both labels when both are up), its panel in
 place of the host's (`draw_guests`: one guest has the whole tile, the
 strip in its full form where the tile is at least `MIN_FULL_WIDTH` by
@@ -241,7 +235,7 @@ late-ssh/src/app/zen/
 |-- state.rs      # TileKind, Node (split tree), Look, RiceLayout (serde), ZenState + edits
 |-- layout.rs     # pure rect math: Gaps, Chrome (boxes, Home's rules), rice_fits (the 40x12 floor under which the page is its too-small notice alone), rice_areas (tiles + the arrange footer row while the mode is on), tile_rects, row_gutters, tile_inner, neighbour_side, pet_neighbours
 |-- presets.rs    # Home's named layouts: Layouts (serde, the nine slots and the current), LayoutList (the L list and its typed name), LayoutCommand (/layout)
-|-- rows.rs       # pure row builders for the Inbox and Headlines tiles
+|-- rows.rs       # pure row builder: the unread DMs and mentions the attention guest lists
 |-- ui.rs         # ZenView, draw_rice, the tile widgets, the pickers and the layouts list
 |-- input.rs      # handle_home_event (arrange mode's layout keys and the tiles' keys), room walk, focus, the layouts (load, save, the list, /layout, /zen)
 `-- bigclock.rs   # block digit font for the clock tile
@@ -271,8 +265,7 @@ and the debounced flush. `late-core`: `extract_key_home_layouts` /
 Where they are shown: each tile names its own keys on the right of its
 title (`tile_keys`, drawn with `hint_line` so the key is amber and the
 word dim), the arrange-only ones (an ascii tile's pieces, the tank's feed,
-the Inbox and Headlines rows, a chat's `[` `]`, the attention guest's
-rows) only while arranging with the focus on the tile; `t` hides them
+a chat's `[` `]`, the attention guest's rows) only while arranging with the focus on the tile; `t` hides them
 with the title. In arrange mode `?` opens `HelpTopic::Layouts`, which
 lists every key, and the bottom row is a footer naming the mode's keys
 (`HOME_ARRANGE_KEYS`, trimmed from the right on a narrow page). Nothing
@@ -342,16 +335,13 @@ included. In it:
   Enter on an ascii tile opens the piece picker (`../ascii/picker`,
   `App::piece_picker`, routed ahead of the page in `app/input.rs` and
   drawn over it in `render.rs`). Attention up on the focused tile takes
-  `j` `k` and Enter (above). On the Inbox `j` `k` walk its rows and Enter
-  opens the selected row in the first chat tile and moves the focus
-  there: a DM binds the tile to its room; a mention binds it to the
-  mention's room and selects the message the way a `Ctrl+/` message jump
-  does. A mention in a room the account never joined opens the history
-  modal instead, and a page with no chat tile says so in a banner. On
-  Headlines `j` `k` walk its items the same way and Enter copies the
-  selected link to the clipboard (`pending_clipboard`, the way a copied
-  search hit goes). `a` on the reef or the tank feeds it (free, once a
-  day, +100 chips on the first feed).
+  `j` `k` and Enter (above); a DM or mention row opens in the first chat
+  tile and moves the focus there (`open_message_target`): a DM binds the
+  tile to its room; a mention binds it to the mention's room and selects
+  the message the way a `Ctrl+/` message jump does. A mention in a room
+  the account never joined opens the history modal instead, and a page
+  with no chat tile says so in a banner. `a` on the reef or the tank feeds
+  it (free, once a day, +100 chips on the first feed).
 - Every other key is swallowed so a stray letter never reaches the chat;
   the `v` music chords still pass (§4). Esc peels a typed name, the list,
   a picker, then leaves the mode, puts the focus back on a chat and
@@ -430,17 +420,14 @@ update.
   The check reads the tile kind only, so an unowned tank (the shop note) is
   watched like a live reef. A sulking or sleeping pet ignores the fish, the
   tree, and the cursor.
-- Pulse draws only owned values the session already keeps for other
-  surfaces (`online_count`, `chip_balance`, the mention count,
-  `active_friends`, and the care: `BonsaiState::last_watered`,
-  `AquariumCare::fed_on_day`, `PetState::petted_on`), so it adds no query
-  and no lock. Every row stays visible at zero, and so should any row added
-  later. The block is capped at `PULSE_MAX_WIDTH` (32) columns and centered,
-  so a wide tile never strands a label far from its value.
+- Pulse draws only owned values: `online_count` and `App::pulse_history`,
+  the day of headcount buckets the tick copies from the pulse service's
+  watch (`../pulse/CONTEXT.md`), so it adds no query and no lock. The
+  drawing is the pulse domain's (`pulse::ui::draw`); the tile only hands
+  it its area.
 - The list tiles (lobby, activity, friends, pulse) draw one column in from
-  each border (`pad_sides` in `draw_rice`). The selectable ones (inbox,
-  headlines) pad only the right (`pad_right`): their one-column row marker
-  is the left padding, so every tile's text starts one column in; the chat,
+  each border (`pad_sides` in `draw_rice`); the presence block pads only
+  the right (`pad_right`); the chat,
   the canvases, the clock, and the equalizers keep the full inner area. A
   chat tile also asks the embedded chat for no inset of its own
   (`EmbeddedRoomChatView::messages_inset: 0`): the tile border already is
@@ -449,22 +436,23 @@ update.
   low value. A
   history chart was tried and dropped: presence is per replica, so a
   process-local day of headcounts would disagree between pods.
-- The mentions list loads only on ask (`notifications.list()`), so while an
-  Inbox tile is on the page tick requests it again whenever the unread count
-  differs from the last request (`App::home_inbox_listed_unread`). The Inbox
-  and Headlines rows are built per frame only while their tile is on the
-  page (`ZenState::shows`), and Enter rebuilds the same Inbox rows, so the
-  marked row is the one that opens.
+- The mentions list loads only on ask (`notifications.list()`), so while
+  the page hosts the attention guest (`ZenState::hosts`) tick requests it
+  again whenever the unread count differs from the last request
+  (`App::home_attention_listed_unread`). A stored layout naming a dropped
+  kind (`inbox`, `headlines`) reads it as `blank`; a small chat tile bound
+  to News is the headlines strip now (`../chat/news/CONTEXT.md`, the
+  compact list).
 - Tests cover the split tree, the fixed splits and the guests' moves, the
   stock Home (`state_test.rs`), neighbour detection, the gutters and the
   rules chrome's insets (`layout_test.rs`), the named layouts and their
   seeds (`presets_test.rs`), the care bar, the music tile's rows, and the
   bonsai canvas cut (`ui_test.rs`), the resize floor (`state_test.rs`),
-  the Inbox and Headlines rows (`rows_test.rs`), and the drawn-kinds gate
+  the unread rows (`rows_test.rs`), and the drawn-kinds gate
   (`state_test.rs`). `input_flow_test.rs` drives `Ctrl+E` and the keys it
   owns, `Ctrl+E` and a digit, `/zen`, Tab walking the tiles, the tile
   picker owning the keys and the clicks under it, the chat keys staying
-  off a tile that is not a chat, Inbox Enter, the Live tile's `s` prefix,
+  off a tile that is not a chat, the Live tile's `s` prefix,
   `[` `]` in rail order, a second chat tile keeping its room with the
   rail following the active one, a draft staying in its room, the pet
   click leaving Home's focus alone, and `?` opening the Layouts topic.

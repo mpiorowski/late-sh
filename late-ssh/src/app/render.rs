@@ -459,7 +459,7 @@ struct DrawContext<'a> {
     home_date: String,
     home_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
     home_active_friends: &'a [crate::app::chat::state::ActiveFriend],
-    home_care: crate::app::zen::ui::Care,
+    pulse_history: crate::app::pulse::svc::History,
     /// What waits on you, for the attention guest (`App::attention_items`).
     attention: Vec<crate::app::attention::state::Item>,
     /// The pane beside this player's own running game, published for the
@@ -1948,7 +1948,7 @@ impl App {
                         home_date,
                         home_pet_strip,
                         home_active_friends: &self.active_friends,
-                        home_care,
+                        pulse_history: self.pulse_history.clone(),
                         attention,
                         own_chat_hit: &self.own_chat_hit,
                     },
@@ -2264,33 +2264,11 @@ impl App {
                     clock: ctx.sidebar_clock,
                     date: ctx.home_date.clone(),
                     online_count: ctx.online_count,
-                    mentions_unread: ctx.status_data.mentions_unread,
                     daily: ctx.daily,
                     lobby_glow: ctx.lobby.glow(),
                     activity: ctx.chat_state.activity_ticker(),
                     active_friends: ctx.home_active_friends,
-                    chip_balance: ctx.status_data.chip_balance,
-                    care: ctx.home_care,
-                    inbox: if ctx.home.shows(crate::app::zen::state::TileKind::Inbox) {
-                        crate::app::zen::rows::inbox_rows(
-                            ctx.user_id,
-                            &ctx.chat_state.rooms,
-                            &ctx.chat_state.unread_counts,
-                            ctx.chat_state.usernames(),
-                            ctx.chat_state.ignored_user_ids(),
-                            ctx.chat_state.notifications.all_items(),
-                        )
-                    } else {
-                        Vec::new()
-                    },
-                    headlines: if ctx.home.shows(crate::app::zen::state::TileKind::Headlines) {
-                        crate::app::zen::rows::headlines(
-                            ctx.chat_state.news.all_articles(),
-                            ctx.chat_state.feeds.all_entries(),
-                        )
-                    } else {
-                        Vec::new()
-                    },
+                    pulse: &ctx.pulse_history,
                     live_panel: crate::app::live::panel::LivePanelProps {
                         rows: &ctx.live_panel_rows,
                         hit: ctx.live_panel_hit,

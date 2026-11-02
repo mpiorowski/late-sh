@@ -14,8 +14,8 @@ use crate::{
         leaderboard::{
             CountedSpan, DailyPuzzle, DoorGame, LATEANIA_XP_AT_LEVEL_CAP,
             LATEANIA_XP_PER_PARAGON_LEVEL, LobbyGame, OnlineTimeFold, OnlineTimeIncrement,
-            RankedEntry, ScoreGame, WeekBest, WeekGame, apply_online_time_batch,
-            fetch_leaderboard_data, fold_online_time_credits, week_bests,
+            RankedEntry, ScoreGame, apply_online_time_batch, fetch_leaderboard_data,
+            fold_online_time_credits,
         },
         minesweeper,
         mud_character::MudCharacter,
@@ -1283,96 +1283,104 @@ async fn lobby_win(
         .expect("settle");
 }
 
-/// The week's scoreboard: per game, the most daily wins over the week's
-/// puzzle dates, the top score among the week's events, the most Lobby
-/// wins that paid, and the top door run of the week, in roster order,
-/// each one person's best and nobody named; a win or a score outside the
-/// week is not on it, nor a Lobby win that did not pay, and a game nobody
-/// played has no line.
+/// The week's scoreboard: per game, everyone's plays inside the seven
+/// UTC days added up (every daily solve, every finished score run, every
+/// finished Lobby match paid or not, every hub card opening), in roster
+/// order, with nobody's best and nobody named; a play outside the week is
+/// not counted, a game nobody played has no line, and a roguelike won in
+/// the week but opened before it has none either: the card prints plays.
 #[tokio::test]
-async fn the_weeks_best_counts_only_the_week() {
+async fn the_weeks_plays_add_up_everyone_inside_the_week() {
+    use crate::models::door_opening::{DoorCard, DoorOpening};
     use crate::models::door_run::{DoorRun, DoorRunResult, NewDoorRun};
+    use crate::models::leaderboard::{DayGame, DayTally, week_tallies};
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
     let solver = create_test_user(&test_db.db, "week_solver").await;
     let rival = create_test_user(&test_db.db, "week_rival").await;
     let last = Utc::now().date_naive();
+    let now = Utc::now();
 
     tetris::HighScore::record_score_event(&client, rival.id, 50_000)
         .await
         .expect("old score");
     roll_score_events_back_a_month(&client).await;
-    for offset in [0, 2, 6] {
-        le_word::DailyWin::record_win(&client, solver.id, last - Duration::days(offset), 4)
+    for (user, offset) in [
+        (solver.id, 0),
+        (solver.id, 2),
+        (solver.id, 6),
+        (rival.id, 0),
+    ] {
+        le_word::DailyWin::record_win(&client, user, last - Duration::days(offset), 4)
             .await
-            .expect("solver win");
+            .expect("le word");
     }
-    for offset in [7, 8, 9] {
-        le_word::DailyWin::record_win(&client, rival.id, last - Duration::days(offset), 4)
-            .await
-            .expect("rival's wins the week before");
-    }
-    le_word::DailyWin::record_win(&client, rival.id, last, 4)
-        .await
-        .expect("rival win");
     sudoku::DailyWin::record_win(&client, rival.id, "hard".to_string(), last, 100)
         .await
-        .expect("rival sudoku");
-    tetris::HighScore::record_score_event(&client, solver.id, 500)
-        .await
-        .expect("solver score");
-    tetris::HighScore::record_score_event(&client, rival.id, 900)
-        .await
-        .expect("rival score");
+        .expect("sudoku");
+    for (user, score) in [(solver.id, 500), (rival.id, 900)] {
+        tetris::HighScore::record_score_event(&client, user, score)
+            .await
+            .expect("score");
+    }
     lobby_win(&client, LobbyGame::Chess, solver.id, rival.id, "paid").await;
     for _ in 0..2 {
         lobby_win(&client, LobbyGame::Chess, rival.id, solver.id, "unplayed").await;
     }
-    for (offset, score, ended_days_ago) in [(1, 99_999, 10), (2, 4_000, 1)] {
-        DoorRun::insert_ignore(
-            &client,
-            &NewDoorRun {
-                game: DoorGame::Dcss.key(),
-                user_id: rival.id,
-                ended_at: Utc::now() - Duration::days(ended_days_ago),
-                result: DoorRunResult::Death,
-                score: Some(score),
-                depth: Some(3),
-                turns: Some(100),
-                raw: json!({}),
-                source_file: "week".to_string(),
-                source_offset: offset,
-            },
-        )
-        .await
-        .expect("door run");
+    for (card, days_ago) in [
+        (DoorCard::Nethack, 0),
+        (DoorCard::Nethack, 5),
+        (DoorCard::Dcss, 1),
+        (DoorCard::Brogue, 10),
+    ] {
+        DoorOpening::record(&client, solver.id, card, now - Duration::days(days_ago))
+            .await
+            .expect("opening");
     }
+    DoorRun::insert_ignore(
+        &client,
+        &NewDoorRun {
+            game: DoorGame::Brogue.key(),
+            user_id: solver.id,
+            ended_at: now,
+            result: DoorRunResult::Win,
+            score: Some(99_999),
+            depth: Some(26),
+            turns: Some(20_000),
+            raw: json!({}),
+            source_file: "week".to_string(),
+            source_offset: 1,
+        },
+    )
+    .await
+    .expect("a brogue run opened ten days ago");
 
-    let best = |game, value| WeekBest { game, value };
+    let tally = |game, plays, won| DayTally { game, plays, won };
     assert_eq!(
-        week_bests(&client, last).await.expect("week"),
+        week_tallies(&client, last).await.expect("week"),
         vec![
-            best(WeekGame::Daily(DailyPuzzle::LeWord), 3),
-            best(WeekGame::Daily(DailyPuzzle::Sudoku), 1),
-            best(WeekGame::Score(ScoreGame::Lateris), 900),
-            best(WeekGame::Lobby(LobbyGame::Chess), 1),
-            best(WeekGame::Door(DoorGame::Dcss), 4_000),
-        ]
+            tally(DayGame::Daily(DailyPuzzle::LeWord), 4, 4),
+            tally(DayGame::Daily(DailyPuzzle::Sudoku), 1, 1),
+            tally(DayGame::Score(ScoreGame::Lateris), 2, 0),
+            tally(DayGame::Lobby(LobbyGame::Chess), 3, 3),
+            tally(DayGame::Door(DoorCard::Nethack), 2, 0),
+            tally(DayGame::Door(DoorCard::Dcss), 1, 0),
+        ],
+        "Le Word: both players' solves; Lateris: both runs, not the month-old one; Chess: every finished match, paid or not; Brogue: won in the week, opened before it, no line"
     );
-    let shown: Vec<String> = [
-        best(WeekGame::Daily(DailyPuzzle::Sudoku), 1),
-        best(WeekGame::Daily(DailyPuzzle::Sudoku), 6),
-        best(WeekGame::Score(ScoreGame::Snake), 900),
-        best(WeekGame::Score(ScoreGame::Snake), 1_234_567),
-        best(WeekGame::Lobby(LobbyGame::Snooker), 2),
-        best(WeekGame::Door(DoorGame::Nethack), 52_340),
-    ]
-    .iter()
-    .map(WeekBest::shown_value)
-    .collect();
+    assert!(
+        week_tallies(&client, last - Duration::days(60))
+            .await
+            .expect("a quiet week")
+            .is_empty()
+    );
+    let shown: Vec<String> = [1, 6, 1_234, 1_234_567]
+        .into_iter()
+        .map(|plays| tally(DayGame::Daily(DailyPuzzle::Sudoku), plays, 0).shown_plays())
+        .collect();
     assert_eq!(
         shown,
-        vec!["1 win", "6 wins", "900", "1,234,567", "2 wins", "52,340"]
+        vec!["1 play", "6 plays", "1,234 plays", "1,234,567 plays"]
     );
 }
 
@@ -1481,19 +1489,6 @@ async fn a_days_tallies_count_the_days_finishes_by_game() {
             .await
             .expect("a quiet day")
             .is_empty()
-    );
-    let shelves: Vec<Shelf> = [
-        WeekGame::Daily(DailyPuzzle::Sudoku),
-        WeekGame::Score(ScoreGame::Snake),
-        WeekGame::Lobby(LobbyGame::Snooker),
-        WeekGame::Door(DoorGame::Dcss),
-    ]
-    .iter()
-    .map(|game| game.shelf())
-    .collect();
-    assert_eq!(
-        shelves,
-        vec![Shelf::Arcade, Shelf::Arcade, Shelf::Lobby, Shelf::Doors]
     );
     let day_shelves: Vec<Shelf> = [
         DayGame::Daily(DailyPuzzle::Sudoku),

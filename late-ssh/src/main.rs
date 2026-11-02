@@ -400,6 +400,11 @@ async fn main() -> anyhow::Result<()> {
         db.clone(),
         pg_listener.subscribe(late_ssh::app::presence::svc::PresenceService::CHANNELS),
     );
+    // The pulse: this replica's headcount sampled once a bucket into
+    // Postgres, the last day read back for Home's pulse tile. See
+    // `app/pulse/svc.rs`.
+    let pulse_service =
+        late_ssh::app::pulse::svc::PulseService::start(db.clone(), active_users.clone());
     let is_draining = Arc::new(std::sync::atomic::AtomicBool::new(false));
     // The lounge spawns (`app/deadchannel/lounge`): every replica runs the
     // spawner and the sweeper against the same rows, the channel carries
@@ -568,6 +573,7 @@ async fn main() -> anyhow::Result<()> {
         is_draining,
         runner_looks: runner_look_service.clone(),
         presence: presence_service,
+        pulse: pulse_service,
         lounge_service,
     };
 

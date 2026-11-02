@@ -700,6 +700,16 @@ fn a_layout_saved_with_a_guest_list_keeps_the_guests_still_known() {
         RiceLayout::from_json(Some(&lobby_host)).root.leaf_guests(),
         vec![vec![Guest::Attention]]
     );
+    // The inbox kind is gone: a layout that had one keeps its shape, the
+    // slot reading as blank space.
+    let had_inbox = serde_json::json!({
+        "root": { "node": "leaf", "kind": "inbox" },
+        "look": RiceLayout::default().look,
+    });
+    assert_eq!(
+        RiceLayout::from_json(Some(&had_inbox)).root.leaf_kinds(),
+        vec![TileKind::Blank]
+    );
     let only_gone = serde_json::json!({
         "root": { "node": "leaf", "kind": "chat", "guests": ["banner"] },
         "look": RiceLayout::default().look,
@@ -733,8 +743,13 @@ fn the_stock_home_is_the_rail_the_reef_over_the_chat_and_the_sidebar_column() {
     );
     assert_eq!(
         home.root.leaf_guests()[1],
-        vec![Guest::Now, Guest::Attention],
-        "the reef hosts both guests, so the chat never loses a row to them"
+        vec![Guest::Now],
+        "the reef hosts the strip, so the chat never loses a row to it"
+    );
+    assert_eq!(
+        home.root.leaf_guests()[5],
+        vec![Guest::Attention],
+        "the lobby hosts attention: what waits on you takes the tables' tile"
     );
     assert_eq!(
         home.root.leaf_guests()[2],

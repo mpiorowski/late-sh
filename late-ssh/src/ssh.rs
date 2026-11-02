@@ -1163,6 +1163,7 @@ impl russh::server::Handler for ClientHandler {
             first_contact_gate,
             runner_looks_rx: self.state.runner_looks.subscribe(),
             presence: self.state.presence.clone(),
+            pulse_rx: self.state.pulse.subscribe(),
             zen_layout: device
                 .zen_layout
                 .clone()

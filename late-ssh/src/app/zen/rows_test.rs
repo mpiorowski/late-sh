@@ -1,15 +1,10 @@
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, TimeZone, Utc};
-use late_core::models::{
-    article::{Article, ArticleFeedItem},
-    chat_room::ChatRoom,
-    notification::NotificationView,
-    rss_entry::{RssEntry, RssEntryView},
-};
+use late_core::models::{chat_room::ChatRoom, notification::NotificationView};
 use uuid::Uuid;
 
-use super::{Headline, InboxRow, headlines, inbox_rows};
+use super::{UnreadRow, unread_rows};
 
 fn at(minute: u32) -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 9, 14, 12, minute, 0)
@@ -60,7 +55,7 @@ fn mention(
 }
 
 #[test]
-fn the_inbox_lists_unread_dms_by_count_then_mentions_newest_first() {
+fn the_unread_rows_list_dms_by_count_then_mentions_newest_first() {
     let viewer = Uuid::now_v7();
     let (alice, bob, carol, dave) = (
         Uuid::now_v7(),
@@ -104,7 +99,7 @@ fn the_inbox_lists_unread_dms_by_count_then_mentions_newest_first() {
         (with_dave, Vec::new()),
     ];
 
-    let rows = inbox_rows(
+    let rows = unread_rows(
         viewer,
         &rooms,
         &unread_counts,
@@ -116,17 +111,17 @@ fn the_inbox_lists_unread_dms_by_count_then_mentions_newest_first() {
     assert_eq!(
         rows,
         vec![
-            InboxRow::Dm {
+            UnreadRow::Dm {
                 room_id: with_bob.id,
                 peer: "bob".to_string(),
                 unread: 3,
             },
-            InboxRow::Dm {
+            UnreadRow::Dm {
                 room_id: with_alice.id,
                 peer: "alice".to_string(),
                 unread: 1,
             },
-            InboxRow::Mention {
+            UnreadRow::Mention {
                 room_id: with_bob.id,
                 message_id: fresh.message_id,
                 actor: "bob".to_string(),
@@ -135,7 +130,7 @@ fn the_inbox_lists_unread_dms_by_count_then_mentions_newest_first() {
                 at: at(5),
                 unread: true,
             },
-            InboxRow::Mention {
+            UnreadRow::Mention {
                 room_id: lounge,
                 message_id: read.message_id,
                 actor: "alice".to_string(),
@@ -143,82 +138,6 @@ fn the_inbox_lists_unread_dms_by_count_then_mentions_newest_first() {
                 preview: "hi there".to_string(),
                 at: at(1),
                 unread: false,
-            },
-        ]
-    );
-}
-
-fn rss(url: &str, title: &str, feed: &str, published: Option<DateTime<Utc>>) -> RssEntryView {
-    RssEntryView {
-        entry: RssEntry {
-            id: Uuid::now_v7(),
-            created: at(20),
-            updated: at(20),
-            feed_id: Uuid::now_v7(),
-            user_id: Uuid::now_v7(),
-            guid: url.to_string(),
-            url: url.to_string(),
-            title: title.to_string(),
-            summary: String::new(),
-            published_at: published,
-            shared_at: None,
-            dismissed_at: None,
-        },
-        feed_title: feed.to_string(),
-        feed_url: format!("{url}/feed"),
-    }
-}
-
-#[test]
-fn headlines_merge_news_and_rss_newest_first_and_a_shared_entry_lists_once() {
-    let article = ArticleFeedItem {
-        article: Article {
-            id: Uuid::now_v7(),
-            created: at(10),
-            updated: at(10),
-            lounge_message_id: None,
-            user_id: Uuid::now_v7(),
-            url: "https://a.example/one".to_string(),
-            title: "Big news".to_string(),
-            summary: String::new(),
-            ascii_art: String::new(),
-        },
-        author_username: "mira".to_string(),
-        body: late_core::models::article_body::BodyStatus::Pending,
-    };
-    let entries = vec![
-        // Shared to News already: the article speaks for it.
-        rss("https://a.example/one", "Big news", "a feed", Some(at(9))),
-        // No title and no publish date: the link and the fetch time.
-        rss("https://b.example/two", "", "b feed", None),
-        rss(
-            "https://c.example/three",
-            "Old\n  story",
-            "c feed",
-            Some(at(2)),
-        ),
-    ];
-
-    assert_eq!(
-        headlines(&[article], &entries),
-        vec![
-            Headline {
-                title: "https://b.example/two".to_string(),
-                source: "b feed".to_string(),
-                url: "https://b.example/two".to_string(),
-                at: at(20),
-            },
-            Headline {
-                title: "Big news".to_string(),
-                source: "news · mira".to_string(),
-                url: "https://a.example/one".to_string(),
-                at: at(10),
-            },
-            Headline {
-                title: "Old story".to_string(),
-                source: "c feed".to_string(),
-                url: "https://c.example/three".to_string(),
-                at: at(2),
             },
         ]
     );

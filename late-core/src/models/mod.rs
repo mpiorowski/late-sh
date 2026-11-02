@@ -162,6 +162,9 @@ pub mod pot;
 #[cfg(test)]
 mod pot_test;
 pub mod presence;
+pub mod presence_sample;
+#[cfg(test)]
+mod presence_sample_test;
 pub mod profile;
 pub mod profile_award;
 #[cfg(test)]
@@ -192,6 +195,8 @@ pub mod server_ban;
 pub mod shop_consumable_effect;
 pub mod showcase;
 pub mod showcase_feed_read;
+#[cfg(test)]
+mod showcase_test;
 pub mod sliding_puzzle;
 #[cfg(test)]
 mod sliding_puzzle_test;

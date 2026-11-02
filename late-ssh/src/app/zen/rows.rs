@@ -1,20 +1,19 @@
-//! The rows the Inbox and Headlines tiles list, derived from the chat state.
-//! Pure: the renderer draws these rows and Enter on the Inbox reads the same
+//! The rows the attention guest lists, derived from the chat state. Pure:
+//! the renderer draws these rows and Enter reads the same
 //! ones, so the row under the marker is the row that opens.
 
 use std::collections::{HashMap, HashSet};
 
 use chrono::{DateTime, Utc};
 use late_core::models::{
-    article::ArticleFeedItem, chat_message::ChatMessage, chat_room::ChatRoom,
-    notification::NotificationView, rss_entry::RssEntryView,
+    chat_message::ChatMessage, chat_room::ChatRoom, notification::NotificationView,
 };
 use uuid::Uuid;
 
 use crate::app::chat::state::dm_peer_is_ignored;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum InboxRow {
+pub enum UnreadRow {
     /// A DM with unread messages; `peer` is the other person's name.
     Dm {
         room_id: Uuid,
@@ -35,14 +34,14 @@ pub enum InboxRow {
 
 /// Unread DMs first, the most unread on top, then the mentions, newest
 /// first. A DM with an ignored peer never shows, as in the room rail.
-pub fn inbox_rows(
+pub fn unread_rows(
     user_id: Uuid,
     rooms: &[(ChatRoom, Vec<ChatMessage>)],
     unread_counts: &HashMap<Uuid, i64>,
     usernames: &HashMap<Uuid, String>,
     ignored: &HashSet<Uuid>,
     mentions: &[NotificationView],
-) -> Vec<InboxRow> {
+) -> Vec<UnreadRow> {
     let mut dms: Vec<(i64, String, Uuid)> = Vec::new();
     for (room, _) in rooms {
         if room.kind != "dm" || dm_peer_is_ignored(room, user_id, ignored) {
@@ -69,12 +68,12 @@ pub fn inbox_rows(
     mentions.sort_by_key(|mention| std::cmp::Reverse(mention.created));
 
     dms.into_iter()
-        .map(|(unread, peer, room_id)| InboxRow::Dm {
+        .map(|(unread, peer, room_id)| UnreadRow::Dm {
             room_id,
             peer,
             unread,
         })
-        .chain(mentions.into_iter().map(|mention| InboxRow::Mention {
+        .chain(mentions.into_iter().map(|mention| UnreadRow::Mention {
             room_id: mention.room_id,
             message_id: mention.message_id,
             actor: mention.actor_username.clone(),
@@ -84,52 +83,6 @@ pub fn inbox_rows(
             unread: mention.read_at.is_none(),
         }))
         .collect()
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Headline {
-    pub title: String,
-    pub source: String,
-    pub url: String,
-    pub at: DateTime<Utc>,
-}
-
-/// News articles and the viewer's RSS entries, newest first. An entry that
-/// was shared to News is the same link, so it lists once, as the article.
-pub fn headlines(articles: &[ArticleFeedItem], entries: &[RssEntryView]) -> Vec<Headline> {
-    let mut seen: HashSet<&str> = HashSet::new();
-    let mut rows = Vec::with_capacity(articles.len() + entries.len());
-    for item in articles {
-        if seen.insert(item.article.url.as_str()) {
-            rows.push(Headline {
-                title: title_or_url(&item.article.title, &item.article.url),
-                source: format!("news · {}", item.author_username),
-                url: item.article.url.clone(),
-                at: item.article.created,
-            });
-        }
-    }
-    for view in entries {
-        if seen.insert(view.entry.url.as_str()) {
-            rows.push(Headline {
-                title: title_or_url(&view.entry.title, &view.entry.url),
-                source: view.feed_title.clone(),
-                url: view.entry.url.clone(),
-                at: view.entry.published_at.unwrap_or(view.entry.created),
-            });
-        }
-    }
-    rows.sort_by_key(|row| std::cmp::Reverse(row.at));
-    rows
-}
-
-fn title_or_url(title: &str, url: &str) -> String {
-    let title = one_line(title);
-    if title.is_empty() {
-        url.to_string()
-    } else {
-        title
-    }
 }
 
 /// A list row is one line: newlines and runs of spaces fold to one space.
