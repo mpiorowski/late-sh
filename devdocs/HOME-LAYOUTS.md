@@ -125,11 +125,11 @@ layout.
   never doubled (`DESIGN_GUIDE.md` section 8: one pane owns the divider).
 - A horizontal split draws the lower tile's title rule as its divider.
   A tile with no title (chat, the reef) gets a plain faint rule.
-- Every tile wears a title, a bare rule or nothing, as `t` picks, and a title carries
-  its key hint on the right (`w tend`, `m mute`) and nothing else: the
-  tank's care bar sits on its water, not in the title. A key that works
-  only in arrange mode on the focused tile (`a feed`, `[ ] Enter pick`,
-  `enter open`) shows only there; a global key shows in every mode.
+- Every tile wears a title, a bare rule or nothing, as `t` picks. A title
+  is the tile's name, and in arrange mode only its key hint on the right
+  (`w tend`, `m mute`) too: the tank's care bar sits on its water, not in
+  the title. A key the tile takes itself (`a feed`, `[ ] Enter pick`,
+  `enter open`) shows only on the focused tile; a global key on every tile.
 - The chat tile wears its title like every other; the composer block
   stays the chat's own chrome.
 
@@ -148,7 +148,7 @@ Always drawn. The closed `TileKind` becomes:
 | `chat` | A room, with the composer when active | a chat tile |
 | `center` | Home's chat center: the selected rail entry, synthetic views included, the strip and the banner inserted at the top | `draw_chat_center` / `draw_dashboard_chat_card` |
 | `rooms` | The room rail with its sections, counts and nav hints | `draw_room_list_rail` |
-| `aquarium` | The reef, or the shop note | a tile |
+| `aquarium` | The reef | a tile |
 | `tank` | The sidebar's small tank, the same aquarium in a six-row band | sidebar Tank |
 | `bonsai` | The 81x26 canvas, cut to fit | a tile, sidebar Bonsai |
 | `pet` | The box | a tile, sidebar Pet |

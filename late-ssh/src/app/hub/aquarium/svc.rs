@@ -15,13 +15,15 @@ use crate::app::{activity::event::ActivityEvent, common::primitives::Banner};
 pub(crate) const FEED_CHIP_BONUS: i64 = 100;
 
 /// What a session learns about its tank at connect: the care row (`None`
-/// for a user with no tank), every shield window ever bought, the fish the
-/// starvation settlement took just now, and what the sprout clock did: what
-/// became of a sprout that passed its week while the owner was away, and
-/// whether a new one came up.
+/// only when the bootstrap failed and the session runs on the default),
+/// whether this connect planted the tank, every shield window ever bought,
+/// the fish the starvation settlement took just now, and what the sprout
+/// clock did: what became of a sprout that passed its week while the owner
+/// was away, and whether a new one came up.
 #[derive(Debug, Clone, Default)]
 pub struct CareBootstrap {
     pub care: Option<AquariumCare>,
+    pub welcomed: bool,
     pub shields: Vec<AquariumShield>,
     pub lost: Vec<String>,
     pub rooted: Option<SproutFate>,
@@ -45,8 +47,6 @@ pub(crate) enum FeedOutcome {
     Fed,
     /// The tank already ate today; nothing written.
     AlreadyFedToday,
-    /// The user owns no tank. The UI never sends this, so it is logged.
-    NoTank,
 }
 
 /// What a cut press came to once the DB had its say.
@@ -56,8 +56,6 @@ pub(crate) enum CutOutcome {
     Cut,
     /// No sprout young enough to cut: bare floor, or it rooted already.
     NothingToCut,
-    /// The user owns no tank. The UI never sends this, so it is logged.
-    NoTank,
 }
 
 /// Persistence and side effects for the tank's care, `BonsaiService::water`
@@ -77,33 +75,23 @@ impl AquariumService {
     }
 
     /// The connect-time read and the starvation settlement in one call. A
-    /// tank owner gets a care row if they never had one (the clock starts
-    /// now), then every `CARE_DAYS` unfed days since the last meal that are
-    /// not settled yet cost one swimming fish, picked by weight (cheap fish
-    /// first, a Bigbert rarely). The row is locked for the transaction, so
-    /// two devices or two replicas connecting at once take turns and the
-    /// second finds nothing left to settle. Only fish starve: the plants
-    /// are another item kind and never in the roll. The sprout clock
-    /// settles in the same transaction: a sprout past its week roots as
+    /// user's first connect plants their tank (the clock starts now, with a
+    /// sprout and a fry), then every `CARE_DAYS` unfed days since the last
+    /// meal that are not settled yet cost one swimming fish, picked by weight
+    /// (cheap fish first, a Bigbert rarely). The row is locked for the
+    /// transaction, so two devices or two replicas connecting at once take
+    /// turns and the second finds nothing left to settle. Only fish starve:
+    /// the plants are another item kind and never in the roll. The sprout
+    /// clock settles in the same transaction: a sprout past its week roots as
     /// one of the catalog's plants, then a due sprout comes up on the bare
-    /// floor. Users without a tank only get the read.
+    /// floor.
     pub async fn bootstrap(&self, user_id: Uuid) -> Result<CareBootstrap> {
         let mut client = self.db.get().await?;
-        if !marketplace::user_owns_aquarium(&**client, user_id).await? {
-            return Ok(CareBootstrap {
-                care: AquariumCare::load(&**client, user_id).await?,
-                shields: AquariumShield::all_for_user(&**client, user_id).await?,
-                lost: Vec::new(),
-                rooted: None,
-                sprouted: false,
-            });
-        }
-
         let today = Utc::now().date_naive();
         let tx = client.transaction().await?;
-        AquariumCare::ensure(&*tx, user_id).await?;
+        let welcomed = marketplace::welcome_aquarium_tank_in_tx(&tx, user_id).await?;
         let Some(care) = AquariumCare::lock(&*tx, user_id).await? else {
-            bail!("aquarium care row missing right after ensure");
+            bail!("aquarium care row missing right after the welcome");
         };
         let shields = AquariumShield::all_for_user(&*tx, user_id).await?;
         let dry = care_rules::dry_days(care.last_fed.date_naive(), today, &shields);
@@ -132,6 +120,9 @@ impl AquariumService {
         let (rooted, sprouted) = settle_sprout_clock_in_tx(&tx, user_id, today).await?;
         tx.commit().await?;
 
+        if welcomed {
+            tracing::info!(user_id = %user_id, "aquarium tank planted");
+        }
         if !lost.is_empty() || rooted.is_some() || sprouted {
             let username = late_core::models::profile::fetch_username(&client, user_id).await;
             for creature in &lost {
@@ -169,6 +160,7 @@ impl AquariumService {
                 },
                 ..care
             }),
+            welcomed,
             shields,
             lost,
             rooted,
@@ -192,9 +184,6 @@ impl AquariumService {
 
     async fn settle_sprout_clock(&self, user_id: Uuid) -> Result<()> {
         let mut client = self.db.get().await?;
-        if !marketplace::user_owns_aquarium(&**client, user_id).await? {
-            return Ok(());
-        }
         let today = Utc::now().date_naive();
         let tx = client.transaction().await?;
         let (rooted, sprouted) = settle_sprout_clock_in_tx(&tx, user_id, today).await?;
@@ -256,18 +245,15 @@ impl AquariumService {
         }
     }
 
-    /// Persist a cut. The ownership check and the sprout's own gate (still
-    /// standing, still young enough) decide in one statement; the event
-    /// follows only when this press was the one that cut it, so a second
-    /// device clears its floor too.
+    /// Persist a cut. The sprout's own gate (still standing, still young
+    /// enough) decides in one statement; the event follows only when this
+    /// press was the one that cut it, so a second device clears its floor
+    /// too.
     pub fn cut_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
             match svc.cut(user_id).await {
                 Ok(CutOutcome::Cut) | Ok(CutOutcome::NothingToCut) => {}
-                Ok(CutOutcome::NoTank) => {
-                    tracing::warn!(user_id = %user_id, "aquarium cut without a tank");
-                }
                 Err(e) => {
                     tracing::error!(error = ?e, user_id = %user_id, "failed to cut aquarium sprout");
                 }
@@ -281,9 +267,6 @@ impl AquariumService {
 
     async fn cut_on(&self, user_id: Uuid, today: NaiveDate) -> Result<CutOutcome> {
         let client = self.db.get().await?;
-        if !marketplace::user_owns_aquarium(&**client, user_id).await? {
-            return Ok(CutOutcome::NoTank);
-        }
         if !AquariumCare::cut_sprout(&**client, user_id, today).await? {
             return Ok(CutOutcome::NothingToCut);
         }
@@ -294,18 +277,15 @@ impl AquariumService {
         Ok(CutOutcome::Cut)
     }
 
-    /// Persist a feeding. The ownership check, the daily gate, the chip
-    /// credit, and any fry the streak earns commit in one transaction, so
-    /// they succeed or fail together; the activity events follow only when
-    /// the gate said this was the first feed of the day.
+    /// Persist a feeding. The daily gate, the chip credit, and any fry the
+    /// streak earns commit in one transaction, so they succeed or fail
+    /// together; the activity events follow only when the gate said this was
+    /// the first feed of the day.
     pub fn feed_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
             match svc.feed(user_id).await {
                 Ok(FeedOutcome::Fed) | Ok(FeedOutcome::AlreadyFedToday) => {}
-                Ok(FeedOutcome::NoTank) => {
-                    tracing::warn!(user_id = %user_id, "aquarium feed without a tank");
-                }
                 Err(e) => {
                     tracing::error!(error = ?e, user_id = %user_id, "failed to feed aquarium");
                 }
@@ -320,12 +300,6 @@ impl AquariumService {
     async fn feed_on(&self, user_id: Uuid, today: NaiveDate) -> Result<FeedOutcome> {
         let mut client = self.db.get().await?;
         let tx = client.transaction().await?;
-        // The chips reward tending a tank; without one there is nothing to
-        // tend and no clock to start.
-        if !marketplace::user_owns_aquarium(&*tx, user_id).await? {
-            tx.commit().await?;
-            return Ok(FeedOutcome::NoTank);
-        }
         let shields = AquariumShield::all_for_user(&*tx, user_id).await?;
         let continues_from = care_rules::streak_continues_from(today, &shields);
         let Some(streak) = AquariumCare::feed_day(&*tx, user_id, today, continues_from).await?

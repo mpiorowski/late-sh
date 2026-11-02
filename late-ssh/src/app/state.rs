@@ -1595,9 +1595,15 @@ impl App {
             aquarium_care.sprout_visible(),
         );
         aquarium_state.set_hungry(aquarium_care.hungry());
-        // What the login settlement did while the user was away: said once,
-        // on the first screen. A loss outranks the sprout news.
+        // What the login settlement did while the user was away, or the tank
+        // it planted: said once, on the first screen. A loss outranks the
+        // sprout news.
         let aquarium_loss_banner = match config.initial_aquarium_care.lost.as_slice() {
+            [] if config.initial_aquarium_care.welcomed => {
+                Some(crate::app::common::primitives::Banner::info(
+                    "You have a tank, a fry and a sprout: /aquarium feed daily, cut the sprout in /shop or let it root",
+                ))
+            }
             [] => match (
                 &config.initial_aquarium_care.rooted,
                 config.initial_aquarium_care.sprouted,
@@ -3745,17 +3751,14 @@ impl App {
         self.home_layout_dirty = true;
     }
 
-    /// Today's care, gated on ownership: what the Pulse tile and the
-    /// attention guest read.
+    /// Today's care, the pet gated on ownership: what the Pulse tile and
+    /// the attention guest read.
     pub(crate) fn care_today(&self) -> crate::app::zen::ui::Care {
         use crate::app::zen::ui::{Care, Chore};
         let today = chrono::Utc::now().date_naive();
         Care {
             bonsai: Chore::of(true, self.bonsai.tree.last_watered == Some(today)),
-            tank: Chore::of(
-                self.shop_state.entitlements().has_aquarium(),
-                self.aquarium_care.fed_on_day(today),
-            ),
+            tank: Chore::of(true, self.aquarium_care.fed_on_day(today)),
             pet: Chore::of(
                 self.shop_state.entitlements().has_pet_companion(),
                 self.pet_state.petted_on(today),

@@ -166,7 +166,6 @@ impl App {
         // midnight asks the service once when a sprout has rooted or the
         // next is due, and the event clears or plants the floor.
         if one_hz
-            && self.shop_state.entitlements().has_aquarium()
             && self
                 .aquarium_care
                 .take_sprout_settlement_on(chrono::Utc::now().date_naive())
@@ -1133,30 +1132,6 @@ impl App {
             let equipped_badge = self.shop_state.equipped_chat_badge();
             self.chat
                 .set_chat_badge(self.user_id, equipped_badge.as_deref());
-            // A tank owned by the shop but with no clock in this session
-            // was bought just now (a connect-time owner always has one from
-            // bootstrap): take the row the purchase planted, sprout and
-            // fry. The fry is the one fish the snapshot says is swimming.
-            if self.shop_state.entitlements().has_aquarium()
-                && self.aquarium_care.last_fed.is_none()
-            {
-                let fry = self
-                    .shop_state
-                    .active_aquarium_creatures()
-                    .into_iter()
-                    .next()
-                    .map(|(creature, _)| creature);
-                let welcome = match &fry {
-                    Some(_) => String::from(
-                        "Your tank came with a fry and a sprout: cut the sprout in /shop within the week, or leave it to root"
-                    ),
-                    None => "Your tank came with a sprout: cut it in /shop within the week, or leave it to root"
-                        .to_string(),
-                };
-                self.aquarium_care
-                    .welcome_new_tank(chrono::Utc::now().date_naive(), fry);
-                self.banner = Some(crate::app::common::primitives::Banner::info(&welcome));
-            }
             self.aquarium_state.set_active_creatures(
                 &self.shop_state.active_aquarium_creatures(),
                 self.aquarium_care.fry_visible(),

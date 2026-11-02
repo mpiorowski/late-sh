@@ -22,14 +22,13 @@ Tile kinds are a closed enum: bonsai (always the care modal's true
 and the sides evenly so the trunk stays centered, `draw_bonsai_tile`,
 `ui_test.rs`; no status row, every row is tree, since day, vigor, and
 stress live in the `w` care modal), aquarium (the real reef
-simulation once the account owns it, in a tile wider than the rail and
+simulation, in a tile wider than the rail and
 taller than the small tank (`ui::reef_form`), else a note pointing at the
-tank tile; unowned, the tile is a centered
-note pointing at `/shop`, the same shape as the pet's), tank (the same
+tank tile), tank (the same
 aquarium the sidebar's way: the fish in a six-row band across the tile,
 centered in a taller one, `hub/aquarium/ui::draw_mini_tank`; the two are
-the one tank two ways, and both draw the care bar on the water's surface once
-owned, fourteen dots green for the feeding streak or red for the days unfed,
+the one tank two ways, and both draw the care bar on the water's surface,
+fourteen dots green for the feeding streak or red for the days unfed,
 see the hub CONTEXT), ascii (an
 animated piece ported from ascii.rest, `../ascii/CONTEXT.md`: earthrise
 in dots, the screensaver's default and a slow piece, until `[` `]` step it through the others or Enter picks one from
@@ -67,8 +66,8 @@ The stock `zen` layout (`RiceLayout::default`, what `R` resets a layout
 named `zen` to; rounded borders, no gap, titles on): on the left (72%),
 the bonsai beside the reef over the current room's chat; on the right a rail of clock, pet, lobby, live, then music, so the
 pet has the tank against its left edge and watches it (the bonsai is out
-of its reach; pinned by `layout_test.rs`). Without a Pet Companion or the
-Aquarium the tile says so and points at `/shop`. Pulse is not in it.
+of its reach; pinned by `layout_test.rs`). Without a Pet Companion the
+tile says so and points at `/shop`. Pulse is not in it.
 
 The active chat is `App::home_chat_room_id`: the focused chat tile's
 room, else the first chat tile's, else (no chat tile) the current room,
@@ -127,8 +126,8 @@ line), `live` at its panel rows, `pet` (its three-row box, no mood row) and
 `bonsai` taking the rest. The rail, the reef and `presence` take their
 title off outside arrange mode (`Node::untitled`, `Node::title_at`): the
 reef keeps the row for water, so nothing moves when the mode comes up, and
-`presence` gets both its rows. An unowned reef
-or pet draws the shop's note in its tile. The Settings panel list is the
+`presence` gets both its rows. An unowned
+pet draws the shop's note in its tile. The Settings panel list is the
 Arcade's alone. `R` resets to the stock. Nothing about the terminal's size
 changes a layout: a page is drawn as arranged at every width, so a phone
 arranges its own Home once and keeps it on its key.
@@ -165,15 +164,14 @@ rail, and the gutter of each row split painted as one `│`
 title rule, and `t` picks one of three for it (`TileTitle`, `Chrome::wears`):
 named, the rule alone with no text, or no row at all. In arrange mode every
 tile is named whatever it says, so the focus has a ring to land on.
-The rule is the tile's name on the left and its key hint on the right
-(`tile_keys`: the key that matters most on the tile, `w tend`, `m mute`,
-`ctrl+/ room`), nothing else. A hint says when it works (`HintWhen`): a
-global key shows in every mode; a key the tile takes only in arrange mode
-with the focus (`[ ] Enter pick` on an ascii tile, `a feed` on the reef
-or tank, `[ ] cycle` on a chat, and
-`j k Enter act` for the attention guest) shows only then
-(`hints_shown`), so outside the mode no title names a key the composer
-would take. The rail names none: it takes clicks on its rows. A layout with
+Outside arrange mode the rule is the tile's name and nothing else. In
+arrange mode its key hint comes up on the right (`tile_keys`: the key that
+matters most on the tile, `w tend`, `m mute`, `ctrl+/ room`, `^G open`),
+which `hints_shown` picks by `HintWhen`: a global key on every tile, and a
+key the tile takes itself (`[ ] Enter pick` on an ascii tile, `a feed` on
+the reef or tank, `[ ] cycle` on a chat, and `j k Enter act` for the
+attention guest) only on the focused one. The rail names none: it takes
+clicks on its rows. A layout with
 a border (the stock `zen`, or `b` in
 arrange mode) is boxed in its look with its gap (`ZenState::chrome`,
 `gaps`).
@@ -271,15 +269,15 @@ and the debounced flush. `late-core`: `extract_key_home_layouts` /
 
 ## 3. Keys
 
-Where they are shown: each tile names its own keys on the right of its
-title (`tile_keys`, drawn with `hint_line` so the key is amber and the
-word dim), the arrange-only ones (an ascii tile's pieces, the tank's feed,
-a chat's `[` `]`, the attention guest's rows) only while arranging with the focus on the tile; `t` takes them away
-with the title. In arrange mode `?` opens `HelpTopic::Layouts`, which
-lists every key, and the bottom row is a footer naming the mode's keys
-(`HOME_ARRANGE_KEYS`, trimmed from the right on a narrow page). Nothing
-else on the page names a key: the lobby's compact footer lost its key
-pair to the title.
+Where they are shown: in arrange mode only, each tile names its own keys on
+the right of its title (`tile_keys`, drawn with `hint_line` so the key is
+amber and the word dim), the ones the tile takes itself (an ascii tile's
+pieces, the tank's feed, a chat's `[` `]`, the attention guest's rows) only
+with the focus on the tile. In arrange mode `?` opens `HelpTopic::Layouts`,
+which lists every key, and the bottom row is a footer naming the mode's keys
+(`HOME_ARRANGE_KEYS`, trimmed from the right on a narrow page). A few panels
+still name keys inside the tile in normal mode: the music dock's `v+r tune`
+and the sidebar bonsai's `w care`. The lobby's compact footer has none.
 
 Outside arrange mode Home's keys are Home's (`dashboard::input`): the
 active chat tile is Home's chat, the rail its room, `i` / Enter compose
@@ -384,9 +382,8 @@ update.
   uses (`layout.rs`), so the sim and the drawing never disagree on size.
   Entering or leaving arrange mode moves the footer row, so it is a
   layout change like any other.
-  It steps on the quarter edge while Home draws a reef tile, owned or not
-  (`aquarium_visible`, `App::reef_tile_inner` in `tick.rs`), though the
-  tile only draws it once the tank is owned; unowned it is the shop note.
+  It steps on the quarter edge while Home draws a reef tile
+  (`aquarium_visible`, `App::reef_tile_inner` in `tick.rs`).
 - The care bar (`care_bar_spans`, `draw_care_bar`, `ui_test.rs`) is the
   tank's only care readout on the page: `CareBar` comes from
   `AquariumCare::bar` in `hub/aquarium/state.rs`, the aquarium and tank
@@ -429,8 +426,7 @@ update.
   Adjacency is exact edge contact, not proximity: one cell of overlap on
   the perpendicular axis and edges equal plus the gap, so a diagonal or
   corner-only tile is not a neighbour.
-  The check reads the tile kind only, so an unowned tank (the shop note) is
-  watched like a live reef. A sulking or sleeping pet ignores the fish, the
+  A sulking or sleeping pet ignores the fish, the
   tree, and the cursor.
 - Pulse draws only owned values: `online_count` and
   `PresenceSession::history`, the day of headcount buckets the tick copies

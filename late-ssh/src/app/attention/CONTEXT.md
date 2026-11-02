@@ -18,11 +18,11 @@ A guest (`zen::state::Guest::Attention`, `../zen/CONTEXT.md`): invisible while n
 | result in: `game` vs `name` | a finished daily match you have not looked at (`DailyState::my_finished`) | opening the board |
 | `@peer`: n unread | a DM room with unread messages (`zen/rows.rs::unread_rows`) | reading it |
 | `@actor` mentioned you in #room | an unread mention (the same rows, read ones left out) | reading it |
-| the tank is unfed today | the reef is owned and `AquariumCare` has no meal today | `/aquarium feed`, `a` on the tank |
+| the tank is unfed today | `AquariumCare` has no meal today | `/aquarium feed`, `a` on the tank |
 | the tree is unwatered today | `last_watered` is not today | watering |
 | the pet is unpetted today | the pet is owned and not petted today | a pat |
 
-Order: moves, results, DMs, mentions, tank, tree, pet. The care rows are keyed on the UTC day, so they come back each morning; ownership is gated by the glue, an unowned tank or pet is never due.
+Order: moves, results, DMs, mentions, tank, tree, pet. The care rows are keyed on the UTC day, so they come back each morning; ownership is gated by the glue, an unowned pet is never due; everyone has a tank and a tree.
 
 ## 2. Files
 

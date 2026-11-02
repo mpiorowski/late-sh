@@ -3420,17 +3420,11 @@ pub(crate) fn pet_the_pet_globally(app: &mut App) {
         .pet(std::time::Instant::now(), chrono::Utc::now().date_naive());
 }
 
-/// The tank's free daily meal, from any surface that shows it. Ownership is
-/// the only gate: the flakes are the immediate feedback, the chips banner
-/// follows when the service's event comes back.
+/// The tank's free daily meal, from any surface that shows it: the flakes
+/// are the immediate feedback, the chips banner follows when the service's
+/// event comes back.
 pub(crate) fn feed_aquarium_globally(app: &mut App) {
     clear_prefix_arms(app);
-    if !app.shop_state.entitlements().has_aquarium() {
-        app.banner = Some(crate::app::common::primitives::Banner::error(
-            "Unlock Aquarium in Hub Shop",
-        ));
-        return;
-    }
     match app.aquarium_care.feed() {
         crate::app::hub::aquarium::state::CareOutcome::Fed => {
             app.aquarium_state.feed();

@@ -223,10 +223,7 @@ fn off(component: RightSidebarComponent) -> RightSidebarComponentSetting {
     }
 }
 
-const OWNS_ALL: SidebarOwnership = SidebarOwnership {
-    pet: true,
-    tank: true,
-};
+const OWNS_ALL: SidebarOwnership = SidebarOwnership { pet: true };
 
 #[test]
 fn visible_components_respects_order() {
@@ -297,13 +294,10 @@ fn visible_components_skips_unowned_panels_without_stopping() {
         on(RightSidebarComponent::Tank),
         on(RightSidebarComponent::Daily),
     ];
-    let owns_pet = SidebarOwnership {
-        pet: true,
-        tank: false,
-    };
+    let no_pet = SidebarOwnership { pet: false };
     assert_eq!(
-        visible_components(&components, owns_pet, 100),
-        vec![RightSidebarComponent::Pet, RightSidebarComponent::Daily]
+        visible_components(&components, no_pet, 100),
+        vec![RightSidebarComponent::Tank, RightSidebarComponent::Daily]
     );
 }
 

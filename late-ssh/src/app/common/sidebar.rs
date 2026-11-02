@@ -67,9 +67,8 @@ pub(crate) struct SidebarProps<'a> {
     /// The pet panel's pet; `None` without a Pet Companion, which hides
     /// the panel.
     pub pet: Option<&'a PetState>,
-    /// The tank panel's reef; `None` without the aquarium, which hides
-    /// the panel.
-    pub tank: Option<SidebarTank<'a>>,
+    /// The tank panel's reef.
+    pub tank: SidebarTank<'a>,
     pub clock_text: &'a str,
     /// YouTube queue snapshot — drives the music stage's active panel and
     /// peek strip. Fed from the same watch channel as the booth modal.
@@ -122,15 +121,14 @@ pub(crate) struct SidebarTank<'a> {
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SidebarOwnership {
     pub pet: bool,
-    pub tank: bool,
 }
 
 impl SidebarOwnership {
     pub(crate) fn owns(self, component: RightSidebarComponent) -> bool {
         match component {
             RightSidebarComponent::Pet => self.pet,
-            RightSidebarComponent::Tank => self.tank,
-            RightSidebarComponent::Live
+            RightSidebarComponent::Tank
+            | RightSidebarComponent::Live
             | RightSidebarComponent::Music
             | RightSidebarComponent::Bonsai
             | RightSidebarComponent::Daily
@@ -165,7 +163,6 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
     // Free space panel wherever it sits, else to the bottom of the rail.
     let ownership = SidebarOwnership {
         pet: props.pet.is_some(),
-        tank: props.tank.is_some(),
     };
     let visible = visible_components(props.components, ownership, area.height);
 
@@ -293,14 +290,11 @@ fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_
                 draw_pet_box(frame, body, &view, pet_neighbours(&visible, idx));
             }
             RightSidebarComponent::Tank => {
-                let Some(tank) = &props.tank else {
-                    unreachable!("an unowned tank panel is never visible");
-                };
                 aquarium_ui::draw_mini_tank(
                     frame.buffer_mut(),
                     body,
-                    tank.aquarium,
-                    tank.hungry,
+                    props.tank.aquarium,
+                    props.tank.hungry,
                     props.marquee_tick,
                 );
             }

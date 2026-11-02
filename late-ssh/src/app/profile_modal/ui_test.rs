@@ -445,7 +445,7 @@ async fn a_runners_profile_hangs_the_face_and_the_poster() {
 #[tokio::test]
 async fn a_pet_sits_beside_its_owners_reef() {
     use late_core::models::marketplace::{
-        AQUARIUM_SKU, PET_COMPANION_SKU, purchase_durable_item_by_sku,
+        PET_COMPANION_SKU, purchase_durable_item_by_sku, welcome_aquarium_tank_in_tx,
     };
 
     let fixture = fixture("reef").await;
@@ -456,12 +456,15 @@ async fn a_pet_sits_beside_its_owners_reef() {
             .await
             .expect("fund chips");
         // The tank arrives with a welcome fry swimming, the pet with its row.
-        for sku in [AQUARIUM_SKU, PET_COMPANION_SKU] {
-            purchase_durable_item_by_sku(&mut client, fixture.user_id, sku)
-                .await
-                .expect("purchase")
-                .expect("affordable");
-        }
+        let tx = client.transaction().await.expect("transaction");
+        welcome_aquarium_tank_in_tx(&tx, fixture.user_id)
+            .await
+            .expect("plant the tank");
+        tx.commit().await.expect("commit");
+        purchase_durable_item_by_sku(&mut client, fixture.user_id, PET_COMPANION_SKU)
+            .await
+            .expect("purchase")
+            .expect("affordable");
     }
     let profile_service = ProfileService::new(db.clone(), Arc::new(Mutex::new(HashMap::new())));
     let mut snapshot_rx = profile_service.subscribe_snapshot(fixture.user_id);

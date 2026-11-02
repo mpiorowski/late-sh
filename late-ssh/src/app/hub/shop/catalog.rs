@@ -1,8 +1,8 @@
 use late_core::models::{
     marketplace::{
         AQUARIUM_CONSUMABLE_ITEM_KIND, AQUARIUM_FISH_ITEM_KIND, AQUARIUM_PLANT_ITEM_KIND,
-        AQUARIUM_SKU, BONSAI_CONSUMABLE_ITEM_KIND, CHAT_CONSUMABLE_ITEM_KIND,
-        COMPANION_CONSUMABLE_ITEM_KIND, PET_COMPANION_SKU, USERNAME_EFFECT_ITEM_KIND,
+        BONSAI_CONSUMABLE_ITEM_KIND, CHAT_CONSUMABLE_ITEM_KIND, COMPANION_CONSUMABLE_ITEM_KIND,
+        PET_COMPANION_SKU, USERNAME_EFFECT_ITEM_KIND,
     },
     rental::TITLE_RENTAL_ITEM_KIND,
 };
@@ -42,8 +42,8 @@ impl ShopCategory {
     pub(crate) fn matches_item(self, item: &ShopCatalogItem) -> bool {
         match self {
             // Everything you keep alive, in one tab: the pet, the bonsai
-            // shield, and the tank with its shield, its plants, and its
-            // fish. `CompanionSection` splits and orders them.
+            // shield, and the tank's shield, plants, and fish.
+            // `CompanionSection` splits and orders them.
             Self::Companions => {
                 item.item_kind == "feature_unlock"
                     || item.item_kind == COMPANION_CONSUMABLE_ITEM_KIND
@@ -70,7 +70,7 @@ impl ShopCategory {
 /// the list is sorted by this (`ShopState::visible_items`, stable, so
 /// catalog order holds inside a section) and labelled by it
 /// (`shop::ui::item_list_rows`). The tank's own growth (the fry and the
-/// sprout, listed and never sold) sits between the tank and what it sells,
+/// sprout, listed and never sold) sits between its shield and what it sells,
 /// the plants before the fish.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
 pub(crate) enum CompanionSection {
@@ -113,8 +113,4 @@ impl CompanionSection {
 
 pub(crate) fn is_pet_companion_sku(sku: &str) -> bool {
     sku == PET_COMPANION_SKU
-}
-
-pub(crate) fn is_aquarium_sku(sku: &str) -> bool {
-    sku == AQUARIUM_SKU
 }

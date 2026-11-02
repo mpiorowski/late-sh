@@ -389,8 +389,8 @@ removes a required secret follows the deploy skew rule in `infra/RUNBOOK.md`.
   (online count, clock, connected friends) then the user's panels
   (`RightSidebarComponent`) in their order, each a fixed height;
   `visible_components` stops at the first panel that does not fit, so panels
-  drop from the bottom. Free space takes leftover rows. Pet and Tank are
-  shop-gated and view only here. A panel missing from a stored list is
+  drop from the bottom. Free space takes leftover rows. Pet is
+  shop-gated, and Pet and Tank are view only here. A panel missing from a stored list is
   backfilled at its default under its default predecessor
   (`normalize_right_sidebar_components`). Stored `"activity"` and `"pot"` keys
   are dropped on read. The Live panel is `app/live`. Home draws the same

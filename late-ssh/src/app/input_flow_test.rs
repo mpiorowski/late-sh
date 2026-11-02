@@ -5492,7 +5492,7 @@ async fn arranging_home_keeps_the_chat_keys_off_a_tile_that_is_not_a_chat() {
     app.resize(160, 40).expect("resize test terminal");
     wait_for_render_contains(&mut app, "zen select target").await;
     crate::app::zen::input::load_zen_layout(&mut app);
-    wait_for_render_contains(&mut app, "w tend").await;
+    wait_for_render_contains(&mut app, "bonsai").await;
 
     // The layout opens on its chat tile: `j` selects in its room.
     assert_eq!(
@@ -5573,7 +5573,7 @@ async fn home_s_then_a_digit_opens_the_live_tiles_row() {
     app.resize(160, 40).expect("resize test terminal");
     wait_for_render_contains(&mut app, "lounge").await;
     crate::app::zen::input::load_zen_layout(&mut app);
-    wait_for_render_contains(&mut app, "w tend").await;
+    wait_for_render_contains(&mut app, "bonsai").await;
 
     // The zen layout's Live tile shows the shared link.
     assert!(app.home.shows(TileKind::Live));
@@ -5629,7 +5629,7 @@ async fn home_clicks_under_the_open_tile_picker_reach_nothing() {
     app.resize(160, 40).expect("resize test terminal");
     wait_for_render_contains(&mut app, "lounge").await;
     crate::app::zen::input::load_zen_layout(&mut app);
-    wait_for_render_contains(&mut app, "w tend").await;
+    wait_for_render_contains(&mut app, "bonsai").await;
 
     app.handle_input(b"\x05");
     assert!(app.home.arrange);
@@ -5698,7 +5698,7 @@ async fn home_a_draft_stays_in_its_room_when_the_focus_moves() {
     app.resize(160, 40).expect("resize test terminal");
     wait_for_render_contains(&mut app, "zen-quiet").await;
     crate::app::zen::input::load_zen_layout(&mut app);
-    wait_for_render_contains(&mut app, "w tend").await;
+    wait_for_render_contains(&mut app, "bonsai").await;
 
     // A second chat tile beside the zen layout's, bound to the second
     // room; the first is bound to #lounge.
@@ -5841,7 +5841,7 @@ async fn home_every_chat_tile_keeps_its_composer_whatever_is_focused() {
     app.resize(160, 40).expect("resize test terminal");
     wait_for_render_contains(&mut app, "lounge").await;
     crate::app::zen::input::load_zen_layout(&mut app);
-    wait_for_render_contains(&mut app, "w tend").await;
+    wait_for_render_contains(&mut app, "bonsai").await;
 
     let first = app
         .home
@@ -5924,7 +5924,7 @@ async fn home_arrange_brackets_cycle_rooms_in_rail_order() {
     app.resize(160, 40).expect("resize test terminal");
     wait_for_render_contains(&mut app, "zen-cycle").await;
     crate::app::zen::input::load_zen_layout(&mut app);
-    wait_for_render_contains(&mut app, "w tend").await;
+    wait_for_render_contains(&mut app, "bonsai").await;
     app.handle_input(b"\x05");
     assert!(app.home.arrange);
     assert_eq!(app.home.focused_kind(), Some(TileKind::Chat));
@@ -5971,7 +5971,7 @@ async fn slash_picker_opens_the_room_picker_and_the_pick_moves_homes_chat() {
     wait_for_render_contains(&mut app, "zen-picked").await;
     let home_selection = app.chat.selected_room_id;
     crate::app::zen::input::load_zen_layout(&mut app);
-    wait_for_render_contains(&mut app, "w tend").await;
+    wait_for_render_contains(&mut app, "bonsai").await;
     assert_eq!(app.home.focused_kind(), Some(TileKind::Chat));
     assert_eq!(
         app.home.active_chat_room(),
@@ -6019,7 +6019,7 @@ async fn home_arrange_space_opens_a_tile_picker_that_owns_the_keys_until_a_pick_
     app.resize(160, 40).expect("resize test terminal");
     wait_for_render_contains(&mut app, " Home ").await;
     crate::app::zen::input::load_zen_layout(&mut app);
-    wait_for_render_contains(&mut app, "w tend").await;
+    wait_for_render_contains(&mut app, "bonsai").await;
     app.handle_input(b"\x05");
     assert!(app.home.arrange);
     assert_eq!(app.home.focused_kind(), Some(TileKind::Chat));

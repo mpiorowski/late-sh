@@ -117,10 +117,7 @@ pub(crate) struct ZenView<'a> {
     /// whenever `zen.arrange` is on, as `App::home_tiles_area` lays it out.
     pub arrange_keys: Option<Line<'static>>,
     pub bonsai: &'a BonsaiState,
-    /// The reef is drawn for everyone; `aquarium_owned` says whether the
-    /// account has fish in it or gets the shop caption instead.
     pub aquarium: &'a AquariumState,
-    pub aquarium_owned: bool,
     /// The owner's care: the care bar's fourteen dots read off it.
     pub aquarium_care: &'a AquariumCare,
     /// `None` when the account owns no pet.
@@ -361,18 +358,13 @@ pub(crate) fn draw_rice(
         };
         match kind {
             TileKind::Bonsai => draw_bonsai_tile(frame, inner, view.bonsai, view.wall_tick),
-            TileKind::Aquarium => draw_aquarium_tile(
-                frame,
-                inner,
-                view.aquarium,
-                view.aquarium_owned,
-                view.aquarium_care.bar(),
-            ),
+            TileKind::Aquarium => {
+                draw_aquarium_tile(frame, inner, view.aquarium, view.aquarium_care.bar())
+            }
             TileKind::Tank => draw_tank_tile(
                 frame,
                 inner,
                 view.aquarium,
-                view.aquarium_owned,
                 view.aquarium_care.hungry(),
                 view.aquarium_care.bar(),
                 view.wall_tick,
@@ -816,12 +808,13 @@ fn draw_kind_picker(frame: &mut Frame, area: Rect, zen: &ZenState) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-/// When a tile's key works: always, as the global keys do with the chat
-/// composer open, or only in arrange mode on the focused tile, where the
-/// tile takes the keys (`input::handle_tile_keys`).
+/// Which titles name a key, all of them in arrange mode only: normal mode
+/// keeps its titles free of keys. Every tile names a global key that works
+/// with the chat composer open; only the focused tile names one the tile
+/// itself takes (`input::handle_tile_keys`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HintWhen {
-    Always,
+    Arranging,
     Focused,
 }
 
@@ -833,11 +826,11 @@ struct TileHint {
     when: HintWhen,
 }
 
-const fn always(key: &'static str, action: &'static str) -> TileHint {
+const fn arranging(key: &'static str, action: &'static str) -> TileHint {
     TileHint {
         key,
         action,
-        when: HintWhen::Always,
+        when: HintWhen::Arranging,
     }
 }
 
@@ -853,21 +846,20 @@ const fn focused(key: &'static str, action: &'static str) -> TileHint {
 /// arrange mode: `j` `k` walk its rows, Enter acts on the selected one.
 const ATTENTION_HINT: TileHint = focused("j k Enter", "act");
 
-/// The key hints a tile's title carries, on the right, the same text
-/// whenever one shows: the key that matters most on it, or none. A key
-/// that works only in arrange mode on the focused tile shows only there,
-/// so outside the mode a title never names a key the composer would
-/// take. The guide has the rest.
+/// The key hints a tile's title carries in arrange mode, on the right, the
+/// same text whenever one shows: the key that matters most on it, or none.
+/// A key the tile takes itself shows only with the focus on it. The guide
+/// has the rest.
 fn tile_keys(kind: TileKind) -> &'static [TileHint] {
     match kind {
-        TileKind::Bonsai => const { &[always("w", "tend")] },
+        TileKind::Bonsai => const { &[arranging("w", "tend")] },
         TileKind::Ascii => const { &[focused("[ ] Enter", "pick")] },
         TileKind::Aquarium | TileKind::Tank => const { &[focused("a", "feed")] },
-        TileKind::Pet => const { &[always("click", "pet")] },
-        TileKind::Chat => const { &[focused("[ ]", "cycle"), always("ctrl+/", "room")] },
-        TileKind::Music => const { &[always("m", "mute")] },
-        TileKind::Lobby => const { &[always("ctrl+g", "open")] },
-        TileKind::Live => const { &[always("s1-4", "open")] },
+        TileKind::Pet => const { &[arranging("click", "pet")] },
+        TileKind::Chat => const { &[focused("[ ]", "cycle"), arranging("ctrl+/", "room")] },
+        TileKind::Music => const { &[arranging("m", "mute")] },
+        TileKind::Lobby => const { &[arranging("^G", "open")] },
+        TileKind::Live => const { &[arranging("s1-4", "open")] },
         TileKind::Rooms
         | TileKind::Clock
         | TileKind::Visualizer
@@ -879,9 +871,8 @@ fn tile_keys(kind: TileKind) -> &'static [TileHint] {
     }
 }
 
-/// The hints that show on a tile now: every always-on one, and the
-/// focused-only ones when the page is arranging and this tile has the
-/// focus.
+/// The hints that show on a tile now: none in normal mode; in arrange mode
+/// every tile's global ones, and the focused-only ones where the focus is.
 fn hints_shown(
     hints: &[TileHint],
     arrange: bool,
@@ -890,7 +881,7 @@ fn hints_shown(
     hints
         .iter()
         .filter(|hint| match hint.when {
-            HintWhen::Always => true,
+            HintWhen::Arranging => arrange,
             HintWhen::Focused => arrange && focused,
         })
         .map(|hint| (hint.key, hint.action))
@@ -941,7 +932,7 @@ fn draw_tile_chrome(
             }
             let right = Line::from(right);
             let used = 3 + title.chars().count() + 1;
-            if right.width() > 0 && right.width() + used <= row.width as usize {
+            if right.width() > 0 && right.width() + used < row.width as usize {
                 frame.render_widget(Paragraph::new(right).right_aligned(), row);
             }
             return inner;
@@ -1080,20 +1071,8 @@ fn draw_bonsai_tile(frame: &mut Frame, area: Rect, state: &BonsaiState, wall_tic
 
 /// The reef, bound to the tile (`reef_form`), with the care bar on its
 /// surface; a tile too small for it says so and points at the tank tile,
-/// the small form. Without the shop unlock the tile reads like the pet's,
-/// a centered note pointing at the shop. The sprout on the floor is
-/// tended on its Shop row.
-fn draw_aquarium_tile(
-    frame: &mut Frame,
-    area: Rect,
-    state: &AquariumState,
-    owned: bool,
-    care: CareBar,
-) {
-    if !owned {
-        draw_centered_note(frame, area, &["no tank yet", "the Aquarium is in /shop"]);
-        return;
-    }
+/// the small form. The sprout on the floor is tended on its Shop row.
+fn draw_aquarium_tile(frame: &mut Frame, area: Rect, state: &AquariumState, care: CareBar) {
     if !reef_form(area) {
         draw_centered_note(
             frame,
@@ -1112,15 +1091,10 @@ fn draw_tank_tile(
     frame: &mut Frame,
     area: Rect,
     state: &AquariumState,
-    owned: bool,
     hungry: bool,
     care: CareBar,
     wall_tick: usize,
 ) {
-    if !owned {
-        draw_centered_note(frame, area, &["no tank yet", "the Aquarium is in /shop"]);
-        return;
-    }
     let height = crate::app::hub::aquarium::ui::MINI_TANK_HEIGHT;
     let band = Rect::new(
         area.x,

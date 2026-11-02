@@ -2,13 +2,13 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/hub`
-- Purpose: local working context for the Hub domain: the Shop modal, the quest service behind the Arcade strip, and the Shop-unlocked aquarium.
+- Purpose: local working context for the Hub domain: the Shop modal, the quest service behind the Arcade strip, and everyone's aquarium.
 - Companion docs: `shop/CONTEXT.md` (the marketplace), `aquarium/CONTEXT.md` (the reef and its care).
 - Parent context: `../../../../CONTEXT.md`
 
 ## Scope
 
-`late-ssh/src/app/hub` owns the Shop modal (opened with Ctrl+S, the `/shop` composer command, or a locked-feature nudge; active games, profile/job editors, and Artboard input retain their local Ctrl+S bindings) and `QuestService` feeding the quest strip at the top of The Arcade lobby. The player-facing economy explanation lives in the global `?` guide's Economy topic (`late-ssh/src/app/help_modal/hub_guide.rs`). Hub also owns the Shop-unlocked Aquarium simulation and its care; the reef is a tile of Home's stock `home` and `zen` layouts, with a small stand-in of its population in the tank tile, and fed with the `/aquarium feed` composer command (alias `/aq feed`). The Leaderboards page, its `LeaderboardService`, the board rosters, and monthly profile awards live in their own slice: `late-ssh/src/app/leaderboard/` with `app/leaderboard/CONTEXT.md`.
+`late-ssh/src/app/hub` owns the Shop modal (opened with Ctrl+S, the `/shop` composer command, or a locked-feature nudge; active games, profile/job editors, and Artboard input retain their local Ctrl+S bindings) and `QuestService` feeding the quest strip at the top of The Arcade lobby. The player-facing economy explanation lives in the global `?` guide's Economy topic (`late-ssh/src/app/help_modal/hub_guide.rs`). Hub also owns the Aquarium simulation and its care; the reef is a tile of Home's stock `home` and `zen` layouts, with a small stand-in of its population in the tank tile, and fed with the `/aquarium feed` composer command (alias `/aq feed`). The Leaderboards page, its `LeaderboardService`, the board rosters, and monthly profile awards live in their own slice: `late-ssh/src/app/leaderboard/` with `app/leaderboard/CONTEXT.md`.
 
 Hub is a cross-product domain surface. Its services may summarize Arcade, Lobby, economy, and marketplace information, but it must not own those runtimes. Arcade game state stays under `late-ssh/src/app/arcade`; the Lobby's game runtimes stay under `late-ssh/src/app/lobby`; generic chip earn/spend primitives stay in `late-core/src/models/chips.rs`. Hub-owned marketplace state and entitlement projections live under `hub/shop`.
 
@@ -23,18 +23,18 @@ Keep `mod.rs` declaration-only. Do not add `pub use` re-export layers.
   - `svc.rs`: `QuestService`, current assignment generation, Activity-driven progress matching, per-user watch snapshots including daily streak state, completion banners, and Postgres LISTEN/NOTIFY refresh listener.
   - `state.rs`: snapshot/event drains for the quest strip and completion banners.
   - `ui.rs`: `draw_arcade_strip`, the quest strip at the top of The Arcade lobby: a heading with the 6-slot daily-streak meter (`▰▱`, day 6 caps the bonus) and next-bonus chips, then Daily and Weekly sections, each with a done count, the open-chip sum, and a reset note. Items show a status glyph, colored difficulty tag (easy/medium/hard), reward, and a progress bar for multi-step quests on terminals at least 70 cols wide. Height is dynamic via `arcade_strip_height`; the lobby drops the strip when fewer than 13 rows would remain below it.
-- `aquarium/`: the Shop-unlocked reef, its drawing and its care (`aquarium/CONTEXT.md`).
+- `aquarium/`: the reef everyone has, its drawing and its care (`aquarium/CONTEXT.md`).
 - `shop/`: Hub-owned marketplace domain: catalog, purchases, entitlements, rentals, flair (`shop/CONTEXT.md`).
 
 ## The modal
 
-The modal is the Shop and nothing else: a functional marketplace surface where Pet Companion is the durable companion unlock. It has no tab strip and no tab state; `Tab`/arrows switch the Shop's own category tabs. It is opened by Ctrl+S, the `/shop` composer command (`ChatState` request drained in `chat/input.rs`, calling `input::open_shop_modal_globally`), and locked pet/aquarium nudges. Active games, profile/job editors, and Artboard input retain their local Ctrl+S bindings.
+The modal is the Shop and nothing else: a functional marketplace surface where Pet Companion is the durable companion unlock. It has no tab strip and no tab state; `Tab`/arrows switch the Shop's own category tabs. It is opened by Ctrl+S, the `/shop` composer command (`ChatState` request drained in `chat/input.rs`, calling `input::open_shop_modal_globally`), and the locked pet nudge. Active games, profile/job editors, and Artboard input retain their local Ctrl+S bindings.
 
 Leaderboards live on page `6` (`app/leaderboard`), quests on the strip at the top of the Arcade lobby (`dailies/ui.rs::draw_arcade_strip`), and the economy's player-facing explanation in the global guide's Economy topic. There is no in-app editor for rewards or catalog rows (Known Gaps).
 
 ## Aquarium
 
-Aquarium is a Shop unlock (10,000 chips, Companions tab): an ambient reef drawn as a tile of Home, on the profile and in the opt-in sidebar Tank panel, fed for free once a UTC day with `/aquarium feed` (`/aq feed`, or `a` on its tile while arranging Home), with fish that breed and starve and plants that sprout and root. The tank, its stock caps, its care clocks and their gotchas are in `aquarium/CONTEXT.md`.
+Aquarium is everyone's from their first connect, nothing to buy (the Shop's Companions tab sells its fish, plants and shield): an ambient reef drawn as a tile of Home, on the profile and in the opt-in sidebar Tank panel, fed for free once a UTC day with `/aquarium feed` (`/aq feed`, or `a` on its tile while arranging Home), with fish that breed and starve and plants that sprout and root. The tank, its stock caps, its care clocks and their gotchas are in `aquarium/CONTEXT.md`.
 
 ## Leaderboard Data
 
@@ -113,7 +113,7 @@ Each board's tier is `DailyPuzzle::tiers` in `late-core/src/models/leaderboard.r
 
 ## Shop / Marketplace
 
-Durable marketplace ownership: `marketplace_items` / `user_purchases`, purchases as one chip-debit transaction, per-user `ShopSnapshot` watch channels kept fresh by the process listener, entitlements (Pet Companion, the tank), room consumables, rentals (username effects, badge and flag rentals, titles including the AI-screened custom title), burn milestones, and the `NameFlairDirectory` that distributes name flair to every session. All of it, and the future Shop work, is in `shop/CONTEXT.md`.
+Durable marketplace ownership: `marketplace_items` / `user_purchases`, purchases as one chip-debit transaction, per-user `ShopSnapshot` watch channels kept fresh by the process listener, entitlements (Pet Companion), room consumables, rentals (username effects, badge and flag rentals, titles including the AI-screened custom title), burn milestones, and the `NameFlairDirectory` that distributes name flair to every session. All of it, and the future Shop work, is in `shop/CONTEXT.md`.
 
 ## Events (no surface today)
 

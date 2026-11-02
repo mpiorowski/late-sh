@@ -1,8 +1,7 @@
 use late_core::models::aquarium_care::{AquariumCare, CARE_DAYS};
 use late_core::models::chips::UserChips;
 use late_core::models::marketplace::{
-    AQUARIUM_MAX_FISH, AQUARIUM_MAX_PLANTS, AQUARIUM_PLANT_ITEM_KIND, AQUARIUM_SKU,
-    purchase_durable_item_by_sku,
+    AQUARIUM_MAX_FISH, AQUARIUM_MAX_PLANTS, AQUARIUM_PLANT_ITEM_KIND, purchase_durable_item_by_sku,
 };
 use late_core::test_utils::create_test_user;
 use tokio::sync::broadcast;
@@ -13,7 +12,6 @@ use super::{AquariumService, CutOutcome, FEED_CHIP_BONUS, SproutFate};
 use crate::app::activity::event::{ActivityEvent, ActivityKind};
 use crate::test_helpers::new_test_db;
 
-const AQUARIUM_PRICE: i64 = 10_000;
 const CLOWNFISH_PRICE: i64 = 1_000;
 
 fn service(db: &late_core::db::Db) -> (AquariumService, broadcast::Receiver<ActivityEvent>) {
@@ -21,23 +19,31 @@ fn service(db: &late_core::db::Db) -> (AquariumService, broadcast::Receiver<Acti
     (AquariumService::new(db.clone(), tx), rx)
 }
 
+/// The tank a first connect plants, in the same call.
+async fn plant_tank(db: &late_core::db::Db, user_id: Uuid) {
+    let mut client = db.get().await.expect("db client");
+    let tx = client.transaction().await.expect("transaction");
+    late_core::models::marketplace::welcome_aquarium_tank_in_tx(&tx, user_id)
+        .await
+        .expect("plant the tank");
+    tx.commit().await.expect("commit");
+}
+
 /// A tank with two clownfish swimming, bought the way a player buys them.
 async fn stock_tank(db: &late_core::db::Db, user_id: Uuid) {
+    plant_tank(db, user_id).await;
     let mut client = db.get().await.expect("db client");
-    UserChips::admin_grant(&**client, user_id, AQUARIUM_PRICE + CLOWNFISH_PRICE * 2)
+    UserChips::admin_grant(&**client, user_id, CLOWNFISH_PRICE * 2)
         .await
         .expect("fund chips");
-    purchase_durable_item_by_sku(&mut client, user_id, AQUARIUM_SKU)
-        .await
-        .expect("aquarium purchase");
     // The tank came with a welcome fry; park it in inventory so only the
     // clownfish swim and every roll below lands on them.
     let welcome = AquariumCare::load(&**client, user_id)
         .await
         .expect("care")
-        .expect("the purchase planted a care row")
+        .expect("the tank has a care row")
         .fry_creature
-        .expect("the purchase stamped a welcome fry");
+        .expect("the tank has a welcome fry");
     late_core::models::marketplace::adjust_aquarium_active_by_sku(
         &mut client,
         user_id,
@@ -102,32 +108,52 @@ async fn sku_counts(db: &late_core::db::Db, user_id: Uuid, sku: &str) -> Option<
 }
 
 #[tokio::test]
-async fn feeding_pays_the_daily_chips_once_and_only_a_tank_owner() {
+async fn the_first_connect_plants_a_free_tank_once() {
     let test_db = new_test_db().await;
     let client = test_db.db.get().await.expect("db client");
-    let user = create_test_user(&test_db.db, "aquarium-svc-feed").await;
+    let user = create_test_user(&test_db.db, "aquarium-svc-welcome").await;
     let (svc, mut rx) = service(&test_db.db);
-    let boot = svc.bootstrap(user.id).await.expect("bootstrap");
-    assert_eq!(boot.care, None, "no tank, no clock");
+    let today = chrono::Utc::now().date_naive();
     let before = UserChips::ensure(&client, user.id)
         .await
         .expect("chips")
         .balance;
 
-    // No tank: nothing to feed, nothing paid, no clock started.
-    svc.feed(user.id).await.expect("feed without a tank");
-    let unpaid = UserChips::ensure(&client, user.id)
+    let first = svc.bootstrap(user.id).await.expect("first bootstrap");
+    assert!(first.welcomed, "the first connect plants the tank");
+    let care = first.care.expect("care");
+    assert_eq!(care.sprout_born, Some(today));
+    assert_eq!(care.fry_creature.as_deref(), Some("fry"));
+    assert_eq!(
+        sku_counts(&test_db.db, user.id, "aquarium_fish_fry").await,
+        Some((1, 1)),
+        "the welcome fry is owned and swimming"
+    );
+    let after = UserChips::ensure(&client, user.id)
         .await
         .expect("chips")
         .balance;
-    assert_eq!(unpaid, before, "a user without a tank earns nothing");
-    assert_eq!(
-        AquariumCare::load(&**client, user.id).await.expect("care"),
-        None,
-        "feeding without a tank starts no clock"
+    assert_eq!(after, before, "the tank costs nothing");
+    assert!(
+        rx.try_recv().is_err(),
+        "a welcome is the session's banner, not an event"
     );
-    assert!(rx.try_recv().is_err(), "and announces nothing");
 
+    let second = svc.bootstrap(user.id).await.expect("second bootstrap");
+    assert!(!second.welcomed, "the next connect finds it");
+    assert_eq!(
+        sku_counts(&test_db.db, user.id, "aquarium_fish_fry").await,
+        Some((1, 1)),
+        "and no second fry"
+    );
+}
+
+#[tokio::test]
+async fn feeding_pays_the_daily_chips_once() {
+    let test_db = new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "aquarium-svc-feed").await;
+    let (svc, mut rx) = service(&test_db.db);
     stock_tank(&test_db.db, user.id).await;
     let before = UserChips::ensure(&client, user.id)
         .await
@@ -268,18 +294,13 @@ async fn a_sprout_comes_up_every_two_weeks_and_roots_unless_it_is_cut() {
     let (svc, mut rx) = service(&test_db.db);
     let client = test_db.db.get().await.expect("db client");
 
-    // No tank: nothing to cut, no clock.
-    assert_eq!(
-        svc.cut(user.id).await.expect("cut without a tank"),
-        CutOutcome::NoTank
-    );
     stock_tank(&test_db.db, user.id).await;
 
-    // The purchase planted the first sprout: the first connect finds it up
+    // The tank was planted with its first sprout: the connect finds it up
     // already (nothing new to announce) with the next booked two weeks out.
     let today = chrono::Utc::now().date_naive();
     let boot = svc.bootstrap(user.id).await.expect("first bootstrap");
-    assert!(!boot.sprouted, "up since the purchase, not raised now");
+    assert!(!boot.sprouted, "up since the planting, not raised now");
     assert_eq!(boot.rooted, None);
     let care = boot.care.expect("care");
     assert_eq!(care.sprout_born, Some(today));

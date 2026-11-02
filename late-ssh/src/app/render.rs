@@ -2251,7 +2251,6 @@ impl App {
                     attention: &ctx.attention,
                     bonsai: ctx.bonsai,
                     aquarium: ctx.aquarium_state,
-                    aquarium_owned: ctx.shop_state.entitlements().has_aquarium(),
                     aquarium_care: ctx.aquarium_care,
                     pet_strip: ctx.home_pet_strip.take(),
                     chats: std::mem::take(&mut ctx.home_chat_tiles),
@@ -2730,12 +2729,10 @@ impl App {
                         .entitlements()
                         .has_pet_companion()
                         .then_some(ctx.pet_state),
-                    tank: ctx.shop_state.entitlements().has_aquarium().then_some(
-                        crate::app::common::sidebar::SidebarTank {
-                            aquarium: ctx.aquarium_state,
-                            hungry: ctx.aquarium_care.hungry(),
-                        },
-                    ),
+                    tank: crate::app::common::sidebar::SidebarTank {
+                        aquarium: ctx.aquarium_state,
+                        hungry: ctx.aquarium_care.hungry(),
+                    },
                     clock_text: ctx.sidebar_clock,
                     queue_snapshot: &ctx.booth_snapshot,
                     youtube_source_count: ctx.youtube_source_count,
@@ -2820,7 +2817,6 @@ impl App {
                 ctx.settings_modal_state,
                 crate::app::common::sidebar::SidebarOwnership {
                     pet: ctx.shop_state.entitlements().has_pet_companion(),
-                    tank: ctx.shop_state.entitlements().has_aquarium(),
                 },
             );
         }

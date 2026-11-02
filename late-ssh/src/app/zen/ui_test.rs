@@ -1,13 +1,14 @@
 use super::{
-    care_bar_spans, chat_tile_title, draw_board_day, draw_bonsai_tile, draw_centered_note,
-    draw_music_tile, draw_tile_chrome, hint_line_fitting, hints_shown, station_text, tile_keys,
+    care_bar_spans, chat_tile_title, draw_aquarium_tile, draw_board_day, draw_bonsai_tile,
+    draw_centered_note, draw_music_tile, draw_tank_tile, draw_tile_chrome, hint_line_fitting,
+    hints_shown, station_text, tile_keys,
 };
 use crate::app::bonsai::{
     render::canvas_lines,
     state::{BonsaiState, CANVAS_HEIGHT, CANVAS_WIDTH},
 };
 use crate::app::common::primitives::hint_line;
-use crate::app::hub::aquarium::state::CareBar;
+use crate::app::hub::aquarium::state::{AquariumState, CareBar};
 use crate::app::zen::layout::Chrome;
 use crate::app::zen::state::{TileKind, TileTitle};
 use late_core::models::aquarium_care::CARE_DAYS;
@@ -45,6 +46,15 @@ fn a_short_music_tile_centres_the_track_over_the_station_and_draws_no_band() {
 }
 
 #[test]
+fn no_title_names_a_key_outside_arrange_mode() {
+    for kind in TileKind::ALL {
+        let keys = tile_keys(kind);
+        assert_eq!(hints_shown(keys, false, false), vec![], "{kind:?}");
+        assert_eq!(hints_shown(keys, false, true), vec![], "{kind:?}");
+    }
+}
+
+#[test]
 fn a_key_that_works_only_on_the_focused_tile_shows_only_there() {
     let ascii = tile_keys(TileKind::Ascii);
     assert_eq!(hints_shown(ascii, false, false), vec![]);
@@ -52,14 +62,14 @@ fn a_key_that_works_only_on_the_focused_tile_shows_only_there() {
     assert_eq!(hints_shown(ascii, true, false), vec![]);
     assert_eq!(hints_shown(ascii, true, true), vec![("[ ] Enter", "pick")]);
 
-    // A global key shows in every mode; a chat tile adds its arrange-only
-    // room cycling ahead of it only while focused.
+    // Arranging, every tile names its global key, focused or not; a chat
+    // tile adds its room cycling ahead of it only while focused.
     assert_eq!(
-        hints_shown(tile_keys(TileKind::Bonsai), false, false),
+        hints_shown(tile_keys(TileKind::Bonsai), true, false),
         vec![("w", "tend")]
     );
     let chat = tile_keys(TileKind::Chat);
-    assert_eq!(hints_shown(chat, false, false), vec![("ctrl+/", "room")]);
+    assert_eq!(hints_shown(chat, true, false), vec![("ctrl+/", "room")]);
     assert_eq!(
         hints_shown(chat, true, true),
         vec![("[ ]", "cycle"), ("ctrl+/", "room")]
@@ -249,6 +259,32 @@ fn a_note_wider_than_its_tile_wraps_at_the_words() {
     );
 }
 
+/// Everyone has a tank, so neither of its tiles points anyone at the shop,
+/// even before a fish is in the water: both draw the water and its care bar.
+#[test]
+fn the_tank_tiles_never_send_anyone_to_the_shop() {
+    let area = Rect::new(0, 0, 60, 16);
+    let state = AquariumState::default_for_area(area).expect("aquarium");
+    for tile in [TileKind::Aquarium, TileKind::Tank] {
+        let mut terminal = Terminal::new(TestBackend::new(area.width, area.height)).expect("term");
+        terminal
+            .draw(|frame| match tile {
+                TileKind::Aquarium => draw_aquarium_tile(frame, area, &state, CareBar::Dry(1)),
+                _ => draw_tank_tile(frame, area, &state, true, CareBar::Dry(1), 0),
+            })
+            .expect("draw");
+        let text: String = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(!text.contains("/shop"), "{tile:?}: {text}");
+        assert!(!text.contains("no tank"), "{tile:?}: {text}");
+    }
+}
+
 /// The top row of a sidebar-wide lobby tile wearing `title`, as text.
 fn lobby_top_row(title: TileTitle) -> String {
     let mut terminal = Terminal::new(TestBackend::new(23, 4)).expect("terminal");
@@ -261,7 +297,7 @@ fn lobby_top_row(title: TileTitle) -> String {
                 false,
                 title,
                 "lobby",
-                &[("ctrl+g", "open")],
+                &hints_shown(tile_keys(TileKind::Lobby), true, false),
                 false,
                 false,
                 &Chrome::Rules { arrange: false },
@@ -273,12 +309,12 @@ fn lobby_top_row(title: TileTitle) -> String {
         .collect()
 }
 
-/// In the sidebar's width the lobby's name and its key take the whole rule,
-/// with no room to spare; the rule alone drops every word; hidden draws
-/// nothing on the row.
+/// In the sidebar's width the lobby's name and its key both fit, the rule
+/// between them; the rule alone drops every word; hidden draws nothing on
+/// the row.
 #[test]
 fn the_three_title_modes_on_a_sidebar_wide_lobby() {
-    assert_eq!(lobby_top_row(TileTitle::Named), " ── lobby ctrl+g open  ");
+    assert_eq!(lobby_top_row(TileTitle::Named), " ── lobby ─── ^G open  ");
     assert_eq!(
         lobby_top_row(TileTitle::Rule),
         format!(" {} ", "─".repeat(21))

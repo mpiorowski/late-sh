@@ -37,10 +37,7 @@ fn paint(app: &App) -> Buffer {
                 frame,
                 area,
                 &app.settings_modal_state,
-                SidebarOwnership {
-                    pet: true,
-                    tank: true,
-                },
+                SidebarOwnership { pet: true },
             );
             if app.tag_picker.is_open() {
                 crate::app::tag_picker::ui::draw(frame, area, &app.tag_picker);

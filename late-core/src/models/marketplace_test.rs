@@ -3,7 +3,7 @@ use crate::{
         aquarium_care::AquariumCare,
         chips::{ChipMove, UserChips},
         marketplace::{
-            AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_PLANT_ITEM_KIND, AQUARIUM_SKU,
+            AQUARIUM_FISH_ITEM_KIND, AQUARIUM_MAX_FISH, AQUARIUM_PLANT_ITEM_KIND,
             AQUARIUM_SPROUT_SKU, AQUARIUM_WELCOME_FISH_SKU, BONSAI_CONSUMABLE_ITEM_KIND,
             BONSAI_DECAY_PROTECTION_KIND, BONSAI_DECAY_SHIELD_SKU, CHAT_BADGE_SLOT,
             CHAT_CONSUMABLE_ITEM_KIND, CHAT_FLAG_SLOT, COMPANION_CONSUMABLE_ITEM_KIND,
@@ -12,6 +12,7 @@ use crate::{
             WONDERLAND_ULTIMATE_SKU, adjust_aquarium_active_by_sku, purchase_durable_item_by_sku,
             purchase_item_by_sku_with_chat_effect, purchase_item_by_sku_with_custom_title,
             purchase_item_by_sku_with_username_effect, rental_duration_secs,
+            welcome_aquarium_tank_in_tx,
         },
         pet::PetCompanion,
         rental::{
@@ -34,7 +35,17 @@ use std::time::Duration;
 
 const PET_COMPANION_PRICE: i64 = 3_000;
 const BASIC_BADGE_PRICE: i64 = 1_000;
-const AQUARIUM_PRICE: i64 = 10_000;
+/// The tank a user's first connect plants, through the same call.
+async fn plant_tank(db: &crate::db::Db, user_id: uuid::Uuid) -> bool {
+    let mut client = db.get().await.expect("db client");
+    let tx = client.transaction().await.expect("transaction");
+    let planted = welcome_aquarium_tank_in_tx(&tx, user_id)
+        .await
+        .expect("plant the tank");
+    tx.commit().await.expect("commit");
+    planted
+}
+
 const AQUARIUM_FISH_PRICE: i64 = 1_000;
 const AQUARIUM_MEDIUM_FISH_PRICE: i64 = 2_500;
 const AQUARIUM_BIGBERT_PRICE: i64 = 10_000;
@@ -219,20 +230,28 @@ async fn room_bump_is_the_only_chat_consumable_on_sale() {
 }
 
 #[tokio::test]
-async fn companion_shop_items_are_the_two_unlocks() {
+async fn the_pet_is_the_one_companion_unlock_and_the_tank_is_not_sold() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
 
     let items = MarketplaceItem::list_visible(&client)
         .await
         .expect("list items");
-    let companion_skus = items
+    let unlocks = items
         .iter()
-        .filter(|item| matches!(item.sku.as_str(), PET_COMPANION_SKU | AQUARIUM_SKU))
+        .filter(|item| item.item_kind == "feature_unlock")
         .map(|item| item.sku.as_str())
         .collect::<Vec<_>>();
 
-    assert_eq!(companion_skus, vec![PET_COMPANION_SKU, AQUARIUM_SKU]);
+    assert_eq!(unlocks, vec![PET_COMPANION_SKU]);
+    assert_eq!(
+        MarketplaceItem::find_visible_by_sku(&client, "aquarium")
+            .await
+            .expect("lookup")
+            .map(|item| item.sku),
+        None,
+        "the tank is everyone's, its old unlock is retired"
+    );
 }
 
 #[tokio::test]
@@ -331,15 +350,12 @@ async fn aquarium_fish_are_repeatable_up_to_the_owned_cap_and_all_of_them_can_sw
     UserChips::admin_grant(
         &**client,
         user.id,
-        AQUARIUM_PRICE + AQUARIUM_FISH_PRICE * AQUARIUM_MAX_FISH as i64,
+        AQUARIUM_FISH_PRICE * AQUARIUM_MAX_FISH as i64,
     )
     .await
     .expect("fund chips");
 
-    let aquarium = purchase_durable_item_by_sku(&mut client, user.id, AQUARIUM_SKU)
-        .await
-        .expect("aquarium purchase")
-        .expect("aquarium item");
+    plant_tank(&test_db.db, user.id).await;
     let first = purchase_durable_item_by_sku(&mut client, user.id, "aquarium_fish_seahorse")
         .await
         .expect("first fish purchase")
@@ -349,7 +365,6 @@ async fn aquarium_fish_are_repeatable_up_to_the_owned_cap_and_all_of_them_can_sw
         .expect("second fish purchase")
         .expect("seahorse item");
 
-    assert_eq!(aquarium.status, PurchaseStatus::Purchased);
     assert_eq!(first.status, PurchaseStatus::Purchased);
     assert_eq!(second.status, PurchaseStatus::QuantityAdded);
     assert_eq!(second.item.item_kind, AQUARIUM_FISH_ITEM_KIND);
@@ -419,19 +434,20 @@ async fn aquarium_fish_are_repeatable_up_to_the_owned_cap_and_all_of_them_can_sw
 }
 
 #[tokio::test]
-async fn buying_the_tank_comes_with_a_free_fry_and_a_sprout() {
+async fn the_tank_is_free_and_comes_with_a_fry_and_a_sprout_once() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "aquarium-welcome-fry").await;
-    let mut client = test_db.db.get().await.expect("db client");
-    let before = UserChips::admin_grant(&**client, user.id, AQUARIUM_PRICE)
+    let client = test_db.db.get().await.expect("db client");
+    let before = UserChips::ensure(&client, user.id)
         .await
-        .expect("fund chips")
+        .expect("chips row")
         .balance;
 
-    purchase_durable_item_by_sku(&mut client, user.id, AQUARIUM_SKU)
-        .await
-        .expect("aquarium purchase")
-        .expect("aquarium item");
+    assert!(plant_tank(&test_db.db, user.id).await);
+    assert!(
+        !plant_tank(&test_db.db, user.id).await,
+        "a tank is planted once, a second connect finds it"
+    );
 
     // One fry, swimming, at no price.
     let fish = client
@@ -459,17 +475,17 @@ async fn buying_the_tank_comes_with_a_free_fry_and_a_sprout() {
     let care = AquariumCare::load(&**client, user.id)
         .await
         .expect("care row")
-        .expect("the purchase planted a care row");
+        .expect("the tank has a care row");
     assert_eq!(care.fry_creature, Some(creature));
     assert_eq!(care.fry_born, Some(today));
     assert_eq!(care.sprout_born, Some(today));
 
-    // Nothing but the tank was paid for.
+    // None of it cost a chip.
     let chips = UserChips::find(&client, user.id)
         .await
         .expect("chips row")
-        .expect("the buyer has a chips row");
-    assert_eq!(chips.balance, before - AQUARIUM_PRICE);
+        .expect("the user has a chips row");
+    assert_eq!(chips.balance, before);
 }
 
 #[tokio::test]
@@ -477,13 +493,11 @@ async fn the_welcome_fish_and_the_sprout_are_listed_but_never_sold() {
     let test_db = test_db().await;
     let user = create_test_user(&test_db.db, "aquarium-fry-not-for-sale").await;
     let mut client = test_db.db.get().await.expect("db client");
-    let before = UserChips::admin_grant(&**client, user.id, AQUARIUM_PRICE + AQUARIUM_FISH_PRICE)
+    let before = UserChips::admin_grant(&**client, user.id, AQUARIUM_FISH_PRICE)
         .await
         .expect("fund chips")
         .balance;
-    purchase_durable_item_by_sku(&mut client, user.id, AQUARIUM_SKU)
-        .await
-        .expect("aquarium purchase");
+    plant_tank(&test_db.db, user.id).await;
 
     // The shop lists it with the other fish, so its art and its count show.
     let listed = MarketplaceItem::list_visible(&client)
@@ -504,8 +518,8 @@ async fn the_welcome_fish_and_the_sprout_are_listed_but_never_sold() {
     let chips = UserChips::find(&client, user.id)
         .await
         .expect("chips row")
-        .expect("the buyer has a chips row");
-    assert_eq!(chips.balance, before - AQUARIUM_PRICE);
+        .expect("the user has a chips row");
+    assert_eq!(chips.balance, before);
     let owned: i32 = client
         .query_one(
             "SELECT p.quantity
@@ -552,15 +566,12 @@ async fn a_tank_stocked_past_the_cap_before_it_still_swims_twenty() {
     UserChips::admin_grant(
         &**client,
         user.id,
-        AQUARIUM_PRICE + AQUARIUM_FISH_PRICE * AQUARIUM_MAX_FISH as i64,
+        AQUARIUM_FISH_PRICE * AQUARIUM_MAX_FISH as i64,
     )
     .await
     .expect("fund chips");
 
-    purchase_durable_item_by_sku(&mut client, user.id, AQUARIUM_SKU)
-        .await
-        .expect("aquarium purchase")
-        .expect("aquarium item");
+    plant_tank(&test_db.db, user.id).await;
     for _ in 0..AQUARIUM_MAX_FISH - 2 {
         purchase_durable_item_by_sku(&mut client, user.id, "aquarium_fish_seahorse")
             .await
@@ -622,25 +633,14 @@ async fn plants_are_tank_stock_with_a_cap_apart_from_the_fish_and_growth_stops_a
     UserChips::admin_grant(
         &**client,
         user.id,
-        AQUARIUM_PRICE
-            + AQUARIUM_FISH_PRICE * AQUARIUM_MAX_FISH as i64
+        AQUARIUM_FISH_PRICE * AQUARIUM_MAX_FISH as i64
             + AQUARIUM_FISH_PRICE * AQUARIUM_MAX_PLANTS as i64,
     )
     .await
     .expect("fund chips");
 
-    // No tank, no plant: the same gate the fish have.
-    let refused = purchase_durable_item_by_sku(&mut client, user.id, "aquarium_plant_seatuft")
-        .await
-        .expect("plant purchase")
-        .expect("plant item");
-    assert_eq!(refused.status, PurchaseStatus::RequiresAquarium);
-
     // The tank comes with one fry; nineteen seahorses fill the fish cap.
-    purchase_durable_item_by_sku(&mut client, user.id, AQUARIUM_SKU)
-        .await
-        .expect("aquarium purchase")
-        .expect("aquarium item");
+    plant_tank(&test_db.db, user.id).await;
     for _ in 0..AQUARIUM_MAX_FISH - 1 {
         purchase_durable_item_by_sku(&mut client, user.id, "aquarium_fish_seahorse")
             .await
@@ -737,25 +737,6 @@ async fn plants_are_tank_stock_with_a_cap_apart_from_the_fish_and_growth_stops_a
             (AQUARIUM_PLANT_ITEM_KIND.to_string(), AQUARIUM_MAX_PLANTS),
         ]
     );
-}
-
-#[tokio::test]
-async fn fish_purchase_requires_aquarium_and_returns_current_balance() {
-    let test_db = test_db().await;
-    let user = create_test_user(&test_db.db, "aquarium-required-balance").await;
-    let mut client = test_db.db.get().await.expect("db client");
-    let balance = UserChips::admin_grant(&**client, user.id, AQUARIUM_FISH_PRICE)
-        .await
-        .expect("fund chips")
-        .balance;
-
-    let result = purchase_durable_item_by_sku(&mut client, user.id, "aquarium_fish_seahorse")
-        .await
-        .expect("fish purchase")
-        .expect("seahorse item");
-
-    assert_eq!(result.status, PurchaseStatus::RequiresAquarium);
-    assert_eq!(result.balance, balance);
 }
 
 #[tokio::test]
