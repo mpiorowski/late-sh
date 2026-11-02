@@ -142,6 +142,9 @@ pub(crate) struct ZenView<'a> {
     /// The #lounge activity feed, newest first (`ChatState::activity_ticker`).
     pub activity: &'a [ActivityTickerEntry],
     pub active_friends: &'a [ActiveFriend],
+    /// Today's all-day board posts (`calendar::live::day_text`), the banner
+    /// across the top of every tile; `None` on any other day.
+    pub board_day: Option<&'a str>,
     /// The last day of headcount samples, for the pulse tile.
     pub pulse: &'a [HeadcountPoint],
     /// The Live panel's rows, the sidebar's, for the Live tile: it draws
@@ -173,7 +176,11 @@ pub(crate) fn draw_rice(
         return;
     }
     let arrange_keys = view.arrange_keys.take();
-    let (tiles_area, row_area) = layout::rice_areas(area, view.zen.arrange);
+    let areas = layout::rice_areas(area, view.board_day.is_some(), view.zen.arrange);
+    if let (Some(row), Some(text)) = (areas.banner, view.board_day) {
+        draw_board_day(frame, row, text);
+    }
+    let (tiles_area, row_area) = (areas.tiles, areas.footer);
     // One frame per chat tile in layout order.
     let mut chats: Vec<Option<ZenChatTile<'_>>> = std::mem::take(&mut view.chats)
         .into_iter()
@@ -1295,6 +1302,32 @@ fn draw_visualizer_tile(frame: &mut Frame, area: Rect, wall_tick: usize, eq_stat
     };
     let lines = dance_lines(dance, wall_tick, area.width as usize, area.height as usize);
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// The board's day across the top of Home, over every tile: today's
+/// all-day posts in amber, the board's colour, the board's key flush right
+/// in the strip's key style.
+fn draw_board_day(frame: &mut Frame, row: Rect, text: &str) {
+    let width = usize::from(row.width);
+    let hint = crate::app::live::ui::key_hint_spans(
+        width,
+        &[
+            crate::app::live::ui::HintPart::Key("7"),
+            crate::app::live::ui::HintPart::Text(" for the board"),
+        ],
+    );
+    let hint_width: usize = hint.iter().map(|span| span.width()).sum();
+    let text_room = width.saturating_sub(hint_width + 1);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            crate::app::chat::ui::truncate_cells(text, text_room),
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ))),
+        row,
+    );
+    frame.render_widget(Paragraph::new(Line::from(hint)).right_aligned(), row);
 }
 
 /// The pulse tile: the people online now over a day of them as a

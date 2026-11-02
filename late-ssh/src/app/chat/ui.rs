@@ -174,10 +174,6 @@ pub struct DashboardChatView<'a> {
     pub live_strip: Option<crate::app::live::state::LiveStripView<'a>>,
     /// Receives the strip's rect and source for the click that opens it.
     pub live_strip_hit: &'a std::cell::Cell<Option<(Rect, crate::app::live::pick::LiveSource)>>,
-    /// The board's all-day posts for today (`calendar::live::day_text`),
-    /// which take the #lounge topic row for the day. `None` elsewhere and
-    /// on any other day.
-    pub board_day: Option<String>,
     pub inline_images: &'a HashMap<Uuid, InlinePreview>,
     /// News shares' #lounge cards by message id: those messages draw as
     /// the card.
@@ -1157,21 +1153,15 @@ pub fn draw_dashboard_chat_card(
             voice,
             // The live strip stands in for the topic row while it is up:
             // the board is the room's news, and the topic is a key away in
-            // `/rules`. On a day the board has an all-day post, that post
-            // takes the row. Voice and stream rows carry live state, so
-            // they stay.
-            row: match (
-                &view.live_strip,
-                view.board_day.as_deref(),
-                view.room.and_then(room_topic),
-            ) {
-                (Some(_), _, _) => None,
-                (None, Some(day), _) => Some(TopicRow::BoardDay(day)),
-                (None, None, Some(text)) => Some(TopicRow::Topic {
+            // `/rules`. Voice and stream rows carry live state, so they
+            // stay.
+            row: match (&view.live_strip, view.room.and_then(room_topic)) {
+                (Some(_), _) => None,
+                (None, Some(text)) => Some(TopicRow::Topic {
                     text,
                     has_rules: view.room.is_some_and(room_has_rules),
                 }),
-                (None, None, None) => None,
+                (None, None) => None,
             },
             closing_rule: view.live_strip.is_none(),
         },
@@ -5098,11 +5088,9 @@ fn dm_display_label(
     }
 }
 
-/// What the header's last row says: the room's topic, or on #lounge on a
-/// day the board has an all-day post, the board's day in the topic's place.
+/// What the header's last row says: the room's topic.
 enum TopicRow<'a> {
     Topic { text: &'a str, has_rules: bool },
-    BoardDay(&'a str),
 }
 
 /// The header block above a room's messages: the voice row (when the room has a
@@ -5267,27 +5255,6 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
                 vec![Span::styled(
                     truncate_cells(text, room_for_topic),
                     Style::default().fg(theme::TEXT_DIM()),
-                )],
-                hint,
-                width,
-            )));
-        }
-        // The board's day reads in amber, the board's colour, with the
-        // board's key where `/rules` would be, in the strip's key style.
-        Some(TopicRow::BoardDay(text)) => {
-            let hint = crate::app::live::ui::key_hint_spans(
-                width,
-                &[
-                    crate::app::live::ui::HintPart::Key("7"),
-                    crate::app::live::ui::HintPart::Text(" for the board"),
-                ],
-            );
-            lines.push(padded(row_with_hint(
-                vec![Span::styled(
-                    truncate_cells(text, width.saturating_sub(17)),
-                    Style::default()
-                        .fg(theme::AMBER())
-                        .add_modifier(Modifier::BOLD),
                 )],
                 hint,
                 width,

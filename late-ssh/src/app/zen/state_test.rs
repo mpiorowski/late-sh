@@ -723,8 +723,8 @@ fn a_layout_saved_with_a_guest_list_keeps_the_guests_still_known() {
 #[test]
 fn the_stock_home_is_the_rail_the_reef_over_the_chat_and_the_sidebar_column() {
     // The stock is fixed and the same for every account: the sidebar's
-    // panels with the pet in the tank's old slot, and an unowned reef or
-    // pet draws the shop's note in its tile.
+    // panels with the pet over the bonsai, and an unowned reef or pet
+    // draws the shop's note in its tile.
     let home = RiceLayout::home();
     assert_eq!(
         home.root.leaf_kinds(),
@@ -737,8 +737,8 @@ fn the_stock_home_is_the_rail_the_reef_over_the_chat_and_the_sidebar_column() {
             TileKind::Music,
             TileKind::Lobby,
             TileKind::Live,
-            TileKind::Bonsai,
             TileKind::Pet,
+            TileKind::Bonsai,
         ]
     );
     assert_eq!(
@@ -747,14 +747,14 @@ fn the_stock_home_is_the_rail_the_reef_over_the_chat_and_the_sidebar_column() {
         "the reef hosts the strip, so the chat never loses a row to it"
     );
     assert_eq!(
-        home.root.leaf_guests()[5],
+        home.root.leaf_guests()[6],
         vec![Guest::Attention],
         "the lobby hosts attention: what waits on you takes the tables' tile"
     );
     assert_eq!(
         home.root.leaf_guests()[2],
         Vec::<Guest>::new(),
-        "the board's day is the chat card's own row, not a guest"
+        "the board's day is the banner over the tree, not a guest"
     );
 
     let zen = ZenState::new(home.clone(), home);

@@ -459,6 +459,8 @@ struct DrawContext<'a> {
     home_date: String,
     home_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
     home_active_friends: &'a [crate::app::chat::state::ActiveFriend],
+    /// Today's all-day board posts for the banner over Home's tiles.
+    home_board_day: Option<String>,
     /// The day of headcount buckets for the pulse tile (`PresenceSession::history`).
     pulse_history: crate::app::presence::svc::History,
     /// What waits on you, for the attention guest (`App::attention_items`).
@@ -814,15 +816,8 @@ impl App {
             true => (home_live_strip, None),
             false => (None, home_live_strip),
         };
-        // The board's day is the #lounge card's topic row.
-        let dashboard_board_day = if screen == Screen::Dashboard && home_selected {
-            crate::app::calendar::live::day_text(
-                &self.calendar.live_at(live_panel_now),
-                live_panel_now,
-            )
-        } else {
-            None
-        };
+        // The board's day is the banner over Home's tiles.
+        let home_board_day = self.home_board_day();
         let dashboard_voice_channel_id = shell_active_room
             .and_then(|room_id| self.chat.voice_channels_by_room_id.get(&room_id))
             .map(|channel| channel.id);
@@ -968,7 +963,6 @@ impl App {
             active_poll: dashboard_active_poll,
             live_strip: dashboard_live_strip,
             live_strip_hit: &self.live.hit,
-            board_day: dashboard_board_day,
             inline_images: &self.chat.inline_image_cache,
             news_cards: self.chat.news.lounge_cards(),
             keep_composer_focused: self.profile_state.profile().keep_composer_focused,
@@ -1949,6 +1943,7 @@ impl App {
                         home_date,
                         home_pet_strip,
                         home_active_friends: &self.active_friends,
+                        home_board_day,
                         pulse_history: self.presence.history.clone(),
                         attention,
                         own_chat_hit: &self.own_chat_hit,
@@ -2222,9 +2217,13 @@ impl App {
                 // (`Ctrl+E`) its bottom row is the mode's key
                 // footer.
                 let arrange_keys = match ctx.home.arrange {
-                    true => crate::app::zen::layout::rice_areas(content_area, true)
-                        .1
-                        .and_then(crate::app::statusline::bar::build_home_arrange_row),
+                    true => crate::app::zen::layout::rice_areas(
+                        content_area,
+                        ctx.home_board_day.is_some(),
+                        true,
+                    )
+                    .footer
+                    .and_then(crate::app::statusline::bar::build_home_arrange_row),
                     false => None,
                 };
                 let view = crate::app::zen::ui::ZenView {
@@ -2269,6 +2268,7 @@ impl App {
                     lobby_glow: ctx.lobby.glow(),
                     activity: ctx.chat_state.activity_ticker(),
                     active_friends: ctx.home_active_friends,
+                    board_day: ctx.home_board_day.as_deref(),
                     pulse: &ctx.pulse_history,
                     live_panel: crate::app::live::panel::LivePanelProps {
                         rows: &ctx.live_panel_rows,

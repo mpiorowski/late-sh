@@ -912,7 +912,7 @@ impl RiceLayout {
             Node::leaf(TileKind::Chat),
         );
         // The sidebar's panels, each at its rows plus its title rule; the
-        // pet, last, takes the rest of the column.
+        // bonsai, last, takes the rest of the column.
         let panels: [(TileKind, u16); 5] = [
             (
                 TileKind::Visualizer,
@@ -927,11 +927,12 @@ impl RiceLayout {
                 crate::app::lobby::daily::panel::DAILY_PANEL_HEIGHT,
             ),
             (TileKind::Live, crate::app::live::panel::LIVE_PANEL_HEIGHT),
-            (TileKind::Bonsai, crate::app::common::sidebar::BONSAI_HEIGHT),
+            // The pet's mood row over its box.
+            (TileKind::Pet, super::layout::FLOOR_ROWS + 1),
         ];
         // The lobby hosts attention: what waits on you takes its tile over
         // and the latest tables come back when the list clears.
-        let mut column = Node::leaf(TileKind::Pet);
+        let mut column = Node::leaf(TileKind::Bonsai);
         for (kind, rows) in panels.iter().rev() {
             let tile = match kind {
                 TileKind::Lobby => Node::hosting(*kind, &[Guest::Attention]),

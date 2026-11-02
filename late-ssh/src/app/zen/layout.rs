@@ -63,23 +63,57 @@ pub fn rice_fits(area: Rect) -> bool {
     area.width >= RICE_MIN_COLS && area.height >= RICE_MIN_ROWS
 }
 
-/// Home's content area: the tiles, then the arrange mode's key footer at
-/// the bottom when `footer_row` (the mode is on). Every caller that draws,
-/// clicks, or sizes what is on show passes the same flag
-/// (`App::home_tiles_area`).
-pub fn rice_areas(area: Rect, footer_row: bool) -> (Rect, Option<Rect>) {
-    match footer_row {
+/// Home's content area cut into its rows (`rice_areas`).
+pub struct RiceAreas {
+    /// The board's day across the top, over every tile, on a day the
+    /// board has an all-day post.
+    pub banner: Option<Rect>,
+    pub tiles: Rect,
+    /// The arrange mode's key footer, while the mode is on.
+    pub footer: Option<Rect>,
+}
+
+/// Home's content area: the board's day banner at the top when
+/// `banner_row`, the tiles, then the arrange mode's key footer at the
+/// bottom when `footer_row`. Every caller that draws, clicks, or sizes
+/// what is on show passes the same flags (`App::home_tiles_area`).
+pub fn rice_areas(area: Rect, banner_row: bool, footer_row: bool) -> RiceAreas {
+    let mut tiles = area;
+    let banner = match banner_row {
+        true => {
+            let row = Rect::new(area.x, area.y, area.width, 1.min(area.height));
+            tiles = Rect::new(
+                area.x,
+                area.y + row.height,
+                area.width,
+                area.height.saturating_sub(row.height),
+            );
+            Some(row)
+        }
+        false => None,
+    };
+    let footer = match footer_row {
         true => {
             let row = Rect::new(
-                area.x,
-                area.bottom().saturating_sub(1),
-                area.width,
-                1.min(area.height),
+                tiles.x,
+                tiles.bottom().saturating_sub(1),
+                tiles.width,
+                1.min(tiles.height),
             );
-            let tiles = Rect::new(area.x, area.y, area.width, area.height.saturating_sub(1));
-            (tiles, Some(row))
+            tiles = Rect::new(
+                tiles.x,
+                tiles.y,
+                tiles.width,
+                tiles.height.saturating_sub(row.height),
+            );
+            Some(row)
         }
-        false => (area, None),
+        false => None,
+    };
+    RiceAreas {
+        banner,
+        tiles,
+        footer,
     }
 }
 
