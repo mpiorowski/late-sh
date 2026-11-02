@@ -3831,6 +3831,117 @@ impl App {
         }
     }
 
+    /// Today's care, gated on ownership: what the Pulse tile and the
+    /// attention guest read.
+    pub(crate) fn care_today(&self) -> crate::app::zen::ui::Care {
+        use crate::app::zen::ui::{Care, Chore};
+        let today = chrono::Utc::now().date_naive();
+        Care {
+            bonsai: Chore::of(true, self.bonsai.tree.last_watered == Some(today)),
+            tank: Chore::of(
+                self.shop_state.entitlements().has_aquarium(),
+                self.aquarium_care.fed_on_day(today),
+            ),
+            pet: Chore::of(
+                self.shop_state.entitlements().has_pet_companion(),
+                self.pet_state.petted_on(today),
+            ),
+        }
+    }
+
+    /// What waits on you, for the attention guest (`app/attention`): the
+    /// daily matches on your move and the results you have not looked at,
+    /// the unread DMs and mentions the Inbox tile lists, and today's care
+    /// still due. Read each frame and on each of the guest's keys.
+    pub(crate) fn attention_items(&self) -> Vec<crate::app::attention::state::Item> {
+        use crate::app::attention::state::{Inputs, Item, Match, items};
+        use crate::app::zen::rows::InboxRow;
+        use crate::app::zen::ui::Chore;
+        let other_player = |challenger_id: Uuid,
+                            challenger: &Option<String>,
+                            opponent: &Option<String>|
+         -> String {
+            let name = match challenger_id == self.user_id {
+                true => opponent,
+                false => challenger,
+            };
+            name.clone().unwrap_or_else(|| "someone".to_string())
+        };
+        let my_moves = self
+            .daily
+            .my_turn_matches()
+            .into_iter()
+            .map(|m| Match {
+                game: m.game.label(),
+                opponent: other_player(
+                    m.challenger_id,
+                    &m.challenger_username,
+                    &m.opponent_username,
+                ),
+            })
+            .collect();
+        let results = self
+            .daily
+            .my_finished()
+            .into_iter()
+            .map(|m| Match {
+                game: m.game.label(),
+                opponent: other_player(
+                    m.challenger_id,
+                    &m.challenger_username,
+                    &m.opponent_username,
+                ),
+            })
+            .collect();
+        let mut dms = Vec::new();
+        let mut mentions = Vec::new();
+        let rows = crate::app::zen::rows::inbox_rows(
+            self.user_id,
+            &self.chat.rooms,
+            &self.chat.unread_counts,
+            self.chat.usernames(),
+            self.chat.ignored_user_ids(),
+            self.chat.notifications.all_items(),
+        );
+        for row in rows {
+            match row {
+                InboxRow::Dm {
+                    room_id,
+                    peer,
+                    unread,
+                } => dms.push(Item::Dm {
+                    room_id,
+                    peer,
+                    unread,
+                }),
+                InboxRow::Mention {
+                    room_id,
+                    message_id,
+                    actor,
+                    room,
+                    unread: true,
+                    ..
+                } => mentions.push(Item::Mention {
+                    room_id,
+                    message_id,
+                    actor,
+                    room,
+                }),
+                InboxRow::Mention { unread: false, .. } => {}
+            }
+        }
+        let care = self.care_today();
+        items(Inputs {
+            my_moves,
+            results,
+            dms,
+            mentions,
+            tank_due: care.tank == Chore::Due,
+            tree_due: care.bonsai == Chore::Due,
+            pet_due: care.pet == Chore::Due,
+        })
+    }
+
     /// Write Home's layouts if an edit is pending, the same way: the page
     /// as it is goes into the current slot, and the whole set is stored.
     pub(crate) fn flush_home_layout(&mut self) {

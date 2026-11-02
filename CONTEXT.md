@@ -194,6 +194,7 @@ otherwise.
 | `voice` | LiveKit voice rooms, TUI voice controls, pair-WS voice messages |
 | `stream` | `/golive` and `/watch` streams, the stream registry, the late-web live pages (staff and streamer tools in `MODERATION.md`) |
 | `live` | The live strip (`now`) on #lounge and the Live panel (rows and keys in `PANEL.md`) |
+| `attention` | The attention guest: what waits on you, a row each, gone when the list is empty |
 | `paper` | The Late Edition: the daily paper and its print sweeper |
 | `jobs` | The job feed: nightly press, posts, tags, matches |
 | `herald` | The herald: one post a day on the Fediverse and Bluesky, the daily claim and the post |

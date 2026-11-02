@@ -12,7 +12,8 @@ use uuid::Uuid;
 
 use super::presets::{LayoutCommand, LayoutList, Layouts, LayoutsError, NameEdit, NamePurpose};
 use super::rows::InboxRow;
-use super::state::{Dir, GuestPick, KindPick, MAX_TILES, TileKind};
+use super::state::{Dir, Guest, GuestPick, KindPick, MAX_TILES, TileKind};
+use crate::app::attention::state::Item as AttentionItem;
 use crate::app::{
     chat::state::RoomSlot, common::primitives::Banner, input::ParsedInput, state::App,
 };
@@ -331,6 +332,11 @@ fn handle_common(app: &mut App, event: &ParsedInput) -> bool {
         crate::app::live::input::open_from_prefix(app, byte);
         return true;
     }
+    // The attention guest, up on the focused tile, is the tile: its rows
+    // take `j` `k` and Enter ahead of the host's keys.
+    if app.rice().focused_guest() == Some(Guest::Attention) && handle_attention(app, byte) {
+        return true;
+    }
     if app.rice().focused_kind() == Some(TileKind::Inbox) && handle_inbox(app, byte) {
         return true;
     }
@@ -439,11 +445,8 @@ fn inbox_rows(app: &App) -> Vec<InboxRow> {
     )
 }
 
-/// Open the selected Inbox row in the page's first chat tile and move the
-/// focus there, so `i` answers at once: a DM binds the tile to its room, a
-/// mention binds it to the mention's room and selects the message the way
-/// a `Ctrl+/` message jump does. A mention in a room the account never
-/// joined has no tile to land in and reads in the history modal instead.
+/// Open the selected Inbox row (`open_inbox_target`): a DM lands in its
+/// room, a mention on its message.
 fn open_inbox_row(app: &mut App) {
     let rows = inbox_rows(app);
     let Some(row) = rows.get(app.rice().inbox_selected.min(rows.len().saturating_sub(1))) else {
@@ -457,6 +460,64 @@ fn open_inbox_row(app: &mut App) {
             ..
         } => (*room_id, Some(*message_id)),
     };
+    open_inbox_target(app, room_id, message_id);
+}
+
+/// The attention guest's rows while it is up on the focused tile: `j` `k`
+/// move, Enter does the row's act (`AttentionItem::act`): the lobby for
+/// a match, the room for a DM or a mention (as an Inbox row opens), the
+/// tank's meal, the tree's water, the pet's pat. False with the list
+/// empty, since the guest is down and the host has the keys.
+fn handle_attention(app: &mut App, byte: u8) -> bool {
+    let items = app.attention_items();
+    if items.is_empty() {
+        return false;
+    }
+    match byte {
+        b'j' | b'J' => {
+            let last = items.len() - 1;
+            app.rice_mut().attention_selected = (app.rice().attention_selected + 1).min(last);
+            true
+        }
+        b'k' | b'K' => {
+            app.rice_mut().attention_selected = app.rice().attention_selected.saturating_sub(1);
+            true
+        }
+        b'\r' | b'\n' => {
+            let selected = app.rice().attention_selected.min(items.len() - 1);
+            act_on_attention(app, items[selected].clone());
+            true
+        }
+        _ => false,
+    }
+}
+
+fn act_on_attention(app: &mut App, item: AttentionItem) {
+    match item {
+        AttentionItem::YourMove { .. } | AttentionItem::Result { .. } => {
+            crate::app::input::open_daily_modal_globally(app);
+        }
+        AttentionItem::Dm { room_id, .. } => open_inbox_target(app, room_id, None),
+        AttentionItem::Mention {
+            room_id,
+            message_id,
+            ..
+        } => open_inbox_target(app, room_id, Some(message_id)),
+        AttentionItem::FeedTank => crate::app::input::feed_aquarium_globally(app),
+        AttentionItem::WaterTree => {
+            let _ = app
+                .bonsai
+                .request(crate::app::bonsai::state::BonsaiAction::Water);
+        }
+        AttentionItem::PetPet => crate::app::input::pet_the_pet_globally(app),
+    }
+}
+
+/// Land in `room_id` in the page's first chat tile, on `message_id` when
+/// there is one, the way a `Ctrl+/` message jump does. A mention in a
+/// room the account never joined has no tile to land in and reads in the
+/// history modal instead.
+fn open_inbox_target(app: &mut App, room_id: Uuid, message_id: Option<Uuid>) {
     if let Some(message_id) = message_id
         && !app.chat.rooms.iter().any(|(room, _)| room.id == room_id)
     {

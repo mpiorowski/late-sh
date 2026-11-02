@@ -30,7 +30,7 @@ delta against the design):
   views, and the rail shows its room (a stored `center` reads as `chat`).
   The cut list (pulse, friends, activity, visualizer, blank) is not cut:
   Zen keeps them.
-- Guests are the two that end, now and lobby (`+` on a tile, one a
+- Guests are the two that end, now and attention (`+` on a tile, one a
   tile), and a guest takes its host over while it is up. The live panel
   is a tile kind only; the board's day is the chat card's own row.
 - Fixed splits (`Share::First` / `Share::Second`) carry the rails; the Fit
@@ -165,7 +165,7 @@ A dynamic widget has one yes/no question the session already answers:
 | Kind | Active while | The answer today |
 |---|---|---|
 | `now` (the now strip) | the queue has something up | `LiveState::shown` |
-| `lobby` | a match waits on your move, or a result on your look | `DailyState::awaits_me` |
+| `attention` | anything waits on you: your move or an unseen result in a daily match, an unread DM or mention, the tank, tree or pet uncared for today | `App::attention_items` non-empty (`late-ssh/src/app/attention/CONTEXT.md`) |
 | `live` (the live panel) | at least one row is joinable | `live_panel_rows` non-empty |
 
 "Now strip" is the name from here on; "live" is the panel. The two were
@@ -182,11 +182,13 @@ A dynamic kind is placed one of two ways:
   is) and shows whole the moment the guest goes.
 
 Only widgets that end are guests: `now` comes down on the queue's clock
-(five minutes at most), `lobby` when you move or acknowledge. The live
-panel stays up as long as anything is on, an evening at a time, so it is
-a tile kind only. A tile hosts one guest, and a guest is on the page
-once, so the `s` prefix, `Ctrl+G` and the clicks have one target. Clicks
-on a guest work as on its panel. Guests never take focus.
+(five minutes at most), `attention` when its last row clears (a read, a
+move, a feed; the care rows return each UTC day). The live panel stays
+up as long as anything is on, an evening at a time, so it is a tile kind
+only. A tile hosts one guest, and a guest is on the page once, so the
+`s` prefix and the clicks have one target. Clicks on the strip work as
+on its panel; attention has rows instead, `j` `k` and Enter where tile
+keys run (Zen, Home's arrange mode). Guests never take focus.
 
 The `chat` tile is the one host that inserts instead of taking over: the
 strip on the page's chat pushes the messages down, which is the strip's

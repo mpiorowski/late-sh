@@ -461,6 +461,8 @@ struct DrawContext<'a> {
     zen_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
     zen_active_friends: &'a [crate::app::chat::state::ActiveFriend],
     zen_care: crate::app::zen::ui::Care,
+    /// What waits on you, for the attention guest (`App::attention_items`).
+    attention: Vec<crate::app::attention::state::Item>,
     /// The pane beside this player's own running game, published for the
     /// click that opens its composer; cleared every frame like the hits.
     own_chat_hit: &'a std::cell::Cell<Option<Rect>>,
@@ -473,6 +475,8 @@ impl App {
         // collide with the mutable field borrows the view structs hold below
         // (some door states are even taken out of `self` for the draw).
         use crate::app::door::hub::state::HubGame;
+        let zen_care = self.care_today();
+        let attention = self.attention_items();
         let lateania_live = HubGame::Lateania.live_screen(self).is_some();
         let realm_live = HubGame::Realm.live_screen(self).is_some();
         let nethack_live = HubGame::Nethack.live_screen(self).is_some();
@@ -1525,21 +1529,7 @@ impl App {
             radio_now_playing.as_deref(),
         );
         let zen_date = status_date_full.clone();
-        let care_day = chrono::Utc::now().date_naive();
-        let zen_care = crate::app::zen::ui::Care {
-            bonsai: crate::app::zen::ui::Chore::of(
-                true,
-                self.bonsai.tree.last_watered == Some(care_day),
-            ),
-            tank: crate::app::zen::ui::Chore::of(
-                self.shop_state.entitlements().has_aquarium(),
-                self.aquarium_care.fed_on_day(care_day),
-            ),
-            pet: crate::app::zen::ui::Chore::of(
-                self.shop_state.entitlements().has_pet_companion(),
-                self.pet_state.petted_on(care_day),
-            ),
-        };
+
         let zen_pet_strip = self
             .shop_state
             .entitlements()
@@ -1964,6 +1954,7 @@ impl App {
                         zen_pet_strip,
                         zen_active_friends: &self.active_friends,
                         zen_care,
+                        attention,
                         own_chat_hit: &self.own_chat_hit,
                     },
                     &mut terminal_image_frame,
@@ -2297,7 +2288,7 @@ impl App {
                             hit: strip_hit,
                         }
                     }),
-                    lobby_awaits: ctx.daily.awaits_me(),
+                    attention: &ctx.attention,
                     bonsai: ctx.bonsai,
                     aquarium: ctx.aquarium_state,
                     aquarium_owned: ctx.shop_state.entitlements().has_aquarium(),

@@ -189,20 +189,27 @@ a synthetic entry is up. Every other chat tile watches its room under a
 `chat · #room` rule, a click away from being the page's chat, so a stream
 night is two chats: the stream room and #lounge.
 
-Guests (`Guest`: now, lobby) are the two widgets that come and go: the
-now strip while the queue has something up (`LiveState::shown`, down on
-its clock), the lobby while a match waits on your move or a result on
-your look (`DailyState::awaits_me`, down when you act). Both end, which
-is what makes them guests; a widget that stays up for an evening (the
-Live roster, the bonsai) is a tile kind. A tile hosts one guest (`guest`
-on the leaf, `Node::toggle_guest`; a guest is on the page once), and the
-guest is the tile while it is up: its label in the rule, its panel in
-place of the host's (`draw_guest`: the strip in its full form where the
-tile is at least `MIN_FULL_WIDTH` by `LIVE_STRIP_HEIGHT`, else its one
-row, centred down the tile; the lobby's compact panel), nothing of the
-host underneath, so the host shows whole the moment the guest goes. A
-layout saved with a `guests` list reads as its first guest still known
-(`live` and `banner` were guests once and read as none). The active chat
+Guests (`Guest`: now, attention) are the two widgets that come and go:
+the now strip while the queue has something up (`LiveState::shown`, down
+on its clock), attention while anything waits on you (`app/attention`,
+`../attention/CONTEXT.md`: your move or an unseen result in a daily
+match, an unread DM or mention, a companion uncared for today; down when
+the last row clears). Both end, which is what makes them guests; a widget
+that stays up for an evening (the Live roster, the bonsai) is a tile
+kind. A tile hosts one guest (`guest` on the leaf, `Node::toggle_guest`;
+a guest is on the page once), and the guest is the tile while it is up:
+its label in the rule, its panel in place of the host's (`draw_guest`:
+the strip in its full form where the tile is at least `MIN_FULL_WIDTH`
+by `LIVE_STRIP_HEIGHT`, else its one row, centred down the tile;
+attention's rows from the top), nothing of the host underneath, so the
+host shows whole the moment the guest goes. Attention up on the focused
+tile takes `j` `k` and Enter ahead of the host's keys (`handle_attention`,
+`ZenState::attention_selected`; Enter does the row's act), on Zen and in
+Home's arrange mode, where tile keys run; outside arrange mode Home's keys
+are its chat's and the list reads only. A layout saved with a `guests`
+list reads as its first guest still known (`live` and `banner` were
+guests once and read as none; `lobby`, the guest attention grew out of,
+reads as attention). The active chat
 tile hosting the strip is the exception: there it inserts above the
 messages as the #lounge card always did (the card draws it itself, gated
 to #lounge, `active_chat_hosts`); the board's day is the card's own topic
@@ -250,7 +257,8 @@ seed `extract_key_home_layout`) in `late-core/src/models/user_ssh_key.rs`,
 the account seeds `extract_zen_layout` / `extract_home_layout` in
 `user.rs`. The Home arm of `render.rs` builds the
 same `ZenView` with a `HomeView` (the chat and card views the page's chat
-and the rail draw from) and the guests' inputs (`StripGuest`, `lobby_awaits`).
+and the rail draw from) and the guests' inputs (`StripGuest`, `attention`,
+the rows `App::attention_items` gathers).
 
 ## 3. Keys
 

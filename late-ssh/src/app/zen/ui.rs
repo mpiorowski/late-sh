@@ -25,6 +25,7 @@ use late_core::models::aquarium_care::CARE_DAYS;
 use late_core::models::user::{AudioSource, RadioStation};
 
 use crate::app::{
+    attention::state::Item as AttentionItem,
     audio::viz::{Dance, EqState, dance_lines, render_eq},
     bonsai::{
         render::{apply_sway, canvas_lines, center_lines},
@@ -110,9 +111,9 @@ pub(crate) struct ZenView<'a> {
     /// is up. The page's chat hosts it inside its card instead
     /// (`dashboard_view`).
     pub strip: Option<StripGuest<'a>>,
-    /// Whether a daily match waits on your move or a result on your look:
-    /// the lobby guest takes its host while so.
-    pub lobby_awaits: bool,
+    /// What waits on you (`App::attention_items`): the attention guest
+    /// takes its host while the list has rows.
+    pub attention: &'a [AttentionItem],
     /// The bottom row: the user's status line and the page's keys. `None`
     /// only on a page too small to draw.
     pub status_row: Option<ZenStatusRow>,
@@ -283,7 +284,7 @@ pub(crate) fn draw_rice(
         let guest = guests.get(ordinal).copied().flatten();
         let guest_up = match guest {
             Some(Guest::Now) => view.strip.is_some() && !is_page_chat,
-            Some(Guest::Lobby) => view.lobby_awaits,
+            Some(Guest::Attention) => !view.attention.is_empty(),
             None => false,
         };
         let title = match (guest, guest_up, zen.arrange) {
@@ -344,7 +345,14 @@ pub(crate) fn draw_rice(
             continue;
         }
         if let (Some(guest), true) = (guest, guest_up) {
-            draw_guest(frame, inner, guest, &mut view);
+            draw_guest(
+                frame,
+                inner,
+                guest,
+                zen.attention_selected,
+                focused,
+                &mut view,
+            );
             continue;
         }
         // The rules chrome already set every tile but the page's chat and
@@ -581,10 +589,17 @@ const MUSIC_STAGE_MIN_COLS: u16 = 18;
 
 /// Paint the guest that has taken its host's tile. The strip sits in its
 /// full form where the tile is wide and tall enough, its one-row form
-/// otherwise, centred down the tile; the lobby is the daily panel at the
-/// top. The host draws nothing underneath, so the moment the guest goes
-/// the host shows whole.
-fn draw_guest(frame: &mut Frame, area: Rect, guest: Guest, view: &mut ZenView<'_>) {
+/// otherwise, centred down the tile; attention is its rows from the top,
+/// the selected one marked while the tile is focused. The host draws
+/// nothing underneath, so the moment the guest goes the host shows whole.
+fn draw_guest(
+    frame: &mut Frame,
+    area: Rect,
+    guest: Guest,
+    attention_selected: usize,
+    focused: bool,
+    view: &mut ZenView<'_>,
+) {
     match guest {
         Guest::Now => {
             let Some(strip) = &view.strip else {
@@ -612,7 +627,13 @@ fn draw_guest(frame: &mut Frame, area: Rect, guest: Guest, view: &mut ZenView<'_
             );
             crate::app::live::ui::draw_live_strip(frame, strip_area, size, &strip.strip, strip.hit);
         }
-        Guest::Lobby => draw_lobby_tile(frame, area, view.daily, view.lobby_glow),
+        Guest::Attention => crate::app::attention::ui::draw(
+            frame,
+            area,
+            view.attention,
+            attention_selected,
+            focused,
+        ),
     }
 }
 

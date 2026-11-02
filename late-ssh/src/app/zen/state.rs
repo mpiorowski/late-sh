@@ -160,26 +160,26 @@ impl TileKind {
 /// something else: invisible while it has nothing to say, the whole tile
 /// while it does, then gone again. Each is on the page once, as a guest
 /// somewhere or not at all, and a tile hosts one. Both end: the strip on
-/// the queue's clock, the lobby when you act. Widgets that stay up for an
-/// evening (the Live roster) are tile kinds, never guests.
+/// the queue's clock, attention when its last row clears. Widgets that
+/// stay up for an evening (the Live roster) are tile kinds, never guests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Guest {
     /// The now strip (`app/live`): one thing just happened in the house.
     Now,
-    /// The lobby panel, while a match waits on your move or a result
-    /// waits on your look.
-    Lobby,
+    /// The attention list (`app/attention`): what waits on you, a row
+    /// each, while anything does.
+    Attention,
 }
 
 impl Guest {
     /// Every guest, the guest picker's rows.
-    pub const ALL: [Guest; 2] = [Guest::Now, Guest::Lobby];
+    pub const ALL: [Guest; 2] = [Guest::Now, Guest::Attention];
 
     pub fn label(self) -> &'static str {
         match self {
             Guest::Now => "now",
-            Guest::Lobby => "lobby",
+            Guest::Attention => "attention",
         }
     }
 
@@ -187,16 +187,17 @@ impl Guest {
     pub fn when(self) -> &'static str {
         match self {
             Guest::Now => "something just happened",
-            Guest::Lobby => "your move, or a result",
+            Guest::Attention => "something waits on you",
         }
     }
 
     /// A stored guest key this build knows; `live` and `banner`, guests
-    /// once, read as none.
+    /// once, read as none, and `lobby`, the guest attention grew out of,
+    /// reads as attention.
     fn from_key(key: &str) -> Option<Guest> {
         match key {
             "now" => Some(Guest::Now),
-            "lobby" => Some(Guest::Lobby),
+            "attention" | "lobby" => Some(Guest::Attention),
             _ => None,
         }
     }
@@ -1004,6 +1005,8 @@ pub struct ZenState {
     pub inbox_selected: usize,
     /// The Headlines tile's selected item, clamped the same way.
     pub headlines_selected: usize,
+    /// The attention guest's selected row, clamped the same way.
+    pub attention_selected: usize,
     /// Whether the page has been opened this session; the first opening
     /// lands the focus on the first chat tile so the chat keys work at once.
     opened: bool,
@@ -1040,6 +1043,7 @@ impl ZenState {
             kind_picker: None,
             inbox_selected: 0,
             headlines_selected: 0,
+            attention_selected: 0,
             opened: false,
         }
     }

@@ -628,11 +628,11 @@ fn a_guest_lives_on_one_tile_and_toggling_moves_it_or_takes_it_off() {
         Dir::Column,
         500,
         Node::hosting(TileKind::Chat, Guest::Now),
-        Node::hosting(TileKind::Aquarium, Guest::Lobby),
+        Node::hosting(TileKind::Aquarium, Guest::Attention),
     );
     assert_eq!(root.host_of(Guest::Now), Some(0));
     // Toggled on the reef, the strip moves there and takes the reef's
-    // lobby off: one host per guest, one guest per tile.
+    // attention off: one host per guest, one guest per tile.
     assert!(root.toggle_guest(1, Guest::Now));
     assert_eq!(root.host_of(Guest::Now), Some(1));
     assert_eq!(root.leaf_guests(), vec![None, Some(Guest::Now)]);
@@ -669,6 +669,16 @@ fn a_layout_saved_with_a_guest_list_keeps_the_first_guest_still_known() {
     });
     let layout = RiceLayout::from_json(Some(&stored));
     assert_eq!(layout.root.leaf_guests(), vec![Some(Guest::Now)]);
+    // A tile that hosted the lobby, the guest attention grew out of,
+    // hosts attention.
+    let lobby_host = serde_json::json!({
+        "root": { "node": "leaf", "kind": "chat", "guest": "lobby" },
+        "look": RiceLayout::default().look,
+    });
+    assert_eq!(
+        RiceLayout::from_json(Some(&lobby_host)).root.leaf_guests(),
+        vec![Some(Guest::Attention)]
+    );
     let only_gone = serde_json::json!({
         "root": { "node": "leaf", "kind": "chat", "guests": ["banner"] },
         "look": RiceLayout::default().look,
