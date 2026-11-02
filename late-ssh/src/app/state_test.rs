@@ -369,7 +369,7 @@ async fn home_navigation_and_overlays_preserve_only_the_current_visit() {
     // In arrange mode, Enter on the tile opens the picker on the configured
     // mode, which applies a new one before the next frame; returning to the
     // same mode leaves the instance alone.
-    app.handle_input(b"\x06");
+    app.handle_input(b"\x05");
     assert!(app.home.arrange);
     app.handle_input(b"\r");
     assert!(app.piece_picker.is_open());

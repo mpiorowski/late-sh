@@ -450,7 +450,7 @@ pub(crate) fn draw_rice(
 /// while a name is being typed (`n`, `r`) the field sits under the rows
 /// with its cursor.
 fn draw_layout_list(frame: &mut Frame, area: Rect, layouts: &Layouts, list: &LayoutList) {
-    let rows = layouts.len() as u16;
+    let rows = layouts.count() as u16;
     // The rows, a blank, the hint, the two border rows; two more rows
     // while a name is typed.
     let edit_rows = match list.editing {

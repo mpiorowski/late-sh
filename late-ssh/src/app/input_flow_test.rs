@@ -5015,8 +5015,16 @@ async fn a_second_chat_tile_on_home_keeps_its_room_and_the_rail_follows_the_acti
     app.banner = None;
     let frame = render_plain(&mut app);
     assert!(
-        frame.contains("chat · #lounge") && !frame.contains("chat · #stream-night"),
-        "the watching tile wears its room's rule, the active one draws Home's card; frame={frame:?}"
+        frame.contains("chat · #lounge") && frame.contains("chat · #stream-night"),
+        "each chat tile wears its room's rule; frame={frame:?}"
+    );
+    assert_eq!(
+        (
+            frame.matches("Compose").count(),
+            frame.matches("watching").count()
+        ),
+        (1, 1),
+        "the active tile draws Home's card, the other only watches; frame={frame:?}"
     );
 
     // A click on the first tile makes it the active chat and moves the
@@ -5032,8 +5040,10 @@ async fn a_second_chat_tile_on_home_keeps_its_room_and_the_rail_follows_the_acti
     );
     let frame = render_plain(&mut app);
     assert!(
-        frame.contains("chat · #stream-night") && !frame.contains("chat · #lounge"),
-        "the rule moved to the tile that now watches; frame={frame:?}"
+        frame.contains("chat · #lounge")
+            && frame.contains("chat · #stream-night")
+            && frame.contains("Home · lounge"),
+        "both tiles keep their rooms' rules and the header follows the active one; frame={frame:?}"
     );
 
     // The rail steers the active tile: a room picked there rebinds it.
@@ -5750,6 +5760,31 @@ async fn home_a_draft_stays_in_its_room_when_the_focus_moves() {
     app.chat.reset_composer();
 }
 
+/// The first frame comes before the rooms do: a chat tile with no room to
+/// name says so rather than claiming #lounge, and keys sent on the strength
+/// of that name would land nowhere.
+#[tokio::test]
+async fn a_chat_tile_names_no_room_until_the_rooms_load() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "chat-tile-label").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge");
+    let mut app = make_app(test_db.db.clone(), user.id, "chat-tile-label-flow-it");
+
+    // No tick yet, so no snapshot has been taken in.
+    assert!(app.chat.selected_room_id.is_none());
+    let first = String::from_utf8_lossy(&app.render().expect("render")).into_owned();
+    assert!(!first.contains("#lounge"), "frame={first:?}");
+
+    wait_for_render_contains(&mut app, "chat · #lounge").await;
+    assert_eq!(app.chat.selected_room_id, Some(lounge.id));
+}
+
 #[tokio::test]
 async fn home_pet_tile_is_petted_without_moving_the_focus() {
     use crate::app::hub::shop::{
@@ -5793,7 +5828,7 @@ async fn home_pet_tile_is_petted_without_moving_the_focus() {
     };
     app.home = ZenState::new(arranged.clone(), arranged);
     app.resize(cols, rows).expect("resize test terminal");
-    wait_for_render_contains(&mut app, "── pet").await;
+    wait_for_render_contains(&mut app, "╭ pet").await;
 
     // The pet sits on Home's rail in a tile of its own. Petting it is a
     // passing gesture: the keys stay with the chat.

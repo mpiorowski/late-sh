@@ -229,7 +229,8 @@ fn the_boards_day_banner_is_the_text_left_and_the_key_right() {
 }
 
 /// The shop note in a sidebar's width: the long row wraps at its words,
-/// centred, and nothing is cut off.
+/// centred, and nothing is cut off. An odd spare cell goes on the left, as
+/// ratatui centres a line; a kept trailing space would pull the row left.
 #[test]
 fn a_note_wider_than_its_tile_wraps_at_the_words() {
     let mut terminal = Terminal::new(TestBackend::new(20, 3)).expect("terminal");
@@ -253,8 +254,8 @@ fn a_note_wider_than_its_tile_wraps_at_the_words() {
         rows,
         vec![
             "     no pet yet     ",
-            " the Pet Companion  ",
-            "    is in /shop     ",
+            "  the Pet Companion ",
+            "     is in /shop    ",
         ]
     );
 }

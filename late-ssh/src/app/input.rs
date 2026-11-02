@@ -36,9 +36,6 @@ const CTRL_R: u8 = 0x12;
 const CTRL_S: u8 = 0x13;
 const CTRL_T: u8 = 0x14;
 const CTRL_V: u8 = 0x16;
-/// Home's layouts (`app/zen`): arrange mode on Home, from any page, so a
-/// digit or `L` after it switches the layout.
-
 /// Home's arrange mode (`app/zen`, the Home page): the layout keys on
 /// the page you are on.
 const CTRL_E: u8 = 0x05;

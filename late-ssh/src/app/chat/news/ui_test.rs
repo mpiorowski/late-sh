@@ -189,7 +189,13 @@ fn a_short_list_is_one_row_a_story_with_the_title_giving_way_first() {
     let short = drawn(&view, 60, COMPACT_UNDER_ROWS - 1);
     assert!(short[0].contains("· example.com · now"), "{short:?}");
     assert!(short[1].contains("· other.org · now"), "{short:?}");
-    let tall = drawn(&view, 60, COMPACT_UNDER_ROWS);
+    // The first story selected: the second one's would scroll this
+    // story's headline off the top, the whole list being a row taller.
+    let tall = drawn(
+        &self::view(&articles, 0, 0, &marker, &positions),
+        60,
+        COMPACT_UNDER_ROWS,
+    );
     assert!(
         tall[1].trim_start().starts_with("@mat"),
         "the full list's meta row: {tall:?}"

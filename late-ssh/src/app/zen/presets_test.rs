@@ -24,7 +24,7 @@ fn a_device_starts_with_stock_home_current_and_zen_second() {
         layouts.get(1).map(|item| &item.layout),
         Some(&RiceLayout::default())
     );
-    assert_eq!(layouts.len(), 2);
+    assert_eq!(layouts.count(), 2);
 }
 
 #[test]
@@ -109,7 +109,7 @@ fn saving_names_the_page_makes_it_current_and_stops_at_nine() {
         layouts.save_new("seventeen chars!!", chat_alone()),
         Err(LayoutsError::LongName)
     );
-    for n in layouts.len()..MAX_LAYOUTS {
+    for n in layouts.count()..MAX_LAYOUTS {
         layouts
             .save_new(&format!("l{n}"), chat_alone())
             .expect("room up to nine");

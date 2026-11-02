@@ -626,11 +626,8 @@ impl App {
             .map(|room_id| {
                 room_id
                     .and_then(|room_id| self.chat.rooms.iter().find(|(room, _)| room.id == room_id))
-                    .map(|(room, _)| match room.slug.as_deref() {
-                        Some(slug) => format!("#{slug}"),
-                        None => "chat".to_string(),
-                    })
-                    .unwrap_or_else(|| "#lounge".to_string())
+                    .and_then(|(room, _)| room.slug.as_deref())
+                    .map_or_else(|| "chat".to_string(), |slug| format!("#{slug}"))
             })
             .collect();
         self.home_chat_rows_caches

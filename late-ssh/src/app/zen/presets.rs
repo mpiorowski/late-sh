@@ -124,7 +124,7 @@ impl Layouts {
         self.current
     }
 
-    pub fn len(&self) -> usize {
+    pub fn count(&self) -> usize {
         self.items.len()
     }
 

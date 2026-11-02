@@ -72,6 +72,9 @@ pub fn handle_home_event(app: &mut App, event: &ParsedInput) -> bool {
                     crate::app::input::open_guide_globally(app);
                     return true;
                 }
+                // The `v` chords stay global: the press that arms them
+                // passes here, the guard above defers the suffix.
+                b'v' | b'V' => return false,
                 _ => {}
             }
             if handle_tile_keys(app, byte) {
@@ -118,7 +121,7 @@ pub(crate) fn toggle_home_arrange(app: &mut App) {
 /// into its own slot first, so nothing arranged is lost, then the slot
 /// becomes current and the page draws it. False past the end.
 pub(crate) fn load_layout(app: &mut App, index: usize) -> bool {
-    if index >= app.home_layouts.len() {
+    if index >= app.home_layouts.count() {
         return false;
     }
     app.home_layouts.store_current(app.home.rice.clone());
@@ -163,7 +166,7 @@ pub(crate) fn run_layout_command(app: &mut App, command: LayoutCommand) {
         }
         LayoutCommand::Load(target) => {
             let index = match target.parse::<usize>() {
-                Ok(digit) if (1..=app.home_layouts.len()).contains(&digit) => Some(digit - 1),
+                Ok(digit) if (1..=app.home_layouts.count()).contains(&digit) => Some(digit - 1),
                 Ok(_) => None,
                 Err(_) => app.home_layouts.index_of(&target),
             };
@@ -221,7 +224,7 @@ fn handle_layout_list(app: &mut App, event: &ParsedInput) {
         }
         return;
     }
-    let len = app.home_layouts.len();
+    let len = app.home_layouts.count();
     let selected = list.selected;
     match (event, event_byte(event)) {
         (ParsedInput::Arrow(b'A'), _) | (_, Some(b'k')) => list.move_by(-1, len),
@@ -251,7 +254,7 @@ fn handle_layout_list(app: &mut App, event: &ParsedInput) {
             let was_current = app.home_layouts.current() == selected;
             match app.home_layouts.delete(selected) {
                 Ok(()) => {
-                    list.move_by(0, app.home_layouts.len());
+                    list.move_by(0, app.home_layouts.count());
                     if was_current {
                         show_current_layout(app);
                     } else {
@@ -264,12 +267,11 @@ fn handle_layout_list(app: &mut App, event: &ParsedInput) {
             }
         }
         (_, Some(b'R')) => {
-            if app.home_layouts.reset(selected) {
-                if app.home_layouts.current() == selected {
-                    show_current_layout(app);
-                } else {
-                    app.mark_home_layout_dirty();
-                }
+            let reset = app.home_layouts.reset(selected);
+            match (reset, app.home_layouts.current() == selected) {
+                (true, true) => show_current_layout(app),
+                (true, false) => app.mark_home_layout_dirty(),
+                (false, _) => {}
             }
         }
         _ => {}

@@ -172,7 +172,7 @@ fn daily_feed_rows(state: &DailyState) -> Vec<DailyFeedRow> {
             },
         ));
     }
-    rows.sort_by(|a, b| b.0.cmp(&a.0));
+    rows.sort_by_key(|row| std::cmp::Reverse(row.0));
     rows.into_iter().map(|(_, row)| row).collect()
 }
 

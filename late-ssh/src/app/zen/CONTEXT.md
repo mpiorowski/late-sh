@@ -392,8 +392,8 @@ update.
   nothing else.
   `draw_tile_chrome` takes the optional span tail for exactly this; no
   other tile has one.
-- Arrange mode defers every key while `App::music_prefix_armed` is set,
-  so the `v` chords (`v x` audio source, `v s` skip vote) stay global
+- Arrange mode passes `v` on and defers every key while
+  `App::music_prefix_armed` is set, so the `v` chords (`v x` audio source, `v s` skip vote) stay global
   although the mode swallows stray letters and `X` closes a tile. Adding
   a layout key that collides with a chord suffix is fine, the guard
   covers it.
