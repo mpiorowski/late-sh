@@ -83,7 +83,8 @@ terrain; any other seed is a different world:
   "temporalStorms": "off",
   "temporalRifts": "off",
   "colorAccurateWorldmap": "true",
-  "foodSpoilSpeed": "0.25"
+  "foodSpoilSpeed": "0.25",
+  "daysPerMonth": "15"
 }
 ```
 
@@ -108,13 +109,23 @@ world: tools last 150%, saplings grow in 75% of the time
 on most cubic blocks instead of only stone and wood, a death keeps the
 inventory, lightning starts fires (they spread because `AllowFireSpread` is
 on in Terraform), no temporal storms or rifts for now (the stability meter
-itself stays on), the world map shows the real terrain colors, and food
-spoils at a quarter of the normal rate (half the Exploration preset's).
+itself stays on), the world map shows the real terrain colors, food
+spoils at a quarter of the normal rate (half the Exploration preset's), and
+months last 15 days instead of 9.
 Every perishable ages on the shared world clock, so food a player leaves in
 a chest or carries when logging out keeps rotting while others play; the
-slower rate softens that. `foodSpoilSpeed` was first set on the live save
-with `/worldconfig` and later added to the block on the volume by hand, so
-`/worldconfig <key>` on the console and the file agree on every key.
+slower rate softens that. `foodSpoilSpeed` and `daysPerMonth` were first set
+on the live save with `/worldconfig` and also written into the block on the
+volume by hand, so `/worldconfig <key>` on the console and the file agree on
+every key.
+
+A 15-day month is 12 real hours of the server being occupied and a year is 6
+days of it, since `PassTimeWhenEmpty` is off. 15 is not one of the
+create-world screen's choices (table below), but the save takes it.
+`daysPerMonth` applies after a restart and moves the date: the calendar keeps
+elapsed days since 1 January of year 0 and derives the date from them, so 6
+September at 9 days per month is 3 June at 15. Seasons follow the date, so
+work out the landing date before changing it on a live world.
 
 Every other world key is the `surviveandbuild` preset or the attribute
 default.
