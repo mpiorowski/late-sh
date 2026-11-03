@@ -37,7 +37,7 @@ jq --argjson seed "$seedjson" --arg lc "$landcover" --arg os "$oceanscale" '
   "$dir/serverconfig.json" > "$dir/serverconfig.new.json"
 jq '.WorldConfig | {Seed, WorldConfiguration}' "$dir/serverconfig.new.json"
 kubectl exec -i "$helper" -- sh -c 'cat > /data/serverconfig.json && chown 1654:1654 /data/serverconfig.json' < "$dir/serverconfig.new.json"
-kubectl exec "$helper" -- sh -c 'rm -rf /data/Saves/* /data/Backups/* /data/BackupSaves/*; ls -la /data/Saves'
+kubectl exec "$helper" -- sh -c 'rm -rf /data/Saves/* /data/Backups/* /data/BackupSaves/* /data/ModData/*; ls -la /data/Saves'
 
 kubectl delete pod "$helper" --wait
 kubectl scale deploy/vintagestory --replicas=1

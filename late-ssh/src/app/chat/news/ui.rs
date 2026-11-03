@@ -50,6 +50,10 @@ pub struct ArticleListView<'a> {
 
 /// The unread dot's column and the space after it.
 const GUTTER: usize = 2;
+/// Under this many rows the list is compact: one row a story, the title
+/// with its source and age, no link, summary or art. A small Home tile
+/// bound to News reads as a headlines strip this way.
+pub(crate) const COMPACT_UNDER_ROWS: u16 = 12;
 /// The art beside each story, the width the service draws it at.
 const ART_WIDTH: u16 = 12;
 /// Narrower than this a story keeps its whole width for text.
@@ -97,7 +101,10 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
         rows,
         selected,
         context,
-    } = lay_out(view, list_area.width);
+    } = match list_area.height < COMPACT_UNDER_ROWS {
+        true => lay_out_compact(view, list_area.width),
+        false => lay_out(view, list_area.width),
+    };
     let height = usize::from(list_area.height);
     let previous = view.scroll.map_or(0, Cell::get);
     let offset = scroll_offset(previous, rows.len(), &selected, &context, height);
@@ -222,6 +229,73 @@ pub(crate) fn lay_out(view: &ArticleListView<'_>, width: u16) -> ListLayout {
         selected,
         context: context_start..context_end,
     }
+}
+
+/// The compact list: one row a story in the same order as the full list,
+/// the shelf first with no rules, each row the title behind its unread
+/// dot, then `· example.com · 4m` dim, the title giving way first.
+pub(crate) fn lay_out_compact(view: &ArticleListView<'_>, width: u16) -> ListLayout {
+    let mut rows: Vec<ListRow> = Vec::new();
+    let mut selected = 0..0;
+    let selected_index = view
+        .selected_index
+        .min(view.articles.len().saturating_sub(1));
+    let full_width = usize::from(width);
+    for (index, item) in view.articles.iter().enumerate() {
+        let on_shelf = index < view.saved_len;
+        rows.push(ListRow {
+            line: compact_row(item, view, on_shelf, full_width),
+            art: None,
+        });
+        if index == selected_index {
+            selected = index..index + 1;
+        }
+    }
+    let context = selected_index.saturating_sub(1)..(selected_index + 2).min(rows.len());
+    ListLayout {
+        rows,
+        selected,
+        context,
+    }
+}
+
+/// `● Title · example.com · 4m`: the dot as the full list draws it, the
+/// title bright, the tail dim; the tail keeps its width and the title is
+/// cut to what is left.
+fn compact_row(
+    item: &ArticleFeedItem,
+    view: &ArticleListView<'_>,
+    on_shelf: bool,
+    width: usize,
+) -> Line<'static> {
+    let article = &item.article;
+    let unread = !on_shelf && is_unread(item, view.marker);
+    let dot = if unread {
+        Span::styled(
+            "● ",
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        )
+    } else {
+        Span::raw(" ".repeat(GUTTER))
+    };
+    let tail = format!(
+        " · {} · {}",
+        domain_label(&article.url),
+        format_relative_time_short(article.created)
+    );
+    let title_width = width.saturating_sub(GUTTER + UnicodeWidthStr::width(tail.as_str()));
+    Line::from(vec![
+        dot,
+        Span::styled(
+            truncate_cells(article.title.trim(), title_width),
+            Style::default()
+                .fg(theme::TEXT_BRIGHT())
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(tail, Style::default().fg(theme::TEXT_DIM())),
+    ])
 }
 
 /// What follows a story's title and meta: its link, then up to

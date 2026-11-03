@@ -10,13 +10,13 @@ use ratatui::{
 };
 
 use super::state::{Look, PET_HEIGHT, PET_WIDTH, Perch, PetFrameInputs, PetState, PetTravel};
-use crate::app::common::theme;
+use crate::app::common::{primitives::draw_centered_note, theme};
 
 /// The pet's box at its smallest: the three art rows.
 pub const PET_BOX_MIN_ROWS: u16 = PET_HEIGHT as u16;
 
 /// Where the tank is, seen from the pet's box, when the two share an edge
-/// on the Zen page. The pet goes and sits against that edge to watch.
+/// on Home. The pet goes and sits against that edge to watch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WatchSide {
     Left,
@@ -33,7 +33,7 @@ pub enum WatchTarget {
     Bonsai,
 }
 
-/// What the pet's box touches on the Zen page, with the side each one is
+/// What the pet's box touches on Home, with the side each one is
 /// on. The pet spends one watch window of the round on each, so with both
 /// beside it the fish and the tree alternate; with one, that one takes
 /// both windows, and its time at the glass never depends on what else the
@@ -110,7 +110,7 @@ impl PetPose {
     }
 }
 
-/// Pet box inputs threaded through the Zen render view. The rect slot
+/// Pet box inputs threaded through Home's tile view. The rect slot
 /// receives this frame's click target (a click is a pet), the frame slot
 /// what the tick needs to walk it and gate its frames.
 pub struct PetView<'a> {
@@ -158,7 +158,7 @@ pub fn draw_pet_box(frame: &mut Frame, area: Rect, view: &PetView<'_>, neighbour
 }
 
 /// The row over the pet's box: its name, its mood, and what it is up to
-/// when that is more than a stroll. Drawn centred over the Zen tile; the
+/// when that is more than a stroll. Drawn centred over the Home tile; the
 /// sidebar panel has no such row.
 pub fn status_line(state: &PetState, neighbours: Neighbours) -> Line<'static> {
     let dim = Style::default().fg(theme::TEXT_DIM());
@@ -500,6 +500,34 @@ fn mood_color(mood: PetMood) -> Color {
         PetMood::Sulking => theme::TEXT_DIM(),
         PetMood::Asleep => theme::TEXT_FAINT(),
     }
+}
+
+/// Home's pet tile: the box at tile size, a name and mood row on top when
+/// there is room, and the whole rest of the tile to roam. `neighbours`
+/// names the side a tank and a bonsai are on; a calm pet goes and watches
+/// them. With no pet owned the tile points at the shop.
+pub fn draw_tile(frame: &mut Frame, area: Rect, pet: Option<&PetView<'_>>, neighbours: Neighbours) {
+    let Some(view) = pet else {
+        draw_centered_note(
+            frame,
+            area,
+            &["no pet yet", "the Pet Companion is in /shop"],
+        );
+        return;
+    };
+    if area.height < PET_BOX_MIN_ROWS {
+        return;
+    }
+    let box_area = if area.height >= PET_BOX_MIN_ROWS + 2 {
+        frame.render_widget(
+            Paragraph::new(status_line(view.state, neighbours).centered()),
+            Rect::new(area.x, area.y, area.width, 1),
+        );
+        Rect::new(area.x, area.y + 1, area.width, area.height - 1)
+    } else {
+        area
+    };
+    draw_pet_box(frame, box_area, view, neighbours);
 }
 
 #[cfg(test)]

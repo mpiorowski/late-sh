@@ -87,7 +87,7 @@ fn panel_rows_say_the_start_in_the_viewers_zone() {
     );
 }
 
-/// The topic row reads the day's all-day posts, in the order given, and
+/// The banner reads the day's all-day posts, in the order given, and
 /// is absent on a day without one or once the day is over.
 #[test]
 fn the_days_all_day_posts_make_the_topic_row() {

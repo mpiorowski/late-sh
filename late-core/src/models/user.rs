@@ -154,11 +154,12 @@ impl RightSidebarMode {
 
 /// The page a session starts on (Settings, Tweaks, Startup). Brand-new users
 /// always start in the Clubhouse regardless, so the first-visit tour runs.
+/// A stored `zen` is not a landing (`zen` is a Home layout) and reads as
+/// the Clubhouse, as every unknown value does.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LandingPage {
     Clubhouse,
     Home,
-    Zen,
 }
 
 impl LandingPage {
@@ -166,7 +167,6 @@ impl LandingPage {
         match self {
             Self::Clubhouse => "clubhouse",
             Self::Home => "home",
-            Self::Zen => "zen",
         }
     }
 
@@ -174,19 +174,14 @@ impl LandingPage {
         match key.trim() {
             "clubhouse" => Some(Self::Clubhouse),
             "home" => Some(Self::Home),
-            "zen" => Some(Self::Zen),
             _ => None,
         }
     }
 
     pub fn cycle(self, forward: bool) -> Self {
         match (self, forward) {
-            (Self::Clubhouse, true) => Self::Home,
-            (Self::Home, true) => Self::Zen,
-            (Self::Zen, true) => Self::Clubhouse,
-            (Self::Clubhouse, false) => Self::Zen,
-            (Self::Home, false) => Self::Clubhouse,
-            (Self::Zen, false) => Self::Home,
+            (Self::Clubhouse, true) | (Self::Clubhouse, false) => Self::Home,
+            (Self::Home, true) | (Self::Home, false) => Self::Clubhouse,
         }
     }
 }
@@ -253,10 +248,10 @@ impl SceneStyle {
     }
 }
 
-/// An animated ascii piece (`late-ssh/src/app/ascii`): what a Zen ascii tile
+/// An animated ascii piece (`late-ssh/src/app/ascii`): what a Home ascii tile
 /// shows and what the away screensaver plays, a scene in one of its styles.
 /// Ported from ascii.rest by @bas3line (MIT). Stored by key (`as_str`) in
-/// `users.settings` and in the Zen layout: a scene's key is its name for
+/// `users.settings` and in Home's layouts: a scene's key is its name for
 /// dots, `<name>_pixels` for pixels.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct AsciiPiece {
@@ -265,7 +260,7 @@ pub struct AsciiPiece {
 }
 
 impl AsciiPiece {
-    /// What plays when nothing was picked, on a Zen ascii tile and as the
+    /// What plays when nothing was picked, on a Home ascii tile and as the
     /// screensaver alike: earthrise in dots, a slow piece, a frame a second
     /// that moves a few cells, so a tile left up or an away session costs
     /// about what idling does.
@@ -523,43 +518,6 @@ impl TerminalImagesMode {
     }
 }
 
-/// Master on/off for the Home room-list rail, the left column. Mirrors
-/// [`RightSidebarMode`], including `Auto`: the rail folds away on terminals too
-/// narrow to carry three columns.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RoomListMode {
-    On,
-    Off,
-    Auto,
-}
-
-impl RoomListMode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::On => "on",
-            Self::Off => "off",
-            Self::Auto => "auto",
-        }
-    }
-
-    pub fn from_key(key: &str) -> Option<Self> {
-        match key.trim() {
-            "on" => Some(Self::On),
-            "off" => Some(Self::Off),
-            "auto" => Some(Self::Auto),
-            _ => None,
-        }
-    }
-
-    pub fn cycle(self, forward: bool) -> Self {
-        match (self, forward) {
-            (Self::On, true) | (Self::Auto, false) => Self::Off,
-            (Self::Off, true) | (Self::On, false) => Self::Auto,
-            (Self::Auto, true) | (Self::Off, false) => Self::On,
-        }
-    }
-}
-
 /// Number of reorderable/toggleable panels in the right sidebar (the clock is
 /// always pinned at the top and is not part of this list).
 pub const RIGHT_SIDEBAR_COMPONENT_COUNT: usize = 7;
@@ -736,11 +694,10 @@ const SHOW_RIGHT_SIDEBAR_KEY: &str = "show_right_sidebar";
 const RIGHT_SIDEBAR_MODE_KEY: &str = "right_sidebar_mode";
 const RIGHT_SIDEBAR_COMPONENTS_KEY: &str = "right_sidebar_components";
 const STATUSLINE_COMPONENTS_KEY: &str = "statusline_components";
-/// The Rice page's tiling layout and look (`late-ssh/src/app/zen`), stored
-/// as the JSON the page itself serializes; absent until first edited.
-const ZEN_LAYOUT_KEY: &str = "zen_layout";
-const SHOW_ROOM_LIST_SIDEBAR_KEY: &str = "show_room_list_sidebar";
-const ROOM_LIST_MODE_KEY: &str = "room_list_mode";
+/// A single stored `zen` tiling layout, from before layouts had names: read
+/// only as the seed for a device's stock `zen` Home layout
+/// (`late-ssh/src/app/zen/presets.rs`).
+const HOME_LAYOUT_KEY: &str = "home_layout";
 const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
 const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
 const LANDING_PAGE_KEY: &str = "landing_page";
@@ -1318,23 +1275,6 @@ impl User {
                      updated = current_timestamp
                  WHERE id = $3",
                 &[&INTERACTION_MODE_KEY, &value, &user_id],
-            )
-            .await?;
-        if updated == 0 {
-            bail!("user not found");
-        }
-        Ok(())
-    }
-
-    /// Store the Rice page's layout JSON in the settings blob.
-    pub async fn set_zen_layout(client: &Client, user_id: Uuid, layout: &Value) -> Result<()> {
-        let updated = client
-            .execute(
-                "UPDATE users
-                 SET settings = settings || jsonb_build_object($1::text, $2::jsonb),
-                     updated = current_timestamp
-                 WHERE id = $3",
-                &[&ZEN_LAYOUT_KEY, layout, &user_id],
             )
             .await?;
         if updated == 0 {
@@ -2226,31 +2166,6 @@ pub fn extract_statusline_components(settings: &Value) -> Vec<StatusComponentSet
     parse_statusline_components(values)
 }
 
-pub fn extract_show_room_list_sidebar(settings: &Value) -> bool {
-    settings
-        .get(SHOW_ROOM_LIST_SIDEBAR_KEY)
-        .and_then(Value::as_bool)
-        .unwrap_or(true)
-}
-
-/// The account default for the room-list rail. Mirrors
-/// `extract_right_sidebar_mode`, including its legacy bool fallback: accounts
-/// that predate the mode key only stored `show_room_list_sidebar`, and the bool
-/// is still written alongside the mode so a rollback keeps working.
-pub fn extract_room_list_mode(settings: &Value) -> RoomListMode {
-    match settings
-        .get(ROOM_LIST_MODE_KEY)
-        .and_then(Value::as_str)
-        .map(str::trim)
-    {
-        Some("off") => RoomListMode::Off,
-        Some("auto") => RoomListMode::Auto,
-        Some("on") => RoomListMode::On,
-        _ if extract_show_room_list_sidebar(settings) => RoomListMode::On,
-        _ => RoomListMode::Off,
-    }
-}
-
 /// Tweak: when true, pressing Enter in the chat composer sends the message
 /// but keeps the composer focused (same behavior as Alt+S, which becomes a
 /// no-op while the tweak is on). Opt-in; defaults to false so existing
@@ -2375,10 +2290,11 @@ pub fn extract_artboard_disclaimer(settings: &Value) -> bool {
         .unwrap_or(true)
 }
 
-/// The stored Rice layout, if the account ever edited one. Parsed by the
-/// page, which falls back to its default on anything unreadable.
-pub fn extract_zen_layout(settings: &Value) -> Option<Value> {
-    settings.get(ZEN_LAYOUT_KEY).cloned()
+/// The account's stored Home layout, the seed for an SSH key with none
+/// (`user_ssh_key::extract_key_home_layout`). Parsed by the page, which
+/// falls back to the stock Home on anything unreadable.
+pub fn extract_home_layout(settings: &Value) -> Option<Value> {
+    settings.get(HOME_LAYOUT_KEY).cloned()
 }
 
 /// True once the user has finished (or skipped) the clubhouse first-visit

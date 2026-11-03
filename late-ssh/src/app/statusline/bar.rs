@@ -35,10 +35,6 @@ pub(crate) enum Placement {
     /// Left-aligned on the bottom border, sharing the row with the sponsor
     /// line on the right. The corner end has first claim on the room.
     BottomLeft,
-    /// Left-aligned on Zen's own bottom row, which it has to itself. Zen
-    /// has no frame, so there is no border to run on: no corners, and the
-    /// dividers are dots.
-    ZenRow,
 }
 
 impl Placement {
@@ -47,7 +43,7 @@ impl Placement {
     fn claim_order(self, len: usize) -> Vec<usize> {
         match self {
             Self::TopRight => (0..len).rev().collect(),
-            Self::BottomLeft | Self::ZenRow => (0..len).collect(),
+            Self::BottomLeft => (0..len).collect(),
         }
     }
 
@@ -55,7 +51,6 @@ impl Placement {
     fn usable_cols(self, area: Rect) -> u16 {
         match self {
             Self::TopRight | Self::BottomLeft => area.width.saturating_sub(2),
-            Self::ZenRow => area.width,
         }
     }
 }
@@ -120,36 +115,36 @@ pub(crate) fn build_top_status_bar(
     build_status_bar(&components, data, Placement::TopRight, area, title_width)
 }
 
-/// Zen's bottom row for one frame: the user's bar on the left, the page's
-/// own keys on the right.
-pub(crate) struct ZenStatusRow {
-    /// `None` while every enabled component is auto-hidden, or all are off:
-    /// the bar's part of the row stays blank.
-    pub bar: Option<Line<'static>>,
-    /// `None` on a row too narrow to hold them beside a cell of gap.
-    pub keys: Option<Line<'static>>,
-    pub hits: Vec<(StatusClick, Rect)>,
-}
-
-/// The layout keys worth knowing by heart, on the right end of Zen's row:
-/// the guide, split, flip, close, and zoom. The rest are in the guide.
-pub(crate) const ZEN_ROW_KEYS: [(&str, &str); 5] = [
-    ("?", "help"),
+/// Every key of Home's arrange mode (`Ctrl+E`), on its footer
+/// while the mode is on (`?` opens the layouts guide for the rest).
+/// The way out first, then by use, so a row too narrow for all of them
+/// keeps the ones that matter.
+pub(crate) const HOME_ARRANGE_KEYS: [(&str, &str); 14] = [
+    ("Esc", "done"),
+    ("arrows", "move"),
     ("S", "split"),
-    ("F", "flip"),
     ("X", "close"),
-    ("z", "zoom"),
+    ("F", "flip"),
+    ("<>{}", "resize"),
+    ("space", "tile"),
+    ("+", "guest"),
+    ("t", "title"),
+    ("b", "frame"),
+    ("1-9", "layout"),
+    ("L", "layouts"),
+    ("R", "reset"),
+    ("Tab", "next"),
 ];
 
 /// The keys as one compact line: each key amber, its word dim, two spaces
 /// between pairs and nothing around them.
-pub(crate) fn zen_keys_line() -> Line<'static> {
+pub(crate) fn keys_line(keys: &[(&str, &str)]) -> Line<'static> {
     let key = Style::default()
         .fg(theme::AMBER_DIM())
         .add_modifier(Modifier::BOLD);
     let word = Style::default().fg(theme::TEXT_DIM());
-    let mut spans = Vec::with_capacity(ZEN_ROW_KEYS.len() * 2);
-    for (index, (k, w)) in ZEN_ROW_KEYS.iter().enumerate() {
+    let mut spans = Vec::with_capacity(keys.len() * 2);
+    for (index, (k, w)) in keys.iter().enumerate() {
         let gap = if index == 0 { "" } else { "  " };
         spans.push(Span::styled(format!("{gap}{k}"), key));
         spans.push(Span::styled(format!(" {w}"), word));
@@ -157,32 +152,15 @@ pub(crate) fn zen_keys_line() -> Line<'static> {
     Line::from(spans)
 }
 
-/// Build Zen's bottom row. The keys claim the right end first, a cell of gap
-/// before them, and the bar fits into what is left; a row narrower than the
-/// keys gives the bar all of it.
-pub(crate) fn build_zen_status_row(
-    components: &[StatusComponentSetting],
-    data: &StatusData<'_>,
-    row: Rect,
-) -> ZenStatusRow {
-    let keys = zen_keys_line();
-    let reserved = keys.width() as u16 + 1;
-    let (keys, reserved) = match reserved <= row.width {
-        true => (Some(keys), reserved),
-        false => (None, 0),
-    };
-    match build_status_bar(components, data, Placement::ZenRow, row, reserved) {
-        Some(bar) => ZenStatusRow {
-            bar: Some(bar.line),
-            keys,
-            hits: bar.hits,
-        },
-        None => ZenStatusRow {
-            bar: None,
-            keys,
-            hits: Vec::new(),
-        },
+/// Home's footer while arranging: the arrange keys alone, as many leading
+/// ones as fit the row, no status bar (the frame carries the bars). `None`
+/// on a row too narrow for the first key; the row stays the footer's.
+pub(crate) fn build_home_arrange_row(row: Rect) -> Option<Line<'static>> {
+    let mut keep = HOME_ARRANGE_KEYS.len();
+    while keep > 0 && keys_line(&HOME_ARRANGE_KEYS[..keep]).width() > row.width as usize {
+        keep -= 1;
     }
+    (keep > 0).then(|| keys_line(&HOME_ARRANGE_KEYS[..keep]))
 }
 
 /// The keyboard hint was the original bottom-left frame title. It stays its
@@ -201,7 +179,7 @@ fn shortcut_spans(brief: bool) -> Vec<Span<'static>> {
             &[
                 ("Settings", "^O"),
                 ("Lobby", "^G"),
-                ("Zen", "^F"),
+                ("Layouts", "^E"),
                 ("Shop", "^S"),
                 ("Guide", "?"),
                 ("Exit", "qq"),
@@ -226,10 +204,10 @@ fn shortcut_spans(brief: bool) -> Vec<Span<'static>> {
 
 /// Build the bar for one frame.
 ///
-/// `area` is the full bordered frame (corners included), or Zen's row itself
-/// for `ZenRow`, and `title_width` is the width of the other title sharing
-/// the row. Both arrive raw rather than pre-subtracted so the fitting math is
-/// covered by tests instead of living uncovered at the call site.
+/// `area` is the full bordered frame (corners included), and `title_width`
+/// is the width of the other title sharing the row. Both arrive raw rather
+/// than pre-subtracted so the fitting math is covered by tests instead of
+/// living uncovered at the call site.
 pub(crate) fn build_status_bar(
     components: &[StatusComponentSetting],
     data: &StatusData<'_>,
@@ -380,23 +358,17 @@ pub(crate) fn fit(segments: Vec<Segment>, spare_cols: u16, placement: Placement)
 /// ```text
 /// ───── 3 ─ 12:04 ─ 1204 ─┐
 /// ```
-///
-/// Zen's row has no border to continue, so it is dotted like the page's
-/// other hint rows.
 fn separator(placement: Placement) -> Span<'static> {
     match placement {
         Placement::TopRight | Placement::BottomLeft => {
             Span::styled("─", Style::default().fg(theme::BORDER_ACTIVE()))
         }
-        Placement::ZenRow => Span::styled("·", Style::default().fg(theme::TEXT_FAINT())),
     }
 }
 
 /// Painted width of the whole bar: every segment and a separator between
-/// each adjacent pair. A frame bar adds one more at the corner end so it
-/// meets the frame corner through a border glyph instead of a blank cell.
-/// `fit` budgets that corner glyph on every placement, so Zen's row keeps
-/// the cell as air at its right end.
+/// each adjacent pair, plus one more at the corner end so it meets the
+/// frame corner through a border glyph instead of a blank cell.
 fn total_width(segments: &[Segment]) -> u16 {
     let segments_width: u16 = segments.iter().map(Segment::width).sum();
     segments_width + (segments.len() as u16)
@@ -422,10 +394,9 @@ pub(crate) fn lay_out(
     let start_x = match placement {
         Placement::TopRight => area.right().saturating_sub(total).saturating_sub(1),
         Placement::BottomLeft => area.x.saturating_add(1),
-        Placement::ZenRow => area.x,
     };
     let y = match placement {
-        Placement::TopRight | Placement::ZenRow => area.y,
+        Placement::TopRight => area.y,
         Placement::BottomLeft => area.bottom().saturating_sub(1),
     };
 
@@ -467,7 +438,7 @@ pub(crate) fn lay_out(
 
     let line = match placement {
         Placement::TopRight => Line::from(spans).right_aligned(),
-        Placement::BottomLeft | Placement::ZenRow => Line::from(spans).left_aligned(),
+        Placement::BottomLeft => Line::from(spans).left_aligned(),
     };
     Some(StatusBar {
         line,
@@ -487,8 +458,9 @@ pub(crate) enum StatusClick {
     Booth,
     Arcade,
     Profiles,
-    /// Zen, where the bonsai, the tank, and the pet all live.
-    Zen,
+    /// Home's `home` layout, where the bonsai, the tank, and the pet all
+    /// live.
+    HomeLayout,
     /// What the live strip shows, as `o` on the #lounge card opens it.
     Live,
 }
@@ -499,7 +471,7 @@ pub(crate) fn click_action(component: StatusComponent) -> Option<StatusClick> {
         StatusComponent::Mentions => Some(StatusClick::Mentions),
         StatusComponent::Chips => Some(StatusClick::Shop),
         StatusComponent::Turns => Some(StatusClick::Lobby),
-        StatusComponent::Care => Some(StatusClick::Zen),
+        StatusComponent::Care => Some(StatusClick::HomeLayout),
         StatusComponent::Station => Some(StatusClick::Booth),
         StatusComponent::Quests => Some(StatusClick::Arcade),
         StatusComponent::Users => Some(StatusClick::Profiles),

@@ -5,6 +5,7 @@ use uuid::Uuid;
 use super::PresenceService;
 use crate::app::presence::session::PresenceSession;
 use crate::pg_listener::{PgListener, Signal};
+use crate::state::ActiveUsers;
 use crate::test_helpers::{new_test_db, wait_until};
 
 /// Two replicas as two presence services on one database: what one
@@ -17,10 +18,12 @@ async fn a_session_on_one_replica_moves_and_leaves_on_the_other() {
     let replica_a = PresenceService::start(
         test_db.db.clone(),
         listener.subscribe(PresenceService::CHANNELS),
+        ActiveUsers::default(),
     );
     let replica_b = PresenceService::start(
         test_db.db.clone(),
         listener.subscribe(PresenceService::CHANNELS),
+        ActiveUsers::default(),
     );
     // Act only once the LISTEN is live, so the first flush is heard and
     // the test does not ride on a heartbeat.

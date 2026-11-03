@@ -120,7 +120,7 @@ Cross-domain touchpoints:
   on the `Pending -> Live` edge (a stop and resume through grace keeps it),
   so the strip inherits "never before media flows" and a page refresh never
   queues the stream twice. It stays up at least `LIVE_STREAM_MIN` (2 min);
-  `o`, Enter on a Zen Live tile, or a click walks into the stream room on
+  `o`, `s` and the row's digit on a Live tile, or a click walks into the stream room on
   Home, the path the rail row takes (lazy join, named-viewer note). The
   right sidebar's Live panel (`live/panel.rs`) lists every live stream as
   a row for as long as it runs (streamer, `⦿ title`, viewers), ahead of

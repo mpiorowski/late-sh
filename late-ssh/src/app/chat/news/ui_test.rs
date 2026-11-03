@@ -1,6 +1,6 @@
 use super::{
-    ArticleListView, ascii_preview_if_fit, draw_article_list, lay_out, lounge_card_lines,
-    scroll_offset,
+    ArticleListView, COMPACT_UNDER_ROWS, ascii_preview_if_fit, draw_article_list, lay_out,
+    lay_out_compact, lounge_card_lines, scroll_offset,
 };
 use chrono::Utc;
 use late_core::models::article::{Article, ArticleFeedItem};
@@ -146,6 +146,65 @@ fn the_list_sections_the_shelf_over_the_feed_and_shows_every_story_whole() {
 
 /// The unread dot marks a feed story the visit's marker has no read for,
 /// and never a story on the shelf: the shelf is the reader's own list.
+#[test]
+fn a_short_list_is_one_row_a_story_with_the_title_giving_way_first() {
+    let first = card_at(
+        "https://example.com/one",
+        BodyStatus::Ready { reading_minutes: 7 },
+    );
+    let second = card_at(
+        "https://other.org/two",
+        BodyStatus::Ready { reading_minutes: 7 },
+    );
+    let articles = vec![first.clone(), second.clone()];
+    let marker: HashSet<Uuid> = HashSet::new();
+    let positions: HashMap<Uuid, WatchPosition> = HashMap::new();
+    let view = view(&articles, 0, 1, &marker, &positions);
+
+    let layout = lay_out_compact(&view, 60);
+    assert_eq!(layout.rows.len(), 2, "one row a story, no rules");
+    assert_eq!(layout.selected, 1..2);
+    assert_eq!(layout.context, 0..2, "the story above, nothing below");
+    let texts: Vec<String> = layout
+        .rows
+        .iter()
+        .map(|row| row.line.spans.iter().map(|s| s.content.as_ref()).collect())
+        .collect();
+    assert!(
+        texts[0].starts_with("● Why LISTEN/NOTIFY stops scaling · example.com · now"),
+        "{texts:?}"
+    );
+    assert!(texts[1].ends_with(" · other.org · now"), "{texts:?}");
+
+    // Narrow, the tail keeps its width and the title is cut.
+    let narrow = lay_out_compact(&view, 30);
+    let row: String = narrow.rows[0]
+        .line
+        .spans
+        .iter()
+        .map(|s| s.content.as_ref())
+        .collect();
+    assert!(row.ends_with(" · example.com · now"), "{row:?}");
+    assert!(row.chars().count() <= 30, "{row:?}");
+
+    // The drawn list picks the compact form under the threshold and the
+    // whole one at it.
+    let short = drawn(&view, 60, COMPACT_UNDER_ROWS - 1);
+    assert!(short[0].contains("· example.com · now"), "{short:?}");
+    assert!(short[1].contains("· other.org · now"), "{short:?}");
+    // The first story selected: the second one's would scroll this
+    // story's headline off the top, the whole list being a row taller.
+    let tall = drawn(
+        &self::view(&articles, 0, 0, &marker, &positions),
+        60,
+        COMPACT_UNDER_ROWS,
+    );
+    assert!(
+        tall[1].trim_start().starts_with("@mat"),
+        "the full list's meta row: {tall:?}"
+    );
+}
+
 #[test]
 fn the_unread_dot_marks_the_feed_and_not_the_shelf() {
     let marker = HashSet::new();

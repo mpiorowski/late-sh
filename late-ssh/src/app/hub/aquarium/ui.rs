@@ -5,15 +5,17 @@ use ratatui::{
     buffer::Buffer,
     layout::Rect,
     style::{Color, Modifier, Style},
-    text::Line,
+    text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Widget},
 };
 
-use crate::app::common::theme;
+use late_core::models::aquarium_care::CARE_DAYS;
+
+use crate::app::common::{primitives::draw_centered_note, theme};
 
 use super::{
     creature::{CreatureDef, Entity, School, Variant},
-    state::{AquariumState, RuntimeMode, TankState, WaterBand},
+    state::{AquariumCare, AquariumState, CareBar, RuntimeMode, TankState, WaterBand},
     world::ReefWorld,
 };
 
@@ -49,7 +51,7 @@ fn render_tank(buf: &mut Buffer, area: Rect, app: &AquariumState, tank_state: &T
                 tank_state.width, tank_state.height
             )),
             Line::from(format!("Current size: {}x{}", area.width, area.height)),
-            Line::from("Resize the terminal, or /aquarium to hide."),
+            Line::from("Resize the terminal, or the tile (Ctrl+E, then })."),
         ])
         .style(Style::new().fg(theme::TEXT_MUTED()));
         render_widget(buf, message, area);
@@ -112,7 +114,7 @@ fn render_size_warning(buf: &mut Buffer, area: Rect, min_height: u16) {
         Line::from("Aquarium reef mode needs more rows."),
         Line::from(format!("Minimum rows: {min_height}")),
         Line::from(format!("Current rows: {}", area.height)),
-        Line::from("Resize the terminal, or /aquarium to hide."),
+        Line::from("Resize the terminal, or the tile (Ctrl+E, then })."),
     ])
     .style(Style::new().fg(theme::TEXT_MUTED()));
     render_widget(buf, message, area);
@@ -462,9 +464,12 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
     )
 }
 
-/// Rows of the sidebar tank: the surface, four rows of water, the floor.
+/// Rows of the sidebar tank, and the least a tank tile draws: the
+/// surface, four rows of water, the floor.
 pub(crate) const MINI_TANK_HEIGHT: u16 = 6;
-const MINI_WATER_ROWS: usize = MINI_TANK_HEIGHT as usize - 2;
+/// The swimmers' lanes: the sidebar's four water rows, spread over the
+/// water of a taller tank.
+const MINI_LANES: usize = MINI_TANK_HEIGHT as usize - 2;
 /// A 21-cell band holds this many glyphs before it reads as noise.
 const MINI_MAX_CREATURES: usize = 10;
 /// Copies of one kind drawn at most, so a school of ten does not crowd out
@@ -478,14 +483,17 @@ const MINI_HUNGRY_SLOWDOWN: usize = 4;
 const MINI_FLOOR: &str = "._.-^-.__-._";
 
 /// The sidebar tank: the owned population as one-to-three-cell glyphs
-/// (`CreatureDef::mini`) in a fixed band, `MINI_TANK_HEIGHT` rows tall.
+/// (`CreatureDef::mini`) filling `area`, the surface on its top row and
+/// the floor on its bottom one, at least `MINI_TANK_HEIGHT` rows tall.
 /// Stateless like the bonsai sway: where each creature is comes from the
 /// wall tick alone, so there is no simulation to step and the panel rides
 /// the sidebar's anim_half frames. It reads the reef's population and
 /// colours (the fry in its parent's, the sprout on the floor) and nothing
-/// else of the simulation. Swimmers take the water rows in turn and swim
-/// wall to wall, each at its own pace; floor-bound creatures stand still
-/// on the bottom row; hungry fish sink to that row and slow down.
+/// else of the simulation. Swimmers take the four lanes in turn, spread
+/// over the water (a taller tank has the same lanes, further apart) and
+/// swim wall to wall, each at its own pace; floor-bound creatures stand
+/// still on the bottom water row; hungry fish sink to that row and slow
+/// down.
 pub(crate) fn draw_mini_tank(
     buf: &mut Buffer,
     area: Rect,
@@ -496,7 +504,8 @@ pub(crate) fn draw_mini_tank(
     if area.width == 0 || area.height < MINI_TANK_HEIGHT {
         return;
     }
-    let band = Rect::new(area.x, area.y, area.width, MINI_TANK_HEIGHT);
+    let band = area;
+    let water_rows = band.height as usize - 2;
     render_surface_wave(buf, band, tick as u64);
     let floor_style = Style::new().fg(theme::BORDER_DIM());
     let floor: String = MINI_FLOOR
@@ -507,7 +516,7 @@ pub(crate) fn draw_mini_tank(
     buf.set_string(band.x, band.bottom() - 1, floor, floor_style);
 
     let width = band.width as usize;
-    let bottom_row = band.y + MINI_WATER_ROWS as u16;
+    let bottom_row = band.y + water_rows as u16;
     let mut drawn_per_kind: HashMap<usize, usize> = HashMap::new();
     let mut plants = 0usize;
     let mut swimmers = 0usize;
@@ -536,7 +545,7 @@ pub(crate) fn draw_mini_tank(
             (bottom_row, MINI_STEP_TICKS * MINI_HUNGRY_SLOWDOWN)
         } else {
             (
-                band.y + 1 + (ordinal % MINI_WATER_ROWS) as u16,
+                band.y + 1 + ((ordinal % MINI_LANES) * water_rows / MINI_LANES) as u16,
                 MINI_STEP_TICKS * (1 + ordinal % 3),
             )
         };
@@ -560,6 +569,81 @@ pub(crate) fn draw_mini_tank(
 
 fn glyph_width(glyph: &str) -> usize {
     unicode_width::UnicodeWidthStr::width(glyph)
+}
+
+/// The tank and its care, as Home's reef and tank tiles read them.
+pub(crate) struct TankView<'a> {
+    pub state: &'a AquariumState,
+    pub care: &'a AquariumCare,
+}
+
+/// Home's reef tile: the reef bound to the tile (`reef_form`), with the
+/// care bar on its surface; a tile too small for it says so and points at
+/// the tank tile, the small form. The sprout on the floor is tended on
+/// its Shop row.
+pub(crate) fn draw_reef_tile(frame: &mut Frame, area: Rect, view: &TankView<'_>) {
+    if !reef_form(area) {
+        draw_centered_note(
+            frame,
+            area,
+            &["the reef needs more room", "a tank tile is the small one"],
+        );
+        return;
+    }
+    draw(frame, area, view.state);
+    draw_care_bar(frame, area, view.care.bar());
+}
+
+/// Home's tank tile, the sidebar's small tank the tile's whole size: the
+/// surface on the tile's top row, the floor on its bottom one, the fish
+/// in the water between, the care bar on the surface.
+pub(crate) fn draw_tank_tile(frame: &mut Frame, area: Rect, view: &TankView<'_>, wall_tick: usize) {
+    draw_mini_tank(
+        frame.buffer_mut(),
+        area,
+        view.state,
+        view.care.hungry(),
+        wall_tick,
+    );
+    draw_care_bar(frame, area, view.care.bar());
+}
+
+/// Whether an aquarium tile's inner area is big enough for the reef:
+/// wider than the rail and taller than the mini tank. The simulation
+/// binds to the first tile in this form (`App::sync_aquarium_bounds`).
+pub(crate) fn reef_form(inner: Rect) -> bool {
+    inner.width > REEF_MIN_COLS && inner.height > MINI_TANK_HEIGHT
+}
+
+/// The sidebar's content width: a tile this narrow is a sidebar panel.
+const REEF_MIN_COLS: u16 = 30;
+
+/// The care bar on the water's surface: the tile's top row, right end,
+/// over the reef or the tank once they are drawn.
+fn draw_care_bar(frame: &mut Frame, area: Rect, bar: CareBar) {
+    let bar = Line::from(care_bar_spans(bar));
+    if area.height == 0 || (area.width as usize) < bar.width() + 2 {
+        return;
+    }
+    let row = Rect::new(area.x, area.y, area.width.saturating_sub(1), 1);
+    frame.render_widget(Paragraph::new(bar).right_aligned(), row);
+}
+
+/// The care bar: one dot per day of the fourteen both clocks run on.
+/// Streak dots fill green, unfed dots red, and a minded tank (the
+/// shield's auto feeder) shows all fourteen empty.
+fn care_bar_spans(bar: CareBar) -> Vec<Span<'static>> {
+    let (filled, color) = match bar {
+        CareBar::Streak(days) => (days, theme::SUCCESS()),
+        CareBar::Dry(days) => (days, theme::ERROR()),
+        CareBar::Minded => (0, theme::TEXT_FAINT()),
+    };
+    let filled = filled.min(CARE_DAYS) as usize;
+    let empty = CARE_DAYS as usize - filled;
+    vec![
+        Span::styled("●".repeat(filled), Style::default().fg(color)),
+        Span::styled("○".repeat(empty), Style::default().fg(theme::TEXT_FAINT())),
+    ]
 }
 
 #[cfg(test)]

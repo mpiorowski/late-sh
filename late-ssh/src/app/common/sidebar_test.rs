@@ -1,46 +1,10 @@
 use super::*;
+use ratatui::{Terminal, backend::TestBackend};
 
 #[test]
 fn sidebar_clock_text_falls_back_to_utc_when_timezone_missing() {
     let clock = sidebar_clock_text(None);
     assert!(clock.starts_with("UTC "));
-}
-
-fn friend(username: &str, away: bool) -> ActiveFriend {
-    ActiveFriend {
-        user_id: uuid::Uuid::now_v7(),
-        username: username.to_string(),
-        audio_source: AudioSource::default(),
-        online_since: std::time::Instant::now(),
-        away,
-    }
-}
-
-#[test]
-fn friend_names_text_keeps_every_name_when_the_row_is_wide() {
-    let friends = vec![friend("ada", false), friend("bob", false)];
-    assert_eq!(friend_names_text(&friends, 40, 0), "@ada @bob");
-}
-
-#[test]
-fn friend_names_text_marks_an_away_friend_with_the_glyph_alone() {
-    let friends = vec![friend("ada", false), friend("bob", true)];
-    assert_eq!(friend_names_text(&friends, 40, 0), "@ada @bob 💤");
-}
-
-#[test]
-fn friend_names_text_scrolls_past_the_names_that_do_not_fit() {
-    let friends = vec![
-        friend("ada", false),
-        friend("bob", false),
-        friend("cyd", false),
-    ];
-    // The full 12-wide rail shows names; the marker was retired so no
-    // column is reserved.
-    assert_eq!(friend_names_text(&friends, 12, 0), "@ada @bob @c");
-    // Held at the start, then scrolled to the end: the tail is readable.
-    // With hold 45 and step 15, the far extreme spans ticks 75..120.
-    assert_eq!(friend_names_text(&friends, 12, 90), "da @bob @cyd");
 }
 
 fn line_text(line: &Line<'_>) -> String {
@@ -103,8 +67,9 @@ fn music_stage_height_is_constant() {
         let texts = stage_texts(source);
         assert_eq!(texts.len(), MUSIC_DOCK_HEIGHT as usize, "{source:?}");
         assert!(texts[0].starts_with("vol"), "{source:?}");
-        assert!(texts[1].starts_with("▌ radio"), "{source:?}");
-        assert!(texts[11].contains("v+x source"), "{source:?}");
+        assert_eq!(texts[1], "- = volume  m mute", "{source:?}");
+        assert!(texts[2].starts_with("▌ radio"), "{source:?}");
+        assert!(texts[12].contains("v+x source"), "{source:?}");
     }
 }
 
@@ -119,22 +84,22 @@ fn on_radio_the_stage_reads_radio_then_its_stations_then_the_youtube_peek() {
     .iter()
     .map(line_text)
     .collect();
-    assert!(texts[1].starts_with("▌ radio"));
+    assert!(texts[2].starts_with("▌ radio"));
     // The track row falls back to the station label without live metadata.
-    assert_eq!(texts[2], "datawave");
+    assert_eq!(texts[3], "datawave");
     // The heading names the station and credits its provider.
-    assert_eq!(texts[3], "datawave · nightride");
-    assert!(texts[4].starts_with("○ chillsynth"));
-    assert!(texts[4].trim_end().ends_with("v1"));
-    assert!(texts[5].starts_with("○ nightride"));
-    assert!(texts[6].starts_with("● datawave"));
-    assert!(texts[6].trim_end().ends_with("v3"));
-    assert!(texts[7].starts_with("○ mellow"));
-    assert!(texts[8].starts_with("○ plaza"));
-    assert!(texts[8].trim_end().ends_with("v5"));
-    assert!(texts[9].starts_with("▌ youtube"));
-    assert_eq!(texts[10], "fallback stream");
-    assert!(texts[11].contains("v+r tune"));
+    assert_eq!(texts[4], "datawave · nightride");
+    assert!(texts[5].starts_with("○ chillsynth"));
+    assert!(texts[5].trim_end().ends_with("v1"));
+    assert!(texts[6].starts_with("○ nightride"));
+    assert!(texts[7].starts_with("● datawave"));
+    assert!(texts[7].trim_end().ends_with("v3"));
+    assert!(texts[8].starts_with("○ mellow"));
+    assert!(texts[9].starts_with("○ plaza"));
+    assert!(texts[9].trim_end().ends_with("v5"));
+    assert!(texts[10].starts_with("▌ youtube"));
+    assert_eq!(texts[11], "fallback stream");
+    assert!(texts[12].contains("v+r tune"));
 }
 
 #[test]
@@ -148,10 +113,10 @@ fn on_youtube_radio_collapses_to_its_title_bar() {
     .iter()
     .map(line_text)
     .collect();
-    assert!(texts[1].starts_with("▌ radio"));
-    assert!(texts[2].starts_with("▌ youtube"));
-    assert_eq!(texts[3], "fallback stream");
-    assert!(texts[11].contains("v+v queue"), "{}", texts[11]);
+    assert!(texts[2].starts_with("▌ radio"));
+    assert!(texts[3].starts_with("▌ youtube"));
+    assert_eq!(texts[4], "fallback stream");
+    assert!(texts[12].contains("v+v queue"), "{}", texts[12]);
     assert!(
         texts.iter().all(|row| !row.contains("An Artist")),
         "the radio track is hidden on youtube: {texts:?}"
@@ -161,11 +126,11 @@ fn on_youtube_radio_collapses_to_its_title_bar() {
 #[test]
 fn both_title_bars_keep_their_listener_counts() {
     let texts = stage_texts(AudioSource::Radio);
-    assert!(texts[1].trim_end().ends_with('1'));
-    assert!(texts[9].trim_end().ends_with('3'));
+    assert!(texts[2].trim_end().ends_with('1'));
+    assert!(texts[10].trim_end().ends_with('3'));
     let texts = stage_texts(AudioSource::Youtube);
-    assert!(texts[1].trim_end().ends_with('1'));
-    assert!(texts[2].trim_end().ends_with('3'));
+    assert!(texts[2].trim_end().ends_with('1'));
+    assert!(texts[3].trim_end().ends_with('3'));
 }
 
 #[test]
@@ -177,12 +142,12 @@ fn an_off_slot_station_lights_no_slot_row_and_credits_its_own_provider() {
         .map(line_text)
         .collect();
     assert!(
-        texts[4..9].iter().all(|row| row.starts_with("○ ")),
+        texts[5..10].iter().all(|row| row.starts_with("○ ")),
         "{texts:?}"
     );
-    assert!(texts[6].starts_with("○ pin via v+r"), "{}", texts[6]);
-    assert!(texts[6].trim_end().ends_with("v3"));
-    assert_eq!(texts[3], "lofi · late.sh", "the heading still names it");
+    assert!(texts[7].starts_with("○ pin via v+r"), "{}", texts[7]);
+    assert!(texts[7].trim_end().ends_with("v3"));
+    assert_eq!(texts[4], "lofi · late.sh", "the heading still names it");
 }
 
 /// The rail is 21 columns: a long station keeps its whole label and the
@@ -206,7 +171,7 @@ fn the_radio_track_row_prefers_live_metadata() {
     .iter()
     .map(line_text)
     .collect();
-    assert_eq!(texts[2], "An Artist - A Track");
+    assert_eq!(texts[3], "An Artist - A Track");
 }
 
 fn on(component: RightSidebarComponent) -> RightSidebarComponentSetting {
@@ -223,10 +188,7 @@ fn off(component: RightSidebarComponent) -> RightSidebarComponentSetting {
     }
 }
 
-const OWNS_ALL: SidebarOwnership = SidebarOwnership {
-    pet: true,
-    tank: true,
-};
+const OWNS_ALL: SidebarOwnership = SidebarOwnership { pet: true };
 
 #[test]
 fn visible_components_respects_order() {
@@ -297,13 +259,10 @@ fn visible_components_skips_unowned_panels_without_stopping() {
         on(RightSidebarComponent::Tank),
         on(RightSidebarComponent::Daily),
     ];
-    let owns_pet = SidebarOwnership {
-        pet: true,
-        tank: false,
-    };
+    let no_pet = SidebarOwnership { pet: false };
     assert_eq!(
-        visible_components(&components, owns_pet, 100),
-        vec![RightSidebarComponent::Pet, RightSidebarComponent::Daily]
+        visible_components(&components, no_pet, 100),
+        vec![RightSidebarComponent::Tank, RightSidebarComponent::Daily]
     );
 }
 
@@ -352,4 +311,52 @@ fn pet_watches_the_bonsai_and_tank_panels_it_touches() {
             bonsai: None,
         }
     );
+}
+
+fn music_short_rows(width: u16, height: u16) -> Vec<String> {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+    terminal
+        .draw(|frame| {
+            draw_music_short(frame, Rect::new(0, 0, width, height), "Ambition", "youtube")
+        })
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+    (0..height)
+        .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
+        .collect()
+}
+
+#[test]
+fn a_short_music_tile_centres_the_track_over_the_station_and_draws_no_band() {
+    let rows = music_short_rows(24, 9);
+    assert!(rows[3].contains("♪ Ambition"), "{rows:#?}");
+    assert!(rows[4].contains("youtube"), "{rows:#?}");
+    // Nothing else is drawn: the equalizer is the visualizer tile's.
+    for (y, row) in rows.iter().enumerate() {
+        if y != 3 && y != 4 {
+            assert_eq!(row.trim(), "", "{rows:#?}");
+        }
+    }
+
+    // Two rows is text only; one row keeps the track.
+    assert_eq!(music_short_rows(24, 2)[0].trim(), "♪ Ambition");
+    assert_eq!(music_short_rows(24, 2)[1].trim(), "youtube");
+    assert_eq!(music_short_rows(24, 1)[0].trim(), "♪ Ambition");
+}
+
+#[test]
+fn the_player_names_the_station_for_the_streams_that_have_one() {
+    let datawave = RadioStation::from_key("datawave").unwrap();
+    let classical = RadioStation::from_key("classical").unwrap();
+    assert_eq!(
+        station_text(AudioSource::Radio, datawave),
+        "radio · datawave"
+    );
+    // House mounts are stations like any other.
+    assert_eq!(
+        station_text(AudioSource::Radio, classical),
+        "radio · classical"
+    );
+    // YouTube plays the queue, not a station: one word.
+    assert_eq!(station_text(AudioSource::Youtube, datawave), "youtube");
 }

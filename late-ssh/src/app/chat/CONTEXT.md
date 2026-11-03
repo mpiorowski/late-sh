@@ -20,9 +20,10 @@ late-ssh/src/app/chat/
 |-- svc.rs                       # ChatService: DB boundary, snapshots, events, room/message tasks
 |-- state.rs                     # ChatState: local UI state, receivers, composer, room/message selection
 |-- input.rs                     # Home chat input plus shared message actions used by Dashboard and embedded game chat
-|-- ui.rs                        # Home room rail/chat center, dashboard-lounge view, embedded room chat, composer, row cache
+|-- ui.rs                        # Home room rail/chat center, dashboard-lounge view, embedded room chat, composer, row cache, Home's activity and friends tiles
 |-- ui_text.rs                   # Message/news/reaction wrapping into ratatui Lines
 |-- list_ui.rs                   # Shared "mine only" filtered-list layout and status line for the synthetic entries
+|-- mod_modal/                   # `/mod` console modal: state/input/ui, opened by `take_requested_mod_modal`
 |-- slur.rs                      # Pure drunk-text transform applied to outgoing public-room messages (never touches a spending phrase, `../ai/ROUND.md`, or a memory trigger, `../ai/MEMORY.md`)
 |-- special_badges.rs            # Hardcoded per-username badges in author labels (allowlist, edit and redeploy)
 |-- cyberspace/                  # Cyberspace rail section: personal client for cyberspace.online, incl. their chat (cIRC)
@@ -33,6 +34,9 @@ late-ssh/src/app/chat/
 |-- news/                        # Synthetic News entry: articles, the reader (`reader/`), body fetch (`body.rs`), the #lounge card (`ui.rs::lounge_card_lines`)
 |-- notifications/               # Synthetic Mentions entry: mention notifications
 |-- polls/                       # /poll modal state/input/UI
+|-- room_info_modal/             # Room name/topic/rules form: state/input/ui, opened by `take_requested_room_info_modal` (`/public`, `/private`, `/roominfo`)
+|-- room_search_modal/           # `Ctrl+/` room jump and `?` message search modal: state/input/ui (`ROOMS.md`)
+|-- sheet_modal/                 # `/sheet` character sheet modal (#dnd): state/input/ui, opened by `take_requested_open_sheet`
 |-- showcase/                    # Projects service/state/UI reused by Directory page 5
 `-- work/                        # Profiles service/state/UI reused by Directory page 5
 ```
@@ -61,7 +65,7 @@ Chat-owned moderation commands also use `room_ban.rs`,
 - `svc.rs` is the async boundary between TUI state, DB models, mention notifications, and broadcast/watch channels.
 - `state.rs` owns local chat data, room/message selection, composer state, reply/edit/reaction state, overlays, synthetic-entry substates, unread/read tracking, and cache inputs. It reads no palette: anything it builds for the screen carries ink, and `ui.rs` (or `common/overlay.rs`) picks the colour in the draw.
 - `input.rs` maps Home chat keys to state/service actions. `handle_message_action_in_room` is shared by Home chat and the embedded game-chat panes.
-- `ui.rs` renders Home room rail/chat center surfaces and owns `ChatRowsCache`.
+- `ui.rs` renders Home room rail/chat center surfaces and Home's activity and friends tiles (the lists `ChatState::activity_ticker` and `active_friends` feed), and owns `ChatRowsCache`.
 - `ui_text.rs` centralizes wrapping for normal messages, the small Markdown subset, reply quotes, report cards, and reaction footers.
 
 Keep `mod.rs` declaration-only; no `pub use` re-export layer.
@@ -126,7 +130,7 @@ In `ROOMS.md`, Rooms and selection: `RoomSlot`, the rail's visual order (favorit
 There is no top-level `Screen::Chat`. `Screen::Dashboard` renders as Home and owns both the room rail and the chat center:
 - If `chat.selected_room_id` is `#lounge` and no synthetic entry is selected, the center renders `chat::ui::draw_dashboard_chat_card`: the lounge chat card, full height. It is the one chat surface carrying the live strip (`DashboardChatView.live_strip`, drawn in the topic's place under any stream or voice row and above the poll strip; owned by `app/live/`, see that domain's CONTEXT).
 - If any other real room or synthetic entry is selected, the center renders `chat::ui::draw_chat_center`.
-- On wide terminals, `chat::ui::draw_room_list_rail` renders a borderless left rail. On narrow terminals, the center owns the available width.
+- `chat::ui::draw_room_list_rail` renders the borderless room rail in Home's `rooms` tile (`app/zen/CONTEXT.md`); the page is laid out as arranged at every width.
 
 Room favorites:
 - Press `f` on a selected real room, or on Mentions, News, RSS or `+ browse rooms`, to toggle it in `ProfileState::toggle_favorite_room`. The four synthetic entries are stored under fixed sentinel ids (`state.rs` `synthetic_favorite_id` / `synthetic_slot_for_favorite_id`, the only code that interprets them; version nibble 0, so no v7 room id can collide). A favorited entry moves from Core into Favorites in both rail builders through the same pushed-id exclusion the rooms use; RSS stays hidden everywhere while feeds are unavailable.
@@ -270,7 +274,7 @@ Shared links, their #lounge cards, the News room and the reader: `news/CONTEXT.m
 
 ### Room Header
 
-`ui.rs::draw_room_header` owns everything between the room rail and the messages, and returns the area left for messages. Each content row pairs live state on the left with the keys or commands that act on it flushed right (`primitives::row_with_hint`): the voice row (`voice::ui::voice_strip_line`, present only for voice-enabled rooms), a dim full-width rule when voice and a topic are both present, the topic row (`TopicRow::Topic`, with a `/rules` hint when the room has rules), and a closing rule that separates the block from the conversation (`RoomHeader.closing_rule`). On the #lounge card, on a day the board has an all-day event, the topic row reads the board's day instead (`TopicRow::BoardDay`, amber, `7 for the board` where the hint sits, the key in the strip's hint style; the text comes from `calendar/live.rs::day_text` through `ChatRenderInput.board_day`). While the live strip is up, the #lounge card drops that row and the closing rule and keeps only the stream and voice rows: the strip stands in for it, and the strip ends in its own rule. A room with neither voice nor a topic keeps the full height for messages, and the whole header yields if it would leave fewer than two rows for them.
+`ui.rs::draw_room_header` owns everything between the room rail and the messages, and returns the area left for messages. Each content row pairs live state on the left with the keys or commands that act on it flushed right (`primitives::row_with_hint`): the voice row (`voice::ui::voice_strip_line`, present only for voice-enabled rooms), a dim full-width rule when voice and a topic are both present, the topic row (`TopicRow`, with a `/rules` hint when the room has rules), and a closing rule that separates the block from the conversation (`RoomHeader.closing_rule`). While the live strip is up, the #lounge card drops that row and the closing rule and keeps only the stream and voice rows: the strip stands in for it, and the strip ends in its own rule. A room with neither voice nor a topic keeps the full height for messages, and the whole header yields if it would leave fewer than two rows for them.
 - The stream row (`stream_header_line`) fits everything around its watch link, not the other way round: `row_with_hint` drops a hint it cannot fit rather than wrapping it, and here the hint *is* the URL. So the hint is measured first, the title clips to whatever is left, and the ` · N watching` count drops when even that is not enough. A `watch: https://…/live/<id>` plus its load-bearing trailing cell runs 51 columns, which is why stream capability ids are 22-char base64url (`stream/CONTEXT.md` §2), and why the title budget is measured after the hint so the title, not the link, is what gets dropped. The watcher count survives down to 73 columns.
 - `/` opens an inline substring filter over room slugs (footer shows the live query); typing edits it, `selected`/`visible_items` track the filtered subset, and `Esc` clears+closes it. While `discover.is_filtering()`, `app::input::handle_byte_event` and `chat::input::handle_byte` route every byte (digits, `space`, `h`/`l`) into the filter so it captures an unrestricted query; arrows still navigate. `start_slash_command_composer` excludes Discover so `/` never starts a slash command there.
 
@@ -334,7 +338,7 @@ Scroll-driven room history (`history_modal/`), opened by `/history` or by a sear
 ### Room Membership Commands
 
 1. `/public #room` gets or creates a public topic room and joins only the caller. A new room starts with `auto_join=false`; an existing room keeps its flag, so `/join` on a room a mod filled never unfills it. `/join #room` is an alias for it, parsed in the same `parse_public_room_command` so the two can never drift; it exists because IRC users type `/join` first. Public rooms are hosted, not owned: opening one grants nothing, and a brand-new one posts two plain system-bot lines (deliberately without the system-line prefix, so they render as messages), one in the room asking the creator to describe it and one in #moderators reporting it.
-2. `/private #room` opens the room-info form (`app/room_info_modal`) and creates the room with its topic/rules and `created_by` in one go.
+2. `/private #room` opens the room-info form (`room_info_modal/`) and creates the room with its topic/rules and `created_by` in one go.
 3. `/roominfo` opens the same form for the selected room. Authority is decided once in `ChatService::set_room_info`: mods for any room, otherwise the derived owner of a private topic room. `ChatState::room_info_authority` mirrors the rule for what the UI offers (and what the refusal banner says); DMs and game rooms have no info at all. A successful write broadcasts `RoomInfoUpdated`, which banners for the editor and refreshes the room list of every session sitting in that room, so no header waits on the 10s snapshot.
 4. `/rules` shows the selected room's rules in the shared overlay (`Overlay`, the same surface `/active` uses), titled `#slug rules`, one entry per stored line: rules are multi-line and a banner is one line. A room with no rules answers with a banner instead of an empty overlay.
 5. `/kick @user` runs the moderation service's room action (`ModerationService::room_command` then `room_action`), so membership removal, voice removal, audit log and the target's live session behave exactly as from the mod surface. A private room's owner is granted `Caps::KICK_FROM_ROOM` for that one room via `Permissions::as_room_owner`, which leaves the tier alone so staff stay out of reach. Chat-originated room actions name the room by id (`RoomRef::Id`), never by slug: slugs are only unique per namespace (a topic room and a stream room can share one), so the id is the only exact name of the room the actor is sitting in. The mod surface still resolves its typed slug.

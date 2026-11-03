@@ -1,10 +1,9 @@
 use super::{
     audio::booth as audio_booth,
-    chat, dashboard, help_modal, hub, icon_picker, mod_modal, profile_modal, quit_confirm,
-    room_info_modal, room_search_modal, settings_modal, sheet_modal,
+    chat::{self, mod_modal, room_info_modal, room_search_modal, sheet_modal},
+    help_modal, hub, icon_picker, profile_modal, quit_confirm, settings_modal,
     state::{App, IconPickerTarget},
 };
-use late_core::models::user::{RightSidebarMode, RoomListMode};
 
 use crate::app::chat::state::RoomSection;
 use crate::app::chat::ui::{ChatRowHit, ChatRowKind, HeaderTarget};
@@ -37,9 +36,9 @@ const CTRL_R: u8 = 0x12;
 const CTRL_S: u8 = 0x13;
 const CTRL_T: u8 = 0x14;
 const CTRL_V: u8 = 0x16;
-/// Zen: the one page that is a chord, not a tab, so it is reachable from
-/// anywhere and hands you back where you were.
-const CTRL_F: u8 = 0x06;
+/// Home's arrange mode (`app/zen`, the Home page): the layout keys on
+/// the page you are on.
+const CTRL_E: u8 = 0x05;
 
 #[derive(Clone, Copy)]
 struct InputContext {
@@ -90,7 +89,6 @@ fn screen_has_chat_pane(screen: Screen) -> bool {
         Screen::Dashboard
             | Screen::DailyMatch
             | Screen::HouseTable
-            | Screen::Zen
             | Screen::Games
             | Screen::Realm
             | Screen::Nethack
@@ -829,7 +827,7 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    // Over the Zen page, from its ascii tile.
+    // Over Home, from an ascii tile.
     if app.piece_picker.is_open() {
         crate::app::ascii::picker::input::handle_input(app, event);
         return;
@@ -1034,7 +1032,7 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         if !app.interaction_mode.mouse_enabled() {
             return;
         }
-        // SGR coordinates are 1-based; the pet follows the cursor on Zen.
+        // SGR coordinates are 1-based; the pet follows the cursor on Home.
         if let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) {
             app.last_mouse = Some((x, y));
         }
@@ -1350,8 +1348,10 @@ fn handle_dedicated_screen_input(app: &mut App, ctx: InputContext, event: &Parse
         return crate::app::deadchannel::city::input::handle_event(app, event);
     }
 
-    if ctx.screen == Screen::Zen {
-        return crate::app::zen::input::handle_event(app, event);
+    // Home's tiles first: arrange mode's layout keys, or a focused chat
+    // tile's own keys; everything else is Home's as before.
+    if ctx.screen == Screen::Dashboard && crate::app::zen::input::handle_home_event(app, event) {
+        return true;
     }
 
     if ctx.screen == Screen::Rebels {
@@ -2118,23 +2118,24 @@ fn dispatch_escape(app: &mut App) {
     // editor's own `EditOutcome::Cancel`: a lone Esc never reaches the keymap,
     // it is held as `pending_escape` and lands here via `flush_pending_escape`.
     // The keymap only sees Esc when it arrives mid-chunk with other bytes.
-    // Esc on Zen peels the tile picker, the composer, or a selected message,
-    // and otherwise does nothing: only Ctrl+F (or `/zen`) leaves the page,
-    // so a stray Esc never throws away the layout you sat down in.
-    if ctx.screen == Screen::Zen {
-        if app.zen.kind_picker.is_some() {
-            app.zen.close_kind_picker();
+    // Esc on Home in arrange mode peels a typed layout name, the layouts
+    // list, then a picker, then leaves the mode.
+    if ctx.screen == Screen::Dashboard && app.home.arrange {
+        if let Some(list) = app.layout_list.as_mut() {
+            if list.editing.take().is_none() {
+                app.layout_list = None;
+            }
             return;
         }
-        if app.chat.composing {
-            app.chat.reset_composer();
+        if app.home.kind_picker.is_some() {
+            app.home.close_kind_picker();
             return;
         }
-        if let Some(room_id) = app.zen_chat_room_id()
-            && app.chat.selected_message_body_in_room(room_id).is_some()
-        {
-            app.chat.clear_message_selection();
+        if app.home.guest_picker.is_some() {
+            app.home.close_guest_picker();
+            return;
         }
+        crate::app::zen::input::toggle_home_arrange(app);
         return;
     }
     if ctx.screen == Screen::Scratchpad {
@@ -2464,11 +2465,7 @@ fn select_screen_from_topbar(app: &mut App, current: Screen, target: Screen) {
 }
 
 fn handle_topbar_screen_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool {
-    // Zen is full-bleed and has no app frame or screen numbers.
-    if screen == Screen::Zen
-        || mouse.kind != MouseEventKind::Down
-        || mouse.button != Some(MouseButton::Left)
-    {
+    if mouse.kind != MouseEventKind::Down || mouse.button != Some(MouseButton::Left) {
         return false;
     }
     let (Some(x), Some(y)) = (mouse.x.checked_sub(1), mouse.y.checked_sub(1)) else {
@@ -2635,6 +2632,27 @@ fn handle_pet_click(app: &mut App, x: u16, y: u16) -> bool {
     false
 }
 
+/// A left-click on the reef or the tank tile feeds it, the pet's way: a
+/// passing gesture on Home that never moves the focus. The tiles are read
+/// off the frame's rects, so the click lands wherever the water drew; the
+/// Live strip on the reef has had its turn by then (`handle_mouse_click`).
+fn handle_tank_click(app: &mut App, x: u16, y: u16) -> bool {
+    if !app.on_home() || chat_scroll_clicks_blocked(app) {
+        return false;
+    }
+    let on_tank = app.home_tile_rects().iter().any(|(kind, rect, _)| {
+        matches!(
+            kind,
+            crate::app::zen::state::TileKind::Aquarium | crate::app::zen::state::TileKind::Tank
+        ) && rect_contains(*rect, x, y)
+    });
+    if !on_tank {
+        return false;
+    }
+    feed_aquarium_globally(app);
+    true
+}
+
 fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool {
     if mouse.kind != MouseEventKind::Down || mouse.button != Some(MouseButton::Left) {
         return false;
@@ -2646,11 +2664,14 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
         return false;
     };
     // Petting the pet is a passing gesture, not a move: it takes the click
-    // before the Zen focus, so a click on the pet leaves the keys with the
+    // before the tile focus, so a click on the pet leaves the keys with the
     // chat tile the page opened on.
     if handle_pet_click(app, x, y) {
         return true;
     }
+    // The strip is a guest on the reef's tile, so it answers before the
+    // tank does: a click on it opens what it shows, the water around it
+    // feeds.
     if !chat_scroll_clicks_blocked(app) && crate::app::live::input::open_from_click(app, x, y) {
         return true;
     }
@@ -2659,11 +2680,16 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
     {
         return true;
     }
-    // A click on a Zen tile focuses it, then falls through so the composer
-    // and the messages of that tile still take the click. A modal over the
-    // page takes the click itself, the same guard the pet click uses.
-    if screen == Screen::Zen && !chat_scroll_clicks_blocked(app) {
-        focus_zen_tile_at(app, x, y);
+    if handle_tank_click(app, x, y) {
+        return true;
+    }
+    // A click on a chat tile on Home focuses it (every tile in arrange
+    // mode), then falls through so the composer and the messages of that
+    // tile still take the click. A modal over the page takes the click
+    // itself, the same guard the pet click uses. Furniture is clicked for
+    // its gesture and the keys stay put.
+    if app.on_home() && !chat_scroll_clicks_blocked(app) {
+        focus_home_tile_at(app, x, y);
     }
     if handle_chat_composer_click(app, screen, x, y) {
         return true;
@@ -2835,10 +2861,10 @@ pub(crate) struct PendingChatProfileOpen {
 /// Games hub with no open watch).
 fn embedded_chat_room_id(app: &App, screen: Screen) -> Option<Uuid> {
     match screen {
-        Screen::Dashboard => app.chat.selected_room_id,
+        // A focused chat tile's room, else the center's selection.
+        Screen::Dashboard => app.home_chat_room_id(),
         Screen::DailyMatch => app.daily.board_chat_room_id(),
         Screen::HouseTable => app.house.chat_room_id(),
-        Screen::Zen => app.zen_chat_room_id(),
         Screen::Games => app.spectate_chat_room_id(),
         Screen::Realm => app.realm.shown_chat_room_id(),
         Screen::Nethack | Screen::Dcss | Screen::Brogue | Screen::Zork => {
@@ -3002,23 +3028,21 @@ fn handle_chat_scroll_click(app: &mut App, screen: Screen, x: u16, y: u16) -> bo
     true
 }
 
+/// The rail's rect on Home: its tile's inner area, when the layout holds
+/// one and it is on show.
 fn dashboard_room_rail_area(app: &App) -> Option<Rect> {
-    let (room_list_mode, _) = app.rail_modes();
-    if !crate::app::render::resolve_room_list_enabled(room_list_mode, app.size.0) {
+    if app.screen != Screen::Dashboard {
         return None;
     }
-    const HOME_RAIL_WIDTH: u16 = 24;
-    let content_area = app_content_area(app);
-    (content_area.width > HOME_RAIL_WIDTH + 20).then_some(Rect {
-        x: content_area.x,
-        y: content_area.y,
-        width: HOME_RAIL_WIDTH,
-        height: content_area.height,
-    })
+    app.home_tile_rects()
+        .into_iter()
+        .find(|(kind, _, _)| *kind == crate::app::zen::state::TileKind::Rooms)
+        .map(|(_, _, inner)| inner)
+        .filter(|inner| inner.width > 0 && inner.height > 0)
 }
 
-/// Route a click on a status bar (either frame bar, or Zen's row) to the
-/// segment under it.
+/// Route a click on a status bar (either frame bar) to the segment under
+/// it.
 ///
 /// The rects come from the bar's own layout pass, rebuilt every frame, so this
 /// stays correct however the bar is reordered or resized, and a segment a fit
@@ -3057,10 +3081,8 @@ fn handle_status_bar_click(app: &mut App, mouse: MouseEvent) -> bool {
         StatusClick::Booth => crate::app::audio::booth::input::open(app),
         StatusClick::Arcade => app.set_screen(Screen::Arcade),
         StatusClick::Profiles => app.set_screen(Screen::Profiles),
-        // Care on Zen's own row: the companions are already on the page,
-        // and reopening would make Zen its own return page.
-        StatusClick::Zen if app.screen == Screen::Zen => {}
-        StatusClick::Zen => open_zen_globally(app),
+        // Care: Home's `home` layout, where the tank and the tree are.
+        StatusClick::HomeLayout => crate::app::zen::input::load_home_layout(app),
         // Nothing up, or a result holding the strip: nothing to open.
         StatusClick::Live => {
             crate::app::live::input::open_from_key(app);
@@ -3072,7 +3094,7 @@ fn handle_status_bar_click(app: &mut App, mouse: MouseEvent) -> bool {
 pub(crate) fn app_content_area(app: &App) -> Rect {
     let area = Rect::new(0, 0, app.size.0, app.size.1);
     let inner = Block::default().borders(Borders::ALL).inner(area);
-    let (_, right_sidebar_mode) = app.rail_modes();
+    let right_sidebar_mode = app.rail_modes();
     if crate::app::render::resolve_right_sidebar_enabled(right_sidebar_mode, app.screen, app.size.0)
     {
         Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner)[0]
@@ -3101,7 +3123,7 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
     }
 
     match screen {
-        Screen::Dashboard => dashboard::input::handle_arrow(app, key),
+        Screen::Dashboard => crate::app::zen::input::handle_home_arrow(app, key),
         // Games hub arrows are handled in handle_dedicated_screen_input.
         Screen::Games => false,
         Screen::Lateania => crate::app::door::lateania::screen::GAME.handle_arrow(app, key),
@@ -3143,8 +3165,6 @@ fn handle_arrow_for_screen(app: &mut App, screen: Screen, key: u8) -> bool {
         Screen::Realm => false,
         // Scratchpad arrows are consumed in handle_dedicated_screen_input.
         Screen::Scratchpad => false,
-        // Zen arrows are consumed in handle_dedicated_screen_input.
-        Screen::Zen => false,
     }
 }
 
@@ -3296,7 +3316,7 @@ fn clear_prefix_arms(app: &mut App) {
 /// lands behind an overlay that is already up.
 fn close_overlays_for_modal(app: &mut App) {
     clear_prefix_arms(app);
-    app.zen.close_kind_picker();
+    app.home.close_kind_picker();
     app.show_help = false;
     app.show_mod_modal = false;
     app.show_hub_modal = false;
@@ -3334,7 +3354,7 @@ pub(crate) fn open_message_search_modal_globally(app: &mut App, query: &str) {
 
 fn open_settings_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
-    // A piece picker left open over Zen would take the modal's keys.
+    // A piece picker left open over Home would take the modal's keys.
     app.piece_picker.close();
     app.show_help = false;
     app.show_mod_modal = false;
@@ -3424,17 +3444,12 @@ pub(crate) fn pet_the_pet_globally(app: &mut App) {
         .pet(std::time::Instant::now(), chrono::Utc::now().date_naive());
 }
 
-/// The tank's free daily meal, from any surface that shows it. Ownership is
-/// the only gate: the flakes are the immediate feedback, the chips banner
-/// follows when the service's event comes back.
+/// The tank's free daily meal, from any surface that shows it (`a` on its
+/// tile in arrange mode, a click on it, `/aquarium feed`, the attention
+/// row): the flakes are the immediate feedback, the chips banner follows
+/// when the service's event comes back.
 pub(crate) fn feed_aquarium_globally(app: &mut App) {
     clear_prefix_arms(app);
-    if !app.shop_state.entitlements().has_aquarium() {
-        app.banner = Some(crate::app::common::primitives::Banner::error(
-            "Unlock Aquarium in Hub Shop",
-        ));
-        return;
-    }
     match app.aquarium_care.feed() {
         crate::app::hub::aquarium::state::CareOutcome::Fed => {
             app.aquarium_state.feed();
@@ -3472,7 +3487,7 @@ fn open_bonsai_modal_globally(app: &mut App) {
 
 pub(crate) fn open_daily_modal_globally(app: &mut App) {
     clear_prefix_arms(app);
-    // A piece picker left open over Zen would take the modal's keys.
+    // A piece picker left open over Home would take the modal's keys.
     app.piece_picker.close();
     app.show_help = false;
     app.show_mod_modal = false;
@@ -3605,9 +3620,23 @@ fn tour_advance(app: &mut App) {
             app.daily.open_practice_table(Screen::Arcade, &username);
             app.set_screen(Screen::DailyMatch);
         }
-        // The same toggle Ctrl+F runs anywhere (modals closed, return page
-        // remembered).
-        TourMove::Zen => toggle_zen_globally(app),
+        // Home with its stock second layout up, the street: a device that
+        // deleted it gets the missing-name banner under the stop.
+        TourMove::Layouts => {
+            crate::app::lobby::daily::board_input::leave_board(app, Screen::Dashboard);
+            crate::app::zen::input::run_layout_command(
+                app,
+                crate::app::zen::presets::LayoutCommand::Load(
+                    crate::app::zen::presets::STOCK_STREET_NAME.to_string(),
+                ),
+            );
+        }
+        // Home's first layout back before the tavern, so the newcomer's
+        // page is as the tour found it.
+        TourMove::Homecoming => {
+            crate::app::zen::input::load_home_layout(app);
+            crate::app::lobby::daily::board_input::leave_board(app, Screen::Clubhouse);
+        }
         TourMove::Finished => app.persist_clubhouse_tutorial_done(),
     }
     // The stop just reached, on a first visit's tour only (its welcome box
@@ -3665,7 +3694,6 @@ fn game_owns_ctrl_s(app: &App) -> bool {
         | Screen::Leaderboard
         | Screen::Clubhouse
         | Screen::Nightcap
-        | Screen::Zen
         | Screen::Scratchpad => false,
     }
 }
@@ -3697,7 +3725,7 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
         // A Settings text field being edited holds typing that is not in the
         // draft yet. Each of these chords closes or reopens the modal and
         // would drop it, so the field keeps the key instead.
-        CTRL_O | CTRL_G | CTRL_F | CTRL_S
+        CTRL_O | CTRL_G | CTRL_E | CTRL_S
             if app.show_settings && app.settings_modal_state.editing_text() =>
         {
             false
@@ -3712,8 +3740,11 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
             toggle_lobby_globally(app);
             true
         }
-        CTRL_F => {
-            toggle_zen_globally(app);
+        // Home's layouts: a chord, so it works from a chat tile and the
+        // center alike, and from any page. A composer being typed in keeps
+        // the key (readline's end of line).
+        CTRL_E if !app.chat.is_composing() => {
+            layout_chord_globally(app);
             true
         }
         // Games keep their controls; these editors own Ctrl+S for save/post.
@@ -3736,31 +3767,31 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
     }
 }
 
-/// Move the Zen focus to the tile under a click. Nothing happens on the
-/// footer, on a gap, or on the tile already focused.
-fn focus_zen_tile_at(app: &mut App, x: u16, y: u16) {
-    use crate::app::zen::layout as zen_layout;
-    let (cols, rows) = app.size;
-    let page = Rect::new(0, 0, cols, rows);
-    let (tiles_area, _) = zen_layout::rice_areas(page, zen_layout::rice_row(page, app.zen.zoomed));
-    let zoomed = app.zen.zoomed.then_some(app.zen.focus);
-    let rects = zen_layout::tile_rects(
-        &app.zen.rice.root,
-        tiles_area,
-        app.zen.rice.look.gap as u16,
-        zoomed,
-    );
-    let hit = rects
+/// Move Home's focus to the tile under a click. Nothing happens on the
+/// footer, on a gap, on the tile already focused, or, outside arrange
+/// mode, on furniture (`TileKind::takes_focus`).
+fn focus_home_tile_at(app: &mut App, x: u16, y: u16) {
+    let hit = app
+        .home_tile_rects()
         .iter()
-        .position(|(_, rect)| rect_contains(*rect, x, y));
+        .position(|(_, rect, _)| rect_contains(*rect, x, y));
     let Some(ordinal) = hit else {
         return;
     };
-    // Zoomed, the one rect on show is the focused tile whatever its index.
-    if zoomed.is_some() || ordinal == app.zen.focus {
+    if ordinal == app.home.focus {
         return;
     }
-    app.zen.focus = ordinal;
+    if !app.home.arrange
+        && !app
+            .home
+            .rice
+            .root
+            .kind_at(ordinal)
+            .is_some_and(crate::app::zen::state::TileKind::takes_focus)
+    {
+        return;
+    }
+    app.home.focus = ordinal;
     crate::app::zen::input::focus_moved(app);
 }
 
@@ -3783,8 +3814,8 @@ pub(crate) fn open_guide_globally(app: &mut App) {
         HelpTopic::Lateania
     } else if app.screen == Screen::Profiles {
         HelpTopic::Profiles
-    } else if app.screen == Screen::Zen {
-        HelpTopic::Zen
+    } else if app.screen == Screen::Dashboard && app.home.arrange {
+        HelpTopic::Layouts
     } else {
         HelpTopic::Pair
     };
@@ -3792,17 +3823,35 @@ pub(crate) fn open_guide_globally(app: &mut App) {
     app.show_help = true;
 }
 
-/// Zen is a surface, not a place in the tab order: the chord opens it over
-/// whatever page is up and the same chord returns there. Esc never leaves.
-pub(crate) fn toggle_zen_globally(app: &mut App) {
-    if app.screen == Screen::Zen {
-        close_zen(app);
-    } else {
-        open_zen_globally(app);
+/// `Ctrl+E`: Home's layouts. On Home it toggles arrange mode, where a
+/// digit loads a layout and `L` lists them (so `Ctrl+E 2` is two
+/// keystrokes, like a tmux prefix); anywhere else it opens Home in arrange
+/// mode. The modals close under it either way. The caller keeps it off a
+/// composer being typed in.
+pub(crate) fn layout_chord_globally(app: &mut App) {
+    match app.screen {
+        Screen::Dashboard => close_modals_for_page_change(app),
+        _ => go_home_for_layouts(app),
     }
+    crate::app::zen::input::toggle_home_arrange(app);
 }
 
-fn open_zen_globally(app: &mut App) {
+/// Home, for a layout key or command pressed elsewhere: the modals close
+/// and the composers reset as for any page change; on Home already,
+/// nothing moves.
+pub(crate) fn go_home_for_layouts(app: &mut App) {
+    if app.screen == Screen::Dashboard {
+        return;
+    }
+    close_modals_for_page_change(app);
+    reset_composers_for_page_change(app);
+    app.set_screen(Screen::Dashboard);
+    app.chat.clear_message_selection();
+}
+
+/// Every modal a page change pulls out from under: a chord that opens a
+/// page over them closes them first.
+fn close_modals_for_page_change(app: &mut App) {
     clear_prefix_arms(app);
     app.show_help = false;
     app.show_mod_modal = false;
@@ -3816,74 +3865,6 @@ fn open_zen_globally(app: &mut App) {
     app.show_bonsai_modal = false;
     app.show_settings = false;
     app.show_lobby_modal = false;
-    app.zen_return_screen = zen_return_screen(app);
-    reset_composers_for_page_change(app);
-    // The first opening this session lands on the first chat tile, so the
-    // chat keys work before anyone reads the footer.
-    app.zen.note_opened();
-    app.set_screen(Screen::Zen);
-    app.chat.clear_message_selection();
-}
-
-/// The page the chord on Zen hands back. For a daily board, Realm, or house
-/// table, Zen remembers the page the game was opened from. One opened from Zen hands
-/// back Zen's own page, which the workspace base carries; with none, Zen
-/// walks into the Clubhouse like a session that landed there.
-fn zen_return_screen(app: &App) -> Option<Screen> {
-    use crate::app::workspace::cycle::WorkspaceBase;
-
-    let opened_from = match app.screen {
-        Screen::DailyMatch => app.daily.board.as_ref().map(|board| board.return_screen),
-        Screen::HouseTable => Some(app.house.return_screen),
-        Screen::Realm => app.realm.board.as_ref().map(|board| board.return_screen),
-        Screen::Dashboard
-        | Screen::Games
-        | Screen::Arcade
-        | Screen::Rebels
-        | Screen::Nethack
-        | Screen::Dcss
-        | Screen::Brogue
-        | Screen::Lateania
-        | Screen::Darkroom
-        | Screen::GreenDragon
-        | Screen::Dopewars
-        | Screen::Bashquest
-        | Screen::Codekeep
-        | Screen::Zork
-        | Screen::Usurper
-        | Screen::Artboard
-        | Screen::Profiles
-        | Screen::Calendars
-        | Screen::Leaderboard
-        | Screen::Clubhouse
-        | Screen::Nightcap
-        | Screen::City
-        | Screen::Zen
-        | Screen::Scratchpad => return Some(app.screen),
-    };
-    match (opened_from, app.workspace_base) {
-        (Some(Screen::Zen), WorkspaceBase::Zen { back }) => back,
-        (Some(Screen::Zen), WorkspaceBase::Home) => None,
-        (Some(screen), _) => Some(screen),
-        (None, _) => None,
-    }
-}
-
-/// Hands the page back to wherever Ctrl+F was pressed. A session that
-/// landed on Zen has nowhere to go back to, so it walks into the Clubhouse,
-/// the front door. `set_screen` closes the tile picker and forgets the
-/// return page. Handing back a game screen is not going into the games from
-/// Zen, so the backtick base `set_screen` records is put back.
-fn close_zen(app: &mut App) {
-    let back = match app.zen_return_screen {
-        Some(screen) => screen,
-        None => Screen::Clubhouse,
-    };
-    reset_composers_for_page_change(app);
-    let base = app.workspace_base;
-    app.set_screen(back);
-    app.workspace_base = base;
-    app.chat.clear_message_selection();
 }
 
 fn handle_voice_global_chord(app: &mut App, ctx: InputContext, event: &ParsedInput) -> bool {
@@ -4099,32 +4080,6 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
             app.live_prefix_armed = true;
             true
         }
-        b'\\'
-            if ctx.screen == Screen::Dashboard
-                && !ctx.chat_composing
-                && !ctx.feeds_processing
-                && !ctx.news_composing =>
-        {
-            // Per device: this writes the layout onto the SSH key the session
-            // authenticated with, so cycling on a phone leaves the desktop's
-            // layout alone. The banner says so, since the same account can now
-            // legitimately look different in two places.
-            let label = match app.cycle_device_rails() {
-                (RoomListMode::Auto, _) | (_, RightSidebarMode::Auto) => {
-                    "Sidebars: auto for this terminal size (this device)"
-                }
-                (RoomListMode::On, RightSidebarMode::On) => "Sidebars: both shown (this device)",
-                (RoomListMode::Off, RightSidebarMode::On) => {
-                    "Sidebars: room list hidden (this device)"
-                }
-                (RoomListMode::On, RightSidebarMode::Off) => {
-                    "Sidebars: info panel hidden (this device)"
-                }
-                (RoomListMode::Off, RightSidebarMode::Off) => "Sidebars: both hidden (this device)",
-            };
-            app.banner = Some(crate::app::common::primitives::Banner::success(label));
-            true
-        }
         b'w' | b'W'
             if global_letter_keys
                 && !ctx.chat_composing
@@ -4139,7 +4094,7 @@ fn handle_global_key(app: &mut App, ctx: InputContext, byte: u8) -> bool {
                 && !ctx.chat_composing
                 && !ctx.feeds_processing
                 && !ctx.news_composing
-                && app.lounge_card_shown() =>
+                && app.home_strip_hosted() =>
         {
             crate::app::live::input::open_from_key(app)
         }
@@ -4220,7 +4175,7 @@ fn artboard_blocks_global_page_switch(app: &App, screen: Screen) -> bool {
 fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
     match screen {
         Screen::Dashboard => {
-            dashboard::input::handle_key(app, byte);
+            crate::app::zen::input::handle_home_key(app, byte);
         }
         Screen::Calendars => {}
         Screen::Games => {
@@ -4310,9 +4265,6 @@ fn dispatch_screen_key(app: &mut App, screen: Screen, byte: u8) {
         }
         Screen::Scratchpad => {
             // Scratchpad keys are handled in handle_dedicated_screen_input.
-        }
-        Screen::Zen => {
-            // Zen keys are handled in handle_dedicated_screen_input.
         }
     }
 }

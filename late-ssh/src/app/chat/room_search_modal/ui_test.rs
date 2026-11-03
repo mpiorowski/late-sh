@@ -1,5 +1,5 @@
 use super::*;
-use crate::app::{chat::state::RoomSlot, room_search_modal::state::RoomSearchItem};
+use crate::app::{chat::room_search_modal::state::RoomSearchItem, chat::state::RoomSlot};
 use uuid::Uuid;
 
 fn item(index: u128, favorite: bool) -> RoomSearchItem {

@@ -5,8 +5,8 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 
 use super::bar::{
-    Placement, StatusClick, build_status_bar, build_top_status_bar, build_zen_status_row,
-    click_action, fixed_topbar_components, zen_keys_line,
+    Placement, StatusClick, build_status_bar, build_top_status_bar, click_action,
+    fixed_topbar_components,
 };
 use super::data::{StatusData, clock_icon};
 
@@ -171,7 +171,7 @@ fn a_reading_painted_on_the_bottom_bar_leaves_the_top_one() {
     );
 
     // Room for the hints only: the chips never made it onto the bottom bar.
-    let hints_only = "─ Settings ^O  Lobby ^G  Zen ^F  Shop ^S  Guide ?  Exit qq ";
+    let hints_only = "─ Settings ^O  Lobby ^G  Layouts ^E  Shop ^S  Guide ?  Exit qq ";
     let tight = Rect::new(0, 0, Span::raw(hints_only).width() as u16 + 2, 24);
     let bottom =
         build_status_bar(&components, &data, Placement::BottomLeft, tight, 0).expect("bottom bar");
@@ -234,7 +234,7 @@ fn the_voice_badge_is_labelled_once() {
     .expect("bar");
     assert_eq!(
         bar.line.to_string(),
-        "─ Settings ^O  Lobby ^G  Zen ^F  Shop ^S  Guide ?  Exit qq ─ mic #lounge [muted] "
+        "─ Settings ^O  Lobby ^G  Layouts ^E  Shop ^S  Guide ?  Exit qq ─ mic #lounge [muted] "
     );
 }
 
@@ -242,7 +242,7 @@ fn the_voice_badge_is_labelled_once() {
 #[test]
 fn keyhints_paint_caret_notation_or_nothing() {
     let components = [StatusComponentSetting::new(StatusComponent::Shortcuts)];
-    let caret = "─ Settings ^O  Lobby ^G  Zen ^F  Shop ^S  Guide ?  Exit qq ";
+    let caret = "─ Settings ^O  Lobby ^G  Layouts ^E  Shop ^S  Guide ?  Exit qq ";
     let width = Span::raw(caret).width() as u16 + 2;
     let render_in = |width: u16| {
         build_status_bar(
@@ -786,7 +786,10 @@ fn click_actions_cover_exactly_the_actionable_components() {
         click_action(StatusComponent::Chips),
         Some(StatusClick::Shop)
     );
-    assert_eq!(click_action(StatusComponent::Care), Some(StatusClick::Zen));
+    assert_eq!(
+        click_action(StatusComponent::Care),
+        Some(StatusClick::HomeLayout)
+    );
     assert_eq!(click_action(StatusComponent::Time), None);
     assert_eq!(click_action(StatusComponent::Shortcuts), None);
     assert_eq!(click_action(StatusComponent::Voice), None);
@@ -807,67 +810,6 @@ fn a_title_wider_than_the_border_row_does_not_underflow_the_budget() {
         40,
     );
     assert!(bar.is_none(), "nothing fits behind an oversized title");
-}
-
-/// Zen's row: the keys hold the right end, and the bar fits into the rest,
-/// dots between segments, a segment with no room dropped whole.
-#[test]
-fn zen_row_fits_the_bar_beside_the_keys() {
-    let components = [
-        on(StatusComponent::Mentions, LabelMode::Text),
-        on(StatusComponent::Chips, LabelMode::Text),
-        on(StatusComponent::Users, LabelMode::Text),
-    ];
-    let keys = zen_keys_line();
-    assert_eq!(keys.to_string(), "? help  S split  F flip  X close  z zoom");
-    // 30 cells for the bar, one of gap, then the keys.
-    let row = Rect::new(0, 39, 30 + 1 + keys.width() as u16, 1);
-    let zen_row = build_zen_status_row(&components, &data(), row);
-
-    assert_eq!(zen_row.keys.expect("keys").to_string(), keys.to_string());
-    let bar = zen_row.bar.expect("bar");
-    assert_eq!(bar.to_string(), " unread 5 · chips 1204 ");
-    assert_eq!(
-        zen_row.hits,
-        vec![
-            (StatusClick::Mentions, Rect::new(0, 39, 10, 1)),
-            (StatusClick::Shop, Rect::new(11, 39, 12, 1)),
-        ]
-    );
-}
-
-/// A row narrower than the keys gives the bar the whole row.
-#[test]
-fn zen_row_too_narrow_for_the_keys_is_all_bar() {
-    let components = [on(StatusComponent::Mentions, LabelMode::Text)];
-    let zen_row = build_zen_status_row(&components, &data(), Rect::new(0, 39, 30, 1));
-    assert!(zen_row.keys.is_none());
-    assert_eq!(zen_row.bar.expect("bar").to_string(), " unread 5 ");
-}
-
-/// With the bar silent (auto-hidden, or every component off) the keys are
-/// still there and nothing is clickable.
-#[test]
-fn zen_row_keeps_its_keys_while_the_bar_is_silent() {
-    let quiet = StatusData {
-        mentions_unread: 0,
-        dms_unread: 0,
-        ..data()
-    };
-    let auto_hidden = [StatusComponentSetting {
-        auto_hide: true,
-        ..on(StatusComponent::Mentions, LabelMode::Text)
-    }];
-    let all_off = StatusComponent::ALL.map(|component| StatusComponentSetting {
-        enabled: false,
-        ..StatusComponentSetting::new(component)
-    });
-    for components in [&auto_hidden[..], &all_off[..]] {
-        let zen_row = build_zen_status_row(components, &quiet, Rect::new(0, 39, 80, 1));
-        assert!(zen_row.bar.is_none());
-        assert!(zen_row.keys.is_some());
-        assert!(zen_row.hits.is_empty());
-    }
 }
 
 /// The date paints in the format its dial picks, bare like the clock, and is

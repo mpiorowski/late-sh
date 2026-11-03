@@ -270,18 +270,6 @@ fn extract_right_sidebar_components_preserves_order_and_backfills() {
 }
 
 #[test]
-fn extract_show_room_list_sidebar_defaults_to_true() {
-    let settings = json!({});
-    assert!(extract_show_room_list_sidebar(&settings));
-}
-
-#[test]
-fn extract_show_room_list_sidebar_reads_explicit_false() {
-    let settings = json!({ "show_room_list_sidebar": false });
-    assert!(!extract_show_room_list_sidebar(&settings));
-}
-
-#[test]
 fn extract_country_normalizes_uppercase() {
     let settings = json!({ "country": " pl " });
     assert_eq!(extract_country(&settings).as_deref(), Some("PL"));

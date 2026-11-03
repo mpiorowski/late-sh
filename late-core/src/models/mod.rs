@@ -162,6 +162,9 @@ pub mod pot;
 #[cfg(test)]
 mod pot_test;
 pub mod presence;
+pub mod presence_sample;
+#[cfg(test)]
+mod presence_sample_test;
 pub mod profile;
 pub mod profile_award;
 #[cfg(test)]

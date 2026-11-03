@@ -1,208 +1,48 @@
-use super::{
-    Care, Chore, PulseView, care_bar_spans, chat_tile_title, draw_bonsai_tile, draw_headlines_tile,
-    draw_music_tile, draw_pulse_tile, hint_line_fitting, station_text,
-};
-use crate::app::audio::viz::EqState;
-use crate::app::bonsai::{
-    render::canvas_lines,
-    state::{BonsaiState, CANVAS_HEIGHT, CANVAS_WIDTH},
-};
-use crate::app::common::{primitives::hint_line, theme};
-use crate::app::hub::aquarium::state::CareBar;
-use crate::app::zen::rows::Headline;
-use late_core::models::aquarium_care::CARE_DAYS;
+use super::{chat_tile_title, draw_board_day, draw_tile_chrome, hint_line_fitting, hints_shown};
+use crate::app::common::primitives::hint_line;
+use crate::app::zen::layout::Chrome;
+use crate::app::zen::state::{TileKind, TileTitle};
 use ratatui::{Terminal, backend::TestBackend, layout::Rect};
 use unicode_width::UnicodeWidthStr;
-use uuid::Uuid;
-
-fn music_tile_rows(width: u16, height: u16) -> Vec<String> {
-    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
-    terminal
-        .draw(|frame| {
-            draw_music_tile(
-                frame,
-                Rect::new(0, 0, width, height),
-                "Ambition",
-                "youtube",
-                0,
-                EqState::Ambient,
-            )
-        })
-        .expect("draw");
-    let buffer = terminal.backend().buffer();
-    (0..height)
-        .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
-        .collect()
-}
 
 #[test]
-fn the_music_tile_pins_track_and_station_to_its_last_two_rows() {
-    let rows = music_tile_rows(24, 9);
-    assert!(rows[7].contains("♪ Ambition"), "{rows:#?}");
-    assert!(rows[8].contains("youtube"), "{rows:#?}");
-    // Every row above the text belongs to the visualizer.
-    for row in &rows[..7] {
-        assert!(
-            !row.contains("Ambition") && !row.contains("youtube"),
-            "{rows:#?}"
-        );
+fn no_title_names_a_key_outside_arrange_mode() {
+    for kind in TileKind::ALL {
+        let keys = kind.hints();
+        assert_eq!(hints_shown(keys, false, false), vec![], "{kind:?}");
+        assert_eq!(hints_shown(keys, false, true), vec![], "{kind:?}");
     }
-    let bar_cells = rows[..7]
-        .iter()
-        .flat_map(|row| row.chars())
-        .filter(|ch| !ch.is_whitespace())
-        .count();
-    assert!(bar_cells > 0, "{rows:#?}");
-
-    // Two rows is text only; one row keeps the track.
-    assert_eq!(music_tile_rows(24, 2)[0].trim(), "♪ Ambition");
-    assert_eq!(music_tile_rows(24, 1)[0].trim(), "♪ Ambition");
-}
-
-fn glyphs(bar: CareBar) -> String {
-    care_bar_spans(bar)
-        .iter()
-        .map(|span| span.content.to_string())
-        .collect()
 }
 
 #[test]
-fn pulse_draws_every_row_even_at_zero_and_colors_each_chore() {
-    let pulse = PulseView {
-        online: 0,
-        chips: 0,
-        mentions: 0,
-        friends: 0,
-        care: Care {
-            bonsai: Chore::Done,
-            tank: Chore::Due,
-            pet: Chore::NotOwned,
-        },
-    };
-    let (width, height) = (30u16, 5u16);
-    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
-    terminal
-        .draw(|frame| draw_pulse_tile(frame, Rect::new(0, 0, width, height), &pulse))
-        .expect("draw");
-    let buffer = terminal.backend().buffer();
-    let rows: Vec<String> = (0..height)
-        .map(|y| {
-            let row: String = (0..width).map(|x| buffer[(x, y)].symbol()).collect();
-            row.split_whitespace().collect::<Vec<_>>().join(" ")
-        })
-        .collect();
+fn a_key_that_works_only_on_the_focused_tile_shows_only_there() {
+    let ascii = TileKind::Ascii.hints();
+    assert_eq!(hints_shown(ascii, false, false), vec![]);
+    assert_eq!(hints_shown(ascii, false, true), vec![]);
+    assert_eq!(hints_shown(ascii, true, false), vec![]);
+    assert_eq!(hints_shown(ascii, true, true), vec![("[ ] Enter", "pick")]);
+
+    // Arranging, every tile names its house key, focused or not; a chat
+    // tile adds its room cycling ahead of it only while focused.
     assert_eq!(
-        rows,
-        vec![
-            "online 0",
-            "chips 0",
-            "mentions 0",
-            "friends 0",
-            "care bonsai tank pet"
-        ]
+        hints_shown(TileKind::Bonsai.hints(), true, false),
+        vec![("w", "tend")]
     );
-    // The chores sit flush right: `bonsai tank pet` is fifteen columns.
-    assert_eq!(buffer[(15, 4)].fg, theme::SUCCESS(), "a tended bonsai");
-    assert_eq!(buffer[(22, 4)].fg, theme::AMBER(), "a tank still due");
-    assert_eq!(buffer[(27, 4)].fg, theme::TEXT_FAINT(), "no pet owned");
-
-    // On a wide tile the block keeps its width and sits centered.
-    let wide = 60u16;
-    let mut terminal = Terminal::new(TestBackend::new(wide, height)).expect("terminal");
-    terminal
-        .draw(|frame| draw_pulse_tile(frame, Rect::new(0, 0, wide, height), &pulse))
-        .expect("draw");
-    let buffer = terminal.backend().buffer();
-    let first_row: String = (0..wide).map(|x| buffer[(x, 0)].symbol()).collect();
+    let chat = TileKind::Chat.hints();
+    assert_eq!(hints_shown(chat, true, false), vec![("ctrl+/", "room")]);
     assert_eq!(
-        first_row.find("online"),
-        Some(14),
-        "the block starts centered"
+        hints_shown(chat, true, true),
+        vec![("[ ]", "cycle"), ("ctrl+/", "room")]
     );
+    // The tank names its click on every tile and takes `a` only focused.
+    let tank = TileKind::Tank.hints();
+    assert_eq!(hints_shown(tank, true, false), vec![("click", "feed")]);
     assert_eq!(
-        first_row.trim_end().len(),
-        46,
-        "and its value ends 32 columns later"
+        hints_shown(tank, true, true),
+        vec![("a", "feed"), ("click", "feed")]
     );
-}
-
-fn headlines_rows(selected: usize, focused: bool) -> Vec<String> {
-    let at = chrono::Utc::now();
-    let rows = vec![
-        Headline {
-            title: "first".to_string(),
-            source: "news · mira".to_string(),
-            url: "https://a.example".to_string(),
-            at,
-        },
-        Headline {
-            title: "second".to_string(),
-            source: "b feed".to_string(),
-            url: "https://b.example".to_string(),
-            at,
-        },
-    ];
-    let (width, height) = (40u16, 4u16);
-    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
-    terminal
-        .draw(|frame| {
-            draw_headlines_tile(
-                frame,
-                Rect::new(0, 0, width, height),
-                &rows,
-                selected,
-                focused,
-            )
-        })
-        .expect("draw");
-    let buffer = terminal.backend().buffer();
-    (0..height)
-        .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
-        .collect()
-}
-
-#[test]
-fn headlines_mark_the_selected_item_only_while_focused() {
-    // The marker is one column, the tile's left padding: text starts one
-    // column in whether or not its row is the selected one.
-    let rows = headlines_rows(1, true);
-    assert!(rows[0].starts_with(" first"), "{rows:#?}");
-    assert!(rows[1].starts_with("   https://a.example"), "{rows:#?}");
-    assert!(rows[2].starts_with("▌second"), "{rows:#?}");
-
-    let unfocused = headlines_rows(1, false);
-    assert!(unfocused[2].starts_with(" second"), "{unfocused:#?}");
-}
-
-#[test]
-fn the_care_bar_is_always_fourteen_dots() {
-    // Five fed days: five full, nine empty.
-    assert_eq!(glyphs(CareBar::Streak(5)), "●●●●●○○○○○○○○○");
-    // Two unfed days: two full (red), the rest empty.
-    assert_eq!(glyphs(CareBar::Dry(2)), "●●○○○○○○○○○○○○");
-    // A minded tank shows nothing filled.
-    assert_eq!(glyphs(CareBar::Minded), "○".repeat(CARE_DAYS as usize));
-    // Nothing past fourteen ever widens the title.
-    assert_eq!(glyphs(CareBar::Dry(40)), "●".repeat(CARE_DAYS as usize));
-}
-
-#[test]
-fn the_player_names_the_station_for_the_streams_that_have_one() {
-    use late_core::models::user::{AudioSource, RadioStation};
-
-    let datawave = RadioStation::from_key("datawave").unwrap();
-    let classical = RadioStation::from_key("classical").unwrap();
-    assert_eq!(
-        station_text(AudioSource::Radio, datawave),
-        "radio · datawave"
-    );
-    // House mounts are stations like any other.
-    assert_eq!(
-        station_text(AudioSource::Radio, classical),
-        "radio · classical"
-    );
-    // YouTube plays the queue, not a station: one word.
-    assert_eq!(station_text(AudioSource::Youtube, datawave), "youtube");
+    // The rail takes clicks on its rows and no key, so it names none.
+    assert_eq!(hints_shown(TileKind::Rooms.hints(), true, true), vec![]);
 }
 
 #[test]
@@ -238,56 +78,64 @@ fn a_stream_chat_tile_title_keeps_the_watcher_count_on_a_narrow_tile() {
     assert_eq!(UnicodeWidthStr::width(title.as_str()), 16);
 }
 
-fn bonsai_tile_rows(width: u16, height: u16) -> Vec<String> {
-    let state = BonsaiState::fallback(Uuid::nil(), 42);
-    let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
+/// The board's day reads in amber at the left of its row with the board's
+/// key flush right, one column in from each edge, the text giving way to
+/// the key when the row is short.
+#[test]
+fn the_boards_day_banner_is_the_text_left_and_the_key_right() {
+    let mut terminal = Terminal::new(TestBackend::new(40, 1)).expect("terminal");
     terminal
-        .draw(|frame| draw_bonsai_tile(frame, Rect::new(0, 0, width, height), &state, 0))
+        .draw(|frame| draw_board_day(frame, Rect::new(0, 0, 40, 1), "Hackathon"))
         .expect("draw");
-    let buffer = terminal.backend().buffer();
-    (0..height)
-        .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
-        .collect()
+    let row: String = (0..40)
+        .map(|x| terminal.backend().buffer()[(x, 0)].symbol().to_string())
+        .collect();
+    assert_eq!(row, format!(" Hackathon{}7 for the board ", " ".repeat(14)));
+
+    let mut terminal = Terminal::new(TestBackend::new(24, 1)).expect("terminal");
+    terminal
+        .draw(|frame| draw_board_day(frame, Rect::new(0, 0, 24, 1), "Hackathon and more"))
+        .expect("draw");
+    let row: String = (0..24)
+        .map(|x| terminal.backend().buffer()[(x, 0)].symbol().to_string())
+        .collect();
+    assert!(row.ends_with("7 for the board "), "{row:?}");
+    assert!(row.starts_with(" Hack"), "{row:?}");
 }
 
-/// The care modal's canvas as plain rows, each padded to the canvas width.
-fn canvas_rows() -> Vec<String> {
-    let state = BonsaiState::fallback(Uuid::nil(), 42);
-    canvas_lines(&state, true)
-        .iter()
-        .map(|line| {
-            let text: String = line
-                .spans
-                .iter()
-                .map(|span| span.content.as_ref())
-                .collect();
-            format!("{text:<width$}", width = CANVAS_WIDTH)
+/// The top row of a sidebar-wide lobby tile wearing `title`, as text.
+fn lobby_top_row(title: TileTitle) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(23, 4)).expect("terminal");
+    terminal
+        .draw(|frame| {
+            draw_tile_chrome(
+                frame,
+                Rect::new(0, 0, 23, 4),
+                TileKind::Lobby,
+                false,
+                title,
+                "lobby",
+                &hints_shown(TileKind::Lobby.hints(), true, false),
+                false,
+                false,
+                &Chrome::Rules { arrange: false },
+            );
         })
+        .expect("draw");
+    (0..23)
+        .map(|x| terminal.backend().buffer()[(x, 0)].symbol().to_string())
         .collect()
 }
 
+/// In the sidebar's width the lobby's name and its key both fit, the rule
+/// between them; the rule alone drops every word; hidden draws nothing on
+/// the row.
 #[test]
-fn a_small_bonsai_tile_shows_the_true_canvas_cut_evenly_around_the_trunk() {
-    let (width, height) = (41u16, 12u16);
-    let rows = bonsai_tile_rows(width, height);
-    let cut = (CANVAS_WIDTH - width as usize) / 2;
-    let canvas = canvas_rows();
-    let expected: Vec<String> = canvas[canvas.len() - height as usize..]
-        .iter()
-        .map(|row| row.chars().skip(cut).take(width as usize).collect())
-        .collect();
-    assert_eq!(rows, expected);
-}
-
-#[test]
-fn a_roomy_bonsai_tile_centers_the_whole_canvas() {
-    let (width, height) = (CANVAS_WIDTH as u16 + 20, CANVAS_HEIGHT as u16 + 3);
-    let rows = bonsai_tile_rows(width, height);
-    let canvas = canvas_rows();
-    let tree_rows = &rows[rows.len() - canvas.len()..];
-    let expected: Vec<String> = canvas
-        .iter()
-        .map(|row| format!("{:10}{row}{:10}", "", ""))
-        .collect();
-    assert_eq!(tree_rows, &expected[..]);
+fn the_three_title_modes_on_a_sidebar_wide_lobby() {
+    assert_eq!(lobby_top_row(TileTitle::Named), " ── lobby ─── ^G open  ");
+    assert_eq!(
+        lobby_top_row(TileTitle::Rule),
+        format!(" {} ", "─".repeat(21))
+    );
+    assert_eq!(lobby_top_row(TileTitle::Hidden), " ".repeat(23));
 }

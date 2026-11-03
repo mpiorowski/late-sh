@@ -1,5 +1,6 @@
 //! One session's hold on presence: its session id, the record it last
-//! told the replica's presence task, and its tick copy of everyone's.
+//! told the replica's presence task, its tick copy of everyone's, and its
+//! tick copy of the day's headcount for Home's pulse tile.
 //!
 //! The session builds its whole record on every tick from the rooms that
 //! own the parts (`App::presence_record`) and hands it to `publish`, which
@@ -12,14 +13,18 @@ use late_core::models::presence::PresenceRecord;
 use tokio::sync::{mpsc, watch};
 use uuid::Uuid;
 
-use super::svc::{PresenceEvent, PresenceService, Records};
+use super::svc::{History, PresenceEvent, PresenceService, Records};
 
 pub struct PresenceSession {
     session_id: Uuid,
     events_tx: mpsc::UnboundedSender<PresenceEvent>,
     records_rx: watch::Receiver<Records>,
+    history_rx: watch::Receiver<History>,
     /// The tick copy the rooms derive from.
     pub records: Records,
+    /// The tick copy the pulse tile draws: the last day of headcount
+    /// buckets, oldest first.
+    pub history: History,
     sent: Option<PresenceRecord>,
 }
 
@@ -27,11 +32,15 @@ impl PresenceSession {
     pub fn new(service: &PresenceService, session_id: Uuid) -> Self {
         let records_rx = service.records_rx();
         let records = records_rx.borrow().clone();
+        let history_rx = service.history_rx();
+        let history = history_rx.borrow().clone();
         Self {
             session_id,
             events_tx: service.events_tx(),
             records_rx,
+            history_rx,
             records,
+            history,
             sent: None,
         }
     }
@@ -58,6 +67,16 @@ impl PresenceSession {
         let moved = !Arc::ptr_eq(&records, &self.records);
         self.records = records;
         moved
+    }
+
+    /// Copy the day's headcount if a new bucket landed (once in five
+    /// minutes). Returns whether it did.
+    pub fn refresh_history(&mut self) -> bool {
+        if !self.history_rx.has_changed().unwrap_or(false) {
+            return false;
+        }
+        self.history = self.history_rx.borrow_and_update().clone();
+        true
     }
 
     fn send(&self, event: PresenceEvent) {

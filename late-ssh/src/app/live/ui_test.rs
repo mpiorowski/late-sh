@@ -56,7 +56,11 @@ fn the_card_draws_the_hint_among_the_words_and_the_rule_under_them() {
     let mut card = vec![String::new(); PICTURE_ROWS as usize];
     card[HINT_ROW] = format!("{words}o read");
     card.push(format!("── now {}", "─".repeat(33)));
-    assert_eq!(text(frame_lines(40, body())), card);
+    assert_eq!(text(frame_lines(40, StripHost::Card, body())), card);
+    // A tile wears the guest's name on its own title, so the strip there
+    // is the picture rows alone, the hint still among the words.
+    let tile = &card[..PICTURE_ROWS as usize];
+    assert_eq!(text(frame_lines(40, StripHost::Tile, body())), tile);
 }
 
 #[test]
@@ -73,7 +77,7 @@ fn a_picture_wider_than_its_column_never_touches_the_words() {
         hint: vec![Span::raw("words")],
         glow: false,
     };
-    let lines = frame_lines(80, body);
+    let lines = frame_lines(80, StripHost::Card, body);
     let words_at = usize::from(PICTURE_COLS + GAP);
     for line in &lines[..PICTURE_ROWS as usize] {
         let text: String = line

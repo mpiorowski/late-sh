@@ -59,7 +59,7 @@ pub fn open_from_panel_click(app: &mut App, x: u16, y: u16) -> bool {
     }
 }
 
-/// `s` then `1`-`4` on Home, or on Zen with a Live tile on the page, opens
+/// `s` then `1`-`4` on Home with a Live panel or tile on the page, opens
 /// that row of the Live panel (the sidebar's, or the tile's, which draws
 /// the same rows), by the number the row shows: the targets are the ones
 /// the last frame drew, so the key and the eye agree. Nothing opens for a

@@ -106,6 +106,15 @@ impl ProfileState {
             .set_key_layout(self.user_id, fingerprint, layout);
     }
 
+    /// Store this device's named Home layouts (`zen::presets::Layouts`),
+    /// per device like the rails: a phone and a desktop on one account each
+    /// keep their own Home. The account's stored layouts are only the seed
+    /// for a key with none.
+    pub fn set_device_home_layouts(&self, fingerprint: String, layouts: serde_json::Value) {
+        self.profile_service
+            .set_key_home_layouts(self.user_id, fingerprint, layouts);
+    }
+
     /// Store whether this device shows the Artboard content disclaimer. Fire
     /// and forget, and per device for the same reason the rails are: it does
     /// not touch the account profile.
@@ -213,8 +222,6 @@ pub(crate) fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         right_sidebar_mode: profile.right_sidebar_mode,
         right_sidebar_components: profile.right_sidebar_components.clone(),
         statusline_components: profile.statusline_components.clone(),
-        show_room_list_sidebar: profile.show_room_list_sidebar,
-        room_list_mode: profile.room_list_mode,
         keep_composer_focused: profile.keep_composer_focused,
         start_with_music_muted: profile.start_with_music_muted,
         landing_page: profile.landing_page,

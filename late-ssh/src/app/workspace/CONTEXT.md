@@ -1,7 +1,7 @@
 # Workspace Context
 
 ## Metadata
-- Scope: `late-ssh/src/app/workspace`, the backtick workspace cycle: the one key that hops the base page (Home chat or Zen), your-turn daily boards, seated house tables, unfinished Arcade dailies, live door games, and every open watch of someone else's door game.
+- Scope: `late-ssh/src/app/workspace`, the backtick workspace cycle: the one key that hops Home, your-turn daily boards, seated house tables, unfinished Arcade dailies, live door games, and every open watch of someone else's door game.
 - Parent context: root `CONTEXT.md`. The legs' own domains: `lobby/daily/CONTEXT.md`, `lobby/house/CONTEXT.md`, `arcade/CONTEXT.md`, and the per-door contexts under `door/` (e.g. `door/darkroom/CONTEXT.md`, `door/nethack/CONTEXT.md`).
 - Status: Active
 
@@ -11,7 +11,7 @@ The cycle is its own vertical slice because it spans four domains and belongs to
 
 Stop order: the base → each daily board waiting on your move (nearest deadline first) → each house table you hold a seat at (roster order) → each unfinished Arcade daily (lobby order) → each live door game (hub sidebar order) → each open watch → back to the base. Real-time Arcade games (Lateris, Snake, Traffic, NES) and personal boards never join.
 
-The base (`WorkspaceBase`, held on `App::workspace_base`) is the page you went into the games from, and only the two pages that answer backtick qualify: Zen, or Home for everything else, so the loop always closes. It is recorded in two places: `cycle_game_workspace` when the key is pressed on Home or Zen, and `note_screen_change` (called by `App::set_screen`) whenever a screen change crosses from a page onto the game side (`is_game_side`: the stop screens plus the Arcade lobby, and the Games hub while the session holds an open watch, so a watch opened from Zen comes home to Zen), which covers Lobby jumps and hub launches. `Ctrl+F` handing Zen back to the game screen it was opened over (an Arcade puzzle or a door; never a board or table, which close on the way into Zen) is closing Zen, not going in, and leaves the base alone. The Zen variant carries Zen's own `Ctrl+F` page, because `set_screen` forgets it on the way out; coming back to Zen from the game side refills it when empty, so the wrap and an Esc off a board or table both hand back a Zen that still knows its way out.
+The base is Home, the one page that answers backtick, so the loop always closes: the chain starts there and the wrap comes home there, whatever page the games were entered from (a Lobby jump, a hub launch).
 
 ## 2. Module map
 
@@ -23,7 +23,7 @@ The base (`WorkspaceBase`, held on `App::workspace_base`) is the page you went i
 
 ## 3. Invariants
 
-- The key binding stays with its screens: `dashboard/input.rs` and `zen/input.rs` keep only the binding; `arcade/input.rs` routes backtick out of active daily puzzles; the doors intercept it in their own input paths and re-enter the cycle as a detach; the realm board does the same from `door/realm/input.rs`, with nothing to arm because the board stays open across the hop.
+- The key binding stays with its screens: `zen/input.rs::handle_home_key` keeps only the binding; `arcade/input.rs` routes backtick out of active daily puzzles; the doors intercept it in their own input paths and re-enter the cycle as a detach; the realm board does the same from `door/realm/input.rs`, with nothing to arm because the board stays open across the hop.
 - This domain reads other domains through their queries and open/enter functions, never their internals. Each leg's membership test lives with the leg's domain (`my_turn_matches`, `my_seated_tables`, `has_unfinished_daily`, `HubGame::live_screen`); this domain owns only the leg order and the routing.
 - New workspace kinds go through the `GameWorkspace` enum; do not re-add rooms stops.
 

@@ -149,8 +149,18 @@ async fn a_moved_session_lands_on_its_page_unless_the_tour_still_has_to_run() {
     let test_db = new_test_db().await;
     for (idx, (page, landing, tour_pending, expected)) in [
         (Page::Arcade, LandingPage::Clubhouse, false, Screen::Arcade),
-        (Page::Calendars, LandingPage::Zen, false, Screen::Calendars),
-        (Page::Zen, LandingPage::Home, false, Screen::Zen),
+        (
+            Page::Calendars,
+            LandingPage::Clubhouse,
+            false,
+            Screen::Calendars,
+        ),
+        (
+            Page::Dashboard,
+            LandingPage::Clubhouse,
+            false,
+            Screen::Dashboard,
+        ),
         (Page::Clubhouse, LandingPage::Home, false, Screen::Clubhouse),
         // The tour only runs in the tavern, so it wins over the resume.
         (Page::Arcade, LandingPage::Home, true, Screen::Clubhouse),

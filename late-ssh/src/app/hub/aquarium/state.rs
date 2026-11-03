@@ -94,7 +94,7 @@ pub(crate) enum CutOutcome {
     Rooted,
 }
 
-/// What the Zen tile's fourteen dots show.
+/// What the Home tank tile's fourteen dots show.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CareBar {
     /// Fed today: this many dots green, the way to the next fry (a full bar
@@ -288,26 +288,6 @@ impl AquariumCare {
     /// A fry hatched into the water (the service's event came back).
     pub(crate) fn set_fry(&mut self, creature: String, born: NaiveDate) {
         self.fry = Some(Fry { creature, born });
-    }
-
-    /// The tank was bought in this session: the purchase planted the row
-    /// (`AquariumCare::welcome` in late-core), so the session's care takes
-    /// the same shape without a reconnect: hungry since yesterday, a sprout
-    /// up today.
-    pub(crate) fn welcome_new_tank(&mut self, today: NaiveDate, fry: Option<String>) {
-        let yesterday = today.pred_opt().unwrap_or(today);
-        self.last_fed = Some(
-            yesterday
-                .and_hms_opt(12, 0, 0)
-                .unwrap_or_default()
-                .and_utc(),
-        );
-        self.streak = 0;
-        self.set_sprout(today);
-        self.fry = fry.map(|creature| Fry {
-            creature,
-            born: today,
-        });
     }
 
     /// Whether a sprout stands on the floor to be drawn.

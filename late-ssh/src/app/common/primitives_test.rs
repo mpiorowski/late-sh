@@ -1,5 +1,5 @@
 use crate::app::common::primitives::*;
-use ratatui::layout::Rect;
+use ratatui::{Terminal, backend::TestBackend, layout::Rect};
 use std::time::{Duration, Instant};
 
 #[test]
@@ -66,7 +66,6 @@ fn a_screen_off_the_cycle_belongs_to_the_page_it_is_reached_from() {
         Page::Profiles,
         Page::Leaderboard,
         Page::Calendars,
-        Page::Zen,
     ] {
         assert_eq!(page.screen().page(), page);
     }
@@ -85,12 +84,6 @@ fn a_screen_off_the_cycle_belongs_to_the_page_it_is_reached_from() {
         assert_eq!(screen.next(), page.screen(), "{screen:?} next");
         assert_eq!(screen.prev(), page.screen(), "{screen:?} prev");
     }
-}
-
-#[test]
-fn zen_is_a_page_off_the_cycle_that_tabs_to_home() {
-    assert_eq!(Screen::Zen.next(), Screen::Dashboard);
-    assert_eq!(Screen::Zen.prev(), Screen::Dashboard);
 }
 
 #[test]
@@ -127,5 +120,37 @@ fn too_small_text_names_the_screen_the_requirement_and_the_current_size() {
     assert_eq!(
         too_small_text("Rubik's Cube", 42, 18, Rect::new(0, 0, 30, 12)),
         "Rubik's Cube needs at least 42×18, this space is 30×12"
+    );
+}
+
+/// A note in a sidebar's width: the long row wraps at its words, centred,
+/// and nothing is cut off. An odd spare cell goes on the left, as ratatui
+/// centres a line; a kept trailing space would pull the row left.
+#[test]
+fn a_note_wider_than_its_area_wraps_at_the_words() {
+    let mut terminal = Terminal::new(TestBackend::new(20, 3)).expect("terminal");
+    terminal
+        .draw(|frame| {
+            draw_centered_note(
+                frame,
+                Rect::new(0, 0, 20, 3),
+                &["no pet yet", "the Pet Companion is in /shop"],
+            )
+        })
+        .expect("draw");
+    let rows: Vec<String> = (0..3)
+        .map(|y| {
+            (0..20)
+                .map(|x| terminal.backend().buffer()[(x, y)].symbol().to_string())
+                .collect::<String>()
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        vec![
+            "     no pet yet     ",
+            "  the Pet Companion ",
+            "     is in /shop    ",
+        ]
     );
 }

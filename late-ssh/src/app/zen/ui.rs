@@ -1,46 +1,46 @@
-//! Rendering for both Zen pages. Every widget here is a thin frame around a
-//! renderer another domain already owns (the bonsai canvas, the aquarium
-//! reef, the pet box, the embedded room chat, the equalizer); what this
-//! file adds is the composition and the chrome.
-
-use std::time::{Duration, Instant};
+//! Rendering for Home's tile tree: the chrome around every tile, the
+//! guests, the pickers and the layouts list. Each tile's own drawing is
+//! its domain's (`bonsai::render::draw_tile`, `hub::aquarium::ui::draw_reef_tile`,
+//! `pet::ui::draw_tile`, ...): the `match` in `draw_rice` is the one wire
+//! between a kind and the drawer, and the clock, the blank tile and the
+//! board's day banner are the page's own.
 
 use ratatui::{
     Frame,
-    layout::{Alignment, Rect},
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph},
 };
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 
 use super::{
+    attention::Item as AttentionItem,
     bigclock,
-    layout::{self, FLOOR_ROWS},
-    rows::{Headline, InboxRow},
-    state::{BorderKind, TileKind, ZenState},
+    layout::{self, Chrome},
+    presets::{LayoutList, Layouts, MAX_LAYOUT_NAME_CHARS},
+    state::{Guest, TileHint, TileKind, TileTitle, ZenState},
 };
-use late_core::models::aquarium_care::CARE_DAYS;
-use late_core::models::user::{AudioSource, RadioStation};
 
 use crate::app::{
-    audio::viz::{Dance, EqState, dance_lines, render_eq},
-    bonsai::{
-        render::{apply_sway, canvas_lines, center_lines},
-        state::{BonsaiState, CANVAS_WIDTH},
+    audio::viz::EqState,
+    bonsai::state::BonsaiState,
+    chat::state::ActivityTickerEntry,
+    chat::ui::{
+        ChatRenderInput, DashboardChatView, EmbeddedRoomChatView, draw_chat_center,
+        draw_dashboard_chat_card, draw_embedded_room_chat, draw_room_list_rail,
     },
-    chat::state::{ActiveFriend, ActivityTickerEntry},
-    chat::ui::{EmbeddedRoomChatView, draw_embedded_room_chat},
     common::{
-        primitives::{format_relative_time_short, hint_line},
+        primitives::{center_lines, draw_centered_note, hint_line},
+        sidebar::{MusicStageProps, draw_music_tile, draw_panel_rule},
         theme,
     },
     files::terminal_image::TerminalImageFrame,
-    hub::aquarium::state::{AquariumCare, AquariumState, CareBar},
+    hub::aquarium::ui::TankView,
     live::panel::LivePanelProps,
     lobby::daily::{panel::draw_daily_compact, state::DailyState},
-    pet::ui::{Neighbours, PetView, draw_pet_box, status_line},
-    statusline::bar::ZenStatusRow,
+    pet::ui::PetView,
+    presence::ui::{PresenceView, draw_core_block},
 };
 
 /// A chat tile's frame: its room's label, the watcher count badge when the
@@ -51,7 +51,17 @@ use crate::app::{
 pub(crate) struct ZenChatTile<'a> {
     pub label: String,
     pub stream_badge: Option<String>,
-    pub view: Option<EmbeddedRoomChatView<'a>>,
+    pub view: Option<ChatTileView<'a>>,
+}
+
+/// What a chat tile draws: a room, or the News list for a tile holding
+/// News (`ChatRoomBinding::News`). The active tile is drawn by the page's
+/// chat instead, where News is the rail's row with its keys.
+// This transient render input stays on the stack to avoid allocating each frame.
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum ChatTileView<'a> {
+    Room(EmbeddedRoomChatView<'a>),
+    News(crate::app::chat::news::ui::ArticleListView<'a>),
 }
 
 /// A chat tile's title: `Chat · #mat-live [3]`. The tile does not draw the
@@ -73,45 +83,61 @@ pub(crate) fn chat_tile_title(label: &str, stream_badge: Option<&str>, width: u1
     }
 }
 
-/// Everything the Zen page reads, assembled once per frame in `render.rs`.
+/// What Home's own tiles read: the rail and the page's chat draw from
+/// the same render input Home has always built, the chat as the #lounge
+/// card while the lounge is selected.
+pub(crate) struct HomeView<'a> {
+    pub chat_view: ChatRenderInput<'a>,
+    pub dashboard_view: DashboardChatView<'a>,
+    pub home_selected: bool,
+}
+
+/// The now strip as a guest: what it shows and where its click lands.
+pub(crate) struct StripGuest<'a> {
+    pub strip: crate::app::live::state::LiveStripView<'a>,
+    pub hit: &'a std::cell::Cell<Option<(Rect, crate::app::live::pick::LiveSource)>>,
+}
+
+/// Everything Home's tiles read but its rail and chat, assembled once per
+/// frame in `render.rs`.
 pub(crate) struct ZenView<'a> {
     pub zen: &'a ZenState,
-    /// The bottom row: the user's status line and the page's keys. `None`
-    /// only on a page too small to draw.
-    pub status_row: Option<ZenStatusRow>,
+    /// Home's named layouts, and the list `L` opens over them while it is
+    /// up (arrange mode only).
+    pub home_layouts: &'a Layouts,
+    pub layout_list: Option<&'a LayoutList>,
+    /// The music dock's inputs (`sidebar::draw_music_tile`): a tall music
+    /// tile draws the dock, a short one the track over the station.
+    pub music: MusicStageProps<'a>,
+    /// The now strip for the tile hosting it as a guest, while something
+    /// is up. The page's chat hosts it inside its card instead
+    /// (`dashboard_view`).
+    pub strip: Option<StripGuest<'a>>,
+    /// What waits on you (`App::attention_items`): the attention guest
+    /// takes its host while the list has rows.
+    pub attention: &'a [AttentionItem],
     pub bonsai: &'a BonsaiState,
-    /// The reef is drawn for everyone; `aquarium_owned` says whether the
-    /// account has fish in it or gets the shop caption instead.
-    pub aquarium: &'a AquariumState,
-    pub aquarium_owned: bool,
-    /// The owner's care: the title bar's fourteen dots read off it.
-    pub aquarium_care: &'a AquariumCare,
+    /// The tank and its care, for the reef and the tank tiles.
+    pub tank: TankView<'a>,
     /// `None` when the account owns no pet.
-    pub pet_strip: Option<PetView<'a>>,
+    pub pet: Option<PetView<'a>>,
     /// One entry per chat tile, in layout order.
     pub chats: Vec<ZenChatTile<'a>>,
-    pub track: String,
-    /// The source and, for the streams that have one, the station it is
-    /// tuned to (`station_text`).
-    pub station: String,
     pub eq_state: EqState,
-    pub clock: &'a str,
-    pub date: String,
-    pub online_count: usize,
-    pub mentions_unread: i64,
+    /// Who is online now and the day behind it: the presence, pulse,
+    /// friends and clock tiles read it.
+    pub presence: PresenceView<'a>,
+    /// The date under the clock tile's digits.
+    pub date: &'a str,
     /// Daily correspondence games for the lobby tile, and whether the lobby
     /// label glows (your turn somewhere, or a result waiting).
     pub daily: &'a DailyState,
     pub lobby_glow: bool,
     /// The #lounge activity feed, newest first (`ChatState::activity_ticker`).
     pub activity: &'a [ActivityTickerEntry],
-    pub active_friends: &'a [ActiveFriend],
-    /// The viewer's chips and today's care, for the Pulse tile.
-    pub chip_balance: i64,
-    pub care: Care,
-    /// Built only while an Inbox or Headlines tile is on the page.
-    pub inbox: Vec<InboxRow>,
-    pub headlines: Vec<Headline>,
+    /// Today's all-day board posts (`calendar::live::day_text`), the banner
+    /// across the top of every tile; `None` on any other day.
+    pub board_day: Option<&'a str>,
     /// The Live panel's rows, the sidebar's, for the Live tile: it draws
     /// them the same way and records the same click and key targets.
     pub live_panel: LivePanelProps<'a>,
@@ -121,10 +147,13 @@ pub(crate) struct ZenView<'a> {
     pub ascii_clock: u64,
 }
 
+/// Home's page: every tile of the layout, `home` drawing the rail and the
+/// page's chat.
 pub(crate) fn draw_rice(
     frame: &mut Frame,
     area: Rect,
     mut view: ZenView<'_>,
+    home: HomeView<'_>,
     terminal_images: &mut TerminalImageFrame,
 ) {
     if !layout::rice_fits(area) {
@@ -137,196 +166,474 @@ pub(crate) fn draw_rice(
         );
         return;
     }
-    let status_row = view.status_row.take();
-    let (tiles_area, row_area) = layout::rice_areas(area, status_row.is_some());
-    // One frame per chat tile in layout order. Zoomed, the one tile drawn
-    // is the focused one, so it takes the active chat's frame, not the
-    // first.
-    let mut chats: Vec<Option<ZenChatTile<'_>>> = std::mem::take(&mut view.chats)
-        .into_iter()
-        .map(Some)
-        .collect();
-    let mut next_chat = 0usize;
+    let areas = layout::rice_areas(area, view.board_day.is_some(), view.zen.arrange);
+    if let (Some(row), Some(text)) = (areas.banner, view.board_day) {
+        draw_board_day(frame, row, text);
+    }
+    let tiles_area = areas.tiles;
+    // One frame per chat tile in layout order.
+    let mut chats = std::mem::take(&mut view.chats).into_iter();
     let zen = view.zen;
-    let zoomed = zen.zoomed.then_some(zen.focus);
-    let gap = zen.rice.look.gap as u16;
-    let rects = layout::tile_rects(&zen.rice.root, tiles_area, gap, zoomed);
+    let gaps = zen.gaps();
+    let chrome = zen.chrome();
+    let rects = layout::tile_rects(&zen.rice.root, tiles_area, gaps);
+    // Under the rules chrome the gutter between two columns is one line,
+    // owned by the split, so neither tile draws its own.
+    if matches!(chrome, Chrome::Rules { .. }) {
+        for gutter in layout::row_gutters(&zen.rice.root, tiles_area, gaps) {
+            crate::app::common::sidebar::paint_vertical_separator(
+                frame,
+                gutter.x,
+                gutter.y,
+                gutter.height,
+            );
+        }
+    }
+    let guests = zen.rice.root.leaf_guests();
+    // Taken by the page's chat, the one tile that draws from it whole.
+    let mut home = Some(home);
+    // The active chat tile is the page's chat: it draws Home's card (the
+    // rail's selection, synthetic entries included) with the card's own
+    // chrome, where every other chat tile watches its room under a rule.
+    let page_chat = zen.active_chat_ordinal();
     // A pet tile sharing an edge with a tank or a bonsai tile: the pet
     // goes and sits against that edge to watch, and alternates when it
-    // touches both (zoomed, a lone tile has no neighbour at all).
-    let neighbours = layout::pet_neighbours(&rects, gap);
-    for (idx, (kind, rect)) in rects.iter().enumerate() {
-        let focused = if zoomed.is_some() {
-            true
-        } else {
-            idx == zen.focus
-        };
-        // Zoomed, the one rect drawn is the focused tile's.
-        let ordinal = zoomed.unwrap_or(idx);
+    // touches both.
+    let neighbours = layout::pet_neighbours(&rects, gaps);
+    for (ordinal, (kind, rect)) in rects.iter().enumerate() {
+        let focused = ordinal == zen.focus;
         // Each chat tile takes the next frame in layout order and names
         // its room in the title, so `[` `]` walking the rooms shows where
         // you landed without reading the messages.
-        let chat_tile = match kind {
-            TileKind::Chat => {
-                let index = match zoomed {
-                    Some(_) => zen.active_chat_index().unwrap_or(next_chat),
-                    None => next_chat,
-                };
-                next_chat += 1;
-                chats.get_mut(index).and_then(Option::take)
-            }
-            TileKind::Bonsai
-            | TileKind::Aquarium
-            | TileKind::Ascii
-            | TileKind::Pet
-            | TileKind::Music
-            | TileKind::Clock
-            | TileKind::Visualizer
-            | TileKind::Lobby
-            | TileKind::Activity
-            | TileKind::Friends
-            | TileKind::Pulse
-            | TileKind::Inbox
-            | TileKind::Headlines
-            | TileKind::Live
-            | TileKind::Blank => None,
+        let chat_tile = match *kind == TileKind::Chat {
+            true => chats.next(),
+            false => None,
         };
-        let title = match (kind, &chat_tile) {
-            (TileKind::Chat, Some(tile)) => {
+        let is_page_chat = page_chat == Some(ordinal);
+        // An ascii tile names the piece it plays, so `[` `]` shows where
+        // you landed.
+        let title = match (&chat_tile, zen.piece_label(ordinal)) {
+            (Some(tile), _) => {
                 chat_tile_title(&tile.label, tile.stream_badge.as_deref(), rect.width)
             }
-            (TileKind::Chat, None) => kind.label().to_string(),
-            // The tile names the piece it plays, so `[` `]` shows where
-            // you landed.
-            (TileKind::Ascii, _) => match zen.piece_label(ordinal) {
-                Some(label) => format!("{} · {}", kind.label(), label),
-                None => kind.label().to_string(),
-            },
-            (
-                TileKind::Bonsai
-                | TileKind::Aquarium
-                | TileKind::Pet
-                | TileKind::Music
-                | TileKind::Clock
-                | TileKind::Visualizer
-                | TileKind::Lobby
-                | TileKind::Activity
-                | TileKind::Friends
-                | TileKind::Pulse
-                | TileKind::Inbox
-                | TileKind::Headlines
-                | TileKind::Live
-                | TileKind::Blank,
-                _,
-            ) => kind.label().to_string(),
+            (None, Some(label)) => format!("{} · {}", kind.label(), label),
+            (None, None) => kind.label().to_string(),
         };
-        // The tank's title carries its care bar: fourteen dots, green
-        // for the feeding streak or red for the days unfed.
-        let title_tail = match kind {
-            TileKind::Aquarium if view.aquarium_owned => {
-                Some(care_bar_spans(view.aquarium_care.bar()))
+        // The tile's guests, while they have something to say, are the
+        // tile: their labels in the rule and their panels in place of the
+        // host's (stacked when both are up). On the page's chat the strip
+        // inserts into the card instead.
+        let hosted: &[Guest] = guests.get(ordinal).copied().unwrap_or(&[]);
+        let up: Vec<Guest> = hosted
+            .iter()
+            .copied()
+            .filter(|guest| match guest {
+                Guest::Now => view.strip.is_some() && !is_page_chat,
+                Guest::Attention => !view.attention.is_empty(),
+            })
+            .collect();
+        let title = match (up.is_empty(), zen.arrange) {
+            (false, false) => up
+                .iter()
+                .map(|guest| guest.label())
+                .collect::<Vec<_>>()
+                .join(" · "),
+            (true, _) | (false, true) => title,
+        };
+        let title_override = zen.rice.root.title_at(ordinal);
+        // Arranging, the tile names the guests it hosts (`+name`, as the
+        // key that gives it one), so a quiet guest is never a surprise,
+        // and a tile that goes bare outside the mode says so in the rule
+        // it wears for the mode.
+        let title = match zen.arrange {
+            true => {
+                let mut title = title;
+                for guest in hosted {
+                    title.push_str(" +");
+                    title.push_str(guest.label());
+                }
+                match title_override {
+                    TileTitle::Named => {}
+                    TileTitle::Rule => title.push_str(" · rule"),
+                    TileTitle::Hidden => title.push_str(" · hidden"),
+                }
+                title
             }
-            TileKind::Aquarium
-            | TileKind::Ascii
-            | TileKind::Chat
-            | TileKind::Bonsai
-            | TileKind::Pet
-            | TileKind::Music
-            | TileKind::Clock
-            | TileKind::Visualizer
-            | TileKind::Lobby
-            | TileKind::Activity
-            | TileKind::Friends
-            | TileKind::Pulse
-            | TileKind::Inbox
-            | TileKind::Headlines
-            | TileKind::Live
-            | TileKind::Blank => None,
+            false => title,
         };
-        let keys = tile_keys(*kind, &view);
-        // Zoomed, the tile is the page: no border, no title, no keys, the
-        // way the screensaver draws a piece.
-        let inner = match zoomed {
-            Some(_) => *rect,
-            None => draw_tile_chrome(
-                frame,
-                *rect,
-                &title,
-                title_tail,
-                keys,
-                focused,
-                &zen.rice.look,
-            ),
-        };
+
+        // The tile's keys, its guests' ahead of them while they are up
+        // here; the ones the tile takes show only where they work.
+        let mut hints: Vec<TileHint> = Vec::new();
+        for guest in &up {
+            hints.extend_from_slice(guest.hints());
+        }
+        hints.extend_from_slice(kind.hints());
+        let keys = hints_shown(&hints, zen.arrange, focused);
+        // The lobby's rule glows while a game waits on you, as the
+        // sidebar's does.
+        let glow = *kind == TileKind::Lobby && view.lobby_glow;
+        let inner = draw_tile_chrome(
+            frame,
+            *rect,
+            *kind,
+            is_page_chat,
+            title_override,
+            &title,
+            &keys,
+            focused,
+            glow,
+            &chrome,
+        );
         if inner.width == 0 || inner.height == 0 {
             continue;
         }
-        // List tiles read better off the border: one column each side.
-        let padded = pad_sides(inner);
+        if !up.is_empty() {
+            draw_guests(frame, inner, &up, focused, &view);
+            continue;
+        }
+        // The rules chrome already set every tile but the page's chat and
+        // the rail one column in; the boxed one pads its lists here.
+        let padded = match chrome {
+            Chrome::Boxed { .. } => pad_sides(inner),
+            Chrome::Rules { .. } => inner,
+        };
         match kind {
-            TileKind::Bonsai => draw_bonsai_tile(frame, inner, view.bonsai, view.wall_tick),
-            TileKind::Aquarium => {
-                draw_aquarium_tile(frame, inner, view.aquarium, view.aquarium_owned)
+            TileKind::Bonsai => {
+                crate::app::bonsai::render::draw_tile(frame, inner, view.bonsai, view.wall_tick)
             }
+            TileKind::Aquarium => {
+                crate::app::hub::aquarium::ui::draw_reef_tile(frame, inner, &view.tank)
+            }
+            TileKind::Tank => crate::app::hub::aquarium::ui::draw_tank_tile(
+                frame,
+                inner,
+                &view.tank,
+                view.wall_tick,
+            ),
             TileKind::Ascii => {
                 if let Some(piece) = zen.piece_at(ordinal) {
                     crate::app::ascii::ui::draw_piece(frame, inner, piece, view.ascii_clock);
                 }
             }
-            TileKind::Pet => draw_pet_tile(frame, inner, view.pet_strip.as_ref(), neighbours),
-            TileKind::Chat => draw_chat_tile(frame, inner, chat_tile, terminal_images),
-            TileKind::Music => draw_music_tile(
+            TileKind::Pet => {
+                crate::app::pet::ui::draw_tile(frame, inner, view.pet.as_ref(), neighbours)
+            }
+            TileKind::Chat => match (is_page_chat, home.take()) {
+                (
+                    true,
+                    Some(HomeView {
+                        chat_view,
+                        dashboard_view,
+                        home_selected,
+                    }),
+                ) => {
+                    if home_selected {
+                        draw_dashboard_chat_card(frame, inner, dashboard_view, terminal_images);
+                    } else {
+                        draw_chat_center(frame, inner, chat_view, terminal_images);
+                    }
+                }
+                (true, None) | (false, _) => {
+                    draw_chat_tile(frame, inner, chat_tile, terminal_images)
+                }
+            },
+            TileKind::Music => draw_music_tile(frame, inner, &view.music),
+            TileKind::Clock => draw_clock_tile(frame, inner, &view),
+            TileKind::Visualizer => crate::app::audio::viz::draw_visualizer_tile(
                 frame,
                 inner,
-                &view.track,
-                &view.station,
                 view.wall_tick,
                 view.eq_state,
             ),
-            TileKind::Clock => draw_clock_tile(frame, inner, &view),
-            TileKind::Visualizer => {
-                draw_visualizer_tile(frame, inner, view.wall_tick, view.eq_state)
-            }
-            TileKind::Lobby => draw_lobby_tile(frame, padded, view.daily, view.lobby_glow),
-            TileKind::Activity => {
-                draw_activity_tile(frame, padded, view.activity, view.active_friends)
-            }
-            TileKind::Friends => draw_friends_tile(frame, padded, view.active_friends),
-            TileKind::Pulse => draw_pulse_tile(
+            // Top-aligned, so a short tile shows the games first.
+            TileKind::Lobby => draw_daily_compact(frame, padded, view.daily, view.lobby_glow),
+            TileKind::Presence => draw_core_block(
+                frame,
+                pad_right(inner),
+                view.presence.clock,
+                view.presence.online,
+                view.presence.friends,
+                view.wall_tick,
+            ),
+            TileKind::Rooms => match &home {
+                Some(home) => draw_room_list_rail(frame, inner, &home.chat_view),
+                None => draw_centered_note(frame, inner, &["the rail is Home's"]),
+            },
+            TileKind::Activity => crate::app::chat::ui::draw_activity_tile(
                 frame,
                 padded,
-                &PulseView {
-                    online: view.online_count,
-                    chips: view.chip_balance,
-                    mentions: view.mentions_unread,
-                    friends: view.active_friends.len(),
-                    care: view.care,
-                },
+                view.activity,
+                view.presence.friends,
             ),
-            TileKind::Inbox => draw_inbox_tile(
+            TileKind::Friends => {
+                crate::app::chat::ui::draw_friends_tile(frame, padded, view.presence.friends)
+            }
+            TileKind::Pulse => crate::app::presence::ui::draw_pulse_tile(
                 frame,
-                pad_right(inner),
-                &view.inbox,
-                zen.inbox_selected,
-                focused,
-            ),
-            TileKind::Headlines => draw_headlines_tile(
-                frame,
-                pad_right(inner),
-                &view.headlines,
-                zen.headlines_selected,
-                focused,
+                padded,
+                view.presence.online,
+                view.presence.history,
             ),
             TileKind::Live => {
-                crate::app::live::panel::draw_live_inline(frame, pad_sides(inner), &view.live_panel)
+                crate::app::live::panel::draw_live_inline(frame, padded, &view.live_panel)
             }
             TileKind::Blank => draw_blank_tile(frame, inner, focused),
         }
     }
-    if let (Some(row), Some(row_area)) = (status_row, row_area) {
-        draw_status_row(frame, row_area, row);
+    // Arrange mode's key footer; a row too narrow for any key stays blank.
+    if let Some(row) = areas.footer
+        && let Some(keys) = crate::app::statusline::bar::build_home_arrange_row(row)
+    {
+        frame.render_widget(Paragraph::new(keys).right_aligned(), row);
     }
     draw_kind_picker(frame, area, zen);
+    draw_guest_picker(frame, area, zen);
+    if let Some(list) = view.layout_list {
+        draw_layout_list(frame, area, view.home_layouts, list);
+    }
+}
+
+/// The layouts list `L` opens in arrange mode: one row per layout with
+/// its digit and name, the current one marked, the selected row lit;
+/// while a name is being typed (`n`) the field sits under the rows with
+/// its cursor.
+fn draw_layout_list(frame: &mut Frame, area: Rect, layouts: &Layouts, list: &LayoutList) {
+    let rows = layouts.count() as u16;
+    // The rows, a blank, the hint, the two border rows; two more rows
+    // while a name is typed.
+    let edit_rows = match list.editing {
+        Some(_) => 2,
+        None => 0,
+    };
+    let Some(inner) = draw_popup(frame, area, " layouts ", 50, rows + 4 + edit_rows) else {
+        return;
+    };
+    let mut lines: Vec<Line<'static>> = layouts
+        .items()
+        .iter()
+        .enumerate()
+        .map(|(index, item)| {
+            let picked = index == list.selected;
+            let current = index == layouts.current();
+            let name_style = if picked {
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme::TEXT())
+            };
+            let note = if current { "current" } else { "" };
+            Line::from(vec![
+                Span::styled(
+                    if picked { "▌ " } else { "  " },
+                    Style::default().fg(theme::AMBER()),
+                ),
+                Span::styled(
+                    format!("{} ", index + 1),
+                    Style::default().fg(theme::TEXT_DIM()),
+                ),
+                Span::styled(
+                    format!("{:<width$} ", item.name, width = MAX_LAYOUT_NAME_CHARS),
+                    name_style,
+                ),
+                Span::styled(note.to_string(), Style::default().fg(theme::TEXT_FAINT())),
+            ])
+        })
+        .collect();
+    if let Some(edit) = &list.editing {
+        let label = "save as: ";
+        lines.push(Line::from(""));
+        lines.push(Line::from(vec![
+            Span::styled("  ".to_string(), Style::default()),
+            Span::styled(label.to_string(), Style::default().fg(theme::TEXT_DIM())),
+            Span::styled(
+                edit.text.clone(),
+                Style::default()
+                    .fg(theme::TEXT_BRIGHT())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled("▏".to_string(), Style::default().fg(theme::AMBER())),
+        ]));
+    }
+    lines.push(Line::from(""));
+    let hints: &[(&str, &str)] = match list.editing {
+        Some(_) => &[("enter", "keep"), ("esc", "drop")],
+        None => &[
+            ("jk", "move"),
+            ("enter", "load"),
+            ("n", "new"),
+            ("d", "delete"),
+            ("R", "reset"),
+            ("esc", "close"),
+        ],
+    };
+    lines.push(hint_line_fitting(hints, inner.width as usize));
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// A popup of up to `width` by `height` centred over `area`, cleared and
+/// framed under `title`: the area inside its frame, or `None` on a page too
+/// small to hold one.
+fn draw_popup(
+    frame: &mut Frame,
+    area: Rect,
+    title: &'static str,
+    width: u16,
+    height: u16,
+) -> Option<Rect> {
+    let height = height.min(area.height);
+    let width = width.min(area.width);
+    if height < 4 || width < 12 {
+        return None;
+    }
+    let popup = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(title)
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    Some(inner)
+}
+
+/// Paint the guests that have taken their host's tile. One guest has the
+/// whole tile, the strip centred down it and attention's rows from its
+/// top; with both up the strip takes its picture rows at the top and
+/// attention the rest. Neither draws a title
+/// of its own: the tile's chrome names the guests up in place of the
+/// host's title, where the host wears one. The host draws nothing
+/// underneath, so the moment the last guest goes the host shows whole.
+fn draw_guests(frame: &mut Frame, area: Rect, up: &[Guest], focused: bool, view: &ZenView<'_>) {
+    let now = up.contains(&Guest::Now);
+    let attention = up.contains(&Guest::Attention);
+    match (now, attention) {
+        (true, true) => {
+            let (_, strip_height) = now_strip_size(area);
+            let top = Rect::new(area.x, area.y, area.width, strip_height);
+            draw_guest(frame, top, Guest::Now, focused, view);
+            let below = Rect::new(
+                area.x,
+                area.y + strip_height,
+                area.width,
+                area.height - strip_height,
+            );
+            draw_guest(frame, below, Guest::Attention, focused, view);
+        }
+        (true, false) => draw_guest(frame, area, Guest::Now, focused, view),
+        (false, true) => draw_guest(frame, area, Guest::Attention, focused, view),
+        (false, false) => {}
+    }
+}
+
+/// The strip's form in a tile of `area`: full where the tile is wide and
+/// tall enough for the picture, its one-row form otherwise, and the rows
+/// the form paints (the tile form has no rule, `StripHost::Tile`).
+fn now_strip_size(area: Rect) -> (crate::app::live::ui::StripSize, u16) {
+    use crate::app::live::ui::{
+        LIVE_STRIP_COMPACT_HEIGHT, MIN_FULL_WIDTH, PICTURE_ROWS, StripSize,
+    };
+    match area.width >= MIN_FULL_WIDTH && area.height >= PICTURE_ROWS {
+        true => (StripSize::Full, PICTURE_ROWS),
+        false => (
+            StripSize::Compact,
+            LIVE_STRIP_COMPACT_HEIGHT.min(area.height),
+        ),
+    }
+}
+
+/// Paint one guest into `area`: the strip's picture and words centred
+/// down it (the click lands on those rows), or attention's rows from its
+/// top, the selected one lit while the tile is focused.
+fn draw_guest(frame: &mut Frame, area: Rect, guest: Guest, focused: bool, view: &ZenView<'_>) {
+    match guest {
+        Guest::Now => {
+            let Some(strip) = &view.strip else {
+                return;
+            };
+            let (size, height) = now_strip_size(area);
+            let strip_area = Rect::new(
+                area.x,
+                area.y + (area.height - height) / 2,
+                area.width,
+                height,
+            );
+            crate::app::live::ui::draw_live_strip(
+                frame,
+                strip_area,
+                size,
+                crate::app::live::ui::StripHost::Tile,
+                &strip.strip,
+                strip.hit,
+            );
+        }
+        Guest::Attention => draw_attention_tile(
+            frame,
+            area,
+            view.attention,
+            view.zen.attention_selected,
+            focused,
+        ),
+    }
+}
+
+/// The guest picker `+` opens in arrange mode: one row per guest, a check
+/// beside each the focused tile hosts, `elsewhere` beside one another
+/// tile hosts (picking it moves it here). Space or Enter picks, or takes
+/// the tile's own off, and the picker stays up.
+fn draw_guest_picker(frame: &mut Frame, area: Rect, zen: &ZenState) {
+    let Some(selected) = zen.guest_picker else {
+        return;
+    };
+    let Some(inner) = draw_popup(frame, area, " guest ", 44, Guest::ALL.len() as u16 + 4) else {
+        return;
+    };
+    let here = zen.focused_guests();
+    let mut lines: Vec<Line<'static>> = Guest::ALL
+        .iter()
+        .enumerate()
+        .map(|(index, guest)| {
+            let picked = index == selected;
+            let on_tile = here.contains(guest);
+            let elsewhere = !on_tile && zen.hosts(*guest);
+            let label_style = if picked {
+                Style::default()
+                    .fg(theme::AMBER_GLOW())
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(theme::TEXT())
+            };
+            let mark = if on_tile { "[x] " } else { "[ ] " };
+            let note = if elsewhere { "elsewhere" } else { guest.when() };
+            Line::from(vec![
+                Span::styled(
+                    if picked { "▌ " } else { "  " },
+                    Style::default().fg(theme::AMBER()),
+                ),
+                Span::styled(mark, Style::default().fg(theme::TEXT_DIM())),
+                Span::styled(format!("{:<10}", guest.label()), label_style),
+                Span::styled(note.to_string(), Style::default().fg(theme::TEXT_FAINT())),
+            ])
+        })
+        .collect();
+    lines.push(Line::from(""));
+    lines.push(hint_line_fitting(
+        &[("jk", "move"), ("space", "pick"), ("esc", "close")],
+        inner.width as usize,
+    ));
+    frame.render_widget(Paragraph::new(lines), inner);
 }
 
 /// The tile picker `space` opens: one row per kind, centered over the
@@ -338,30 +645,9 @@ fn draw_kind_picker(frame: &mut Frame, area: Rect, zen: &ZenState) {
     };
     // Every kind, a blank, the hint, and the two border rows; wide enough
     // for the full hint, which `hint_line_fitting` trims on a narrow page.
-    let height = (TileKind::ALL.len() as u16 + 4).min(area.height);
-    let width = 36u16.min(area.width);
-    if height < 4 || width < 12 {
+    let Some(inner) = draw_popup(frame, area, " tile ", 36, TileKind::ALL.len() as u16 + 4) else {
         return;
-    }
-    let popup = Rect::new(
-        area.x + (area.width - width) / 2,
-        area.y + (area.height - height) / 2,
-        width,
-        height,
-    );
-    frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" tile ")
-        .title_style(
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        )
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    };
 
     let current = zen.focused_kind();
     // A short page shows a window of the kinds that follows the selection;
@@ -399,7 +685,11 @@ fn draw_kind_picker(frame: &mut Frame, area: Rect, zen: &ZenState) {
                 ));
             } else if !allowed {
                 spans.push(Span::styled(
-                    "full",
+                    if kind.one_per_page() {
+                        "one per page"
+                    } else {
+                        "full"
+                    },
                     Style::default().fg(theme::TEXT_FAINT()),
                 ));
             }
@@ -414,52 +704,71 @@ fn draw_kind_picker(frame: &mut Frame, area: Rect, zen: &ZenState) {
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-/// The keys a tile answers to, named on the right of its title so the
-/// page explains itself in one place per tile; `t` hides the titles and
-/// the keys with them. The layout keys are the guide's (`?`).
-fn tile_keys(kind: TileKind, view: &ZenView<'_>) -> &'static [(&'static str, &'static str)] {
-    match kind {
-        TileKind::Bonsai => &[("w", "tend")],
-        TileKind::Ascii => &[("[ ]", "piece"), ("Enter", "pick"), ("z", "full")],
-        TileKind::Aquarium if view.aquarium_owned => &[("a", "feed")],
-        TileKind::Aquarium => &[],
-        TileKind::Pet if view.pet_strip.is_some() => &[("click", "pet")],
-        TileKind::Pet => &[],
-        TileKind::Chat => &[("[ ] ctrl+/", "room"), ("i", "write")],
-        TileKind::Music => &[
-            ("m", "mute"),
-            ("-=", "vol"),
-            ("v x", "source"),
-            ("v1-5", "tune"),
-        ],
-        TileKind::Lobby => &[("ctrl+g", "open"), ("`", "toggle")],
-        TileKind::Inbox => &[("jk", "pick"), ("enter", "open")],
-        TileKind::Headlines => &[("jk", "pick"), ("enter", "copy")],
-        TileKind::Live => &[("s1-4", "open")],
-        TileKind::Clock
-        | TileKind::Visualizer
-        | TileKind::Activity
-        | TileKind::Friends
-        | TileKind::Pulse => &[],
-        TileKind::Blank => &[],
-    }
+/// The hints that show on a tile now (`TileKind::hints`, `Guest::hints`):
+/// none outside arrange mode; in it, every house key the tile names, and
+/// the keys it takes itself where the focus is.
+fn hints_shown(
+    hints: &[TileHint],
+    arrange: bool,
+    focused: bool,
+) -> Vec<(&'static str, &'static str)> {
+    hints
+        .iter()
+        .filter(|hint| match hint {
+            TileHint::Takes(_) => arrange && focused,
+            TileHint::Names(_) => arrange,
+        })
+        .map(|hint| hint.text())
+        .collect()
 }
 
 /// Border, title, keys, and focus ring per the look; returns the tile's
-/// inner area. The keys sit on the right of the title row when there is
-/// room for them after the title and its tail.
+/// inner area. A title row is the title on the left and the tile's keys
+/// on the right when there is room for them, nothing else.
+#[allow(clippy::too_many_arguments)]
 fn draw_tile_chrome(
     frame: &mut Frame,
     rect: Rect,
+    kind: TileKind,
+    page_chat: bool,
+    title_override: TileTitle,
     title: &str,
-    title_tail: Option<Vec<Span<'static>>>,
     keys: &[(&str, &str)],
     focused: bool,
-    look: &super::state::Look,
+    glow: bool,
+    chrome: &Chrome,
 ) -> Rect {
     if rect.width == 0 || rect.height == 0 {
         return rect;
     }
+    let border = match chrome {
+        Chrome::Boxed { border, .. } => *border,
+        Chrome::Rules { arrange } => {
+            let inner = layout::tile_inner(rect, chrome, kind, page_chat, title_override);
+            let row = Rect::new(inner.x, rect.y, inner.width, 1);
+            match chrome.wears(title_override) {
+                TileTitle::Hidden => return inner,
+                TileTitle::Rule => {
+                    crate::app::common::sidebar::draw_bare_rule(frame, row, glow);
+                    return inner;
+                }
+                TileTitle::Named => {}
+            }
+            // The sidebar's rule, the title italic and dim, lit amber while
+            // the focus is on it in arrange mode or the lobby glows, with
+            // the tile's keys on its right end.
+            draw_panel_rule(frame, row, title, glow || (*arrange && focused));
+            if !keys.is_empty() {
+                let mut right = hint_line(keys);
+                right.spans.push(Span::raw(" "));
+                let used = 3 + title.chars().count() + 1;
+                if right.width() + used < row.width as usize {
+                    frame.render_widget(Paragraph::new(right).right_aligned(), row);
+                }
+            }
+            return inner;
+        }
+    };
     let ring = if focused {
         Style::default().fg(theme::AMBER())
     } else {
@@ -472,97 +781,26 @@ fn draw_tile_chrome(
     } else {
         Style::default().fg(theme::TEXT_DIM())
     };
-    let border_type = match look.border {
-        BorderKind::None => None,
-        BorderKind::Plain => Some(BorderType::Plain),
-        BorderKind::Rounded => Some(BorderType::Rounded),
-        BorderKind::Double => Some(BorderType::Double),
-        BorderKind::Thick => Some(BorderType::Thick),
-    };
-    match border_type {
-        Some(border_type) => {
-            let mut block = Block::default()
-                .borders(Borders::ALL)
-                .border_type(border_type)
-                .border_style(ring);
-            if look.titles {
-                let mut spans = vec![Span::styled(format!(" {title} "), title_style)];
-                if let Some(tail) = title_tail {
-                    spans.extend(tail);
-                    spans.push(Span::raw(" "));
-                }
-                let left = Line::from(spans);
-                // The corners take two cells; the keys need a cell of
-                // border on each side of them to read as a second title.
-                // Styled like the footer: the key amber, the word dim.
-                let room = (rect.width as usize).saturating_sub(2 + left.width());
-                let mut right = hint_line(keys);
-                right.spans.push(Span::raw(" "));
-                if !keys.is_empty() && right.width() <= room {
-                    block = block.title(left).title(right.right_aligned());
-                } else {
-                    block = block.title(left);
-                }
-            }
-            frame.render_widget(block, rect);
-            layout::tile_inner(rect, look)
-        }
-        None => {
-            if !look.titles {
-                return rect;
-            }
-            let marker = if focused { "▌" } else { " " };
-            let mut spans = vec![
-                Span::styled(marker, ring),
-                Span::styled(title.to_string(), title_style),
-            ];
-            if let Some(tail) = title_tail {
-                spans.push(Span::raw(" "));
-                spans.extend(tail);
-            }
-            let left = Line::from(spans);
-            let room = (rect.width as usize).saturating_sub(left.width());
-            let mut line_spans = left.spans;
-            let right = hint_line(keys);
-            if !keys.is_empty() && right.width() < room {
-                line_spans.push(Span::raw(" ".repeat(room - right.width())));
-                line_spans.extend(right.spans);
-            }
-            frame.render_widget(
-                Paragraph::new(Line::from(line_spans)),
-                Rect::new(rect.x, rect.y, rect.width, 1),
-            );
-            layout::tile_inner(rect, look)
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(border)
+        .border_style(ring);
+    if chrome.wears(title_override) == TileTitle::Named {
+        let left = Line::from(vec![Span::styled(format!(" {title} "), title_style)]);
+        // The corners take two cells; the keys need a cell of border on
+        // each side of them to read as a second title. Styled like the
+        // footer: the key amber, the word dim.
+        let room = (rect.width as usize).saturating_sub(2 + left.width());
+        let mut right = hint_line(keys);
+        right.spans.push(Span::raw(" "));
+        if !keys.is_empty() && right.width() <= room {
+            block = block.title(left).title(right.right_aligned());
+        } else {
+            block = block.title(left);
         }
     }
-}
-
-/// The care bar: one dot per day of the fourteen both clocks run on.
-/// Streak dots fill green, unfed dots red, and a minded tank (the
-/// shield's auto feeder) shows all fourteen empty.
-pub(crate) fn care_bar_spans(bar: CareBar) -> Vec<Span<'static>> {
-    let (filled, color) = match bar {
-        CareBar::Streak(days) => (days, theme::SUCCESS()),
-        CareBar::Dry(days) => (days, theme::ERROR()),
-        CareBar::Minded => (0, theme::TEXT_FAINT()),
-    };
-    let filled = filled.min(CARE_DAYS) as usize;
-    let empty = CARE_DAYS as usize - filled;
-    vec![
-        Span::styled("●".repeat(filled), Style::default().fg(color)),
-        Span::styled("○".repeat(empty), Style::default().fg(theme::TEXT_FAINT())),
-    ]
-}
-
-/// The user's status line on the left, the layout keys on the right (the
-/// rest are in the guide, `?`); each tile names its own in its title.
-fn draw_status_row(frame: &mut Frame, area: Rect, row: ZenStatusRow) {
-    if let Some(bar) = row.bar {
-        frame.render_widget(Paragraph::new(bar), area);
-    }
-    if let Some(keys) = row.keys {
-        frame.render_widget(Paragraph::new(keys).right_aligned(), area);
-    }
+    frame.render_widget(block, rect);
+    layout::tile_inner(rect, chrome, kind, page_chat, title_override)
 }
 
 /// `hint_line` with as many leading hints as fit in `width` cells.
@@ -574,76 +812,10 @@ fn hint_line_fitting(hints: &[(&str, &str)], width: usize) -> Line<'static> {
     hint_line(&hints[..keep])
 }
 
-/// The care modal's canvas at its true size, never the preview, pot on the
-/// floor. No status row: the numbers live in the care modal (`w`), so the
-/// tile gives every row to the tree. A tile smaller than the canvas cuts it:
-/// the top rows go first, and the sides go evenly so the trunk stays centered.
-fn draw_bonsai_tile(frame: &mut Frame, area: Rect, state: &BonsaiState, wall_tick: usize) {
-    let mut lines = canvas_lines(state, true);
-    apply_sway(&mut lines, wall_tick);
-    center_lines(&mut lines, area.width as usize, CANVAS_WIDTH);
-    let cut_left = CANVAS_WIDTH.saturating_sub(area.width as usize) / 2;
-    let visible = lines.len().min(area.height as usize);
-    let dropped = lines.len() - visible;
-    let mut lines: Vec<Line<'static>> = lines.into_iter().skip(dropped).collect();
-    let top_pad = (area.height as usize).saturating_sub(lines.len());
-    let mut padded = Vec::with_capacity(top_pad + lines.len());
-    for _ in 0..top_pad {
-        padded.push(Line::from(""));
-    }
-    padded.append(&mut lines);
-    frame.render_widget(Paragraph::new(padded).scroll((0, cut_left as u16)), area);
-}
-
-/// The tank. Without the shop unlock the tile reads like the pet's, a
-/// centered note pointing at the shop; owned, it is the live reef, nothing
-/// else: the sprout on its floor is tended on its Shop row.
-fn draw_aquarium_tile(frame: &mut Frame, area: Rect, state: &AquariumState, owned: bool) {
-    if !owned {
-        draw_centered_note(frame, area, &["no tank yet", "the Aquarium is in /shop"]);
-        return;
-    }
-    crate::app::hub::aquarium::ui::draw(frame, area, state);
-}
-
-/// The lobby in a tile, compact: the games running, then one footer row
-/// with the open count and the keys. Top-aligned so a short tile shows the
-/// games first.
-fn draw_lobby_tile(frame: &mut Frame, area: Rect, daily: &DailyState, glow: bool) {
-    draw_daily_compact(frame, area, daily, glow);
-}
-
-/// The pet's box at tile size: a name and mood row on top when there is
-/// room, and the whole rest of the tile to roam. `neighbours` names the
-/// side a tank and a bonsai are on; a calm pet goes and watches them.
-fn draw_pet_tile(frame: &mut Frame, area: Rect, pet: Option<&PetView<'_>>, neighbours: Neighbours) {
-    let Some(view) = pet else {
-        draw_centered_note(
-            frame,
-            area,
-            &["no pet yet", "the Pet Companion is in /shop"],
-        );
-        return;
-    };
-    if area.height < FLOOR_ROWS {
-        return;
-    }
-    let box_area = if area.height >= FLOOR_ROWS + 2 {
-        frame.render_widget(
-            Paragraph::new(status_line(view.state, neighbours).centered()),
-            Rect::new(area.x, area.y, area.width, 1),
-        );
-        Rect::new(area.x, area.y + 1, area.width, area.height - 1)
-    } else {
-        area
-    };
-    draw_pet_box(frame, box_area, view, neighbours);
-}
-
 /// A chat tile: its room's messages, with the composer on the active tile
-/// only. `None` is a tile past the frames built this frame, which cannot
-/// happen (one frame per chat tile) but is drawn as an empty note rather
-/// than crashed on.
+/// only, or the News list. `None` is a tile past the frames built this
+/// frame, which cannot happen (one frame per chat tile) but is drawn as an
+/// empty note rather than crashed on.
 fn draw_chat_tile(
     frame: &mut Frame,
     area: Rect,
@@ -652,65 +824,21 @@ fn draw_chat_tile(
 ) {
     match tile {
         Some(ZenChatTile {
-            view: Some(view), ..
+            view: Some(ChatTileView::Room(view)),
+            ..
         }) => {
             if area.height < 4 || area.width < 20 {
                 return;
             }
             draw_embedded_room_chat(frame, area, view, terminal_images);
         }
+        Some(ZenChatTile {
+            view: Some(ChatTileView::News(view)),
+            ..
+        }) => crate::app::chat::news::ui::draw_article_list(frame, area, &view),
         Some(ZenChatTile { view: None, .. }) | None => {
             draw_centered_note(frame, area, &["no room open", "1 opens Home to pick one"])
         }
-    }
-}
-
-/// Track and station always sit on the tile's last two rows, the station
-/// first to go when the tile is a single row. The visualizer takes every
-/// row above them. The keys are on the title.
-fn draw_music_tile(
-    frame: &mut Frame,
-    area: Rect,
-    track: &str,
-    station: &str,
-    wall_tick: usize,
-    eq_state: EqState,
-) {
-    if area.height == 0 {
-        return;
-    }
-    let text_rows: u16 = area.height.min(2);
-    let eq_rows = area.height - text_rows;
-    if eq_rows > 0 {
-        draw_visualizer_tile(
-            frame,
-            Rect::new(area.x, area.y, area.width, eq_rows),
-            wall_tick,
-            eq_state,
-        );
-    }
-    let track = Line::from(vec![
-        Span::styled("♪ ", Style::default().fg(theme::AMBER())),
-        Span::styled(track.to_string(), Style::default().fg(theme::TEXT_BRIGHT())),
-    ])
-    .centered();
-    let station = Line::from(Span::styled(
-        station.to_string(),
-        Style::default().fg(theme::TEXT_DIM()),
-    ))
-    .centered();
-    frame.render_widget(
-        Paragraph::new(vec![track, station]),
-        Rect::new(area.x, area.y + eq_rows, area.width, text_rows),
-    );
-}
-
-/// The player's second row: the source, then the station or stream it is
-/// tuned to. YouTube has no station, so it stays one word.
-pub(crate) fn station_text(source: AudioSource, station: RadioStation) -> String {
-    match source {
-        AudioSource::Radio => format!("radio · {}", station.label()),
-        AudioSource::Youtube => "youtube".to_string(),
     }
 }
 
@@ -720,6 +848,7 @@ fn draw_clock_tile(frame: &mut Frame, area: Rect, view: &ZenView<'_>) {
     let date_rows = if height >= 7 { 2 } else { 0 };
     // Only the digits go big; the zone prefix rides the date row.
     let digits: String = view
+        .presence
         .clock
         .chars()
         .filter(|ch| ch.is_ascii_digit() || *ch == ':')
@@ -739,7 +868,7 @@ fn draw_clock_tile(frame: &mut Frame, area: Rect, view: &ZenView<'_>) {
             }
             None => vec![
                 Line::from(Span::styled(
-                    view.clock.to_string(),
+                    view.presence.clock.to_string(),
                     Style::default()
                         .fg(theme::AMBER_GLOW())
                         .add_modifier(Modifier::BOLD),
@@ -751,262 +880,48 @@ fn draw_clock_tile(frame: &mut Frame, area: Rect, view: &ZenView<'_>) {
         lines.push(Line::from(""));
         lines.push(
             Line::from(Span::styled(
-                view.date.clone(),
+                view.date.to_string(),
                 Style::default().fg(theme::TEXT_DIM()),
             ))
             .centered(),
         );
     }
-    let top_pad = height.saturating_sub(lines.len()) / 2;
-    let mut padded = Vec::with_capacity(top_pad + lines.len());
-    for _ in 0..top_pad {
-        padded.push(Line::from(""));
-    }
-    padded.append(&mut lines);
-    frame.render_widget(Paragraph::new(padded), area);
+    let top_pad = (height.saturating_sub(lines.len()) / 2) as u16;
+    let below = Rect::new(area.x, area.y + top_pad, area.width, area.height - top_pad);
+    frame.render_widget(Paragraph::new(lines), below);
 }
 
-/// The visualizer tile is the equalizer at the tile's full height: the
-/// same bars and peak caps as the music stage, only taller.
-fn draw_visualizer_tile(frame: &mut Frame, area: Rect, wall_tick: usize, eq_state: EqState) {
-    if area.width < 2 || area.height == 0 {
-        return;
-    }
-    let dance = match eq_state {
-        EqState::Live(live) => Dance::Live(live),
-        EqState::Ambient => Dance::Ambient,
-        EqState::Muted | EqState::Unpaired => {
-            render_eq(frame, area, wall_tick, eq_state);
-            return;
-        }
-    };
-    let lines = dance_lines(dance, wall_tick, area.width as usize, area.height as usize);
-    frame.render_widget(Paragraph::new(lines), area);
-}
-
-/// The #lounge activity feed as a list: newest on top, one event a row with
-/// its age flush right, a friend's line in the friend color.
-fn draw_activity_tile(
-    frame: &mut Frame,
-    area: Rect,
-    entries: &[ActivityTickerEntry],
-    friends: &[ActiveFriend],
-) {
-    if entries.is_empty() {
-        draw_centered_note(frame, area, &["quiet for now", "wins and joins land here"]);
-        return;
-    }
-    let width = area.width as usize;
-    let lines: Vec<Line<'static>> = entries
-        .iter()
-        .take(area.height as usize)
-        .map(|entry| {
-            let about_a_friend = friends
-                .iter()
-                .any(|friend| names_actor(&entry.text, &friend.username));
-            let style = if about_a_friend {
-                Style::default().fg(theme::SUCCESS())
-            } else {
-                Style::default().fg(theme::TEXT_DIM())
-            };
-            stamped_row(
-                vec![Span::styled(entry.text.clone(), style)],
-                format_relative_time_short(entry.at),
-                width,
-            )
-        })
-        .collect();
-    frame.render_widget(Paragraph::new(lines), area);
-}
-
-/// Whether a feed line is about `username`: feed lines open with the name.
-fn names_actor(text: &str, username: &str) -> bool {
-    text.strip_prefix(username)
-        .is_some_and(|rest| rest.starts_with(' '))
-}
-
-/// Connected friends, here before away, then the most recent login: the
-/// name, the away glyph when away, their audio source, and how long they
-/// have been on.
-fn draw_friends_tile(frame: &mut Frame, area: Rect, friends: &[ActiveFriend]) {
-    if friends.is_empty() {
-        draw_centered_note(frame, area, &["no friends online"]);
-        return;
-    }
-    let width = area.width as usize;
-    let now = Instant::now();
-    let dim = Style::default().fg(theme::TEXT_DIM());
-    let lines: Vec<Line<'static>> = friends
-        .iter()
-        .take(area.height as usize)
-        .map(|friend| {
-            let mut spans = vec![
-                Span::styled("● ", Style::default().fg(theme::SUCCESS())),
-                Span::styled(
-                    friend.username.clone(),
-                    Style::default().fg(theme::TEXT_BRIGHT()),
-                ),
-            ];
-            if friend.away {
-                spans.push(Span::raw(format!(
-                    " {}",
-                    crate::app::common::away::AWAY_GLYPH
-                )));
-            }
-            spans.push(Span::styled(
-                format!("  ♪ {}", audio_source_word(friend.audio_source)),
-                dim,
-            ));
-            stamped_row(
-                spans,
-                compact_elapsed(now.saturating_duration_since(friend.online_since)),
-                width,
-            )
-        })
-        .collect();
-    frame.render_widget(Paragraph::new(lines), area);
-}
-
-fn audio_source_word(source: AudioSource) -> &'static str {
-    match source {
-        AudioSource::Youtube => "youtube",
-        AudioSource::Radio => "radio",
-    }
-}
-
-fn compact_elapsed(elapsed: Duration) -> String {
-    let secs = elapsed.as_secs();
-    if secs < 60 {
-        "now".to_string()
-    } else if secs < 3_600 {
-        format!("{}m", secs / 60)
-    } else if secs < 86_400 {
-        format!("{}h", secs / 3_600)
-    } else {
-        format!("{}d", secs / 86_400)
-    }
-}
-
-/// What the Pulse tile draws.
-pub(crate) struct PulseView {
-    pub online: usize,
-    pub chips: i64,
-    pub mentions: i64,
-    pub friends: usize,
-    pub care: Care,
-}
-
-impl Care {
-    /// How many owned companions still wait on today's care.
-    pub(crate) fn due_count(&self) -> usize {
-        [self.bonsai, self.tank, self.pet]
-            .into_iter()
-            .filter(|chore| *chore == Chore::Due)
-            .count()
-    }
-}
-
-/// Today's care for one companion: tended, still due, or not owned.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum Chore {
-    Done,
-    Due,
-    NotOwned,
-}
-
-impl Chore {
-    pub(crate) fn of(owned: bool, done_today: bool) -> Self {
-        match (owned, done_today) {
-            (false, _) => Chore::NotOwned,
-            (true, true) => Chore::Done,
-            (true, false) => Chore::Due,
-        }
-    }
-}
-
-/// The three once-a-day chores Pulse's care row names.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Care {
-    pub bonsai: Chore,
-    pub tank: Chore,
-    pub pet: Chore,
-}
-
-/// The numbers worth a glance, one `label  value` row each and every row
-/// always drawn, zero included: people online, your chips, unread mentions
-/// (the mention color once there are some), friends online, and today's
-/// care, each companion green once tended, amber while due, faint when not
-/// owned. A short tile keeps the top rows; the block sits centered.
-fn draw_pulse_tile(frame: &mut Frame, area: Rect, pulse: &PulseView) {
-    use crate::app::common::primitives::thousands;
-
-    let bright = Style::default()
-        .fg(theme::AMBER_GLOW())
-        .add_modifier(Modifier::BOLD);
-    let mentions_style = if pulse.mentions > 0 {
-        Style::default()
-            .fg(theme::MENTION())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default().fg(theme::TEXT_DIM())
-    };
-    let chore = |name: &'static str, chore: Chore| {
-        let color = match chore {
-            Chore::Done => theme::SUCCESS(),
-            Chore::Due => theme::AMBER(),
-            Chore::NotOwned => theme::TEXT_FAINT(),
-        };
-        Span::styled(name, Style::default().fg(color))
-    };
-    let rows: [(&str, Vec<Span<'static>>); 5] = [
-        (
-            "online",
-            vec![Span::styled(pulse.online.to_string(), bright)],
-        ),
-        ("chips", vec![Span::styled(thousands(pulse.chips), bright)]),
-        (
-            "mentions",
-            vec![Span::styled(pulse.mentions.to_string(), mentions_style)],
-        ),
-        (
-            "friends",
-            vec![Span::styled(pulse.friends.to_string(), bright)],
-        ),
-        (
-            "care",
-            vec![
-                chore("bonsai", pulse.care.bonsai),
-                Span::raw(" "),
-                chore("tank", pulse.care.tank),
-                Span::raw(" "),
-                chore("pet", pulse.care.pet),
-            ],
-        ),
-    ];
-
-    // A wide tile keeps the block narrow and centered, so every label stays
-    // within reach of its value.
-    let width = area.width.min(PULSE_MAX_WIDTH);
-    let block = Rect::new(
-        area.x + (area.width - width) / 2,
-        area.y,
+/// The board's day across the top of Home, over every tile: today's
+/// all-day posts in amber, the board's colour, the board's key flush right
+/// in the strip's key style, one column in from each edge.
+fn draw_board_day(frame: &mut Frame, row: Rect, text: &str) {
+    let row = Rect::new(
+        row.x.saturating_add(1),
+        row.y,
+        row.width.saturating_sub(2),
+        row.height,
+    );
+    let width = usize::from(row.width);
+    let hint = crate::app::live::ui::key_hint_spans(
         width,
-        area.height,
+        &[
+            crate::app::live::ui::HintPart::Key("7"),
+            crate::app::live::ui::HintPart::Text(" for the board"),
+        ],
     );
-    let height = area.height as usize;
-    let top_pad = height.saturating_sub(rows.len()) / 2;
-    let mut lines: Vec<Line<'static>> = vec![Line::from(""); top_pad];
-    lines.extend(
-        rows.into_iter()
-            .take(height)
-            .map(|(label, value)| stat_row(label, value, width as usize)),
+    let hint_width: usize = hint.iter().map(|span| span.width()).sum();
+    let text_room = width.saturating_sub(hint_width + 1);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            crate::app::chat::ui::truncate_cells(text, text_room),
+            Style::default()
+                .fg(theme::AMBER())
+                .add_modifier(Modifier::BOLD),
+        ))),
+        row,
     );
-    frame.render_widget(Paragraph::new(lines), block);
+    frame.render_widget(Paragraph::new(Line::from(hint)).right_aligned(), row);
 }
-
-/// The widest the Pulse block grows: past this a label drifts too far
-/// from its value to read as one row.
-const PULSE_MAX_WIDTH: u16 = 32;
 
 /// `area` less one column on each side, when it has columns to spare.
 fn pad_sides(area: Rect) -> Rect {
@@ -1016,223 +931,13 @@ fn pad_sides(area: Rect) -> Rect {
     Rect::new(area.x + 1, area.y, area.width - 2, area.height)
 }
 
-/// `area` less its last column. For the selectable lists (Inbox,
-/// Headlines): their one-column row marker is the left padding, so the
-/// text still sits one column in and the selection bar has a place to go.
+/// `area` less its last column: the presence block keeps its right edge
+/// clear of the border.
 fn pad_right(area: Rect) -> Rect {
     if area.width <= 1 {
         return area;
     }
     Rect::new(area.x, area.y, area.width - 1, area.height)
-}
-
-/// `label` dim on the left, `value` flush right; the label gives way first
-/// when the tile is too narrow for both.
-fn stat_row(label: &str, value: Vec<Span<'static>>, width: usize) -> Line<'static> {
-    let value_width: usize = value.iter().map(|span| span.content.width()).sum();
-    let label = fit(label, width.saturating_sub(value_width + 1));
-    let pad = width.saturating_sub(label.width() + value_width);
-    let mut spans = vec![
-        Span::styled(label, Style::default().fg(theme::TEXT_DIM())),
-        Span::raw(" ".repeat(pad)),
-    ];
-    spans.extend(value);
-    Line::from(spans)
-}
-
-/// Unread DMs, then mentions. The focused tile marks its selected row;
-/// Enter opens that row in the page's first chat tile (`input.rs`).
-fn draw_inbox_tile(
-    frame: &mut Frame,
-    area: Rect,
-    rows: &[InboxRow],
-    selected: usize,
-    focused: bool,
-) {
-    if rows.is_empty() {
-        draw_centered_note(
-            frame,
-            area,
-            &["all caught up", "mentions and unread DMs land here"],
-        );
-        return;
-    }
-    let width = area.width as usize;
-    let visible = area.height as usize;
-    let selected = selected.min(rows.len() - 1);
-    let first = (selected + 1).saturating_sub(visible);
-    let amber = Style::default().fg(theme::AMBER());
-    let faint = Style::default().fg(theme::TEXT_FAINT());
-    let lines: Vec<Line<'static>> = rows
-        .iter()
-        .enumerate()
-        .skip(first)
-        .take(visible)
-        .map(|(index, row)| {
-            let marked = focused && index == selected;
-            let marker = Span::styled(if marked { "▌" } else { " " }, amber);
-            let emphasis = |style: Style| {
-                if marked {
-                    style.add_modifier(Modifier::BOLD)
-                } else {
-                    style
-                }
-            };
-            match row {
-                InboxRow::Dm { peer, unread, .. } => stamped_row(
-                    vec![
-                        marker,
-                        Span::styled("✉ ", amber),
-                        Span::styled(
-                            format!("@{peer}"),
-                            emphasis(Style::default().fg(theme::TEXT_BRIGHT())),
-                        ),
-                    ],
-                    format!("{unread} new"),
-                    width,
-                ),
-                InboxRow::Mention {
-                    actor,
-                    room,
-                    preview,
-                    at,
-                    unread,
-                    ..
-                } => {
-                    let (name_color, preview_color) = if *unread {
-                        (theme::MENTION(), theme::TEXT())
-                    } else {
-                        (theme::TEXT_DIM(), theme::TEXT_DIM())
-                    };
-                    let place = match room {
-                        Some(slug) => format!(" in #{slug}: "),
-                        None => ": ".to_string(),
-                    };
-                    stamped_row(
-                        vec![
-                            marker,
-                            Span::styled(
-                                format!("@{actor}"),
-                                emphasis(Style::default().fg(name_color)),
-                            ),
-                            Span::styled(place, faint),
-                            Span::styled(preview.clone(), Style::default().fg(preview_color)),
-                        ],
-                        format_relative_time_short(*at),
-                        width,
-                    )
-                }
-            }
-        })
-        .collect();
-    frame.render_widget(Paragraph::new(lines), area);
-}
-
-/// News articles and the viewer's RSS entries, newest first, two rows each:
-/// the title with its source and age, then the link. The focused tile marks
-/// its selected item and scrolls to keep it in view; Enter copies the link
-/// (`input.rs`).
-fn draw_headlines_tile(
-    frame: &mut Frame,
-    area: Rect,
-    rows: &[Headline],
-    selected: usize,
-    focused: bool,
-) {
-    if rows.is_empty() {
-        draw_centered_note(
-            frame,
-            area,
-            &["no headlines yet", "News and your RSS feeds land here"],
-        );
-        return;
-    }
-    let width = area.width as usize;
-    let faint = Style::default().fg(theme::TEXT_FAINT());
-    let amber = Style::default().fg(theme::AMBER());
-    let visible = (area.height as usize).div_ceil(2);
-    let selected = selected.min(rows.len() - 1);
-    let first = (selected + 1).saturating_sub(visible);
-    let lines: Vec<Line<'static>> = rows
-        .iter()
-        .enumerate()
-        .skip(first)
-        .take(visible)
-        .flat_map(|(index, row)| {
-            let marked = focused && index == selected;
-            let marker = if marked { "▌" } else { " " };
-            let title_style = if marked {
-                Style::default()
-                    .fg(theme::TEXT_BRIGHT())
-                    .add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(theme::TEXT())
-            };
-            [
-                stamped_row(
-                    vec![
-                        Span::styled(marker, amber),
-                        Span::styled(row.title.clone(), title_style),
-                        Span::styled(format!(" · {}", row.source), faint),
-                    ],
-                    format_relative_time_short(row.at),
-                    width,
-                ),
-                Line::from(vec![
-                    Span::raw("   "),
-                    Span::styled(fit(&row.url, width.saturating_sub(3)), faint),
-                ]),
-            ]
-        })
-        .collect();
-    frame.render_widget(Paragraph::new(lines), area);
-}
-
-/// One list row: `spans` from the left, cut with an ellipsis where the
-/// room runs out, and `stamp` flush right in faint.
-fn stamped_row(spans: Vec<Span<'static>>, stamp: String, width: usize) -> Line<'static> {
-    let stamp_width = stamp.width();
-    let budget = width.saturating_sub(stamp_width + 1);
-    let mut used = 0usize;
-    let mut out: Vec<Span<'static>> = Vec::with_capacity(spans.len() + 2);
-    for span in spans {
-        let room = budget.saturating_sub(used);
-        if room == 0 {
-            break;
-        }
-        let text = fit(&span.content, room);
-        used += text.width();
-        out.push(Span::styled(text, span.style));
-    }
-    out.push(Span::raw(
-        " ".repeat(width.saturating_sub(used + stamp_width)),
-    ));
-    out.push(Span::styled(
-        stamp,
-        Style::default().fg(theme::TEXT_FAINT()),
-    ));
-    Line::from(out)
-}
-
-/// `text` cut to `width` columns, ending in an ellipsis when it was cut.
-fn fit(text: &str, width: usize) -> String {
-    if text.width() <= width {
-        return text.to_string();
-    }
-    let mut out = String::new();
-    let mut used = 0usize;
-    for ch in text.chars() {
-        let ch_width = ch.width().unwrap_or(0);
-        if used + ch_width + 1 > width {
-            break;
-        }
-        out.push(ch);
-        used += ch_width;
-    }
-    if width > 0 {
-        out.push('…');
-    }
-    out
 }
 
 fn draw_blank_tile(frame: &mut Frame, area: Rect, focused: bool) {
@@ -1241,22 +946,58 @@ fn draw_blank_tile(frame: &mut Frame, area: Rect, focused: bool) {
     }
 }
 
-fn draw_centered_note(frame: &mut Frame, area: Rect, rows: &[&str]) {
-    if area.height == 0 || area.width == 0 {
+/// The attention guest's rows into `area`, scrolled so the selected one is in view.
+/// `selected` is clamped to the rows, since they come and go.
+fn draw_attention_tile(
+    frame: &mut Frame,
+    area: Rect,
+    items: &[AttentionItem],
+    selected: usize,
+    focused: bool,
+) {
+    if items.is_empty() || area.width == 0 || area.height == 0 {
         return;
     }
+    let width = area.width as usize;
+    let visible = area.height as usize;
+    let selected = selected.min(items.len() - 1);
+    let first = (selected + 1).saturating_sub(visible);
+    let amber = Style::default().fg(theme::AMBER());
     let faint = Style::default().fg(theme::TEXT_FAINT());
-    let mut lines: Vec<Line<'static>> = rows
+    let bright = Style::default().fg(theme::TEXT_BRIGHT());
+    let lines: Vec<Line<'static>> = items
         .iter()
-        .map(|row| Line::from(Span::styled(row.to_string(), faint)))
+        .enumerate()
+        .skip(first)
+        .take(visible)
+        .map(|(index, item)| {
+            // The rows start at the tile's edge, no marker column: the
+            // selected row is lit instead, its glyph glowing and its
+            // words bold.
+            let marked = focused && index == selected;
+            let (head_style, words_style) = match marked {
+                true => (
+                    Style::default()
+                        .fg(theme::AMBER_GLOW())
+                        .add_modifier(Modifier::BOLD),
+                    bright.add_modifier(Modifier::BOLD),
+                ),
+                false => (amber, bright),
+            };
+            let act = item.act();
+            let head = format!("{} ", item.glyph());
+            let budget = width.saturating_sub(head.width() + act.width() + 1);
+            let words = crate::app::chat::ui::truncate_cells(&item.label(), budget);
+            let pad = width.saturating_sub(head.width() + words.width() + act.width());
+            Line::from(vec![
+                Span::styled(head, head_style),
+                Span::styled(words, words_style),
+                Span::raw(" ".repeat(pad)),
+                Span::styled(act.to_string(), faint),
+            ])
+        })
         .collect();
-    let top_pad = (area.height as usize).saturating_sub(lines.len()) / 2;
-    let mut padded = Vec::with_capacity(top_pad + lines.len());
-    for _ in 0..top_pad {
-        padded.push(Line::from(""));
-    }
-    padded.append(&mut lines);
-    frame.render_widget(Paragraph::new(padded).alignment(Alignment::Center), area);
+    frame.render_widget(Paragraph::new(lines), area);
 }
 
 #[cfg(test)]

@@ -35,6 +35,7 @@ use crate::app::leaderboard::svc::AwardAnnouncementOutcome;
 use crate::app::live::input::Origin as LiveOrigin;
 use crate::app::lobby::daily::svc::{DailyWinPayout, PoolShotOutcome, SnapshotRowError};
 use crate::app::pot::svc::{PotRefusal, PotReminderOutcome};
+use crate::app::presence::svc::PulseSampleOutcome;
 use crate::app::referral::svc::{NewcomerMinuteResult, ReferralAttachOutcome, ReferralSettlement};
 use crate::app::video::state::{WatchOutcome, WatchSource};
 use crate::ircd::conn::{IrcHistoryOutcome, IrcHistoryRequest};
@@ -818,6 +819,7 @@ mod inner {
     use super::BoothFavoriteOutcome;
     use super::HomeRoom;
     use super::PosterBeat;
+    use super::PulseSampleOutcome;
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
@@ -1874,6 +1876,18 @@ mod inner {
         })
     }
 
+    fn pulse_samples_total() -> &'static Counter<u64> {
+        static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
+        METRIC.get_or_init(|| {
+            meter()
+                .u64_counter("late_ssh_pulse_samples_total")
+                .with_description(
+                    "Headcount samples for Home's pulse tile by outcome: recorded, write_failed, or read_failed",
+                )
+                .build()
+        })
+    }
+
     fn news_saves_total() -> &'static Counter<u64> {
         static METRIC: OnceLock<Counter<u64>> = OnceLock::new();
         METRIC.get_or_init(|| {
@@ -2805,7 +2819,6 @@ mod inner {
             Screen::Clubhouse => "clubhouse",
             Screen::Nightcap => "nightcap",
             Screen::City => "city",
-            Screen::Zen => "zen",
             Screen::DailyMatch => "daily_match",
             Screen::HouseTable => "house_table",
             Screen::Realm => "realm",
@@ -2919,7 +2932,7 @@ mod inner {
             Tutorial::VisitJobs => "jobs",
             Tutorial::VisitLeaderboard => "leaderboard",
             Tutorial::VisitCalendar => "calendar",
-            Tutorial::VisitZen => "zen",
+            Tutorial::VisitLayouts => "layouts",
             Tutorial::Homecoming => "homecoming",
             Tutorial::Done => "done",
         }
@@ -3356,6 +3369,20 @@ mod inner {
             NewsSaveOutcome::Unsaved => "unsaved",
             NewsSaveOutcome::Full => "full",
         }
+    }
+
+    fn pulse_sample_label(outcome: PulseSampleOutcome) -> &'static str {
+        match outcome {
+            PulseSampleOutcome::Recorded => "recorded",
+            PulseSampleOutcome::WriteFailed => "write_failed",
+            PulseSampleOutcome::ReadFailed => "read_failed",
+        }
+    }
+
+    /// One a bucket per replica; a run of failures is the pulse tile going
+    /// stale everywhere.
+    pub fn record_pulse_sample(outcome: PulseSampleOutcome) {
+        pulse_samples_total().add(1, &[KeyValue::new("outcome", pulse_sample_label(outcome))]);
     }
 
     /// Saved against unsaved is how much the shelf gets used; a run of
@@ -4484,6 +4511,7 @@ mod inner {
     use super::BartenderMemoryWrite;
     use super::BoothFavoriteOutcome;
     use super::PosterBeat;
+    use super::PulseSampleOutcome;
     use super::ScreensaverTrigger;
     use super::ShareCardKind;
     use super::SlidingPuzzleArtLoad;
@@ -4620,6 +4648,7 @@ mod inner {
     pub fn record_news_body_fetch(_outcome: BodyFetchOutcome) {}
     pub fn record_news_reader_opened(_status: BodyStatus) {}
     pub(crate) fn record_video_watch(_source: WatchSource, _outcome: WatchOutcome) {}
+    pub fn record_pulse_sample(_outcome: PulseSampleOutcome) {}
     pub fn record_news_save(_outcome: NewsSaveOutcome) {}
     pub fn record_news_card(_outcome: NewsCardOutcome) {}
     pub fn record_song_queued(_reward: SongQueueReward) {}

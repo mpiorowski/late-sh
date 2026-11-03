@@ -17,6 +17,7 @@ use ratatui_textarea::TextArea;
 use std::{
     borrow::Cow,
     collections::{HashMap, HashSet},
+    time::{Duration, Instant},
 };
 use unicode_width::UnicodeWidthStr;
 use uuid::Uuid;
@@ -25,7 +26,7 @@ use crate::app::common::{
     composer::composer_line_count,
     mentions::mentions_user,
     overlay::{Overlay, draw_overlay},
-    primitives::row_with_hint,
+    primitives::{draw_centered_note, format_relative_time_short, row_with_hint},
     theme,
     username_effect::ResolvedName,
 };
@@ -174,10 +175,6 @@ pub struct DashboardChatView<'a> {
     pub live_strip: Option<crate::app::live::state::LiveStripView<'a>>,
     /// Receives the strip's rect and source for the click that opens it.
     pub live_strip_hit: &'a std::cell::Cell<Option<(Rect, crate::app::live::pick::LiveSource)>>,
-    /// The board's all-day posts for today (`calendar::live::day_text`),
-    /// which take the #lounge topic row for the day. `None` elsewhere and
-    /// on any other day.
-    pub board_day: Option<String>,
     pub inline_images: &'a HashMap<Uuid, InlinePreview>,
     /// News shares' #lounge cards by message id: those messages draw as
     /// the card.
@@ -247,8 +244,8 @@ pub enum ComposerIdleHint {
 pub enum ComposerInert {
     /// The composer takes keys (or is the screen's one composer).
     No,
-    /// A Zen chat tile that is not the focused one: `i`, `j` and `k` act on
-    /// the focused tile.
+    /// A Home chat tile that is not the active one: `i`, `j` and `k` act on
+    /// the active tile.
     ZenTile,
 }
 
@@ -511,7 +508,7 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Par
     match view.inert {
         ComposerInert::ZenTile => {
             return Paragraph::new(Line::from(Span::styled(
-                "Tab or a click focuses this tile · i writes",
+                "A click focuses this tile · i writes",
                 dim,
             )));
         }
@@ -656,7 +653,7 @@ pub(crate) fn composer_placeholder_lines(view: &ComposerBlockView<'_>, width: us
     )
 }
 
-/// Vertical layout for an embedded chat (Zen tiles, house tables, daily
+/// Vertical layout for an embedded chat (Home tiles, house tables, daily
 /// boards): messages fill, one blank breather, then the composer. These
 /// surfaces draw no activity ticker, so its row goes to the messages.
 fn split_chat_and_composer(area: Rect, composer_height: u16) -> (Rect, Rect) {
@@ -1158,21 +1155,15 @@ pub fn draw_dashboard_chat_card(
             voice,
             // The live strip stands in for the topic row while it is up:
             // the board is the room's news, and the topic is a key away in
-            // `/rules`. On a day the board has an all-day post, that post
-            // takes the row. Voice and stream rows carry live state, so
-            // they stay.
-            row: match (
-                &view.live_strip,
-                view.board_day.as_deref(),
-                view.room.and_then(room_topic),
-            ) {
-                (Some(_), _, _) => None,
-                (None, Some(day), _) => Some(TopicRow::BoardDay(day)),
-                (None, None, Some(text)) => Some(TopicRow::Topic {
+            // `/rules`. Voice and stream rows carry live state, so they
+            // stay.
+            row: match (&view.live_strip, view.room.and_then(room_topic)) {
+                (Some(_), _) => None,
+                (None, Some(text)) => Some(TopicRow {
                     text,
                     has_rules: view.room.is_some_and(room_has_rules),
                 }),
-                (None, None, None) => None,
+                (None, None) => None,
             },
             closing_rule: view.live_strip.is_none(),
         },
@@ -1182,7 +1173,14 @@ pub fn draw_dashboard_chat_card(
     if let Some(strip) = &view.live_strip
         && let Some((size, strip_area, rest)) = crate::app::live::ui::fit_live_strip(messages_area)
     {
-        crate::app::live::ui::draw_live_strip(frame, strip_area, size, strip, view.live_strip_hit);
+        crate::app::live::ui::draw_live_strip(
+            frame,
+            strip_area,
+            size,
+            crate::app::live::ui::StripHost::Card,
+            strip,
+            view.live_strip_hit,
+        );
         messages_area = rest;
     }
     let (poll_area, messages_area) = split_poll_and_messages(messages_area, view.active_poll);
@@ -3223,7 +3221,7 @@ pub(crate) struct ChatRoomListView<'a> {
 
 pub struct EmbeddedRoomChatView<'a> {
     /// Columns kept clear on each side of the messages. A surface that
-    /// draws its own border around the chat (a Zen tile) passes 0, so the
+    /// draws its own border around the chat (a boxed Home tile) passes 0, so the
     /// text sits one column in, as on Home; a bare panel passes 1.
     pub messages_inset: u16,
     pub title: &'a str,
@@ -4309,10 +4307,8 @@ pub(crate) fn room_list_panel_contains(
 /// separator on its RIGHT edge; the rest is borderless. Quiet section labels,
 /// left-bar accent on the active row, dim trailing unread numbers.
 pub fn draw_room_list_rail(frame: &mut Frame, area: Rect, view: &ChatRenderInput<'_>) {
-    // Right-edge vertical separator anchors the rail visually.
-    let sep_x = area.right().saturating_sub(1);
-    crate::app::common::sidebar::paint_vertical_separator(frame, sep_x, area.y, area.height);
-
+    // The gutter beside the rail tile is its separator (`zen::ui`); the
+    // rail keeps a column of air on its right.
     let room_list_view = room_list_view_from_render_input(view);
     let room_rows = build_cozy_room_rail_rows(&room_list_view, area.width.saturating_sub(2));
 
@@ -4954,7 +4950,7 @@ fn stream_on_air_view(
 
 /// A stream's watcher count in brackets, `[3]` (zero included), or `[…]`
 /// while it is pending: the watch count only means something once frames
-/// flow. Shared by the rail row and the Zen chat tile title, so the two
+/// flow. Shared by the rail row and the Home chat tile title, so the two
 /// surfaces read the same number the same way.
 pub(crate) fn stream_count_badge(stream: &crate::app::stream::registry::LiveStreamView) -> String {
     match stream.live {
@@ -5101,11 +5097,10 @@ fn dm_display_label(
     }
 }
 
-/// What the header's last row says: the room's topic, or on #lounge on a
-/// day the board has an all-day post, the board's day in the topic's place.
-enum TopicRow<'a> {
-    Topic { text: &'a str, has_rules: bool },
-    BoardDay(&'a str),
+/// What the header's last row says: the room's topic.
+struct TopicRow<'a> {
+    text: &'a str,
+    has_rules: bool,
 }
 
 /// The header block above a room's messages: the voice row (when the room has a
@@ -5253,50 +5248,26 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
     if header.voice.is_some() && header.row.is_some() {
         lines.push(rule());
     }
-    match header.row {
-        Some(TopicRow::Topic { text, has_rules }) => {
-            let hint = if has_rules {
-                vec![Span::styled(
-                    "/rules",
-                    Style::default().fg(theme::TEXT_FAINT()),
-                )]
-            } else {
-                Vec::new()
-            };
-            // The topic is clipped to whatever the hint leaves, so a long
-            // topic never pushes `/rules` off the row.
-            let room_for_topic = width.saturating_sub(if has_rules { 8 } else { 0 });
-            lines.push(padded(row_with_hint(
-                vec![Span::styled(
-                    truncate_cells(text, room_for_topic),
-                    Style::default().fg(theme::TEXT_DIM()),
-                )],
-                hint,
-                width,
-            )));
-        }
-        // The board's day reads in amber, the board's colour, with the
-        // board's key where `/rules` would be, in the strip's key style.
-        Some(TopicRow::BoardDay(text)) => {
-            let hint = crate::app::live::ui::key_hint_spans(
-                width,
-                &[
-                    crate::app::live::ui::HintPart::Key("7"),
-                    crate::app::live::ui::HintPart::Text(" for the board"),
-                ],
-            );
-            lines.push(padded(row_with_hint(
-                vec![Span::styled(
-                    truncate_cells(text, width.saturating_sub(17)),
-                    Style::default()
-                        .fg(theme::AMBER())
-                        .add_modifier(Modifier::BOLD),
-                )],
-                hint,
-                width,
-            )));
-        }
-        None => {}
+    if let Some(TopicRow { text, has_rules }) = header.row {
+        let hint = if has_rules {
+            vec![Span::styled(
+                "/rules",
+                Style::default().fg(theme::TEXT_FAINT()),
+            )]
+        } else {
+            Vec::new()
+        };
+        // The topic is clipped to whatever the hint leaves, so a long
+        // topic never pushes `/rules` off the row.
+        let room_for_topic = width.saturating_sub(if has_rules { 8 } else { 0 });
+        lines.push(padded(row_with_hint(
+            vec![Span::styled(
+                truncate_cells(text, room_for_topic),
+                Style::default().fg(theme::TEXT_DIM()),
+            )],
+            hint,
+            width,
+        )));
     }
     // Closes the block off from the conversation below it.
     if header.closing_rule {
@@ -5427,7 +5398,7 @@ fn draw_selected_content(
                         .iter()
                         .find(|stream| stream.room_id == room.id),
                     voice,
-                    row: room_topic(room).map(|text| TopicRow::Topic {
+                    row: room_topic(room).map(|text| TopicRow {
                         text,
                         has_rules: room_has_rules(room),
                     }),
@@ -5747,6 +5718,140 @@ fn draw_selected_content(
             view.composer_viewport_top_slot,
         );
     }
+}
+
+/// Home's activity tile: the #lounge activity feed as a list, newest on
+/// top, one event a row with its age flush right, a friend's line in the
+/// friend color. The same queue the one-row ticker packs.
+pub(crate) fn draw_activity_tile(
+    frame: &mut Frame,
+    area: Rect,
+    entries: &[super::state::ActivityTickerEntry],
+    friends: &[super::state::ActiveFriend],
+) {
+    if entries.is_empty() {
+        draw_centered_note(frame, area, &["quiet for now", "wins and joins land here"]);
+        return;
+    }
+    let width = area.width as usize;
+    let lines: Vec<Line<'static>> = entries
+        .iter()
+        .take(area.height as usize)
+        .map(|entry| {
+            let about_a_friend = friends
+                .iter()
+                .any(|friend| names_actor(&entry.text, &friend.username));
+            let style = if about_a_friend {
+                Style::default().fg(theme::SUCCESS())
+            } else {
+                Style::default().fg(theme::TEXT_DIM())
+            };
+            stamped_row(
+                vec![Span::styled(entry.text.clone(), style)],
+                format_relative_time_short(entry.at),
+                width,
+            )
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// Whether a feed line is about `username`: feed lines open with the name.
+fn names_actor(text: &str, username: &str) -> bool {
+    text.strip_prefix(username)
+        .is_some_and(|rest| rest.starts_with(' '))
+}
+
+/// Home's friends tile: connected friends, here before away, then the
+/// most recent login: the name, the away glyph when away, their audio
+/// source, and how long they have been on.
+pub(crate) fn draw_friends_tile(
+    frame: &mut Frame,
+    area: Rect,
+    friends: &[super::state::ActiveFriend],
+) {
+    if friends.is_empty() {
+        draw_centered_note(frame, area, &["no friends online"]);
+        return;
+    }
+    let width = area.width as usize;
+    let now = Instant::now();
+    let dim = Style::default().fg(theme::TEXT_DIM());
+    let lines: Vec<Line<'static>> = friends
+        .iter()
+        .take(area.height as usize)
+        .map(|friend| {
+            let mut spans = vec![
+                Span::styled("● ", Style::default().fg(theme::SUCCESS())),
+                Span::styled(
+                    friend.username.clone(),
+                    Style::default().fg(theme::TEXT_BRIGHT()),
+                ),
+            ];
+            if friend.away {
+                spans.push(Span::raw(format!(
+                    " {}",
+                    crate::app::common::away::AWAY_GLYPH
+                )));
+            }
+            spans.push(Span::styled(
+                format!("  ♪ {}", audio_source_word(friend.audio_source)),
+                dim,
+            ));
+            stamped_row(
+                spans,
+                compact_elapsed(now.saturating_duration_since(friend.online_since)),
+                width,
+            )
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), area);
+}
+
+fn audio_source_word(source: late_core::models::user::AudioSource) -> &'static str {
+    match source {
+        late_core::models::user::AudioSource::Youtube => "youtube",
+        late_core::models::user::AudioSource::Radio => "radio",
+    }
+}
+
+fn compact_elapsed(elapsed: Duration) -> String {
+    let secs = elapsed.as_secs();
+    if secs < 60 {
+        "now".to_string()
+    } else if secs < 3_600 {
+        format!("{}m", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h", secs / 3_600)
+    } else {
+        format!("{}d", secs / 86_400)
+    }
+}
+
+/// One list row: `spans` from the left, cut with an ellipsis where the
+/// room runs out, and `stamp` flush right in faint.
+fn stamped_row(spans: Vec<Span<'static>>, stamp: String, width: usize) -> Line<'static> {
+    let stamp_width = stamp.width();
+    let budget = width.saturating_sub(stamp_width + 1);
+    let mut used = 0usize;
+    let mut out: Vec<Span<'static>> = Vec::with_capacity(spans.len() + 2);
+    for span in spans {
+        let room = budget.saturating_sub(used);
+        if room == 0 {
+            break;
+        }
+        let text = truncate_cells(&span.content, room);
+        used += text.width();
+        out.push(Span::styled(text, span.style));
+    }
+    out.push(Span::raw(
+        " ".repeat(width.saturating_sub(used + stamp_width)),
+    ));
+    out.push(Span::styled(
+        stamp,
+        Style::default().fg(theme::TEXT_FAINT()),
+    ));
+    Line::from(out)
 }
 
 // ── Tests ───────────────────────────────────────────────────

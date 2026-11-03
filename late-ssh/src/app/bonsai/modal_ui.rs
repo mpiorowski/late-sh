@@ -8,10 +8,10 @@ use ratatui::{
 
 use crate::app::{
     bonsai::{
-        render::{apply_sway, canvas_lines, center_lines},
+        render::{apply_sway, canvas_lines},
         state::{BonsaiState, CANVAS_HEIGHT, CANVAS_WIDTH, branch_label},
     },
-    common::theme,
+    common::{primitives::center_lines, theme},
 };
 
 /// The modal is a frame around the canvas: the tree, one blank row, two

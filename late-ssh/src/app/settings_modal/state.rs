@@ -10,8 +10,8 @@ use late_core::models::statusline::{
     LabelMode, StatusComponent, StatusComponentSetting, StatusVariant,
 };
 use late_core::models::user::{
-    AsciiSelection, InteractionMode, RightSidebarComponentSetting, RightSidebarMode, RoomListMode,
-    Screensaver, normalize_text_brightness_adjustment, sanitize_username_input,
+    AsciiSelection, InteractionMode, RightSidebarComponentSetting, RightSidebarMode, Screensaver,
+    normalize_text_brightness_adjustment, sanitize_username_input,
 };
 use ratatui::style::{Modifier, Style};
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
@@ -151,7 +151,6 @@ pub(crate) enum TweakRow {
     BackgroundColor,
     TextBrightness,
     RightSidebar,
-    RoomListSidebar,
     // Input / Display / Startup groups. There is deliberately no music-mute
     // row: mute and volume are owned by `m` and `+`/`-`, persisted per device,
     // and a second control here would be a second source of truth for them.
@@ -169,11 +168,10 @@ pub(crate) enum TweakRow {
 }
 
 impl TweakRow {
-    pub(crate) const ALL: [TweakRow; 14] = [
+    pub(crate) const ALL: [TweakRow; 13] = [
         TweakRow::BackgroundColor,
         TweakRow::TextBrightness,
         TweakRow::RightSidebar,
-        TweakRow::RoomListSidebar,
         TweakRow::ComposerKeepFocused,
         TweakRow::InteractionMode,
         TweakRow::FlagFallback,
@@ -597,7 +595,7 @@ pub(crate) struct SettingsModalState {
     /// account: keeping them in `draft` would republish one device's layout as
     /// the account default on any unrelated settings edit, and every key that
     /// never stored a layout of its own would inherit it.
-    device_rails: (RoomListMode, RightSidebarMode),
+    device_rails: RightSidebarMode,
     /// The Artboard content disclaimer row, held apart from `draft` for the
     /// same reason as `device_rails`: it is this device's, and
     /// `draft.artboard_disclaimer` stays the account default that keys with no
@@ -683,7 +681,7 @@ impl SettingsModalState {
             feed_service,
             user_id,
             draft: Profile::default(),
-            device_rails: (RoomListMode::On, RightSidebarMode::On),
+            device_rails: RightSidebarMode::On,
             device_artboard_disclaimer: true,
             selected_tab: Tab::Settings,
             row_index: 0,
@@ -744,11 +742,11 @@ impl SettingsModalState {
         self.interaction_mode = mode;
     }
 
-    /// The rail modes the two Appearance rows are editing: this device's, not
-    /// the account's. Read by their value spans and by the render/tick preview
-    /// while the modal is open; `App::sync_device_rails_from_settings` picks them
-    /// up and persists them onto the SSH key.
-    pub(crate) fn device_rails(&self) -> (RoomListMode, RightSidebarMode) {
+    /// The Arcade sidebar mode the Appearance row is editing: this device's,
+    /// not the account's. Read by its value span and by the render/tick
+    /// preview while the modal is open; `App::sync_device_rails_from_settings`
+    /// picks it up and persists it onto the SSH key.
+    pub(crate) fn device_rails(&self) -> RightSidebarMode {
         self.device_rails
     }
 
@@ -766,16 +764,16 @@ impl SettingsModalState {
         &mut self.gem
     }
 
-    /// Load the draft from the account profile, and take the rail modes this
-    /// session is actually rendering with (`App::rail_modes`) separately: the two
-    /// rail rows are per device, so showing the account default would misreport
-    /// what the user is looking at, and writing it back would leak this device's
-    /// layout onto every other one. The Artboard disclaimer is per device too
+    /// Load the draft from the account profile, and take the sidebar mode this
+    /// session is actually rendering with (`App::rail_modes`) separately: the
+    /// row is per device, so showing the account default would misreport what
+    /// the user is looking at, and writing it back would leak this device's
+    /// mode onto every other one. The Artboard disclaimer is per device too
     /// (`App::artboard_disclaimer_enabled`).
     pub(crate) fn open_from_profile(
         &mut self,
         profile: &Profile,
-        device_rails: (RoomListMode, RightSidebarMode),
+        device_rails: RightSidebarMode,
         device_artboard_disclaimer: bool,
     ) {
         self.mouse.reveal_selection();
@@ -1166,10 +1164,7 @@ impl SettingsModalState {
                 return;
             }
             TweakRow::RightSidebar => {
-                self.device_rails.1 = self.device_rails.1.cycle(true);
-            }
-            TweakRow::RoomListSidebar => {
-                self.device_rails.0 = self.device_rails.0.cycle(true);
+                self.device_rails = self.device_rails.cycle(true);
             }
             TweakRow::ComposerKeepFocused => {
                 self.draft.keep_composer_focused ^= true;
@@ -1213,8 +1208,7 @@ impl SettingsModalState {
 
     pub(crate) fn cycle_selected_tweak(&mut self, forward: bool) {
         match self.selected_tweak_row() {
-            TweakRow::RightSidebar => self.device_rails.1 = self.device_rails.1.cycle(forward),
-            TweakRow::RoomListSidebar => self.device_rails.0 = self.device_rails.0.cycle(forward),
+            TweakRow::RightSidebar => self.device_rails = self.device_rails.cycle(forward),
             TweakRow::TextBrightness => self.cycle_text_brightness_adjustment(forward),
             TweakRow::LandingPage => {
                 self.draft.landing_page = self.draft.landing_page.cycle(forward);
@@ -2763,8 +2757,6 @@ impl SettingsModalState {
             right_sidebar_mode: draft.right_sidebar_mode,
             right_sidebar_components: draft.right_sidebar_components.clone(),
             statusline_components: draft.statusline_components.clone(),
-            show_room_list_sidebar: draft.show_room_list_sidebar,
-            room_list_mode: draft.room_list_mode,
             keep_composer_focused: draft.keep_composer_focused,
             start_with_music_muted: draft.start_with_music_muted,
             landing_page: draft.landing_page,

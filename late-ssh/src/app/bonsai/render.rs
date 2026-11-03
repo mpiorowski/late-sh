@@ -8,7 +8,7 @@ use ratatui::{
 
 use crate::app::{
     bonsai::state::{BonsaiState, Branch, BranchStatus, CANVAS_HEIGHT, CANVAS_WIDTH},
-    common::theme,
+    common::{primitives::center_lines, theme},
 };
 
 /// The preview block: the sidebar's one fixed size. Twelve tree rows over
@@ -159,18 +159,6 @@ pub(crate) fn canvas_lines_in(state: &BonsaiState, width: usize) -> Vec<Line<'st
 pub(crate) fn render_preview_lines(state: &BonsaiState) -> Vec<Line<'static>> {
     let rendered = render_preview_ascii(state);
     rendered_lines(state, &rendered, false)
-}
-
-/// Lead each line with blanks so a `block_width`-wide block sits centered
-/// in a wider area. A block already wider than the area is left alone.
-pub(crate) fn center_lines(lines: &mut [Line<'static>], width: usize, block_width: usize) {
-    let left = width.saturating_sub(block_width) / 2;
-    if left == 0 {
-        return;
-    }
-    for line in lines.iter_mut() {
-        line.spans.insert(0, Span::raw(" ".repeat(left)));
-    }
 }
 
 /// The one bonsai renderer: the graph plotted 1:1 into a
@@ -789,6 +777,29 @@ fn put(grid: &mut [Vec<Option<Cell>>], x: usize, y: usize, cell: Cell) {
         return;
     }
     *slot = Some(cell);
+}
+
+/// Home's bonsai tile: the care modal's canvas at its true size, never the
+/// preview, pot on the floor. No status row: the numbers live in the care
+/// modal (`w`), so the tile gives every row to the tree. A tile smaller
+/// than the canvas cuts it: the top rows go first, and the sides go evenly
+/// so the trunk stays centered. A tile narrower than half the canvas is
+/// the sidebar's: the preview with its footer (`51d · alive · w care`),
+/// as the sidebar panel draws.
+pub(crate) fn draw_tile(frame: &mut Frame, area: Rect, state: &BonsaiState, wall_tick: usize) {
+    if (area.width as usize) < CANVAS_WIDTH / 2 {
+        draw_bonsai_inline(frame, area, state, wall_tick);
+        return;
+    }
+    let mut lines = canvas_lines(state, true);
+    apply_sway(&mut lines, wall_tick);
+    center_lines(&mut lines, area.width as usize, CANVAS_WIDTH);
+    let cut_left = CANVAS_WIDTH.saturating_sub(area.width as usize) / 2;
+    let visible = lines.len().min(area.height as usize);
+    lines.drain(..lines.len() - visible);
+    let top_pad = area.height - visible as u16;
+    let below = Rect::new(area.x, area.y + top_pad, area.width, visible as u16);
+    frame.render_widget(Paragraph::new(lines).scroll((0, cut_left as u16)), below);
 }
 
 #[cfg(test)]
