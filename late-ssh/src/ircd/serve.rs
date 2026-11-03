@@ -6,13 +6,13 @@
 
 use std::{
     fs::File,
-    io::BufReader,
     net::{IpAddr, SocketAddr},
     sync::Arc,
 };
 
 use anyhow::{Context, Result};
 use late_core::{rate_limit::IpRateLimiter, shutdown::CancellationToken};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, pem::PemObject};
 use tokio::{
     io::{AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
@@ -165,7 +165,7 @@ async fn resolve_client_ip(
     }
 }
 
-fn load_tls_acceptor(config: &IrcConfig) -> Result<Option<TlsAcceptor>> {
+pub(super) fn load_tls_acceptor(config: &IrcConfig) -> Result<Option<TlsAcceptor>> {
     let (Some(cert_path), Some(key_path)) = (&config.tls_cert_path, &config.tls_key_path) else {
         return Ok(None);
     };
@@ -178,7 +178,7 @@ fn load_tls_acceptor(config: &IrcConfig) -> Result<Option<TlsAcceptor>> {
 
     let cert_file = File::open(cert_path)
         .with_context(|| format!("failed to open LATE_IRC_TLS_CERT {}", cert_path.display()))?;
-    let certs = rustls_pemfile::certs(&mut BufReader::new(cert_file))
+    let certs = CertificateDer::pem_reader_iter(cert_file)
         .collect::<std::result::Result<Vec<_>, _>>()
         .with_context(|| format!("failed to read LATE_IRC_TLS_CERT {}", cert_path.display()))?;
     if certs.is_empty() {
@@ -190,7 +190,9 @@ fn load_tls_acceptor(config: &IrcConfig) -> Result<Option<TlsAcceptor>> {
 
     let key_file = File::open(key_path)
         .with_context(|| format!("failed to open LATE_IRC_TLS_KEY {}", key_path.display()))?;
-    let key = rustls_pemfile::private_key(&mut BufReader::new(key_file))
+    let key = PrivateKeyDer::pem_reader_iter(key_file)
+        .next()
+        .transpose()
         .with_context(|| format!("failed to read LATE_IRC_TLS_KEY {}", key_path.display()))?
         .with_context(|| {
             format!(
