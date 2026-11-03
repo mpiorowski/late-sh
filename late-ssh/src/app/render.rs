@@ -486,7 +486,7 @@ impl App {
                 false => Vec::new(),
             };
         let home_only_labels = match self.on_home() && self.home.arrange {
-            true => self.home_only_labels(),
+            true => self.home.only_labels(&self.chat.rooms),
             false => Vec::new(),
         };
         let home_board_day = match self.on_home() {

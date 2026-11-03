@@ -117,7 +117,7 @@ pub(crate) struct ZenView<'a> {
     /// takes its host while the list has rows.
     pub attention: &'a [AttentionItem],
     /// The room each tile keeps to, in layout order, for its rule in arrange
-    /// mode (`App::home_only_labels`); empty outside it.
+    /// mode (`ZenState::only_labels`); empty outside it.
     pub only_labels: &'a [Option<String>],
     pub bonsai: &'a BonsaiState,
     /// The tank and its care, for the reef and the tank tiles.

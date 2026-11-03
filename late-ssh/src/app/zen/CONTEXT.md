@@ -181,9 +181,10 @@ records the seed so a deleted `street` stays deleted, and a full set
 only records it; the same pass keeps a device's reefs to #lounge, once). `R` puts `home` back to stock Home and refuses every
 other name with a banner (`Layouts::stock_of` is `None` for them,
 `LayoutsError::NoStock`). The status line's care click loads the layout
-named `home` (`zen::input::load_home_layout`, `/layout home` by another
+named `home` (`zen::input::open_care`, `/layout home` by another
 route: Home first, and the `No layout by that name or number` banner on
-a device that deleted it). Names are trimmed, one to
+a device that deleted it). With the tank due it also takes the chat to the
+room the reef keeps to, so the click lands on a reef it can feed. Names are trimmed, one to
 `MAX_LAYOUT_NAME_CHARS` (16) characters, unique case aside. Nothing
 switches a layout but the keys, `/layout` and the care click: not
 `/golive`, not a game waiting, not the screensaver, not the landing
@@ -290,7 +291,7 @@ page only reflows on a room change, when the messages change anyway.
   same once on its next login (`Layouts::seed_stock`, `RiceLayout::keep_reefs_to_lounge`,
   a `stock_seen` mark): every reef still in every room, on any layout with a
   chat; a page with no chat keeps its reef, since nothing would take its space.
-  `O` on #lounge frees it for good (`App::home_only_here` reads the slug and
+  `O` on #lounge frees it for good (`ZenState::only_here` reads the slug and
   the rail's id as the same room). A room unresolved, the room list still
   landing or the account not in #lounge, reads as every room.
 - The rail's selection decides, which is the active chat tile's room, so with
@@ -307,10 +308,11 @@ page only reflows on a room change, when the messages change anyway.
   to one shows the current room, so nothing goes down for a room that can
   never come back; the rule says `only a room you left`.
 - Arrange mode brings every tile up so it can be reached, and each names its
-  room in the rule (`reef +now · only #lounge`, `App::home_only_labels`). Away
+  room in the rule (`reef +now · only #lounge`, `ZenState::only_labels`). Away
   from the room, entering the mode moves the page.
 - The mask is session-only: `App::sync_home_kept_tiles`, inside
-  `sync_visible_chat_room`, writes `ZenState::kept_away`, and everything reads
+  `sync_visible_chat_room`, hands `ZenState::sync_kept_away` where the chat is
+  and the account's rooms, that writes `ZenState::kept_away`, and everything reads
   it through `tile_hidden`, which arrange mode overrides. A tile that is down
   keeps its ordinal and has an empty rect at the origin, so focus, the chats'
   frames and the playback slots do not move, and it is nobody's neighbour.
@@ -377,7 +379,7 @@ reserved chords, the Esc arm, `focus_home_tile_at`, the
 `chat/input.rs`. `state.rs`: `App::home`, `App::home_layouts`,
 `App::layout_list`, `on_home`, `home_tiles_area` / `home_tile_rects`,
 `home_chat_room_id` / `home_chat_rooms`, `home_rail_binding`,
-`sync_home_kept_tiles`, `home_only_labels`, `sync_aquarium_bounds`, and
+`sync_home_kept_tiles`, `sync_aquarium_bounds`, and
 `mark_home_layout_dirty` / `flush_home_layout`. `tick.rs`: the aquarium
 stepping, the ascii tile's cadence edge (`ascii_edge`), the anim edge
 and the debounced flush. `late-core`: `extract_key_home_layouts` /
@@ -480,8 +482,9 @@ the pickers, the ascii piece picker included. In it:
   tile and moves the focus there (`open_message_target`): a DM binds the
   tile to its room; a mention binds it to the mention's room and selects
   the message the way a `Ctrl+/` message jump does. A mention in a room
-  the account never joined opens the history modal instead, and a page
-  with no chat tile says so in a banner. `a` on the reef or the tank feeds
+  the account never joined, or on a page with no chat tile, opens the
+  history modal instead, and a DM with no chat tile says so in a banner.
+  `a` on the reef or the tank feeds
   it (free, once a day, +100 chips on the first feed), as a click on
   either does in any mode.
 - Every other key is swallowed so a stray letter never reaches the chat;
@@ -577,10 +580,13 @@ update.
   low value. A
   history chart was tried and dropped: presence is per replica, so a
   process-local day of headcounts would disagree between pods.
-- The mentions list loads only on ask (`notifications.list()`), so while
-  the page hosts the attention guest (`ZenState::hosts`) tick requests it
-  again whenever the unread count differs from the last request
-  (`App::home_attention_listed_unread`). A stored layout naming a dropped
+- The mentions list loads on ask (`notifications.list()`) and after a stamp
+  (`NotificationService::mark_read_for_messages_task`). While the page hosts
+  the attention guest (`ZenState::hosts`) tick also requests it whenever the
+  unread count differs from the last request
+  (`App::home_attention_listed_unread`). That count is sampled once a second,
+  so it finds new mentions but cannot clear read ones: one that moved and came
+  back looks unmoved, which is why the stamp delivers the list. A stored layout naming a dropped
   kind (`inbox`, `headlines`) reads it as `blank`; a small chat tile bound
   to News is the headlines strip now (`../chat/news/CONTEXT.md`, the
   compact list).

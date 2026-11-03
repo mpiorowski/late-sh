@@ -139,9 +139,11 @@ impl NotificationService {
     }
 
     /// Stamp `read_at` on this user's mentions riding on the given rendered
-    /// messages, then republish the unread count when anything moved. The
-    /// count query runs in the same task after the update commits, so the
-    /// badge the session renders next is never behind the stamp.
+    /// messages, then republish the unread count and the list when anything
+    /// moved. Both read in the same task after the update commits, so the badge
+    /// the session renders next is never behind the stamp. The list goes too
+    /// because the attention guest refetches on a count it samples once a
+    /// second: a count that moved and came back would leave the read row up.
     pub fn mark_read_for_messages_task(&self, user_id: Uuid, message_ids: Vec<Uuid>) {
         if message_ids.is_empty() {
             return;
@@ -172,10 +174,15 @@ impl NotificationService {
     ) -> anyhow::Result<()> {
         let client = self.db.get().await?;
         let cleared = Notification::mark_read_for_messages(&client, user_id, message_ids).await?;
-        if cleared > 0 {
-            self.publish_unread_count(user_id).await?;
+        // The count and the list each check out their own connection.
+        drop(client);
+        match cleared {
+            0 => Ok(()),
+            _ => {
+                self.publish_unread_count(user_id).await?;
+                self.do_list(user_id).await
+            }
         }
-        Ok(())
     }
 
     /// Opening the Mentions entry, in one task so the order holds: stamp every
@@ -205,6 +212,8 @@ impl NotificationService {
     async fn do_open_feed(&self, user_id: Uuid) -> anyhow::Result<()> {
         let client = self.db.get().await?;
         let read = Notification::mark_all_read(&client, user_id).await?;
+        // The count and the list each check out their own connection.
+        drop(client);
         let _ = self
             .evt_tx
             .send(NotificationEvent::FeedOpened { user_id, read });

@@ -3082,7 +3082,7 @@ fn handle_status_bar_click(app: &mut App, mouse: MouseEvent) -> bool {
         StatusClick::Arcade => app.set_screen(Screen::Arcade),
         StatusClick::Profiles => app.set_screen(Screen::Profiles),
         // Care: Home's `home` layout, where the tank and the tree are.
-        StatusClick::HomeLayout => crate::app::zen::input::load_home_layout(app),
+        StatusClick::HomeLayout => crate::app::zen::input::open_care(app),
         // Nothing up, or a result holding the strip: nothing to open.
         StatusClick::Live => {
             crate::app::live::input::open_from_key(app);

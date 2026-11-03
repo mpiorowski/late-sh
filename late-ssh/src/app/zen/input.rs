@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use uuid::Uuid;
 
-use super::attention::Item as AttentionItem;
+use super::attention::{Chore, Item as AttentionItem};
 use super::presets::{LayoutCommand, LayoutList, Layouts, LayoutsError, NameEdit};
 use super::state::ChatRoomBinding;
 use super::state::{
@@ -247,15 +247,34 @@ pub(crate) fn run_layout_command(app: &mut App, command: LayoutCommand) {
     }
 }
 
-/// The status line's care click: Home's layout named `home`, where the
-/// tank and the tree are, loaded the way `/layout home` loads it. A
-/// device that deleted its `home` layout gets the banner a missing name
-/// gets.
+/// Home's layout named `home`, where the tank and the tree are, loaded the
+/// way `/layout home` loads it. A device that deleted its `home` layout gets
+/// the banner a missing name gets.
 pub(crate) fn load_home_layout(app: &mut App) {
     run_layout_command(
         app,
         LayoutCommand::Load(super::presets::STOCK_HOME_NAME.to_string()),
     );
+}
+
+/// The status line's care click: the `home` layout and, with the tank due,
+/// the chat in the room the reef keeps to, so the click lands on a reef that
+/// can take the meal.
+pub(crate) fn open_care(app: &mut App) {
+    load_home_layout(app);
+    if app.care_today().tank != Chore::Due {
+        return;
+    }
+    let Some(reef) = app.home.first_tile_of(TileKind::Aquarium) else {
+        return;
+    };
+    let only = app.home.rice.root.only_at(reef);
+    match only.joined_room(&app.chat.rooms).map(|room| room.id) {
+        Some(room_id) if app.home_chat_room_id() != Some(room_id) => {
+            pick_for_active_chat(app, RoomSlot::Room(room_id));
+        }
+        Some(_) | None => {}
+    }
 }
 
 /// The layouts list: `j` `k` and the arrows move, Enter loads the row and
@@ -460,8 +479,8 @@ fn act_on_attention(app: &mut App, item: AttentionItem) {
             message_id,
             ..
         } => {
-            // Answering the row reads it, wherever the message opens: a room
-            // the rail lacks opens in history, which stamps nothing.
+            // Answering the row reads it, wherever the message opens: history
+            // opens it when no chat tile can, and stamps nothing itself.
             app.chat
                 .notifications
                 .mark_read_for_messages(vec![message_id]);
@@ -479,16 +498,18 @@ fn act_on_attention(app: &mut App, item: AttentionItem) {
 
 /// Land in `room_id` in the page's first chat tile, on `message_id` when
 /// there is one, the way a `Ctrl+/` message jump does. A mention in a
-/// room the account never joined has no tile to land in and reads in the
-/// history modal instead.
+/// room the account never joined, or on a page with no chat tile, has no
+/// tile to land in and reads in the history modal instead.
 fn open_message_target(app: &mut App, room_id: Uuid, message_id: Option<Uuid>) {
+    let chat_tile = app.home.first_tile_of(TileKind::Chat);
+    let joined = app.chat.rooms.iter().any(|(room, _)| room.id == room_id);
     if let Some(message_id) = message_id
-        && !app.chat.rooms.iter().any(|(room, _)| room.id == room_id)
+        && (chat_tile.is_none() || !joined)
     {
         app.chat.open_history_at_message(room_id, message_id);
         return;
     }
-    let Some(chat_tile) = app.home.first_tile_of(TileKind::Chat) else {
+    let Some(chat_tile) = chat_tile else {
         app.banner = Some(Banner::info("Add a chat tile to open it here"));
         return;
     };
@@ -594,11 +615,12 @@ fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
 /// rail row that is no room (mentions, rss) has nothing to keep it to, and the
 /// rail and the chats stay up in every room. `true` when the tile changed.
 fn toggle_only_here(app: &mut App) -> bool {
-    let Some(here) = app.home_only_here() else {
+    let Some(rail) = app.home_rail_binding() else {
         app.banner = Some(Banner::info("Pick a room on the rail first"));
         return false;
     };
-    let label = app.home_only_label(&here).unwrap_or_default();
+    let here = app.home.only_here(rail, &app.chat.rooms);
+    let label = here.only_label(&app.chat.rooms).unwrap_or_default();
     match app.home.toggle_focused_only(here) {
         OnlyPick::Kept => {
             app.banner = Some(Banner::info(&format!("Only in {label}")));

@@ -4,7 +4,11 @@
 
 use std::time::Instant;
 
-use late_core::models::user::{AsciiPiece, AsciiSelection};
+use late_core::models::{
+    chat_message::ChatMessage,
+    chat_room::ChatRoom,
+    user::{AsciiPiece, AsciiSelection},
+};
 use rand::Rng;
 use ratatui::{layout::Rect, widgets::BorderType};
 use serde::{Deserialize, Serialize};
@@ -558,12 +562,11 @@ fn known_title<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Tile
     })
 }
 
-/// A stored `piece` key: a piece this build knows, or `None` for one it
-/// does not, so the tile falls back to [`AsciiPiece::DEFAULT`] and the rest of
-/// the layout reads as stored.
 /// What a chat tile shows. Stored as the leaf's `room`: a room id, the
 /// word `news`, or a permanent room's slug so a stock layout can name
-/// `#announcements` on any account; absent for the current room.
+/// `#announcements` on any account; absent for the current room. A leaf's
+/// `only` says the one room it is up in with the same words, and there
+/// `Current` means every room.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum ChatRoomBinding {
     /// The current room: Home's rail selection when it is a real room,
@@ -589,6 +592,63 @@ const NEWS_BINDING: &str = "news";
 impl ChatRoomBinding {
     pub fn is_current(&self) -> bool {
         matches!(self, ChatRoomBinding::Current)
+    }
+
+    /// The joined room this names: a room id the account still holds, or the
+    /// permanent room with that slug. `None` for the current room, for News,
+    /// and for a binding the account's rooms do not hold.
+    pub fn joined_room<'a>(
+        &self,
+        rooms: &'a [(ChatRoom, Vec<ChatMessage>)],
+    ) -> Option<&'a ChatRoom> {
+        let found = rooms.iter().find(|(room, _)| match self {
+            ChatRoomBinding::Current | ChatRoomBinding::News => false,
+            ChatRoomBinding::Room(room_id) => room.id == *room_id,
+            ChatRoomBinding::Permanent(slug) => {
+                room.permanent && room.slug.as_deref() == Some(slug.as_str())
+            }
+        });
+        found.map(|(room, _)| room)
+    }
+
+    /// Whether a tile kept to this is up with the page's chat where it is. A
+    /// room the account has since left reads as every room, the way a chat
+    /// tile bound to one shows the current room: nothing goes down for a room
+    /// that can never come back.
+    fn keeps_up_with(
+        &self,
+        news_selected: bool,
+        chat_room: Option<Uuid>,
+        rooms: &[(ChatRoom, Vec<ChatMessage>)],
+    ) -> bool {
+        match self {
+            ChatRoomBinding::Current => true,
+            ChatRoomBinding::News => news_selected,
+            ChatRoomBinding::Room(_) | ChatRoomBinding::Permanent(_) => {
+                match self.joined_room(rooms) {
+                    Some(room) => chat_room == Some(room.id),
+                    None => true,
+                }
+            }
+        }
+    }
+
+    /// This as arrange mode's rule and the `O` banner name it, read as a
+    /// leaf's `only`. `None` for every room.
+    pub fn only_label(&self, rooms: &[(ChatRoom, Vec<ChatMessage>)]) -> Option<String> {
+        match self {
+            ChatRoomBinding::Current => None,
+            ChatRoomBinding::News => Some("news".to_string()),
+            ChatRoomBinding::Room(_) | ChatRoomBinding::Permanent(_) => {
+                Some(match self.joined_room(rooms) {
+                    None => "a room you left".to_string(),
+                    Some(room) => match room.slug.as_deref() {
+                        Some(slug) => format!("#{slug}"),
+                        None => "this DM".to_string(),
+                    },
+                })
+            }
+        }
     }
 }
 
@@ -637,6 +697,9 @@ fn room_from_json<'de, D: serde::Deserializer<'de>>(
     })
 }
 
+/// A stored `piece` key: a piece this build knows, or `None` for one it
+/// does not, so the tile falls back to [`AsciiPiece::DEFAULT`] and the rest of
+/// the layout reads as stored.
 fn known_piece<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<AsciiSelection>, D::Error> {
@@ -1431,7 +1494,6 @@ pub enum GuestPick {
     Unchanged,
 }
 
-/// Session state for Home's tile tree: the current layout and its focus.
 /// What `O` did to the focused tile.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OnlyPick {
@@ -1443,6 +1505,7 @@ pub enum OnlyPick {
     Refused,
 }
 
+/// Session state for Home's tile tree: the current layout and its focus.
 pub struct ZenState {
     pub rice: RiceLayout,
     /// What `R` resets to.
@@ -1509,6 +1572,47 @@ impl ZenState {
         let changed = self.kept_away != kept_away;
         self.kept_away = kept_away;
         changed
+    }
+
+    /// `set_kept_away` from where the page's chat is; `true` when that changed.
+    pub fn sync_kept_away(
+        &mut self,
+        news_selected: bool,
+        chat_room: Option<Uuid>,
+        rooms: &[(ChatRoom, Vec<ChatMessage>)],
+    ) -> bool {
+        let root = &self.rice.root;
+        let kept_away = (0..root.leaf_count())
+            .map(|ordinal| {
+                !root
+                    .only_at(ordinal)
+                    .keeps_up_with(news_selected, chat_room, rooms)
+            })
+            .collect();
+        self.set_kept_away(kept_away)
+    }
+
+    /// `ChatRoomBinding::only_label` for every tile in layout order.
+    pub fn only_labels(&self, rooms: &[(ChatRoom, Vec<ChatMessage>)]) -> Vec<Option<String>> {
+        let root = &self.rice.root;
+        (0..root.leaf_count())
+            .map(|ordinal| root.only_at(ordinal).only_label(rooms))
+            .collect()
+    }
+
+    /// The room `O` keeps the focused tile to: the rail's, or, when the tile
+    /// already keeps to that room by slug (the stock reef), the tile's own
+    /// words for it, so `O` frees it rather than rewriting it by id.
+    pub fn only_here(
+        &self,
+        rail: ChatRoomBinding,
+        rooms: &[(ChatRoom, Vec<ChatMessage>)],
+    ) -> ChatRoomBinding {
+        let focused = self.rice.root.only_at(self.focus);
+        match (focused.joined_room(rooms), &rail) {
+            (Some(kept), ChatRoomBinding::Room(room_id)) if kept.id == *room_id => focused,
+            _ => rail,
+        }
     }
 
     /// Whether the tile at `ordinal` is down on this frame: kept to another

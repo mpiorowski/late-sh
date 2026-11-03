@@ -1023,6 +1023,83 @@ fn a_split_shares_the_tiles_room_and_a_chat_forgets_it() {
     assert_eq!(root.only_at(1), ChatRoomBinding::Current);
 }
 
+/// A kept tile is up only in its room, News counting as one, and a room the
+/// account has left reads as every room, since it can never come back. Arrange
+/// mode's rule names each of them.
+#[test]
+fn a_tile_goes_down_only_for_a_room_the_account_still_holds() {
+    let room = |permanent: bool, slug: Option<&str>| {
+        let now = chrono::Utc::now();
+        ChatRoom {
+            id: Uuid::now_v7(),
+            created: now,
+            updated: now,
+            kind: "topic".to_string(),
+            visibility: "public".to_string(),
+            auto_join: false,
+            permanent,
+            slug: slug.map(str::to_string),
+            language_code: None,
+            dm_user_a: None,
+            dm_user_b: None,
+            topic: None,
+            rules: None,
+            created_by: None,
+        }
+    };
+    let (lounge, dev, dm) = (
+        room(true, Some("lounge")),
+        room(false, Some("dev")),
+        room(false, None),
+    );
+    let (lounge_id, dev_id, dm_id) = (lounge.id, dev.id, dm.id);
+    let rooms = vec![(lounge, Vec::new()), (dev, Vec::new()), (dm, Vec::new())];
+    let tile = |only: ChatRoomBinding| {
+        let mut leaf = Node::leaf(TileKind::Clock);
+        leaf.set_only(0, only);
+        leaf
+    };
+    let root = Node::split(
+        Dir::Row,
+        500,
+        tile(ChatRoomBinding::Permanent("lounge".to_string())),
+        Node::split(
+            Dir::Row,
+            500,
+            tile(ChatRoomBinding::Room(dm_id)),
+            Node::split(
+                Dir::Row,
+                500,
+                tile(ChatRoomBinding::News),
+                tile(ChatRoomBinding::Room(Uuid::now_v7())),
+            ),
+        ),
+    );
+    let mut page = ZenState::new(
+        RiceLayout {
+            root,
+            look: Look::default(),
+        },
+        None,
+    );
+
+    assert!(page.sync_kept_away(false, Some(dev_id), &rooms));
+    assert_eq!(page.hidden_tiles(), vec![true, true, true, false]);
+    assert!(page.sync_kept_away(false, Some(lounge_id), &rooms));
+    assert_eq!(page.hidden_tiles(), vec![false, true, true, false]);
+    assert!(page.sync_kept_away(true, None, &rooms));
+    assert_eq!(page.hidden_tiles(), vec![true, true, false, false]);
+    assert!(
+        !page.sync_kept_away(true, None, &rooms),
+        "the same room moves nothing"
+    );
+
+    assert_eq!(
+        page.only_labels(&rooms),
+        ["#lounge", "this DM", "news", "a room you left"].map(|label| Some(label.to_string()))
+    );
+}
+
 /// A tile kept away is off the page for everything that asks what is up:
 /// the work its kind wakes for and the guest it hosts. Arrange mode brings
 /// every tile back so it can be reached.

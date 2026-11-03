@@ -3631,7 +3631,7 @@ impl App {
                 RoomSlot::News
             }
             ChatRoomBinding::Current | ChatRoomBinding::Room(_) | ChatRoomBinding::Permanent(_) => {
-                let Some(room_id) = self.home_bound_room(&bound) else {
+                let Some(room_id) = bound.joined_room(&self.chat.rooms).map(|room| room.id) else {
                     return;
                 };
                 if self.chat.selected_room_id == Some(room_id)
@@ -3704,7 +3704,7 @@ impl App {
         let same = match (&bound, &moment) {
             (ChatRoomBinding::Current, _) => true,
             (ChatRoomBinding::Permanent(_), ChatRoomBinding::Room(room_id)) => {
-                self.home_bound_room(&bound) == Some(*room_id)
+                bound.joined_room(&self.chat.rooms).map(|room| room.id) == Some(*room_id)
             }
             (bound, moment) => bound == moment,
         };
@@ -3727,79 +3727,18 @@ impl App {
         self.home_chat_room_id().map(ChatRoomBinding::Room)
     }
 
-    /// The room `O` keeps the focused tile to: the rail's, or, when the tile
-    /// already keeps to that room by slug (the stock reef), the tile's own
-    /// words for it, so `O` frees it rather than rewriting it by id.
-    pub(crate) fn home_only_here(&self) -> Option<crate::app::zen::state::ChatRoomBinding> {
-        use crate::app::zen::state::ChatRoomBinding;
-        let here = self.home_rail_binding()?;
-        let focused = self.home.rice.root.only_at(self.home.focus);
-        match (self.home_bound_room(&focused), &here) {
-            (Some(bound), ChatRoomBinding::Room(room_id)) if bound == *room_id => Some(focused),
-            _ => Some(here),
-        }
-    }
-
-    /// Whether a tile keeping to `only` is up with the page's chat where it
-    /// is. A room the account has since left reads as every room, the way a
-    /// chat tile bound to one shows the current room: nothing goes down for
-    /// a room that can never come back.
-    fn home_chat_is_in(&self, only: &crate::app::zen::state::ChatRoomBinding) -> bool {
-        use crate::app::zen::state::ChatRoomBinding;
-        match only {
-            ChatRoomBinding::Current => true,
-            ChatRoomBinding::News => self.chat.news_selected,
-            bound => match self.home_bound_room(bound) {
-                Some(room_id) => self.home_chat_room_id() == Some(room_id),
-                None => true,
-            },
-        }
-    }
-
     /// Note which of Home's tiles are kept to a room the page's chat is not
     /// in. Runs with the room (`sync_visible_chat_room`), so the page reflows
     /// as the messages change anyway. The reef's rect moves when it goes
     /// down or comes back, so the simulation is bound again.
     pub(crate) fn sync_home_kept_tiles(&mut self) {
-        let root = &self.home.rice.root;
-        let kept_away = (0..root.leaf_count())
-            .map(|ordinal| !self.home_chat_is_in(&root.only_at(ordinal)))
-            .collect();
-        if self.home.set_kept_away(kept_away) {
+        let chat_room = self.home_chat_room_id();
+        let moved = self
+            .home
+            .sync_kept_away(self.chat.news_selected, chat_room, &self.chat.rooms);
+        if moved {
             self.sync_aquarium_bounds();
         }
-    }
-
-    /// `only` as arrange mode's rule and the `O` banner name it. `None` for
-    /// every room.
-    pub(crate) fn home_only_label(
-        &self,
-        only: &crate::app::zen::state::ChatRoomBinding,
-    ) -> Option<String> {
-        use crate::app::zen::state::ChatRoomBinding;
-        match only {
-            ChatRoomBinding::Current => None,
-            ChatRoomBinding::News => Some("news".to_string()),
-            bound => Some(match self.home_bound_room(bound) {
-                None => "a room you left".to_string(),
-                Some(room_id) => match self
-                    .chat
-                    .room_by_id(room_id)
-                    .and_then(|room| room.slug.as_deref())
-                {
-                    Some(slug) => format!("#{slug}"),
-                    None => "this DM".to_string(),
-                },
-            }),
-        }
-    }
-
-    /// `home_only_label` for every tile in layout order.
-    pub(crate) fn home_only_labels(&self) -> Vec<Option<String>> {
-        let root = &self.home.rice.root;
-        (0..root.leaf_count())
-            .map(|ordinal| self.home_only_label(&root.only_at(ordinal)))
-            .collect()
     }
 
     /// What every chat tile draws, in layout order, resolved: a tile bound
@@ -3823,31 +3762,9 @@ impl App {
         &self,
         bound: &crate::app::zen::state::ChatRoomBinding,
     ) -> Option<Uuid> {
-        match self.home_bound_room(bound) {
-            Some(room_id) => Some(room_id),
+        match bound.joined_room(&self.chat.rooms) {
+            Some(room) => Some(room.id),
             None => self.home_current_room_id(),
-        }
-    }
-
-    /// The joined room a binding names: a room id the account still holds,
-    /// or the permanent room with that slug. `None` for the current room,
-    /// for News, and for a binding the account's rooms do not hold.
-    fn home_bound_room(&self, bound: &crate::app::zen::state::ChatRoomBinding) -> Option<Uuid> {
-        use crate::app::zen::state::ChatRoomBinding;
-        match bound {
-            ChatRoomBinding::Current | ChatRoomBinding::News => None,
-            ChatRoomBinding::Room(room_id) => self
-                .chat
-                .rooms
-                .iter()
-                .find(|(room, _)| room.id == *room_id)
-                .map(|(room, _)| room.id),
-            ChatRoomBinding::Permanent(slug) => self
-                .chat
-                .rooms
-                .iter()
-                .find(|(room, _)| room.permanent && room.slug.as_deref() == Some(slug.as_str()))
-                .map(|(room, _)| room.id),
         }
     }
 

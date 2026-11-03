@@ -2138,7 +2138,12 @@ async fn slash_lobby_layout_and_guide_mirror_their_keys() {
     assert!(app.home.arrange, "/edit should enter arrange mode");
     assert!(!app.chat.is_composing());
     app.handle_input(b"\x1b");
-    assert!(!app.home.arrange, "Esc should leave what /edit entered");
+    wait_for_esc_effect(
+        &mut app,
+        |app| !app.home.arrange,
+        "Esc should leave what /edit entered",
+    )
+    .await;
 
     // /redraw re-emits every cell, the way Ctrl+R does: the frame after it
     // carries more than a settled diff.
@@ -7712,7 +7717,7 @@ async fn a_tile_kept_to_lounge_goes_down_in_other_rooms_and_comes_back() {
         Some("The rail and the chats stay up in every room")
     );
     app.handle_input(b"\x1b");
-    assert!(!app.home.arrange);
+    wait_for_esc_effect(&mut app, |app| !app.home.arrange, "leave arrange mode").await;
 
     // Still on #lounge, nothing moved.
     assert_eq!(rect_of(&app, TileKind::Aquarium), reef_up);
@@ -7736,6 +7741,7 @@ async fn a_tile_kept_to_lounge_goes_down_in_other_rooms_and_comes_back() {
     app.handle_input(b"\x05");
     assert!(rect_of(&app, TileKind::Aquarium).height > 0);
     app.handle_input(b"\x1b");
+    wait_for_esc_effect(&mut app, |app| !app.home.arrange, "leave arrange mode").await;
     assert_eq!(rect_of(&app, TileKind::Aquarium).height, 0);
 
     // Back on #lounge it is where it was.
@@ -7768,4 +7774,100 @@ async fn a_tile_kept_to_lounge_goes_down_in_other_rooms_and_comes_back() {
         app.home.rice.root.only_at(ordinal),
         ChatRoomBinding::Room(lounge.id)
     );
+}
+
+/// The care click exists to reach the tank, and the stock reef keeps to
+/// #lounge. With the tank due the click takes the chat there, so it lands on a
+/// reef that can take the meal; with the tank fed, the room stays yours.
+#[tokio::test]
+async fn the_care_click_lands_on_the_reef_while_the_tank_is_due() {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "care-reef-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let announcements = ChatRoom::ensure_permanent(&client, "announcements")
+        .await
+        .expect("announcements");
+    ChatRoomMember::join(&client, announcements.id, user.id)
+        .await
+        .expect("join announcements");
+    let mut app = make_app(test_db.db.clone(), user.id, "care-reef-flow-it");
+    app.resize(200, 50).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "announcements").await;
+
+    app.handle_input(b"\x1f");
+    app.handle_input(b"announcements\r");
+    assert_eq!(app.chat.selected_room_id, Some(announcements.id));
+    assert_eq!(app.reef_tile_inner(), None, "the reef is down in this room");
+
+    crate::app::zen::input::open_care(&mut app);
+    assert_eq!(app.chat.selected_room_id, Some(lounge.id));
+    assert!(app.reef_tile_inner().is_some(), "the click found the reef");
+
+    app.handle_input(b"\x1f");
+    app.handle_input(b"announcements\r");
+    app.aquarium_care.feed();
+    crate::app::zen::input::open_care(&mut app);
+    assert_eq!(app.chat.selected_room_id, Some(announcements.id));
+}
+
+/// Enter on a mention always opens what it stamps read. A page with no chat
+/// tile reads the message in the history modal, so the row never clears for a
+/// message nobody saw.
+#[tokio::test]
+async fn a_mention_answered_with_no_chat_tile_opens_in_history_and_clears() {
+    use crate::app::zen::state::{Guest, Look, Node, RiceLayout, TileKind, ZenState};
+    use late_core::models::notification::Notification;
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "attend-viewer").await;
+    let actor = create_test_user(&test_db.db, "attend-actor").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join viewer");
+    let message = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: actor.id,
+            body: "@attend-viewer over here".to_string(),
+        },
+    )
+    .await
+    .expect("create mention message");
+    Notification::create_mentions_batch(&client, &[viewer.id], actor.id, message.id, lounge.id)
+        .await
+        .expect("create mention notification");
+
+    let mut app = make_app(test_db.db.clone(), viewer.id, "attend-flow-it");
+    app.resize(200, 50).expect("resize test terminal");
+    app.home = ZenState::new(
+        RiceLayout {
+            root: Node::hosting(TileKind::Clock, &[Guest::Attention]),
+            look: Look::default(),
+        },
+        None,
+    );
+    app.handle_input(b"\x05");
+    assert!(app.home.arrange);
+    wait_for_render_contains(&mut app, "mentioned you in #lounge").await;
+
+    app.handle_input(b"\r");
+    assert!(
+        app.chat.history_modal.is_open(),
+        "the mention opened nothing, banner: {:?}",
+        app.banner.as_ref().map(|banner| banner.message.as_str())
+    );
+
+    app.handle_input(b"\x1b");
+    wait_for_render_not_contains(&mut app, "mentioned you in #lounge").await;
 }
