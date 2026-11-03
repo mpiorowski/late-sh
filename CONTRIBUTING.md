@@ -34,7 +34,8 @@ This adds a `Signed-off-by:` line to your commit message.
 
 ### Tooling
 
-The repo includes `.mise.toml` with `rust`, `mold`, and `cargo-nextest`. Run
+The repo includes `.mise.toml` with `rust`, `mold` (Linux only), and
+`cargo-nextest`. Run
 `mise install` to get the expected toolchain.
 
 ### Running locally
