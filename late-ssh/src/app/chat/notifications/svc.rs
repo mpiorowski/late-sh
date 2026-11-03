@@ -104,12 +104,9 @@ impl NotificationService {
         let client = self.db.get().await?;
         let items = Notification::list_for_user(&client, user_id, 50).await?;
         let sender = self.snapshot_txs.lock_recover().get(&user_id).cloned();
-        match sender {
-            Some(sender) => {
-                sender.send_replace(NotificationSnapshot { items });
-            }
-            // The session left while the list was loading: nobody to tell.
-            None => {}
+        // No sender: the session left while the list was loading, nobody to tell.
+        if let Some(sender) = sender {
+            sender.send_replace(NotificationSnapshot { items });
         }
         Ok(())
     }
