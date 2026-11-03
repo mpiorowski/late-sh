@@ -244,6 +244,18 @@ async fn main() -> anyhow::Result<()> {
             db.clone(),
             activity_tx.clone(),
         );
+    let netwalk_service =
+        late_ssh::app::arcade::netwalk::svc::NetwalkService::new(db.clone(), activity_tx.clone());
+    let chess_puzzle_service = late_ssh::app::arcade::chess_puzzle::svc::ChessPuzzleService::new(
+        db.clone(),
+        activity_tx.clone(),
+    );
+    let word_wheel_service = late_ssh::app::arcade::word_wheel::svc::WordWheelService::new(
+        db.clone(),
+        activity_tx.clone(),
+    );
+    let quartets_service =
+        late_ssh::app::arcade::quartets::svc::QuartetsService::new(db.clone(), activity_tx.clone());
     let le_word_service =
         late_ssh::app::arcade::le_word::svc::LeWordService::new(db.clone(), activity_tx.clone());
     let chip_service = late_ssh::app::games::chips::svc::ChipService::new(db.clone());
@@ -502,6 +514,10 @@ async fn main() -> anyhow::Result<()> {
         traffic_service,
         rubiks_cube_service,
         sliding_puzzle_service,
+        netwalk_service,
+        chess_puzzle_service,
+        word_wheel_service,
+        quartets_service,
         le_word_service,
         sudoku_service,
         nonogram_service,

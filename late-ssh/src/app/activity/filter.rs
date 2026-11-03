@@ -54,8 +54,12 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
             ActivityGame::Asterion
             | ActivityGame::Blackjack
             | ActivityGame::Chess
+            | ActivityGame::ChessPuzzle
+            | ActivityGame::WordWheel
+            | ActivityGame::Quartets
             | ActivityGame::LeWord
             | ActivityGame::Minesweeper
+            | ActivityGame::Netwalk
             | ActivityGame::Nonogram
             | ActivityGame::Poker
             | ActivityGame::Realm
@@ -100,8 +104,12 @@ pub fn lounge_includes(event: &ActivityEvent) -> bool {
             // for personal/practice runs), so these are once-per-day-per-board
             // finishes, not high-volume grind — a small "someone beat today's
             // puzzle" story worth sharing.
-            ActivityGame::LeWord
+            ActivityGame::ChessPuzzle
+            | ActivityGame::WordWheel
+            | ActivityGame::Quartets
+            | ActivityGame::LeWord
             | ActivityGame::Minesweeper
+            | ActivityGame::Netwalk
             | ActivityGame::Nonogram
             | ActivityGame::RubiksCube
             | ActivityGame::SlidingPuzzle
@@ -285,12 +293,15 @@ pub fn lounge_headline(event: &ActivityEvent) -> Option<String> {
             ..
         } => Some(match (winner, *pot) {
             (Some(winner), 0) => format!(
-                "\u{2694} @{winner} conquered the realm: season {season} is over after {players} \
-                 players, too soon to pay. The next world rises within the day."
+                "\u{2694} @{} {}: season {season} is over after {players} players, too soon \
+                 to pay. The next world rises within the day.",
+                winner.username, winner.took_it
             ),
             (Some(winner), pot) => format!(
-                "\u{2694} @{winner} conquered the realm: season {season} is over after {players} \
-                 players and {} chips paid. The next world rises within the day.",
+                "\u{2694} @{} {}: season {season} is over after {players} players and {} chips \
+                 paid. The next world rises within the day.",
+                winner.username,
+                winner.took_it,
                 thousands(pot)
             ),
             (None, _) => format!(

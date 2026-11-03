@@ -5,6 +5,8 @@ use serde_json::Value;
 use tokio_postgres::GenericClient;
 use uuid::Uuid;
 
+use super::leaderboard::DailyPuzzle;
+
 pub const REWARD_CLAIM_POLICY_ASSIGNMENT: &str = "assignment";
 pub const REWARD_CLAIM_POLICY_COOLDOWN: &str = "cooldown";
 pub const REWARD_CLAIM_POLICY_PER_EVENT: &str = "per_event";
@@ -44,31 +46,6 @@ pub const BROGUE_MASTERY_REWARD_KEY: &str = "brogue_mastery";
 pub const TRON_WIN_2P_REWARD_KEY: &str = "tron_win_2p";
 pub const TRON_WIN_3P_REWARD_KEY: &str = "tron_win_3p";
 pub const TRON_WIN_4P_REWARD_KEY: &str = "tron_win_4p";
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DailyPuzzleRewardGame {
-    LeWord,
-    Minesweeper,
-    Nonogram,
-    RubiksCube,
-    SlidingPuzzle,
-    Solitaire,
-    Sudoku,
-}
-
-impl DailyPuzzleRewardGame {
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::LeWord => "le_word",
-            Self::Minesweeper => "minesweeper",
-            Self::Nonogram => "nonogram",
-            Self::RubiksCube => "rubiks_cube",
-            Self::SlidingPuzzle => "sliding_puzzle",
-            Self::Solitaire => "solitaire",
-            Self::Sudoku => "sudoku",
-        }
-    }
-}
 
 #[derive(Clone, Debug)]
 pub struct RewardTemplate {
@@ -149,10 +126,12 @@ impl RewardTemplate {
     }
 }
 
-pub fn daily_puzzle_reward_key(game: DailyPuzzleRewardGame, difficulty_key: &str) -> String {
+/// The `reward_templates` key that pays a daily win of `puzzle` on the
+/// board `difficulty_key` (one of `puzzle.tiers()`).
+pub fn daily_puzzle_reward_key(puzzle: DailyPuzzle, difficulty_key: &str) -> String {
     format!(
         "{}_daily_{}_win",
-        game.key(),
+        puzzle.key(),
         difficulty_key.replace('-', "_")
     )
 }

@@ -1,5 +1,7 @@
-//! The realm overview view: standings table (every player, color swatch,
-//! territories, strength, status) plus your own holdings list.
+//! The realm overview view: standings table (every player by share of the
+//! world, color swatch, land, walls, how long they have dominated, status),
+//! the domination bar and the season clock where the rules have them, plus
+//! your own holdings list.
 
 use ratatui::{
     Frame,
@@ -14,6 +16,7 @@ use unicode_width::UnicodeWidthStr;
 use crate::app::common::theme;
 
 use super::map_ui::compact;
+use super::night;
 use super::resolver::{PlayerPhase, RealmPlayerStatus};
 use super::state::{RealmState, player_color};
 
@@ -48,26 +51,34 @@ pub fn draw_overview_view(frame: &mut Frame, area: Rect, realm: &RealmState) {
     let world_pop: u64 = map.territories.iter().map(|t| t.population).sum();
     let world_area: u64 = map.territories.iter().map(|t| t.area_km2).sum();
 
-    let mut players: Vec<_> = state.players.iter().collect();
-    players.sort_by(|a, b| {
-        let ta = state.territory_count(a.user_id);
-        let tb = state.territory_count(b.user_id);
-        tb.cmp(&ta).then_with(|| a.username.cmp(&b.username))
+    // By share of the world: what domination is measured in and what the
+    // clock decides on, so the table is the race as it is scored.
+    let mut players: Vec<_> = state
+        .players
+        .iter()
+        .map(|p| (night::share(state, &map, p.user_id), p))
+        .collect();
+    players.sort_by(|(a_share, a), (b_share, b)| {
+        b_share
+            .total_cmp(a_share)
+            .then_with(|| a.username.cmp(&b.username))
     });
+    let nights = state.ruleset.domination_nights;
+    let dominating_heading = match nights {
+        0 => String::new(),
+        _ => format!(" {:>6}", "dom"),
+    };
     lines.push(Line::from(Span::styled(
         format!(
-            "  {:<18}{:>5} {:>9} {:>11} {:>7} {:>6} {:>6} {:>6}  {}",
-            "player", "land", "people", "area km²", "share", "str", "days", "walls", "status"
+            "  {:<18}{:>5} {:>9} {:>11} {:>7} {:>6}{dominating_heading} {:>6}  {}",
+            "player", "land", "people", "area km²", "share", "walls", "days", "status"
         ),
         Style::default().fg(theme::TEXT_FAINT()),
     )));
-    for p in &players {
+    for (share, p) in &players {
         let (r, g, b) = player_color(state, p.user_id);
         let held = state.territory_count(p.user_id);
         let standing = state.standing(p.user_id, today);
-        // Strength as it actually counts: an empire left unruled defends
-        // with less than its size suggests.
-        let strength = state.effective_strength(p.user_id, &map, today);
         // Population and land are the currency of this game — the odds are
         // built from them — so the standings say them out loud.
         let (pop, area) = state
@@ -85,10 +96,10 @@ pub fn draw_overview_view(frame: &mut Frame, area: Rect, realm: &RealmState) {
             .filter(|(_, owner)| **owner == p.user_id)
             .map(|(t, _)| u32::from(state.fort_level(*t).saturating_sub(1)))
             .sum();
-        let share = if world_pop > 0 {
-            pop as f64 / world_pop as f64 * 100.0
-        } else {
-            0.0
+        let share = share * 100.0;
+        let dominating = match nights {
+            0 => String::new(),
+            n => format!(" {:>6}", format!("{}/{n}", p.dominating_nights)),
         };
         let status = match p.status {
             RealmPlayerStatus::Alive => {
@@ -105,6 +116,10 @@ pub fn draw_overview_view(frame: &mut Frame, area: Rect, realm: &RealmState) {
                         note.push_str(&format!(" · crumbling ×{:.2}", standing.decay));
                     }
                     note
+                } else if !realm.points_shown(p.user_id) {
+                    // What a rival has left tonight is what they have
+                    // ordered; that stays theirs until the night.
+                    "in play".to_string()
                 } else if standing.banked > 0 {
                     format!("{} left (+{} banked)", standing.left(), standing.banked)
                 } else {
@@ -125,7 +140,7 @@ pub fn draw_overview_view(frame: &mut Frame, area: Rect, realm: &RealmState) {
             Span::styled(format!("{:<18}", format!("{}{you}", p.username)), text),
             Span::styled(
                 format!(
-                    "{held:>5} {:>9} {:>11} {share:>6.1}% {strength:>6.1} {:>6} {walls:>6}  {status}",
+                    "{held:>5} {:>9} {:>11} {share:>6.1}% {walls:>6}{dominating} {:>6}  {status}",
                     compact(pop),
                     compact(area),
                     p.active_days
@@ -135,6 +150,32 @@ pub fn draw_overview_view(frame: &mut Frame, area: Rect, realm: &RealmState) {
         ]));
     }
     lines.push(Line::from(""));
+    // How it is won, where the rules have more than the last one standing:
+    // the bar and how long it has to be held, and the clock.
+    if nights > 0 {
+        let bar = state.ruleset.domination_share(state.war_roster(today)) * 100.0;
+        lines.push(Line::from(Span::styled(
+            format!(
+                "domination: hold {bar:.0}% of the world (a giant counting twice a \
+                 speck) through {nights} nights running and it is yours"
+            ),
+            Style::default().fg(theme::AMBER()),
+        )));
+    }
+    if let Some(last) = night::season_last_day(state) {
+        let left = (last - today).max(0);
+        lines.push(Line::from(Span::styled(
+            format!(
+                "the clock: day {} of {} · {left} {} to go · when it runs out the biggest \
+                 share among those who have played {} days wins",
+                night::season_day(state, today),
+                state.ruleset.season_days,
+                if left == 1 { "day" } else { "days" },
+                state.ruleset.min_active_days_to_win
+            ),
+            Style::default().fg(theme::AMBER()),
+        )));
+    }
     lines.push(Line::from(Span::styled(
         format!(
             "world: {} people · {} km² · {} of {} territories taken",
@@ -184,13 +225,19 @@ pub fn draw_overview_view(frame: &mut Frame, area: Rect, realm: &RealmState) {
             ),
             Style::default().fg(theme::AMBER()),
         )));
-        let banked = if me.banked > 0 {
-            format!(" (+{} banked from days away)", me.banked)
-        } else {
-            String::new()
+        let mut extras = Vec::new();
+        if me.land > 0 {
+            extras.push(format!("{} from your land", me.land));
+        }
+        if me.banked > 0 {
+            extras.push(format!("{} banked from days away", me.banked));
+        }
+        let extras = match extras.is_empty() {
+            true => String::new(),
+            false => format!(" (+{})", extras.join(", +")),
         };
         lines.push(Line::from(Span::styled(
-            format!("today: {} of {} points{banked}", me.left(), me.allowance),
+            format!("today: {} of {} points{extras}", me.left(), me.allowance),
             dim,
         )));
         // The ladder, stated as what happens next rather than as a table.

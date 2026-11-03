@@ -282,9 +282,10 @@ fn feed_items_merge_the_columns_newest_first_and_escape_once() {
 
 /// The front page's lines: the masthead, the dateline, the most played
 /// arcade game with its picture and its finishes when anyone played, the
-/// numbers whole and then each printed column's head under its name (a
-/// column that did not print is left out), the way in; nothing when none
-/// printed, whoever played.
+/// numbers whole and then each printed column's head under its name in
+/// the edition page's order, reading before outside (a column that did
+/// not print is left out), the way in; nothing when none printed,
+/// whoever played.
 #[test]
 fn the_front_page_card_leads_with_the_most_played_game() {
     let line = |ink, text: &str| CardLine::new(ink, text);
@@ -298,8 +299,8 @@ fn the_front_page_card_leads_with_the_most_played_game() {
             EDITION,
             sudoku,
             &yesterday,
+            &["Someone shared a fine link.".to_string()],
             &["The world turned.".to_string()],
-            &[]
         ),
         Some(vec![
             line(Ink::Title, "THE LATE EDITION"),
@@ -317,21 +318,24 @@ fn the_front_page_card_leads_with_the_most_played_game() {
             line(Ink::Body, "Booth: 2 tracks queued"),
             line(Ink::Body, "Arcade: 3 games finished, all Sudoku"),
             CardLine::blank(),
+            line(Ink::Heading, "WHAT WE WERE READING"),
+            line(Ink::Body, "Someone shared a fine link."),
+            CardLine::blank(),
             line(Ink::Heading, "OUTSIDE"),
             line(Ink::Body, "The world turned."),
             CardLine::blank(),
             line(Ink::Dim, "late.sh/paper"),
         ])
     );
-    let quiet = front_page(EDITION, None, &[], &["The world turned.".to_string()], &[])
+    let quiet = front_page(EDITION, None, &[], &[], &["The world turned.".to_string()])
         .expect("a column printed");
     assert_eq!(quiet.len(), 7, "nobody played: no headline");
     let one = front_page(
         EDITION,
         Some((ArcadeGame::Score(ScoreGame::Snake), 1)),
         &[],
-        &["The world turned.".to_string()],
         &[],
+        &["The world turned.".to_string()],
     )
     .expect("a column printed");
     assert!(

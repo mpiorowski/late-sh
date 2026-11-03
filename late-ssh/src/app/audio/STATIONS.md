@@ -44,7 +44,8 @@ resolves to nothing, so `/api/listen` never lists a station it cannot play.
 - **Stations modal** (`v` then `r`): the catalogue grouped by section (one
   faint heading per group, which the cursor skips), every row showing live
   now-playing from the shared map (a station with no data shows its label
-  dimmed, never a stale title). `Enter` listens now and switches the source to
+  dimmed, never a stale title). `↑`/`↓`, `j`/`k` or `Ctrl+J`/`Ctrl+K` move,
+  `PageUp`/`PageDown` jump eight rows. `Enter` listens now and switches the source to
   radio if YouTube was active (it always produces sound); `1`-`5` pin to a
   slot, de-duplicating; `0` unpins; `Ctrl+Y` copies the highlighted track.
   There is no preview-then-revert: the paired CLI is the only audible surface,

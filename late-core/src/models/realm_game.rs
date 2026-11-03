@@ -48,6 +48,10 @@ pub struct RealmDay {
     /// The board as this day closed. `None` on days archived before boards
     /// were kept, and on a day still being played.
     pub board: Option<Value>,
+    /// The board the day's night opened on, before any of its fights landed:
+    /// what the replay draws under them. `None` on instant games, on days
+    /// archived before it was kept, and on a day still being played.
+    pub board_open: Option<Value>,
 }
 
 impl From<tokio_postgres::Row> for RealmDay {
@@ -57,6 +61,7 @@ impl From<tokio_postgres::Row> for RealmDay {
             day: row.get("day"),
             seed: row.get("seed"),
             board: row.get("board"),
+            board_open: row.get("board_open"),
             log: row.get("log"),
         }
     }
@@ -435,12 +440,13 @@ impl RealmGame {
     /// Archive one day's log. Re-archiving the same day overwrites it: a day
     /// is written when it rolls over, but a crash mid-day can leave a partial
     /// row that the next write completes.
-    /// Write a day's log, and optionally the board as that day closed.
+    /// Write a day's log, and optionally the board as that day closed and
+    /// the board its night opened on.
     ///
-    /// `board` is `None` for the live upserts that happen while a day is
+    /// The boards are `None` for the live upserts that happen while a day is
     /// being played, and `Some` once at the rollover (and again when the game
-    /// ends). The `COALESCE` is what keeps those apart: a mid-day write must
-    /// never replace the closing snapshot with a half-finished one, and the
+    /// ends). The `COALESCE` on each is what keeps those apart: a mid-day
+    /// write must never replace a snapshot with a half-finished one, and the
     /// day row is rewritten on every action.
     pub async fn archive_day(
         client: &Client,
@@ -449,16 +455,18 @@ impl RealmGame {
         seed: i64,
         log: &Value,
         board: Option<&Value>,
+        board_open: Option<&Value>,
     ) -> Result<u64> {
         let inserted = client
             .execute(
-                "INSERT INTO realm_days (game_id, day, seed, log, board)
-                 VALUES ($1, $2, $3, $4, $5)
+                "INSERT INTO realm_days (game_id, day, seed, log, board, board_open)
+                 VALUES ($1, $2, $3, $4, $5, $6)
                  ON CONFLICT (game_id, day) DO UPDATE
                  SET seed = EXCLUDED.seed,
                      log = EXCLUDED.log,
-                     board = COALESCE(EXCLUDED.board, realm_days.board)",
-                &[&game_id, &day, &seed, log, &board],
+                     board = COALESCE(EXCLUDED.board, realm_days.board),
+                     board_open = COALESCE(EXCLUDED.board_open, realm_days.board_open)",
+                &[&game_id, &day, &seed, log, &board, &board_open],
             )
             .await?;
         Ok(inserted)

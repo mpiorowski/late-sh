@@ -19,9 +19,8 @@ pub const PROFILE_LEDGER_ROWS: i64 = 100;
 /// The three daily-puzzle difficulty tiers. One enum owns both reward
 /// scales: the chip bonus a daily win pays (mirrored in seeded
 /// `reward_templates` rows) and the Arcade Wins leaderboard points, so the
-/// two can never drift apart in string-matched copies. Solitaire's draw
-/// modes are not tiers: draw-1 pays [`Difficulty::Medium`] chips but scores
-/// [`Difficulty::Easy`] points, so its mapping lives at each consumer.
+/// two can never drift apart in string-matched copies. Which tier each of a
+/// puzzle's boards sits on is `leaderboard::DailyPuzzle::tiers`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Difficulty {
     Easy,

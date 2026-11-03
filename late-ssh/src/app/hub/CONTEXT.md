@@ -52,6 +52,10 @@ Current user-facing chip amounts:
   - Le Word daily: 100 chips
   - Rubik's Cube daily: 250 chips
   - Sliding Puzzle easy/medium/hard: 100/250/500 chips
+  - Netwalk easy/medium/hard: 100/250/500 chips
+  - Chess Puzzle easy/medium/hard: 100/250/500 chips
+  - Word Wheel Bronze/Silver/Gold (easy/medium/hard): 100/250/500 chips
+  - Quartets daily: 250 chips
 - Bonsai watering pays 200 chips once per UTC day (`app/bonsai/CONTEXT.md`).
 - Quest completions pay their template-defined chip reward automatically once per active assignment.
 - Asterion escapes pay 4000 chips once per UTC day through `game_payout_claims`.
@@ -89,19 +93,23 @@ Activity gateway notes:
 - Hidden quest-progress events use `ActivityCategory::Quest` for score signals so they reach no public surface.
 - Lateris and Snake publish final-score Activity events; Snake includes final level. House tables publish sit-downs only (`app/lobby/house/CONTEXT.md`).
 
-Seeded Arcade quest templates include Sudoku easy/medium, Nonogram easy/medium, Minesweeper easy/medium, Solitaire draw-1/draw-3, Le Word daily, Rubik's Cube daily, Sliding Puzzle easy/medium/hard, and score quests for Lateris, 2048, and Snake. Le Word uses `daily_puzzle_win` with params `{ "game": "le_word", "difficulty": "daily" }` and pays the quick quest reward of 150 chips. Rubik's Cube uses `arcade_puzzle_solved` with params `{ "game": "rubiks_cube", "difficulty": "daily" }` and pays the medium quest reward of 375 chips. Sliding Puzzle uses `daily_puzzle_win` with its matching difficulty key; easy/medium are daily templates and hard is weekly. Each slot rolls from its full difficulty bucket: there is no cross-slot domain avoidance, so the medium slot can draw a medium puzzle even after slot 1 took an easy puzzle. Rubik's Cube and draw-3 Solitaire each carry two quest templates so they sit in both tiers: Rubik's is medium daily (`solve_rubiks_cube`) and hard weekly (`solve_rubiks_cube_weekly`, migration 121); draw-3 Solitaire is hard weekly (`win_draw_3_solitaire`) and medium daily (`win_draw_3_solitaire_daily`, migration 121). The twins share completion params, so one solve ticks both when both are drawn.
+Seeded Arcade quest templates include Sudoku easy/medium, Nonogram easy/medium, Minesweeper easy/medium, Solitaire draw-1/draw-3, Le Word daily, Rubik's Cube daily, Quartets daily, Sliding Puzzle, Netwalk, Chess Puzzle and Word Wheel easy/medium/hard, and score quests for Lateris, 2048, and Snake. Le Word uses `daily_puzzle_win` with params `{ "game": "le_word", "difficulty": "daily" }` and pays the quick quest reward of 150 chips. Rubik's Cube uses `arcade_puzzle_solved` with params `{ "game": "rubiks_cube", "difficulty": "daily" }` and pays the medium quest reward of 375 chips. Sliding Puzzle, Netwalk, Chess Puzzle and Word Wheel (migration 271) use `daily_puzzle_win` with their matching difficulty key; easy (quick, 150) and medium (skill, 375) are daily templates and hard (750) is weekly. Word Wheel's are titled by rank (Reach Bronze, Silver, Gold) and match the rank's tier key. Each slot rolls from its full difficulty bucket: there is no cross-slot domain avoidance, so the medium slot can draw a medium puzzle even after slot 1 took an easy puzzle. Rubik's Cube, Quartets and draw-3 Solitaire each carry two quest templates so they sit in both tiers: Rubik's is medium daily (`solve_rubiks_cube`) and hard weekly (`solve_rubiks_cube_weekly`, migration 121); Quartets is the same, `solve_quartets` and `solve_quartets_weekly` (migration 271, `daily_puzzle_win` with `{ "game": "quartets", "difficulty": "daily" }`); draw-3 Solitaire is hard weekly (`win_draw_3_solitaire`) and medium daily (`win_draw_3_solitaire_daily`, migration 121). The twins share completion params, so one solve ticks both when both are drawn.
 
 ## Arcade Wins Scoring
 
 The monthly Arcade Wins board is not a chip board. It awards points for daily puzzle completions:
-- easy / draw-1: 1 point
-- medium: 3 points
+- easy: 1 point
+- medium / draw-1: 3 points
 - hard / draw-3: 5 points
 - Le Word daily: 1 point
 - Rubik's Cube daily: 3 points
 - Sliding Puzzle easy/medium/hard: 1/3/5 points
+- Netwalk easy/medium/hard: 1/3/5 points
+- Chess Puzzle easy/medium/hard: 1/3/5 points
+- Word Wheel Bronze/Silver/Gold (easy/medium/hard): 1/3/5 points
+- Quartets daily: 3 points
 
-This scoring lives in `late-core/src/models/leaderboard.rs` SQL. Completing more hard dailies across more daily games is the intended path to win the board.
+Each board's tier is `DailyPuzzle::tiers` in `late-core/src/models/leaderboard.rs`, the same tier its chip payout comes from, and the points SQL is generated from it. Completing more hard dailies across more daily games is the intended path to win the board.
 
 ## Shop / Marketplace
 

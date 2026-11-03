@@ -3,10 +3,13 @@
 use crate::app::activity::event::ActivityEvent;
 use crate::app::activity::publisher::ActivityPublisher;
 use crate::app::ai::svc::AiService;
+use crate::app::arcade::chess_puzzle::svc::ChessPuzzleService;
 use crate::app::arcade::le_word::svc::LeWordService;
 use crate::app::arcade::minesweeper::svc::MinesweeperService;
+use crate::app::arcade::netwalk::svc::NetwalkService;
 use crate::app::arcade::nonogram::state::Library as NonogramLibrary;
 use crate::app::arcade::nonogram::svc::NonogramService;
+use crate::app::arcade::quartets::svc::QuartetsService;
 use crate::app::arcade::rubiks_cube::svc::RubiksCubeService;
 use crate::app::arcade::sliding_puzzle::svc::SlidingPuzzleService;
 use crate::app::arcade::snake::svc::SnakeService;
@@ -15,6 +18,7 @@ use crate::app::arcade::sudoku::svc::SudokuService;
 use crate::app::arcade::tetris::svc::LaterisService;
 use crate::app::arcade::traffic::svc::TrafficService;
 use crate::app::arcade::twenty_forty_eight::svc::TwentyFortyEightService;
+use crate::app::arcade::word_wheel::svc::WordWheelService;
 use crate::app::artboard::provenance::ArtboardProvenance;
 use crate::app::bonsai::svc::BonsaiService;
 use crate::app::chat::news::svc::ArticleService;
@@ -300,6 +304,10 @@ pub fn test_app_state(db: Db, config: Config) -> State {
     let le_word_service = LeWordService::new(db.clone(), activity_tx.clone());
     let rubiks_cube_service = RubiksCubeService::new(db.clone(), activity_tx.clone());
     let sliding_puzzle_service = SlidingPuzzleService::new(db.clone(), activity_tx.clone());
+    let netwalk_service = NetwalkService::new(db.clone(), activity_tx.clone());
+    let chess_puzzle_service = ChessPuzzleService::new(db.clone(), activity_tx.clone());
+    let word_wheel_service = WordWheelService::new(db.clone(), activity_tx.clone());
+    let quartets_service = QuartetsService::new(db.clone(), activity_tx.clone());
     let chip_service = ChipService::new(db.clone());
     let activity_publisher = ActivityPublisher::new(db.clone(), activity_tx.clone());
     let sudoku_service = SudokuService::new(db.clone(), activity_tx.clone());
@@ -376,6 +384,10 @@ pub fn test_app_state(db: Db, config: Config) -> State {
         le_word_service,
         rubiks_cube_service,
         sliding_puzzle_service,
+        netwalk_service,
+        chess_puzzle_service,
+        word_wheel_service,
+        quartets_service,
         sudoku_service,
         nonogram_service,
         solitaire_service,
@@ -601,8 +613,16 @@ fn make_app_with_chat_service_and_permissions(
         initial_rubiks_cube_game: None,
         sliding_puzzle_service: SlidingPuzzleService::new(db.clone(), activity_tx.clone()),
         initial_sliding_puzzle_games: Vec::new(),
-        initial_le_word_daily_word: None,
-        initial_le_word_game: None,
+        netwalk_service: NetwalkService::new(db.clone(), activity_tx.clone()),
+        initial_netwalk_games: Vec::new(),
+        chess_puzzle_service: ChessPuzzleService::new(db.clone(), activity_tx.clone()),
+        initial_chess_puzzle_today: None,
+        initial_chess_puzzle_games: Vec::new(),
+        word_wheel_service: WordWheelService::new(db.clone(), activity_tx.clone()),
+        initial_word_wheel_today: None,
+        quartets_service: QuartetsService::new(db.clone(), activity_tx.clone()),
+        initial_quartets_today: None,
+        initial_le_word_today: None,
         sudoku_service: SudokuService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_sudoku_games: test_sudoku_games(user_id),
         nonogram_service: NonogramService::new(
@@ -894,8 +914,16 @@ pub fn make_app_with_paired_client(
         initial_rubiks_cube_game: None,
         sliding_puzzle_service: SlidingPuzzleService::new(db.clone(), activity_tx.clone()),
         initial_sliding_puzzle_games: Vec::new(),
-        initial_le_word_daily_word: None,
-        initial_le_word_game: None,
+        netwalk_service: NetwalkService::new(db.clone(), activity_tx.clone()),
+        initial_netwalk_games: Vec::new(),
+        chess_puzzle_service: ChessPuzzleService::new(db.clone(), activity_tx.clone()),
+        initial_chess_puzzle_today: None,
+        initial_chess_puzzle_games: Vec::new(),
+        word_wheel_service: WordWheelService::new(db.clone(), activity_tx.clone()),
+        initial_word_wheel_today: None,
+        quartets_service: QuartetsService::new(db.clone(), activity_tx.clone()),
+        initial_quartets_today: None,
+        initial_le_word_today: None,
         sudoku_service: SudokuService::new(db.clone(), broadcast::channel::<ActivityEvent>(64).0),
         initial_sudoku_games: test_sudoku_games(user_id),
         nonogram_service: NonogramService::new(

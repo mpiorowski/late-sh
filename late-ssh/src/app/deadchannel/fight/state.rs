@@ -2842,7 +2842,7 @@ fn refused(refusal: Refusal) -> Outcome {
         Refusal::NotOffered => "that card is not on offer.",
         Refusal::NobodyThere => "nobody is at the crossing tonight. the street is yours.",
         Refusal::NoAnswerOwed => "nobody crossed you. there is nothing to answer.",
-        Refusal::NotOnTheWire => "they are off the wire. the answer keeps.",
+        Refusal::NotOnTheWire => "they have gone dark. the answer keeps.",
         Refusal::NotAnUpgrade
         | Refusal::Short { .. }
         | Refusal::NothingToPatch

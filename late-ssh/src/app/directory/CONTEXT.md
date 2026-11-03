@@ -73,3 +73,5 @@ edits, `d` deletes; each project is a small form).
   Space/Enter pick, Backspace drops the last pick, Esc hands the list back.
   `skills` and `skills_tags` hold the same canonical tags, twelve at most.
 - A moderator editing someone else's card or project gets that page alone.
+
+A shared project is also what the herald draws its weekly post from (`late-ssh/src/app/herald/CONTEXT.md`, "What: a project"): one project of an active member, credited `~name`, linking the project's own URL.

@@ -1,4 +1,4 @@
-use late_core::models::leaderboard::{ArcadeGame, DailyPuzzle, ScoreGame};
+use late_core::models::leaderboard::ArcadeGame;
 
 use super::arcade_art::art;
 
@@ -10,11 +10,7 @@ const ART_COLUMNS: usize = 16;
 /// space to misalign it.
 #[test]
 fn every_arcade_game_has_a_picture_that_fits() {
-    let puzzles = DailyPuzzle::ALL
-        .iter()
-        .map(|&puzzle| ArcadeGame::Puzzle(puzzle));
-    let scores = ScoreGame::ALL.iter().map(|&game| ArcadeGame::Score(game));
-    for game in puzzles.chain(scores) {
+    for game in ArcadeGame::all() {
         let rows = art(game);
         assert!(!rows.is_empty(), "{game:?} has no picture");
         assert!(rows.len() <= ART_ROWS, "{game:?} is {} rows", rows.len());

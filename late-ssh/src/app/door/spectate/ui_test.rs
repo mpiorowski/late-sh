@@ -52,136 +52,66 @@ fn duration_label_reads_minutes_then_hours() {
     assert_eq!(duration_label(185), "3h 05m");
 }
 
+/// The watch chat is Realm's column on both sides of it, a third of the
+/// screen within 34..=64 columns. Beside the game where crawl keeps its 80
+/// columns, else over the game's right side with the game keeping the whole
+/// area.
 #[test]
-fn the_chat_docks_right_when_wide_then_below_when_tall() {
-    let dcss = SpectateGame::Dcss;
-    // Wide enough for crawl's 80 columns, the rule and the chat column.
-    assert_eq!(chat_dock(Rect::new(0, 0, 121, 30), dcss), ChatDock::Right);
-    // Not wide enough, but 24 rows of game fit above the rule and the strip.
-    assert_eq!(chat_dock(Rect::new(0, 0, 120, 34), dcss), ChatDock::Below);
-    // Neither: the watched screen keeps the whole view.
-    assert_eq!(chat_dock(Rect::new(0, 0, 120, 33), dcss), ChatDock::Hidden);
-    assert_eq!(chat_dock(Rect::new(0, 0, 80, 24), dcss), ChatDock::Hidden);
-}
-
-/// Brogue's grid is 100x34, so its chat needs that much more room before it
-/// docks; a view that would dock beside crawl leaves Brogue whole.
-#[test]
-fn a_brogue_watch_docks_only_around_its_whole_grid() {
-    let brogue = SpectateGame::Brogue;
+fn the_chat_column_is_beside_the_game_only_where_crawl_keeps_its_screen() {
     assert_eq!(
-        chat_dock(Rect::new(0, 0, 121, 30), brogue),
-        ChatDock::Hidden
-    );
-    assert_eq!(chat_dock(Rect::new(0, 0, 141, 30), brogue), ChatDock::Right);
-    assert_eq!(
-        chat_dock(Rect::new(0, 0, 140, 43), brogue),
-        ChatDock::Hidden
-    );
-    assert_eq!(chat_dock(Rect::new(0, 0, 140, 44), brogue), ChatDock::Below);
-}
-
-#[test]
-fn a_docked_chat_leaves_crawl_its_minimum_screen() {
-    let (screen, chat) = dock_areas(Rect::new(0, 1, 121, 29), ChatDock::Right);
-    assert_eq!(screen, Rect::new(0, 1, 80, 29));
-    assert_eq!(
-        chat,
-        Some((Rect::new(80, 1, 1, 29), Rect::new(81, 1, 40, 29)))
-    );
-
-    let (screen, chat) = dock_areas(Rect::new(0, 1, 100, 33), ChatDock::Below);
-    assert_eq!(screen, Rect::new(0, 1, 100, 24));
-    assert_eq!(
-        chat,
-        Some((Rect::new(0, 25, 100, 1), Rect::new(0, 26, 100, 8)))
-    );
-
-    let body = Rect::new(0, 1, 80, 23);
-    assert_eq!(dock_areas(body, ChatDock::Hidden), (body, None));
-}
-
-/// A chat docked on the right runs the full height of the view, so its rule
-/// meets the frame's top border; the header sits over the screen alone.
-#[test]
-fn a_right_dock_runs_from_the_top_of_the_view() {
-    let layout = watch_layout(Rect::new(19, 1, 130, 40), ChatDock::Right);
-    assert_eq!(
-        layout,
-        WatchLayout {
-            header: Rect::new(19, 1, 89, 1),
-            screen: Rect::new(19, 2, 89, 39),
-            chat: Some((Rect::new(108, 1, 1, 40), Rect::new(109, 1, 40, 40))),
-        }
-    );
-}
-
-#[test]
-fn a_dock_below_keeps_the_header_the_full_width() {
-    let layout = watch_layout(Rect::new(0, 0, 100, 34), ChatDock::Below);
-    assert_eq!(
-        layout,
-        WatchLayout {
-            header: Rect::new(0, 0, 100, 1),
-            screen: Rect::new(0, 1, 100, 24),
-            chat: Some((Rect::new(0, 25, 100, 1), Rect::new(0, 26, 100, 8))),
-        }
-    );
-}
-
-/// The player's own game: a pane on the right when wide, one row underneath
-/// when only tall, nothing when neither leaves crawl its 80x24.
-#[test]
-fn a_players_chat_never_costs_crawl_its_minimum_screen() {
-    assert_eq!(
-        own_game_split(Rect::new(1, 1, 121, 30), SpectateGame::Dcss),
+        chat_split(Rect::new(1, 1, 150, 30), SpectateGame::Dcss),
         (
-            Rect::new(1, 1, 80, 30),
-            OwnChat::Pane {
-                rule: Rect::new(81, 1, 1, 30),
-                pane: Rect::new(82, 1, 40, 30),
+            Rect::new(1, 1, 99, 30),
+            ChatColumn {
+                rule: Rect::new(100, 1, 1, 30),
+                pane: Rect::new(101, 1, 50, 30),
             }
         )
     );
     assert_eq!(
-        own_game_split(Rect::new(1, 1, 100, 25), SpectateGame::Dcss),
-        (
-            Rect::new(1, 1, 100, 24),
-            OwnChat::Line(Rect::new(1, 25, 100, 1))
-        )
+        chat_split(Rect::new(1, 1, 240, 30), SpectateGame::Dcss)
+            .1
+            .pane,
+        Rect::new(177, 1, 64, 30),
+        "never wider than 64"
     );
-    let small = Rect::new(1, 1, 100, 24);
+    let narrow = Rect::new(1, 1, 100, 24);
     assert_eq!(
-        own_game_split(small, SpectateGame::Dcss),
-        (small, OwnChat::Hidden)
+        chat_split(narrow, SpectateGame::Dcss),
+        (
+            narrow,
+            ChatColumn {
+                rule: Rect::new(66, 1, 1, 24),
+                pane: Rect::new(67, 1, 34, 24),
+            }
+        ),
+        "over the game, never narrower than 34"
     );
 }
 
-/// A Brogue player keeps the whole 100x34 grid: the pane and the line each
-/// need that much room left over.
+/// Brogue keeps its whole 100x34 grid under the chat: where the column does
+/// not fit beside it, it is drawn over the grid.
 #[test]
-fn a_brogue_players_chat_never_costs_the_grid() {
+fn the_chat_column_never_costs_brogue_its_grid() {
     let roomy_for_crawl = Rect::new(1, 1, 121, 34);
     assert_eq!(
-        own_game_split(roomy_for_crawl, SpectateGame::Brogue),
-        (roomy_for_crawl, OwnChat::Hidden)
+        chat_split(roomy_for_crawl, SpectateGame::Brogue).0,
+        roomy_for_crawl
     );
     assert_eq!(
-        own_game_split(Rect::new(1, 1, 120, 35), SpectateGame::Brogue),
+        chat_split(Rect::new(1, 1, 150, 34), SpectateGame::Brogue),
         (
-            Rect::new(1, 1, 120, 34),
-            OwnChat::Line(Rect::new(1, 35, 120, 1))
-        )
-    );
-    assert_eq!(
-        own_game_split(Rect::new(1, 1, 141, 34), SpectateGame::Brogue),
-        (
-            Rect::new(1, 1, 100, 34),
-            OwnChat::Pane {
-                rule: Rect::new(101, 1, 1, 34),
-                pane: Rect::new(102, 1, 40, 34),
+            Rect::new(1, 1, 150, 34),
+            ChatColumn {
+                rule: Rect::new(100, 1, 1, 34),
+                pane: Rect::new(101, 1, 50, 34),
             }
-        )
+        ),
+        "99 columns beside it would cut the grid"
+    );
+    assert_eq!(
+        chat_split(Rect::new(1, 1, 160, 34), SpectateGame::Brogue).0,
+        Rect::new(1, 1, 106, 34)
     );
 }
 
@@ -202,47 +132,7 @@ fn the_rule_tees_into_the_composer_borders() {
     assert_eq!(column, "\u{2502}\u{2502}\u{251c}\u{2502}\u{251c}\u{2502}");
 }
 
-/// The one-row fallback under a player's own game always says how many are
-/// watching: beside the newest message, or with nobody having spoken, even
-/// when nobody is there.
-#[test]
-fn the_players_chat_row_always_counts_the_watchers() {
-    let row = |line: Option<&WatchLine>, watchers: usize| {
-        let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(60, 1))
-            .expect("test terminal");
-        terminal
-            .draw(|frame| {
-                draw_watch_line(
-                    frame,
-                    Rect::new(0, 0, 60, 1),
-                    line,
-                    watchers,
-                    SpectateGame::Dcss,
-                )
-            })
-            .expect("draw");
-        let buffer = terminal.backend().buffer();
-        (0..60)
-            .map(|x| buffer[(x, 0)].symbol().to_string())
-            .collect::<String>()
-            .trim_end()
-            .to_string()
-    };
-
-    assert_eq!(row(None, 0), " 0 watching \u{b7} nobody has said anything");
-    let line = WatchLine {
-        author: "mira".to_string(),
-        body: "nice dodge".to_string(),
-        is_action: false,
-        age: "now".to_string(),
-    };
-    assert_eq!(
-        row(Some(&line), 3),
-        format!(" mira: nice dodge{}now \u{b7} 3 watching", " ".repeat(26))
-    );
-}
-
-/// One row of a 40-column (or wider) buffer, as plain text.
+/// One row of a buffer `width` columns wide, as plain text.
 fn drawn_row(width: u16, draw: impl FnOnce(&mut Frame, Rect)) -> String {
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 1))
         .expect("test terminal");
@@ -257,41 +147,43 @@ fn drawn_row(width: u16, draw: impl FnOnce(&mut Frame, Rect)) -> String {
         .to_string()
 }
 
-/// On Zork the watch chat's header says how a suggested command works from
-/// each side, whole within the 40-column dock even at three-digit counts;
-/// the other games' headers are the count alone.
+/// The watch chat's header: on Zork how a suggested command works from each
+/// side, on the player's side how to get back to the game, a watcher's on
+/// the other games the count alone. Whole in the narrowest column.
 #[test]
 fn the_zork_chat_header_says_how_to_suggest() {
-    let header = |watchers: usize, game: SpectateGame, side: ChatSide| {
-        drawn_row(DOCK_RIGHT_WIDTH, |frame, area| {
+    let header = |watchers: usize, game: SpectateGame, side: ChatSide<'_>| {
+        drawn_row(CHAT_MIN_WIDTH, |frame, area| {
             draw_chat_header(frame, area, watchers, game, side)
         })
     };
 
     assert_eq!(
-        header(2, SpectateGame::Zork, ChatSide::Watcher),
-        " 2 watching \u{b7} type >look to suggest"
+        header(100, SpectateGame::Zork, ChatSide::Watcher),
+        " 100 watching \u{b7} >look to suggest"
     );
     assert_eq!(
-        header(100, SpectateGame::Zork, ChatSide::Player),
-        " 100 watching \u{b7} F3 takes a >suggestion"
-    );
-    assert_eq!(
-        header(2, SpectateGame::Nethack, ChatSide::Player),
+        header(2, SpectateGame::Nethack, ChatSide::Watcher),
         " 2 watching"
     );
-}
-
-/// The one-row fallback under a player's own Zork game names F3 too, after
-/// the count.
-#[test]
-fn the_zork_players_chat_row_names_f3() {
-    let row = drawn_row(80, |frame, area| {
-        draw_watch_line(frame, area, None, 1, SpectateGame::Zork)
-    });
-
     assert_eq!(
-        row,
-        " 1 watching \u{b7} nobody has said anything \u{b7} F3 takes a >suggestion"
+        header(
+            100,
+            SpectateGame::Nethack,
+            ChatSide::Player { suggestion: None }
+        ),
+        " 100 watching \u{b7} Esc to the game",
+        "whole in the player's narrowest column"
+    );
+    assert_eq!(
+        drawn_row(64, |frame, area| draw_chat_header(
+            frame,
+            area,
+            100,
+            SpectateGame::Zork,
+            ChatSide::Player { suggestion: None }
+        )),
+        " 100 watching \u{b7} F3 takes a >suggestion \u{b7} Esc to the game",
+        "whole in the widest column"
     );
 }

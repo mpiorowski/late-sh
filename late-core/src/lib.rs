@@ -5,6 +5,12 @@ pub mod ascii;
 #[cfg(test)]
 mod ascii_test;
 pub mod audio;
+pub mod chess_puzzle;
+#[cfg(test)]
+mod chess_puzzle_test;
+pub mod daily;
+#[cfg(test)]
+mod daily_test;
 pub mod db;
 #[cfg(test)]
 mod db_test;
@@ -23,6 +29,9 @@ pub mod telemetry;
 pub mod vocab;
 #[cfg(test)]
 mod vocab_test;
+pub mod word_wheel;
+#[cfg(test)]
+mod word_wheel_test;
 
 #[cfg(feature = "testing")]
 pub mod test_utils;

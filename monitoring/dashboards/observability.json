@@ -4627,7 +4627,7 @@
     {
       "type": "bargauge",
       "title": "Daily Posts and Deliveries",
-      "description": "The herald's one post a day (late-ssh app/herald) over the range: posted, skipped (nothing worth posting), lost (another replica had the day), failed (retried up to three times, then the day rests); and each network's leg of it, delivered or failed. One 'posted' or 'skipped' a day is the healthy line; a 'failed' with no 'posted' after it is a day missed, and the network rows say which leg.",
+      "description": "The herald's two posts a day (late-ssh app/herald), words and art, over the range: posted, skipped (nothing to post, or nothing clean), lost (another replica had the slot), failed (retried up to three times, then the slot rests), each by slot; and each network's leg of it, delivered or failed. One 'posted' or 'skipped' a day for each of words and art is the healthy line; a 'failed' with no 'posted' after it is a post missed, and the network rows say which leg.",
       "datasource": {
         "uid": "victoriametrics",
         "type": "victoriametrics-metrics-datasource"
@@ -4635,8 +4635,8 @@
       "targets": [
         {
           "refId": "A",
-          "expr": "sum by (result) (increase(late_ssh_herald_posts_total[$__range]))",
-          "legendFormat": "{{result}}",
+          "expr": "sum by (slot, result) (increase(late_ssh_herald_posts_total[$__range]))",
+          "legendFormat": "{{slot}} {{result}}",
           "instant": true
         },
         {
@@ -4689,8 +4689,8 @@
     },
     {
       "type": "bargauge",
-      "title": "The Look",
-      "description": "What the herald's look (late-ssh app/herald/look.rs) made of each picture it was shown, a day's fresh pick or an admin's /herald preview: clean (no warning), warned (posted blurred behind a content warning), unseen (the model failed or AI is off; posted marked not reviewed). A retry reuses the stored look and is not counted. Unseen in prod is the herald_look_failed error in the logs.",
+      "title": "The Look and the Projects",
+      "description": "What the herald's look (late-ssh app/herald/look.rs) made of each picture it was shown, a fresh pick or an admin's /herald preview: clean (no warning), warned (stays unposted), unseen (AI is off; stays unposted), drawn (a card, no call), failed (the call failed: the post fails with nothing sent and the next check asks again; the herald_post_failed error in the logs). A retry with a stored look reuses it and is not counted. The project rows are the write-up (app/herald/writeup.rs), per project asked about: written, refused (commercial, unfit or unclear; the next is tried), ai_off, failed (the herald_writeup_failed error; the week still owes a project).",
       "datasource": {
         "uid": "victoriametrics",
         "type": "victoriametrics-metrics-datasource"
@@ -4700,6 +4700,12 @@
           "refId": "A",
           "expr": "sum by (result) (increase(late_ssh_herald_looks_total[$__range]))",
           "legendFormat": "{{result}}",
+          "instant": true
+        },
+        {
+          "refId": "B",
+          "expr": "sum by (result) (increase(late_ssh_herald_projects_total[$__range]))",
+          "legendFormat": "project {{result}}",
           "instant": true
         }
       ],

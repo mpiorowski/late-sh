@@ -32,6 +32,7 @@ fn data() -> StatusData<'static> {
         care_due: 1,
         voice: Some("lounge [talking]"),
         live: Some("stream mat · late night rust"),
+        username: "night_owl",
     }
 }
 
@@ -934,4 +935,21 @@ fn live_reads_the_strip_and_rests_or_hides_when_it_is_down() {
     assert_eq!(render(auto_hiding, &quiet), None);
     assert_eq!(click_action(StatusComponent::Live), Some(StatusClick::Live));
     assert_eq!(click_action(StatusComponent::Date), None);
+}
+
+/// The username segment names who this session is logged in as, for anyone
+/// juggling several keys or accounts. It always has a reading, and is
+/// opt-in, so nobody's bar grows unasked.
+#[test]
+fn username_segment_paints_the_logged_in_name() {
+    assert_eq!(
+        roomy(&[on(StatusComponent::Username, LabelMode::Icon)]),
+        " 👤 night_owl ─"
+    );
+    assert_eq!(
+        roomy(&[on(StatusComponent::Username, LabelMode::Text)]),
+        " as night_owl ─"
+    );
+    assert!(!StatusComponent::Username.default_enabled());
+    assert!(!StatusComponent::Username.backfill_existing());
 }

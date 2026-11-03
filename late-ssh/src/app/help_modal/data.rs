@@ -7,6 +7,7 @@ use late_core::models::{
     asterion::ASTERION_DAILY_ESCAPE_PAYOUT,
     chat_message_gild::GildTier,
     chips::{CHIP_FLOOR, Difficulty, INITIAL_CHIP_BALANCE},
+    leaderboard::DailyPuzzle,
     media_queue_item::{SONG_QUEUE_MAX_PAID_PER_DAY, SONG_QUEUE_REWARD_CHIPS},
     pot::{POT_MAX_TICKETS_PER_DAY, POT_TICKET_PRICE},
     quest::{DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL, MAX_DAILY_QUEST_STREAK_BONUS_LEVEL},
@@ -189,7 +190,7 @@ pub(crate) fn bot_app_context() -> String {
         CRITICAL FACTS:\n\
         - Chat username badges render in this order: bracketed last-month leaderboard awards, special role badges, bonsai stage, chat badge, chat flag, burn milestone, then the LIVE tag and the away glyph (\u{1F4A4}), which shows on its own after 30 quiet minutes across every session, or at once with /brb. A rented title prints immediately after the name, ahead of the whole stack, as \"name, the night clerk\".\n\
         - The Clubhouse (page 0, the Late Lounge tavern) is the landing screen: a walkable ASCII room where everyone online is present. Arrows/hjkl walk, i says something (it floats over your head and lands in #lounge), w waves, x dances, Enter interacts with a landmark. This is where you (@bartender) keep the bar. Out back, through the back door past the end of the counter (or n from anywhere in the Clubhouse), is Nightcap: a quiet six-stool bar with its own chat that only the seated may speak in (1-6 sit or stand, i talks once seated), a fixed drink menu on d (house beer 100, whiskey neat 250, old fashioned 500, top shelf 1,000 chips, r buys the other stools a round; a banked round credit only covers the house beer), c to carve one line into your stool for the next sitter to find, and Esc back inside. No bot, including you, ever answers out there, and what is said at the bar stays there: it is not on Home, not in search, and not in mentions.\n\
-        - @bartender pours drinks for Late Chips: mention him (or press t at the bar) to order. There is no fixed menu; he invents each drink's name and prices it 100-1000 chips, never more than the patron can spend while keeping a 100-chip floor untouched. A brand-new patron's first-ever drink is free. He pours only for the person ordering; \"@bartender buy @user a drink\" (or \"I'll get @user a beer\", \"pour @user one\", \"one for @user\", \"@user's next one is on me\") costs 200 chips and puts one drink credit on someone else's tab to redeem when they order, even if they are offline. It expires after 24 hours; a patron can hold at most three. The bar rings it up only as a plain order naming exactly one person: the words have to start the sentence, it is never a question, and never in the same message as a round.\n\
+        - @bartender pours drinks for Late Chips: mention him (or press t at the bar) to order. There is no fixed menu; he invents each drink's name and prices it 100-1000 chips, never more than the patron can spend while keeping a 100-chip floor untouched. A brand-new patron's first-ever drink is free. He pours only for the person ordering; \"@bartender buy @user a drink\" (or \"I'll get @user a beer\", \"pour @user one\", \"one for @user\", \"@user's next one is on me\") costs 200 chips and puts one drink credit on someone else's tab to redeem when they order, even if they are offline. It expires after 24 hours; a patron can hold at most three. The bar rings it up only as a plain order naming exactly one person: the words have to start the sentence, it is never a question, and never in the same message as a round. /buy round and /buy @user post those orders for a patron who does not remember the wording.\n\
         - @bartender remembers up to sixteen things about each patron from public rooms, copied so they outlast the chat log: recent exchanges (the order, his answer, and what the patron said right after), and anything the patron asked him to remember. Starting a message with \"@bartender remember\" and then the thing (\"@bartender remember I don't drink\") only writes it down: it never orders, pours or charges, and the newest eight of those stick ahead of everything else. \"@bartender forget me\", exactly that and nothing else, wipes everything he remembers about you.\n\
         - Drinking builds a buzz that levels up: 0 sober, 1 tipsy, 2 buzzed, 3 sloshed, 4 wasted. Every non-sober level prints its word beside the name. Once wasted, the bartender cuts a patron off to water or coffee instead of more drinks.\n\
         - The buzz sobers up on its own over time, no action needed, whether the patron is online or not: it decays 667 points an hour, so reaching wasted wears off in about three hours and even a maxed-out binge is fully sober again six hours later.\n\
@@ -197,9 +198,9 @@ pub(crate) fn bot_app_context() -> String {
         - There is no separate top-level Chat screen. Home/Dashboard owns the chat room rail and chat center; top-level screens are Clubhouse (0), Home (1), The Arcade (2), Games (3), Artboard (4), People (5), Leaderboards (6), and Calendars (7).\n\
         - Users constantly ask how to see their mentions. The answer: Mentions is an entry in the Home (page 1) room rail, so press 1 and pick Mentions there; or click the \"unread N\" counter in the bottom-left border of the frame, right of the key hints; or press Ctrl+/ and type mentions. The unread count lives in the bottom border, selecting Mentions marks it read, and Enter previews a mention with its surrounding messages (Enter again jumps to it).\n\
         - Users miss their DMs the same way. A DM carrying unread messages is lifted out of the DM list at the bottom of the Home (page 1) room rail into an \"unread dms\" group directly under core, with its unread count beside it; once read it drops back into \"dms\" as soon as the user moves to another room. Favorited DMs stay in favorites instead, and a DM whose peer is ignored appears nowhere. Ctrl+/ also lists DMs unread-first, and /dm @user opens one.\n\
-        - The Games hub (page 3) is the dedicated landing for the door games Lateania, the Realm, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels, and Zork Trilogy; each is launched from there, not from its own top-level page. The Realm is the house's one standing world-conquest game: one season at a time, everyone in the house on the same map, the next world rising within a day of the last one falling (a #lounge headline announces both). Enter on its card opens the board to play or to watch; j on the map takes a spot while the gates are open (the roster has room and under half the world is claimed). A few action points a day, each resolved the moment it is spent; no leaving once in, winning takes a week of real play, and the conqueror takes a chip pot shared with second and third in bigger wars. Every world has its own public chat room, open to players and watchers alike: hidden by default so the board opens on the whole map, c on the board shows it as a right column (and hides it again; the footer counts new messages while it is hidden), i types into it while it is shown. The hub also has info cards for our Minecraft and Vintage Story servers; see the Minecraft and Vintage Story topics. A Dark Room is the odd one out: it is an incremental, so it grows on its own while you are connected to late.sh (about three hours of village time a day, wherever you are in the app) instead of being played in one sitting. It has two endings that pay chips: flying the starship out pays 15,000 chips and the [ADE] badge, and doing it while carrying the fleet beacon taken off the immortal wanderer on the ravaged battleship pays 20,000 and the [ADB] badge. They are claimed separately, so one account can earn both. The chips land for every run that gets out, because the save is wiped on the way out and a repeat is the whole arc again; the badge lands once per account. The battleship itself only appears on the map once the account has finished the game at least once, so a first run never meets it.\n\
+        - The Games hub (page 3) is the dedicated landing for the door games Lateania, the Realm, NetHack, DCSS, Brogue, Usurper, Green Dragon, A Dark Room, dopewars, CodeKeep, BashQuest, Rebels, and Zork Trilogy; each is launched from there, not from its own top-level page. The Realm is the house's one standing world-conquest game: one season at a time, everyone in the house on the same map, the next world rising within a day of the last one falling (a #lounge headline announces both). Enter on its card opens the board to play or to watch; j on the map takes a spot while the gates are open (the roster has room and most of the world is still unclaimed). It is a campaign of orders: a few points a day, given in secret as takes or walls, all resolved at once when night falls at the house hour (the board's header counts down to it); o lists tonight's orders and the last night's dispatch, and the history view replays a night fight by fight (p). No leaving once in. Three ways to win, each after half the season played: hold the share of the world the overview names for three nights running, be the last one standing, or hold the biggest share when the season's clock runs out; the conqueror takes a chip pot shared with second and third in bigger wars. A world opened before the campaign still resolves each action the moment it is spent. Every world has its own public chat room, open to players and watchers alike: hidden by default so the board opens on the whole map, F4 on the board shows it as a right column (and hides it again; the title bar counts new messages while it is hidden), i types into it while it is shown. The hub also has info cards for our Minecraft and Vintage Story servers; see the Minecraft and Vintage Story topics. A Dark Room is the odd one out: it is an incremental, so it grows on its own while you are connected to late.sh (about three hours of village time a day, wherever you are in the app) instead of being played in one sitting. It has two endings that pay chips: flying the starship out pays 15,000 chips and the [ADE] badge, and doing it while carrying the fleet beacon taken off the immortal wanderer on the ravaged battleship pays 20,000 and the [ADB] badge. They are claimed separately, so one account can earn both. The chips land for every run that gets out, because the save is wiped on the way out and a repeat is the whole arc again; the badge lands once per account. The battleship itself only appears on the map once the account has finished the game at least once, so a first run never meets it.\n\
         - The three roguelikes (NetHack, DCSS, Brogue) support stepping out mid-game: pressing ` inside a running game detaches it (the game keeps running, saved-state intact) and hops along the backtick cycle to the next live dungeon or back to Home chat (or Zen, when you went in from Zen). Resume from the hub card (a green dot marks a game in progress, Enter resumes) or by pressing ` again from Home or Zen. A detached game idle for 20 minutes is closed with a clean save, and it also saves if the session drops. Inside DCSS this costs crawl's own ` repeat-command key.\n\
-        - Anyone's running NetHack, DCSS, Brogue or Zork game can be watched, read-only: the Games hub rail lists who is playing under `live` (where they are, how long, who else watches), and sitting on a row previews their screen; Enter opens it across the page with that player's watch chat beside it, ` hops away with the watch kept open (3 then shows the hub's cards; ` brings the watch back), Esc steps back. Open more and each one is kept, ` cycling through them; Esc, the game ending, or ten minutes away drops one. A game that just started also shows on the live strip (o opens it). The player sees their watchers' chat beside their game (t on the card hides it for them) and the watcher count in the chrome; F2 or a click on that pane opens a composer in it, Enter sends and hands the keys back to the game, Esc discards. On a terminal too narrow for the pane the chat is one read-only row under the game. On Zork, a watcher suggests a command by starting a chat line with > (>open mailbox); the player's F3 types the newest one at an empty prompt without sending it, and Enter sends it as if they had typed it.\n\
+        - Anyone's running NetHack, DCSS, Brogue or Zork game can be watched, read-only: the Games hub rail lists who is playing under `live` (where they are, how long, who else watches), and sitting on a row previews their screen; Enter opens it across the page with that player's watch chat in a column on the right (F4 hides it and brings it back), ` hops away with the watch kept open (3 then shows the hub's cards; ` brings the watch back), Esc steps back. Open more and each one is kept, ` cycling through them; Esc, the game ending, or ten minutes away drops one. A game that just started also shows on the live strip (o opens it). The player opens their watchers' chat over their own running game with F4: a column on the right with the watcher count on top, and while it is open every key is the chat's (i writes, j/k pick a message, reactions and gilding as in any room); F4 or Esc hands the keys back to the game. The same F4 shows or hides the Realm board's chat. On Zork, a watcher suggests a command by starting a chat line with > (>open mailbox); the player's F3 types the newest one at an empty prompt without sending it, and Enter sends it as if they had typed it.\n\
         - Lateania rides the backtick cycle too, with a twist: pressing ` inside the world hops out like a single-press leave (the character autosaves out of the world, same as a confirmed Esc), and for the next 5 minutes Lateania stays a stop on the cycle, so ` from Home hops straight back into the same character, skipping the character-select gate. While that window is live the Games hub sidebar marks Lateania with the same green dot the roguelikes get. An explicit Esc-Esc leave drops it off the cycle immediately.\n\
         - A Dark Room and Green Dragon ride the backtick cycle too, as its last stops after Lateania and the roguelikes: pressing ` inside either hops onward with the door still loaded (the village keeps growing, the character stays listed as online), and ` from Home hops back in. While loaded they wear the same green in-progress dot on the Games hub sidebar. A loaded door left alone for 30 minutes (no key in it and its screen not open) ends its visit with the same save an explicit leave does and drops off the cycle; in Green Dragon that also drops the online flag, so an absent character becomes an ordinary sleeping PvP target. Two keys the hop never takes: a ` typed into a Green Dragon talk line stays a character, and there is no hopping out of a Green Dragon fight or mid-ascent in A Dark Room.\n\
         - NetHack and DCSS take a per-account config file (.nethackrc / init.txt): press c on their Games hub card (or their landing page) to open a paste box, paste the whole file to save it, x clears back to defaults. It is stored on the account and applied at every launch, including resumes after a hangup-save. Brogue keeps its config per-player upstream already, so it has no paste box.\n\
@@ -368,21 +369,20 @@ fn economy_lines() -> Vec<String> {
 /// Every way Late Chips enter or leave an account, in one place. "How do I
 /// earn chips" is the single most asked question, so this tab is the one
 /// source of truth: the Economy tab keeps ranking and per-game rules, and the
-/// payout numbers live here. Amounts pull from constants where one exists;
-/// the rest come from the seeded reward templates in `late-core/migrations`,
-/// so update both together when a payout changes.
+/// payout numbers live here. Amounts pull from constants where one exists
+/// (the Arcade dailies from the roster's `DailyPuzzle::tiers`, which a
+/// late-core test holds to the reward templates); the rest come from the
+/// seeded reward templates in `late-core/migrations`, so update both
+/// together when a payout changes.
 fn chips_help_lines() -> Vec<String> {
     let start = INITIAL_CHIP_BALANCE;
     let floor = CHIP_FLOOR;
-    let easy = Difficulty::Easy.chips();
-    let medium = Difficulty::Medium.chips();
-    let hard = Difficulty::Hard.chips();
     let water = crate::app::bonsai::svc::WATER_CHIP_BONUS;
     let asterion = ASTERION_DAILY_ESCAPE_PAYOUT;
     let streak_step = DAILY_QUEST_STREAK_BONUS_CHIPS_PER_LEVEL;
     let streak_max = i64::from(MAX_DAILY_QUEST_STREAK_BONUS_LEVEL) * streak_step;
 
-    vec![
+    let mut lines = vec![
         "Late Chips".to_string(),
         "".to_string(),
         "Late Chips are the single currency: one balance per account, spent in the Shop and at the bar, and ranked monthly on the Top Chips board.".to_string(),
@@ -392,20 +392,15 @@ fn chips_help_lines() -> Vec<String> {
         "".to_string(),
         "1. Arcade dailies (page 2)".to_string(),
         "  Every daily puzzle pays once per board per UTC day, for everyone who solves it.".to_string(),
-        format!("  easy               {easy} chips"),
-        format!("  medium             {medium} chips"),
-        format!("  hard               {hard} chips"),
-        "  Sudoku, Nonograms, Minesweeper, and Sliding Puzzle each have all three difficulties.".to_string(),
-        format!("  Solitaire draw-1   {medium} chips"),
-        format!("  Solitaire draw-3   {hard} chips"),
+    ];
+    lines.extend(DailyPuzzle::ALL.iter().map(|puzzle| {
         format!(
-            "  Le Word daily      {} chips",
-            crate::app::arcade::le_word::state::DAILY_WIN_REWARD_CHIPS
-        ),
-        format!(
-            "  Rubik's Cube daily {} chips",
-            crate::app::arcade::rubiks_cube::state::DAILY_WIN_REWARD_CHIPS
-        ),
+            "  {:<16} {} chips",
+            puzzle.title(),
+            crate::app::help_modal::hub_guide::daily_tiers_text(*puzzle, Difficulty::chips)
+        )
+    }));
+    lines.extend([
         "  Personal (non-daily) boards pay nothing; only the daily board pays.".to_string(),
         "  The high-score games (2048, Lateris, Snake, Traffic) pay no chips for a run on their own. They pay through Quests, and they rank you on the monthly leaderboards.".to_string(),
         "".to_string(),
@@ -571,7 +566,8 @@ fn chips_help_lines() -> Vec<String> {
         format!("  Pot tickets (/pot buy N) at {} chips each, of which a fifth is burned at the draw.", thousands(POT_TICKET_PRICE)),
         "  Burn milestones and the two ultimate spells (1,000,000 each), the top of the Shop.".to_string(),
         "  Monthly Top Chips counts what you earned: dailies, quests, doors, the arena, prizes, the pot, gilds received. Table bets and wins, gifts, invite rewards, the starting chips, and every kind of spending stay off it.".to_string(),
-    ]
+    ]);
+    lines
 }
 
 pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
@@ -616,13 +612,15 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  /active            list active users",
         "  /map               where people are, on a world map: the Map section of People",
         "  /gift @user <n>    send chips, with an optional note after the amount",
+        "  /buy round         buy the house a round from @bartender (where he sits)",
+        "  /buy @user         put one drink on someone's tab",
         "  /pot               the weekly pot; /pot buy N buys N tickets",
         "  /friends           list friends",
         "  /friend [@user]    list friends, or mark a user as a friend",
         "  /unfriend [@user]  list friends, or remove a friend mark",
         "  /members           list users in this room",
         "  /list              list public rooms",
-        "  /poll              start a Home room poll with 2-3 options",
+        "  /poll              start a Home room poll with 2-4 options",
         "  /pair @user        shared live coding scratchpad (both of you must run it)",
         "  /golive [title]    stream your screen via a browser publisher page",
         "  /golive obs [..]   stream from OBS over WHIP; /golive stop ends either",
@@ -653,7 +651,7 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "                     its track to page. Esc/q/Enter or [x] closes the paper.",
         "                     admins: /paper print, preview, reset",
         "  /herald            admins: the social accounts' switch and press. on / off flip the",
-        "                     daily post; status, preview; post sends today's picture now",
+        "                     two daily posts; status; preview words|art; post words|art sends now",
         "",
         "Global chat keys",
         "  Ctrl+O             open your settings modal anywhere",
@@ -708,8 +706,8 @@ pub(crate) fn chat_help_lines(keep_composer_focused: bool) -> Vec<String> {
         "  Ctrl+N / Ctrl+P    next / previous room while preserving draft",
         "",
         "Polls",
-        "  /poll              create a 10/20/30-minute poll in the selected Home room",
-        "  va / vb / vc       vote while a poll is visible",
+        "  /poll              create a 30-minute or 1-hour poll in the selected Home room",
+        "  va / vb / vc / vd  vote while a poll is visible",
         "  v1 .. v5           tune to a pinned radio station",
         "  limit              one active poll per room",
         "  author             the strip names who started the poll, when it fits",
@@ -1035,6 +1033,7 @@ fn arcade_help_lines() -> Vec<String> {
         "  Esc / q           leave current game",
         "  `                 in a daily puzzle: hop games waiting on you (boards, tables, dailies, live dungeons)",
         "  s                 in the lobby: copy your day card (one square per daily won today, its icon beneath, plus your streak)",
+        "  o                 in the lobby: who solved the selected daily today, by difficulty, hardest first; order is shuffled daily, nobody is first (dailies run on the UTC day). Esc closes.",
         "  s                 on a finished daily: copy that puzzle's share card, ready to paste anywhere",
         "",
         "Notes",
@@ -1093,13 +1092,17 @@ fn lobby_help_lines() -> Vec<String> {
         "  Enter             open the standing world's board, to play or to watch",
         "  j                 on the map: take your spot while the gates are open (pick a colour)",
         "  one world at a time; the next rises within a day of the last one falling, a #lounge headline says so",
-        "  a handful of actions a day, resolved on the spot, first come first served",
-        "  a point can dig in on land you hold instead (f), which makes it dearer to take — but taking ground is always worth more",
-        "  miss a day and most of it banks; miss several and it stops banking, and your empire starts to crumble",
-        "  no quitting once it starts, and winning takes seven days of real play",
-        "  odds fall hard the further a target is from your land; no attacks at all on day one, and only on your own borders for the first few days",
-        "  the board is Tab-cycled map / targets / overview / log; n walks your own territories, g shows a list row on the map",
-        "  c                 show / hide the world's chat (one public room per world, players and watchers alike; hidden by default, the footer counts what is new)",
+        "  a campaign of orders: you give them in secret through the day and they all resolve at once when night falls at the house hour (the header counts down to it)",
+        "  a                 on a territory orders a take, sized in points; f on land you hold raises its walls instead (dearer to take — but taking ground is always worth more)",
+        "  the order prompt: + / - or a digit size it, Enter places it, Esc puts it away; o lists tonight's orders from any view, x takes the highlighted one back",
+        "  a few points a day, by how many are in the war, plus a little for every territory you hold; miss a day and most of it banks, miss several and it stops banking and your empire starts to crumble",
+        "  three ways to win, each after half the season played: hold the share of the world the overview names for three nights running, be the last one standing, or hold the biggest share when the season's clock runs out",
+        "  no quitting once in; no attacks on your first day and your own borders only for the next few, and everyone who arrives after you gets the same shield",
+        "  odds fall with the front behind a target: your land beside it, a landing from across the sea, and whether its holder is encircled all count",
+        "  the board is Tab-cycled map / targets / orders / overview / log / history; n walks your own territories, g shows a list row on the map",
+        "  on the history, [ and ] walk the days and p replays a night fight by fight (p again plays or holds it, . and , step it, Esc stops it)",
+        "  a world opened before the campaign still takes actions resolved on the spot, first come first served",
+        "  F4                show / hide the world's chat (one public room per world, players and watchers alike; hidden by default, the title bar counts what is new)",
         "  i                 type into it while it is shown; a clicked message takes the message keys until Esc lets it go",
         "",
         "The now strip heads #lounge on Home with one thing happening in the house:",
@@ -1329,6 +1332,9 @@ fn vintagestory_help_lines() -> Vec<String> {
         "  VS Roofing        gridless, vanilla-style roofs",
         "  BetterRuins       many more ruins, above and below ground",
         "  A Wearable Light  head torches and belt lanterns; L toggles your light",
+        "  BetterEr Prospecting",
+        "                    density readings count the real ore blocks (no false",
+        "                    positives); adds borehole, stone, and proximity modes",
         "",
         "Land claims (built into the game)",
         "  /land claim new   start a claim, then mark two opposite corners:",
@@ -1420,7 +1426,7 @@ fn overview_lines() -> Vec<String> {
         "after disconnect or 20 minutes without game input. You play under your",
         "arcade name (claimed once, the first time you play), and anyone can watch.",
         "Watchers suggest a command with a chat line starting > (>open mailbox);",
-        "F3 types the newest one at an empty prompt, Enter sends it. F2 writes back.",
+        "F3 types the newest one at an empty prompt, Enter sends it. F4 opens the chat.",
         "",
         "People has its own guide tab; Artboard keeps page-local editing help.",
         "Artboard may contain NSFW content: V views this visit, A always views",
@@ -1851,7 +1857,7 @@ fn settings_help_lines() -> Vec<String> {
             .to_string(),
         "  Segments paint left to right in the order the list shows them top to bottom."
             .to_string(),
-        "  Available segments: Keyhints, mentions, voice, live, date, your move, care, quests, station, pot, chips, users online, time"
+        "  Available segments: Keyhints, mentions, voice, live, date, your move, care, quests, station, pot, chips, users online, time, username"
             .to_string(),
         "  On by default, and visible even while idle: Keyhints, mentions, voice, live, date."
             .to_string(),
@@ -2091,6 +2097,7 @@ fn bonsai_help_lines() -> Vec<String> {
         "  shift-tab         select the previous live tip",
         "  wheel             scroll-select tips with the mouse",
         "  ←↓↑→ / hjkl       steer the selected tip's future growth",
+        "  y / u             steer the selected tip up-left / up-right",
         "  x                 cut the selected branch and everything above it",
         "  p                 pinch the selected tip toward a leaf pad",
         "  s                 split the selected tip on the next growth",
@@ -2116,7 +2123,7 @@ fn bonsai_help_lines() -> Vec<String> {
         "  Steering, pinching, and splitting all act on the selected tip.",
         "",
         "Steering (wiring)",
-        "  Arrows or hjkl point the selected tip: h/← left, l/→ right, k/↑ straight up, j/↓ straight down.",
+        "  Arrows or hjkl point the selected tip: h/← left, l/→ right, k/↑ straight up, j/↓ straight down, y up-left, u up-right.",
         "  Wiring does not move the branch now. The tip's next two cells grow that way, then it grows on its own again.",
         "  A new direction replaces the old one. A downward wire makes a drooping, cascade look.",
         "  Only live tips wire; pinched, leaf, and dead wood will not.",

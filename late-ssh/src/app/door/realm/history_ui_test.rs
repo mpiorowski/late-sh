@@ -6,7 +6,7 @@ use super::{HistoryFrame, render};
 use crate::app::common::worldmap::data::map_by_id;
 use crate::app::common::worldmap::view::Viewport;
 use crate::app::door::realm::resolver::{
-    DayBoard, DayPlayer, DayResult, LogEntry, RealmGameState, STATE_VERSION,
+    DayBoard, DayPlayer, DayResult, LogEntry, RealmGameState, STATE_VERSION, TakerRoll, WinKind,
 };
 use crate::app::door::realm::rulesets::STANDARD;
 use crate::app::door::realm::state::palette_shades;
@@ -27,6 +27,7 @@ fn live_state() -> RealmGameState {
         start_player_count: 0,
         start_day: 0,
         news: None,
+        last_night: None,
     }
 }
 
@@ -46,6 +47,7 @@ fn archived(day: i32, board: Option<DayBoard>, entries: Vec<LogEntry>) -> Archiv
             entries,
         },
         board,
+        board_open: None,
     }
 }
 
@@ -88,7 +90,7 @@ fn a_slot_past_the_roster_names_nobody() {
 }
 
 fn draw_days(days: &[ArchivedDay], selected: Option<i32>, w: u16, h: u16) -> (String, Vec<Color>) {
-    draw_run(days, selected, w, h, false)
+    draw_run(days, selected, w, h, false, None)
 }
 
 fn draw_run(
@@ -97,6 +99,7 @@ fn draw_run(
     w: u16,
     h: u16,
     loading: bool,
+    replay_step: Option<usize>,
 ) -> (String, Vec<Color>) {
     let map = map_by_id("earth").expect("earth");
     // The view offers only days that kept a board, oldest first — the same
@@ -126,6 +129,7 @@ fn draw_run(
                     live: &live,
                     loading,
                     view: Viewport::fitted(&map, area.width as i32, canvas_h),
+                    replay_step,
                 },
             );
         })
@@ -163,8 +167,8 @@ fn the_map_is_painted_from_the_day_on_screen() {
         archived(11, Some(late), Vec::new()),
     ];
 
-    let alice_shade = palette_shades(0)[2];
-    let bob_shade = palette_shades(4)[2];
+    let alice_shade = palette_shades(0)[1];
+    let bob_shade = palette_shades(4)[1];
     let (text, colors) = draw_days(&days, Some(10), 160, 44);
     // Days are dates on screen: the number is days since the epoch, which is
     // the right thing to compute with and no use to read.
@@ -198,6 +202,7 @@ fn days_without_a_board_are_not_offered() {
             None,
             vec![LogEntry::Won {
                 user_id: Uuid::nil(),
+                kind: WinKind::LastStanding,
             }],
         ),
         archived(
@@ -317,7 +322,7 @@ fn a_half_read_run_does_not_claim_to_be_at_the_beginning() {
         archived(20_031, Some(board), Vec::new()),
     ];
 
-    let (loading_text, _) = draw_run(&days, None, 160, 44, true);
+    let (loading_text, _) = draw_run(&days, None, 160, 44, true, None);
     assert!(
         loading_text.contains("reading the run in"),
         "{loading_text:.200}"
@@ -328,7 +333,7 @@ fn a_half_read_run_does_not_claim_to_be_at_the_beginning() {
     );
 
     // Once it is all in, it says where you are.
-    let (settled_text, _) = draw_run(&days, None, 160, 44, false);
+    let (settled_text, _) = draw_run(&days, None, 160, 44, false, None);
     assert!(settled_text.contains("day 1 of 2"), "{settled_text:.200}");
 }
 
@@ -355,5 +360,130 @@ fn the_track_is_drawn_between_the_keys_that_move_it() {
     assert!(
         track.contains('▮') && track.contains('─'),
         "the run should sit between the keys that move it: {first_row:?}"
+    );
+}
+
+fn earth_id(iso: &str) -> u16 {
+    map_by_id("earth")
+        .unwrap()
+        .territories
+        .iter()
+        .find(|t| t.iso == iso)
+        .unwrap_or_else(|| panic!("{iso} on earth"))
+        .id
+}
+
+fn fight(target: u16, holder: Option<u128>, taker: u128, from: u16, took: bool) -> LogEntry {
+    LogEntry::Fought {
+        target,
+        holder: holder.map(Uuid::from_u128),
+        taken_by: took.then(|| Uuid::from_u128(taker)),
+        defence: 1.0,
+        takers: vec![TakerRoll {
+            user_id: Uuid::from_u128(taker),
+            points: 3,
+            from,
+            force: 2.0,
+            probability: 0.42,
+            shown: 0.42,
+            success: took,
+        }],
+        bounced: false,
+    }
+}
+
+/// A night plays back over the board it opened on, one fight a step: the
+/// step's target is lit, the land the take came from is lit in the taker's
+/// colour, and the caption says how it went. `p` opens it on the first
+/// fight, still.
+#[test]
+fn a_replayed_night_lights_each_fight_in_turn() {
+    let (canada, usa, brazil, russia) = (
+        earth_id("CA"),
+        earth_id("US"),
+        earth_id("BR"),
+        earth_id("RU"),
+    );
+    // alice (rose) holds Canada and bob (green) Brazil as the night opens;
+    // alice takes the free United States, bob fails on Russia.
+    let players = vec![player(1, "alice", 0), player(2, "bob", 4)];
+    let open = DayBoard {
+        players: players.clone(),
+        owned: vec![(canada, 0), (brazil, 1)],
+        forts: Vec::new(),
+    };
+    let closed = DayBoard {
+        players,
+        owned: vec![(canada, 0), (usa, 0), (brazil, 1)],
+        forts: Vec::new(),
+    };
+    let mut night = archived(
+        20_000,
+        Some(closed),
+        vec![
+            fight(usa, None, 1, canada, true),
+            fight(russia, None, 2, brazil, false),
+        ],
+    );
+    night.board_open = Some(open);
+    let days = vec![night];
+    let lit = Color::Rgb(
+        super::REPLAY_TARGET.0,
+        super::REPLAY_TARGET.1,
+        super::REPLAY_TARGET.2,
+    );
+    let launched = |slot: u8| {
+        let (r, g, b) = super::lit(palette_shades(slot)[0]);
+        Color::Rgb(r, g, b)
+    };
+    // The caption rides the map's top row, under the slider; the rail lists
+    // every fight of the night on every step, so the step is read there.
+    let caption = |text: &str| text.chars().skip(160).take(160).collect::<String>();
+
+    // Not replaying: the closing board, nothing lit.
+    let (text, colors) = draw_run(&days, None, 160, 44, false, None);
+    assert!(!colors.contains(&lit));
+    assert!(!colors.contains(&launched(0)));
+    assert!(text.contains("as 4 Oct ended"), "{text:.300}");
+
+    // The first still: the United States lit, Canada lit in alice's colour.
+    let (text, colors) = draw_run(&days, None, 160, 44, false, Some(0));
+    assert!(colors.contains(&lit), "the target is lit");
+    assert!(
+        colors.contains(&launched(0)),
+        "the take came from alice's land"
+    );
+    assert!(
+        !colors.contains(&launched(4)),
+        "bob's fight is not this step"
+    );
+    let first = caption(&text);
+    assert!(first.contains("night · fight 1 of 2"), "{first}");
+    assert!(first.contains("United States"), "{first}");
+    assert!(first.contains("taken"), "{first}");
+    assert!(
+        text.contains("as the night of 4 Oct began"),
+        "the rail reads from the opening board: {text:.400}"
+    );
+
+    // Step two: Russia, from bob's Brazil, held.
+    let (text, colors) = draw_run(&days, None, 160, 44, false, Some(1));
+    assert!(colors.contains(&lit));
+    assert!(
+        colors.contains(&launched(4)),
+        "the take came from bob's land"
+    );
+    assert!(!colors.contains(&launched(0)), "alice's fight is past");
+    let second = caption(&text);
+    assert!(second.contains("night · fight 2 of 2"), "{second}");
+    assert!(second.contains("Russia"), "{second}");
+    assert!(second.contains("held"), "{second}");
+
+    // A step past the end holds on the last fight.
+    let (text, _) = draw_run(&days, None, 160, 44, false, Some(9));
+    assert!(
+        caption(&text).contains("fight 2 of 2"),
+        "{}",
+        caption(&text)
     );
 }

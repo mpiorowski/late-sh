@@ -2447,12 +2447,26 @@ fn chat_state_with_cyberspace(
     ChatState,
     crate::app::chat::cyberspace::svc::CyberspaceService,
 ) {
+    let ai = crate::app::ai::svc::AiService::new(false, None);
+    let summary = crate::app::ai::summary::SummaryService::new(test_db.db.clone(), ai);
+    chat_state_sharing_summary(test_db, user_id, summary)
+}
+
+/// A session on `summary`: two of these on one service see the same
+/// summary events, as two sessions of one account on one process do.
+fn chat_state_sharing_summary(
+    test_db: &late_core::test_utils::TestDb,
+    user_id: Uuid,
+    summary: crate::app::ai::summary::SummaryService,
+) -> (
+    ChatState,
+    crate::app::chat::cyberspace::svc::CyberspaceService,
+) {
     let db = test_db.db.clone();
     let notifications = crate::app::chat::notifications::svc::NotificationService::new(db.clone());
     let chat = crate::app::chat::svc::ChatService::new(db.clone(), notifications.clone());
     let ai = crate::app::ai::svc::AiService::new(false, None);
     let translation = crate::app::ai::translate::TranslationService::new(db.clone(), ai.clone());
-    let summary = crate::app::ai::summary::SummaryService::new(db.clone(), ai.clone());
     let articles = crate::app::chat::news::svc::ArticleService::new(db.clone(), ai, chat.clone());
     let (notifier, _outbox) = crate::app::notify::channel();
     // Dead base URL: state logic under test never talks to the network.
@@ -3114,6 +3128,146 @@ async fn report_success_banners_its_room() {
 
     let messages: Vec<_> = banners.iter().map(|b| b.message.as_str()).collect();
     assert_eq!(messages, ["Posted to #bugs"]);
+}
+
+/// A regular user in #bugs, composing with the room's own messages loaded.
+async fn composing_in_bugs(username: &str) -> (late_core::test_utils::TestDb, ChatState) {
+    use late_core::models::chat_room::ChatRoom;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = late_core::test_utils::create_test_user(&test_db.db, username).await;
+    let bugs = ChatRoom::get_or_create_public_room(&client, ReportKind::Bug.slug())
+        .await
+        .expect("bugs room");
+    drop(client);
+    let state = composing_in_room(&test_db, user.id, bugs).await;
+    (test_db, state)
+}
+
+/// A session for `user_id`, joined to `room` with the composer open there.
+async fn composing_in_room(
+    test_db: &late_core::test_utils::TestDb,
+    user_id: Uuid,
+    room: late_core::models::chat_room::ChatRoom,
+) -> ChatState {
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let client = test_db.db.get().await.expect("db client");
+    ChatRoomMember::join(&client, room.id, user_id)
+        .await
+        .expect("join room");
+    let mut state = chat_state_with_cyberspace(test_db, user_id).0;
+    let room_id = room.id;
+    state.rooms.push((room, Vec::new()));
+    state.start_composing_in_room(room_id);
+    state
+}
+
+/// Drain events until this session's send lands or a banner answers it;
+/// returns every banner seen on the way.
+async fn await_own_send(state: &mut ChatState) -> Vec<Banner> {
+    let mut banners = Vec::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while state.last_own_send_at.is_none() && banners.is_empty() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "timed out waiting for the send to settle"
+        );
+        banners.extend(state.drain_events());
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    }
+    banners
+}
+
+/// #bugs takes reports only, so plain text typed there is filed as one
+/// instead of being refused after the composer cleared.
+#[tokio::test]
+async fn plain_text_in_bugs_files_a_report() {
+    let (_test_db, mut state) = composing_in_bugs("report_plain").await;
+    state.composer.insert_str("the door ate my hat");
+    assert!(
+        state
+            .submit_composer(false, ComposerCommands::Enabled)
+            .is_none()
+    );
+
+    let banners = await_own_send(&mut state).await;
+    let messages: Vec<_> = banners.iter().map(|b| b.message.as_str()).collect();
+    assert_eq!(messages, ["Posted to #bugs"]);
+}
+
+/// Only the public #bugs takes reports. Slugs are unique per visibility, so
+/// a private room may be called #bugs too; plain text there is a normal
+/// message to its members, never a report filed in public.
+#[tokio::test]
+async fn plain_text_in_a_private_bugs_room_stays_in_that_room() {
+    use late_core::models::chat_message::ChatMessage;
+    use late_core::models::chat_room::ChatRoom;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = late_core::test_utils::create_test_user(&test_db.db, "report_private").await;
+    let private_bugs = ChatRoom::create_private_room(&client, ReportKind::Bug.slug(), user.id)
+        .await
+        .expect("private bugs room");
+    let mut state = composing_in_room(&test_db, user.id, private_bugs.clone()).await;
+    state.composer.insert_str("the door ate my hat");
+    assert!(
+        state
+            .submit_composer(false, ComposerCommands::Enabled)
+            .is_none()
+    );
+
+    let banners = await_own_send(&mut state).await;
+    let messages: Vec<_> = banners.iter().map(|b| b.message.as_str()).collect();
+    assert_eq!(messages, Vec::<&str>::new());
+    let landed = ChatMessage::list_recent(&client, private_bugs.id, 5)
+        .await
+        .expect("messages");
+    let bodies: Vec<_> = landed.iter().map(|m| m.body.as_str()).collect();
+    assert_eq!(bodies, ["the door ate my hat"]);
+}
+
+/// A plain message too short to be a report is refused on submit with the
+/// draft kept, not rewritten into a `/bug` the user never typed.
+#[tokio::test]
+async fn short_text_in_bugs_is_refused_and_keeps_the_draft() {
+    let (_test_db, mut state) = composing_in_bugs("report_short").await;
+    state.composer.insert_str("same here");
+
+    let banner = state
+        .submit_composer(false, ComposerCommands::Enabled)
+        .expect("refusal banner");
+
+    assert_eq!(
+        banner.message,
+        "#bugs takes reports: describe it in a few words or more"
+    );
+    assert_eq!(state.composer.lines().join("\n"), "same here");
+}
+
+/// Reports get reactions, not threads: a reply in #bugs is refused before
+/// anything is sent, and the typed text stays in the composer.
+#[tokio::test]
+async fn reply_in_bugs_is_refused_and_keeps_the_draft() {
+    let (_test_db, mut state) = composing_in_bugs("report_reply").await;
+    state.reply_target = Some(ReplyTarget {
+        to: ReplyTo::Message(Uuid::now_v7()),
+        author: "someone".to_string(),
+        preview: "the door ate my hat".to_string(),
+    });
+    state.composer.insert_str("same here");
+
+    let banner = state
+        .submit_composer(false, ComposerCommands::Enabled)
+        .expect("refusal banner");
+
+    assert_eq!(
+        banner.message,
+        super::super::svc::SendRefusal::ReportOnly(ReportKind::Bug).message()
+    );
+    assert_eq!(state.composer.lines().join("\n"), "same here");
 }
 
 #[test]
@@ -4167,6 +4321,10 @@ async fn summary_command_requests_the_visible_public_room() {
         .await
         .expect("event within timeout")
         .expect("channel open");
+    assert!(
+        state.summary_requests.contains(&event.request_id),
+        "the answer names this session's request"
+    );
     assert_eq!(event.user_id, user.id);
     assert_eq!(event.room_id, room_id);
     assert!(matches!(event.outcome, SummaryOutcome::Unavailable));
@@ -4235,8 +4393,11 @@ async fn a_ready_summary_waits_for_an_open_overlay_instead_of_clobbering_it() {
     let user = late_core::test_utils::create_test_user(&test_db.db, "sum_overlay").await;
     let mut state = chat_state_with_cyberspace(&test_db, user.id).0;
     state.overlay = Some(Overlay::new("Rules", vec!["be kind".to_string()]));
+    let request_id = Uuid::now_v7();
+    state.summary_requests.insert(request_id);
 
     state.summary_service.emit_for_test(SummaryEvent {
+        request_id,
         user_id: user.id,
         room_id: Uuid::now_v7(),
         room_label: "#lounge".to_string(),
@@ -4273,6 +4434,47 @@ async fn a_ready_summary_waits_for_an_open_overlay_instead_of_clobbering_it() {
     );
 }
 
+/// A summary answers the session that asked. The same account's other
+/// sessions (another terminal, a phone) share the user id and the event
+/// stream, and must stay as they were.
+#[tokio::test]
+async fn a_summary_lands_only_on_the_session_that_asked() {
+    let test_db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&test_db.db, "sum_session").await;
+    let mut asking = chat_state_with_cyberspace(&test_db, user.id).0;
+    let mut other = chat_state_sharing_summary(&test_db, user.id, asking.summary_service.clone()).0;
+    let request_id = Uuid::now_v7();
+    asking.summary_requests.insert(request_id);
+
+    asking.summary_service.emit_for_test(SummaryEvent {
+        request_id,
+        user_id: user.id,
+        room_id: Uuid::now_v7(),
+        room_label: "#lounge".to_string(),
+        outcome: SummaryOutcome::Ready {
+            text: "- alice shipped the thing".to_string(),
+            message_count: 3,
+            since: Utc::now() - chrono::Duration::hours(2),
+            basis: SummaryBasis::Explicit,
+            capped: false,
+            truncated: false,
+        },
+    });
+    let other_tick = other.tick();
+    asking.tick();
+
+    assert!(other.overlay.is_none(), "another session's summary");
+    assert!(other_tick.banner.is_none(), "another session's summary");
+    assert_eq!(
+        asking.overlay.as_ref().map(|o| o.title.as_str()),
+        Some("#lounge catch-up")
+    );
+    assert!(
+        asking.summary_requests.is_empty(),
+        "the answer settles the request"
+    );
+}
+
 /// The catch-up head is the one absolute time in the overlay, so it is
 /// written on the reader's clock when the account has a zone.
 #[tokio::test]
@@ -4287,7 +4489,10 @@ async fn a_ready_summary_dates_its_window_in_the_viewers_timezone() {
         .single()
         .unwrap();
     let emit = |state: &mut ChatState| {
+        let request_id = Uuid::now_v7();
+        state.summary_requests.insert(request_id);
         state.summary_service.emit_for_test(SummaryEvent {
+            request_id,
             user_id: user.id,
             room_id: Uuid::now_v7(),
             room_label: "#lounge".to_string(),
@@ -4583,4 +4788,95 @@ async fn a_tail_that_lands_before_its_room_waits_for_the_room_list() {
         .map(|message| message.body.as_str())
         .collect();
     assert_eq!(bodies, vec!["dealt before the list"]);
+}
+
+#[test]
+fn parse_buy_command_reads_a_round_or_one_named_patron() {
+    assert_eq!(
+        parse_buy_command("/buy round"),
+        Some(BuyParse::Order(BuyOrder::Round))
+    );
+    assert_eq!(
+        parse_buy_command("/buy Round "),
+        Some(BuyParse::Order(BuyOrder::Round))
+    );
+    assert_eq!(
+        parse_buy_command("/buy @mossy"),
+        Some(BuyParse::Order(BuyOrder::Gift("mossy")))
+    );
+    assert_eq!(parse_buy_command("/buy"), Some(BuyParse::Invalid));
+    assert_eq!(parse_buy_command("/buy mossy"), Some(BuyParse::Invalid));
+    assert_eq!(parse_buy_command("/buy @"), Some(BuyParse::Invalid));
+    assert_eq!(parse_buy_command("/buy @a @b"), Some(BuyParse::Invalid));
+    assert_eq!(parse_buy_command("/buyer"), None);
+    assert_eq!(parse_buy_command("buy round"), None);
+}
+
+/// @bartender only sits in auto-join public rooms, so `/buy` is refused
+/// anywhere else (draft cleared like every command) and posts his order
+/// where he is.
+#[tokio::test]
+async fn buy_posts_only_where_the_bartender_sits() {
+    use late_core::models::chat_message::ChatMessage;
+    use late_core::models::chat_room::ChatRoom;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let user = late_core::test_utils::create_test_user(&test_db.db, "buy_rooms").await;
+    let garden = ChatRoom::get_or_create_public_room(&client, "garden")
+        .await
+        .expect("garden room");
+    assert!(!garden.auto_join, "a /public room starts opt-in");
+    let mut state = composing_in_room(&test_db, user.id, garden.clone()).await;
+
+    state.composer.insert_str("/buy round");
+    let banner = state
+        .submit_composer(false, ComposerCommands::Enabled)
+        .expect("refusal banner");
+    assert_eq!(
+        banner.message,
+        "Use /buy from a room @bartender is in, like #lounge"
+    );
+
+    ChatRoom::set_auto_join(&client, garden.id, true)
+        .await
+        .expect("fill garden");
+    let (room, _) = state
+        .rooms
+        .iter_mut()
+        .find(|(room, _)| room.id == garden.id)
+        .expect("garden in the room list");
+    room.auto_join = true;
+    state.start_composing_in_room(garden.id);
+    state.composer.insert_str("/buy round");
+    assert!(
+        state
+            .submit_composer(false, ComposerCommands::Enabled)
+            .is_none()
+    );
+    let banners = await_own_send(&mut state).await;
+    let messages: Vec<_> = banners.iter().map(|b| b.message.as_str()).collect();
+    assert_eq!(messages, Vec::<&str>::new());
+    let landed = ChatMessage::list_recent(&client, garden.id, 5)
+        .await
+        .expect("messages");
+    let bodies: Vec<_> = landed.iter().map(|m| m.body.as_str()).collect();
+    assert_eq!(bodies, [buy_order_body(BuyOrder::Round).as_str()]);
+}
+
+/// `/buy` only works because the bar rings its text up like a typed order,
+/// so what it posts is checked against the bar's own matcher.
+#[test]
+fn buy_posts_the_order_the_bar_rings_up() {
+    use late_core::models::drink_round::{BarOrder, bar_order};
+
+    let round = buy_order_body(BuyOrder::Round);
+    assert_eq!(bar_order(&round, "bartender"), BarOrder::Round, "{round}");
+
+    let gift = buy_order_body(BuyOrder::Gift("mossy"));
+    assert_eq!(
+        bar_order(&gift, "bartender"),
+        BarOrder::Gift("mossy"),
+        "{gift}"
+    );
 }

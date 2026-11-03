@@ -159,8 +159,8 @@ async fn dated_handler(
 
 /// The edition's front page as a card: the masthead, the dateline, the
 /// arcade's most played game of the covered day with its picture,
-/// YESTERDAY ON LATE.SH whole and the head of OUTSIDE and WHAT WE WERE
-/// READING, the picture the herald posts on its paper days
+/// YESTERDAY ON LATE.SH whole and the head of WHAT WE WERE READING and
+/// OUTSIDE, the picture the herald posts on its paper days
 /// (`late-ssh/src/app/herald`). A path that is not a date, or an edition
 /// with no column printed, is 404.
 #[tracing::instrument(skip(state))]
@@ -189,8 +189,8 @@ async fn image_handler(
         edition,
         DayTally::most_played_arcade(&tallies),
         &ready_column(&issue, PaperSectionKind::Yesterday),
-        &ready_column(&issue, PaperSectionKind::Outside),
         &ready_column(&issue, PaperSectionKind::Reading),
+        &ready_column(&issue, PaperSectionKind::Outside),
     ) else {
         return Ok(StatusCode::NOT_FOUND.into_response());
     };
@@ -210,16 +210,17 @@ fn ready_column(issue: &PaperEdition, kind: PaperSectionKind) -> Vec<String> {
 
 /// The front page's lines, `None` when no column printed: the most
 /// played arcade game first, when anyone played, with its picture and its
-/// finishes, then the columns. YESTERDAY's lines are numbers and few, so
-/// they all fit under the cap the prose columns are cut to.
+/// finishes, then the columns in the edition page's order. YESTERDAY's
+/// lines are numbers and few, so they all fit under the cap the prose
+/// columns are cut to.
 pub(crate) fn front_page(
     edition: NaiveDate,
     most_played: Option<(ArcadeGame, i64)>,
     yesterday: &[String],
-    outside: &[String],
     reading: &[String],
+    outside: &[String],
 ) -> Option<Vec<CardLine>> {
-    if yesterday.is_empty() && outside.is_empty() && reading.is_empty() {
+    if yesterday.is_empty() && reading.is_empty() && outside.is_empty() {
         return None;
     }
     let mut lines = vec![
@@ -243,8 +244,8 @@ pub(crate) fn front_page(
     }
     for (kind, column) in [
         (PaperSectionKind::Yesterday, yesterday),
-        (PaperSectionKind::Outside, outside),
         (PaperSectionKind::Reading, reading),
+        (PaperSectionKind::Outside, outside),
     ] {
         if column.is_empty() {
             continue;

@@ -1,29 +1,28 @@
-//! The herald: one picture a day on the Fediverse and Bluesky
-//! (AUDIENCE.md, "The herald"). `HeraldService` runs on every replica and
-//! checks every `HERALD_CHECK_INTERVAL`; once the day's post time
-//! (`state::HERALD_POST_TIME`) has passed, the `herald_posts` row for the
-//! day is the claim (root CONTEXT.md, multi-replica rule), so one replica
-//! posts. A claimed day is: find what it could post (the operator's
-//! announcements the edition carries, the week's scoreboard on Sundays,
-//! the piece over the door, yesterday's board with `state::BOARD_MIN_INK`
-//! drawn cells, the day's paper) and pick one, an announcement first,
-//! else by the week's schedule (`state::schedule`, `state::Found::choice`);
-//! an announcement is briefed into words (`brief.rs`), a picture is
-//! fetched from late-web's PNG route and looked at (`look.rs`: the alt
-//! text and the warning); the pick and the look are stored on the row,
-//! delivered to every configured network that has no delivery yet
-//! (`mastodon.rs`, a note in place of a marked picture; `bluesky.rs`), and
-//! the row settled once all have one. A failed day marks
-//! its row and the next check claims it again, up to
-//! `HERALD_MAX_ATTEMPTS`, reusing the stored pick and skipping the
-//! networks already delivered; a claim whose replica died is taken over
-//! after `HERALD_STALE_CLAIM`, and never after `HERALD_CLAIM_WINDOW` from
-//! the day's first claim, the hour Mastodon honours the idempotency key.
+//! The herald: two posts a day on the Fediverse and Bluesky (AUDIENCE.md,
+//! "The herald"), the words at `state::WORDS_POST_TIME` and the art at
+//! `state::ART_POST_TIME`. `HeraldService` runs on every replica and checks
+//! every `HERALD_CHECK_INTERVAL`; once a slot's time has passed, its
+//! `herald_posts` row for the day is the claim (root CONTEXT.md, multi-replica
+//! rule), so one replica posts it. A claimed slot is: find what it could post
+//! and walk it (`state::Found::choices`). Words: the operator's announcements
+//! the edition carries, briefed (`brief.rs`), else the day's schedule
+//! (`state::words_schedule`): a member's project, written up (`writeup.rs`), the
+//! paper, the week's scoreboard. Art: the one candidate of the day
+//! (`state::art_day`), yesterday's board with `state::BOARD_MIN_INK` drawn cells
+//! or the piece over the door, fetched from late-web's PNG route and looked at
+//! (`look.rs`), and left unposted unless the look is clean (`Look::goes_out`).
+//! The pick and the look are stored on the row, delivered to every configured
+//! network that has no delivery yet (`mastodon.rs`, `bluesky.rs`), and the row
+//! settled once all have one. A failed post marks its row and the next check
+//! claims it again, up to `HERALD_MAX_ATTEMPTS`, reusing the stored pick and
+//! skipping the networks already delivered; a claim whose replica died is taken
+//! over after `HERALD_STALE_CLAIM`, and never after `HERALD_CLAIM_WINDOW` from
+//! the row's first claim, the hour Mastodon honours the idempotency key.
 //!
 //! Two switches gate the checker: `Config::herald` (a network configured,
 //! off in dev without its pair) and the `herald_settings` row
 //! (`HeraldSwitch`), the operator's, read at every check so a flip needs
-//! no deploy. An admin flips the row and runs the day by hand from chat
+//! no deploy. An admin flips the row and runs a slot by hand from chat
 //! (`/herald`, parsed in `state.rs`): `request` runs the command off the
 //! session and answers over a broadcast channel that `tick` drains into a
 //! banner, the shape of the paper's press hooks.
@@ -41,21 +40,24 @@ use late_core::models::artboard_piece::ArtboardPiece;
 use late_core::models::chat_message::ChatMessage;
 use late_core::models::chat_room::ChatRoom;
 use late_core::models::herald::{
-    HeraldDay, HeraldDayStatus, HeraldNetwork, HeraldPick, HeraldPost, HeraldPosted, HeraldSwitch,
+    HeraldDay, HeraldDayStatus, HeraldKind, HeraldNetwork, HeraldPick, HeraldPost, HeraldPosted,
+    HeraldSlot, HeraldSwitch,
 };
-use late_core::models::leaderboard::week_bests;
+use late_core::models::leaderboard::{DayTally, day_tallies, week_tallies};
 use late_core::models::paper::{
     ANNOUNCEMENTS_LIMIT, ANNOUNCEMENTS_SLUG, PaperEdition, PaperSectionKind,
 };
+use late_core::models::showcase::Showcase;
 use tokio::sync::broadcast;
 use tracing::Instrument;
 use uuid::Uuid;
 
 use super::state::{
-    self, AnnouncementCandidate, AnnouncementFound, BoardFound, BoardInk, Brief, Choice, Found,
-    HeraldCommand, Look, MastodonPost, PaperCandidate, Picture, PieceCandidate,
-    ScoreboardCandidate, Words,
+    self, AnnouncementCandidate, AnnouncementFound, ArtDay, ArtFound, BoardFound, BoardInk, Brief,
+    Choice, Found, HeraldCommand, Image, LinkCard, Look, PaperCandidate, Picture, PieceCandidate,
+    ProjectCandidate, ProjectFound, ScoreboardCandidate, Shape, WordsAlone, WordsFound, WordsKind,
 };
+use super::writeup::{self, Writeup};
 use super::{bluesky, brief, look, mastodon};
 use crate::app::ai::svc::AiService;
 use crate::app::common::primitives::Banner;
@@ -63,10 +65,11 @@ use crate::app::state::App;
 use crate::config::HeraldConfig;
 use crate::metrics::{
     self, HeraldBriefResult, HeraldDeliveryResult, HeraldLookResult, HeraldPostResult,
+    HeraldProjectResult,
 };
 
-/// How often each replica asks whether the day's post is due and
-/// unclaimed. The steady state is one flag read per check.
+/// How often each replica asks whether a slot's post is due and unclaimed.
+/// The steady state is one flag read per slot per check.
 pub const HERALD_CHECK_INTERVAL: Duration = Duration::from_secs(5 * 60);
 
 /// A `posting` claim older than this belongs to a replica that died
@@ -74,31 +77,37 @@ pub const HERALD_CHECK_INTERVAL: Duration = Duration::from_secs(5 * 60);
 /// timeouts and the media polling.
 pub const HERALD_STALE_CLAIM: chrono::Duration = chrono::Duration::minutes(20);
 
-/// How many times one day is claimed before a failing post is left alone.
+/// How many times one post is claimed before a failing post is left alone.
 /// Three checks is fifteen minutes of retries; a network outage or a
 /// revoked token should not turn into a day-long retry storm.
 pub const HERALD_MAX_ATTEMPTS: i32 = 3;
 
-/// How long after a day's first claim it may be claimed again at all.
+/// How long after a post's first claim it may be claimed again at all.
 /// Mastodon keeps an `Idempotency-Key` for about an hour; a retry outside
 /// it would be a second status, so past this a stale claim rests as
 /// failed. Three claims twenty minutes apart fit inside.
 pub const HERALD_CLAIM_WINDOW: chrono::Duration = chrono::Duration::minutes(50);
 
+/// How many projects a week's draw reads, and how many the model is asked
+/// about before the day moves on: a turned-down project costs a grounded call,
+/// so a bad week stops at three.
+const PROJECT_DRAW: i64 = 12;
+const PROJECT_TRIES: usize = 3;
+
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 const USER_AGENT: &str = "late.sh herald (+https://late.sh)";
 const EVENT_CHANNEL_CAP: usize = 64;
 
-/// What a claimed day came to.
+/// What a claimed slot came to.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Outcome {
-    /// Every network has the picture, marked as `look` says.
+    /// Every network has the post.
     Posted { posted: HeraldPosted, look: Look },
-    /// Nothing worth posting: no kind had anything.
+    /// Nothing to post, or nothing clean.
     Skipped,
 }
 
-/// The day's pick, ready to deliver: the picture, what the look saw in
+/// The slot's pick, ready to deliver: the picture, what the look saw in
 /// it, and what goes up with the words.
 struct Pick {
     picture: Picture,
@@ -112,30 +121,31 @@ enum Media {
         png: Vec<u8>,
         alt: String,
     },
-    /// An announcement: the words are the post, with the site's picture
-    /// as the thumb of its link card where a network wants one.
+    /// An announcement or a project: the words are the post, with a link card
+    /// where a network wants one, the site's picture its thumb.
     Words {
         thumb: Vec<u8>,
+        card: LinkCard,
     },
 }
 
-/// What working a day came to, for the checker and for `/herald post`.
+/// What working a slot came to, for the checker and for `/herald post`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum DayWorked {
     Posted(HeraldPosted),
     Skipped,
-    /// Another replica holds the day right now.
+    /// Another replica holds the slot right now.
     Held,
-    /// The day is settled: posted, skipped, or failed at the cap.
+    /// The slot is settled: posted, skipped, or failed at the cap.
     Finished,
     /// The claim or the post failed; logged and counted here.
     Failed,
 }
 
-/// When the first post after `/herald on` goes out.
+/// When a slot's first post after `/herald on` goes out.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NextPost {
-    /// Today's day is due and unclaimed: the next check posts it.
+    /// Today's post is due and unclaimed: the next check posts it.
     NextCheck,
     /// Today is not due yet, or already has its row.
     AtHour,
@@ -146,20 +156,25 @@ pub(crate) enum NextPost {
 /// The answer to an admin's `/herald` command.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum CommandOutcome {
-    SwitchedOn(NextPost),
+    SwitchedOn {
+        words: NextPost,
+        art: NextPost,
+    },
     SwitchedOff,
-    /// The row and today's day as they stand.
+    /// The row and today's two posts as they stand.
     Status {
         on: bool,
         day: NaiveDate,
-        today: Option<HeraldDay>,
+        words: Option<HeraldDay>,
+        art: Option<HeraldDay>,
     },
-    /// What `/herald post` would send today, and where: what the day
-    /// could post and, when it is a post, the day's pick, briefed or with
-    /// a fresh look at it. `found` is boxed: it carries every kind's
+    /// What `/herald post` would send of a slot today, and where: what the
+    /// slot could post and, when it is a post, its pick, briefed, written up or
+    /// with a fresh look at it. `found` is boxed: it carries every kind's
     /// candidate and would otherwise size the whole enum.
     Preview {
         day: NaiveDate,
+        slot: HeraldSlot,
         found: Box<Found>,
         post: Option<(Picture, Look)>,
         networks: Vec<HeraldNetwork>,
@@ -222,26 +237,34 @@ impl HeraldService {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(HERALD_CHECK_INTERVAL);
             interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            let mut finished_for: Option<NaiveDate> = None;
+            let mut finished: [(HeraldSlot, Option<NaiveDate>); 2] =
+                HeraldSlot::ALL.map(|slot| (slot, None));
             loop {
                 interval.tick().await;
-                service
-                    .check(Utc::now(), &mut finished_for)
-                    .instrument(tracing::info_span!("herald.check"))
-                    .await;
+                for (slot, finished_for) in &mut finished {
+                    service
+                        .check(Utc::now(), *slot, finished_for)
+                        .instrument(tracing::info_span!("herald.check", slot = slot.as_str()))
+                        .await;
+                }
             }
         })
     }
 
-    /// One check at `now`: is the herald on, is the due day unclaimed, is
-    /// it ours. Returns whether this replica worked the day (posted,
-    /// skipped, or failed trying). `finished_for` memoizes a day this
-    /// replica saw finished, so the rest of that day costs nothing.
-    pub async fn check(&self, now: DateTime<Utc>, finished_for: &mut Option<NaiveDate>) -> bool {
+    /// One check of `slot` at `now`: is the herald on, is the due day's post
+    /// unclaimed, is it ours. Returns whether this replica worked it (posted,
+    /// skipped, or failed trying). `finished_for` memoizes a day this replica
+    /// saw the slot finished, so the rest of that day costs nothing.
+    pub async fn check(
+        &self,
+        now: DateTime<Utc>,
+        slot: HeraldSlot,
+        finished_for: &mut Option<NaiveDate>,
+    ) -> bool {
         if !self.config.enabled() {
             return false;
         }
-        let day = state::post_due_day(now);
+        let day = state::post_due_day(now, slot);
         if *finished_for == Some(day) {
             return false;
         }
@@ -257,7 +280,7 @@ impl HeraldService {
                 return false;
             }
         }
-        match self.work_day(day, now).await {
+        match self.work_day(day, slot, now).await {
             DayWorked::Posted(_) | DayWorked::Skipped => {
                 *finished_for = Some(day);
                 true
@@ -286,9 +309,9 @@ impl HeraldService {
         );
     }
 
-    /// The command itself. `/herald post` works today's day regardless of
+    /// The command itself. `/herald post` works today's slot regardless of
     /// the row: an admin asking is the switch for that one post. The
-    /// 16:00 check then finds the day settled and leaves it.
+    /// slot's check then finds it settled and leaves it.
     pub(crate) async fn run_command(
         &self,
         command: HeraldCommand,
@@ -298,26 +321,11 @@ impl HeraldService {
         let result: anyhow::Result<CommandOutcome> = async {
             match command {
                 HeraldCommand::On => {
-                    // The day the switch slept through is settled before the
-                    // row flips, or the next check would catch it up with a
-                    // two-day-old board and post again at 16:00.
                     let client = self.db.get().await?;
-                    let due = state::post_due_day(now);
-                    let next = if due < today {
-                        if HeraldPost::settle_unclaimed(&client, due).await? {
-                            tracing::info!(day = %due, "the herald left the day it slept through unposted");
-                            NextPost::AtHourAfterSkipping(due)
-                        } else {
-                            NextPost::AtHour
-                        }
-                    } else {
-                        match HeraldPost::day(&client, today).await? {
-                            None => NextPost::NextCheck,
-                            Some(_) => NextPost::AtHour,
-                        }
-                    };
+                    let words = Self::next_post(&client, now, HeraldSlot::Words).await?;
+                    let art = Self::next_post(&client, now, HeraldSlot::Art).await?;
                     HeraldSwitch::set(&client, true).await?;
-                    Ok(CommandOutcome::SwitchedOn(next))
+                    Ok(CommandOutcome::SwitchedOn { words, art })
                 }
                 HeraldCommand::Off => {
                     let client = self.db.get().await?;
@@ -326,19 +334,18 @@ impl HeraldService {
                 }
                 HeraldCommand::Status => {
                     let client = self.db.get().await?;
-                    let on = HeraldSwitch::is_on(&client).await?;
-                    let today_row = HeraldPost::day(&client, today).await?;
                     Ok(CommandOutcome::Status {
-                        on,
+                        on: HeraldSwitch::is_on(&client).await?,
                         day: today,
-                        today: today_row,
+                        words: HeraldPost::day(&client, today, HeraldSlot::Words).await?,
+                        art: HeraldPost::day(&client, today, HeraldSlot::Art).await?,
                     })
                 }
-                HeraldCommand::Preview => {
+                HeraldCommand::Preview(slot) => {
                     if !self.config.enabled() {
                         return Ok(CommandOutcome::Unconfigured);
                     }
-                    let found = self.find(today).await?;
+                    let found = self.find(today, slot).await?;
                     let post = match self.choose(&found, today).await {
                         Some(picture) => {
                             let (look, _) = self.look_and_media(&picture).await?;
@@ -348,16 +355,19 @@ impl HeraldService {
                     };
                     Ok(CommandOutcome::Preview {
                         day: today,
+                        slot,
                         found: Box::new(found),
                         post,
                         networks: self.networks(),
                     })
                 }
-                HeraldCommand::Post => {
+                HeraldCommand::Post(slot) => {
                     if !self.config.enabled() {
                         return Ok(CommandOutcome::Unconfigured);
                     }
-                    Ok(CommandOutcome::Worked(self.work_day(today, now).await))
+                    Ok(CommandOutcome::Worked(
+                        self.work_day(today, slot, now).await,
+                    ))
                 }
             }
         }
@@ -373,6 +383,29 @@ impl HeraldService {
                 );
                 CommandOutcome::Failed
             }
+        }
+    }
+
+    /// When `slot` next posts, for `/herald on`, settling the post the switch
+    /// slept through first: the next check would otherwise catch it up with a
+    /// two-day-old board and post again at the hour.
+    async fn next_post(
+        client: &tokio_postgres::Client,
+        now: DateTime<Utc>,
+        slot: HeraldSlot,
+    ) -> anyhow::Result<NextPost> {
+        let today = now.date_naive();
+        let due = state::post_due_day(now, slot);
+        if due < today {
+            if HeraldPost::settle_unclaimed(client, due, slot).await? {
+                tracing::info!(day = %due, slot = slot.as_str(), "the herald left the post it slept through unposted");
+                return Ok(NextPost::AtHourAfterSkipping(due));
+            }
+            return Ok(NextPost::AtHour);
+        }
+        match HeraldPost::day(client, today, slot).await? {
+            None => Ok(NextPost::NextCheck),
+            Some(_) => Ok(NextPost::AtHour),
         }
     }
 
@@ -393,12 +426,13 @@ impl HeraldService {
         HeraldSwitch::is_on(&client).await
     }
 
-    async fn claim(&self, day: NaiveDate) -> anyhow::Result<Option<Uuid>> {
+    async fn claim(&self, day: NaiveDate, slot: HeraldSlot) -> anyhow::Result<Option<Uuid>> {
         let client = self.db.get().await?;
         let now = Utc::now();
         HeraldPost::claim(
             &client,
             day,
+            slot,
             now - HERALD_STALE_CLAIM,
             now - HERALD_CLAIM_WINDOW,
             HERALD_MAX_ATTEMPTS,
@@ -406,70 +440,75 @@ impl HeraldService {
         .await
     }
 
-    async fn finished(&self, day: NaiveDate) -> anyhow::Result<bool> {
+    async fn finished(&self, day: NaiveDate, slot: HeraldSlot) -> anyhow::Result<bool> {
         let client = self.db.get().await?;
         HeraldPost::is_finished(
             &client,
             day,
+            slot,
             Utc::now() - HERALD_CLAIM_WINDOW,
             HERALD_MAX_ATTEMPTS,
         )
         .await
     }
 
-    /// Claim the day and post it. Every outcome is counted and logged
+    /// Claim the slot and post it. Every outcome is counted and logged
     /// here, once, for the checker and `/herald post` alike.
-    async fn work_day(&self, day: NaiveDate, now: DateTime<Utc>) -> DayWorked {
-        let key = match self.claim(day).await {
+    async fn work_day(&self, day: NaiveDate, slot: HeraldSlot, now: DateTime<Utc>) -> DayWorked {
+        let slot_name = slot.as_str();
+        let key = match self.claim(day, slot).await {
             Ok(Some(key)) => key,
             Ok(None) => {
-                return match self.finished(day).await {
+                return match self.finished(day, slot).await {
                     Ok(true) => DayWorked::Finished,
                     Ok(false) => {
-                        metrics::record_herald_post(HeraldPostResult::Lost);
+                        metrics::record_herald_post(slot, HeraldPostResult::Lost);
                         DayWorked::Held
                     }
                     Err(error) => {
-                        tracing::warn!(error = ?error, %day, "failed to read the herald's day");
+                        tracing::warn!(error = ?error, %day, slot = slot_name, "failed to read the herald's day");
                         DayWorked::Held
                     }
                 };
             }
             Err(error) => {
-                metrics::record_herald_post(HeraldPostResult::Failed);
+                metrics::record_herald_post(slot, HeraldPostResult::Failed);
                 late_core::error_span!(
                     "herald_claim_failed",
                     error = ?error,
                     %day,
+                    slot = slot_name,
                     "failed to claim the herald's day"
                 );
                 return DayWorked::Failed;
             }
         };
-        match self.post_claimed(day, key, now).await {
+        match self.post_claimed(day, slot, key, now).await {
             Ok(Outcome::Posted { posted, look }) => {
-                metrics::record_herald_post(HeraldPostResult::Posted);
+                metrics::record_herald_post(slot, HeraldPostResult::Posted);
                 tracing::info!(
                     %day,
+                    slot = slot_name,
                     kind = posted.kind.as_str(),
                     subject = %posted.subject,
-                    warning = look.as_str(),
+                    look = look.as_str(),
                     urls = ?posted.deliveries.iter().map(|d| d.url.as_str()).collect::<Vec<_>>(),
                     "the herald posted"
                 );
                 DayWorked::Posted(posted)
             }
             Ok(Outcome::Skipped) => {
-                metrics::record_herald_post(HeraldPostResult::Skipped);
-                tracing::info!(%day, "the herald had nothing worth posting");
+                metrics::record_herald_post(slot, HeraldPostResult::Skipped);
+                tracing::info!(%day, slot = slot_name, "the herald had nothing worth posting");
                 DayWorked::Skipped
             }
             Err(error) => {
-                metrics::record_herald_post(HeraldPostResult::Failed);
+                metrics::record_herald_post(slot, HeraldPostResult::Failed);
                 late_core::error_span!(
                     "herald_post_failed",
                     error = ?error,
                     %day,
+                    slot = slot_name,
                     "the herald's post failed"
                 );
                 DayWorked::Failed
@@ -477,37 +516,38 @@ impl HeraldService {
         }
     }
 
-    /// The claimed day: post it, then settle the row. An error marks the
+    /// The claimed slot: post it, then settle the row. An error marks the
     /// row failed for the next check and is passed up for the one log
     /// line in `work_day`. Clients are scoped to each query; nothing
     /// holds a pooled connection across an HTTP call.
     async fn post_claimed(
         &self,
         day: NaiveDate,
+        slot: HeraldSlot,
         key: Uuid,
         now: DateTime<Utc>,
     ) -> anyhow::Result<Outcome> {
-        match self.post_day(day, key, now).await {
+        match self.post_day(day, slot, key, now).await {
             Ok(Outcome::Posted { posted, look }) => {
                 let client = self.db.get().await?;
-                HeraldPost::finish_posted(&client, day).await?;
+                HeraldPost::finish_posted(&client, day, slot).await?;
                 Ok(Outcome::Posted { posted, look })
             }
             Ok(Outcome::Skipped) => {
                 let client = self.db.get().await?;
-                HeraldPost::finish_skipped(&client, day).await?;
+                HeraldPost::finish_skipped(&client, day, slot).await?;
                 Ok(Outcome::Skipped)
             }
             Err(error) => {
                 let marked = async {
                     let client = self.db.get().await?;
-                    HeraldPost::mark_failed(&client, day).await
+                    HeraldPost::mark_failed(&client, day, slot).await
                 }
                 .await;
                 if let Err(mark_error) = marked {
                     // A second, separate failure: the claim stays until
                     // the stale bound reclaims it.
-                    tracing::warn!(error = ?mark_error, %day, "failed to mark the herald's day failed");
+                    tracing::warn!(error = ?mark_error, %day, slot = slot.as_str(), "failed to mark the herald's day failed");
                 }
                 Err(error)
             }
@@ -515,12 +555,12 @@ impl HeraldService {
     }
 
     /// Pick (or reuse the stored pick), deliver to every network still
-    /// missing, each marked as the look says. Each network's failure is
-    /// logged and counted here, once; the day fails when any did, with the
-    /// ones that landed kept.
+    /// missing. Each network's failure is logged and counted here, once; the
+    /// post fails when any did, with the ones that landed kept.
     async fn post_day(
         &self,
         day: NaiveDate,
+        slot: HeraldSlot,
         key: Uuid,
         now: DateTime<Utc>,
     ) -> anyhow::Result<Outcome> {
@@ -528,36 +568,27 @@ impl HeraldService {
             picture,
             look,
             media,
-        }) = self.pick_for(day).await?
+        }) = self.pick_for(day, slot).await?
         else {
             return Ok(Outcome::Skipped);
         };
         let delivered: Vec<HeraldNetwork> = {
             let client = self.db.get().await?;
-            HeraldPost::deliveries(&client, day)
+            HeraldPost::deliveries(&client, day, slot)
                 .await?
                 .into_iter()
                 .map(|delivery| delivery.network)
                 .collect()
         };
+        let text = state::status_text(&picture, &self.web_url);
 
         let mut failed = 0;
         if let Some(config) = &self.config.mastodon
             && !delivered.contains(&HeraldNetwork::Mastodon)
         {
-            let (text, body) = match (state::mastodon_post(&look), &media) {
-                (MastodonPost::Picture, Media::Png { png, alt }) => (
-                    state::status_text(&picture, &self.web_url, Words::Plain),
-                    mastodon::Body::Picture { png, alt },
-                ),
-                (MastodonPost::Picture, Media::Words { .. }) => (
-                    state::status_text(&picture, &self.web_url, Words::Plain),
-                    mastodon::Body::Words,
-                ),
-                (MastodonPost::Note { warning }, Media::Png { .. } | Media::Words { .. }) => (
-                    state::note_text(&picture, &self.web_url),
-                    mastodon::Body::Note { warning },
-                ),
+            let body = match &media {
+                Media::Png { png, alt } => mastodon::Body::Picture { png, alt },
+                Media::Words { .. } => mastodon::Body::Words,
             };
             let sent = mastodon::deliver(
                 &self.http,
@@ -569,29 +600,21 @@ impl HeraldService {
                 },
             )
             .await;
-            failed += self.note_delivery(day, HeraldNetwork::Mastodon, sent).await;
+            failed += self
+                .note_delivery(day, slot, HeraldNetwork::Mastodon, sent)
+                .await;
         }
         if let Some(config) = &self.config.bluesky
             && !delivered.contains(&HeraldNetwork::Bluesky)
         {
-            let mark = state::bluesky_mark(&look);
-            let text = state::status_text(&picture, &self.web_url, mark.words);
-            let card = match &picture {
-                Picture::Announcement(announcement) => Some(announcement.link_card(&self.web_url)),
-                Picture::Board(_)
-                | Picture::Piece(_)
-                | Picture::Scoreboard(_)
-                | Picture::Paper(_) => None,
-            };
-            let embed = match (&media, &card) {
-                (Media::Png { png, alt }, _) => bluesky::Embed::Picture { png, alt },
-                (Media::Words { thumb }, Some(card)) => bluesky::Embed::Card {
+            let embed = match &media {
+                Media::Png { png, alt } => bluesky::Embed::Picture { png, alt },
+                Media::Words { thumb, card } => bluesky::Embed::Card {
                     uri: &card.uri,
                     title: &card.title,
                     description: &card.description,
                     thumb,
                 },
-                (Media::Words { .. }, None) => bail!("words alone come with a link card"),
             };
             let sent = bluesky::deliver(
                 &self.http,
@@ -600,12 +623,13 @@ impl HeraldService {
                     key,
                     embed,
                     text: &text,
-                    label: mark.label,
                     created_at: now,
                 },
             )
             .await;
-            failed += self.note_delivery(day, HeraldNetwork::Bluesky, sent).await;
+            failed += self
+                .note_delivery(day, slot, HeraldNetwork::Bluesky, sent)
+                .await;
         }
         if failed > 0 {
             bail!("{failed} delivery(ies) failed");
@@ -615,7 +639,7 @@ impl HeraldService {
             posted: HeraldPosted {
                 kind: picture.kind(),
                 subject: picture.subject(),
-                deliveries: HeraldPost::deliveries(&client, day).await?,
+                deliveries: HeraldPost::deliveries(&client, day, slot).await?,
             },
             look,
         })
@@ -623,12 +647,13 @@ impl HeraldService {
 
     /// Record a network's answer: the delivery row and the counter on
     /// success, the counter and the one log line on failure. Returns how
-    /// many failed (0 or 1) for the day's tally. A delivery that landed
+    /// many failed (0 or 1) for the post's tally. A delivery that landed
     /// but could not be recorded counts as failed too: the retry sends it
     /// again under the same key, which the network dedupes.
     async fn note_delivery(
         &self,
         day: NaiveDate,
+        slot: HeraldSlot,
         network: HeraldNetwork,
         sent: anyhow::Result<String>,
     ) -> u32 {
@@ -636,13 +661,13 @@ impl HeraldService {
             Ok(url) => {
                 let recorded = async {
                     let client = self.db.get().await?;
-                    HeraldPost::record_delivery(&client, day, network, &url).await
+                    HeraldPost::record_delivery(&client, day, slot, network, &url).await
                 }
                 .await;
                 match recorded {
                     Ok(()) => {
                         metrics::record_herald_delivery(network, HeraldDeliveryResult::Delivered);
-                        tracing::info!(%day, network = network.as_str(), %url, "the herald delivered");
+                        tracing::info!(%day, slot = slot.as_str(), network = network.as_str(), %url, "the herald delivered");
                         0
                     }
                     Err(error) => {
@@ -651,6 +676,7 @@ impl HeraldService {
                             "herald_delivery_failed",
                             error = ?error,
                             %day,
+                            slot = slot.as_str(),
                             network = network.as_str(),
                             %url,
                             "the herald delivered but could not record it"
@@ -665,6 +691,7 @@ impl HeraldService {
                     "herald_delivery_failed",
                     error = ?error,
                     %day,
+                    slot = slot.as_str(),
                     network = network.as_str(),
                     "the herald's delivery failed"
                 );
@@ -673,14 +700,15 @@ impl HeraldService {
         }
     }
 
-    /// The day's pick with its picture fetched: the one an earlier claim
-    /// stored, look and all, else a fresh pick briefed or looked at and
-    /// stored now, before the first network call. `None` is a day with
-    /// nothing worth posting.
-    async fn pick_for(&self, day: NaiveDate) -> anyhow::Result<Option<Pick>> {
+    /// The slot's pick with its picture fetched: the one an earlier claim
+    /// stored, look and all, else a fresh pick briefed, written up or looked at
+    /// and stored now, before the first network call. `None` is a slot with
+    /// nothing to post, or whose picture the look did not clear: the one place a
+    /// look decides, and only a pick that goes out is ever stored.
+    async fn pick_for(&self, day: NaiveDate, slot: HeraldSlot) -> anyhow::Result<Option<Pick>> {
         let stored = {
             let client = self.db.get().await?;
-            HeraldPost::stored_pick(&client, day).await?
+            HeraldPost::stored_pick(&client, day, slot).await?
         };
         if let Some(stored) = stored {
             let picture: Picture =
@@ -694,17 +722,35 @@ impl HeraldService {
                 media,
             }));
         }
-        let found = self.find(day).await?;
+        let found = self.find(day, slot).await?;
         let Some(picture) = self.choose(&found, day).await else {
             return Ok(None);
         };
         let (look, media) = self.look_and_media(&picture).await?;
+        if !look.goes_out() {
+            tracing::info!(
+                %day,
+                slot = slot.as_str(),
+                subject = %picture.subject(),
+                look = %describe_look(&look),
+                "the herald left a picture unposted"
+            );
+            return Ok(None);
+        }
         let stored = HeraldPick {
             picture: serde_json::to_value(&picture).context("encoding the picture")?,
             look: serde_json::to_value(&look).context("encoding the look")?,
         };
         let client = self.db.get().await?;
-        HeraldPost::store_pick(&client, day, picture.kind(), &picture.subject(), &stored).await?;
+        HeraldPost::store_pick(
+            &client,
+            day,
+            slot,
+            picture.kind(),
+            &picture.subject(),
+            &stored,
+        )
+        .await?;
         Ok(Some(Pick {
             picture,
             look,
@@ -712,13 +758,24 @@ impl HeraldService {
         }))
     }
 
-    /// The day's post from what was found: an announcement briefed into
-    /// its words, else the schedule's picture.
+    /// The slot's post from what was found: the first choice that comes to
+    /// something. An announcement is briefed into its words and always does; a
+    /// project is written up and may not, and then the day's next kind goes.
     async fn choose(&self, found: &Found, day: NaiveDate) -> Option<Picture> {
-        match found.choice(day)? {
-            Choice::Picture(picture) => Some(picture),
-            Choice::Announcement(found) => Some(Picture::Announcement(self.brief(&found).await)),
+        for choice in found.choices(day) {
+            match choice {
+                Choice::Picture(picture) => return Some(picture),
+                Choice::Announcement(found) => {
+                    return Some(Picture::Announcement(self.brief(&found).await));
+                }
+                Choice::Projects(projects) => {
+                    if let Some(project) = self.write_up(&projects).await {
+                        return Some(Picture::Project(project));
+                    }
+                }
+            }
         }
+        None
     }
 
     /// The words of an announcement, for a fresh pick or an admin's
@@ -743,89 +800,162 @@ impl HeraldService {
         AnnouncementCandidate::of(found.edition, &words, brief, found.summary.clone())
     }
 
-    /// A fresh pick's look and media: the picture fetched and looked at,
-    /// or words alone, drawn, with the site's picture for their card.
+    /// The week's project, for a fresh pick or an admin's preview: the first
+    /// drawn the model writes up. A refusal moves to the next. AI off or a
+    /// failed call stops the walk with no project: a member's own text never
+    /// goes out unchecked under the official account, and the project stays owed
+    /// to the next day of the week. Counted here, a failure logged here, once.
+    async fn write_up(&self, projects: &[ProjectFound]) -> Option<ProjectCandidate> {
+        for project in projects {
+            match writeup::write(&self.ai, project).await {
+                Ok(Some(Writeup::Words(words))) => {
+                    metrics::record_herald_project(HeraldProjectResult::Written);
+                    return Some(ProjectCandidate::of(project, &words));
+                }
+                Ok(Some(Writeup::Refused { refusal, reason })) => {
+                    metrics::record_herald_project(HeraldProjectResult::Refused);
+                    tracing::info!(
+                        project = %project.id,
+                        refusal = refusal.as_str(),
+                        %reason,
+                        "the herald's write-up turned a project down"
+                    );
+                }
+                Ok(None) => {
+                    metrics::record_herald_project(HeraldProjectResult::AiOff);
+                    return None;
+                }
+                Err(error) => {
+                    metrics::record_herald_project(HeraldProjectResult::Failed);
+                    late_core::error_span!(
+                        "herald_writeup_failed",
+                        error = ?error,
+                        project = %project.id,
+                        "the herald's write-up failed; no project post this time"
+                    );
+                    return None;
+                }
+            }
+        }
+        None
+    }
+
+    /// A fresh pick's look and media: the picture fetched and looked at, or words
+    /// alone, with nothing to look at. A look that fails is an error like a fetch
+    /// that fails: the next check asks again, and nothing goes out unchecked.
     async fn look_and_media(&self, picture: &Picture) -> anyhow::Result<(Look, Media)> {
-        match picture.picture_path() {
-            Some(path) => {
-                let png = self.fetch_picture(&path).await?;
-                let look = self.look_at(picture, &png).await;
-                let Some(alt) = state::alt_text(picture, &look) else {
-                    bail!("a picture and its alt text come together");
-                };
+        match picture.shape() {
+            Shape::Image(image) => {
+                let png = self.fetch_picture(&image.path()).await?;
+                let look = self
+                    .look_at(image, &png)
+                    .await
+                    .with_context(|| format!("looking at {}", picture.subject()))?;
+                let alt = image.alt_text(&look);
                 Ok((look, Media::Png { png, alt }))
             }
-            None => {
-                let thumb = self.fetch_picture(state::SITE_IMAGE_PATH).await?;
-                Ok((Look::Drawn, Media::Words { thumb }))
-            }
+            Shape::Words(words) => Ok((Look::Drawn, self.words_media(words).await?)),
         }
     }
 
     /// A stored pick's media: the picture fetched again, its alt text from
-    /// the stored look, or words alone with the site's picture.
+    /// the stored look, or words alone.
     async fn fetch_media(&self, picture: &Picture, look: &Look) -> anyhow::Result<Media> {
-        match (picture.picture_path(), state::alt_text(picture, look)) {
-            (Some(path), Some(alt)) => Ok(Media::Png {
-                png: self.fetch_picture(&path).await?,
-                alt,
+        match picture.shape() {
+            Shape::Image(image) => Ok(Media::Png {
+                png: self.fetch_picture(&image.path()).await?,
+                alt: image.alt_text(look),
             }),
-            (None, None) => Ok(Media::Words {
-                thumb: self.fetch_picture(state::SITE_IMAGE_PATH).await?,
-            }),
-            (Some(_), None) | (None, Some(_)) => {
-                bail!("a picture and its alt text come together")
-            }
+            Shape::Words(words) => self.words_media(words).await,
         }
     }
 
-    /// The look at a picture, for a fresh pick or an admin's preview:
-    /// counted here, and a failure logged here, once, and taken as
-    /// `Unseen` so the post still goes out, marked not reviewed.
-    async fn look_at(&self, picture: &Picture, png: &[u8]) -> Look {
-        let look = match look::look(&self.ai, picture, png).await {
-            Ok(look) => look,
-            Err(error) => {
-                late_core::error_span!(
-                    "herald_look_failed",
-                    error = ?error,
-                    subject = %picture.subject(),
-                    "the herald's look failed; posting not reviewed"
-                );
-                Look::Unseen
-            }
-        };
+    /// Words alone: their link card, with the site's picture as its thumb.
+    async fn words_media(&self, words: WordsAlone<'_>) -> anyhow::Result<Media> {
+        Ok(Media::Words {
+            thumb: self.fetch_picture(state::SITE_IMAGE_PATH).await?,
+            card: words.link_card(&self.web_url),
+        })
+    }
+
+    /// The look at a picture, for a fresh pick or an admin's preview, counted
+    /// here. A failed call is passed up for the caller's one log line.
+    async fn look_at(&self, image: Image<'_>, png: &[u8]) -> anyhow::Result<Look> {
+        let look = look::look(&self.ai, image, png).await;
         metrics::record_herald_look(match &look {
-            Look::Seen { warning: None, .. } => HeraldLookResult::Clean,
-            Look::Seen {
+            Ok(Look::Seen { warning: None, .. }) => HeraldLookResult::Clean,
+            Ok(Look::Seen {
                 warning: Some(_), ..
-            } => HeraldLookResult::Warned,
-            Look::Unseen => HeraldLookResult::Unseen,
-            Look::Drawn => HeraldLookResult::Drawn,
+            }) => HeraldLookResult::Warned,
+            Ok(Look::Unseen) => HeraldLookResult::Unseen,
+            Ok(Look::Drawn) => HeraldLookResult::Drawn,
+            Err(_) => HeraldLookResult::Failed,
         });
         look
     }
 
-    /// Everything the day could post, one read per kind; the day's choice
-    /// (`state::Found::choice`) picks.
-    async fn find(&self, day: NaiveDate) -> anyhow::Result<Found> {
+    /// What `slot` could post on `day`, one read per kind it can use.
+    async fn find(&self, day: NaiveDate, slot: HeraldSlot) -> anyhow::Result<Found> {
         let client = self.db.get().await?;
+        match slot {
+            HeraldSlot::Words => Ok(Found::Words(Self::find_words(&client, day).await?)),
+            HeraldSlot::Art => Ok(Found::Art(match state::art_day(day) {
+                ArtDay::Board => ArtFound::Board(self.find_board(&client, day).await?),
+                ArtDay::Piece => ArtFound::Piece(self.find_piece(&client, day).await?),
+            })),
+        }
+    }
+
+    async fn find_words(
+        client: &tokio_postgres::Client,
+        day: NaiveDate,
+    ) -> anyhow::Result<WordsFound> {
         let scoreboard = match state::scoreboard_week(day) {
-            Some(last) => ScoreboardCandidate::of(last, &week_bests(&client, last).await?),
+            Some(last) => ScoreboardCandidate::of(last, &week_tallies(client, last).await?),
             None => None,
         };
-        let issue = PaperEdition::load(&client, day).await?;
-        let paper = Self::find_paper(&issue);
+        let issue = PaperEdition::load(client, day).await?;
+        let paper = Self::find_paper(client, &issue).await?;
         let summary = paper
             .as_ref()
             .and_then(|paper| paper.outside.clone().or_else(|| paper.reading.clone()));
-        Ok(Found {
-            announcement: Self::find_announcement(&client, &issue, summary).await?,
+        Ok(WordsFound {
+            announcement: Self::find_announcement(client, &issue, summary).await?,
+            projects: Self::find_projects(client, day).await?,
             scoreboard,
-            piece: self.find_piece(&client, day).await?,
-            board: self.find_board(&client, day).await?,
             paper,
         })
+    }
+
+    /// The week's draw, in the order to try them: nothing on a day with no
+    /// project on its schedule or a week that already had one, else the
+    /// projects of members active in the last `PROJECT_ACTIVE_WINDOW`, none
+    /// posted in the last `PROJECT_COOLDOWN`, each one the post can carry.
+    async fn find_projects(
+        client: &tokio_postgres::Client,
+        day: NaiveDate,
+    ) -> anyhow::Result<Vec<ProjectFound>> {
+        if !state::words_schedule(day).contains(&WordsKind::Project) {
+            return Ok(Vec::new());
+        }
+        let picked =
+            HeraldPost::picked_since(client, HeraldKind::Project, day - state::PROJECT_COOLDOWN)
+                .await?;
+        let Some(excluded) = state::project_exclusions(day, &picked)? else {
+            return Ok(Vec::new());
+        };
+        let drawn = Showcase::random_active(
+            client,
+            Utc::now() - state::PROJECT_ACTIVE_WINDOW,
+            &excluded,
+            PROJECT_DRAW,
+        )
+        .await?;
+        Ok(drawn
+            .into_iter()
+            .filter_map(ProjectFound::of)
+            .take(PROJECT_TRIES)
+            .collect())
     }
 
     /// The operator's `#announcements` over the edition's window, as
@@ -888,14 +1018,22 @@ impl HeraldService {
     }
 
     /// The edition dated the day, which reads the day before, once a
-    /// public column of it printed.
-    fn find_paper(issue: &PaperEdition) -> Option<PaperCandidate> {
-        PaperCandidate::of(
+    /// public column of it printed, with the covered day's most played
+    /// arcade game (the card's headline, read by the same rule late-web
+    /// draws it with).
+    async fn find_paper(
+        client: &tokio_postgres::Client,
+        issue: &PaperEdition,
+    ) -> anyhow::Result<Option<PaperCandidate>> {
+        let covered = PaperEdition::window(issue.edition).0.date_naive();
+        let tallies = day_tallies(client, covered).await?;
+        Ok(PaperCandidate::of(
             issue.edition,
+            DayTally::most_played_arcade(&tallies),
             issue.ready_text(PaperSectionKind::Yesterday),
-            issue.ready_text(PaperSectionKind::Outside),
             issue.ready_text(PaperSectionKind::Reading),
-        )
+            issue.ready_text(PaperSectionKind::Outside),
+        ))
     }
 
     /// Yesterday's board as the rollover archived it, with its ink counted
@@ -986,14 +1124,14 @@ fn tick_commands(app: &mut App) -> bool {
     let Some(command) = app.chat.take_requested_herald() else {
         return false;
     };
-    let working = match command {
-        HeraldCommand::On | HeraldCommand::Off | HeraldCommand::Status | HeraldCommand::Preview => {
-            None
+    match command {
+        HeraldCommand::On
+        | HeraldCommand::Off
+        | HeraldCommand::Status
+        | HeraldCommand::Preview(_) => {}
+        HeraldCommand::Post(slot) => {
+            app.banner = Some(Banner::info(&format!("Posting today's {}…", slot.as_str())));
         }
-        HeraldCommand::Post => Some("Posting today's picture…"),
-    };
-    if let Some(working) = working {
-        app.banner = Some(Banner::info(working));
     }
     app.herald.service.request(app.user_id, command);
     true
@@ -1007,8 +1145,11 @@ fn names(networks: &[HeraldNetwork]) -> String {
         .join(", ")
 }
 
-/// Today's row in one clause, for `/herald status`.
-fn describe_day(day: &HeraldDay) -> String {
+/// A slot's row in one clause, for `/herald status`.
+fn describe_day(day: Option<&HeraldDay>) -> String {
+    let Some(day) = day else {
+        return "no post yet".to_string();
+    };
     match day.status {
         HeraldDayStatus::Posting => "posting right now".to_string(),
         HeraldDayStatus::Posted => format!(
@@ -1020,7 +1161,7 @@ fn describe_day(day: &HeraldDay) -> String {
                     .collect::<Vec<_>>()
             )
         ),
-        HeraldDayStatus::Skipped => "skipped, nothing worth posting".to_string(),
+        HeraldDayStatus::Skipped => "skipped, nothing to post or nothing clean".to_string(),
         HeraldDayStatus::Failed => format!(
             "failed after {} attempt(s), {} delivered",
             day.attempts,
@@ -1038,74 +1179,86 @@ fn describe_look(look: &Look) -> String {
             reason,
             ..
         } => format!("warned {} ({reason})", warning.as_str()),
-        Look::Unseen => "not reviewed (the look failed or AI is off)".to_string(),
-        Look::Drawn => "drawn by late.sh from its own words".to_string(),
+        Look::Unseen => "not reviewed (AI is off)".to_string(),
+        Look::Drawn => "nothing for the look to see".to_string(),
     }
 }
 
-/// What Mastodon gets, in a clause, for `/herald preview`.
-fn describe_mastodon(look: &Look) -> &'static str {
-    match state::mastodon_post(look) {
-        MastodonPost::Picture => "the picture on Mastodon",
-        MastodonPost::Note { .. } => "a note in place of the picture on Mastodon",
+/// When a slot next posts, in a clause, for `/herald on`.
+fn describe_next(slot: HeraldSlot, next: NextPost) -> String {
+    let name = slot.as_str();
+    let hour = state::post_time(slot).format("%H:%M");
+    match next {
+        NextPost::NextCheck => format!("{name} goes out at the next check, within 5 minutes"),
+        NextPost::AtHour => format!("{name} goes out at {hour} UTC"),
+        NextPost::AtHourAfterSkipping(day) => {
+            format!("{name} of {day} stays unposted, the next goes out at {hour} UTC")
+        }
     }
 }
 
 /// One line per outcome, the admin's whole answer.
 fn banner_for(outcome: CommandOutcome) -> Banner {
     match outcome {
-        CommandOutcome::SwitchedOn(NextPost::NextCheck) => Banner::success(
-            "The herald is on: today's post goes out at the next check, within 5 minutes",
-        ),
-        CommandOutcome::SwitchedOn(NextPost::AtHour) => {
-            Banner::success("The herald is on: the next post goes out at 16:00 UTC")
-        }
-        CommandOutcome::SwitchedOn(NextPost::AtHourAfterSkipping(day)) => {
-            Banner::success(&format!(
-                "The herald is on: {day} was due while it was off and stays unposted; the next post goes out at 16:00 UTC"
-            ))
-        }
+        CommandOutcome::SwitchedOn { words, art } => Banner::success(&format!(
+            "The herald is on: {}; {}",
+            describe_next(HeraldSlot::Words, words),
+            describe_next(HeraldSlot::Art, art),
+        )),
         CommandOutcome::SwitchedOff => {
             Banner::success("The herald is off: nothing posts until /herald on")
         }
-        CommandOutcome::Status { on, day, today } => {
+        CommandOutcome::Status {
+            on,
+            day,
+            words,
+            art,
+        } => {
             let switch = if on { "on" } else { "off" };
-            let state = match today {
-                None => "no post yet".to_string(),
-                Some(row) => describe_day(&row),
-            };
-            Banner::info(&format!("Herald {switch}. Today, {day}: {state}"))
+            Banner::info(&format!(
+                "Herald {switch}. {day}: words {}; art {}",
+                describe_day(words.as_ref()),
+                describe_day(art.as_ref()),
+            ))
         }
         CommandOutcome::Preview {
             day,
+            slot,
             found,
             post,
             networks,
         } => match post {
             Some((picture, look)) => {
-                let shown = match &picture {
-                    Picture::Announcement(announcement) => format!(
+                let shown = match picture.shape() {
+                    Shape::Words(WordsAlone::Announcement(announcement)) => format!(
                         "Words ({}): {}",
                         announcement.brief.as_str(),
                         announcement.text
                     ),
-                    Picture::Board(_)
-                    | Picture::Piece(_)
-                    | Picture::Scoreboard(_)
-                    | Picture::Paper(_) => format!(
-                        "Alt: {}",
-                        state::alt_text(&picture, &look).expect("a picture has alt text")
-                    ),
+                    Shape::Words(WordsAlone::Project(project)) => {
+                        format!("Words: {}", project.text)
+                    }
+                    Shape::Image(image) => format!("Alt: {}", image.alt_text(&look)),
                 };
-                Banner::info(&format!(
-                    "Would post {} to {} for {day}, {}, {}. {shown}",
-                    picture.subject(),
-                    names(&networks),
-                    describe_look(&look),
-                    describe_mastodon(&look),
-                ))
+                match look.goes_out() {
+                    true => Banner::info(&format!(
+                        "Would post {} to {} for {day}, {}. {shown}",
+                        picture.subject(),
+                        names(&networks),
+                        describe_look(&look),
+                    )),
+                    false => Banner::info(&format!(
+                        "Would leave {} unposted for {day}, {}. {shown}",
+                        picture.subject(),
+                        describe_look(&look),
+                    )),
+                }
             }
-            None => Banner::info(&format!("Nothing to post for {day}: {}", found.describe())),
+            None => Banner::info(&format!(
+                "Nothing to post in {} for {day}: {}",
+                slot.as_str(),
+                found.describe()
+            )),
         },
         CommandOutcome::Worked(DayWorked::Posted(posted)) => Banner::success(&format!(
             "Posted {} to {}",
@@ -1118,13 +1271,13 @@ fn banner_for(outcome: CommandOutcome) -> Banner {
                 .join(", "),
         )),
         CommandOutcome::Worked(DayWorked::Skipped) => {
-            Banner::info("Nothing worth posting today; the day is settled as skipped")
+            Banner::info("Nothing to post today, or nothing clean; the slot is settled as skipped")
         }
         CommandOutcome::Worked(DayWorked::Held) => {
-            Banner::info("Another replica is posting today right now")
+            Banner::info("Another replica is posting this slot right now")
         }
         CommandOutcome::Worked(DayWorked::Finished) => {
-            Banner::info("Today is already settled; /herald status says how")
+            Banner::info("This slot is already settled today; /herald status says how")
         }
         CommandOutcome::Worked(DayWorked::Failed) => {
             Banner::error("The herald's post failed; see the logs")

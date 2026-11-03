@@ -10,7 +10,10 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use image::{
     ExtendedColorType, GenericImageView, ImageEncoder, RgbaImage, codecs::png::PngEncoder,
 };
-use ratatui::layout::Rect;
+use ratatui::{
+    buffer::{Buffer, CellDiffOption},
+    layout::Rect,
+};
 use uuid::Uuid;
 
 const KITTY_CHUNK_BYTES: usize = 4096;
@@ -186,8 +189,9 @@ struct PersistentRasterIntent {
     /// changes that touch neither flag above, so a screen change is its own
     /// wipe trigger — otherwise those pixels leak onto the next screen.
     screen_tag: u16,
-    /// Generation of a non-modal terminal image such as Sliding Puzzle.
-    /// Changes when its raster disappears or its placement/content changes.
+    /// Generation of a non-modal terminal image whose pixels must be wiped
+    /// before the frame draws; no screen sets one today. Changes when its
+    /// raster disappears or its placement/content changes.
     non_modal_image_tag: Option<u64>,
 }
 
@@ -260,6 +264,45 @@ impl TerminalImageRenderState {
         // image remains visible, or settle on no placements when it does not.
         self.placements.clear();
         out
+    }
+
+    /// Marks the cells under last frame's iTerm2/Sixel images that this frame
+    /// puts no image on, so ratatui's diff writes them again. Their pixels go
+    /// only when those cells are written, and the diff skips a cell drawn the
+    /// same as last frame: a square a chess piece left, or a board dealt
+    /// fresh, would keep the old piece. A cell that keeps an image or gets a
+    /// new one is left alone, since the mark also differs from the next
+    /// frame's cell and that second write would erase the new image. Runs
+    /// inside the draw, once `frame` holds every placement.
+    pub(crate) fn redraw_vacated_persistent_raster(
+        &self,
+        buffer: &mut Buffer,
+        frame: &TerminalImageFrame,
+        suppress_persistent_raster: bool,
+    ) {
+        if !matches!(
+            self.protocol,
+            Some(TerminalImageProtocol::Iterm2 | TerminalImageProtocol::Sixel)
+        ) {
+            return;
+        }
+        let placed: &[TerminalImagePlacement] = if suppress_persistent_raster {
+            &[]
+        } else {
+            &frame.placements
+        };
+        for key in &self.placements {
+            let area = Rect::new(key.x, key.y, key.cols, key.rows).intersection(buffer.area);
+            for position in area.positions() {
+                if placed
+                    .iter()
+                    .any(|placement| placement.area.contains(position))
+                {
+                    continue;
+                }
+                buffer[position].set_diff_option(CellDiffOption::AlwaysUpdate);
+            }
+        }
     }
 
     pub(crate) fn build_commands(

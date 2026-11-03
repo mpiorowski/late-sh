@@ -41,14 +41,18 @@ pub struct ArcadeSessionPreloads {
     pub initial_snake_high_score: Option<late_core::models::snake::HighScore>,
     pub initial_traffic_track_scores: Vec<late_core::models::traffic::TrackScore>,
     pub initial_traffic_high_score: Option<late_core::models::traffic::HighScore>,
-    pub initial_le_word_daily_word: Option<late_core::models::le_word::DailyWord>,
-    pub initial_le_word_game: Option<late_core::models::le_word::Game>,
+    pub initial_le_word_today: Option<crate::app::arcade::le_word::svc::Today>,
     pub initial_rubiks_cube_game: Option<late_core::models::rubiks_cube::Game>,
     pub initial_sliding_puzzle_games: Vec<late_core::models::sliding_puzzle::Game>,
     pub initial_sudoku_games: Vec<late_core::models::sudoku::Game>,
     pub initial_nonogram_games: Vec<late_core::models::nonogram::Game>,
     pub initial_solitaire_games: Vec<late_core::models::solitaire::Game>,
     pub initial_minesweeper_games: Vec<late_core::models::minesweeper::Game>,
+    pub initial_netwalk_games: Vec<late_core::models::netwalk::Game>,
+    pub initial_chess_puzzle_today: Option<crate::app::arcade::chess_puzzle::svc::Today>,
+    pub initial_chess_puzzle_games: Vec<late_core::models::chess_puzzle::Game>,
+    pub initial_word_wheel_today: Option<crate::app::arcade::word_wheel::svc::Today>,
+    pub initial_quartets_today: Option<crate::app::arcade::quartets::svc::Today>,
 }
 
 pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> ArcadeSessionPreloads {
@@ -63,6 +67,10 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
     let nonogram_service = state.nonogram_service.clone();
     let solitaire_service = state.solitaire_service.clone();
     let minesweeper_service = state.minesweeper_service.clone();
+    let netwalk_service = state.netwalk_service.clone();
+    let chess_puzzle_service = state.chess_puzzle_service.clone();
+    let word_wheel_service = state.word_wheel_service.clone();
+    let quartets_service = state.quartets_service.clone();
 
     let (
         initial_2048_game,
@@ -73,14 +81,18 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
         initial_snake_high_score,
         initial_traffic_track_scores,
         initial_traffic_high_score,
-        initial_le_word_daily_word,
-        initial_le_word_game,
+        initial_le_word_today,
         initial_rubiks_cube_game,
         initial_sliding_puzzle_games,
         initial_sudoku_games,
         initial_nonogram_games,
         initial_solitaire_games,
         initial_minesweeper_games,
+        initial_netwalk_games,
+        initial_chess_puzzle_today,
+        initial_chess_puzzle_games,
+        initial_word_wheel_today,
+        initial_quartets_today,
     ) = tokio::join!(
         async {
             match twenty_forty_eight_service.load_game(user_id).await {
@@ -154,25 +166,7 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
                 }
             }
         },
-        async {
-            match le_word_service.ensure_daily_word().await {
-                Ok(word) => Some(word),
-                Err(e) => {
-                    tracing::warn!(error = ?e, "failed to load Le Word daily word");
-                    None
-                }
-            }
-        },
-        async {
-            let today = le_word_service.today();
-            match le_word_service.load_game(user_id, today).await {
-                Ok(game) => game,
-                Err(e) => {
-                    tracing::warn!(error = ?e, "failed to load Le Word game state");
-                    None
-                }
-            }
-        },
+        le_word_service.load_today(user_id),
         async {
             match rubiks_cube_service.load_game(user_id).await {
                 Ok(game) => game,
@@ -227,6 +221,31 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
                 }
             }
         },
+        async {
+            match netwalk_service.load_games(user_id).await {
+                Ok(games) => games,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load netwalk game states");
+                    Vec::new()
+                }
+            }
+        },
+        // Today's puzzles with the saved progress on them (`daily_load.rs`
+        // logs and counts each).
+        chess_puzzle_service.load_today(user_id),
+        // The saved rows again on their own, so the personal puzzles restore
+        // whether or not the day's claim did.
+        async {
+            match chess_puzzle_service.load_games(user_id).await {
+                Ok(games) => games,
+                Err(e) => {
+                    tracing::warn!(error = ?e, "failed to load chess puzzle game states");
+                    Vec::new()
+                }
+            }
+        },
+        word_wheel_service.load_today(user_id),
+        quartets_service.load_today(user_id),
     );
 
     ArcadeSessionPreloads {
@@ -238,14 +257,18 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
         initial_snake_high_score,
         initial_traffic_track_scores,
         initial_traffic_high_score,
-        initial_le_word_daily_word,
-        initial_le_word_game,
+        initial_le_word_today,
         initial_rubiks_cube_game,
         initial_sliding_puzzle_games,
         initial_sudoku_games,
         initial_nonogram_games,
         initial_solitaire_games,
         initial_minesweeper_games,
+        initial_netwalk_games,
+        initial_chess_puzzle_today,
+        initial_chess_puzzle_games,
+        initial_word_wheel_today,
+        initial_quartets_today,
     }
 }
 
@@ -348,14 +371,18 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_snake_high_score,
         initial_traffic_track_scores,
         initial_traffic_high_score,
-        initial_le_word_daily_word,
-        initial_le_word_game,
+        initial_le_word_today,
         initial_rubiks_cube_game,
         initial_sliding_puzzle_games,
         initial_sudoku_games,
         initial_nonogram_games,
         initial_solitaire_games,
         initial_minesweeper_games,
+        initial_netwalk_games,
+        initial_chess_puzzle_today,
+        initial_chess_puzzle_games,
+        initial_word_wheel_today,
+        initial_quartets_today,
     } = load_arcade_session_preloads(state, user_id).await;
     let initial_bonsai_tree = match state.bonsai_service.ensure_tree(user_id).await {
         Ok(tree) => Some(tree),
@@ -476,6 +503,15 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_rubiks_cube_game,
         sliding_puzzle_service: state.sliding_puzzle_service.clone(),
         initial_sliding_puzzle_games,
+        netwalk_service: state.netwalk_service.clone(),
+        initial_netwalk_games,
+        chess_puzzle_service: state.chess_puzzle_service.clone(),
+        initial_chess_puzzle_today,
+        initial_chess_puzzle_games,
+        word_wheel_service: state.word_wheel_service.clone(),
+        initial_word_wheel_today,
+        quartets_service: state.quartets_service.clone(),
+        initial_quartets_today,
         initial_tetris_game,
         initial_snake_game,
         initial_tetris_high_score,
@@ -483,8 +519,7 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         initial_traffic_track_scores,
         initial_traffic_high_score,
         le_word_service: state.le_word_service.clone(),
-        initial_le_word_daily_word,
-        initial_le_word_game,
+        initial_le_word_today,
         sudoku_service: state.sudoku_service.clone(),
         initial_sudoku_games,
         nonogram_service: state.nonogram_service.clone(),

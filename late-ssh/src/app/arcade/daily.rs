@@ -1,13 +1,37 @@
 //! Arcade daily lifecycle: this session's own win marks for the lobby cards,
-//! and the UTC-midnight rollover that swaps every daily board to today's
-//! puzzle. The backtick-cycle leg (which dailies count as stops, and how to
-//! open one) lives in `workspace/arcade.rs`.
+//! the UTC-midnight rollover that swaps every daily board to today's
+//! puzzle, the per-tick walk that takes in each daily's background loads,
+//! and the map from a daily to its Activity game. The backtick-cycle
+//! leg (which dailies count as stops, and how to open one) lives in
+//! `workspace/arcade.rs`.
 
 use chrono::{NaiveDate, Utc};
 use late_core::models::leaderboard::{DailyCompletionStatus, DailyPuzzle};
 
+use crate::app::activity::event::ActivityGame;
 use crate::app::common::primitives::Screen;
 use crate::app::state::App;
+
+/// The Activity game a daily's wins publish as. Every daily's
+/// `record_win_and_publish` names its game through this, so a new roster
+/// variant needs its `ActivityGame` (and with it the key, family, lounge
+/// and metrics arms) before it can publish a win. The inverse is
+/// `ActivityGame::daily_puzzle`.
+pub(crate) const fn activity_game(puzzle: DailyPuzzle) -> ActivityGame {
+    match puzzle {
+        DailyPuzzle::LeWord => ActivityGame::LeWord,
+        DailyPuzzle::RubiksCube => ActivityGame::RubiksCube,
+        DailyPuzzle::SlidingPuzzle => ActivityGame::SlidingPuzzle,
+        DailyPuzzle::Sudoku => ActivityGame::Sudoku,
+        DailyPuzzle::Nonogram => ActivityGame::Nonogram,
+        DailyPuzzle::Minesweeper => ActivityGame::Minesweeper,
+        DailyPuzzle::Solitaire => ActivityGame::Solitaire,
+        DailyPuzzle::Netwalk => ActivityGame::Netwalk,
+        DailyPuzzle::ChessPuzzle => ActivityGame::ChessPuzzle,
+        DailyPuzzle::WordWheel => ActivityGame::WordWheel,
+        DailyPuzzle::Quartets => ActivityGame::Quartets,
+    }
+}
 
 /// The dailies this session banked today, kept beside the leaderboard
 /// snapshot so the lobby card turns green the moment a win lands instead of
@@ -74,12 +98,62 @@ pub(crate) fn refresh_daily_games(app: &mut App) -> bool {
     if app.screen == Screen::Arcade && app.is_playing_game {
         return false;
     }
-    let mut changed = app.le_word_state.ensure_current_daily();
-    changed |= app.rubiks_cube_state.ensure_current_daily();
-    changed |= app.sliding_puzzle_state.ensure_current_daily();
-    changed |= app.sudoku_state.ensure_current_daily();
-    changed |= app.nonogram_state.ensure_current_daily();
-    changed |= app.minesweeper_state.ensure_current_daily();
-    changed |= app.solitaire_state.ensure_current_daily();
+    let mut changed = false;
+    for puzzle in DailyPuzzle::ALL {
+        changed |= ensure_current_daily(app, *puzzle);
+    }
     changed
 }
+
+/// Roll one daily's boards to today's puzzle; true when they moved.
+fn ensure_current_daily(app: &mut App, puzzle: DailyPuzzle) -> bool {
+    match puzzle {
+        DailyPuzzle::LeWord => app.le_word_state.ensure_current_daily(),
+        DailyPuzzle::RubiksCube => app.rubiks_cube_state.ensure_current_daily(),
+        DailyPuzzle::SlidingPuzzle => app.sliding_puzzle_state.ensure_current_daily(),
+        DailyPuzzle::Sudoku => app.sudoku_state.ensure_current_daily(),
+        DailyPuzzle::Nonogram => app.nonogram_state.ensure_current_daily(),
+        DailyPuzzle::Minesweeper => app.minesweeper_state.ensure_current_daily(),
+        DailyPuzzle::Solitaire => app.solitaire_state.ensure_current_daily(),
+        DailyPuzzle::Netwalk => app.netwalk_state.ensure_current_daily(),
+        DailyPuzzle::ChessPuzzle => app.chess_puzzle_state.ensure_current_daily(),
+        DailyPuzzle::WordWheel => app.word_wheel_state.ensure_current_daily(),
+        DailyPuzzle::Quartets => app.quartets_state.ensure_current_daily(),
+    }
+}
+
+/// Take in every daily's background work that landed since the last tick:
+/// Sudoku's off-thread boards, and the puzzle loads of the dailies claimed in
+/// the database (`daily_load.rs`), which also start a load for a board left
+/// without one. Runs on every tick, board open or not. Returns true when
+/// anything moved, so the caller can force a frame.
+pub(crate) fn poll_daily_loads(app: &mut App) -> bool {
+    let mut changed = false;
+    for puzzle in DailyPuzzle::ALL {
+        changed |= poll_daily_load(app, *puzzle);
+    }
+    changed
+}
+
+/// One daily's background work; true when its screen changed.
+fn poll_daily_load(app: &mut App, puzzle: DailyPuzzle) -> bool {
+    match puzzle {
+        DailyPuzzle::LeWord => app.le_word_state.poll_load(),
+        DailyPuzzle::Sudoku => app.sudoku_state.poll_daily_generation(),
+        DailyPuzzle::ChessPuzzle => app.chess_puzzle_state.poll_load(),
+        DailyPuzzle::WordWheel => app.word_wheel_state.poll_load(),
+        DailyPuzzle::Quartets => app.quartets_state.poll_load(),
+        // Built from the date in `ensure_current_daily`, nothing in the
+        // background. Sliding Puzzle's art is polled with its open board.
+        DailyPuzzle::RubiksCube
+        | DailyPuzzle::SlidingPuzzle
+        | DailyPuzzle::Nonogram
+        | DailyPuzzle::Minesweeper
+        | DailyPuzzle::Solitaire
+        | DailyPuzzle::Netwalk => false,
+    }
+}
+
+#[cfg(test)]
+#[path = "daily_test.rs"]
+mod daily_test;

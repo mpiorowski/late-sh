@@ -277,28 +277,51 @@ pub fn action_to_body(action: &str) -> String {
         .unwrap_or_else(|| action.trim().to_string())
 }
 
+/// A stored chat body as IRC delivers it. A `/me` line travels as a CTCP
+/// ACTION, so clients draw `* nick waves` themselves instead of a plain
+/// PRIVMSG that repeats the nick the prefix already carries.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IrcBody {
+    Text(String),
+    Action(String),
+}
+
+const CTCP_ACTION_PREFIX: &str = "\u{1}ACTION ";
+const CTCP_ACTION_SUFFIX: &str = "\u{1}";
+
+/// Bytes the CTCP ACTION wrapper adds to every line it wraps.
+pub const CTCP_ACTION_OVERHEAD: usize = CTCP_ACTION_PREFIX.len() + CTCP_ACTION_SUFFIX.len();
+
+/// Wrap one already-split line as a CTCP ACTION.
+pub fn ctcp_action(line: &str) -> String {
+    format!("{CTCP_ACTION_PREFIX}{line}{CTCP_ACTION_SUFFIX}")
+}
+
 /// Render a stored chat body for IRC delivery.
-pub fn body_for_irc(body: &str, author: &str) -> String {
-    crate::app::chat::action::parse_action_body(body)
-        .map(|action| format!("* {author} {action}"))
-        .unwrap_or_else(|| body.to_string())
+pub fn body_for_irc(body: &str) -> IrcBody {
+    match crate::app::chat::action::parse_action_body(body) {
+        Some(action) => IrcBody::Action(action.to_string()),
+        None => IrcBody::Text(body.to_string()),
+    }
 }
 
 /// A stored channel message body as IRC delivers it, live or replayed: the
-/// `/me` and CTCP shape from `body_for_irc`, then a leading `@username`
+/// `/me` shape from `body_for_irc`, then a plain body's leading `@username`
 /// mention rewritten to the matching IRC nick when the username is known.
-pub fn channel_body_for_irc(body: &str, author: &str, directory: &HashMap<Uuid, String>) -> String {
-    let body = body_for_irc(body, author);
-    rewrite_leading_mention_for_irc(&body, |username| {
-        directory
-            .values()
-            .find(|candidate| candidate.eq_ignore_ascii_case(username))
-            .cloned()
-    })
+pub fn channel_body_for_irc(body: &str, directory: &HashMap<Uuid, String>) -> IrcBody {
+    match body_for_irc(body) {
+        IrcBody::Text(text) => IrcBody::Text(rewrite_leading_mention_for_irc(&text, |username| {
+            directory
+                .values()
+                .find(|candidate| candidate.eq_ignore_ascii_case(username))
+                .cloned()
+        })),
+        IrcBody::Action(action) => IrcBody::Action(action),
+    }
 }
 
 /// Extract CTCP ACTION text from a PRIVMSG body, if present.
 pub fn parse_ctcp_action(text: &str) -> Option<&str> {
-    text.strip_prefix("\u{1}ACTION ")
-        .map(|rest| rest.trim_end_matches('\u{1}'))
+    text.strip_prefix(CTCP_ACTION_PREFIX)
+        .map(|rest| rest.trim_end_matches(CTCP_ACTION_SUFFIX))
 }

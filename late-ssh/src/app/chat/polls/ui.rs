@@ -18,7 +18,7 @@ pub(crate) fn draw_modal(frame: &mut Frame, area: Rect, state: &PollModalState) 
     if !state.is_open() {
         return;
     }
-    let popup = centered_rect(area, 68, 18);
+    let popup = centered_rect(area, 68, 21);
     frame.render_widget(Clear, popup);
     let block = Block::default()
         .title(" Poll ")
@@ -30,6 +30,7 @@ pub(crate) fn draw_modal(frame: &mut Frame, area: Rect, state: &PollModalState) 
 
     let areas = Layout::vertical([
         Constraint::Length(1),
+        Constraint::Length(3),
         Constraint::Length(3),
         Constraint::Length(3),
         Constraint::Length(3),
@@ -149,14 +150,18 @@ fn draw_duration_field(frame: &mut Frame, area: Rect, state: &PollModalState, fo
         if index > 0 {
             spans.push(Span::raw("  "));
         }
-        let minutes = duration_secs / 60;
+        let label = if duration_secs % 3600 == 0 {
+            format!("{}h", duration_secs / 3600)
+        } else {
+            format!("{}m", duration_secs / 60)
+        };
         let selected = state.duration_index() == index;
         let style = if selected {
             theme::punch_through(theme::SUCCESS()).add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(theme::TEXT_DIM())
         };
-        spans.push(Span::styled(format!(" {}m ", minutes), style));
+        spans.push(Span::styled(format!(" {label} "), style));
     }
 
     frame.render_widget(

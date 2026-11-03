@@ -1,5 +1,8 @@
 //! The realm as it was: a day picked with the arrows, the map painted from
-//! that day's closing board, and what happened on it beside.
+//! that day's closing board, and what happened on it beside. On a day whose
+//! night was fought, `p` plays the night back over the board it opened on, a
+//! fight a step: the target bright, the land each take came from bright in
+//! its taker's colour, and a caption saying how it went.
 //!
 //! The map is the same `worldmap` painter the live board uses; what differs is
 //! where the colours come from. A replayed day is coloured from its own
@@ -17,12 +20,16 @@ use ratatui::widgets::Paragraph;
 use crate::app::common::theme;
 use crate::app::common::worldmap::{self, view::Viewport};
 
-use super::log_ui::entry_line;
+use super::log_ui::{entry_lines, fought_line};
 use super::map::{TerritoryId, WorldMap};
 use super::map_ui::RAIL_WIDTH;
-use super::resolver::{DayBoard, RealmGameState};
-use super::state::{RealmState, palette_shades, shade_index};
+use super::resolver::{DayBoard, LogEntry, RealmGameState};
+use super::state::{RealmState, palette_shades, replay_steps, shade_index};
 use super::svc::ArchivedDay;
+
+/// The fought-over territory on a replayed step: bright against every
+/// player's fill, so the eye lands on it first.
+const REPLAY_TARGET: (u8, u8, u8) = (255, 244, 214);
 
 /// Everything a history frame draws from, gathered before drawing so the
 /// drawing itself does not need a live session — which is also what makes it
@@ -41,6 +48,8 @@ pub(super) struct HistoryFrame<'a> {
     /// covers them for everything else on screen.
     pub live: &'a RealmGameState,
     pub view: Viewport,
+    /// The replay is up on this day, on this fight.
+    pub replay_step: Option<usize>,
 }
 
 pub fn draw(frame: &mut Frame, area: Rect, realm: &RealmState) {
@@ -67,6 +76,11 @@ pub fn draw(frame: &mut Frame, area: Rect, realm: &RealmState) {
     // different pictures.
     let view = Viewport::fitted(&map, canvas.width as i32, canvas.height as i32 * 2);
 
+    let shown_day = days.get(index).map(|day| day.day());
+    let replay_step = board
+        .replay
+        .filter(|replay| Some(replay.day) == shown_day)
+        .map(|replay| replay.step);
     render(
         frame,
         area,
@@ -77,6 +91,7 @@ pub fn draw(frame: &mut Frame, area: Rect, realm: &RealmState) {
             live: &detail.state,
             loading: realm.history_loading(),
             view,
+            replay_step,
         },
     );
 }
@@ -124,14 +139,34 @@ pub(super) fn render(frame: &mut Frame, area: Rect, ctx: &HistoryFrame) {
     // the screen.
     let slider_area = Rect::new(map_area.x, map_area.y, map_area.width, 1);
 
+    // A replayed night is drawn over the board it opened on; the step's
+    // fight is lit on top of it.
+    let replay = ctx.replay_step.and_then(|step| {
+        let open = archived.board_open.as_ref()?;
+        let fights = replay_steps(&archived.result);
+        let at = step.min(fights.len().checked_sub(1)?);
+        Some((open, at, fights.len(), fights[at]))
+    });
+    let shown_board = replay.map(|(open, ..)| open).unwrap_or(day_board);
+    let mut colors = colors_of(shown_board, ctx.live.ruleset.fort_max_level);
+    let mut selected = None;
+    if let Some((open, _, _, LogEntry::Fought { target, takers, .. })) = replay {
+        colors.insert(*target, REPLAY_TARGET);
+        for roll in takers {
+            if let Some(color) = taker_color(open, roll.user_id) {
+                colors.insert(roll.from, color);
+            }
+        }
+        selected = Some(*target);
+    }
     worldmap::view::paint(
         frame,
         canvas_of(area),
         ctx.map,
         &ctx.view,
         &worldmap::view::Paint {
-            colors: &colors_of(day_board, ctx.live.ruleset.fort_max_level),
-            selected: None,
+            colors: &colors,
+            selected,
             crosshair: false,
         },
     );
@@ -144,9 +179,95 @@ pub(super) fn render(frame: &mut Frame, area: Rect, ctx: &HistoryFrame) {
         ctx.loading,
     );
 
-    if let Some(rail) = rail_area {
-        draw_rail(frame, rail, archived, day_board, ctx.live, ctx.map);
+    // The caption rides the map's top row, over the ocean, so the frame the
+    // map is fitted to stays the one every other day is drawn in.
+    if let Some((_, at, total, fight)) = replay {
+        draw_caption(
+            frame,
+            Rect::new(map_area.x, map_area.y + 1, map_area.width, 1),
+            fight,
+            at,
+            total,
+            ctx,
+        );
     }
+
+    if let Some(rail) = rail_area {
+        draw_rail(
+            frame,
+            rail,
+            archived,
+            shown_board,
+            replay.is_some(),
+            ctx.live,
+            ctx.map,
+        );
+    }
+}
+
+/// The land a take came from, lit in its taker's colour: their palest
+/// shade halfway to white, which no fill on the board is.
+fn taker_color(open: &DayBoard, user_id: uuid::Uuid) -> Option<(u8, u8, u8)> {
+    open.players
+        .iter()
+        .enumerate()
+        .find(|(_, player)| player.user_id == user_id)
+        .map(|(slot, player)| lit(palette_shades(player.color.unwrap_or(slot as u8))[0]))
+}
+
+pub(super) fn lit((r, g, b): (u8, u8, u8)) -> (u8, u8, u8) {
+    let up = |c: u8| ((u16::from(c) + 255) / 2) as u8;
+    (up(r), up(g), up(b))
+}
+
+/// "night · fight 2 of 7 · spoon → Micronesia · 3 pts · 42% · taken from
+/// mat": the step on screen, told by the take that decided it (the one
+/// that took it, else the strongest).
+fn draw_caption(
+    frame: &mut Frame,
+    area: Rect,
+    fight: &LogEntry,
+    at: usize,
+    total: usize,
+    ctx: &HistoryFrame,
+) {
+    let LogEntry::Fought {
+        target,
+        holder,
+        taken_by,
+        takers,
+        bounced,
+        ..
+    } = fight
+    else {
+        return;
+    };
+    let deciding = takers
+        .iter()
+        .find(|roll| Some(roll.user_id) == *taken_by)
+        .or_else(|| takers.iter().max_by(|a, b| a.force.total_cmp(&b.force)));
+    let Some(roll) = deciding else {
+        return;
+    };
+    let mut spans = vec![Span::styled(
+        format!(" night · fight {} of {total} ·", at + 1),
+        Style::default()
+            .fg(theme::AMBER_GLOW())
+            .add_modifier(Modifier::BOLD),
+    )];
+    spans.extend(
+        fought_line(
+            ctx.live, ctx.map, *target, *holder, *taken_by, *bounced, roll,
+        )
+        .spans,
+    );
+    if takers.len() > 1 {
+        spans.push(Span::styled(
+            format!(" · {} more on it", takers.len() - 1),
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 /// A day's territory colours, from that day's own roster. The live game is
@@ -225,7 +346,7 @@ fn draw_slider(frame: &mut Frame, area: Rect, index: usize, total: usize, day: i
 
 /// A realm day as a date. The number is days since the epoch, which is the
 /// right thing to compute with and no use at all to read.
-fn day_label(day: i32) -> String {
+pub(super) fn day_label(day: i32) -> String {
     chrono::DateTime::from_timestamp(i64::from(day) * 86_400, 0)
         .map(|at| at.format("%-d %b").to_string())
         .unwrap_or_else(|| format!("day {day}"))
@@ -249,12 +370,14 @@ fn draw_nothing_yet(frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// Who stood where on the day being shown, and what happened on it.
+/// Who stood where on the day being shown (as its night began, while the
+/// night replays), and what happened on it.
 fn draw_rail(
     frame: &mut Frame,
     area: Rect,
     archived: &ArchivedDay,
     day_board: &DayBoard,
+    replaying: bool,
     live: &RealmGameState,
     map: &WorldMap,
 ) {
@@ -264,7 +387,10 @@ fn draw_rail(
     let mut lines: Vec<Line<'static>> = Vec::new();
 
     lines.push(Line::from(Span::styled(
-        format!(" as {} ended", day_label(archived.day())),
+        match replaying {
+            true => format!(" as the night of {} began", day_label(archived.day())),
+            false => format!(" as {} ended", day_label(archived.day())),
+        },
         Style::default()
             .fg(theme::AMBER())
             .add_modifier(Modifier::BOLD),
@@ -298,7 +424,7 @@ fn draw_rail(
     // The same renderer the log view uses, so a day reads the same in both
     // places.
     for entry in &archived.result.entries {
-        lines.push(entry_line(entry, live, map));
+        lines.extend(entry_lines(entry, live, map));
     }
 
     frame.render_widget(

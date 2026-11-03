@@ -61,6 +61,7 @@ fn poll_option_position(byte: u8) -> Option<i32> {
         b'a' | b'A' => Some(1),
         b'b' | b'B' => Some(2),
         b'c' | b'C' => Some(3),
+        b'd' | b'D' => Some(4),
         _ => None,
     }
 }

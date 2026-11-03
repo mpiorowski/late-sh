@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -126,10 +127,12 @@ pub(crate) fn save_banner(outcome: NewsSaveOutcome) -> Banner {
 }
 
 /// The News list in display order: the reader's shelf first, newest save
-/// first, then the feed's stories that are not on it, newest first. A
-/// saved story appears once, on the shelf, whatever the feed holds; the
-/// feed's copy of it is the one shown, since the snapshot carries the
-/// freshest body status. The mine-only filter applies to both parts.
+/// first, then the feed's stories that are not on it, oldest first, so the
+/// newest share is at the bottom of the page like the newest line of a
+/// room. A saved story appears once, on the shelf, whatever the feed
+/// holds; the feed's copy of it is the one shown, since the snapshot
+/// carries the freshest body status. The mine-only filter applies to both
+/// parts.
 pub(crate) fn display_order(
     saved: &[ArticleFeedItem],
     feed: &[ArticleFeedItem],
@@ -153,6 +156,7 @@ pub(crate) fn display_order(
     let saved_len = rows.len();
     rows.extend(
         feed.iter()
+            .rev()
             .filter(|item| !saved_ids.contains(&item.article.id) && shown(item))
             .cloned(),
     );
@@ -181,6 +185,10 @@ pub struct State {
     saved_len: usize,
     mine_only: bool,
     selected: usize,
+    /// The feed has reached the list at least once (`rebuild_display`).
+    feed_drawn: bool,
+    /// The list's first drawn row, kept between draws (`news::ui::scroll_offset`).
+    list_scroll: Cell<usize>,
     snapshot_rx: watch::Receiver<ArticleSnapshot>,
     event_rx: broadcast::Receiver<ArticleEvent>,
     reads: Reads,
@@ -228,6 +236,8 @@ impl State {
             saved_len: 0,
             mine_only: false,
             selected: 0,
+            feed_drawn: false,
+            list_scroll: Cell::new(0),
             snapshot_rx,
             event_rx,
             reads: Reads::Loading,
@@ -324,10 +334,16 @@ impl State {
     }
 
     fn rebuild_display(&mut self) {
-        let prev_id = self
-            .articles
-            .get(self.selected.min(self.articles.len().saturating_sub(1)))
-            .map(|item| item.article.id);
+        // The shelf can load ahead of the feed. Until the feed has drawn nothing
+        // counts as selected, so the first fill still lands on the newest story.
+        let prev_id = match self.feed_drawn {
+            true => self
+                .articles
+                .get(self.selected.min(self.articles.len().saturating_sub(1)))
+                .map(|item| item.article.id),
+            false => None,
+        };
+        self.feed_drawn = self.feed_drawn || !self.source_articles.is_empty();
 
         let mine_only = self.mine_only.then_some(self.user_id);
         let (next, saved_len) =
@@ -335,13 +351,19 @@ impl State {
 
         self.articles = next;
         self.saved_len = saved_len;
-        if let Some(id) = prev_id
-            && let Some(idx) = self.articles.iter().position(|item| item.article.id == id)
-        {
-            self.selected = idx;
-        } else {
-            self.selected = clamp_index(self.selected, self.articles.len());
+        match prev_id {
+            Some(id) => match self.articles.iter().position(|item| item.article.id == id) {
+                Some(idx) => self.selected = idx,
+                None => self.selected = clamp_index(self.selected, self.articles.len()),
+            },
+            // Nothing was selected (the first fill): land on the newest
+            // story, the last row.
+            None => self.selected = self.articles.len().saturating_sub(1),
         }
+    }
+
+    pub fn list_scroll(&self) -> &Cell<usize> {
+        &self.list_scroll
     }
 
     pub fn selected_index(&self) -> usize {

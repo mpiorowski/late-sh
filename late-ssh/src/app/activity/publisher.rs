@@ -138,7 +138,7 @@ impl ActivityPublisher {
         &self,
         game_id: Uuid,
         season: i32,
-        winner: Option<String>,
+        winner: Option<crate::app::activity::event::RealmWinner>,
         pot: i64,
         players: u8,
     ) {

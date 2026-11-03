@@ -217,7 +217,11 @@ one `session wire summary` line (`log_wire_summary`). How to read it:
   holds, so a re-placement is an `a=p` of a few dozen bytes. iTerm2 and Sixel
   have no delete-by-id, so `pre_frame_persistent_raster_wipe_bytes` writes wipe
   spaces ahead of the frame on transitions (modal closed, image swapped,
-  overlay opened, screen changed, protocol changed). A timed-out side-channel
+  overlay opened, screen changed, protocol changed). Inside the draw,
+  `redraw_vacated_persistent_raster` marks the cells under last frame's
+  iTerm2/Sixel images that this frame places none on as
+  `CellDiffOption::AlwaysUpdate`, so the diff rewrites a cell drawn the same
+  (a square a chess piece left, a board dealt fresh). A timed-out side-channel
   write calls `force_full_repaint` and abandons the batch.
 - **Video never passes through the server:** the paired CLI's mpv draws to
   the user's tty; the server paints the player black and sends the CLI the

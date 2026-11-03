@@ -1,4 +1,5 @@
 use super::*;
+use crate::models::leaderboard::DailyPuzzle;
 use serde_json::json;
 
 fn template(key: &str, difficulty: &str, domain: &str, kind: &str) -> QuestTemplate {
@@ -150,4 +151,30 @@ async fn assignment_titles_resolve_through_the_template() {
         .expect("titles");
     assert_eq!(titles.len(), 1);
     assert_eq!(titles.get(&assignment_id), Some(&title));
+}
+
+/// Quest templates are migration data the compiler cannot see: a daily with
+/// no active quest naming its game never joins the Hub's quest pool.
+#[tokio::test]
+async fn every_daily_puzzle_has_an_active_quest_template() {
+    let test_db = crate::test_utils::test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let now = Utc::now();
+    let mut templates = list_active_templates(&**client, "daily", now)
+        .await
+        .expect("daily templates");
+    templates.extend(
+        list_active_templates(&**client, "weekly", now)
+            .await
+            .expect("weekly templates"),
+    );
+
+    for puzzle in DailyPuzzle::ALL {
+        assert!(
+            templates
+                .iter()
+                .any(|template| template.params["game"] == puzzle.key()),
+            "{puzzle:?} has no active quest template"
+        );
+    }
 }

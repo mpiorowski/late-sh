@@ -34,6 +34,8 @@ fn base_state(players: &[(u128, &str)]) -> RealmGameState {
                 // Played enough to win, except where a test says otherwise.
                 active_days: 20,
                 color: None,
+                orders: Vec::new(),
+                dominating_nights: 0,
                 joined_claimed: 0,
             })
             .collect(),
@@ -45,6 +47,7 @@ fn base_state(players: &[(u128, &str)]) -> RealmGameState {
         // moves it back on purpose.
         start_day: DAY - 10,
         news: None,
+        last_night: None,
     }
 }
 
@@ -833,7 +836,13 @@ fn taking_a_last_territory_eliminates_and_ends_the_realm() {
         state.player(uid(2)).unwrap().status,
         RealmPlayerStatus::Eliminated
     );
-    assert_eq!(out.end, ResolveEnd::Won(uid(1)));
+    assert_eq!(
+        out.end,
+        ResolveEnd::Won {
+            winner: uid(1),
+            kind: WinKind::LastStanding
+        }
+    );
     assert!(
         state.ownership.len() < map.territories.len(),
         "and it ended with most of the map still unclaimed"
@@ -1071,7 +1080,13 @@ fn winning_takes_a_week_of_play_not_an_afternoon() {
     // Once the days are in, the same position is a win.
     state.player_mut(uid(1)).unwrap().active_days = state.ruleset.min_active_days_to_win;
     let (_, end) = sweep_idle(&mut state, &map, DAY + 1);
-    assert_eq!(end, ResolveEnd::Won(uid(1)));
+    assert_eq!(
+        end,
+        ResolveEnd::Won {
+            winner: uid(1),
+            kind: WinKind::LastStanding
+        }
+    );
 }
 
 #[test]
@@ -1115,7 +1130,13 @@ fn total_conquest_wins_while_others_are_still_alive() {
         seed_for(true, odds),
     )
     .expect("legal attack");
-    assert_eq!(out.end, ResolveEnd::Won(uid(1)));
+    assert_eq!(
+        out.end,
+        ResolveEnd::Won {
+            winner: uid(1),
+            kind: WinKind::LastStanding
+        }
+    );
 }
 
 #[test]
@@ -1447,7 +1468,13 @@ fn a_win_earned_on_a_day_spent_digging_in_ends_the_realm() {
         1,
     )
     .expect("dig in");
-    assert_eq!(out.end, ResolveEnd::Won(uid(1)));
+    assert_eq!(
+        out.end,
+        ResolveEnd::Won {
+            winner: uid(1),
+            kind: WinKind::LastStanding
+        }
+    );
     assert!(
         state
             .last_day
@@ -1509,4 +1536,93 @@ fn a_realm_short_of_a_rival_keeps_its_doors_open() {
     assert!(state.claimed_fraction(&map) >= state.ruleset.join_max_claimed);
     assert!(!state.can_win(uid(1)), "alone, there is nothing to win");
     assert!(state.joinable(&map), "so the door stays open for a rival");
+}
+
+/// Season 1 froze its row before the orders engine existed. It has to keep
+/// parsing as the instant game it is: no orders, no domination run, no
+/// night, and a win that was the last one standing.
+#[test]
+fn a_season_one_state_parses_without_any_orders_fields() {
+    let mut state = base_state(&[(1, "a"), (2, "b")]);
+    state.ownership.insert(3, uid(1));
+    state.log(
+        DAY,
+        7,
+        LogEntry::Won {
+            user_id: uid(1),
+            kind: WinKind::LastStanding,
+        },
+    );
+    state.news = Some(RealmNews {
+        at: chrono::Utc::now(),
+        kind: RealmNewsKind::Ended {
+            winner_user_id: Some(uid(1)),
+            winner_username: Some("a".to_string()),
+            win_kind: Some(WinKind::LastStanding),
+        },
+    });
+    let mut value = serde_json::to_value(&state).unwrap();
+    let strip = |object: &mut serde_json::Value, keys: &[&str]| {
+        for key in keys {
+            assert!(
+                object.as_object_mut().unwrap().remove(*key).is_some(),
+                "{key} is written"
+            );
+        }
+    };
+    strip(&mut value, &["last_night"]);
+    strip(
+        &mut value["ruleset"],
+        &[
+            "resolution",
+            "garrison_weight",
+            "front_factor",
+            "sea_front",
+            "sea_reach_km",
+            "landing_factor",
+            "encircle_factor",
+            "support_factor",
+            "neutral_factor",
+            "contest_exponent",
+            "domination_share_tiers",
+            "domination_nights",
+            "season_days",
+        ],
+    );
+    for player in value["players"].as_array_mut().unwrap() {
+        strip(player, &["orders", "dominating_nights"]);
+    }
+    strip(&mut value["last_day"]["entries"][0], &["kind"]);
+    strip(&mut value["news"]["kind"], &["win_kind"]);
+
+    let parsed: RealmGameState = serde_json::from_value(value).expect("season 1 parses");
+    assert_eq!(
+        parsed.ruleset.resolution,
+        crate::app::door::realm::rulesets::Resolution::Instant
+    );
+    assert_eq!(parsed.ruleset.season_days, 0);
+    assert!(parsed.last_night.is_none());
+    assert!(
+        parsed
+            .players
+            .iter()
+            .all(|p| p.orders.is_empty() && p.dominating_nights == 0)
+    );
+    assert!(matches!(
+        parsed.last_day.as_ref().unwrap().entries[0],
+        LogEntry::Won {
+            kind: WinKind::LastStanding,
+            ..
+        }
+    ));
+    assert!(matches!(
+        parsed.news.as_ref().unwrap().kind,
+        RealmNewsKind::Ended { win_kind: None, .. }
+    ));
+    // Everything else reads as it did.
+    assert_eq!(
+        parsed.points_left(uid(1), DAY + 1),
+        state.points_left(uid(1), DAY + 1)
+    );
+    assert_eq!(parsed.ownership, state.ownership);
 }
