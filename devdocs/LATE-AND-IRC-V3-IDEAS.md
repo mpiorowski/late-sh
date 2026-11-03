@@ -20,7 +20,7 @@ The TUI chat surface already has richer semantics than plain IRC:
 - One reaction per `(message_id, user_id)`, stored as arbitrary icon text and
   displayed as reaction summary chips.
 - Admin-only global message pins.
-- Active room polls with two or three options, 10/20/30 minute durations,
+- Active room polls with two to four options, 30 minute or 1 hour durations,
   per-user votes, and automatic result posts.
 - Mention notifications, unread cursors, friends, ignores, and active-user
   presence.

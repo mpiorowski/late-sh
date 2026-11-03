@@ -85,5 +85,5 @@ Tests (`sidebar_test.rs`): `music_stage_height_is_constant`, `on_radio_the_stage
 
 - There is no genre-vote row.
 - `v+1`..`v+5` tune to the station pinned in that slot while Radio is the source (`input.rs::handle_music_suffix`); on YouTube the digit is swallowed. The choice persists to `users.settings.radio_station` and confirms with a `Station: <label>` banner.
-- `va`/`vb`/`vc` are reserved for active Home poll votes before music dispatch; numeric selectors must stay available even when a poll is visible.
+- `va`/`vb`/`vc`/`vd` are reserved for active Home poll votes before music dispatch; numeric selectors must stay available even when a poll is visible.
 - v+x toggles radio and youtube through `app/state.rs::toggle_paired_playback_source` → `AudioService::persist_audio_source`, which updates every paired registry entry for the user and broadcasts `PairControlMessage::SetPlaybackSource { source, stream_url, station }`. Radio retargets direct-stream playback to the selected station (a house station resolves against the Icecast base URL); YouTube silences native output and starts the embedded webview helper on capable CLI builds.

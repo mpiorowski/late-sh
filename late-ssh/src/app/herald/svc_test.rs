@@ -6,12 +6,13 @@ use axum::extract::State;
 use axum::http::{HeaderMap, StatusCode, Uri, header};
 use axum::response::IntoResponse;
 use axum::routing::{get, post};
-use chrono::{Duration, NaiveDate, TimeZone, Utc};
+use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
 use dartboard_core::{Canvas, Pos};
 use late_core::models::artboard::Snapshot;
 use late_core::models::herald::{
-    HeraldDay, HeraldDayStatus, HeraldKind, HeraldNetwork, HeraldPost, HeraldSwitch,
+    HeraldDay, HeraldDayStatus, HeraldKind, HeraldNetwork, HeraldPost, HeraldSlot, HeraldSwitch,
 };
+use late_core::models::showcase::{Showcase, ShowcaseParams};
 use tokio::net::TcpListener;
 use tokio_postgres::Client;
 use uuid::Uuid;
@@ -19,8 +20,8 @@ use uuid::Uuid;
 use super::bluesky::tid_for;
 use super::bluesky_test::png;
 use super::state::{
-    BOARD_MIN_INK, BoardFound, BoardInk, Crop, Found, HeraldCommand, Look, post_due_day, schedule,
-    shown_day,
+    ArtDay, ArtFound, BOARD_MIN_INK, BoardFound, BoardInk, Crop, Found, HeraldCommand, art_day,
+    post_due_day, shown_day,
 };
 use super::svc::{
     CommandOutcome, DayWorked, HERALD_CLAIM_WINDOW, HERALD_MAX_ATTEMPTS, HeraldService, NextPost,
@@ -54,6 +55,8 @@ struct Recorded {
     /// the last call carried.
     gemini_calls: usize,
     gemini_images: usize,
+    /// Gemini: the text of the last call's prompt.
+    gemini_prompt: String,
     /// Gemini: the text the model answers.
     gemini_reply: String,
 }
@@ -210,6 +213,12 @@ async fn gemini(
         .iter()
         .filter(|part| part.get("inlineData").is_some())
         .count();
+    log.gemini_prompt = body["contents"][0]["parts"]
+        .as_array()
+        .expect("parts")
+        .iter()
+        .filter_map(|part| part["text"].as_str())
+        .collect();
     axum::Json(serde_json::json!({
         "candidates": [{"content": {"parts": [{"text": log.gemini_reply}]}}]
     }))
@@ -263,59 +272,66 @@ async fn daily_board(client: &Client, shown: NaiveDate, ink: usize) {
     .expect("snapshot");
 }
 
-async fn row(client: &Client, day: NaiveDate) -> (Uuid, String, i32) {
+async fn row(client: &Client, day: NaiveDate, slot: HeraldSlot) -> (Uuid, String, i32) {
     let row = client
         .query_one(
-            "SELECT id, status, attempts FROM herald_posts WHERE day = $1",
-            &[&day],
+            "SELECT id, status, attempts FROM herald_posts WHERE day = $1 AND slot = $2",
+            &[&day, &slot.as_str()],
         )
         .await
         .expect("row");
     (row.get("id"), row.get("status"), row.get("attempts"))
 }
 
-/// Day one posts yesterday's board to both networks, day two the next
-/// board, day three has a bare board and rests; a day is settled once.
-/// The model is off, so every post goes out marked not reviewed: Bluesky
-/// gets the picture with the mark, Mastodon a note in its place.
+/// What the model answers about a picture it finds clean.
+fn clean_look() -> String {
+    serde_json::json!({
+        "alt": "A lighthouse on a cliff.",
+        "warning": "none",
+        "reason": "",
+    })
+    .to_string()
+}
+
+/// Half past the art slot on the Monday of 26 October 2026, the board's day.
+fn monday_art() -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(2026, 10, 26, 20, 30, 0).unwrap()
+}
+
+/// Half past the words slot, the same Monday.
+fn monday_words() -> DateTime<Utc> {
+    Utc.with_ymd_and_hms(2026, 10, 26, 15, 30, 0).unwrap()
+}
+
+/// Monday's art is yesterday's board, seen clean, as a picture on both
+/// networks under the row's own key; a settled slot is settled, the words slot
+/// is untouched by it, and the next Monday's bare board rests.
 #[tokio::test]
-async fn the_herald_posts_the_board_and_rests_on_a_bare_one() {
+async fn the_monday_board_goes_out_and_a_bare_one_rests() {
     let test_db = new_test_db().await;
     let db = test_db.db.clone();
     let client = db.get().await.expect("db client");
     let (base, log) = fake_servers().await;
     HeraldSwitch::set(&client, true).await.expect("switch on");
-
-    let now = Utc.with_ymd_and_hms(2026, 10, 23, 16, 30, 0).unwrap();
+    let now = monday_art();
     let day = now.date_naive();
+    let next_monday = day + Duration::days(7);
     daily_board(&client, shown_day(day), BOARD_MIN_INK).await;
-    daily_board(
-        &client,
-        shown_day(day + Duration::days(1)),
-        BOARD_MIN_INK + 5,
-    )
-    .await;
-    daily_board(
-        &client,
-        shown_day(day + Duration::days(2)),
-        BOARD_MIN_INK - 1,
-    )
-    .await;
-
-    let herald = service(db.clone(), &base, ai_off());
+    daily_board(&client, shown_day(next_monday), BOARD_MIN_INK - 1).await;
+    log.lock().expect("log").gemini_reply = clean_look();
+    let herald = service(db.clone(), &base, model_on(&base));
     let mut finished = None;
 
-    // Day one: the board of the 22nd, on both networks.
-    assert!(herald.check(now, &mut finished).await);
+    assert!(herald.check(now, HeraldSlot::Art, &mut finished).await);
     assert_eq!(finished, Some(day));
-    let (key, status, attempts) = row(&client, day).await;
+    let (key, status, attempts) = row(&client, day, HeraldSlot::Art).await;
     assert_eq!((status.as_str(), attempts), ("posted", 1));
-    let posted = HeraldPost::posted_on(&client, day)
+    let posted = HeraldPost::posted_on(&client, day, HeraldSlot::Art)
         .await
         .expect("read")
         .expect("posted");
     assert_eq!(posted.kind, HeraldKind::Artboard);
-    assert_eq!(posted.subject, "daily:2026-10-22");
+    assert_eq!(posted.subject, "daily:2026-10-25");
     let rkey = tid_for(key);
     assert_eq!(posted.deliveries.len(), 2);
     assert_eq!(posted.deliveries[0].network, HeraldNetwork::Bluesky);
@@ -325,17 +341,22 @@ async fn the_herald_posts_the_board_and_rests_on_a_bare_one() {
     );
     assert_eq!(posted.deliveries[1].network, HeraldNetwork::Mastodon);
     assert_eq!(posted.deliveries[1].url, "https://instance.test/@late/1");
+    let words = "Yesterday's Artboard on late.sh, 25 October 2026. A shared ASCII canvas, anyone logged in can draw on it.\n\nhttps://late.sh/gallery\n\n#ASCIIart #MastoArt #tildeverse #terminal";
     {
         let log = log.lock().expect("log");
         assert_eq!(
             log.picture_paths,
-            vec!["/gallery/daily:2026-10-22/image.png?crop=0,0,80,5"],
+            vec!["/gallery/daily:2026-10-25/image.png?crop=0,0,80,5"],
             "fetched once for both networks, cropped to the drawn rows"
         );
-
+        assert_eq!((log.gemini_calls, log.gemini_images), (1, 5));
+        assert_eq!(log.media_uploads[0].0, "Bearer secret-token");
         assert!(
-            log.media_uploads.is_empty(),
-            "an unseen picture stays off Mastodon"
+            log.media_uploads[0]
+                .1
+                .contains("ASCII art: A lighthouse on a cliff."),
+            "{}",
+            log.media_uploads[0].1
         );
         let (auth, idempotency, status) = &log.statuses[0];
         assert_eq!(auth, "Bearer secret-token");
@@ -344,16 +365,10 @@ async fn the_herald_posts_the_board_and_rests_on_a_bare_one() {
             key.to_string(),
             "the row id is the idempotency key"
         );
-        assert_eq!(status["media_ids"], serde_json::json!([]));
+        assert_eq!(status["media_ids"], serde_json::json!(["77"]));
         assert_eq!(status["visibility"], "unlisted");
         assert_eq!(status["language"], "en");
-        assert_eq!(status["sensitive"], true);
-        assert_eq!(status["spoiler_text"], "cw: not reviewed");
-        assert_eq!(
-            status["status"],
-            "Yesterday's Artboard, as the room left it on 22 October 2026, is behind a content warning, so this server gets a note and not the picture. It is on late.sh, and on Bluesky with a label.\n\nhttps://late.sh\n\n#tildeverse #terminal",
-            "the note links the front page, never the gallery's card"
-        );
+        assert_eq!(status["status"], words);
 
         assert_eq!(log.sessions[0]["identifier"], "late.test");
         assert_eq!(log.sessions[0]["password"], "app-pass");
@@ -365,21 +380,18 @@ async fn the_herald_posts_the_board_and_rests_on_a_bare_one() {
         assert_eq!(put["collection"], "app.bsky.feed.post");
         assert_eq!(put["rkey"], rkey, "the record key comes from the row id");
         let record = &put["record"];
-        assert_eq!(
-            record["text"],
-            "cw: not reviewed\n\nThe Artboard yesterday: late.sh's shared ASCII canvas, as the room left it on 22 October 2026. Anyone in the clubhouse can pick up a brush.\n\nhttps://late.sh/gallery\n\n#ASCIIart #MastoArt #tildeverse #nsfw",
-        );
-        assert!(record.get("labels").is_none(), "no label for not reviewed");
+        assert_eq!(record["text"], words, "the same words on both");
+        assert!(record.get("labels").is_none(), "{record}");
         assert_eq!(record["langs"], serde_json::json!(["en"]));
         assert!(
             record["createdAt"]
                 .as_str()
                 .unwrap()
-                .starts_with("2026-10-23T16:30:00")
+                .starts_with("2026-10-26T20:30:00")
         );
         assert!(!record["facets"].as_array().unwrap().is_empty());
         let image = &record["embed"]["images"][0];
-        assert!(image["alt"].as_str().unwrap().contains("22 October 2026"));
+        assert_eq!(image["alt"], "ASCII art: A lighthouse on a cliff.");
         assert_eq!(image["image"]["ref"]["$link"], "bafyfake");
         assert_eq!(
             image["aspectRatio"],
@@ -387,62 +399,52 @@ async fn the_herald_posts_the_board_and_rests_on_a_bare_one() {
         );
     }
 
-    // The same day again, memoized or not, is over.
-    assert!(!herald.check(now + Duration::hours(1), &mut finished).await);
+    // The same slot again, memoized or not, is over; words have no row.
+    assert!(
+        !herald
+            .check(now + Duration::hours(1), HeraldSlot::Art, &mut finished)
+            .await
+    );
     let mut fresh = None;
-    assert!(!herald.check(now + Duration::hours(2), &mut fresh).await);
-    assert_eq!(fresh, Some(day), "a settled day is memoized on sight");
+    assert!(
+        !herald
+            .check(now + Duration::hours(2), HeraldSlot::Art, &mut fresh)
+            .await
+    );
+    assert_eq!(fresh, Some(day), "a settled slot is memoized on sight");
     assert_eq!(log.lock().expect("log").statuses.len(), 1);
-
-    // Day two: the next day's board.
-    let day_two = day + Duration::days(1);
-    assert!(herald.check(now + Duration::days(1), &mut finished).await);
-    let posted = HeraldPost::posted_on(&client, day_two)
-        .await
-        .expect("read")
-        .expect("posted");
-    assert_eq!(posted.kind, HeraldKind::Artboard);
-    assert_eq!(posted.subject, "daily:2026-10-23");
-    assert_eq!(posted.deliveries.len(), 2);
-    {
-        let log = log.lock().expect("log");
-        assert_eq!(
-            log.picture_paths[1],
-            "/gallery/daily:2026-10-23/image.png?crop=0,0,80,5"
-        );
-        let text = log.statuses[1].2["status"].as_str().expect("text");
-        assert!(text.contains("23 October 2026"), "{text}");
-        assert!(
-            log.records[1].1["record"]["text"]
-                .as_str()
-                .expect("text")
-                .starts_with("cw: not reviewed\n\nThe Artboard yesterday")
-        );
-    }
-
-    // Day three: the board is a smudge.
-    let day_three = day + Duration::days(2);
-    assert!(herald.check(now + Duration::days(2), &mut finished).await);
     assert_eq!(
-        HeraldPost::posted_on(&client, day_three)
+        HeraldPost::day(&client, day, HeraldSlot::Words)
             .await
             .expect("read"),
         None
     );
+
+    // The next Monday: the board is a smudge, and nothing goes out.
+    assert!(
+        herald
+            .check(now + Duration::days(7), HeraldSlot::Art, &mut finished)
+            .await
+    );
+    assert_eq!(
+        row(&client, next_monday, HeraldSlot::Art).await.1,
+        "skipped"
+    );
     assert!(
         HeraldPost::is_finished(
             &client,
-            day_three,
+            next_monday,
+            HeraldSlot::Art,
             Utc::now() - HERALD_CLAIM_WINDOW,
             HERALD_MAX_ATTEMPTS
         )
         .await
         .expect("read"),
-        "a skipped day is settled"
+        "a skipped slot is settled"
     );
     let log = log.lock().expect("log");
-    assert_eq!(log.statuses.len(), 2);
-    assert_eq!(log.records.len(), 2);
+    assert_eq!(log.statuses.len(), 1);
+    assert_eq!(log.records.len(), 1);
 }
 
 /// With the row off nothing is claimed and nothing is sent, however the
@@ -453,12 +455,13 @@ async fn the_switch_off_posts_nothing() {
     let db = test_db.db.clone();
     let client = db.get().await.expect("db client");
     let (base, log) = fake_servers().await;
-    let now = Utc.with_ymd_and_hms(2026, 10, 23, 16, 30, 0).unwrap();
+    let now = monday_art();
     daily_board(&client, shown_day(now.date_naive()), BOARD_MIN_INK).await;
 
-    let herald = service(db.clone(), &base, ai_off());
+    let herald = service(db.clone(), &base, model_on(&base));
     let mut finished = None;
-    assert!(!herald.check(now, &mut finished).await);
+    assert!(!herald.check(now, HeraldSlot::Art, &mut finished).await);
+    assert!(!herald.check(now, HeraldSlot::Words, &mut finished).await);
     assert_eq!(finished, None);
     let rows: i64 = client
         .query_one("SELECT count(*) FROM herald_posts", &[])
@@ -472,9 +475,9 @@ async fn the_switch_off_posts_nothing() {
     assert!(log.records.is_empty());
 }
 
-/// One network down leaves the day failed with the other's delivery
-/// kept; the next check sends the same picture to the missing network
-/// only, under the same key.
+/// One network down leaves the post failed with the other's delivery kept;
+/// the next check sends the same picture to the missing network only, under
+/// the same key, without asking the model again.
 #[tokio::test]
 async fn a_failed_network_is_retried_alone_under_the_same_key() {
     let test_db = new_test_db().await;
@@ -482,25 +485,33 @@ async fn a_failed_network_is_retried_alone_under_the_same_key() {
     let client = db.get().await.expect("db client");
     let (base, log) = fake_servers().await;
     HeraldSwitch::set(&client, true).await.expect("switch on");
-    let now = Utc.with_ymd_and_hms(2026, 10, 23, 16, 30, 0).unwrap();
+    let now = monday_art();
     let day = now.date_naive();
     daily_board(&client, shown_day(day), BOARD_MIN_INK).await;
-    log.lock().expect("log").fail_bluesky = true;
+    {
+        let mut log = log.lock().expect("log");
+        log.gemini_reply = clean_look();
+        log.fail_bluesky = true;
+    }
 
-    let herald = service(db.clone(), &base, ai_off());
+    let herald = service(db.clone(), &base, model_on(&base));
     let mut finished = None;
     assert!(
-        herald.check(now, &mut finished).await,
-        "the day was claimed and tried"
+        herald.check(now, HeraldSlot::Art, &mut finished).await,
+        "the slot was claimed and tried"
     );
-    assert_eq!(finished, None, "a failed day is not finished");
-    let (key, status, attempts) = row(&client, day).await;
+    assert_eq!(finished, None, "a failed post is not finished");
+    let (key, status, attempts) = row(&client, day, HeraldSlot::Art).await;
     assert_eq!((status.as_str(), attempts), ("failed", 1));
-    let landed = HeraldPost::deliveries(&client, day).await.expect("read");
+    let landed = HeraldPost::deliveries(&client, day, HeraldSlot::Art)
+        .await
+        .expect("read");
     assert_eq!(landed.len(), 1);
     assert_eq!(landed[0].network, HeraldNetwork::Mastodon);
     assert_eq!(
-        HeraldPost::posted_on(&client, day).await.expect("read"),
+        HeraldPost::posted_on(&client, day, HeraldSlot::Art)
+            .await
+            .expect("read"),
         None
     );
     {
@@ -513,112 +524,135 @@ async fn a_failed_network_is_retried_alone_under_the_same_key() {
     log.lock().expect("log").fail_bluesky = false;
     assert!(
         herald
-            .check(now + Duration::minutes(5), &mut finished)
+            .check(now + Duration::minutes(5), HeraldSlot::Art, &mut finished)
             .await
     );
     assert_eq!(finished, Some(day));
-    let (retry_key, status, attempts) = row(&client, day).await;
+    let (retry_key, status, attempts) = row(&client, day, HeraldSlot::Art).await;
     assert_eq!((status.as_str(), attempts), ("posted", 2));
     assert_eq!(retry_key, key, "the retry carries the first claim's key");
-    let posted = HeraldPost::posted_on(&client, day)
+    let posted = HeraldPost::posted_on(&client, day, HeraldSlot::Art)
         .await
         .expect("read")
         .expect("posted on the retry");
-    assert_eq!(posted.subject, "daily:2026-10-22", "the stored pick");
+    assert_eq!(posted.subject, "daily:2026-10-25", "the stored pick");
     assert_eq!(posted.deliveries.len(), 2);
     let log = log.lock().expect("log");
     assert_eq!(log.statuses.len(), 1, "mastodon was not sent again");
     assert_eq!(log.records.len(), 1);
     assert_eq!(log.records[0].1["rkey"], tid_for(key));
+    assert_eq!(log.gemini_calls, 1, "the stored look, not a second call");
+    assert_eq!(
+        log.records[0].1["record"]["embed"]["images"][0]["alt"],
+        "ASCII art: A lighthouse on a cliff.",
+        "the stored look's alt text"
+    );
 }
 
-/// With the model on, its look writes the alt text and the mark, and is
-/// stored with the pick: a warned board is a note on Mastodon and the
-/// labelled picture on Bluesky, and a retry after one network failed sends
-/// the same mark without asking the model again.
+/// A flagged board stays off every network: the slot rests for the day, nothing
+/// is stored and nothing is sent, no note and no label.
 #[tokio::test]
-async fn a_seen_day_carries_the_mark_and_a_retry_keeps_it() {
+async fn a_flagged_board_stays_off_every_network() {
     let test_db = new_test_db().await;
     let db = test_db.db.clone();
     let client = db.get().await.expect("db client");
     let (base, log) = fake_servers().await;
     HeraldSwitch::set(&client, true).await.expect("switch on");
-    let now = Utc.with_ymd_and_hms(2026, 10, 23, 16, 30, 0).unwrap();
+    let now = monday_art();
     let day = now.date_naive();
     daily_board(&client, shown_day(day), BOARD_MIN_INK).await;
-    {
-        let mut log = log.lock().expect("log");
-        log.gemini_reply = serde_json::json!({
-            "alt": "A cyborg stands on the left.",
-            "warning": "nudity",
-            "reason": "bare breasts on the cyborg",
-        })
-        .to_string();
-        log.fail_bluesky = true;
-    }
-    let ai = AiService::at_endpoint(true, Some("test-key".to_string()), base.clone());
-    let herald = service(db.clone(), &base, ai);
+    log.lock().expect("log").gemini_reply = serde_json::json!({
+        "alt": "A cyborg stands on the left.",
+        "warning": "nudity",
+        "reason": "bare breasts on the cyborg",
+    })
+    .to_string();
+    let herald = service(db.clone(), &base, model_on(&base));
     let mut finished = None;
 
-    assert!(herald.check(now, &mut finished).await);
-    assert_eq!(row(&client, day).await.1, "failed");
-    {
-        let log = log.lock().expect("log");
-        assert_eq!(log.gemini_calls, 1);
-        assert_eq!(log.gemini_images, 5, "the board whole and its quarters");
-        assert!(log.media_uploads.is_empty(), "no picture on Mastodon");
-        let status = &log.statuses[0].2;
-        assert_eq!(status["media_ids"], serde_json::json!([]));
-        assert_eq!(status["sensitive"], true);
-        assert_eq!(status["spoiler_text"], "nsfw: nudity");
-        let text = status["status"].as_str().expect("text");
-        assert!(text.starts_with("Yesterday's Artboard"), "{text}");
-    }
-
-    log.lock().expect("log").fail_bluesky = false;
-    assert!(
-        herald
-            .check(now + Duration::minutes(5), &mut finished)
+    assert!(herald.check(now, HeraldSlot::Art, &mut finished).await);
+    assert_eq!(finished, Some(day), "settled, not retried");
+    assert_eq!(row(&client, day, HeraldSlot::Art).await.1, "skipped");
+    assert_eq!(
+        HeraldPost::stored_pick(&client, day, HeraldSlot::Art)
             .await
+            .expect("read"),
+        None
     );
-    assert_eq!(row(&client, day).await.1, "posted");
     let log = log.lock().expect("log");
-    assert_eq!(log.gemini_calls, 1, "the stored look, not a second call");
-    let record = &log.records[0].1["record"];
-    assert_eq!(
-        record["labels"],
-        serde_json::json!({
-            "$type": "com.atproto.label.defs#selfLabels",
-            "values": [{"val": "nudity"}],
-        })
-    );
-    let text = record["text"].as_str().expect("text");
-    assert!(text.starts_with("The Artboard yesterday"), "{text}");
-    assert!(text.ends_with("#tildeverse #nsfw"), "{text}");
-    assert_eq!(
-        record["embed"]["images"][0]["alt"],
-        "ASCII art: A cyborg stands on the left."
-    );
+    assert_eq!((log.gemini_calls, log.gemini_images), (1, 5));
+    assert!(log.media_uploads.is_empty());
+    assert!(log.statuses.is_empty());
+    assert!(log.blobs.is_empty());
+    assert!(log.records.is_empty());
 }
 
-/// An admin's `/herald`: the row flips, status and preview read without
-/// posting, and `post` works today before 16:00 with the row off; the
-/// same day again is settled, and the checker then leaves it alone.
+/// A look that fails is no verdict: nothing goes out, the row is `failed` and
+/// the next check asks again, so one bad answer does not lose the day's picture.
 #[tokio::test]
-async fn the_commands_flip_read_and_post_today_by_hand() {
+async fn a_failed_look_is_retried_with_nothing_sent() {
     let test_db = new_test_db().await;
     let db = test_db.db.clone();
     let client = db.get().await.expect("db client");
     let (base, log) = fake_servers().await;
-    let herald = service(db.clone(), &base, ai_off());
+    HeraldSwitch::set(&client, true).await.expect("switch on");
+    let now = monday_art();
+    let day = now.date_naive();
+    daily_board(&client, shown_day(day), BOARD_MIN_INK).await;
+    log.lock().expect("log").gemini_reply = "not json".to_string();
+    let herald = service(db.clone(), &base, model_on(&base));
+    let mut finished = None;
+
+    assert!(herald.check(now, HeraldSlot::Art, &mut finished).await);
+    let (_, status, attempts) = row(&client, day, HeraldSlot::Art).await;
+    assert_eq!((status.as_str(), attempts), ("failed", 1));
+    assert_eq!(finished, None, "not settled");
+    assert_eq!(
+        HeraldPost::stored_pick(&client, day, HeraldSlot::Art)
+            .await
+            .expect("read"),
+        None
+    );
+    {
+        let log = log.lock().expect("log");
+        assert!(log.statuses.is_empty());
+        assert!(log.records.is_empty());
+    }
+
+    log.lock().expect("log").gemini_reply = clean_look();
+    assert!(herald.check(now, HeraldSlot::Art, &mut finished).await);
+    let (_, status, attempts) = row(&client, day, HeraldSlot::Art).await;
+    assert_eq!((status.as_str(), attempts), ("posted", 2));
+    assert_eq!(finished, Some(day));
+    let log = log.lock().expect("log");
+    assert_eq!(log.gemini_calls, 2);
+    assert_eq!(log.statuses.len(), 1);
+    assert_eq!(log.records.len(), 1);
+}
+
+/// An admin's `/herald`: the row flips, status and preview read without
+/// posting, and `post` works today's slot before its hour with the row off; the
+/// same slot again is settled, and the checker then leaves it alone.
+#[tokio::test]
+async fn the_commands_flip_read_and_post_a_slot_by_hand() {
+    let test_db = new_test_db().await;
+    let db = test_db.db.clone();
+    let client = db.get().await.expect("db client");
+    let (base, log) = fake_servers().await;
+    log.lock().expect("log").gemini_reply = clean_look();
+    let herald = service(db.clone(), &base, model_on(&base));
     // Mid-morning: the checker's due day is yesterday, the admin's is today.
-    let now = Utc.with_ymd_and_hms(2026, 10, 23, 9, 0, 0).unwrap();
+    let now = Utc.with_ymd_and_hms(2026, 10, 26, 9, 0, 0).unwrap();
     let today = now.date_naive();
+    let yesterday = today - Duration::days(1);
 
     assert_eq!(
         herald.run_command(HeraldCommand::On, now).await,
-        CommandOutcome::SwitchedOn(NextPost::AtHourAfterSkipping(post_due_day(now))),
-        "yesterday was due while off and stays unposted"
+        CommandOutcome::SwitchedOn {
+            words: NextPost::AtHourAfterSkipping(yesterday),
+            art: NextPost::AtHourAfterSkipping(yesterday),
+        },
+        "yesterday's two posts were due while off and stay unposted"
     );
     assert!(HeraldSwitch::is_on(&client).await.expect("read"));
     assert_eq!(
@@ -632,34 +666,34 @@ async fn the_commands_flip_read_and_post_today_by_hand() {
         CommandOutcome::Status {
             on: false,
             day: today,
-            today: None,
+            words: None,
+            art: None,
         }
     );
+    let art = HeraldCommand::Preview(HeraldSlot::Art);
     assert_eq!(
-        herald.run_command(HeraldCommand::Preview, now).await,
+        herald.run_command(art, now).await,
         CommandOutcome::Preview {
             day: today,
-            found: Box::new(Found {
-                announcement: None,
-                scoreboard: None,
-                piece: None,
-                board: BoardFound {
-                    key: "daily:2026-10-22".to_string(),
-                    shown: shown_day(today),
-                    ink: None,
-                },
-                paper: None,
-            }),
+            slot: HeraldSlot::Art,
+            found: Box::new(Found::Art(ArtFound::Board(BoardFound {
+                key: "daily:2026-10-25".to_string(),
+                shown: shown_day(today),
+                ink: None,
+            }))),
             post: None,
             networks: vec![HeraldNetwork::Mastodon, HeraldNetwork::Bluesky],
         }
     );
 
     daily_board(&client, shown_day(today), BOARD_MIN_INK + 3).await;
-    match herald.run_command(HeraldCommand::Preview, now).await {
+    match herald.run_command(art, now).await {
         CommandOutcome::Preview { found, post, .. } => {
+            let Found::Art(ArtFound::Board(board)) = *found else {
+                panic!("Monday's art is the board, not {found:?}");
+            };
             assert_eq!(
-                found.board.ink,
+                board.ink,
                 Some(BoardInk {
                     cells: BOARD_MIN_INK + 3,
                     area: Some(Crop {
@@ -671,8 +705,8 @@ async fn the_commands_flip_read_and_post_today_by_hand() {
                 })
             );
             let (picture, look) = post.expect("the board is a post");
-            assert_eq!(picture.subject(), "daily:2026-10-22");
-            assert_eq!(look, Look::Unseen, "the model is off");
+            assert_eq!(picture.subject(), "daily:2026-10-25");
+            assert!(look.goes_out(), "{look:?}");
         }
         other => panic!("a preview, not {other:?}"),
     }
@@ -682,18 +716,20 @@ async fn the_commands_flip_read_and_post_today_by_hand() {
     );
 
     // Posting by hand, with the row off and before the post time.
-    let worked = herald.run_command(HeraldCommand::Post, now).await;
+    let post_art = HeraldCommand::Post(HeraldSlot::Art);
+    let worked = herald.run_command(post_art, now).await;
     let CommandOutcome::Worked(DayWorked::Posted(posted)) = worked else {
         panic!("posted, not {worked:?}");
     };
-    assert_eq!(posted.subject, "daily:2026-10-22");
+    assert_eq!(posted.subject, "daily:2026-10-25");
     assert_eq!(posted.deliveries.len(), 2);
     assert_eq!(
         herald.run_command(HeraldCommand::Status, now).await,
         CommandOutcome::Status {
             on: false,
             day: today,
-            today: Some(HeraldDay {
+            words: None,
+            art: Some(HeraldDay {
                 status: HeraldDayStatus::Posted,
                 attempts: 1,
                 deliveries: posted.deliveries.clone(),
@@ -701,48 +737,61 @@ async fn the_commands_flip_read_and_post_today_by_hand() {
         }
     );
     assert_eq!(
-        herald.run_command(HeraldCommand::Post, now).await,
+        herald.run_command(post_art, now).await,
         CommandOutcome::Worked(DayWorked::Finished),
-        "a day goes out once"
+        "a slot goes out once"
     );
 
-    // The checker at 16:00 with the row on finds today settled.
+    // The checker at the art hour with the row on finds it settled.
     HeraldSwitch::set(&client, true).await.expect("switch on");
     let mut finished = None;
-    assert!(!herald.check(now + Duration::hours(8), &mut finished).await);
+    assert!(
+        !herald
+            .check(now + Duration::hours(11), HeraldSlot::Art, &mut finished)
+            .await
+    );
     assert_eq!(finished, Some(today));
     let log = log.lock().expect("log");
     assert_eq!(log.statuses.len(), 1);
     assert_eq!(log.records.len(), 1);
 }
 
-/// Switching on in the morning does not catch up the day the switch
-/// slept through: that day is settled unposted and the first post is
-/// today's, at 16:00. After the hour, an unposted today goes out at the
-/// next check.
+/// Switching on in the morning does not catch up what the switch slept through:
+/// those posts are settled unposted and the first is today's, at its hour. After
+/// the hour, an unposted slot goes out at the next check. Each slot answers for
+/// itself.
 #[tokio::test]
-async fn switching_on_waits_for_the_hour() {
+async fn switching_on_waits_for_each_slots_hour() {
     let test_db = new_test_db().await;
     let db = test_db.db.clone();
     let client = db.get().await.expect("db client");
     let (base, log) = fake_servers().await;
-    let herald = service(db.clone(), &base, ai_off());
-    let morning = Utc.with_ymd_and_hms(2026, 10, 23, 10, 0, 0).unwrap();
+    log.lock().expect("log").gemini_reply = clean_look();
+    let herald = service(db.clone(), &base, model_on(&base));
+    let morning = Utc.with_ymd_and_hms(2026, 10, 26, 10, 0, 0).unwrap();
     let today = morning.date_naive();
-    let slept = post_due_day(morning);
+    let slept = post_due_day(morning, HeraldSlot::Art);
     daily_board(&client, shown_day(slept), BOARD_MIN_INK).await;
     daily_board(&client, shown_day(today), BOARD_MIN_INK).await;
 
     assert_eq!(
         herald.run_command(HeraldCommand::On, morning).await,
-        CommandOutcome::SwitchedOn(NextPost::AtHourAfterSkipping(slept))
+        CommandOutcome::SwitchedOn {
+            words: NextPost::AtHourAfterSkipping(slept),
+            art: NextPost::AtHourAfterSkipping(slept),
+        }
     );
-    assert_eq!(row(&client, slept).await.1, "skipped");
+    assert_eq!(row(&client, slept, HeraldSlot::Art).await.1, "skipped");
+    assert_eq!(row(&client, slept, HeraldSlot::Words).await.1, "skipped");
 
     let mut finished = None;
     assert!(
         !herald
-            .check(morning + Duration::minutes(5), &mut finished)
+            .check(
+                morning + Duration::minutes(5),
+                HeraldSlot::Art,
+                &mut finished
+            )
             .await
     );
     assert_eq!(finished, Some(slept));
@@ -751,30 +800,36 @@ async fn switching_on_waits_for_the_hour() {
         "nothing goes out before the hour"
     );
 
-    let hour = Utc.with_ymd_and_hms(2026, 10, 23, 16, 5, 0).unwrap();
-    assert!(herald.check(hour, &mut finished).await);
+    let hour = Utc.with_ymd_and_hms(2026, 10, 26, 20, 5, 0).unwrap();
+    assert!(herald.check(hour, HeraldSlot::Art, &mut finished).await);
     assert_eq!(finished, Some(today));
-    assert_eq!(row(&client, today).await.1, "posted");
+    assert_eq!(row(&client, today, HeraldSlot::Art).await.1, "posted");
     {
         let log = log.lock().expect("log");
         assert_eq!(log.statuses.len(), 1);
         assert_eq!(
             log.picture_paths,
-            vec!["/gallery/daily:2026-10-22/image.png?crop=0,0,80,5"],
+            vec!["/gallery/daily:2026-10-25/image.png?crop=0,0,80,5"],
             "today's board, not the one the switch slept through"
         );
     }
     assert_eq!(
         herald.run_command(HeraldCommand::On, hour).await,
-        CommandOutcome::SwitchedOn(NextPost::AtHour),
-        "today has its row"
+        CommandOutcome::SwitchedOn {
+            words: NextPost::NextCheck,
+            art: NextPost::AtHour,
+        },
+        "art has its row today, words do not"
     );
 
     // The next evening with nothing posted yet: on means the next check.
-    let evening = Utc.with_ymd_and_hms(2026, 10, 24, 17, 0, 0).unwrap();
+    let evening = Utc.with_ymd_and_hms(2026, 10, 27, 21, 0, 0).unwrap();
     assert_eq!(
         herald.run_command(HeraldCommand::On, evening).await,
-        CommandOutcome::SwitchedOn(NextPost::NextCheck)
+        CommandOutcome::SwitchedOn {
+            words: NextPost::NextCheck,
+            art: NextPost::NextCheck,
+        }
     );
 }
 
@@ -810,23 +865,29 @@ fn model_on(base: &str) -> AiService {
     AiService::at_endpoint(true, Some("test-key".to_string()), base.to_string())
 }
 
-/// The first day after today on which the schedule leads with the piece:
-/// the wall shows a piece the day after it was hung at the earliest, and
-/// the test hangs one now.
-fn next_piece_day() -> NaiveDate {
+/// The first day after today that shows a piece and is followed by another:
+/// the wall shows a piece the day after it was hung at the earliest, and the
+/// tests hang theirs now.
+fn next_piece_days() -> NaiveDate {
     let mut day = Utc::now().date_naive() + Duration::days(1);
-    while schedule(day)[0] != HeraldKind::Piece {
+    while art_day(day) != ArtDay::Piece || art_day(day + Duration::days(1)) != ArtDay::Piece {
         day += Duration::days(1);
     }
     day
 }
 
-/// On an art day the piece over the door beats the board; the model saw
-/// it clean, so both networks get the picture, credited and linking its
-/// page. The wall moves on: the next day has no piece and the board goes
-/// out.
+/// Half past the art slot on `day`.
+fn art_hour(day: NaiveDate) -> DateTime<Utc> {
+    day.and_hms_opt(20, 30, 0)
+        .expect("half past eight")
+        .and_utc()
+}
+
+/// On a piece day the piece over the door goes out, seen clean, credited and
+/// linking its page. The wall moves on: the next day has no piece, and the board
+/// waiting there is no fallback, so that day's art rests.
 #[tokio::test]
-async fn a_clean_piece_goes_out_as_a_picture_and_only_once() {
+async fn a_clean_piece_goes_out_and_an_empty_wall_rests() {
     use late_core::models::artboard_piece::ArtboardPiece;
 
     let test_db = new_test_db().await;
@@ -834,26 +895,22 @@ async fn a_clean_piece_goes_out_as_a_picture_and_only_once() {
     let client = db.get().await.expect("db client");
     let (base, log) = fake_servers().await;
     HeraldSwitch::set(&client, true).await.expect("switch on");
-    let day = next_piece_day();
-    let now = day
-        .and_hms_opt(16, 30, 0)
-        .expect("half past four")
-        .and_utc();
+    let day = next_piece_days();
+    let next = day + Duration::days(1);
     daily_board(&client, shown_day(day), BOARD_MIN_INK).await;
-    daily_board(&client, shown_day(day + Duration::days(1)), BOARD_MIN_INK).await;
+    daily_board(&client, shown_day(next), BOARD_MIN_INK).await;
     let artist = late_core::test_utils::create_test_user(&db, "herald-artist").await;
     let piece = hang_piece(&client, artist.id, "harbour").await;
-    log.lock().expect("log").gemini_reply = serde_json::json!({
-        "alt": "A lighthouse on a cliff.",
-        "warning": "none",
-        "reason": "",
-    })
-    .to_string();
+    log.lock().expect("log").gemini_reply = clean_look();
     let herald = service(db.clone(), &base, model_on(&base));
     let mut finished = None;
 
-    assert!(herald.check(now, &mut finished).await);
-    let posted = HeraldPost::posted_on(&client, day)
+    assert!(
+        herald
+            .check(art_hour(day), HeraldSlot::Art, &mut finished)
+            .await
+    );
+    let posted = HeraldPost::posted_on(&client, day, HeraldSlot::Art)
         .await
         .expect("read")
         .expect("posted");
@@ -884,63 +941,96 @@ async fn a_clean_piece_goes_out_as_a_picture_and_only_once() {
         );
         let status = &log.statuses[0].2;
         assert_eq!(status["media_ids"], serde_json::json!(["77"]));
-        assert_eq!(status["sensitive"], false);
-        assert!(status.get("spoiler_text").is_none(), "{status}");
         let text = status["status"].as_str().expect("text");
         assert_eq!(
             text,
             format!(
-                "\"harbour\" by ~herald-artist, hung in the late.sh gallery: drawn cell by cell on the shared ASCII canvas, over SSH.\n\nhttps://late.sh/gallery/pieces/{piece}\n\n#ASCIIart #MastoArt #tildeverse #terminal"
+                "\"harbour\" by ~herald-artist, from the late.sh gallery. ASCII art drawn on the shared canvas over SSH.\n\nhttps://late.sh/gallery/pieces/{piece}\n\n#ASCIIart #MastoArt #tildeverse #terminal"
             )
         );
         let record = &log.records[0].1["record"];
-        assert_eq!(record["text"], text, "clean: the same words on both");
-        assert!(record.get("labels").is_none());
+        assert_eq!(record["text"], text, "the same words on both");
         assert_eq!(
             record["embed"]["images"][0]["alt"],
             "ASCII art: A lighthouse on a cliff."
         );
     }
 
-    assert!(herald.check(now + Duration::days(1), &mut finished).await);
-    let next = HeraldPost::posted_on(&client, day + Duration::days(1))
-        .await
-        .expect("read")
-        .expect("posted");
-    assert_eq!(
-        (next.kind, next.subject.as_str()),
-        (
-            HeraldKind::Artboard,
-            Snapshot::daily_key(shown_day(day + Duration::days(1))).as_str()
-        ),
-        "the wall has no piece the next day"
+    assert!(
+        herald
+            .check(art_hour(next), HeraldSlot::Art, &mut finished)
+            .await
     );
+    assert_eq!(row(&client, next, HeraldSlot::Art).await.1, "skipped");
+    let log = log.lock().expect("log");
+    assert_eq!(log.picture_paths.len(), 1, "the board was never fetched");
+    assert_eq!(log.statuses.len(), 1);
 }
 
-/// The cards are drawn from late.sh's own words and never shown to the
-/// model: the week's scoreboard on Sunday, the paper on a Monday with
-/// nothing drawn. Both carry the picture on both networks, alt text from
-/// the same words.
+/// A piece the look flags rests and does not reach for the board; so does a
+/// piece nobody could check. The two days hang two pieces, one for each.
 #[tokio::test]
-async fn the_cards_go_out_drawn_without_the_model() {
-    use late_core::models::le_word;
-    use late_core::models::paper::{PaperSectionKind, PaperSectionRow};
-
+async fn a_flagged_or_unchecked_piece_rests_and_the_board_is_no_fallback() {
     let test_db = new_test_db().await;
     let db = test_db.db.clone();
     let client = db.get().await.expect("db client");
     let (base, log) = fake_servers().await;
     HeraldSwitch::set(&client, true).await.expect("switch on");
-    let sunday = Utc.with_ymd_and_hms(2026, 10, 25, 16, 30, 0).unwrap();
-    let player = late_core::test_utils::create_test_user(&db, "card-player").await;
-    le_word::DailyWin::record_win(&client, player.id, shown_day(sunday.date_naive()), 4)
-        .await
-        .expect("a win in the week");
-    let monday = sunday + Duration::days(1);
+    let day = next_piece_days();
+    let next = day + Duration::days(1);
+    daily_board(&client, shown_day(day), BOARD_MIN_INK).await;
+    daily_board(&client, shown_day(next), BOARD_MIN_INK).await;
+    let artist = late_core::test_utils::create_test_user(&db, "herald-artist").await;
+    let flagged = hang_piece(&client, artist.id, "flagged").await;
+    hang_piece(&client, artist.id, "unchecked").await;
+    log.lock().expect("log").gemini_reply = serde_json::json!({
+        "alt": "A drawn figure.",
+        "warning": "explicit",
+        "reason": "a drawn penis at the centre",
+    })
+    .to_string();
+    let mut finished = None;
+
+    let herald = service(db.clone(), &base, model_on(&base));
+    assert!(
+        herald
+            .check(art_hour(day), HeraldSlot::Art, &mut finished)
+            .await
+    );
+    assert_eq!(row(&client, day, HeraldSlot::Art).await.1, "skipped");
+    {
+        let log = log.lock().expect("log");
+        assert_eq!(
+            log.picture_paths,
+            vec![format!("/gallery/pieces/{flagged}/image.png")],
+            "the piece alone: the board was never fetched"
+        );
+        assert_eq!(log.gemini_calls, 1, "one look, at the piece");
+    }
+
+    // The model off: the next piece has no look, and stays off too.
+    let herald = service(db.clone(), &base, ai_off());
+    assert!(
+        herald
+            .check(art_hour(next), HeraldSlot::Art, &mut finished)
+            .await
+    );
+    assert_eq!(row(&client, next, HeraldSlot::Art).await.1, "skipped");
+    let log = log.lock().expect("log");
+    assert_eq!(log.gemini_calls, 1, "no call with the model off");
+    assert!(log.media_uploads.is_empty());
+    assert!(log.statuses.is_empty());
+    assert!(log.records.is_empty());
+}
+
+/// One public column printed for `edition`, the way the paper's tests do it.
+async fn print_edition(client: &Client, edition: NaiveDate) {
+    use late_core::models::paper::{PaperSectionKind, PaperSectionRow};
+
     assert!(
         PaperSectionRow::claim_printing(
-            &client,
-            monday.date_naive(),
+            client,
+            edition,
             PaperSectionKind::Outside,
             Utc::now() - Duration::minutes(15),
             3,
@@ -949,22 +1039,49 @@ async fn the_cards_go_out_drawn_without_the_model() {
         .expect("claim")
     );
     PaperSectionRow::finish(
-        &client,
-        monday.date_naive(),
+        client,
+        edition,
         PaperSectionKind::Outside,
         Some("The world turned."),
     )
     .await
     .expect("print");
+}
+
+/// The cards are drawn from late.sh's own words and never shown to the
+/// model: the week's scoreboard on Sunday, the paper on a Monday with no project
+/// to post. Both carry the picture on both networks, alt text from the same
+/// words.
+#[tokio::test]
+async fn the_cards_go_out_drawn_without_the_model() {
+    use late_core::models::door_opening::{DoorCard, DoorOpening};
+
+    let test_db = new_test_db().await;
+    let db = test_db.db.clone();
+    let client = db.get().await.expect("db client");
+    let (base, log) = fake_servers().await;
+    HeraldSwitch::set(&client, true).await.expect("switch on");
+    let sunday = Utc.with_ymd_and_hms(2026, 10, 25, 15, 30, 0).unwrap();
+    let player = late_core::test_utils::create_test_user(&db, "card-player").await;
+    DoorOpening::record(
+        &client,
+        player.id,
+        DoorCard::Nethack,
+        sunday - Duration::days(2),
+    )
+    .await
+    .expect("a play in the week");
+    let monday = sunday + Duration::days(1);
+    print_edition(&client, monday.date_naive()).await;
     let herald = service(db.clone(), &base, model_on(&base));
     let mut finished = None;
 
-    assert!(herald.check(sunday, &mut finished).await);
-    assert!(herald.check(monday, &mut finished).await);
+    assert!(herald.check(sunday, HeraldSlot::Words, &mut finished).await);
+    assert!(herald.check(monday, HeraldSlot::Words, &mut finished).await);
     let kinds = [sunday, monday].map(|at| at.date_naive());
     let mut posted = Vec::new();
     for day in kinds {
-        let row = HeraldPost::posted_on(&client, day)
+        let row = HeraldPost::posted_on(&client, day, HeraldSlot::Words)
             .await
             .expect("read")
             .expect("posted");
@@ -987,7 +1104,7 @@ async fn the_cards_go_out_drawn_without_the_model() {
         ]
     );
     assert!(
-        log.media_uploads[0].1.contains("Le Word: 1 win"),
+        log.media_uploads[0].1.contains("NetHack: 1 play"),
         "{}",
         log.media_uploads[0].1
     );
@@ -998,9 +1115,6 @@ async fn the_cards_go_out_drawn_without_the_model() {
         "{}",
         log.media_uploads[1].1
     );
-    for (_, _, status) in &log.statuses {
-        assert_eq!(status["sensitive"], false);
-    }
     let paper = log.statuses[1].2["status"].as_str().expect("text");
     assert!(
         paper.contains("https://late.sh/paper/2026-10-26\n"),
@@ -1014,32 +1128,30 @@ async fn the_cards_go_out_drawn_without_the_model() {
             .contains("\n\nhttps://late.sh\n\n#puzzles"),
         "the scoreboard links the front page"
     );
-    for (_, put) in &log.records {
-        assert!(put["record"].get("labels").is_none());
-    }
 }
 
-/// A picture route that answers anything but a PNG fails the day before
+/// A picture route that answers anything but a PNG fails the post before
 /// any network is called: an older late-web's landing page never goes out
 /// as the picture.
 #[tokio::test]
-async fn a_page_where_the_picture_should_be_fails_the_day() {
+async fn a_page_where_the_picture_should_be_fails_the_post() {
     let test_db = new_test_db().await;
     let db = test_db.db.clone();
     let client = db.get().await.expect("db client");
     let (base, log) = fake_servers().await;
     HeraldSwitch::set(&client, true).await.expect("switch on");
-    let now = Utc.with_ymd_and_hms(2026, 10, 23, 16, 30, 0).unwrap();
+    let now = monday_art();
     let day = now.date_naive();
     daily_board(&client, shown_day(day), BOARD_MIN_INK).await;
     log.lock().expect("log").web_answers_html = true;
 
-    let herald = service(db.clone(), &base, ai_off());
+    let herald = service(db.clone(), &base, model_on(&base));
     let mut finished = None;
-    assert!(herald.check(now, &mut finished).await);
-    assert_eq!(row(&client, day).await.1, "failed");
+    assert!(herald.check(now, HeraldSlot::Art, &mut finished).await);
+    assert_eq!(row(&client, day, HeraldSlot::Art).await.1, "failed");
     let log = log.lock().expect("log");
     assert_eq!(log.picture_paths.len(), 1);
+    assert_eq!(log.gemini_calls, 0);
     assert!(log.statuses.is_empty());
     assert!(log.records.is_empty());
 }
@@ -1053,7 +1165,7 @@ const NOTE: &str = "# Server updates no longer kick you out\n\n- A new `late` CL
 async fn announce(db: &late_core::db::Db, client: &Client, edition: NaiveDate, author: &str) {
     use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
     use late_core::models::chat_room::ChatRoom;
-    use late_core::models::paper::{PaperEdition, PaperSectionKind, PaperSectionRow};
+    use late_core::models::paper::PaperEdition;
 
     let room = ChatRoom::find_non_dm_by_slug(client, "announcements")
         .await
@@ -1078,31 +1190,12 @@ async fn announce(db: &late_core::db::Db, client: &Client, edition: NaiveDate, a
         )
         .await
         .expect("backdate the note");
-    assert!(
-        PaperSectionRow::claim_printing(
-            client,
-            edition,
-            PaperSectionKind::Outside,
-            Utc::now() - Duration::minutes(15),
-            3,
-        )
-        .await
-        .expect("claim")
-    );
-    PaperSectionRow::finish(
-        client,
-        edition,
-        PaperSectionKind::Outside,
-        Some("The world turned."),
-    )
-    .await
-    .expect("print");
+    print_edition(client, edition).await;
 }
 
-/// The operator's word goes out the day its edition prints, ahead of the
-/// schedule, as words alone: the model's brief on both networks (no media
-/// on Mastodon, no embed on Bluesky, the edition's page linked), nothing
-/// fetched from late-web and nothing shown to the model but the note; and
+/// The operator's word goes out in the words slot the day its edition prints,
+/// ahead of the schedule, as words alone: the model's brief on both networks (no
+/// media on Mastodon, a link card on Bluesky, the edition's page linked); and
 /// when the model's answer is unusable, the note as written, cut.
 #[tokio::test]
 async fn an_announcement_goes_out_as_words_the_day_its_edition_prints() {
@@ -1111,10 +1204,9 @@ async fn an_announcement_goes_out_as_words_the_day_its_edition_prints() {
     let client = db.get().await.expect("db client");
     let (base, log) = fake_servers().await;
     HeraldSwitch::set(&client, true).await.expect("switch on");
-    // A Friday: an art day, and a board with ink waits and loses.
-    let now = Utc.with_ymd_and_hms(2026, 10, 23, 16, 30, 0).unwrap();
+    // A Friday, then a Saturday: the Saturday's printed paper waits and loses.
+    let now = Utc.with_ymd_and_hms(2026, 10, 23, 15, 30, 0).unwrap();
     let day = now.date_naive();
-    daily_board(&client, shown_day(day), BOARD_MIN_INK).await;
     announce(&db, &client, day, "herald-admin").await;
     log.lock().expect("log").gemini_reply = serde_json::json!({
         "text": "A new late CLI is out, and server updates no longer kick you out.\n\nIdle five minutes when we ship and your session moves to the new server by itself.",
@@ -1123,8 +1215,8 @@ async fn an_announcement_goes_out_as_words_the_day_its_edition_prints() {
     let herald = service(db.clone(), &base, model_on(&base));
     let mut finished = None;
 
-    assert!(herald.check(now, &mut finished).await);
-    let posted = HeraldPost::posted_on(&client, day)
+    assert!(herald.check(now, HeraldSlot::Words, &mut finished).await);
+    let posted = HeraldPost::posted_on(&client, day, HeraldSlot::Words)
         .await
         .expect("read")
         .expect("posted");
@@ -1146,8 +1238,6 @@ async fn an_announcement_goes_out_as_words_the_day_its_edition_prints() {
         let status = &log.statuses[0].2;
         assert_eq!(status["status"], words);
         assert_eq!(status["media_ids"], serde_json::json!([]));
-        assert_eq!(status["sensitive"], false);
-        assert!(status.get("spoiler_text").is_none(), "{status}");
         let record = &log.records[0].1["record"];
         assert_eq!(record["text"], words);
         assert_eq!(record["embed"]["$type"], "app.bsky.embed.external");
@@ -1156,7 +1246,6 @@ async fn an_announcement_goes_out_as_words_the_day_its_edition_prints() {
         assert_eq!(external["title"], "The Late Edition, 23 October 2026");
         assert_eq!(external["description"], "The world turned.");
         assert!(external.get("thumb").is_some(), "{record}");
-        assert!(record.get("labels").is_none(), "{record}");
         let facets = record["facets"].as_array().expect("facets");
         assert!(
             facets
@@ -1170,13 +1259,17 @@ async fn an_announcement_goes_out_as_words_the_day_its_edition_prints() {
     let next = day + Duration::days(1);
     announce(&db, &client, next, "herald-admin-again").await;
     log.lock().expect("log").gemini_reply = "not json".to_string();
-    assert!(herald.check(now + Duration::days(1), &mut finished).await);
-    let posted = HeraldPost::posted_on(&client, next)
+    assert!(
+        herald
+            .check(now + Duration::days(1), HeraldSlot::Words, &mut finished)
+            .await
+    );
+    let posted = HeraldPost::posted_on(&client, next, HeraldSlot::Words)
         .await
         .expect("read")
         .expect("posted");
     assert_eq!(posted.kind, HeraldKind::Announcement);
-    let stored = HeraldPost::stored_pick(&client, next)
+    let stored = HeraldPost::stored_pick(&client, next, HeraldSlot::Words)
         .await
         .expect("read")
         .expect("stored");
@@ -1194,5 +1287,313 @@ async fn an_announcement_goes_out_as_words_the_day_its_edition_prints() {
             "\n\nFull notes: https://late.sh/paper/2026-10-24\n\n#tildeverse #terminal #TUI"
         ),
         "{status}"
+    );
+}
+
+/// A member's project, the way the editor saves one.
+async fn share_project(client: &Client, user_id: Uuid, title: &str) -> Uuid {
+    Showcase::create_by_user_id(
+        client,
+        user_id,
+        ShowcaseParams {
+            user_id,
+            title: title.to_string(),
+            url: format!("https://example.com/{title}"),
+            description: "A clock for your terminal.".to_string(),
+            tags: vec!["rust".to_string()],
+        },
+    )
+    .await
+    .expect("share a project")
+    .id
+}
+
+/// What the model answers when it features a project. Its words try to mention
+/// and link; they must go out dead.
+fn featured() -> String {
+    serde_json::json!({
+        "verdict": "feature",
+        "text": "A clock for your terminal, by way of @someone at https://other.example.",
+        "reason": "",
+    })
+    .to_string()
+}
+
+fn refused() -> String {
+    serde_json::json!({
+        "verdict": "commercial",
+        "text": "",
+        "reason": "a paid service",
+    })
+    .to_string()
+}
+
+/// Monday's words are a member's project, written up by the model: words alone
+/// under the member's own link, with a link card on Bluesky. It pays the week, so
+/// Tuesday stays quiet with another project waiting; the next Monday posts that
+/// other project, since the first is in its cooldown; with both in theirs, the
+/// Monday after has nothing.
+#[tokio::test]
+async fn the_weeks_project_goes_out_once_and_waits_out_its_cooldown() {
+    let test_db = new_test_db().await;
+    let db = test_db.db.clone();
+    let client = db.get().await.expect("db client");
+    let (base, log) = fake_servers().await;
+    HeraldSwitch::set(&client, true).await.expect("switch on");
+    let member = late_core::test_utils::create_test_user(&db, "maker").await;
+    let tinyclock = share_project(&client, member.id, "tinyclock").await;
+    log.lock().expect("log").gemini_reply = featured();
+    let herald = service(db.clone(), &base, model_on(&base));
+    let mut finished = None;
+    let now = monday_words();
+    let day = now.date_naive();
+
+    assert!(herald.check(now, HeraldSlot::Words, &mut finished).await);
+    let posted = HeraldPost::posted_on(&client, day, HeraldSlot::Words)
+        .await
+        .expect("read")
+        .expect("posted");
+    assert_eq!(
+        (posted.kind, posted.subject),
+        (HeraldKind::Project, format!("project:{tinyclock}"))
+    );
+    let words = format!(
+        "\"tinyclock\" by ~{}, from late.sh.\n\nA clock for your terminal, by way of someone at https: //other.example.\n\nhttps://example.com/tinyclock\n\n#tildeverse #terminal",
+        member.username
+    );
+    {
+        let log = log.lock().expect("log");
+        assert_eq!((log.gemini_calls, log.gemini_images), (1, 0));
+        assert!(
+            log.gemini_prompt.contains("https://example.com/tinyclock")
+                && log.gemini_prompt.contains("A clock for your terminal."),
+            "the model is told the project: {}",
+            log.gemini_prompt
+        );
+        assert_eq!(log.picture_paths, vec!["/static/og-image.png"]);
+        assert!(log.media_uploads.is_empty(), "no media on Mastodon");
+        let status = &log.statuses[0].2;
+        assert_eq!(status["status"], words);
+        assert_eq!(status["media_ids"], serde_json::json!([]));
+        let record = &log.records[0].1["record"];
+        assert_eq!(record["text"], words);
+        let external = &record["embed"]["external"];
+        assert_eq!(external["uri"], "https://example.com/tinyclock");
+        assert_eq!(external["title"], "tinyclock");
+        assert_eq!(
+            external["description"],
+            "A clock for your terminal, by way of someone at https: //other.example."
+        );
+        let links: Vec<&str> = record["facets"]
+            .as_array()
+            .expect("facets")
+            .iter()
+            .filter_map(|facet| facet["features"][0]["uri"].as_str())
+            .collect();
+        assert_eq!(
+            links,
+            vec!["https://example.com/tinyclock"],
+            "the member's link alone is live"
+        );
+    }
+
+    // Tuesday: another project waits, and the week is already paid.
+    let lantern = share_project(&client, member.id, "lantern").await;
+    assert!(
+        herald
+            .check(now + Duration::days(1), HeraldSlot::Words, &mut finished)
+            .await
+    );
+    assert_eq!(
+        row(&client, day + Duration::days(1), HeraldSlot::Words)
+            .await
+            .1,
+        "skipped"
+    );
+    assert_eq!(log.lock().expect("log").gemini_calls, 1);
+
+    // The next Monday: the first is in its cooldown, so the other goes.
+    assert!(
+        herald
+            .check(now + Duration::days(7), HeraldSlot::Words, &mut finished)
+            .await
+    );
+    assert_eq!(
+        HeraldPost::posted_on(&client, day + Duration::days(7), HeraldSlot::Words)
+            .await
+            .expect("read")
+            .expect("posted")
+            .subject,
+        format!("project:{lantern}")
+    );
+
+    // The Monday after: both in their cooldown, no paper, nothing.
+    assert!(
+        herald
+            .check(now + Duration::days(14), HeraldSlot::Words, &mut finished)
+            .await
+    );
+    assert_eq!(
+        row(&client, day + Duration::days(14), HeraldSlot::Words)
+            .await
+            .1,
+        "skipped"
+    );
+    let log = log.lock().expect("log");
+    assert_eq!(log.gemini_calls, 2, "no call with nothing to draw");
+    assert_eq!(log.statuses.len(), 2);
+}
+
+/// A project the model turns down goes unposted and the next is tried, three at
+/// most; with all turned down the day's next kind goes, and the week still owes
+/// a project: Tuesday's goes out.
+#[tokio::test]
+async fn a_refused_project_falls_to_the_paper_and_stays_owed() {
+    let test_db = new_test_db().await;
+    let db = test_db.db.clone();
+    let client = db.get().await.expect("db client");
+    let (base, log) = fake_servers().await;
+    HeraldSwitch::set(&client, true).await.expect("switch on");
+    let member = late_core::test_utils::create_test_user(&db, "maker").await;
+    for title in ["one", "two", "three", "four"] {
+        share_project(&client, member.id, title).await;
+    }
+    let now = monday_words();
+    let day = now.date_naive();
+    print_edition(&client, day).await;
+    log.lock().expect("log").gemini_reply = refused();
+    let herald = service(db.clone(), &base, model_on(&base));
+    let mut finished = None;
+
+    assert!(herald.check(now, HeraldSlot::Words, &mut finished).await);
+    assert_eq!(
+        HeraldPost::posted_on(&client, day, HeraldSlot::Words)
+            .await
+            .expect("read")
+            .expect("posted")
+            .kind,
+        HeraldKind::Paper
+    );
+    assert_eq!(log.lock().expect("log").gemini_calls, 3, "three tries");
+
+    log.lock().expect("log").gemini_reply = featured();
+    assert!(
+        herald
+            .check(now + Duration::days(1), HeraldSlot::Words, &mut finished)
+            .await
+    );
+    assert_eq!(
+        HeraldPost::posted_on(&client, day + Duration::days(1), HeraldSlot::Words)
+            .await
+            .expect("read")
+            .expect("posted")
+            .kind,
+        HeraldKind::Project,
+        "the week still owed one"
+    );
+}
+
+/// The operator's word on Monday moves the project along to Tuesday.
+#[tokio::test]
+async fn an_announcement_moves_the_project_to_the_next_free_day() {
+    let test_db = new_test_db().await;
+    let db = test_db.db.clone();
+    let client = db.get().await.expect("db client");
+    let (base, log) = fake_servers().await;
+    HeraldSwitch::set(&client, true).await.expect("switch on");
+    let member = late_core::test_utils::create_test_user(&db, "maker").await;
+    share_project(&client, member.id, "tinyclock").await;
+    let now = monday_words();
+    let day = now.date_naive();
+    announce(&db, &client, day, "herald-admin").await;
+    log.lock().expect("log").gemini_reply = featured();
+    let herald = service(db.clone(), &base, model_on(&base));
+    let mut finished = None;
+
+    assert!(herald.check(now, HeraldSlot::Words, &mut finished).await);
+    assert!(
+        herald
+            .check(now + Duration::days(1), HeraldSlot::Words, &mut finished)
+            .await
+    );
+    let kinds = [
+        HeraldPost::posted_on(&client, day, HeraldSlot::Words)
+            .await
+            .expect("read")
+            .expect("posted")
+            .kind,
+        HeraldPost::posted_on(&client, day + Duration::days(1), HeraldSlot::Words)
+            .await
+            .expect("read")
+            .expect("posted")
+            .kind,
+    ];
+    assert_eq!(kinds, [HeraldKind::Announcement, HeraldKind::Project]);
+}
+
+/// A member's text never goes out unchecked: with the model off or failing no
+/// project goes out, the day's next kind does, and the project stays owed until
+/// the model answers.
+#[tokio::test]
+async fn no_project_goes_out_unchecked() {
+    let test_db = new_test_db().await;
+    let db = test_db.db.clone();
+    let client = db.get().await.expect("db client");
+    let (base, log) = fake_servers().await;
+    HeraldSwitch::set(&client, true).await.expect("switch on");
+    let member = late_core::test_utils::create_test_user(&db, "maker").await;
+    share_project(&client, member.id, "tinyclock").await;
+    let now = monday_words();
+    let day = now.date_naive();
+    print_edition(&client, day).await;
+    let mut finished = None;
+
+    // Monday, the model off: the paper, and no call.
+    let herald = service(db.clone(), &base, ai_off());
+    assert!(herald.check(now, HeraldSlot::Words, &mut finished).await);
+    assert_eq!(
+        HeraldPost::posted_on(&client, day, HeraldSlot::Words)
+            .await
+            .expect("read")
+            .expect("posted")
+            .kind,
+        HeraldKind::Paper
+    );
+    assert_eq!(log.lock().expect("log").gemini_calls, 0);
+
+    // Tuesday, the model answering junk: one call, then nothing on the schedule.
+    log.lock().expect("log").gemini_reply = "not json".to_string();
+    let herald = service(db.clone(), &base, model_on(&base));
+    assert!(
+        herald
+            .check(now + Duration::days(1), HeraldSlot::Words, &mut finished)
+            .await
+    );
+    assert_eq!(
+        row(&client, day + Duration::days(1), HeraldSlot::Words)
+            .await
+            .1,
+        "skipped"
+    );
+    {
+        let log = log.lock().expect("log");
+        assert_eq!(log.gemini_calls, 1, "a failed call stops the walk");
+        assert_eq!(log.statuses.len(), 1, "Monday's paper alone");
+    }
+
+    // Wednesday, the model back: the project is still owed.
+    log.lock().expect("log").gemini_reply = featured();
+    assert!(
+        herald
+            .check(now + Duration::days(2), HeraldSlot::Words, &mut finished)
+            .await
+    );
+    assert_eq!(
+        HeraldPost::posted_on(&client, day + Duration::days(2), HeraldSlot::Words)
+            .await
+            .expect("read")
+            .expect("posted")
+            .kind,
+        HeraldKind::Project
     );
 }

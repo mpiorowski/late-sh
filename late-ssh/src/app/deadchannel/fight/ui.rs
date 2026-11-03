@@ -1258,59 +1258,61 @@ pub(crate) fn news_line(news: &Ambush) -> String {
 /// The news and the answer owed, under the legend: at most two rows,
 /// and the key row's extra key when the answer can be given now. The
 /// news is dim, behind the runner like the last step's word; the one
-/// lit block on the road is the step ahead.
-fn lookout_lines(lookout: &Lookout, picker: &Picker) -> (Vec<Line<'static>>, Vec<Span<'static>>) {
+/// lit block on the road is the step ahead. Two rows, the news and the
+/// answer owed, kept whether or not there is either, so the panel holds
+/// its size; the answer carries its own `[r]` key, since the key row
+/// beside a step down has no room for it.
+fn lookout_lines(lookout: &Lookout, picker: &Picker) -> [Line<'static>; 2] {
     let text = ink(INK);
     let dim_text = ink(INK_DIM);
     let key = lit(Neon::Amber);
-    let mut lines = Vec::new();
-    let mut keys = Vec::new();
-    if let Some(news) = &lookout.news {
-        lines.push(Line::from(vec![
+    let news = match &lookout.news {
+        Some(news) => Line::from(vec![
             Span::styled("    ", text),
             Span::styled(
                 truncate(&news_line(news), INNER.saturating_sub(6)),
                 dim(Neon::Magenta),
             ),
-        ]));
-    }
-    if let Some(token) = &lookout.token {
-        let them = &token.crosser;
-        match &token.prey {
-            Some(prey) => {
-                lines.push(Line::from(vec![
+        ]),
+        None => Line::default(),
+    };
+    let answer = match &lookout.token {
+        Some(token) => {
+            let them = &token.crosser;
+            match &token.prey {
+                Some(prey) => {
+                    let stake = match prey.stake {
+                        0 => "nothing to take".to_string(),
+                        n => format!("{n} bits to take"),
+                    };
+                    Line::from(truncate_spans(
+                        vec![
+                            Span::styled("    [r] ", key),
+                            Span::styled("answer", action()),
+                            Span::styled(format!(" {them}"), text),
+                            Span::styled(format!(": {stake}. no ration. "), dim_text),
+                            threat_span(picker.answer),
+                        ],
+                        INNER.saturating_sub(2),
+                    ))
+                }
+                None => Line::from(vec![
                     Span::styled("    ", text),
                     Span::styled(
-                        match prey.stake {
-                            0 => format!(
-                                "owed an answer: {them} is up, nothing to take. no ration. "
+                        truncate(
+                            &format!(
+                                "you are owed an answer. {them} has gone dark. it keeps two days."
                             ),
-                            n => format!(
-                                "owed an answer: {them} is up, {n} bits to take. no ration. "
-                            ),
-                        },
+                            INNER.saturating_sub(6),
+                        ),
                         dim_text,
                     ),
-                    threat_span(picker.answer),
-                ]));
-                keys.extend([
-                    Span::styled("   [r] ", key),
-                    Span::styled("answer", action()),
-                    Span::styled(format!(" {them}"), text),
-                ]);
-            }
-            None => {
-                lines.push(Line::from(vec![
-                    Span::styled("    ", text),
-                    Span::styled(
-                        format!("you are owed an answer. {them} has gone dark. it keeps two days."),
-                        dim_text,
-                    ),
-                ]));
+                ]),
             }
         }
-    }
-    (lines, keys)
+        None => Line::default(),
+    };
+    [news, answer]
 }
 
 /// Why the road is over for the day, in the words the row would refuse a
@@ -1777,9 +1779,9 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
     let muted = ink(INK_MUTED);
     let key = lit(Neon::Amber);
     let frame_style = glow(Neon::Cyan);
-    // Everything but the map: the sheet, the rules, the numbers, three
-    // rows on the node, the word, the keys.
-    let fixed = 1 + PORTRAIT_HEIGHT + 1 + 1 + 1 + 1 + 3 + 1 + 1 + 1;
+    // Everything but the map: the sheet, the rules, the numbers, the
+    // lookout's two rows, the word, three rows on the node, the keys.
+    let fixed = 1 + PORTRAIT_HEIGHT + 1 + 1 + 1 + 1 + 2 + 1 + 3 + 1 + 1;
     let roomy = usize::from(area.height) >= fixed + ((LANES - 1) * 2 + 1) + 3 + 3;
     let pitch = match roomy {
         true => 2,
@@ -1840,10 +1842,17 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
                         glow(Neon::Green),
                         false,
                     ));
+                    // The exp keeps one column whatever the signal reads:
+                    // the reading padded to the full bar's width.
+                    let full = format!(" {0}/{0}", sheet.max_signal()).len();
                     row.push(Span::styled(
-                        format!(" {}/{}", sheet.signal, sheet.max_signal()),
+                        format!(
+                            "{:<full$}",
+                            format!(" {}/{}", sheet.signal, sheet.max_signal())
+                        ),
                         text,
                     ));
+                    row.push(Span::styled(format!("   {exp}"), dim_text));
                     row
                 },
                 vec![Span::styled(
@@ -1868,7 +1877,7 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
                 Span::styled(" ".repeat(2 + PORTRAIT_WIDTH + 3), text),
                 Span::styled(
                     format!(
-                        "rations {}/{RATIONS_PER_DAY} · bits {} · crystals {} · {exp}",
+                        "rations {}/{RATIONS_PER_DAY} · bits {} · crystals {}",
                         sheet.rations_left, sheet.bits, sheet.crystals
                     ),
                     dim_text,
@@ -1907,8 +1916,7 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
             // What is behind the runner, dim: the news of the last fight
             // on them, the answer owed, the last step's word. Then the step
             // ahead, lit, and the keys.
-            let (notice, answer_keys) = lookout_lines(view.lookout, view.picker);
-            lines.extend(notice);
+            lines.extend(lookout_lines(view.lookout, view.picker));
             lines.push(Line::from(match view.word {
                 Some(word) => [
                     vec![Span::styled("    ", text)],
@@ -1961,13 +1969,11 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
                         Span::styled("back", action()),
                         Span::styled(" to the street", text),
                     ]);
-                    keys.extend(answer_keys);
                     lines.push(Line::from(keys));
                 }
                 (None, Some(node)) => {
-                    let (detail, mut keys) = node_lines(sheet, view.picker, view.lookout, node);
+                    let (detail, keys) = node_lines(sheet, view.picker, view.lookout, node);
                     lines.extend(detail);
-                    keys.extend(answer_keys);
                     lines.push(Line::from(keys));
                 }
             }
