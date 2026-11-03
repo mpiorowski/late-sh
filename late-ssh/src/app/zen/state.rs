@@ -6,7 +6,7 @@ use std::time::Instant;
 
 use late_core::models::user::{AsciiPiece, AsciiSelection};
 use rand::Rng;
-use ratatui::layout::Rect;
+use ratatui::{layout::Rect, widgets::BorderType};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -431,8 +431,8 @@ pub enum Node {
         /// The selection an ascii tile plays; `None` (the stored default) is
         /// [`AsciiPiece::DEFAULT`]. Other kinds ignore it. A key this build does
         /// not know (a piece dropped, a rolled-back deploy) reads as `None`
-        /// rather than failing the whole layout, which `from_json` would
-        /// replace with the default, room bindings and all.
+        /// rather than failing the whole layout, which `from_json_or` would
+        /// replace with its fallback, room bindings and all.
         #[serde(
             default,
             deserialize_with = "known_piece",
@@ -541,13 +541,7 @@ pub const MAX_CHAT_TILES: usize = 10;
 
 impl Node {
     pub fn leaf(kind: TileKind) -> Self {
-        Node::Leaf {
-            kind,
-            guests: Vec::new(),
-            room: None,
-            piece: None,
-            title: TileTitle::Named,
-        }
+        Self::hosting(kind, &[])
     }
 
     /// A leaf hosting `guests`, given in any order.
@@ -600,58 +594,50 @@ impl Node {
         }
     }
 
-    /// Tile kinds in layout order (depth first, first child before second).
-    pub fn leaf_kinds(&self) -> Vec<TileKind> {
+    /// One value per leaf in layout order (depth first, first child before
+    /// second).
+    fn map_leaves<'a, T>(&'a self, pick: fn(TileKind, &'a [Guest], Option<Uuid>) -> T) -> Vec<T> {
         let mut out = Vec::with_capacity(self.leaf_count());
-        self.collect_kinds(&mut out);
+        self.collect_leaves(pick, &mut out);
         out
     }
 
-    fn collect_kinds(&self, out: &mut Vec<TileKind>) {
+    fn collect_leaves<'a, T>(
+        &'a self,
+        pick: fn(TileKind, &'a [Guest], Option<Uuid>) -> T,
+        out: &mut Vec<T>,
+    ) {
         match self {
-            Node::Leaf { kind, .. } => out.push(*kind),
+            Node::Leaf {
+                kind, guests, room, ..
+            } => out.push(pick(*kind, guests, *room)),
             Node::Split { first, second, .. } => {
-                first.collect_kinds(out);
-                second.collect_kinds(out);
+                first.collect_leaves(pick, out);
+                second.collect_leaves(pick, out);
             }
         }
+    }
+
+    /// Tile kinds in layout order.
+    pub fn leaf_kinds(&self) -> Vec<TileKind> {
+        self.map_leaves(|kind, _, _| kind)
     }
 
     /// Every leaf's bound room in layout order, parallel to `leaf_kinds`.
     pub fn leaf_rooms(&self) -> Vec<Option<Uuid>> {
-        let mut out = Vec::with_capacity(self.leaf_count());
-        self.collect_rooms(&mut out);
-        out
-    }
-
-    fn collect_rooms(&self, out: &mut Vec<Option<Uuid>>) {
-        match self {
-            Node::Leaf { room, .. } => out.push(*room),
-            Node::Split { first, second, .. } => {
-                first.collect_rooms(out);
-                second.collect_rooms(out);
-            }
-        }
-    }
-
-    pub fn kind_at(&self, ordinal: usize) -> Option<TileKind> {
-        self.leaf_kinds().get(ordinal).copied()
+        self.map_leaves(|_, _, room| room)
     }
 
     /// Every leaf's guests in layout order, parallel to `leaf_kinds`.
-    pub fn leaf_guests(&self) -> Vec<Vec<Guest>> {
-        let mut out = Vec::with_capacity(self.leaf_count());
-        self.collect_guests(&mut out);
-        out
+    pub fn leaf_guests(&self) -> Vec<&[Guest]> {
+        self.map_leaves(|_, guests, _| guests)
     }
 
-    fn collect_guests(&self, out: &mut Vec<Vec<Guest>>) {
-        match self {
-            Node::Leaf { guests, .. } => out.push(guests.clone()),
-            Node::Split { first, second, .. } => {
-                first.collect_guests(out);
-                second.collect_guests(out);
-            }
+    pub fn kind_at(&self, ordinal: usize) -> Option<TileKind> {
+        let mut remaining = ordinal;
+        match self.leaf_ref(&mut remaining) {
+            Some(Node::Leaf { kind, .. }) => Some(*kind),
+            _ => None,
         }
     }
 
@@ -681,11 +667,11 @@ impl Node {
         match self.leaf_mut(&mut remaining) {
             Some(Node::Leaf { guests, .. }) => {
                 guests.push(guest);
-                let mut ordered: Vec<Guest> = Guest::ALL
+                let ordered: Vec<Guest> = Guest::ALL
                     .into_iter()
                     .filter(|known| guests.contains(known))
                     .collect();
-                std::mem::swap(guests, &mut ordered);
+                *guests = ordered;
                 true
             }
             _ => false,
@@ -805,23 +791,7 @@ impl Node {
         let Some(leaf) = self.leaf_mut(&mut remaining) else {
             return false;
         };
-        let Node::Leaf {
-            kind,
-            guests,
-            room,
-            piece,
-            title,
-        } = leaf
-        else {
-            return false;
-        };
-        let kept = Node::Leaf {
-            kind: *kind,
-            guests: std::mem::take(guests),
-            room: *room,
-            piece: *piece,
-            title: *title,
-        };
+        let kept = std::mem::replace(leaf, Node::leaf(new_kind));
         *leaf = Node::split(dir, 500, kept, Node::leaf(new_kind));
         true
     }
@@ -1110,12 +1080,6 @@ impl RiceLayout {
         }
     }
 
-    /// Parse a stored layout; anything unreadable falls back to the stock
-    /// `zen` layout, so a bad row never locks someone out of the page.
-    pub fn from_json(value: Option<&serde_json::Value>) -> Self {
-        Self::from_json_or(value, Self::default())
-    }
-
     /// The stock Home: the room rail, then the reef across the top of the
     /// chat hosting the now strip, the chat under it, and a sidebar column
     /// of the presence row, the visualizer, the music dock, the lobby
@@ -1134,43 +1098,30 @@ impl RiceLayout {
         );
         // The sidebar's panels, each at its rows plus its title rule; the
         // bonsai, last, takes the rest of the column.
-        let panels: [(TileKind, u16); 5] = [
+        let panels: [(Node, u16); 5] = [
             (
-                TileKind::Visualizer,
+                Node::leaf(TileKind::Visualizer),
                 crate::app::common::sidebar::MUSIC_VIZ_HEIGHT,
             ),
             (
-                TileKind::Music,
+                Node::leaf(TileKind::Music),
                 crate::app::common::sidebar::MUSIC_DOCK_HEIGHT,
             ),
-            (TileKind::Lobby, HOME_LOBBY_ROWS),
-            (TileKind::Live, crate::app::live::panel::LIVE_PANEL_HEIGHT),
+            // The lobby hosts attention: what waits on you takes its tile
+            // over and the latest tables come back when the list clears.
+            (
+                Node::hosting(TileKind::Lobby, &[Guest::Attention]),
+                HOME_LOBBY_ROWS,
+            ),
+            (
+                Node::leaf(TileKind::Live),
+                crate::app::live::panel::LIVE_PANEL_HEIGHT,
+            ),
             // The pet's box and nothing else: no mood row.
-            (TileKind::Pet, super::layout::FLOOR_ROWS),
+            (Node::leaf(TileKind::Pet), super::layout::FLOOR_ROWS),
         ];
-        // The lobby hosts attention: what waits on you takes its tile over
-        // and the latest tables come back when the list clears.
         let mut column = Node::leaf(TileKind::Bonsai);
-        for (kind, rows) in panels.iter().rev() {
-            let tile = match kind {
-                TileKind::Lobby => Node::hosting(*kind, &[Guest::Attention]),
-                TileKind::Visualizer
-                | TileKind::Music
-                | TileKind::Live
-                | TileKind::Bonsai
-                | TileKind::Rooms
-                | TileKind::Aquarium
-                | TileKind::Tank
-                | TileKind::Ascii
-                | TileKind::Pet
-                | TileKind::Chat
-                | TileKind::Clock
-                | TileKind::Activity
-                | TileKind::Friends
-                | TileKind::Pulse
-                | TileKind::Blank
-                | TileKind::Presence => Node::leaf(*kind),
-            };
+        for (tile, rows) in panels.into_iter().rev() {
             column = Node::split_first(Dir::Column, rows + 1, tile, column);
         }
         let sidebar = Node::split_first(
@@ -1325,12 +1276,10 @@ impl ZenState {
     /// above the messages, the way Home's card has always carried it,
     /// instead of taking the tile.
     pub fn active_chat_hosts(&self, guest: Guest) -> bool {
-        self.host_of(guest).is_some() && self.host_of(guest) == self.active_chat_ordinal()
-    }
-
-    /// Whether a tile on the page hosts `guest`.
-    pub fn hosts_guest(&self, guest: Guest) -> bool {
-        self.host_of(guest).is_some()
+        match self.host_of(guest) {
+            Some(host) => self.active_chat_ordinal() == Some(host),
+            None => false,
+        }
     }
 
     /// Whether the page draws its look's boxes: when the layout has a
@@ -1352,11 +1301,20 @@ impl ZenState {
 
     /// The chrome tiles wear: the look's boxes, or Home's rules.
     pub fn chrome(&self) -> layout::Chrome {
-        match self.boxed() {
-            true => layout::Chrome::Boxed(self.rice.look.clone()),
-            false => layout::Chrome::Rules {
-                arrange: self.arrange,
-            },
+        let border = match self.rice.look.border {
+            BorderKind::None => {
+                return layout::Chrome::Rules {
+                    arrange: self.arrange,
+                };
+            }
+            BorderKind::Plain => BorderType::Plain,
+            BorderKind::Rounded => BorderType::Rounded,
+            BorderKind::Double => BorderType::Double,
+            BorderKind::Thick => BorderType::Thick,
+        };
+        layout::Chrome::Boxed {
+            border,
+            titles: self.rice.look.titles,
         }
     }
 
@@ -1479,16 +1437,24 @@ impl ZenState {
         if tiles.is_empty() {
             return None;
         }
-        match tiles.iter().position(|(ordinal, _)| *ordinal == self.focus) {
-            Some(index) => Some(index),
-            None => Some(0),
-        }
+        Some(
+            tiles
+                .iter()
+                .position(|(ordinal, _)| *ordinal == self.focus)
+                .unwrap_or(0),
+        )
+    }
+
+    /// The active chat tile as `chat_tiles` lists it: its ordinal and room.
+    fn active_chat_tile(&self) -> Option<(usize, Option<Uuid>)> {
+        let tiles = self.chat_tiles();
+        let focused = tiles.iter().find(|(ordinal, _)| *ordinal == self.focus);
+        focused.or(tiles.first()).copied()
     }
 
     /// The active chat tile's ordinal in the layout.
     pub fn active_chat_ordinal(&self) -> Option<usize> {
-        let index = self.active_chat_index()?;
-        Some(self.chat_tiles()[index].0)
+        Some(self.active_chat_tile()?.0)
     }
 
     /// Whether the keys belong to a chat tile: the focus is on one.
@@ -1499,8 +1465,7 @@ impl ZenState {
     /// The active chat tile's bound room (`None` for the rail's room),
     /// when the page has a chat tile.
     pub fn active_chat_room(&self) -> Option<Option<Uuid>> {
-        let index = self.active_chat_index()?;
-        Some(self.chat_tiles()[index].1)
+        Some(self.active_chat_tile()?.1)
     }
 
     /// Bind the active chat tile to `room`; `false` when the page has no
@@ -1635,7 +1600,7 @@ impl ZenState {
             .root
             .leaf_guests()
             .get(self.focus)
-            .cloned()
+            .map(|guests| guests.to_vec())
             .unwrap_or_default()
     }
 

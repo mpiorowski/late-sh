@@ -11,6 +11,11 @@ fn widths(root: &Node, area: Rect, gap: u16) -> Vec<u16> {
         .collect()
 }
 
+/// A stored layout as a page reads it, the stock `zen` layout its fallback.
+fn from_json(value: Option<&serde_json::Value>) -> RiceLayout {
+    RiceLayout::from_json_or(value, RiceLayout::default())
+}
+
 /// A page showing `rice`, with the focus moved to its first tile: the
 /// edits below act on a known tile, whatever the layout opens on.
 fn focused_on_first_tile(rice: RiceLayout) -> ZenState {
@@ -164,7 +169,7 @@ fn a_chat_tile_keeps_its_room_through_the_stored_json_and_old_layouts_still_read
     assert_eq!(zen.chat_tiles(), vec![(chat, Some(room))]);
     zen.focus = chat;
 
-    let read_back = RiceLayout::from_json(Some(&zen.rice.to_json()));
+    let read_back = from_json(Some(&zen.rice.to_json()));
     assert_eq!(read_back, zen.rice, "the binding is part of the layout");
 
     // A layout saved before rooms were per tile has bare leaves: it parses,
@@ -173,7 +178,7 @@ fn a_chat_tile_keeps_its_room_through_the_stored_json_and_old_layouts_still_read
         "root": { "node": "leaf", "kind": "chat" },
         "look": { "border": "rounded", "gap": 0, "titles": true }
     });
-    let old = RiceLayout::from_json(Some(&old));
+    let old = from_json(Some(&old));
     assert_eq!(old.root.leaf_rooms(), vec![None]);
 
     // A layout from before Pulse names the presence tile, which is a tile
@@ -184,7 +189,7 @@ fn a_chat_tile_keeps_its_room_through_the_stored_json_and_old_layouts_still_read
         "look": { "border": "rounded", "gap": 0, "titles": true }
     });
     assert_eq!(
-        RiceLayout::from_json(Some(&retired)).root.leaf_kinds(),
+        from_json(Some(&retired)).root.leaf_kinds(),
         vec![TileKind::Presence]
     );
 
@@ -425,7 +430,7 @@ fn a_layout_with_an_unknown_piece_keeps_everything_but_the_pick() {
         },
         "look": Look::default()
     });
-    let restored = RiceLayout::from_json(Some(&stored));
+    let restored = from_json(Some(&stored));
     assert_ne!(restored, RiceLayout::default(), "the layout survives");
     assert_eq!(restored.root.selection_at(0), Some(AsciiSelection::DEFAULT));
     assert_eq!(restored.root.kind_at(1), Some(TileKind::Chat));
@@ -464,7 +469,7 @@ fn random_tiles_keep_runtime_separate_from_the_saved_layout() {
     let saved = zen.rice.to_json();
     assert_eq!(saved["root"]["first"]["piece"], "random");
     assert_eq!(saved["root"]["second"]["piece"], "randomer");
-    assert_eq!(RiceLayout::from_json(Some(&saved)), zen.rice);
+    assert_eq!(from_json(Some(&saved)), zen.rice);
     let now = Instant::now();
     let mut rng = StdRng::seed_from_u64(17);
     zen.enter(now, &mut rng);
@@ -629,11 +634,11 @@ fn a_fixed_split_keeps_its_cells_at_every_width_and_a_share_still_reads_as_a_num
     };
     let json = mille.to_json();
     assert_eq!(json["root"]["share"], serde_json::json!(640));
-    assert_eq!(RiceLayout::from_json(Some(&json)), mille);
+    assert_eq!(from_json(Some(&json)), mille);
     let fixed = RiceLayout { root, look };
     let json = fixed.to_json();
     assert_eq!(json["root"]["share"], serde_json::json!({ "second": 24 }));
-    assert_eq!(RiceLayout::from_json(Some(&json)), fixed);
+    assert_eq!(from_json(Some(&json)), fixed);
 }
 
 #[test]
@@ -666,7 +671,7 @@ fn a_guest_lives_on_one_tile_and_toggling_moves_it_or_takes_it_off() {
         look: RiceLayout::default().look,
     };
     let json = layout.to_json();
-    assert_eq!(RiceLayout::from_json(Some(&json)), layout);
+    assert_eq!(from_json(Some(&json)), layout);
     assert!(
         json["root"]["first"].get("guests").is_none(),
         "a tile without guests writes none: {json}"
@@ -685,7 +690,7 @@ fn a_layout_saved_with_a_guest_list_keeps_the_guests_still_known() {
         },
         "look": RiceLayout::default().look,
     });
-    let layout = RiceLayout::from_json(Some(&stored));
+    let layout = from_json(Some(&stored));
     assert_eq!(
         layout.root.leaf_guests(),
         vec![vec![Guest::Now, Guest::Attention]]
@@ -697,7 +702,7 @@ fn a_layout_saved_with_a_guest_list_keeps_the_guests_still_known() {
         "look": RiceLayout::default().look,
     });
     assert_eq!(
-        RiceLayout::from_json(Some(&lobby_host)).root.leaf_guests(),
+        from_json(Some(&lobby_host)).root.leaf_guests(),
         vec![vec![Guest::Attention]]
     );
     // The inbox kind is gone: a layout that had one keeps its shape, the
@@ -707,7 +712,7 @@ fn a_layout_saved_with_a_guest_list_keeps_the_guests_still_known() {
         "look": RiceLayout::default().look,
     });
     assert_eq!(
-        RiceLayout::from_json(Some(&had_inbox)).root.leaf_kinds(),
+        from_json(Some(&had_inbox)).root.leaf_kinds(),
         vec![TileKind::Blank]
     );
     let only_gone = serde_json::json!({
@@ -715,7 +720,7 @@ fn a_layout_saved_with_a_guest_list_keeps_the_guests_still_known() {
         "look": RiceLayout::default().look,
     });
     assert_eq!(
-        RiceLayout::from_json(Some(&only_gone)).root.leaf_guests(),
+        from_json(Some(&only_gone)).root.leaf_guests(),
         vec![Vec::<Guest>::new()]
     );
 }
@@ -789,7 +794,7 @@ fn the_stock_home_is_the_rail_the_reef_over_the_chat_and_the_sidebar_column() {
     );
     assert!(!zen.arrange, "Home is furniture until Ctrl+E");
     assert!(!zen.active_chat_hosts(Guest::Now));
-    assert!(zen.hosts_guest(Guest::Now));
+    assert!(zen.hosts(Guest::Now));
     assert!(!zen.kind_allowed(TileKind::Rooms), "one rail per page");
 
     // The stock zen layout has no rail, so any tile of it may become one.
@@ -825,7 +830,7 @@ fn a_tile_owns_its_title_mode_on_home_and_the_mode_rides_the_layout() {
     assert!(zen.cycle_focused_title());
     assert!(zen.cycle_focused_title());
     let saved = zen.rice.to_json();
-    assert_eq!(RiceLayout::from_json(Some(&saved)), zen.rice);
+    assert_eq!(from_json(Some(&saved)), zen.rice);
     assert!(zen.rice.root.set_kind(music, TileKind::Clock));
     assert_eq!(zen.rice.root.title_at(music), TileTitle::Named);
 }

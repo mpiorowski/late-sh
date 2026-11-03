@@ -70,14 +70,10 @@ pub(crate) fn draw_daily_inline(
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// The Home lobby tile's shape: only the games actually running, then one footer
-/// row carrying the open count, your entries, and the two keys. No empty
-/// slots, so the tile can be as short as its content. Top-aligned; rows
-/// past the area are dropped, the footer never is.
 /// The Home lobby tile: the latest tables on the board, newest first, over
 /// the `N open · entries/cap` footer. What waits on you is not this tile's
 /// job: the attention guest hosted on it takes the tile over while it has
-/// something (`../zen/CONTEXT.md`, the attention guest).
+/// something (`../../zen/CONTEXT.md`, the attention guest).
 pub(crate) fn draw_daily_compact(
     frame: &mut Frame,
     area: Rect,

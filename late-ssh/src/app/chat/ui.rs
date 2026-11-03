@@ -1158,7 +1158,7 @@ pub fn draw_dashboard_chat_card(
             // stay.
             row: match (&view.live_strip, view.room.and_then(room_topic)) {
                 (Some(_), _) => None,
-                (None, Some(text)) => Some(TopicRow::Topic {
+                (None, Some(text)) => Some(TopicRow {
                     text,
                     has_rules: view.room.is_some_and(room_has_rules),
                 }),
@@ -5090,8 +5090,9 @@ fn dm_display_label(
 }
 
 /// What the header's last row says: the room's topic.
-enum TopicRow<'a> {
-    Topic { text: &'a str, has_rules: bool },
+struct TopicRow<'a> {
+    text: &'a str,
+    has_rules: bool,
 }
 
 /// The header block above a room's messages: the voice row (when the room has a
@@ -5239,29 +5240,26 @@ fn draw_room_header(frame: &mut Frame, area: Rect, header: RoomHeader<'_>) -> Re
     if header.voice.is_some() && header.row.is_some() {
         lines.push(rule());
     }
-    match header.row {
-        Some(TopicRow::Topic { text, has_rules }) => {
-            let hint = if has_rules {
-                vec![Span::styled(
-                    "/rules",
-                    Style::default().fg(theme::TEXT_FAINT()),
-                )]
-            } else {
-                Vec::new()
-            };
-            // The topic is clipped to whatever the hint leaves, so a long
-            // topic never pushes `/rules` off the row.
-            let room_for_topic = width.saturating_sub(if has_rules { 8 } else { 0 });
-            lines.push(padded(row_with_hint(
-                vec![Span::styled(
-                    truncate_cells(text, room_for_topic),
-                    Style::default().fg(theme::TEXT_DIM()),
-                )],
-                hint,
-                width,
-            )));
-        }
-        None => {}
+    if let Some(TopicRow { text, has_rules }) = header.row {
+        let hint = if has_rules {
+            vec![Span::styled(
+                "/rules",
+                Style::default().fg(theme::TEXT_FAINT()),
+            )]
+        } else {
+            Vec::new()
+        };
+        // The topic is clipped to whatever the hint leaves, so a long
+        // topic never pushes `/rules` off the row.
+        let room_for_topic = width.saturating_sub(if has_rules { 8 } else { 0 });
+        lines.push(padded(row_with_hint(
+            vec![Span::styled(
+                truncate_cells(text, room_for_topic),
+                Style::default().fg(theme::TEXT_DIM()),
+            )],
+            hint,
+            width,
+        )));
     }
     // Closes the block off from the conversation below it.
     if header.closing_rule {
@@ -5392,7 +5390,7 @@ fn draw_selected_content(
                         .iter()
                         .find(|stream| stream.room_id == room.id),
                     voice,
-                    row: room_topic(room).map(|text| TopicRow::Topic {
+                    row: room_topic(room).map(|text| TopicRow {
                         text,
                         has_rules: room_has_rules(room),
                     }),
@@ -5714,8 +5712,6 @@ fn draw_selected_content(
     }
 }
 
-// ── Tests ───────────────────────────────────────────────────
-
 /// Home's activity tile: the #lounge activity feed as a list, newest on
 /// top, one event a row with its age flush right, a friend's line in the
 /// friend color. The same queue the one-row ticker packs.
@@ -5849,6 +5845,8 @@ fn stamped_row(spans: Vec<Span<'static>>, stamp: String, width: usize) -> Line<'
     ));
     Line::from(out)
 }
+
+// ── Tests ───────────────────────────────────────────────────
 
 #[cfg(test)]
 #[path = "ui_test.rs"]

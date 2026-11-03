@@ -26,24 +26,14 @@ pub fn columns(points: &[HeadcountPoint], now: DateTime<Utc>, width: usize) -> V
         }
         let offset = (point.bucket - start).num_milliseconds() as f64;
         let index = ((offset / span_ms) as usize).min(width - 1);
-        columns[index] = Some(match columns[index] {
-            Some(highest) => point.online.max(highest),
-            None => point.online,
-        });
+        columns[index] = columns[index].max(Some(point.online));
     }
     columns
 }
 
 /// The day's highest sample, the latest one on a tie.
 pub fn peak(points: &[HeadcountPoint]) -> Option<HeadcountPoint> {
-    let mut best: Option<HeadcountPoint> = None;
-    for point in points {
-        best = match best {
-            Some(held) if point.online < held.online => Some(held),
-            Some(_) | None => Some(*point),
-        };
-    }
-    best
+    points.iter().copied().max_by_key(|point| point.online)
 }
 
 /// One column's glyphs, bottom row first, over `rows` rows: `value` out of

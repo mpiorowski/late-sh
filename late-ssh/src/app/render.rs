@@ -455,7 +455,6 @@ struct DrawContext<'a> {
     /// The now strip for the Home tile hosting it as a guest (`None` on
     /// the page's chat: the card carries it itself).
     guest_live_strip: Option<crate::app::live::state::LiveStripView<'a>>,
-    home_date: String,
     home_pet_strip: Option<crate::app::pet::ui::PetView<'a>>,
     home_active_friends: &'a [crate::app::chat::state::ActiveFriend],
     /// Today's all-day board posts for the banner over Home's tiles.
@@ -477,7 +476,17 @@ impl App {
         // (some door states are even taken out of `self` for the draw).
         use crate::app::door::hub::state::HubGame;
         let home_care = self.care_today();
-        let attention = self.attention_items();
+        // Only Home draws these, and only a page hosting attention reads
+        // its list: every other frame skips the work.
+        let attention =
+            match self.on_home() && self.home.hosts(crate::app::zen::state::Guest::Attention) {
+                true => self.attention_items(),
+                false => Vec::new(),
+            };
+        let home_board_day = match self.on_home() {
+            true => self.home_board_day(),
+            false => None,
+        };
         let lateania_live = HubGame::Lateania.live_screen(self).is_some();
         let realm_live = HubGame::Realm.live_screen(self).is_some();
         let nethack_live = HubGame::Nethack.live_screen(self).is_some();
@@ -812,8 +821,6 @@ impl App {
             true => (home_live_strip, None),
             false => (None, home_live_strip),
         };
-        // The board's day is the banner over Home's tiles.
-        let home_board_day = self.home_board_day();
         let dashboard_voice_channel_id = shell_active_room
             .and_then(|room_id| self.chat.voice_channels_by_room_id.get(&room_id))
             .map(|channel| channel.id);
@@ -1508,7 +1515,6 @@ impl App {
                 }
             })
             .collect();
-        let home_date = status_date_full.clone();
 
         let home_pet_strip = self
             .shop_state
@@ -1929,7 +1935,6 @@ impl App {
                         layout_list: self.layout_list.as_ref(),
                         home_chat_tiles,
                         guest_live_strip,
-                        home_date,
                         home_pet_strip,
                         home_active_friends: &self.active_friends,
                         home_board_day,
@@ -2202,21 +2207,7 @@ impl App {
                     dashboard_view: ctx.dashboard_view,
                     home_selected: ctx.home_selected,
                 };
-                // The frame carries Home's bars; while it is being arranged
-                // (`Ctrl+E`) its bottom row is the mode's key
-                // footer.
-                let arrange_keys = match ctx.home.arrange {
-                    true => crate::app::zen::layout::rice_areas(
-                        content_area,
-                        ctx.home_board_day.is_some(),
-                        true,
-                    )
-                    .footer
-                    .and_then(crate::app::statusline::bar::build_home_arrange_row),
-                    false => None,
-                };
                 let view = crate::app::zen::ui::ZenView {
-                    arrange_keys,
                     zen: ctx.home,
                     home_layouts: ctx.home_layouts,
                     layout_list: ctx.layout_list,
@@ -2252,7 +2243,7 @@ impl App {
                         friends: ctx.home_active_friends,
                         history: &ctx.pulse_history,
                     },
-                    date: ctx.home_date.clone(),
+                    date: ctx.status_data.date_full,
                     daily: ctx.daily,
                     lobby_glow: ctx.lobby.glow(),
                     activity: ctx.chat_state.activity_ticker(),

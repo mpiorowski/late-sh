@@ -403,18 +403,14 @@ pub(crate) fn draw_centered_note(frame: &mut Frame, area: Rect, rows: &[&str]) {
         return;
     }
     let faint = Style::default().fg(theme::TEXT_FAINT());
-    let mut lines: Vec<Line<'static>> = rows
+    let lines: Vec<Line<'static>> = rows
         .iter()
         .flat_map(|row| super::markdown::wrap_plain_line(row, usize::from(area.width)))
         .map(|row| Line::from(Span::styled(row.trim_end().to_string(), faint)))
         .collect();
-    let top_pad = (area.height as usize).saturating_sub(lines.len()) / 2;
-    let mut padded = Vec::with_capacity(top_pad + lines.len());
-    for _ in 0..top_pad {
-        padded.push(Line::from(""));
-    }
-    padded.append(&mut lines);
-    frame.render_widget(Paragraph::new(padded).alignment(Alignment::Center), area);
+    let top_pad = (area.height as usize).saturating_sub(lines.len()) as u16 / 2;
+    let below = Rect::new(area.x, area.y + top_pad, area.width, area.height - top_pad);
+    frame.render_widget(Paragraph::new(lines).alignment(Alignment::Center), below);
 }
 
 /// Lead each line with blanks so a `block_width`-wide block sits centered

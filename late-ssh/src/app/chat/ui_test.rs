@@ -2895,7 +2895,7 @@ fn room_header_puts_the_topic_left_and_the_rules_hint_right() {
                 super::RoomHeader {
                     stream: None,
                     voice: None,
-                    row: super::room_topic(&room).map(|text| super::TopicRow::Topic {
+                    row: super::room_topic(&room).map(|text| super::TopicRow {
                         text,
                         has_rules: super::room_has_rules(&room),
                     }),
@@ -2937,7 +2937,7 @@ fn room_header_is_absent_without_a_topic_or_voice() {
                 super::RoomHeader {
                     stream: None,
                     voice: None,
-                    row: super::room_topic(&room).map(|text| super::TopicRow::Topic {
+                    row: super::room_topic(&room).map(|text| super::TopicRow {
                         text,
                         has_rules: super::room_has_rules(&room),
                     }),
@@ -2963,7 +2963,7 @@ fn room_header_omits_the_hint_when_there_are_no_rules() {
                 super::RoomHeader {
                     stream: None,
                     voice: None,
-                    row: super::room_topic(&room).map(|text| super::TopicRow::Topic {
+                    row: super::room_topic(&room).map(|text| super::TopicRow {
                         text,
                         has_rules: super::room_has_rules(&room),
                     }),

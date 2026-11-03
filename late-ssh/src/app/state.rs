@@ -3541,8 +3541,8 @@ impl App {
         if self.chat.synthetic_entry_selected() {
             return None;
         }
-        match self.home.active_chat_index() {
-            Some(index) => self.home_chat_rooms()[index],
+        match self.home.active_chat_room() {
+            Some(bound) => self.home_room_or_current(bound),
             None => self.chat.selected_room_id,
         }
     }
@@ -3578,16 +3578,16 @@ impl App {
         let rice = &self.home;
         let area = self.home_tiles_area();
         let chrome = rice.chrome();
+        let page_chat = rice.active_chat_ordinal();
         zen_layout::tile_rects(&rice.rice.root, area, rice.gaps())
             .into_iter()
             .enumerate()
             .map(|(idx, (kind, rect))| {
-                let page_chat = rice.active_chat_ordinal() == Some(idx);
                 let inner = zen_layout::tile_inner(
                     rect,
                     &chrome,
                     kind,
-                    page_chat,
+                    page_chat == Some(idx),
                     rice.rice.root.title_at(idx),
                 );
                 (kind, rect, inner)
@@ -3597,11 +3597,12 @@ impl App {
 
     /// Whether Home's now strip shows this frame: the center hosts it and
     /// the #lounge card is up (the strip is the lounge's), or furniture
-    /// hosts it, where it shows whatever the room.
+    /// hosts it, where it shows whatever the room. A Live tile is the
+    /// panel, which does not animate.
     pub(crate) fn home_strip_hosted(&self) -> bool {
         use crate::app::zen::state::Guest;
-        self.screen == Screen::Dashboard
-            && self.home.hosts_guest(Guest::Now)
+        self.on_home()
+            && self.home.hosts(Guest::Now)
             && (!self.home.active_chat_hosts(Guest::Now) || self.lounge_card_shown())
     }
 
@@ -3721,7 +3722,7 @@ impl App {
     /// Home, if it is up.
     pub(crate) fn reef_tile_inner(&self) -> Option<Rect> {
         use crate::app::zen::state::TileKind;
-        if !self.on_home() {
+        if !self.on_home() || !self.home.shows(TileKind::Aquarium) {
             return None;
         }
         self.home_tile_rects()
@@ -3771,11 +3772,10 @@ impl App {
     /// What waits on you, for the attention guest (`zen/attention.rs`): the
     /// daily matches on your move and the results you have not looked at,
     /// the unread DMs and mentions (`unread_rows`), and today's care still
-    /// due. Read each frame and on each of the guest's keys.
+    /// due. Read each frame while the page hosts the guest and on each of
+    /// its keys.
     pub(crate) fn attention_items(&self) -> Vec<crate::app::zen::attention::Item> {
-        use crate::app::zen::attention::{
-            Chore, Inputs, Item, Match, UnreadRow, items, unread_rows,
-        };
+        use crate::app::zen::attention::{Chore, Inputs, Match, items, unread_rows};
         let other_player = |challenger_id: Uuid,
                             challenger: &Option<String>,
                             opponent: &Option<String>|
@@ -3812,9 +3812,7 @@ impl App {
                 ),
             })
             .collect();
-        let mut dms = Vec::new();
-        let mut mentions = Vec::new();
-        let rows = unread_rows(
+        let unread = unread_rows(
             self.user_id,
             &self.chat.rooms,
             &self.chat.unread_counts,
@@ -3822,39 +3820,11 @@ impl App {
             self.chat.ignored_user_ids(),
             self.chat.notifications.all_items(),
         );
-        for row in rows {
-            match row {
-                UnreadRow::Dm {
-                    room_id,
-                    peer,
-                    unread,
-                } => dms.push(Item::Dm {
-                    room_id,
-                    peer,
-                    unread,
-                }),
-                UnreadRow::Mention {
-                    room_id,
-                    message_id,
-                    actor,
-                    room,
-                    unread: true,
-                    ..
-                } => mentions.push(Item::Mention {
-                    room_id,
-                    message_id,
-                    actor,
-                    room,
-                }),
-                UnreadRow::Mention { unread: false, .. } => {}
-            }
-        }
         let care = self.care_today();
         items(Inputs {
             my_moves,
             results,
-            dms,
-            mentions,
+            unread,
             tank_due: care.tank == Chore::Due,
             tree_due: care.bonsai == Chore::Due,
             pet_due: care.pet == Chore::Due,

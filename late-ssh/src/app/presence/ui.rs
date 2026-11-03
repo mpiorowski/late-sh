@@ -163,11 +163,7 @@ pub(crate) fn draw_pulse_tile(
     // The last column is this minute: the live count, which may sit above
     // the bucket's sample.
     if let Some(last) = cols.last_mut() {
-        let live = online as i64;
-        *last = Some(match *last {
-            Some(sampled) => sampled.max(live),
-            None => live,
-        });
+        *last = (*last).max(Some(online as i64));
     }
     let max = cols.iter().flatten().copied().max().unwrap_or(0).max(1);
     draw_pulse_spark(

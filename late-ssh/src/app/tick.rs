@@ -967,14 +967,14 @@ impl App {
                     self.chat_ctx_epoch += 1;
                 }
             }
-            // Runner looks (the #deadchannel portraits) ride the same edge:
-            // a pointer bump when the directory changed, and the chat rows
-            // rebuild once for every portrait in view.
             // A new headcount bucket lands once in five minutes; the pulse
             // tile reads the session's copy.
             if self.presence.refresh_history() {
                 changed = true;
             }
+            // Runner looks (the #deadchannel portraits) ride the same edge:
+            // a pointer bump when the directory changed, and the chat rows
+            // rebuild once for every portrait in view.
             if self.runner_looks_rx.has_changed().unwrap_or(false) {
                 self.runner_looks = self.runner_looks_rx.borrow_and_update().clone();
                 self.chat_ctx_epoch += 1;
@@ -1378,7 +1378,7 @@ impl App {
                 || (self.on_home() && self.home.paints_on_half_edge()));
         // The live strip draws a shooter's cue: the aim is stored, the
         // half-tick edge paints it.
-        changed |= anim_half && self.live_strip_shown() && self.live.aiming();
+        changed |= anim_half && self.home_strip_hosted() && self.live.aiming();
 
         // Sidebar marquees: track rows and the friends row scroll while their
         // text overflows. The marquee moves at most once per
@@ -1514,7 +1514,7 @@ impl App {
             || crate::app::door::hub::state::animates(self)
             || crate::app::deadchannel::lounge::svc::animates(self)
             || self.right_sidebar_visible()
-            || (self.live_strip_shown() && self.live.aiming())
+            || (self.home_strip_hosted() && self.live.aiming())
             || (self.on_home() && self.home.paints_on_half_edge())
             || self.lively_ascii_visible()
             || self.last_pet_frame.get().is_some()
@@ -1603,12 +1603,6 @@ impl App {
                 self.chat.selected_room_id,
                 self.chat.synthetic_entry_selected(),
             )
-    }
-
-    /// Whether the live strip is on screen: on Home, wherever its host
-    /// tile draws it (a Live tile is the panel, which does not animate).
-    fn live_strip_shown(&self) -> bool {
-        self.home_strip_hosted()
     }
 
     /// Whether the right sidebar draws this frame (the settings draft

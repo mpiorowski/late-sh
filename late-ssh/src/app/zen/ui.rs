@@ -19,7 +19,7 @@ use super::{
     bigclock,
     layout::{self, Chrome},
     presets::{LayoutList, Layouts, MAX_LAYOUT_NAME_CHARS, NamePurpose},
-    state::{BorderKind, Guest, TileHint, TileKind, TileTitle, ZenState},
+    state::{Guest, TileHint, TileKind, TileTitle, ZenState},
 };
 
 use crate::app::{
@@ -106,10 +106,6 @@ pub(crate) struct ZenView<'a> {
     /// What waits on you (`App::attention_items`): the attention guest
     /// takes its host while the list has rows.
     pub attention: &'a [AttentionItem],
-    /// Arrange mode's key footer (`statusline::bar::build_home_arrange_row`),
-    /// `None` on a row too narrow for any key. The row is the footer's
-    /// whenever `zen.arrange` is on, as `App::home_tiles_area` lays it out.
-    pub arrange_keys: Option<Line<'static>>,
     pub bonsai: &'a BonsaiState,
     /// The tank and its care, for the reef and the tank tiles.
     pub tank: TankView<'a>,
@@ -122,7 +118,7 @@ pub(crate) struct ZenView<'a> {
     /// friends and clock tiles read it.
     pub presence: PresenceView<'a>,
     /// The date under the clock tile's digits.
-    pub date: String,
+    pub date: &'a str,
     /// Daily correspondence games for the lobby tile, and whether the lobby
     /// label glows (your turn somewhere, or a result waiting).
     pub daily: &'a DailyState,
@@ -160,18 +156,13 @@ pub(crate) fn draw_rice(
         );
         return;
     }
-    let arrange_keys = view.arrange_keys.take();
     let areas = layout::rice_areas(area, view.board_day.is_some(), view.zen.arrange);
     if let (Some(row), Some(text)) = (areas.banner, view.board_day) {
         draw_board_day(frame, row, text);
     }
-    let (tiles_area, row_area) = (areas.tiles, areas.footer);
+    let tiles_area = areas.tiles;
     // One frame per chat tile in layout order.
-    let mut chats: Vec<Option<ZenChatTile<'_>>> = std::mem::take(&mut view.chats)
-        .into_iter()
-        .map(Some)
-        .collect();
-    let mut next_chat = 0usize;
+    let mut chats = std::mem::take(&mut view.chats).into_iter();
     let zen = view.zen;
     let gaps = zen.gaps();
     let chrome = zen.chrome();
@@ -204,65 +195,25 @@ pub(crate) fn draw_rice(
         // Each chat tile takes the next frame in layout order and names
         // its room in the title, so `[` `]` walking the rooms shows where
         // you landed without reading the messages.
-        let chat_tile = match kind {
-            TileKind::Chat => {
-                let index = next_chat;
-                next_chat += 1;
-                chats.get_mut(index).and_then(Option::take)
-            }
-            TileKind::Bonsai
-            | TileKind::Aquarium
-            | TileKind::Tank
-            | TileKind::Ascii
-            | TileKind::Pet
-            | TileKind::Music
-            | TileKind::Clock
-            | TileKind::Visualizer
-            | TileKind::Lobby
-            | TileKind::Activity
-            | TileKind::Friends
-            | TileKind::Pulse
-            | TileKind::Live
-            | TileKind::Blank
-            | TileKind::Rooms
-            | TileKind::Presence => None,
+        let chat_tile = match *kind == TileKind::Chat {
+            true => chats.next(),
+            false => None,
         };
         let is_page_chat = page_chat == Some(ordinal);
-        let title = match (kind, &chat_tile) {
-            (TileKind::Chat, Some(tile)) => {
+        // An ascii tile names the piece it plays, so `[` `]` shows where
+        // you landed.
+        let title = match (&chat_tile, zen.piece_label(ordinal)) {
+            (Some(tile), _) => {
                 chat_tile_title(&tile.label, tile.stream_badge.as_deref(), rect.width)
             }
-            (TileKind::Chat, None) => kind.label().to_string(),
-            // The tile names the piece it plays, so `[` `]` shows where
-            // you landed.
-            (TileKind::Ascii, _) => match zen.piece_label(ordinal) {
-                Some(label) => format!("{} · {}", kind.label(), label),
-                None => kind.label().to_string(),
-            },
-            (
-                TileKind::Bonsai
-                | TileKind::Aquarium
-                | TileKind::Tank
-                | TileKind::Pet
-                | TileKind::Music
-                | TileKind::Clock
-                | TileKind::Visualizer
-                | TileKind::Lobby
-                | TileKind::Activity
-                | TileKind::Friends
-                | TileKind::Pulse
-                | TileKind::Live
-                | TileKind::Blank
-                | TileKind::Rooms
-                | TileKind::Presence,
-                _,
-            ) => kind.label().to_string(),
+            (None, Some(label)) => format!("{} · {}", kind.label(), label),
+            (None, None) => kind.label().to_string(),
         };
         // The tile's guests, while they have something to say, are the
         // tile: their labels in the rule and their panels in place of the
         // host's (stacked when both are up). On the page's chat the strip
         // inserts into the card instead.
-        let hosted: &[Guest] = guests.get(ordinal).map(Vec::as_slice).unwrap_or(&[]);
+        let hosted: &[Guest] = guests.get(ordinal).copied().unwrap_or(&[]);
         let up: Vec<Guest> = hosted
             .iter()
             .copied()
@@ -291,7 +242,7 @@ pub(crate) fn draw_rice(
                     title.push_str(" +");
                     title.push_str(guest.label());
                 }
-                match zen.rice.root.title_at(ordinal) {
+                match title_override {
                     TileTitle::Named => {}
                     TileTitle::Rule => title.push_str(" · rule"),
                     TileTitle::Hidden => title.push_str(" · hidden"),
@@ -328,20 +279,13 @@ pub(crate) fn draw_rice(
             continue;
         }
         if !up.is_empty() {
-            draw_guests(
-                frame,
-                inner,
-                &up,
-                zen.attention_selected,
-                focused,
-                &mut view,
-            );
+            draw_guests(frame, inner, &up, focused, &view);
             continue;
         }
         // The rules chrome already set every tile but the page's chat and
         // the rail one column in; the boxed one pads its lists here.
         let padded = match chrome {
-            Chrome::Boxed(_) => pad_sides(inner),
+            Chrome::Boxed { .. } => pad_sides(inner),
             Chrome::Rules { .. } => inner,
         };
         match kind {
@@ -427,8 +371,11 @@ pub(crate) fn draw_rice(
             TileKind::Blank => draw_blank_tile(frame, inner, focused),
         }
     }
-    if let (Some(keys), Some(row_area)) = (arrange_keys, row_area) {
-        frame.render_widget(Paragraph::new(keys).right_aligned(), row_area);
+    // Arrange mode's key footer; a row too narrow for any key stays blank.
+    if let Some(row) = areas.footer
+        && let Some(keys) = crate::app::statusline::bar::build_home_arrange_row(row)
+    {
+        frame.render_widget(Paragraph::new(keys).right_aligned(), row);
     }
     draw_kind_picker(frame, area, zen);
     draw_guest_picker(frame, area, zen);
@@ -449,30 +396,9 @@ fn draw_layout_list(frame: &mut Frame, area: Rect, layouts: &Layouts, list: &Lay
         Some(_) => 2,
         None => 0,
     };
-    let height = (rows + 4 + edit_rows).min(area.height);
-    let width = 50u16.min(area.width);
-    if height < 4 || width < 12 {
+    let Some(inner) = draw_popup(frame, area, " layouts ", 50, rows + 4 + edit_rows) else {
         return;
-    }
-    let popup = Rect::new(
-        area.x + (area.width - width) / 2,
-        area.y + (area.height - height) / 2,
-        width,
-        height,
-    );
-    frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" layouts ")
-        .title_style(
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        )
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    };
     let mut lines: Vec<Line<'static>> = layouts
         .items()
         .iter()
@@ -540,49 +466,65 @@ fn draw_layout_list(frame: &mut Frame, area: Rect, layouts: &Layouts, list: &Lay
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
+/// A popup of up to `width` by `height` centred over `area`, cleared and
+/// framed under `title`: the area inside its frame, or `None` on a page too
+/// small to hold one.
+fn draw_popup(
+    frame: &mut Frame,
+    area: Rect,
+    title: &'static str,
+    width: u16,
+    height: u16,
+) -> Option<Rect> {
+    let height = height.min(area.height);
+    let width = width.min(area.width);
+    if height < 4 || width < 12 {
+        return None;
+    }
+    let popup = Rect::new(
+        area.x + (area.width - width) / 2,
+        area.y + (area.height - height) / 2,
+        width,
+        height,
+    );
+    frame.render_widget(Clear, popup);
+    let block = Block::default()
+        .title(title)
+        .title_style(
+            Style::default()
+                .fg(theme::AMBER_GLOW())
+                .add_modifier(Modifier::BOLD),
+        )
+        .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
+        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+    Some(inner)
+}
+
 /// Paint the guests that have taken their host's tile. One guest has the
 /// whole tile; with both up the strip takes its rows at the top and
 /// attention the rest. The host draws nothing underneath, so the moment
 /// the last guest goes the host shows whole.
-fn draw_guests(
-    frame: &mut Frame,
-    area: Rect,
-    up: &[Guest],
-    attention_selected: usize,
-    focused: bool,
-    view: &mut ZenView<'_>,
-) {
+fn draw_guests(frame: &mut Frame, area: Rect, up: &[Guest], focused: bool, view: &ZenView<'_>) {
     let now = up.contains(&Guest::Now);
     let attention = up.contains(&Guest::Attention);
     match (now, attention) {
         (true, true) => {
             let (_, strip_height) = now_strip_size(area);
             let top = Rect::new(area.x, area.y, area.width, strip_height);
-            draw_guest(frame, top, Guest::Now, attention_selected, focused, view);
+            draw_guest(frame, top, Guest::Now, focused, view);
             let below = Rect::new(
                 area.x,
                 area.y + strip_height,
                 area.width,
                 area.height - strip_height,
             );
-            draw_guest(
-                frame,
-                below,
-                Guest::Attention,
-                attention_selected,
-                focused,
-                view,
-            );
+            draw_guest(frame, below, Guest::Attention, focused, view);
         }
-        (true, false) => draw_guest(frame, area, Guest::Now, attention_selected, focused, view),
-        (false, true) => draw_guest(
-            frame,
-            area,
-            Guest::Attention,
-            attention_selected,
-            focused,
-            view,
-        ),
+        (true, false) => draw_guest(frame, area, Guest::Now, focused, view),
+        (false, true) => draw_guest(frame, area, Guest::Attention, focused, view),
         (false, false) => {}
     }
 }
@@ -590,31 +532,21 @@ fn draw_guests(
 /// The strip's form in a tile of `area`: full where the tile is wide and
 /// tall enough, its one-row form otherwise, and the rows it takes.
 fn now_strip_size(area: Rect) -> (crate::app::live::ui::StripSize, u16) {
-    let size = if area.width >= crate::app::live::ui::MIN_FULL_WIDTH
-        && area.height >= crate::app::live::ui::LIVE_STRIP_HEIGHT
-    {
-        crate::app::live::ui::StripSize::Full
-    } else {
-        crate::app::live::ui::StripSize::Compact
+    use crate::app::live::ui::{
+        LIVE_STRIP_COMPACT_HEIGHT, LIVE_STRIP_HEIGHT, MIN_FULL_WIDTH, StripSize,
     };
-    let height = match size {
-        crate::app::live::ui::StripSize::Full => crate::app::live::ui::LIVE_STRIP_HEIGHT,
-        crate::app::live::ui::StripSize::Compact => crate::app::live::ui::LIVE_STRIP_COMPACT_HEIGHT,
+    match area.width >= MIN_FULL_WIDTH && area.height >= LIVE_STRIP_HEIGHT {
+        true => (StripSize::Full, LIVE_STRIP_HEIGHT),
+        false => (
+            StripSize::Compact,
+            LIVE_STRIP_COMPACT_HEIGHT.min(area.height),
+        ),
     }
-    .min(area.height);
-    (size, height)
 }
 
 /// Paint one guest into `area`: the strip centred down it, attention's
 /// rows from its top, the selected one marked while the tile is focused.
-fn draw_guest(
-    frame: &mut Frame,
-    area: Rect,
-    guest: Guest,
-    attention_selected: usize,
-    focused: bool,
-    view: &mut ZenView<'_>,
-) {
+fn draw_guest(frame: &mut Frame, area: Rect, guest: Guest, focused: bool, view: &ZenView<'_>) {
     match guest {
         Guest::Now => {
             let Some(strip) = &view.strip else {
@@ -629,9 +561,13 @@ fn draw_guest(
             );
             crate::app::live::ui::draw_live_strip(frame, strip_area, size, &strip.strip, strip.hit);
         }
-        Guest::Attention => {
-            draw_attention_tile(frame, area, view.attention, attention_selected, focused)
-        }
+        Guest::Attention => draw_attention_tile(
+            frame,
+            area,
+            view.attention,
+            view.zen.attention_selected,
+            focused,
+        ),
     }
 }
 
@@ -643,30 +579,9 @@ fn draw_guest_picker(frame: &mut Frame, area: Rect, zen: &ZenState) {
     let Some(selected) = zen.guest_picker else {
         return;
     };
-    let height = (Guest::ALL.len() as u16 + 4).min(area.height);
-    let width = 44u16.min(area.width);
-    if height < 4 || width < 12 {
+    let Some(inner) = draw_popup(frame, area, " guest ", 44, Guest::ALL.len() as u16 + 4) else {
         return;
-    }
-    let popup = Rect::new(
-        area.x + (area.width - width) / 2,
-        area.y + (area.height - height) / 2,
-        width,
-        height,
-    );
-    frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" guest ")
-        .title_style(
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        )
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    };
     let here = zen.focused_guests();
     let mut lines: Vec<Line<'static>> = Guest::ALL
         .iter()
@@ -712,30 +627,9 @@ fn draw_kind_picker(frame: &mut Frame, area: Rect, zen: &ZenState) {
     };
     // Every kind, a blank, the hint, and the two border rows; wide enough
     // for the full hint, which `hint_line_fitting` trims on a narrow page.
-    let height = (TileKind::ALL.len() as u16 + 4).min(area.height);
-    let width = 36u16.min(area.width);
-    if height < 4 || width < 12 {
+    let Some(inner) = draw_popup(frame, area, " tile ", 36, TileKind::ALL.len() as u16 + 4) else {
         return;
-    }
-    let popup = Rect::new(
-        area.x + (area.width - width) / 2,
-        area.y + (area.height - height) / 2,
-        width,
-        height,
-    );
-    frame.render_widget(Clear, popup);
-    let block = Block::default()
-        .title(" tile ")
-        .title_style(
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        )
-        .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
+    };
 
     let current = zen.focused_kind();
     // A short page shows a window of the kinds that follows the selection;
@@ -829,8 +723,8 @@ fn draw_tile_chrome(
     if rect.width == 0 || rect.height == 0 {
         return rect;
     }
-    let look = match chrome {
-        Chrome::Boxed(look) => look,
+    let border = match chrome {
+        Chrome::Boxed { border, .. } => *border,
         Chrome::Rules { arrange } => {
             let inner = layout::tile_inner(rect, chrome, kind, page_chat, title_override);
             let row = Rect::new(inner.x, rect.y, inner.width, 1);
@@ -844,18 +738,15 @@ fn draw_tile_chrome(
             }
             // The sidebar's rule, the title italic and dim, lit amber while
             // the focus is on it in arrange mode or the lobby glows, with
-            // the tile's keys and tail on its right end.
+            // the tile's keys on its right end.
             draw_panel_rule(frame, row, title, glow || (*arrange && focused));
-            let mut right: Vec<Span<'static>> = Vec::new();
-            let hints = hint_line(keys);
             if !keys.is_empty() {
-                right.extend(hints.spans);
-                right.push(Span::raw(" "));
-            }
-            let right = Line::from(right);
-            let used = 3 + title.chars().count() + 1;
-            if right.width() > 0 && right.width() + used < row.width as usize {
-                frame.render_widget(Paragraph::new(right).right_aligned(), row);
+                let mut right = hint_line(keys);
+                right.spans.push(Span::raw(" "));
+                let used = 3 + title.chars().count() + 1;
+                if right.width() + used < row.width as usize {
+                    frame.render_widget(Paragraph::new(right).right_aligned(), row);
+                }
             }
             return inner;
         }
@@ -872,59 +763,26 @@ fn draw_tile_chrome(
     } else {
         Style::default().fg(theme::TEXT_DIM())
     };
-    let border_type = match look.border {
-        BorderKind::None => None,
-        BorderKind::Plain => Some(BorderType::Plain),
-        BorderKind::Rounded => Some(BorderType::Rounded),
-        BorderKind::Double => Some(BorderType::Double),
-        BorderKind::Thick => Some(BorderType::Thick),
-    };
-    match border_type {
-        Some(border_type) => {
-            let mut block = Block::default()
-                .borders(Borders::ALL)
-                .border_type(border_type)
-                .border_style(ring);
-            if chrome.wears(title_override) == TileTitle::Named {
-                let left = Line::from(vec![Span::styled(format!(" {title} "), title_style)]);
-                // The corners take two cells; the keys need a cell of
-                // border on each side of them to read as a second title.
-                // Styled like the footer: the key amber, the word dim.
-                let room = (rect.width as usize).saturating_sub(2 + left.width());
-                let mut right = hint_line(keys);
-                right.spans.push(Span::raw(" "));
-                if !keys.is_empty() && right.width() <= room {
-                    block = block.title(left).title(right.right_aligned());
-                } else {
-                    block = block.title(left);
-                }
-            }
-            frame.render_widget(block, rect);
-            layout::tile_inner(rect, chrome, kind, page_chat, title_override)
-        }
-        None => {
-            if !look.titles {
-                return rect;
-            }
-            let marker = if focused { "▌" } else { " " };
-            let left = Line::from(vec![
-                Span::styled(marker, ring),
-                Span::styled(title.to_string(), title_style),
-            ]);
-            let room = (rect.width as usize).saturating_sub(left.width());
-            let mut line_spans = left.spans;
-            let right = hint_line(keys);
-            if !keys.is_empty() && right.width() < room {
-                line_spans.push(Span::raw(" ".repeat(room - right.width())));
-                line_spans.extend(right.spans);
-            }
-            frame.render_widget(
-                Paragraph::new(Line::from(line_spans)),
-                Rect::new(rect.x, rect.y, rect.width, 1),
-            );
-            layout::tile_inner(rect, chrome, kind, page_chat, title_override)
+    let mut block = Block::default()
+        .borders(Borders::ALL)
+        .border_type(border)
+        .border_style(ring);
+    if chrome.wears(title_override) == TileTitle::Named {
+        let left = Line::from(vec![Span::styled(format!(" {title} "), title_style)]);
+        // The corners take two cells; the keys need a cell of border on
+        // each side of them to read as a second title. Styled like the
+        // footer: the key amber, the word dim.
+        let room = (rect.width as usize).saturating_sub(2 + left.width());
+        let mut right = hint_line(keys);
+        right.spans.push(Span::raw(" "));
+        if !keys.is_empty() && right.width() <= room {
+            block = block.title(left).title(right.right_aligned());
+        } else {
+            block = block.title(left);
         }
     }
+    frame.render_widget(block, rect);
+    layout::tile_inner(rect, chrome, kind, page_chat, title_override)
 }
 
 /// `hint_line` with as many leading hints as fit in `width` cells.
@@ -999,19 +857,15 @@ fn draw_clock_tile(frame: &mut Frame, area: Rect, view: &ZenView<'_>) {
         lines.push(Line::from(""));
         lines.push(
             Line::from(Span::styled(
-                view.date.clone(),
+                view.date.to_string(),
                 Style::default().fg(theme::TEXT_DIM()),
             ))
             .centered(),
         );
     }
-    let top_pad = height.saturating_sub(lines.len()) / 2;
-    let mut padded = Vec::with_capacity(top_pad + lines.len());
-    for _ in 0..top_pad {
-        padded.push(Line::from(""));
-    }
-    padded.append(&mut lines);
-    frame.render_widget(Paragraph::new(padded), area);
+    let top_pad = (height.saturating_sub(lines.len()) / 2) as u16;
+    let below = Rect::new(area.x, area.y + top_pad, area.width, area.height - top_pad);
+    frame.render_widget(Paragraph::new(lines), below);
 }
 
 /// The board's day across the top of Home, over every tile: today's
@@ -1102,7 +956,7 @@ fn draw_attention_tile(
             let act = item.act();
             let head = format!("{} {} ", if marked { "▌" } else { " " }, item.glyph());
             let budget = width.saturating_sub(head.width() + act.width() + 1);
-            let words = cut_to(&item.label(), budget);
+            let words = crate::app::chat::ui::truncate_cells(&item.label(), budget);
             let pad = width.saturating_sub(head.width() + words.width() + act.width());
             Line::from(vec![
                 Span::styled(head, amber),
@@ -1113,28 +967,6 @@ fn draw_attention_tile(
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), area);
-}
-
-/// `text` cut to `budget` columns, an ellipsis on the end when it was cut.
-fn cut_to(text: &str, budget: usize) -> String {
-    if text.width() <= budget {
-        return text.to_string();
-    }
-    if budget == 0 {
-        return String::new();
-    }
-    let mut out = String::new();
-    let mut used = 0usize;
-    for ch in text.chars() {
-        let w = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
-        if used + w > budget - 1 {
-            break;
-        }
-        out.push(ch);
-        used += w;
-    }
-    out.push('…');
-    out
 }
 
 #[cfg(test)]

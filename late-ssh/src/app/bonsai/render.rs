@@ -796,15 +796,10 @@ pub(crate) fn draw_tile(frame: &mut Frame, area: Rect, state: &BonsaiState, wall
     center_lines(&mut lines, area.width as usize, CANVAS_WIDTH);
     let cut_left = CANVAS_WIDTH.saturating_sub(area.width as usize) / 2;
     let visible = lines.len().min(area.height as usize);
-    let dropped = lines.len() - visible;
-    let mut lines: Vec<Line<'static>> = lines.into_iter().skip(dropped).collect();
-    let top_pad = (area.height as usize).saturating_sub(lines.len());
-    let mut padded = Vec::with_capacity(top_pad + lines.len());
-    for _ in 0..top_pad {
-        padded.push(Line::from(""));
-    }
-    padded.append(&mut lines);
-    frame.render_widget(Paragraph::new(padded).scroll((0, cut_left as u16)), area);
+    lines.drain(..lines.len() - visible);
+    let top_pad = area.height - visible as u16;
+    let below = Rect::new(area.x, area.y + top_pad, area.width, visible as u16);
+    frame.render_widget(Paragraph::new(lines).scroll((0, cut_left as u16)), below);
 }
 
 #[cfg(test)]

@@ -4,7 +4,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use late_core::models::{chat_room::ChatRoom, notification::NotificationView};
 use uuid::Uuid;
 
-use super::{Inputs, Item, Match, UnreadRow, items, unread_rows};
+use super::{Inputs, Item, Match, items, unread_rows};
 
 fn at(minute: u32) -> DateTime<Utc> {
     Utc.with_ymd_and_hms(2026, 9, 14, 12, minute, 0)
@@ -87,9 +87,18 @@ fn the_unread_rows_list_dms_by_count_then_mentions_newest_first() {
         (alice, "alice"),
         lounge,
         Some("lounge"),
-        "  hi\n  there",
+        "answered",
         at(1),
         Some(at(2)),
+    );
+    let older = mention(
+        viewer,
+        (alice, "alice"),
+        lounge,
+        Some("lounge"),
+        "hi",
+        at(3),
+        None,
     );
     let fresh = mention(viewer, (bob, "bob"), with_bob.id, None, "ping", at(5), None);
     let rooms = vec![
@@ -105,39 +114,34 @@ fn the_unread_rows_list_dms_by_count_then_mentions_newest_first() {
         &unread_counts,
         &usernames,
         &ignored,
-        &[read.clone(), fresh.clone()],
+        &[read, older.clone(), fresh.clone()],
     );
 
+    // The read mention answered itself: it never comes back as a row.
     assert_eq!(
         rows,
         vec![
-            UnreadRow::Dm {
+            Item::Dm {
                 room_id: with_bob.id,
                 peer: "bob".to_string(),
                 unread: 3,
             },
-            UnreadRow::Dm {
+            Item::Dm {
                 room_id: with_alice.id,
                 peer: "alice".to_string(),
                 unread: 1,
             },
-            UnreadRow::Mention {
+            Item::Mention {
                 room_id: with_bob.id,
                 message_id: fresh.message_id,
                 actor: "bob".to_string(),
                 room: None,
-                preview: "ping".to_string(),
-                at: at(5),
-                unread: true,
             },
-            UnreadRow::Mention {
+            Item::Mention {
                 room_id: lounge,
-                message_id: read.message_id,
+                message_id: older.message_id,
                 actor: "alice".to_string(),
                 room: Some("lounge".to_string()),
-                preview: "hi there".to_string(),
-                at: at(1),
-                unread: false,
             },
         ]
     );
@@ -147,8 +151,7 @@ fn quiet() -> Inputs {
     Inputs {
         my_moves: Vec::new(),
         results: Vec::new(),
-        dms: Vec::new(),
-        mentions: Vec::new(),
+        unread: Vec::new(),
         tank_due: false,
         tree_due: false,
         pet_due: false,
@@ -182,8 +185,7 @@ fn the_list_puts_your_moves_first_then_results_people_and_the_companions() {
             game: "battleship",
             opponent: "lee".to_string(),
         }],
-        dms: vec![dm.clone()],
-        mentions: vec![mention.clone()],
+        unread: vec![dm.clone(), mention.clone()],
         tank_due: true,
         tree_due: false,
         pet_due: true,

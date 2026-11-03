@@ -205,9 +205,9 @@ fn shortcut_spans(brief: bool) -> Vec<Span<'static>> {
 /// Build the bar for one frame.
 ///
 /// `area` is the full bordered frame (corners included), and `title_width`
-/// is the width of the other title sharing
-/// the row. Both arrive raw rather than pre-subtracted so the fitting math is
-/// covered by tests instead of living uncovered at the call site.
+/// is the width of the other title sharing the row. Both arrive raw rather
+/// than pre-subtracted so the fitting math is covered by tests instead of
+/// living uncovered at the call site.
 pub(crate) fn build_status_bar(
     components: &[StatusComponentSetting],
     data: &StatusData<'_>,

@@ -320,21 +320,24 @@ pub async fn load_device_state(
             };
         }
     };
-    let (layout, artboard_disclaimer, zen_layout, home_layout, home_layouts) =
-        match UserSshKey::find_by_fingerprint(&client, user_id, fingerprint).await {
-            Ok(Some(key)) => (
-                extract_key_layout(&key.settings),
-                extract_key_artboard_disclaimer(&key.settings),
-                extract_key_zen_layout(&key.settings),
-                extract_key_home_layout(&key.settings),
-                extract_key_home_layouts(&key.settings),
-            ),
-            Ok(None) => (None, None, None, None, None),
-            Err(e) => {
-                tracing::warn!(error = ?e, "failed to load device settings");
-                (None, Some(true), None, None, None)
+    let settings = match UserSshKey::find_by_fingerprint(&client, user_id, fingerprint).await {
+        Ok(Some(key)) => DeviceState {
+            layout: extract_key_layout(&key.settings),
+            artboard_disclaimer: extract_key_artboard_disclaimer(&key.settings),
+            zen_layout: extract_key_zen_layout(&key.settings),
+            home_layout: extract_key_home_layout(&key.settings),
+            home_layouts: extract_key_home_layouts(&key.settings),
+            left_at: None,
+        },
+        Ok(None) => DeviceState::default(),
+        Err(e) => {
+            tracing::warn!(error = ?e, "failed to load device settings");
+            DeviceState {
+                artboard_disclaimer: Some(true),
+                ..DeviceState::default()
             }
-        };
+        }
+    };
     let left_at = match UserSshKey::take_left_at(&client, user_id, fingerprint).await {
         Ok(left_at) => left_at,
         Err(e) => {
@@ -343,12 +346,8 @@ pub async fn load_device_state(
         }
     };
     DeviceState {
-        layout,
-        zen_layout,
-        home_layout,
-        home_layouts,
-        artboard_disclaimer,
         left_at,
+        ..settings
     }
 }
 
@@ -657,13 +656,11 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         // for a key that has never arranged a page.
         zen_layout: device
             .zen_layout
-            .clone()
             .or_else(|| late_core::models::user::extract_zen_layout(&user.settings)),
         home_layout: device
             .home_layout
-            .clone()
             .or_else(|| late_core::models::user::extract_home_layout(&user.settings)),
-        home_layouts: device.home_layouts.clone(),
+        home_layouts: device.home_layouts,
         username_directory: Some(state.username_directory.clone()),
         flair_directory: Some(state.flair_directory.clone()),
         pot_service: Some(state.pot_service.clone()),

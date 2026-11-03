@@ -44,12 +44,12 @@ pub(crate) const MUSIC_VIZ_HEIGHT: u16 = 3;
 // `MUSIC_YOUTUBE_DETAIL_HEIGHT` detail rows.
 pub(crate) const MUSIC_DOCK_HEIGHT: u16 = 12;
 // Full music stage: the wave strip on top of the dock.
-pub(crate) const MUSIC_STAGE_HEIGHT: u16 = MUSIC_VIZ_HEIGHT + MUSIC_DOCK_HEIGHT;
+const MUSIC_STAGE_HEIGHT: u16 = MUSIC_VIZ_HEIGHT + MUSIC_DOCK_HEIGHT;
 const MUSIC_QUEUE_HEIGHT: u16 = 4;
 // YouTube detail rows: progress, skip meter, `next` header, the queue rows.
 const MUSIC_YOUTUBE_DETAIL_HEIGHT: u16 = 3 + MUSIC_QUEUE_HEIGHT;
 /// The bonsai preview block plus its footer row.
-pub(crate) const BONSAI_HEIGHT: u16 = crate::app::bonsai::render::PREVIEW_HEIGHT as u16 + 1;
+const BONSAI_HEIGHT: u16 = crate::app::bonsai::render::PREVIEW_HEIGHT as u16 + 1;
 /// The pet's three-row box, nothing else: no name or mood row.
 const PET_HEIGHT: u16 = crate::app::pet::ui::PET_BOX_MIN_ROWS;
 const TANK_HEIGHT: u16 = aquarium_ui::MINI_TANK_HEIGHT;
@@ -549,12 +549,7 @@ pub(crate) struct MusicStageProps<'a> {
 /// client is currently paired — the sidebar reflects it from the first
 /// frame, before the browser has finished pairing. `v+x` toggles between
 /// the two sources, so the amber `▌` accent hops between the title bars.
-pub(crate) fn draw_music_stage(
-    frame: &mut Frame,
-    area: Rect,
-    props: &MusicStageProps<'_>,
-    eq_state: EqState,
-) {
+fn draw_music_stage(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>, eq_state: EqState) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -568,7 +563,7 @@ pub(crate) fn draw_music_stage(
 
 /// The dock alone, no equalizer: Home's `music` tile, which leaves the
 /// band to a `visualizer` tile of its own.
-pub(crate) fn draw_music_dock(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>) {
+fn draw_music_dock(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>) {
     if area.width == 0 || area.height == 0 {
         return;
     }

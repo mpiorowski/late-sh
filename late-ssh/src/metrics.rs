@@ -3370,8 +3370,6 @@ mod inner {
         }
     }
 
-    /// Saved against unsaved is how much the shelf gets used; a run of
-    /// full is readers wanting a bigger one.
     fn pulse_sample_label(outcome: PulseSampleOutcome) -> &'static str {
         match outcome {
             PulseSampleOutcome::Recorded => "recorded",
@@ -3386,6 +3384,8 @@ mod inner {
         pulse_samples_total().add(1, &[KeyValue::new("outcome", pulse_sample_label(outcome))]);
     }
 
+    /// Saved against unsaved is how much the shelf gets used; a run of
+    /// full is readers wanting a bigger one.
     pub fn record_news_save(outcome: NewsSaveOutcome) {
         news_saves_total().add(1, &[KeyValue::new("outcome", news_save_label(outcome))]);
     }

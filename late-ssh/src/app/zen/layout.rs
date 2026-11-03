@@ -1,9 +1,9 @@
 //! Pure rect math for Rice. Shared by the renderer and by `App`, which needs
 //! the aquarium's rect ahead of the draw to size the reef simulation.
 
-use ratatui::layout::Rect;
+use ratatui::{layout::Rect, widgets::BorderType};
 
-use super::state::{BorderKind, Dir, Look, Node, Share, TileKind, TileTitle};
+use super::state::{Dir, Node, Share, TileKind, TileTitle};
 use crate::app::pet::ui::{Neighbours, WatchSide};
 
 /// The cells between siblings: `row` between the children of a row split
@@ -33,9 +33,9 @@ impl Gaps {
 /// painted as one line.
 /// In arrange mode every tile wears a title, so the focus has a ring to
 /// land on; outside it the page's chat and the rail draw their own chrome.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Chrome {
-    Boxed(Look),
+    Boxed { border: BorderType, titles: bool },
     Rules { arrange: bool },
 }
 
@@ -46,7 +46,7 @@ impl Chrome {
     /// tiles have only the name or nothing.
     pub fn wears(&self, title: TileTitle) -> TileTitle {
         match self {
-            Chrome::Boxed(look) => match (look.titles, title) {
+            Chrome::Boxed { titles, .. } => match (*titles, title) {
                 (true, TileTitle::Named) => TileTitle::Named,
                 (true, TileTitle::Rule | TileTitle::Hidden) | (false, _) => TileTitle::Hidden,
             },
@@ -236,10 +236,9 @@ pub fn split_rect(area: Rect, dir: Dir, share: Share, gaps: Gaps) -> (Rect, Rect
 }
 
 /// The area left inside a tile of `kind` once its chrome is drawn. Boxed:
-/// a border takes one cell on every side, a bare title takes the top row,
-/// nothing else. Rules: a title takes the top row, and every tile but
-/// the page's chat and the rail (which keep their own insets) gives up a
-/// column on each side.
+/// the border takes one cell on every side. Rules: a title takes the top
+/// row, and every tile but the page's chat and the rail (which keep their
+/// own insets) gives up a column on each side.
 pub fn tile_inner(
     rect: Rect,
     chrome: &Chrome,
@@ -247,30 +246,15 @@ pub fn tile_inner(
     page_chat: bool,
     title: TileTitle,
 ) -> Rect {
-    let wears = chrome.wears(title);
     match chrome {
-        Chrome::Boxed(look) => match look.border {
-            BorderKind::None => {
-                if wears == TileTitle::Named {
-                    Rect::new(
-                        rect.x,
-                        rect.y + 1.min(rect.height),
-                        rect.width,
-                        rect.height.saturating_sub(1),
-                    )
-                } else {
-                    rect
-                }
-            }
-            _ => Rect::new(
-                rect.x + 1.min(rect.width),
-                rect.y + 1.min(rect.height),
-                rect.width.saturating_sub(2),
-                rect.height.saturating_sub(2),
-            ),
-        },
+        Chrome::Boxed { .. } => Rect::new(
+            rect.x + 1.min(rect.width),
+            rect.y + 1.min(rect.height),
+            rect.width.saturating_sub(2),
+            rect.height.saturating_sub(2),
+        ),
         Chrome::Rules { .. } => {
-            let top = match wears {
+            let top = match chrome.wears(title) {
                 TileTitle::Named | TileTitle::Rule => 1.min(rect.height),
                 TileTitle::Hidden => 0,
             };

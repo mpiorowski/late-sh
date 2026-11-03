@@ -7962,7 +7962,7 @@ pub(crate) fn room_activity_at(
 }
 
 /// The other participant in a DM room, from `user_id`'s perspective.
-fn dm_peer_id(room: &ChatRoom, user_id: Uuid) -> Option<Uuid> {
+pub(crate) fn dm_peer_id(room: &ChatRoom, user_id: Uuid) -> Option<Uuid> {
     if room.dm_user_a == Some(user_id) {
         room.dm_user_b
     } else {
