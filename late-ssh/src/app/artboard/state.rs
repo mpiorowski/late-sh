@@ -346,15 +346,12 @@ impl State {
         .then_some(PRIMARY_SWATCH_IDX);
         if copied_to_slot.is_some() {
             self.prepare_primary_clipboard_slot();
-            let colors = match self.editor.selection() {
-                Some(selection) => capture_selection_colors(&self.snapshot.canvas, selection),
-                None => capture_bounds_colors(
-                    &self.snapshot.canvas,
-                    self.editor
-                        .selection_or_cursor_bounds()
-                        .normalized_for_canvas(&self.snapshot.canvas),
-                ),
-            };
+            let colors = capture_bounds_colors(
+                &self.snapshot.canvas,
+                self.editor
+                    .selection_or_cursor_bounds()
+                    .normalized_for_canvas(&self.snapshot.canvas),
+            );
             push_swatch_colors(&mut self.swatch_colors, &self.editor.swatches, colors);
         }
         let primary_colors = matches!(action, EditorAction::PastePrimarySwatch)
@@ -408,11 +405,11 @@ impl State {
             _ => editor_handle_action(editor, canvas, action, color),
         });
         if let EditorAction::ActivateSwatch(idx) = action {
-            self.floating_colors = if self.active_swatch_index() == Some(idx) {
-                self.swatch_colors.get(idx).and_then(Clone::clone)
-            } else {
-                None
-            };
+            if self.active_swatch_index() == Some(idx) {
+                self.floating_colors = self.swatch_colors.get(idx).and_then(Clone::clone);
+            } else if self.editor.floating.is_none() {
+                self.floating_colors = None;
+            }
         }
         self.sync_floating_source_selection();
 
@@ -432,17 +429,18 @@ impl State {
             .editor
             .canvas_pos_for_pointer(pointer.column, pointer.row, &self.snapshot.canvas)
             .is_some();
-        let floating_colors = (had_floating
+        let paints_floating = had_floating
             && matches!(
                 pointer.kind,
                 AppPointerKind::Down(AppPointerButton::Left)
                     | AppPointerKind::Drag(AppPointerButton::Left)
-            ))
-        .then(|| self.floating_colors.clone())
-        .flatten();
+            );
+        let floating_colors = paints_floating
+            .then(|| self.floating_colors.clone())
+            .flatten();
         let reach = self.pointer_reach(pointer);
         let (dispatch, _) = self.edit_board(reach, |editor, canvas, color| {
-            if floating_colors.is_some() {
+            if paints_floating {
                 paint_floating_pointer_colored(
                     editor,
                     canvas,
@@ -658,10 +656,10 @@ impl State {
             return false;
         };
         let clipboard = capture_selection(&self.snapshot.canvas, selection);
-        let colors = capture_selection_colors(&self.snapshot.canvas, selection);
         let bounds = selection
             .bounds()
             .normalized_for_canvas(&self.snapshot.canvas);
+        let colors = capture_bounds_colors(&self.snapshot.canvas, bounds);
         self.editor.cursor = Pos {
             x: bounds.min_x,
             y: bounds.min_y,
@@ -2254,31 +2252,6 @@ fn capture_bounds_colors(canvas: &Canvas, bounds: Bounds) -> Vec<Option<RgbColor
     for y in bounds.min_y..=bounds.max_y {
         for x in bounds.min_x..=bounds.max_x {
             colors.push(canvas.fg(Pos { x, y }));
-        }
-    }
-    colors
-}
-
-fn selection_covers_cell(canvas: &Canvas, selection: EditorSelection, pos: Pos) -> bool {
-    super::ui::selection_covers_cell(
-        canvas,
-        SelectionView {
-            anchor: selection.anchor,
-            cursor: selection.cursor,
-            shape: selection_shape_to_tui(selection.shape),
-        },
-        pos,
-    )
-}
-
-fn capture_selection_colors(canvas: &Canvas, selection: EditorSelection) -> Vec<Option<RgbColor>> {
-    let bounds = selection.bounds().normalized_for_canvas(canvas);
-    let mut colors = Vec::with_capacity(bounds.width() * bounds.height());
-    for y in bounds.min_y..=bounds.max_y {
-        for x in bounds.min_x..=bounds.max_x {
-            let pos = Pos { x, y };
-            let include = selection_covers_cell(canvas, selection, pos);
-            colors.push(include.then(|| canvas.fg(pos)).flatten());
         }
     }
     colors

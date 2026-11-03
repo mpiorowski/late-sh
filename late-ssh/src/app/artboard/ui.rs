@@ -552,7 +552,7 @@ fn render_canvas_widget(
     }
 }
 
-pub(crate) fn selection_covers_cell(canvas: &Canvas, selection: SelectionView, pos: Pos) -> bool {
+fn selection_covers_cell(canvas: &Canvas, selection: SelectionView, pos: Pos) -> bool {
     if selection.contains(pos) {
         return true;
     }

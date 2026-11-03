@@ -279,6 +279,7 @@ Inline module tests:
 - Wide glyph handling affects cursor rendering, selection coverage, double-click sampling, provenance, swatches, and ownership overlay.
 - `diff_canvas_op` abstracts many editor mutations into server ops; editor changes can affect sync granularity and provenance application.
 - `EditReach` encodes where each `dartboard_editor` action can write; it matches `EditorAction` exhaustively, so a crate upgrade that adds an action breaks the build. An upgrade that changes where an existing action writes fails the debug-build check in any test that drives that action; an action no test drives goes unchecked.
+- `dartboard_editor::Clipboard` holds glyphs only, so `state.rs` keeps `swatch_colors` and `floating_colors` in step with `editor.swatches` and `editor.floating` by hand, and carries its own copies of the crate's `push_swatch` rotation, `stamp_clipboard`, and floating stroke code (`paint_floating_drag`, `paint_floating_diagonal_segment`, `snap_horizontal_brush_x`, `line_points`). A crate upgrade has to compare them; every floating brush strokes through the local copy.
 - Archive lists are keys only and one canvas loads at a time, so retention can grow without the page paying for it; the per-session cache is bounded (`ARCHIVE_CACHE_SIZE`).
 - UI hit testing depends on exact layout math shared by `ui.rs`, `input.rs`, and `page.rs`.
 - SGR mouse coordinates are 1-based at the parser boundary; Artboard hit tests assume normalized coordinates from app input.

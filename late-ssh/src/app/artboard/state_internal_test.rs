@@ -993,3 +993,154 @@ fn cut_and_lift_preserve_cell_colors() {
     assert_eq!(state.snapshot.canvas.get(Pos { x: 4, y: 2 }), 'B');
     assert_eq!(state.snapshot.canvas.fg(Pos { x: 4, y: 2 }), Some(blue));
 }
+
+/// A chord for an empty slot does nothing to the brush that is up: the
+/// crate ignores it, so the colours stay with the glyphs.
+#[test]
+fn an_empty_swatch_chord_leaves_the_brush_colors_alone() {
+    let mut state = test_state();
+    state.snapshot.canvas = Canvas::with_size(40, 20);
+    let red = RgbColor::new(255, 40, 40);
+    let blue = RgbColor::new(40, 120, 255);
+    let _ = state
+        .snapshot
+        .canvas
+        .put_glyph_colored(Pos { x: 0, y: 0 }, 'A', red);
+    let _ = state
+        .snapshot
+        .canvas
+        .put_glyph_colored(Pos { x: 1, y: 0 }, 'B', blue);
+    state.editor.cursor = Pos { x: 0, y: 0 };
+    state.begin_selection_from_cursor();
+    state.editor.cursor = Pos { x: 1, y: 0 };
+    let _ = state.handle_editor_action(EditorAction::CopySelection);
+    assert_eq!(state.active_swatch_index(), Some(PRIMARY_SWATCH_IDX));
+    state.paint_color = Some(PAINT_PALETTE[3]);
+
+    let _ = state.handle_editor_action(EditorAction::ActivateSwatch(2));
+    state.editor.cursor = Pos { x: 0, y: 1 };
+    assert!(state.stamp_floating());
+
+    let mut expected = Canvas::with_size(40, 20);
+    for y in 0..2 {
+        let _ = expected.put_glyph_colored(Pos { x: 0, y }, 'A', red);
+        let _ = expected.put_glyph_colored(Pos { x: 1, y }, 'B', blue);
+    }
+    assert_eq!(state.snapshot.canvas, expected);
+}
+
+/// Colours rotate with their glyphs, and a pinned slot keeps both while the
+/// others move past it.
+#[test]
+fn swatch_colors_rotate_past_a_pinned_slot_with_their_glyphs() {
+    let mut state = test_state();
+    state.snapshot.canvas = Canvas::with_size(40, 20);
+    let red = RgbColor::new(255, 40, 40);
+    let blue = RgbColor::new(40, 120, 255);
+    let green = RgbColor::new(40, 255, 40);
+    for (x, ch, fg) in [(0, 'A', red), (1, 'B', blue), (2, 'C', green)] {
+        let _ = state
+            .snapshot
+            .canvas
+            .put_glyph_colored(Pos { x, y: 0 }, ch, fg);
+    }
+    let copy_cell = |state: &mut State, x: usize| {
+        state.editor.cursor = Pos { x, y: 0 };
+        let _ = state.handle_editor_action(EditorAction::CopySelection);
+        assert!(state.dismiss_floating());
+    };
+
+    copy_cell(&mut state, 0);
+    copy_cell(&mut state, 1);
+    state.toggle_swatch_pin(1);
+    copy_cell(&mut state, 2);
+
+    let slot = |state: &State, idx: usize| {
+        (
+            state.swatches()[idx]
+                .as_ref()
+                .and_then(|swatch| swatch.clipboard.get(0, 0)),
+            state.swatch_colors(idx).map(<[_]>::to_vec),
+        )
+    };
+    assert_eq!(
+        slot(&state, 0),
+        (Some(CellValue::Narrow('C')), Some(vec![Some(green)]))
+    );
+    assert_eq!(
+        slot(&state, 1),
+        (Some(CellValue::Narrow('A')), Some(vec![Some(red)]))
+    );
+    assert_eq!(
+        slot(&state, 2),
+        (Some(CellValue::Narrow('B')), Some(vec![Some(blue)]))
+    );
+}
+
+/// The local stroke code is a copy of the crate's: with no colours it has to
+/// paint what the crate paints, so a crate upgrade that moves strokes fails
+/// here.
+#[test]
+fn the_local_stroke_path_with_no_colors_matches_the_crate() {
+    let color = RgbColor::new(255, 40, 40);
+    let stroke = |paint: &dyn Fn(
+        &mut EditorSession,
+        &mut Canvas,
+        AppPointerEvent,
+    ) -> EditorPointerDispatch| {
+        let mut canvas = Canvas::with_size(40, 20);
+        let mut editor = EditorSession::default();
+        editor.set_viewport(
+            Viewport {
+                x: 0,
+                y: 0,
+                width: 40,
+                height: 20,
+            },
+            &canvas,
+        );
+        editor.floating = Some(EditorFloatingSelection {
+            clipboard: Clipboard::new(
+                2,
+                1,
+                vec![Some(CellValue::Narrow('A')), Some(CellValue::Narrow('B'))],
+            ),
+            transparent: true,
+            source_index: None,
+        });
+        let dispatches: Vec<EditorPointerDispatch> = [
+            (0, 0, AppPointerKind::Down(AppPointerButton::Left)),
+            (1, 0, AppPointerKind::Drag(AppPointerButton::Left)),
+            (5, 0, AppPointerKind::Drag(AppPointerButton::Left)),
+            (5, 0, AppPointerKind::Drag(AppPointerButton::Left)),
+            (9, 4, AppPointerKind::Drag(AppPointerButton::Left)),
+            (10, 4, AppPointerKind::Drag(AppPointerButton::Left)),
+            (14, 4, AppPointerKind::Drag(AppPointerButton::Left)),
+            (2, 9, AppPointerKind::Drag(AppPointerButton::Left)),
+            (60, 3, AppPointerKind::Drag(AppPointerButton::Left)),
+        ]
+        .into_iter()
+        .map(|(column, row, kind)| {
+            paint(
+                &mut editor,
+                &mut canvas,
+                AppPointerEvent {
+                    column,
+                    row,
+                    kind,
+                    modifiers: AppModifiers::default(),
+                },
+            )
+        })
+        .collect();
+        (canvas, editor.cursor, dispatches)
+    };
+
+    let crate_stroke =
+        stroke(&|editor, canvas, pointer| editor_handle_pointer(editor, canvas, pointer, color));
+    let local_stroke = stroke(&|editor, canvas, pointer| {
+        paint_floating_pointer_colored(editor, canvas, pointer, None, color)
+    });
+
+    assert_eq!(local_stroke, crate_stroke);
+}
