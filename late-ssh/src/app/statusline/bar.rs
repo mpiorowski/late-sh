@@ -119,7 +119,7 @@ pub(crate) fn build_top_status_bar(
 /// while the mode is on (`?` opens the layouts guide for the rest).
 /// The way out first, then by use, so a row too narrow for all of them
 /// keeps the ones that matter.
-pub(crate) const HOME_ARRANGE_KEYS: [(&str, &str); 14] = [
+pub(crate) const HOME_ARRANGE_KEYS: [(&str, &str); 15] = [
     ("Esc", "done"),
     ("arrows", "move"),
     ("S", "split"),
@@ -128,6 +128,7 @@ pub(crate) const HOME_ARRANGE_KEYS: [(&str, &str); 14] = [
     ("<>{}", "resize"),
     ("space", "tile"),
     ("+", "guest"),
+    ("O", "only here"),
     ("t", "title"),
     ("b", "frame"),
     ("1-9", "layout"),

@@ -131,9 +131,6 @@ pub mod media_queue_item;
 mod media_queue_item_test;
 pub mod media_queue_vote;
 pub mod media_source;
-pub mod mention_feed_read;
-#[cfg(test)]
-mod mention_feed_read_test;
 pub mod message_translation;
 #[cfg(test)]
 mod message_translation_test;

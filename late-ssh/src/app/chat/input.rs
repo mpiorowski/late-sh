@@ -218,6 +218,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     if app.chat.take_requested_lobby_toggle() {
         crate::app::input::toggle_lobby_globally(app);
     }
+    if app.chat.take_requested_home_arrange() {
+        crate::app::input::layout_chord_globally(app);
+    }
     if let Some(command) = app.chat.take_requested_layout_command() {
         crate::app::zen::input::run_layout_command(app, command);
     }

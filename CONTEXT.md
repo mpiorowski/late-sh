@@ -204,7 +204,7 @@ otherwise.
 | `settings_modal` | Settings (`Ctrl+O`): tabs, pickers, mouse, save rules |
 | `handoff` | Drain handoff: a quiet native-CLI session moved off an updating pod onto its page, the "Auto restart on update" tweak |
 | `statusline` | The frame status bars and their customizer |
-| `zen` | The tile tree behind Home (`Ctrl+E` arranges it and switches its nine named layouts) and its stock layouts, `home` and `street` (layout 2), the pet and tank tiles |
+| `zen` | The tile tree behind Home (`Ctrl+E` or `/edit` arranges it, `O` keeps a tile to one room, and it switches its nine named layouts) and its stock layouts, `home` and `street` (layout 2), the pet and tank tiles |
 | `ascii` | The animated ascii pieces, the Home ascii tile, the away screensaver |
 | `bonsai` | The bonsai: branch graph, care modal, daily chips; the per-user state reference |
 | `hub` | The Shop (`Ctrl+S`), quests, pet unlock (the marketplace, rentals and flair in `shop/CONTEXT.md`, the reef in `aquarium/CONTEXT.md`) |

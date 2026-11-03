@@ -1303,6 +1303,7 @@ impl App {
 
     pub(crate) fn sync_visible_chat_room(&mut self) {
         self.steer_active_chat_from_rail();
+        self.sync_home_kept_tiles();
         let visible_room_id = self.current_visible_chat_room_id();
         let changed = self.chat.visible_room_id() != visible_room_id;
         self.chat.set_visible_room_id(visible_room_id);
@@ -3585,7 +3586,7 @@ impl App {
         let area = self.home_tiles_area();
         let chrome = rice.chrome();
         let page_chat = rice.active_chat_ordinal();
-        zen_layout::tile_rects(&rice.rice.root, area, rice.gaps())
+        zen_layout::tile_rects(&rice.rice.root, area, rice.gaps(), &rice.hidden_tiles())
             .into_iter()
             .enumerate()
             .map(|(idx, (kind, rect))| {
@@ -3630,7 +3631,7 @@ impl App {
                 RoomSlot::News
             }
             ChatRoomBinding::Current | ChatRoomBinding::Room(_) | ChatRoomBinding::Permanent(_) => {
-                let Some(room_id) = self.home_bound_room(&bound) else {
+                let Some(room_id) = bound.joined_room(&self.chat.rooms).map(|room| room.id) else {
                     return;
                 };
                 if self.chat.selected_room_id == Some(room_id)
@@ -3694,16 +3695,8 @@ impl App {
         if !self.on_home() {
             return;
         }
-        let moment = match (
-            self.chat.news_selected,
-            self.chat.synthetic_entry_selected(),
-        ) {
-            (true, _) => ChatRoomBinding::News,
-            (false, true) => return,
-            (false, false) => match self.chat.selected_room_id {
-                Some(room_id) => ChatRoomBinding::Room(room_id),
-                None => return,
-            },
+        let Some(moment) = self.home_rail_binding() else {
+            return;
         };
         let Some(bound) = self.home.active_chat_room() else {
             return;
@@ -3711,7 +3704,7 @@ impl App {
         let same = match (&bound, &moment) {
             (ChatRoomBinding::Current, _) => true,
             (ChatRoomBinding::Permanent(_), ChatRoomBinding::Room(room_id)) => {
-                self.home_bound_room(&bound) == Some(*room_id)
+                bound.joined_room(&self.chat.rooms).map(|room| room.id) == Some(*room_id)
             }
             (bound, moment) => bound == moment,
         };
@@ -3720,6 +3713,31 @@ impl App {
         }
         if self.home.bind_active_chat_room(moment) {
             self.mark_home_layout_dirty();
+        }
+    }
+
+    /// The rail's selection as a binding: News or a real room. `None` on the
+    /// other synthetic rows (mentions, rss, browse) and before the rooms
+    /// arrive.
+    pub(crate) fn home_rail_binding(&self) -> Option<crate::app::zen::state::ChatRoomBinding> {
+        use crate::app::zen::state::ChatRoomBinding;
+        if self.chat.news_selected {
+            return Some(ChatRoomBinding::News);
+        }
+        self.home_chat_room_id().map(ChatRoomBinding::Room)
+    }
+
+    /// Note which of Home's tiles are kept to a room the page's chat is not
+    /// in. Runs with the room (`sync_visible_chat_room`), so the page reflows
+    /// as the messages change anyway. The reef's rect moves when it goes
+    /// down or comes back, so the simulation is bound again.
+    pub(crate) fn sync_home_kept_tiles(&mut self) {
+        let chat_room = self.home_chat_room_id();
+        let moved = self
+            .home
+            .sync_kept_away(self.chat.news_selected, chat_room, &self.chat.rooms);
+        if moved {
+            self.sync_aquarium_bounds();
         }
     }
 
@@ -3744,31 +3762,9 @@ impl App {
         &self,
         bound: &crate::app::zen::state::ChatRoomBinding,
     ) -> Option<Uuid> {
-        match self.home_bound_room(bound) {
-            Some(room_id) => Some(room_id),
+        match bound.joined_room(&self.chat.rooms) {
+            Some(room) => Some(room.id),
             None => self.home_current_room_id(),
-        }
-    }
-
-    /// The joined room a binding names: a room id the account still holds,
-    /// or the permanent room with that slug. `None` for the current room,
-    /// for News, and for a binding the account's rooms do not hold.
-    fn home_bound_room(&self, bound: &crate::app::zen::state::ChatRoomBinding) -> Option<Uuid> {
-        use crate::app::zen::state::ChatRoomBinding;
-        match bound {
-            ChatRoomBinding::Current | ChatRoomBinding::News => None,
-            ChatRoomBinding::Room(room_id) => self
-                .chat
-                .rooms
-                .iter()
-                .find(|(room, _)| room.id == *room_id)
-                .map(|(room, _)| room.id),
-            ChatRoomBinding::Permanent(slug) => self
-                .chat
-                .rooms
-                .iter()
-                .find(|(room, _)| room.permanent && room.slug.as_deref() == Some(slug.as_str()))
-                .map(|(room, _)| room.id),
         }
     }
 
