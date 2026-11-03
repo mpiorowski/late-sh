@@ -257,7 +257,7 @@ fn toggle_pet_out(app: &mut App) -> Option<Banner> {
     app.pet_state.set_enabled(enabled);
     Some(Banner::success(match enabled {
         true => "Your pet is back out",
-        false => "Put your pet away: no tile, no reminders",
+        false => "Put your pet away: no reminders, o brings it back",
     }))
 }
 

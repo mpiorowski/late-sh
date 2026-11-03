@@ -6334,6 +6334,64 @@ async fn a_pet_put_away_leaves_its_tile_and_stops_asking_for_care() {
     assert!(app.attention_items().contains(&Item::PetPet));
 }
 
+/// The stock Home hosts a pet tile, and a pet put away leaves it holding a
+/// note, so the Shop's answer to `o` must not promise the tile is gone.
+#[tokio::test]
+async fn putting_the_pet_away_on_the_stock_home_says_what_the_home_then_shows() {
+    use crate::app::hub::shop::{catalog::ShopCategory, state::ShopState, svc::ShopService};
+    use crate::app::zen::state::{RiceLayout, ZenState};
+    use late_core::models::chips::UserChips;
+    use late_core::models::marketplace::{PET_COMPANION_SKU, purchase_durable_item_by_sku};
+
+    let test_db = new_test_db().await;
+    let owner = create_test_user(&test_db.db, "pet-away-stock").await;
+    let mut client = test_db.db.get().await.expect("db client");
+    UserChips::admin_grant(&**client, owner.id, 1_000_000)
+        .await
+        .expect("fund chips");
+    purchase_durable_item_by_sku(&mut client, owner.id, PET_COMPANION_SKU)
+        .await
+        .expect("buy the pet");
+    let mut app = make_app(test_db.db.clone(), owner.id, "pet-away-stock-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    let stock = RiceLayout::home();
+    app.home = ZenState::new(stock.clone(), Some(stock));
+    // The catalog and the purchase as the session's bootstrap loads them.
+    app.shop_state = ShopState::for_test_snapshot(
+        ShopService::new(test_db.db.clone())
+            .refresh_user(owner.id)
+            .await
+            .expect("the shop's snapshot"),
+    );
+
+    app.handle_input(b"\x13");
+    assert!(app.show_hub_modal, "Ctrl+S opens the Shop");
+    app.shop_state.select_category(ShopCategory::Companions);
+    let pet_row = app
+        .shop_state
+        .visible_items()
+        .iter()
+        .position(|item| item.is_pet_companion())
+        .expect("the pet's row");
+    app.shop_state.select_item(pet_row);
+    app.handle_input(b"o");
+    assert!(!app.pet_out(), "o puts it away");
+    let answer = app
+        .banner
+        .as_ref()
+        .expect("the switch answers")
+        .message
+        .clone();
+
+    app.show_hub_modal = false;
+    let frame = render_plain(&mut app);
+    assert!(frame.contains("no pet out"), "the tile stays: {frame}");
+    assert!(
+        !answer.contains("no tile"),
+        "the answer agrees with the tile: {answer}"
+    );
+}
+
 #[tokio::test]
 async fn home_tank_tile_is_fed_by_a_click_without_moving_the_focus() {
     use crate::app::zen::state::{Dir, Look, Node, RiceLayout, TileKind, ZenState};

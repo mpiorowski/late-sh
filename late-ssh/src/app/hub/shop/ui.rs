@@ -97,13 +97,7 @@ fn draw_categories(frame: &mut Frame, area: Rect, state: &ShopState) {
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
-fn draw_body(
-    frame: &mut Frame,
-    area: Rect,
-    state: &ShopState,
-    pet: ShopPet,
-    care: &AquariumCare,
-) {
+fn draw_body(frame: &mut Frame, area: Rect, state: &ShopState, pet: ShopPet, care: &AquariumCare) {
     let columns =
         Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).split(area);
     let today = Utc::now().date_naive();

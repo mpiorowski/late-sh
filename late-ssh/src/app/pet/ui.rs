@@ -505,7 +505,8 @@ fn mood_color(mood: PetMood) -> Color {
 /// Home's pet tile: the box at tile size, a name and mood row on top when
 /// there is room, and the whole rest of the tile to roam. `neighbours`
 /// names the side a tank and a bonsai are on; a calm pet goes and watches
-/// them. With no pet owned the tile points at the shop.
+/// them. With no pet out (none bought, or one put away) the tile points at
+/// the shop.
 pub fn draw_tile(frame: &mut Frame, area: Rect, pet: Option<&PetView<'_>>, neighbours: Neighbours) {
     let Some(view) = pet else {
         draw_centered_note(

@@ -3435,7 +3435,8 @@ pub(crate) fn open_shop_modal_globally(app: &mut App) {
 
 /// A click on the pet: it purrs for a bit, and the first click of the day
 /// pays (`PetState::pet`). The box only draws for a pet that is out, so the
-/// click can only land on one; the service checks ownership again.
+/// click can only land on one here; the service's claim decides the payout
+/// off the row, since another session may have put it away since.
 pub(crate) fn pet_the_pet_globally(app: &mut App) {
     if !app.pet_out() {
         return;
