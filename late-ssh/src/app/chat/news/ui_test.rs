@@ -7,6 +7,7 @@ use late_core::models::article::{Article, ArticleFeedItem};
 use late_core::models::article_body::BodyStatus;
 use late_core::models::article_read::WatchPosition;
 use ratatui::{Terminal, backend::TestBackend};
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use uuid::Uuid;
 
@@ -243,6 +244,38 @@ fn the_list_scrolls_only_when_the_next_story_would_leave_the_window() {
     assert_eq!(held, 0);
     let moved = scroll_offset(held, total, &story(3), &context(3, count), height);
     assert_eq!(moved, story(4).end - height);
+}
+
+/// Real draws sharing one kept offset, on a list with a shelf: the window holds
+/// while the selection moves inside it, scrolls when the story above would
+/// leave it, and walking back to the first story brings the shelf's rule back.
+/// Stories are 6 rows: a rule at row 0, the rule under the shelf at row 7, then
+/// 7 rows a story, so 42 rows and a lowest offset of 18 on a window of 24.
+#[test]
+fn the_kept_offset_holds_the_list_and_walks_back_to_the_shelf_rule() {
+    let marker = HashSet::new();
+    let positions = HashMap::new();
+    let articles: Vec<_> = (0..6).map(|_| card(BodyStatus::Pending)).collect();
+    let scroll = Cell::new(0);
+    let draw = |selected_index| {
+        let list = ArticleListView {
+            scroll: Some(&scroll),
+            ..view(&articles, 1, selected_index, &marker, &positions)
+        };
+        drawn(&list, 80, 24)
+    };
+
+    draw(5);
+    assert_eq!(scroll.get(), 18);
+    draw(4);
+    assert_eq!(scroll.get(), 18, "the story above is still in the window");
+    draw(3);
+    assert_eq!(scroll.get(), 15, "the story above would leave the window");
+    draw(2);
+    draw(1);
+    let rows = draw(0);
+    assert_eq!(scroll.get(), 0);
+    assert!(rows[0].starts_with("━━ saved"), "{:?}", rows[0]);
 }
 
 /// Too short for a story and both neighbours, the neighbours share what the

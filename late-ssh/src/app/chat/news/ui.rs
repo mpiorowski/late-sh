@@ -211,7 +211,9 @@ pub(crate) fn lay_out(view: &ArticleListView<'_>, width: u16) -> ListLayout {
     let context_start = selected_index
         .checked_sub(1)
         .and_then(|above| stories.get(above))
-        .map_or(selected.start, |above| above.start);
+        // The first story reaches row 0, so walking back to it brings back
+        // the shelf's rule above it.
+        .map_or(0, |above| above.start);
     let context_end = stories
         .get(selected_index + 1)
         .map_or(selected.end, |below| below.end);

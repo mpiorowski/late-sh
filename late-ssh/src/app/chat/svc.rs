@@ -703,7 +703,7 @@ fn poll_error_message(error: &anyhow::Error) -> String {
     let text = error.to_string();
     if text.contains("already has an active poll")
         || text.contains("at least two options")
-        || text.contains("at most three options")
+        || text.contains("at most four options")
         || text.contains("too long")
         || text.contains("duration must")
         || text.contains("question is required")
