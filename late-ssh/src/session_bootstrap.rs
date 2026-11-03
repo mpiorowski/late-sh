@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use late_core::models::user_ssh_key::{
     KeyLayout, UserSshKey, extract_key_artboard_disclaimer, extract_key_home_layout,
-    extract_key_home_layouts, extract_key_layout, extract_key_zen_layout,
+    extract_key_home_layouts, extract_key_layout,
 };
 use late_core::models::{artboard_ban::ArtboardBan, user::User};
 use tokio::sync::{broadcast, mpsc};
@@ -285,13 +285,12 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
 #[derive(Clone, Debug, Default)]
 pub struct DeviceState {
     pub layout: Option<KeyLayout>,
-    /// This device's single `zen` and Home tile layouts, stored before Home
-    /// had named layouts (`app/zen`), `None` to follow the account's stored
-    /// layout. Read only as the seed for `home_layouts`.
-    pub zen_layout: Option<serde_json::Value>,
+    /// This device's single Home tile layout, stored before Home had named
+    /// layouts (`app/zen`), `None` to follow the account's stored layout.
+    /// Read only as the seed for `home_layouts`.
     pub home_layout: Option<serde_json::Value>,
     /// This device's named Home layouts (`app/zen/presets`), `None` until
-    /// it saved or switched one; the two above then seed the set.
+    /// it saved or switched one; the one above then seeds the set.
     pub home_layouts: Option<serde_json::Value>,
     /// This device's Artboard content disclaimer, `None` to follow the account.
     /// `Some(true)` when the key could not be read.
@@ -324,7 +323,6 @@ pub async fn load_device_state(
         Ok(Some(key)) => DeviceState {
             layout: extract_key_layout(&key.settings),
             artboard_disclaimer: extract_key_artboard_disclaimer(&key.settings),
-            zen_layout: extract_key_zen_layout(&key.settings),
             home_layout: extract_key_home_layout(&key.settings),
             home_layouts: extract_key_home_layouts(&key.settings),
             left_at: None,
@@ -654,9 +652,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         presence: state.presence.clone(),
         // This device's tile layouts, the account's stored ones as the seed
         // for a key that has never arranged a page.
-        zen_layout: device
-            .zen_layout
-            .or_else(|| late_core::models::user::extract_zen_layout(&user.settings)),
         home_layout: device
             .home_layout
             .or_else(|| late_core::models::user::extract_home_layout(&user.settings)),

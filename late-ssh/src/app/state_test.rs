@@ -349,7 +349,7 @@ async fn home_navigation_and_overlays_preserve_only_the_current_visit() {
     layout.root.set_selection(0, AsciiSelection::Random);
     // Off Home and back, so the visit starts with this layout up.
     app.set_screen(Screen::Arcade);
-    app.home = ZenState::new(layout, RiceLayout::default());
+    app.home = ZenState::new(layout, Some(RiceLayout::default()));
     app.set_screen(Screen::Dashboard);
     let initial = app.home.focused_piece().expect("resolved before rendering");
     let saved = app.home.rice.to_json();

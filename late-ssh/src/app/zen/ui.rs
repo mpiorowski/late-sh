@@ -18,7 +18,7 @@ use super::{
     attention::Item as AttentionItem,
     bigclock,
     layout::{self, Chrome},
-    presets::{LayoutList, Layouts, MAX_LAYOUT_NAME_CHARS, NamePurpose},
+    presets::{LayoutList, Layouts, MAX_LAYOUT_NAME_CHARS},
     state::{Guest, TileHint, TileKind, TileTitle, ZenState},
 };
 
@@ -51,7 +51,15 @@ use crate::app::{
 pub(crate) struct ZenChatTile<'a> {
     pub label: String,
     pub stream_badge: Option<String>,
-    pub view: Option<EmbeddedRoomChatView<'a>>,
+    pub view: Option<ChatTileView<'a>>,
+}
+
+/// What a chat tile draws: a room, or the News list for a tile holding
+/// News (`ChatRoomBinding::News`). The active tile is drawn by the page's
+/// chat instead, where News is the rail's row with its keys.
+pub(crate) enum ChatTileView<'a> {
+    Room(EmbeddedRoomChatView<'a>),
+    News(crate::app::chat::news::ui::ArticleListView<'a>),
 }
 
 /// A chat tile's title: `Chat · #mat-live [3]`. The tile does not draw the
@@ -386,8 +394,8 @@ pub(crate) fn draw_rice(
 
 /// The layouts list `L` opens in arrange mode: one row per layout with
 /// its digit and name, the current one marked, the selected row lit;
-/// while a name is being typed (`n`, `r`) the field sits under the rows
-/// with its cursor.
+/// while a name is being typed (`n`) the field sits under the rows with
+/// its cursor.
 fn draw_layout_list(frame: &mut Frame, area: Rect, layouts: &Layouts, list: &LayoutList) {
     let rows = layouts.count() as u16;
     // The rows, a blank, the hint, the two border rows; two more rows
@@ -432,10 +440,7 @@ fn draw_layout_list(frame: &mut Frame, area: Rect, layouts: &Layouts, list: &Lay
         })
         .collect();
     if let Some(edit) = &list.editing {
-        let label = match edit.purpose {
-            NamePurpose::SaveNew => "save as: ",
-            NamePurpose::Rename(_) => "rename to: ",
-        };
+        let label = "save as: ";
         lines.push(Line::from(""));
         lines.push(Line::from(vec![
             Span::styled("  ".to_string(), Style::default()),
@@ -456,7 +461,6 @@ fn draw_layout_list(frame: &mut Frame, area: Rect, layouts: &Layouts, list: &Lay
             ("jk", "move"),
             ("enter", "load"),
             ("n", "new"),
-            ("r", "rename"),
             ("d", "delete"),
             ("R", "reset"),
             ("esc", "close"),
@@ -504,9 +508,12 @@ fn draw_popup(
 }
 
 /// Paint the guests that have taken their host's tile. One guest has the
-/// whole tile; with both up the strip takes its rows at the top and
-/// attention the rest. The host draws nothing underneath, so the moment
-/// the last guest goes the host shows whole.
+/// whole tile, the strip centred down it and attention's rows from its
+/// top; with both up the strip takes its picture rows at the top and
+/// attention the rest. Neither draws a title
+/// of its own: the tile's chrome names the guests up in place of the
+/// host's title, where the host wears one. The host draws nothing
+/// underneath, so the moment the last guest goes the host shows whole.
 fn draw_guests(frame: &mut Frame, area: Rect, up: &[Guest], focused: bool, view: &ZenView<'_>) {
     let now = up.contains(&Guest::Now);
     let attention = up.contains(&Guest::Attention);
@@ -530,13 +537,14 @@ fn draw_guests(frame: &mut Frame, area: Rect, up: &[Guest], focused: bool, view:
 }
 
 /// The strip's form in a tile of `area`: full where the tile is wide and
-/// tall enough, its one-row form otherwise, and the rows it takes.
+/// tall enough for the picture, its one-row form otherwise, and the rows
+/// the form paints (the tile form has no rule, `StripHost::Tile`).
 fn now_strip_size(area: Rect) -> (crate::app::live::ui::StripSize, u16) {
     use crate::app::live::ui::{
-        LIVE_STRIP_COMPACT_HEIGHT, LIVE_STRIP_HEIGHT, MIN_FULL_WIDTH, StripSize,
+        LIVE_STRIP_COMPACT_HEIGHT, MIN_FULL_WIDTH, PICTURE_ROWS, StripSize,
     };
-    match area.width >= MIN_FULL_WIDTH && area.height >= LIVE_STRIP_HEIGHT {
-        true => (StripSize::Full, LIVE_STRIP_HEIGHT),
+    match area.width >= MIN_FULL_WIDTH && area.height >= PICTURE_ROWS {
+        true => (StripSize::Full, PICTURE_ROWS),
         false => (
             StripSize::Compact,
             LIVE_STRIP_COMPACT_HEIGHT.min(area.height),
@@ -544,8 +552,9 @@ fn now_strip_size(area: Rect) -> (crate::app::live::ui::StripSize, u16) {
     }
 }
 
-/// Paint one guest into `area`: the strip centred down it, attention's
-/// rows from its top, the selected one marked while the tile is focused.
+/// Paint one guest into `area`: the strip's picture and words centred
+/// down it (the click lands on those rows), or attention's rows from its
+/// top, the selected one lit while the tile is focused.
 fn draw_guest(frame: &mut Frame, area: Rect, guest: Guest, focused: bool, view: &ZenView<'_>) {
     match guest {
         Guest::Now => {
@@ -559,7 +568,14 @@ fn draw_guest(frame: &mut Frame, area: Rect, guest: Guest, focused: bool, view: 
                 area.width,
                 height,
             );
-            crate::app::live::ui::draw_live_strip(frame, strip_area, size, &strip.strip, strip.hit);
+            crate::app::live::ui::draw_live_strip(
+                frame,
+                strip_area,
+                size,
+                crate::app::live::ui::StripHost::Tile,
+                &strip.strip,
+                strip.hit,
+            );
         }
         Guest::Attention => draw_attention_tile(
             frame,
@@ -795,9 +811,9 @@ fn hint_line_fitting(hints: &[(&str, &str)], width: usize) -> Line<'static> {
 }
 
 /// A chat tile: its room's messages, with the composer on the active tile
-/// only. `None` is a tile past the frames built this frame, which cannot
-/// happen (one frame per chat tile) but is drawn as an empty note rather
-/// than crashed on.
+/// only, or the News list. `None` is a tile past the frames built this
+/// frame, which cannot happen (one frame per chat tile) but is drawn as an
+/// empty note rather than crashed on.
 fn draw_chat_tile(
     frame: &mut Frame,
     area: Rect,
@@ -806,13 +822,18 @@ fn draw_chat_tile(
 ) {
     match tile {
         Some(ZenChatTile {
-            view: Some(view), ..
+            view: Some(ChatTileView::Room(view)),
+            ..
         }) => {
             if area.height < 4 || area.width < 20 {
                 return;
             }
             draw_embedded_room_chat(frame, area, view, terminal_images);
         }
+        Some(ZenChatTile {
+            view: Some(ChatTileView::News(view)),
+            ..
+        }) => crate::app::chat::news::ui::draw_article_list(frame, area, &view),
         Some(ZenChatTile { view: None, .. }) | None => {
             draw_centered_note(frame, area, &["no room open", "1 opens Home to pick one"])
         }
@@ -948,18 +969,26 @@ fn draw_attention_tile(
         .skip(first)
         .take(visible)
         .map(|(index, item)| {
+            // The rows start at the tile's edge, no marker column: the
+            // selected row is lit instead, its glyph glowing and its
+            // words bold.
             let marked = focused && index == selected;
-            let words_style = match marked {
-                true => bright.add_modifier(Modifier::BOLD),
-                false => bright,
+            let (head_style, words_style) = match marked {
+                true => (
+                    Style::default()
+                        .fg(theme::AMBER_GLOW())
+                        .add_modifier(Modifier::BOLD),
+                    bright.add_modifier(Modifier::BOLD),
+                ),
+                false => (amber, bright),
             };
             let act = item.act();
-            let head = format!("{} {} ", if marked { "▌" } else { " " }, item.glyph());
+            let head = format!("{} ", item.glyph());
             let budget = width.saturating_sub(head.width() + act.width() + 1);
             let words = crate::app::chat::ui::truncate_cells(&item.label(), budget);
             let pad = width.saturating_sub(head.width() + words.width() + act.width());
             Line::from(vec![
-                Span::styled(head, amber),
+                Span::styled(head, head_style),
                 Span::styled(words, words_style),
                 Span::raw(" ".repeat(pad)),
                 Span::styled(act.to_string(), faint),

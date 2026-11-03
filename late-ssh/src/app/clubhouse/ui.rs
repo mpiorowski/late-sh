@@ -1344,6 +1344,7 @@ fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bo
         | Tutorial::VisitJobs
         | Tutorial::VisitLeaderboard
         | Tutorial::VisitCalendar
+        | Tutorial::VisitLayouts
         | Tutorial::Off
         | Tutorial::Pending
         | Tutorial::Done => return false,
@@ -1631,6 +1632,63 @@ pub fn draw_tour_overlay(
                 ]),
                 Line::from(Span::styled("in green, and only you see them.", text)),
             ],
+            "the layouts",
+        ),
+        Tutorial::VisitLayouts => (
+            Screen::Dashboard,
+            " ✦ the tour · [Ctrl+E] layouts ",
+            vec![
+                Line::from(Span::styled(
+                    "home is tiles you arrange yourself. this is its second",
+                    text,
+                )),
+                Line::from(vec![
+                    Span::styled("layout, ", text),
+                    Span::styled("street", name),
+                    Span::styled(": an ascii stage, the tank, the news and the", text),
+                ]),
+                Line::from(Span::styled(
+                    "announcements, the clock and the pulse. up to nine layouts",
+                    text,
+                )),
+                Line::from(Span::styled("are saved on this key.", text)),
+                Line::default(),
+                Line::from(vec![
+                    Span::styled("[Ctrl+E] ", key),
+                    Span::styled("arranges the page. ", text),
+                    Span::styled("[Ctrl+E] [1-9] ", key),
+                    Span::styled("switches layouts", text),
+                ]),
+                Line::from(vec![
+                    Span::styled("[Ctrl+E] [L] ", key),
+                    Span::styled("lists them · ", text),
+                    Span::styled("[n] ", key),
+                    Span::styled("there saves the page as a new one", text),
+                ]),
+                Line::default(),
+                Line::from(vec![
+                    Span::styled("[Tab] ", key),
+                    Span::styled("focus a tile · ", text),
+                    Span::styled("[space] ", key),
+                    Span::styled("pick what it shows", text),
+                ]),
+                Line::from(vec![
+                    Span::styled("[S] ", key),
+                    Span::styled("split · ", text),
+                    Span::styled("[X] ", key),
+                    Span::styled("close · ", text),
+                    Span::styled("[F] ", key),
+                    Span::styled("flip · ", text),
+                    Span::styled("[R] ", key),
+                    Span::styled("reset home", text),
+                ]),
+                Line::from(vec![
+                    Span::styled("[i] ", key),
+                    Span::styled("write in the focused chat · ", text),
+                    Span::styled("[?] ", key),
+                    Span::styled("the full guide", text),
+                ]),
+            ],
             "home to the lounge",
         ),
         // The music, lobby, practice-table and dungeon stops write their
@@ -1896,6 +1954,7 @@ pub(crate) fn tour_header(
         | Tutorial::VisitJobs
         | Tutorial::VisitLeaderboard
         | Tutorial::VisitCalendar
+        | Tutorial::VisitLayouts
         | Tutorial::Homecoming
         | Tutorial::Done => None,
     }

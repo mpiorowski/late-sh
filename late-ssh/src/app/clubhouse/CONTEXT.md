@@ -178,8 +178,12 @@ room is the chat surface, and the full history lives in #lounge on Home.
   whatever a rerun left it on, and each Enter then steps `]` itself through
   `TourMove::NextSection`, so the newcomer learns no key mid-tour and each
   box stays a few lines) -> `VisitLeaderboard` -> `VisitCalendar` ->
-  `Homecoming` (back in the tavern). Every top-level page gets one stop, and
-  the copy is kept plain: short sentences, no flourish.
+  `VisitLayouts` (Home again with its stock second layout up,
+  `TourMove::Layouts` loads `street` the way `/layout street` does: the
+  tiles, `Ctrl+E` and the layouts) -> `Homecoming` (back in the tavern;
+  `TourMove::Homecoming` puts Home's `home` layout back first, so the
+  newcomer's page is as the tour found it). Every top-level page gets one
+  stop, and the copy is kept plain: short sentences, no flourish.
 - At `VisitArtboard`, the stop lands behind the content disclaimer: the page
   stays bare and the tour box offers `S` (show the art for this visit) or
   Enter (skip to Profiles). The standalone disclaimer dialog never draws in

@@ -156,7 +156,10 @@ impl TileKind {
         match self {
             TileKind::Bonsai => &[TileHint::Names(HouseKey::Tend)],
             TileKind::Ascii => &[TileHint::Takes(TileKey::PickPiece)],
-            TileKind::Aquarium | TileKind::Tank => &[TileHint::Takes(TileKey::Feed)],
+            TileKind::Aquarium | TileKind::Tank => &[
+                TileHint::Takes(TileKey::Feed),
+                TileHint::Names(HouseKey::FeedClick),
+            ],
             TileKind::Pet => &[TileHint::Names(HouseKey::PetClick)],
             TileKind::Chat => &[
                 TileHint::Takes(TileKey::CycleRoom),
@@ -211,7 +214,8 @@ pub enum TileKey {
     /// `[` `]` step an ascii tile through the pieces, Enter opens the
     /// picker.
     PickPiece,
-    /// `a` feeds the tank, on the reef or the tank tile.
+    /// `a` feeds the tank, on the reef or the tank tile (a click does
+    /// the same from any mode, `HouseKey::FeedClick`).
     Feed,
     /// `[` `]` rebind a chat tile to the previous or next room.
     CycleRoom,
@@ -254,6 +258,8 @@ pub enum HouseKey {
     OpenLive,
     /// A click on the pet pets it.
     PetClick,
+    /// A click on the reef or the tank feeds it.
+    FeedClick,
 }
 
 impl HouseKey {
@@ -265,6 +271,7 @@ impl HouseKey {
             HouseKey::OpenLobby => ("^G", "open"),
             HouseKey::OpenLive => ("s1-4", "open"),
             HouseKey::PetClick => ("click", "pet"),
+            HouseKey::FeedClick => ("click", "feed"),
         }
     }
 
@@ -277,7 +284,7 @@ impl HouseKey {
             HouseKey::Mute => TakenBy::Letter(b'm'),
             HouseKey::OpenLive => TakenBy::Letter(b's'),
             HouseKey::PickRoom | HouseKey::OpenLobby => TakenBy::Chord,
-            HouseKey::PetClick => TakenBy::Click,
+            HouseKey::PetClick | HouseKey::FeedClick => TakenBy::Click,
         }
     }
 }
@@ -423,11 +430,16 @@ pub enum Node {
             skip_serializing_if = "Vec::is_empty"
         )]
         guests: Vec<Guest>,
-        /// The room a chat tile is bound to; `None` (the stored default,
-        /// and every layout saved before rooms were per tile) means the
-        /// current room, Home's selection or #lounge. Other kinds ignore it.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        room: Option<Uuid>,
+        /// The room a chat tile is bound to (`ChatRoomBinding`); absent
+        /// in the stored JSON (and in every layout saved before rooms were
+        /// per tile) means the current room. Other kinds ignore it.
+        #[serde(
+            default,
+            skip_serializing_if = "ChatRoomBinding::is_current",
+            serialize_with = "room_to_json",
+            deserialize_with = "room_from_json"
+        )]
+        room: ChatRoomBinding,
         /// The selection an ascii tile plays; `None` (the stored default) is
         /// [`AsciiPiece::DEFAULT`]. Other kinds ignore it. A key this build does
         /// not know (a piece dropped, a rolled-back deploy) reads as `None`
@@ -512,6 +524,82 @@ fn known_title<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Tile
 /// A stored `piece` key: a piece this build knows, or `None` for one it
 /// does not, so the tile falls back to [`AsciiPiece::DEFAULT`] and the rest of
 /// the layout reads as stored.
+/// What a chat tile shows. Stored as the leaf's `room`: a room id, the
+/// word `news`, or a permanent room's slug so a stock layout can name
+/// `#announcements` on any account; absent for the current room.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum ChatRoomBinding {
+    /// The current room: Home's rail selection when it is a real room,
+    /// else #lounge.
+    #[default]
+    Current,
+    /// A room by id; one the account has since left shows the current
+    /// room instead (`App::home_chat_rooms`).
+    Room(Uuid),
+    /// A permanent room by slug, resolved from the joined rooms at render
+    /// time; unknown, the current room.
+    Permanent(String),
+    /// The rail's News view, the house's shared links: the one synthetic
+    /// view a tile can hold. Active, the tile is the News room with its
+    /// keys; watching, it draws the same list.
+    News,
+}
+
+/// The stored word for `ChatRoomBinding::News`; no permanent room has
+/// the slug.
+const NEWS_BINDING: &str = "news";
+
+impl ChatRoomBinding {
+    pub fn is_current(&self) -> bool {
+        matches!(self, ChatRoomBinding::Current)
+    }
+}
+
+/// What a chat tile draws once its binding is resolved against the
+/// account's rooms (`App::home_chat_rooms`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChatTileSource {
+    Room(Uuid),
+    News,
+}
+
+impl ChatTileSource {
+    pub fn room_id(self) -> Option<Uuid> {
+        match self {
+            ChatTileSource::Room(room_id) => Some(room_id),
+            ChatTileSource::News => None,
+        }
+    }
+}
+
+fn room_to_json<S: serde::Serializer>(
+    room: &ChatRoomBinding,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match room {
+        ChatRoomBinding::Current => serializer.serialize_none(),
+        ChatRoomBinding::Room(id) => serializer.serialize_str(&id.to_string()),
+        ChatRoomBinding::Permanent(slug) => serializer.serialize_str(slug),
+        ChatRoomBinding::News => serializer.serialize_str(NEWS_BINDING),
+    }
+}
+
+/// A stored `room`: a uuid is a room id, `news` the News view, any other
+/// string a permanent room's slug, nothing the current room.
+fn room_from_json<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<ChatRoomBinding, D::Error> {
+    let stored: Option<String> = Option::deserialize(deserializer)?;
+    Ok(match stored {
+        None => ChatRoomBinding::Current,
+        Some(text) if text == NEWS_BINDING => ChatRoomBinding::News,
+        Some(text) => match text.parse::<Uuid>() {
+            Ok(id) => ChatRoomBinding::Room(id),
+            Err(_) => ChatRoomBinding::Permanent(text),
+        },
+    })
+}
+
 fn known_piece<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Option<AsciiSelection>, D::Error> {
@@ -544,6 +632,26 @@ impl Node {
         Self::hosting(kind, &[])
     }
 
+    /// A chat tile bound to the permanent room `slug` (`#lounge`,
+    /// `#announcements`): what a stock layout binds with, since it knows
+    /// no account's room ids.
+    pub fn chat_in(slug: &str) -> Self {
+        Self::chat_bound(ChatRoomBinding::Permanent(slug.to_string()))
+    }
+
+    /// A chat tile holding the News view.
+    pub fn chat_news() -> Self {
+        Self::chat_bound(ChatRoomBinding::News)
+    }
+
+    fn chat_bound(binding: ChatRoomBinding) -> Self {
+        let mut leaf = Self::leaf(TileKind::Chat);
+        if let Node::Leaf { room, .. } = &mut leaf {
+            *room = binding;
+        }
+        leaf
+    }
+
     /// A leaf hosting `guests`, given in any order.
     pub fn hosting(kind: TileKind, guests: &[Guest]) -> Self {
         Node::Leaf {
@@ -552,7 +660,7 @@ impl Node {
                 .into_iter()
                 .filter(|guest| guests.contains(guest))
                 .collect(),
-            room: None,
+            room: ChatRoomBinding::Current,
             piece: None,
             title: TileTitle::Named,
         }
@@ -596,7 +704,10 @@ impl Node {
 
     /// One value per leaf in layout order (depth first, first child before
     /// second).
-    fn map_leaves<'a, T>(&'a self, pick: fn(TileKind, &'a [Guest], Option<Uuid>) -> T) -> Vec<T> {
+    fn map_leaves<'a, T>(
+        &'a self,
+        pick: fn(TileKind, &'a [Guest], &'a ChatRoomBinding) -> T,
+    ) -> Vec<T> {
         let mut out = Vec::with_capacity(self.leaf_count());
         self.collect_leaves(pick, &mut out);
         out
@@ -604,13 +715,13 @@ impl Node {
 
     fn collect_leaves<'a, T>(
         &'a self,
-        pick: fn(TileKind, &'a [Guest], Option<Uuid>) -> T,
+        pick: fn(TileKind, &'a [Guest], &'a ChatRoomBinding) -> T,
         out: &mut Vec<T>,
     ) {
         match self {
             Node::Leaf {
                 kind, guests, room, ..
-            } => out.push(pick(*kind, guests, *room)),
+            } => out.push(pick(*kind, guests, room)),
             Node::Split { first, second, .. } => {
                 first.collect_leaves(pick, out);
                 second.collect_leaves(pick, out);
@@ -624,8 +735,8 @@ impl Node {
     }
 
     /// Every leaf's bound room in layout order, parallel to `leaf_kinds`.
-    pub fn leaf_rooms(&self) -> Vec<Option<Uuid>> {
-        self.map_leaves(|_, _, room| room)
+    pub fn leaf_rooms(&self) -> Vec<ChatRoomBinding> {
+        self.map_leaves(|_, _, room| room.clone())
     }
 
     /// Every leaf's guests in layout order, parallel to `leaf_kinds`.
@@ -755,7 +866,7 @@ impl Node {
     }
 
     /// Bind the leaf at `ordinal` to a room (or back to the current room).
-    pub fn set_room(&mut self, ordinal: usize, new_room: Option<Uuid>) -> bool {
+    pub fn set_room(&mut self, ordinal: usize, new_room: ChatRoomBinding) -> bool {
         let mut remaining = ordinal;
         match self.leaf_mut(&mut remaining) {
             Some(Node::Leaf { room, .. }) => {
@@ -812,7 +923,7 @@ impl Node {
             }) => {
                 *kind = new_kind;
                 if new_kind != TileKind::Chat {
-                    *room = None;
+                    *room = ChatRoomBinding::Current;
                 }
                 if new_kind != TileKind::Ascii {
                     *piece = None;
@@ -1006,13 +1117,13 @@ pub struct RiceLayout {
     pub look: Look,
 }
 
+#[cfg(test)]
 impl Default for RiceLayout {
-    /// The stock `zen` Home layout (`presets.rs`), also what `R` resets it
-    /// to: on the left, the
-    /// bonsai beside the reef over the current room's chat; on the right a
-    /// rail of clock, pet, lobby, live, then music (the pet sits against
-    /// the tank, to its left, and watches it; unowned, the pet tile points
-    /// at the shop).
+    /// The page the tests arrange from: the retired stock `zen` layout. On
+    /// the left, the bonsai beside the reef over the current room's chat;
+    /// on the right a rail of clock, pet, lobby, live, then music (the pet
+    /// sits against the tank, to its left, and watches it). No device is
+    /// seeded with it any more.
     fn default() -> Self {
         Self {
             root: Node::split(
@@ -1067,8 +1178,14 @@ pub const PRESENCE_ROWS: u16 = 2;
 /// eleven rows while that is Bigbert), so the fish swim in arrange mode too,
 /// where the title takes the extra row this tile has outside it.
 pub const HOME_AQUARIUM_ROWS: u16 = 11;
-/// The stock lobby tile: two tables over the status line.
-pub const HOME_LOBBY_ROWS: u16 = 3;
+/// The stock lobby tile: two tables over the status line and the keys.
+pub const HOME_LOBBY_ROWS: u16 = 4;
+/// The stock `street` layout's right rail, wide enough for the clock's
+/// block digits with their date.
+pub const STREET_RAIL_COLS: u16 = 30;
+/// The stock `street` layout's tank beside the ascii stage, the mini
+/// tank's band with room to swim.
+pub const STREET_TANK_COLS: u16 = 34;
 
 impl RiceLayout {
     /// Parse a stored layout; anything unreadable falls back to `fallback`,
@@ -1145,6 +1262,50 @@ impl RiceLayout {
         }
     }
 
+    /// The stock `street` layout, the second every device is seeded with
+    /// (`presets::Layouts::seed_stock`, once; `R` has no stock for it):
+    /// the tiles Home does not draw. An ascii piece across the top with
+    /// the tank beside it, two chats under them, the News view and
+    /// `#announcements` bound by slug, so the page works on any account,
+    /// and on the right a rail of the clock, the pulse, the friends and
+    /// the activity feed. Boxed.
+    pub fn street() -> Self {
+        let stage = Node::split_second(
+            Dir::Row,
+            STREET_TANK_COLS,
+            Node::leaf(TileKind::Ascii),
+            Node::leaf(TileKind::Tank),
+        );
+        let chats = Node::split(
+            Dir::Row,
+            500,
+            Node::chat_news(),
+            Node::chat_in("announcements"),
+        );
+        let left = Node::split(Dir::Column, 320, stage, chats);
+        let rail = Node::split_first(
+            Dir::Column,
+            // The clock's seven rows with its date, inside the box.
+            9,
+            Node::leaf(TileKind::Clock),
+            Node::split(
+                Dir::Column,
+                300,
+                Node::leaf(TileKind::Pulse),
+                Node::split(
+                    Dir::Column,
+                    400,
+                    Node::leaf(TileKind::Friends),
+                    Node::leaf(TileKind::Activity),
+                ),
+            ),
+        );
+        Self {
+            root: Node::split_second(Dir::Row, STREET_RAIL_COLS, left, rail),
+            look: Look::default(),
+        }
+    }
+
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
     }
@@ -1175,7 +1336,7 @@ pub enum GuestPick {
 pub struct ZenState {
     pub rice: RiceLayout,
     /// What `R` resets to.
-    stock: RiceLayout,
+    stock: Option<RiceLayout>,
     /// Whether the layout keys are live: only while arrange mode is up
     /// (`Ctrl+E`).
     pub arrange: bool,
@@ -1199,7 +1360,7 @@ impl ZenState {
     /// The page's state: `rice` is what it shows, `stock` what `R` resets
     /// to. It starts outside arrange mode, its keys Home's, with the focus
     /// on its first chat tile from the first frame.
-    pub fn new(rice: RiceLayout, stock: RiceLayout) -> Self {
+    pub fn new(rice: RiceLayout, stock: Option<RiceLayout>) -> Self {
         let focus = rice
             .root
             .leaf_kinds()
@@ -1409,9 +1570,8 @@ impl ZenState {
         self.set_focused_selection(selection.cycle(forward), now, rng)
     }
 
-    /// The chat tiles in layout order: each one's ordinal and bound room
-    /// (`None` for the current room).
-    pub fn chat_tiles(&self) -> Vec<(usize, Option<Uuid>)> {
+    /// The chat tiles in layout order: each one's ordinal and binding.
+    pub fn chat_tiles(&self) -> Vec<(usize, ChatRoomBinding)> {
         let kinds = self.rice.root.leaf_kinds();
         let rooms = self.rice.root.leaf_rooms();
         kinds
@@ -1445,11 +1605,11 @@ impl ZenState {
         )
     }
 
-    /// The active chat tile as `chat_tiles` lists it: its ordinal and room.
-    fn active_chat_tile(&self) -> Option<(usize, Option<Uuid>)> {
+    /// The active chat tile as `chat_tiles` lists it: its ordinal and binding.
+    fn active_chat_tile(&self) -> Option<(usize, ChatRoomBinding)> {
         let tiles = self.chat_tiles();
         let focused = tiles.iter().find(|(ordinal, _)| *ordinal == self.focus);
-        focused.or(tiles.first()).copied()
+        focused.or(tiles.first()).cloned()
     }
 
     /// The active chat tile's ordinal in the layout.
@@ -1464,13 +1624,13 @@ impl ZenState {
 
     /// The active chat tile's bound room (`None` for the rail's room),
     /// when the page has a chat tile.
-    pub fn active_chat_room(&self) -> Option<Option<Uuid>> {
+    pub fn active_chat_room(&self) -> Option<ChatRoomBinding> {
         Some(self.active_chat_tile()?.1)
     }
 
     /// Bind the active chat tile to `room`; `false` when the page has no
     /// chat tile.
-    pub fn bind_active_chat_room(&mut self, room: Option<Uuid>) -> bool {
+    pub fn bind_active_chat_room(&mut self, room: ChatRoomBinding) -> bool {
         match self.active_chat_ordinal() {
             Some(ordinal) => self.rice.root.set_room(ordinal, room),
             None => false,
@@ -1480,8 +1640,10 @@ impl ZenState {
     /// Bind every chat tile bound to no room to `room_id`.
     pub fn pin_unbound_chats(&mut self, room_id: Uuid) {
         for (ordinal, bound) in self.chat_tiles() {
-            if bound.is_none() {
-                self.rice.root.set_room(ordinal, Some(room_id));
+            if bound.is_current() {
+                self.rice
+                    .root
+                    .set_room(ordinal, ChatRoomBinding::Room(room_id));
             }
         }
     }
@@ -1669,25 +1831,36 @@ impl ZenState {
         self.rice.root.set_title(self.focus, next)
     }
 
-    /// Back to the stock layout (`zen`'s page, or Home as it always drew),
-    /// with the focus on its chat so the chat keys work at once.
-    pub fn reset(&mut self) {
-        self.rice = self.stock.clone();
+    /// Back to the stock layout (Home as it always drew), with the focus
+    /// on its chat so the chat keys work at once. `false` on a layout
+    /// with no stock (`presets::Layouts::stock_of`): only `home` has one.
+    pub fn reset(&mut self) -> bool {
+        let Some(stock) = &self.stock else {
+            return false;
+        };
+        self.rice = stock.clone();
         // Stock leaves carry no random selection, so nothing needs a draw.
         self.playback = vec![None; self.leaf_count()];
         self.focus = self.first_tile_of(TileKind::Chat).unwrap_or(0);
+        true
     }
 
     /// What `R` puts back from now on: a page just saved under a new name
-    /// keeps its tree and takes that name's stock.
-    pub fn set_stock(&mut self, stock: RiceLayout) {
+    /// keeps its tree and takes that name's stock, if any.
+    pub fn set_stock(&mut self, stock: Option<RiceLayout>) {
         self.stock = stock;
     }
 
     /// Show another layout (`presets`): `rice` is the page now, `stock`
     /// what `R` puts back. The pickers close, the focus lands on its chat,
     /// and its ascii tiles are drawn afresh on the next playback sync.
-    pub fn load(&mut self, rice: RiceLayout, stock: RiceLayout, now: Instant, rng: &mut impl Rng) {
+    pub fn load(
+        &mut self,
+        rice: RiceLayout,
+        stock: Option<RiceLayout>,
+        now: Instant,
+        rng: &mut impl Rng,
+    ) {
         self.rice = rice;
         self.stock = stock;
         self.playback = vec![None; self.leaf_count()];

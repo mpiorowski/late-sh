@@ -94,8 +94,9 @@ struct BannerEntry {
 /// that have no page of their own (the Stations modal on Home, the Lobby
 /// modal on The Arcade, each held open for real), has the newcomer play one
 /// break at a practice pool table and win one scripted dungeon fight on the
-/// Games page (the two stops where Enter is gated on playing first), ends
-/// back in the tavern, and `Done` is persisted once on the homecoming Enter. The bartender is
+/// Games page (the two stops where Enter is gated on playing first), shows
+/// Home's second layout last, ends back in the tavern with Home's first
+/// layout put back, and `Done` is persisted once on the homecoming Enter. The bartender is
 /// deliberately absent from the route: his comped welcome pour stays a
 /// hidden treasure for whoever walks up to the glowing bar after the
 /// send-off (see [`State::welcome_pour_due`]).
@@ -138,6 +139,9 @@ pub enum Tutorial {
     VisitLeaderboard,
     /// On the Calendars: the events board, the last page.
     VisitCalendar,
+    /// Back on Home with its second layout, `street`, up: the tiles, the
+    /// arrange chord and the layouts.
+    VisitLayouts,
     /// Back in the tavern: the send-off box.
     Homecoming,
     Done,
@@ -196,6 +200,11 @@ pub enum TourMove {
     NextSection,
     /// To the practice pool table.
     Table,
+    /// To Home with its stock second layout up (`/layout street`).
+    Layouts,
+    /// Back to the tavern with Home's first layout put back, so the tour
+    /// leaves the newcomer's page as it found it.
+    Homecoming,
     /// The tour just ended and should be persisted.
     Finished,
 }
@@ -699,6 +708,7 @@ impl State {
             | Tutorial::VisitJobs
             | Tutorial::VisitLeaderboard
             | Tutorial::VisitCalendar
+            | Tutorial::VisitLayouts
             | Tutorial::Homecoming => Some(TourStep::Enter),
         }
     }
@@ -723,6 +733,7 @@ impl State {
             | Tutorial::VisitJobs
             | Tutorial::VisitLeaderboard
             | Tutorial::VisitCalendar
+            | Tutorial::VisitLayouts
             | Tutorial::Homecoming
             | Tutorial::Done => TourModal::None,
         }
@@ -773,7 +784,8 @@ impl State {
             Tutorial::VisitLeaderboard => {
                 (Tutorial::VisitCalendar, TourMove::Page(Screen::Calendars))
             }
-            Tutorial::VisitCalendar => (Tutorial::Homecoming, TourMove::Page(Screen::Clubhouse)),
+            Tutorial::VisitCalendar => (Tutorial::VisitLayouts, TourMove::Layouts),
+            Tutorial::VisitLayouts => (Tutorial::Homecoming, TourMove::Homecoming),
             Tutorial::Homecoming => (Tutorial::Done, TourMove::Finished),
         };
         self.tutorial = next;

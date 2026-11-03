@@ -42,7 +42,7 @@ pub(crate) const MUSIC_VIZ_HEIGHT: u16 = 3;
 // credit) + `RADIO_SLOTS` slot rows, then the youtube title + track. On
 // youtube: the radio title alone, then the youtube title + track +
 // `MUSIC_YOUTUBE_DETAIL_HEIGHT` detail rows.
-pub(crate) const MUSIC_DOCK_HEIGHT: u16 = 12;
+pub(crate) const MUSIC_DOCK_HEIGHT: u16 = 13;
 // Full music stage: the wave strip on top of the dock.
 const MUSIC_STAGE_HEIGHT: u16 = MUSIC_VIZ_HEIGHT + MUSIC_DOCK_HEIGHT;
 const MUSIC_QUEUE_HEIGHT: u16 = 4;
@@ -576,6 +576,9 @@ fn music_stage_lines(width: u16, props: &MusicStageProps<'_>) -> Vec<Line<'stati
     let station_label = props.selected_station.label();
     let mut lines = Vec::with_capacity(MUSIC_DOCK_HEIGHT as usize);
     lines.push(volume_row_line(props.paired_client));
+    // The keys that move the bar above, named where it is read; they are
+    // the house's on every page (`app/input.rs`), not the dock's.
+    lines.push(keybind_row_line(width, VOLUME_KEYS));
 
     lines.push(stage_title_line(
         width,
@@ -748,6 +751,10 @@ pub(crate) fn youtube_track(queue: &QueueSnapshot) -> Option<String> {
         _ => title,
     })
 }
+
+/// `- = volume  m mute`: the paired client's volume and mute keys, under
+/// the bar they move.
+pub(crate) const VOLUME_KEYS: &[(&str, &str)] = &[("- =", "volume"), ("m", "mute")];
 
 fn volume_row_line(paired_client: Option<&ClientAudioState>) -> Line<'static> {
     let mut spans = vec![Span::styled(

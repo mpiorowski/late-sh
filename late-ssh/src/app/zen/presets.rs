@@ -14,10 +14,13 @@ pub const MAX_LAYOUTS: usize = 9;
 /// The longest name a layout takes; the list and the status row read it.
 pub const MAX_LAYOUT_NAME_CHARS: usize = 16;
 /// The two stock layouts every device starts with: Home as it always
-/// drew, and `zen`: the bonsai and the reef over a chat, with the clock,
-/// pet, lobby, live and music, boxed.
+/// drew, and `street`: the tiles Home does not draw, an ascii piece and
+/// the tank over two chats, news and #announcements, with the clock, pulse, friends and activity,
+/// boxed (`RiceLayout::street`). Only `home` resets to its stock;
+/// `street` is seeded once per device (`seed_stock`) and then the
+/// device's own.
 pub const STOCK_HOME_NAME: &str = "home";
-pub const STOCK_ZEN_NAME: &str = "zen";
+pub const STOCK_STREET_NAME: &str = "street";
 
 /// One saved layout: its name, as the list and `/layout <name>` know it,
 /// and the tree with its look.
@@ -34,6 +37,9 @@ pub struct NamedLayout {
 pub struct Layouts {
     current: usize,
     items: Vec<NamedLayout>,
+    /// The stock layouts this device was seeded with, by name, so a seed
+    /// lands once: deleted, it stays deleted (`seed_stock`).
+    stock_seen: Vec<String>,
 }
 
 /// The stored shape, checked into a `Layouts` on read.
@@ -41,6 +47,8 @@ pub struct Layouts {
 struct StoredLayouts {
     current: usize,
     items: Vec<NamedLayout>,
+    #[serde(default)]
+    stock_seen: Vec<String>,
 }
 
 /// Why a list edit was refused; `message` is the banner that says so.
@@ -52,6 +60,8 @@ pub enum LayoutsError {
     NameTaken,
     NoSuchLayout,
     LastOne,
+    /// `R` on a layout other than `home`, which has no stock.
+    NoStock,
 }
 
 impl LayoutsError {
@@ -63,34 +73,51 @@ impl LayoutsError {
             LayoutsError::NameTaken => "A layout already has that name",
             LayoutsError::NoSuchLayout => "No layout by that name or number",
             LayoutsError::LastOne => "The last layout stays",
+            LayoutsError::NoStock => "Only home resets to its stock",
         }
     }
 }
 
 impl Layouts {
-    /// A device's first set: stock `home` current, stock `zen` second.
+    /// A device's first set: stock `home` current, stock `street` second.
     pub fn stock() -> Self {
-        Self::seeded(None, None)
+        Self::seeded(None)
     }
 
-    /// A device with single stored layouts from before layouts had names:
-    /// its Home layout as `home`, its stored `zen_layout` as `zen`, each the
-    /// stock when it has none. A stored layout that no longer parses reads
-    /// as its stock.
-    pub fn seeded(home: Option<&serde_json::Value>, zen: Option<&serde_json::Value>) -> Self {
-        Self {
+    /// A device with a single stored Home layout from before layouts had
+    /// names: it as `home`, the stock when it has none or it no longer
+    /// parses, and the stock `street` seeded after it.
+    pub fn seeded(home: Option<&serde_json::Value>) -> Self {
+        let mut layouts = Self {
             current: 0,
-            items: vec![
-                NamedLayout {
-                    name: STOCK_HOME_NAME.to_string(),
-                    layout: RiceLayout::from_json_or(home, RiceLayout::home()),
-                },
-                NamedLayout {
-                    name: STOCK_ZEN_NAME.to_string(),
-                    layout: RiceLayout::from_json_or(zen, RiceLayout::default()),
-                },
-            ],
+            items: vec![NamedLayout {
+                name: STOCK_HOME_NAME.to_string(),
+                layout: RiceLayout::from_json_or(home, RiceLayout::home()),
+            }],
+            stock_seen: Vec::new(),
+        };
+        layouts.seed_stock();
+        layouts
+    }
+
+    /// Give the device the stock `street` layout if it never had it: a
+    /// device from before `street` existed gets it on its next login,
+    /// after its own layouts; one that deleted it keeps it deleted, and a
+    /// full set only records the seed. `true` when the set changed and
+    /// wants writing.
+    pub fn seed_stock(&mut self) -> bool {
+        let name = STOCK_STREET_NAME;
+        if self.stock_seen.iter().any(|seen| seen == name) {
+            return false;
         }
+        self.stock_seen.push(name.to_string());
+        if self.index_of(name).is_none() && !self.is_full() {
+            self.items.push(NamedLayout {
+                name: name.to_string(),
+                layout: RiceLayout::street(),
+            });
+        }
+        true
     }
 
     /// Parse a stored set; anything unreadable, empty, over the cap or
@@ -111,6 +138,7 @@ impl Layouts {
             true => Self {
                 current: stored.current,
                 items: stored.items,
+                stock_seen: stored.stock_seen,
             },
             false => fallback,
         }
@@ -148,16 +176,17 @@ impl Layouts {
         &self.items[self.current].name
     }
 
-    /// What `R` puts back: the stock `zen` for the layout named `zen`,
-    /// stock Home for every other name.
-    pub fn stock_of(name: &str) -> RiceLayout {
-        match name == STOCK_ZEN_NAME {
-            true => RiceLayout::default(),
-            false => RiceLayout::home(),
+    /// What `R` puts back: stock Home for the layout named `home`, nothing
+    /// for any other (`street` included: seeded once, then the device's
+    /// own to arrange or delete).
+    pub fn stock_of(name: &str) -> Option<RiceLayout> {
+        match name == STOCK_HOME_NAME {
+            true => Some(RiceLayout::home()),
+            false => None,
         }
     }
 
-    pub fn current_stock(&self) -> RiceLayout {
+    pub fn current_stock(&self) -> Option<RiceLayout> {
         Self::stock_of(self.current_name())
     }
 
@@ -200,21 +229,6 @@ impl Layouts {
         Ok(self.current)
     }
 
-    /// Give the layout at `index` a new name, under the same rules as
-    /// `save_new`; its own name is not taken.
-    pub fn rename(&mut self, index: usize, name: &str) -> Result<(), LayoutsError> {
-        if index >= self.items.len() {
-            return Err(LayoutsError::NoSuchLayout);
-        }
-        let cleaned = clean_name(name)?;
-        let taken = self.index_of(&cleaned).is_some_and(|other| other != index);
-        if taken {
-            return Err(LayoutsError::NameTaken);
-        }
-        self.items[index].name = cleaned;
-        Ok(())
-    }
-
     /// Drop the layout at `index`, never the last one. Deleting the current
     /// one makes its neighbor current (the one before it, else the first);
     /// the caller loads it onto the page.
@@ -233,11 +247,14 @@ impl Layouts {
     }
 
     /// Put the layout at `index` back to its stock (`stock_of` its name).
-    /// False past the end.
+    /// False past the end, and on a layout with no stock.
     pub fn reset(&mut self, index: usize) -> bool {
         match self.items.get_mut(index) {
             Some(item) => {
-                item.layout = Self::stock_of(&item.name);
+                let Some(stock) = Self::stock_of(&item.name) else {
+                    return false;
+                };
+                item.layout = stock;
                 true
             }
             None => false,
@@ -298,8 +315,7 @@ impl LayoutCommand {
 }
 
 /// The layouts list `L` opens in arrange mode: the selected row, and the
-/// name being typed when `n` (save the page as new) or `r` (rename the
-/// selected) is under way.
+/// name being typed when `n` (save the page as new) is under way.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LayoutList {
     pub selected: usize,
@@ -325,16 +341,15 @@ impl LayoutList {
     }
 }
 
-/// A name under edit in the list and what it is for.
+/// The name typed for the page saved as a new layout.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NameEdit {
-    pub purpose: NamePurpose,
     pub text: String,
 }
 
 impl NameEdit {
-    pub fn new(purpose: NamePurpose, text: String) -> Self {
-        Self { purpose, text }
+    pub fn new(text: String) -> Self {
+        Self { text }
     }
 
     /// Type one character; a name past the cap takes no more.
@@ -347,14 +362,6 @@ impl NameEdit {
     pub fn pop(&mut self) {
         self.text.pop();
     }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum NamePurpose {
-    /// Save the page as a new layout under the typed name.
-    SaveNew,
-    /// Rename the layout at this index.
-    Rename(usize),
 }
 
 #[cfg(test)]

@@ -631,11 +631,16 @@ impl App {
         let home_active_chat = rice.active_chat_index();
         let home_room_labels: Vec<String> = home_chat_rooms
             .iter()
-            .map(|room_id| {
-                room_id
-                    .and_then(|room_id| self.chat.rooms.iter().find(|(room, _)| room.id == room_id))
+            .map(|source| match source {
+                Some(crate::app::zen::state::ChatTileSource::News) => "news".to_string(),
+                Some(crate::app::zen::state::ChatTileSource::Room(room_id)) => self
+                    .chat
+                    .rooms
+                    .iter()
+                    .find(|(room, _)| room.id == *room_id)
                     .and_then(|(room, _)| room.slug.as_deref())
-                    .map_or_else(|| "chat".to_string(), |slug| format!("#{slug}"))
+                    .map_or_else(|| "chat".to_string(), |slug| format!("#{slug}")),
+                None => "chat".to_string(),
             })
             .collect();
         self.home_chat_rows_caches
@@ -974,7 +979,9 @@ impl App {
             chat_hit_slot: Some(&self.chat.last_chat_hit_layout),
             selection_scroll: Some(&self.chat.selection_scroll),
         };
-        let news_view = chat::news::ui::ArticleListView {
+        // The News list, for the page's chat and for every Home chat tile
+        // holding News: the same list with the same cursor.
+        let news_list_view = || chat::news::ui::ArticleListView {
             articles: self.chat.news.displayed_articles(),
             saved_len: self.chat.news.saved_len(),
             saved_count: self.chat.news.saved_count(),
@@ -983,6 +990,7 @@ impl App {
             watch_positions: self.chat.news.watch_positions(),
             mine_only: self.chat.news.mine_only(),
         };
+        let news_view = news_list_view();
         let feeds_view = chat::feeds::ui::FeedListView {
             entries: self.chat.feeds.all_entries(),
             selected_index: self.chat.feeds.selected_index(),
@@ -1415,102 +1423,114 @@ impl App {
             .zip(home_room_labels.iter())
             .zip(self.home_chat_rows_caches.iter_mut())
             .enumerate()
-            .map(|(index, ((room_id, label), rows_cache))| {
+            .map(|(index, ((source, label), rows_cache))| {
+                use crate::app::zen::{state::ChatTileSource, ui::ChatTileView};
                 let active = Some(index) == home_active_chat;
-                let view = room_id.map(|chat_room_id| chat::ui::EmbeddedRoomChatView {
-                    // The tile's border is already the column of air.
-                    messages_inset: 0,
-                    title: label.as_str(),
-                    messages: self.chat.messages_for_room(chat_room_id),
-                    overlay: if active { self.chat.overlay() } else { None },
-                    image_modal: if active { image_modal } else { None },
-                    rows_cache,
-                    rows_versions: chat::ui::ChatRowsVersions {
-                        room_id: Some(chat_room_id),
-                        room_version: self.chat.room_version(chat_room_id),
-                        chat_ctx_epoch: self.chat.context_epoch(),
-                        app_ctx_epoch: self.chat_ctx_epoch,
-                    },
-                    usernames: chat_usernames,
-                    countries: chat_countries,
-                    friend_user_ids: self.chat.friend_user_ids(),
-                    live_user_ids: &self.chat.live_user_ids,
-                    message_reactions,
-                    message_gilds,
-                    inline_images: &self.chat.inline_image_cache,
-                    news_cards: self.chat.news.lounge_cards(),
-                    dividers: crate::app::chat::ui::ChatDividers {
-                        afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
-                        left_app: self.chat.device_left_at(),
-                    },
-                    current_user_id: self.user_id,
-                    voice_channel_id: self
-                        .chat
-                        .voice_channels_by_room_id
-                        .get(&chat_room_id)
-                        .map(|channel| channel.id),
-                    voice_snapshot,
-                    voice_paired_cli_supports_voice: paired_cli_supports_voice,
-                    show_flag_fallback: self.profile_state.profile().show_flag_fallback,
-                    selected_message_id: if active {
-                        self.chat.selected_message_id
-                    } else {
-                        None
-                    },
-                    selected_image_message: active
-                        && self
-                            .chat
-                            .selected_message_has_inline_image_in_room(chat_room_id),
-                    highlighted_message_id: if active {
-                        self.chat.highlighted_message_id
-                    } else {
-                        None
-                    },
-                    reaction_picker_active: active && self.chat.is_reaction_leader_active(),
-                    composer: if active {
-                        self.chat.composer()
-                    } else {
-                        &idle_composer
-                    },
-                    composer_inert: match active {
-                        true => chat::ui::ComposerInert::No,
-                        false => chat::ui::ComposerInert::ZenTile,
-                    },
-                    composing: active && self.chat.composing,
-                    mention_matches: &self.chat.mention_ac.matches,
-                    mention_selected: self.chat.mention_ac.selected,
-                    mention_active: active && self.chat.mention_ac.active,
-                    reply_author: if active {
-                        self.chat.reply_target().map(|reply| reply.author.as_str())
-                    } else {
-                        None
-                    },
-                    is_editing: active && self.chat.edited_message_id.is_some(),
-                    bonsai_glyphs,
-                    chat_badges,
-                    profile_award_badges,
-                    drunk_levels: &self.drunk_levels,
-                    name_flair: &self.name_flair,
-                    away_user_ids: &self.away_user_ids,
-                    name_flicker,
-                    translations: &self.chat.translations,
-                    translation_hidden: &self.chat.translation_hidden,
-                    keep_composer_focused: self.profile_state.profile().keep_composer_focused,
-                    composer_rect_slot: active.then_some(&self.chat.last_composer_rect),
-                    composer_viewport_top_slot: active
-                        .then_some(&self.chat.last_composer_viewport_top),
-                    chat_hit_slot: active.then_some(&self.chat.last_chat_hit_layout),
-                    selection_scroll: active.then_some(&self.chat.selection_scroll),
-                });
+                let view = match *source {
+                    None => None,
+                    Some(ChatTileSource::News) => Some(ChatTileView::News(news_list_view())),
+                    Some(ChatTileSource::Room(chat_room_id)) => {
+                        Some(ChatTileView::Room(chat::ui::EmbeddedRoomChatView {
+                            // The tile's border is already the column of air.
+                            messages_inset: 0,
+                            title: label.as_str(),
+                            messages: self.chat.messages_for_room(chat_room_id),
+                            overlay: if active { self.chat.overlay() } else { None },
+                            image_modal: if active { image_modal } else { None },
+                            rows_cache,
+                            rows_versions: chat::ui::ChatRowsVersions {
+                                room_id: Some(chat_room_id),
+                                room_version: self.chat.room_version(chat_room_id),
+                                chat_ctx_epoch: self.chat.context_epoch(),
+                                app_ctx_epoch: self.chat_ctx_epoch,
+                            },
+                            usernames: chat_usernames,
+                            countries: chat_countries,
+                            friend_user_ids: self.chat.friend_user_ids(),
+                            live_user_ids: &self.chat.live_user_ids,
+                            message_reactions,
+                            message_gilds,
+                            inline_images: &self.chat.inline_image_cache,
+                            news_cards: self.chat.news.lounge_cards(),
+                            dividers: crate::app::chat::ui::ChatDividers {
+                                afk_line: self.chat.afk_lines.get(&chat_room_id).copied(),
+                                left_app: self.chat.device_left_at(),
+                            },
+                            current_user_id: self.user_id,
+                            voice_channel_id: self
+                                .chat
+                                .voice_channels_by_room_id
+                                .get(&chat_room_id)
+                                .map(|channel| channel.id),
+                            voice_snapshot,
+                            voice_paired_cli_supports_voice: paired_cli_supports_voice,
+                            show_flag_fallback: self.profile_state.profile().show_flag_fallback,
+                            selected_message_id: if active {
+                                self.chat.selected_message_id
+                            } else {
+                                None
+                            },
+                            selected_image_message: active
+                                && self
+                                    .chat
+                                    .selected_message_has_inline_image_in_room(chat_room_id),
+                            highlighted_message_id: if active {
+                                self.chat.highlighted_message_id
+                            } else {
+                                None
+                            },
+                            reaction_picker_active: active && self.chat.is_reaction_leader_active(),
+                            composer: if active {
+                                self.chat.composer()
+                            } else {
+                                &idle_composer
+                            },
+                            composer_inert: match active {
+                                true => chat::ui::ComposerInert::No,
+                                false => chat::ui::ComposerInert::ZenTile,
+                            },
+                            composing: active && self.chat.composing,
+                            mention_matches: &self.chat.mention_ac.matches,
+                            mention_selected: self.chat.mention_ac.selected,
+                            mention_active: active && self.chat.mention_ac.active,
+                            reply_author: if active {
+                                self.chat.reply_target().map(|reply| reply.author.as_str())
+                            } else {
+                                None
+                            },
+                            is_editing: active && self.chat.edited_message_id.is_some(),
+                            bonsai_glyphs,
+                            chat_badges,
+                            profile_award_badges,
+                            drunk_levels: &self.drunk_levels,
+                            name_flair: &self.name_flair,
+                            away_user_ids: &self.away_user_ids,
+                            name_flicker,
+                            translations: &self.chat.translations,
+                            translation_hidden: &self.chat.translation_hidden,
+                            keep_composer_focused: self
+                                .profile_state
+                                .profile()
+                                .keep_composer_focused,
+                            composer_rect_slot: active.then_some(&self.chat.last_composer_rect),
+                            composer_viewport_top_slot: active
+                                .then_some(&self.chat.last_composer_viewport_top),
+                            chat_hit_slot: active.then_some(&self.chat.last_chat_hit_layout),
+                            selection_scroll: active.then_some(&self.chat.selection_scroll),
+                        }))
+                    }
+                };
                 crate::app::zen::ui::ZenChatTile {
                     label: label.clone(),
-                    stream_badge: room_id.and_then(|room_id| {
-                        self.chat
-                            .live_streams
-                            .iter()
-                            .find(|stream| stream.room_id == room_id)
-                            .map(chat::ui::stream_count_badge)
-                    }),
+                    stream_badge: source
+                        .and_then(ChatTileSource::room_id)
+                        .and_then(|room_id| {
+                            self.chat
+                                .live_streams
+                                .iter()
+                                .find(|stream| stream.room_id == room_id)
+                                .map(chat::ui::stream_count_badge)
+                        }),
                     view,
                 }
             })

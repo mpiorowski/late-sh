@@ -71,7 +71,8 @@ pub(crate) fn draw_daily_inline(
 }
 
 /// The Home lobby tile: the latest tables on the board, newest first, over
-/// the `N open · entries/cap` footer. What waits on you is not this tile's
+/// the `N open · entries/cap` row, with the Lobby's two keys on the last row
+/// (`COMPACT_FOOTER_KEYS`). What waits on you is not this tile's
 /// job: the attention guest hosted on it takes the tile over while it has
 /// something (`../../zen/CONTEXT.md`, the attention guest).
 pub(crate) fn draw_daily_compact(
@@ -233,15 +234,15 @@ fn daily_panel_lines(width: u16, props: &DailyPanelProps) -> Vec<Line<'static>> 
 }
 
 /// Feed rows for as many tables as fit above the footer (a quiet board says
-/// so in one faint row), then `1 open · 1/10`; the key is the title's.
+/// so in one faint row), then `1 open · 1/10`, then the keys on the last row.
 fn daily_compact_lines(
     width: u16,
     height: u16,
     feed: &[DailyFeedRow],
     props: &DailyPanelProps,
 ) -> Vec<Line<'static>> {
-    let room = (height as usize).saturating_sub(1);
-    let mut lines = Vec::with_capacity(room + 1);
+    let room = (height as usize).saturating_sub(2);
+    let mut lines = Vec::with_capacity(room + 2);
     if feed.is_empty() {
         if room > 0 {
             lines.push(Line::from(Span::styled(
@@ -254,9 +255,29 @@ fn daily_compact_lines(
             lines.push(feed_line(width, row));
         }
     }
-    // Flush with the rows above it; the keys are on the tile's title.
+    // Flush with the rows above it, the keys under it as the music dock
+    // names its own.
     lines.push(status_line(width, props));
+    lines.push(compact_keys_line(width));
     lines
+}
+
+/// The two keys the Home tile's last row names, as the arrange footer
+/// spells them: `^G` opens the Lobby, the backtick toggles you through the
+/// games waiting on you and back to chat.
+pub(crate) const COMPACT_FOOTER_KEYS: [(&str, &str); 2] = [("^G", "open"), ("`", "toggle")];
+
+/// `^G open  ` toggle`, trimmed from the right a whole key at a time on a
+/// tile too narrow for both.
+fn compact_keys_line(width: u16) -> Line<'static> {
+    let mut keep = COMPACT_FOOTER_KEYS.len();
+    while keep > 0
+        && crate::app::statusline::bar::keys_line(&COMPACT_FOOTER_KEYS[..keep]).width()
+            > width as usize
+    {
+        keep -= 1;
+    }
+    crate::app::statusline::bar::keys_line(&COMPACT_FOOTER_KEYS[..keep])
 }
 
 /// `○ chess srw        2m` / `● pool srw·crk     5m` / `· chess crk·srw    1h`:
@@ -385,7 +406,8 @@ fn status_line(width: u16, props: &DailyPanelProps) -> Line<'static> {
 /// `ctrl+g · \` toggle` — the two keys that front the Lobby: `ctrl+g` opens
 /// the modal, and the backtick toggles you through the games waiting on you
 /// (boards on your move, seated tables, unfinished dailies) and back to chat.
-/// Constant chrome of the sidebar panel; the Home tile names them on its title.
+/// Constant chrome of the sidebar panel; the Home tile puts the same two on
+/// its last row (`COMPACT_FOOTER_KEYS`).
 fn hints_line() -> Line<'static> {
     let key_style = Style::default()
         .fg(theme::AMBER_DIM())

@@ -2932,6 +2932,7 @@ mod inner {
             Tutorial::VisitJobs => "jobs",
             Tutorial::VisitLeaderboard => "leaderboard",
             Tutorial::VisitCalendar => "calendar",
+            Tutorial::VisitLayouts => "layouts",
             Tutorial::Homecoming => "homecoming",
             Tutorial::Done => "done",
         }

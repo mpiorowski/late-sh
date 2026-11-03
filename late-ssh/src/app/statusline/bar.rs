@@ -458,9 +458,9 @@ pub(crate) enum StatusClick {
     Booth,
     Arcade,
     Profiles,
-    /// Home's `zen` layout, where the bonsai, the tank, and the pet all
+    /// Home's `home` layout, where the bonsai, the tank, and the pet all
     /// live.
-    ZenLayout,
+    HomeLayout,
     /// What the live strip shows, as `o` on the #lounge card opens it.
     Live,
 }
@@ -471,7 +471,7 @@ pub(crate) fn click_action(component: StatusComponent) -> Option<StatusClick> {
         StatusComponent::Mentions => Some(StatusClick::Mentions),
         StatusComponent::Chips => Some(StatusClick::Shop),
         StatusComponent::Turns => Some(StatusClick::Lobby),
-        StatusComponent::Care => Some(StatusClick::ZenLayout),
+        StatusComponent::Care => Some(StatusClick::HomeLayout),
         StatusComponent::Station => Some(StatusClick::Booth),
         StatusComponent::Quests => Some(StatusClick::Arcade),
         StatusComponent::Users => Some(StatusClick::Profiles),

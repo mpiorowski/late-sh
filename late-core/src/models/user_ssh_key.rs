@@ -49,7 +49,6 @@ crate::user_scoped_model! {
 }
 
 const RIGHT_SIDEBAR_MODE_KEY: &str = "right_sidebar_mode";
-const ZEN_LAYOUT_KEY: &str = "zen_layout";
 const HOME_LAYOUT_KEY: &str = "home_layout";
 const HOME_LAYOUTS_KEY: &str = "home_layouts";
 const AUDIO_MUTED_KEY: &str = "audio_muted";
@@ -129,14 +128,6 @@ pub fn extract_key_layout(settings: &Value) -> Option<KeyLayout> {
         .and_then(Value::as_str)
         .and_then(RightSidebarMode::from_key)?;
     Some(KeyLayout { right_sidebar_mode })
-}
-
-/// This device's single stored `zen` tile layout (`RiceLayout` JSON,
-/// parsed by `late-ssh`): only the seed for the device's stock `zen` Home
-/// layout; nothing writes it. `None` when the key has none and should
-/// follow the account's `zen_layout` seed.
-pub fn extract_key_zen_layout(settings: &Value) -> Option<Value> {
-    settings.get(ZEN_LAYOUT_KEY).cloned()
 }
 
 /// This device's Home tile layout from before Home had named layouts, or

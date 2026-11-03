@@ -411,16 +411,11 @@ pub struct SessionConfig {
     /// on the Nightcap stools and on the night city street, across every
     /// replica.
     pub presence: crate::app::presence::svc::PresenceService,
-    /// The stored single `zen` layout, `None` when the device never
-    /// arranged it; only the seed for the stock `zen` slot of
-    /// `home_layouts`.
-    pub zen_layout: Option<serde_json::Value>,
     /// The stored Home layout from before Home had named layouts, `None`
     /// when the device never arranged it; the seed for `home_layouts`.
     pub home_layout: Option<serde_json::Value>,
     /// This device's named Home layouts (`app/zen/presets`), `None` until
-    /// one is saved or switched, when `home_layout` and `zen_layout` seed
-    /// the set.
+    /// one is saved or switched, when `home_layout` seeds the set.
     pub home_layouts: Option<serde_json::Value>,
     /// Fingerprint of the SSH key this session authenticated with: the only
     /// device identity late.sh has, and what per-device settings key off.
@@ -1603,7 +1598,7 @@ impl App {
         let aquarium_loss_banner = match config.initial_aquarium_care.lost.as_slice() {
             [] if config.initial_aquarium_care.welcomed => {
                 Some(crate::app::common::primitives::Banner::info(
-                    "You have a tank, a fry and a sprout: /aquarium feed daily, cut the sprout in /shop or let it root",
+                    "You have a tank, a fry and a sprout: click the tank or /aquarium feed daily, cut the sprout in /shop or let it root",
                 ))
             }
             [] => match (
@@ -1669,15 +1664,14 @@ impl App {
             LandingPage::Home => Screen::Dashboard,
         };
         // This device's named Home layouts; a device from before they had
-        // names keeps its arranged `home` and `zen` as the two stock slots,
-        // and its stored `zen` layout is read nowhere else.
-        let home_layouts = crate::app::zen::presets::Layouts::from_json_or(
+        // names keeps its arranged `home` as the stock slot. A device that
+        // never had the stock `street` gets it now, and the set is written
+        // so the seed lands once.
+        let mut home_layouts = crate::app::zen::presets::Layouts::from_json_or(
             config.home_layouts.as_ref(),
-            crate::app::zen::presets::Layouts::seeded(
-                config.home_layout.as_ref(),
-                config.zen_layout.as_ref(),
-            ),
+            crate::app::zen::presets::Layouts::seeded(config.home_layout.as_ref()),
         );
+        let home_layouts_seeded = home_layouts.seed_stock();
         let haunt = crate::app::deadchannel::haunt::svc::arm(
             config.user_id,
             &config.username,
@@ -1746,7 +1740,7 @@ impl App {
             ),
             home_layouts,
             layout_list: None,
-            home_layout_dirty: false,
+            home_layout_dirty: home_layouts_seeded,
             mod_modal_state: mod_modal::state::ModModalState::new(),
             pending_escape: false,
             pending_escape_started_at: None,
@@ -3542,7 +3536,8 @@ impl App {
             return None;
         }
         match self.home.active_chat_room() {
-            Some(bound) => self.home_room_or_current(bound),
+            Some(crate::app::zen::state::ChatRoomBinding::News) => None,
+            Some(bound) => self.home_room_or_current(&bound),
             None => self.chat.selected_room_id,
         }
     }
@@ -3607,22 +3602,35 @@ impl App {
     }
 
     /// The rail follows the active chat tile: the focus landing on a
-    /// chat tile bound to a room makes that room Home's selection. A tile
-    /// bound to no room shows the rail's room and moves nothing.
+    /// chat tile bound to a room makes that room Home's selection, and on
+    /// one holding News, the News row. A tile bound to no room shows the
+    /// rail's room and moves nothing.
     pub(crate) fn sync_rail_to_active_chat(&mut self) {
-        let Some(Some(room_id)) = self.home.active_chat_room() else {
+        use crate::app::chat::state::RoomSlot;
+        use crate::app::zen::state::ChatRoomBinding;
+        let Some(bound) = self.home.active_chat_room() else {
             return;
         };
-        if !self.chat.rooms.iter().any(|(room, _)| room.id == room_id) {
-            return;
-        }
-        if self.chat.selected_room_id == Some(room_id) && !self.chat.synthetic_entry_selected() {
-            return;
-        }
-        if self
-            .chat
-            .select_room_slot(crate::app::chat::state::RoomSlot::Room(room_id))
-        {
+        let slot = match &bound {
+            ChatRoomBinding::News => {
+                if self.chat.news_selected {
+                    return;
+                }
+                RoomSlot::News
+            }
+            ChatRoomBinding::Current | ChatRoomBinding::Room(_) | ChatRoomBinding::Permanent(_) => {
+                let Some(room_id) = self.home_bound_room(&bound) else {
+                    return;
+                };
+                if self.chat.selected_room_id == Some(room_id)
+                    && !self.chat.synthetic_entry_selected()
+                {
+                    return;
+                }
+                RoomSlot::Room(room_id)
+            }
+        };
+        if self.chat.select_room_slot(slot) {
             self.chat.reset_composer();
             self.chat.request_list();
         }
@@ -3640,13 +3648,16 @@ impl App {
         let Some(selected) = self.chat.selected_room_id else {
             return;
         };
-        let Some(Some(bound)) = self.home.active_chat_room() else {
+        let Some(bound) = self.home.active_chat_room() else {
             return;
         };
-        if bound == selected {
+        if bound.is_current() || self.home_bound_room(&bound) == Some(selected) {
             return;
         }
-        if self.home.bind_active_chat_room(Some(selected)) {
+        if self
+            .home
+            .bind_active_chat_room(crate::app::zen::state::ChatRoomBinding::Room(selected))
+        {
             self.mark_home_layout_dirty();
         }
     }
@@ -3665,23 +3676,53 @@ impl App {
         self.home.pin_unbound_chats(room_id);
     }
 
-    /// Every chat tile's room in layout order, resolved: a tile bound to a
-    /// room the account has since left shows the current room instead.
-    pub(crate) fn home_chat_rooms(&self) -> Vec<Option<Uuid>> {
+    /// What every chat tile draws, in layout order, resolved: a tile bound
+    /// to a room the account has since left, or to a permanent room's slug
+    /// the account's rooms do not hold, shows the current room instead;
+    /// one holding News draws the News list. `None` is an account with no
+    /// room at all.
+    pub(crate) fn home_chat_rooms(&self) -> Vec<Option<crate::app::zen::state::ChatTileSource>> {
+        use crate::app::zen::state::{ChatRoomBinding, ChatTileSource};
         self.home
             .chat_tiles()
             .into_iter()
-            .map(|(_, bound)| self.home_room_or_current(bound))
+            .map(|(_, bound)| match bound {
+                ChatRoomBinding::News => Some(ChatTileSource::News),
+                bound => self.home_room_or_current(&bound).map(ChatTileSource::Room),
+            })
             .collect()
     }
 
-    fn home_room_or_current(&self, bound: Option<Uuid>) -> Option<Uuid> {
-        if let Some(room_id) = bound
-            && self.chat.rooms.iter().any(|(room, _)| room.id == room_id)
-        {
-            return Some(room_id);
+    fn home_room_or_current(
+        &self,
+        bound: &crate::app::zen::state::ChatRoomBinding,
+    ) -> Option<Uuid> {
+        match self.home_bound_room(bound) {
+            Some(room_id) => Some(room_id),
+            None => self.home_current_room_id(),
         }
-        self.home_current_room_id()
+    }
+
+    /// The joined room a binding names: a room id the account still holds,
+    /// or the permanent room with that slug. `None` for the current room,
+    /// for News, and for a binding the account's rooms do not hold.
+    fn home_bound_room(&self, bound: &crate::app::zen::state::ChatRoomBinding) -> Option<Uuid> {
+        use crate::app::zen::state::ChatRoomBinding;
+        match bound {
+            ChatRoomBinding::Current | ChatRoomBinding::News => None,
+            ChatRoomBinding::Room(room_id) => self
+                .chat
+                .rooms
+                .iter()
+                .find(|(room, _)| room.id == *room_id)
+                .map(|(room, _)| room.id),
+            ChatRoomBinding::Permanent(slug) => self
+                .chat
+                .rooms
+                .iter()
+                .find(|(room, _)| room.permanent && room.slug.as_deref() == Some(slug.as_str()))
+                .map(|(room, _)| room.id),
+        }
     }
 
     /// The current room: Home's selection when it is a real room, else #lounge.

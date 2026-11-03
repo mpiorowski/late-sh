@@ -1,7 +1,7 @@
 use crate::models::user::RightSidebarMode;
 use crate::models::user_ssh_key::{
     KeyAudio, KeyLayout, UserSshKey, extract_key_artboard_disclaimer, extract_key_audio,
-    extract_key_home_layouts, extract_key_layout, extract_key_zen_layout,
+    extract_key_home_layouts, extract_key_layout,
 };
 use crate::test_utils::{create_test_user, test_db};
 use serde_json::json;
@@ -133,18 +133,6 @@ fn stored_layout_round_trips_and_partial_blobs_inherit() {
         extract_key_layout(&json!({"right_sidebar_mode": "sideways"})),
         None
     );
-}
-
-/// A key's stored `zen_layout` is only read: it seeds the device's stock
-/// `zen` Home layout, and nothing writes it.
-#[test]
-fn a_stored_zen_layout_reads_back_as_the_seed() {
-    let zen = json!({ "root": { "node": "leaf", "kind": "bonsai" } });
-    assert_eq!(
-        extract_key_zen_layout(&json!({ "zen_layout": zen.clone() })),
-        Some(zen)
-    );
-    assert_eq!(extract_key_zen_layout(&json!({})), None);
 }
 
 #[tokio::test]

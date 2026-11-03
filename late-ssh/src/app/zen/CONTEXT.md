@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/zen`
-- Purpose: the tile tree behind Home (`Screen::Dashboard`): its room rail, chats, sidebar panels and the things you keep alive are tiles of one tree, `App::home`, arranged in place and kept as up to nine named layouts per device. One of the two stock layouts is named `zen` (the bonsai and the reef over a chat, boxed): `/zen` and the status line's care click load it. The design and what v1 left out: `devdocs/HOME-LAYOUTS.md`.
+- Purpose: the tile tree behind Home (`Screen::Dashboard`): its room rail, chats, sidebar panels and the things you keep alive are tiles of one tree, `App::home`, arranged in place and kept as up to nine named layouts per device. The second stock layout is `street` (the tiles Home does not draw: an ascii piece and the tank over two chats, with the clock, pulse, friends and activity, boxed), seeded once per device; the status line's care click loads `home`. The design and what v1 left out: `devdocs/HOME-LAYOUTS.md`.
 - Status: Experimental.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -25,8 +25,9 @@ stress live in the `w` care modal), aquarium (the real reef
 simulation, in a tile wider than the rail and
 taller than the small tank (`../hub/aquarium/ui.rs` `reef_form`), else a
 note pointing at the tank tile), tank (the same
-aquarium the sidebar's way: the fish in a six-row band across the tile,
-centered in a taller one, `hub/aquarium/ui::draw_mini_tank`; the two are
+aquarium the sidebar's way, the tile's whole size: the surface on its top
+row, the floor on its bottom one, the fish in four lanes spread over the
+water between, `hub/aquarium/ui::draw_mini_tank`; the two are
 the one tank two ways, and both draw the care bar on the water's surface,
 fourteen dots green for the feeding streak or red for the days unfed,
 see the hub CONTEXT), ascii (an
@@ -45,7 +46,7 @@ or more; a one-row tile shows the time alone), visualizer, lobby (the latest tab
 board, newest change first: open challenges, matches by their last move,
 unseen results, each `○ chess srw 2m` with the state as the marker and the
 age flush right, `panel::daily_feed_rows`, plus the `N open · entries/cap`
-footer; what waits on you is the attention guest's, which the stock lobby
+row and a last row of `^G open` and `` ` toggle``; what waits on you is the attention guest's, which the stock lobby
 hosts), activity
 (the #lounge feed as a list, newest on top, each event's age flush right
 and a friend's line in the friend color: the same
@@ -64,19 +65,35 @@ one per page: below), blank. The look
 (border style, gap, titles) is part of the layout: a layout without a
 border draws Home's rules, one with a border boxes every tile (below).
 
-The stock `zen` layout (`RiceLayout::default`, what `R` resets a layout
-named `zen` to; rounded borders, no gap, titles on): on the left (72%),
-the bonsai beside the reef over the current room's chat; on the right a rail of clock, pet, lobby, live, then music, so the
-pet has the tank against its left edge and watches it (the bonsai is out
-of its reach; pinned by `layout_test.rs`). Without a Pet Companion the
-tile says so and points at `/shop`. Pulse is not in it.
+The stock `street` layout (`RiceLayout::street`; rounded borders, no
+gap, titles on): an ascii piece across the top with the tank beside it
+(`STREET_TANK_COLS`), two chats under them, the News view
+(`Node::chat_news`, `ChatRoomBinding::News`) and `#announcements` bound by
+slug (`Node::chat_in`, `ChatRoomBinding::Permanent`, so the stock tree
+works on any account), and on the right (`STREET_RAIL_COLS`)
+a rail of the clock at its seven rows, the pulse, the friends and the
+activity feed. Every kind the stock Home leaves out, and two chats to
+show a page can hold more than one. The retired `zen` page (the bonsai
+beside the reef over a chat, a rail of clock, pet, lobby, live and
+music) lives on as the tests' fixture, `RiceLayout::default` under
+`cfg(test)`: the pet-watches-the-tank pin in `layout_test.rs` runs on
+it.
 
 The active chat is `App::home_chat_room_id`: the focused chat tile's
 room, else the first chat tile's, else (no chat tile) the current room,
 which is Home's selected room when it is a real room, else #lounge
 (`ZenState::active_chat_index`, `App::home_chat_rooms`; a tile bound to no
 room shows the current room, and so does one bound to a room the account
-has left). The rail and the active tile are one room, kept so from both
+has left or to a permanent room's slug its rooms do not hold). A chat
+tile's binding is `ChatRoomBinding`: the current room, a room by id, a
+permanent room by slug, or News, all on the leaf's one `room` key (a
+uuid reads as an id, `news` as News, any other string as a slug, nothing
+as the current room). News is the one synthetic view a tile can hold
+(`ChatTileSource`, `ui::ChatTileView`): active, the rail follows the tile
+onto its News row and the page's chat draws the room with its keys;
+watching, the tile draws the same list with the same cursor
+(`chat::news::ui::draw_article_list`). `[` `]` stop on News between
+`#lounge` and the other permanent rooms, as the rail orders them. The rail and the active tile are one room, kept so from both
 ends: the focus landing on a chat tile bound to a room selects that room
 on the rail (`App::sync_rail_to_active_chat`, from
 `zen::input::focus_moved` and on arriving at Home), and the rail
@@ -123,8 +140,8 @@ chat (`aquarium`, `HOME_AQUARIUM_ROWS`) hosting the now strip, the chat
 under it (a `chat` bound to no room, so it shows the rail's; a stored
 `center` reads as one), and the sidebar column (`HOME_SIDEBAR_COLS`):
 `presence`, then `visualizer` (the band's three rows), `music` (the dock's
-twelve), `lobby` hosting attention (three rows: two tables over the status
-line), `live` at its panel rows, `pet` (its three-row box, no mood row) and
+thirteen), `lobby` hosting attention (four rows: two tables over the status
+line and the keys), `live` at its panel rows, `pet` (its three-row box, no mood row) and
 `bonsai` taking the rest. The rail, the reef and `presence` take their
 title off outside arrange mode (`Node::untitled`, `Node::title_at`): the
 reef keeps the row for water, so nothing moves when the mode comes up, and
@@ -140,21 +157,25 @@ Layouts (`presets.rs`): a device holds up to nine named layouts
 its slot by `Layouts::store_current` on every flush and before every
 switch, so nothing arranged is lost). Stored whole on the SSH key
 (`user_ssh_keys.settings.home_layouts`); a key with none seeds the set
-from the single layouts it stored before they had names (`home_layout`
-as `home`, `zen_layout` as `zen`, the account's as their seeds), and a
-blob that does not parse, is empty, or points past its items reads as
-that seed. Every device has the two stock layouts to start: `home` (the
-stock Home) and `zen` (`RiceLayout::default`, boxed in its look); `R`
-puts a layout back to the stock its name says (`Layouts::stock_of`:
-`zen` to the stock `zen`, anything else to stock Home). `/zen` and the
-status line's care click load the layout named `zen`
-(`zen::input::load_zen_layout`, `/layout zen` by a shorter name: Home
-first, and the `No layout by that name or number` banner on a device
-that renamed or deleted it). A stored `zen_layout` is only ever a seed.
-Names are trimmed, one to `MAX_LAYOUT_NAME_CHARS` (16) characters,
-unique case aside. Nothing switches a layout but the keys, `/layout`,
-`/zen` and the care click: not `/golive`, not a game waiting, not the
-screensaver, not the landing page.
+from the single layout it stored before they had names (`home_layout`
+as `home`, the account's as its seed), and a blob that does not parse,
+is empty, or points past its items reads as that seed. Every device has
+the two stock layouts to start: `home` (the stock Home) and `street`
+(`RiceLayout::street`, boxed in its look). `street` is a seed, not a
+stock to return to: `Layouts::seed_stock` appends it once to a set that
+never had it (a device from before it existed gets it on its next login,
+after its own layouts, and the set is written at once; `stock_seen`
+records the seed so a deleted `street` stays deleted, and a full set
+only records it). `R` puts `home` back to stock Home and refuses every
+other name with a banner (`Layouts::stock_of` is `None` for them,
+`LayoutsError::NoStock`). The status line's care click loads the layout
+named `home` (`zen::input::load_home_layout`, `/layout home` by another
+route: Home first, and the `No layout by that name or number` banner on
+a device that deleted it). Names are trimmed, one to
+`MAX_LAYOUT_NAME_CHARS` (16) characters, unique case aside. Nothing
+switches a layout but the keys, `/layout` and the care click: not
+`/golive`, not a game waiting, not the screensaver, not the landing
+page.
 
 The look is Home's rules (`layout::Chrome::Rules`) while the layout's
 border is `none`, Home's stock and every layout arranged from it: no
@@ -170,19 +191,19 @@ Outside arrange mode the rule is the tile's name and nothing else. In
 arrange mode its key hint comes up on the right (`TileKind::hints`, one
 table with the handler, `TileHint`): a house key the tile only names
 (`HouseKey`: `w tend`, `m mute`, `ctrl+/ room`, `^G open`, `s1-4 open`,
-`click pet`) on every tile, and a key the tile takes itself (`TileKey`:
+`click pet`, `click feed`) on every tile, and a key the tile takes itself (`TileKey`:
 `[ ] Enter pick` on an ascii tile, `a feed` on the reef or tank, `[ ]
 cycle` on a chat, and `j k Enter act` for the attention guest,
 `Guest::hints`) only on the focused one. The rail names none: it takes
 clicks on its rows. A layout with
-a border (the stock `zen`, or `b` in
+a border (the stock `street`, or `b` in
 arrange mode) is boxed in its look with its gap (`ZenState::chrome`,
 `gaps`).
 
 Furniture and focus: outside arrange mode only chat tiles take the focus
 (`TileKind::takes_focus`), by click or the arrows of arrange mode; a
-click on a panel is its gesture (the pet is petted, a live row opens) and
-the keys stay with the chat (`focus_home_tile_at`). A page opens with
+click on a panel is its gesture (the pet is petted, the tank is fed, a
+live row opens) and the keys stay with the chat (`focus_home_tile_at`). A page opens with
 the focus on its first chat tile (`ZenState::new`, `ZenState::load`). Home's chat is its
 active chat tile (`ZenState::active_chat_ordinal`: the focused chat tile,
 else the first): it draws Home's card (the rail's selection, synthetic
@@ -205,10 +226,14 @@ the stock Home's reef hosts now and its lobby attention), and a guest is the til
 up: its label in the rule (both labels when both are up), its panel in
 place of the host's (`draw_guests`: one guest has the whole tile, the
 strip in its full form where the tile is at least `MIN_FULL_WIDTH` by
-`LIVE_STRIP_HEIGHT`, else its one row, centred down the tile, attention's
-rows from the top; with both up the strip takes its rows at the top and
-attention the rest), nothing of the host underneath, so the host shows
-whole the moment the last guest goes. Arranging, a tile's rule names the
+`PICTURE_ROWS`, else its one row, centred down the tile, attention's
+rows from the top; with both up the strip takes its picture rows at the
+top and attention the rest), nothing
+of the host underneath, so the host shows whole the moment the last
+guest goes. A guest draws no title of its own (the strip's `── now ──`
+rule is the #lounge card's, `live::ui::StripHost`): the tile's chrome
+puts the guests' labels where the host's title was, and a host wearing
+a bare rule or no title keeps that. Arranging, a tile's rule names the
 guests it hosts (`reef +now +attention`), so a quiet guest is never a
 surprise. Attention up on the focused
 tile takes `j` `k` and Enter ahead of the host's keys (`handle_attention`,
@@ -247,7 +272,7 @@ Every row is a fact the session already holds, and every row clears on the act t
 | result in: `game` vs `name` | a finished daily match you have not looked at (`DailyState::my_finished`) | opening the board |
 | `@peer`: n unread | a DM room with unread messages (`attention::unread_rows`) | reading it |
 | `@actor` mentioned you in #room | an unread mention (the same rows, read ones left out) | reading it |
-| the tank is unfed today | `AquariumCare` has no meal today | `/aquarium feed`, `a` on the tank |
+| the tank is unfed today | `AquariumCare` has no meal today | `/aquarium feed`, a click or `a` on the tank |
 | the tree is unwatered today | `last_watered` is not today | watering |
 | the pet is unpetted today | the pet is owned and not petted today | a pat |
 
@@ -262,7 +287,7 @@ late-ssh/src/app/zen/
 |-- layout.rs     # pure rect math: Gaps, Chrome (boxes, Home's rules), rice_fits (the 40x12 floor under which the page is its too-small notice alone), rice_areas (tiles + the arrange footer row while the mode is on), tile_rects, row_gutters, tile_inner, neighbour_side, pet_neighbours
 |-- presets.rs    # Home's named layouts: Layouts (serde, the nine slots and the current), LayoutList (the L list and its typed name), LayoutCommand (/layout)
 |-- attention.rs  # the attention guest's facts: unread_rows (the DMs and mentions, from the chat state), Item and items (the ordered list), Care / Chore (today's three chores, App::care_today)
-|-- ui.rs         # ZenView (one view per domain), draw_rice (the chrome, and the one match from a kind to its domain's drawer), the guests (draw_attention_tile: the rows, the selected one marked, the act word at the row's end), the pickers, the layouts list, the clock and blank tiles
+|-- ui.rs         # ZenView (one view per domain), draw_rice (the chrome, and the one match from a kind to its domain's drawer), the guests (draw_attention_tile: the rows flush with the tile's edge, the selected one lit, the act word at the row's end), the pickers, the layouts list, the clock and blank tiles
 |-- input.rs      # handle_home_event (arrange mode's layout keys, the tiles' keys: act, one arm per TileKey), handle_home_key / handle_home_arrow (Home's keys outside arrange mode: the music prefix, backtick, the chat's), room walk, focus, the layouts (load, save, the list, /layout, /zen)
 `-- bigclock.rs   # block digit font for the clock tile
 ```
@@ -287,17 +312,16 @@ the arms the build then asks for (`label`, `one_per_page`, `takes_focus`,
 the domain's surface, and the kind table in `devdocs/HOME-LAYOUTS.md`. `input.rs`: `handle_home_event` ahead of Home's own keys,
 `Ctrl+E` (`layout_chord_globally`, `go_home_for_layouts`) among the
 reserved chords, the Esc arm, `focus_home_tile_at`, the
-`StatusClick::ZenLayout` click and the guide's `HelpTopic::Layouts`.
-`/layout` and `/zen` are parsed in `chat/state.rs` and handed over in
+`StatusClick::HomeLayout` click and the guide's `HelpTopic::Layouts`.
+`/layout` is parsed in `chat/state.rs` and handed over in
 `chat/input.rs`. `state.rs`: `App::home`, `App::home_layouts`,
 `App::layout_list`, `on_home`, `home_tiles_area` / `home_tile_rects`,
 `home_chat_room_id` / `home_chat_rooms`, `sync_aquarium_bounds`, and
 `mark_home_layout_dirty` / `flush_home_layout`. `tick.rs`: the aquarium
 stepping, the ascii tile's cadence edge (`ascii_edge`), the anim edge
 and the debounced flush. `late-core`: `extract_key_home_layouts` /
-`UserSshKey::set_home_layouts` and the seeds `extract_key_home_layout` /
-`extract_key_zen_layout` in `user_ssh_key.rs`, the account seeds
-`extract_home_layout` / `extract_zen_layout` in `user.rs`.
+`UserSshKey::set_home_layouts` and the seed `extract_key_home_layout` in
+`user_ssh_key.rs`, the account seed `extract_home_layout` in `user.rs`.
 
 ## 3. Keys
 
@@ -313,8 +337,10 @@ where it swallows every other stray letter (`house_letter`,
 ahead of every page. In arrange mode `?` opens `HelpTopic::Layouts`,
 which lists every key, and the bottom row is a footer naming the mode's keys
 (`HOME_ARRANGE_KEYS`, trimmed from the right on a narrow page). A few panels
-still name keys inside the tile in normal mode: the music dock's `v+r tune`
-and the sidebar bonsai's `w care`. The lobby's compact footer has none.
+still name keys inside the tile in normal mode: the music dock's `- = volume  m mute` under its bar and `v+r tune`
+and the sidebar bonsai's `w care`. The lobby tile's last row names
+`^G open` and `` ` toggle`` (`lobby/daily/panel::COMPACT_FOOTER_KEYS`),
+trimmed a key at a time on a narrow tile.
 
 Outside arrange mode Home's keys are Home's (`input::handle_home_key`): the
 active chat tile is Home's chat, the rail its room, `i` / Enter compose
@@ -334,7 +360,8 @@ included. In it:
 - Focus: Tab / Shift+Tab and the arrows walk every tile (the page owns
   Tab; it is not the page switch here); a left click focuses the tile
   under it (not through a modal, the same guard as the pet click). A
-  click on the pet pets it and leaves the focus where it was.
+  click on the pet pets it, a click on the reef or the tank feeds it, and
+  both leave the focus where it was.
 - `space` opens the tile picker over the focused tile
   (`ZenState::kind_picker`: one row per `TileKind`, alphabetical
   (`TileKind::ALL`), scrolled with the selection on a short page, `j` `k`
@@ -365,15 +392,16 @@ included. In it:
   a border only the name draws: the border is already a rule.
 - A digit `1`..`9` loads that layout and leaves the mode
   (`zen::input::load_layout`: the page goes into its own slot first; so
-  `Ctrl+E 2` is the stock `zen` in two keystrokes, like a tmux prefix),
+  `Ctrl+E 2` is the stock `street` in two keystrokes, like a tmux prefix),
   and `L` opens the layouts list (`App::layout_list`,
   `presets::LayoutList`, drawn over the page: one row per layout with its
   digit and name, the current marked; `j` `k` and the arrows move, Enter
   loads the row and leaves the mode, `n` types a name and saves the page
-  as a new layout, current from then on, `r` retypes the row's name, `d`
+  as a new layout, current from then on, `d`
   deletes the row, never the last, the page showing its neighbor when it
-  was the current one, `R` puts the row back to its stock; a refused name
-  says why in a banner and keeps the field up).
+  was the current one, `R` puts `home` back to its stock and says in a
+  banner that no other row has one; a refused name says why in a banner
+  and keeps the field up).
 - The focused tile's own keys (`handle_tile_keys`: the keys of the
   guests it hosts, then its own, from the same table as the title's
   hints, each a `TileKey` and an arm of `act`): `[` `]` on a chat
@@ -390,7 +418,8 @@ included. In it:
   the message the way a `Ctrl+/` message jump does. A mention in a room
   the account never joined opens the history modal instead, and a page
   with no chat tile says so in a banner. `a` on the reef or the tank feeds
-  it (free, once a day, +100 chips on the first feed).
+  it (free, once a day, +100 chips on the first feed), as a click on
+  either does in any mode.
 - Every other key is swallowed so a stray letter never reaches the chat;
   the `v` music chords still pass (§4). Esc peels a typed name, the list,
   a picker, then leaves the mode, puts the focus back on a chat and
@@ -399,12 +428,12 @@ included. In it:
 From any composer, `/layout` opens the list (walking Home into arrange
 mode), `/layout <name or digit>` loads that layout, `/layout save <name>`
 saves the page as a new one (`presets::LayoutCommand`,
-`zen::input::run_layout_command`; a banner names the digit it got), and
-`/zen` loads the layout named `zen`. Every form walks Home first
-(`go_home_for_layouts`).
+`zen::input::run_layout_command`; a banner names the digit it got).
+Every form walks Home first (`go_home_for_layouts`).
 
 The pet has no key: it is petted with a left click and reads the rest of
-the session itself. The sprout on the tank floor (the fortnightly bud;
+the session itself. The tank takes the same click as its meal
+(`handle_tank_click`, before the tile focus like the pet's). The sprout on the tank floor (the fortnightly bud;
 leave it a week and it roots as a plant) is cut on its Shop row (`-`,
 Companions), never a page key: dedicated keys accumulate and collide, and
 the tile draws no caption for it either. The bonsai has no keys of its
@@ -497,7 +526,7 @@ update.
   (`ui_test.rs`), the resize floor (`state_test.rs`),
   the unread rows (`rows_test.rs`), and the drawn-kinds gate
   (`state_test.rs`). `input_flow_test.rs` drives `Ctrl+E` and the keys it
-  owns, `Ctrl+E` and a digit, `/zen`, Tab walking the tiles, the tile
+  owns, `Ctrl+E` and a digit, `/layout 2`, Tab walking the tiles, the tile
   picker owning the keys and the clicks under it, the chat keys staying
   off a tile that is not a chat, the Live tile's `s` prefix,
   `[` `]` in rail order, a second chat tile keeping its room with the

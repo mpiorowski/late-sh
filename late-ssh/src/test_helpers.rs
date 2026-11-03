@@ -774,7 +774,6 @@ fn make_app_with_chat_service_and_permissions(
             std::collections::HashMap::new(),
         ),
         presence: crate::app::presence::svc::PresenceService::detached(Vec::new()),
-        zen_layout: None,
         home_layout: None,
         home_layouts: None,
         // No SSH key: test apps follow the account default and persist no
@@ -1081,7 +1080,6 @@ pub fn make_app_with_paired_client(
             std::collections::HashMap::new(),
         ),
         presence: crate::app::presence::svc::PresenceService::detached(Vec::new()),
-        zen_layout: None,
         home_layout: None,
         home_layouts: None,
         // No SSH key: test apps follow the account default and persist no

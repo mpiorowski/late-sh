@@ -157,7 +157,6 @@ const COMMANDS: &[Command] = &[
     global("unignore", "unmute a user (/unignore @user)"),
     global("upload", "upload an image by url (/upload <url>)"),
     global("watch", "open someone's live stream (/watch @user)"),
-    global("zen", "load Home's zen layout (same as /layout zen)"),
     room(RoomScopedCommand::Sheet),
 ];
 

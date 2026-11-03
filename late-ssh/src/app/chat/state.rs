@@ -3823,15 +3823,6 @@ impl ChatState {
             return None;
         }
 
-        // Home's layout named `zen`: `/layout zen` by a shorter name.
-        if body.trim() == "/zen" {
-            self.clear_composer_after_submit();
-            self.requested_layout_command = Some(crate::app::zen::presets::LayoutCommand::Load(
-                crate::app::zen::presets::STOCK_ZEN_NAME.to_string(),
-            ));
-            return None;
-        }
-
         // Home's layouts: the list, one by name or digit, or the page
         // saved under a name (`Ctrl+E` has the same three).
         if let Some(command) = crate::app::zen::presets::LayoutCommand::parse(&body) {

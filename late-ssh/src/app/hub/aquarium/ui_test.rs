@@ -12,7 +12,11 @@ fn tank_with(creatures: &[(&str, usize)]) -> AquariumState {
 }
 
 fn mini_rows(app: &AquariumState, hungry: bool, tick: usize) -> Vec<String> {
-    let area = Rect::new(0, 0, 21, MINI_TANK_HEIGHT);
+    mini_rows_tall(app, hungry, tick, MINI_TANK_HEIGHT)
+}
+
+fn mini_rows_tall(app: &AquariumState, hungry: bool, tick: usize, height: u16) -> Vec<String> {
+    let area = Rect::new(0, 0, 21, height);
     let mut buf = Buffer::empty(area);
     draw_mini_tank(&mut buf, area, app, hungry, tick);
     (0..area.height)
@@ -37,6 +41,34 @@ fn mini_tank_lays_swimmers_on_their_rows_and_plants_on_the_floor() {
             r"   \|/               ",
             "._.-^-.__-._._.-^-.__",
         ]
+    );
+}
+
+/// A tank tile taller than the sidebar's band fills its height: the
+/// surface on the top row, the floor on the bottom one, and the four
+/// lanes spread over the water between, so a ten-row tank swims on rows
+/// one, three, five and seven.
+#[test]
+fn a_taller_tank_spreads_the_lanes_over_its_water() {
+    let app = tank_with(&[("anchovy", 2), ("boxfish", 2)]);
+    let rows = mini_rows_tall(&app, false, 0, 10);
+    assert_eq!(rows[0], "~~~^--^^~~~^--^^~~~^-");
+    assert_eq!(rows[9], "._.-^-.__-._._.-^-.__");
+    for row in [1, 3, 5, 7] {
+        assert!(!rows[row].trim().is_empty(), "lane on row {row}: {rows:?}");
+    }
+    for row in [2, 4, 6, 8] {
+        assert!(
+            rows[row].trim().is_empty(),
+            "no lane on row {row}: {rows:?}"
+        );
+    }
+    // Hungry, every fish rests on the last water row.
+    let rows = mini_rows_tall(&app, true, 0, 10);
+    assert!(!rows[8].trim().is_empty(), "{rows:?}");
+    assert!(
+        rows[1..8].iter().all(|row| row.trim().is_empty()),
+        "{rows:?}"
     );
 }
 

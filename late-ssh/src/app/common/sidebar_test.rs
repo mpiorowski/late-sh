@@ -67,8 +67,9 @@ fn music_stage_height_is_constant() {
         let texts = stage_texts(source);
         assert_eq!(texts.len(), MUSIC_DOCK_HEIGHT as usize, "{source:?}");
         assert!(texts[0].starts_with("vol"), "{source:?}");
-        assert!(texts[1].starts_with("▌ radio"), "{source:?}");
-        assert!(texts[11].contains("v+x source"), "{source:?}");
+        assert_eq!(texts[1], "- = volume  m mute", "{source:?}");
+        assert!(texts[2].starts_with("▌ radio"), "{source:?}");
+        assert!(texts[12].contains("v+x source"), "{source:?}");
     }
 }
 
@@ -83,22 +84,22 @@ fn on_radio_the_stage_reads_radio_then_its_stations_then_the_youtube_peek() {
     .iter()
     .map(line_text)
     .collect();
-    assert!(texts[1].starts_with("▌ radio"));
+    assert!(texts[2].starts_with("▌ radio"));
     // The track row falls back to the station label without live metadata.
-    assert_eq!(texts[2], "datawave");
+    assert_eq!(texts[3], "datawave");
     // The heading names the station and credits its provider.
-    assert_eq!(texts[3], "datawave · nightride");
-    assert!(texts[4].starts_with("○ chillsynth"));
-    assert!(texts[4].trim_end().ends_with("v1"));
-    assert!(texts[5].starts_with("○ nightride"));
-    assert!(texts[6].starts_with("● datawave"));
-    assert!(texts[6].trim_end().ends_with("v3"));
-    assert!(texts[7].starts_with("○ mellow"));
-    assert!(texts[8].starts_with("○ plaza"));
-    assert!(texts[8].trim_end().ends_with("v5"));
-    assert!(texts[9].starts_with("▌ youtube"));
-    assert_eq!(texts[10], "fallback stream");
-    assert!(texts[11].contains("v+r tune"));
+    assert_eq!(texts[4], "datawave · nightride");
+    assert!(texts[5].starts_with("○ chillsynth"));
+    assert!(texts[5].trim_end().ends_with("v1"));
+    assert!(texts[6].starts_with("○ nightride"));
+    assert!(texts[7].starts_with("● datawave"));
+    assert!(texts[7].trim_end().ends_with("v3"));
+    assert!(texts[8].starts_with("○ mellow"));
+    assert!(texts[9].starts_with("○ plaza"));
+    assert!(texts[9].trim_end().ends_with("v5"));
+    assert!(texts[10].starts_with("▌ youtube"));
+    assert_eq!(texts[11], "fallback stream");
+    assert!(texts[12].contains("v+r tune"));
 }
 
 #[test]
@@ -112,10 +113,10 @@ fn on_youtube_radio_collapses_to_its_title_bar() {
     .iter()
     .map(line_text)
     .collect();
-    assert!(texts[1].starts_with("▌ radio"));
-    assert!(texts[2].starts_with("▌ youtube"));
-    assert_eq!(texts[3], "fallback stream");
-    assert!(texts[11].contains("v+v queue"), "{}", texts[11]);
+    assert!(texts[2].starts_with("▌ radio"));
+    assert!(texts[3].starts_with("▌ youtube"));
+    assert_eq!(texts[4], "fallback stream");
+    assert!(texts[12].contains("v+v queue"), "{}", texts[12]);
     assert!(
         texts.iter().all(|row| !row.contains("An Artist")),
         "the radio track is hidden on youtube: {texts:?}"
@@ -125,11 +126,11 @@ fn on_youtube_radio_collapses_to_its_title_bar() {
 #[test]
 fn both_title_bars_keep_their_listener_counts() {
     let texts = stage_texts(AudioSource::Radio);
-    assert!(texts[1].trim_end().ends_with('1'));
-    assert!(texts[9].trim_end().ends_with('3'));
+    assert!(texts[2].trim_end().ends_with('1'));
+    assert!(texts[10].trim_end().ends_with('3'));
     let texts = stage_texts(AudioSource::Youtube);
-    assert!(texts[1].trim_end().ends_with('1'));
-    assert!(texts[2].trim_end().ends_with('3'));
+    assert!(texts[2].trim_end().ends_with('1'));
+    assert!(texts[3].trim_end().ends_with('3'));
 }
 
 #[test]
@@ -141,12 +142,12 @@ fn an_off_slot_station_lights_no_slot_row_and_credits_its_own_provider() {
         .map(line_text)
         .collect();
     assert!(
-        texts[4..9].iter().all(|row| row.starts_with("○ ")),
+        texts[5..10].iter().all(|row| row.starts_with("○ ")),
         "{texts:?}"
     );
-    assert!(texts[6].starts_with("○ pin via v+r"), "{}", texts[6]);
-    assert!(texts[6].trim_end().ends_with("v3"));
-    assert_eq!(texts[3], "lofi · late.sh", "the heading still names it");
+    assert!(texts[7].starts_with("○ pin via v+r"), "{}", texts[7]);
+    assert!(texts[7].trim_end().ends_with("v3"));
+    assert_eq!(texts[4], "lofi · late.sh", "the heading still names it");
 }
 
 /// The rail is 21 columns: a long station keeps its whole label and the
@@ -170,7 +171,7 @@ fn the_radio_track_row_prefers_live_metadata() {
     .iter()
     .map(line_text)
     .collect();
-    assert_eq!(texts[2], "An Artist - A Track");
+    assert_eq!(texts[3], "An Artist - A Track");
 }
 
 fn on(component: RightSidebarComponent) -> RightSidebarComponentSetting {

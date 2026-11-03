@@ -8,7 +8,7 @@
 
 ## Scope
 
-`late-ssh/src/app/hub` owns the Shop modal (opened with Ctrl+S, the `/shop` composer command, or a locked-feature nudge; active games, profile/job editors, and Artboard input retain their local Ctrl+S bindings) and `QuestService` feeding the quest strip at the top of The Arcade lobby. The player-facing economy explanation lives in the global `?` guide's Economy topic (`late-ssh/src/app/help_modal/hub_guide.rs`). Hub also owns the Aquarium simulation and its care; the reef is a tile of Home's stock `home` and `zen` layouts, with a small stand-in of its population in the tank tile, and fed with the `/aquarium feed` composer command (alias `/aq feed`). The Leaderboards page, its `LeaderboardService`, the board rosters, and monthly profile awards live in their own slice: `late-ssh/src/app/leaderboard/` with `app/leaderboard/CONTEXT.md`.
+`late-ssh/src/app/hub` owns the Shop modal (opened with Ctrl+S, the `/shop` composer command, or a locked-feature nudge; active games, profile/job editors, and Artboard input retain their local Ctrl+S bindings) and `QuestService` feeding the quest strip at the top of The Arcade lobby. The player-facing economy explanation lives in the global `?` guide's Economy topic (`late-ssh/src/app/help_modal/hub_guide.rs`). Hub also owns the Aquarium simulation and its care; the reef is a tile of Home's stock `home` layout (the stock `street` holds its small tank), with a small stand-in of its population in the tank tile, and fed with the `/aquarium feed` composer command (alias `/aq feed`). The Leaderboards page, its `LeaderboardService`, the board rosters, and monthly profile awards live in their own slice: `late-ssh/src/app/leaderboard/` with `app/leaderboard/CONTEXT.md`.
 
 Hub is a cross-product domain surface. Its services may summarize Arcade, Lobby, economy, and marketplace information, but it must not own those runtimes. Arcade game state stays under `late-ssh/src/app/arcade`; the Lobby's game runtimes stay under `late-ssh/src/app/lobby`; generic chip earn/spend primitives stay in `late-core/src/models/chips.rs`. Hub-owned marketplace state and entitlement projections live under `hub/shop`.
 
@@ -34,7 +34,7 @@ Leaderboards live on page `6` (`app/leaderboard`), quests on the strip at the to
 
 ## Aquarium
 
-Aquarium is everyone's from their first connect, nothing to buy (the Shop's Companions tab sells its fish, plants and shield): an ambient reef drawn as a tile of Home, on the profile and in the opt-in sidebar Tank panel, fed for free once a UTC day with `/aquarium feed` (`/aq feed`, or `a` on its tile while arranging Home), with fish that breed and starve and plants that sprout and root. The tank, its stock caps, its care clocks and their gotchas are in `aquarium/CONTEXT.md`.
+Aquarium is everyone's from their first connect, nothing to buy (the Shop's Companions tab sells its fish, plants and shield): an ambient reef drawn as a tile of Home, on the profile and in the opt-in sidebar Tank panel, fed for free once a UTC day with `/aquarium feed` (`/aq feed`, a click on its tile, or `a` on it while arranging Home), with fish that breed and starve and plants that sprout and root. The tank, its stock caps, its care clocks and their gotchas are in `aquarium/CONTEXT.md`.
 
 ## Leaderboard Data
 

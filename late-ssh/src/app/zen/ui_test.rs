@@ -34,6 +34,13 @@ fn a_key_that_works_only_on_the_focused_tile_shows_only_there() {
         hints_shown(chat, true, true),
         vec![("[ ]", "cycle"), ("ctrl+/", "room")]
     );
+    // The tank names its click on every tile and takes `a` only focused.
+    let tank = TileKind::Tank.hints();
+    assert_eq!(hints_shown(tank, true, false), vec![("click", "feed")]);
+    assert_eq!(
+        hints_shown(tank, true, true),
+        vec![("a", "feed"), ("click", "feed")]
+    );
     // The rail takes clicks on its rows and no key, so it names none.
     assert_eq!(hints_shown(TileKind::Rooms.hints(), true, true), vec![]);
 }

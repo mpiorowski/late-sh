@@ -40,7 +40,8 @@ pub(crate) const PICTURE_ROWS: u16 = 8;
 /// The picture's column: wide enough for an eight-cell grid board at two
 /// columns a cell.
 pub(crate) const PICTURE_COLS: u16 = 21;
-/// The picture rows plus the rule under them.
+/// The card's full form: the picture rows plus the rule under them. In a
+/// Home tile the full form is the `PICTURE_ROWS` alone (`StripHost::Tile`).
 pub(crate) const LIVE_STRIP_HEIGHT: u16 = 1 + PICTURE_ROWS;
 /// The one-row form: the rule label, then what is on.
 pub(crate) const LIVE_STRIP_COMPACT_HEIGHT: u16 = 1;
@@ -63,6 +64,17 @@ pub(crate) enum StripSize {
     Compact,
 }
 
+/// Where the strip is drawn, which decides its chrome. The #lounge card
+/// draws the `── now ──` rule under the strip (and ahead of the one-row
+/// form), parting it from the chat below. A Home tile draws none: the
+/// tile's own title names the guest while it is up, so the strip is its
+/// picture and words alone, from the top of the tile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum StripHost {
+    Card,
+    Tile,
+}
+
 /// What a source paints in the full form.
 pub(crate) struct StripBody {
     /// Up to `PICTURE_ROWS` lines, each `PICTURE_COLS` wide at most.
@@ -71,7 +83,7 @@ pub(crate) struct StripBody {
     /// The hint row (`HINT_ROW`) is left empty for `hint`.
     pub words: Vec<Vec<Span<'static>>>,
     /// The keys that act on the source (`key_hint_spans`), inside the same
-    /// budget. Drawn on the #lounge card only (`StripHost`).
+    /// budget. Drawn on both hosts: `o` and the click work on a tile too.
     pub hint: Vec<Span<'static>>,
     /// Whether the rule's label is lit.
     pub glow: bool,
@@ -101,6 +113,7 @@ pub(crate) fn draw_live_strip(
     frame: &mut Frame,
     area: Rect,
     size: StripSize,
+    host: StripHost,
     strip: &LiveStripView<'_>,
     hit: &Cell<Option<(Rect, LiveSource)>>,
 ) {
@@ -111,19 +124,20 @@ pub(crate) fn draw_live_strip(
         hit.set(Some((area, source)));
     }
     let lines = match size {
-        StripSize::Full => live_strip_lines(area.width, strip, canvas_background()),
-        StripSize::Compact => vec![live_strip_compact_line(area.width, strip)],
+        StripSize::Full => live_strip_lines(area.width, host, strip, canvas_background()),
+        StripSize::Compact => vec![live_strip_compact_line(area.width, host, strip)],
     };
     frame.render_widget(Paragraph::new(lines), area);
 }
 
-/// The picture in its column with the words beside it. On the #lounge card
-/// the hint row and the rule, which parts the strip from the chat below,
-/// make it `LIVE_STRIP_HEIGHT` lines; in a Home tile it is the
-/// `PICTURE_ROWS` alone (`StripHost`). `background` is what a painted
-/// picture blends into.
+/// The picture in its column with the words beside it, the hint among
+/// them. On the #lounge card the rule under them, which parts the strip
+/// from the chat below, makes it `LIVE_STRIP_HEIGHT` lines; in a Home tile
+/// it is the `PICTURE_ROWS` alone (`StripHost`). `background` is what a
+/// painted picture blends into.
 pub(crate) fn live_strip_lines(
     width: u16,
+    host: StripHost,
     strip: &LiveStripView<'_>,
     background: Rgb,
 ) -> Vec<Line<'static>> {
@@ -136,12 +150,13 @@ pub(crate) fn live_strip_lines(
         LiveStripView::Event(event) => event_live::body(budget, event),
         LiveStripView::Realm(realm) => realm_live::body(budget, realm),
     };
-    frame_lines(width, body)
+    frame_lines(width, host, body)
 }
 
 /// A source's body in the frame: the picture centred in its column, the
-/// words beside it, the hint among them and the rule under both.
-fn frame_lines(width: u16, body: StripBody) -> Vec<Line<'static>> {
+/// words beside it, the hint among them, and on the card the rule under
+/// both.
+fn frame_lines(width: u16, host: StripHost, body: StripBody) -> Vec<Line<'static>> {
     let StripBody {
         mut picture,
         mut words,
@@ -168,7 +183,10 @@ fn frame_lines(width: u16, body: StripBody) -> Vec<Line<'static>> {
         spans.extend(words);
         lines.push(Line::from(spans));
     }
-    lines.push(rule_line(width, glow));
+    match host {
+        StripHost::Card => lines.push(rule_line(width, glow)),
+        StripHost::Tile => {}
+    }
     lines
 }
 
@@ -222,8 +240,13 @@ fn rule_line(width: u16, glow: bool) -> Line<'static> {
     ])
 }
 
-/// One row: the rule label, then what the source says in a line.
-pub(crate) fn live_strip_compact_line(width: u16, strip: &LiveStripView<'_>) -> Line<'static> {
+/// One row: on the card the rule label, then what the source says in a
+/// line; in a tile the words alone, the title naming the guest.
+pub(crate) fn live_strip_compact_line(
+    width: u16,
+    host: StripHost,
+    strip: &LiveStripView<'_>,
+) -> Line<'static> {
     let glow = match strip {
         LiveStripView::Match(strip) => match_strip::glow(strip),
         LiveStripView::Track(track) => booth_live::glow(track),
@@ -232,11 +255,16 @@ pub(crate) fn live_strip_compact_line(width: u16, strip: &LiveStripView<'_>) -> 
         LiveStripView::Event(event) => event_live::glow(event),
         LiveStripView::Realm(realm) => realm_live::glow(realm),
     };
-    let mut rule = rule_line(width, glow);
-    rule.spans.truncate(3);
-    let used: usize = rule.spans.iter().map(|span| span.width()).sum();
+    let mut spans = match host {
+        StripHost::Card => {
+            let mut rule = rule_line(width, glow);
+            rule.spans.truncate(3);
+            rule.spans
+        }
+        StripHost::Tile => Vec::new(),
+    };
+    let used: usize = spans.iter().map(|span| span.width()).sum();
     let rest = width.saturating_sub(used as u16);
-    let mut spans = rule.spans;
     spans.extend(compact_body_spans(rest, strip));
     Line::from(spans)
 }

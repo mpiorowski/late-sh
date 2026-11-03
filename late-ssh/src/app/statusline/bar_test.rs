@@ -788,7 +788,7 @@ fn click_actions_cover_exactly_the_actionable_components() {
     );
     assert_eq!(
         click_action(StatusComponent::Care),
-        Some(StatusClick::ZenLayout)
+        Some(StatusClick::HomeLayout)
     );
     assert_eq!(click_action(StatusComponent::Time), None);
     assert_eq!(click_action(StatusComponent::Shortcuts), None);

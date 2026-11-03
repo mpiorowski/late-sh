@@ -464,9 +464,12 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
     )
 }
 
-/// Rows of the sidebar tank: the surface, four rows of water, the floor.
+/// Rows of the sidebar tank, and the least a tank tile draws: the
+/// surface, four rows of water, the floor.
 pub(crate) const MINI_TANK_HEIGHT: u16 = 6;
-const MINI_WATER_ROWS: usize = MINI_TANK_HEIGHT as usize - 2;
+/// The swimmers' lanes: the sidebar's four water rows, spread over the
+/// water of a taller tank.
+const MINI_LANES: usize = MINI_TANK_HEIGHT as usize - 2;
 /// A 21-cell band holds this many glyphs before it reads as noise.
 const MINI_MAX_CREATURES: usize = 10;
 /// Copies of one kind drawn at most, so a school of ten does not crowd out
@@ -480,14 +483,17 @@ const MINI_HUNGRY_SLOWDOWN: usize = 4;
 const MINI_FLOOR: &str = "._.-^-.__-._";
 
 /// The sidebar tank: the owned population as one-to-three-cell glyphs
-/// (`CreatureDef::mini`) in a fixed band, `MINI_TANK_HEIGHT` rows tall.
+/// (`CreatureDef::mini`) filling `area`, the surface on its top row and
+/// the floor on its bottom one, at least `MINI_TANK_HEIGHT` rows tall.
 /// Stateless like the bonsai sway: where each creature is comes from the
 /// wall tick alone, so there is no simulation to step and the panel rides
 /// the sidebar's anim_half frames. It reads the reef's population and
 /// colours (the fry in its parent's, the sprout on the floor) and nothing
-/// else of the simulation. Swimmers take the water rows in turn and swim
-/// wall to wall, each at its own pace; floor-bound creatures stand still
-/// on the bottom row; hungry fish sink to that row and slow down.
+/// else of the simulation. Swimmers take the four lanes in turn, spread
+/// over the water (a taller tank has the same lanes, further apart) and
+/// swim wall to wall, each at its own pace; floor-bound creatures stand
+/// still on the bottom water row; hungry fish sink to that row and slow
+/// down.
 pub(crate) fn draw_mini_tank(
     buf: &mut Buffer,
     area: Rect,
@@ -498,7 +504,8 @@ pub(crate) fn draw_mini_tank(
     if area.width == 0 || area.height < MINI_TANK_HEIGHT {
         return;
     }
-    let band = Rect::new(area.x, area.y, area.width, MINI_TANK_HEIGHT);
+    let band = area;
+    let water_rows = band.height as usize - 2;
     render_surface_wave(buf, band, tick as u64);
     let floor_style = Style::new().fg(theme::BORDER_DIM());
     let floor: String = MINI_FLOOR
@@ -509,7 +516,7 @@ pub(crate) fn draw_mini_tank(
     buf.set_string(band.x, band.bottom() - 1, floor, floor_style);
 
     let width = band.width as usize;
-    let bottom_row = band.y + MINI_WATER_ROWS as u16;
+    let bottom_row = band.y + water_rows as u16;
     let mut drawn_per_kind: HashMap<usize, usize> = HashMap::new();
     let mut plants = 0usize;
     let mut swimmers = 0usize;
@@ -538,7 +545,7 @@ pub(crate) fn draw_mini_tank(
             (bottom_row, MINI_STEP_TICKS * MINI_HUNGRY_SLOWDOWN)
         } else {
             (
-                band.y + 1 + (ordinal % MINI_WATER_ROWS) as u16,
+                band.y + 1 + ((ordinal % MINI_LANES) * water_rows / MINI_LANES) as u16,
                 MINI_STEP_TICKS * (1 + ordinal % 3),
             )
         };
@@ -587,24 +594,18 @@ pub(crate) fn draw_reef_tile(frame: &mut Frame, area: Rect, view: &TankView<'_>)
     draw_care_bar(frame, area, view.care.bar());
 }
 
-/// Home's tank tile, the sidebar's small tank: its six-row band across
-/// the tile's width, centered in a taller tile, the care bar on the
-/// band's surface.
+/// Home's tank tile, the sidebar's small tank the tile's whole size: the
+/// surface on the tile's top row, the floor on its bottom one, the fish
+/// in the water between, the care bar on the surface.
 pub(crate) fn draw_tank_tile(frame: &mut Frame, area: Rect, view: &TankView<'_>, wall_tick: usize) {
-    let band = Rect::new(
-        area.x,
-        area.y + area.height.saturating_sub(MINI_TANK_HEIGHT) / 2,
-        area.width,
-        MINI_TANK_HEIGHT.min(area.height),
-    );
     draw_mini_tank(
         frame.buffer_mut(),
-        band,
+        area,
         view.state,
         view.care.hungry(),
         wall_tick,
     );
-    draw_care_bar(frame, band, view.care.bar());
+    draw_care_bar(frame, area, view.care.bar());
 }
 
 /// Whether an aquarium tile's inner area is big enough for the reef:

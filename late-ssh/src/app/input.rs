@@ -2632,6 +2632,26 @@ fn handle_pet_click(app: &mut App, x: u16, y: u16) -> bool {
     false
 }
 
+/// A left-click on the reef or the tank tile feeds it, the pet's way: a
+/// passing gesture on Home that never moves the focus. The tiles are read
+/// off the frame's rects, so the click lands wherever the water drew.
+fn handle_tank_click(app: &mut App, x: u16, y: u16) -> bool {
+    if !app.on_home() || chat_scroll_clicks_blocked(app) {
+        return false;
+    }
+    let on_tank = app.home_tile_rects().iter().any(|(kind, rect, _)| {
+        matches!(
+            kind,
+            crate::app::zen::state::TileKind::Aquarium | crate::app::zen::state::TileKind::Tank
+        ) && rect_contains(*rect, x, y)
+    });
+    if !on_tank {
+        return false;
+    }
+    feed_aquarium_globally(app);
+    true
+}
+
 fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool {
     if mouse.kind != MouseEventKind::Down || mouse.button != Some(MouseButton::Left) {
         return false;
@@ -2646,6 +2666,9 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
     // before the tile focus, so a click on the pet leaves the keys with the
     // chat tile the page opened on.
     if handle_pet_click(app, x, y) {
+        return true;
+    }
+    if handle_tank_click(app, x, y) {
         return true;
     }
     if !chat_scroll_clicks_blocked(app) && crate::app::live::input::open_from_click(app, x, y) {
@@ -3054,8 +3077,8 @@ fn handle_status_bar_click(app: &mut App, mouse: MouseEvent) -> bool {
         StatusClick::Booth => crate::app::audio::booth::input::open(app),
         StatusClick::Arcade => app.set_screen(Screen::Arcade),
         StatusClick::Profiles => app.set_screen(Screen::Profiles),
-        // Care: Home's `zen` layout, the companions' page.
-        StatusClick::ZenLayout => crate::app::zen::input::load_zen_layout(app),
+        // Care: Home's `home` layout, where the tank and the tree are.
+        StatusClick::HomeLayout => crate::app::zen::input::load_home_layout(app),
         // Nothing up, or a result holding the strip: nothing to open.
         StatusClick::Live => {
             crate::app::live::input::open_from_key(app);
@@ -3417,9 +3440,10 @@ pub(crate) fn pet_the_pet_globally(app: &mut App) {
         .pet(std::time::Instant::now(), chrono::Utc::now().date_naive());
 }
 
-/// The tank's free daily meal, from any surface that shows it: the flakes
-/// are the immediate feedback, the chips banner follows when the service's
-/// event comes back.
+/// The tank's free daily meal, from any surface that shows it (`a` on its
+/// tile in arrange mode, a click on it, `/aquarium feed`, the attention
+/// row): the flakes are the immediate feedback, the chips banner follows
+/// when the service's event comes back.
 pub(crate) fn feed_aquarium_globally(app: &mut App) {
     clear_prefix_arms(app);
     match app.aquarium_care.feed() {
@@ -3591,6 +3615,23 @@ fn tour_advance(app: &mut App) {
             let username = app.username.clone();
             app.daily.open_practice_table(Screen::Arcade, &username);
             app.set_screen(Screen::DailyMatch);
+        }
+        // Home with its stock second layout up, the street: a device that
+        // deleted it gets the missing-name banner under the stop.
+        TourMove::Layouts => {
+            crate::app::lobby::daily::board_input::leave_board(app, Screen::Dashboard);
+            crate::app::zen::input::run_layout_command(
+                app,
+                crate::app::zen::presets::LayoutCommand::Load(
+                    crate::app::zen::presets::STOCK_STREET_NAME.to_string(),
+                ),
+            );
+        }
+        // Home's first layout back before the tavern, so the newcomer's
+        // page is as the tour found it.
+        TourMove::Homecoming => {
+            crate::app::zen::input::load_home_layout(app);
+            crate::app::lobby::daily::board_input::leave_board(app, Screen::Clubhouse);
         }
         TourMove::Finished => app.persist_clubhouse_tutorial_done(),
     }

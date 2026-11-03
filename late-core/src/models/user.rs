@@ -697,7 +697,6 @@ const STATUSLINE_COMPONENTS_KEY: &str = "statusline_components";
 /// A single stored `zen` tiling layout, from before layouts had names: read
 /// only as the seed for a device's stock `zen` Home layout
 /// (`late-ssh/src/app/zen/presets.rs`).
-const ZEN_LAYOUT_KEY: &str = "zen_layout";
 const HOME_LAYOUT_KEY: &str = "home_layout";
 const KEEP_COMPOSER_FOCUSED_KEY: &str = "keep_composer_focused";
 const START_WITH_MUSIC_MUTED_KEY: &str = "start_with_music_muted";
@@ -2289,14 +2288,6 @@ pub fn extract_artboard_disclaimer(settings: &Value) -> bool {
         .get("artboard_disclaimer")
         .and_then(Value::as_bool)
         .unwrap_or(true)
-}
-
-/// The account's stored `zen` layout, from before layouts were per device:
-/// only the seed for an SSH key with none (`user_ssh_key::extract_key_zen_layout`),
-/// which seeds the device's stock `zen` Home layout. Parsed by the layouts,
-/// which fall back to the stock on anything unreadable.
-pub fn extract_zen_layout(settings: &Value) -> Option<Value> {
-    settings.get(ZEN_LAYOUT_KEY).cloned()
 }
 
 /// The account's stored Home layout, the seed for an SSH key with none

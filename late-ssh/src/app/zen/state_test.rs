@@ -1,6 +1,7 @@
 use ratatui::layout::Rect;
 use uuid::Uuid;
 
+use super::ChatRoomBinding;
 use super::*;
 use crate::app::zen::layout::{Gaps, tile_rects};
 
@@ -19,7 +20,7 @@ fn from_json(value: Option<&serde_json::Value>) -> RiceLayout {
 /// A page showing `rice`, with the focus moved to its first tile: the
 /// edits below act on a known tile, whatever the layout opens on.
 fn focused_on_first_tile(rice: RiceLayout) -> ZenState {
-    let mut page = ZenState::new(rice, RiceLayout::default());
+    let mut page = ZenState::new(rice, Some(RiceLayout::default()));
     page.focus = 0;
     page
 }
@@ -164,9 +165,9 @@ fn a_chat_tile_keeps_its_room_through_the_stored_json_and_old_layouts_still_read
     // The active chat tile takes the room: the focused one, else the
     // first chat on the page while the focus is on the bonsai.
     assert_ne!(zen.focus, chat);
-    assert!(zen.bind_active_chat_room(Some(room)));
-    assert_eq!(zen.active_chat_room(), Some(Some(room)));
-    assert_eq!(zen.chat_tiles(), vec![(chat, Some(room))]);
+    assert!(zen.bind_active_chat_room(ChatRoomBinding::Room(room)));
+    assert_eq!(zen.active_chat_room(), Some(ChatRoomBinding::Room(room)));
+    assert_eq!(zen.chat_tiles(), vec![(chat, ChatRoomBinding::Room(room))]);
     zen.focus = chat;
 
     let read_back = from_json(Some(&zen.rice.to_json()));
@@ -179,7 +180,25 @@ fn a_chat_tile_keeps_its_room_through_the_stored_json_and_old_layouts_still_read
         "look": { "border": "rounded", "gap": 0, "titles": true }
     });
     let old = from_json(Some(&old));
-    assert_eq!(old.root.leaf_rooms(), vec![None]);
+    assert_eq!(old.root.leaf_rooms(), vec![ChatRoomBinding::Current]);
+
+    // A stock layout holds News and binds a permanent room by slug, and
+    // both ride the same `room` key a room id does.
+    let street = RiceLayout::street();
+    let bound: Vec<ChatRoomBinding> = street
+        .root
+        .leaf_rooms()
+        .into_iter()
+        .filter(|room| !room.is_current())
+        .collect();
+    assert_eq!(
+        bound,
+        vec![
+            ChatRoomBinding::News,
+            ChatRoomBinding::Permanent("announcements".to_string()),
+        ]
+    );
+    assert_eq!(from_json(Some(&street.to_json())), street);
 
     // A layout from before Pulse names the presence tile, which is a tile
     // again (the online count, the clock, the friends): it reads as such,
@@ -202,7 +221,7 @@ fn a_chat_tile_keeps_its_room_through_the_stored_json_and_old_layouts_still_read
     zen.move_kind_picker(-1);
     assert_eq!(zen.pick_kind(), KindPick::Changed);
     assert_eq!(zen.focused_kind(), Some(TileKind::Chat));
-    assert_eq!(zen.active_chat_room(), Some(None));
+    assert_eq!(zen.active_chat_room(), Some(ChatRoomBinding::Current));
 }
 
 #[test]
@@ -264,7 +283,7 @@ fn the_page_holds_ten_chats_and_opens_on_the_first_one() {
     zen.close_kind_picker();
 
     // A page opens on its first chat tile, outside arrange mode.
-    let mut fresh = ZenState::new(RiceLayout::default(), RiceLayout::default());
+    let mut fresh = ZenState::new(RiceLayout::default(), Some(RiceLayout::default()));
     assert_eq!(fresh.focused_kind(), Some(TileKind::Chat));
     assert_eq!(fresh.active_chat_index(), Some(0));
     assert!(!fresh.arrange);
@@ -434,7 +453,7 @@ fn a_layout_with_an_unknown_piece_keeps_everything_but_the_pick() {
     assert_ne!(restored, RiceLayout::default(), "the layout survives");
     assert_eq!(restored.root.selection_at(0), Some(AsciiSelection::DEFAULT));
     assert_eq!(restored.root.kind_at(1), Some(TileKind::Chat));
-    assert_eq!(restored.root.leaf_rooms()[1], Some(room));
+    assert_eq!(restored.root.leaf_rooms()[1], ChatRoomBinding::Room(room));
     assert_eq!(
         restored.root.selection_at(2),
         Some(AsciiSelection::Piece(AsciiPiece {
@@ -781,7 +800,7 @@ fn the_stock_home_is_the_rail_the_reef_over_the_chat_and_the_sidebar_column() {
         "only the rail, the reef and the presence rows take their title off"
     );
 
-    let zen = ZenState::new(home.clone(), home);
+    let zen = ZenState::new(home.clone(), Some(home));
     assert_eq!(
         zen.focused_kind(),
         Some(TileKind::Chat),
@@ -789,7 +808,7 @@ fn the_stock_home_is_the_rail_the_reef_over_the_chat_and_the_sidebar_column() {
     );
     assert_eq!(
         zen.active_chat_room(),
-        Some(None),
+        Some(ChatRoomBinding::Current),
         "the stock chat is bound to no room: it shows the rail's"
     );
     assert!(!zen.arrange, "Home is furniture until Ctrl+E");
@@ -798,7 +817,7 @@ fn the_stock_home_is_the_rail_the_reef_over_the_chat_and_the_sidebar_column() {
     assert!(!zen.kind_allowed(TileKind::Rooms), "one rail per page");
 
     // The stock zen layout has no rail, so any tile of it may become one.
-    let zen_layout = ZenState::new(RiceLayout::default(), RiceLayout::default());
+    let zen_layout = ZenState::new(RiceLayout::default(), Some(RiceLayout::default()));
     assert!(zen_layout.kind_allowed(TileKind::Rooms));
     assert!(zen_layout.kind_allowed(TileKind::Presence));
 }
@@ -806,7 +825,7 @@ fn the_stock_home_is_the_rail_the_reef_over_the_chat_and_the_sidebar_column() {
 #[test]
 fn a_tile_owns_its_title_mode_on_home_and_the_mode_rides_the_layout() {
     let home = RiceLayout::home();
-    let mut zen = ZenState::new(home.clone(), home);
+    let mut zen = ZenState::new(home.clone(), Some(home));
     let chat = zen.first_tile_of(TileKind::Chat).expect("a chat");
     let music = zen.first_tile_of(TileKind::Music).expect("a music tile");
     assert_eq!(zen.rice.root.title_at(chat), TileTitle::Named);

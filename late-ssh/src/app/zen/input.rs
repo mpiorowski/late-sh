@@ -12,7 +12,8 @@ use std::time::Instant;
 use uuid::Uuid;
 
 use super::attention::Item as AttentionItem;
-use super::presets::{LayoutCommand, LayoutList, Layouts, LayoutsError, NameEdit, NamePurpose};
+use super::presets::{LayoutCommand, LayoutList, Layouts, LayoutsError, NameEdit};
+use super::state::ChatRoomBinding;
 use super::state::{Dir, GuestPick, KindPick, MAX_TILES, TakenBy, TileHint, TileKey, TileKind};
 use crate::app::{
     chat::{self, state::RoomSlot},
@@ -183,7 +184,7 @@ fn show_current_layout(app: &mut App) {
 }
 
 /// Save the page as a new layout under `name`, which becomes current; the
-/// page keeps showing it, with stock Home as what `R` puts back.
+/// page keeps showing it, with nothing for `R` to put back.
 pub(crate) fn save_layout_as(app: &mut App, name: &str) -> Result<usize, LayoutsError> {
     app.home_layouts.store_current(app.home.rice.clone());
     let index = app.home_layouts.save_new(name, app.home.rice.clone())?;
@@ -234,20 +235,21 @@ pub(crate) fn run_layout_command(app: &mut App, command: LayoutCommand) {
     }
 }
 
-/// `/zen` and the status line's care click: Home's layout named `zen`,
-/// loaded the way `/layout zen` loads it. A device that renamed or deleted
-/// its `zen` layout gets the banner a missing name gets.
-pub(crate) fn load_zen_layout(app: &mut App) {
+/// The status line's care click: Home's layout named `home`, where the
+/// tank and the tree are, loaded the way `/layout home` loads it. A
+/// device that deleted its `home` layout gets the banner a missing name
+/// gets.
+pub(crate) fn load_home_layout(app: &mut App) {
     run_layout_command(
         app,
-        LayoutCommand::Load(super::presets::STOCK_ZEN_NAME.to_string()),
+        LayoutCommand::Load(super::presets::STOCK_HOME_NAME.to_string()),
     );
 }
 
 /// The layouts list: `j` `k` and the arrows move, Enter loads the row and
 /// leaves arrange mode, `n` types a name for the page as a new layout,
-/// `r` retypes the row's name, `d` deletes the row (never the last), `R`
-/// puts the row back to its stock. While a name is being typed the
+/// `d` deletes the row (never the last), `R` puts `home` back to its
+/// stock (no other row has one). While a name is being typed the
 /// printable keys spell it, Backspace erases, Enter keeps it and Esc
 /// drops it (`dispatch_escape`). Everything else is swallowed.
 fn handle_layout_list(app: &mut App, event: &ParsedInput) {
@@ -279,16 +281,8 @@ fn handle_layout_list(app: &mut App, event: &ParsedInput) {
             if app.home_layouts.is_full() {
                 app.banner = Some(Banner::info(LayoutsError::Full.message()));
             } else {
-                list.editing = Some(NameEdit::new(NamePurpose::SaveNew, String::new()));
+                list.editing = Some(NameEdit::new(String::new()));
             }
-        }
-        (_, Some(b'r')) => {
-            let name = app
-                .home_layouts
-                .get(selected)
-                .map(|item| item.name.clone())
-                .unwrap_or_default();
-            list.editing = Some(NameEdit::new(NamePurpose::Rename(selected), name));
         }
         (_, Some(b'd')) => {
             let was_current = app.home_layouts.current() == selected;
@@ -311,16 +305,18 @@ fn handle_layout_list(app: &mut App, event: &ParsedInput) {
             match (reset, app.home_layouts.current() == selected) {
                 (true, true) => show_current_layout(app),
                 (true, false) => app.mark_home_layout_dirty(),
-                (false, _) => {}
+                (false, _) => {
+                    app.banner = Some(Banner::info(LayoutsError::NoStock.message()));
+                }
             }
         }
         _ => {}
     }
 }
 
-/// Enter on a typed name: the page saved under it, or the row renamed.
-/// A refused name says why in a banner and the field stays up with the
-/// text, so one more key fixes it.
+/// Enter on a typed name: the page saved under it. A refused name says
+/// why in a banner and the field stays up with the text, so one more key
+/// fixes it.
 fn confirm_name_edit(app: &mut App) {
     let Some(list) = app.layout_list.as_mut() else {
         return;
@@ -328,20 +324,11 @@ fn confirm_name_edit(app: &mut App) {
     let Some(edit) = list.editing.take() else {
         return;
     };
-    let result = match edit.purpose {
-        NamePurpose::SaveNew => save_layout_as(app, &edit.text).map(|index| {
-            if let Some(list) = app.layout_list.as_mut() {
-                list.selected = index;
-            }
-        }),
-        NamePurpose::Rename(index) => {
-            let renamed = app.home_layouts.rename(index, &edit.text);
-            if renamed.is_ok() {
-                app.mark_home_layout_dirty();
-            }
-            renamed
+    let result = save_layout_as(app, &edit.text).map(|index| {
+        if let Some(list) = app.layout_list.as_mut() {
+            list.selected = index;
         }
-    };
+    });
     if let Err(error) = result {
         app.banner = Some(Banner::info(error.message()));
         if let Some(list) = app.layout_list.as_mut() {
@@ -564,10 +551,13 @@ fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
         }
         // The focused tile's own title rule.
         b't' => app.home.cycle_focused_title(),
-        b'R' => {
-            app.home.reset();
-            true
-        }
+        b'R' => match app.home.reset() {
+            true => true,
+            false => {
+                app.banner = Some(Banner::info(LayoutsError::NoStock.message()));
+                return true;
+            }
+        },
         _ => return false,
     };
     if changed {
@@ -666,20 +656,21 @@ fn focused_tile_is_wide(app: &App) -> bool {
         .unwrap_or(true)
 }
 
-/// Walk the rooms in rail order, top to bottom, and bind the focused chat
-/// tile to the one landed on; the binding is part of the layout, so it is
-/// saved. The rail's synthetic rows (mentions, rss, voice, browse) are not
-/// rooms a tile can show and are stepped over, and so are the rooms of a
-/// collapsed section, which the rail does not show either.
+/// Walk the rail top to bottom, the rooms and the News row, and bind the
+/// focused chat tile to the one landed on; the binding is part of the
+/// layout, so it is saved. The rail's other synthetic rows (mentions,
+/// rss, voice, browse) are not views a tile can hold and are stepped
+/// over, and so are the rooms of a collapsed section, which the rail does
+/// not show either.
 fn cycle_room(app: &mut App, delta: isize) {
-    let ids: Vec<Uuid> = app
+    let stops: Vec<ChatRoomBinding> = app
         .chat
         .visual_order()
         .into_iter()
         .filter_map(|slot| match slot {
-            RoomSlot::Room(room_id) => Some(room_id),
+            RoomSlot::Room(room_id) => Some(ChatRoomBinding::Room(room_id)),
+            RoomSlot::News => Some(ChatRoomBinding::News),
             RoomSlot::Feeds
-            | RoomSlot::News
             | RoomSlot::Cyberspace
             | RoomSlot::CyberspaceNotifications
             | RoomSlot::CyberspaceMail(_)
@@ -690,24 +681,30 @@ fn cycle_room(app: &mut App, delta: isize) {
             | RoomSlot::Work => None,
         })
         .collect();
-    if ids.is_empty() {
+    if stops.is_empty() {
         return;
     }
-    let current = app
-        .home_chat_room_id()
-        .and_then(|id| ids.iter().position(|room_id| *room_id == id))
-        .unwrap_or(0);
-    let next = (current as isize + delta).rem_euclid(ids.len() as isize) as usize;
-    bind_active_chat_to_room(app, ids[next]);
+    let at = match (app.chat.news_selected, app.home_chat_room_id()) {
+        (true, _) => ChatRoomBinding::News,
+        (false, Some(room_id)) => ChatRoomBinding::Room(room_id),
+        (false, None) => ChatRoomBinding::Current,
+    };
+    let current = stops.iter().position(|stop| *stop == at).unwrap_or(0);
+    let next = (current as isize + delta).rem_euclid(stops.len() as isize) as usize;
+    bind_active_chat(app, stops[next].clone());
 }
 
 /// Bind the active chat tile to `room_id` (a layout edit, saved), move
 /// the rail there, and drop the draft and selection that belonged to its
 /// old room. `false` when the page has no chat tile, so the caller can
-/// fall back to Home's selection; the `Ctrl+/` picker and `[` `]` both
-/// land here.
+/// fall back to Home's selection; the `Ctrl+/` picker lands here, and
+/// `[` `]` through `bind_active_chat`.
 pub(crate) fn bind_active_chat_to_room(app: &mut App, room_id: Uuid) -> bool {
-    if !app.home.bind_active_chat_room(Some(room_id)) {
+    bind_active_chat(app, ChatRoomBinding::Room(room_id))
+}
+
+fn bind_active_chat(app: &mut App, binding: ChatRoomBinding) -> bool {
+    if !app.home.bind_active_chat_room(binding) {
         return false;
     }
     app.chat.reset_composer();

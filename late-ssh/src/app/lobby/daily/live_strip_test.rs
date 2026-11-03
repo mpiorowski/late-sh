@@ -11,7 +11,7 @@ use crate::app::games::{
 };
 use crate::app::live::{
     state::LiveStripView,
-    ui::{GAP, LIVE_STRIP_HEIGHT, live_strip_compact_line, live_strip_lines},
+    ui::{GAP, LIVE_STRIP_HEIGHT, StripHost, live_strip_compact_line, live_strip_lines},
 };
 use crate::app::lobby::daily::{
     briscola::{self, DailyBriscolaState},
@@ -93,7 +93,7 @@ fn strip_height_is_fixed_whatever_it_shows() {
         strip(&item, None, Some("weslin won · eight ball · +400 chips")),
     ] {
         assert_eq!(
-            live_strip_lines(WIDTH, &strip, BACKGROUND).len(),
+            live_strip_lines(WIDTH, StripHost::Card, &strip, BACKGROUND).len(),
             LIVE_STRIP_HEIGHT as usize
         );
     }
@@ -102,7 +102,12 @@ fn strip_height_is_fixed_whatever_it_shows() {
 #[test]
 fn the_words_sit_beside_the_board() {
     let item = pool_item();
-    let lines = live_strip_lines(WIDTH, &strip(&item, None, None), BACKGROUND);
+    let lines = live_strip_lines(
+        WIDTH,
+        StripHost::Card,
+        &strip(&item, None, None),
+        BACKGROUND,
+    );
     let text: Vec<String> = lines.iter().map(line_text).collect();
 
     assert!(text[1].ends_with("eggy · weslin"), "{}", text[1]);
@@ -126,7 +131,12 @@ fn the_words_sit_beside_the_board() {
     );
 
     let shot = aim();
-    let aiming = live_strip_lines(WIDTH, &strip(&item, Some(&shot), None), BACKGROUND);
+    let aiming = live_strip_lines(
+        WIDTH,
+        StripHost::Card,
+        &strip(&item, Some(&shot), None),
+        BACKGROUND,
+    );
     assert!(
         line_text(&aiming[3]).ends_with("eggy is lining up a shot"),
         "{}",
@@ -135,6 +145,7 @@ fn the_words_sit_beside_the_board() {
 
     let done = live_strip_lines(
         WIDTH,
+        StripHost::Card,
         &strip(&item, None, Some("weslin won · eight ball · +400 chips")),
         BACKGROUND,
     );
@@ -145,15 +156,28 @@ fn the_words_sit_beside_the_board() {
 #[test]
 fn the_compact_line_names_the_game_and_the_players() {
     let item = pool_item();
-    let live = line_text(&live_strip_compact_line(WIDTH, &strip(&item, None, None)));
+    let live = line_text(&live_strip_compact_line(
+        WIDTH,
+        StripHost::Card,
+        &strip(&item, None, None),
+    ));
     assert!(live.starts_with("── now "), "{live}");
     assert!(live.ends_with("8ball eggy v weslin"), "{live}");
 
     let done = line_text(&live_strip_compact_line(
         WIDTH,
+        StripHost::Card,
         &strip(&item, None, Some("a draw")),
     ));
     assert!(done.ends_with("a draw"), "{done}");
+
+    // In a tile the row is the words alone: the tile's title says `now`.
+    let tile = line_text(&live_strip_compact_line(
+        WIDTH,
+        StripHost::Tile,
+        &strip(&item, None, None),
+    ));
+    assert_eq!(tile.trim_end(), "8ball eggy v weslin", "{tile}");
 }
 
 #[test]
@@ -174,7 +198,12 @@ fn backgammon_words_mark_each_players_colour_and_never_touch_the_board() {
         ..pool_item()
     };
 
-    let lines = live_strip_lines(WIDTH, &strip(&item, None, None), BACKGROUND);
+    let lines = live_strip_lines(
+        WIDTH,
+        StripHost::Card,
+        &strip(&item, None, None),
+        BACKGROUND,
+    );
     let text: Vec<String> = lines.iter().map(line_text).collect();
 
     // The words start past the picture column and its gap, on every row.
@@ -263,7 +292,12 @@ fn gin_says_how_the_last_hand_ended_once_the_next_is_dealt() {
         ..pool_item()
     };
 
-    let lines = live_strip_lines(WIDTH, &strip(&item, None, None), BACKGROUND);
+    let lines = live_strip_lines(
+        WIDTH,
+        StripHost::Card,
+        &strip(&item, None, None),
+        BACKGROUND,
+    );
     let text: Vec<String> = lines.iter().map(line_text).collect();
 
     let words_at = usize::from(PICTURE_COLS + GAP);
@@ -337,7 +371,12 @@ fn briscola_shows_the_trick_the_follower_took_with_the_challenger_on_top() {
     state.apply_play(answer).unwrap();
     let item = card_item(DailyGame::Briscola, &state, eggy);
 
-    let lines = live_strip_lines(WIDTH, &strip(&item, None, None), BACKGROUND);
+    let lines = live_strip_lines(
+        WIDTH,
+        StripHost::Card,
+        &strip(&item, None, None),
+        BACKGROUND,
+    );
 
     assert_eq!(
         strip_rows(&lines),
@@ -380,7 +419,12 @@ fn gin_shows_the_pile_and_each_hand_with_the_challenger_on_top() {
     state.apply_move(GinMove::Draw(Pile::Stock)).unwrap();
     let item = card_item(DailyGame::GinRummy, &state, weslin);
 
-    let lines = live_strip_lines(WIDTH, &strip(&item, None, None), BACKGROUND);
+    let lines = live_strip_lines(
+        WIDTH,
+        StripHost::Card,
+        &strip(&item, None, None),
+        BACKGROUND,
+    );
 
     // eggy holds ten on top, weslin eleven below with the card just drawn.
     assert_eq!(
@@ -440,7 +484,12 @@ fn cribbage_pegs_each_lane_with_the_challenger_on_top() {
     }
     let item = card_item(DailyGame::Cribbage, &state, weslin);
 
-    let lines = live_strip_lines(WIDTH, &strip(&item, None, None), BACKGROUND);
+    let lines = live_strip_lines(
+        WIDTH,
+        StripHost::Card,
+        &strip(&item, None, None),
+        BACKGROUND,
+    );
 
     let empty = "·".repeat(20);
     let home = format!("{empty}○");

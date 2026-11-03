@@ -57,9 +57,20 @@ fn compact_shape_is_the_feed_rows_and_one_footer() {
         .iter()
         .map(line_text)
         .collect();
-    assert_eq!(texts.len(), 2, "a quiet board is one note and the footer");
+    assert_eq!(
+        texts.len(),
+        3,
+        "a quiet board is one note, the counts and the keys"
+    );
     assert_eq!(texts[0].trim_end(), "no tables yet");
     assert_eq!(texts[1].trim_end(), "2 open · 1/4");
+    assert_eq!(texts[2], "^G open  ` toggle");
+    // A tile too narrow for both keys drops the last one whole.
+    let narrow: Vec<String> = daily_compact_lines(12, 3, &[], &quiet)
+        .iter()
+        .map(line_text)
+        .collect();
+    assert_eq!(narrow[2], "^G open");
 
     let busy = props_with(Vec::new(), 0);
     let texts: Vec<String> = daily_compact_lines(40, 4, &feed(6, DailyFeedState::Playing), &busy)
@@ -68,8 +79,9 @@ fn compact_shape_is_the_feed_rows_and_one_footer() {
         .collect();
     assert_eq!(texts.len(), 4, "rows past the area drop, the footer stays");
     assert_eq!(texts[0], format!("● chess p0·q0{}0m", " ".repeat(40 - 15)));
-    assert!(texts[2].starts_with("● chess p2·q2"));
-    assert!(texts[3].starts_with("0 open"));
+    assert!(texts[1].starts_with("● chess p1·q1"));
+    assert!(texts[2].starts_with("0 open"));
+    assert_eq!(texts[3], "^G open  ` toggle");
 
     // An open challenge names the challenger alone behind the open marker;
     // a done table is the faint dot. Long names give way to the age.

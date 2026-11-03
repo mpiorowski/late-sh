@@ -309,10 +309,10 @@ Some settings belong to the SSH key a session authenticated with
 - **Home's tile layouts** (`app/zen/CONTEXT.md`): `home_layouts` (Home's
   named layouts, up to nine, and the current one) on the key, written by
   `App::flush_home_layout` through `ProfileState::set_device_home_layouts`.
-  A key with no `home_layouts` seeds the set from its own `home_layout` and
-  `zen_layout`, and those from the account's `users.settings.home_layout` /
-  `zen_layout`; nothing writes `home_layout`, `zen_layout` or the account's
-  copies.
+  A key with no `home_layouts` seeds the set from its own `home_layout`,
+  and that from the account's `users.settings.home_layout`; nothing writes
+  `home_layout` or the account's copy, and the old `zen_layout` keys are
+  read nowhere.
 - **The Artboard content disclaimer.** Same shape (`artboard_disclaimer` on the
   key, `App::artboard_disclaimer_enabled`), except a failed key read fails
   closed to on.
@@ -431,7 +431,7 @@ interaction mode ignores mouse reports.
 | `w` | Bonsai care modal |
 | `` ` `` | Workspace cycle (`app/workspace/CONTEXT.md`) |
 | `/settings` `/lobby` `/redraw` `/guide` `/picker` `/shop` | Composer fallbacks for chords a terminal swallows; each runs the key's function |
-| `/layout` `/zen` | Home's layouts from any composer, Home first: `/layout` lists them, `/layout <name or 1-9>` loads one, `/layout save <name>` saves the page as one; `/zen` is `/layout zen` |
+| `/layout` | Home's layouts from any composer, Home first: `/layout` lists them, `/layout <name or 1-9>` loads one, `/layout save <name>` saves the page as one |
 | `Esc` | Close the top modal |
 
 `Ctrl+O/G/F/S` are ignored while a Settings text field is being edited.

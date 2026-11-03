@@ -1,6 +1,6 @@
 use serde_json::json;
 
-use super::{LayoutList, Layouts, LayoutsError, MAX_LAYOUTS, STOCK_HOME_NAME, STOCK_ZEN_NAME};
+use super::{LayoutList, Layouts, LayoutsError, MAX_LAYOUTS, STOCK_HOME_NAME, STOCK_STREET_NAME};
 use crate::app::zen::state::{Node, RiceLayout, TileKind};
 
 fn chat_alone() -> RiceLayout {
@@ -11,39 +11,75 @@ fn chat_alone() -> RiceLayout {
 }
 
 #[test]
-fn a_device_starts_with_stock_home_current_and_zen_second() {
+fn a_device_starts_with_stock_home_current_and_street_second() {
     let layouts = Layouts::stock();
     assert_eq!(layouts.current(), 0);
     assert_eq!(layouts.current_name(), STOCK_HOME_NAME);
     assert_eq!(layouts.current_layout(), &RiceLayout::home());
     assert_eq!(
         layouts.get(1).map(|item| item.name.as_str()),
-        Some(STOCK_ZEN_NAME)
+        Some(STOCK_STREET_NAME)
     );
     assert_eq!(
         layouts.get(1).map(|item| &item.layout),
-        Some(&RiceLayout::default())
+        Some(&RiceLayout::street())
     );
     assert_eq!(layouts.count(), 2);
 }
 
 #[test]
-fn a_device_that_arranged_its_pages_before_names_keeps_them_as_home_and_zen() {
+fn a_device_that_arranged_its_page_before_names_keeps_it_as_home() {
     let home = chat_alone();
-    let zen = RiceLayout {
-        root: Node::leaf(TileKind::Bonsai),
-        ..RiceLayout::default()
-    };
-    let layouts = Layouts::seeded(Some(&home.to_json()), Some(&zen.to_json()));
+    let layouts = Layouts::seeded(Some(&home.to_json()));
     assert_eq!(layouts.current_layout(), &home);
-    assert_eq!(layouts.get(1).map(|item| &item.layout), Some(&zen));
-    // A page that no longer parses reads as its stock, not as nothing.
-    let layouts = Layouts::seeded(Some(&json!({ "root": 7 })), None);
-    assert_eq!(layouts.current_layout(), &RiceLayout::home());
     assert_eq!(
         layouts.get(1).map(|item| &item.layout),
-        Some(&RiceLayout::default())
+        Some(&RiceLayout::street()),
+        "the stock street follows it"
     );
+    // A page that no longer parses reads as its stock, not as nothing.
+    let layouts = Layouts::seeded(Some(&json!({ "root": 7 })));
+    assert_eq!(layouts.current_layout(), &RiceLayout::home());
+}
+
+#[test]
+fn the_stock_street_is_seeded_once_per_device_and_stays_deleted() {
+    // A set stored before `street` existed: it gets the layout once, after
+    // its own, and says so.
+    let stored = json!({
+        "current": 1,
+        "items": [
+            { "name": "home", "layout": RiceLayout::home().to_json() },
+            { "name": "mine", "layout": chat_alone().to_json() }
+        ]
+    });
+    let mut layouts = Layouts::from_json_or(Some(&stored), Layouts::stock());
+    assert_eq!(layouts.count(), 2, "parsed as stored");
+    assert!(layouts.seed_stock(), "the seed changes the set");
+    assert_eq!(layouts.count(), 3);
+    assert_eq!(layouts.current_name(), "mine", "the current slot holds");
+    assert_eq!(
+        layouts.get(2).map(|item| item.name.as_str()),
+        Some(STOCK_STREET_NAME)
+    );
+    assert!(!layouts.seed_stock(), "once");
+
+    // Deleted, it stays deleted: the marker rides the stored set.
+    assert_eq!(layouts.delete(2), Ok(()));
+    let mut read_back = Layouts::from_json_or(Some(&layouts.to_json()), Layouts::stock());
+    assert!(!read_back.seed_stock());
+    assert_eq!(read_back.count(), 2);
+
+    // A full set only records the seed.
+    let mut full = Layouts::from_json_or(Some(&stored), Layouts::stock());
+    for index in 0..(MAX_LAYOUTS - 2) {
+        full.save_new(&format!("l{index}"), chat_alone())
+            .expect("room up to the cap");
+    }
+    assert!(full.is_full());
+    assert!(full.seed_stock(), "the marker is worth writing");
+    assert!(full.index_of(STOCK_STREET_NAME).is_none());
+    assert!(!full.seed_stock());
 }
 
 #[test]
@@ -58,7 +94,7 @@ fn a_stored_set_round_trips_and_a_broken_one_falls_back() {
         layouts
     );
 
-    let fallback = Layouts::seeded(Some(&chat_alone().to_json()), None);
+    let fallback = Layouts::seeded(Some(&chat_alone().to_json()));
     assert_eq!(
         Layouts::from_json_or(None, fallback.clone()),
         fallback,
@@ -122,20 +158,6 @@ fn saving_names_the_page_makes_it_current_and_stops_at_nine() {
 }
 
 #[test]
-fn renaming_keeps_names_unique_but_a_layout_may_keep_its_own() {
-    let mut layouts = Layouts::stock();
-    assert_eq!(
-        layouts.rename(1, "zen"),
-        Ok(()),
-        "its own name is not taken"
-    );
-    assert_eq!(layouts.rename(1, "home"), Err(LayoutsError::NameTaken));
-    assert_eq!(layouts.rename(1, "focus"), Ok(()));
-    assert_eq!(layouts.get(1).map(|item| item.name.as_str()), Some("focus"));
-    assert_eq!(layouts.rename(5, "x"), Err(LayoutsError::NoSuchLayout));
-}
-
-#[test]
 fn deleting_moves_the_current_onto_a_neighbor_and_never_empties_the_set() {
     let mut layouts = Layouts::stock();
     layouts.save_new("third", chat_alone()).expect("saved");
@@ -147,13 +169,13 @@ fn deleting_moves_the_current_onto_a_neighbor_and_never_empties_the_set() {
     // Deleting the current, last one lands on the one before it.
     assert_eq!(layouts.delete(1), Ok(()));
     assert_eq!(layouts.current(), 0);
-    assert_eq!(layouts.current_name(), STOCK_ZEN_NAME);
+    assert_eq!(layouts.current_name(), STOCK_STREET_NAME);
     assert_eq!(layouts.delete(0), Err(LayoutsError::LastOne));
     assert_eq!(layouts.delete(3), Err(LayoutsError::NoSuchLayout));
 }
 
 #[test]
-fn reset_puts_back_the_stock_that_matches_the_name() {
+fn only_home_resets_to_a_stock() {
     let mut layouts = Layouts::stock();
     layouts.store_current(chat_alone());
     assert_eq!(layouts.current_layout(), &chat_alone());
@@ -161,11 +183,11 @@ fn reset_puts_back_the_stock_that_matches_the_name() {
     assert_eq!(layouts.current_layout(), &RiceLayout::home());
     layouts.switch(1);
     layouts.store_current(chat_alone());
-    assert!(layouts.reset(1));
+    assert!(!layouts.reset(1), "street has no stock to go back to");
     assert_eq!(
         layouts.current_layout(),
-        &RiceLayout::default(),
-        "zen resets to the stock zen layout"
+        &chat_alone(),
+        "a refused reset leaves the page alone"
     );
     assert!(!layouts.reset(7));
     assert!(!layouts.switch(7));

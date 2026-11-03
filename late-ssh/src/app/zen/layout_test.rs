@@ -165,10 +165,10 @@ fn the_banner_and_the_footer_each_take_one_row_off_the_tiles() {
     assert_eq!(neither.footer, None);
 }
 
-/// The stock lobby and pet are three rows each under their title rule,
-/// and the bonsai under them takes whatever the column has left.
+/// The stock lobby is four rows and the pet three, each under its title
+/// rule, and the bonsai under them takes whatever the column has left.
 #[test]
-fn the_stock_lobby_and_pet_are_three_rows_and_the_bonsai_takes_the_rest() {
+fn the_stock_lobby_is_four_rows_the_pet_three_and_the_bonsai_takes_the_rest() {
     let rice = RiceLayout::home();
     let rects = tile_rects(
         &rice.root,
@@ -177,7 +177,7 @@ fn the_stock_lobby_and_pet_are_three_rows_and_the_bonsai_takes_the_rest() {
     );
     let (lobby, pet, bonsai) = (rects[6], rects[8], rects[9]);
     assert_eq!(lobby.0, TileKind::Lobby);
-    assert_eq!(lobby.1.height, 4);
+    assert_eq!(lobby.1.height, 5);
     assert_eq!(pet.0, TileKind::Pet);
     assert_eq!(pet.1.height, 4);
     assert_eq!(bonsai.0, TileKind::Bonsai);

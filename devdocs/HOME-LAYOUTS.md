@@ -1,6 +1,7 @@
 # Home layouts (design)
 
-Home and Zen are one page: Zen is Home's stock layout `zen`, not a screen.
+Home and Zen are one page: Zen was a screen, then Home's stock layout
+`zen`, and is now the tests' fixture; the second stock layout is `street`.
 Home stays exactly as it is for anyone who never touches it; underneath,
 it is a tile tree, and a chord
 switches the keys into arrange mode on the page you are already on. The
@@ -18,17 +19,19 @@ delta against the design):
   the rail, the reef over the chat, and the sidebar column (presence,
   visualizer, music, lobby, live, pet, bonsai). `Ctrl+E` is Home's one layouts chord
   (arrange mode, then a digit or `L`; `Ctrl+F` is unbound). There is no
-  Zen screen: its tree is the stock layout `zen`
-  (layout 2), which `/zen` (`/layout zen`) and the status line's care
-  click load, Home first; a device that renamed or deleted it gets the
-  `No layout by that name or number` banner. The tour has no Zen stop
-  (Calendars walks home to the lounge), Settings "Land on" is Clubhouse or
-  Home (a stored `zen` lands in the Clubhouse and switches no layout), and
+  Zen screen and no `zen` layout: layout 2 is the stock `street`, and the
+  status line's care click loads `home` (`/layout home`), Home first; a
+  device that deleted it gets the
+  `No layout by that name or number` banner. The tour's Zen stop is the
+  `VisitLayouts` stop: Home with `street` up after Calendars, and `home`
+  put back on the way to the lounge. Settings "Land on" is Clubhouse or
+  Home (a stored `zen` landing lands in the Clubhouse and switches no layout), and
   the backtick cycle's base is always Home.
 - Arrange mode also takes the tile keys the Zen screen had: `j` `k` and
   Enter on attention, `[` `]` and Enter on an
   ascii tile, `a` on the reef or tank. Outside it the furniture takes no
-  keys.
+  keys; a click on the reef or tank feeds it in either mode, the pet's
+  way.
 - Static kinds `rooms`, `presence` and `tank` exist (the tank is the
   aquarium's small form as its own kind, the stock sidebar's; the
   `aquarium` kind is the reef alone); there is no `center` kind.
@@ -46,18 +49,20 @@ delta against the design):
   shares are not built.
 - Chat tiles on Home bind rooms: a tile that becomes a chat is
   pinned to the room of the moment, the rail steers the active tile and
-  follows the focus onto another. The MyStream binding is not built.
+  follows the focus onto another. Bindings are `Current`, `Room(id)`,
+  `Permanent(slug)` and `News`, the one synthetic view a tile holds
+  (`[` `]` stop on it); the MyStream binding is not built.
 - Named layouts as below (`zen/presets.rs`): nine per device on the key
-  (`user_ssh_keys.settings.home_layouts`), stock `home` and `zen`,
-  `Ctrl+E` digit, the `L` list with save, rename, delete and reset,
-  `/layout`. `R` in the list resets a layout to the stock its name says
-  (`zen` to the stock `zen`), not always to stock Home. The status line
+  (`user_ssh_keys.settings.home_layouts`), stock `home` and `street`,
+  `Ctrl+E` digit, the `L` list with save, delete and reset,
+  `/layout`. `R` resets `home` alone; `street` is seeded once per device
+  (`Layouts::seed_stock`, a marker in the stored set so a deleted
+  `street` stays deleted) and has no stock to return to. The status line
   `layout` component is not built. A key with no `home_layouts` seeds the
-  set from its `home_layout` and `zen_layout`; nothing writes either any
-  more.
+  set from its `home_layout`; the old `zen_layout` is read nowhere.
 - The border is the layout's: a border of `none` draws Home's rules, any
   other boxes the page in its look (`b` cycles them in arrange mode; the
-  stock `zen` is boxed). There is no separate `f` frame key.
+  stock `street` is boxed). There is no separate `f` frame key.
 - No chat-only key and no narrow fold: a page is drawn as arranged at
   every width, and a phone arranges its own Home. The room-list setting is
   gone, row and storage; the sidebar row is the Arcade's. The stock Home
@@ -216,7 +221,7 @@ included. The board's all-day line is the banner over the tree
 The stock Home puts the strip on the reef across the top of the chat, so
 it lands on the fish and the chat never loses a row, and attention on the
 lobby: what waits on you takes the tables' tile and the feed comes back
-when the list clears. The stock lobby and pet are three rows each under
+when the list clears. The stock lobby is four rows and the pet three under
 their titles, the bonsai takes the rest of the column, and the rail, the
 reef and the presence rows wear no title outside arrange mode.
 
@@ -265,20 +270,22 @@ tile's own business; the board's day left that row for the banner.
 A device (an SSH key, the rails' precedent in `late-ssh/CONTEXT.md`
 section 8) holds up to nine named layouts and which one is current. Each
 is a tree plus its look. Stored on `user_ssh_keys.settings`, the account's
-`zen_layout` only a seed for a key with none, then ignored.
+`home_layout` only a seed for a key with none, then ignored.
 
 Stock, on every device:
 
-1. `home`: today's Home, the default.
-2. `zen`: the reef and the bonsai over one chat, the clock, pet, lobby,
-   live and music rail, boxed: the page the Zen screen drew.
+1. `home`: today's Home, the default, the one `R` resets.
+2. `street`: the tiles Home leaves out. An ascii piece with the tank
+   beside it over two chats (News, and `#announcements` bound by slug),
+   and a rail of clock, pulse, friends and activity, boxed. Seeded once,
+   then the device's own.
 
 Switching:
 
 - `Ctrl+E` then a digit `1`..`9`: enter arrange mode, load that layout,
   leave arrange mode. Two keystrokes, like a tmux prefix.
 - `Ctrl+E L`: the layouts list. `j` `k` move, Enter loads, `n` saves the
-  page as a new layout, `r` renames, `d` deletes (not the last one), `R`
+  page as a new layout, `d` deletes (not the last one), `R`
   resets one to stock Home.
 - `/layout <name>` and `/layout save <name>` from any composer.
 - A `layout` component in the status line customizer, off by default,
@@ -330,17 +337,19 @@ Zen ever earned.
   arm and through the tree and asserts equal buffers, at three widths
   (the two `AUTO_*_MIN_COLS` thresholds and a wide one). The old arm is
   deleted only once that passes.
-- A stored `zen_layout` becomes layout 2 on first login after the change,
-  its look dropped, its retired kinds dropped, its `room` fields read as
-  `Room(id)`.
+- A stored `zen_layout` is not read; layout 2 is the stock `street`,
+  seeded on first login after the change. A chat tile's `room` reads as
+  `Room(id)` for a uuid, `News` for `news`, and `Permanent(slug)` for any
+  other string.
 - A stored `right_sidebar_components` list becomes the stock `home`
   tree's sidebar column in that order; a panel the account turned off is
   left out. The list and the rail modes are then dead keys, dropped on
   read the way `activity` and `pot` are today.
 - `Screen::Zen`, `zen_return_screen`, the workspace base dance in
   `input.rs::zen_return_screen` and the tour's `VisitZen` stop are gone
-  (built). The tour stop was dropped rather than made a `Ctrl+E` stop on
-  Home, so a newcomer's layout never changes under them.
+  (built). The tour stop became `VisitLayouts`, a `Ctrl+E` stop on Home
+  with `street` up; the homecoming move puts `home` back, so a newcomer's
+  layout never changes under them.
 
 ## What this costs
 
@@ -376,7 +385,7 @@ refused with a message. It would make layouts shareable in chat
 3. The `center`, `rooms`, `music` kinds and the stock `home` tree behind
    the snapshot test; the Home arm switches over.
 4. Guests, `now` on the reef and `lobby` wherever its owner puts it.
-5. Layouts per device, the stock `zen`, `Ctrl+E` digit, the list,
+5. Layouts per device, the stock `street`, `Ctrl+E` digit, the list,
    `/layout`.
 6. Migration, the contexts, the help topic, the tips. Built: the Zen
    screen is gone (see Built: v1).

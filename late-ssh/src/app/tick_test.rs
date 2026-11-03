@@ -54,7 +54,7 @@ fn hide_sidebar(app: &mut App) {
         ),
         look: Look::default(),
     };
-    app.home = ZenState::new(quiet.clone(), quiet);
+    app.home = ZenState::new(quiet.clone(), Some(quiet));
 }
 
 /// Undo [`hide_sidebar`] for the animated case, which shares the settled
@@ -78,7 +78,7 @@ fn show_sidebar(app: &mut App) {
         ),
         look: Look::default(),
     };
-    app.home = ZenState::new(with_music.clone(), with_music);
+    app.home = ZenState::new(with_music.clone(), Some(with_music));
 }
 
 /// Mirror the render loop's frame path: a changed tick renders and drains
@@ -271,7 +271,7 @@ async fn home_equalizer_tiles_hold_the_half_rate_tier() {
     app.last_input_at = Instant::now() - Duration::from_secs(10);
 
     // The stock zen layout carries a music tile, whose eq strip animates.
-    app.home = ZenState::new(RiceLayout::default(), RiceLayout::default());
+    app.home = ZenState::new(RiceLayout::default(), Some(RiceLayout::default()));
     assert_eq!(
         app.wake_hint(),
         ANIM_HALF_TICK,
@@ -288,7 +288,7 @@ async fn home_equalizer_tiles_hold_the_half_rate_tier() {
             ),
             look: Look::default(),
         },
-        RiceLayout::default(),
+        Some(RiceLayout::default()),
     );
     assert_eq!(
         app.wake_hint(),
@@ -307,7 +307,7 @@ async fn home_equalizer_tiles_hold_the_half_rate_tier() {
             ),
             look: Look::default(),
         },
-        RiceLayout::default(),
+        Some(RiceLayout::default()),
     );
     assert_eq!(
         app.wake_hint(),
