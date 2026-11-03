@@ -209,7 +209,8 @@ struct DrawContext<'a> {
     live_panel_now: chrono::DateTime<chrono::Utc>,
     live_panel_hit: &'a crate::app::live::panel::LivePanelHit,
     /// People with a watch open on this player's own running game on the
-    /// watchable door whose screen is up, for its watcher chat.
+    /// watchable door whose screen is up, for its frame title and watcher
+    /// chat.
     own_watchers: usize,
     /// People with the held watch open, this session included, for its
     /// watch chat's header.
@@ -508,19 +509,10 @@ impl App {
             crate::app::door::spectate::state::SpectateGame::of_screen(self.screen);
         let own_chat_open = crate::app::door::spectate::input::open_own_chat_game(self);
         let foreground_overlay_open = self.foreground_overlay_open();
-        let own_game_key = own_screen_game.and_then(|game| {
-            let handle = crate::app::door::spectate::chat::own_running_handle(self, game)?;
-            crate::app::door::spectate::state::LiveGameKey::new(game, &handle)
-        });
-        // No game of theirs on the roster: nobody can be watching it.
-        let own_watchers = match own_game_key {
-            Some(key) => self.live_games.watchers_of(key),
-            None => 0,
-        };
-        let held_watchers = match self.spectate_state.as_ref() {
-            Some(state) => self.live_games.watchers_of(state.key()),
-            None => 0,
-        };
+        let crate::app::door::spectate::chat::WatcherCounts {
+            own: own_watchers,
+            held: held_watchers,
+        } = crate::app::door::spectate::chat::watcher_counts(self);
         let is_runner = self.is_runner();
         let games_hub_roster = HubGame::roster(is_runner);
         // Away with the Tweak on: the piece covers everything this frame.
@@ -3158,6 +3150,18 @@ fn chat_title_hint(unread: Option<i64>) -> Option<Span<'static>> {
     }
 }
 
+/// What the frame title says around a player's own running game on a
+/// watchable door: who is watching, then the chat's word.
+fn own_game_title_hints(ctx: &DrawContext<'_>) -> Vec<Span<'static>> {
+    crate::app::door::spectate::ui::watchers_title_hint(
+        ctx.own_watchers,
+        ctx.own_chat_open.is_some(),
+    )
+    .into_iter()
+    .chain(chat_title_hint(ctx.chat_title_unread))
+    .collect()
+}
+
 /// The numbered page tabs in the frame title, by the screen each one is.
 const FRAME_TABS: [(Screen, &str); 8] = [
     (Screen::Clubhouse, "0"),
@@ -3276,7 +3280,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .as_deref()
             .is_some_and(|state| state.is_running());
         if in_game {
-            spans.extend(chat_title_hint(ctx.chat_title_unread));
+            spans.extend(own_game_title_hints(ctx));
             spans.push(Span::styled(
                 "· ? help · S save · ` step out · #quit ",
                 Style::default().fg(theme::TEXT_DIM()),
@@ -3297,7 +3301,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .as_deref()
             .is_some_and(|state| state.is_running());
         if in_game {
-            spans.extend(chat_title_hint(ctx.chat_title_unread));
+            spans.extend(own_game_title_hints(ctx));
             spans.push(Span::styled(
                 "· ? help · S save · ` step out · Ctrl-Q abandon ",
                 Style::default().fg(theme::TEXT_DIM()),
@@ -3318,7 +3322,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .as_deref()
             .is_some_and(|state| state.is_running());
         if in_game {
-            spans.extend(chat_title_hint(ctx.chat_title_unread));
+            spans.extend(own_game_title_hints(ctx));
             spans.push(Span::styled(
                 "\u{b7} ? help \u{b7} S save \u{b7} ` step out \u{b7} Q abandon ",
                 Style::default().fg(theme::TEXT_DIM()),
@@ -3394,7 +3398,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     {
         // The ways out lead after the chat's word: every key belongs to the
         // story, and an 80 column title cuts the tail.
-        spans.extend(chat_title_hint(ctx.chat_title_unread));
+        spans.extend(own_game_title_hints(ctx));
         spans.push(Span::styled(
             "· ` step out · QUIT quit · RESTORE menu · SAVE manual save ",
             Style::default().fg(theme::TEXT_DIM()),

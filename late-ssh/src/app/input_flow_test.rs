@@ -5690,6 +5690,195 @@ async fn a_zork_player_opens_their_watchers_chat_with_f4_and_f3_closes_it() {
     assert_eq!(app.screen, Screen::Zork);
 }
 
+/// A player keeps the whole screen and still knows what is going on around
+/// their game: with the chat shut the frame title says who is watching and
+/// what they said. Nobody watching is no word at all, the open chat's header
+/// takes the count over, and a watcher coming or going is a frame even on a
+/// game sitting still (nothing else signals it).
+#[tokio::test]
+async fn the_title_tells_a_player_who_is_watching_and_what_is_new_with_the_chat_shut() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::door::spectate::state::{LiveGameKey, SpectateGame};
+    use late_core::models::chat_room::{ChatRoom, WatchDoor};
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    // The render loop's frame path: a dirty tick draws and drains its queued
+    // terminal commands, which keep the gate dirty until they go.
+    let settle = |app: &mut crate::app::state::App| {
+        for _ in 0..50 {
+            if !app.tick() {
+                return;
+            }
+            render_plain(app);
+            let _ = std::mem::take(&mut app.pending_terminal_commands);
+        }
+        panic!("the session never settled");
+    };
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "own-title").await;
+    let first_watcher = create_test_user(&test_db.db, "own-title-first").await;
+    let second_watcher = create_test_user(&test_db.db, "own-title-second").await;
+    let client = test_db.db.get().await.expect("db client");
+    let room = ChatRoom::get_or_create_watch_room(&client, WatchDoor::Nethack, "tester")
+        .await
+        .expect("the player's watch room");
+    ChatRoomMember::join(&client, room.id, user.id)
+        .await
+        .expect("join the watch room");
+    let mut app = make_app(test_db.db.clone(), user.id, "own-title-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_app(&mut app, "the room list", |app| {
+        app.chat.room_by_id(room.id).is_some()
+    })
+    .await;
+    app.live_games
+        .publish_chat_room_for_tests(SpectateGame::Nethack, "tester", room.id);
+
+    // A watcher talks, and the room's unread count comes in the way it does
+    // for every room, on the session's next chat snapshot.
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: room.id,
+            user_id: first_watcher.id,
+            body: "nice dagger".to_string(),
+        },
+    )
+    .await
+    .expect("the watcher's message");
+    app.chat.request_list();
+    wait_for_app(&mut app, "the unread count", |app| {
+        app.chat.unread_counts.get(&room.id) == Some(&1)
+    })
+    .await;
+
+    // A running game under a claimed handle. Nothing awaits from here on, as
+    // in the flows above: the fabricated proxy would end the game.
+    app.set_screen(Screen::Games);
+    app.enter_nethack();
+    let state = app.nethack_state.as_mut().expect("nethack state");
+    state.force_claimed_handle_for_test("tester");
+    state.force_running_for_test();
+    app.set_screen(Screen::Nethack);
+    app.tick();
+
+    let plain = render_plain(&mut app);
+    assert!(
+        plain.contains("\u{b7} F4 chat (1 new) \u{b7} ? help"),
+        "what the watchers said, with the chat shut: {plain}"
+    );
+    assert!(!plain.contains("watching"), "nobody, no word: {plain}");
+    settle(&mut app);
+
+    let key = LiveGameKey::new(SpectateGame::Nethack, "tester").expect("a handle");
+    let first_watch = app.live_games.open_watch(key, first_watcher.id);
+    assert!(app.tick(), "a watcher coming is a frame on a still game");
+    let plain = render_plain(&mut app);
+    assert!(
+        plain.contains("\u{b7} 1 watching \u{b7} F4 chat (1 new) \u{b7} ? help"),
+        "{plain}"
+    );
+    settle(&mut app);
+
+    let second_watch = app.live_games.open_watch(key, second_watcher.id);
+    assert!(app.tick(), "and so is a second one");
+    let plain = render_plain(&mut app);
+    assert!(
+        plain.contains("\u{b7} 2 watching \u{b7} F4 chat"),
+        "{plain}"
+    );
+    settle(&mut app);
+
+    // F4 up: the chat's header has the count, and the room reads.
+    app.handle_input(b"\x1bOS");
+    app.tick();
+    let plain = render_plain(&mut app);
+    assert!(
+        plain.contains("2 watching \u{b7} Esc to the game"),
+        "{plain}"
+    );
+    assert!(!plain.contains("\u{b7} 2 watching"), "{plain}");
+
+    // F4 down: back in the title, with nothing new left to count.
+    app.handle_input(b"\x1bOS");
+    app.tick();
+    let plain = render_plain(&mut app);
+    assert!(
+        plain.contains("\u{b7} 2 watching \u{b7} F4 chat \u{b7} ? help"),
+        "{plain}"
+    );
+    settle(&mut app);
+
+    drop(first_watch);
+    assert!(app.tick(), "a watcher leaving is a frame too");
+    let plain = render_plain(&mut app);
+    assert!(
+        plain.contains("\u{b7} 1 watching \u{b7} F4 chat"),
+        "{plain}"
+    );
+    settle(&mut app);
+
+    drop(second_watch);
+    assert!(app.tick(), "the last one leaving as well");
+    let plain = render_plain(&mut app);
+    assert!(!plain.contains("watching"), "{plain}");
+}
+
+/// The title's word is written per door, so each door is held to it.
+#[tokio::test]
+async fn every_watchable_door_says_who_is_watching_in_its_title() {
+    use crate::app::common::primitives::Screen;
+    use crate::app::door::spectate::state::{LiveGameKey, SpectateGame};
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "door-titles").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "door-titles-flow-it");
+    app.resize(160, 40).expect("resize test terminal");
+
+    // Running games under a claimed handle. Nothing awaits from here on, as
+    // in the flows above: the fabricated proxies would end the games.
+    app.set_screen(Screen::Games);
+    app.enter_nethack();
+    let state = app.nethack_state.as_mut().expect("nethack state");
+    state.force_claimed_handle_for_test("tester");
+    state.force_running_for_test();
+    app.enter_dcss();
+    let state = app.dcss_state.as_mut().expect("dcss state");
+    state.force_claimed_handle_for_test("tester");
+    state.force_running_for_test();
+    app.enter_brogue();
+    let state = app.brogue_state.as_mut().expect("brogue state");
+    state.force_claimed_handle_for_test("tester");
+    state.force_running_for_test();
+    app.zork_enabled = true;
+    app.enter_zork();
+    app.zork_state
+        .as_mut()
+        .expect("zork state")
+        .force_running_for_test();
+
+    let watcher = uuid::Uuid::now_v7();
+    for (game, screen) in [
+        (SpectateGame::Nethack, Screen::Nethack),
+        (SpectateGame::Dcss, Screen::Dcss),
+        (SpectateGame::Brogue, Screen::Brogue),
+        (SpectateGame::Zork, Screen::Zork),
+    ] {
+        app.set_screen(screen);
+        let plain = render_plain(&mut app);
+        assert!(!plain.contains("watching"), "{screen:?}: {plain}");
+
+        let key = LiveGameKey::new(game, "tester").expect("a handle");
+        let _watch = app.live_games.open_watch(key, watcher);
+        let plain = render_plain(&mut app);
+        assert!(
+            plain.contains("\u{b7} 1 watching \u{b7} "),
+            "{screen:?}: {plain}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn arranging_home_keeps_the_chat_keys_off_a_tile_that_is_not_a_chat() {
     let test_db = new_test_db().await;

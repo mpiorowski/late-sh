@@ -916,6 +916,9 @@ pub struct App {
     /// with F4, also closed by Esc and by the game ending. `None`, the game
     /// has the keys and the whole screen.
     pub(crate) own_watch_chat_open: Option<crate::app::door::spectate::state::SpectateGame>,
+    /// The watcher counts as the last tick read them
+    /// (`door::spectate::chat::watchers_moved`).
+    pub(crate) watcher_counts_seen: crate::app::door::spectate::chat::WatcherCounts,
     /// The chat column over this player's own running game, as the last
     /// frame drew it (`None` while it is closed): only a drawn column takes
     /// the keys (`door::spectate::input::own_chat_takes_keys`).
@@ -1971,6 +1974,7 @@ impl App {
             live_games: config.live_games,
             own_watch_chats: Vec::new(),
             own_watch_chat_open: None,
+            watcher_counts_seen: Default::default(),
             own_chat_hit: std::cell::Cell::new(None),
             own_chat_undrawn: std::cell::Cell::new(false),
             brogue_state: None,
