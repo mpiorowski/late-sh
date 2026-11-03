@@ -157,7 +157,7 @@ line and the keys), `live` at its panel rows, `pet` (its three-row box, no mood 
 title off outside arrange mode (`Node::untitled`, `Node::title_at`): the
 reef keeps the row for water, so nothing moves when the mode comes up, and
 `presence` gets both its rows. An unowned
-pet draws the shop's note in its tile. The Settings panel list is the
+pet, or one its owner put away (the Shop's `o`), draws the shop's note in its tile. The Settings panel list is the
 Arcade's alone. `R` resets to the stock. Nothing about the terminal's size
 changes a layout: a page is drawn as arranged at every width, so a phone
 arranges its own Home once and keeps it on its key.
@@ -286,9 +286,9 @@ Every row is a fact the session already holds, and every row clears on the act t
 | `@actor` mentioned you in #room | an unread mention (the same rows, read ones left out) | reading it |
 | the tank is unfed today | `AquariumCare` has no meal today | `/aquarium feed`, a click or `a` on the tank |
 | the tree is unwatered today | `last_watered` is not today | watering |
-| the pet is unpetted today | the pet is owned and not petted today | a pat |
+| the pet is unpetted today | the pet is out (`App::pet_out`: owned, not put away) and not petted today | a pat |
 
-Order: moves, results, DMs, mentions, tank, tree, pet (`attention::items`). The care rows are keyed on the UTC day, so they come back each morning; ownership is gated by the glue (`App::care_today`, a `Care` of three `Chore`s), an unowned pet is never due; everyone has a tank and a tree. The guest is up exactly when the list is non-empty; the page asks nothing else (`guest_up`). Enter does the row's act through the page's global functions (`open_daily_modal_globally`, the Inbox row opener, `feed_aquarium_globally`, `BonsaiSession::request(Water)`, `pet_the_pet_globally`); the list never switches a layout, opens a modal or moves the focus on its own.
+Order: moves, results, DMs, mentions, tank, tree, pet (`attention::items`). The care rows are keyed on the UTC day, so they come back each morning; ownership is gated by the glue (`App::care_today`, a `Care` of three `Chore`s), an unowned or put-away pet is never due; everyone has a tank and a tree. The guest is up exactly when the list is non-empty; the page asks nothing else (`guest_up`). Enter does the row's act through the page's global functions (`open_daily_modal_globally`, the Inbox row opener, `feed_aquarium_globally`, `BonsaiSession::request(Water)`, `pet_the_pet_globally`); the list never switches a layout, opens a modal or moves the focus on its own.
 
 ## 2. File map
 

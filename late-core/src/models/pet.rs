@@ -22,6 +22,8 @@ crate::user_scoped_model! {
         pub mood_since: DateTime<Utc>,
         // The last UTC day the owner petted it: the daily chip gate.
         pub last_petted: Option<NaiveDate>,
+        // The owner's switch: false puts the pet away while it stays bought.
+        pub enabled: bool,
     }
 }
 
@@ -263,6 +265,17 @@ impl PetCompanion {
             .execute(
                 "UPDATE pet_companions SET species = $1, updated = current_timestamp WHERE user_id = $2",
                 &[&species.as_str(), &user_id],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Bring the pet out or put it away.
+    pub async fn set_enabled(client: &Client, user_id: Uuid, enabled: bool) -> Result<()> {
+        client
+            .execute(
+                "UPDATE pet_companions SET enabled = $1, updated = current_timestamp WHERE user_id = $2",
+                &[&enabled, &user_id],
             )
             .await?;
         Ok(())

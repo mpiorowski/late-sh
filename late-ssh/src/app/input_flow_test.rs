@@ -6086,6 +6086,52 @@ async fn home_pet_tile_is_petted_without_moving_the_focus() {
 }
 
 #[tokio::test]
+async fn a_pet_put_away_leaves_its_tile_and_stops_asking_for_care() {
+    use crate::app::hub::shop::{
+        entitlements::ShopEntitlements, state::ShopState, svc::ShopSnapshot,
+    };
+    use crate::app::zen::attention::{Chore, Item};
+    use crate::app::zen::state::{Dir, Guest, Look, Node, RiceLayout, TileKind, ZenState};
+    use late_core::models::marketplace::PET_COMPANION_SKU;
+
+    let test_db = new_test_db().await;
+    let viewer = create_test_user(&test_db.db, "pet-away-viewer").await;
+    let mut app = make_app(test_db.db.clone(), viewer.id, "pet-away-flow-it");
+    app.shop_state = ShopState::for_test_snapshot(ShopSnapshot {
+        entitlements: ShopEntitlements::from_owned_skus([PET_COMPANION_SKU.to_string()]),
+        ..Default::default()
+    });
+    let arranged = RiceLayout {
+        root: Node::split_second(
+            Dir::Row,
+            23,
+            Node::hosting(TileKind::Chat, &[Guest::Attention]),
+            Node::leaf(TileKind::Pet),
+        ),
+        look: Look::default(),
+    };
+    app.home = ZenState::new(arranged.clone(), Some(arranged));
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "╭ pet").await;
+
+    assert!(app.last_pet_rect.get().is_some(), "the pet drew");
+    assert_eq!(app.care_today().pet, Chore::Due);
+    assert!(app.attention_items().contains(&Item::PetPet));
+
+    app.pet_state.set_enabled(false);
+    let frame = render_plain(&mut app);
+    assert!(app.last_pet_rect.get().is_none(), "no click target is left");
+    assert!(frame.contains("no pet out"), "the tile says so: {frame}");
+    assert_eq!(app.care_today().pet, Chore::NotOwned);
+    assert!(!app.attention_items().contains(&Item::PetPet));
+
+    app.pet_state.set_enabled(true);
+    render_plain(&mut app);
+    assert!(app.last_pet_rect.get().is_some(), "the pet is back");
+    assert!(app.attention_items().contains(&Item::PetPet));
+}
+
+#[tokio::test]
 async fn home_tank_tile_is_fed_by_a_click_without_moving_the_focus() {
     use crate::app::zen::state::{Dir, Look, Node, RiceLayout, TileKind, ZenState};
 

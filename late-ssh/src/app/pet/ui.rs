@@ -511,7 +511,7 @@ pub fn draw_tile(frame: &mut Frame, area: Rect, pet: Option<&PetView<'_>>, neigh
         draw_centered_note(
             frame,
             area,
-            &["no pet yet", "the Pet Companion is in /shop"],
+            &["no pet out", "the Pet Companion is in /shop"],
         );
         return;
     };

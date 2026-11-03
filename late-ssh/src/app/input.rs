@@ -3434,10 +3434,10 @@ pub(crate) fn open_shop_modal_globally(app: &mut App) {
 }
 
 /// A click on the pet: it purrs for a bit, and the first click of the day
-/// pays (`PetState::pet`). The box only draws for owners, so the click can
-/// only land on an unlocked pet; the service checks ownership again.
+/// pays (`PetState::pet`). The box only draws for a pet that is out, so the
+/// click can only land on one; the service checks ownership again.
 pub(crate) fn pet_the_pet_globally(app: &mut App) {
-    if !app.shop_state.entitlements().has_pet_companion() {
+    if !app.pet_out() {
         return;
     }
     app.pet_state

@@ -224,3 +224,38 @@ async fn writes_are_scoped_to_the_owner() {
     assert_eq!(owner_after.mood(), PetMood::Sulking);
     assert_eq!(owner_after.species(), PetSpecies::Bird);
 }
+
+#[tokio::test]
+async fn the_switch_starts_on_and_flips_only_the_owners_pet() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let owner = crate::test_utils::create_test_user(&test_db.db, "pet-switch-owner").await;
+    let other = crate::test_utils::create_test_user(&test_db.db, "pet-switch-other").await;
+    let fresh = PetCompanion::ensure(&client, owner.id)
+        .await
+        .expect("ensure owner pet");
+    assert!(fresh.enabled, "a pet starts out");
+    PetCompanion::ensure(&client, other.id)
+        .await
+        .expect("ensure other pet");
+
+    PetCompanion::set_enabled(&client, owner.id, false)
+        .await
+        .expect("put away");
+    let away = PetCompanion::ensure(&client, owner.id)
+        .await
+        .expect("reload owner pet");
+    assert!(!away.enabled, "the owner's pet is away");
+    let other_after = PetCompanion::ensure(&client, other.id)
+        .await
+        .expect("reload other pet");
+    assert!(other_after.enabled, "nobody else's pet moved");
+
+    PetCompanion::set_enabled(&client, owner.id, true)
+        .await
+        .expect("bring out");
+    let back = PetCompanion::ensure(&client, owner.id)
+        .await
+        .expect("reload owner pet");
+    assert!(back.enabled, "the owner's pet is back out");
+}

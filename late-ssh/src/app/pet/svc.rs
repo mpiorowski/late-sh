@@ -115,6 +115,20 @@ impl PetService {
         PetCompanion::set_species(&client, user_id, species).await
     }
 
+    pub fn set_enabled_task(&self, user_id: Uuid, enabled: bool) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.set_enabled(user_id, enabled).await {
+                tracing::error!(error = ?e, user_id = %user_id, enabled, "failed to switch the pet");
+            }
+        });
+    }
+
+    async fn set_enabled(&self, user_id: Uuid, enabled: bool) -> Result<()> {
+        let client = self.db.get().await?;
+        PetCompanion::set_enabled(&client, user_id, enabled).await
+    }
+
     /// Record the mood the session inferred, so a profile can show it. Fired
     /// on every mood change and once more, `Asleep`, when the session ends.
     pub fn set_mood_task(&self, user_id: Uuid, mood: PetMood) {

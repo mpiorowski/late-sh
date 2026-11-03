@@ -33,11 +33,18 @@ use std::sync::OnceLock;
 
 use late_core::models::pet::PetSpecies;
 
+/// What the owned pet's row shows: its animal and its on/off switch.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct ShopPet {
+    pub species: PetSpecies,
+    pub enabled: bool,
+}
+
 pub(crate) fn draw(
     frame: &mut Frame,
     area: Rect,
     state: &ShopState,
-    pet_species: PetSpecies,
+    pet: ShopPet,
     care: &AquariumCare,
 ) {
     let sections = Layout::vertical([
@@ -52,8 +59,8 @@ pub(crate) fn draw(
 
     frame.render_widget(Paragraph::new(section_heading("Shop")), sections[0]);
     draw_categories(frame, sections[2], state);
-    draw_body(frame, sections[4], state, pet_species, care);
-    draw_footer(frame, sections[5], state, pet_species);
+    draw_body(frame, sections[4], state, pet, care);
+    draw_footer(frame, sections[5], state, pet);
     if let Some(pending) = state.pending_room_effect() {
         draw_room_effect_confirm(frame, area, pending);
     }
@@ -94,7 +101,7 @@ fn draw_body(
     frame: &mut Frame,
     area: Rect,
     state: &ShopState,
-    pet_species: PetSpecies,
+    pet: ShopPet,
     care: &AquariumCare,
 ) {
     let columns =
@@ -106,7 +113,7 @@ fn draw_body(
         columns[1],
         state,
         state.selected_item(),
-        pet_species,
+        pet,
         care,
         today,
     );
@@ -262,7 +269,7 @@ fn draw_item_detail(
     area: Rect,
     state: &ShopState,
     item: Option<&ShopCatalogItem>,
-    pet_species: PetSpecies,
+    pet: ShopPet,
     care: &AquariumCare,
     today: NaiveDate,
 ) {
@@ -465,7 +472,7 @@ fn draw_item_detail(
         lines.push(Line::from(vec![
             Span::raw("  ascii  "),
             Span::styled(
-                pet_species.as_str().to_string(),
+                pet.species.as_str().to_string(),
                 Style::default()
                     .fg(theme::AMBER())
                     .add_modifier(Modifier::BOLD),
@@ -474,6 +481,20 @@ fn draw_item_detail(
                 "   t for the next: cat, dog, bird",
                 Style::default().fg(theme::TEXT_DIM()),
             ),
+        ]));
+        let (word, hint) = match pet.enabled {
+            true => ("out", "   o puts it away, no reminders"),
+            false => ("away", "   o brings it back"),
+        };
+        lines.push(Line::from(vec![
+            Span::raw("  state  "),
+            Span::styled(
+                word,
+                Style::default()
+                    .fg(theme::AMBER())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(hint, Style::default().fg(theme::TEXT_DIM())),
         ]));
     }
     if item.is_consumable() {
@@ -730,7 +751,7 @@ fn truncate_display_width(value: &str, max_width: usize) -> String {
     out
 }
 
-fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: PetSpecies) {
+fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, pet: ShopPet) {
     let selected = state.selected_item();
     let enter_label = if selected.is_some_and(|item| item.is_sprout()) {
         "grows on its own"
@@ -771,6 +792,14 @@ fn draw_footer(frame: &mut Frame, area: Rect, state: &ShopState, _pet_species: P
         spans.extend([
             Span::styled("  t", key),
             Span::styled(" cat/dog/bird", text),
+            Span::styled("  o", key),
+            Span::styled(
+                match pet.enabled {
+                    true => " put away",
+                    false => " bring out",
+                },
+                text,
+            ),
         ]);
     }
     if selected.is_some_and(|item| item.is_tank_stock()) {

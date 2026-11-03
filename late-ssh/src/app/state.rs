@@ -1566,6 +1566,7 @@ impl App {
                     mood: late_core::models::pet::PetMood::Asleep.as_str().to_string(),
                     mood_since: chrono::Utc::now(),
                     last_petted: None,
+                    enabled: true,
                 },
             )
         };
@@ -3842,7 +3843,13 @@ impl App {
         self.home_layout_dirty = true;
     }
 
-    /// Today's care, the pet gated on ownership: what the attention guest
+    /// Whether the pet shows: bought, and not put away with its Shop switch.
+    /// Every surface that draws it, pets it or asks for it reads this.
+    pub(crate) fn pet_out(&self) -> bool {
+        self.shop_state.entitlements().has_pet_companion() && self.pet_state.enabled
+    }
+
+    /// Today's care, the pet gated on `pet_out`: what the attention guest
     /// and the status line's Care count read.
     pub(crate) fn care_today(&self) -> crate::app::zen::attention::Care {
         use crate::app::zen::attention::{Care, Chore};
@@ -3850,10 +3857,7 @@ impl App {
         Care {
             bonsai: Chore::of(true, self.bonsai.tree.last_watered == Some(today)),
             tank: Chore::of(true, self.aquarium_care.fed_on_day(today)),
-            pet: Chore::of(
-                self.shop_state.entitlements().has_pet_companion(),
-                self.pet_state.petted_on(today),
-            ),
+            pet: Chore::of(self.pet_out(), self.pet_state.petted_on(today)),
         }
     }
 

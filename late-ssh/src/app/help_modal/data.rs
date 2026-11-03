@@ -1873,7 +1873,7 @@ fn settings_help_lines() -> Vec<String> {
             .to_string(),
         "  On by default, and visible even while idle: Keyhints, mentions, voice, live, date."
             .to_string(),
-        "  Care counts the bonsai, tank, and pet still waiting on today's care; click it for Home, where they live."
+        "  Care counts the bonsai, tank, and pet (unless you put it away) still waiting on today's care; click it for Home, where they live."
             .to_string(),
         "  Now reads what the #lounge now strip shows (a stream, a match, a booth track, a board event); click it to open that."
             .to_string(),
@@ -2202,6 +2202,7 @@ fn bonsai_help_lines() -> Vec<String> {
         "  click it          and it purrs for a couple of minutes (the first pet of the day pays 100 chips); move the cursor in its tile and it walks after it",
         "  the mood shows on your profile, so friends can see how your night is going",
         "  /petname [name]   show or set your pet's name",
+        "  o in the Shop     puts it away and brings it back: while away it has no tile, panel or profile portrait, asks for no petting, and pays no chips",
     ]
     .into_iter()
     .map(str::to_string)

@@ -429,7 +429,8 @@ struct DrawContext<'a> {
     marquee_tick: usize,
     chat_state: &'a chat::state::ChatState,
     user_id: uuid::Uuid,
-    pet_species: late_core::models::pet::PetSpecies,
+    /// `App::pet_out`: the pet is bought and not put away.
+    pet_out: bool,
     news_reader: Option<&'a chat::news::reader::state::ReaderModal>,
     video_modal: Option<&'a crate::app::video::state::WatchModal>,
     is_draining: bool,
@@ -476,6 +477,7 @@ impl App {
         // (some door states are even taken out of `self` for the draw).
         use crate::app::door::hub::state::HubGame;
         let home_care = self.care_today();
+        let pet_out = self.pet_out();
         // Only Home draws these, and only a page hosting attention reads
         // its list: every other frame skips the work.
         let attention =
@@ -1554,15 +1556,11 @@ impl App {
             })
             .collect();
 
-        let home_pet_strip = self
-            .shop_state
-            .entitlements()
-            .has_pet_companion()
-            .then_some(crate::app::pet::ui::PetView {
-                state: &self.pet_state,
-                pet_rect_slot: Some(&self.last_pet_rect),
-                frame_slot: Some(&self.last_pet_frame),
-            });
+        let home_pet_strip = pet_out.then_some(crate::app::pet::ui::PetView {
+            state: &self.pet_state,
+            pet_rect_slot: Some(&self.last_pet_rect),
+            frame_slot: Some(&self.last_pet_frame),
+        });
         // The clubhouse has no chat panel: #lounge messages float over their
         // authors' heads and the shared composer block pins to the bottom.
         // Both are only assembled while that screen is up.
@@ -1932,7 +1930,7 @@ impl App {
                         marquee_tick: self.marquee_tick,
                         chat_state: &self.chat,
                         user_id: self.user_id,
-                        pet_species: self.pet_state.species,
+                        pet_out,
                         news_reader,
                         video_modal,
                         is_draining: self.is_draining.load(std::sync::atomic::Ordering::Relaxed),
@@ -2741,11 +2739,7 @@ impl App {
                     paired_client: ctx.paired_client,
                     eq_state: ctx.eq_state,
                     bonsai: ctx.bonsai,
-                    pet: ctx
-                        .shop_state
-                        .entitlements()
-                        .has_pet_companion()
-                        .then_some(ctx.pet_state),
+                    pet: ctx.pet_out.then_some(ctx.pet_state),
                     tank: crate::app::common::sidebar::SidebarTank {
                         aquarium: ctx.aquarium_state,
                         hungry: ctx.aquarium_care.hungry(),
@@ -2832,9 +2826,7 @@ impl App {
                 frame,
                 inner,
                 ctx.settings_modal_state,
-                crate::app::common::sidebar::SidebarOwnership {
-                    pet: ctx.shop_state.entitlements().has_pet_companion(),
-                },
+                crate::app::common::sidebar::SidebarOwnership { pet: ctx.pet_out },
             );
         }
 
@@ -2848,7 +2840,10 @@ impl App {
                 inner,
                 crate::app::hub::ui::HubDrawProps {
                     shop_state: ctx.shop_state,
-                    pet_species: ctx.pet_species,
+                    pet: crate::app::hub::shop::ui::ShopPet {
+                        species: ctx.pet_state.species,
+                        enabled: ctx.pet_state.enabled,
+                    },
                     aquarium_care: ctx.aquarium_care,
                 },
             );
