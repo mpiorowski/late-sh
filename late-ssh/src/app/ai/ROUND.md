@@ -80,7 +80,10 @@ reads a chat message, and `chat/slur.rs` has to leave that phrase alone.
   "drinks for the house", "everyone a drink", "drinks on me", "round's on
   me", ...) matched case-insensitively on word boundaries, so "turn around
   for all of us" is not an order. Every entry names the whole house or says
-  "on me"; a bare "a round" is not on the list. No model
+  "on me"; a bare "a round" is not on the list. `/buy round` and `/buy @user`
+  (`chat/state.rs::buy_order_body`) post one of these phrases for a patron who
+  does not remember the wording; the bar cannot tell the two apart, and a
+  test holds the posted text to `bar_order`. No model
   decides this: it is the only bartender action that spends more than one
   drink's worth, the price is the size of the room, so the phrase is the
   confirmation. An order is a statement: `contains_round_request` rejects a

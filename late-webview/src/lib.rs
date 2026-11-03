@@ -147,7 +147,11 @@ where
     );
 
     let ipc_tx_handler = ipc_tx.clone();
+    // wry focuses a new webview by default, and on Windows WebView2 takes
+    // keyboard focus from the terminal with it: the user's keys stop until
+    // they click back. The window above is created unfocused; so is this.
     let webview = WebViewBuilder::new()
+        .with_focused(false)
         .with_user_agent(WEBVIEW_USER_AGENT)
         .with_url(page_server.url.clone())
         .with_ipc_handler(move |req| {

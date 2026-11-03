@@ -90,8 +90,9 @@ pub(crate) enum RealmChatPane<'a> {
     /// Nothing to talk in yet: the board is loading, or the world was opened
     /// before rooms were born with it and the sweeper has not caught up.
     Absent,
-    /// The room is there and put away; what was said since is counted.
-    Hidden { unread: i64 },
+    /// The room is there and put away; the frame title counts what was
+    /// said since (`render.rs`, `F4 chat (N new)`).
+    Hidden,
     /// Boxed: the view dwarfs the other two variants, and the pane is built
     /// once a frame.
     Shown(Box<EmbeddedRoomChatView<'a>>),
@@ -122,10 +123,6 @@ pub(crate) fn draw(
     // The chat takes the right column on every view; on the map it stands
     // where the rail was. Too narrow for both, and the chat has the body:
     // it was asked for, the map was not.
-    let unread = match &chat {
-        RealmChatPane::Hidden { unread } => Some(*unread),
-        RealmChatPane::Absent | RealmChatPane::Shown(_) => None,
-    };
     let (body, chat_area, chat_view) = match chat {
         RealmChatPane::Shown(view) => {
             let width = chat_width(full_body.width);
@@ -148,7 +145,7 @@ pub(crate) fn draw(
                 false => (Rect::default(), Some(full_body), Some(view)),
             }
         }
-        RealmChatPane::Absent | RealmChatPane::Hidden { .. } => (full_body, None, None),
+        RealmChatPane::Absent | RealmChatPane::Hidden => (full_body, None, None),
     };
     let rail = chat_area.is_none();
     // The map sets it again if it is drawn; a frame where the chat has the
@@ -381,19 +378,12 @@ pub(crate) fn draw(
         }
     };
     let faint = Style::default().fg(theme::TEXT_FAINT());
-    // The chat's key leads, so a narrow footer cuts the view's keys rather
-    // than the one way to find out somebody said something.
+    // While the chat is up its keys lead, so a narrow footer cuts the
+    // view's keys first. Put away, the frame title names F4 and counts what
+    // is new, as on every game with a chat.
     let mut footer_spans = Vec::new();
-    match unread {
-        Some(0) => footer_spans.push(Span::styled("c chat · ", faint)),
-        Some(unread) => {
-            footer_spans.push(Span::styled(format!("c chat ({unread} new)"), bright));
-            footer_spans.push(Span::styled(" · ", faint));
-        }
-        None if realm.shown_chat_room_id().is_some() => {
-            footer_spans.push(Span::styled("c hide chat · i type · ", faint));
-        }
-        None => {}
+    if realm.shown_chat_room_id().is_some() {
+        footer_spans.push(Span::styled("F4 hide chat · i type · ", faint));
     }
     footer_spans.push(Span::styled(hints, faint));
     frame.render_widget(

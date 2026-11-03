@@ -1,4 +1,6 @@
-use chrono::{Datelike, Duration, NaiveDate, Utc};
+use std::collections::HashMap;
+
+use chrono::{DateTime, Datelike, Duration, NaiveDate, TimeZone, Utc};
 use serde_json::json;
 use uuid::Uuid;
 
@@ -10,9 +12,10 @@ use crate::{
         drinks::{UserDrinks, WELCOME_DRINK_POINTS},
         le_word,
         leaderboard::{
-            DailyPuzzle, DoorGame, LATEANIA_XP_AT_LEVEL_CAP, LATEANIA_XP_PER_PARAGON_LEVEL,
-            LobbyGame, OnlineTimeIncrement, RankedEntry, ScoreGame, WeekBest, WeekGame,
-            apply_online_time_batch, fetch_leaderboard_data, week_bests,
+            CountedSpan, DailyPuzzle, DoorGame, LATEANIA_XP_AT_LEVEL_CAP,
+            LATEANIA_XP_PER_PARAGON_LEVEL, LobbyGame, OnlineTimeFold, OnlineTimeIncrement,
+            RankedEntry, ScoreGame, apply_online_time_batch, fetch_leaderboard_data,
+            fold_online_time_credits,
         },
         minesweeper,
         mud_character::MudCharacter,
@@ -31,10 +34,157 @@ fn entry_for(entries: &[RankedEntry], user_id: Uuid) -> &RankedEntry {
         .expect("user on board")
 }
 
+fn online_span(
+    user_id: Uuid,
+    month_start: NaiveDate,
+    span_start: DateTime<Utc>,
+    span_seconds: i64,
+) -> OnlineTimeIncrement {
+    OnlineTimeIncrement {
+        user_id,
+        month_start,
+        span_start,
+        span_end: span_start + Duration::seconds(span_seconds),
+    }
+}
+
+fn counted(start: DateTime<Utc>, from_second: i64, to_second: i64) -> CountedSpan {
+    CountedSpan {
+        start: start + Duration::seconds(from_second),
+        end: start + Duration::seconds(to_second),
+    }
+}
+
+/// Two pods report the same user: the second to land earns only what the
+/// first did not cover, whichever order the batches arrive in, and a span
+/// with a gap beside an overlap never earns the gap.
+#[test]
+fn online_time_credits_each_moment_once_whatever_order_the_pods_land_in() {
+    let user_id = Uuid::from_u128(1);
+    let month_start = NaiveDate::from_ymd_opt(2026, 10, 1).expect("month");
+    let start = Utc.with_ymd_and_hms(2026, 10, 5, 12, 0, 0).unwrap();
+    let keep_from = start - Duration::days(1);
+
+    // The new pod landed first with 0..10 of a handoff; the old pod's
+    // earlier span 0..10 and a span of its own 20..30 then land, the first
+    // already counted, the second new.
+    let fold = fold_online_time_credits(
+        HashMap::from([(user_id, vec![counted(start, 0, 10)])]),
+        &[
+            online_span(user_id, month_start, start + Duration::seconds(20), 10),
+            online_span(user_id, month_start, start, 10),
+        ],
+        keep_from,
+    );
+    assert_eq!(
+        fold,
+        OnlineTimeFold {
+            counted: HashMap::from([(
+                user_id,
+                vec![counted(start, 0, 10), counted(start, 20, 30)]
+            )]),
+            all_time: HashMap::from([(user_id, 10_000)]),
+            monthly: HashMap::from([((user_id, month_start), 10_000)]),
+        },
+        "the earlier span earns nothing twice, the later one in full"
+    );
+
+    // A span straddling two counted spans earns only the gap between them,
+    // and the three merge into one.
+    let fold = fold_online_time_credits(
+        fold.counted,
+        &[online_span(
+            user_id,
+            month_start,
+            start + Duration::seconds(5),
+            20,
+        )],
+        keep_from,
+    );
+    assert_eq!(
+        fold,
+        OnlineTimeFold {
+            counted: HashMap::from([(user_id, vec![counted(start, 0, 30)])]),
+            all_time: HashMap::from([(user_id, 10_000)]),
+            monthly: HashMap::from([((user_id, month_start), 10_000)]),
+        }
+    );
+
+    // The same batch again, after an uncertain commit: nothing, and no
+    // month row to write.
+    let fold = fold_online_time_credits(
+        fold.counted,
+        &[online_span(
+            user_id,
+            month_start,
+            start + Duration::seconds(5),
+            20,
+        )],
+        keep_from,
+    );
+    assert_eq!(
+        fold,
+        OnlineTimeFold {
+            counted: HashMap::from([(user_id, vec![counted(start, 0, 30)])]),
+            all_time: HashMap::from([(user_id, 0)]),
+            monthly: HashMap::new(),
+        }
+    );
+}
+
+/// A span flushed late, behind everything counted so far, still earns in
+/// full: the old pod's last minutes land after the new pod's first.
+#[test]
+fn online_time_credits_a_span_flushed_after_a_later_one() {
+    let user_id = Uuid::from_u128(2);
+    let month_start = NaiveDate::from_ymd_opt(2026, 10, 1).expect("month");
+    let start = Utc.with_ymd_and_hms(2026, 10, 5, 12, 0, 0).unwrap();
+
+    let fold = fold_online_time_credits(
+        HashMap::from([(user_id, vec![counted(start, 180, 240)])]),
+        &[online_span(user_id, month_start, start, 180)],
+        start - Duration::days(1),
+    );
+    assert_eq!(fold.all_time, HashMap::from([(user_id, 180_000)]));
+    assert_eq!(
+        fold.counted,
+        HashMap::from([(user_id, vec![counted(start, 0, 240)])]),
+        "touching spans merge"
+    );
+}
+
+/// Counted spans are kept for a day; older ones leave the row, and a user
+/// deleted since the batch was prepared earns nothing.
+#[test]
+fn online_time_keeps_a_day_of_counted_spans() {
+    let kept = Uuid::from_u128(3);
+    let deleted = Uuid::from_u128(4);
+    let month_start = NaiveDate::from_ymd_opt(2026, 10, 1).expect("month");
+    let start = Utc.with_ymd_and_hms(2026, 10, 5, 12, 0, 0).unwrap();
+    let old = start - Duration::days(2);
+
+    let fold = fold_online_time_credits(
+        HashMap::from([(kept, vec![counted(old, 0, 60)])]),
+        &[
+            online_span(kept, month_start, start, 60),
+            online_span(deleted, month_start, start, 60),
+        ],
+        start - Duration::days(1),
+    );
+    assert_eq!(
+        fold,
+        OnlineTimeFold {
+            counted: HashMap::from([(kept, vec![counted(start, 0, 60)])]),
+            all_time: HashMap::from([(kept, 60_000)]),
+            monthly: HashMap::from([((kept, month_start), 60_000)]),
+        }
+    );
+}
+
 #[tokio::test]
-async fn online_time_batches_are_idempotent_and_rank_both_windows() {
+async fn online_time_batches_never_count_one_moment_twice_and_rank_both_windows() {
     let test_db = test_db().await;
-    let client = test_db.db.get().await.expect("db client");
+    let mut client = test_db.db.get().await.expect("db client");
     let alice = create_test_user(&test_db.db, "lb_online_alice").await;
     let bob = create_test_user(&test_db.db, "lb_online_bob").await;
     let deleted = create_test_user(&test_db.db, "lb_online_deleted").await;
@@ -43,51 +193,62 @@ async fn online_time_batches_are_idempotent_and_rank_both_windows() {
         .await
         .expect("delete user before batch");
 
-    let first_flush = Uuid::now_v7();
-    let today = Utc::now().date_naive();
+    let now = Utc::now();
+    let today = now.date_naive();
     let current_month =
         NaiveDate::from_ymd_opt(today.year(), today.month(), 1).expect("current month");
     let previous_day = current_month - Duration::days(1);
     let previous_month = NaiveDate::from_ymd_opt(previous_day.year(), previous_day.month(), 1)
         .expect("previous month");
-    let increment = |user_id, month_start, milliseconds| OnlineTimeIncrement {
-        user_id,
-        month_start,
-        milliseconds,
-    };
-    let increments = [
-        increment(alice.id, current_month, 60_000),
-        increment(alice.id, current_month, 40_000),
-        increment(bob.id, current_month, 90_000),
-        increment(deleted.id, current_month, 500_000),
+    let earlier = now - Duration::days(40);
+    let start = now - Duration::hours(1);
+
+    // Pod A, the old pod draining: alice for 100s, bob for 90s.
+    let pod_a = [
+        online_span(alice.id, current_month, start, 100),
+        online_span(bob.id, current_month, start, 90),
+        online_span(deleted.id, current_month, start, 500),
     ];
+    let pod_a_flush = Uuid::now_v7();
     assert_eq!(
-        apply_online_time_batch(&client, first_flush, &increments)
+        apply_online_time_batch(&mut client, pod_a_flush, now, &pod_a)
             .await
-            .expect("apply first batch"),
+            .expect("apply pod A batch"),
         2,
-        "duplicate input users are folded and deleted users are skipped"
+        "deleted users are skipped"
     );
-    apply_online_time_batch(&client, first_flush, &increments)
+    // An uncertain retry of the same batch.
+    apply_online_time_batch(&mut client, pod_a_flush, now, &pod_a)
         .await
-        .expect("retry first batch");
+        .expect("retry pod A batch");
+    // Pod B, the new pod: alice reconnected there at 40s and stayed to 140s.
+    // Only 100s..140s is new.
     apply_online_time_batch(
-        &client,
+        &mut client,
         Uuid::now_v7(),
-        &[increment(alice.id, current_month, 10_000)],
+        now,
+        &[online_span(
+            alice.id,
+            current_month,
+            start + Duration::seconds(40),
+            100,
+        )],
     )
     .await
-    .expect("apply later batch");
+    .expect("apply pod B batch");
+    // A pod that flushes late: last month's spans land after this month's
+    // were counted. Nothing counted them before, so they count in full.
     apply_online_time_batch(
-        &client,
+        &mut client,
         Uuid::now_v7(),
+        now,
         &[
-            increment(alice.id, previous_month, 50_000),
-            increment(bob.id, previous_month, 200_000),
+            online_span(alice.id, previous_month, earlier, 50),
+            online_span(bob.id, previous_month, earlier, 200),
         ],
     )
     .await
-    .expect("apply previous-month batch");
+    .expect("apply a batch that lands out of order");
 
     let alice_total: i64 = client
         .query_one(
@@ -97,7 +258,10 @@ async fn online_time_batches_are_idempotent_and_rank_both_windows() {
         .await
         .expect("alice online time")
         .get(0);
-    assert_eq!(alice_total, 160_000, "retry must not add the batch twice");
+    assert_eq!(
+        alice_total, 190_000,
+        "the overlap and the retry count once, and a span flushed late in full"
+    );
 
     let alice_monthly: i64 = client
         .query_one(
@@ -109,7 +273,21 @@ async fn online_time_batches_are_idempotent_and_rank_both_windows() {
         .await
         .expect("alice monthly online time")
         .get(0);
-    assert_eq!(alice_monthly, 110_000);
+    assert_eq!(alice_monthly, 140_000);
+    let alice_previous: i64 = client
+        .query_one(
+            "SELECT total_milliseconds
+             FROM user_online_time_monthly
+             WHERE month_start = $1 AND user_id = $2",
+            &[&previous_month, &alice.id],
+        )
+        .await
+        .expect("alice previous month online time")
+        .get(0);
+    assert_eq!(
+        alice_previous, 50_000,
+        "the late span lands in its own month"
+    );
 
     let data = fetch_leaderboard_data(&client)
         .await
@@ -117,12 +295,14 @@ async fn online_time_batches_are_idempotent_and_rank_both_windows() {
     assert_eq!(entry_for(&data.online_time.monthly, alice.id).rank, 1);
     assert_eq!(
         entry_for(&data.online_time.monthly, alice.id).value,
-        110_000
+        140_000
     );
     assert_eq!(entry_for(&data.online_time.monthly, bob.id).rank, 2);
-    assert_eq!(entry_for(&data.online_time.all_time, bob.id).rank, 1);
-    assert_eq!(entry_for(&data.online_time.all_time, bob.id).value, 290_000);
-    assert_eq!(entry_for(&data.online_time.all_time, alice.id).rank, 2);
+    assert_eq!(
+        entry_for(&data.online_time.all_time, bob.id).value,
+        290_000,
+        "all time holds both months"
+    );
     assert!(
         !data
             .online_time
@@ -228,6 +408,7 @@ async fn daily_boards_and_arcade_points_follow_the_roster() {
     assert_eq!(entry_for(&sliding_board.monthly, rival.id).value, 1);
     let rival_status = data
         .user_daily_statuses
+        .on(Utc::now().date_naive())
         .get(&rival.id)
         .expect("rival has a daily status");
     assert!(rival_status.completed(DailyPuzzle::RubiksCube));
@@ -1102,96 +1283,104 @@ async fn lobby_win(
         .expect("settle");
 }
 
-/// The week's scoreboard: per game, the most daily wins over the week's
-/// puzzle dates, the top score among the week's events, the most Lobby
-/// wins that paid, and the top door run of the week, in roster order,
-/// each one person's best and nobody named; a win or a score outside the
-/// week is not on it, nor a Lobby win that did not pay, and a game nobody
-/// played has no line.
+/// The week's scoreboard: per game, everyone's plays inside the seven
+/// UTC days added up (every daily solve, every finished score run, every
+/// finished Lobby match paid or not, every hub card opening), in roster
+/// order, with nobody's best and nobody named; a play outside the week is
+/// not counted, a game nobody played has no line, and a roguelike won in
+/// the week but opened before it has none either: the card prints plays.
 #[tokio::test]
-async fn the_weeks_best_counts_only_the_week() {
+async fn the_weeks_plays_add_up_everyone_inside_the_week() {
+    use crate::models::door_opening::{DoorCard, DoorOpening};
     use crate::models::door_run::{DoorRun, DoorRunResult, NewDoorRun};
+    use crate::models::leaderboard::{DayGame, DayTally, week_tallies};
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
     let solver = create_test_user(&test_db.db, "week_solver").await;
     let rival = create_test_user(&test_db.db, "week_rival").await;
     let last = Utc::now().date_naive();
+    let now = Utc::now();
 
     tetris::HighScore::record_score_event(&client, rival.id, 50_000)
         .await
         .expect("old score");
     roll_score_events_back_a_month(&client).await;
-    for offset in [0, 2, 6] {
-        le_word::DailyWin::record_win(&client, solver.id, last - Duration::days(offset), 4)
+    for (user, offset) in [
+        (solver.id, 0),
+        (solver.id, 2),
+        (solver.id, 6),
+        (rival.id, 0),
+    ] {
+        le_word::DailyWin::record_win(&client, user, last - Duration::days(offset), 4)
             .await
-            .expect("solver win");
+            .expect("le word");
     }
-    for offset in [7, 8, 9] {
-        le_word::DailyWin::record_win(&client, rival.id, last - Duration::days(offset), 4)
-            .await
-            .expect("rival's wins the week before");
-    }
-    le_word::DailyWin::record_win(&client, rival.id, last, 4)
-        .await
-        .expect("rival win");
     sudoku::DailyWin::record_win(&client, rival.id, "hard".to_string(), last, 100)
         .await
-        .expect("rival sudoku");
-    tetris::HighScore::record_score_event(&client, solver.id, 500)
-        .await
-        .expect("solver score");
-    tetris::HighScore::record_score_event(&client, rival.id, 900)
-        .await
-        .expect("rival score");
+        .expect("sudoku");
+    for (user, score) in [(solver.id, 500), (rival.id, 900)] {
+        tetris::HighScore::record_score_event(&client, user, score)
+            .await
+            .expect("score");
+    }
     lobby_win(&client, LobbyGame::Chess, solver.id, rival.id, "paid").await;
     for _ in 0..2 {
         lobby_win(&client, LobbyGame::Chess, rival.id, solver.id, "unplayed").await;
     }
-    for (offset, score, ended_days_ago) in [(1, 99_999, 10), (2, 4_000, 1)] {
-        DoorRun::insert_ignore(
-            &client,
-            &NewDoorRun {
-                game: DoorGame::Dcss.key(),
-                user_id: rival.id,
-                ended_at: Utc::now() - Duration::days(ended_days_ago),
-                result: DoorRunResult::Death,
-                score: Some(score),
-                depth: Some(3),
-                turns: Some(100),
-                raw: json!({}),
-                source_file: "week".to_string(),
-                source_offset: offset,
-            },
-        )
-        .await
-        .expect("door run");
+    for (card, days_ago) in [
+        (DoorCard::Nethack, 0),
+        (DoorCard::Nethack, 5),
+        (DoorCard::Dcss, 1),
+        (DoorCard::Brogue, 10),
+    ] {
+        DoorOpening::record(&client, solver.id, card, now - Duration::days(days_ago))
+            .await
+            .expect("opening");
     }
+    DoorRun::insert_ignore(
+        &client,
+        &NewDoorRun {
+            game: DoorGame::Brogue.key(),
+            user_id: solver.id,
+            ended_at: now,
+            result: DoorRunResult::Win,
+            score: Some(99_999),
+            depth: Some(26),
+            turns: Some(20_000),
+            raw: json!({}),
+            source_file: "week".to_string(),
+            source_offset: 1,
+        },
+    )
+    .await
+    .expect("a brogue run opened ten days ago");
 
-    let best = |game, value| WeekBest { game, value };
+    let tally = |game, plays, won| DayTally { game, plays, won };
     assert_eq!(
-        week_bests(&client, last).await.expect("week"),
+        week_tallies(&client, last).await.expect("week"),
         vec![
-            best(WeekGame::Daily(DailyPuzzle::LeWord), 3),
-            best(WeekGame::Daily(DailyPuzzle::Sudoku), 1),
-            best(WeekGame::Score(ScoreGame::Lateris), 900),
-            best(WeekGame::Lobby(LobbyGame::Chess), 1),
-            best(WeekGame::Door(DoorGame::Dcss), 4_000),
-        ]
+            tally(DayGame::Daily(DailyPuzzle::LeWord), 4, 4),
+            tally(DayGame::Daily(DailyPuzzle::Sudoku), 1, 1),
+            tally(DayGame::Score(ScoreGame::Lateris), 2, 0),
+            tally(DayGame::Lobby(LobbyGame::Chess), 3, 3),
+            tally(DayGame::Door(DoorCard::Nethack), 2, 0),
+            tally(DayGame::Door(DoorCard::Dcss), 1, 0),
+        ],
+        "Le Word: both players' solves; Lateris: both runs, not the month-old one; Chess: every finished match, paid or not; Brogue: won in the week, opened before it, no line"
     );
-    let shown: Vec<String> = [
-        best(WeekGame::Daily(DailyPuzzle::Sudoku), 1),
-        best(WeekGame::Daily(DailyPuzzle::Sudoku), 6),
-        best(WeekGame::Score(ScoreGame::Snake), 900),
-        best(WeekGame::Score(ScoreGame::Snake), 1_234_567),
-        best(WeekGame::Lobby(LobbyGame::Snooker), 2),
-        best(WeekGame::Door(DoorGame::Nethack), 52_340),
-    ]
-    .iter()
-    .map(WeekBest::shown_value)
-    .collect();
+    assert!(
+        week_tallies(&client, last - Duration::days(60))
+            .await
+            .expect("a quiet week")
+            .is_empty()
+    );
+    let shown: Vec<String> = [1, 6, 1_234, 1_234_567]
+        .into_iter()
+        .map(|plays| tally(DayGame::Daily(DailyPuzzle::Sudoku), plays, 0).shown_plays())
+        .collect();
     assert_eq!(
         shown,
-        vec!["1 win", "6 wins", "900", "1,234,567", "2 wins", "52,340"]
+        vec!["1 play", "6 plays", "1,234 plays", "1,234,567 plays"]
     );
 }
 
@@ -1300,19 +1489,6 @@ async fn a_days_tallies_count_the_days_finishes_by_game() {
             .await
             .expect("a quiet day")
             .is_empty()
-    );
-    let shelves: Vec<Shelf> = [
-        WeekGame::Daily(DailyPuzzle::Sudoku),
-        WeekGame::Score(ScoreGame::Snake),
-        WeekGame::Lobby(LobbyGame::Snooker),
-        WeekGame::Door(DoorGame::Dcss),
-    ]
-    .iter()
-    .map(|game| game.shelf())
-    .collect();
-    assert_eq!(
-        shelves,
-        vec![Shelf::Arcade, Shelf::Arcade, Shelf::Lobby, Shelf::Doors]
     );
     let day_shelves: Vec<Shelf> = [
         DayGame::Daily(DailyPuzzle::Sudoku),

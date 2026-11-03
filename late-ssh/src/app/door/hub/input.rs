@@ -200,12 +200,6 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
             app.door_rc_modal = selected.rc_game();
             true
         }
-        ParsedInput::Byte(b't' | b'T') | ParsedInput::Char('t' | 'T')
-            if selected.spectate_game().is_some() =>
-        {
-            toggle_show_watch_chat(app);
-            true
-        }
         _ => false,
     }
 }
@@ -241,17 +235,6 @@ fn select_rail_entry(
             }
         }
     }
-}
-
-/// The `t` key on a watchable door's landing: flip whether this player sees
-/// their watchers' chat beside their own game. It is the player's view only;
-/// the watchers keep talking either way.
-fn toggle_show_watch_chat(app: &mut App) {
-    let message = match app.profile_state.toggle_show_watch_chat() {
-        true => "Watcher chat shown beside your game.",
-        false => "Watcher chat hidden. Your watchers can still talk to each other.",
-    };
-    app.banner = Some(Banner::success(message));
 }
 
 /// Jump to the Games hub with `game` selected in the sidebar and its rc config

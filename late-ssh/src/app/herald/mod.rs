@@ -14,3 +14,6 @@ mod state_test;
 pub mod svc;
 #[cfg(test)]
 mod svc_test;
+pub(crate) mod writeup;
+#[cfg(test)]
+mod writeup_test;

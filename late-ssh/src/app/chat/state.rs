@@ -953,6 +953,9 @@ pub struct ChatState {
     /// fire-and-forget contract as translation.
     summary_service: SummaryService,
     summary_rx: tokio::sync::broadcast::Receiver<SummaryEvent>,
+    /// This session's `/summary` requests still waiting for an answer. The
+    /// feed carries every session's results; only these are taken.
+    pub(crate) summary_requests: HashSet<Uuid>,
     /// This session's translations for the current target language, keyed by
     /// message id. Cleared when the target language changes.
     pub(crate) translations: HashMap<Uuid, TranslationDisplay>,
@@ -1360,6 +1363,7 @@ impl ChatState {
             translation_service,
             summary_rx: summary_service.subscribe(),
             summary_service,
+            summary_requests: HashSet::new(),
             translations: HashMap::new(),
             translation_hidden: HashSet::new(),
             translation_manual: HashSet::new(),
@@ -1882,7 +1886,8 @@ impl ChatState {
     /// (the `/rules` surface); when another overlay is already up it waits
     /// in `pending_summary_overlay` instead of clobbering it, and takes the
     /// surface here as soon as it frees. Every other outcome banners. The
-    /// broadcast carries all users' results, so foreign events are dropped.
+    /// broadcast carries every session's results, so only this session's
+    /// own requests are taken.
     /// Returns the banner plus whether a waiting summary was promoted (a
     /// render-visible change `tick` cannot see from the queues).
     fn drain_summary_events(&mut self) -> (Option<Banner>, bool) {
@@ -1901,7 +1906,8 @@ impl ChatState {
                 Err(TryRecvError::Lagged(_)) => continue,
                 Err(TryRecvError::Empty | TryRecvError::Closed) => break,
             };
-            if event.user_id != self.user_id {
+            // Another session's answer, the same account's included.
+            if !self.summary_requests.remove(&event.request_id) {
                 continue;
             }
             match event.outcome {
@@ -2626,7 +2632,12 @@ impl ChatState {
         }
         self.edited_message_id = Some(selected_id);
         self.composer = new_chat_textarea();
-        self.composer.insert_str(body);
+        // An action line is stored CTCP-wrapped; it edits as the command
+        // that wrote it, and submitting that command rewrites it in place.
+        match super::action::parse_action_body(body) {
+            Some(action) => self.composer.insert_str(format!("/me {action}")),
+            None => self.composer.insert_str(body),
+        };
         self.composing = true;
         self.composer_room_id = Some(room_id);
         composer::set_themed_textarea_cursor_visible(&mut self.composer, true);
@@ -3960,7 +3971,10 @@ impl ChatState {
                 }
             };
             let exclude_user_ids: Vec<Uuid> = self.ignored_user_ids.iter().copied().collect();
+            let request_id = Uuid::now_v7();
+            self.summary_requests.insert(request_id);
             self.summary_service.request(
+                request_id,
                 self.user_id,
                 room_id,
                 self.history_room_label(room_id),
@@ -4031,7 +4045,9 @@ impl ChatState {
                 return Some(Banner::error("Only admins can run the herald"));
             }
             let Some(command) = parsed else {
-                return Some(Banner::error("Usage: /herald on|off|status|preview|post"));
+                return Some(Banner::error(
+                    "Usage: /herald on|off|status|preview words|art|post words|art",
+                ));
             };
             self.requested_herald = Some(command);
             return None;
@@ -4323,6 +4339,33 @@ impl ChatState {
             return None;
         }
 
+        // #bugs and #suggestions take report cards only. A regular user's
+        // plain message there is the report, filed as if typed after `/bug`
+        // or `/suggest`, instead of being refused by the send gate after the
+        // composer already cleared. A reply, or text too short to be a
+        // report, is refused here with the composer kept: reports get
+        // reactions, not threads, and a draft is never lost to a command
+        // the user never typed.
+        let body = match (self.report_room_kind(), is_command_draft(&body)) {
+            (Some(kind), false) if self.reply_target.is_some() => {
+                return Some(Banner::error(
+                    &super::svc::SendRefusal::ReportOnly(kind).message(),
+                ));
+            }
+            (Some(kind), false)
+                if !body.trim().is_empty() && body.trim().chars().count() < REPORT_MIN_CHARS =>
+            {
+                return Some(Banner::error(&format!(
+                    "#{} takes reports: describe it in a few words or more",
+                    kind.slug()
+                )));
+            }
+            (Some(kind), false) if !body.trim().is_empty() => {
+                format!("{} {}", kind.command(), body.trim())
+            }
+            (Some(_), _) | (None, _) => body,
+        };
+
         if let Some((kind, text)) = parse_report_command(&body) {
             self.clear_composer_after_submit();
             let Some(text) = text else {
@@ -4355,6 +4398,35 @@ impl ChatState {
                 return Some(Banner::error("No member-list room selected"));
             };
             self.service.list_room_members_task(self.user_id, room_id);
+            return None;
+        }
+
+        // `/buy` posts the bar's own spending phrase to @bartender, so the
+        // purchase, its price, refusals and his answer all run exactly as if
+        // the phrase had been typed. Only where he sits: he is joined to the
+        // auto-join public rooms and no others (`auto_join_public_rooms`),
+        // and anywhere else the order would go unanswered.
+        if let Some(parsed) = parse_buy_command(&body) {
+            let room = self
+                .composer_room_id
+                .and_then(|room_id| self.room_by_id(room_id))
+                .map(|room| (room.id, room.visibility == "public" && room.auto_join));
+            self.clear_composer_after_submit();
+            let order = match parsed {
+                BuyParse::Invalid => {
+                    return Some(Banner::error("Usage: /buy round, or /buy @user"));
+                }
+                BuyParse::Order(order) => buy_order_body(order),
+            };
+            let room_id = match room {
+                Some((room_id, true)) => room_id,
+                Some((_, false)) | None => {
+                    return Some(Banner::error(
+                        "Use /buy from a room @bartender is in, like #lounge",
+                    ));
+                }
+            };
+            self.send_command_message(room_id, order);
             return None;
         }
 
@@ -4741,11 +4813,25 @@ impl ChatState {
                 return Some(Banner::error("Usage: /me <action>"));
             };
             let room_id = self.composer_room_id;
+            let edited_message_id = self.edited_message_id;
             self.clear_composer_after_submit();
             let Some(room_id) = room_id else {
                 return Some(Banner::error("Send actions from inside a room"));
             };
-            self.send_command_message(room_id, action_body);
+            match edited_message_id {
+                Some(message_id) => {
+                    let request_id = Uuid::now_v7();
+                    self.service.edit_message_task(
+                        self.user_id,
+                        message_id,
+                        action_body,
+                        request_id,
+                        self.permissions,
+                    );
+                    self.pending_send_notices.push_back(request_id);
+                }
+                None => self.send_command_message(room_id, action_body),
+            }
             return None;
         }
 
@@ -4813,6 +4899,17 @@ impl ChatState {
             self.clear_composer_after_submit();
         }
         cooldown_banner
+    }
+
+    /// The report kind the composer's room enforces on this user: `None` for
+    /// staff (they reply under reports in free text), while editing, and
+    /// outside the public #bugs and #suggestions.
+    fn report_room_kind(&self) -> Option<ReportKind> {
+        if self.is_admin || self.is_moderator || self.edited_message_id.is_some() {
+            return None;
+        }
+        let room = self.room_by_id(self.composer_room_id?)?;
+        ReportKind::for_room(room)
     }
 
     /// Posts a command's generated body to `room_id` as a plain message
@@ -8289,6 +8386,53 @@ fn room_slug_for(rooms: &[(ChatRoom, Vec<ChatMessage>)], room_id: Uuid) -> Optio
 /// Minimum characters of report text, so `/bug lol` bounces with usage help
 /// instead of posting a useless card.
 const REPORT_MIN_CHARS: usize = 10;
+
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum BuyParse<'a> {
+    Invalid,
+    Order(BuyOrder<'a>),
+}
+
+/// What `/buy` asked the bar for.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum BuyOrder<'a> {
+    /// `/buy round`: a round for the house.
+    Round,
+    /// `/buy @user`: one drink on that user's tab.
+    Gift(&'a str),
+}
+
+/// Parse `/buy round` or `/buy @user`. `None` means not a `/buy` command.
+pub(crate) fn parse_buy_command(input: &str) -> Option<BuyParse<'_>> {
+    let rest = input.trim().strip_prefix("/buy")?;
+    if !(rest.is_empty() || rest.starts_with(char::is_whitespace)) {
+        return None;
+    }
+    let mut words = rest.split_whitespace();
+    match (words.next(), words.next()) {
+        (Some(word), None) if word.eq_ignore_ascii_case("round") => {
+            Some(BuyParse::Order(BuyOrder::Round))
+        }
+        (Some(word), None) => match word.strip_prefix('@') {
+            Some(username) if !username.is_empty() => {
+                Some(BuyParse::Order(BuyOrder::Gift(username)))
+            }
+            Some(_) | None => Some(BuyParse::Invalid),
+        },
+        (Some(_), Some(_)) | (None, _) => Some(BuyParse::Invalid),
+    }
+}
+
+/// The message `/buy` posts: @bartender plus one of the bar's own spending
+/// phrases (`late_core::models::drink_round`), which he rings up exactly as
+/// if it had been typed.
+pub(crate) fn buy_order_body(order: BuyOrder<'_>) -> String {
+    let bartender = crate::app::ai::ladder::LadderBot::Bartender.handle();
+    match order {
+        BuyOrder::Round => format!("@{bartender} round for everyone"),
+        BuyOrder::Gift(username) => format!("@{bartender} buy @{username} a drink"),
+    }
+}
 
 /// Parse `/bug <text>` or `/suggest <text>` from the composer. Outer `None`
 /// means not a report command; inner `None` means missing or too-short text

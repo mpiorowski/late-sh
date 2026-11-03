@@ -162,6 +162,17 @@ impl ReportKind {
             _ => None,
         }
     }
+
+    /// The report kind `room` enforces: only the public topic rooms #bugs
+    /// and #suggestions, the rooms `send_report` posts into. Topic slugs are
+    /// unique per visibility, so a private room may carry the same name and
+    /// stays free text for its members.
+    pub(crate) fn for_room(room: &ChatRoom) -> Option<Self> {
+        if room.kind != "topic" || room.visibility != "public" {
+            return None;
+        }
+        Self::for_room_slug(room.slug.as_deref()?)
+    }
 }
 
 /// What a game-room join found. Public game rooms (house tables, stream
@@ -692,7 +703,7 @@ fn poll_error_message(error: &anyhow::Error) -> String {
     let text = error.to_string();
     if text.contains("already has an active poll")
         || text.contains("at least two options")
-        || text.contains("at most three options")
+        || text.contains("at most four options")
         || text.contains("too long")
         || text.contains("duration must")
         || text.contains("question is required")
@@ -711,6 +722,7 @@ fn poll_vote_key(option_position: i32) -> String {
         1 => "va".to_string(),
         2 => "vb".to_string(),
         3 => "vc".to_string(),
+        4 => "vd".to_string(),
         _ => format!("v{option_position}"),
     }
 }
@@ -3496,7 +3508,7 @@ impl ChatService {
         // under a report. Checked against the DB slug so the IRC path is
         // covered too. The staff lookup only runs on this rare gated path.
         if !is_admin
-            && let Some(kind) = room.slug.as_deref().and_then(ReportKind::for_room_slug)
+            && let Some(kind) = ReportKind::for_room(&room)
             && !body.trim_start().starts_with(kind.marker())
         {
             let is_moderator = User::staff_flags_by_ids(&client, &[user_id])
@@ -3746,7 +3758,7 @@ impl ChatService {
             let room = ChatRoom::get(&client, existing.room_id)
                 .await?
                 .ok_or_else(|| anyhow::anyhow!("room not found"))?;
-            if let Some(kind) = room.slug.as_deref().and_then(ReportKind::for_room_slug)
+            if let Some(kind) = ReportKind::for_room(&room)
                 && !new_body.trim_start().starts_with(kind.marker())
             {
                 anyhow::bail!("report-only:{}", kind.slug());

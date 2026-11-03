@@ -934,6 +934,7 @@ fn composer_view<'a>(textarea: &'a TextArea<'static>) -> ComposerBlockView<'a> {
         mention_selected: 0,
         keep_composer_focused: false,
         inert: ComposerInert::No,
+        idle_hint: ComposerIdleHint::Room,
     }
 }
 
@@ -1014,6 +1015,7 @@ fn chat_view<'a>(
             marker: NEWS_MARKER.get_or_init(HashSet::new),
             watch_positions: NEWS_WATCH_POSITIONS.get_or_init(HashMap::new),
             mine_only: false,
+            scroll: None,
         },
         discover_selected: false,
         discover_view: crate::app::chat::discover::ui::DiscoverListView {

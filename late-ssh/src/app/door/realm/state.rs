@@ -97,7 +97,7 @@ pub struct RealmState {
     /// the one thing that has to ask for its own frames.
     countdown_second: Option<i64>,
     /// The world's chat is up in place of the map's rail. Hidden by default,
-    /// so the board opens on the whole map; `c` flips it, and it stays as
+    /// so the board opens on the whole map; F4 flips it, and it stays as
     /// left for the rest of the session, across boards.
     pub chat_open: bool,
 }

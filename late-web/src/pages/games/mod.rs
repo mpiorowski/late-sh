@@ -1,8 +1,8 @@
 //! late.sh's games on the public web: the week's scoreboard as a card,
 //! the picture the herald posts on Sundays (`late-ssh/src/app/herald`).
 //! One line per game anyone played, under its shelf (the arcade, the
-//! Lobby, the doors), its best of the week and who, from
-//! `leaderboard::week_bests`. No page and no row: the card is drawn on
+//! Lobby, the doors), with everyone's plays of the week added up, from
+//! `leaderboard::week_tallies`. No page and no row: the card is drawn on
 //! request from the games' own tables; the terminal is where the boards
 //! live.
 
@@ -15,7 +15,7 @@ use axum::{
     routing::get,
 };
 use chrono::NaiveDate;
-use late_core::models::leaderboard::{WeekBest, week_bests, week_first_day};
+use late_core::models::leaderboard::{DayTally, week_first_day, week_tallies};
 
 use crate::{
     AppState,
@@ -31,9 +31,9 @@ pub(crate) fn router() -> Router<AppState> {
     Router::new().route("/games/week/{last}/image.png", get(week_image_handler))
 }
 
-/// The game's name, then the value right-aligned: the two columns of a
-/// scoreboard line inside `card::CARD_COLUMNS`. No player: the card is
-/// public and the names stay on the terminal's boards.
+/// The game's name, then its plays right-aligned: the two columns of a
+/// scoreboard line inside `card::CARD_COLUMNS`. Totals, no player: the
+/// card is public and the names stay on the terminal's boards.
 const GAME_COLUMNS: usize = 18;
 const VALUE_COLUMNS: usize = card::CARD_COLUMNS - GAME_COLUMNS;
 
@@ -54,36 +54,36 @@ async fn week_image_handler(
         .get()
         .await
         .context("failed to get db client for the games week")?;
-    let bests = week_bests(&client, last)
+    let tallies = week_tallies(&client, last)
         .await
         .context("failed to read the games week")?;
-    if bests.is_empty() {
+    if tallies.is_empty() {
         return Ok(StatusCode::NOT_FOUND.into_response());
     }
-    let png = board_png::render_blocking(card::canvas(&week_card(last, &bests)))
+    let png = board_png::render_blocking(card::canvas(&week_card(last, &tallies)))
         .await
         .context("failed to render the games week")?;
     Ok(board_png::response(png))
 }
 
 /// The card's lines: the masthead, the week, a section per shelf
-/// (`leaderboard::Shelf`, in the order `week_bests` lists the rosters)
-/// with a line per game, the way in.
-pub(crate) fn week_card(last: NaiveDate, bests: &[WeekBest]) -> Vec<CardLine> {
+/// (`leaderboard::Shelf`, in the order `week_tallies` lists the rosters)
+/// with a line per game and its plays, the way in.
+pub(crate) fn week_card(last: NaiveDate, tallies: &[DayTally]) -> Vec<CardLine> {
     let mut lines = vec![
         CardLine::new(Ink::Title, "THE LATE.SH GAMES"),
         CardLine::new(
             Ink::Dim,
             format!(
-                "the week's best, {} to {}",
+                "everything played, {} to {}",
                 week_first_day(last).format("%-d %B"),
                 last.format("%-d %B %Y"),
             ),
         ),
     ];
     let mut shelf = None;
-    for best in bests {
-        let this = best.game.shelf();
+    for tally in tallies {
+        let this = tally.game.shelf();
         if shelf != Some(this) {
             lines.push(CardLine::blank());
             lines.push(CardLine::new(Ink::Heading, this.heading()));
@@ -93,8 +93,8 @@ pub(crate) fn week_card(last: NaiveDate, bests: &[WeekBest]) -> Vec<CardLine> {
             Ink::Body,
             format!(
                 "{:<GAME_COLUMNS$}{:>VALUE_COLUMNS$}",
-                best.game.title(),
-                best.shown_value(),
+                tally.game.title(),
+                tally.shown_plays(),
             ),
         ));
     }

@@ -20,7 +20,7 @@ pub fn launch(app: &mut App) {
 }
 
 /// F3 in both encodings a terminal sends it (SS3 `ESC O R`, CSI
-/// `ESC [ 13 ~`), matched as a whole input chunk like the watch chat's F2.
+/// `ESC [ 13 ~`), matched as a whole input chunk like the watch chat's F4.
 /// Frotz ignores function keys at a V3 prompt, so the story loses nothing.
 pub fn is_f3(data: &[u8]) -> bool {
     data == b"\x1bOR" || data == b"\x1b[13~"

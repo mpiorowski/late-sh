@@ -338,6 +338,23 @@ fn steering_a_diagonal_tip_up_grows_straight_up() {
     assert_eq!((child.end_x, child.end_y), (tip.end_x, tip.end_y + 1));
 }
 
+/// The diagonal keys mean their direction, whichever way the tip already
+/// leans: toward its lean or against it.
+#[test]
+fn steering_a_diagonal_grows_that_diagonal() {
+    for (dx, dy) in [(-1, 1), (1, 1)] {
+        let graph = graph_with_two_isolated_tips();
+        let tip_id = first_editable_tip(&graph);
+
+        let (tip, child) = steer_and_grow(graph, tip_id, dx, dy);
+
+        assert_eq!(
+            (child.end_x, child.end_y),
+            (tip.end_x + i16::from(dx), tip.end_y + i16::from(dy))
+        );
+    }
+}
+
 /// A tip grown off a wire inherits its lean; a new steer replaces that
 /// lean instead of adding to it.
 #[test]

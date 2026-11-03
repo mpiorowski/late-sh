@@ -268,7 +268,9 @@ async fn the_lobby_counts_todays_solvers_and_o_opens_the_roster() {
     };
     use late_core::{
         models::{
-            leaderboard::{ArcadeGame, DailyCompletionStatus, DailyPuzzle, LeaderboardData},
+            leaderboard::{
+                ArcadeGame, DailyCompletionStatus, DailyPuzzle, DailyStatuses, LeaderboardData,
+            },
             user::RightSidebarMode,
             user_ssh_key::KeyLayout,
         },
@@ -298,11 +300,14 @@ async fn the_lobby_counts_todays_solvers_and_o_opens_the_roster() {
     let mut carol_status = DailyCompletionStatus::default();
     carol_status.mark_completed(DailyPuzzle::Minesweeper, "hard".to_string());
     app.leaderboard = Arc::new(LeaderboardData {
-        user_daily_statuses: HashMap::from([
-            (alice, alice_status),
-            (bob, bob_status),
-            (carol, carol_status),
-        ]),
+        user_daily_statuses: DailyStatuses::new(
+            chrono::Utc::now().date_naive(),
+            HashMap::from([
+                (alice, alice_status),
+                (bob, bob_status),
+                (carol, carol_status),
+            ]),
+        ),
         ..LeaderboardData::default()
     });
     let names = Arc::new(HashMap::from([
@@ -364,4 +369,57 @@ async fn the_lobby_counts_todays_solvers_and_o_opens_the_roster() {
     }
     let closed = render_plain(&mut app);
     assert!(!closed.contains("solved today"), "{closed}");
+}
+
+/// The snapshot's marks belong to the UTC day they were read on. A session up
+/// across midnight (or one that connects in the minutes before the next
+/// refresh) must see today's dailies open, not yesterday's ticks.
+#[tokio::test]
+async fn yesterdays_marks_do_not_show_on_todays_lobby() {
+    use std::{collections::HashMap, sync::Arc};
+
+    use crate::{
+        app::common::primitives::Screen,
+        test_helpers::{make_app, new_test_db, render_plain},
+    };
+    use late_core::{
+        models::leaderboard::{
+            ArcadeGame, DailyCompletionStatus, DailyPuzzle, DailyStatuses, LeaderboardData,
+        },
+        test_utils::create_test_user,
+    };
+    use uuid::Uuid;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "stale-marks-viewer").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "stale-marks-token");
+    app.resize(120, 30).expect("resize test terminal");
+    app.set_screen(Screen::Arcade);
+    app.game_selection = ArcadeGame::Puzzle(DailyPuzzle::Sudoku);
+
+    let mut own = DailyCompletionStatus::default();
+    own.mark_completed(DailyPuzzle::Sudoku, "easy".to_string());
+    let mut other = DailyCompletionStatus::default();
+    other.mark_completed(DailyPuzzle::Sudoku, "easy".to_string());
+    let statuses = HashMap::from([(user.id, own), (Uuid::from_u128(0xb0b), other)]);
+    let today = chrono::Utc::now().date_naive();
+
+    app.leaderboard = Arc::new(LeaderboardData {
+        user_daily_statuses: DailyStatuses::new(today, statuses.clone()),
+        ..LeaderboardData::default()
+    });
+    let fresh = render_plain(&mut app);
+    assert!(fresh.contains("✓100"), "today's own tick: {fresh}");
+    assert!(fresh.contains("2 solved"), "{fresh}");
+
+    app.leaderboard = Arc::new(LeaderboardData {
+        user_daily_statuses: DailyStatuses::new(today - chrono::Duration::days(1), statuses),
+        ..LeaderboardData::default()
+    });
+    let stale = render_plain(&mut app);
+    assert!(!stale.contains("✓100"), "yesterday's tick: {stale}");
+    assert!(
+        !stale.contains("2 solved") && !stale.contains("1 solved"),
+        "yesterday's solvers: {stale}"
+    );
 }
