@@ -5083,9 +5083,10 @@ async fn a_second_chat_tile_on_home_keeps_its_room_and_the_rail_follows_the_acti
         "both tiles keep their rooms' rules and the header follows the active one; frame={frame:?}"
     );
 
-    // Walking the rail rewrites no binding: the active tile draws and
-    // names the rail's selection while it is there, and the next focus on
-    // it brings the rail back to its room.
+    // The active tile remembers where the rail takes it: the rail moving
+    // to the stream rebinds the first tile, its rule says so, and the
+    // next focus on it brings the rail back there.
+    app.home_layout_dirty = false;
     app.chat
         .select_room_slot(crate::app::chat::state::RoomSlot::Room(stream.id));
     app.sync_visible_chat_room();
@@ -5093,11 +5094,12 @@ async fn a_second_chat_tile_on_home_keeps_its_room_and_the_rail_follows_the_acti
     assert_eq!(
         app.home.chat_tiles(),
         vec![
-            (first, ChatRoomBinding::Room(lounge.id)),
+            (first, ChatRoomBinding::Room(stream.id)),
             (second, ChatRoomBinding::Room(stream.id))
         ],
-        "the rail is navigation, not a layout edit"
+        "the rail steers the active tile"
     );
+    assert!(app.home_layout_dirty, "a rebind is a layout edit");
     let frame = render_plain(&mut app);
     assert_eq!(
         frame.matches("chat · #stream-night").count(),
@@ -5111,25 +5113,28 @@ async fn a_second_chat_tile_on_home_keeps_its_room_and_the_rail_follows_the_acti
     let click = format!("\x1b[<0;{};{}M", rect.x + 2, rect.y + 2);
     app.handle_input(click.as_bytes());
     assert_eq!(app.home.focus, first);
-    assert_eq!(app.chat.selected_room_id, Some(lounge.id), "back home");
+    assert_eq!(
+        app.chat.selected_room_id,
+        Some(stream.id),
+        "the tile kept the stream"
+    );
 
-    // The picker is an explicit act: a room picked there binds the active
-    // tile, as `]` does.
+    // The picker is the same act in one step: a room picked there binds
+    // the active tile and the rail follows.
     app.handle_input(b"\x1f");
     assert!(
         app.room_search_modal_state.is_open(),
         "Ctrl+/ opens the picker"
     );
-    app.handle_input(b"stream-night\r");
-    assert_eq!(app.chat.selected_room_id, Some(stream.id));
+    app.handle_input(b"lounge\r");
+    assert_eq!(app.chat.selected_room_id, Some(lounge.id));
     assert_eq!(
         app.home.chat_tiles(),
         vec![
-            (first, ChatRoomBinding::Room(stream.id)),
+            (first, ChatRoomBinding::Room(lounge.id)),
             (second, ChatRoomBinding::Room(stream.id))
         ]
     );
-    assert!(app.home_layout_dirty, "a rebind is a layout edit");
 }
 
 /// The stock `street` holds News on the left and #announcements on the
@@ -5225,6 +5230,29 @@ async fn home_street_picks_news_into_the_active_tile() {
     app.handle_input(b"2");
     assert_eq!(app.home_layouts.current_name(), "street");
     assert!(app.chat.news_selected, "street comes back on News");
+
+    // On `home`, the rail moving to #announcements is what the tile keeps:
+    // away to `street` and back, it is still there.
+    app.handle_input(b"\x05");
+    app.handle_input(b"1");
+    app.chat
+        .select_room_slot(crate::app::chat::state::RoomSlot::Room(announcements.id));
+    app.sync_visible_chat_room();
+    assert_eq!(
+        app.home.chat_tiles(),
+        vec![(home_chat, ChatRoomBinding::Room(announcements.id))]
+    );
+    app.handle_input(b"\x05");
+    app.handle_input(b"2");
+    assert!(app.chat.news_selected);
+    app.handle_input(b"\x05");
+    app.handle_input(b"1");
+    assert_eq!(
+        app.chat.selected_room_id,
+        Some(announcements.id),
+        "home comes back to the room it was switched to"
+    );
+    assert!(!app.chat.news_selected);
 }
 
 /// In arrange mode every tile takes the focus, and Tab walks them instead

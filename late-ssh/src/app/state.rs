@@ -1302,6 +1302,7 @@ impl App {
     }
 
     pub(crate) fn sync_visible_chat_room(&mut self) {
+        self.steer_active_chat_from_rail();
         let visible_room_id = self.current_visible_chat_room_id();
         let changed = self.chat.visible_room_id() != visible_room_id;
         self.chat.set_visible_room_id(visible_room_id);
@@ -3530,8 +3531,9 @@ impl App {
     /// the composer, the message keys, the mouse, and the read marking act
     /// on. While the rail shows a synthetic entry (Mentions, News, feeds)
     /// the active tile shows that view: no room then, as Home has always
-    /// read it. A tile's binding is where the rail goes when the tile takes
-    /// the focus (`sync_rail_to_active_chat`), not what it must show.
+    /// read it. The tile's binding follows the rail onto rooms and News
+    /// (`steer_active_chat_from_rail`) and brings the rail back when the
+    /// tile takes the focus (`sync_rail_to_active_chat`).
     pub(crate) fn home_chat_room_id(&self) -> Option<Uuid> {
         if self.chat.synthetic_entry_selected() {
             return None;
@@ -3676,6 +3678,49 @@ impl App {
             return Some(ChatRoomBinding::News);
         }
         self.home_current_room_id().map(ChatRoomBinding::Room)
+    }
+
+    /// The active chat tile remembers where the rail takes it: a bound
+    /// tile is rebound to the room or the News row the rail moves to (a
+    /// layout edit, saved), so the next focus on it, and the next load of
+    /// its layout, come back there. The other synthetic rows (mentions,
+    /// rss, browse) are views the tile shows while they are up, binding
+    /// nothing; a tile bound to no room follows the rail as is until a
+    /// pin (`pin_chat_tiles_on_pick`, `pin_unbound_chats_to_the_moment`)
+    /// binds it. A slug binding whose room the rail is on is left as the
+    /// slug, so the stock tree is not rewritten by looking at it.
+    fn steer_active_chat_from_rail(&mut self) {
+        use crate::app::zen::state::ChatRoomBinding;
+        if !self.on_home() {
+            return;
+        }
+        let moment = match (
+            self.chat.news_selected,
+            self.chat.synthetic_entry_selected(),
+        ) {
+            (true, _) => ChatRoomBinding::News,
+            (false, true) => return,
+            (false, false) => match self.chat.selected_room_id {
+                Some(room_id) => ChatRoomBinding::Room(room_id),
+                None => return,
+            },
+        };
+        let Some(bound) = self.home.active_chat_room() else {
+            return;
+        };
+        let same = match (&bound, &moment) {
+            (ChatRoomBinding::Current, _) => true,
+            (ChatRoomBinding::Permanent(_), ChatRoomBinding::Room(room_id)) => {
+                self.home_bound_room(&bound) == Some(*room_id)
+            }
+            (bound, moment) => bound == moment,
+        };
+        if same {
+            return;
+        }
+        if self.home.bind_active_chat_room(moment) {
+            self.mark_home_layout_dirty();
+        }
     }
 
     /// What every chat tile draws, in layout order, resolved: a tile bound
