@@ -136,7 +136,7 @@ const COMMANDS: &[Command] = &[
     global("paste-image", "upload image from CLI clipboard"),
     global("petname", "name your pet (/petname Mochi; bare shows)"),
     global("picker", "open the room picker (same as Ctrl+/)"),
-    global("poll", "start a Home room poll (2-3 options)"),
+    global("poll", "start a Home room poll (2-4 options)"),
     global("pot", "the weekly pot (/pot; /pot buy N for tickets)"),
     global("private", "create a private room (/private #room)"),
     global("profile", "view a profile (/profile @user; bare = you)"),

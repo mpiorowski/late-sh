@@ -42,11 +42,6 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         {
             app.poll_modal_state.set_duration_index(1);
         }
-        ParsedInput::Byte(b'3') | ParsedInput::Char('3')
-            if app.poll_modal_state.focus() == super::state::PollField::Duration =>
-        {
-            app.poll_modal_state.set_duration_index(2);
-        }
         ParsedInput::Byte(b'\r' | b'\n') | ParsedInput::Char('\r' | '\n')
             if app.poll_modal_state.focus() == super::state::PollField::Duration =>
         {

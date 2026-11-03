@@ -422,6 +422,65 @@ fn divider_priority_is_selected_then_filled_then_empty() {
     assert_eq!(buf[(divider_34_x, divider_y)].fg, theme::BORDER_DIM());
 }
 
+#[test]
+fn floating_and_swatch_previews_render_copied_cell_colors() {
+    use dartboard_editor::EditorAction;
+    use ratatui::style::Color;
+
+    let mut state = test_state();
+    let red = RgbColor::new(255, 40, 40);
+    let blue = RgbColor::new(40, 120, 255);
+    let _ = state
+        .snapshot
+        .canvas
+        .put_glyph_colored(Pos { x: 0, y: 0 }, 'A', red);
+    let _ = state
+        .snapshot
+        .canvas
+        .put_glyph_colored(Pos { x: 1, y: 0 }, 'B', blue);
+
+    state.editor.cursor = Pos { x: 0, y: 0 };
+    state.begin_selection_from_cursor();
+    state.editor.cursor = Pos { x: 1, y: 0 };
+    let _ = state.handle_editor_action(EditorAction::CopySelection);
+
+    state.select_palette_color(3);
+    state.editor.cursor = Pos { x: 2, y: 2 };
+
+    let screen_size = (80, 26);
+    let game_area = artboard_game_area_for_screen(screen_size, false);
+    let backend = ratatui::backend::TestBackend::new(screen_size.0, screen_size.1);
+    let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| draw_game(frame, game_area, &state, true))
+        .expect("draw");
+
+    let buffer = terminal.backend().buffer();
+    let canvas_area = canvas_area_for_screen(screen_size);
+    assert_eq!(buffer[(canvas_area.x + 2, canvas_area.y + 2)].symbol(), "A");
+    assert_eq!(
+        buffer[(canvas_area.x + 2, canvas_area.y + 2)].fg,
+        Color::Rgb(255, 40, 40)
+    );
+    assert_eq!(buffer[(canvas_area.x + 3, canvas_area.y + 2)].symbol(), "B");
+    assert_eq!(
+        buffer[(canvas_area.x + 3, canvas_area.y + 2)].fg,
+        Color::Rgb(40, 120, 255)
+    );
+
+    let swatch_rect = swatch_box_rects(screen_size, &state)[0].expect("first swatch visible");
+    assert_eq!(buffer[(swatch_rect.x + 1, swatch_rect.y + 1)].symbol(), "A");
+    assert_eq!(
+        buffer[(swatch_rect.x + 1, swatch_rect.y + 1)].fg,
+        Color::Rgb(255, 40, 40)
+    );
+    assert_eq!(buffer[(swatch_rect.x + 2, swatch_rect.y + 1)].symbol(), "B");
+    assert_eq!(
+        buffer[(swatch_rect.x + 2, swatch_rect.y + 1)].fg,
+        Color::Rgb(40, 120, 255)
+    );
+}
+
 fn test_state() -> State {
     let shared_provenance = ArtboardProvenance::default().shared();
     let snapshot = DartboardSnapshot {

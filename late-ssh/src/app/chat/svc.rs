@@ -703,7 +703,7 @@ fn poll_error_message(error: &anyhow::Error) -> String {
     let text = error.to_string();
     if text.contains("already has an active poll")
         || text.contains("at least two options")
-        || text.contains("at most three options")
+        || text.contains("at most four options")
         || text.contains("too long")
         || text.contains("duration must")
         || text.contains("question is required")
@@ -722,6 +722,7 @@ fn poll_vote_key(option_position: i32) -> String {
         1 => "va".to_string(),
         2 => "vb".to_string(),
         3 => "vc".to_string(),
+        4 => "vd".to_string(),
         _ => format!("v{option_position}"),
     }
 }

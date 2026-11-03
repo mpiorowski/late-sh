@@ -19,6 +19,7 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::Paragraph,
 };
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
@@ -41,6 +42,10 @@ pub struct ArticleListView<'a> {
     /// Where the reader left each video they are partway through.
     pub watch_positions: &'a HashMap<Uuid, WatchPosition>,
     pub mine_only: bool,
+    /// The first row the last draw showed. The list only scrolls when the
+    /// selection would leave the window, so it is carried from draw to draw.
+    /// `None` draws as if the list had never scrolled.
+    pub scroll: Option<&'a Cell<usize>>,
 }
 
 /// The unread dot's column and the space after it.
@@ -71,6 +76,10 @@ pub(crate) struct ListLayout {
     /// The rows of the selected story: highlighted, and the ones a draw
     /// must keep in view.
     pub(crate) selected: Range<usize>,
+    /// The rows of the selected story and its neighbours: the story above
+    /// through the story below. The draw keeps as much of it in view as fits,
+    /// so the list scrolls a story before the selection reaches the edge.
+    pub(crate) context: Range<usize>,
 }
 
 pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'_>) {
@@ -88,12 +97,20 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
         return;
     }
 
-    let ListLayout { rows, selected } = match list_area.height < COMPACT_UNDER_ROWS {
+    let ListLayout {
+        rows,
+        selected,
+        context,
+    } = match list_area.height < COMPACT_UNDER_ROWS {
         true => lay_out_compact(view, list_area.width),
         false => lay_out(view, list_area.width),
     };
     let height = usize::from(list_area.height);
-    let offset = scroll_offset(&selected, height);
+    let previous = view.scroll.map_or(0, Cell::get);
+    let offset = scroll_offset(previous, rows.len(), &selected, &context, height);
+    if let Some(scroll) = view.scroll {
+        scroll.set(offset);
+    }
     let art_x = list_area.right().saturating_sub(ART_WIDTH);
     for (row_index, row) in rows.into_iter().enumerate().skip(offset).take(height) {
         let y = list_area.y + (row_index - offset) as u16;
@@ -110,11 +127,40 @@ pub fn draw_article_list(frame: &mut Frame, area: Rect, view: &ArticleListView<'
     }
 }
 
-/// The first row drawn: the selected story's rows stay in view, the list
-/// scrolling just enough to show its last row, so moving down the list
-/// walks it up the screen and moving back up walks it down.
-pub(crate) fn scroll_offset(selected: &Range<usize>, height: usize) -> usize {
-    selected.end.saturating_sub(height).min(selected.start)
+/// The first row drawn, given the one the last draw started at. The window
+/// stays put while the selection moves inside it and scrolls only when the
+/// selected story, or the neighbour story past it (`context`), would leave
+/// it, so there is always a story's worth of list ahead of the selection.
+/// When the selected story and both neighbours do not fit, each neighbour
+/// gets an even share of the rows the selected story leaves, and a story
+/// taller than the window shows its first rows.
+pub(crate) fn scroll_offset(
+    previous: usize,
+    total_rows: usize,
+    selected: &Range<usize>,
+    context: &Range<usize>,
+    height: usize,
+) -> usize {
+    let max_offset = total_rows.saturating_sub(height);
+    let spare = height.saturating_sub(selected.len());
+    let above = selected.start.saturating_sub(context.start);
+    let below = context.end.saturating_sub(selected.end);
+    let (above, below) = if above + below <= spare {
+        (above, below)
+    } else {
+        let above = above.min(spare / 2);
+        (above, below.min(spare - above))
+    };
+    let top = selected.start - above;
+    let bottom = selected.end + below;
+    let mut offset = previous.min(max_offset);
+    if bottom > offset + height {
+        offset = bottom.saturating_sub(height);
+    }
+    if top < offset {
+        offset = top;
+    }
+    offset.min(max_offset)
 }
 
 /// Every row of the list for `width` columns: a rule over the shelf and
@@ -124,7 +170,7 @@ pub(crate) fn scroll_offset(selected: &Range<usize>, height: usize) -> usize {
 /// when the list is wide enough) with a plain rule between stories.
 pub(crate) fn lay_out(view: &ArticleListView<'_>, width: u16) -> ListLayout {
     let mut rows: Vec<ListRow> = Vec::new();
-    let mut selected = 0..0;
+    let mut stories: Vec<Range<usize>> = Vec::with_capacity(view.articles.len());
     let selected_index = view
         .selected_index
         .min(view.articles.len().saturating_sub(1));
@@ -166,11 +212,23 @@ pub(crate) fn lay_out(view: &ArticleListView<'_>, width: u16) -> ListLayout {
                 art: art.next(),
             });
         }
-        if index == selected_index {
-            selected = start..rows.len();
-        }
+        stories.push(start..rows.len());
     }
-    ListLayout { rows, selected }
+    let selected = stories.get(selected_index).cloned().unwrap_or(0..0);
+    let context_start = selected_index
+        .checked_sub(1)
+        .and_then(|above| stories.get(above))
+        // The first story reaches row 0, so walking back to it brings back
+        // the shelf's rule above it.
+        .map_or(0, |above| above.start);
+    let context_end = stories
+        .get(selected_index + 1)
+        .map_or(selected.end, |below| below.end);
+    ListLayout {
+        rows,
+        selected,
+        context: context_start..context_end,
+    }
 }
 
 /// The compact list: one row a story in the same order as the full list,
@@ -193,7 +251,12 @@ pub(crate) fn lay_out_compact(view: &ArticleListView<'_>, width: u16) -> ListLay
             selected = index..index + 1;
         }
     }
-    ListLayout { rows, selected }
+    let context = selected_index.saturating_sub(1)..(selected_index + 2).min(rows.len());
+    ListLayout {
+        rows,
+        selected,
+        context,
+    }
 }
 
 /// `● Title · example.com · 4m`: the dot as the full list draws it, the

@@ -268,7 +268,7 @@ Inline module tests:
 - Active artboard bans block editing through `App::activate_artboard_interaction` and show an error banner while the ban is active; viewing and archive browsing remain available.
 - One archive fetch is in flight per session; `wanted` is the only thing the cursor writes, and `request_wanted_archive` is the only reader.
 - Swatch slot `0` is the primary clipboard slot and is not pinnable.
-- Swatches and floating brushes store glyphs only (`dartboard_editor::Clipboard`); stamping paints in the current paint colour. The eyedropper reads colour from the canvas, never from a swatch.
+- Swatches and copied or lifted floating selections preserve per-cell foreground colours alongside glyphs (`dartboard_editor::Clipboard` + `State::swatch_colors`/`floating_colors`), while sampled single-glyph brushes and terminal pastes stamp in the current paint colour. The eyedropper reads colour from the canvas, never from a swatch.
 - Local paint palette is separate from the server-assigned peer color.
 - Connection rejection lives on `DartboardSnapshot.connect_rejected`, not only on events.
 
@@ -279,6 +279,7 @@ Inline module tests:
 - Wide glyph handling affects cursor rendering, selection coverage, double-click sampling, provenance, swatches, and ownership overlay.
 - `diff_canvas_op` abstracts many editor mutations into server ops; editor changes can affect sync granularity and provenance application.
 - `EditReach` encodes where each `dartboard_editor` action can write; it matches `EditorAction` exhaustively, so a crate upgrade that adds an action breaks the build. An upgrade that changes where an existing action writes fails the debug-build check in any test that drives that action; an action no test drives goes unchecked.
+- `dartboard_editor::Clipboard` holds glyphs only, so `state.rs` keeps `swatch_colors` and `floating_colors` in step with `editor.swatches` and `editor.floating` by hand, and carries its own copies of the crate's `push_swatch` rotation, `stamp_clipboard`, and floating stroke code (`paint_floating_drag`, `paint_floating_diagonal_segment`, `snap_horizontal_brush_x`, `line_points`). A crate upgrade has to compare them; every floating brush strokes through the local copy.
 - Archive lists are keys only and one canvas loads at a time, so retention can grow without the page paying for it; the per-session cache is bounded (`ARCHIVE_CACHE_SIZE`).
 - UI hit testing depends on exact layout math shared by `ui.rs`, `input.rs`, and `page.rs`.
 - SGR mouse coordinates are 1-based at the parser boundary; Artboard hit tests assume normalized coordinates from app input.

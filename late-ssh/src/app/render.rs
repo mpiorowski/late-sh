@@ -999,6 +999,7 @@ impl App {
             marker: self.chat.news.marker(),
             watch_positions: self.chat.news.watch_positions(),
             mine_only: self.chat.news.mine_only(),
+            scroll: Some(self.chat.news.list_scroll()),
         };
         let news_view = news_list_view();
         let feeds_view = chat::feeds::ui::FeedListView {
@@ -1438,7 +1439,14 @@ impl App {
                 let active = Some(index) == home_active_chat;
                 let view = match *source {
                     None => None,
-                    Some(ChatTileSource::News) => Some(ChatTileView::News(news_list_view())),
+                    // A tile that only watches: the scroll the list carries
+                    // between draws is the page's, the two windows differ.
+                    Some(ChatTileSource::News) => {
+                        Some(ChatTileView::News(chat::news::ui::ArticleListView {
+                            scroll: None,
+                            ..news_list_view()
+                        }))
+                    }
                     Some(ChatTileSource::Room(chat_room_id)) => {
                         Some(ChatTileView::Room(chat::ui::EmbeddedRoomChatView {
                             // The tile's border is already the column of air.

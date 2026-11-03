@@ -274,6 +274,26 @@ fn the_display_puts_the_shelf_over_the_feed_once_each() {
 /// `s` on a feed story shelves it and hands the cursor to the story that
 /// came after it; on a full shelf it refuses and the cursor stays put.
 #[tokio::test]
+async fn the_cursor_lands_on_the_newest_story_when_the_shelf_loads_first() {
+    let test_db = new_test_db().await;
+    let mut state = State::new(article_service(test_db.db.clone()), READER, false);
+    let selected_id = |state: &State| state.selected_item().map(|item| item.article.id);
+    let older = article(2, OTHER, 1);
+    let newest = article(3, OTHER, 2);
+
+    state.saved_articles = vec![article(1, OTHER, 0)];
+    state.rebuild_display();
+    state.source_articles = vec![newest.clone(), older.clone()];
+    state.rebuild_display();
+    assert_eq!(selected_id(&state), Some(newest.article.id));
+
+    // Once the feed has drawn, a refresh leaves a moved cursor where it is.
+    state.select_article_by_id(older.article.id);
+    state.rebuild_display();
+    assert_eq!(selected_id(&state), Some(older.article.id));
+}
+
+#[tokio::test]
 async fn a_save_moves_the_cursor_on_and_a_refused_one_leaves_it() {
     let test_db = new_test_db().await;
     let mut client = test_db.db.get().await.expect("db client");

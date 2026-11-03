@@ -25,6 +25,98 @@ use tokio::time::{Instant, timeout};
 
 use crate::test_helpers::{new_test_db, test_app_state, test_config, wait_until};
 
+// Public test identity derived from the fixed Ed25519 seed [42; 32].
+const TLS_TEST_CERT: &str = "-----BEGIN CERTIFICATE-----
+MIIBMTCB5KADAgECAhROBzW7dTYrbRax2PFmzf7q+eTDBTAFBgMrZXAwFDESMBAG
+A1UEAwwJbG9jYWxob3N0MB4XDTI2MTAzMDA0NDUwNloXDTI2MTAzMTA0NDUwNlow
+FDESMBAGA1UEAwwJbG9jYWxob3N0MCowBQYDK2VwAyEAGX9rI+FshTLGq8g4+s1e
+p4m+DHaykgM0A5v6iz02jWGjSDBGMB0GA1UdDgQWBBTSJOd3FZYXGWMf3e7zOCp0
+U+PMLTAPBgNVHRMBAf8EBTADAQH/MBQGA1UdEQQNMAuCCWxvY2FsaG9zdDAFBgMr
+ZXADQQBH+wYgzLQSqyYAD1ZmlsHagNMl3TNskhm6b7xntmm5//Qz6NAaiui+tnbX
+JKwzGDK4kRifxtRuwF56ohqDXQ8E
+-----END CERTIFICATE-----
+";
+
+fn tls_test_key() -> String {
+    use base64::Engine as _;
+
+    let mut der = vec![
+        0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04,
+        0x20,
+    ];
+    der.extend_from_slice(&[42; 32]);
+    format!(
+        "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----\n",
+        base64::engine::general_purpose::STANDARD.encode(der)
+    )
+}
+
+fn tls_test_config(cert: &str, key: &str) -> (tempfile::TempDir, IrcConfig) {
+    let dir = tempfile::tempdir().expect("TLS fixture directory");
+    let cert_path = dir.path().join("cert.pem");
+    let key_path = dir.path().join("key.pem");
+    std::fs::write(&cert_path, cert).expect("write TLS certificate");
+    std::fs::write(&key_path, key).expect("write TLS key");
+    let config = IrcConfig {
+        tls_cert_path: Some(cert_path),
+        tls_key_path: Some(key_path),
+        ..crate::test_helpers::test_irc_config()
+    };
+    (dir, config)
+}
+
+#[test]
+fn irc_tls_loads_a_certificate_chain_and_pkcs8_key() {
+    let chain = TLS_TEST_CERT.repeat(2);
+    let (_dir, config) = tls_test_config(&chain, &tls_test_key());
+    assert!(
+        super::serve::load_tls_acceptor(&config)
+            .expect("TLS acceptor")
+            .is_some()
+    );
+}
+
+#[test]
+fn irc_tls_rejects_an_empty_certificate_chain() {
+    let (_dir, config) = tls_test_config("", &tls_test_key());
+    let error = super::serve::load_tls_acceptor(&config)
+        .err()
+        .expect("empty chain");
+    assert!(error.to_string().contains("contains no certificates"));
+}
+
+#[test]
+fn irc_tls_rejects_a_file_without_a_private_key() {
+    let (_dir, config) = tls_test_config(TLS_TEST_CERT, TLS_TEST_CERT);
+    let error = super::serve::load_tls_acceptor(&config)
+        .err()
+        .expect("missing key");
+    assert!(error.to_string().contains("contains no private key"));
+}
+
+#[test]
+fn irc_tls_reports_malformed_certificate_and_key_paths() {
+    let key = tls_test_key();
+    for (cert, key, message) in [
+        (
+            "-----BEGIN CERTIFICATE-----\n!invalid!\n-----END CERTIFICATE-----\n",
+            key.as_str(),
+            "failed to read LATE_IRC_TLS_CERT",
+        ),
+        (
+            TLS_TEST_CERT,
+            "-----BEGIN PRIVATE KEY-----\n!invalid!\n-----END PRIVATE KEY-----\n",
+            "failed to read LATE_IRC_TLS_KEY",
+        ),
+    ] {
+        let (_dir, config) = tls_test_config(cert, key);
+        let error = super::serve::load_tls_acceptor(&config)
+            .err()
+            .expect("invalid PEM");
+        assert!(error.to_string().contains(message), "{error:#}");
+    }
+}
+
 struct IrcTestServer {
     _db: TestDb,
     state: State,
