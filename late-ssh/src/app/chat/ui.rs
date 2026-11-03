@@ -1047,6 +1047,7 @@ fn poll_option_key(position: i32) -> String {
         1 => "va".to_string(),
         2 => "vb".to_string(),
         3 => "vc".to_string(),
+        4 => "vd".to_string(),
         _ => format!("v{position}"),
     }
 }
