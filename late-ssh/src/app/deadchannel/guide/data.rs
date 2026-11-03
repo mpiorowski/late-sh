@@ -735,7 +735,7 @@ pub const SECTIONS: &[Section] = &[
                 },
                 Key {
                     key: "^c ^x ^v",
-                    does: "{copy}, {cut}, {paste} a piece of it",
+                    does: "{copy}, {cut}, {paste} a piece of it, its colours kept",
                 },
                 Key {
                     key: "^k",
