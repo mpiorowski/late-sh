@@ -1,7 +1,7 @@
 use serde_json::json;
 
 use super::{LayoutList, Layouts, LayoutsError, MAX_LAYOUTS, STOCK_HOME_NAME, STOCK_STREET_NAME};
-use crate::app::zen::state::{Node, RiceLayout, TileKind};
+use crate::app::zen::state::{ChatRoomBinding, Dir, Node, REEF_ROOM, RiceLayout, TileKind};
 
 fn chat_alone() -> RiceLayout {
     RiceLayout {
@@ -80,6 +80,70 @@ fn the_stock_street_is_seeded_once_per_device_and_stays_deleted() {
     assert!(full.seed_stock(), "the marker is worth writing");
     assert!(full.index_of(STOCK_STREET_NAME).is_none());
     assert!(!full.seed_stock());
+}
+
+/// A device's reefs go to #lounge on its next login, once: the stock reef
+/// keeps there too, so `R` agrees. A reef already kept to a room stays there,
+/// a page with no chat keeps its reef, and one freed afterwards stays free.
+#[test]
+fn a_devices_reefs_keep_to_lounge_once_and_a_freed_one_stays_free() {
+    let lounge = ChatRoomBinding::Permanent(REEF_ROOM.to_string());
+    let elsewhere = ChatRoomBinding::Room(uuid::Uuid::from_u128(1));
+    let reef_over_chat = |only: ChatRoomBinding| {
+        let mut root = Node::split(
+            Dir::Column,
+            300,
+            Node::leaf(TileKind::Aquarium),
+            Node::leaf(TileKind::Chat),
+        );
+        root.set_only(0, only);
+        RiceLayout {
+            root,
+            ..RiceLayout::home()
+        }
+    };
+    let reef_alone = RiceLayout {
+        root: Node::leaf(TileKind::Aquarium),
+        ..RiceLayout::home()
+    };
+
+    let stock = RiceLayout::home();
+    let stock_reef = stock
+        .root
+        .leaf_kinds()
+        .iter()
+        .position(|kind| *kind == TileKind::Aquarium)
+        .expect("the stock reef");
+    assert_eq!(stock.root.only_at(stock_reef), lounge);
+
+    let stored = json!({
+        "current": 0,
+        "items": [
+            { "name": "home", "layout": reef_over_chat(ChatRoomBinding::Current).to_json() },
+            { "name": "mine", "layout": reef_over_chat(elsewhere.clone()).to_json() },
+            { "name": "fish", "layout": reef_alone.to_json() }
+        ],
+        "stock_seen": [STOCK_STREET_NAME]
+    });
+    let mut layouts = Layouts::from_json_or(Some(&stored), Layouts::stock());
+    let only_of = |layouts: &Layouts, index: usize| {
+        layouts
+            .get(index)
+            .expect("the layout is there")
+            .layout
+            .root
+            .only_at(0)
+    };
+    assert!(layouts.seed_stock(), "the pass wants writing");
+    assert_eq!(only_of(&layouts, 0), lounge);
+    assert_eq!(only_of(&layouts, 1), elsewhere);
+    assert_eq!(only_of(&layouts, 2), ChatRoomBinding::Current);
+    assert!(!layouts.seed_stock(), "once");
+
+    layouts.store_current(reef_over_chat(ChatRoomBinding::Current));
+    let mut read_back = Layouts::from_json_or(Some(&layouts.to_json()), Layouts::stock());
+    assert!(!read_back.seed_stock());
+    assert_eq!(only_of(&read_back, 0), ChatRoomBinding::Current);
 }
 
 #[test]

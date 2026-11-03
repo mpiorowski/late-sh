@@ -125,6 +125,31 @@ impl TileKind {
         }
     }
 
+    /// Whether a tile of this kind can be kept to one room (`O`,
+    /// `Node::only_at`). The rail and the chats cannot: they are how the
+    /// page picks its room, so one that went down would change the room
+    /// that took it down.
+    pub fn keeps_to_a_room(self) -> bool {
+        match self {
+            TileKind::Chat | TileKind::Rooms => false,
+            TileKind::Bonsai
+            | TileKind::Aquarium
+            | TileKind::Tank
+            | TileKind::Ascii
+            | TileKind::Pet
+            | TileKind::Music
+            | TileKind::Clock
+            | TileKind::Visualizer
+            | TileKind::Lobby
+            | TileKind::Activity
+            | TileKind::Friends
+            | TileKind::Pulse
+            | TileKind::Live
+            | TileKind::Blank
+            | TileKind::Presence => true,
+        }
+    }
+
     pub fn label(self) -> &'static str {
         match self {
             TileKind::Bonsai => "bonsai",
@@ -440,6 +465,18 @@ pub enum Node {
             deserialize_with = "room_from_json"
         )]
         room: ChatRoomBinding,
+        /// The one room this tile is up in (`O`): with the page's chat
+        /// anywhere else it goes down and its sibling takes its cells.
+        /// Absent in the stored JSON (`ChatRoomBinding::Current`) means every
+        /// room. The rail and the chats never hold one
+        /// (`TileKind::keeps_to_a_room`).
+        #[serde(
+            default,
+            skip_serializing_if = "ChatRoomBinding::is_current",
+            serialize_with = "room_to_json",
+            deserialize_with = "room_from_json"
+        )]
+        only: ChatRoomBinding,
         /// The selection an ascii tile plays; `None` (the stored default) is
         /// [`AsciiPiece::DEFAULT`]. Other kinds ignore it. A key this build does
         /// not know (a piece dropped, a rolled-back deploy) reads as `None`
@@ -607,6 +644,10 @@ fn known_piece<'de, D: serde::Deserializer<'de>>(
     Ok(key.as_deref().and_then(AsciiSelection::from_key))
 }
 
+/// The permanent room the stock reef keeps to, by slug since a stock layout
+/// knows no account's room ids.
+pub const REEF_ROOM: &str = "lounge";
+
 /// Per-mille bounds for a split's first child, so neither side is ever
 /// handed the whole split.
 pub const MIN_SHARE: u16 = 1;
@@ -661,6 +702,7 @@ impl Node {
                 .filter(|guest| guests.contains(guest))
                 .collect(),
             room: ChatRoomBinding::Current,
+            only: ChatRoomBinding::Current,
             piece: None,
             title: TileTitle::Named,
         }
@@ -853,6 +895,12 @@ impl Node {
         self
     }
 
+    /// This leaf kept to the permanent room `slug`.
+    pub fn only_in(mut self, slug: &str) -> Self {
+        self.set_only(0, ChatRoomBinding::Permanent(slug.to_string()));
+        self
+    }
+
     /// Set what the leaf at `ordinal` wears on its top row.
     pub fn set_title(&mut self, ordinal: usize, new_title: TileTitle) -> bool {
         let mut remaining = ordinal;
@@ -871,6 +919,28 @@ impl Node {
         match self.leaf_mut(&mut remaining) {
             Some(Node::Leaf { room, .. }) => {
                 *room = new_room;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The one room the leaf at `ordinal` is up in; `Current` for every room.
+    pub fn only_at(&self, ordinal: usize) -> ChatRoomBinding {
+        let mut remaining = ordinal;
+        match self.leaf_ref(&mut remaining) {
+            Some(Node::Leaf { only, .. }) => only.clone(),
+            _ => ChatRoomBinding::Current,
+        }
+    }
+
+    /// Keep the leaf at `ordinal` to one room, or back to every room with
+    /// `Current`. `false` on a kind that stays up in every room.
+    pub fn set_only(&mut self, ordinal: usize, new_only: ChatRoomBinding) -> bool {
+        let mut remaining = ordinal;
+        match self.leaf_mut(&mut remaining) {
+            Some(Node::Leaf { kind, only, .. }) if kind.keeps_to_a_room() => {
+                *only = new_only;
                 true
             }
             _ => false,
@@ -897,19 +967,24 @@ impl Node {
     }
 
     /// Replace the leaf at `ordinal` with a split holding it and a new tile.
+    /// The new tile keeps to the room the old one does: a split carves the
+    /// old tile's cells, and they go down together.
     pub fn split_leaf(&mut self, ordinal: usize, dir: Dir, new_kind: TileKind) -> bool {
         let mut remaining = ordinal;
         let Some(leaf) = self.leaf_mut(&mut remaining) else {
             return false;
         };
         let kept = std::mem::replace(leaf, Node::leaf(new_kind));
-        *leaf = Node::split(dir, 500, kept, Node::leaf(new_kind));
+        let mut added = Node::leaf(new_kind);
+        added.set_only(0, kept.only_at(0));
+        *leaf = Node::split(dir, 500, kept, added);
         true
     }
 
     /// Change what the leaf at `ordinal` shows. A tile that stops being a
     /// chat forgets its room, so cycling back lands on the current room;
     /// one that stops being an ascii tile forgets its piece the same way,
+    /// one that becomes the rail or a chat stops keeping to a room,
     /// and a new kind starts with its name in its title.
     pub fn set_kind(&mut self, ordinal: usize, new_kind: TileKind) -> bool {
         let mut remaining = ordinal;
@@ -917,6 +992,7 @@ impl Node {
             Some(Node::Leaf {
                 kind,
                 room,
+                only,
                 piece,
                 title,
                 ..
@@ -924,6 +1000,9 @@ impl Node {
                 *kind = new_kind;
                 if new_kind != TileKind::Chat {
                     *room = ChatRoomBinding::Current;
+                }
+                if !new_kind.keeps_to_a_room() {
+                    *only = ChatRoomBinding::Current;
                 }
                 if new_kind != TileKind::Ascii {
                     *piece = None;
@@ -1198,7 +1277,8 @@ impl RiceLayout {
     }
 
     /// The stock Home: the room rail, then the reef across the top of the
-    /// chat hosting the now strip, the chat under it, and a sidebar column
+    /// chat hosting the now strip and kept to #lounge, so the chat has its
+    /// rows in every other room, the chat under it, and a sidebar column
     /// of the presence row, the visualizer, the music dock, the lobby
     /// hosting attention, live and the pet (the shop's note while none is
     /// owned) at their panel rows, with the bonsai taking the rest. Fixed,
@@ -1210,7 +1290,9 @@ impl RiceLayout {
             HOME_AQUARIUM_ROWS + 1,
             // The row the title takes in arrange mode stays the reef's
             // outside it, so nothing moves when the mode comes up.
-            Node::hosting(TileKind::Aquarium, &[Guest::Now]).untitled(),
+            Node::hosting(TileKind::Aquarium, &[Guest::Now])
+                .untitled()
+                .only_in(REEF_ROOM),
             Node::leaf(TileKind::Chat),
         );
         // The sidebar's panels, each at its rows plus its title rule; the
@@ -1306,6 +1388,23 @@ impl RiceLayout {
         }
     }
 
+    /// Keep this layout's reefs to #lounge, the way the stock one is. One
+    /// already kept to a room stays there, and a page with no chat keeps its
+    /// reef: nothing would take its space, and the page could go blank.
+    pub fn keep_reefs_to_lounge(&mut self) {
+        let root = &mut self.root;
+        if !root.leaf_kinds().contains(&TileKind::Chat) {
+            return;
+        }
+        for ordinal in 0..root.leaf_count() {
+            if root.kind_at(ordinal) == Some(TileKind::Aquarium)
+                && root.only_at(ordinal).is_current()
+            {
+                root.set_only(ordinal, ChatRoomBinding::Permanent(REEF_ROOM.to_string()));
+            }
+        }
+    }
+
     pub fn to_json(&self) -> serde_json::Value {
         serde_json::to_value(self).unwrap_or(serde_json::Value::Null)
     }
@@ -1333,6 +1432,17 @@ pub enum GuestPick {
 }
 
 /// Session state for Home's tile tree: the current layout and its focus.
+/// What `O` did to the focused tile.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OnlyPick {
+    /// It is up in that one room now.
+    Kept,
+    /// It was kept there already, and is up in every room again.
+    Everywhere,
+    /// The rail and the chats stay up in every room.
+    Refused,
+}
+
 pub struct ZenState {
     pub rice: RiceLayout,
     /// What `R` resets to.
@@ -1346,6 +1456,10 @@ pub struct ZenState {
     /// Session-only playback slots in leaf order. Structural edits move these
     /// with their leaves; serialization only ever sees `rice`.
     playback: Vec<Option<Playback>>,
+    /// Session-only, in leaf order: the tiles kept to a room the page's chat
+    /// is not in (`App::sync_home_kept_tiles`). Read through `tile_hidden`,
+    /// since arrange mode draws them all.
+    kept_away: Vec<bool>,
     visiting: bool,
     /// Focused tile, as an ordinal into `rice.root.leaf_kinds()`.
     pub focus: usize,
@@ -1369,6 +1483,7 @@ impl ZenState {
             .unwrap_or(0);
         Self {
             playback: vec![None; rice.root.leaf_count()],
+            kept_away: vec![false; rice.root.leaf_count()],
             visiting: false,
             rice,
             stock,
@@ -1388,32 +1503,78 @@ impl ZenState {
         self.rice.root.kind_at(self.focus)
     }
 
-    /// Whether the page draws a music equalizer: a visualizer tile, or a
-    /// music tile whose track row marquees. Those paint on the anim_half
-    /// edge, so the render loop has to wake that often while one is up.
-    pub fn shows_equalizer(&self) -> bool {
+    /// Note which tiles the page's chat room keeps down, in leaf order;
+    /// `true` when that changed.
+    pub fn set_kept_away(&mut self, kept_away: Vec<bool>) -> bool {
+        let changed = self.kept_away != kept_away;
+        self.kept_away = kept_away;
+        changed
+    }
+
+    /// Whether the tile at `ordinal` is down on this frame: kept to another
+    /// room, and not in arrange mode, where every tile is up so it can be
+    /// reached.
+    fn tile_hidden(&self, ordinal: usize) -> bool {
+        !self.arrange && self.kept_away.get(ordinal).copied().unwrap_or(false)
+    }
+
+    /// `tile_hidden` for every leaf in layout order, the mask the rect math
+    /// reads (`layout::tile_rects`).
+    pub fn hidden_tiles(&self) -> Vec<bool> {
+        (0..self.leaf_count())
+            .map(|ordinal| self.tile_hidden(ordinal))
+            .collect()
+    }
+
+    /// The kinds of the tiles up on this frame, in layout order.
+    fn kinds_up(&self) -> Vec<TileKind> {
         self.rice
             .root
             .leaf_kinds()
             .into_iter()
-            .any(|kind| match kind {
-                TileKind::Music | TileKind::Visualizer => true,
-                TileKind::Bonsai
-                | TileKind::Aquarium
-                | TileKind::Tank
-                | TileKind::Ascii
-                | TileKind::Pet
-                | TileKind::Chat
-                | TileKind::Clock
-                | TileKind::Lobby
-                | TileKind::Activity
-                | TileKind::Friends
-                | TileKind::Pulse
-                | TileKind::Live
-                | TileKind::Blank
-                | TileKind::Rooms
-                | TileKind::Presence => false,
-            })
+            .enumerate()
+            .filter(|(ordinal, _)| !self.tile_hidden(*ordinal))
+            .map(|(_, kind)| kind)
+            .collect()
+    }
+
+    /// `O`: keep the focused tile to `here`, or back to every room when it
+    /// already keeps to it.
+    pub fn toggle_focused_only(&mut self, here: ChatRoomBinding) -> OnlyPick {
+        let next = match self.rice.root.only_at(self.focus) == here {
+            true => ChatRoomBinding::Current,
+            false => here,
+        };
+        let kept = !next.is_current();
+        match (self.rice.root.set_only(self.focus, next), kept) {
+            (false, _) => OnlyPick::Refused,
+            (true, true) => OnlyPick::Kept,
+            (true, false) => OnlyPick::Everywhere,
+        }
+    }
+
+    /// Whether the page draws a music equalizer: a visualizer tile, or a
+    /// music tile whose track row marquees. Those paint on the anim_half
+    /// edge, so the render loop has to wake that often while one is up.
+    pub fn shows_equalizer(&self) -> bool {
+        self.kinds_up().into_iter().any(|kind| match kind {
+            TileKind::Music | TileKind::Visualizer => true,
+            TileKind::Bonsai
+            | TileKind::Aquarium
+            | TileKind::Tank
+            | TileKind::Ascii
+            | TileKind::Pet
+            | TileKind::Chat
+            | TileKind::Clock
+            | TileKind::Lobby
+            | TileKind::Activity
+            | TileKind::Friends
+            | TileKind::Pulse
+            | TileKind::Live
+            | TileKind::Blank
+            | TileKind::Rooms
+            | TileKind::Presence => false,
+        })
     }
 
     /// Whether the page paints something on the anim_half edge: an
@@ -1423,9 +1584,12 @@ impl ZenState {
         self.shows_equalizer() || self.shows(TileKind::Bonsai)
     }
 
-    /// The tile hosting `guest`, if any.
+    /// The tile hosting `guest`, if any is up.
     pub fn host_of(&self, guest: Guest) -> Option<usize> {
-        self.rice.root.host_of(guest)
+        self.rice
+            .root
+            .host_of(guest)
+            .filter(|host| !self.tile_hidden(*host))
     }
 
     /// Whether `guest` is on the page at all.
@@ -1479,11 +1643,10 @@ impl ZenState {
         }
     }
 
-    /// Whether any tile on the page is `kind`: every tile on the page is
-    /// drawn, so this is also the gate for work that only pays off on
-    /// screen (the live strip's view and its wake tier).
+    /// Whether a tile of `kind` is up on this frame: the gate for work that
+    /// only pays off on screen (the reef's steps, the half-edge wake).
     pub fn shows(&self, kind: TileKind) -> bool {
-        self.rice.root.leaf_kinds().contains(&kind)
+        self.kinds_up().contains(&kind)
     }
 
     /// Resolve all tiles when a visit begins, before the first frame.
@@ -1539,9 +1702,11 @@ impl ZenState {
         })
     }
 
-    /// The pieces the page's ascii tiles play, for the animation wake tier.
+    /// The pieces the page's ascii tiles up on this frame play, for the
+    /// animation wake tier.
     pub fn pieces(&self) -> Vec<AsciiPiece> {
         (0..self.leaf_count())
+            .filter(|i| !self.tile_hidden(*i))
             .filter_map(|i| self.piece_at(i))
             .collect()
     }
@@ -1865,6 +2030,7 @@ impl ZenState {
         self.rice = rice;
         self.stock = stock;
         self.playback = vec![None; self.leaf_count()];
+        self.kept_away = vec![false; self.leaf_count()];
         self.focus = self.first_tile_of(TileKind::Chat).unwrap_or(0);
         self.kind_picker = None;
         self.guest_picker = None;

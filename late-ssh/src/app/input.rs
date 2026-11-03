@@ -3823,7 +3823,7 @@ pub(crate) fn open_guide_globally(app: &mut App) {
     app.show_help = true;
 }
 
-/// `Ctrl+E`: Home's layouts. On Home it toggles arrange mode, where a
+/// `Ctrl+E`, and `/edit` typed: Home's layouts. On Home it toggles arrange mode, where a
 /// digit loads a layout and `L` lists them (so `Ctrl+E 2` is two
 /// keystrokes, like a tmux prefix); anywhere else it opens Home in arrange
 /// mode. The modals close under it either way. The caller keeps it off a

@@ -73,6 +73,9 @@ delta against the design):
   is fixed (the sidebar's panel order with the pet in the tank's slot,
   owned or not), not read from the Settings panel list, which the Arcade
   alone uses.
+- A tile keeps to one room (`O`, `only` on the leaf): anywhere else it goes
+  down and its sibling takes its cells. The rail and the chats stay up. The
+  rules are in `late-ssh/src/app/zen/CONTEXT.md`.
 
 ## Why
 
@@ -161,7 +164,7 @@ Always drawn. The closed `TileKind` becomes:
 | `rooms` | The room rail with its sections, counts and nav hints | `draw_room_list_rail` |
 | `aquarium` | The reef | a tile |
 | `tank` | The sidebar's small tank, the same aquarium in a six-row band | sidebar Tank |
-| `bonsai` | The 81x26 canvas, cut to fit | a tile, sidebar Bonsai |
+| `bonsai` | The 81x26 canvas, cut to fit; narrower than half of it, the sidebar's preview fitted to the tile | a tile, sidebar Bonsai |
 | `pet` | The box | a tile, sidebar Pet |
 | `music` | The dock alone: volume, stations, the v keys; a short tile shows the track over the station | sidebar Music |
 | `visualizer` | The equalizer at the tile's full height | sidebar Music's band |
@@ -222,8 +225,9 @@ behavior on the #lounge card, "wait while a message is selected" rule
 included. The board's all-day line is the banner over the tree
 (`layout::rice_areas`), not a guest.
 
-The stock Home puts the strip on the reef across the top of the chat, so
-it lands on the fish and the chat never loses a row, and attention on the
+The stock Home puts the strip on the reef across the top of the chat, kept
+to #lounge, so it lands on the fish and the chat never loses a row, and
+every other room gives the chat the reef's rows; attention goes on the
 lobby: what waits on you takes the tables' tile and the feed comes back
 when the list clears. The stock lobby is four rows and the pet three under
 their titles, the bonsai takes the rest of the column, and the rail, the
@@ -307,7 +311,7 @@ in the Clubhouse, and login never switches a layout.
 
 ## Keys
 
-Outside arrange mode: Home's keys, exactly. `Ctrl+E` enters arrange mode.
+Outside arrange mode: Home's keys, exactly. `Ctrl+E` or `/edit` enters arrange mode.
 
 Arrange mode:
 
@@ -319,6 +323,7 @@ Arrange mode:
 | `space` | the kind picker over the focused tile |
 | `+` | the guest list over the focused tile: the four dynamic kinds, a check beside the placed ones, toggled in place |
 | `t` | the focused tile's title: named, the rule alone, or no row, its own say from then on (a new tile starts named) |
+| `O` | keep the focused tile to the room the rail is on, or free it |
 | `[` `]` | a chat tile walks the rail's rooms, an ascii tile its pieces |
 | `b` | the border: none is Home's rules, the rest box the page in its look |
 | `1`..`9` | load that layout and leave arrange mode |

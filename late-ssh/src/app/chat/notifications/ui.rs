@@ -1,5 +1,6 @@
+use std::collections::HashSet;
+
 use crate::app::common::{primitives::format_relative_time, theme};
-use chrono::{DateTime, Utc};
 use late_core::models::notification::NotificationView;
 use ratatui::{
     Frame,
@@ -8,11 +9,13 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
+use uuid::Uuid;
 
 pub struct NotificationListView<'a> {
     pub items: &'a [NotificationView],
     pub selected_index: usize,
-    pub marker_read_at: Option<DateTime<Utc>>,
+    /// What this visit stamped read: their dots stay up until the next visit.
+    pub read_on_open: &'a HashSet<Uuid>,
 }
 
 const ITEM_HEIGHT: u16 = 4;
@@ -60,14 +63,10 @@ pub fn draw_notification_list(frame: &mut Frame, area: Rect, view: &Notification
             .map(|s| format!("#{s}"))
             .unwrap_or_else(|| "DM".to_string());
 
-        // Either clears the dot: the feed watermark frozen on entry (so the
-        // dots survive the visit that read them) or the mention's own read
-        // stamp, set when its message was rendered in its room.
-        let is_unread = view
-            .marker_read_at
-            .is_none_or(|last_read_at| item.created > last_read_at)
-            && item.read_at.is_none();
-        let read_indicator = if is_unread {
+        // Unread, or read by this very visit: opening the list stamps its
+        // mentions, and the dots survive the visit that read them.
+        let is_new = item.read_at.is_none() || view.read_on_open.contains(&item.id);
+        let read_indicator = if is_new {
             Span::styled("● ", Style::default().fg(theme::MENTION()))
         } else {
             Span::styled(" ", Style::default())

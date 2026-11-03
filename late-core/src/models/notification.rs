@@ -3,8 +3,6 @@ use chrono::{DateTime, Utc};
 use tokio_postgres::Client;
 use uuid::Uuid;
 
-use super::mention_feed_read::MentionFeedRead;
-
 crate::user_scoped_model! {
     table = "notifications";
     user_field = user_id;
@@ -30,10 +28,9 @@ pub struct NotificationView {
     pub actor_username: String,
     pub room_slug: Option<String>,
     pub message_preview: String,
-    /// When this mention's message was rendered in its own room, `None` while
-    /// it never has been. Stamped by [`Notification::mark_read_for_messages`];
-    /// the list's unread dot honors it the same way
-    /// [`Notification::unread_count`] does.
+    /// When this mention was read, `None` while it is unread: the one signal
+    /// behind [`Notification::unread_count`], the list's dot and the attention
+    /// guest's rows.
     pub read_at: Option<DateTime<Utc>>,
 }
 
@@ -124,10 +121,10 @@ impl Notification {
 
     /// Count unread notifications for a user.
     ///
-    /// Two things clear a mention, and either one is enough: the mention
-    /// feed's own watermark (opening the Mentions entry) and the mention's own
-    /// `read_at`, stamped by [`Self::mark_read_for_messages`] when the message
-    /// it rides on is actually rendered in its room. The room's coarse
+    /// A mention is unread while its `read_at` is empty, and that is the only
+    /// signal. Two acts stamp it: opening the Mentions entry
+    /// ([`Self::mark_all_read`]) and the message it rides on being rendered in
+    /// its room ([`Self::mark_read_for_messages`]). The room's coarse
     /// `chat_room_members.last_read_at` cursor deliberately plays no part
     /// here: it moves whenever the room is merely opened, which would clear
     /// mentions sitting above the loaded tail that were never on screen.
@@ -138,10 +135,8 @@ impl Notification {
                  FROM notifications n
                  JOIN chat_rooms r ON r.id = n.room_id
                  JOIN users recipient ON recipient.id = n.user_id
-                 LEFT JOIN mention_feed_reads mfr ON mfr.user_id = $1
                  WHERE n.user_id = $1
                    AND n.read_at IS NULL
-                   AND n.created > COALESCE(mfr.last_read_at, '-infinity'::timestamptz)
                    AND NOT (
                         COALESCE(recipient.settings, '{}'::jsonb)
                         @> jsonb_build_object(
@@ -161,9 +156,21 @@ impl Notification {
         Ok(row.get("unread_count"))
     }
 
-    /// Mark all unread notifications as read for a user.
-    pub async fn mark_all_read(client: &Client, user_id: Uuid) -> Result<()> {
-        MentionFeedRead::mark_read_now(client, user_id).await
+    /// Stamp `read_at` on every mention this user still has unread. Returns
+    /// the ids it stamped, so the Mentions list can keep its dots on them for
+    /// the visit that read them.
+    pub async fn mark_all_read(client: &Client, user_id: Uuid) -> Result<Vec<Uuid>> {
+        let rows = client
+            .query(
+                "UPDATE notifications
+                 SET read_at = current_timestamp, updated = current_timestamp
+                 WHERE user_id = $1
+                   AND read_at IS NULL
+                 RETURNING id",
+                &[&user_id],
+            )
+            .await?;
+        Ok(rows.iter().map(|row| row.get("id")).collect())
     }
 
     /// Stamp `read_at` on this user's mentions riding on the given messages.
@@ -190,10 +197,6 @@ impl Notification {
             )
             .await?;
         Ok(count)
-    }
-
-    pub async fn last_read_at(client: &Client, user_id: Uuid) -> Result<Option<DateTime<Utc>>> {
-        MentionFeedRead::last_read_at(client, user_id).await
     }
 
     /// Resolve @usernames to user IDs, excluding the actor.

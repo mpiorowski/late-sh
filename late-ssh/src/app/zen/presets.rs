@@ -21,6 +21,8 @@ pub const MAX_LAYOUT_NAME_CHARS: usize = 16;
 /// device's own.
 pub const STOCK_HOME_NAME: &str = "home";
 pub const STOCK_STREET_NAME: &str = "street";
+/// The `stock_seen` mark for the pass that kept a device's reefs to #lounge.
+const REEFS_IN_LOUNGE: &str = "reefs_in_lounge";
 
 /// One saved layout: its name, as the list and `/layout <name>` know it,
 /// and the tree with its look.
@@ -37,8 +39,8 @@ pub struct NamedLayout {
 pub struct Layouts {
     current: usize,
     items: Vec<NamedLayout>,
-    /// The stock layouts this device was seeded with, by name, so a seed
-    /// lands once: deleted, it stays deleted (`seed_stock`).
+    /// The seeds this device has had, by name, so a seed lands once: a
+    /// deleted `street` stays deleted, a freed reef stays free (`seed_stock`).
     stock_seen: Vec<String>,
 }
 
@@ -100,23 +102,34 @@ impl Layouts {
         layouts
     }
 
-    /// Give the device the stock `street` layout if it never had it: a
-    /// device from before `street` existed gets it on its next login,
-    /// after its own layouts; one that deleted it keeps it deleted, and a
-    /// full set only records the seed. `true` when the set changed and
-    /// wants writing.
+    /// What a device gets once, on its next login. The stock `street`
+    /// layout if it never had it, after its own layouts; one that deleted
+    /// it keeps it deleted, and a full set only records the seed. And its
+    /// reefs kept to #lounge, as the stock one now is; `O` frees one and it
+    /// stays free. `true` when the set changed and wants writing.
     pub fn seed_stock(&mut self) -> bool {
-        let name = STOCK_STREET_NAME;
+        let street = self.first_seed(STOCK_STREET_NAME);
+        if street && self.index_of(STOCK_STREET_NAME).is_none() && !self.is_full() {
+            self.items.push(NamedLayout {
+                name: STOCK_STREET_NAME.to_string(),
+                layout: RiceLayout::street(),
+            });
+        }
+        let reefs = self.first_seed(REEFS_IN_LOUNGE);
+        if reefs {
+            for item in &mut self.items {
+                item.layout.keep_reefs_to_lounge();
+            }
+        }
+        street || reefs
+    }
+
+    /// Record the seed `name`; `true` the first time.
+    fn first_seed(&mut self, name: &str) -> bool {
         if self.stock_seen.iter().any(|seen| seen == name) {
             return false;
         }
         self.stock_seen.push(name.to_string());
-        if self.index_of(name).is_none() && !self.is_full() {
-            self.items.push(NamedLayout {
-                name: name.to_string(),
-                layout: RiceLayout::street(),
-            });
-        }
         true
     }
 

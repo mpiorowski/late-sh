@@ -1,4 +1,10 @@
+use std::{
+    collections::HashMap,
+    sync::{Arc, Mutex},
+};
+
 use late_core::{
+    MutexRecover,
     db::Db,
     models::notification::{Notification, NotificationView},
 };
@@ -10,7 +16,6 @@ use crate::app::common::mentions;
 
 #[derive(Clone, Default)]
 pub struct NotificationSnapshot {
-    pub user_id: Option<Uuid>,
     pub items: Vec<NotificationView>,
 }
 
@@ -19,37 +24,59 @@ pub enum NotificationEvent {
     UnreadCountUpdated {
         user_id: Uuid,
         unread_count: i64,
-        last_read_at: Option<chrono::DateTime<chrono::Utc>>,
     },
     NewMention {
         user_id: Uuid,
         unread_count: i64,
+    },
+    /// The Mentions entry was opened; `read` is what that visit stamped.
+    FeedOpened {
+        user_id: Uuid,
+        read: Vec<Uuid>,
     },
 }
 
 #[derive(Clone)]
 pub struct NotificationService {
     db: Db,
-    snapshot_tx: watch::Sender<NotificationSnapshot>,
-    snapshot_rx: watch::Receiver<NotificationSnapshot>,
+    /// One channel per user: a watch keeps only its latest value, so a shared
+    /// one would lose a user's list to whoever published next.
+    snapshot_txs: Arc<Mutex<HashMap<Uuid, watch::Sender<NotificationSnapshot>>>>,
     evt_tx: broadcast::Sender<NotificationEvent>,
 }
 
 impl NotificationService {
     pub fn new(db: Db) -> Self {
-        let (snapshot_tx, snapshot_rx) = watch::channel(NotificationSnapshot::default());
         let (evt_tx, _) = broadcast::channel(256);
 
         Self {
             db,
-            snapshot_tx,
-            snapshot_rx,
+            snapshot_txs: Arc::new(Mutex::new(HashMap::new())),
             evt_tx,
         }
     }
 
-    pub fn subscribe_snapshot(&self) -> watch::Receiver<NotificationSnapshot> {
-        self.snapshot_rx.clone()
+    pub fn subscribe_snapshot(&self, user_id: Uuid) -> watch::Receiver<NotificationSnapshot> {
+        let mut channels = self.snapshot_txs.lock_recover();
+        let make = || watch::channel(NotificationSnapshot::default()).0;
+        let sender = channels.entry(user_id).or_insert_with(&make);
+        if sender.is_closed() {
+            *sender = make();
+        }
+        sender.subscribe()
+    }
+
+    /// Called from the session state's `Drop`, while that state's receiver
+    /// still exists: the entry goes when no other session of this user holds
+    /// the channel.
+    pub fn prune_snapshot_channel(&self, user_id: Uuid) {
+        let mut channels = self.snapshot_txs.lock_recover();
+        let should_remove = channels
+            .get(&user_id)
+            .is_some_and(|sender| sender.receiver_count() <= 1);
+        if should_remove {
+            channels.remove(&user_id);
+        }
     }
 
     pub fn subscribe_events(&self) -> broadcast::Receiver<NotificationEvent> {
@@ -76,10 +103,14 @@ impl NotificationService {
     async fn do_list(&self, user_id: Uuid) -> anyhow::Result<()> {
         let client = self.db.get().await?;
         let items = Notification::list_for_user(&client, user_id, 50).await?;
-        self.snapshot_tx.send(NotificationSnapshot {
-            user_id: Some(user_id),
-            items,
-        })?;
+        let sender = self.snapshot_txs.lock_recover().get(&user_id).cloned();
+        match sender {
+            Some(sender) => {
+                sender.send_replace(NotificationSnapshot { items });
+            }
+            // The session left while the list was loading: nobody to tell.
+            None => {}
+        }
         Ok(())
     }
 
@@ -100,11 +131,9 @@ impl NotificationService {
     async fn publish_unread_count(&self, user_id: Uuid) -> anyhow::Result<()> {
         let client = self.db.get().await?;
         let unread_count = Notification::unread_count(&client, user_id).await?;
-        let last_read_at = Notification::last_read_at(&client, user_id).await?;
         let _ = self.evt_tx.send(NotificationEvent::UnreadCountUpdated {
             user_id,
             unread_count,
-            last_read_at,
         });
         Ok(())
     }
@@ -149,36 +178,38 @@ impl NotificationService {
         Ok(())
     }
 
-    pub fn mark_all_read_task(&self, user_id: Uuid) {
+    /// Opening the Mentions entry, in one task so the order holds: stamp every
+    /// unread mention, say which ones and the new count, then list. The list
+    /// reads after the stamp commits, so it can never bring back a row this
+    /// visit just read.
+    pub fn open_feed_task(&self, user_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(
             async move {
-                if let Err(e) = svc.do_mark_all_read(user_id).await {
+                if let Err(e) = svc.do_open_feed(user_id).await {
                     late_core::error_span!(
-                        "notification_mark_read_failed",
+                        "notification_open_feed_failed",
                         error = ?e,
                         user_id = %user_id,
-                        "failed to mark notifications read"
+                        "failed to open the mentions feed"
                     );
                 }
             }
             .instrument(info_span!(
-                "notification.mark_all_read",
+                "notification.open_feed",
                 user_id = %user_id
             )),
         );
     }
 
-    async fn do_mark_all_read(&self, user_id: Uuid) -> anyhow::Result<()> {
+    async fn do_open_feed(&self, user_id: Uuid) -> anyhow::Result<()> {
         let client = self.db.get().await?;
-        Notification::mark_all_read(&client, user_id).await?;
-        let last_read_at = Notification::last_read_at(&client, user_id).await?;
-        let _ = self.evt_tx.send(NotificationEvent::UnreadCountUpdated {
-            user_id,
-            unread_count: 0,
-            last_read_at,
-        });
-        Ok(())
+        let read = Notification::mark_all_read(&client, user_id).await?;
+        let _ = self
+            .evt_tx
+            .send(NotificationEvent::FeedOpened { user_id, read });
+        self.publish_unread_count(user_id).await?;
+        self.do_list(user_id).await
     }
 
     /// Parse a message body for @mentions, resolve to user IDs, insert notification rows,
@@ -249,3 +280,7 @@ impl NotificationService {
         Ok(())
     }
 }
+
+#[cfg(test)]
+#[path = "svc_test.rs"]
+mod svc_test;

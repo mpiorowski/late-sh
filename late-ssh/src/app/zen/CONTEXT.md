@@ -147,7 +147,8 @@ arrange mode the bottom row is the key footer,
 functions the renderer uses. The stock
 Home (`RiceLayout::home`) is fixed and the same for every account: the
 room rail (`rooms`, `HOME_RAIL_COLS`), the reef across the top of the
-chat (`aquarium`, `HOME_AQUARIUM_ROWS`) hosting the now strip, the chat
+chat (`aquarium`, `HOME_AQUARIUM_ROWS`) hosting the now strip and kept to
+#lounge (below, Tiles kept to a room), the chat
 under it (a `chat` bound to no room, so it shows the rail's; a stored
 `center` reads as one), and the sidebar column (`HOME_SIDEBAR_COLS`):
 `presence`, then `visualizer` (the band's three rows), `music` (the dock's
@@ -177,7 +178,7 @@ stock to return to: `Layouts::seed_stock` appends it once to a set that
 never had it (a device from before it existed gets it on its next login,
 after its own layouts, and the set is written at once; `stock_seen`
 records the seed so a deleted `street` stays deleted, and a full set
-only records it). `R` puts `home` back to stock Home and refuses every
+only records it; the same pass keeps a device's reefs to #lounge, once). `R` puts `home` back to stock Home and refuses every
 other name with a banner (`Layouts::stock_of` is `None` for them,
 `LayoutsError::NoStock`). The status line's care click loads the layout
 named `home` (`zen::input::load_home_layout`, `/layout home` by another
@@ -267,12 +268,59 @@ selected (`App::home_strip_hosted`, which also gates the strip's animation
 edge and `o`). The forms by size: a tank tile draws the reef (and binds the
 simulation, `App::reef_tile_inner`) only in `hub/aquarium/ui::reef_form` (wider than
 30, taller than the mini tank), else the sidebar's mini tank; a bonsai
-tile narrower than half the canvas draws the sidebar's preview; a music
+tile narrower than half the canvas draws the sidebar's preview, fitted to the tile; a music
 tile tall enough draws the sidebar's stage, else the tile's own rows.
 
 There is no zoom, no chat-only key and no narrow fold: every tile on the
-page is drawn, at every width, and a device that wants the chat alone
-arranges it so.
+page is drawn, at every width, but for one kept to another room (below),
+and a device that wants the chat alone arranges it so.
+
+### Tiles kept to a room
+
+`O` in arrange mode keeps the focused tile to the room the rail is on
+(`only` on the leaf, `Node::only_at`, stored the way a chat tile's `room` is
+and absent for every room; one room per tile). `O` again on that room frees
+it, on another room moves it, and a banner says which. With the page's chat
+anywhere else the tile goes down and its sibling takes its cells, so a reef
+and a pet kept to #lounge leave the chat their rows in every other room. The
+page only reflows on a room change, when the messages change anyway.
+
+- The stock reef keeps to #lounge by slug (`REEF_ROOM`, `Node::only_in`), and so
+  it takes the now strip it hosts with it. A device from before that gets the
+  same once on its next login (`Layouts::seed_stock`, `RiceLayout::keep_reefs_to_lounge`,
+  a `stock_seen` mark): every reef still in every room, on any layout with a
+  chat; a page with no chat keeps its reef, since nothing would take its space.
+  `O` on #lounge frees it for good (`App::home_only_here` reads the slug and
+  the rail's id as the same room). A room unresolved, the room list still
+  landing or the account not in #lounge, reads as every room.
+- The rail's selection decides, which is the active chat tile's room, so with
+  several chats moving the focus can bring a kept tile up or take it down.
+  News counts as a room. On a rail row that is no room (mentions, rss, browse)
+  a kept tile is down, and `O` refuses with a banner.
+- The rail and the chats stay up in every room
+  (`TileKind::keeps_to_a_room`, `Node::set_only`): they are how the page picks
+  its room, so one going down would change the room that took it down. A tile
+  that becomes one forgets its room (`Node::set_kind`).
+- A split's new tile keeps to the old one's room, since it carves the old
+  tile's cells and they go down together.
+- A room the account has left reads as every room, the way a chat tile bound
+  to one shows the current room, so nothing goes down for a room that can
+  never come back; the rule says `only a room you left`.
+- Arrange mode brings every tile up so it can be reached, and each names its
+  room in the rule (`reef +now · only #lounge`, `App::home_only_labels`). Away
+  from the room, entering the mode moves the page.
+- The mask is session-only: `App::sync_home_kept_tiles`, inside
+  `sync_visible_chat_room`, writes `ZenState::kept_away`, and everything reads
+  it through `tile_hidden`, which arrange mode overrides. A tile that is down
+  keeps its ordinal and has an empty rect at the origin, so focus, the chats'
+  frames and the playback slots do not move, and it is nobody's neighbour.
+  `layout::deal_split` hands a child's cells to its sibling once every tile of
+  that child is down, which takes a whole section down with no section in the
+  tree.
+- A tile that is down is off the page for everything that asks
+  (`ZenState::shows`, `shows_equalizer`, `host_of`, `pieces`): no wake for its
+  animation, a guest it hosts is not up (`o` opens nothing, the attention list
+  is not gathered), and the reef stops stepping.
 
 ### The attention guest
 
@@ -283,7 +331,7 @@ Every row is a fact the session already holds, and every row clears on the act t
 | your move: `game` vs `name` | a daily match's turn is yours (`DailyState::my_turn_matches`) | the move |
 | result in: `game` vs `name` | a finished daily match you have not looked at (`DailyState::my_finished`) | opening the board |
 | `@peer`: n unread | a DM room with unread messages (`attention::unread_rows`) | reading it |
-| `@actor` mentioned you in #room | an unread mention (the same rows, read ones left out) | reading it |
+| `@actor` mentioned you in #room | an unread mention (the same rows, read ones left out) | Enter on the row, its message rendering in its room, or opening Mentions: each stamps `read_at`, the one read signal |
 | the tank is unfed today | `AquariumCare` has no meal today | `/aquarium feed`, a click or `a` on the tank |
 | the tree is unwatered today | `last_watered` is not today | watering |
 | the pet is unpetted today | the pet is owned and not petted today | a pat |
@@ -296,7 +344,7 @@ Order: moves, results, DMs, mentions, tank, tree, pet (`attention::items`). The 
 late-ssh/src/app/zen/
 |-- mod.rs        # module declarations only
 |-- state.rs      # TileKind and its key table (TileHint: TileKey, HouseKey), Guest, Node (split tree), Look, RiceLayout (serde), ZenState + edits
-|-- layout.rs     # pure rect math: Gaps, Chrome (boxes, Home's rules), rice_fits (the 40x12 floor under which the page is its too-small notice alone), rice_areas (tiles + the arrange footer row while the mode is on), tile_rects, row_gutters, tile_inner, neighbour_side, pet_neighbours
+|-- layout.rs     # pure rect math: Gaps, Chrome (boxes, Home's rules), rice_fits (the 40x12 floor under which the page is its too-small notice alone), rice_areas (tiles + the arrange footer row while the mode is on), tile_rects and row_gutters over the hidden tiles' mask (deal_split), tile_inner, neighbour_side, pet_neighbours
 |-- presets.rs    # Home's named layouts: Layouts (serde, the nine slots and the current), LayoutList (the L list and its typed name), LayoutCommand (/layout)
 |-- attention.rs  # the attention guest's facts: unread_rows (the DMs and mentions, from the chat state), Item and items (the ordered list), Care / Chore (today's three chores, App::care_today)
 |-- ui.rs         # ZenView (one view per domain), draw_rice (the chrome, and the one match from a kind to its domain's drawer), the guests (draw_attention_tile: the rows flush with the tile's edge, the selected one lit, the act word at the row's end), the pickers, the layouts list, the clock and blank tiles
@@ -328,7 +376,8 @@ reserved chords, the Esc arm, `focus_home_tile_at`, the
 `/layout` is parsed in `chat/state.rs` and handed over in
 `chat/input.rs`. `state.rs`: `App::home`, `App::home_layouts`,
 `App::layout_list`, `on_home`, `home_tiles_area` / `home_tile_rects`,
-`home_chat_room_id` / `home_chat_rooms`, `sync_aquarium_bounds`, and
+`home_chat_room_id` / `home_chat_rooms`, `home_rail_binding`,
+`sync_home_kept_tiles`, `home_only_labels`, `sync_aquarium_bounds`, and
 `mark_home_layout_dirty` / `flush_home_layout`. `tick.rs`: the aquarium
 stepping, the ascii tile's cadence edge (`ascii_edge`), the anim edge
 and the debounced flush. `late-core`: `extract_key_home_layouts` /
@@ -366,8 +415,9 @@ tile. There is no `o` for the tile: it is the panel, not the strip.
 `Ctrl+E` enters arrange mode
 (`zen::input::toggle_home_arrange`; `Ctrl+E` from any other page walks
 Home into it first, closing the modals; not while Home's composer holds
-a draft). Leaving or entering closes the pickers, the ascii piece picker
-included. In it:
+a draft), and `/edit` from any composer runs the same chord, for terminals
+that swallow it (`input::layout_chord_globally`). Leaving or entering closes
+the pickers, the ascii piece picker included. In it:
 
 - Focus: Tab / Shift+Tab and the arrows walk every tile (the page owns
   Tab; it is not the page switch here); a left click focuses the tile
@@ -394,6 +444,8 @@ included. In it:
   uncapped held key would write a settings row the login path can never
   parse. The layout keys that change the tree are uppercase (`S` `X` `F`
   `R`), keeping the lowercase letters free for the tiles' own keys.
+- `O` keeps the focused tile to the room the rail is on, or frees it (§Tiles
+  kept to a room).
 - `b` cycles the border (a border boxes the layout in its look, none
   draws Home's rules), `g` the gap between boxed tiles, and `t` walks the
   focused tile's title through named, rule, hidden (`TileTitle`,
@@ -457,8 +509,9 @@ update.
 ## 4. Gotchas
 
 - The aquarium simulation is bound to one rect at a time. `App::sync_aquarium_bounds`
-  re-binds it on every `set_screen`, resize, and layout edit to the
-  aquarium tile's inner rect, from the same pure functions the renderer
+  re-binds it to the aquarium tile's inner rect on every `set_screen`, resize,
+  layout edit, and kept tile going down or coming back, from the same pure
+  functions the renderer
   uses (`layout.rs`), so the sim and the drawing never disagree on size.
   Entering or leaving arrange mode moves the footer row, so it is a
   layout change like any other.
@@ -532,8 +585,10 @@ update.
   to News is the headlines strip now (`../chat/news/CONTEXT.md`, the
   compact list).
 - Tests cover the split tree, the fixed splits and the guests' moves, the
-  stock Home (`state_test.rs`), neighbour detection, the gutters and the
-  rules chrome's insets (`layout_test.rs`), the named layouts and their
+  stock Home, a tile's room and what a tile kept away is off of
+  (`state_test.rs`), neighbour detection, the gutters, the rules chrome's
+  insets and hidden tiles collapsing (`layout_test.rs`), `O` from a room and
+  back and `/edit` (`input_flow_test.rs`), the named layouts and their
   seeds (`presets_test.rs`), the title modes, the hints and the chrome
   (`ui_test.rs`), the resize floor (`state_test.rs`),
   the unread rows (`rows_test.rs`), and the drawn-kinds gate

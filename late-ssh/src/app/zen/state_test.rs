@@ -6,10 +6,15 @@ use super::*;
 use crate::app::zen::layout::{Gaps, tile_rects};
 
 fn widths(root: &Node, area: Rect, gap: u16) -> Vec<u16> {
-    tile_rects(root, area, Gaps::uniform(gap))
-        .into_iter()
-        .map(|(_, rect)| rect.width)
-        .collect()
+    tile_rects(
+        root,
+        area,
+        Gaps::uniform(gap),
+        &vec![false; root.leaf_count()],
+    )
+    .into_iter()
+    .map(|(_, rect)| rect.width)
+    .collect()
 }
 
 /// A stored layout as a page reads it, the stock `zen` layout its fallback.
@@ -26,10 +31,15 @@ fn focused_on_first_tile(rice: RiceLayout) -> ZenState {
 }
 
 fn heights(root: &Node, area: Rect, gap: u16) -> Vec<u16> {
-    tile_rects(root, area, Gaps::uniform(gap))
-        .into_iter()
-        .map(|(_, rect)| rect.height)
-        .collect()
+    tile_rects(
+        root,
+        area,
+        Gaps::uniform(gap),
+        &vec![false; root.leaf_count()],
+    )
+    .into_iter()
+    .map(|(_, rect)| rect.height)
+    .collect()
 }
 
 #[test]
@@ -901,6 +911,7 @@ fn the_stock_reef_fits_the_tallest_creature_with_its_title_up() {
         &home.root,
         Rect::new(0, 0, 200, 60),
         Gaps::uniform(home.look.gap as u16),
+        &vec![false; home.root.leaf_count()],
     );
     let (kind, rect) = rects[1];
     assert_eq!(kind, TileKind::Aquarium);
@@ -909,5 +920,163 @@ fn the_stock_reef_fits_the_tallest_creature_with_its_title_up() {
         rows_under_the_title >= reef.min_height,
         "{rows_under_the_title} rows under the title, the reef needs {}",
         reef.min_height
+    );
+}
+
+/// `only` is stored the way a chat tile's `room` is, and a layout saved
+/// before it existed reads as every room.
+#[test]
+fn a_tiles_room_survives_the_round_trip_and_an_old_layout_reads_as_every_room() {
+    let id = Uuid::now_v7();
+    let stored = |only: serde_json::Value| {
+        serde_json::json!({
+            "root": { "node": "leaf", "kind": "pet", "only": only },
+            "look": { "border": "rounded", "gap": 0, "titles": true }
+        })
+    };
+    for (value, binding) in [
+        (serde_json::json!(id.to_string()), ChatRoomBinding::Room(id)),
+        (
+            serde_json::json!("lounge"),
+            ChatRoomBinding::Permanent("lounge".to_string()),
+        ),
+        (serde_json::json!("news"), ChatRoomBinding::News),
+    ] {
+        let read = from_json(Some(&stored(value)));
+        assert_eq!(read.root.only_at(0), binding);
+        assert_eq!(from_json(Some(&read.to_json())).root.only_at(0), binding);
+    }
+
+    let old = serde_json::json!({
+        "root": { "node": "leaf", "kind": "pet" },
+        "look": { "border": "rounded", "gap": 0, "titles": true }
+    });
+    let old = from_json(Some(&old));
+    assert_eq!(old.root.only_at(0), ChatRoomBinding::Current);
+    assert_eq!(old.root.leaf_kinds(), vec![TileKind::Pet]);
+    assert!(
+        !old.to_json().to_string().contains("only"),
+        "every room writes no key: {}",
+        old.to_json()
+    );
+}
+
+/// `O` binds, the same room again frees, another room moves the binding,
+/// and the two kinds the page picks its room with refuse.
+#[test]
+fn only_toggles_on_a_tile_and_is_refused_by_the_rail_and_the_chats() {
+    let (lounge, dev) = (Uuid::now_v7(), Uuid::now_v7());
+    let mut page = focused_on_first_tile(RiceLayout {
+        root: Node::split(
+            Dir::Row,
+            500,
+            Node::leaf(TileKind::Pet),
+            Node::split(
+                Dir::Row,
+                500,
+                Node::leaf(TileKind::Rooms),
+                Node::leaf(TileKind::Chat),
+            ),
+        ),
+        look: Look::default(),
+    });
+    let here = ChatRoomBinding::Room(lounge);
+    assert_eq!(page.toggle_focused_only(here.clone()), OnlyPick::Kept);
+    assert_eq!(page.rice.root.only_at(0), here);
+    assert_eq!(
+        page.toggle_focused_only(ChatRoomBinding::Room(dev)),
+        OnlyPick::Kept
+    );
+    assert_eq!(page.rice.root.only_at(0), ChatRoomBinding::Room(dev));
+    assert_eq!(
+        page.toggle_focused_only(ChatRoomBinding::Room(dev)),
+        OnlyPick::Everywhere
+    );
+    assert_eq!(page.rice.root.only_at(0), ChatRoomBinding::Current);
+
+    for rail_or_chat in [1, 2] {
+        page.focus = rail_or_chat;
+        assert_eq!(page.toggle_focused_only(here.clone()), OnlyPick::Refused);
+        assert_eq!(
+            page.rice.root.only_at(rail_or_chat),
+            ChatRoomBinding::Current
+        );
+    }
+}
+
+/// A split's new tile goes down with the old one, and a tile that becomes a
+/// chat or the rail stops keeping to a room, so neither can ever go down.
+#[test]
+fn a_split_shares_the_tiles_room_and_a_chat_forgets_it() {
+    let here = ChatRoomBinding::Room(Uuid::now_v7());
+    let mut root = Node::leaf(TileKind::Pet);
+    assert!(root.set_only(0, here.clone()));
+    assert!(root.split_leaf(0, Dir::Row, TileKind::Blank));
+    assert_eq!(root.only_at(0), here);
+    assert_eq!(root.only_at(1), here);
+
+    assert!(root.set_kind(0, TileKind::Clock));
+    assert_eq!(root.only_at(0), here, "another furniture kind keeps it");
+    assert!(root.set_kind(0, TileKind::Chat));
+    assert_eq!(root.only_at(0), ChatRoomBinding::Current);
+    assert!(root.set_kind(1, TileKind::Rooms));
+    assert_eq!(root.only_at(1), ChatRoomBinding::Current);
+}
+
+/// A tile kept away is off the page for everything that asks what is up:
+/// the work its kind wakes for and the guest it hosts. Arrange mode brings
+/// every tile back so it can be reached.
+#[test]
+fn a_tile_kept_away_is_off_the_page_until_arrange_mode() {
+    let mut page = ZenState::new(
+        RiceLayout {
+            root: Node::split(
+                Dir::Column,
+                500,
+                Node::hosting(TileKind::Aquarium, &[Guest::Now]),
+                Node::split(
+                    Dir::Column,
+                    500,
+                    Node::leaf(TileKind::Visualizer),
+                    Node::split(
+                        Dir::Column,
+                        500,
+                        Node::leaf(TileKind::Ascii),
+                        Node::leaf(TileKind::Chat),
+                    ),
+                ),
+            ),
+            look: Look::default(),
+        },
+        None,
+    );
+    let up = |page: &ZenState| {
+        (
+            page.hidden_tiles(),
+            page.shows(TileKind::Aquarium),
+            page.hosts(Guest::Now),
+            page.paints_on_half_edge(),
+            page.pieces().len(),
+        )
+    };
+    assert_eq!(
+        up(&page),
+        (vec![false, false, false, false], true, true, true, 1)
+    );
+
+    assert!(page.set_kept_away(vec![true, true, true, false]));
+    assert!(
+        !page.set_kept_away(vec![true, true, true, false]),
+        "the same mask is no change"
+    );
+    assert_eq!(
+        up(&page),
+        (vec![true, true, true, false], false, false, false, 0)
+    );
+
+    page.arrange = true;
+    assert_eq!(
+        up(&page),
+        (vec![false, false, false, false], true, true, true, 1)
     );
 }

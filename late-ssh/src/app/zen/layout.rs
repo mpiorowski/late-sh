@@ -122,38 +122,78 @@ pub fn rice_areas(area: Rect, banner_row: bool, footer_row: bool) -> RiceAreas {
 }
 
 /// Every tile's rect in layout order, with `gap` cells between siblings.
-pub fn tile_rects(root: &Node, area: Rect, gaps: Gaps) -> Vec<(TileKind, Rect)> {
+/// `hidden` has one entry per leaf in layout order
+/// (`ZenState::hidden_tiles`): a hidden tile's rect is empty, at the origin
+/// so it never reads as anyone's neighbour, and its cells go to its sibling.
+pub fn tile_rects(root: &Node, area: Rect, gaps: Gaps, hidden: &[bool]) -> Vec<(TileKind, Rect)> {
     let mut out = Vec::with_capacity(root.leaf_count());
-    collect_rects(root, area, gaps, &mut out);
+    collect_rects(root, area, gaps, hidden, &mut out);
     out
 }
 
-fn collect_rects(node: &Node, area: Rect, gaps: Gaps, out: &mut Vec<(TileKind, Rect)>) {
+fn collect_rects(
+    node: &Node,
+    area: Rect,
+    gaps: Gaps,
+    hidden: &[bool],
+    out: &mut Vec<(TileKind, Rect)>,
+) {
     match node {
-        Node::Leaf { kind, .. } => out.push((*kind, area)),
+        Node::Leaf { kind, .. } => {
+            let rect = match hidden[0] {
+                true => Rect::default(),
+                false => area,
+            };
+            out.push((*kind, rect));
+        }
         Node::Split {
             dir,
             share,
             first,
             second,
         } => {
-            let (a, b) = split_rect(area, *dir, *share, gaps);
-            collect_rects(first, a, gaps, out);
-            collect_rects(second, b, gaps, out);
+            let (first_hidden, second_hidden) = hidden.split_at(first.leaf_count());
+            let (a, b) = deal_split(area, *dir, *share, gaps, first_hidden, second_hidden);
+            collect_rects(first, a, gaps, first_hidden, out);
+            collect_rects(second, b, gaps, second_hidden, out);
         }
+    }
+}
+
+fn all_hidden(hidden: &[bool]) -> bool {
+    hidden.iter().all(|tile| *tile)
+}
+
+/// A split's two rects with its hidden tiles out of it: `split_rect`, unless
+/// every tile of a child is hidden, which leaves that child nothing and the
+/// other the whole area, the gap between them included. A section of tiles
+/// all hidden goes the same way, with no section of its own in the tree.
+fn deal_split(
+    area: Rect,
+    dir: Dir,
+    share: Share,
+    gaps: Gaps,
+    first_hidden: &[bool],
+    second_hidden: &[bool],
+) -> (Rect, Rect) {
+    match (all_hidden(first_hidden), all_hidden(second_hidden)) {
+        (true, _) => (Rect::default(), area),
+        (false, true) => (area, Rect::default()),
+        (false, false) => split_rect(area, dir, share, gaps),
     }
 }
 
 /// The gutters of every row split, in tree order: the column between two
 /// side-by-side children, full height of the split. Empty when the row
-/// gap is zero. The rules chrome paints a line down each.
-pub fn row_gutters(root: &Node, area: Rect, gaps: Gaps) -> Vec<Rect> {
+/// gap is zero, and a split with a child all hidden has none. The rules
+/// chrome paints a line down each.
+pub fn row_gutters(root: &Node, area: Rect, gaps: Gaps, hidden: &[bool]) -> Vec<Rect> {
     let mut out = Vec::new();
-    collect_gutters(root, area, gaps, &mut out);
+    collect_gutters(root, area, gaps, hidden, &mut out);
     out
 }
 
-fn collect_gutters(node: &Node, area: Rect, gaps: Gaps, out: &mut Vec<Rect>) {
+fn collect_gutters(node: &Node, area: Rect, gaps: Gaps, hidden: &[bool], out: &mut Vec<Rect>) {
     let Node::Split {
         dir,
         share,
@@ -163,12 +203,14 @@ fn collect_gutters(node: &Node, area: Rect, gaps: Gaps, out: &mut Vec<Rect>) {
     else {
         return;
     };
-    let (a, b) = split_rect(area, *dir, *share, gaps);
-    if *dir == Dir::Row && gaps.row > 0 && b.x > a.right() {
+    let (first_hidden, second_hidden) = hidden.split_at(first.leaf_count());
+    let (a, b) = deal_split(area, *dir, *share, gaps, first_hidden, second_hidden);
+    let both_up = !all_hidden(first_hidden) && !all_hidden(second_hidden);
+    if both_up && *dir == Dir::Row && gaps.row > 0 && b.x > a.right() {
         out.push(Rect::new(a.right(), area.y, b.x - a.right(), area.height));
     }
-    collect_gutters(first, a, gaps, out);
-    collect_gutters(second, b, gaps, out);
+    collect_gutters(first, a, gaps, first_hidden, out);
+    collect_gutters(second, b, gaps, second_hidden, out);
 }
 
 /// The cells a split can hand out along its direction: its length minus the
