@@ -117,8 +117,9 @@ pub(crate) struct SidebarTank<'a> {
     pub hungry: bool,
 }
 
-/// Which shop-gated panels the account can show. A panel it does not own
-/// is skipped on the rail and marked in the settings list.
+/// Which shop-gated panels the account can show. A panel it does not own,
+/// or a pet its owner put away, is skipped on the rail and marked in the
+/// settings list (`/shop` is where either comes back).
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct SidebarOwnership {
     pub pet: bool,

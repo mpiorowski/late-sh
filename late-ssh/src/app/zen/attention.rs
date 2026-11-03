@@ -97,7 +97,7 @@ pub enum Item {
     FeedTank,
     /// The tree has not been watered today.
     WaterTree,
-    /// The pet has not been petted today (owners only).
+    /// The pet has not been petted today (owners only, while it is out).
     PetPet,
 }
 
@@ -155,7 +155,7 @@ pub struct Match {
 
 /// What the session knows, gathered by the glue each frame and each key.
 /// The care flags are already gated on ownership: an unowned tank or pet
-/// is never due.
+/// is never due, nor is a pet its owner put away.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Inputs {
     /// Matches on your move, newest first.
@@ -195,7 +195,8 @@ pub fn items(inputs: Inputs) -> Vec<Item> {
     rows
 }
 
-/// Today's care for one companion: tended, still due, or not owned.
+/// Today's care for one companion: tended, still due, or not asked for
+/// (`NotOwned`: not bought, or a pet its owner put away, `App::pet_out`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Chore {
     Done,

@@ -916,6 +916,9 @@ pub struct App {
     /// with F4, also closed by Esc and by the game ending. `None`, the game
     /// has the keys and the whole screen.
     pub(crate) own_watch_chat_open: Option<crate::app::door::spectate::state::SpectateGame>,
+    /// The watcher counts as the last tick read them
+    /// (`door::spectate::chat::watchers_moved`).
+    pub(crate) watcher_counts_seen: crate::app::door::spectate::chat::WatcherCounts,
     /// The chat column over this player's own running game, as the last
     /// frame drew it (`None` while it is closed): only a drawn column takes
     /// the keys (`door::spectate::input::own_chat_takes_keys`).
@@ -1567,6 +1570,7 @@ impl App {
                     mood: late_core::models::pet::PetMood::Asleep.as_str().to_string(),
                     mood_since: chrono::Utc::now(),
                     last_petted: None,
+                    enabled: true,
                 },
             )
         };
@@ -1970,6 +1974,7 @@ impl App {
             live_games: config.live_games,
             own_watch_chats: Vec::new(),
             own_watch_chat_open: None,
+            watcher_counts_seen: Default::default(),
             own_chat_hit: std::cell::Cell::new(None),
             own_chat_undrawn: std::cell::Cell::new(false),
             brogue_state: None,
@@ -3838,7 +3843,13 @@ impl App {
         self.home_layout_dirty = true;
     }
 
-    /// Today's care, the pet gated on ownership: what the attention guest
+    /// Whether the pet shows: bought, and not put away with its Shop switch.
+    /// Every surface that draws it, pets it or asks for it reads this.
+    pub(crate) fn pet_out(&self) -> bool {
+        self.shop_state.entitlements().has_pet_companion() && self.pet_state.enabled
+    }
+
+    /// Today's care, the pet gated on `pet_out`: what the attention guest
     /// and the status line's Care count read.
     pub(crate) fn care_today(&self) -> crate::app::zen::attention::Care {
         use crate::app::zen::attention::{Care, Chore};
@@ -3846,10 +3857,7 @@ impl App {
         Care {
             bonsai: Chore::of(true, self.bonsai.tree.last_watered == Some(today)),
             tank: Chore::of(true, self.aquarium_care.fed_on_day(today)),
-            pet: Chore::of(
-                self.shop_state.entitlements().has_pet_companion(),
-                self.pet_state.petted_on(today),
-            ),
+            pet: Chore::of(self.pet_out(), self.pet_state.petted_on(today)),
         }
     }
 

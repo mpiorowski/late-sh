@@ -31,8 +31,9 @@ truncate it to RESTORE); the story's restore opcode also uses the menu, never
 a filename chooser.
 
 Inside a game every key is the story's, Esc included. The frame title leads
-with the watch chat's word (`F4 chat`, and what is unread there), then the
-ways out (`` ` `` step out, `QUIT`), then `RESTORE` and `SAVE`; an 80-column
+with who is watching (`2 watching`, no word while nobody is), then the watch
+chat's word (`F4 chat`, and what is unread there), then the ways out
+(`` ` `` step out, `QUIT`), then `RESTORE` and `SAVE`; an 80-column
 title cuts the tail. On the menus a lone Esc backs out one level, from the
 edition list to the Games hub.
 

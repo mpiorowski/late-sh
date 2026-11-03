@@ -22,11 +22,23 @@ crate::user_scoped_model! {
         pub mood_since: DateTime<Utc>,
         // The last UTC day the owner petted it: the daily chip gate.
         pub last_petted: Option<NaiveDate>,
+        // The owner's switch: false puts the pet away while it stays bought.
+        pub enabled: bool,
     }
 }
 
 /// Maximum length of a user-set pet name.
 pub const PET_NAME_MAX_CHARS: usize = 24;
+
+/// What a petting came to on the pet's row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PetDay {
+    /// The first pet of the UTC day, now stamped: the daily bonus is due.
+    FirstToday,
+    AlreadyToday,
+    /// Put away: only a session that has not heard yet can still click it.
+    Away,
+}
 
 /// What the pet is. Closed: the database checks the column against this list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -268,23 +280,47 @@ impl PetCompanion {
         Ok(())
     }
 
-    /// Stamp today's petting. `true` only for the first pet of the UTC day:
-    /// the one witness the daily chip bonus needs, atomic however many
-    /// sessions or clicks race for it.
+    /// Bring the pet out or put it away.
+    pub async fn set_enabled(client: &Client, user_id: Uuid, enabled: bool) -> Result<()> {
+        client
+            .execute(
+                "UPDATE pet_companions SET enabled = $1, updated = current_timestamp WHERE user_id = $2",
+                &[&enabled, &user_id],
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// Stamp today's petting of a pet that is out. The `UPDATE` is the one
+    /// witness the daily chip bonus needs, atomic however many sessions or
+    /// clicks race for it, and it is what refuses a pet put away; the read
+    /// after it only names why nothing was stamped.
     pub async fn pet_day(
         client: &impl GenericClient,
         user_id: Uuid,
         today: NaiveDate,
-    ) -> Result<bool> {
-        let updated = client
+    ) -> Result<PetDay> {
+        let stamped = client
             .execute(
                 "UPDATE pet_companions
                  SET last_petted = $2, updated = current_timestamp
-                 WHERE user_id = $1 AND last_petted IS DISTINCT FROM $2",
+                 WHERE user_id = $1 AND enabled AND last_petted IS DISTINCT FROM $2",
                 &[&user_id, &today],
             )
             .await?;
-        Ok(updated == 1)
+        if stamped == 1 {
+            return Ok(PetDay::FirstToday);
+        }
+        let row = client
+            .query_one(
+                "SELECT enabled FROM pet_companions WHERE user_id = $1",
+                &[&user_id],
+            )
+            .await?;
+        match row.get::<_, bool>("enabled") {
+            true => Ok(PetDay::AlreadyToday),
+            false => Ok(PetDay::Away),
+        }
     }
 
     /// Record the mood the owner's session inferred. `mood_since` only moves

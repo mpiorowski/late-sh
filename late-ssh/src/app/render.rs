@@ -209,7 +209,8 @@ struct DrawContext<'a> {
     live_panel_now: chrono::DateTime<chrono::Utc>,
     live_panel_hit: &'a crate::app::live::panel::LivePanelHit,
     /// People with a watch open on this player's own running game on the
-    /// watchable door whose screen is up, for its watcher chat.
+    /// watchable door whose screen is up, for its frame title and watcher
+    /// chat.
     own_watchers: usize,
     /// People with the held watch open, this session included, for its
     /// watch chat's header.
@@ -429,7 +430,8 @@ struct DrawContext<'a> {
     marquee_tick: usize,
     chat_state: &'a chat::state::ChatState,
     user_id: uuid::Uuid,
-    pet_species: late_core::models::pet::PetSpecies,
+    /// `App::pet_out`: the pet is bought and not put away.
+    pet_out: bool,
     news_reader: Option<&'a chat::news::reader::state::ReaderModal>,
     video_modal: Option<&'a crate::app::video::state::WatchModal>,
     is_draining: bool,
@@ -478,6 +480,7 @@ impl App {
         // (some door states are even taken out of `self` for the draw).
         use crate::app::door::hub::state::HubGame;
         let home_care = self.care_today();
+        let pet_out = self.pet_out();
         // Only Home draws these, and only a page hosting attention reads
         // its list: every other frame skips the work.
         let attention =
@@ -506,19 +509,10 @@ impl App {
             crate::app::door::spectate::state::SpectateGame::of_screen(self.screen);
         let own_chat_open = crate::app::door::spectate::input::open_own_chat_game(self);
         let foreground_overlay_open = self.foreground_overlay_open();
-        let own_game_key = own_screen_game.and_then(|game| {
-            let handle = crate::app::door::spectate::chat::own_running_handle(self, game)?;
-            crate::app::door::spectate::state::LiveGameKey::new(game, &handle)
-        });
-        // No game of theirs on the roster: nobody can be watching it.
-        let own_watchers = match own_game_key {
-            Some(key) => self.live_games.watchers_of(key),
-            None => 0,
-        };
-        let held_watchers = match self.spectate_state.as_ref() {
-            Some(state) => self.live_games.watchers_of(state.key()),
-            None => 0,
-        };
+        let crate::app::door::spectate::chat::WatcherCounts {
+            own: own_watchers,
+            held: held_watchers,
+        } = crate::app::door::spectate::chat::watcher_counts(self);
         let is_runner = self.is_runner();
         let games_hub_roster = HubGame::roster(is_runner);
         // Away with the Tweak on: the piece covers everything this frame.
@@ -1560,15 +1554,11 @@ impl App {
             })
             .collect();
 
-        let home_pet_strip = self
-            .shop_state
-            .entitlements()
-            .has_pet_companion()
-            .then_some(crate::app::pet::ui::PetView {
-                state: &self.pet_state,
-                pet_rect_slot: Some(&self.last_pet_rect),
-                frame_slot: Some(&self.last_pet_frame),
-            });
+        let home_pet_strip = pet_out.then_some(crate::app::pet::ui::PetView {
+            state: &self.pet_state,
+            pet_rect_slot: Some(&self.last_pet_rect),
+            frame_slot: Some(&self.last_pet_frame),
+        });
         // The clubhouse has no chat panel: #lounge messages float over their
         // authors' heads and the shared composer block pins to the bottom.
         // Both are only assembled while that screen is up.
@@ -1938,7 +1928,7 @@ impl App {
                         marquee_tick: self.marquee_tick,
                         chat_state: &self.chat,
                         user_id: self.user_id,
-                        pet_species: self.pet_state.species,
+                        pet_out,
                         news_reader,
                         video_modal,
                         is_draining: self.is_draining.load(std::sync::atomic::Ordering::Relaxed),
@@ -2749,11 +2739,7 @@ impl App {
                     paired_client: ctx.paired_client,
                     eq_state: ctx.eq_state,
                     bonsai: ctx.bonsai,
-                    pet: ctx
-                        .shop_state
-                        .entitlements()
-                        .has_pet_companion()
-                        .then_some(ctx.pet_state),
+                    pet: ctx.pet_out.then_some(ctx.pet_state),
                     tank: crate::app::common::sidebar::SidebarTank {
                         aquarium: ctx.aquarium_state,
                         hungry: ctx.aquarium_care.hungry(),
@@ -2840,9 +2826,7 @@ impl App {
                 frame,
                 inner,
                 ctx.settings_modal_state,
-                crate::app::common::sidebar::SidebarOwnership {
-                    pet: ctx.shop_state.entitlements().has_pet_companion(),
-                },
+                crate::app::common::sidebar::SidebarOwnership { pet: ctx.pet_out },
             );
         }
 
@@ -2856,7 +2840,10 @@ impl App {
                 inner,
                 crate::app::hub::ui::HubDrawProps {
                     shop_state: ctx.shop_state,
-                    pet_species: ctx.pet_species,
+                    pet: crate::app::hub::shop::ui::ShopPet {
+                        species: ctx.pet_state.species,
+                        enabled: ctx.pet_state.enabled,
+                    },
                     aquarium_care: ctx.aquarium_care,
                 },
             );
@@ -3163,6 +3150,18 @@ fn chat_title_hint(unread: Option<i64>) -> Option<Span<'static>> {
     }
 }
 
+/// What the frame title says around a player's own running game on a
+/// watchable door: who is watching, then the chat's word.
+fn own_game_title_hints(ctx: &DrawContext<'_>) -> Vec<Span<'static>> {
+    crate::app::door::spectate::ui::watchers_title_hint(
+        ctx.own_watchers,
+        ctx.own_chat_open.is_some(),
+    )
+    .into_iter()
+    .chain(chat_title_hint(ctx.chat_title_unread))
+    .collect()
+}
+
 /// The numbered page tabs in the frame title, by the screen each one is.
 const FRAME_TABS: [(Screen, &str); 8] = [
     (Screen::Clubhouse, "0"),
@@ -3281,7 +3280,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .as_deref()
             .is_some_and(|state| state.is_running());
         if in_game {
-            spans.extend(chat_title_hint(ctx.chat_title_unread));
+            spans.extend(own_game_title_hints(ctx));
             spans.push(Span::styled(
                 "· ? help · S save · ` step out · #quit ",
                 Style::default().fg(theme::TEXT_DIM()),
@@ -3302,7 +3301,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .as_deref()
             .is_some_and(|state| state.is_running());
         if in_game {
-            spans.extend(chat_title_hint(ctx.chat_title_unread));
+            spans.extend(own_game_title_hints(ctx));
             spans.push(Span::styled(
                 "· ? help · S save · ` step out · Ctrl-Q abandon ",
                 Style::default().fg(theme::TEXT_DIM()),
@@ -3323,7 +3322,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .as_deref()
             .is_some_and(|state| state.is_running());
         if in_game {
-            spans.extend(chat_title_hint(ctx.chat_title_unread));
+            spans.extend(own_game_title_hints(ctx));
             spans.push(Span::styled(
                 "\u{b7} ? help \u{b7} S save \u{b7} ` step out \u{b7} Q abandon ",
                 Style::default().fg(theme::TEXT_DIM()),
@@ -3399,7 +3398,7 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
     {
         // The ways out lead after the chat's word: every key belongs to the
         // story, and an 80 column title cuts the tail.
-        spans.extend(chat_title_hint(ctx.chat_title_unread));
+        spans.extend(own_game_title_hints(ctx));
         spans.push(Span::styled(
             "· ` step out · QUIT quit · RESTORE menu · SAVE manual save ",
             Style::default().fg(theme::TEXT_DIM()),

@@ -682,9 +682,8 @@ impl App {
         if let Some(state) = self.brogue_state.as_mut() {
             state.tick();
         }
-        // The live-game rosters feed the hub rail's live rows and the watcher
-        // count in a running watchable game's chrome: drain always, pay a
-        // frame only where one of them is drawn.
+        // The live-game rosters feed the hub rail's live rows: drain always,
+        // pay a frame only on the hub and the watchable doors.
         let rosters_changed = self.live_games.tick();
         changed |= rosters_changed
             && (self.screen == Screen::Games
@@ -693,6 +692,8 @@ impl App {
         // The watch chat: the watchers' pane and the player's own pane each
         // hang on a room that resolves and joins in the background.
         changed |= crate::app::door::spectate::chat::tick(self);
+        // Who is watching, in the frame title and the chat's header.
+        changed |= crate::app::door::spectate::chat::watchers_moved(self);
         // A preview lives only on the Games hub, so leaving the hub ends it.
         // An open watch is only ever on the hub: leaving steps away from it
         // (`App::away_watches`, below). The watched game ending (or its

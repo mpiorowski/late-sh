@@ -16,7 +16,7 @@
 
 use std::sync::Arc;
 
-use super::state::{ChatLink, ChatLinkStep, SpectateGame};
+use super::state::{ChatLink, ChatLinkStep, LiveGameKey, SpectateGame};
 use super::svc::LiveGamesService;
 use crate::app::chat::state::ChatState;
 use crate::app::door::arcade::HandleStatus;
@@ -80,6 +80,43 @@ pub fn tick(app: &mut App) -> bool {
     }
 
     changed
+}
+
+/// How many are watching, as this session's frames draw it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WatcherCounts {
+    /// People with a watch open on this player's own running game on the
+    /// watchable door whose screen is up.
+    pub own: usize,
+    /// People with this session's held watch open, this session included.
+    pub held: usize,
+}
+
+pub(crate) fn watcher_counts(app: &App) -> WatcherCounts {
+    let own_key = SpectateGame::of_screen(app.screen).and_then(|game| {
+        let handle = own_running_handle(app, game)?;
+        LiveGameKey::new(game, &handle)
+    });
+    let own = match own_key {
+        Some(key) => app.live_games.watchers_of(key),
+        None => 0,
+    };
+    let held = match app.spectate_state.as_ref() {
+        Some(state) => app.live_games.watchers_of(state.key()),
+        None => 0,
+    };
+    WatcherCounts { own, held }
+}
+
+/// Whether a count this session draws moved since the last tick. The counts
+/// are read at render and signal nothing (`svc::OpenWatches`), and opening a
+/// watch from its preview changes no stream, so no roster block says so
+/// either: without this a game sitting still would show the old number.
+pub fn watchers_moved(app: &mut App) -> bool {
+    let counts = watcher_counts(app);
+    let moved = counts != app.watcher_counts_seen;
+    app.watcher_counts_seen = counts;
+    moved
 }
 
 /// This session's own running games on the watchable doors, by door and the

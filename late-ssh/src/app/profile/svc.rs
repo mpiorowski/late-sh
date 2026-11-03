@@ -383,6 +383,7 @@ impl ProfileService {
         let pet = if marketplace::user_owns_pet_companion(&**client, user_id).await? {
             PetCompanion::find_by_user_id(&client, user_id)
                 .await?
+                .filter(|row| row.enabled)
                 .map(|row| ProfilePet {
                     species: row.species(),
                     mood: row.mood(),

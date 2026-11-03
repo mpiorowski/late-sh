@@ -122,3 +122,61 @@ async fn petting_pays_an_owner_once_a_day() {
         "a new day pays again"
     );
 }
+
+/// The switch reaches an owner's other sessions only at their next connect,
+/// so one of them can still click a pet put away. The row decides, not the
+/// session: nothing is paid, and the day is not spent.
+#[tokio::test]
+async fn a_pet_put_away_pays_nothing_to_a_session_that_has_not_heard() {
+    use late_core::models::chips::UserChips;
+    use late_core::models::marketplace::{PET_COMPANION_SKU, purchase_durable_item_by_sku};
+
+    use crate::app::activity::event::ActivityEvent;
+    use crate::app::pet::svc::{PET_CHIP_BONUS, PetOutcome};
+
+    let test_db = new_test_db().await;
+    let mut client = test_db.db.get().await.expect("db client");
+    let user = create_test_user(&test_db.db, "pet-svc-away").await;
+    let (tx, mut rx) = tokio::sync::broadcast::channel::<ActivityEvent>(16);
+    let svc = PetService::new(test_db.db.clone(), tx);
+    svc.ensure_pet(user.id).await.expect("ensure pet");
+    UserChips::admin_grant(&**client, user.id, 1_000_000)
+        .await
+        .expect("fund chips");
+    purchase_durable_item_by_sku(&mut client, user.id, PET_COMPANION_SKU)
+        .await
+        .expect("buy the pet");
+    PetCompanion::set_enabled(&client, user.id, false)
+        .await
+        .expect("put the pet away");
+    let today = chrono::Utc::now().date_naive();
+    let before = UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips")
+        .balance;
+
+    assert_eq!(
+        svc.pet_on(user.id, today).await.expect("pet while away"),
+        PetOutcome::Away
+    );
+    let after = UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips")
+        .balance;
+    assert_eq!(after, before, "a pet put away pays nothing");
+    assert!(rx.try_recv().is_err(), "and tells nobody it paid");
+
+    PetCompanion::set_enabled(&client, user.id, true)
+        .await
+        .expect("bring the pet back");
+    assert_eq!(
+        svc.pet_on(user.id, today).await.expect("pet once back"),
+        PetOutcome::Petted,
+        "the refused click did not spend the day"
+    );
+    let back = UserChips::ensure(&client, user.id)
+        .await
+        .expect("chips")
+        .balance;
+    assert_eq!(back - before, PET_CHIP_BONUS);
+}

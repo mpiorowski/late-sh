@@ -3,7 +3,7 @@ use chrono::{NaiveDate, Utc};
 use late_core::db::Db;
 use late_core::models::chips::{ChipMove, UserChips};
 use late_core::models::marketplace;
-use late_core::models::pet::{PetCompanion, PetMood, PetSpecies};
+use late_core::models::pet::{PetCompanion, PetDay, PetMood, PetSpecies};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -18,6 +18,9 @@ pub(crate) enum PetOutcome {
     /// The first pet of the day: the chips are paid.
     Petted,
     AlreadyPettedToday,
+    /// The owner put it away: nothing is paid and the day is not spent. Only
+    /// a session that has not heard of the switch yet gets here.
+    Away,
     /// The account never bought the pet.
     NoPet,
 }
@@ -43,7 +46,9 @@ impl PetService {
         let svc = self.clone();
         tokio::spawn(async move {
             match svc.pet_on(user_id, Utc::now().date_naive()).await {
-                Ok(PetOutcome::Petted) | Ok(PetOutcome::AlreadyPettedToday) => {}
+                Ok(PetOutcome::Petted)
+                | Ok(PetOutcome::AlreadyPettedToday)
+                | Ok(PetOutcome::Away) => {}
                 Ok(PetOutcome::NoPet) => {
                     tracing::warn!(user_id = %user_id, "pet petted without a pet companion");
                 }
@@ -61,9 +66,16 @@ impl PetService {
             tx.commit().await?;
             return Ok(PetOutcome::NoPet);
         }
-        if !PetCompanion::pet_day(&*tx, user_id, today).await? {
-            tx.commit().await?;
-            return Ok(PetOutcome::AlreadyPettedToday);
+        match PetCompanion::pet_day(&*tx, user_id, today).await? {
+            PetDay::FirstToday => {}
+            PetDay::AlreadyToday => {
+                tx.commit().await?;
+                return Ok(PetOutcome::AlreadyPettedToday);
+            }
+            PetDay::Away => {
+                tx.commit().await?;
+                return Ok(PetOutcome::Away);
+            }
         }
         UserChips::apply(
             &*tx,
@@ -113,6 +125,20 @@ impl PetService {
     async fn set_species(&self, user_id: Uuid, species: PetSpecies) -> Result<()> {
         let client = self.db.get().await?;
         PetCompanion::set_species(&client, user_id, species).await
+    }
+
+    pub fn set_enabled_task(&self, user_id: Uuid, enabled: bool) {
+        let svc = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = svc.set_enabled(user_id, enabled).await {
+                tracing::error!(error = ?e, user_id = %user_id, enabled, "failed to switch the pet");
+            }
+        });
+    }
+
+    async fn set_enabled(&self, user_id: Uuid, enabled: bool) -> Result<()> {
+        let client = self.db.get().await?;
+        PetCompanion::set_enabled(&client, user_id, enabled).await
     }
 
     /// Record the mood the session inferred, so a profile can show it. Fired
