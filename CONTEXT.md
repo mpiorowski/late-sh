@@ -267,7 +267,8 @@ query gotchas: `infra/RUNBOOK.md`.
 
 ## 8. Build, run, test
 
-- `mise install` sets up `rust`, `mold` and `cargo-nextest` (`.mise.toml`).
+- `mise install` sets up `rust`, `mold` (Linux only) and `cargo-nextest`
+  (`.mise.toml`).
 - `make start` runs the stack in Docker Compose (it copies `.env.dev` to
   `.env`; personal keys go in the gitignored `.env.local`; `make
   start-instance2` runs a second instance from `.env.dev2`). Connect with `ssh
@@ -277,9 +278,13 @@ query gotchas: `infra/RUNBOOK.md`.
 - `make start-barebones` runs a barebones multi-arch (`arm64` + `amd64`) compose
   stack with only `postgres` and `late-ssh` (`cargo-watch`) from
   `docker-compose.barebones.yml` (`make barebones-up`, `barebones-stop`,
-  `barebones-down`, `barebones-logs`, `barebones-ps`; optional `GEMINI_API_KEY`
-  or `LATE_AI_API_KEY` in `.env.local` enables the LLM bots).
-- late-ssh runs locally the way prod runs it: pods behind a local copy of the
+  `barebones-down`, `barebones-logs`, `barebones-ps`). It is its own compose
+  project with its own empty database, so `make test-db-clean` and the seed
+  scripts, which call plain `docker compose`, still reach the full stack's. It
+  binds the same ports as the full stack, so stop one before starting the
+  other, and a code change restarts the process and drops open sessions.
+- Under `make start`, late-ssh runs locally the way prod runs it: pods behind
+  a local copy of the
   prod SSH edge (`docker-compose.yml` `service-ssh` and `ssh-pod`,
   `scripts/fleet.sh`). `make start` builds the working tree as a generation,
   then watches `late-ssh`, `late-core`, `assets` and the Cargo files: a

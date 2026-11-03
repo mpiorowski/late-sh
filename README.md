@@ -133,7 +133,7 @@ compose service names (`postgres`, `icecast`), so `late-ssh` and `late-web`
 do not run outside it.
 
 ```bash
-mise install        # rust, mold and cargo-nextest, as pinned in .mise.toml
+mise install        # rust, mold (Linux only) and cargo-nextest, as pinned in .mise.toml
 make start          # copies .env.dev to .env and starts the stack
 ssh localhost -p 2222
 ```
