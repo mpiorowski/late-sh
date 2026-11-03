@@ -57,6 +57,8 @@ pub(crate) struct ZenChatTile<'a> {
 /// What a chat tile draws: a room, or the News list for a tile holding
 /// News (`ChatRoomBinding::News`). The active tile is drawn by the page's
 /// chat instead, where News is the rail's row with its keys.
+// This transient render input stays on the stack to avoid allocating each frame.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum ChatTileView<'a> {
     Room(EmbeddedRoomChatView<'a>),
     News(crate::app::chat::news::ui::ArticleListView<'a>),

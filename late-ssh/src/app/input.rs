@@ -2634,7 +2634,8 @@ fn handle_pet_click(app: &mut App, x: u16, y: u16) -> bool {
 
 /// A left-click on the reef or the tank tile feeds it, the pet's way: a
 /// passing gesture on Home that never moves the focus. The tiles are read
-/// off the frame's rects, so the click lands wherever the water drew.
+/// off the frame's rects, so the click lands wherever the water drew; the
+/// Live strip on the reef has had its turn by then (`handle_mouse_click`).
 fn handle_tank_click(app: &mut App, x: u16, y: u16) -> bool {
     if !app.on_home() || chat_scroll_clicks_blocked(app) {
         return false;
@@ -2668,15 +2669,18 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
     if handle_pet_click(app, x, y) {
         return true;
     }
-    if handle_tank_click(app, x, y) {
-        return true;
-    }
+    // The strip is a guest on the reef's tile, so it answers before the
+    // tank does: a click on it opens what it shows, the water around it
+    // feeds.
     if !chat_scroll_clicks_blocked(app) && crate::app::live::input::open_from_click(app, x, y) {
         return true;
     }
     // The sidebar's Live panel is drawn under the same modals as the pet.
     if !chat_scroll_clicks_blocked(app) && crate::app::live::input::open_from_panel_click(app, x, y)
     {
+        return true;
+    }
+    if handle_tank_click(app, x, y) {
         return true;
     }
     // A click on a chat tile on Home focuses it (every tile in arrange

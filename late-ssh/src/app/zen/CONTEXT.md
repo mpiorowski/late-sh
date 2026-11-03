@@ -214,7 +214,8 @@ arrange mode) is boxed in its look with its gap (`ZenState::chrome`,
 Furniture and focus: outside arrange mode only chat tiles take the focus
 (`TileKind::takes_focus`), by click or the arrows of arrange mode; a
 click on a panel is its gesture (the pet is petted, the tank is fed, a
-live row opens) and the keys stay with the chat (`focus_home_tile_at`). A page opens with
+live row opens, the Live strip on the reef opens what it shows rather than
+feeding) and the keys stay with the chat (`focus_home_tile_at`). A page opens with
 the focus on its first chat tile (`ZenState::new`, `ZenState::load`). Home's chat is its
 active chat tile (`ZenState::active_chat_ordinal`: the focused chat tile,
 else the first): it draws Home's card (the rail's selection, synthetic

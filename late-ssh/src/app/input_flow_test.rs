@@ -3969,6 +3969,7 @@ async fn forced_tour_can_skip_artboard_without_viewing_it() {
         Screen::Profiles,
         Screen::Leaderboard,
         Screen::Calendars,
+        Screen::Dashboard,
         Screen::Clubhouse,
     ] {
         app.handle_input(b"\r");
@@ -5031,8 +5032,17 @@ async fn a_second_chat_tile_on_home_keeps_its_room_and_the_rail_follows_the_acti
         ]
     );
 
-    // `]` rebinds the active tile (the focused one) to the next room and
-    // the rail follows it; the first tile keeps #lounge.
+    // `]` rebinds the active tile (the focused one) to the next stop and
+    // the rail follows it: News, as the rail orders them, then the stream.
+    // The first tile keeps #lounge.
+    app.handle_input(b"]");
+    assert_eq!(
+        app.home.chat_tiles(),
+        vec![
+            (first, ChatRoomBinding::Room(lounge.id)),
+            (second, ChatRoomBinding::News)
+        ]
+    );
     app.handle_input(b"]");
     assert_eq!(
         app.home.chat_tiles(),
@@ -5751,6 +5761,13 @@ async fn arranging_home_keeps_the_chat_keys_off_a_tile_that_is_not_a_chat() {
 async fn arranging_home_lets_the_keys_the_titles_name_through() {
     let test_db = new_test_db().await;
     let viewer = create_test_user(&test_db.db, "zen-house-keys-viewer").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
     let mut app = make_app(test_db.db.clone(), viewer.id, "zen-house-keys-flow-it");
     app.resize(160, 40).expect("resize test terminal");
     wait_for_render_contains(&mut app, "lounge").await;
