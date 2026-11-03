@@ -123,6 +123,7 @@ User commands:
 - `/public #room` (alias `/join #room`) opens or creates an opt-in public room for the caller only. A new room starts with `auto_join=false`; an existing room keeps its flag.
 - `/sheet [@user]` (room-scoped to `#dnd`) opens the character sheet modal: bare form opens your own sheet editable (name + freeform body, saved per user per room on field submit via `ChatService::save_sheet_task`); targeted form opens another user's sheet read-only, or banners if they have none. Resolution and fetch happen in `ChatService::open_sheet_task`; saves and reads validate the shared `RoomScopedCommand` metadata plus room membership in `ChatService::ensure_room_scoped_command_access`; the modal lives in `sheet_modal/`.
 - `/settings` opens settings.
+- `/edit` runs `Ctrl+E`, Home's arrange mode, for terminals that swallow the chord; drained via `take_requested_home_arrange` into `layout_chord_globally` (see `../zen/CONTEXT.md`).
 - `/shop` opens the Shop modal, as does Ctrl+S outside profile/job editors and active Artboard input. Locked-feature nudges use the same entry point.
 - `/unignore [@user]` removes an ignored user.
 - `/upload <url>` downloads a public image URL server-side, reuploads it to configured public file storage, and inserts the resulting URL into the composer for the user to send.

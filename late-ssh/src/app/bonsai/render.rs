@@ -11,8 +11,8 @@ use crate::app::{
     common::{primitives::center_lines, theme},
 };
 
-/// The preview block: the sidebar's one fixed size. Twelve tree rows over
-/// the pot row.
+/// The preview block's smallest size, and the sidebar's one fixed size.
+/// Twelve tree rows over the pot row.
 pub(crate) const PREVIEW_WIDTH: usize = 21;
 pub(crate) const PREVIEW_HEIGHT: usize = 13;
 
@@ -56,9 +56,16 @@ pub(crate) fn draw_bonsai_inline(
     if (area.width as usize) < PREVIEW_WIDTH || tree_height < PREVIEW_HEIGHT {
         return;
     }
-    let mut lines = render_preview_lines(state);
+    // An odd width, so the trunk's center column is also the pot's. The
+    // rail's 22 columns land on `PREVIEW_WIDTH`.
+    let block_width = match (area.width as usize).min(CANVAS_WIDTH) {
+        width if width % 2 == 0 => width - 1,
+        width => width,
+    };
+    let block_height = tree_height.min(CANVAS_HEIGHT);
+    let mut lines = render_preview_lines(state, block_width, block_height);
     apply_sway(&mut lines, wall_tick);
-    center_lines(&mut lines, area.width as usize, PREVIEW_WIDTH);
+    center_lines(&mut lines, area.width as usize, block_width);
 
     while lines.len() < tree_height {
         lines.insert(0, Line::from(""));
@@ -144,10 +151,10 @@ pub(crate) fn canvas_lines_in(state: &BonsaiState, width: usize) -> Vec<Line<'st
     lines
 }
 
-/// The preview: the true canvas fitted into the fixed `PREVIEW_WIDTH` x
-/// `PREVIEW_HEIGHT` block for the sidebar. It never
-/// invents anything. When the tree fits, this is the modal's own glyphs,
-/// trimmed around the trunk. When it does not, one integer scale factor
+/// The preview: the true canvas fitted into a `width` x `height` block, the
+/// sidebar's `PREVIEW_WIDTH` x `PREVIEW_HEIGHT` or a narrow Home tile's own
+/// size. It never invents anything. When the tree fits, this is the modal's
+/// own glyphs, trimmed around the trunk. When it does not, one integer scale factor
 /// is applied to both axes, so the block keeps the modal's proportions;
 /// bare rows (trunk and branch only, no foliage) are dropped from the pot
 /// upward only as far as needed to stop the height forcing a larger
@@ -156,8 +163,12 @@ pub(crate) fn canvas_lines_in(state: &BonsaiState, width: usize) -> Vec<Line<'st
 /// sample keeps that sample's glyph; a cell that gathers several takes
 /// its dominant kind, foliage as density glyphs (`@`, `*`, `#`),
 /// structure as its commonest glyph.
-pub(crate) fn render_preview_lines(state: &BonsaiState) -> Vec<Line<'static>> {
-    let rendered = render_preview_ascii(state);
+pub(crate) fn render_preview_lines(
+    state: &BonsaiState,
+    width: usize,
+    height: usize,
+) -> Vec<Line<'static>> {
+    let rendered = render_fitted_ascii(state, width, height);
     rendered_lines(state, &rendered, false)
 }
 
@@ -286,10 +297,6 @@ fn plot_tree(state: &BonsaiState, width: usize, height: usize) -> Vec<Vec<Option
         }
     }
     grid
-}
-
-fn render_preview_ascii(state: &BonsaiState) -> RenderedBonsai {
-    render_fitted_ascii(state, PREVIEW_WIDTH, PREVIEW_HEIGHT)
 }
 
 fn render_fitted_ascii(state: &BonsaiState, width: usize, height: usize) -> RenderedBonsai {
@@ -784,8 +791,8 @@ fn put(grid: &mut [Vec<Option<Cell>>], x: usize, y: usize, cell: Cell) {
 /// modal (`w`), so the tile gives every row to the tree. A tile smaller
 /// than the canvas cuts it: the top rows go first, and the sides go evenly
 /// so the trunk stays centered. A tile narrower than half the canvas is
-/// the sidebar's: the preview with its footer (`51d · alive · w care`),
-/// as the sidebar panel draws.
+/// the sidebar's kind: the preview with its footer (`51d · alive · w care`),
+/// fitted to the tile, so spare rows and columns go to the tree.
 pub(crate) fn draw_tile(frame: &mut Frame, area: Rect, state: &BonsaiState, wall_tick: usize) {
     if (area.width as usize) < CANVAS_WIDTH / 2 {
         draw_bonsai_inline(frame, area, state, wall_tick);

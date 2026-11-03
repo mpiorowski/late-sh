@@ -3082,7 +3082,7 @@ fn handle_status_bar_click(app: &mut App, mouse: MouseEvent) -> bool {
         StatusClick::Arcade => app.set_screen(Screen::Arcade),
         StatusClick::Profiles => app.set_screen(Screen::Profiles),
         // Care: Home's `home` layout, where the tank and the tree are.
-        StatusClick::HomeLayout => crate::app::zen::input::load_home_layout(app),
+        StatusClick::HomeLayout => crate::app::zen::input::open_care(app),
         // Nothing up, or a result holding the strip: nothing to open.
         StatusClick::Live => {
             crate::app::live::input::open_from_key(app);
@@ -3823,7 +3823,7 @@ pub(crate) fn open_guide_globally(app: &mut App) {
     app.show_help = true;
 }
 
-/// `Ctrl+E`: Home's layouts. On Home it toggles arrange mode, where a
+/// `Ctrl+E`, and `/edit` typed: Home's layouts. On Home it toggles arrange mode, where a
 /// digit loads a layout and `L` lists them (so `Ctrl+E 2` is two
 /// keystrokes, like a tmux prefix); anywhere else it opens Home in arrange
 /// mode. The modals close under it either way. The caller keeps it off a

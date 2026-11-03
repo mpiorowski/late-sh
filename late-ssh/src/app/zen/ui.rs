@@ -116,6 +116,9 @@ pub(crate) struct ZenView<'a> {
     /// What waits on you (`App::attention_items`): the attention guest
     /// takes its host while the list has rows.
     pub attention: &'a [AttentionItem],
+    /// The room each tile keeps to, in layout order, for its rule in arrange
+    /// mode (`ZenState::only_labels`); empty outside it.
+    pub only_labels: &'a [Option<String>],
     pub bonsai: &'a BonsaiState,
     /// The tank and its care, for the reef and the tank tiles.
     pub tank: TankView<'a>,
@@ -176,11 +179,12 @@ pub(crate) fn draw_rice(
     let zen = view.zen;
     let gaps = zen.gaps();
     let chrome = zen.chrome();
-    let rects = layout::tile_rects(&zen.rice.root, tiles_area, gaps);
+    let hidden = zen.hidden_tiles();
+    let rects = layout::tile_rects(&zen.rice.root, tiles_area, gaps, &hidden);
     // Under the rules chrome the gutter between two columns is one line,
     // owned by the split, so neither tile draws its own.
     if matches!(chrome, Chrome::Rules { .. }) {
-        for gutter in layout::row_gutters(&zen.rice.root, tiles_area, gaps) {
+        for gutter in layout::row_gutters(&zen.rice.root, tiles_area, gaps, &hidden) {
             crate::app::common::sidebar::paint_vertical_separator(
                 frame,
                 gutter.x,
@@ -242,15 +246,20 @@ pub(crate) fn draw_rice(
         };
         let title_override = zen.rice.root.title_at(ordinal);
         // Arranging, the tile names the guests it hosts (`+name`, as the
-        // key that gives it one), so a quiet guest is never a surprise,
-        // and a tile that goes bare outside the mode says so in the rule
-        // it wears for the mode.
+        // key that gives it one), so a quiet guest is never a surprise, the
+        // one room it keeps to, since every tile is up in the mode whatever
+        // the room, and a tile that goes bare outside the mode says so in
+        // the rule it wears for the mode.
         let title = match zen.arrange {
             true => {
                 let mut title = title;
                 for guest in hosted {
                     title.push_str(" +");
                     title.push_str(guest.label());
+                }
+                if let Some(Some(room)) = view.only_labels.get(ordinal) {
+                    title.push_str(" · only ");
+                    title.push_str(room);
                 }
                 match title_override {
                     TileTitle::Named => {}

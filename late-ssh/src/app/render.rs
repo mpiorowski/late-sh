@@ -464,6 +464,8 @@ struct DrawContext<'a> {
     pulse_history: crate::app::presence::svc::History,
     /// What waits on you, for the attention guest (`App::attention_items`).
     attention: Vec<crate::app::zen::attention::Item>,
+    /// The room each Home tile keeps to, while arrange mode names them.
+    home_only_labels: Vec<Option<String>>,
     /// The pane beside this player's own running game, published for the
     /// click that opens its composer; cleared every frame like the hits.
     own_chat_hit: &'a std::cell::Cell<Option<Rect>>,
@@ -485,6 +487,10 @@ impl App {
                 true => self.attention_items(),
                 false => Vec::new(),
             };
+        let home_only_labels = match self.on_home() && self.home.arrange {
+            true => self.home.only_labels(&self.chat.rooms),
+            false => Vec::new(),
+        };
         let home_board_day = match self.on_home() {
             true => self.home_board_day(),
             false => None,
@@ -1021,7 +1027,7 @@ impl App {
         let notifications_view = chat::notifications::ui::NotificationListView {
             items: self.chat.notifications.all_items(),
             selected_index: self.chat.notifications.selected_index(),
-            marker_read_at: self.chat.notifications.marker_read_at(),
+            read_on_open: self.chat.notifications.read_on_open(),
         };
         let showcase_view = chat::showcase::ui::ShowcaseListView {
             items: self.chat.showcase.all_items(),
@@ -1976,6 +1982,7 @@ impl App {
                         home_board_day,
                         pulse_history: self.presence.history.clone(),
                         attention,
+                        home_only_labels,
                         own_chat_hit: &self.own_chat_hit,
                     },
                     &mut terminal_image_frame,
@@ -2265,6 +2272,7 @@ impl App {
                         }
                     }),
                     attention: &ctx.attention,
+                    only_labels: &ctx.home_only_labels,
                     bonsai: ctx.bonsai,
                     tank: crate::app::hub::aquarium::ui::TankView {
                         state: ctx.aquarium_state,

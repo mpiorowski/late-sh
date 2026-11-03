@@ -430,7 +430,7 @@ interaction mode ignores mouse reports.
 | `m`, `+`/`=`, `-`/`_` | Paired client mute and volume |
 | `w` | Bonsai care modal |
 | `` ` `` | Workspace cycle (`app/workspace/CONTEXT.md`) |
-| `/settings` `/lobby` `/redraw` `/guide` `/picker` `/shop` | Composer fallbacks for chords a terminal swallows; each runs the key's function |
+| `/settings` `/lobby` `/edit` `/redraw` `/guide` `/picker` `/shop` | Composer fallbacks for chords a terminal swallows; each runs the key's function |
 | `/layout` | Home's layouts from any composer, Home first: `/layout` lists them, `/layout <name or 1-9>` loads one, `/layout save <name>` saves the page as one |
 | `Esc` | Close the top modal |
 

@@ -140,7 +140,7 @@ fn preview_keeps_exact_glyphs_when_the_tree_fits() {
     left.status = BranchStatus::LeafPad;
     let state = state_with_branches(vec![trunk, left]);
 
-    let rendered = render_preview_ascii(&state);
+    let rendered = render_fitted_ascii(&state, PREVIEW_WIDTH, PREVIEW_HEIGHT);
 
     assert_eq!(rendered.lines.len(), PREVIEW_HEIGHT);
     assert!(rendered.lines[PREVIEW_HEIGHT - 1].contains("[=====]"));
@@ -168,7 +168,7 @@ fn preview_scales_a_wide_tree_uniformly() {
     right.status = BranchStatus::LeafPad;
     let state = state_with_branches(vec![trunk, left, right]);
 
-    let rendered = render_preview_ascii(&state);
+    let rendered = render_fitted_ascii(&state, PREVIEW_WIDTH, PREVIEW_HEIGHT);
 
     assert_eq!(rendered.lines.len(), PREVIEW_HEIGHT);
     assert!(
@@ -220,15 +220,87 @@ fn diagonal_glyphs_follow_actual_slope() {
 }
 
 fn tile_rows(width: u16, height: u16) -> Vec<String> {
-    let state = BonsaiState::fallback(Uuid::nil(), 42);
+    tile_rows_of(&BonsaiState::fallback(Uuid::nil(), 42), width, height)
+}
+
+fn tile_rows_of(state: &BonsaiState, width: u16, height: u16) -> Vec<String> {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).expect("terminal");
     terminal
-        .draw(|frame| draw_tile(frame, Rect::new(0, 0, width, height), &state, 0))
+        .draw(|frame| draw_tile(frame, Rect::new(0, 0, width, height), state, 0))
         .expect("draw");
     let buffer = terminal.backend().buffer();
     (0..height)
         .map(|y| (0..width).map(|x| buffer[(x, y)].symbol()).collect())
         .collect()
+}
+
+/// A bare forked tree, every row structure only: `trunk_top` rows of trunk,
+/// then two arms reaching `reach` columns out over `rise` more rows.
+fn bare_fork(trunk_top: i16, rise: i16, reach: i16) -> BonsaiState {
+    let trunk = branch(1, None, (0, 0), (0, trunk_top));
+    let left = branch(2, Some(1), (0, trunk_top), (-reach, trunk_top + rise));
+    let right = branch(3, Some(1), (0, trunk_top), (reach, trunk_top + rise));
+    state_with_branches(vec![trunk, left, right])
+}
+
+/// The true canvas rows just above the pot, cut to the columns around the
+/// trunk that a block `width` wide shows.
+fn canvas_rows_above_pot(state: &BonsaiState, width: usize, count: usize) -> Vec<String> {
+    let canvas = render_ascii(state, CANVAS_WIDTH, CANVAS_HEIGHT, false).lines;
+    let cut = (CANVAS_WIDTH - width) / 2;
+    canvas[CANVAS_HEIGHT - 1 - count..CANVAS_HEIGHT - 1]
+        .iter()
+        .map(|row| row.chars().skip(cut).take(width).collect())
+        .collect()
+}
+
+/// A narrow tile taller than the sidebar's panel spends its spare rows on
+/// the tree: a bare tree that fits keeps every row, none dropped from the
+/// pot upward, with the pot and footer on the floor.
+#[test]
+fn a_tall_narrow_tile_keeps_every_row_of_a_tree_that_fits() {
+    let state = bare_fork(8, 8, 8);
+
+    let rows = tile_rows_of(&state, 21, 20);
+
+    assert_eq!(rows[..18], canvas_rows_above_pot(&state, 21, 18)[..]);
+    assert!(rows[18].contains("[=====]"), "pot row: {:?}", rows[18]);
+    assert!(rows[19].contains("w care"), "footer row: {:?}", rows[19]);
+}
+
+/// A narrow tile wider than the sidebar's panel spends its spare columns on
+/// the tree too, instead of scaling it down. An even width fits one column
+/// less, so the trunk stays over the middle of the pot.
+#[test]
+fn a_wide_narrow_tile_fits_the_tree_unscaled_with_the_trunk_over_the_pot() {
+    let state = bare_fork(4, 4, 12);
+
+    let rows = tile_rows_of(&state, 30, 20);
+
+    let expected: Vec<String> = canvas_rows_above_pot(&state, 29, 18)
+        .into_iter()
+        .map(|row| format!("{row} "))
+        .collect();
+    assert_eq!(rows[..18], expected[..]);
+    assert_eq!(rows[17].chars().nth(14), Some('|'));
+    assert_eq!(rows[18].find("[=====]"), Some(14 - 3));
+}
+
+/// The rail's bonsai panel is 22 columns by `PREVIEW_HEIGHT` plus the footer:
+/// exactly the fixed preview block, so a tall tree still shortens to fit.
+#[test]
+fn the_rail_panel_still_draws_the_fixed_preview_block() {
+    let state = bare_fork(8, 8, 8);
+
+    let rows = tile_rows_of(&state, 22, PREVIEW_HEIGHT as u16 + 1);
+
+    let expected: Vec<String> = render_fitted_ascii(&state, PREVIEW_WIDTH, PREVIEW_HEIGHT)
+        .lines
+        .into_iter()
+        .map(|row| format!("{row} "))
+        .collect();
+    assert_eq!(rows[..PREVIEW_HEIGHT], expected[..]);
+    assert!(rows[PREVIEW_HEIGHT].contains("w care"));
 }
 
 /// The care modal's canvas as plain rows, each padded to the canvas width.

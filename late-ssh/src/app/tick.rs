@@ -1052,8 +1052,8 @@ impl App {
                     changed = true;
                 }
             }
-            // Mentions load only when asked for. A page hosting the
-            // attention guest asks whenever the unread count moves, so a
+            // Mentions load when asked for and after a stamp. A page hosting
+            // the attention guest asks whenever the unread count moves, so a
             // new mention lands in its list.
             if self.on_home() && self.home.hosts(crate::app::zen::state::Guest::Attention) {
                 let unread = self.chat.notifications.unread_count();
