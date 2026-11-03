@@ -1711,7 +1711,7 @@ fn layouts_help_lines() -> Vec<String> {
         "Chat tiles",
         "  A page holds up to ten chat tiles, each bound to a room. The focused one is the page's chat, and the rail follows it: it has the composer and the selection, and reading it marks the room read. The others watch their rooms and keep their unread counts until you click them.",
         "  [ ]               in arrange mode, bind the focused chat tile to the previous or next joined room",
-        "  Ctrl+/            pick a room (/picker too); the rail moves and the page's chat follows it",
+        "  Ctrl+/            pick a room (/picker too); it binds the page's chat tile and the rail follows",
         "",
         "Tile keys, in arrange mode",
         "  j k  Enter        on attention, pick a row and do it (a DM or mention opens in the first chat tile)",

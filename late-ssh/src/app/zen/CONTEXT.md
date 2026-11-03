@@ -93,20 +93,30 @@ as the current room). News is the one synthetic view a tile can hold
 onto its News row and the page's chat draws the room with its keys;
 watching, the tile draws the same list with the same cursor
 (`chat::news::ui::draw_article_list`). `[` `]` stop on News between
-`#lounge` and the other permanent rooms, as the rail orders them. The rail and the active tile are one room, kept so from both
-ends: the focus landing on a chat tile bound to a room selects that room
-on the rail (`App::sync_rail_to_active_chat`, from
-`zen::input::focus_moved` and on arriving at Home), and the rail
-moving to another real room rebinds the active tile to it, a layout edit
-(`App::steer_active_chat_from_rail`, inside `sync_visible_chat_room`,
-which every rail move already calls). The synthetic entries are views the
-active tile shows, never bindings. A tile that just became a chat
-is pinned to the room of the moment, together with every tile bound to no
-room (`App::pin_chat_tiles_on_pick`): with two chats on a page, a tile
-that followed the rail would only ever show the other tile's room. The
-`Ctrl+/` picker (or `/picker`) is Home's: a room pick moves the rail,
-which steers the active tile; a `?query` message jump lands the same way
-and selects the message. The other chat tiles are read-only views of
+`#lounge` and the other permanent rooms, as the rail orders them. The
+rail is the truth for the active tile: it draws the rail's selection,
+room or synthetic view, its rule names that selection
+(`App::home_active_chat_label`), and the composer, the message keys and
+the read marking act on it (`App::home_chat_room_id`). A tile's binding
+is two other things: what the tile draws while it only watches, and
+where the rail goes when the tile takes the focus
+(`App::sync_rail_to_active_chat`, from `zen::input::focus_moved` and on
+arriving at Home, never while Home is already up). Walking the rail never
+rewrites a binding: with the rail on #bugs and the tile bound to #lounge,
+the tile shows #bugs, titled so, and the next focus on it brings the rail
+back to #lounge. Bindings change only by an explicit act: `[` `]`, the
+`Ctrl+/` picker (or `/picker`, `zen::input::pick_for_active_chat`: a room
+or News binds, any other row only shows on the rail), a `?query` message
+jump (which lands on the first chat tile and selects the message), the
+chat kind picked for a tile (pinned to the room of the moment together
+with every tile bound to no room, `App::pin_chat_tiles_on_pick`: with two
+chats on a page, a tile that followed the rail would only ever show the
+other tile's room), loading a layout, and leaving one: the layout being
+stored (`zen::input::load_layout`, `save_layout_as`) pins its chat tiles
+bound to no room to the room of the moment
+(`App::pin_unbound_chats_to_the_moment`: News while the rail shows it,
+else the current room), so `Ctrl+E 1` comes back to the room `home` was
+on, not to wherever the rail is by then. The other chat tiles are read-only views of
 their rooms: messages stream in and nothing is marked read until the tile
 is focused, but every tile draws its own composer strip,
 because an input box that appears and disappears as the focus walks moves

@@ -3254,7 +3254,7 @@ impl ChatState {
         }
     }
 
-    fn selected_synthetic_entry_label(&self) -> Option<&'static str> {
+    pub(crate) fn selected_synthetic_entry_label(&self) -> Option<&'static str> {
         if self.news_selected {
             Some("news")
         } else if self.feeds_selected {

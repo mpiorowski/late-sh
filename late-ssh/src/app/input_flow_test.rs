@@ -5083,7 +5083,38 @@ async fn a_second_chat_tile_on_home_keeps_its_room_and_the_rail_follows_the_acti
         "both tiles keep their rooms' rules and the header follows the active one; frame={frame:?}"
     );
 
-    // The rail steers the active tile: a room picked there rebinds it.
+    // Walking the rail rewrites no binding: the active tile draws and
+    // names the rail's selection while it is there, and the next focus on
+    // it brings the rail back to its room.
+    app.chat
+        .select_room_slot(crate::app::chat::state::RoomSlot::Room(stream.id));
+    app.sync_visible_chat_room();
+    assert_eq!(app.home_chat_room_id(), Some(stream.id));
+    assert_eq!(
+        app.home.chat_tiles(),
+        vec![
+            (first, ChatRoomBinding::Room(lounge.id)),
+            (second, ChatRoomBinding::Room(stream.id))
+        ],
+        "the rail is navigation, not a layout edit"
+    );
+    let frame = render_plain(&mut app);
+    assert_eq!(
+        frame.matches("chat · #stream-night").count(),
+        2,
+        "the active tile's rule names what it draws; frame={frame:?}"
+    );
+    let (_, rect, _) = app.home_tile_rects()[second];
+    let click = format!("\x1b[<0;{};{}M", rect.x + 2, rect.y + 2);
+    app.handle_input(click.as_bytes());
+    let (_, rect, _) = app.home_tile_rects()[first];
+    let click = format!("\x1b[<0;{};{}M", rect.x + 2, rect.y + 2);
+    app.handle_input(click.as_bytes());
+    assert_eq!(app.home.focus, first);
+    assert_eq!(app.chat.selected_room_id, Some(lounge.id), "back home");
+
+    // The picker is an explicit act: a room picked there binds the active
+    // tile, as `]` does.
     app.handle_input(b"\x1f");
     assert!(
         app.room_search_modal_state.is_open(),
@@ -5099,6 +5130,101 @@ async fn a_second_chat_tile_on_home_keeps_its_room_and_the_rail_follows_the_acti
         ]
     );
     assert!(app.home_layout_dirty, "a rebind is a layout edit");
+}
+
+/// The stock `street` holds News on the left and #announcements on the
+/// right. Focusing the right tile moves the rail to #announcements; a
+/// News pick in the picker then binds that tile to News and the rail
+/// shows it, the arrival sync notwithstanding: a pick made on Home stands.
+#[tokio::test]
+async fn home_street_picks_news_into_the_active_tile() {
+    use crate::app::zen::state::TileKind;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "street-news-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let announcements = ChatRoom::ensure_permanent(&client, "announcements")
+        .await
+        .expect("announcements");
+    ChatRoomMember::join(&client, announcements.id, user.id)
+        .await
+        .expect("join announcements");
+    let mut app = make_app(test_db.db.clone(), user.id, "street-news-flow-it");
+    app.resize(200, 50).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "announcements").await;
+
+    app.handle_input(b"i/layout 2\r");
+    assert_eq!(app.home_layouts.current_name(), "street");
+    let tiles = app.home.chat_tiles();
+    let [
+        (left, ChatRoomBinding::News),
+        (right, ChatRoomBinding::Permanent(slug)),
+    ] = tiles.as_slice()
+    else {
+        panic!("street holds News and a permanent room: {tiles:?}");
+    };
+    let (left, right) = (*left, *right);
+    assert_eq!(slug, "announcements");
+    assert_eq!(app.home.focused_kind(), Some(TileKind::Chat));
+    assert_eq!(app.home.focus, left);
+    assert!(
+        app.chat.news_selected,
+        "the rail follows the first tile onto News"
+    );
+    wait_for_render_contains(&mut app, "chat · news").await;
+
+    let (_, rect, _) = app.home_tile_rects()[right];
+    let click = format!("\x1b[<0;{};{}M", rect.x + 2, rect.y + 2);
+    app.handle_input(click.as_bytes());
+    assert_eq!(app.home.focus, right);
+    assert_eq!(app.chat.selected_room_id, Some(announcements.id));
+    assert!(!app.chat.news_selected);
+
+    app.handle_input(b"\x1f");
+    app.handle_input(b"news\r");
+    assert!(app.chat.news_selected, "the pick stands on Home");
+    assert_eq!(app.home_chat_room_id(), None, "no room to act on");
+    assert_eq!(
+        app.home.chat_tiles(),
+        vec![
+            (left, ChatRoomBinding::News),
+            (right, ChatRoomBinding::News)
+        ],
+        "the pick binds the active tile"
+    );
+    let frame = render_plain(&mut app);
+    assert_eq!(
+        frame.matches("chat · news").count(),
+        2,
+        "both rules say News; frame={frame:?}"
+    );
+
+    // Leaving `home` pinned its one chat, bound to no room, to #lounge, the
+    // room of that moment: `Ctrl+E 1` lands there, not on News, and
+    // `Ctrl+E 2` lands on News again.
+    app.handle_input(b"\x05");
+    app.handle_input(b"1");
+    assert_eq!(app.home_layouts.current_name(), "home");
+    assert_eq!(app.chat.selected_room_id, Some(lounge.id));
+    assert!(!app.chat.news_selected, "home comes back where it was");
+    let home_chat = app
+        .home
+        .first_tile_of(TileKind::Chat)
+        .expect("home has a chat");
+    assert_eq!(
+        app.home.chat_tiles(),
+        vec![(home_chat, ChatRoomBinding::Room(lounge.id))]
+    );
+    app.handle_input(b"\x05");
+    app.handle_input(b"2");
+    assert_eq!(app.home_layouts.current_name(), "street");
+    assert!(app.chat.news_selected, "street comes back on News");
 }
 
 /// In arrange mode every tile takes the focus, and Tab walks them instead

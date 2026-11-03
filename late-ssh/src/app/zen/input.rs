@@ -159,12 +159,15 @@ pub(crate) fn toggle_home_arrange(app: &mut App) {
 }
 
 /// Show the layout at `index` (`home_layouts`): the page as it is goes
-/// into its own slot first, so nothing arranged is lost, then the slot
-/// becomes current and the page draws it. False past the end.
+/// into its own slot first, so nothing arranged is lost (its chat tiles
+/// bound to no room pinned to the room of the moment, so the layout
+/// comes back where it was), then the slot becomes current and the page
+/// draws it. False past the end.
 pub(crate) fn load_layout(app: &mut App, index: usize) -> bool {
     if index >= app.home_layouts.count() {
         return false;
     }
+    app.pin_unbound_chats_to_the_moment();
     app.home_layouts.store_current(app.home.rice.clone());
     app.home_layouts.switch(index);
     show_current_layout(app);
@@ -184,8 +187,12 @@ fn show_current_layout(app: &mut App) {
 }
 
 /// Save the page as a new layout under `name`, which becomes current; the
-/// page keeps showing it, with nothing for `R` to put back.
+/// page keeps showing it, with nothing for `R` to put back. Its chat
+/// tiles bound to no room are pinned to the room of the moment first, in
+/// the slot left behind and in the new one, so both come back where they
+/// were.
 pub(crate) fn save_layout_as(app: &mut App, name: &str) -> Result<usize, LayoutsError> {
+    app.pin_unbound_chats_to_the_moment();
     app.home_layouts.store_current(app.home.rice.clone());
     let index = app.home_layouts.save_new(name, app.home.rice.clone())?;
     app.home.set_stock(Layouts::stock_of(name));
@@ -697,10 +704,39 @@ fn cycle_room(app: &mut App, delta: isize) {
 /// Bind the active chat tile to `room_id` (a layout edit, saved), move
 /// the rail there, and drop the draft and selection that belonged to its
 /// old room. `false` when the page has no chat tile, so the caller can
-/// fall back to Home's selection; the `Ctrl+/` picker lands here, and
-/// `[` `]` through `bind_active_chat`.
+/// fall back to Home's selection; a `?query` message jump lands here,
+/// `[` `]` and the picker through `bind_active_chat`.
 pub(crate) fn bind_active_chat_to_room(app: &mut App, room_id: Uuid) -> bool {
     bind_active_chat(app, ChatRoomBinding::Room(room_id))
+}
+
+/// The `Ctrl+/` picker's pick, on Home: a room or News binds the active
+/// chat tile (a layout edit, saved, the rail following), as `[` `]` do;
+/// any other row (mentions, rss, browse) is a view the rail shows and the
+/// active tile draws while it is up, binding nothing. With no chat tile
+/// on the page the rail alone moves.
+pub(crate) fn pick_for_active_chat(app: &mut App, slot: RoomSlot) {
+    let binding = match slot {
+        RoomSlot::Room(room_id) => Some(ChatRoomBinding::Room(room_id)),
+        RoomSlot::News => Some(ChatRoomBinding::News),
+        RoomSlot::Feeds
+        | RoomSlot::Cyberspace
+        | RoomSlot::CyberspaceNotifications
+        | RoomSlot::CyberspaceMail(_)
+        | RoomSlot::CyberspaceRoom(_)
+        | RoomSlot::Notifications
+        | RoomSlot::Discover
+        | RoomSlot::Showcase
+        | RoomSlot::Work => None,
+    };
+    let bound = match binding {
+        Some(binding) => bind_active_chat(app, binding),
+        None => false,
+    };
+    if !bound && app.chat.select_room_slot(slot) {
+        app.chat.reset_composer();
+        app.chat.request_list();
+    }
 }
 
 fn bind_active_chat(app: &mut App, binding: ChatRoomBinding) -> bool {

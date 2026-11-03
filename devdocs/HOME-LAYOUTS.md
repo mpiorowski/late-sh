@@ -48,8 +48,12 @@ delta against the design):
 - Fixed splits (`Share::First` / `Share::Second`) carry the rails; the Fit
   shares are not built.
 - Chat tiles on Home bind rooms: a tile that becomes a chat is
-  pinned to the room of the moment, the rail steers the active tile and
-  follows the focus onto another. Bindings are `Current`, `Room(id)`,
+  pinned to the room of the moment, the rail follows the focus onto a
+  tile, and the active tile draws and names the rail's selection without
+  the rail ever rewriting its binding (`[` `]` and the picker do that).
+  Leaving a layout pins its unbound chats to the room of the moment, so
+  every layout comes back where it was.
+  Bindings are `Current`, `Room(id)`,
   `Permanent(slug)` and `News`, the one synthetic view a tile holds
   (`[` `]` stop on it); the MyStream binding is not built.
 - Named layouts as below (`zen/presets.rs`): nine per device on the key

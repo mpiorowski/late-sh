@@ -623,24 +623,34 @@ impl App {
         let screen = self.screen;
         // Home's chat tiles: each one's room (resolved, so a room the
         // account left reads as the current room) and its label. The active
-        // tile is the one the keys, the mouse, and the read marking act on;
-        // the others only watch.
+        // tile is the one the keys, the mouse, and the read marking act on,
+        // and it draws the rail's selection, so its rule names that; the
+        // others watch their bindings.
         let home_chat_rooms = self.home_chat_rooms();
         // A field borrow: the draw closure also holds `usermap` mutably.
         let rice = &self.home;
         let home_active_chat = rice.active_chat_index();
+        let home_active_label = self.home_active_chat_label();
         let home_room_labels: Vec<String> = home_chat_rooms
             .iter()
-            .map(|source| match source {
-                Some(crate::app::zen::state::ChatTileSource::News) => "news".to_string(),
-                Some(crate::app::zen::state::ChatTileSource::Room(room_id)) => self
-                    .chat
-                    .rooms
-                    .iter()
-                    .find(|(room, _)| room.id == *room_id)
-                    .and_then(|(room, _)| room.slug.as_deref())
-                    .map_or_else(|| "chat".to_string(), |slug| format!("#{slug}")),
-                None => "chat".to_string(),
+            .enumerate()
+            .map(|(index, source)| {
+                if Some(index) == home_active_chat
+                    && let Some(label) = &home_active_label
+                {
+                    return label.clone();
+                }
+                match source {
+                    Some(crate::app::zen::state::ChatTileSource::News) => "news".to_string(),
+                    Some(crate::app::zen::state::ChatTileSource::Room(room_id)) => self
+                        .chat
+                        .rooms
+                        .iter()
+                        .find(|(room, _)| room.id == *room_id)
+                        .and_then(|(room, _)| room.slug.as_deref())
+                        .map_or_else(|| "chat".to_string(), |slug| format!("#{slug}")),
+                    None => "chat".to_string(),
+                }
             })
             .collect();
         self.home_chat_rows_caches

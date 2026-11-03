@@ -1637,15 +1637,16 @@ impl ZenState {
         }
     }
 
-    /// Bind every chat tile bound to no room to `room_id`.
-    pub fn pin_unbound_chats(&mut self, room_id: Uuid) {
+    /// Give every chat tile bound to no room the binding `moment` (a room
+    /// or News, never `Current`). `true` when a tile changed.
+    pub fn pin_unbound_chats(&mut self, moment: ChatRoomBinding) -> bool {
+        let mut pinned = false;
         for (ordinal, bound) in self.chat_tiles() {
             if bound.is_current() {
-                self.rice
-                    .root
-                    .set_room(ordinal, ChatRoomBinding::Room(room_id));
+                pinned |= self.rice.root.set_room(ordinal, moment.clone());
             }
         }
+        pinned
     }
 
     fn clamp_focus(&mut self) {

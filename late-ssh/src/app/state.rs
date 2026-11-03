@@ -1302,7 +1302,6 @@ impl App {
     }
 
     pub(crate) fn sync_visible_chat_room(&mut self) {
-        self.steer_active_chat_from_rail();
         let visible_room_id = self.current_visible_chat_room_id();
         let changed = self.chat.visible_room_id() != visible_room_id;
         self.chat.set_visible_room_id(visible_room_id);
@@ -2872,8 +2871,9 @@ impl App {
             self.home.enter(Instant::now(), &mut rand::thread_rng());
         }
         // Home opens on its active chat tile's room: the rail follows the
-        // page, never the other way round on arrival.
-        if self.on_home() {
+        // page on arrival, and only then; a pick made while Home is up
+        // stands.
+        if screen_changed && self.on_home() {
             self.sync_rail_to_active_chat();
         }
         // The aquarium sim is sized for whichever surface shows it next.
@@ -3525,21 +3525,30 @@ impl App {
             .set_clubhouse_tutorial_done(self.user_id);
     }
 
-    /// Home's active chat room: the focused chat tile's, else the first
-    /// chat tile's, else (no chat tile) the rail's selection. This is the
-    /// room the composer, the message keys, the mouse, and the read marking
-    /// act on. While the rail shows a synthetic entry (Mentions, News,
-    /// feeds) the active tile shows that view: no room then, as Home has
-    /// always read it.
+    /// Home's active chat room: the rail's selection, which the active
+    /// chat tile (the focused one, else the first) draws. This is the room
+    /// the composer, the message keys, the mouse, and the read marking act
+    /// on. While the rail shows a synthetic entry (Mentions, News, feeds)
+    /// the active tile shows that view: no room then, as Home has always
+    /// read it. A tile's binding is where the rail goes when the tile takes
+    /// the focus (`sync_rail_to_active_chat`), not what it must show.
     pub(crate) fn home_chat_room_id(&self) -> Option<Uuid> {
         if self.chat.synthetic_entry_selected() {
             return None;
         }
-        match self.home.active_chat_room() {
-            Some(crate::app::zen::state::ChatRoomBinding::News) => None,
-            Some(bound) => self.home_room_or_current(&bound),
-            None => self.chat.selected_room_id,
+        self.chat.selected_room_id
+    }
+
+    /// What the active chat tile's rule names: the rail's selection, as
+    /// the frame's title names it (a synthetic view by its word, a room by
+    /// its slug). `None` while the rail has nothing yet.
+    pub(crate) fn home_active_chat_label(&self) -> Option<String> {
+        if let Some(view) = self.chat.selected_synthetic_entry_label() {
+            return Some(view.to_string());
         }
+        let room_id = self.chat.selected_room_id?;
+        let room = self.chat.room_by_id(room_id)?;
+        room.slug.as_deref().map(|slug| format!("#{slug}"))
     }
 
     /// Whether Home, the page the tile tree draws, is up.
@@ -3636,32 +3645,6 @@ impl App {
         }
     }
 
-    /// The active chat tile follows the rail: a tile bound to a room is
-    /// rebound when the rail moves to another real room (a layout edit,
-    /// saved). The synthetic entries (Mentions, News, feeds) are views
-    /// the active tile shows, never bindings, so they move nothing; nor
-    /// does a tile bound to no room, which shows the rail's room as is.
-    fn steer_active_chat_from_rail(&mut self) {
-        if !self.on_home() || self.chat.synthetic_entry_selected() {
-            return;
-        }
-        let Some(selected) = self.chat.selected_room_id else {
-            return;
-        };
-        let Some(bound) = self.home.active_chat_room() else {
-            return;
-        };
-        if bound.is_current() || self.home_bound_room(&bound) == Some(selected) {
-            return;
-        }
-        if self
-            .home
-            .bind_active_chat_room(crate::app::zen::state::ChatRoomBinding::Room(selected))
-        {
-            self.mark_home_layout_dirty();
-        }
-    }
-
     /// A tile that just became a chat is pinned to the room of the moment,
     /// so it keeps it when the rail moves on; and so is every chat tile
     /// bound to no room, since a page with two chats has nothing left for
@@ -3670,10 +3653,29 @@ impl App {
         if self.home.focused_kind() != Some(crate::app::zen::state::TileKind::Chat) {
             return;
         }
-        let Some(room_id) = self.home_current_room_id() else {
-            return;
+        self.pin_unbound_chats_to_the_moment();
+    }
+
+    /// A layout being left (another one loading, or the page saved under
+    /// a new name) pins its chat tiles bound to no room to the room of the
+    /// moment, so it comes back where it was instead of wherever the rail
+    /// is by then. `true` when a tile changed.
+    pub(crate) fn pin_unbound_chats_to_the_moment(&mut self) -> bool {
+        let Some(moment) = self.binding_of_the_moment() else {
+            return false;
         };
-        self.home.pin_unbound_chats(room_id);
+        self.home.pin_unbound_chats(moment)
+    }
+
+    /// The room of the moment as a binding: News while the rail shows it,
+    /// else the current room (Home's selection when it is a real room,
+    /// else #lounge). `None` before the rooms arrive.
+    fn binding_of_the_moment(&self) -> Option<crate::app::zen::state::ChatRoomBinding> {
+        use crate::app::zen::state::ChatRoomBinding;
+        if self.chat.news_selected {
+            return Some(ChatRoomBinding::News);
+        }
+        self.home_current_room_id().map(ChatRoomBinding::Room)
     }
 
     /// What every chat tile draws, in layout order, resolved: a tile bound
