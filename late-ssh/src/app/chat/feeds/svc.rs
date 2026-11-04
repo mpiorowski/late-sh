@@ -25,6 +25,15 @@ const ENTRY_LIMIT: i64 = 100;
 // high-volume feed cannot evict weekly/monthly feeds from the inbox.
 const PER_FEED_ENTRY_LIMIT: i64 = 20;
 const POLL_LIMIT: i64 = 64;
+/// Owners gone this long stop costing a fetch. Their first login puts their
+/// feeds at the front of the next poll, so at worst they wait one interval.
+const OWNER_ABSENT_AFTER_DAYS: i64 = 14;
+/// Well past the 20 per feed the list shows. An item still in a feed's XML can
+/// re-insert once when it is pruned, so this also keeps that rare.
+const KEEP_ENTRIES_PER_FEED: i64 = 100;
+/// Rows to delete per poll, so the backlog drains over days instead of a
+/// single burst of WAL against the throttled backup plugin.
+const PRUNE_BATCH: i64 = 5_000;
 const POLL_INTERVAL: Duration = Duration::from_secs(30 * 60);
 const FETCH_TIMEOUT: Duration = Duration::from_secs(15);
 const FEED_MAX_BYTES: usize = 1_000_000;
@@ -313,14 +322,29 @@ impl FeedService {
                 if let Err(e) = service.poll_once().await {
                     late_core::error_span!("feed_poll_failed", error = ?e, "failed to poll feeds");
                 }
+                match service.prune_entries().await {
+                    Ok(0) => {}
+                    Ok(deleted) => tracing::info!(deleted, "pruned old rss entries"),
+                    Err(e) => late_core::error_span!(
+                        "feed_prune_failed",
+                        error = ?e,
+                        "failed to prune rss entries"
+                    ),
+                }
             }
         });
+    }
+
+    async fn prune_entries(&self) -> Result<u64> {
+        let client = self.db.get().await?;
+        RssEntry::prune_past_keep(&client, KEEP_ENTRIES_PER_FEED, PRUNE_BATCH).await
     }
 
     async fn poll_once(&self) -> Result<()> {
         let feeds = {
             let client = self.db.get().await?;
-            RssFeed::list_active(&client, POLL_LIMIT).await?
+            let owner_seen_since = Utc::now() - chrono::Duration::days(OWNER_ABSENT_AFTER_DAYS);
+            RssFeed::list_for_poll(&client, owner_seen_since, POLL_LIMIT).await?
         };
         for feed in feeds {
             let user_id = feed.user_id;

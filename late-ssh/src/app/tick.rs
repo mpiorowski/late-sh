@@ -16,7 +16,9 @@ use crate::session::SessionMessage;
 pub(crate) const HOT_TICK: Duration = Duration::from_millis(66);
 /// Half-rate cadence (~7.5fps): Clubhouse ambience and the ascii pieces
 /// (a drawn ascii tile on Home, the away screensaver), riding the shared
-/// `anim_half` /2 edge in tick().
+/// `anim_half` /2 edge in tick(). The surfaces on it drop to the quarter tier
+/// once nobody has pressed a key for [`ATTENTION_ACTIVE_WINDOW`]; a screensaver
+/// keeps its own tier.
 pub(crate) const ANIM_HALF_TICK: Duration = Duration::from_millis(132);
 /// Quarter-rate cadence (~3.8fps): the aquarium surfaces (Home's reef
 /// tile + profile-modal reef) and the lively ascii pieces in pixels,
@@ -1501,7 +1503,10 @@ impl App {
         // music or visualizer tile paints its eq on that edge too; left
         // to the aquarium's quarter tier it drops to ~3.8fps. A drawn ascii
         // tile in dots plays its frames on this edge too; one in pixels
-        // rides the quarter tier below.
+        // rides the quarter tier below. Nobody at the keys means nobody
+        // watching closely, so an idle terminal takes the quarter tier here:
+        // these draws are most of the CPU and most sessions are idle. Only
+        // the frame rate moves: everything here is timed by the wall clock.
         if self.screen == Screen::Clubhouse
             || self.screen == Screen::City
             || crate::app::door::hub::state::animates(self)
@@ -1513,7 +1518,10 @@ impl App {
             || self.show_bonsai_modal
             || (self.show_profile_modal && self.profile_modal_state.bonsai().is_some())
         {
-            return ANIM_HALF_TICK;
+            return match self.attention_presence() {
+                crate::metrics::Presence::Active => ANIM_HALF_TICK,
+                crate::metrics::Presence::Idle => ANIM_QUARTER_TICK,
+            };
         }
         if self.aquarium_visible()
             || (self.show_profile_modal && self.profile_modal_state.aquarium_animating())

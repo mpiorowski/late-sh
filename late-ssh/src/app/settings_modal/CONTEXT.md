@@ -74,7 +74,7 @@ Keyboard, Mouse, and Hybrid, explains that Keyboard disables clicks/wheel, and
 uses App's setter for terminal reporting and persistence.
 Screensaver offers Off, the eight fixed scene/style choices, Random, then Randomer.
 Random holds one choice per activation; Randomer changes landscape every five
-minutes. Both store the mode, with transient playback owned by the session.
+minutes. Both draw only from the cheap pieces (`../ascii/CONTEXT.md`) and store the mode, with transient playback owned by the session.
 Interaction-mode persistence coalesces rapid choices through one writer per
 account, so an older asynchronous write cannot overwrite the final choice.
 Chooser values show `…` two spaces after the current label. Width padding follows
@@ -98,8 +98,9 @@ submits it exactly as its keyboard submit does (`submit_text_edit`), then the
 click acts. There is one save path for both inputs: saves are fire-and-forget
 and a failure surfaces as the usual banner. Each save carries the whole draft,
 so `ProfileService::edit_profile` runs one writer per user that saves drafts in
-order and collapses a burst into its newest draft. An empty feed URL is dropped
-quietly. `[Cancel]` discards. Account confirmation inputs are not auto-saved.
+order and collapses a burst into its newest draft. For the same reason a refused
+username goes back out of the draft (`ProfileEvent::UsernameRefused`): left there,
+it would fail every later save. An empty feed URL is dropped quietly. `[Cancel]` discards. Account confirmation inputs are not auto-saved.
 Closing Settings with `[x]` during a theme search keeps the theme the search
 previewed, as Esc does. The Invites dialog's code field takes the caret on
 click and `[Add code]` submits it like Enter.

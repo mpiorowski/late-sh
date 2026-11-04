@@ -1022,14 +1022,23 @@ fn note_read(tally: &mut PressTally, posting: &JobPosting, read: &anyhow::Result
         Err(error) => {
             tally.read_failed += 1;
             metrics::record_jobs_read(JobsReadResult::Failed);
-            late_core::error_span!(
-                "jobs_read_failed",
-                error = ?error,
-                source = posting.source.as_str(),
-                external_id = %posting.external_id,
-                attempt = posting.read_attempts + 1,
-                "failed to read a job posting"
-            );
+            match late_core::db::is_db_failure(error) {
+                true => late_core::error_span!(
+                    "jobs_read_failed",
+                    error = ?error,
+                    source = posting.source.as_str(),
+                    external_id = %posting.external_id,
+                    attempt = posting.read_attempts + 1,
+                    "failed to read a job posting"
+                ),
+                false => tracing::warn!(
+                    error = ?error,
+                    source = posting.source.as_str(),
+                    external_id = %posting.external_id,
+                    attempt = posting.read_attempts + 1,
+                    "failed to read a job posting"
+                ),
+            }
         }
     }
 }

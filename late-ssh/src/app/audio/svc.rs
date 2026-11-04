@@ -844,15 +844,23 @@ impl AudioService {
                     });
                 }
                 Err(err) => {
-                    late_core::error_span!(
-                        "audio_booth_submit_failed",
-                        error = ?err,
-                        user_id = %user_id,
-                        "failed to submit booth audio URL"
-                    );
+                    let failure = BoothSubmitFailure::of(&err);
+                    match failure.is_refusal() {
+                        true => tracing::warn!(
+                            error = ?err,
+                            user_id = %user_id,
+                            "booth audio URL refused"
+                        ),
+                        false => late_core::error_span!(
+                            "audio_booth_submit_failed",
+                            error = ?err,
+                            user_id = %user_id,
+                            "failed to submit booth audio URL"
+                        ),
+                    }
                     service.publish_event(AudioEvent::BoothSubmitFailed {
                         user_id,
-                        message: booth_submit_error_message(&err),
+                        message: failure.message().to_string(),
                     });
                 }
             }
@@ -2564,29 +2572,69 @@ fn is_single_playing_unique_violation(err: &anyhow::Error) -> bool {
     })
 }
 
-fn booth_submit_error_message(err: &anyhow::Error) -> String {
-    let text = format!("{err:#}").to_ascii_lowercase();
-    if text.contains("audio ban") {
-        "Banned from submitting audio".to_string()
-    } else if is_duplicate_track_error(&text) {
-        "Already in the queue".to_string()
-    } else if text.contains("invalid url")
-        || (text.contains("youtube") && text.contains("not found"))
-    {
-        "Invalid YouTube URL".to_string()
-    } else if text.contains("rate limit") || text.contains("submission rate limit") {
-        "Slow down - too many submissions".to_string()
-    } else if text.contains("not public") {
-        "Video is not public".to_string()
-    } else if text.contains("not embeddable") {
-        "Video is not embeddable".to_string()
-    } else if text.contains("api key")
-        || text.contains("api_key")
-        || text.contains("youtube data api")
-    {
-        "YouTube validation failed - try again".to_string()
-    } else {
-        "Failed to submit".to_string()
+enum BoothSubmitFailure {
+    Banned,
+    AlreadyQueued,
+    InvalidUrl,
+    RateLimited,
+    NotPublic,
+    NotEmbeddable,
+    YoutubeApi,
+    Unknown,
+}
+
+impl BoothSubmitFailure {
+    fn of(err: &anyhow::Error) -> Self {
+        let text = format!("{err:#}").to_ascii_lowercase();
+        if text.contains("audio ban") {
+            Self::Banned
+        } else if is_duplicate_track_error(&text) {
+            Self::AlreadyQueued
+        } else if text.contains("invalid url")
+            || (text.contains("youtube") && text.contains("not found"))
+        {
+            Self::InvalidUrl
+        } else if text.contains("rate limit") || text.contains("submission rate limit") {
+            Self::RateLimited
+        } else if text.contains("not public") {
+            Self::NotPublic
+        } else if text.contains("not embeddable") {
+            Self::NotEmbeddable
+        } else if text.contains("api key")
+            || text.contains("api_key")
+            || text.contains("youtube data api")
+        {
+            Self::YoutubeApi
+        } else {
+            Self::Unknown
+        }
+    }
+
+    fn message(&self) -> &'static str {
+        match self {
+            Self::Banned => "Banned from submitting audio",
+            Self::AlreadyQueued => "Already in the queue",
+            Self::InvalidUrl => "Invalid YouTube URL",
+            Self::RateLimited => "Slow down - too many submissions",
+            Self::NotPublic => "Video is not public",
+            Self::NotEmbeddable => "Video is not embeddable",
+            Self::YoutubeApi => "YouTube validation failed - try again",
+            Self::Unknown => "Failed to submit",
+        }
+    }
+
+    /// The submitter's URL or standing was turned down. The other two are our
+    /// fault or YouTube's, and those stay at ERROR.
+    fn is_refusal(&self) -> bool {
+        match self {
+            Self::Banned
+            | Self::AlreadyQueued
+            | Self::InvalidUrl
+            | Self::RateLimited
+            | Self::NotPublic
+            | Self::NotEmbeddable => true,
+            Self::YoutubeApi | Self::Unknown => false,
+        }
     }
 }
 

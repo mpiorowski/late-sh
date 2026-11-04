@@ -17,7 +17,7 @@ use std::net::{IpAddr, SocketAddr};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex as TokioMutex, OwnedSemaphorePermit};
@@ -85,6 +85,10 @@ const INPUT_DRAIN_MAX_TIME: Duration = Duration::from_millis(4);
 /// A pass that holds the app lock longer than the hot tick is one the user
 /// can feel; it is warned about, once per [`SLOW_PASS_WARN_EVERY`].
 const SLOW_PASS: Duration = crate::app::tick::HOT_TICK;
+/// Dropped frames in a row retried at the hot cadence, which covers a brief
+/// congested moment. Past them the client is not draining, and every retry is
+/// a full repaint nobody receives, so it settles to the idle cadence.
+const FRAME_DROP_HOT_RETRIES: u32 = 3;
 const SLOW_PASS_WARN_EVERY: Duration = Duration::from_secs(60);
 
 /// Tracks bytes handed to russh for the app channel versus window credit the
@@ -1391,6 +1395,7 @@ impl russh::server::Handler for ClientHandler {
                 handle,
                 channel_id,
                 frame_drop_log_every: self.state.config.frame_drop_log_every,
+                frame_drops_in_a_row: AtomicU32::new(0),
                 signal: Arc::clone(&signal),
                 budget: Arc::clone(&self.output_budget),
                 client: self.session_client(),
@@ -1601,7 +1606,6 @@ impl russh::server::Handler for ClientHandler {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self, data, _session), fields(peer = ?self.peer_addr, len = data.len()))]
     async fn data(
         &mut self,
         channel: ChannelId,
@@ -1877,10 +1881,18 @@ struct RenderContext {
     handle: russh::server::Handle,
     channel_id: ChannelId,
     frame_drop_log_every: u64,
+    frame_drops_in_a_row: AtomicU32,
     signal: Arc<RenderSignal>,
     budget: Arc<OutputBudget>,
     client: metrics::SessionClient,
     probe: Arc<TerminalProbe>,
+}
+
+fn retry_after_frame_drop(drops_in_a_row: u32) -> Duration {
+    match drops_in_a_row <= FRAME_DROP_HOT_RETRIES {
+        true => crate::app::tick::HOT_TICK,
+        false => crate::app::tick::IDLE_TICK,
+    }
 }
 
 /// What one render pass produced: whether the app asked to quit, how soon
@@ -2083,6 +2095,7 @@ async fn render_once(
     .await
     {
         Ok(Ok(())) => {
+            ctx.frame_drops_in_a_row.store(0, Ordering::Relaxed);
             ctx.budget.record_sent(frame_len);
             metrics::record_frame_bytes(reason, frame_len);
             spot.record(metrics::OutputKind::Frame, frame_len);
@@ -2110,12 +2123,13 @@ async fn render_once(
         // write is dropped, force the next successful frame to repaint from a
         // blank previous buffer so old terminal cells cannot leak through.
         // Deliberately no notify: the repaint rides the next world tick,
-        // pinned to the hot cadence (15fps retry) instead of re-arming the
-        // input path against a handle that is already busy.
+        // paced by `retry_after_frame_drop`, instead of re-arming the input
+        // path against a handle that is already busy.
         let mut app = app.lock().await;
         app.force_full_repaint();
         ctx.signal.dirty.store(true, Ordering::Release);
-        wake_hint = crate::app::tick::HOT_TICK;
+        let in_a_row = ctx.frame_drops_in_a_row.fetch_add(1, Ordering::Relaxed) + 1;
+        wake_hint = retry_after_frame_drop(in_a_row);
     }
 
     for command in terminal_commands {

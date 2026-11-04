@@ -4,7 +4,8 @@ use ratatui::{Terminal, backend::TestBackend, buffer::Buffer, layout::Rect, styl
 use super::draw_piece;
 use crate::app::ascii::{
     alpine_dawn, aurora_fjord, earthrise, misty_forest,
-    piece::{Shade, cadence, pixel},
+    piece::{AURORA_SWEEP_FRAMES, Shade, cadence, pixel},
+    playback::in_random_pool,
 };
 
 fn draw(piece: AsciiPiece, cols: u16, rows: u16) -> Buffer {
@@ -125,6 +126,9 @@ fn an_empty_area_draws_nothing() {
     );
 }
 
+/// The cells a second a slow piece may change on a 200x50 terminal in dots.
+const BUDGET_PER_SECOND: usize = 100;
+
 /// A slow piece earns its place as a screensaver that can default to on by
 /// moving a few cells a second: on a full 200x50 terminal, in dots, a
 /// frame changes a bounded handful of cells for every second of wall time
@@ -135,7 +139,6 @@ fn an_empty_area_draws_nothing() {
 /// and its own pace within it (`misty_forest::BEAM_PACE`) are tuned to it.
 #[test]
 fn a_slow_piece_moves_a_few_cells_a_second() {
-    const BUDGET_PER_SECOND: usize = 100;
     for scene in [Scene::Earthrise, Scene::MistyForest] {
         let piece = AsciiPiece {
             scene,
@@ -173,10 +176,33 @@ fn a_slow_piece_moves_a_few_cells_a_second() {
     }
 }
 
+/// The aurora in dots pays by the columns its front crosses, more a second
+/// over the curtain than over bare sky, so the budget is its mean across a
+/// whole crossing. The worst second stays a few times that, never the
+/// thousands of cells a repaint of it would be.
+#[test]
+fn the_aurora_in_dots_holds_the_slow_budget_across_a_sweep() {
+    const WORST_PER_SECOND: usize = 3 * BUDGET_PER_SECOND;
+    let cost = wire_cost(AsciiPiece {
+        scene: Scene::AuroraFjord,
+        style: SceneStyle::Dots,
+    });
+    assert!(
+        cost.cells <= BUDGET_PER_SECOND,
+        "{} cells a second on average, over the {BUDGET_PER_SECOND} budget",
+        cost.cells
+    );
+    assert!(
+        cost.worst_cells <= WORST_PER_SECOND,
+        "{} cells in its worst second, over {WORST_PER_SECOND}",
+        cost.worst_cells
+    );
+}
+
 /// What a piece costs on the wire at its own cadence on a 200x50 terminal:
 /// the cells that change between consecutive frames (mean and worst) and
 /// the bytes the same diff is through the real terminal backend, the
-/// mean of `EDGES` frame edges past the warm-up.
+/// mean of `edges` frame edges past the warm-up.
 struct WireCost {
     cells: usize,
     worst_cells: usize,
@@ -184,6 +210,16 @@ struct WireCost {
 }
 
 const EDGES: u64 = 8;
+
+/// How many frame edges read a piece's cost fairly: a few, except a sweep,
+/// whose seconds differ by what its front is crossing, so a whole crossing.
+fn edges(piece: AsciiPiece) -> u64 {
+    match (piece.scene, piece.style) {
+        (Scene::AuroraFjord, SceneStyle::Dots) => AURORA_SWEEP_FRAMES,
+        (Scene::AuroraFjord, SceneStyle::Pixels)
+        | (Scene::Earthrise | Scene::MistyForest | Scene::AlpineDawn, _) => EDGES,
+    }
+}
 
 fn wire_cost(piece: AsciiPiece) -> WireCost {
     use crate::app::state::SharedBuffer;
@@ -200,8 +236,9 @@ fn wire_cost(piece: AsciiPiece) -> WireCost {
     // Past the first edge so the warm-up is not in the frame time.
     let first = 1000;
     let mut before = draw_at(first * frame_ms);
+    let edges = edges(piece);
     let (mut total, mut worst, mut bytes) = (0usize, 0usize, 0usize);
-    for edge in first + 1..=first + EDGES {
+    for edge in first + 1..=first + edges {
         let after = draw_at(edge * frame_ms);
         let changed = before
             .content()
@@ -220,9 +257,9 @@ fn wire_cost(piece: AsciiPiece) -> WireCost {
         before = after;
     }
     WireCost {
-        cells: total / EDGES as usize,
+        cells: total / edges as usize,
         worst_cells: worst,
-        bytes: bytes / EDGES as usize,
+        bytes: bytes / edges as usize,
     }
 }
 
@@ -246,13 +283,37 @@ fn every_piece_stays_under_the_wire_budget() {
     }
 }
 
+/// The most a piece a random draw can land on may put on the wire, in KB a
+/// second on a 200x50 terminal: a draw plays unattended, often for hours to
+/// an empty room, so it has to cost about what an idle session does.
+const RANDOM_POOL_KB_PER_S: usize = 6;
+
+#[test]
+fn every_piece_a_random_draw_can_land_on_costs_a_few_kilobytes_a_second() {
+    for piece in AsciiPiece::ALL {
+        if !in_random_pool(piece) {
+            continue;
+        }
+        let cost = wire_cost(piece);
+        let kb_per_s = cost.bytes * 1000 / cadence(piece).frame_ms() as usize / 1024;
+        assert!(
+            kb_per_s <= RANDOM_POOL_KB_PER_S,
+            "{} is in the random pool at {kb_per_s} KB/s, over the {RANDOM_POOL_KB_PER_S} KB/s it may cost",
+            piece.label()
+        );
+    }
+}
+
 /// The cost report: every piece measured at its own cadence on a 200x50
 /// terminal, the cells that change between consecutive frames, the bytes
 /// the same diff is through the real terminal backend, and one frame's
 /// compute in the unoptimised test profile (read it against the other
 /// rows, not the clock). Ignored, since it is a report, not a contract
-/// (`every_piece_stays_under_the_wire_budget` and
-/// `a_slow_piece_moves_a_few_cells_a_second` are the contracts); run it
+/// (`every_piece_stays_under_the_wire_budget`,
+/// `a_slow_piece_moves_a_few_cells_a_second`,
+/// `the_aurora_in_dots_holds_the_slow_budget_across_a_sweep` and
+/// `every_piece_a_random_draw_can_land_on_costs_a_few_kilobytes_a_second`
+/// are the contracts); run it
 /// when porting a piece or retuning a cadence and put the numbers in
 /// `CONTEXT.md`, Cost:
 /// `make test-llm ARGS="-p late-ssh --lib --run-ignored all --no-capture -E 'test(the_cost_report)'"`.

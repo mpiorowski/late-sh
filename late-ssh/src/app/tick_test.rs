@@ -293,6 +293,28 @@ async fn home_equalizer_tiles_hold_the_half_rate_tier() {
     );
 }
 
+#[tokio::test]
+async fn an_idle_terminal_takes_the_quarter_tier_until_a_key_lands() {
+    let (_test_db, mut app) = chat_compose_app("tick-idle-thin").await;
+    app.set_screen(Screen::Dashboard);
+    app.show_splash = false;
+    home_with_music(&mut app);
+    app.last_input_at = Instant::now() - Duration::from_secs(10);
+
+    app.last_active_at = Instant::now() - Duration::from_secs(4 * 60);
+    assert_eq!(app.wake_hint(), ANIM_HALF_TICK, "still at the keys");
+
+    app.last_active_at = Instant::now() - Duration::from_secs(6 * 60);
+    assert_eq!(
+        app.wake_hint(),
+        ANIM_QUARTER_TICK,
+        "left open, no screensaver"
+    );
+
+    app.last_active_at = Instant::now();
+    assert_eq!(app.wake_hint(), ANIM_HALF_TICK, "a key brings it back");
+}
+
 /// The default screensaver is the slow piece: it rides the idle floor and
 /// its 1Hz edge, so an away session under it wakes no faster than an idle
 /// one, and a pointer move over it opens no hot window.

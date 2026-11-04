@@ -245,11 +245,6 @@ impl PairedClientRegistry {
         let mut clients = self.clients.lock_recover();
         let entries = clients.entry(token.clone()).or_default();
         if entries.len() >= MAX_PAIRED_CLIENTS_PER_TOKEN {
-            tracing::warn!(
-                token_hint = %token_hint(&token),
-                entries = entries.len(),
-                "rejecting paired client: token at capacity"
-            );
             return None;
         }
         tracing::info!(

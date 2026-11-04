@@ -1,5 +1,22 @@
-use crate::db::{Db, DbConfig, create_pool};
+use anyhow::Context;
+
+use crate::db::{Db, DbConfig, create_pool, is_db_failure};
 use crate::test_utils::test_db;
+
+#[tokio::test]
+async fn a_query_failure_counts_as_a_db_failure_through_its_context() {
+    let test_db = test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+
+    let failure = client
+        .query_one("SELECT 1 / 0", &[])
+        .await
+        .context("loading the thing")
+        .unwrap_err();
+
+    assert!(is_db_failure(&failure));
+    assert!(!is_db_failure(&anyhow::anyhow!("no action points")));
+}
 
 #[test]
 fn default_config_values() {

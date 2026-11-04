@@ -596,12 +596,15 @@ impl ArticleService {
     }
 
     fn share_failed(&self, user_id: Uuid, url: &str, e: anyhow::Error) {
-        late_core::error_span!(
-            "article_process_failed",
-            error = ?e,
-            url = %url,
-            "failed to process article url"
-        );
+        match late_core::db::is_db_failure(&e) {
+            true => late_core::error_span!(
+                "article_process_failed",
+                error = ?e,
+                url = %url,
+                "failed to process article url"
+            ),
+            false => tracing::warn!(error = ?e, url = %url, "failed to process article url"),
+        }
         self.publish_event(ArticleEvent::Failed {
             user_id,
             error: e.to_string(),

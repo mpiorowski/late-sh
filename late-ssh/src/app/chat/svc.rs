@@ -474,6 +474,11 @@ impl SendRefusal {
     }
 }
 
+enum RoomTailLoad {
+    Loaded,
+    NotAMember,
+}
+
 /// A send that did not land: a room rule said no, or something broke. The
 /// two are separated because only the first is the sender's to fix; the
 /// second is ours, and marks its span.
@@ -1929,12 +1934,10 @@ impl ChatService {
     }
 
     #[tracing::instrument(skip(self), fields(user_id = %user_id, room_id = %room_id))]
+    /// A session that has just left the room marks nothing: the `UPDATE` is
+    /// scoped to the membership row, so no row means no cursor to move.
     async fn mark_room_read(&self, user_id: Uuid, room_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
-        let is_member = ChatRoomMember::is_member(&client, room_id, user_id).await?;
-        if !is_member {
-            anyhow::bail!("user is not a member of room");
-        }
         ChatRoomMember::mark_read_now(&client, room_id, user_id).await?;
         Ok(())
     }
@@ -2020,12 +2023,12 @@ impl ChatService {
     }
 
     #[tracing::instrument(skip(self), fields(user_id = %user_id, room_id = %room_id))]
-    async fn load_room_tail(&self, user_id: Uuid, room_id: Uuid) -> Result<()> {
+    async fn load_room_tail(&self, user_id: Uuid, room_id: Uuid) -> Result<RoomTailLoad> {
         let _permit = self.read_permits.acquire().await?;
         let client = self.db.get().await?;
         let is_member = ChatRoomMember::is_member(&client, room_id, user_id).await?;
         if !is_member {
-            anyhow::bail!("user is not a member of room");
+            return Ok(RoomTailLoad::NotAMember);
         }
         // The tail deliberately carries no read cursor. It used to, and the
         // session drew its `new messages` divider from it, which made a room
@@ -2057,23 +2060,34 @@ impl ChatService {
                 profile_award_badges: author_metadata.profile_award_badges,
             },
         );
-        Ok(())
+        Ok(RoomTailLoad::Loaded)
     }
 
     pub fn load_room_tail_task(&self, user_id: Uuid, room_id: Uuid) {
         let service = self.clone();
         tokio::spawn(
             async move {
-                if let Err(e) = service.load_room_tail(user_id, room_id).await {
-                    service.send_user_event(
-                        user_id,
-                        ChatEvent::RoomTailLoadFailed { user_id, room_id },
-                    );
-                    late_core::error_span!(
-                        "chat_load_room_tail_failed",
-                        error = ?e,
-                        "failed to load chat room tail"
-                    );
+                match service.load_room_tail(user_id, room_id).await {
+                    Ok(RoomTailLoad::Loaded) => {}
+                    // The expected race: the session asked just as it left.
+                    Ok(RoomTailLoad::NotAMember) => {
+                        service.send_user_event(
+                            user_id,
+                            ChatEvent::RoomTailLoadFailed { user_id, room_id },
+                        );
+                        tracing::warn!("chat room tail refused: not a member");
+                    }
+                    Err(e) => {
+                        service.send_user_event(
+                            user_id,
+                            ChatEvent::RoomTailLoadFailed { user_id, room_id },
+                        );
+                        late_core::error_span!(
+                            "chat_load_room_tail_failed",
+                            error = ?e,
+                            "failed to load chat room tail"
+                        );
+                    }
                 }
             }
             .instrument(info_span!(

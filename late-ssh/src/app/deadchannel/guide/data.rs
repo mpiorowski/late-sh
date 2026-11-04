@@ -446,7 +446,7 @@ pub const SECTIONS: &[Section] = &[
         neon: Neon::Amber,
         blocks: &[
             Block::Rule(
-                "at levels *3*, *6*, *9*, and *12* a new card is waiting for you on the road: one of two, the same two for everybody. `1` or `2` takes it, and the road waits until you do.",
+                "at levels *3*, *6*, *9*, and *12* a new card is waiting for you on the road: one of two, the same two for everybody. `1` or `2` takes it, and the road waits until you do. an inked draft asks nothing: `1` takes both.",
             ),
             Block::Rule(
                 "the card goes in *in place of* a ‹strike› or a ‹block›, so a draft never grows the deck past ten: only an inked draft's other card and a {pour} at dead air add one. it stays until the mark; the next climb you pick again.",
@@ -476,7 +476,7 @@ pub const SECTIONS: &[Section] = &[
                 "at *15*, once you have the exp to leave it, the next glyph you step onto is the Old Signal instead. it {hits}, floods you with {noise}, {gathers}, and comes down {heavy}, and it has more signal than anything on the road: read the hand for this one.",
             ),
             Block::Rule(
-                "put it down and you wake at *level 1*: bare hands, fifty bits, an empty locker, no crystals, and a mark. the mark stays, adds a point of attack and defense (up to five), and makes every level cost a little more. the debt stays too.",
+                "put it down and you wake at *level 1*: bare hands, fifty bits, an empty locker, no crystals, and a mark. the mark stays and adds a point of attack and defense (up to five). every level costs what it did. the debt stays too.",
             ),
             Block::Rule(
                 "a kill pays *40,000 chips*, at most *once every 30 days*: the one way bits ever turn into chips. a second mark inside the month is yours all the same. your face, your tailor's rack, and your badges stay. the first kill earns [SIG].",
@@ -641,10 +641,10 @@ pub const SECTIONS: &[Section] = &[
                 },
             ]),
             Block::Rule(
-                "a draft inked is *both its cards*: the one you pick and the one you did not, from the draft's level on, in this climb and every one after. *ten crystals*, and nothing takes it back: not a mark, not the ledge.",
+                "a draft inked is *both its cards*: the one you picked and the one you did not. inked now, the other joins your deck next fight. a mark takes your cards with the rest, but on every climb after, at that level, `1` on the road gives you both. *ten crystals*, and nothing takes it back: not a mark, not the ledge.",
             ),
             Block::Rule(
-                "the needle takes *one draft for every mark you hold, and one more*. a draft you have not reached yet can be inked ahead; its cards come when its level does.",
+                "the needle takes *one draft for every mark you hold, and one more*, four at most, and only a draft your level has reached.",
             ),
         ],
     },

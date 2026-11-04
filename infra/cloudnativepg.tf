@@ -127,6 +127,9 @@ resource "kubernetes_manifest" "postgres_cluster" {
           "pg_stat_statements.max"   = "10000"
           "pg_stat_statements.track" = "all"
           track_io_timing            = "on"
+          # Short OLTP queries only, so JIT costs more than it saves: 5% of DB
+          # time, 11% of the top query (SCALE.md, DB Cost Ranking).
+          jit = "off"
         }
       }
 

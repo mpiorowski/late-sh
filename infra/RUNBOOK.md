@@ -18,6 +18,11 @@ capacity findings and the scaling plan are in `SCALE.md`.
   grace period; a `FailedPreStopHook` event when it exits is expected. Its
   `tcp-tuning` init container sets `net.ipv4.tcp_slow_start_after_idle=0` in the
   node's host network namespace.
+- **Client IPs on HTTP(S).** `api.` and `audio.` sit behind Cloudflare, the apex
+  does not. nginx takes the client from `CF-Connecting-IP` only when the peer is
+  in Cloudflare's ranges (`infra/ingress.tf`), and hands it on as
+  `X-Forwarded-For`, which late-ssh's per-IP pair limits key on. So those limits
+  count people, and logs hold real client addresses.
 - **IPv6 HTTP(S).** RKE2's `hostPort` exposes ingress-nginx on IPv4 only; the
   `kube-system/ipv6-proxy` HAProxy (`infra/ipv6-proxy.tf`) binds
   `2a01:4f9:c013:2ae1::1` on 80/443 and forwards to the ingress. Do not switch
@@ -159,6 +164,48 @@ requires it. A
 change to `late-web/src/config.rs` needs a `-web` release; an ssh release never
 applies infra drift. Prod env is `LATE_ENV=prod` plus secrets only, injected by
 `infra/service-ssh.tf` / `infra/service-web.tf`.
+
+## RKE2 certificates and etcd snapshots
+
+RKE2 renews any certificate inside 120 days of expiry each time it starts, so
+one restart of `rke2-server` renews them. Running pods and SSH sessions stay up
+(the unit is `KillMode=process`); the API is down for about a minute. Offsite
+etcd snapshots are a config change that takes the same restart, so do both at
+once. On `server-1`, as root, with the values from GitHub variables
+`S3_ENDPOINT` and `DB_BACKUPS_BUCKET` and the `s3-credentials` Secret:
+
+```bash
+rke2 etcd-snapshot save --name pre-restart
+cat >> /etc/rancher/rke2/config.yaml <<'CONFIG'
+etcd-s3: true
+etcd-s3-endpoint: <S3_ENDPOINT without https://>
+etcd-s3-region: auto
+etcd-s3-bucket: <DB_BACKUPS_BUCKET>
+etcd-s3-folder: etcd
+etcd-s3-access-key: <ACCESS_KEY_ID>
+etcd-s3-secret-key: <SECRET_ACCESS_KEY>
+CONFIG
+chmod 600 /etc/rancher/rke2/config.yaml
+systemctl restart rke2-server
+
+# Verify: the new expiry, and an s3:// location for a fresh snapshot.
+rke2 certificate check --output table
+rke2 etcd-snapshot save --name offsite-check
+kubectl get etcdsnapshotfile
+```
+
+Barman keeps Postgres under its own prefix in the same bucket, so `etcd/` does
+not touch it. `setup_rke2.sh` does not write these lines: a rebuilt `server-1`
+needs them added by hand.
+
+While on the node, reclaim disk (images take most of it, and kubelet image GC
+starts around 5.6 GiB free):
+
+```bash
+CRI_CONFIG_FILE=/var/lib/rancher/rke2/agent/etc/crictl.yaml \
+  /var/lib/rancher/rke2/bin/crictl rmi --prune
+journalctl --vacuum-size=500M
+```
 
 ## Monitoring gotchas
 

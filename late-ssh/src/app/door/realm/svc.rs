@@ -603,7 +603,12 @@ impl RealmService {
         let svc = self.clone();
         tokio::spawn(async move {
             if let Err(e) = svc.act(user_id, game_id, action).await {
-                tracing::error!(error = ?e, %user_id, %game_id, "failed to resolve realm action");
+                match late_core::db::is_db_failure(&e) {
+                    true => {
+                        tracing::error!(error = ?e, %user_id, %game_id, "failed to resolve realm action")
+                    }
+                    false => tracing::warn!(error = ?e, %user_id, %game_id, "realm action refused"),
+                }
                 svc.send_error(user_id, &e);
             }
         });

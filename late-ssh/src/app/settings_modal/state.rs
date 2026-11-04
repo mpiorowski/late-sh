@@ -2549,6 +2549,13 @@ impl SettingsModalState {
                         self.irc_token.message = Some("Token revoked.".to_string());
                     }
                 }
+                Ok(ProfileEvent::UsernameRefused {
+                    user_id,
+                    kept_username,
+                    ..
+                }) if user_id == self.user_id => {
+                    self.draft.username = kept_username;
+                }
                 Ok(ProfileEvent::Error { user_id, message }) if user_id == self.user_id => {
                     if self.irc_token.open {
                         self.irc_token.pending = false;

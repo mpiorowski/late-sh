@@ -100,19 +100,31 @@ fn a_delayed_tick_changes_once_and_keeps_the_original_phase() {
 }
 
 #[test]
-fn every_style_is_eligible_but_neither_style_of_the_previous_scene_is() {
+fn a_draw_lands_only_on_the_cheap_pieces_and_never_on_the_previous_scene() {
+    let piece = |scene, style| AsciiPiece { scene, style };
+    let pool = [
+        piece(Scene::Earthrise, SceneStyle::Dots),
+        piece(Scene::Earthrise, SceneStyle::Pixels),
+        piece(Scene::MistyForest, SceneStyle::Dots),
+        piece(Scene::MistyForest, SceneStyle::Pixels),
+        piece(Scene::AuroraFjord, SceneStyle::Dots),
+    ];
     let mut rng = StdRng::seed_from_u64(23);
     for exclude in std::iter::once(None).chain(Scene::ALL.into_iter().map(Some)) {
         let mut seen = Vec::new();
         for _ in 0..256 {
-            let piece = choose(exclude, &mut rng);
-            assert_ne!(Some(piece.scene), exclude);
-            if !seen.contains(&piece) {
-                seen.push(piece);
+            let drawn = choose(exclude, &mut rng);
+            if !seen.contains(&drawn) {
+                seen.push(drawn);
             }
         }
         for piece in AsciiPiece::ALL {
-            assert_eq!(seen.contains(&piece), Some(piece.scene) != exclude);
+            assert_eq!(
+                seen.contains(&piece),
+                pool.contains(&piece) && Some(piece.scene) != exclude,
+                "{} with {exclude:?} excluded",
+                piece.label()
+            );
         }
     }
 }
