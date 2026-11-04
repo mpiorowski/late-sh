@@ -110,48 +110,6 @@ crate::model! {
 
 pub const USERNAME_MAX_LEN: usize = 32;
 
-/// Master on/off for the global right sidebar. The sidebar only appears on the
-/// first three top-level screens (Home, Arcade, Rooms); which panels show and
-/// in what order is governed by the component list, not by this mode.
-///
-/// `Auto` hands the decision to the terminal: the sidebar shows only when the
-/// session is wide enough to spare the columns, so one account works on both a
-/// phone and a desktop. The width thresholds live in `late-ssh`'s render layer,
-/// which is the only place that knows the live terminal size.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RightSidebarMode {
-    On,
-    Off,
-    Auto,
-}
-
-impl RightSidebarMode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::On => "on",
-            Self::Off => "off",
-            Self::Auto => "auto",
-        }
-    }
-
-    pub fn from_key(key: &str) -> Option<Self> {
-        match key.trim() {
-            "on" => Some(Self::On),
-            "off" => Some(Self::Off),
-            "auto" => Some(Self::Auto),
-            _ => None,
-        }
-    }
-
-    pub fn cycle(self, forward: bool) -> Self {
-        match (self, forward) {
-            (Self::On, true) | (Self::Auto, false) => Self::Off,
-            (Self::Off, true) | (Self::On, false) => Self::Auto,
-            (Self::Auto, true) | (Self::Off, false) => Self::On,
-        }
-    }
-}
-
 /// The page a session starts on (Settings, Tweaks, Startup). Brand-new users
 /// always start in the Clubhouse regardless, so the first-visit tour runs.
 /// A stored `zen` is not a landing (`zen` is a Home layout) and reads as
@@ -518,165 +476,6 @@ impl TerminalImagesMode {
     }
 }
 
-/// Number of reorderable/toggleable panels in the right sidebar (the clock is
-/// always pinned at the top and is not part of this list).
-pub const RIGHT_SIDEBAR_COMPONENT_COUNT: usize = 7;
-
-/// A right-sidebar panel the user can reorder and toggle. The clock is not
-/// listed here: it is always pinned at the top of the sidebar. The
-/// visualizer is not a panel of its own: it renders inline at the top of
-/// `Music`, see `common/sidebar.rs`.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum RightSidebarComponent {
-    /// What the house can watch right now: the live games on the
-    /// watchable doors, a row each.
-    Live,
-    Music,
-    Bonsai,
-    Daily,
-    /// The Pet Companion's box; drawn only while the account owns one.
-    Pet,
-    /// A small tank of one-to-three-cell fish; drawn only while the account
-    /// owns the aquarium.
-    Tank,
-    /// Free space: no rule, no rows of its own, it takes whatever the rail
-    /// has left, so the panels under it sit at the bottom.
-    Spacer,
-}
-
-impl RightSidebarComponent {
-    /// Default order, top to bottom. Used when a user has no stored list and
-    /// to place any panel missing from a stored list (right after the panel
-    /// before it here, see `normalize_right_sidebar_components`). Every panel has a
-    /// fixed height; when the rail runs short, panels drop from the bottom
-    /// of this order up. Stale stored keys (e.g. the retired "pet",
-    /// "activity", "visualizer" and "pot" panels) are dropped on read by
-    /// `from_key`; the pet panel came back under a new key so an old stored
-    /// "pet" entry cannot switch it on.
-    pub const ALL: [RightSidebarComponent; RIGHT_SIDEBAR_COMPONENT_COUNT] = [
-        Self::Music,
-        Self::Daily,
-        Self::Live,
-        Self::Spacer,
-        Self::Bonsai,
-        Self::Pet,
-        Self::Tank,
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Live => "live",
-            Self::Music => "music",
-            Self::Bonsai => "bonsai",
-            Self::Daily => "daily",
-            Self::Pet => "pet_box",
-            Self::Tank => "mini_tank",
-            Self::Spacer => "spacer",
-        }
-    }
-
-    pub fn from_key(key: &str) -> Option<Self> {
-        match key.trim() {
-            "live" => Some(Self::Live),
-            "music" => Some(Self::Music),
-            "bonsai" => Some(Self::Bonsai),
-            "daily" => Some(Self::Daily),
-            "pet_box" => Some(Self::Pet),
-            "mini_tank" => Some(Self::Tank),
-            "spacer" => Some(Self::Spacer),
-            _ => None,
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Live => "Live",
-            Self::Music => "Audio playback",
-            Self::Bonsai => "Bonsai",
-            Self::Daily => "Lobby",
-            Self::Pet => "Pet",
-            Self::Tank => "Tank",
-            Self::Spacer => "Free space",
-        }
-    }
-
-    /// Whether the panel starts enabled, for new users and when a new panel
-    /// is backfilled into an existing user's stored list. The pet and the
-    /// tank start off: the rail is tight and they are opt-in. Live starts
-    /// on: a game nobody can see is a game nobody watches.
-    pub fn default_enabled(self) -> bool {
-        match self {
-            Self::Live | Self::Music | Self::Bonsai | Self::Daily | Self::Spacer => true,
-            Self::Pet | Self::Tank => false,
-        }
-    }
-}
-
-/// One entry in the ordered right-sidebar component list: a panel plus whether
-/// it is currently shown. List order is the render order, top to bottom.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct RightSidebarComponentSetting {
-    pub component: RightSidebarComponent,
-    pub enabled: bool,
-}
-
-/// Default component list: every panel, in default order, at its default
-/// on/off state.
-pub fn default_right_sidebar_components() -> Vec<RightSidebarComponentSetting> {
-    RightSidebarComponent::ALL
-        .into_iter()
-        .map(|component| RightSidebarComponentSetting {
-            component,
-            enabled: component.default_enabled(),
-        })
-        .collect()
-}
-
-/// Drop duplicates and backfill any missing panels so the list always
-/// covers every component exactly once, preserving stored order. A missing
-/// panel lands where a new user has it: right under the panel that precedes
-/// it in `ALL`, wherever the stored order put that one (the first panel of
-/// `ALL` goes on top), so a new panel shipped under the lobby sits under
-/// the lobby on every rail and is not lost off the bottom of a full one.
-/// It takes its `default_enabled()`, the same as a new user gets it.
-pub fn normalize_right_sidebar_components(
-    components: &[RightSidebarComponentSetting],
-) -> Vec<RightSidebarComponentSetting> {
-    let mut result: Vec<RightSidebarComponentSetting> = Vec::new();
-    for setting in components {
-        if result.iter().any(|s| s.component == setting.component) {
-            continue;
-        }
-        result.push(*setting);
-    }
-    for (index, component) in RightSidebarComponent::ALL.into_iter().enumerate() {
-        if result.iter().any(|s| s.component == component) {
-            continue;
-        }
-        // Missing panels are placed in ALL order, so the predecessor is
-        // in the list by now, stored or just placed.
-        let at = match index {
-            0 => 0,
-            _ => {
-                let before = RightSidebarComponent::ALL[index - 1];
-                result
-                    .iter()
-                    .position(|s| s.component == before)
-                    .expect("the panel before it in ALL is placed first")
-                    + 1
-            }
-        };
-        result.insert(
-            at,
-            RightSidebarComponentSetting {
-                component,
-                enabled: component.default_enabled(),
-            },
-        );
-    }
-    result
-}
-
 const IGNORED_USER_IDS_KEY: &str = "ignored_user_ids";
 const FRIEND_USER_IDS_KEY: &str = "friend_user_ids";
 const INTERACTION_MODE_KEY: &str = "interaction_mode";
@@ -690,9 +489,6 @@ const NOTIFY_COOLDOWN_MINS_KEY: &str = "notify_cooldown_mins";
 const NOTIFY_FORMAT_KEY: &str = "notify_format";
 const ENABLE_BACKGROUND_COLOR_KEY: &str = "enable_background_color";
 const TEXT_BRIGHTNESS_ADJUSTMENT_KEY: &str = "text_brightness_adjustment";
-const SHOW_RIGHT_SIDEBAR_KEY: &str = "show_right_sidebar";
-const RIGHT_SIDEBAR_MODE_KEY: &str = "right_sidebar_mode";
-const RIGHT_SIDEBAR_COMPONENTS_KEY: &str = "right_sidebar_components";
 const STATUSLINE_COMPONENTS_KEY: &str = "statusline_components";
 /// A single stored `zen` tiling layout, from before layouts had names: read
 /// only as the seed for a device's stock `zen` Home layout
@@ -2084,74 +1880,6 @@ pub fn extract_text_brightness_adjustment(settings: &Value) -> i32 {
         .unwrap_or(0)
 }
 
-pub fn extract_show_right_sidebar(settings: &Value) -> bool {
-    // Legacy `"custom"` predates the global component list and meant "shown";
-    // treat it as on.
-    match settings
-        .get(RIGHT_SIDEBAR_MODE_KEY)
-        .and_then(Value::as_str)
-        .map(str::trim)
-    {
-        Some("on" | "custom") => return true,
-        Some("off") => return false,
-        _ => {}
-    }
-
-    settings
-        .get(SHOW_RIGHT_SIDEBAR_KEY)
-        .and_then(Value::as_bool)
-        .unwrap_or(true)
-}
-
-pub fn extract_right_sidebar_mode(settings: &Value) -> RightSidebarMode {
-    match settings
-        .get(RIGHT_SIDEBAR_MODE_KEY)
-        .and_then(Value::as_str)
-        .map(str::trim)
-    {
-        Some("off") => RightSidebarMode::Off,
-        Some("auto") => RightSidebarMode::Auto,
-        // Legacy per-screen `"custom"` collapses to On now that visibility is
-        // governed by the global component list.
-        Some("on" | "custom") => RightSidebarMode::On,
-        _ if settings
-            .get(SHOW_RIGHT_SIDEBAR_KEY)
-            .and_then(Value::as_bool)
-            .unwrap_or(true) =>
-        {
-            RightSidebarMode::On
-        }
-        _ => RightSidebarMode::Off,
-    }
-}
-
-pub fn extract_right_sidebar_components(settings: &Value) -> Vec<RightSidebarComponentSetting> {
-    let Some(values) = settings
-        .get(RIGHT_SIDEBAR_COMPONENTS_KEY)
-        .and_then(Value::as_array)
-    else {
-        return default_right_sidebar_components();
-    };
-
-    let mut parsed: Vec<RightSidebarComponentSetting> = Vec::new();
-    for value in values {
-        let Some(component) = value
-            .get("key")
-            .and_then(Value::as_str)
-            .and_then(RightSidebarComponent::from_key)
-        else {
-            continue;
-        };
-        let enabled = value
-            .get("enabled")
-            .and_then(Value::as_bool)
-            .unwrap_or(true);
-        parsed.push(RightSidebarComponentSetting { component, enabled });
-    }
-
-    normalize_right_sidebar_components(&parsed)
-}
-
 /// The user's bottom status bar. An absent key means "never customized" and
 /// yields the shipped defaults (Keyhints, station, voice, mentions), so this is also
 /// what every existing account reads until the customizer writes for the
@@ -2356,27 +2084,26 @@ pub fn extract_first_contact_invited_at(settings: &Value) -> Option<DateTime<Utc
     extract_rfc3339(settings, FIRST_CONTACT_INVITED_AT_KEY)
 }
 
-/// The keys a person only ever touches on purpose: the "touched settings"
-/// leg of the first-contact eligibility gate counts how many of these are
-/// present. Closed list; a key that every account gets written by default
+/// The keys the "touched settings" leg of the first-contact eligibility gate
+/// counts. Closed list; a key that every account gets written by default
 /// (audio source, tutorial done, the first-contact marks) does not belong
-/// here, since it would measure nothing.
-const TOUCHED_SETTINGS_KEYS: [&str; 11] = [
+/// here, since it would measure nothing. The leg is a low bar: `Profile::update`
+/// writes `theme_id`, `notify_kinds`, `translate_to` and `favorite_theme_ids`
+/// on every save, so one settings save of anything clears it. What it tells
+/// apart is an account that has saved settings from one that never has.
+const TOUCHED_SETTINGS_KEYS: [&str; 9] = [
     THEME_ID_KEY,
     COUNTRY_KEY,
     TIMEZONE_KEY,
     IDE_KEY,
     TERMINAL_KEY,
     OS_KEY,
-    RIGHT_SIDEBAR_COMPONENTS_KEY,
-    RIGHT_SIDEBAR_MODE_KEY,
     NOTIFY_KINDS_KEY,
     TRANSLATE_TO_KEY,
     FAVORITE_THEME_IDS_KEY,
 ];
 
-/// How many deliberately-set settings this account carries (see
-/// [`TOUCHED_SETTINGS_KEYS`]).
+/// How many of the [`TOUCHED_SETTINGS_KEYS`] this account carries.
 pub fn count_touched_settings(settings: &Value) -> usize {
     TOUCHED_SETTINGS_KEYS
         .iter()

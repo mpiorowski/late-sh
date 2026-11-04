@@ -103,7 +103,7 @@ fn the_boards_day_banner_is_the_text_left_and_the_key_right() {
     assert!(row.starts_with(" Hack"), "{row:?}");
 }
 
-/// The top row of a sidebar-wide lobby tile wearing `title`, as text.
+/// The top row of a narrow lobby tile wearing `title`, as text.
 fn lobby_top_row(title: TileTitle) -> String {
     let mut terminal = Terminal::new(TestBackend::new(23, 4)).expect("terminal");
     terminal
@@ -127,11 +127,11 @@ fn lobby_top_row(title: TileTitle) -> String {
         .collect()
 }
 
-/// In the sidebar's width the lobby's name and its key both fit, the rule
+/// In the right column's width the lobby's name and its key both fit, the rule
 /// between them; the rule alone drops every word; hidden draws nothing on
 /// the row.
 #[test]
-fn the_three_title_modes_on_a_sidebar_wide_lobby() {
+fn the_three_title_modes_on_a_narrow_lobby() {
     assert_eq!(lobby_top_row(TileTitle::Named), " ── lobby ─── ^G open  ");
     assert_eq!(
         lobby_top_row(TileTitle::Rule),

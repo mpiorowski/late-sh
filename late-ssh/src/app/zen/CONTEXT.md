@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/zen`
-- Purpose: the tile tree behind Home (`Screen::Dashboard`): its room rail, chats, sidebar panels and the things you keep alive are tiles of one tree, `App::home`, arranged in place and kept as up to nine named layouts per device. The second stock layout is `street` (the tiles Home does not draw: an ascii piece and the tank over two chats, with the clock, pulse, friends and activity, boxed), seeded once per device; the status line's care click loads `home`. The design and what v1 left out: `devdocs/HOME-LAYOUTS.md`.
+- Purpose: the tile tree behind Home (`Screen::Dashboard`): its room rail, chats, panels and the things you keep alive are tiles of one tree, `App::home`, arranged in place and kept as up to nine named layouts per device. The second stock layout is `street` (the tiles Home does not draw: an ascii piece and the tank over two chats, with the clock, pulse, friends and activity, boxed), seeded once per device; the status line's care click loads `home`. The design and what v1 left out: `devdocs/HOME-LAYOUTS.md`.
 - Status: Experimental.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -25,7 +25,7 @@ stress live in the `w` care modal), aquarium (the real reef
 simulation, in a tile wider than the rail and
 taller than the small tank (`../hub/aquarium/ui.rs` `reef_form`), else a
 note pointing at the tank tile), tank (the same
-aquarium the sidebar's way, the tile's whole size: the surface on its top
+aquarium small, the tile's whole size: the surface on its top
 row, the floor on its bottom one, the fish in four lanes spread over the
 water between, `hub/aquarium/ui::draw_mini_tank`; the two are
 the one tank two ways, and both draw the care bar on the water's surface,
@@ -41,7 +41,7 @@ before it when selected. Each tile keeps independent session-only playback in
 clears playback; resizing and overlays preserve it and its timer. Only
 the selection is stored on the leaf beside `room`, absent
 for the default, rides along on a split, and is forgotten when the tile
-changes kind, as a chat tile's room is), pet (the box from `pet/ui.rs`, also drawn by the sidebar Pet panel and as the profile portrait; its top row, `pet::ui::status_line`, reads `name · mood`, the mood inferred from the session by `pet/state.rs` (purring, proud, sulking, chatty, asleep, vibing, idle); when its tile shares an edge with a tank or a bonsai tile and the pet is calm (idle, vibing, or chatty) it strolls for twenty minutes then sits against that edge for five with wide eyes, on the wall clock: `PetPose::for_frame`, `STROLL_TICKS`/`WATCH_TICKS`/`LEG_TICKS`, the side from `layout::neighbour_side` and the target from `Neighbours`. A round is two legs, the tank on the first watch window and the bonsai on the second, so with both beside it they alternate and with one that one takes both windows: its five minutes in twenty-five never depend on what else the page holds. At the glass it gasps at a passing fish; at the tree it leans in for a slower sniff; a click on it pets it (the first pet of the UTC day pays 100 chips, see the hub CONTEXT) and does *not* focus its tile, since petting is a passing gesture and the keys belong to the chat you are typing in (`handle_pet_click` takes the click before `focus_home_tile_at`, `input_flow_test.rs`); while the terminal cursor is inside the tile an awake, unsulking pet walks after it, eyes on the cursor), chat, music (the sidebar's dock without its band, `sidebar::draw_music_dock`, once the tile is `MUSIC_DOCK_HEIGHT` rows and eighteen columns; shorter, the track over the station, centred; `v1`..`v5` retune it, `m` mutes), clock (block digits, the date below them when the tile is seven rows
+changes kind, as a chat tile's room is), pet (the box from `pet/ui.rs`, also drawn as the profile portrait; its top row, `pet::ui::status_line`, reads `name · mood`, the mood inferred from the session by `pet/state.rs` (purring, proud, sulking, chatty, asleep, vibing, idle); when its tile shares an edge with a tank or a bonsai tile and the pet is calm (idle, vibing, or chatty) it strolls for twenty minutes then sits against that edge for five with wide eyes, on the wall clock: `PetPose::for_frame`, `STROLL_TICKS`/`WATCH_TICKS`/`LEG_TICKS`, the side from `layout::neighbour_side` and the target from `Neighbours`. A round is two legs, the tank on the first watch window and the bonsai on the second, so with both beside it they alternate and with one that one takes both windows: its five minutes in twenty-five never depend on what else the page holds. At the glass it gasps at a passing fish; at the tree it leans in for a slower sniff; a click on it pets it (the first pet of the UTC day pays 100 chips, see the hub CONTEXT) and does *not* focus its tile, since petting is a passing gesture and the keys belong to the chat you are typing in (`handle_pet_click` takes the click before `focus_home_tile_at`, `input_flow_test.rs`); while the terminal cursor is inside the tile an awake, unsulking pet walks after it, eyes on the cursor), chat, music (the dock, `common/music_dock.rs::draw_music_dock`, once the tile is `MUSIC_DOCK_HEIGHT` rows and eighteen columns; shorter, the track over the station, centred; `v1`..`v5` retune it, `m` mutes), clock (block digits, the date below them when the tile is seven rows
 or more; a one-row tile shows the time alone), visualizer, lobby (the latest tables on the
 board, newest change first: open challenges, matches by their last move,
 unseen results, each `○ chess srw 2m` with the state as the marker and the
@@ -57,9 +57,9 @@ drawn in `../chat/ui.rs`), pulse (the people online now over the
 last day of them as a sparkline, the peak named, a time axis under it; the
 samples are presence's, `../presence/svc.rs`, and so is the drawing,
 `../presence/ui.rs`; a one-row tile is the sparkline alone), live (the Live panel's rows, `../live/PANEL.md`:
-the same four rows the sidebar's panel draws, each with its `s1`-`s4`
+four rows, each with its `s1`-`s4`
 key, wider so less is cut; `nobody playing` while nothing is on), presence
-(the sidebar's pinned rows, `presence/ui::draw_core_block`: the online count
+(`presence/ui::draw_core_block`: the online count
 and the clock, then the connected friends), rooms (Home's room rail,
 one per page: below), blank. The look
 (border style, gap, titles) is part of the layout: a layout without a
@@ -150,7 +150,7 @@ room rail (`rooms`, `HOME_RAIL_COLS`), the reef across the top of the
 chat (`aquarium`, `HOME_AQUARIUM_ROWS`) hosting the now strip and kept to
 #lounge (below, Tiles kept to a room), the chat
 under it (a `chat` bound to no room, so it shows the rail's; a stored
-`center` reads as one), and the sidebar column (`HOME_SIDEBAR_COLS`):
+`center` reads as one), and the stock right column (`HOME_RIGHT_COLS`):
 `presence`, then `visualizer` (the band's three rows), `music` (the dock's
 thirteen), `lobby` hosting attention (four rows: two tables over the status
 line and the keys), `live` at its panel rows, `pet` (its three-row box, no mood row) and
@@ -158,8 +158,7 @@ line and the keys), `live` at its panel rows, `pet` (its three-row box, no mood 
 title off outside arrange mode (`Node::untitled`, `Node::title_at`): the
 reef keeps the row for water, so nothing moves when the mode comes up, and
 `presence` gets both its rows. An unowned
-pet, or one its owner put away (the Shop's `o`), draws the shop's note in its tile. The Settings panel list is the
-Arcade's alone. `R` resets to the stock. Nothing about the terminal's size
+pet, or one its owner put away (the Shop's `o`), draws the shop's note in its tile. `R` resets to the stock. Nothing about the terminal's size
 changes a layout: a page is drawn as arranged at every width, so a phone
 arranges its own Home once and keeps it on its key.
 
@@ -192,7 +191,7 @@ page.
 
 The look is Home's rules (`layout::Chrome::Rules`) while the layout's
 border is `none`, Home's stock and every layout arranged from it: no
-boxes, a `── title ──` rule over a panel tile (`sidebar::draw_panel_rule`,
+boxes, a `── title ──` rule over a panel tile (`draw_panel_rule`,
 lit while the lobby glows or, in arrange mode, the focus is on it), a
 column of air on each side of every tile but the page's chat and the
 rail, and the gutter of each row split painted as one `│`
@@ -268,9 +267,9 @@ tiles for the renderer, the clicks and the reef's bounds alike
 selected (`App::home_strip_hosted`, which also gates the strip's animation
 edge and `o`). The forms by size: a tank tile draws the reef (and binds the
 simulation, `App::reef_tile_inner`) only in `hub/aquarium/ui::reef_form` (wider than
-30, taller than the mini tank), else the sidebar's mini tank; a bonsai
-tile narrower than half the canvas draws the sidebar's preview, fitted to the tile; a music
-tile tall enough draws the sidebar's stage, else the tile's own rows.
+30, taller than the mini tank), else the mini tank; a bonsai
+tile narrower than half the canvas draws the preview, fitted to the tile; a music
+tile tall enough draws the dock, else the tile's own rows.
 
 There is no zoom, no chat-only key and no narrow fold: every tile on the
 page is drawn, at every width, but for one kept to another room (below),
@@ -357,13 +356,13 @@ late-ssh/src/app/zen/
 Glue: `render.rs` builds `ZenView` with a `HomeView` (the chat and card
 views the page's chat and the rail draw from), one view per domain for
 the rest (`hub/aquarium/ui::TankView`, `presence/ui::PresenceView`,
-`sidebar::MusicStageProps`, `pet/ui::PetView`, `live/panel::LivePanelProps`),
+`music_dock::MusicStageProps`, `pet/ui::PetView`, `live/panel::LivePanelProps`),
 one chat view per chat tile over `App::home_chat_rows_caches`, the
 arrange footer, and the guests' inputs (`StripGuest`, `attention`, the
 rows `App::attention_items` gathers from `DailyState`, `unread_rows` and
 `App::care_today` once per frame and once per key of the guest). Each tile's drawing lives in its
 domain (`bonsai/render::draw_tile`, `hub/aquarium/ui::draw_reef_tile` /
-`draw_tank_tile`, `pet/ui::draw_tile`, `sidebar::draw_music_tile`,
+`draw_tank_tile`, `pet/ui::draw_tile`, `music_dock::draw_music_tile`,
 `audio/viz::draw_visualizer_tile`, `lobby/daily/panel::draw_daily_compact`,
 `presence/ui::draw_pulse_tile`, `chat/ui::draw_activity_tile` /
 `draw_friends_tile`, `live/panel::draw_live_inline`, `presence/ui::draw_core_block`);
@@ -401,7 +400,7 @@ ahead of every page. In arrange mode `?` opens `HelpTopic::Layouts`,
 which lists every key, and the bottom row is a footer naming the mode's keys
 (`HOME_ARRANGE_KEYS`, trimmed from the right on a narrow page). A few panels
 still name keys inside the tile in normal mode: the music dock's `- = volume  m mute` under its bar and `v+r tune`
-and the sidebar bonsai's `w care`. The lobby tile's last row names
+and the bonsai preview's `w care`. The lobby tile's last row names
 `^G open` and `` ` toggle`` (`lobby/daily/panel::COMPACT_FOOTER_KEYS`),
 trimmed a key at a time on a narrow tile.
 
@@ -410,7 +409,7 @@ active chat tile is Home's chat, the rail its room, `i` / Enter compose
 in it, `j` `k` select in it and the message actions act on its
 selection; the furniture takes no keys. With a Live tile on the page,
 `s` then a row's number opens that row (`live::input::open_from_prefix`,
-Home's own prefix, as the sidebar's Live panel opens; any other key after
+Home's own prefix; any other key after
 `s` is swallowed), and a click on a row opens it without focusing the
 tile. There is no `o` for the tile: it is the panel, not the strip.
 
@@ -545,7 +544,7 @@ update.
   on the current terminal, so a press moves exactly one row or column and
   writes back the share that reproduces it. Home's rails are fixed splits
   instead (`Share::First { first }` for the rail, `Share::Second { second }`
-  for the sidebar, untagged beside the bare number), so the rail keeps its
+  for the right column, untagged beside the bare number), so the rail keeps its
   columns at every width and a resize moves the fixed count. A resize stops with
   `MIN_TILE_CELLS` (3) left on either side, a border and one row inside,
   so a clock fits a one-row tile. A saved layout that does not parse
@@ -608,6 +607,6 @@ update.
   The Live tile's rows are the panel's (`live/panel_test.rs`), the care
   bar and the tank tiles the aquarium's (`hub/aquarium/ui_test.rs`), the
   bonsai cut the bonsai's (`bonsai/render_test.rs`), the music tile's
-  rows the sidebar's (`common/sidebar_test.rs`), the pulse rows
+  rows the dock's (`common/music_dock_test.rs`), the pulse rows
   presence's (`presence/ui_test.rs`), the note's wrap
   `common/primitives_test.rs`; the rest of the tile drawing is untested.

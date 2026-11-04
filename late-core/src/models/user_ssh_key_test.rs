@@ -1,26 +1,9 @@
-use crate::models::user::RightSidebarMode;
 use crate::models::user_ssh_key::{
-    KeyAudio, KeyLayout, UserSshKey, extract_key_artboard_disclaimer, extract_key_audio,
-    extract_key_home_layouts, extract_key_layout,
+    KeyAudio, UserSshKey, extract_key_artboard_disclaimer, extract_key_audio,
+    extract_key_home_layouts,
 };
 use crate::test_utils::{create_test_user, test_db};
 use serde_json::json;
-
-/// The stored rail layout, read the way bootstrap reads it.
-async fn stored_layout(
-    client: &tokio_postgres::Client,
-    user_id: uuid::Uuid,
-    fingerprint: &str,
-) -> anyhow::Result<Option<KeyLayout>> {
-    let key = UserSshKey::find_by_fingerprint(client, user_id, fingerprint).await?;
-    Ok(key.and_then(|key| extract_key_layout(&key.settings)))
-}
-
-fn phone_layout() -> KeyLayout {
-    KeyLayout {
-        right_sidebar_mode: RightSidebarMode::Auto,
-    }
-}
 
 fn muted_at_sixty() -> KeyAudio {
     KeyAudio {
@@ -49,7 +32,7 @@ fn stored_audio_round_trips_and_partial_blobs_fall_back() {
 }
 
 #[tokio::test]
-async fn stored_audio_is_per_device_and_leaves_the_rail_layout_alone() {
+async fn stored_audio_is_per_device_and_leaves_other_settings_alone() {
     let test_db = test_db().await;
     let client = test_db.db.get().await.expect("db client");
     let owner = create_test_user(&test_db.db, "audioowner").await;
@@ -70,9 +53,9 @@ async fn stored_audio_is_per_device_and_leaves_the_rail_layout_alone() {
         None
     );
 
-    UserSshKey::set_layout(&client, owner.id, "SHA256:laptop", phone_layout())
+    UserSshKey::set_artboard_disclaimer(&client, owner.id, "SHA256:laptop", false)
         .await
-        .expect("store laptop layout");
+        .expect("store laptop disclaimer");
     UserSshKey::set_audio(&client, owner.id, "SHA256:laptop", muted_at_sixty())
         .await
         .expect("store laptop audio");
@@ -90,13 +73,15 @@ async fn stored_audio_is_per_device_and_leaves_the_rail_layout_alone() {
             .expect("desktop audio"),
         None
     );
-    // Audio and layout share one settings blob, so writing either must merge
-    // rather than replace.
+    // Every per-device preference shares one settings blob, so writing audio
+    // must merge rather than replace.
+    let laptop = UserSshKey::find_by_fingerprint(&client, owner.id, "SHA256:laptop")
+        .await
+        .expect("read laptop")
+        .expect("laptop row");
     assert_eq!(
-        stored_layout(&client, owner.id, "SHA256:laptop")
-            .await
-            .expect("laptop layout"),
-        Some(phone_layout())
+        extract_key_artboard_disclaimer(&laptop.settings),
+        Some(false)
     );
 
     // Another account cannot write onto this key even holding its fingerprint.
@@ -119,19 +104,6 @@ async fn stored_audio_is_per_device_and_leaves_the_rail_layout_alone() {
             .await
             .expect("laptop audio"),
         Some(muted_at_sixty())
-    );
-}
-
-#[test]
-fn stored_layout_round_trips_and_partial_blobs_inherit() {
-    let layout = phone_layout();
-    assert_eq!(extract_key_layout(&layout.to_value()), Some(layout));
-
-    // Nothing stored, or a mangled mode, means "follow the account default".
-    assert_eq!(extract_key_layout(&json!({})), None);
-    assert_eq!(
-        extract_key_layout(&json!({"right_sidebar_mode": "sideways"})),
-        None
     );
 }
 
@@ -216,67 +188,7 @@ async fn ensure_creates_the_key_then_repoints_it_on_reconnect() {
 }
 
 #[tokio::test]
-async fn layout_is_per_key_and_scoped_to_its_owner() {
-    let test_db = test_db().await;
-    let client = test_db.db.get().await.expect("db client");
-    let user = create_test_user(&test_db.db, "keylayout").await;
-    let stranger = create_test_user(&test_db.db, "keystranger").await;
-
-    UserSshKey::ensure(&client, user.id, "SHA256:phone")
-        .await
-        .expect("phone key");
-    UserSshKey::ensure(&client, user.id, "SHA256:desktop")
-        .await
-        .expect("desktop key");
-
-    // A key with nothing stored inherits the account default.
-    assert_eq!(
-        stored_layout(&client, user.id, "SHA256:desktop")
-            .await
-            .expect("desktop layout"),
-        None
-    );
-
-    UserSshKey::set_layout(&client, user.id, "SHA256:phone", phone_layout())
-        .await
-        .expect("store phone layout");
-    assert_eq!(
-        stored_layout(&client, user.id, "SHA256:phone")
-            .await
-            .expect("phone layout"),
-        Some(phone_layout()),
-        "the phone keeps its own layout"
-    );
-    assert_eq!(
-        stored_layout(&client, user.id, "SHA256:desktop")
-            .await
-            .expect("desktop layout"),
-        None,
-        "and does not touch the desktop's"
-    );
-
-    // Another account cannot write onto this key even knowing its fingerprint.
-    let denied = UserSshKey::set_layout(
-        &client,
-        stranger.id,
-        "SHA256:phone",
-        KeyLayout {
-            right_sidebar_mode: RightSidebarMode::On,
-        },
-    )
-    .await;
-    assert!(denied.is_err(), "cross-account write is refused");
-    assert_eq!(
-        stored_layout(&client, user.id, "SHA256:phone")
-            .await
-            .expect("phone layout"),
-        Some(phone_layout()),
-        "the owner's layout survives"
-    );
-}
-
-#[tokio::test]
-async fn linking_accounts_moves_keys_and_keeps_their_layouts() {
+async fn linking_accounts_moves_keys_and_keeps_their_settings() {
     let test_db = test_db().await;
     let mut client = test_db.db.get().await.expect("db client");
     let kept = create_test_user(&test_db.db, "keykept").await;
@@ -288,9 +200,9 @@ async fn linking_accounts_moves_keys_and_keeps_their_layouts() {
     UserSshKey::ensure(&client, abandoned.id, "SHA256:phone")
         .await
         .expect("phone key");
-    UserSshKey::set_layout(&client, abandoned.id, "SHA256:phone", phone_layout())
+    UserSshKey::set_artboard_disclaimer(&client, abandoned.id, "SHA256:phone", false)
         .await
-        .expect("store phone layout");
+        .expect("store phone setting");
 
     // Linking runs the move inside its own transaction, like `account_link`,
     // which hands the model a `tokio_postgres` transaction rather than a
@@ -310,12 +222,14 @@ async fn linking_accounts_moves_keys_and_keeps_their_layouts() {
         2,
         "both devices now belong to the kept account"
     );
+    let phone = UserSshKey::find_by_fingerprint(&client, kept.id, "SHA256:phone")
+        .await
+        .expect("read phone")
+        .expect("phone row");
     assert_eq!(
-        stored_layout(&client, kept.id, "SHA256:phone")
-            .await
-            .expect("phone layout"),
-        Some(phone_layout()),
-        "the phone's layout survives the link"
+        extract_key_artboard_disclaimer(&phone.settings),
+        Some(false),
+        "the phone's settings survive the link"
     );
 }
 
@@ -427,9 +341,9 @@ async fn artboard_disclaimer_is_per_device_and_leaves_other_settings_alone() {
     UserSshKey::ensure(&client, user.id, "SHA256:work")
         .await
         .expect("work key");
-    UserSshKey::set_layout(&client, user.id, "SHA256:home", phone_layout())
+    UserSshKey::set_audio(&client, user.id, "SHA256:home", muted_at_sixty())
         .await
-        .expect("home layout");
+        .expect("home audio");
 
     let user_id = user.id;
     let stored = |fingerprint: &'static str| {
@@ -441,7 +355,7 @@ async fn artboard_disclaimer_is_per_device_and_leaves_other_settings_alone() {
                 .expect("key exists");
             (
                 extract_key_artboard_disclaimer(&key.settings),
-                extract_key_layout(&key.settings),
+                extract_key_audio(&key.settings),
             )
         }
     };
@@ -454,8 +368,8 @@ async fn artboard_disclaimer_is_per_device_and_leaves_other_settings_alone() {
         .expect("work on");
     assert_eq!(
         stored("SHA256:home").await,
-        (Some(false), Some(phone_layout())),
-        "home turns it off and keeps its layout"
+        (Some(false), Some(muted_at_sixty())),
+        "home turns it off and keeps its audio"
     );
     assert_eq!(stored("SHA256:work").await, (Some(true), None));
 

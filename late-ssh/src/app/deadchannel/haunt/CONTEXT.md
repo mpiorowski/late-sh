@@ -8,7 +8,7 @@ Part of Dead Channel (`../CONTEXT.md`; design in `../GAME.md`, first contact). T
 |---|---|
 | `haunt/state.rs` | The pure machines and data: `HauntState` (the one `App` slot), `FirstContactMarks` (persisted marks bundle), `FirstContactGate` + `BioStanding` + the thresholds and `bio_hash` (the eligibility gate), `ClockGlitch` (stage 1), `NameFlicker` (stage 2, the person being haunted), `ActiveHit` (one hit's playback, holding the wave seed: the roller's own hit and the `witness` slot share it, so every screen corrupts identically), `WhisperState` (stage 3), `Breakthrough` + `InvitationClaim` (stage 4's full-screen beat and the claim answer), the voice/invitation/breakthrough-line constants (stage 4), `PendingClaim`/`HitStage` (claims in flight), `HauntCommand` + `parse_haunt_command`. No I/O, no clock reads. |
 | `haunt/svc.rs` | Orchestration: `bootstrap_gate` (gate + bio screen claim at connect), `arm` (session start), one `tick(app)` (claim drain, splash door, glitch scheduler, name-flicker roller, witness replay, breakthrough (claim answer, scene, due send), `/haunt` drain), `swallows_splash_input`, `replay_whisper`, the bio screen task, and `publish_name_hit` (a won or forced hit goes on the wire through `ChatService::publish_name_hit`). The only haunting layer touching `App`, logging, metrics, and persistence. |
-| `haunt/ui.rs` | Pure render helpers: whisper frame + splash overlay + static surge, breakthrough frame + full-screen draw, `apply_clock_glitch`, `glitched_name`, `name_flicker_for`. Deterministic per burst seed, stateless like the sidebar equalizer. |
+| `haunt/ui.rs` | Pure render helpers: whisper frame + splash overlay + static surge, breakthrough frame + full-screen draw, `apply_clock_glitch`, `glitched_name`, `name_flicker_for`. Deterministic per burst seed, stateless like the equalizer. |
 
 ## Seams
 
@@ -68,7 +68,9 @@ connected time (`user_online_time.total_milliseconds`, the
 online-time leaderboard's table, one primary-key read at bootstrap;
 account age is not tenure, hours spent here are), at least
 `TOUCHED_SETTINGS_MIN` (2) keys from the
-closed `TOUCHED_SETTINGS_KEYS` list in late-core `user.rs`, and a bio of
+closed `TOUCHED_SETTINGS_KEYS` list in late-core `user.rs` (in practice one
+settings save of anything, since `Profile::update` writes four of those keys
+every time), and a bio of
 at least `BIO_MIN_CHARS` (100) that the AI screen passed (the length is
 only the floor under which no screen is spent; the screen decides
 whether it reads as a person). The gate is
@@ -92,15 +94,17 @@ number of replicas spend one AI call per text.
 
 ## The four stages (behavior contract)
 
-1. **Clock glitch (deniable).** The sidebar clock (pinned core block,
-   Home/Arcade: the most stable, most-glanced-at element) renders one or
+1. **Clock glitch (deniable).** The presence clock (Home's presence tile,
+   pinned core block: the most stable, most-glanced-at element) renders one or
    two time characters from the glyph alphabet for ~200ms
-   (`GLITCH_HOLD_TICKS`, spanning the sidebar's ~132ms wake cadence),
+   (`GLITCH_HOLD_TICKS`, spanning an animated Home's ~132ms wake cadence),
    then heals. Scheduled per session with independent dice: the first
    burst 5-20 min after connect (so an hour-long evening sees one), the
    next 20-60 min later, at most `GLITCH_DAILY_CAP` (2) per UTC day,
-   deferred a few minutes whenever the clock is off screen so a burst is
-   never spent unseen. A due burst is a `GlitchTick::Due`: the service
+   deferred a few minutes whenever the clock is off screen (`svc::clock_on_screen`:
+   not on Home, no presence tile or one hosting a guest, no animated tile to
+   hold the wake cadence, a session away, an app-wide modal, or a terminal too
+   small for Home) so a burst is not spent unseen. A due burst is a `GlitchTick::Due`: the service
    claims it on the row (`claim_first_contact_glitch_burst`, both caps
    enforced in the `UPDATE ... WHERE`), the machine holds its schedule,
    and the burst starts on the tick the claim comes back won; a capped
@@ -359,5 +363,3 @@ Drained by `haunt::svc::tick`.
 - Test apps pass `FirstContactMarks::spent_for_tests()` and
   `FirstContactGate::closed_for_tests()` so no stage can fire in a test
   unless armed on purpose (both `#[cfg(test)]`, like `test_helpers`).
-- `right_sidebar_visible` (in `tick.rs`) is `pub(crate)` for the glitch's
-  visibility gate.

@@ -118,7 +118,7 @@ Every track playing or queued is a candidate for the live strip (`../live/CONTEX
 - `late_ssh_booth_thumbnails_total{outcome}` counts `fetched` and `failed`; a failure is logged with the video id.
 
 ### The roll call
-Who is tuned in, written down: every `ROLL_CALL_INTERVAL` (10 minutes) each replica's `start_background_task` runs `roll_call`, which takes the humans online on that replica (`state::online_human_ids` over `active_users`, the roster the sidebar's `radio`/`youtube` counts read; bots have no fingerprint and are left out), reads each one's source and station from their settings (`User::audio_tunings_by_ids`), and writes an account on the radio as a `radio_listens` row under its station (`RadioListen::record`) and an account on YouTube as a `youtube_listens` row (`YoutubeListen::record`), both for today, UTC. It counts who has the source picked, not who is audible: an account with no paired CLI, a muted one and an IRC-only one all count, as on the sidebar. A listener already written is a no-op, so a day's rows are its distinct listeners, never minutes. A listener gone inside one interval is missed, which keeps a station flipped through from counting. Each replica calls its own roster, and the upsert makes the replicas' overlap harmless. The paper's YESTERDAY column reads the covered day's top stations and the booth's listeners (`../paper/CONTEXT.md`). `late_ssh_radio_roll_calls_total{result}` counts `called` and `failed` (a failed call is the `radio_roll_call_failed` error: it stopped at the first listener it could not write, the ones before it are in, and the next call fills the gap); `late_ssh_radio_listeners_total{station}` and `late_ssh_youtube_listeners_total` add each called roll call's listeners, a failed call's none.
+Who is tuned in, written down: every `ROLL_CALL_INTERVAL` (10 minutes) each replica's `start_background_task` runs `roll_call`, which takes the humans online on that replica (`state::online_human_ids` over `active_users`, the roster the music dock's `radio`/`youtube` counts read; bots have no fingerprint and are left out), reads each one's source and station from their settings (`User::audio_tunings_by_ids`), and writes an account on the radio as a `radio_listens` row under its station (`RadioListen::record`) and an account on YouTube as a `youtube_listens` row (`YoutubeListen::record`), both for today, UTC. It counts who has the source picked, not who is audible: an account with no paired CLI, a muted one and an IRC-only one all count, as on the music dock. A listener already written is a no-op, so a day's rows are its distinct listeners, never minutes. A listener gone inside one interval is missed, which keeps a station flipped through from counting. Each replica calls its own roster, and the upsert makes the replicas' overlap harmless. The paper's YESTERDAY column reads the covered day's top stations and the booth's listeners (`../paper/CONTEXT.md`). `late_ssh_radio_roll_calls_total{result}` counts `called` and `failed` (a failed call is the `radio_roll_call_failed` error: it stopped at the first listener it could not write, the ones before it are in, and the next call fills the gap); `late_ssh_radio_listeners_total{station}` and `late_ssh_youtube_listeners_total` add each called roll call's listeners, a failed call's none.
 
 ### Submission reward
 Queueing a track pays the person who brought it `SONG_QUEUE_REWARD_CHIPS`
@@ -244,9 +244,9 @@ Mechanics:
 Skip-vote uses the persisted preference cached on active users. If an active user's `users.settings.audio_source = "youtube"`, they can cast a skip vote and count toward the threshold. Pairing shape is intentionally ignored: CLI-only, embedded-webview, and real-browser users with the same saved preference all count the same. Offline users do not count.
 
 Helpers used by the skip-vote path:
-- `User::audio_source(user_id)` — gates the caller: only users whose saved preference is `Youtube` can vote.
-- `ActiveUsers[*].audio_source` — cached from the user's settings on login and updated after `v+x`; feeds both the sidebar tags and skip threshold.
-- `PairedClientRegistry::set_audio_source(user_id, source)` — only mirrors the new preference to connected clients via `SetPlaybackSource`; it does not define listener counts.
+- `User::audio_source(user_id)`: gates the caller: only users whose saved preference is `Youtube` can vote.
+- `ActiveUsers[*].audio_source`: cached from the user's settings on login and updated after `v+x`; feeds both the dock's tags and skip threshold.
+- `PairedClientRegistry::set_audio_source(user_id, source)`: only mirrors the new preference to connected clients via `SetPlaybackSource`; it does not define listener counts.
 
 Vote-strip on flip-away: when the DB value transitions from `Youtube` to `Icecast`, `AudioService::persist_audio_source` removes the user from `state.skip_votes` and runs `reevaluate_skip_threshold` (which may fire a skip if the threshold dropped to meet remaining votes).
 
@@ -354,12 +354,12 @@ In `VIZ.md`: the live CLI spectrum, the ambient fallback, smoothing, and each so
 - Independent of `AudioService` — does not subscribe to its channels.
 - Consumers:
   - `GET /api/now-playing?mount={chill|classical}` (`api.rs`) — `mount` is optional and defaults to `chill`, which keeps late-web's existing param-less fetch working unchanged. Response shape is unchanged.
-  - The sidebar music stage (`STAGE.md`), when the user's selected station is a house mount: `stations::station_now_playing` looks the mount up in the map and `sidebar.rs` receives the preformatted `radio_now_playing` text. When the mount has no entry yet, the track row shows the station label.
+  - The music dock (`STAGE.md`), when the user's selected station is a house mount: `stations::station_now_playing` looks the mount up in the map and `music_dock.rs` receives the preformatted `radio_now_playing` text. When the mount has no entry yet, the track row shows the station label.
   - The pair WS via `AudioService::start_meta_forward_task` (§5): per-mount snapshots are broadcast as `now_playing_update` whenever the watch changes, for paired clients.
 
 ---
 
-## 12. Sidebar music-stage widget (`common/sidebar.rs`)
+## 12. Music dock widget (`common/music_dock.rs`)
 
 In `STAGE.md`: the fixed-height accordion, the active-source rule, title-bar source tags, fallback-not-empty semantics, data sources and helpers. The station table and the onboarding checklist for a new station are in `STATIONS.md`.
 
@@ -441,7 +441,7 @@ These are intentional non-goals. Reopen only if the constraint that put them her
 Open work that's been deliberately punted past v1. Each line is a "we know it's missing, here's the next-time hook."
 
 - **Public `POST /api/queue/submit` HTTP route.** Booth submit goes through the in-process service. Revive when there's a non-SSH submitter (web form, third-party). YouTube Data API validation path is already in code (un-trusted route in `AudioService::submit_url_task`).
-- **Expanded queue management outside Booth.** The sidebar music stage already shows current/fallback, skip progress, and up to four next YouTube items; richer queue actions remain Booth-only.
+- **Expanded queue management outside Booth.** The music dock already shows current/fallback, skip progress, and up to four next YouTube items; richer queue actions remain Booth-only.
 - **Heartbeat cadence tuning.** The 10s `LoadVideo` re-broadcast has never been tuned against real drift. Could be slower (30s) once we have confidence stuck browsers don't accumulate.
 - **Region-lock partial failure UX.** Data API validation catches public/embeddable metadata but not every playback-region failure. Client errors are warn-only today because one surface can fail while another succeeds.
 - **Better admin feedback** when DB insert fails after local URL validation succeeds.

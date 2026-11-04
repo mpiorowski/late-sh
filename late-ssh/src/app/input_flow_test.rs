@@ -530,8 +530,7 @@ use crate::test_helpers::{
     with_session_key,
 };
 use late_core::models::cyberspace_account::CyberspaceAccount;
-use late_core::models::user::RightSidebarMode;
-use late_core::models::user_ssh_key::{KeyLayout, UserSshKey, extract_key_layout};
+use late_core::models::user_ssh_key::UserSshKey;
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
     chat_message_gild::{ChatMessageGild, GildPlacement, GildTier},
@@ -2707,7 +2706,7 @@ async fn chat_room_list_is_mouse_clickable() {
     let mut app = make_app(test_db.db.clone(), user.id, "chat-room-mouse-flow-it");
     wait_for_render_contains(&mut app, "rust").await;
 
-    // Click the #rust row in the sidebar. It sits below the Core section
+    // Click the #rust row in the rail. It sits below the Core section
     // (lounge, mentions, news, "+ browse rooms") and the Channels header, at
     // rail row 10 (SGR mouse rows are 1-based).
     app.handle_input(b"\x1b[<0;5;10M");
@@ -3297,10 +3296,10 @@ async fn sheet_command_opens_character_sheet_modal_in_dnd_room() {
     let mut app = make_app(test_db.db.clone(), user.id, "sheet-modal-flow-it");
 
     wait_for_render_contains(&mut app, "lounge").await;
-    // Wait for the dnd room to appear in the sidebar.
+    // Wait for the dnd room to appear in the rail.
     wait_for_render_contains(&mut app, "dnd").await;
 
-    // Navigate to the dnd room. The sidebar order is lounge, mentions, news,
+    // Navigate to the dnd room. The rail order is lounge, mentions, news,
     // "+ browse rooms" (Discover, last in Core), then dnd (channels section).
     // Press l four times to reach dnd from lounge.
     app.handle_input(b"llll");
@@ -3314,140 +3313,6 @@ async fn sheet_command_opens_character_sheet_modal_in_dnd_room() {
     app.handle_input(b"/sheet \r");
     wait_for_render_contains(&mut app, "character sheet").await;
     wait_for_render_contains(&mut app, "sheet-modal-it").await;
-}
-
-#[tokio::test]
-async fn cycling_rails_persists_only_to_authenticating_key_and_survives_unrelated_settings() {
-    // End-to-end for both sides of the device-layout boundary: cycling the rails
-    // writes only the authenticating key, and a later account-settings save does
-    // not leak that device layout onto the account or its other keys.
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "rails-key-it").await;
-    let client = test_db.db.get().await.expect("db client");
-    let lounge = ChatRoom::ensure_lounge(&client)
-        .await
-        .expect("ensure lounge room");
-    ChatRoomMember::join(&client, lounge.id, user.id)
-        .await
-        .expect("join lounge room");
-    // Two devices on one account, as `auth_publickey` would have recorded them.
-    UserSshKey::ensure(&client, user.id, "SHA256:phone")
-        .await
-        .expect("phone key");
-    UserSshKey::ensure(&client, user.id, "SHA256:desktop")
-        .await
-        .expect("desktop key");
-
-    let mut app = with_session_key(
-        make_app(test_db.db.clone(), user.id, "rails-key-flow-it"),
-        "SHA256:phone",
-    );
-    wait_for_render_contains(&mut app, "sort/fold").await;
-
-    // Hide the Arcade's sidebar on this device only: the Tweaks row, as
-    // the modal's arrows would, then the modal hands the rows to the app.
-    app.settings_modal_state
-        .select_tab(crate::app::settings_modal::state::Tab::Tweaks);
-    app.settings_modal_state
-        .select_mouse_target(crate::app::settings_modal::mouse::Target::Tweak(
-            crate::app::settings_modal::state::TweakRow::RightSidebar,
-        ));
-    app.settings_modal_state.cycle_selected_tweak(true);
-    app.sync_device_rails_from_settings();
-    assert_eq!(
-        app.rail_modes(),
-        RightSidebarMode::Off,
-        "expected the sidebar hidden for this device"
-    );
-
-    let db = test_db.db.clone();
-    wait_until(
-        || {
-            let db = db.clone();
-            async move {
-                let client = db.get().await.expect("db client");
-                stored_layout(&client, user.id, "SHA256:phone")
-                    .await
-                    .expect("phone layout")
-                    == Some(KeyLayout {
-                        right_sidebar_mode: RightSidebarMode::Off,
-                    })
-            }
-        },
-        "the device layout to reach this device's key",
-    )
-    .await;
-    assert_eq!(
-        stored_layout(&client, user.id, "SHA256:desktop")
-            .await
-            .expect("desktop layout"),
-        None,
-        "the account's other device must keep following the account default"
-    );
-
-    // Now touch something unrelated: Ctrl+O, Tab to the Tweaks tab, and flip
-    // the first row (Sync terminal background). The save banner marks the
-    // write landing.
-    app.handle_input(b"\x0f");
-    // Wait for the draft to hydrate from the profile snapshot before moving:
-    // that hydration resets the modal to its first tab (`open_from_profile`).
-    wait_for_render_contains(&mut app, "rails-key-it").await;
-    app.handle_input(b"\t\t\t");
-    wait_for_render_contains(&mut app, "Sync terminal background").await;
-    // Enter toggles the selected row (Sync terminal background, the first
-    // one), which runs the same `save()` every other settings edit runs.
-    app.handle_input(b"\r");
-    wait_until(
-        || {
-            let db = db.clone();
-            async move {
-                let client = db.get().await.expect("db client");
-                let stored = User::get(&client, user.id)
-                    .await
-                    .expect("load user")
-                    .expect("user exists");
-                !late_core::models::user::extract_enable_background_color(&stored.settings)
-            }
-        },
-        "background color tweak to persist",
-    )
-    .await;
-
-    // That write landed, so if the device rails were riding along they would be
-    // in it. The account default still has both rails on: only this device changed.
-    let stored = User::get(&client, user.id)
-        .await
-        .expect("load user")
-        .expect("user exists");
-    assert_eq!(
-        late_core::models::user::extract_right_sidebar_mode(&stored.settings),
-        RightSidebarMode::On,
-        "an unrelated tweak must not republish this device's sidebar mode"
-    );
-    assert_eq!(
-        stored_layout(&client, user.id, "SHA256:phone")
-            .await
-            .expect("phone layout after settings save"),
-        Some(KeyLayout {
-            right_sidebar_mode: RightSidebarMode::Off,
-        }),
-        "the unrelated account save must preserve this device's layout"
-    );
-    assert_eq!(
-        stored_layout(&client, user.id, "SHA256:desktop")
-            .await
-            .expect("desktop layout after settings save"),
-        None,
-        "the unrelated account save must not publish a layout to another device"
-    );
-
-    // And the device's own choice survived the settings round trip.
-    app.handle_input(b"\x1b");
-    assert_eq!(
-        app.rail_modes(),
-        RightSidebarMode::Off,
-        "expected the device's sidebar to stay hidden"
-    );
 }
 
 #[tokio::test]
@@ -4512,16 +4377,6 @@ async fn mention_rendered_in_its_room_clears_the_rail_badge() {
     wait_for_render_not_contains(&mut app, "mentions (").await;
 }
 
-/// The stored rail layout, read the way bootstrap reads it.
-async fn stored_layout(
-    client: &tokio_postgres::Client,
-    user_id: Uuid,
-    fingerprint: &str,
-) -> anyhow::Result<Option<KeyLayout>> {
-    let key = UserSshKey::find_by_fingerprint(client, user_id, fingerprint).await?;
-    Ok(key.and_then(|key| extract_key_layout(&key.settings)))
-}
-
 #[tokio::test]
 async fn whisper_holds_the_splash_door_then_releases_and_marks_delivery() {
     let test_db = new_test_db().await;
@@ -4991,6 +4846,93 @@ async fn ctrl_e_arranges_home_and_the_layout_keys_are_arrange_modes_alone() {
     app.handle_input(b"1");
     assert_eq!(app.home_layouts.current_name(), "home");
     assert_eq!(app.home.leaf_count(), tiles + 1);
+}
+
+/// The page's chat is the active tile wherever it sits in the layout: focus
+/// the second chat tile and it draws Home's card, the activity ticker over
+/// its composer and a synthetic entry's composer included, rather than the
+/// watching view every other tile draws.
+#[tokio::test]
+async fn the_second_chat_tile_draws_the_pages_card_when_it_is_active() {
+    use crate::app::activity::lounge::{SYSTEM_FINGERPRINT, SYSTEM_USERNAME};
+    use late_core::models::user::UserParams;
+
+    const FEED_LINE: &str = "ticker-probe cleared Minesweeper";
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "page-card-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let announcements = ChatRoom::ensure_permanent(&client, "announcements")
+        .await
+        .expect("announcements");
+    ChatRoomMember::join(&client, announcements.id, user.id)
+        .await
+        .expect("join announcements");
+    let system = User::create(
+        &client,
+        UserParams {
+            fingerprint: SYSTEM_FINGERPRINT.to_string(),
+            username: SYSTEM_USERNAME.to_string(),
+            settings: serde_json::json!({ "bot": true, "system": true }),
+        },
+    )
+    .await
+    .expect("create system user");
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: system.id,
+            body: format!("· {FEED_LINE}"),
+        },
+    )
+    .await
+    .expect("create feed line");
+
+    let mut app = make_app(test_db.db.clone(), user.id, "page-card-flow-it");
+    app.resize(200, 50).expect("resize test terminal");
+    wait_for_render_contains(&mut app, FEED_LINE).await;
+    assert_eq!(
+        app.chat.activity_ticker().len(),
+        1,
+        "the line feeds the ticker, not the chat"
+    );
+
+    app.handle_input(b"i/layout 2\r");
+    assert_eq!(app.home_layouts.current_name(), "street");
+    let tiles = app.home.chat_tiles();
+    let [(left, _), (right, _)] = tiles.as_slice() else {
+        panic!("street holds two chats: {tiles:?}");
+    };
+    let (left, right) = (*left, *right);
+    assert_eq!(app.home.focus, left);
+    wait_for_render_contains(&mut app, FEED_LINE).await;
+
+    let (_, rect, _) = app.home_tile_rects()[right];
+    let click = format!("\x1b[<0;{};{}M", rect.x + 2, rect.y + 2);
+    app.handle_input(click.as_bytes());
+    assert_eq!(app.home.focus, right);
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains(FEED_LINE),
+        "the ticker follows the focus to the second tile; frame={frame:?}"
+    );
+
+    // News on the second tile is the page's News, composer and all.
+    app.handle_input(b"\x1f");
+    app.handle_input(b"news\r");
+    assert!(app.chat.news_selected);
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("Share URL"),
+        "the active News tile draws the page's composer; frame={frame:?}"
+    );
 }
 
 #[tokio::test]
@@ -6836,9 +6778,9 @@ async fn chat_badges_picker_hides_a_whole_game_ladder() {
     app.handle_input(b"\t\t\t");
     wait_for_render_contains(&mut app, "Chat badges").await;
     wait_for_render_contains(&mut app, "all shown").await;
-    // Tweaks rows: background, brightness, right sidebar, composer,
-    // interaction mode, plain glyphs, terminal images, then Chat badges.
-    app.handle_input(b"jjjjjjj\r");
+    // Tweaks rows: background, brightness, composer, interaction mode, plain
+    // glyphs, terminal images, then Chat badges.
+    app.handle_input(b"jjjjjj\r");
     // The heading fits the dialog whole, not cut at its border.
     wait_for_render_contains(&mut app, "Earn it, hide it. Games show their top badge.").await;
     wait_for_render_contains(&mut app, "LMG LKN LYS LKA").await;

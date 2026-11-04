@@ -14,10 +14,7 @@ use crate::app::files::terminal_image::TerminalImageProtocol;
 use crate::app::help_modal::data::HelpTopic;
 use crate::app::statusline::bar::StatusClick;
 use crate::usernames::UsernameLookup;
-use ratatui::{
-    layout::{Constraint, Layout, Rect},
-    widgets::{Block, Borders},
-};
+use ratatui::layout::Rect;
 use std::{mem, time::Duration};
 use uuid::Uuid;
 use vte::{Params, Parser, Perform};
@@ -2675,7 +2672,7 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
     if !chat_scroll_clicks_blocked(app) && crate::app::live::input::open_from_click(app, x, y) {
         return true;
     }
-    // The sidebar's Live panel is drawn under the same modals as the pet.
+    // A Live tile is drawn under the same modals as the pet.
     if !chat_scroll_clicks_blocked(app) && crate::app::live::input::open_from_panel_click(app, x, y)
     {
         return true;
@@ -3091,18 +3088,6 @@ fn handle_status_bar_click(app: &mut App, mouse: MouseEvent) -> bool {
     true
 }
 
-pub(crate) fn app_content_area(app: &App) -> Rect {
-    let area = Rect::new(0, 0, app.size.0, app.size.1);
-    let inner = Block::default().borders(Borders::ALL).inner(area);
-    let right_sidebar_mode = app.rail_modes();
-    if crate::app::render::resolve_right_sidebar_enabled(right_sidebar_mode, app.screen, app.size.0)
-    {
-        Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(inner)[0]
-    } else {
-        inner
-    }
-}
-
 fn mouse_scroll_delta(mouse: MouseEvent) -> Option<isize> {
     match mouse.kind {
         MouseEventKind::ScrollUp => Some(1),
@@ -3372,13 +3357,9 @@ fn open_settings_modal_globally(app: &mut App) {
     app.chat.close_overlay();
     close_reader_and_player(app);
     app.chat.cancel_room_jump();
-    let device_rails = app.rail_modes();
     let device_artboard_disclaimer = app.artboard_disclaimer_enabled();
-    app.settings_modal_state.open_from_profile(
-        app.profile_state.profile(),
-        device_rails,
-        device_artboard_disclaimer,
-    );
+    app.settings_modal_state
+        .open_from_profile(app.profile_state.profile(), device_artboard_disclaimer);
     app.settings_modal_state
         .set_interaction_mode_display(app.interaction_mode);
     app.show_settings = true;

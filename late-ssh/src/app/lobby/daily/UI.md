@@ -1,15 +1,12 @@
 # Daily games: UI surfaces
 
-The four places a correspondence match is drawn: the sidebar panel, the
+The four places a correspondence match is drawn: the lobby tile, the
 lounge strip, the lobby modal and the board screen. Part of the daily games
 domain (`CONTEXT.md`); per-game renderers are listed in `GAMES.md`.
 
-## Sidebar panel (`panel.rs`)
-- Fixed 6 rows: four match slots, one status line (`N open · entries/cap`); the key hint (`^G open`, arrange mode only) is the tile's title's. Slots render dashes when empty; the panel never changes height between states (stable-chrome rule).
-- The Home `lobby` tile (`draw_daily_compact`) is a different shape: the latest tables on the board, newest change first (`daily_feed_rows`: open challenges by posting, matches by last move, unseen results by finish), one row each, `○ chess srw 2m` for an open challenge, `● pool srw·crk 5m` for a match, `· chess crk·srw 1h` faint once done, the age flush right, then the same status line. No slots: as many rows as fit, `no tables yet` when the board is empty. What waits on you is not in it; the attention guest the stock lobby hosts takes the tile over while it has something.
-- Slot order is actionable > news > waiting: your-turn rows first (nearest deadline within), then unseen results (`you won` / `you lost` / `draw`, glowing in success/error/amber), then waiting rows. Since the cap (10) now exceeds the four slots, the panel is a deliberate **top-4 view**: the actionable/your-turn matches always win the slots and the tail (typically waiting rows, plus any overflow from unseen results) lives in the modal. Result rows still self-clear the moment the player looks (see §6).
-- The panel has no title row: the sidebar's labeled separator rule (`── lobby ────`, built in `app/common/sidebar.rs::draw_panel_rule`) is the title. Every sidebar panel's rule is labeled this way; the lobby's label is the only one with an active state.
-- Attention is split across two signals: the rule label glows while it's your turn in any match OR an unseen result is waiting (the sidebar computes this from `DailyState::my_matches`/`my_turn`/`my_finished`); the status line's open count glows while there are open challenges unseen since the modal was last opened (the liquidity signal; owned by `LobbyState`, passed into the panel as a bool). Own challenges never glow. `LobbyState::seen_open_ids` is seeded at session start so pre-existing challenges don't glow on login (result rows deliberately DO survive login: that persistence is their whole point).
+## Lobby tile (`panel.rs`)
+- The Home `lobby` tile (`draw_daily_compact`) is the latest tables on the board, newest change first (`daily_feed_rows`: open challenges by posting, matches by last move, unseen results by finish), one row each, `○ chess srw 2m` for an open challenge, `● pool srw·crk 5m` for a match, `· chess crk·srw 1h` faint once done, the age flush right, then the status line (`N open · entries/cap`) and the keys. No slots: as many rows as fit, `no tables yet` when the board is empty. What waits on you is not in it; the attention guest the stock lobby hosts takes the tile over while it has something.
+- The status line's open count glows while there are open challenges unseen since the modal was last opened (the liquidity signal; owned by `LobbyState`, passed into the tile as a bool). Own challenges never glow. `LobbyState::seen_open_ids` is seeded at session start so pre-existing challenges don't glow on login.
 
 ## Lounge strip (`live_strip.rs`, `live_board.rs`)
 - The strip itself is `app/live/` (`../../live/CONTEXT.md`): which source is featured, for how long, the frame, the key. What follows is what a daily match brings to it.

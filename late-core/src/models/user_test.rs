@@ -688,7 +688,7 @@ async fn first_contact_bio_screen_is_claimed_once_per_text_and_retried_when_stal
 }
 
 #[test]
-fn touched_settings_count_only_deliberate_keys() {
+fn touched_settings_count_only_the_listed_keys() {
     use crate::models::user::count_touched_settings;
     assert_eq!(count_touched_settings(&json!({})), 0);
     // Keys every account gets written by default do not count.
@@ -985,21 +985,6 @@ async fn country_counts_can_ignore_the_long_gone() {
         vec![("PL".to_string(), 2), ("RO".to_string(), 1)],
         "the long-dormant drop out, the rest stay"
     );
-}
-
-#[test]
-fn sidebar_modes_cycle_in_both_directions_and_wrap() {
-    use crate::models::user::RightSidebarMode;
-    for mode in [
-        RightSidebarMode::On,
-        RightSidebarMode::Off,
-        RightSidebarMode::Auto,
-    ] {
-        assert_eq!(mode.cycle(true).cycle(false), mode);
-        assert_eq!(mode.cycle(false).cycle(true), mode);
-        assert_eq!(mode.cycle(true).cycle(true).cycle(true), mode);
-    }
-    assert_eq!(RightSidebarMode::On.cycle(false), RightSidebarMode::Auto);
 }
 
 /// Seeds users in the pre-migration shape, runs migration 220 over them,

@@ -628,7 +628,7 @@ impl AudioService {
     }
 
     /// The roll call: every human online on this replica (the roster the
-    /// sidebar's source counts read), written down for `now`'s UTC day by
+    /// music dock's source counts read), written down for `now`'s UTC day by
     /// the source they have picked: on the radio under its station
     /// (`RadioListen::record`), on YouTube once (`YoutubeListen::record`).
     /// It counts who is tuned in, not who is audible: an account with no
@@ -981,7 +981,7 @@ impl AudioService {
     }
 
     /// Count of active users whose persisted audio source is YouTube. This
-    /// drives the sidebar badge and skip-vote denominator.
+    /// drives the music dock's badge and skip-vote denominator.
     pub fn youtube_source_count(&self) -> usize {
         active_audio_source_counts(&self.active_users).0
     }

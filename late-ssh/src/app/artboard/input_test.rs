@@ -117,7 +117,7 @@ fn swatch_overlay_pointer_events_keep_preview_active_until_canvas_move() {
         &MouseEvent {
             kind: MouseEventKind::Down,
             button: Some(MouseButton::Left),
-            x: 21,
+            x: 45,
             y: 20,
             modifiers: Default::default(),
         },
@@ -131,7 +131,7 @@ fn swatch_overlay_pointer_events_keep_preview_active_until_canvas_move() {
         &MouseEvent {
             kind: MouseEventKind::Up,
             button: Some(MouseButton::Left),
-            x: 21,
+            x: 45,
             y: 20,
             modifiers: Default::default(),
         },
@@ -145,7 +145,7 @@ fn swatch_overlay_pointer_events_keep_preview_active_until_canvas_move() {
         &MouseEvent {
             kind: MouseEventKind::Moved,
             button: None,
-            x: 21,
+            x: 45,
             y: 20,
             modifiers: Default::default(),
         },
@@ -212,7 +212,7 @@ fn ctrl_click_swatch_body_clears_slot() {
         &MouseEvent {
             kind: MouseEventKind::Down,
             button: Some(MouseButton::Left),
-            x: 21,
+            x: 45,
             y: 20,
             modifiers: crate::app::input::MouseModifiers {
                 ctrl: true,
@@ -241,7 +241,7 @@ fn ctrl_click_active_swatch_clears_slot_and_dismisses_floating() {
         &MouseEvent {
             kind: MouseEventKind::Down,
             button: Some(MouseButton::Left),
-            x: 21,
+            x: 45,
             y: 20,
             modifiers: crate::app::input::MouseModifiers {
                 ctrl: true,
@@ -756,7 +756,7 @@ fn mouse_wheel_over_info_overlay_does_not_pan_canvas() {
         &MouseEvent {
             kind: MouseEventKind::ScrollDown,
             button: None,
-            x: 35,
+            x: 59,
             y: 3,
             modifiers: Default::default(),
         },

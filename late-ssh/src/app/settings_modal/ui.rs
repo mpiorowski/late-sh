@@ -7,11 +7,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Widget, Wrap},
 };
 
-use late_core::models::user::RightSidebarMode;
-
-use crate::app::common::{
-    markdown::render_body_to_lines, primitives::thousands, sidebar::SidebarOwnership, theme,
-};
+use crate::app::common::{markdown::render_body_to_lines, primitives::thousands, theme};
 use crate::app::referral::state::{
     INVITEE_BONUS_CHIPS, INVITER_REWARD_CHIPS, invitee_status_label, ssh_invite_command,
 };
@@ -32,20 +28,13 @@ use super::{
 pub(crate) const MODAL_WIDTH: u16 = 96;
 pub(crate) const MODAL_HEIGHT: u16 = 34;
 
-/// `ownership` marks the shop-gated sidebar panels the account cannot show
-/// yet in the Sidebar panels dialog.
-pub(crate) fn draw(
-    frame: &mut Frame,
-    area: Rect,
-    state: &SettingsModalState,
-    ownership: SidebarOwnership,
-) {
+pub(crate) fn draw(frame: &mut Frame, area: Rect, state: &SettingsModalState) {
     let size = frame.area();
     state.mouse.begin((size.width, size.height));
     let mut surface = Surface {
         buffer: frame.buffer_mut(),
     };
-    draw_surface(&mut surface, area, state, ownership);
+    draw_surface(&mut surface, area, state);
     state.mouse.finish();
 }
 
@@ -122,12 +111,7 @@ fn close_button(frame: &mut Surface<'_>, popup: Rect, state: &SettingsModalState
     );
 }
 
-fn draw_surface(
-    frame: &mut Surface<'_>,
-    area: Rect,
-    state: &SettingsModalState,
-    ownership: SidebarOwnership,
-) {
+fn draw_surface(frame: &mut Surface<'_>, area: Rect, state: &SettingsModalState) {
     let popup = centered_rect(MODAL_WIDTH, MODAL_HEIGHT, area);
     frame.render_widget(Clear, popup);
 
@@ -237,10 +221,6 @@ fn draw_surface(
     if state.picker_open() {
         state.mouse.clear_surface();
         draw_picker(frame, popup, state);
-    }
-    if state.right_sidebar_components_open() {
-        state.mouse.clear_surface();
-        draw_right_sidebar_components_dialog(frame, popup, state, ownership);
     }
     if state.chat_badges_open() {
         state.mouse.clear_surface();
@@ -362,9 +342,7 @@ fn settings_body_rows() -> usize {
 
 fn tweak_lines() -> Vec<BodyLine<TweakRow>> {
     grouped_lines(&TweakRow::ALL, |row| match row {
-        TweakRow::BackgroundColor | TweakRow::TextBrightness | TweakRow::RightSidebar => {
-            "Appearance"
-        }
+        TweakRow::BackgroundColor | TweakRow::TextBrightness => "Appearance",
         TweakRow::ComposerKeepFocused | TweakRow::InteractionMode => "Input",
         TweakRow::FlagFallback | TweakRow::TerminalImages | TweakRow::ChatBadges => "Display",
         TweakRow::LandingPage | TweakRow::PaperAtLogin | TweakRow::AutoRestart => "Startup",
@@ -973,11 +951,6 @@ fn draw_tweak_row(frame: &mut Surface<'_>, rect: Rect, state: &SettingsModalStat
             text_brightness_span(draft.text_brightness_adjustment),
             true,
         ),
-        TweakRow::RightSidebar => (
-            "Right sidebar",
-            right_sidebar_mode_span(state.device_rails()),
-            true,
-        ),
         TweakRow::ComposerKeepFocused => (
             "Send and keep open on Enter",
             toggle_span(draft.keep_composer_focused),
@@ -1021,32 +994,10 @@ fn draw_tweak_row(frame: &mut Surface<'_>, rect: Rect, state: &SettingsModalStat
             state,
             rect,
             &line,
-            if row == TweakRow::RightSidebar {
-                Target::SidebarMode
-            } else {
-                Target::Tweak(row)
-            },
+            Target::Tweak(row),
             Target::TweakCycle(row, false),
             Target::TweakCycle(row, true),
         );
-        if row == TweakRow::RightSidebar {
-            let label_end = line.spans.iter().take(2).map(Span::width).sum::<usize>() as u16;
-            state.mouse.hit(
-                Rect::new(rect.x, rect.y, label_end, 1).intersection(rect),
-                Target::Tweak(row),
-            );
-            let value_end = line.spans.iter().take(3).map(Span::width).sum::<usize>() as u16;
-            state.mouse.hit(
-                Rect::new(
-                    rect.x + value_end + 2,
-                    rect.y,
-                    Span::raw("[Panels]").width() as u16,
-                    1,
-                )
-                .intersection(rect),
-                Target::SidebarPanels,
-            );
-        }
     } else {
         state.mouse.hit(rect, Target::Tweak(row));
     }
@@ -1086,23 +1037,13 @@ fn tweak_row_line(
     };
 
     let prefix = format!(" {marker} ");
-    let panels = if row == TweakRow::RightSidebar {
-        "  [Panels]"
-    } else {
-        ""
-    };
     let label_width = width
-        .saturating_sub(
-            Span::raw(&prefix).width()
-                + Span::raw(&value.text).width().max(5)
-                + Span::raw(panels).width(),
-        )
+        .saturating_sub(Span::raw(&prefix).width() + Span::raw(&value.text).width().max(5))
         .min(32);
     let label_text = fit_label(label, label_width);
     let mut used = Span::raw(&prefix).width()
         + Span::raw(&label_text).width()
-        + Span::raw(&value.text).width()
-        + Span::raw(panels).width();
+        + Span::raw(&value.text).width();
     if used > width {
         used = width;
     }
@@ -1118,7 +1059,6 @@ fn tweak_row_line(
         Span::styled(prefix, prefix_style),
         Span::styled(label_text, label_style),
         Span::styled(value.text, value_style),
-        Span::styled(panels, value_style),
         Span::styled(trailing, trailing_style),
     ])
 }
@@ -1920,104 +1860,6 @@ fn draw_picker(frame: &mut Surface<'_>, area: Rect, state: &SettingsModalState) 
         Span::styled(" cancel", Style::default().fg(theme::TEXT_DIM())),
     ]);
     frame.render_widget(Paragraph::new(footer), layout[3]);
-}
-
-fn draw_right_sidebar_components_dialog(
-    frame: &mut Surface<'_>,
-    area: Rect,
-    state: &SettingsModalState,
-    ownership: SidebarOwnership,
-) {
-    let components = state.right_sidebar_components();
-    let count = components.len() as u16;
-    // rows + heading + blank + 2 footer lines + borders.
-    let popup = centered_rect(46, count + 7, area);
-    frame.render_widget(Clear, popup);
-
-    let block = Block::default()
-        .title(" Sidebar panels ")
-        .title_style(
-            Style::default()
-                .fg(theme::AMBER_GLOW())
-                .add_modifier(Modifier::BOLD),
-        )
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(theme::BORDER_ACTIVE()));
-    let inner = block.inner(popup);
-    frame.render_widget(block, popup);
-    close_button(frame, popup, state);
-
-    let layout = Layout::vertical([
-        Constraint::Length(1),
-        Constraint::Length(1),
-        Constraint::Min(1),
-        Constraint::Length(1),
-        Constraint::Length(1),
-    ])
-    .split(inner);
-    frame.render_widget(
-        Paragraph::new("Clock is always shown on top.")
-            .style(Style::default().fg(theme::TEXT_DIM())),
-        layout[0],
-    );
-    draw_scroll(
-        frame,
-        layout[2],
-        state,
-        Pane::Sidebar,
-        components.len(),
-        state.right_sidebar_components_index(),
-        |frame, area| {
-            for (idx, setting) in components.iter().enumerate() {
-                let row = Rect::new(area.x, area.y + idx as u16, area.width, 1);
-                let selected = state.right_sidebar_components_index() == idx;
-                let text = format!(
-                    " {} {} {}{}",
-                    if selected { ">" } else { " " },
-                    if setting.enabled { "[x]" } else { "[ ]" },
-                    setting.component.label(),
-                    if ownership.owns(setting.component) {
-                        ""
-                    } else {
-                        " (/shop)"
-                    }
-                );
-                frame.render_widget(
-                    Paragraph::new(text).style(statusline_row_style(
-                        selected,
-                        true,
-                        setting.enabled,
-                    )),
-                    row,
-                );
-                state.mouse.hit(row, Target::Sidebar(idx));
-                reorder_buttons(
-                    frame,
-                    row,
-                    state,
-                    Target::SidebarMove(idx, -1),
-                    Target::SidebarMove(idx, 1),
-                );
-            }
-        },
-    );
-
-    let footer_top = Line::from(vec![
-        Span::raw(" "),
-        Span::styled("↑↓", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" select  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("[ ]", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" reorder  ", Style::default().fg(theme::TEXT_DIM())),
-        Span::styled("↵", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" toggle", Style::default().fg(theme::TEXT_DIM())),
-    ]);
-    let footer_bottom = Line::from(vec![
-        Span::raw(" "),
-        Span::styled("Esc", Style::default().fg(theme::AMBER_DIM())),
-        Span::styled(" close", Style::default().fg(theme::TEXT_DIM())),
-    ]);
-    frame.render_widget(Paragraph::new(footer_top), layout[layout.len() - 2]);
-    frame.render_widget(Paragraph::new(footer_bottom), layout[layout.len() - 1]);
 }
 
 /// Bottom status bar customizer: the ordered segment list on the left, the
@@ -3557,17 +3399,6 @@ fn interaction_mode_span(mode: late_core::models::user::InteractionMode) -> Valu
     )
 }
 
-fn right_sidebar_mode_span(mode: RightSidebarMode) -> ValueSpan {
-    cycle_value_span(
-        match mode {
-            RightSidebarMode::On => "On",
-            RightSidebarMode::Off => "Off",
-            RightSidebarMode::Auto => "Auto",
-        },
-        &["On", "Off", "Auto"],
-    )
-}
-
 fn translate_to_span(lang: late_core::models::message_translation::TranslateLang) -> ValueSpan {
     let choices: Vec<_> = late_core::models::message_translation::TranslateLang::ALL
         .iter()
@@ -3799,11 +3630,7 @@ fn choice_hits(
 ) {
     let x = line.spans.iter().take(2).map(Span::width).sum::<usize>() as u16;
     let width = line.spans[2].width() as u16;
-    let ordinary_rect = if ordinary == Target::SidebarMode {
-        Rect::new(row.x + x + 2, row.y, width.saturating_sub(4), 1)
-    } else {
-        Rect::new(row.x, row.y, x + width, 1)
-    };
+    let ordinary_rect = Rect::new(row.x, row.y, x + width, 1);
     state.mouse.hit(ordinary_rect.intersection(row), ordinary);
     for (offset, target) in [(x, backward), (x + width.saturating_sub(2), forward)] {
         state.mouse.hit(

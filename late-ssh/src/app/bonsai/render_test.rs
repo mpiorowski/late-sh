@@ -254,7 +254,7 @@ fn canvas_rows_above_pot(state: &BonsaiState, width: usize, count: usize) -> Vec
         .collect()
 }
 
-/// A narrow tile taller than the sidebar's panel spends its spare rows on
+/// A narrow tile taller than the small preview spends its spare rows on
 /// the tree: a bare tree that fits keeps every row, none dropped from the
 /// pot upward, with the pot and footer on the floor.
 #[test]
@@ -268,7 +268,7 @@ fn a_tall_narrow_tile_keeps_every_row_of_a_tree_that_fits() {
     assert!(rows[19].contains("w care"), "footer row: {:?}", rows[19]);
 }
 
-/// A narrow tile wider than the sidebar's panel spends its spare columns on
+/// A narrow tile wider than the small preview spends its spare columns on
 /// the tree too, instead of scaling it down. An even width fits one column
 /// less, so the trunk stays over the middle of the pot.
 #[test]

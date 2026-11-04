@@ -23,7 +23,7 @@ const ROOT_BRANCH_ID: i32 = 1;
 /// that the modal and the share snippet show 1:1, so the whole tree is
 /// always visible where it is tended and nobody wonders why it stopped at
 /// an edge they cannot see. Growth stops at the edge; density does not:
-/// forks, buds, and pads keep filling the box. Smaller surfaces (sidebar,
+/// forks, buds, and pads keep filling the box. Smaller surfaces (a narrow tile,
 /// profile) draw a scaled preview of this canvas. Wider than tall, since
 /// a bonsai spreads and a terminal cell is twice as tall as it is wide.
 pub(crate) const CANVAS_WIDTH: usize = 81;

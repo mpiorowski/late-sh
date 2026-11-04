@@ -23,7 +23,7 @@ use late_core::models::{
     room_ban::RoomBan,
     server_ban::ServerBan,
     statusline::default_statusline_components,
-    user::{RightSidebarMode, User, default_right_sidebar_components},
+    user::User,
 };
 use std::collections::HashMap;
 use std::net::IpAddr;
@@ -112,9 +112,6 @@ async fn send_pre_translates_to_english_for_opted_in_authors() {
             theme_id: None,
             enable_background_color: false,
             text_brightness_adjustment: 0,
-            show_right_sidebar: true,
-            right_sidebar_mode: RightSidebarMode::On,
-            right_sidebar_components: default_right_sidebar_components(),
             statusline_components: default_statusline_components(),
             keep_composer_focused: false,
             start_with_music_muted: false,
@@ -733,9 +730,6 @@ async fn room_tail_task_loads_favorite_room_history() {
             theme_id: Some("late".to_string()),
             enable_background_color: false,
             text_brightness_adjustment: 0,
-            show_right_sidebar: true,
-            right_sidebar_mode: RightSidebarMode::On,
-            right_sidebar_components: default_right_sidebar_components(),
             statusline_components: default_statusline_components(),
             keep_composer_focused: false,
             start_with_music_muted: false,

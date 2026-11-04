@@ -1169,7 +1169,6 @@ impl russh::server::Handler for ClientHandler {
                 .or_else(|| late_core::models::user::extract_home_layout(&user.settings)),
             home_layouts: device.home_layouts.clone(),
             key_fingerprint,
-            key_layout: device.layout,
             key_artboard_disclaimer: device.artboard_disclaimer,
             key_left_at: device.left_at,
             username_directory: Some(self.state.username_directory.clone()),

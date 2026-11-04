@@ -34,7 +34,7 @@ Leaderboards live on page `6` (`app/leaderboard`), quests on the strip at the to
 
 ## Aquarium
 
-Aquarium is everyone's from their first connect, nothing to buy (the Shop's Companions tab sells its fish, plants and shield): an ambient reef drawn as a tile of Home, on the profile and in the opt-in sidebar Tank panel, fed for free once a UTC day with `/aquarium feed` (`/aq feed`, a click on its tile, or `a` on it while arranging Home), with fish that breed and starve and plants that sprout and root. The tank, its stock caps, its care clocks and their gotchas are in `aquarium/CONTEXT.md`.
+Aquarium is everyone's from their first connect, nothing to buy (the Shop's Companions tab sells its fish, plants and shield): an ambient reef drawn as a tile of Home and on the profile, fed for free once a UTC day with `/aquarium feed` (`/aq feed`, a click on its tile, or `a` on it while arranging Home), with fish that breed and starve and plants that sprout and root. The tank, its stock caps, its care clocks and their gotchas are in `aquarium/CONTEXT.md`.
 
 ## Leaderboard Data
 

@@ -86,7 +86,7 @@ fn an_empty_tally_explains_itself() {
 
 /// The online slice is everyone connected minus those with no country, so
 /// its headline says how many of the connected it shows; otherwise it reads
-/// as a different "online" number from the sidebar's.
+/// as a different "online" number from the presence tile's.
 #[test]
 fn the_online_headline_says_how_many_set_a_country() {
     let mut state = UserMapState::default();

@@ -6,7 +6,6 @@ use ratatui::{Terminal, backend::TestBackend, buffer::Buffer};
 
 use super::mouse::{Field, Target};
 use super::state::{AccountRow, Row, StatuslinePane, Tab, TweakRow};
-use crate::app::common::sidebar::SidebarOwnership;
 use crate::app::state::App;
 use crate::test_helpers::{make_app, new_test_db, wait_until};
 
@@ -17,11 +16,8 @@ async fn fixture() -> (TestDb, App) {
     app.interaction_mode = InteractionMode::Hybrid;
     let client = db.db.get().await.unwrap();
     let profile = Profile::load(&client, user.id).await.unwrap();
-    app.settings_modal_state.open_from_profile(
-        &profile,
-        app.rail_modes(),
-        app.artboard_disclaimer_enabled(),
-    );
+    app.settings_modal_state
+        .open_from_profile(&profile, app.artboard_disclaimer_enabled());
     app.settings_modal_state
         .set_interaction_mode_display(app.interaction_mode);
     app.show_settings = true;
@@ -33,12 +29,7 @@ fn paint(app: &App) -> Buffer {
     terminal
         .draw(|frame| {
             let area = frame.area();
-            super::ui::draw(
-                frame,
-                area,
-                &app.settings_modal_state,
-                SidebarOwnership { pet: true },
-            );
+            super::ui::draw(frame, area, &app.settings_modal_state);
             if app.tag_picker.is_open() {
                 crate::app::tag_picker::ui::draw(frame, area, &app.tag_picker);
             }
@@ -368,34 +359,6 @@ async fn settings_mouse_toggles_reorders_and_scrolls_status_panes_independently(
         app.settings_modal_state.draft().enable_background_color,
         !original
     );
-    let rails = app.rail_modes();
-    let default_sidebar = app.settings_modal_state.draft().right_sidebar_mode;
-    click(&mut app, Target::SidebarMode);
-    assert_ne!(app.rail_modes(), rails);
-    assert_eq!(app.settings_modal_state.device_rails(), app.rail_modes());
-    assert_eq!(
-        app.settings_modal_state.draft().right_sidebar_mode,
-        default_sidebar
-    );
-    click(&mut app, Target::Tweak(TweakRow::RightSidebar));
-    let components = app.settings_modal_state.right_sidebar_components().to_vec();
-    click(&mut app, Target::SidebarMove(0, 1));
-    assert_eq!(
-        app.settings_modal_state.right_sidebar_components()[1],
-        components[0]
-    );
-    click(&mut app, Target::SidebarMove(1, -1));
-    assert_eq!(
-        app.settings_modal_state.right_sidebar_components(),
-        components
-    );
-    click(&mut app, Target::SidebarMove(0, 1));
-    click(&mut app, Target::Sidebar(1));
-    assert_ne!(
-        app.settings_modal_state.right_sidebar_components()[1].enabled,
-        components[0].enabled
-    );
-    click(&mut app, Target::Close);
     click(&mut app, Target::Tweak(TweakRow::ChatBadges));
     click(&mut app, Target::Badge(0));
     click(&mut app, Target::Close);
@@ -508,7 +471,6 @@ async fn settings_mouse_rss_click_away_adds_the_feed_and_keeps_the_clicked_one_s
         .unwrap();
     app.settings_modal_state.open_from_profile(
         &Profile::load(&client, app.user_id).await.unwrap(),
-        app.rail_modes(),
         app.artboard_disclaimer_enabled(),
     );
     drop(client);
@@ -1095,88 +1057,6 @@ async fn interaction_chooser_applies_explicit_modes_and_terminal_reporting_once(
         "interaction mode persistence",
     )
     .await;
-}
-
-#[tokio::test]
-async fn sidebar_arrows_preserve_device_only_persistence_and_always_offer_panels() {
-    use late_core::models::user_ssh_key::{UserSshKey, extract_key_layout};
-    let (db, mut app) = fixture().await;
-    let client = db.db.get().await.unwrap();
-    UserSshKey::ensure(&client, app.user_id, "settings-device")
-        .await
-        .unwrap();
-    UserSshKey::ensure(&client, app.user_id, "other-device")
-        .await
-        .unwrap();
-    app.key_fingerprint = Some("settings-device".to_string());
-    let original = app.rail_modes();
-    app.settings_modal_state.select_tab(Tab::Tweaks);
-    for size in [(120, 40), (48, 14)] {
-        app.resize(size.0, size.1).unwrap();
-        for row in [TweakRow::RightSidebar] {
-            app.settings_modal_state
-                .select_mouse_target(Target::Tweak(row));
-            app.settings_modal_state.mouse.reveal_selection();
-            paint(&app);
-            let left = rect_for(&app, Target::TweakCycle(row, false));
-            let right = rect_for(&app, Target::TweakCycle(row, true));
-            for forward in [true, true, true, false, false, false] {
-                click(&mut app, Target::TweakCycle(row, forward));
-                let expected = app.device_rails.unwrap();
-                let db = db.db.clone();
-                let user_id = app.user_id;
-                crate::test_helpers::wait_until(
-                    || {
-                        let db = db.clone();
-                        async move {
-                            let client = db.get().await.unwrap();
-                            let key = UserSshKey::find_by_fingerprint(
-                                &client,
-                                user_id,
-                                "settings-device",
-                            )
-                            .await
-                            .unwrap()
-                            .unwrap();
-                            extract_key_layout(&key.settings) == Some(expected)
-                        }
-                    },
-                    "Settings sidebar device persistence",
-                )
-                .await;
-                let buffer = paint(&app);
-                assert_eq!(rect_for(&app, Target::TweakCycle(row, false)), left);
-                assert_eq!(rect_for(&app, Target::TweakCycle(row, true)), right);
-                assert_eq!(buffer[(left.x, left.y)].symbol(), "◂");
-                assert_eq!(buffer[(right.x + 1, right.y)].symbol(), "▸");
-                assert_eq!(app.rail_modes(), app.settings_modal_state.device_rails());
-                if row == TweakRow::RightSidebar {
-                    assert_eq!(
-                        rendered_row(&buffer, rect_for(&app, Target::SidebarPanels)),
-                        "[Panels]"
-                    );
-                    click(&mut app, Target::SidebarPanels);
-                    assert!(app.settings_modal_state.right_sidebar_components_open());
-                    click(&mut app, Target::Close);
-                }
-            }
-        }
-        assert_eq!(app.rail_modes(), original);
-    }
-    assert!(
-        extract_key_layout(
-            &UserSshKey::find_by_fingerprint(&client, app.user_id, "other-device")
-                .await
-                .unwrap()
-                .unwrap()
-                .settings
-        )
-        .is_none()
-    );
-    let stored = Profile::load(&client, app.user_id).await.unwrap();
-    assert_eq!(stored.right_sidebar_mode, original);
-    click(&mut app, Target::Tweak(TweakRow::RightSidebar));
-    assert!(app.settings_modal_state.right_sidebar_components_open());
 }
 
 #[tokio::test]

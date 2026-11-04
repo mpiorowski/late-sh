@@ -11,7 +11,7 @@ use crate::app::{
     common::{primitives::center_lines, theme},
 };
 
-/// The preview block's smallest size, and the sidebar's one fixed size.
+/// The preview block's smallest size.
 /// Twelve tree rows over the pot row.
 pub(crate) const PREVIEW_WIDTH: usize = 21;
 pub(crate) const PREVIEW_HEIGHT: usize = 13;
@@ -152,7 +152,7 @@ pub(crate) fn canvas_lines_in(state: &BonsaiState, width: usize) -> Vec<Line<'st
 }
 
 /// The preview: the true canvas fitted into a `width` x `height` block, the
-/// sidebar's `PREVIEW_WIDTH` x `PREVIEW_HEIGHT` or a narrow Home tile's own
+/// `PREVIEW_WIDTH` x `PREVIEW_HEIGHT` or a narrow Home tile's own
 /// size. It never invents anything. When the tree fits, this is the modal's
 /// own glyphs, trimmed around the trunk. When it does not, one integer scale factor
 /// is applied to both axes, so the block keeps the modal's proportions;
@@ -791,7 +791,7 @@ fn put(grid: &mut [Vec<Option<Cell>>], x: usize, y: usize, cell: Cell) {
 /// modal (`w`), so the tile gives every row to the tree. A tile smaller
 /// than the canvas cuts it: the top rows go first, and the sides go evenly
 /// so the trunk stays centered. A tile narrower than half the canvas is
-/// the sidebar's kind: the preview with its footer (`51d · alive · w care`),
+/// the small kind: the preview with its footer (`51d · alive · w care`),
 /// fitted to the tile, so spare rows and columns go to the tree.
 pub(crate) fn draw_tile(frame: &mut Frame, area: Rect, state: &BonsaiState, wall_tick: usize) {
     if (area.width as usize) < CANVAS_WIDTH / 2 {

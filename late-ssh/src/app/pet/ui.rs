@@ -158,8 +158,7 @@ pub fn draw_pet_box(frame: &mut Frame, area: Rect, view: &PetView<'_>, neighbour
 }
 
 /// The row over the pet's box: its name, its mood, and what it is up to
-/// when that is more than a stroll. Drawn centred over the Home tile; the
-/// sidebar panel has no such row.
+/// when that is more than a stroll. Drawn centred over the Home tile.
 pub fn status_line(state: &PetState, neighbours: Neighbours) -> Line<'static> {
     let dim = Style::default().fg(theme::TEXT_DIM());
     let name = state

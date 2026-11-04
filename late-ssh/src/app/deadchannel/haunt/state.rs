@@ -653,7 +653,7 @@ impl WhisperState {
 /// the adaptive loop runs.
 ///
 /// A glitch is only legible against stability, so the target is the
-/// sidebar clock (pinned core block, Home and Arcade). One burst swaps a
+/// presence clock (Home's presence tile, pinned core block). One burst swaps a
 /// character or two of the rendered time for glyph-alphabet characters,
 /// holds ~200ms, restores. Rolled per session with independent dice (two
 /// people almost never see it together), rare, render-layer only. The
@@ -663,7 +663,7 @@ impl WhisperState {
 /// on a won claim.
 ///
 /// How long one burst holds: 3 ticks (~200ms). One frame at 15fps is too
-/// fast to trust; this survives the sidebar's ~132ms wake cadence.
+/// fast to trust; this survives an animated Home's ~132ms wake cadence.
 const GLITCH_HOLD_TICKS: usize = 3;
 /// The first burst of a session comes early, so an hour-long evening
 /// sees one: the schedule is paced for a person who connects daily, and
@@ -685,7 +685,7 @@ pub(crate) const GLITCH_DAILY_CAP: u32 = 2;
 /// is part of the escalation; unchosen users go quiet at the same cap
 /// (GAME.md).
 pub(crate) const GLITCH_TOTAL_CAP: u32 = 3;
-/// Fuse on a forced burst: the `/haunt glitch` banner covers the sidebar
+/// Fuse on a forced burst: the `/haunt glitch` banner covers the presence
 /// clock for ~5s, so the burst waits it out.
 const GLITCH_FORCE_DELAY_TICKS: usize = 7 * 1000 / 66; // ~7 s
 
@@ -733,7 +733,7 @@ impl ClockGlitch {
         glitch
     }
 
-    /// Advance one world tick. `clock_visible` is whether the sidebar
+    /// Advance one world tick. `clock_visible` is whether the presence
     /// clock is actually on screen; a burst never spends itself unseen.
     pub(crate) fn tick(&mut self, tick: usize, clock_visible: bool) -> GlitchTick {
         if let Some(since) = self.active_since {
@@ -814,7 +814,7 @@ impl ClockGlitch {
     }
 
     /// `/haunt glitch`: light a short fuse (the command banner covers the
-    /// sidebar clock for ~5s), then burst, bypassing schedule and caps.
+    /// presence clock for ~5s), then burst, bypassing schedule and caps.
     /// Admin test hook only.
     pub(crate) fn fire_now(&mut self, tick: usize) {
         self.forced_at = Some(tick + GLITCH_FORCE_DELAY_TICKS);

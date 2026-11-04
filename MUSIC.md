@@ -16,7 +16,7 @@ How the library ships:
   `ffmpeg`, `ffprobe`.
 - The `.m3u` playlists in `infra/liquidsoap/` live in git and are the runtime
   source of truth for order, licenses and source URLs, in Liquidsoap
-  `annotate:` format (CC-BY attribution rides the metadata to the sidebar).
+  `annotate:` format (CC-BY attribution rides the metadata to the music dock).
 - Binaries live in Cloudflare R2 (the `MUSIC_BUCKET` GitHub variable), never
   in git. The manual `sync_music` workflow wipes and re-copies every genre
   directory onto the Liquidsoap PVC; it is never a side effect of an infra

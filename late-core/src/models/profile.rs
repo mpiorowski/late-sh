@@ -10,18 +10,16 @@ use super::statusline::{
     StatusComponentSetting, default_statusline_components, statusline_components_json,
 };
 use super::user::{
-    LandingPage, RightSidebarComponentSetting, RightSidebarMode, Screensaver, TerminalImagesMode,
-    User, extract_artboard_disclaimer, extract_auto_restart, extract_auto_translate, extract_bio,
-    extract_country, extract_enable_background_color, extract_favorite_room_ids,
-    extract_favorite_theme_ids, extract_hidden_award_categories, extract_ide,
-    extract_keep_composer_focused, extract_landing_page, extract_langs, extract_notify_bell,
-    extract_notify_cooldown_mins, extract_notify_format, extract_notify_kinds, extract_os,
-    extract_paper_at_login, extract_right_sidebar_components, extract_right_sidebar_mode,
-    extract_screensaver, extract_show_flag_fallback, extract_show_right_sidebar,
-    extract_start_with_music_muted, extract_statusline_components, extract_terminal,
-    extract_terminal_images, extract_text_brightness_adjustment, extract_theme_id,
-    extract_timezone, extract_translate_mine_to_en, extract_translate_to,
-    normalize_right_sidebar_components, normalize_text_brightness_adjustment,
+    LandingPage, Screensaver, TerminalImagesMode, User, extract_artboard_disclaimer,
+    extract_auto_restart, extract_auto_translate, extract_bio, extract_country,
+    extract_enable_background_color, extract_favorite_room_ids, extract_favorite_theme_ids,
+    extract_hidden_award_categories, extract_ide, extract_keep_composer_focused,
+    extract_landing_page, extract_langs, extract_notify_bell, extract_notify_cooldown_mins,
+    extract_notify_format, extract_notify_kinds, extract_os, extract_paper_at_login,
+    extract_screensaver, extract_show_flag_fallback, extract_start_with_music_muted,
+    extract_statusline_components, extract_terminal, extract_terminal_images,
+    extract_text_brightness_adjustment, extract_theme_id, extract_timezone,
+    extract_translate_mine_to_en, extract_translate_to, normalize_text_brightness_adjustment,
 };
 
 #[derive(Clone, Debug)]
@@ -46,11 +44,6 @@ pub struct Profile {
     pub theme_id: Option<String>,
     pub enable_background_color: bool,
     pub text_brightness_adjustment: i32,
-    pub show_right_sidebar: bool,
-    pub right_sidebar_mode: RightSidebarMode,
-    /// Ordered list of sidebar panels with their on/off state. List order is
-    /// the render order (top to bottom); the clock is pinned above it.
-    pub right_sidebar_components: Vec<RightSidebarComponentSetting>,
     /// Ordered list of user-configurable bottom status bar segments with their
     /// per-component dials. List order is the paint order, left to right along
     /// the app frame's bottom border row. The top bar (pot, chips) is fixed UI
@@ -116,9 +109,6 @@ impl Default for Profile {
             theme_id: None,
             enable_background_color: true,
             text_brightness_adjustment: 0,
-            show_right_sidebar: true,
-            right_sidebar_mode: RightSidebarMode::On,
-            right_sidebar_components: super::user::default_right_sidebar_components(),
             statusline_components: default_statusline_components(),
             keep_composer_focused: false,
             start_with_music_muted: false,
@@ -156,9 +146,6 @@ pub struct ProfileParams {
     pub theme_id: Option<String>,
     pub enable_background_color: bool,
     pub text_brightness_adjustment: i32,
-    pub show_right_sidebar: bool,
-    pub right_sidebar_mode: RightSidebarMode,
-    pub right_sidebar_components: Vec<RightSidebarComponentSetting>,
     pub statusline_components: Vec<StatusComponentSetting>,
     pub keep_composer_focused: bool,
     pub start_with_music_muted: bool,
@@ -230,7 +217,6 @@ impl Profile {
     /// Atomic partial update — merges
     /// bio/country/timezone/theme_id/notify_kinds/notify_bell/notify_cooldown_mins/
     /// enable_background_color/text_brightness_adjustment/
-    /// show_right_sidebar/right_sidebar_mode/right_sidebar_components/
     /// keep_composer_focused/
     /// start_with_music_muted/show_flag_fallback/screensaver into settings via
     /// `settings || jsonb_build_object(...)`, so concurrent writes to
@@ -246,17 +232,6 @@ impl Profile {
         )?;
         let favorite_theme_ids_json = serde_json::to_value(&params.favorite_theme_ids)?;
         let hidden_award_categories_json = serde_json::to_value(&params.hidden_award_categories)?;
-        let right_sidebar_components_json = serde_json::to_value(
-            normalize_right_sidebar_components(&params.right_sidebar_components)
-                .into_iter()
-                .map(|setting| {
-                    serde_json::json!({
-                        "key": setting.component.as_str(),
-                        "enabled": setting.enabled,
-                    })
-                })
-                .collect::<Vec<_>>(),
-        )?;
         let statusline_components_json = statusline_components_json(&params.statusline_components);
         let cooldown = params.notify_cooldown_mins.max(0);
         let bio = params.bio.trim().to_string();
@@ -312,32 +287,29 @@ impl Profile {
                          'enable_background_color', $9::bool,
                          'text_brightness_adjustment', $10::int,
                          'notify_format', $11::text,
-                         'show_right_sidebar', $12::bool,
-                         'right_sidebar_mode', $13::text,
-                         'right_sidebar_components', $14::jsonb,
-                         'favorite_room_ids', $15::jsonb,
-                         'ide', $16::text,
-                         'terminal', $17::text,
-                         'os', $18::text,
-                         'langs', $19::jsonb,
-                         'keep_composer_focused', $20::bool,
-                         'start_with_music_muted', $21::bool,
-                         'show_flag_fallback', $22::bool,
-                         'landing_page', $23::text,
-                         'translate_to', $24::text,
-                         'auto_translate', $25::bool,
-                         'translate_mine_to_en', $26::bool,
-                         'favorite_theme_ids', $27::jsonb,
-                         'paper_at_login', $28::bool,
-                         'terminal_images', $29::text,
-                         'hidden_award_categories', $30::jsonb,
-                         'statusline_components', $31::jsonb,
-                         'artboard_disclaimer', $32::bool,
-                         'screensaver', $33::text,
-                         'auto_restart', $34::bool
+                         'favorite_room_ids', $12::jsonb,
+                         'ide', $13::text,
+                         'terminal', $14::text,
+                         'os', $15::text,
+                         'langs', $16::jsonb,
+                         'keep_composer_focused', $17::bool,
+                         'start_with_music_muted', $18::bool,
+                         'show_flag_fallback', $19::bool,
+                         'landing_page', $20::text,
+                         'translate_to', $21::text,
+                         'auto_translate', $22::bool,
+                         'translate_mine_to_en', $23::bool,
+                         'favorite_theme_ids', $24::jsonb,
+                         'paper_at_login', $25::bool,
+                         'terminal_images', $26::text,
+                         'hidden_award_categories', $27::jsonb,
+                         'statusline_components', $28::jsonb,
+                         'artboard_disclaimer', $29::bool,
+                         'screensaver', $30::text,
+                         'auto_restart', $31::bool
                      ),
                      updated = current_timestamp
-                 WHERE id = $35
+                 WHERE id = $32
                  RETURNING *",
                 &[
                     &params.username,
@@ -351,9 +323,6 @@ impl Profile {
                     &params.enable_background_color,
                     &normalize_text_brightness_adjustment(params.text_brightness_adjustment),
                     &notify_format,
-                    &params.show_right_sidebar,
-                    &params.right_sidebar_mode.as_str(),
-                    &right_sidebar_components_json,
                     &favorite_room_ids_json,
                     &ide,
                     &terminal,
@@ -401,9 +370,6 @@ impl Profile {
             theme_id: extract_theme_id(&user.settings),
             enable_background_color: extract_enable_background_color(&user.settings),
             text_brightness_adjustment: extract_text_brightness_adjustment(&user.settings),
-            show_right_sidebar: extract_show_right_sidebar(&user.settings),
-            right_sidebar_mode: extract_right_sidebar_mode(&user.settings),
-            right_sidebar_components: extract_right_sidebar_components(&user.settings),
             statusline_components: extract_statusline_components(&user.settings),
             keep_composer_focused: extract_keep_composer_focused(&user.settings),
             start_with_music_muted: extract_start_with_music_muted(&user.settings),

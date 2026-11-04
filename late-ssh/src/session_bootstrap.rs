@@ -1,7 +1,6 @@
 use chrono::{DateTime, Utc};
 use late_core::models::user_ssh_key::{
-    KeyLayout, UserSshKey, extract_key_artboard_disclaimer, extract_key_home_layout,
-    extract_key_home_layouts, extract_key_layout,
+    UserSshKey, extract_key_artboard_disclaimer, extract_key_home_layout, extract_key_home_layouts,
 };
 use late_core::models::{artboard_ban::ArtboardBan, user::User};
 use tokio::sync::{broadcast, mpsc};
@@ -284,7 +283,6 @@ pub async fn load_arcade_session_preloads(state: &State, user_id: Uuid) -> Arcad
 /// seed is off.
 #[derive(Clone, Debug, Default)]
 pub struct DeviceState {
-    pub layout: Option<KeyLayout>,
     /// This device's single Home tile layout, stored before Home had named
     /// layouts (`app/zen`), `None` to follow the account's stored layout.
     /// Read only as the seed for `home_layouts`.
@@ -321,7 +319,6 @@ pub async fn load_device_state(
     };
     let settings = match UserSshKey::find_by_fingerprint(&client, user_id, fingerprint).await {
         Ok(Some(key)) => DeviceState {
-            layout: extract_key_layout(&key.settings),
             artboard_disclaimer: extract_key_artboard_disclaimer(&key.settings),
             home_layout: extract_key_home_layout(&key.settings),
             home_layouts: extract_key_home_layouts(&key.settings),
@@ -485,7 +482,6 @@ pub async fn build_session_config(state: &State, inputs: SessionBootstrapInputs)
         rows,
         term,
         key_fingerprint,
-        key_layout: device.layout,
         key_artboard_disclaimer: device.artboard_disclaimer,
         key_left_at: device.left_at,
         audio_service: state.audio_service.clone(),
