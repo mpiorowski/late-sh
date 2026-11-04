@@ -8,6 +8,7 @@
 //! nearest its hue; [`dot`] is that step, kept for the golden frame, while
 //! the renderer draws `Shade::ink` (`ui.rs`). The land is built once for the
 //! whole process; each frame shades the sky, then mirrors it into the water.
+//! The pixels style plays [`frame`] directly; the dots style plays [`sweep`].
 
 use std::f64::consts::PI;
 use std::sync::OnceLock;
@@ -890,6 +891,29 @@ pub(crate) fn frame(t: f64) -> ShadedFrame {
         ground: GROUND,
         cells,
     }
+}
+
+/// How far apart in play time a sweep's two stills are, in seconds.
+pub(crate) const SWEEP_STEP: f64 = 2.0;
+
+/// The scene as the dots style plays it, at `t` seconds of play time: two
+/// whole frames a `SWEEP_STEP` apart, the later one left of a front that
+/// crosses the screen once per step. Its sky and water move as a whole, so
+/// drifting costs cells everywhere however slowly it goes, but what a step
+/// flips levels off as the step grows: a step this size flips about half the
+/// screen, and the same motion in small steps flips it many times over. A
+/// few columns of a far-off still a second keep the budget and the motion
+/// (Cost in `CONTEXT.md`).
+pub(crate) fn sweep(t: f64) -> ShadedFrame {
+    let step = (t / SWEEP_STEP).floor();
+    let mut out = frame(step * SWEEP_STEP);
+    let next = frame((step + 1.0) * SWEEP_STEP);
+    let front = ((t / SWEEP_STEP - step) * WF) as usize;
+    for r in 0..H {
+        let row = r * W..r * W + front;
+        out.cells[row.clone()].copy_from_slice(&next.cells[row]);
+    }
+    out
 }
 
 /// One cell of the halftone as the original draws it: its dot and its

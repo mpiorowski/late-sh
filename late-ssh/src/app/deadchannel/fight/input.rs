@@ -13,7 +13,8 @@
 //! node is the one other call, the glyph a level down for less pay. `r`
 //! is the answer to a crossing the runner is owed, when the panel shows
 //! one to give. With a draft owed the panel shows the two cards instead
-//! of a step, and `1` and `2` take one. With the road over for the day Enter or `g` closes
+//! of a step, and `1` and `2` take one, or `1` takes both on an inked
+//! draft. With the road over for the day Enter or `g` closes
 //! it, and `s` copies the day's card. Esc closes it from the root, the
 //! same way.
 

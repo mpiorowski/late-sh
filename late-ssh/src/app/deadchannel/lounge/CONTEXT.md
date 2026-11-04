@@ -118,7 +118,8 @@ moved but could not be announced). The fight counter sees each pay as
 The lounge's seams: `App.lounge` (the session), one tick line in
 `tick.rs` (`lounge::svc::tick`, with the half animation edge) and one
 in its wake cadence (`lounge::svc::animates`, the half tier while a
-strike or a dissolve plays), `looking_at_lounge` on the presence
+strike or a dissolve plays, the quarter tier once the session has been
+idle five minutes), `looking_at_lounge` on the presence
 record (`App::sync_presence`: Home with the #lounge card up, the
 `lounge` flag in `models/presence.rs`), `dashboard_lounge` in
 `render.rs` (the scene for a runner on the #lounge card, built off the

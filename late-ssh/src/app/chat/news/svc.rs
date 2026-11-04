@@ -595,13 +595,19 @@ impl ArticleService {
         handle.abort_handle()
     }
 
+    /// Every share that did not land ends here, once. A refusal
+    /// (`ShareRefusal`) is the sharer's to see and logs at WARN; anything
+    /// else is ours and logs at ERROR. Either way the sharer gets the text.
     fn share_failed(&self, user_id: Uuid, url: &str, e: anyhow::Error) {
-        late_core::error_span!(
-            "article_process_failed",
-            error = ?e,
-            url = %url,
-            "failed to process article url"
-        );
+        match e.downcast_ref::<ShareRefusal>() {
+            Some(refusal) => tracing::warn!(?refusal, url = %url, "share refused"),
+            None => late_core::error_span!(
+                "article_process_failed",
+                error = ?e,
+                url = %url,
+                "failed to process article url"
+            ),
+        }
         self.publish_event(ArticleEvent::Failed {
             user_id,
             error: e.to_string(),
@@ -616,9 +622,7 @@ impl ArticleService {
         // here so no share path (chat link, RSS share) can route their
         // content into the summarizer.
         if is_ai_blocklisted_url(url) {
-            anyhow::bail!(
-                "cyberspace.online links can't be shared to news (their terms bar AI summaries)"
-            );
+            return Err(ShareRefusal::AiBlocklisted.into());
         }
 
         // 1. Quick existence check: acquire and release before the slow AI work
@@ -626,8 +630,7 @@ impl ArticleService {
         {
             let client = self.db.get().await?;
             if Article::find_by_url(&client, url).await?.is_some() {
-                tracing::info!(%url, "article already exists, skipping");
-                anyhow::bail!("Article exists");
+                return Err(ShareRefusal::Exists.into());
             }
         }
 
@@ -1040,8 +1043,7 @@ impl ArticleService {
             serde_json::from_str(&json_str).context("failed to parse AI json extraction")?;
 
         if extraction.title == "INVALID_OR_NSFW" {
-            tracing::warn!(%url, "AI rejected URL as invalid or NSFW");
-            anyhow::bail!("Link was rejected due to content policy violations or being invalid.");
+            return Err(ShareRefusal::Rejected.into());
         }
 
         Ok(extraction)
@@ -1056,7 +1058,7 @@ impl ArticleService {
         let identity = self
             .fetch_youtube_identity(url)
             .await?
-            .context("YouTube oEmbed could not resolve this video")?;
+            .ok_or(ShareRefusal::YoutubeUnresolved)?;
 
         let ai_summary = match self
             .fetch_youtube_ai_summary(&identity.title, &identity.author, url)
@@ -1158,9 +1160,10 @@ impl ArticleService {
     /// nothing indexed against a bare status URL.
     #[tracing::instrument(skip(self), fields(url = %url, status_id = %status_id))]
     async fn extract_tweet(&self, url: &str, status_id: &str) -> Result<ArticleExtraction> {
-        let identity = self.fetch_tweet_identity(url).await?.context(
-            "X could not resolve this post: it may be deleted, from a protected account, or not a post URL",
-        )?;
+        let identity = self
+            .fetch_tweet_identity(url)
+            .await?
+            .ok_or(ShareRefusal::XUnresolved)?;
 
         // oEmbed carries neither an image nor a sensitivity flag, so this is
         // the only source for either, and the sensitivity flag is the only
@@ -1173,16 +1176,13 @@ impl ArticleService {
             Err(e) => {
                 metrics::record_news_x_media_lookup(XMediaLookup::Unavailable);
                 tracing::warn!(%url, error = ?e, "tweet media lookup failed; rejecting the share unscreened");
-                anyhow::bail!(
-                    "X could not confirm this post is safe to share right now. Try again in a minute."
-                );
+                return Err(ShareRefusal::XUnconfirmed.into());
             }
         };
 
         if media.possibly_sensitive {
             metrics::record_news_x_media_lookup(XMediaLookup::Sensitive);
-            tracing::warn!(%url, "X flags this post as sensitive; rejecting the share");
-            anyhow::bail!("Link was rejected due to content policy violations or being invalid.");
+            return Err(ShareRefusal::Rejected.into());
         }
         metrics::record_news_x_media_lookup(XMediaLookup::Clean);
 
@@ -1483,6 +1483,52 @@ fn display_author(usernames: &HashMap<Uuid, String>, user_id: Uuid) -> String {
 
 /// Domains whose content must never reach the AI summarizer. Currently just
 /// cyberspace.online: their API terms ban feeding their content to AI systems.
+/// Why a share was turned down: the link, or what the page behind it is.
+/// The sharer's problem to see, never ours to log as a failure; the text is
+/// the banner. Carried through `anyhow` as the typed error `share_failed`
+/// matches on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShareRefusal {
+    /// cyberspace.online's terms bar AI summaries of their content.
+    AiBlocklisted,
+    Exists,
+    /// The AI or X called the page invalid or NSFW.
+    Rejected,
+    /// X's media lookup could not answer, so the post went unscreened.
+    XUnconfirmed,
+    XUnresolved,
+    YoutubeUnresolved,
+}
+
+impl ShareRefusal {
+    pub fn message(self) -> &'static str {
+        match self {
+            ShareRefusal::AiBlocklisted => {
+                "cyberspace.online links can't be shared to news (their terms bar AI summaries)"
+            }
+            ShareRefusal::Exists => "Article exists",
+            ShareRefusal::Rejected => {
+                "Link was rejected due to content policy violations or being invalid."
+            }
+            ShareRefusal::XUnconfirmed => {
+                "X could not confirm this post is safe to share right now. Try again in a minute."
+            }
+            ShareRefusal::XUnresolved => {
+                "X could not resolve this post: it may be deleted, from a protected account, or not a post URL"
+            }
+            ShareRefusal::YoutubeUnresolved => "YouTube oEmbed could not resolve this video",
+        }
+    }
+}
+
+impl std::fmt::Display for ShareRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
+    }
+}
+
+impl std::error::Error for ShareRefusal {}
+
 fn is_ai_blocklisted_url(url: &str) -> bool {
     let Ok(parsed) = reqwest::Url::parse(url) else {
         return false;

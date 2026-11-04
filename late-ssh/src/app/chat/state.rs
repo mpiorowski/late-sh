@@ -6353,17 +6353,6 @@ impl ChatState {
                         banner = Some(Banner::success(&format!("Posted to #{}", kind.slug())));
                     }
                 }
-                ChatEvent::DeltaSynced {
-                    user_id,
-                    room_id,
-                    messages,
-                } if self.user_id == user_id => {
-                    for message in messages {
-                        if message.room_id == room_id {
-                            self.push_message(message);
-                        }
-                    }
-                }
                 ChatEvent::RoomTailLoaded {
                     user_id,
                     room_id,

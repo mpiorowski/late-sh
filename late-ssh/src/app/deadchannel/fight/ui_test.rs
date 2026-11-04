@@ -721,6 +721,47 @@ fn a_draft_owed_takes_the_road_panel() {
     assert!(screen.contains("drafted: ‹brace› · ‹bulwark›"), "{screen}");
 }
 
+/// An inked draft owed asks no question: both cards, one key, and the
+/// frame's list carries both once taken.
+#[test]
+fn an_inked_draft_owed_takes_both_on_one_key() {
+    let mut sheet = Sheet::fresh(Uuid::nil(), september(24));
+    sheet.level = 6;
+    sheet.signal = 60;
+    sheet.cards = vec![Card::Brace];
+    sheet.inks = vec![6];
+    let picker = Picker {
+        lane: 1,
+        fair: Some(Threat::Easy),
+        lower: Some(Threat::Easy),
+        bright: Some(Threat::Even),
+        crossing: None,
+        answer: None,
+    };
+    for height in [24, 40] {
+        let screen = render_road(&sheet, &picker, height, None);
+        for text in [
+            "two new cards",
+            "level 6. inked: both, for one ‹block›, until the mark",
+            "        ‹riposte› hits for a block and a half plus all the block you have up",
+            "        ‹bulwark› two energy. holds two blocks and a half",
+            "[1] take both",
+            "drafted: ‹brace›",
+        ] {
+            assert!(screen.contains(text), "{text} at {height} rows\n{screen}");
+        }
+        assert!(!screen.contains("[2]"), "there is no choice\n{screen}");
+        assert!(!screen.contains("take one"), "{screen}");
+    }
+
+    sheet.cards.push(Card::Riposte);
+    let screen = render_road(&sheet, &picker, 24, None);
+    assert!(
+        screen.contains("drafted: ‹brace› · ‹riposte› · ‹bulwark›"),
+        "{screen}"
+    );
+}
+
 /// A runner stood one step short of the crossing on `sheet`'s road, down
 /// its lane, and a picker on it.
 fn before_the_crossing(sheet: &Sheet) -> (Sheet, Picker) {

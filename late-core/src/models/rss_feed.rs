@@ -32,14 +32,23 @@ impl RssFeed {
         Ok(rows.into_iter().map(Self::from).collect())
     }
 
-    pub async fn list_active(client: &Client, limit: i64) -> Result<Vec<Self>> {
+    /// The feeds to fetch next, longest unchecked first, for owners seen since
+    /// `owner_seen_since`. An owner who comes back has the oldest check of all,
+    /// so their feeds go first on the very next poll.
+    pub async fn list_for_poll(
+        client: &Client,
+        owner_seen_since: DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<Self>> {
         let rows = client
             .query(
-                "SELECT * FROM rss_feeds
-                 WHERE active = true
-                 ORDER BY COALESCE(last_checked_at, '-infinity'::timestamptz), created
-                 LIMIT $1",
-                &[&limit],
+                "SELECT f.* FROM rss_feeds f
+                 JOIN users u ON u.id = f.user_id
+                 WHERE f.active = true
+                   AND u.last_seen >= $1
+                 ORDER BY COALESCE(f.last_checked_at, '-infinity'::timestamptz), f.created
+                 LIMIT $2",
+                &[&owner_seen_since, &limit],
             )
             .await?;
         Ok(rows.into_iter().map(Self::from).collect())

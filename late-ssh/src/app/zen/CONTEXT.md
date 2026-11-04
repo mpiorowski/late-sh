@@ -35,6 +35,7 @@ animated piece ported from ascii.rest, `../ascii/CONTEXT.md`: earthrise
 in dots, the screensaver's default and a slow piece, until `[` `]` step it through the others or Enter picks one from
 the list (`ascii/picker`, over the page), including random and randomer.
 Random holds one scene/style per visit; randomer changes landscape every five minutes.
+Both draw only from the cheap pieces (`../ascii/CONTEXT.md`).
 The title names the piece, `ascii · aurora fjord · pixels`, with the random mode
 before it when selected. Each tile keeps independent session-only playback in
 `ZenState`; slots follow surviving leaves through splits/closes. Leaving Home

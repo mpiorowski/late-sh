@@ -39,7 +39,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-use super::cards::{Board, Card, Draft, ENERGY, HAND};
+use super::cards::{Board, Card, DRAFTS, Draft, ENERGY, HAND};
 use super::data::{self, FOES, FoeKind, FoeTier, Intent, OLD_SIGNAL, RATIONS_PER_DAY};
 use super::road::{LANES, Mark, Node, STEPS};
 use super::session::{Picker, Scene};
@@ -1732,6 +1732,41 @@ fn node_lines(
     (lines, keys)
 }
 
+/// An inked draft owed, in the same rows: nothing to choose, so the two
+/// cards with no key of their own and the one key that takes them.
+fn inked_draft_lines(draft: &Draft) -> (Vec<Line<'static>>, Vec<Span<'static>>) {
+    let text = ink(INK);
+    let dim_text = ink(INK_DIM);
+    let key = lit(Neon::Amber);
+    let mut lines = vec![Line::from(vec![
+        Span::styled("  ▸ ", key),
+        Span::styled("two new cards", lit(Neon::Amber)),
+        Span::styled(
+            format!("   level {}. inked: both, for one ", draft.level),
+            dim_text,
+        ),
+        card_mark(draft.replaces),
+        Span::styled(", until the mark", dim_text),
+    ])];
+    for card in draft.options {
+        let mark = card.marked();
+        lines.push(Line::from(vec![
+            Span::styled("        ", text),
+            card_mark(card),
+            Span::styled(" ".repeat(10 - mark.chars().count()), text),
+            Span::styled(card.rule().to_string(), text),
+        ]));
+    }
+    let keys = vec![
+        Span::styled("    [1] ", key),
+        Span::styled("take", action()),
+        Span::styled(" both", text),
+        Span::styled("   the road waits on it", dim_text),
+        Span::styled("  esc back", dim_text),
+    ];
+    (lines, keys)
+}
+
 /// A draft owed, in the three rows the node under the cursor would have:
 /// the level and what the pick replaces, then the two cards, a key each.
 fn draft_lines(draft: &Draft) -> (Vec<Line<'static>>, Vec<Span<'static>>) {
@@ -1812,11 +1847,19 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
             );
             if !sheet.cards.is_empty() {
                 drafted.push(Span::styled(" drafted: ", dim_text));
-                for (i, card) in sheet.cards.iter().enumerate() {
+                // An inked draft's other card rides beside its pick.
+                let mut held = Vec::new();
+                for (draft, pick) in DRAFTS.iter().zip(&sheet.cards) {
+                    held.push(*pick);
+                    if sheet.inked(draft.level) {
+                        held.push(draft.other(*pick));
+                    }
+                }
+                for (i, card) in held.into_iter().enumerate() {
                     if i > 0 {
                         drafted.push(Span::styled(" · ", dim_text));
                     }
-                    drafted.push(card_mark(*card));
+                    drafted.push(card_mark(card));
                 }
                 drafted.push(Span::styled(" ", dim_text));
             }
@@ -1932,7 +1975,10 @@ pub(crate) fn draw_picker(frame: &mut Frame, area: Rect, view: PickerView<'_>) {
             };
             match (sheet.draft(), ahead) {
                 (Some(draft), _) => {
-                    let (detail, keys) = draft_lines(draft);
+                    let (detail, keys) = match sheet.inked(draft.level) {
+                        true => inked_draft_lines(draft),
+                        false => draft_lines(draft),
+                    };
                     lines.extend(detail);
                     lines.push(Line::from(keys));
                 }

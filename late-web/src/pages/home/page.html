@@ -69,7 +69,7 @@
     <div class="stagger stagger-1 mb-14">
         <div class="flex items-baseline justify-between gap-4">
             <h1 class="text-3xl sm:text-4xl text-green-500 tracking-tight">late.sh</h1>
-            <div class="text-xs shrink-0" hx-get="/status" hx-trigger="load, every 5s" hx-swap="innerHTML"></div>
+            <div class="text-xs shrink-0" hx-get="/status" hx-trigger="load, every 30s [!document.hidden]" hx-swap="innerHTML"></div>
         </div>
         <p class="text-gray-300 mt-2">a cozy command-line clubhouse for computer people</p>
         <p class="text-xs text-gray-400 mt-3">

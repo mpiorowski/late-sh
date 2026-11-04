@@ -133,7 +133,7 @@ Per day, 2026-09-27 to 2026-10-22 unless stated.
 | Chat YouTube links played in the terminal | 3 in total since the feature shipped |
 
 Web, 25 days: the landing page 535,000 views (about 432,000 of them the
-kubelet's readiness probe on `/`, every 5 s; treat as noise), gallery 4,400, profile pages 3,700 plus 1,400 index views, terms
+kubelet's readiness probe, every 5 s, from before it moved to `/health`; treat as noise), gallery 4,400, profile pages 3,700 plus 1,400 index views, terms
 764, `/listen` 147, a live stream page 136.
 
 **The newcomer funnel**, from the referral clock (section 6): the 298

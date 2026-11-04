@@ -258,15 +258,24 @@ impl FightSession {
         self.sheet.as_ref().and_then(Sheet::draft)
     }
 
-    /// `1` or `2` on a draft: take that option. Nothing is sent with no
-    /// draft owed, so the keys stay the page keys everywhere else.
+    /// `1` or `2` on a draft: take that option. An inked draft is both its
+    /// cards, so `1` takes them and `2` asks nothing, swallowed so it cannot
+    /// switch the page under the panel. Nothing is sent with no draft owed,
+    /// so the keys stay the page keys everywhere else.
     pub(crate) fn take_card(&mut self, option: usize) -> bool {
-        let Some(card) = self
-            .draft()
-            .and_then(|draft| draft.options.get(option).copied())
-        else {
+        let Some(draft) = self.draft() else {
             return false;
         };
+        let Some(card) = draft.options.get(option).copied() else {
+            return false;
+        };
+        let inked = self
+            .sheet
+            .as_ref()
+            .is_some_and(|sheet| sheet.inked(draft.level));
+        if inked && option > 0 {
+            return true;
+        }
         self.mark_news_read();
         self.request(Command::Draft { card });
         true

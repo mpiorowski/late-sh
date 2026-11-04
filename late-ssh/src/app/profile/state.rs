@@ -173,6 +173,11 @@ impl ProfileState {
                     ProfileEvent::Error { user_id, message } if self.user_id == user_id => {
                         banner = Some(Banner::error(&message));
                     }
+                    ProfileEvent::UsernameRefused {
+                        user_id, message, ..
+                    } if self.user_id == user_id => {
+                        banner = Some(Banner::error(&message));
+                    }
                     _ => (),
                 },
                 Err(broadcast::error::TryRecvError::Empty) => break,

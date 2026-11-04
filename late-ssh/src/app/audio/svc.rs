@@ -28,7 +28,10 @@ use tokio::task::JoinHandle;
 use tracing::{Instrument, info_span};
 use uuid::Uuid;
 
-use super::{thumbnail::Thumbnail, youtube::YoutubeClient};
+use super::{
+    thumbnail::Thumbnail,
+    youtube::{YoutubeClient, YoutubeLookup, YoutubeRefusal},
+};
 use crate::{
     authz::Permissions,
     metrics::{self, RollCallResult},
@@ -682,7 +685,10 @@ impl AudioService {
     }
 
     pub async fn submit_url(&self, user_id: Uuid, url: &str) -> Result<SubmitQueueResponse> {
-        let video = self.youtube.validate_url(url).await?;
+        let video = match self.youtube.validate_url(url).await? {
+            YoutubeLookup::Video(video) => video,
+            YoutubeLookup::Refused(refusal) => return Err(BoothRefusal::Youtube(refusal).into()),
+        };
         self.submit_video(user_id, video, true).await
     }
 
@@ -691,7 +697,10 @@ impl AudioService {
         user_id: Uuid,
         url: &str,
     ) -> Result<SubmitQueueResponse> {
-        let video = self.youtube.validate_url(url).await?;
+        let video = match self.youtube.validate_url(url).await? {
+            YoutubeLookup::Video(video) => video,
+            YoutubeLookup::Refused(refusal) => return Err(BoothRefusal::Youtube(refusal).into()),
+        };
         self.submit_video(user_id, video, false).await
     }
 
@@ -711,7 +720,10 @@ impl AudioService {
     }
 
     pub async fn set_trusted_youtube_fallback(&self, user_id: Uuid, url: &str) -> Result<()> {
-        let video = self.youtube.validate_url(url).await?;
+        let video = match self.youtube.validate_url(url).await? {
+            YoutubeLookup::Video(video) => video,
+            YoutubeLookup::Refused(refusal) => return Err(BoothRefusal::Youtube(refusal).into()),
+        };
         let mut state = self.state.lock().await;
         let client = self.db.get().await?;
         let source = MediaSource::upsert_youtube_fallback(
@@ -743,7 +755,7 @@ impl AudioService {
         enforce_rate_limit: bool,
     ) -> Result<SubmitQueueResponse> {
         if !video.is_stream && video.duration_ms.is_none() {
-            anyhow::bail!("YouTube video duration is unavailable");
+            return Err(BoothRefusal::DurationUnavailable.into());
         }
 
         let mut state = self.state.lock().await;
@@ -751,21 +763,21 @@ impl AudioService {
         let (item, reward) = {
             let mut client = self.db.get().await?;
             if AudioBan::is_active_for_user(&client, user_id).await? {
-                anyhow::bail!("audio ban: submitting blocked");
+                return Err(BoothRefusal::BannedFromSubmitting.into());
             }
             if enforce_rate_limit {
                 let since = Utc::now() - SUBMISSION_WINDOW;
                 let recent =
                     MediaQueueItem::recent_submission_count(&client, user_id, since).await?;
                 if recent >= MAX_SUBMISSIONS_PER_WINDOW {
-                    anyhow::bail!("submission rate limit exceeded");
+                    return Err(BoothRefusal::RateLimited.into());
                 }
             }
             if MediaQueueItem::youtube_is_active(&client, &video.video_id).await? {
-                anyhow::bail!("track is already in the queue");
+                return Err(BoothRefusal::AlreadyQueued.into());
             }
 
-            MediaQueueItem::insert_youtube(
+            let inserted = MediaQueueItem::insert_youtube(
                 &mut client,
                 user_id,
                 &video.video_id,
@@ -774,7 +786,15 @@ impl AudioService {
                 video.duration_ms,
                 video.is_stream,
             )
-            .await?
+            .await;
+            match inserted {
+                Ok(inserted) => inserted,
+                // Lost the race with another submission of the same track.
+                Err(err) if is_unique_violation_on(&err, ACTIVE_TRACK_CONSTRAINT) => {
+                    return Err(BoothRefusal::AlreadyQueued.into());
+                }
+                Err(err) => return Err(err),
+            }
         };
         metrics::record_song_queued(reward);
         tracing::info!(
@@ -808,20 +828,6 @@ impl AudioService {
         })
     }
 
-    pub fn submit_url_task(&self, user_id: Uuid, url: String) {
-        let service = self.clone();
-        tokio::spawn(async move {
-            if let Err(err) = service.submit_url(user_id, &url).await {
-                late_core::error_span!(
-                    "audio_submit_url_failed",
-                    error = ?err,
-                    user_id = %user_id,
-                    "failed to submit media queue URL"
-                );
-            }
-        });
-    }
-
     /// Booth submit: same as `submit_url` (YouTube Data API validation +
     /// rate limit) but emits banner events so the modal can surface
     /// success/failure to the submitter.
@@ -844,15 +850,9 @@ impl AudioService {
                     });
                 }
                 Err(err) => {
-                    late_core::error_span!(
-                        "audio_booth_submit_failed",
-                        error = ?err,
-                        user_id = %user_id,
-                        "failed to submit booth audio URL"
-                    );
                     service.publish_event(AudioEvent::BoothSubmitFailed {
                         user_id,
-                        message: booth_submit_error_message(&err),
+                        message: booth_write_failed(BoothWrite::Submit, user_id, &err),
                     });
                 }
             }
@@ -876,15 +876,9 @@ impl AudioService {
                     });
                 }
                 Err(err) => {
-                    late_core::error_span!(
-                        "audio_trusted_submit_failed",
-                        error = ?err,
-                        user_id = %user_id,
-                        "failed to queue trusted audio URL"
-                    );
                     service.publish_event(AudioEvent::TrustedSubmitFailed {
                         user_id,
-                        message: trusted_submit_error_message(&err),
+                        message: booth_write_failed(BoothWrite::TrustedSubmit, user_id, &err),
                     });
                 }
             }
@@ -899,15 +893,9 @@ impl AudioService {
                     service.publish_event(AudioEvent::YoutubeFallbackSet { user_id });
                 }
                 Err(err) => {
-                    late_core::error_span!(
-                        "audio_youtube_fallback_set_failed",
-                        error = ?err,
-                        user_id = %user_id,
-                        "failed to set YouTube fallback"
-                    );
                     service.publish_event(AudioEvent::YoutubeFallbackFailed {
                         user_id,
-                        message: trusted_submit_error_message(&err),
+                        message: booth_write_failed(BoothWrite::Fallback, user_id, &err),
                     });
                 }
             }
@@ -1058,7 +1046,7 @@ impl AudioService {
 
     pub async fn cast_vote(&self, user_id: Uuid, item_id: Uuid, value: i16) -> Result<i32> {
         if value != 1 && value != -1 {
-            anyhow::bail!("invalid vote value");
+            return Err(BoothRefusal::InvalidVote.into());
         }
 
         let mut client = self.db.get().await?;
@@ -1066,9 +1054,10 @@ impl AudioService {
         drop(client);
         let score = match outcome {
             CastVoteOutcome::Applied(score) => score,
-            CastVoteOutcome::NotFound => anyhow::bail!("queue item not found"),
-            CastVoteOutcome::VotingClosed => anyhow::bail!("voting closed - track started"),
-            CastVoteOutcome::NotVoteable => anyhow::bail!("queue item is no longer voteable"),
+            CastVoteOutcome::NotFound | CastVoteOutcome::NotVoteable => {
+                return Err(BoothRefusal::QueueItemGone.into());
+            }
+            CastVoteOutcome::VotingClosed => return Err(BoothRefusal::VotingClosed.into()),
         };
 
         let mut state = self.state.lock().await;
@@ -1099,18 +1088,18 @@ impl AudioService {
         let (item, reward) = {
             let mut client = self.db.get().await?;
             if AudioBan::is_active_for_user(&client, user_id).await? {
-                anyhow::bail!("audio ban: submitting blocked");
+                return Err(BoothRefusal::BannedFromHistory.into());
             }
             let since = Utc::now() - SUBMISSION_WINDOW;
             let recent = MediaQueueItem::recent_submission_count(&client, user_id, since).await?;
             if recent >= MAX_SUBMISSIONS_PER_WINDOW {
-                anyhow::bail!("submission rate limit exceeded");
+                return Err(BoothRefusal::RateLimited.into());
             }
             let track = match source {
                 RequeueSource::History(history_item_id) => {
                     let history = MediaHistoryItem::find_by_id(&client, history_item_id)
                         .await?
-                        .ok_or_else(|| anyhow::anyhow!("history item not found"))?;
+                        .ok_or(BoothRefusal::HistoryItemGone)?;
                     StoredTrack {
                         external_id: history.external_id,
                         title: history.title,
@@ -1122,7 +1111,7 @@ impl AudioService {
                 RequeueSource::Favorite(favorite_id) => {
                     let favorite = MediaFavorite::get_by_user_id(&client, user_id, favorite_id)
                         .await?
-                        .ok_or_else(|| anyhow::anyhow!("favorite not found"))?;
+                        .ok_or(BoothRefusal::FavoriteGone)?;
                     StoredTrack {
                         external_id: favorite.external_id,
                         title: favorite.title,
@@ -1133,9 +1122,9 @@ impl AudioService {
                 }
             };
             if MediaQueueItem::youtube_is_active(&client, &track.external_id).await? {
-                anyhow::bail!("track is already in the queue");
+                return Err(BoothRefusal::AlreadyQueued.into());
             }
-            MediaQueueItem::insert_youtube(
+            let inserted = MediaQueueItem::insert_youtube(
                 &mut client,
                 user_id,
                 &track.external_id,
@@ -1144,7 +1133,14 @@ impl AudioService {
                 track.duration_ms,
                 track.is_stream,
             )
-            .await?
+            .await;
+            match inserted {
+                Ok(inserted) => inserted,
+                Err(err) if is_unique_violation_on(&err, ACTIVE_TRACK_CONSTRAINT) => {
+                    return Err(BoothRefusal::AlreadyQueued.into());
+                }
+                Err(err) => return Err(err),
+            }
         };
         metrics::record_song_queued(reward);
         tracing::info!(
@@ -1182,12 +1178,12 @@ impl AudioService {
     pub async fn delete_history_item(&self, user_id: Uuid, history_item_id: Uuid) -> Result<()> {
         let client = self.db.get().await?;
         if !user_is_staff(&client, user_id).await? {
-            anyhow::bail!("not allowed");
+            return Err(BoothRefusal::OnlyStaffDeletesHistory.into());
         }
         let deleted = MediaHistoryItem::delete_by_id(&client, history_item_id).await?;
         drop(client);
         if deleted == 0 {
-            anyhow::bail!("history item not found");
+            return Err(BoothRefusal::HistoryItemGone.into());
         }
 
         let mut state = self.state.lock().await;
@@ -1205,10 +1201,10 @@ impl AudioService {
         {
             let client = self.db.get().await?;
             if User::audio_source(&client, user_id).await? != AudioSource::Youtube {
-                anyhow::bail!("switch to youtube to skip-vote");
+                return Err(BoothRefusal::SwitchToYoutube.into());
             }
             if AudioBan::is_active_for_user(&client, user_id).await? {
-                anyhow::bail!("audio ban: skip-vote blocked");
+                return Err(BoothRefusal::BannedFromVoting.into());
             }
         }
 
@@ -1221,10 +1217,10 @@ impl AudioService {
                 )
                 .await?
         {
-            anyhow::bail!("nothing is playing");
+            return Err(BoothRefusal::NothingPlaying.into());
         }
         let Some(current_id) = state.current_item_id else {
-            anyhow::bail!("nothing is playing");
+            return Err(BoothRefusal::NothingPlaying.into());
         };
 
         {
@@ -1232,7 +1228,7 @@ impl AudioService {
             if let Some(item) = MediaQueueItem::find_by_id(&client, current_id).await?
                 && item.unskippable
             {
-                anyhow::bail!("track is unskippable");
+                return Err(BoothRefusal::Unskippable.into());
             }
         }
 
@@ -1251,7 +1247,7 @@ impl AudioService {
                     "skip vote hit stale current",
                 )
                 .await?;
-                anyhow::bail!("track changed; try again");
+                return Err(BoothRefusal::TrackChanged.into());
             }
             state.current_item_id = None;
             state.skip_votes.clear();
@@ -1322,7 +1318,7 @@ impl AudioService {
                 Err(err) => {
                     service.publish_event(AudioEvent::BoothVoteFailed {
                         user_id,
-                        message: booth_vote_error_message(&err),
+                        message: booth_write_failed(BoothWrite::Vote, user_id, &err),
                     });
                 }
             }
@@ -1343,7 +1339,7 @@ impl AudioService {
                 Err(err) => {
                     service.publish_event(AudioEvent::BoothVoteFailed {
                         user_id,
-                        message: booth_vote_error_message(&err),
+                        message: booth_write_failed(BoothWrite::Vote, user_id, &err),
                     });
                 }
             }
@@ -1365,7 +1361,7 @@ impl AudioService {
                 Err(err) => {
                     service.publish_event(AudioEvent::BoothHistoryRequeueFailed {
                         user_id,
-                        message: booth_history_error_message(&err),
+                        message: booth_write_failed(BoothWrite::Requeue, user_id, &err),
                     });
                 }
             }
@@ -1425,17 +1421,9 @@ impl AudioService {
                 }
                 Err(err) => {
                     metrics::record_booth_favorite(BoothFavoriteOutcome::AddFailed);
-                    late_core::error_span!(
-                        "booth_favorite_add_failed",
-                        error = ?err,
-                        user_id = %user_id,
-                        history_item_id = %history_item_id,
-                        favorite_id = %favorite_id,
-                        "failed to add a booth favorite"
-                    );
                     self.publish_event(AudioEvent::BoothFavoriteFailed {
                         user_id,
-                        message: booth_favorite_error_message(&err),
+                        message: booth_write_failed(BoothWrite::AddFavorite, user_id, &err),
                     });
                 }
             },
@@ -1453,16 +1441,9 @@ impl AudioService {
                     }
                     Err(err) => {
                         metrics::record_booth_favorite(BoothFavoriteOutcome::RemoveFailed);
-                        late_core::error_span!(
-                            "booth_favorite_remove_failed",
-                            error = ?err,
-                            user_id = %user_id,
-                            favorite_id = %favorite_id,
-                            "failed to remove a booth favorite"
-                        );
                         self.publish_event(AudioEvent::BoothFavoriteFailed {
                             user_id,
-                            message: "Failed to remove favorite".to_string(),
+                            message: booth_write_failed(BoothWrite::RemoveFavorite, user_id, &err),
                         });
                     }
                 }
@@ -1509,7 +1490,7 @@ impl AudioService {
         let mut client = self.db.get().await?;
         let track = MediaHistoryItem::find_by_id(&client, history_item_id)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("history item not found"))?;
+            .ok_or(BoothRefusal::HistoryItemGone)?;
         MediaFavorite::add_from_history(&mut client, user_id, favorite_id, &track)
             .await
             .context("adding the favorite")
@@ -1541,7 +1522,7 @@ impl AudioService {
                 Err(err) => {
                     service.publish_event(AudioEvent::BoothHistoryItemDeleteFailed {
                         user_id,
-                        message: booth_history_delete_error_message(&err),
+                        message: booth_write_failed(BoothWrite::DeleteHistory, user_id, &err),
                     });
                 }
             }
@@ -1566,7 +1547,7 @@ impl AudioService {
                 Err(err) => {
                     service.publish_event(AudioEvent::BoothVoteFailed {
                         user_id,
-                        message: booth_vote_error_message(&err),
+                        message: booth_write_failed(BoothWrite::SkipVote, user_id, &err),
                     });
                 }
             }
@@ -1586,10 +1567,10 @@ impl AudioService {
                 )
                 .await?
         {
-            anyhow::bail!("nothing is playing");
+            return Err(BoothRefusal::NothingPlaying.into());
         }
         let Some(current_id) = state.current_item_id else {
-            anyhow::bail!("nothing is playing");
+            return Err(BoothRefusal::NothingPlaying.into());
         };
         let client = self.db.get().await?;
         let changed = MediaQueueItem::mark_skipped(&client, current_id, Utc::now()).await?;
@@ -1600,7 +1581,7 @@ impl AudioService {
                 "force skip hit stale current",
             )
             .await?;
-            anyhow::bail!("track changed; try again");
+            return Err(BoothRefusal::TrackChanged.into());
         }
         state.current_item_id = None;
         state.skip_votes.clear();
@@ -1616,15 +1597,10 @@ impl AudioService {
                     service.publish_event(AudioEvent::TrustedSkipFired { user_id });
                 }
                 Err(err) => {
-                    let message = if format!("{err:#}")
-                        .to_ascii_lowercase()
-                        .contains("nothing is playing")
-                    {
-                        "Nothing is playing".to_string()
-                    } else {
-                        "Failed to skip audio".to_string()
-                    };
-                    service.publish_event(AudioEvent::TrustedSkipFailed { user_id, message });
+                    service.publish_event(AudioEvent::TrustedSkipFailed {
+                        user_id,
+                        message: booth_write_failed(BoothWrite::ForceSkip, user_id, &err),
+                    });
                 }
             }
         });
@@ -1640,21 +1616,21 @@ impl AudioService {
         let client = self.db.get().await?;
         let item = MediaQueueItem::find_by_id(&client, item_id)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("queue item not found"))?;
+            .ok_or(BoothRefusal::QueueItemGone)?;
         if item.status != MediaQueueItem::STATUS_QUEUED {
-            anyhow::bail!("track is no longer queued");
+            return Err(BoothRefusal::QueueItemGone.into());
         }
         let is_owner = item.submitter_id == user_id;
         if !audio_permissions_for_user(&client, user_id)
             .await?
             .can_delete_audio_track(is_owner)
         {
-            anyhow::bail!("not allowed");
+            return Err(BoothRefusal::OnlySubmitterOrStaffDeletes.into());
         }
         let deleted = MediaQueueItem::delete_queued(&client, item_id).await?;
         drop(client);
         if deleted == 0 {
-            anyhow::bail!("track is no longer queued");
+            return Err(BoothRefusal::QueueItemGone.into());
         }
         let mut state = self.state.lock().await;
         self.publish_queue_update_with_guard(&mut state).await?;
@@ -1671,11 +1647,11 @@ impl AudioService {
             .await?
             .can_delete_audio_track(false)
         {
-            anyhow::bail!("not allowed");
+            return Err(BoothRefusal::OnlyStaffLocks.into());
         }
         let updated = MediaQueueItem::toggle_unskippable_queued(&client, item_id)
             .await?
-            .ok_or_else(|| anyhow::anyhow!("track is no longer queued"))?;
+            .ok_or(BoothRefusal::QueueItemGone)?;
         drop(client);
         let new_value = updated.unskippable;
         let mut state = self.state.lock().await;
@@ -1702,7 +1678,7 @@ impl AudioService {
                 Err(err) => {
                     service.publish_event(AudioEvent::BoothItemUnskippableFailed {
                         user_id,
-                        message: booth_unskippable_error_message(&err),
+                        message: booth_write_failed(BoothWrite::Lock, user_id, &err),
                     });
                 }
             }
@@ -1719,7 +1695,7 @@ impl AudioService {
                 Err(err) => {
                     service.publish_event(AudioEvent::BoothItemDeleteFailed {
                         user_id,
-                        message: booth_delete_error_message(&err),
+                        message: booth_write_failed(BoothWrite::DeleteItem, user_id, &err),
                     });
                 }
             }
@@ -1973,7 +1949,7 @@ impl AudioService {
                     self.publish_queue_update_with_guard(state).await?;
                     return Ok(());
                 }
-                Err(err) if is_single_playing_unique_violation(&err) => {
+                Err(err) if is_unique_violation_on(&err, SINGLE_PLAYING_CONSTRAINT) => {
                     tracing::warn!(
                         item_id = %next.id,
                         error = ?err,
@@ -2551,161 +2527,170 @@ fn skip_threshold(youtube_source_total: usize) -> u32 {
     value.max(SKIP_VOTE_MIN)
 }
 
-fn is_single_playing_unique_violation(err: &anyhow::Error) -> bool {
+/// One row plays at a time.
+const SINGLE_PLAYING_CONSTRAINT: &str = "idx_media_queue_single_playing";
+/// The queue holds a track once. `youtube_is_active` refuses ahead of the
+/// insert; a submission that loses the race gets the same refusal from the
+/// constraint.
+const ACTIVE_TRACK_CONSTRAINT: &str = "idx_media_queue_active_track";
+
+fn is_unique_violation_on(err: &anyhow::Error, constraint: &str) -> bool {
     err.chain().any(|cause| {
         cause
             .downcast_ref::<tokio_postgres::Error>()
             .and_then(|pg| pg.as_db_error())
             .is_some_and(|db| {
                 db.code() == &tokio_postgres::error::SqlState::UNIQUE_VIOLATION
-                    && db.constraint() == Some("idx_media_queue_single_playing")
+                    && db.constraint() == Some(constraint)
             })
-            || cause.to_string().contains("idx_media_queue_single_playing")
+            || cause.to_string().contains(constraint)
     })
 }
 
-fn booth_submit_error_message(err: &anyhow::Error) -> String {
-    let text = format!("{err:#}").to_ascii_lowercase();
-    if text.contains("audio ban") {
-        "Banned from submitting audio".to_string()
-    } else if is_duplicate_track_error(&text) {
-        "Already in the queue".to_string()
-    } else if text.contains("invalid url")
-        || (text.contains("youtube") && text.contains("not found"))
-    {
-        "Invalid YouTube URL".to_string()
-    } else if text.contains("rate limit") || text.contains("submission rate limit") {
-        "Slow down - too many submissions".to_string()
-    } else if text.contains("not public") {
-        "Video is not public".to_string()
-    } else if text.contains("not embeddable") {
-        "Video is not embeddable".to_string()
-    } else if text.contains("api key")
-        || text.contains("api_key")
-        || text.contains("youtube data api")
-    {
-        "YouTube validation failed - try again".to_string()
-    } else {
-        "Failed to submit".to_string()
+/// Why the booth turned a listener's request down: their standing, their
+/// link, or a queue that moved under them. The listener's problem to see,
+/// never ours to log as a failure; `message` is the banner. Carried
+/// through `anyhow` as the typed error `booth_write_failed` matches on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BoothRefusal {
+    BannedFromSubmitting,
+    BannedFromVoting,
+    BannedFromHistory,
+    RateLimited,
+    OnlyStaffLocks,
+    OnlySubmitterOrStaffDeletes,
+    OnlyStaffDeletesHistory,
+    /// Skip-votes count YouTube listeners only.
+    SwitchToYoutube,
+    Youtube(YoutubeRefusal),
+    /// A pre-validated video with no duration (`submit_validated_video`).
+    DurationUnavailable,
+    AlreadyQueued,
+    QueueItemGone,
+    VotingClosed,
+    InvalidVote,
+    NothingPlaying,
+    Unskippable,
+    /// The playing row changed between the read and the write.
+    TrackChanged,
+    HistoryItemGone,
+    FavoriteGone,
+}
+
+impl BoothRefusal {
+    pub fn message(self) -> &'static str {
+        match self {
+            BoothRefusal::BannedFromSubmitting => "Banned from submitting audio",
+            BoothRefusal::BannedFromVoting => "Banned from voting",
+            BoothRefusal::BannedFromHistory => "Banned from audio history actions",
+            BoothRefusal::RateLimited => "Slow down - too many submissions",
+            BoothRefusal::OnlyStaffLocks => "Only staff can lock tracks",
+            BoothRefusal::OnlySubmitterOrStaffDeletes => {
+                "Only the submitter or staff can delete this track"
+            }
+            BoothRefusal::OnlyStaffDeletesHistory => "Only staff can delete history tracks",
+            BoothRefusal::SwitchToYoutube => "Switch to YouTube to skip-vote",
+            BoothRefusal::Youtube(refusal) => refusal.message(),
+            BoothRefusal::DurationUnavailable => "Video duration is unavailable",
+            BoothRefusal::AlreadyQueued => "Already in the queue",
+            BoothRefusal::QueueItemGone => "Track is no longer in the queue",
+            BoothRefusal::VotingClosed => "Voting closed - track started",
+            BoothRefusal::InvalidVote => "Vote failed",
+            BoothRefusal::NothingPlaying => "Nothing is playing",
+            BoothRefusal::Unskippable => "Track is unskippable",
+            BoothRefusal::TrackChanged => "Track changed - try again",
+            BoothRefusal::HistoryItemGone => "Track is no longer in history",
+            BoothRefusal::FavoriteGone => "Track is no longer in your favorites",
+        }
     }
 }
 
-fn booth_vote_error_message(err: &anyhow::Error) -> String {
-    let text = format!("{err:#}").to_ascii_lowercase();
-    if text.contains("audio ban") {
-        "Banned from voting".to_string()
-    } else if text.contains("voting closed") {
-        "Voting closed - track started".to_string()
-    } else if text.contains("switch to youtube") {
-        "Switch to YouTube to skip-vote".to_string()
-    } else if text.contains("nothing is playing") {
-        "Nothing is playing".to_string()
-    } else if text.contains("queue item not found")
-        || text.contains("queue item is no longer voteable")
-    {
-        "Item is no longer in the queue".to_string()
-    } else {
-        "Vote failed".to_string()
+impl std::fmt::Display for BoothRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.message())
     }
 }
 
-fn booth_unskippable_error_message(err: &anyhow::Error) -> String {
-    let text = format!("{err:#}").to_ascii_lowercase();
-    if text.contains("not allowed") {
-        "Only staff can lock tracks".to_string()
-    } else if text.contains("no longer queued") || text.contains("not found") {
-        "Track is no longer in the queue".to_string()
-    } else {
-        "Failed to update track".to_string()
+impl std::error::Error for BoothRefusal {}
+
+/// The booth writes a session fires and forgets: the log line names the
+/// write, and a failure's banner is the write's own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BoothWrite {
+    Submit,
+    TrustedSubmit,
+    Fallback,
+    Vote,
+    SkipVote,
+    Requeue,
+    AddFavorite,
+    RemoveFavorite,
+    DeleteHistory,
+    ForceSkip,
+    DeleteItem,
+    Lock,
+}
+
+impl BoothWrite {
+    fn as_str(self) -> &'static str {
+        match self {
+            BoothWrite::Submit => "submit",
+            BoothWrite::TrustedSubmit => "trusted_submit",
+            BoothWrite::Fallback => "fallback",
+            BoothWrite::Vote => "vote",
+            BoothWrite::SkipVote => "skip_vote",
+            BoothWrite::Requeue => "requeue",
+            BoothWrite::AddFavorite => "add_favorite",
+            BoothWrite::RemoveFavorite => "remove_favorite",
+            BoothWrite::DeleteHistory => "delete_history",
+            BoothWrite::ForceSkip => "force_skip",
+            BoothWrite::DeleteItem => "delete_item",
+            BoothWrite::Lock => "lock",
+        }
+    }
+
+    fn failed_message(self) -> &'static str {
+        match self {
+            BoothWrite::Submit => "Failed to submit",
+            BoothWrite::TrustedSubmit => "Failed to queue audio",
+            BoothWrite::Fallback => "Failed to set YouTube fallback",
+            BoothWrite::Vote | BoothWrite::SkipVote => "Vote failed",
+            BoothWrite::Requeue => "History action failed",
+            BoothWrite::AddFavorite => "Failed to add favorite",
+            BoothWrite::RemoveFavorite => "Failed to remove favorite",
+            BoothWrite::DeleteHistory => "Failed to delete history track",
+            BoothWrite::ForceSkip => "Failed to skip audio",
+            BoothWrite::DeleteItem => "Failed to delete track",
+            BoothWrite::Lock => "Failed to update track",
+        }
     }
 }
 
-fn booth_delete_error_message(err: &anyhow::Error) -> String {
-    let text = format!("{err:#}").to_ascii_lowercase();
-    if text.contains("not allowed") {
-        "Only the submitter or staff can delete this track".to_string()
-    } else if text.contains("queue item not found") || text.contains("no longer queued") {
-        "Track is no longer in the queue".to_string()
-    } else {
-        "Failed to delete track".to_string()
-    }
-}
-
-fn booth_history_error_message(err: &anyhow::Error) -> String {
-    let text = format!("{err:#}").to_ascii_lowercase();
-    if text.contains("audio ban") {
-        "Banned from audio history actions".to_string()
-    } else if is_duplicate_track_error(&text) {
-        "Already in the queue".to_string()
-    } else if text.contains("rate limit") || text.contains("submission rate limit") {
-        "Slow down - too many submissions".to_string()
-    } else if text.contains("history item not found") {
-        "Track is no longer in history".to_string()
-    } else if text.contains("favorite not found") {
-        "Track is no longer in your favorites".to_string()
-    } else {
-        "History action failed".to_string()
-    }
-}
-
-fn booth_favorite_error_message(err: &anyhow::Error) -> String {
-    let text = format!("{err:#}").to_ascii_lowercase();
-    if text.contains("history item not found") {
-        "Track is no longer in history".to_string()
-    } else {
-        "Failed to add favorite".to_string()
-    }
-}
-
-fn booth_history_delete_error_message(err: &anyhow::Error) -> String {
-    let text = format!("{err:#}").to_ascii_lowercase();
-    if text.contains("not allowed") {
-        "Only staff can delete history tracks".to_string()
-    } else if text.contains("history item not found") {
-        "Track is no longer in history".to_string()
-    } else {
-        "Failed to delete history track".to_string()
-    }
-}
-
-/// The queue holds a track once. The app-level guard produces the message;
-/// a submission that loses the race to `idx_media_queue_active_track` gets
-/// the same banner from the constraint violation.
-fn is_duplicate_track_error(text: &str) -> bool {
-    text.contains("already in the queue") || text.contains("idx_media_queue_active_track")
-}
-
-fn trusted_submit_error_message(err: &anyhow::Error) -> String {
-    let text = format!("{err:#}").to_ascii_lowercase();
-    if text.contains("audio ban") {
-        "Banned from submitting audio".to_string()
-    } else if is_duplicate_track_error(&text) {
-        "Already in the queue".to_string()
-    } else if text.contains("invalid url")
-        || text.contains("unsupported youtube url")
-        || text.contains("invalid youtube video id")
-        || (text.contains("youtube") && text.contains("not found"))
-    {
-        "Invalid YouTube URL".to_string()
-    } else if text.contains("not public") {
-        "Video is not public".to_string()
-    } else if text.contains("not embeddable") {
-        "Video is not embeddable".to_string()
-    } else if text.contains("upcoming stream") {
-        "Upcoming streams are not supported".to_string()
-    } else if text.contains("duration is unavailable") {
-        "Video duration is unavailable".to_string()
-    } else if text.contains("at least 30 seconds") {
-        "Video must be at least 30 seconds".to_string()
-    } else if text.contains("api key")
-        || text.contains("api_key")
-        || text.contains("youtube data api")
-    {
-        "YouTube validation failed - check server API key".to_string()
-    } else if text.contains("rate limit") {
-        "Slow down - too many submissions".to_string()
-    } else {
-        "Failed to queue audio".to_string()
+/// Every booth write that did not land ends here, once. A refusal
+/// (`BoothRefusal`) is the listener's to see and logs at WARN; anything
+/// else is ours and logs at ERROR. Either way the banner text comes back
+/// for the write's event.
+fn booth_write_failed(write: BoothWrite, user_id: Uuid, err: &anyhow::Error) -> String {
+    match err.downcast_ref::<BoothRefusal>() {
+        Some(refusal) => {
+            tracing::warn!(
+                ?refusal,
+                user_id = %user_id,
+                write = write.as_str(),
+                "booth write refused"
+            );
+            refusal.message().to_string()
+        }
+        None => {
+            late_core::error_span!(
+                "audio_booth_write_failed",
+                error = ?err,
+                user_id = %user_id,
+                write = write.as_str(),
+                "failed a booth write"
+            );
+            write.failed_message().to_string()
+        }
     }
 }
 
