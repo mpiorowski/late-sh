@@ -987,21 +987,6 @@ async fn country_counts_can_ignore_the_long_gone() {
     );
 }
 
-#[test]
-fn sidebar_modes_cycle_in_both_directions_and_wrap() {
-    use crate::models::user::RightSidebarMode;
-    for mode in [
-        RightSidebarMode::On,
-        RightSidebarMode::Off,
-        RightSidebarMode::Auto,
-    ] {
-        assert_eq!(mode.cycle(true).cycle(false), mode);
-        assert_eq!(mode.cycle(false).cycle(true), mode);
-        assert_eq!(mode.cycle(true).cycle(true).cycle(true), mode);
-    }
-    assert_eq!(RightSidebarMode::On.cycle(false), RightSidebarMode::Auto);
-}
-
 /// Seeds users in the pre-migration shape, runs migration 220 over them,
 /// then drives the ordinary writes a listener makes afterwards.
 #[tokio::test]

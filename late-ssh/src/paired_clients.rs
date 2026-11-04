@@ -445,7 +445,7 @@ impl PairedClientRegistry {
     /// Snapshot the state of the most recently registered entry, preferring
     /// the webview helper when one is present. The helper only runs while the
     /// user is on YouTube, and it is then the audible surface, so its
-    /// mute/volume is what the sidebar should report.
+    /// mute/volume is what the music dock should report.
     pub fn snapshot(&self, token: &str) -> Option<ClientAudioState> {
         let clients = self.clients.lock_recover();
         let entries = clients.get(token)?;

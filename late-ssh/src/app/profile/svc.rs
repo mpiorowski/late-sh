@@ -23,7 +23,7 @@ use late_core::models::showcase::Showcase;
 use late_core::models::user::{
     FirstContactHitCaps, FirstContactHitClaim, InteractionMode, User, sanitize_username_input,
 };
-use late_core::models::user_ssh_key::{KeyLayout, UserSshKey};
+use late_core::models::user_ssh_key::UserSshKey;
 use tokio_postgres::error::SqlState;
 use uuid::Uuid;
 
@@ -755,30 +755,9 @@ impl ProfileService {
         );
     }
 
-    /// Fire-and-forget: persist one device's home rail layout onto the SSH key
-    /// the session authenticated with. No event on success; a failure is only
-    /// logged, since the layout already applies for the rest of the session and
-    /// the cost of losing the write is one un-remembered preference.
-    pub fn set_key_layout(&self, user_id: Uuid, fingerprint: String, layout: KeyLayout) {
-        let service = self.clone();
-        tokio::spawn(
-            async move {
-                let result = async {
-                    let client = service.db.get().await?;
-                    UserSshKey::set_layout(&client, user_id, &fingerprint, layout).await
-                }
-                .await;
-                if let Err(e) = result {
-                    tracing::warn!(error = ?e, "failed to persist device rail layout");
-                }
-            }
-            .instrument(info_span!("profile.device_rails_task", user_id = %user_id)),
-        );
-    }
-
     /// Fire-and-forget: persist this device's Artboard content disclaimer onto
-    /// the SSH key the session authenticated with. Logged on failure only, like
-    /// the rail layout: the choice already applies for the rest of the session.
+    /// the SSH key the session authenticated with. Logged on failure only: the
+    /// choice already applies for the rest of the session.
     pub fn set_key_artboard_disclaimer(&self, user_id: Uuid, fingerprint: String, enabled: bool) {
         let service = self.clone();
         tokio::spawn(

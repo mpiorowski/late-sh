@@ -6,8 +6,8 @@ Home stays exactly as it is for anyone who never touches it; underneath,
 it is a tile tree, and a chord
 switches the keys into arrange mode on the page you are already on. The
 code it talks about is `late-ssh/src/app/zen` (the tree, `state.rs`,
-`layout.rs`), the Home arm of `late-ssh/src/app/render.rs`, the sidebar in
-`app/common/sidebar.rs`, and the strip in `app/live`.
+`layout.rs`), the Home arm of `late-ssh/src/app/render.rs`, the music dock in
+`app/common/music_dock.rs`, and the strip in `app/live`.
 
 ## Built: v1
 
@@ -68,11 +68,10 @@ delta against the design):
   other boxes the page in its look (`b` cycles them in arrange mode; the
   stock `street` is boxed). There is no separate `f` frame key.
 - No chat-only key and no narrow fold: a page is drawn as arranged at
-  every width, and a phone arranges its own Home. The room-list setting is
-  gone, row and storage; the sidebar row is the Arcade's. The stock Home
-  is fixed (the sidebar's panel order with the pet in the tank's slot,
-  owned or not), not read from the Settings panel list, which the Arcade
-  alone uses.
+  every width, and a phone arranges its own Home. The room-list and
+  sidebar settings are gone, rows and code: no other page has a sidebar, so
+  page 1 is the only place panels live. The stock Home is fixed, with the pet
+  in the tank's slot, owned or not.
 - A tile keeps to one room (`O`, `only` on the leaf): anywhere else it goes
   down and its sibling takes its cells. The rail and the chats stay up. The
   rules are in `late-ssh/src/app/zen/CONTEXT.md`.
@@ -96,7 +95,7 @@ complaints from #suggestions say why Zen never replaces Home:
 - "I click a widget, see a message, type a reply, and the keys go
   somewhere else." In `zen/input.rs` every tile is a focus target and the
   key router switches on the focused kind. Home has one focus, the chat;
-  the sidebar panels are view only. That one difference is why Home feels
+  the panels around it are view only. That one difference is why Home feels
   safe.
 
 So the merge is not "Zen replaces Home". It is "Home becomes a layout, the
@@ -350,10 +349,9 @@ Zen ever earned.
   seeded on first login after the change. A chat tile's `room` reads as
   `Room(id)` for a uuid, `News` for `news`, and `Permanent(slug)` for any
   other string.
-- A stored `right_sidebar_components` list becomes the stock `home`
-  tree's sidebar column in that order; a panel the account turned off is
-  left out. The list and the rail modes are then dead keys, dropped on
-  read the way `activity` and `pot` are today.
+- The stored `right_sidebar_components`, `right_sidebar_mode` and
+  `show_right_sidebar` keys are read nowhere and written nowhere; they stay
+  in the settings blobs, and the stock `home` does not read them.
 - `Screen::Zen`, `zen_return_screen`, the workspace base dance in
   `input.rs::zen_return_screen` and the tour's `VisitZen` stop are gone
   (built). The tour stop became `VisitLayouts`, a `Ctrl+E` stop on Home

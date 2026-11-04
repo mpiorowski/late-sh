@@ -636,7 +636,7 @@ fn a_fixed_split_keeps_its_cells_at_every_width_and_a_share_still_reads_as_a_num
         "fixed from the first child's side after the resize too"
     );
 
-    // The sidebar is fixed from the other end: the chat takes the rest.
+    // The right column is fixed from the other end: the chat takes the rest.
     let mut root = Node::split_second(
         Dir::Row,
         23,
@@ -755,8 +755,8 @@ fn a_layout_saved_with_a_guest_list_keeps_the_guests_still_known() {
 }
 
 #[test]
-fn the_stock_home_is_the_rail_the_reef_over_the_chat_and_the_sidebar_column() {
-    // The stock is fixed and the same for every account: the sidebar's
+fn the_stock_home_is_the_rail_the_reef_over_the_chat_and_the_right_column() {
+    // The stock is fixed and the same for every account: the column's
     // panels with the pet over the bonsai, and an unowned reef or pet
     // draws the shop's note in its tile.
     let home = RiceLayout::home();

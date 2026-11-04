@@ -45,17 +45,16 @@ scroll focus all walk that list. To add a row: add the variant, put it in `ALL`,
 and the compiler asks for its group and its label/value arm; nothing else holds
 a row position.
 
-Settings/Tweaks clicks reuse keyboard actions, including per-device rail and
-interaction-mode updates. Cooldown, notification format, both sidebar modes,
+Settings/Tweaks clicks reuse keyboard actions, including per-device
+interaction-mode updates. Cooldown, notification format,
 Terminal images, Land on, Screensaver, and Text Brightness share bold
 amber arrows. Only the arrows choose direction; other row/value clicks cycle
 forward. Every cycle reserves its longest option width. Ratatui measures both
 rendered spans and clipped hitboxes, and labels shorten at grapheme boundaries
-before complete controls. Right sidebar's label and always-visible `[Panels]`
-button open its panel editor, including when Off.
+before complete controls.
 
 The Artboard group contains the default-on Artboard content disclaimer toggle.
-It is per device like the rail rows: it edits `device_artboard_disclaimer`
+It is per device: it edits `device_artboard_disclaimer`
 (outside `draft`, so `save()` never republishes it) and persists onto this
 session's SSH key, with the account's `artboard_disclaimer` only the default a
 new device inherits; re-enabling it closes
@@ -84,7 +83,7 @@ the hint so their hitboxes stay consistent across choices.
 Statusline is a split layout. Its compact list column fits the
 widest `>[ ] Name [↑↓]` entry, with reorder controls aligned after the widest name
 and no gap between cursor and checkbox. Each half of `[↑↓]` independently moves
-the row in its arrow's direction, including in Sidebar panels. Option titles sit
+the row in its arrow's direction. Option titles sit
 two cells from their controls; Label and component-specific options have
 directional arrows, while Brief/Auto-hide are
 simple toggles. Labels open options; checkboxes toggle. Pane offsets and wheel

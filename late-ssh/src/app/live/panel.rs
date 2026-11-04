@@ -1,4 +1,4 @@
-//! The right sidebar's Live panel: what the house can watch or read right
+//! Home's Live panel: what the house can watch or read right
 //! now, one row per thing, four rows, under its `── live ──` rule. Four
 //! kinds today: a stream that has gone live (who, the title, how many are
 //! watching), a live game on a watchable door (which game, where its

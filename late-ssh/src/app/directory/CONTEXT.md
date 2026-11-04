@@ -14,7 +14,7 @@ domains:
 - `state.rs`: the section enum and its stepping (`[` left, `]` right, both
   wrap), the Profiles list and selection, focus inside the detail.
 - `input.rs`, `mouse.rs`: page keys and clicks; a click on nothing this page
-  draws falls through to the frame and sidebar handlers.
+  draws falls through to the frame's handlers.
 - `ui.rs`: the section row, the list, the detail pane, the footer.
 - `editor/`: the profile editor (below). `app/tag_picker/` is the multi-select
   it opens for skills and langs (also used by Settings).

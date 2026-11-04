@@ -252,8 +252,13 @@ What the numbers decide:
   client's terminal has to parse and paint it at its rate, and a terminal
   that cannot (tmux in the path, a non-GPU emulator) falls behind and
   every key feels late. The bytes column is the number the rule holds.
-- Measured in prod (`late_ssh_render*`, the output-budget metrics): not
-  yet, for any piece; the bytes column is the proxy until then.
+- Measured in prod, indirectly: nothing records which piece a session
+  ran, so the reading is 7 days of `session wire summary` joined to each
+  user's selected piece, and the ranking above holds. `earthrise` and
+  `misty_forest` sessions cost what `off` does, about 5 KB/s, and `random`,
+  `randomer`, the aurora and alpine dawn cost 27 to 70 KB/s. Those 20 users
+  are 78% of all output (`SCALE.md`, Pain Point 1): the budget bounds a
+  piece's rate, and nothing bounds how long it plays to an empty room.
 
 ## 5. Porting a piece
 

@@ -1768,7 +1768,7 @@ fn settings_help_lines() -> Vec<String> {
         "  country via picker, with Unicode flag rendering".to_string(),
         "  timezone via picker".to_string(),
         "  IDE, terminal, OS, and languages for profile/late.fetch surfaces".to_string(),
-        "  Tweaks: terminal background sync, text brightness, right sidebar mode, composer send behavior, plain glyphs, terminal images, chat badges, landing page, input mode"
+        "  Tweaks: terminal background sync, text brightness, composer send behavior, plain glyphs, terminal images, chat badges, landing page, input mode"
             .to_string(),
         "  Statusline: bottom status bar components, their order, and display options".to_string(),
         "  private RSS/Atom subscriptions".to_string(),
@@ -1794,8 +1794,7 @@ fn settings_help_lines() -> Vec<String> {
         "  Language search matches English/native names and stored codes. Profile Langs uses the tag picker".to_string(),
         "  Interaction mode offers Keyboard, Mouse, Hybrid; Keyboard disables clicks and wheel input".to_string(),
         "  Statusline Label and component options use ◂/▸; Brief and Auto-hide are toggles".to_string(),
-        "  Sidebar panels: click toggles; [↑↓] arrows reorder. Chat badges: click toggles".to_string(),
-        "  Right sidebar: mode arrows change this device; its label or [Panels] opens panels, even when Off".to_string(),
+        "  Chat badges: click toggles".to_string(),
         "  Country/timezone/Target language/Interaction mode: Enter or click a result applies; Esc/[x] cancels".to_string(),
         "  RSS: click subscriptions to select; Add, Remove, Refresh manage them".to_string(),
         "  Account: click fields, choices and buttons; typed confirmations still apply".to_string(),
@@ -1805,7 +1804,6 @@ fn settings_help_lines() -> Vec<String> {
         "  Enter / e edit text or open pickers".to_string(),
         "  Space quick-cycles simple toggles".to_string(),
         "  Pickers: type to filter, Enter pick, Esc cancel".to_string(),
-        "  Sidebar panels: Enter on Right sidebar opens the ordered checklist".to_string(),
         "  Statusline: Space toggles a component; Enter opens its options"
             .to_string(),
         "  Account: Enter opens Invites, Link Accounts, IRC access token, or Delete Account"
@@ -1841,16 +1839,6 @@ fn settings_help_lines() -> Vec<String> {
         "    Sync terminal background  paint your terminal's background to match the theme; off (or the Terminal theme) leaves your terminal's own background alone. Selections and highlights inside the app are part of the theme itself, not this toggle"
             .to_string(),
         "    Text Brightness         nudge overall text brightness up or down; click ◂ / ▸ to decrease / increase".to_string(),
-        "    Right sidebar           on / off / auto for the Arcade; Enter opens the panel checklist, which"
-            .to_string(),
-        "                            orders the Arcade's panels (Home's tiles are arranged in place, Ctrl+E)"
-            .to_string(),
-        "                            auto hides the sidebar on terminals too narrow to carry it, so one"
-            .to_string(),
-        "                            account works on both a desktop and a phone".to_string(),
-        "                            the row applies to this device (this SSH key) only, never the"
-            .to_string(),
-        "                            account default".to_string(),
         "  Input".to_string(),
         "    Send and keep open on Enter   Enter sends without closing the composer; while on, Alt+S becomes a no-op"
             .to_string(),
@@ -2103,7 +2091,7 @@ fn bonsai_help_lines() -> Vec<String> {
         "",
         "The bonsai is a living tree. It is not a fixed ladder of pictures: it keeps a real branch graph, and every choice you make is remembered in how it grows next. Water it, steer the tips, cut your mistakes, and pinch foliage, and the silhouette becomes a record of how you tended it.",
         "",
-        "Everyone has one. It is planted at your first login, w opens it from anywhere you are not composing, and it lives in the right sidebar and on your profile as a compact preview of the care modal.",
+        "Everyone has one. It is planted at your first login, w opens it from anywhere you are not composing, and it lives on Home and on your profile as a compact preview of the care modal.",
         "",
         "Controls",
         "  w                 water, or replant when the tree has died",
@@ -2178,7 +2166,7 @@ fn bonsai_help_lines() -> Vec<String> {
         "  green tip         ready to pinch again",
         "  grey and faint    deadwood, or a tree that has died",
         "  dry leaves        the canopy browns out when stress is high",
-        "  The sidebar preview is a compact silhouette; denser foliage reads as * and #.",
+        "  The small preview is a compact silhouette; denser foliage reads as * and #.",
         "",
         "The chat badge",
         "  Your chat glyph is earned from the live tree: branch length plus leaf-pad weight, scaled by health.",

@@ -1,7 +1,5 @@
-//! Right-sidebar Lobby panel (daily correspondence games): passive, fixed
-//! height, stable chrome. Slots render dashes when empty so the panel never
-//! changes shape between states; all interaction lives in the modal
-//! (`Ctrl+G`).
+//! Home's lobby tile (daily correspondence games): passive, all interaction
+//! lives in the modal (`Ctrl+G`).
 
 use ratatui::{
     Frame,
@@ -15,59 +13,17 @@ use crate::app::common::theme;
 
 use super::{
     state::DailyState,
-    svc::{DailyChallengeItem, DailyFinishedItem, DailyMatchItem, DailyOutcome},
+    svc::{DailyChallengeItem, DailyFinishedItem, DailyMatchItem},
 };
 use crate::app::common::primitives::format_relative_time_short;
 
-/// Four match slots + status line (open count + entries) + key hints. The
-/// panel has no title row of its own: the sidebar's labeled separator rule
-/// (`── lobby ────`, glowing on your-turn) is the title.
-pub(crate) const DAILY_PANEL_HEIGHT: u16 = 6;
-/// The cap (`DAILY_MAX_ACTIVE_ENTRIES`, 10) now exceeds these four slots, so
-/// the panel is a top-4 view, not a full mirror: it shows the most actionable
-/// matches (your-turn first) and the modal shows the rest.
-const MATCH_SLOTS: usize = 4;
-
-/// Inputs for the panel, bundled so the pure line builder is easy to drive
-/// from tests.
+/// Inputs for the tile's counts row, bundled so the pure line builder is easy
+/// to drive from tests.
 pub(crate) struct DailyPanelProps {
-    /// Slot rows in display order: your-turn first (nearest deadline within),
-    /// then unseen results, then waiting. Only the first four render; with the
-    /// cap above four the tail (typically waiting rows) lives in the modal.
-    pub matches: Vec<DailyPanelMatchRow>,
     pub open_count: usize,
     pub lobby_glow: bool,
     pub entry_count: usize,
     pub entry_cap: usize,
-}
-
-pub(crate) struct DailyPanelMatchRow {
-    pub opponent: String,
-    pub status: DailyPanelRowStatus,
-}
-
-/// What a slot row is telling the player. Won/Lost/Draw rows are unseen
-/// results lingering until acknowledged in the modal.
-pub(crate) enum DailyPanelRowStatus {
-    YourTurn,
-    Waiting,
-    Won,
-    Lost,
-    Draw,
-}
-
-pub(crate) fn draw_daily_inline(
-    frame: &mut Frame,
-    area: Rect,
-    state: &DailyState,
-    lobby_glow: bool,
-) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    let props = daily_panel_props(state, lobby_glow);
-    let lines = daily_panel_lines(area.width, &props);
-    frame.render_widget(Paragraph::new(lines), area);
 }
 
 /// The Home lobby tile: the latest tables on the board, newest first, over
@@ -174,63 +130,12 @@ fn daily_feed_rows(state: &DailyState) -> Vec<DailyFeedRow> {
 }
 
 fn daily_panel_props(state: &DailyState, lobby_glow: bool) -> DailyPanelProps {
-    let my_matches = state.my_matches();
-    let (turn_rows, waiting_rows): (Vec<_>, Vec<_>) =
-        my_matches.iter().partition(|item| state.my_turn(item));
-    let match_row =
-        |item: &&crate::app::lobby::daily::svc::DailyMatchItem, status| DailyPanelMatchRow {
-            opponent: state
-                .opponent_of(item)
-                .1
-                .unwrap_or_else(|| "player".to_string()),
-            status,
-        };
-    // Actionable beats news beats waiting: your-turn rows, then unseen
-    // results, then matches waiting on the opponent.
-    let mut matches: Vec<DailyPanelMatchRow> = turn_rows
-        .iter()
-        .map(|item| match_row(item, DailyPanelRowStatus::YourTurn))
-        .collect();
-    matches.extend(state.my_finished().into_iter().map(|item| {
-        DailyPanelMatchRow {
-            opponent: item
-                .opponent_of(state.user_id())
-                .1
-                .unwrap_or_else(|| "player".to_string()),
-            status: match item.outcome_for(state.user_id()) {
-                DailyOutcome::Won => DailyPanelRowStatus::Won,
-                DailyOutcome::Lost => DailyPanelRowStatus::Lost,
-                DailyOutcome::Draw => DailyPanelRowStatus::Draw,
-            },
-        }
-    }));
-    matches.extend(
-        waiting_rows
-            .iter()
-            .map(|item| match_row(item, DailyPanelRowStatus::Waiting)),
-    );
-    let lobby = state.lobby();
     DailyPanelProps {
-        matches,
-        open_count: lobby.len(),
+        open_count: state.lobby().len(),
         lobby_glow,
         entry_count: state.entry_count(),
         entry_cap: state.entry_cap(),
     }
-}
-
-fn daily_panel_lines(width: u16, props: &DailyPanelProps) -> Vec<Line<'static>> {
-    let mut lines = Vec::with_capacity(DAILY_PANEL_HEIGHT as usize);
-    for slot in 0..MATCH_SLOTS {
-        match props.matches.get(slot) {
-            Some(row) => lines.push(match_line(width, row)),
-            None => lines.push(empty_slot_line()),
-        }
-    }
-
-    lines.push(status_line(width, props));
-    lines.push(hints_line());
-    lines
 }
 
 /// Feed rows for as many tables as fit above the footer (a quiet board says
@@ -317,68 +222,7 @@ fn feed_line(width: u16, row: &DailyFeedRow) -> Line<'static> {
     ])
 }
 
-/// `► mira        your turn` / `  c0ld          waiting` / `► kal   you won`.
-fn match_line(width: u16, row: &DailyPanelMatchRow) -> Line<'static> {
-    // Everything but "waiting" is an attention row: glowing marker, bright
-    // bold name, accent-colored status.
-    let (marker_color, status, status_color) = match row.status {
-        DailyPanelRowStatus::YourTurn => (theme::AMBER_GLOW(), "your turn", theme::AMBER()),
-        DailyPanelRowStatus::Won => (theme::SUCCESS(), "you won", theme::SUCCESS()),
-        DailyPanelRowStatus::Lost => (theme::ERROR(), "you lost", theme::ERROR()),
-        DailyPanelRowStatus::Draw => (theme::AMBER(), "draw", theme::AMBER()),
-        DailyPanelRowStatus::Waiting => (theme::TEXT_FAINT(), "waiting", theme::TEXT_FAINT()),
-    };
-    let waiting = match row.status {
-        DailyPanelRowStatus::Waiting => true,
-        DailyPanelRowStatus::YourTurn
-        | DailyPanelRowStatus::Won
-        | DailyPanelRowStatus::Lost
-        | DailyPanelRowStatus::Draw => false,
-    };
-    let (marker, marker_style, name_style, status_style) = if waiting {
-        (
-            "  ",
-            Style::default().fg(marker_color),
-            Style::default().fg(theme::TEXT_DIM()),
-            Style::default().fg(status_color),
-        )
-    } else {
-        (
-            "► ",
-            Style::default()
-                .fg(marker_color)
-                .add_modifier(Modifier::BOLD),
-            Style::default()
-                .fg(theme::TEXT_BRIGHT())
-                .add_modifier(Modifier::BOLD),
-            Style::default()
-                .fg(status_color)
-                .add_modifier(Modifier::BOLD),
-        )
-    };
-    let marker_w = 2;
-    let status_w = status.chars().count();
-    let name_budget = (width as usize).saturating_sub(marker_w + status_w + 1);
-    let name = truncate_chars(&row.opponent, name_budget);
-    let pad = (width as usize)
-        .saturating_sub(marker_w + name.chars().count() + status_w)
-        .max(1);
-    Line::from(vec![
-        Span::styled(marker.to_string(), marker_style),
-        Span::styled(name, name_style),
-        Span::raw(" ".repeat(pad)),
-        Span::styled(status.to_string(), status_style),
-    ])
-}
-
-fn empty_slot_line() -> Line<'static> {
-    Line::from(Span::styled(
-        "  ─",
-        Style::default().fg(theme::BORDER_DIM()),
-    ))
-}
-
-/// `2 open · 1/4` — open lobby challenges and your entry usage in one row.
+/// `2 open · 1/4`: open lobby challenges and your entry usage in one row.
 /// The open count glows while there are unseen challenges; the entries part
 /// stays faint so the liquidity signal carries the row.
 fn status_line(width: u16, props: &DailyPanelProps) -> Line<'static> {
@@ -400,24 +244,6 @@ fn status_line(width: u16, props: &DailyPanelProps) -> Line<'static> {
             truncate_chars(&entries_text, budget),
             Style::default().fg(theme::TEXT_FAINT()),
         ),
-    ])
-}
-
-/// `ctrl+g · \` toggle` — the two keys that front the Lobby: `ctrl+g` opens
-/// the modal, and the backtick toggles you through the games waiting on you
-/// (boards on your move, seated tables, unfinished dailies) and back to chat.
-/// Constant chrome of the sidebar panel; the Home tile puts the same two on
-/// its last row (`COMPACT_FOOTER_KEYS`).
-fn hints_line() -> Line<'static> {
-    let key_style = Style::default()
-        .fg(theme::AMBER_DIM())
-        .add_modifier(Modifier::BOLD);
-    let sep_style = Style::default().fg(theme::TEXT_FAINT());
-    Line::from(vec![
-        Span::styled("ctrl+g", key_style),
-        Span::styled(" · ", sep_style),
-        Span::styled("`", key_style.fg(theme::AMBER())),
-        Span::styled(" toggle", Style::default().fg(theme::TEXT_DIM())),
     ])
 }
 

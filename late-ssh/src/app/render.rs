@@ -4,7 +4,7 @@ use anyhow::Context;
 use late_core::api_types::NowPlaying;
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear},
@@ -12,7 +12,6 @@ use ratatui::{
 
 use late_core::models::leaderboard::{ArcadeGame, LeaderboardData, ScoreGame};
 use late_core::models::statusline::StatusComponentSetting;
-use late_core::models::user::{RightSidebarComponentSetting, RightSidebarMode};
 
 use super::{
     artboard,
@@ -21,8 +20,8 @@ use super::{
     chat::{mod_modal, room_info_modal, room_search_modal, sheet_modal},
     common::{
         primitives::{Banner, BannerKind, Screen, draw_banner},
-        sidebar::{SidebarProps, draw_sidebar, sidebar_clock_text},
         theme,
+        time::clock_text,
     },
     help_modal, icon_picker, profile_modal, quit_confirm, settings_modal,
     state::App,
@@ -30,72 +29,17 @@ use super::{
 use crate::app::door::game::DoorGame;
 use crate::app::files::terminal_image::TerminalImageFrame;
 
-/// Narrowest terminal that still carries the Arcade's sidebar set to
-/// `Auto`: the sidebar costs 24 columns, under 72 the page takes the whole
-/// width. (Home has no such fold: its rails are tiles, laid out as
-/// arranged at every width.)
-pub(crate) const AUTO_RIGHT_SIDEBAR_MIN_COLS: u16 = 72;
-
-pub(crate) const RIGHT_SIDEBAR_WIDTH: u16 = 24;
-
 fn app_frame_inner_area(area: Rect) -> Rect {
     Block::default().borders(Borders::ALL).inner(area)
 }
 
-fn app_content_and_sidebar_areas(inner: Rect, show_right_sidebar: bool) -> (Rect, Option<Rect>) {
-    if show_right_sidebar {
-        let layout =
-            Layout::horizontal([Constraint::Fill(1), Constraint::Length(RIGHT_SIDEBAR_WIDTH)])
-                .split(inner);
-        (layout[0], Some(layout[1]))
-    } else {
-        (inner, None)
-    }
-}
-
 impl App {
-    /// The rect the current screen draws into: inside the app border, minus
-    /// the right rail when it shows. This is the one definition — the draw
-    /// path, mouse hit-testing, and the pre-frame raster wipe all derive
-    /// their geometry from it, and they have to agree cell for cell or
-    /// placements land in the wrong place.
+    /// The rect the current screen draws into: inside the app border. This is
+    /// the one definition: the draw path, mouse hit-testing, and the pre-frame
+    /// raster wipe all derive their geometry from it, and they have to agree
+    /// cell for cell or placements land in the wrong place.
     pub(crate) fn content_area(&self) -> Rect {
-        let inner = app_frame_inner_area(Rect::new(0, 0, self.size.0, self.size.1));
-        app_content_and_sidebar_areas(inner, self.right_sidebar_visible()).0
-    }
-}
-
-fn sidebar_enabled(show_settings: bool, draft_enabled: bool, profile_enabled: bool) -> bool {
-    if show_settings {
-        draft_enabled
-    } else {
-        profile_enabled
-    }
-}
-
-/// The Arcade keeps the panel sidebar; Home's sidebar is its tiles now
-/// (`app/zen`, the Home page).
-fn right_sidebar_allowed_on_screen(screen: Screen) -> bool {
-    matches!(screen, Screen::Arcade)
-}
-
-/// Resolve whether the right sidebar should render on `screen`, given the mode
-/// this session ended up with (see `App::rail_modes`) and the live terminal
-/// width. The sidebar only shows on Home and the Arcade; which panels appear is
-/// governed by the component list.
-pub(crate) fn resolve_right_sidebar_enabled(
-    mode: RightSidebarMode,
-    screen: Screen,
-    cols: u16,
-) -> bool {
-    if !right_sidebar_allowed_on_screen(screen) {
-        return false;
-    }
-
-    match mode {
-        RightSidebarMode::On => true,
-        RightSidebarMode::Off => false,
-        RightSidebarMode::Auto => cols >= AUTO_RIGHT_SIDEBAR_MIN_COLS,
+        app_frame_inner_area(Rect::new(0, 0, self.size.0, self.size.1))
     }
 }
 
@@ -153,6 +97,8 @@ struct DrawContext<'a> {
     chat_view: chat::ui::ChatRenderInput<'a>,
     game_selection: ArcadeGame,
     is_playing_game: bool,
+    /// This screen answers backtick (`workspace::cycle::title_offers_hop`).
+    title_offers_hop: bool,
     arcade_solvers_open: bool,
     door_delete_confirm: bool,
     usernames: &'a crate::usernames::UsernameLookup<'a>,
@@ -203,7 +149,7 @@ struct DrawContext<'a> {
     /// Every live game on a watchable door: the hub rail's live rows and
     /// the watch view's header.
     live_rows: Vec<crate::app::door::spectate::state::LiveRow>,
-    /// The same games as the sidebar's Live panel lists them, with who is
+    /// The same games as the Live panel lists them, with who is
     /// watching each, and the panel's click slot.
     live_panel_rows: Vec<crate::app::live::panel::LivePanelRow>,
     live_panel_now: chrono::DateTime<chrono::Utc>,
@@ -325,15 +271,11 @@ struct DrawContext<'a> {
     now_playing: Option<&'a NowPlaying>,
     paired_client: Option<&'a ClientAudioState>,
     eq_state: crate::app::audio::viz::EqState,
-    sidebar_clock: &'a str,
+    clock: &'a str,
     bonsai: &'a crate::app::bonsai::state::BonsaiState,
     banner: Option<&'a Banner>,
     is_admin: bool,
     is_moderator: bool,
-    show_right_sidebar: bool,
-    /// Resolved ordered sidebar panels (draft while the settings modal is open,
-    /// else the saved profile). Order is render order, top to bottom.
-    right_sidebar_components: Vec<RightSidebarComponentSetting>,
     show_settings: bool,
     settings_modal_state: &'a settings_modal::state::SettingsModalState,
     show_quit_confirm: bool,
@@ -425,13 +367,11 @@ struct DrawContext<'a> {
     radio_slots: late_core::models::user::RadioSlots,
     radio_now_playing: Option<&'a str>,
     /// Humans currently connected (bots excluded) plus connected friends,
-    /// for the sidebar's pinned presence rows.
+    /// for the pinned presence rows.
     online_count: usize,
     marquee_tick: usize,
     chat_state: &'a chat::state::ChatState,
     user_id: uuid::Uuid,
-    /// `App::pet_out`: the pet is bought and not put away.
-    pet_out: bool,
     news_reader: Option<&'a chat::news::reader::state::ReaderModal>,
     video_modal: Option<&'a crate::app::video::state::WatchModal>,
     is_draining: bool,
@@ -586,32 +526,8 @@ impl App {
         }
 
         let area = Rect::new(0, 0, self.size.0, self.size.1);
-        // Rail visibility: the settings draft previews live while its modal is
-        // open, otherwise the session's modes (this device's stored layout, else
-        // the account default). `Auto` resolves against the live width, so a
-        // rotate or a window drag reflows on the next frame.
-        let session_right_sidebar_mode = self.rail_modes();
-        let draft_right_sidebar_mode = self.settings_modal_state.device_rails();
-        let show_right_sidebar = sidebar_enabled(
-            self.show_settings,
-            resolve_right_sidebar_enabled(draft_right_sidebar_mode, self.screen, self.size.0),
-            resolve_right_sidebar_enabled(session_right_sidebar_mode, self.screen, self.size.0),
-        );
-        // Live-preview the component list from the draft while the settings
-        // modal is open; otherwise use the saved profile.
-        let right_sidebar_components = if self.show_settings {
-            self.settings_modal_state
-                .draft()
-                .right_sidebar_components
-                .clone()
-        } else {
-            self.profile_state
-                .profile()
-                .right_sidebar_components
-                .clone()
-        };
-        // Same draft-aware live preview as the sidebar panels above. These are
-        // the user-arranged bottom-left components; the top bar is fixed.
+        // Draft-aware live preview: the user-arranged bottom-left components;
+        // the top bar is fixed.
         let statusline_components = self.statusline_components().to_vec();
         let shell_active_room = self.chat.selected_room_id;
         let synthetic_selected = self.chat.synthetic_entry_selected();
@@ -704,10 +620,11 @@ impl App {
         let banner = self.active_banner().cloned();
         // First contact, stage 1 (`app/deadchannel/haunt`): a live glitch
         // burst swaps a clock character or two for the glyph alphabet.
-        let sidebar_clock = crate::app::deadchannel::haunt::ui::apply_clock_glitch(
+        let title_offers_hop = crate::app::workspace::cycle::title_offers_hop(self);
+        let clock = crate::app::deadchannel::haunt::ui::apply_clock_glitch(
             &self.haunt,
             self.marquee_tick,
-            sidebar_clock_text(self.profile_state.profile().timezone.as_deref()),
+            clock_text(self.profile_state.profile().timezone.as_deref()),
         );
         // Stage 2's live hit, threaded into every chat message surface.
         let name_flicker =
@@ -900,7 +817,7 @@ impl App {
         };
         let status_youtube_track = match self.paired_source {
             late_core::models::user::AudioSource::Youtube => {
-                crate::app::common::sidebar::youtube_track(&self.audio.queue_snapshot())
+                crate::app::common::music_dock::youtube_track(&self.audio.queue_snapshot())
             }
             late_core::models::user::AudioSource::Radio => None,
         };
@@ -1714,6 +1631,7 @@ impl App {
                         chat_view,
                         game_selection: self.game_selection,
                         is_playing_game: self.is_playing_game,
+                        title_offers_hop,
                         arcade_solvers_open: self.arcade_solvers_open,
                         door_delete_confirm: self.door_delete_confirm,
                         usernames: chat_usernames,
@@ -1839,13 +1757,11 @@ impl App {
                         now_playing: now_playing.as_ref(),
                         paired_client: paired_client.as_ref(),
                         eq_state,
-                        sidebar_clock: &sidebar_clock,
+                        clock: &clock,
                         bonsai: &self.bonsai.tree,
                         banner: banner.as_ref(),
                         is_admin: self.is_admin,
                         is_moderator: self.is_moderator,
-                        show_right_sidebar,
-                        right_sidebar_components,
                         show_settings: self.show_settings,
                         settings_modal_state: &self.settings_modal_state,
                         show_quit_confirm: self.show_quit_confirm,
@@ -1928,7 +1844,6 @@ impl App {
                         marquee_tick: self.marquee_tick,
                         chat_state: &self.chat,
                         user_id: self.user_id,
-                        pet_out,
                         news_reader,
                         video_modal,
                         is_draining: self.is_draining.load(std::sync::atomic::Ordering::Relaxed),
@@ -2215,8 +2130,7 @@ impl App {
             inner
         };
 
-        let (content_area, sidebar_area) =
-            app_content_and_sidebar_areas(inner, ctx.show_right_sidebar);
+        let content_area = inner;
         let foreground_overlay_open = ctx.foreground_overlay_open;
         // The tour stops that write into a real surface: the two modals take
         // the header themselves, the practice table and the dungeon fight
@@ -2233,7 +2147,7 @@ impl App {
             (Some(_), _) | (None, _) => content_area,
         };
         match screen {
-            // Home: its rail, chat and sidebar panels as tiles, inside the
+            // Home: its rail, chat and panels as tiles, inside the
             // frame.
             Screen::Dashboard => {
                 let strip_hit = ctx.dashboard_view.live_strip_hit;
@@ -2246,7 +2160,7 @@ impl App {
                     zen: ctx.home,
                     home_layouts: ctx.home_layouts,
                     layout_list: ctx.layout_list,
-                    music: crate::app::common::sidebar::MusicStageProps {
+                    music: crate::app::common::music_dock::MusicStageProps {
                         paired_client: ctx.paired_client,
                         queue: &ctx.booth_snapshot,
                         source: ctx.paired_source,
@@ -2274,7 +2188,7 @@ impl App {
                     chats: std::mem::take(&mut ctx.home_chat_tiles),
                     eq_state: ctx.eq_state,
                     presence: crate::app::presence::ui::PresenceView {
-                        clock: ctx.sidebar_clock,
+                        clock: ctx.clock,
                         online: ctx.online_count,
                         friends: ctx.home_active_friends,
                         history: &ctx.pulse_history,
@@ -2730,42 +2644,6 @@ impl App {
             }
         }
 
-        if let Some(sidebar_area) = sidebar_area {
-            draw_sidebar(
-                frame,
-                sidebar_area,
-                &SidebarProps {
-                    components: &ctx.right_sidebar_components,
-                    paired_client: ctx.paired_client,
-                    eq_state: ctx.eq_state,
-                    bonsai: ctx.bonsai,
-                    pet: ctx.pet_out.then_some(ctx.pet_state),
-                    tank: crate::app::common::sidebar::SidebarTank {
-                        aquarium: ctx.aquarium_state,
-                        hungry: ctx.aquarium_care.hungry(),
-                    },
-                    clock_text: ctx.sidebar_clock,
-                    queue_snapshot: &ctx.booth_snapshot,
-                    youtube_source_count: ctx.youtube_source_count,
-                    radio_source_count: ctx.radio_source_count,
-                    paired_source: ctx.paired_source,
-                    selected_radio_station: ctx.selected_radio_station,
-                    radio_slots: ctx.radio_slots,
-                    radio_now_playing: ctx.radio_now_playing,
-                    daily: ctx.daily,
-                    live: crate::app::live::panel::LivePanelProps {
-                        rows: &ctx.live_panel_rows,
-                        hit: ctx.live_panel_hit,
-                        now: ctx.live_panel_now,
-                    },
-                    lobby_glow: ctx.lobby.glow(),
-                    online_count: ctx.online_count,
-                    active_friends: ctx.home_active_friends,
-                    marquee_tick: ctx.marquee_tick,
-                },
-            );
-        }
-
         if foreground_overlay_open {
             terminal_images.clear();
         }
@@ -2822,12 +2700,7 @@ impl App {
         crate::app::calendar::ui::draw_modal(frame, inner, ctx.calendar);
 
         if ctx.show_settings {
-            settings_modal::ui::draw(
-                frame,
-                inner,
-                ctx.settings_modal_state,
-                crate::app::common::sidebar::SidebarOwnership { pet: ctx.pet_out },
-            );
+            settings_modal::ui::draw(frame, inner, ctx.settings_modal_state);
         }
 
         if ctx.show_mod_modal {
@@ -3441,6 +3314,13 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
 
     if screen == Screen::Arcade && ctx.is_playing_game {
         append_arcade_title_extras(&mut spans, ctx);
+    }
+
+    if ctx.title_offers_hop {
+        spans.push(Span::styled(
+            "· ` hop in & out ",
+            Style::default().fg(theme::TEXT_DIM()),
+        ));
     }
 
     if screen == Screen::Artboard {

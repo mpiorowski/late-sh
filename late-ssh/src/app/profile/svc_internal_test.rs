@@ -80,9 +80,7 @@ async fn interaction_mode_saves_latest_choice_while_an_earlier_write_is_blocked(
 async fn profile_edits_save_the_latest_draft_while_an_earlier_write_is_blocked() {
     use crate::test_helpers::{new_test_db, wait_until};
     use late_core::models::statusline::default_statusline_components;
-    use late_core::models::user::{
-        LandingPage, RightSidebarMode, TerminalImagesMode, default_right_sidebar_components,
-    };
+    use late_core::models::user::{LandingPage, TerminalImagesMode};
     use late_core::test_utils::create_test_user;
 
     let draft = |ide: &str| ProfileParams {
@@ -101,9 +99,6 @@ async fn profile_edits_save_the_latest_draft_while_an_earlier_write_is_blocked()
         theme_id: None,
         enable_background_color: false,
         text_brightness_adjustment: 0,
-        show_right_sidebar: true,
-        right_sidebar_mode: RightSidebarMode::On,
-        right_sidebar_components: default_right_sidebar_components(),
         statusline_components: default_statusline_components(),
         keep_composer_focused: false,
         start_with_music_muted: false,

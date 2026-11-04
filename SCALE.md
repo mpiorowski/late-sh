@@ -1,20 +1,39 @@
 # late.sh Scale Notes
 
-This document records the current production capacity posture, what was discovered during the HN-spike investigations (June 2026 and the 2026-07-22 OOM, see the incident log in `infra/RUNBOOK.md`), the DB query findings, the shipped render-cost program, and the roadmap toward roughly 1000 concurrent users.
+> **Health check or capacity question? Look up `monitoring/dashboards/observability.json` first.** It is the catalogue of production queries: 98 panels with their exact PromQL and LogsQL (spans, session start and the DB pool in the Operations row, errors in Logs, frames and bytes in Rendering and Wire & Latency). Copy an `expr` from it instead of rebuilding a query, and check metric names against it:
+>
+> ```sh
+> jq -r '.panels[] | select(.targets) | .title as $t | .targets[] | select(.expr) | "\($t): \(.expr)"' monitoring/dashboards/observability.json
+> ```
+>
+> Reaching the data: [Reach the data](#reach-the-data). Postgres recipes: `infra/RUNBOOK.md`. Rank DB work by a two-snapshot delta: [DB Cost Ranking](#db-cost-ranking).
+
+This document records the production capacity posture, the measured costs, and the roadmap toward roughly 1000 concurrent users. Crashes and incidents are in the log in `infra/RUNBOOK.md`.
 
 ## Current Infra Status
 
 Cluster shape:
 
-- Three RKE2 nodes (Kubernetes v1.34.4+rke2r1, Debian 13): `server-1`, the only control-plane and etcd member; `agent-2`, the games worker (below); and `agent-1`, a worker joined 2026-09-13 (Hetzner CX33, 4 vCPU, 8 GB, 40 GB disk) with label and `NoSchedule` taint `role=support`. Node table and join procedure: `infra/README.md`, Nodes
-- `server-1` capacity observed: 8 CPU, about 15.6 GiB memory
-- Node usage at about 60 concurrent sessions (2026-07-24, post-render-cost-program): about 37% CPU, 46% memory. For contrast, the pre-program reading at 80 sessions was about 77% CPU, 43% memory
-- Node usage 2026-08-18 at 38 sessions: 23% CPU, 53% memory. Scheduler requests are at 56% CPU / 56% memory; limits are overcommitted to 295% CPU / 206% memory. The overcommit is normal for this shape but means a synchronized spike across pods has no referee
-- Node disk: 52% used as of 2026-08-18, down from the 75% recorded 2026-07-24 (something reclaimed, most likely containerd image GC). `DiskPressure`, `MemoryPressure`, and `PIDPressure` all `False`
-- Support workloads run on `agent-1` since 2026-09-13 (applied and verified): service-web, Icecast, Liquidsoap, otel-collector, vmagent, kube-state-metrics, VictoriaMetrics/Logs/Traces, Grafana, Minecraft. `server-1` keeps service-ssh, redis, the doors, ingress-nginx, ipv6-proxy, ssh-edge, LiveKit, and both Postgres instances, the last two by decision. See Immediate Next Work 3
-- Game servers run on `agent-2` (Hetzner CAX21, arm64, 4 vCPU, about 7.6 GiB allocatable), tainted `role=games`: Vintage Story only, about 1.2 GiB idle. Minecraft stays on `agent-1`
-- Node usage 2026-09-13, minutes after the move (not a settled baseline): `server-1` 13% CPU, 41% memory, 16.6 GB disk free, down from 18% CPU, 52% memory, 7.5 GB free earlier that day. `agent-1` 4% CPU, 52% memory (about 4 GiB, Minecraft's JVM included), 29.2 GB disk free
+- Three RKE2 nodes (Kubernetes v1.34.4+rke2r1, Debian 13). Node table and join procedure: `infra/README.md`, Nodes
+  - `server-1` (8 CPU, about 15.6 GiB), the only control-plane and etcd member: service-ssh, redis, the doors, ingress-nginx, ipv6-proxy, ssh-edge, LiveKit, both Postgres instances (the last two by decision, Immediate Next Work 3)
+  - `agent-1` (Hetzner CX33, 4 vCPU, 8 GB, 40 GB disk), label and `NoSchedule` taint `role=support`: service-web, Icecast, Liquidsoap, otel-collector, vmagent, kube-state-metrics, VictoriaMetrics/Logs/Traces, Grafana, Minecraft
+  - `agent-2` (Hetzner CAX21, arm64, 4 vCPU, about 7.6 GiB allocatable), tainted `role=games`: Vintage Story only
 - Storage: every PVC uses the `local-path` (hostPath) provisioner, so any pod with a volume is pinned to the node that holds its data. This matters for any node move (door-game saves, music data, Postgres).
+
+Reading 2026-11-04, 21 live sessions, no pressure condition set on any node:
+
+| Node | CPU | Memory | Disk free | Requests CPU / mem | Limits CPU / mem |
+|---|---|---|---|---|---|
+| `server-1` | 17% | 47% | 9.3 of 37.2 GiB (images 12.8 GiB) | 52% / 49% | 320% / 184% |
+| `agent-1` | 7% | 74% | 13.0 of 37.2 GiB (images 7.0 GiB) | 41% / 55% | 135% / 107% |
+| `agent-2` | 3% | 29% | 29.2 of 37.2 GiB | 25% / 21% | 75% / 39% |
+
+The limit overcommit is normal for this shape but means a synchronized spike across pods has no referee. `server-1` disk is the one trend: 16.6 GiB free on 2026-09-13, 9.3 GiB now, and kubelet image GC starts by default at 85% used, about 5.6 GiB free. Item 3, Left to do.
+
+Operational notes:
+
+- Changing the CNPG memory limit restarts the primary and briefly removes the `postgres-rw` endpoint.
+- In-place pod resize (`kubectl patch --subresource resize`, Kubernetes 1.34, zero restart, zero dropped sessions) patches only the running pod. The Deployment template must come from Terraform or the next rollout reverts the limit.
 
 Application deployments:
 
@@ -45,9 +64,9 @@ Application deployments:
 - `redis`: 1 replica (`valkey/valkey:8-alpine`, service name `redis-sv`)
   - LiveKit <-> ingress message bus only. The LiveKit server refuses Ingress API calls without it. Not application state, not a cache
 - `postgres`: CloudNativePG, 2 instances
-  - Primary: `postgres-1`
+  - Primary: `postgres-2`, since a switchover on 2026-10-22 17:35 UTC (timeline 8). `postgres-1` exited 0, so it was not a crash; nothing records what triggered it
   - Both instances stay on `server-1` by decision (Immediate Next Work 3). Data leaves the node through daily barman-cloud base backups plus continuous WAL archiving to object storage
-  - Current Terraform/live memory limit: 4 GiB
+  - Current Terraform/live limits: 1 CPU, 4 GiB
   - `max_connections`: 100
   - `shared_buffers`: 256 MB
 
@@ -63,58 +82,66 @@ Internal endpoints:
 - `service-web -> icecast-sv:8000` for upstream `/stream` proxying
 - `service-ssh/service-web -> postgres-rw:5432`
 
-## Recent Emergency Headroom Changes
 
-Applied in Terraform and live Kubernetes:
-
-- Raised `service-ssh` CPU limit from `4000m` to `8000m`
-- Set `max_conns_global` to `1000` in the prod profile (late-ssh/src/config.rs)
-- Changed `late-web` audio upstream from public `https://audio.late.sh` to internal `http://icecast-sv:8000`
-- Raised Postgres memory limit from `2Gi` to `4Gi`
-- Raised Icecast client cap from `100` to `300`
-- Raised Icecast resources from `50m/64Mi` request and `200m/128Mi` limit to `100m/128Mi` request and `500m/512Mi` limit
-
-Operational note: changing the CNPG memory limit briefly removed the `postgres-rw` endpoint while the primary restarted. It recovered and reported healthy with 2 ready instances.
-
-Applied 2026-07-22 (OOM incident):
-
-- Raised `service-ssh` memory limit from `4Gi` to `8Gi` and request from `512Mi` to `2Gi`, first via in-place pod resize (Kubernetes 1.34 `kubectl patch --subresource resize`, zero restart, zero dropped sessions), then persisted in Terraform
-- Shipped the SSH output-budget guard and pair-WS hardening (see Pain Point 1 and the `infra/RUNBOOK.md` incident log)
-- In-place resize caveat: it patches only the running pod; the Deployment template must come from Terraform or the next rollout reverts the limit
 
 ## Biggest Pain Points
 
-### 1. Render/tick CPU: was the primary 1000-user blocker, fixed in code and verified in prod (2026-07-24, re-confirmed 2026-08-18). Still the scaling unit
+### 1. Render/tick CPU: the scaling unit
 
 The before-picture, kept as the baseline: the SSH render loop and browser tunnel world tick ran every 66 ms (roughly 15 FPS) for every session regardless of activity. Measured 2026-07-22 during the HN surge: about 59 millicores per session at the 15 FPS floor (4.7 cores for 80 sessions), saturating the 8-core node at roughly 100-110 concurrent sessions.
 
 The render-cost program (see its own section below) removed both the fixed tick and the unconditional draw:
 
-- A dirty gate skips `terminal.draw()` entirely on clean frames; an idle session with the sidebar hidden settles to about 1 render/min.
+- A dirty gate skips `terminal.draw()` entirely on clean frames; an idle session on a page with nothing animated settles to about 1 render/min.
 - The fixed 66 ms interval is replaced by an adaptive wake deadline (66 ms hot to 500 ms idle floor); an idle session costs 2 cheap channel-drain ticks/sec instead of 15 full renders/sec.
 - The per-frame constant factors from the 2026-07-22 audit are fixed (run-length clubhouse spans instead of per-cell `String`s, 1 Hz presence cache instead of a per-render `active_users` lock).
-- The floor by product decision: a session with the right sidebar visible paints at ~7.5 fps and never settles fully clean. Two panels hold that edge: the bonsai sway (always) and the ambient equalizer (only while a client is paired and unmuted).
+- The floor by product decision: a session on a Home with an animated tile paints at ~7.5 fps and never settles fully clean. Two tiles hold that edge: the bonsai sway (always) and the ambient equalizer (only while a client is paired and unmuted).
 
 The memory failure mode is also closed: the 2026-07-22 OOM (full writeup in the `infra/RUNBOOK.md` incident log) was frames rendered into russh's uncapped per-channel output queue for clients that had stopped reading. Shipped fix: a per-session `OutputBudget` in `late-ssh/src/ssh.rs`; over 32 MB outstanding the render loop pauses, and 30 s of sustained stall disconnects the session. Metrics: `late_ssh_render_stall_{skips,disconnects}_total`.
 
-Measured in prod 2026-07-24 (v0.41.0, single `service-ssh` pod, 60 live sessions):
+Prod readings:
 
-- CPU about 1591 millicores, so about **26.5 millicores/session** (down from the pre-program 59 floor; a 32h A/B against a still-draining v0.40.7 pod read 47 mcores/session for the old code on the same node at the same time).
-- Memory about 1085 MiB, so about **18 MiB/session**.
-- Render loop: about 5.3 draws/session/sec, **~20% clean-skip ratio**. Sessions sit in the `ANIM_HALF_TICK` (~7.5 fps) tier, not the 500 ms idle floor, because almost everyone keeps the right sidebar visible and the ambient eq paints there. The documented "1 render/min idle" case is real but rare in the wild.
-- Stall guard never fired (`late_ssh_render_stall_*` has no series); 0 frame drops on this pod.
+| Date | Sessions | mcores/session | MiB/session | draws/session/s | clean-skip |
+|---|---|---|---|---|---|
+| 2026-07-22 (before the program) | 80 | 59 | | 15 | 0% |
+| 2026-07-24 | 60 | 26.5 | 18 | 5.3 | 20% |
+| 2026-08-18 | 38, peak 43 | 24.9 | 18 | 7.15 | 15% |
+| 2026-11-04 (7 d) | 24 avg, peak 39 | 32 | 18 | 4.0 | 21% |
 
-Re-measured in prod 2026-08-18 (7-day window, 38 sessions live, peak 43):
+Memory sits at about 18 MiB/session over a ~1 GiB per-pod baseline, with transient bursts to about 3 GiB (consistent with `OutputBudget`, 32 MB unacked per session, holding frames for stalled clients, then releasing; not a leak). The stall guard fires: 3,926 skips and 13 disconnects in the 7 days to 2026-11-04.
 
-- CPU **24.9 millicores/session**, confirming the 26.5 figure holds. This is the number that matters and it has not drifted.
-- Memory ~18 MiB/session at steady state over a ~1 GiB per-pod baseline, also confirming.
-- **Zero OOM kills cluster-wide over 7 days** (`container_oom_events_total`).
-- Two numbers moved the wrong way: **7.15 draws/session/sec** (was 5.3) and a **15% clean-skip ratio** (was ~20%). Small, and consistent with everyone sitting in the `ANIM_HALF_TICK` sidebar tier as documented, but it is movement against the baseline rather than sampling noise. Re-check after the next render-touching change; if it keeps climbing, the eq-to-quarter-edge knob is the response.
-- Per-pod memory shows transient bursts to 2.7-3.5 GiB against the ~1 GiB baseline, but only **3 ten-minute samples in the whole week**, and they do not correlate with session count. Consistent with `OutputBudget` holding frames for stalled clients (32 MB × N sessions) and then releasing. Not a leak: the baseline is flat across a 2-day pod lifetime.
+A 7-day regression over 5-minute samples (2026-11-04): `service-ssh` CPU is about 0.24 cores plus 5.6 mcores per draw/s (r² 0.53), so draws carry about 69% of the 0.78 cores it averages. Per session it reads 33 mcores with no real base (r² 0.46).
 
-Re-derived ceiling: at ~26.5 mcores/session, `service-ssh` reaches about **260 sessions on the current shared node and about 300 on a dedicated 8-core node** (memory ceiling is ~450/pod, so it stays CPU-bound). Old ceiling was 100-110. Against the 2026-08-18 peak of 43 concurrent sessions that is roughly **7x headroom**, and no capacity event occurred in the window. The named knob if this reads expensive: move both the eq and the sway to the quarter edge (~3.8 fps), which roughly doubles the ceiling again. Not gating the render edge on audio state: the eq's *content* is now pairing-aware (`EqState`), but the `anim_half` edge itself must stay unconditional while the bonsai sway rides it.
+Ceiling at 32 mcores/session: about **225 sessions on `server-1` as shared today and 250 on a dedicated 8-core node** (memory ceiling ~450/pod, so it stays CPU-bound). Old ceiling was 100-110. Against the 7-day peak of 39 that is roughly **6x headroom**.
 
-**The input queue does overflow in prod, and it is fine.** 2,306 `session input queue full; dropping inbound ssh input` warnings (`ssh.rs:1299`, `queue_cap=256`) over the 7 days to 2026-08-18. Before reading that as input-latency regression: the events arrive **sub-millisecond apart** in 5 tight bursts (one hour held 1,511 of them), which is a paste bomb or an escape-sequence flood filling a 256-slot queue instantly, not a user losing keystrokes while typing. This is the bounded queue doing its job instead of growing without limit. Recorded so the next person who greps for it does not go hunting a latency bug. If it ever appears spread evenly across a session instead of bunched, that *would* be the real thing.
+**Where the bytes go, 2026-11-04 (7 d): away screensavers.** Output is 215 GB, 87% of it to terminals nobody has touched for five minutes (78% of session time). Those bytes follow the screensaver a user picked. `session wire summary` over 7 days (2,225 ended sessions, 196 GB; 12 of them are 34% of the bytes, the median is 1.2 MB), joined to each user's current selection:
+
+| Selected | Users | GB | Hours | KB/s | KB/frame | Frames/s |
+|---|---|---|---|---|---|---|
+| `random` | 8 | 77.7 | 797 | 27.1 | 5.0 | 5.4 |
+| `randomer` | 7 | 36.2 | 304 | 33.1 | 7.9 | 4.2 |
+| `aurora_fjord` | 1 | 23.3 | 92 | 70.3 | 16.1 | 4.4 |
+| `aurora_fjord_pixels` | 2 | 10.6 | 81 | 36.1 | 6.5 | 5.6 |
+| `alpine_dawn` | 2 | 5.1 | 44 | 32.0 | 3.9 | 8.2 |
+| `off` | 186 | 22.0 | 1,077 | 5.7 | 1.6 | 3.5 |
+| `earthrise` | 80 | 14.5 | 903 | 4.4 | 1.2 | 3.8 |
+| `misty_forest` | 3 | 2.7 | 98 | 7.6 | 2.6 | 3.0 |
+| `misty_forest_pixels` | 3 | 2.0 | 115 | 4.9 | 1.0 | 4.8 |
+| `earthrise_pixels` | 2 | 1.5 | 105 | 3.9 | 1.6 | 2.4 |
+
+**20 users, the first five rows, are 78% of all bytes.** `earthrise` and `misty_forest` cost the same as `off`, so this is the piece and not just heavy users liking screensavers, and the ranking matches the per-piece table in `late-ssh/src/app/ascii/CONTEXT.md`, Cost: 2 to 5 KB/s for those two, 107 to 194 KB/s for the aurora and alpine dawn on a 200x50 terminal. `random` and `randomer` draw uniformly from `AsciiPiece::ALL` (`ascii/playback.rs`, `choose`), so half their draws are lively pieces. The 200 KB/s budget bounds a piece's rate, and nothing bounds how long it plays to an empty room: the heaviest session ran 33 hours at 93 KB/s, 11 GB.
+
+Not proof: the selection is today's, the rates are whole sessions, and nothing records which piece ran. A piece field on `session wire summary` would settle it.
+
+At `earthrise`'s rate those 1,318 hours are about 21 GB instead of 153 GB, **about -67% of all output**. How lively an unattended terminal should be is a product call. Options: `random` and `randomer` draw only budgeted slow pieces for the away screensaver (about -49% by itself), or a lively piece yields to a slow one after some minutes away.
+
+A screensaver covers whichever screen was open, so by-screen `presence="idle"` byte rates mostly measure screensavers: do not rank screens by them.
+
+For someone actually there, KB/s per active viewer (7 d, screens with over an hour of attention): night city 141, Artboard 114, Brogue 41, Realm 24, DCSS 21, `zen` 20, the rest under 10.
+
+**Draws are the separate lever, for CPU: thin the ambient edges for an idle session.** `App::tick` derives `anim_half` and `anim_quarter` from one wall clock and `wake_hint` picks the tier, so a session past `ATTENTION_ACTIVE_WINDOW` can step both down in one place, and animation speed is unaffected because state is wall-clock derived. Door output, chat and other pushes still wake through `RenderSignal`, so a spectator watching a door keeps every frame. A screensaver returns its own tier first in `wake_hint`, so it needs its own decision. Projected from the regression, assuming about 80% of draws are idle (attention is 78% idle), not measured: half the idle draws is about -27% CPU, a quarter about -41%, which raises the session ceiling rather than fixing anything today. A viewer who keeps the equalizer on screen without touching a key sees a choppier one, so the rate is a product call. The old all-sessions version of this knob (eq and sway on the quarter edge) stays available if the ceiling ever binds.
+
+**The input queue does overflow in prod, and it is fine.** 2,306 `session input queue full; dropping inbound ssh input` warnings (`queue_cap=256`) over the 7 days to 2026-08-18, 54 in the 24 h to 2026-11-04. Before reading that as input-latency regression: the events arrive **sub-millisecond apart** in 5 tight bursts (one hour held 1,511 of them), which is a paste bomb or an escape-sequence flood filling a 256-slot queue instantly, not a user losing keystrokes while typing. This is the bounded queue doing its job instead of growing without limit. Recorded so the next person who greps for it does not go hunting a latency bug. If it ever appears spread evenly across a session instead of bunched, that *would* be the real thing.
 
 Input latency: keystrokes land in a per-session bounded queue and the render loop wakes on input, so ordinary keystrokes never wait on the app mutex before being queued. The remaining risk under high fan-out is that `render_once` still holds the app lock across synchronous `app.tick()` + `app.render()`, so a slow tick delays that session's input-to-frame path; the input queue closed the cadence gap, not the lock-held-across-tick stall. Chat-specific row-cache, snapshot, unread-count, and scoped-loading performance notes live in `late-ssh/src/app/chat/CONTEXT.md`.
 
@@ -183,15 +210,24 @@ Per-user connect/snapshot work includes:
 - notifications
 - room/game data
 
-The app is not continuously polling the DB for chat *messages*; message flow is event-driven and snapshots carry empty message vectors (`app/chat/svc.rs`, the `(chat, Vec::new())` map). It does continuously poll for chat *metadata*: see Pain Point 7, which is the single largest DB consumer in the system. Connect storms and room switches hit DB-heavy paths on top of that.
+The app is not continuously polling the DB for chat *messages*; message flow is event-driven and snapshots carry empty message vectors. It does continuously poll for chat *metadata*: see Pain Point 7, the largest DB consumer in the system. Connect storms and room switches hit DB-heavy paths on top of that.
 
-2026-07-22 bootstrap audit specifics (none was the OOM cause, all are burst multipliers):
+Session start, 2026-11-04 (24 h, 356 starts), TCP accept to first frame:
 
-- The 15-20 query bootstrap fan-out per new session has no concurrency limiter (only chat reads share an 8-permit semaphore). Still open.
-- Aquarium creature/world assets are re-parsed from KDL on every session start. Still open.
-- `next_available_username` + `User::create` race under same-name connect storms, rejecting auth with no backoff (the `idx_users_username_lower` error loop seen in prod logs). FIXED: new users get a randomly generated curated username (no longer derived from the SSH login name), and `ensure_user` retries on the `idx_users_username_lower` unique violation (bounded to 5 attempts, then auth is rejected instead of spinning). Follow-up: `next_generated_username` scans all usernames (`SELECT username FROM users`) per new signup and per retry; fine at current scale but O(users) per signup during a new-user surge. Cheaper shape is a single indexed probe against `idx_users_username_lower` first, full scan only on the rare collision.
-  - Open as of 2026-07-24: `idx_users_username_lower` violations still appear in prod at about 1/hour of isolated singles, plus one 59-error burst from a single user retrying a rename to a taken name. The rename path is handled correctly (`ProfileService::edit_profile` publishes a user-visible error banner, `app/profile/svc.rs:389`), so that burst is only log noise. The isolated singles are unexplained and worth one pass over who raises them, signup or rename.
-- The nonogram library deep-clone per session (about 1-3 MB) is FIXED: Arc-shared since render-cost phase 0.
+| | auth p50 / p95 | bootstrap p50 / p95 | first frame p50 | total p50 / p95 |
+|---|---|---|---|---|
+| returning | 0.93 / 2.65 s | 0.59 / 1.66 s | 35 ms | 1.76 / 4.2 s |
+| new | 3.5 / 13 s | 0.46 / 1.3 s | 27 ms | 4.0 / 16.5 s |
+
+`auth` is mostly the client: `auth_publickey` is 32 ms p50 on the server, and a new user's clock probably includes answering the host key prompt. `bootstrap` is the server-side part, and `pty_request` alone is 141 ms p50 and 395 ms p95. Not yet split further.
+
+Burst multipliers still open, none of which has caused an incident:
+
+- The 15-20 query bootstrap fan-out per new session has no concurrency limiter (only chat reads share an 8-permit semaphore).
+- Aquarium creature/world assets are re-parsed from KDL on every session start.
+- `next_generated_username` scans all usernames (`SELECT username FROM users`) per new signup and per retry; fine at current scale but O(users) during a new-user surge. Cheaper shape: one indexed probe against `idx_users_username_lower` first, full scan only on the rare collision.
+
+`idx_users_username_lower` violations are renames to a taken name: `ProfileService::edit_profile` shows the user an error banner, so the 655 `failed to edit profile` ERROR lines in the 7 days to 2026-11-04 (82% of all ERROR lines) are log noise. An expected failure should not log at ERROR (Observability Gaps).
 
 ### 4. Audio capacity is still single-pod
 
@@ -202,7 +238,7 @@ Icecast now allows 300 clients, but it is still one pod. The second-node move (b
 - multiple relays
 - or browser/client behavior that avoids duplicating streams where possible
 
-**RESOLVED as of 2026-08-18.** The separate open bug seen 2026-07-24 was: the `service-web -> icecast-sv:8000` upstream fetch dropping every 10 to 50 minutes (`upstream stream ended; injecting silence until reconnect` and `ConnectionReset` in `late-web/src/pages/stream.rs`), giving browser `/stream` listeners audible silence gaps. A 7-day log search on 2026-08-18 found **zero** `upstream stream ended` events. `service-web` currently reports 0 restarts and 11 readiness blips over the window (the 8 restarts in the window belong to a pod that no longer exists). Nothing was knowingly changed to fix this, so if the symptom returns, the 2026-07-24 leads still apply: Icecast client timeout/burst settings and the proxy's reconnect behavior.
+The `service-web -> icecast-sv:8000` upstream drops seen in 2026-07 have not returned: zero `upstream stream ended` events in the 7 days to 2026-11-04, though nothing was knowingly changed to fix them. If they return, start from Icecast's client timeout and burst settings and the reconnect behavior in `late-web/src/pages/stream.rs`.
 
 ### 5. Postgres connections are bounded but not pooled externally
 
@@ -212,7 +248,7 @@ Each `late-ssh` replica also holds exactly one LISTEN connection outside the poo
 
 Postgres `max_connections=100`. This is acceptable while replicas are low, but scaling app replicas will multiply pools. PgBouncer should be introduced before many app replicas.
 
-### 6. Feed writes no longer fan out over the users table (fixed in code, verify after deploy)
+### 6. Feed writes never fan out over the users table
 
 The rule: never compute per-user state for every registered user and publish it on a shared broadcast channel. Each session drains its receiver only once per world tick (66 ms hot, 500 ms idle), so an O(users) burst overflows a 256/512 channel in every idle session, and each one drops its own update. Measured cost of breaking it, 48 h to 2026-09-23: ~6.2k `channel lagged by N` errors across the work, showcase, and news receivers, bursting to 1,189/min on a single work-card save.
 
@@ -222,87 +258,40 @@ What exists now:
 - **News:** stays live and is replica-ready. Every `articles` write fires `articles_changed` (migration 198); each replica's `ArticleService::start_notify_worker` (fed by the one process listener) re-reads the newest 40 articles into its shared `watch`. Each session counts its own badge from that snapshot against its `article_reads` rows (`news::state::unread_in_snapshot`), so the badge saturates at `40+`. A write costs one list query per replica, independent of registered users and concurrent sessions.
 - The remaining `Lagged` arms warn once per lag and keep draining instead of breaking.
 
-**Verify after deploy:** `stats by (_msg) count()` in VictoriaLogs over 48 h should show no `failed to receive work event` / `showcase event` / `article event` lines and no `event receiver lagged` warns.
+Verified 2026-11-04: no `failed to receive work event` / `showcase event` / `article event` lines and no `event receiver lagged` warns in 7 days.
 
-### 7. The chat snapshot poll is the largest DB consumer, but it is no longer a scaling threat
+### 7. The chat snapshot poll is the largest DB consumer, but not a scaling threat
 
-**Status changed 2026-08-18.** This was billed as "the top code-level scaling problem on this list" and "the binding DB constraint on the 1000-user target". Measured against a live differential, it is neither. It is still the largest single share of DB work, but the total is now so small that the share does not matter:
+`ChatService::ensure_refresh_scheduler` runs one process-global task that rebuilds a full `ChatSnapshot` for **every connected session every 10 seconds** (`CHAT_REFRESH_INTERVAL`), on top of on-demand rebuilds at room switch and `request_list`. One rebuild is 5 queries in 2 pipelined rounds (7 with a live poll): `ChatRoom::list_for_user_with_state` (rooms, last message and unread count in one statement, the count capped at `UNREAD_COUNT_CAP`) plus `friend_and_ignored_user_ids`, then voice channels, polls, author metadata and owners. Details in `late-ssh/src/app/chat/CONTEXT.md`.
 
-- The chat snapshot bundle is about **80% of live DB execution time**, and live DB execution time is about **1.9% of one core** at 38 sessions.
-- Cost per session: **0.40 ms of DB time per session per second**. Extrapolated to 1000 sessions that is roughly **0.4 cores**. Postgres has a 4 GiB limit and averaged 0.086 cores over the week.
-- Per-pass cost is about 4.0 ms of DB time across 5 queries, running at the expected 3.5 passes/sec for 38 sessions on a 10 s interval.
+Measured 2026-11-04 by live differential: **77% of live DB execution time, and live DB execution is 2.3% of one core** at 22 sessions. That is **0.8 ms of DB time per session per second**, so about 0.8 cores at 1000 sessions against a 1 CPU Postgres limit. It doubled from 0.40 ms on 2026-08-18: `list_for_user_with_state` went from 2.96 ms to 5.7 ms mean as memberships grew, and JIT is 11% of its time (DB Cost Ranking). So the bundle is not the reason to rework anything today, but the extrapolation now reaches the limit: re-read it before planning a 1000-session Postgres. Render/tick CPU (Pain Point 1) is still what binds first.
 
-So the remaining work in this section is worth doing for tidiness and for latency, not because it gates the 1000-user target. **Do not plan the 1000-user roadmap around this item any more.** The render/tick CPU in Pain Point 1 is the scaling unit; this is overhead.
+| | 2026-08-18 | 2026-11-04 |
+|---|---|---|
+| users | 16,175 | 18,691 |
+| rooms | 755 | 922 |
+| `chat_room_members` rows | 492,729 | 634,827 |
+| avg rooms/user | 30.5 | 34.0 |
+| **max rooms/user** | 225 | **308** |
+| memberships never opened | 41.5% | 42.1% |
+| DB size | 495 MB | 858 MB (362 MB is `rss_entries`) |
 
-The historical measurement, kept for context: measured 2026-07-26 (first full `pg_stat_statements` ranking, see DB Cost Ranking below), **50-68% of all database execution time**, with `ChatRoomMember::unread_counts_for_user` alone at **43.0%**.
+The number to watch is **max rooms/user**: the room laterals fan out over every room a user has joined, whether or not it is on screen.
 
-`ChatService::ensure_refresh_scheduler` (`app/chat/svc.rs:1255`) runs one process-global task that rebuilds a full `ChatSnapshot` for **every connected session every 10 seconds** (`CHAT_REFRESH_INTERVAL`, `svc.rs:64`), on top of on-demand rebuilds at room switch and `request_list`.
+Planning was 60% of execution time for `list_for_user_with_state` on 2026-08-18 (20 parameters, two laterals). It matters only if this moves onto a hot path, and then the answer is a prepared-statement cache, not a rewrite.
 
-Each rebuild was 9 sequential round trips on one held pool connection, 11 when a room has a live poll:
+Two structural facts:
 
-1. `ChatRoom::list_for_user`
-2. `VoiceChannel::enabled_for_chat_rooms`
-3. `ChatMessage::last_message_at_for_rooms` (LATERAL, one index scan per joined room)
-4. `chat_poll::list_active_polls_for_rooms` (1 query, +2 more if any poll is live)
-5. `ChatRoomMember::unread_counts_for_user` (LATERAL `COUNT(*)`, one per membership row)
-6. `User::friend_user_ids` -> `SELECT settings FROM users WHERE id = $1`
-7. `User::list_chat_author_metadata`
-8. `User::ignored_user_ids` -> **the identical `SELECT settings` query a second time** (`late-core/src/models/user.rs:985`)
-9. `ChatRoom::owner_ids_for_rooms`
+- **The session loop is sequential.** `refresh_registered_sessions` is a plain `for session in sessions { ... .await }`, so cycle time is N_sessions x snapshot latency and `MissedTickBehavior::Skip` means an overrun degrades silently into a back-to-back loop. Unread-badge latency is 10 s plus the session's position in the cycle.
+- **The poll is load-bearing for unread badges.** Nothing else increments `ChatState::unread_counts`, so `MessageCreated` events do not move a badge and the DB poll is the only source of truth.
 
-It is now **5 queries in 2 pipelined rounds** (7 queries when a poll is live). See "Fixed 2026-07-26" below.
+Three ideas that did NOT survive measurement, recorded so nobody re-proposes them:
 
-Why it is so expensive: **`chat_room_members` holds 444,994 rows over 583 rooms and 14,347 users, averaging 31 rooms per user and peaking at 154** (2026-07-26). Auto-join means memberships only accumulate.
+- *Skip rooms with no new activity* (denormalized `chat_rooms.last_message_at`): would skip about 2% of memberships, because never-opened rooms always have something newer than "never".
+- *Maintain an incremental unread counter per membership*: `#lounge` has every user as a member, so every message would update about 18,000 rows. That is the Pain Point 6 disease, worse.
+- *Widen `CHAT_REFRESH_INTERVAL`*: tripling it triples worst-case badge latency for every room the user is not looking at, which is the primary signal in the product.
 
-Growth since that baseline, measured 2026-08-18:
-
-| | 2026-07-26 | 2026-08-18 | change |
-|---|---|---|---|
-| users | 14,347 | 16,175 | +12.7% |
-| rooms | 583 | 755 | +29.5% |
-| `chat_room_members` rows | 444,994 | 492,729 | +10.7% |
-| avg rooms/user | 31 | 30.5 | flat |
-| **max rooms/user** | 154 | **225** | **+46%** |
-| memberships never opened | 46% | 41.5% | -4.5pp |
-| DB size | 161 MB | 495 MB | 3x |
-
-The number to watch is **max rooms/user, not the average**. The average held flat at 30.5 while the heaviest user gained 46% more rooms, so this is concentration in the tail rather than broad growth, and the tail is exactly what the per-room laterals fan out over. DB size tripling is mostly `chat_messages` (86k to 182k rows) and is not a concern at 495 MB. So queries 3 and 5 fan out over every room a user has ever joined, whether or not it is on screen, and the unread query returns 32.5 rows per call on average. The double `settings` read shows up as 11,070,677 calls, exactly 2.006 per snapshot.
-
-Two structural problems on top of the raw cost:
-
-- **The session loop is sequential.** `refresh_registered_sessions` (`svc.rs:1291`) is a plain `for session in sessions { ... .await }`, so the effective concurrency is 1 and the 8-permit `read_permits` semaphore does nothing on this path. Cycle time is N_sessions × snapshot latency, and `MissedTickBehavior::Skip` means an overrun degrades silently into a continuous back-to-back loop rather than erroring. Unread-badge latency is therefore 10 s plus the session's position in the cycle.
-- **The poll is load-bearing for unread badges.** The only writes to `ChatState::unread_counts` are mark-read to 0 (`chat/state.rs:869`), wholesale replace from the snapshot (`:3746`), and remove on room deletion (`:4547`). There is no increment path, so `MessageCreated` events do not move a badge and the DB poll is the only source of truth.
-
-**Where the cost actually was, measured 2026-07-26.** `#lounge` is auto-join with all 14,346 users as members and 127,246 messages, and it is where the activity feed posts. 46% of all memberships have `last_read_at IS NULL`, never opened once, so their count starts at the first message ever posted and walks the whole room. On top of that, the "is this an activity line" test read `users.settings->>'system'` out of JSONB per message, so Postgres sequentially scanned the entire users table and built a 5 MB hash to answer a question with one constant answer. Worst-case single user: 578 ms, 183,914 buffers, 12,613 rows removed by that filter out of 127,260 examined.
-
-Two ideas that did NOT survive measurement, recorded so nobody re-proposes them:
-
-- *Skip rooms with no new activity* (denormalized `chat_rooms.last_message_at`): would skip **1.9%** of memberships, because never-opened rooms always have something newer than "never".
-- *Maintain an incremental unread counter per membership*: `#lounge` has 14,346 members, so every message would update 14,346 rows. That is the Pain Point 6 disease, worse.
-
-**Fixed 2026-07-26, part one: the unread count itself.** The lateral count runs under `LIMIT ChatRoomMember::UNREAD_COUNT_CAP` (100) so it walks the index forward from `last_read_at` and stops, and the `users` join is replaced by a UUID compare against the system bot id passed in from `ChatService` (published once at startup by the #lounge feed task). 578 ms to 11.8 ms on the same user. Room ordering only tests `unread > 0` so it is unaffected, and the room tail only ever loads 500 messages anyway.
-
-**Fixed 2026-07-26, part two: the shape of the bundle.** Two changes, no new infrastructure:
-
-- **Three queries merged into one.** `list_for_user`, `last_message_at_for_rooms`, and `unread_counts_for_user` all keyed off the same `chat_room_members` row for the same user, so the user's membership set was index-scanned three times per pass. They are now `ChatRoom::list_for_user_with_state`, one query with two laterals, returning rooms plus both per-room maps. Measured on prod against the heaviest user in the system (157 rooms): **1,452 buffers / 5.2 ms exec / 4.1 ms planning**, against **1,760 buffers / 8.1 ms exec / 6.3 ms planning** for the three it replaces. Both laterals plan as index scans on `idx_chat_messages_room_created`. `unread_counts_for_user` and `last_message_at_for_rooms` were **deleted**, not left beside it: a second copy of that SQL is a drift hazard, and their tests moved onto the merged function.
-- **The remaining queries are pipelined, not serial.** `build_chat_snapshot` is now two rounds of `tokio::join!` on one pooled connection: round one is the merged room query plus `friend_and_ignored_user_ids`; round two is voice channels, polls, author metadata, and owners, all of which need the room or friend set from round one. tokio-postgres pipelines concurrent queries on a single connection, so each round costs about one round trip rather than one per query. Same pattern as `late_core::models::leaderboard::fetch_leaderboard_data`. **This buys latency, not server CPU** (Postgres still executes them in order), which is exactly what the sequential session loop below needs.
-
-Net: 9 sequential round trips to 5 queries in 2 pipelined rounds.
-
-**Verified in prod 2026-08-18.** Both halves are confirmed live, not projected:
-
-- Every pre-fix query shape is **completely idle**. A two-snapshot differential over the live system shows 0 calls for all three `unread_counts_for_user` variants, for `last_message_at_for_rooms`, and for the old `list_for_user`; only `list_for_user_with_state` runs, at 3.48 calls/sec. See DB Cost Ranking for why the cumulative table still shows the old shapes at the top.
-- The merged query re-explained against the current heaviest user (**225 rooms**, up from the 157 measured when it shipped): **8.5 ms execution, 5.1 ms planning, 859 buffers on the unread lateral**. Was 5.2 ms exec / 4.1 ms planning at 157 rooms, so cost scales slightly worse than linearly with rooms-per-user, as designed. Both laterals still plan as index scans on `idx_chat_messages_room_created`.
-- Note that **planning is now 60% of execution time** for this query. It carries 20 parameters and two laterals, so the planner does real work per call. At 3.5 calls/sec that is irrelevant; it would matter if this ever moved onto a hot path, and a prepared-statement cache is the answer if it does, not a query rewrite.
-
-Still open, all much smaller now:
-
-1. **Stop the loop being sequential**, so cycle time cannot exceed the interval at higher session counts. The pipelining above cut per-snapshot latency, which raises the ceiling, but does not remove it.
-2. If it ever matters again, the O(1) shape is a per-room message sequence number plus a per-membership read position, so unread is subtraction rather than counting. It needs a migration and a decision about the activity lines, which is why it is not the fix today.
-
-**Do not widen `CHAT_REFRESH_INTERVAL` as a cheap win.** It looks like a free 3x, and it is not: the poll is the only writer of unread badges (see the second structural problem above), so tripling the interval triples worst-case badge latency for every room the user is not looking at. That is the primary signal in the product.
-
-No new infrastructure is needed and none is wanted here. The events already exist and already reach every session; the bug is that the client discards them and re-derives the state from Postgres on a timer. A broker (NATS, Redis pub/sub) would add a hop to a pipeline that already works and would not remove one of those 22M queries.
+Still open: stop the loop being sequential, so cycle time cannot exceed the interval at higher session counts. If it ever matters, the O(1) unread shape is a per-room message sequence number plus a per-membership read position, so unread is subtraction rather than counting; it needs a migration and a decision about the activity lines. No new infrastructure is needed or wanted: a broker would add a hop and remove none of these queries.
 
 ### 8. Stream egress scales with viewers, not sessions
 
@@ -537,14 +526,14 @@ would bite. The edge read `tcp_slow_start_after_idle = 1`, `cubic`,
 
 **Shipped against slow start:** the `ssh-edge` DaemonSet's `tcp-tuning` init
 container sets `net.ipv4.tcp_slow_start_after_idle=0` in `server-1`'s host
-network namespace (`infra/ssh-tcp.tf`). Verify after the infra apply with
+network namespace (`infra/ssh-tcp.tf`). Verified 2026-11-04:
 `kubectl exec -n kube-system ds/ssh-edge -- cat /proc/sys/net/ipv4/tcp_slow_start_after_idle`
-(expect `0`).
+reads `0`.
 
-How to pull every number above from a terminal, and the first readings, are
+How to pull every number above from a terminal, and the current reading, are
 in [User Latency: Checking It Fast](#user-latency-checking-it-fast).
 
-**How to read it, after about a week of data:**
+**How to read it:**
 
 - `backlog="large"` p95 well above `backlog="none"` p95 (say 100 ms or more)
   means bytes on the wire are what users feel. Do the fix below.
@@ -559,7 +548,8 @@ in [User Latency: Checking It Fast](#user-latency-checking-it-fast).
   retired probes, or `ended=stalled`, are a terminal ignoring DSR or a link
   that stopped reading.
 
-**Future fix, after monitoring confirms it: pace frames by acknowledgement,
+**Monitoring has confirmed it (reading below); this is the fix once screensaver
+bytes are cut (Pain Point 1) and re-read: pace frames by acknowledgement,
 the way mosh does.** A frame that answers input always goes out at once. A
 world-tick frame (animation) waits while a probe is still unanswered, and
 while pacing is active every frame carries a probe, so the terminal's
@@ -639,45 +629,31 @@ match `sum(increase(late_ssh_frame_bytes_sum[12h]))` plus the
 `sum(increase(late_ssh_session_output_bytes_per_second_sum[12h]))` (one
 sample per 10 s window).
 
-### First reading (2026-10-21, 11 h after the probe shipped, 15 live sessions)
+### Reading (2026-11-04, 7 d)
 
 | | cli | ssh |
 |---|---|---|
-| probes answered / lost | 41,915 / 25 | 29,540 / 64 |
-| trip p50 / p95 / p99 | 152 / 480 / 962 ms | 171 / 592 / 942 ms |
-| p50 backlog `none` / `large` | 129 / 239 ms | 165 / 235 ms |
-| p95 backlog `none` / `large` | 275 / 487 ms | 638 / 695 ms |
+| p50 backlog `none` / `large` | 128 / 246 ms | 133 / 211 ms |
+| p95 backlog `none` / `large` | 233 / 979 ms | 296 / 809 ms |
+| p95 backlog `small` / `medium` | 434 / 456 ms | 381 / 285 ms |
 
-- CLI split p50: `ssh_rtt` 155 ms, `terminal` 2.8 ms (p95 479 / 166 ms).
-  The trip is the network; terminals parse fast.
-- `small` and `medium` backlogs match `none`; only `large` (over 32 KiB in
-  the second before, 23% of probes) adds about 70 to 100 ms at the median.
-  The ssh `none` p95 of 638 ms is network jitter that bytes do not explain.
-- Of 5.74 GB of frames, 79% were world-tick frames; terminal commands were
-  within noise of zero. Two plain-ssh kitty sessions ran at about 243 KB/s
-  for minutes at 27 to 34 KB a frame (full repaints every tick). The
-  per-place counter landed after this reading, so which screen did it is
-  the next thing to check.
+- By the rule in Pain Point 11, bytes on the wire are what users feel: `large` p95 is 500 to 750 ms above `none`. The bucket is oversampled by design (probed as soon as the last probe is 2 s old), so its share of probes is not its share of traffic. Much of `large` is probably screensaver traffic nobody is typing on (the heaviest session answered 43,803 of its 46,575 probes in that bucket), so re-read this after the Pain Point 1 fix before treating it as felt lag.
+- CLI split: `ssh_rtt` 127 ms p50, 408 ms p95; `terminal` 2.9 ms p50, 434 ms p95. At the median the trip is the network. At p95 the terminal costs as much as the network, which by the same rule says smaller and fewer frames help more than pacing.
+- In 24 h, 93% of frame bytes are world-tick frames; over 7 days 87% of all bytes go to idle terminals, mostly away screensavers (Pain Point 1). By screen over 7 days: Home 135 GB, `zen` 22 GB, Arcade 19 GB, Artboard 10 GB, Leaderboard 8 GB, city 7 GB.
+- The night city and Artboard are the heavy screens for someone actually there (Pain Point 1), neither root-caused. Artboard also holds 76 of 121 `slow render pass` lines in 24 h and a 59 ms p99 pass.
 
 ## Render-Cost Program (shipped 2026-07-22/23)
 
-Consolidated from RENDER_COST.md (deleted). The canonical description of the gate contract and the adaptive tick lives in `late-ssh/CONTEXT.md`, Render loop; this section keeps the scale-relevant summary, the rules that must not be violated, and the open follow-ups.
+The canonical description of the gate contract and the adaptive tick lives in `late-ssh/CONTEXT.md`, Render loop; this section keeps the rules that must not be violated and the open follow-ups.
 
-### What shipped
+Shipped: per-frame constant factors, the dirty gate (`App::tick() -> bool`; `render_once` skips `terminal.draw()` on a clean pass), every domain's `tick()` under the dirty contract, and the adaptive wake (`App::wake_hint()`) replacing the fixed 66 ms interval. Result: a session on a page with nothing animated costs 2 cheap clean ticks/sec and about 1 render/min. A Home with a bonsai or equalizer tile holds ~7.5 fps by product decision.
 
-- **Phase 0, per-frame constant factors (2026-07-22):** counter-validated chat row caches (`ChatRowsVersions`, see `late-ssh/src/app/chat/CONTEXT.md`), presence cached at 1 Hz, per-session `targeted_event_rx` for single-recipient chat events, 64 KB BufWriter frame path, run-length clubhouse spans, Arc-shared nonogram library, and the `OutputBudget` guard (32 MB unacked pause, 30 s disconnect).
-- **Phase 1, dirty gate (2026-07-22):** `App::tick() -> bool`; `render_once` (ssh.rs) computes `changed = signal.dirty.swap(false) | input drained | app.tick()` and skips `terminal.draw()` entirely when clean (ratatui's diff does not advance on skip, no forced repaint needed).
-- **Phase 1 tightening + domain sweep (2026-07-22/23):** every domain state exposes `tick() -> bool` under the dirty contract ("rule of three", `late-ssh/CONTEXT.md`): chat snapshot drains report real change via full compares, modals are event-driven, house tables and door games report their watch peeks and go quiet between rounds, the ultimate cooldown became minute-granularity riding the per-minute global frame. The FFT audio visualizer was replaced by a stateless synthetic ambient equalizer (`viz::render_eq`), so no audio state drives rendering at all.
-- **Phase 2, adaptive world tick (2026-07-23):** the fixed 66 ms interval is gone. Each render pass returns `App::wake_hint() -> Duration` and the loop sleeps exactly that long unless input or a `RenderSignal` wake lands first. Tiers (`app/tick.rs` consts): `HOT_TICK` 66 ms (splash, 2 s post-input window, active ultimate effect, house tables, open arcade game, bonsai modals), `ANIM_HALF_TICK` 132 ms (Clubhouse, visible sidebar, pet), `ANIM_QUARTER_TICK` 264 ms (aquarium surfaces), `IDLE_TICK` 500 ms floor. Floor ticks only drain channels; worst-case latency for an unprompted event while idle is one floor interval. Enablers: `marquee_tick` is wall-clock-derived, every frame edge is a period-index compare, and bonsai passive growth was removed entirely (product decision) so no wall-time accumulator depends on tick cadence.
-
-Result: idle sessions cost 2 cheap clean ticks/sec and about 1 render/min. A sidebar-visible session holds ~7.5 fps (about 37 draws per 5 s) by product decision: the bonsai sway animates unconditionally, and the ambient eq animates while a client is paired and unmuted.
-
-Gating the `anim_half` sidebar edge on a paired client is NOT the knob, and would freeze the bonsai sway for the plain-`ssh` majority. A correct gate is `sidebar_visible && (eq_animating || bonsai_panel_enabled)`, and since Bonsai ships enabled by default, it would buy almost nothing. The real knob if this reads expensive in prod is moving both to the quarter edge.
+Gating the `anim_half` edge on a paired client is NOT the knob, and would freeze the bonsai sway for the plain-`ssh` majority. The gate is whether Home draws a bonsai or equalizer tile (`ZenState::paints_on_half_edge`), and since the stock Home draws both, narrowing it would buy almost nothing. The knob is gating on presence: Pain Point 1.
 
 ### Design rules (do not violate)
 
 - PROVE-CLEAN, NOT PROVE-DIRTY. Anything uncertain reports changed. A spurious frame costs nothing; a wrong "clean" freezes UI.
-- The gate lives in `render_once` in ssh.rs, the only render loop (the browser `/play` demo and its `web_tunnel.rs` mirror loop were removed entirely on 2026-07-23; the loops used to gate identically, change-both).
+- The gate lives in `render_once` in ssh.rs, the only render loop.
 - Peek receivers BEFORE draining (`has_changed()` on watches, `!is_empty()` on mpsc/broadcast). Exception: fixed-cadence publishers (chat snapshot, audio queue) report real change from the drain itself. A watch that is only `borrow()`ed at render must be marked seen (`borrow_and_update`) by whoever peeks it, or the peek latches dirty forever.
 - Nothing paints at full rate. The ambient eq, pet, bonsai sway, and clubhouse ambience share the half-rate edge (`anim_half`, ~7.5 fps); aquarium steps on the quarter edge (~3.8 fps); everything else is slow/static. Marquee moves 3 columns/sec in 1 s steps so speed costs no extra frames.
 - `is_multiple_of` on the tick counter is a bug pattern under sparse ticking; every edge compares its period index against the previous tick's.
@@ -708,225 +684,141 @@ Drop the `anim_half`/`anim_quarter` gates in tick.rs and restore the aquarium's 
 
 ## DB Cost Ranking
 
-> **Read this before trusting the cumulative table.** `pg_stat_statements` was
-> **never reset** after the 2026-07-26 deploy, despite this document twice
-> instructing it. As of 2026-08-18 the window is 41.9 days old and blends 19
-> days of pre-fix data with 23 days of post-fix data. `pg_stat_statements` is
-> cumulative and never decays, so **query shapes that stopped running on
-> 2026-07-26 still sit at the top of the ranking forever.** Read raw, the table
-> says `unread_counts_for_user` is the #1 query in the system at 20.5% of all
-> execution time. It has not executed once since July. Use the live differential
-> below, or reset the window, but do not read shares off the cumulative table.
+Each instance keeps its own `pg_stat_statements`, so the window restarted when `postgres-2` was promoted on 2026-10-22. Read as of 2026-11-04 that is a clean 13 days: about 31,700 s of execution, nothing evicted (`dealloc` 0, 1,159 of 10,000 slots). The window is cumulative and never decays, so a query shape that stopped running stays at the top. Rank "what runs now" by a **two-snapshot delta** rather than by cumulative totals; `stats_since` dates each entry, which tells deploy generations of one query apart.
 
-Baseline taken 2026-07-26 from a `pg_stat_statements` window opened 2026-07-07 (18.6 days, 59.05M calls, 56,625 s total execution time). Percentages are share of total execution time in that window, before the fixes landed the same day.
-
-| # | Subsystem | Baseline | Calls | Cadence | Status |
-|---|---|---|---|---|---|
-| 1 | Chat snapshot poll (Pain Point 7) | 50-68% | 22.1M+ | 10 s per session | **fixed, verified 2026-08-18** |
-| 2 | Leaderboard refresh loop | 13.1% | 1.1M | 30 s, process-global | **fixed, verified 2026-08-18** |
-| 3 | `list_discover_public_topic_rooms` | 5.6% | 6.0k | on demand, 510 ms mean | **open, REGRESSED to 771 ms** |
-| 4 | Artboard snapshot reads | 2.9% | 39k | on demand, 158 ms and 624 ms means | open, not worth it |
-| 5 | Chat username list scan | 1.9% | 66k | 30 s, process-global | **fixed, verified 2026-08-18** |
-| 6 | Feed fan-outs (Pain Point 6) | 0.5% | 3.6M | per feed write | **fixed in code**, verify after deploy |
-
-Notes on reading this table:
-
-- The range on #1 is deploy-generation variants of the same statement: the conservative match gives 50.4%, counting every variant visible in the top 25 gives 67.8%. The unambiguous figure is `unread_counts_for_user` at 43.0% on its own.
-- Everything not attributed above is 27.5% spread across the long tail. Nothing in the tail exceeds 0.5%; the largest oddities are `UPDATE rss_entries` (982k calls, 0.32%, the poller writes entries whether or not the content changed) and `INSERT INTO tetris_games` (328k calls, 0.16%).
-- #4 is not a missing index. `artboard_snapshots` is 17 rows in 9.9 MB, about 580 KB of JSONB per row, and `board_key` is already uniquely indexed. The time is detoasting the blob. Fixing it means smaller payloads or incremental persistence, not an index.
-
-The shape worth remembering: the two largest items were **timers, not user actions.** Nobody had to do anything for either to run.
-
-### Fixed 2026-07-26
-
-All shipped together, no migration, no schema change, no new infrastructure. Percentages are of the baseline total above.
-
-| Change | Baseline | Expected after |
-|---|---|---|
-| `unread_counts_for_user`: count capped at 100, per-message `users` join replaced by a UUID compare | 43% | ~1% |
-| Leaderboard loop: 30 s to 300 s, skipped entirely with no subscribers | 13.1% | ~1.3% |
-| Leaderboard connect refresh (added 2026-07-27, see below) | — | bounded by the same 300 s |
-| `list_for_user` + `last_message_at_for_rooms` + `unread_counts_for_user` merged into `ChatRoom::list_for_user_with_state` | 12.6% + the unread row above | ~8% |
-| Mention-autocomplete list: read the in-memory `UsernameDirectory` instead of re-scanning `users` | 1.9% | 0 |
-| `User::friend_and_ignored_user_ids`: one `SELECT settings` per snapshot instead of two | 0.9% | 0.45% |
-
-Plus one change with no `pg_stat_statements` line of its own: `build_chat_snapshot` now issues its remaining queries as **two pipelined `tokio::join!` rounds instead of a serial chain**, which cuts per-snapshot latency without changing server CPU. That is what raises the ceiling on the sequential session loop (item 3 below).
-
-Roughly **60% of the total workload**, projected.
-
-### Verified 2026-08-18: the live ranking
-
-Method, since the cumulative window is contaminated (see the warning above): two full `pg_stat_statements` snapshots 88 seconds apart, ranked by the *delta*. That measures what is actually executing now regardless of accumulated history. `dealloc` was 0 and 993 of 10,000 statement slots were in use, so nothing had been evicted and the differential is sound. Investigation queries run from the same psql session have been excluded from the totals below.
-
-**Total live DB execution: about 1.9% of one core** at 38 concurrent sessions.
+**Live, two snapshots 305 s apart, investigation queries excluded: 2.3% of one core at 22 sessions, 1.4 GB of WAL a day.**
 
 | share | query | calls/s | mean ms |
 |---|---|---|---|
-| 54.4% | `ChatRoom::list_for_user_with_state` | 3.48 | 2.96 |
-| 14.7% | `User::list_chat_author_metadata` | 3.49 | 0.80 |
-| 7.0% | leaderboard refresh passes | 0.01 | 12-46 |
-| 6.2% | `voice_channels` | 3.48 | 0.34 |
-| 3.4% | `INSERT INTO mud_world_states` | 0.07 | 9.36 |
-| 2.7% | `owner_ids_for_rooms` | 0.61 | 0.83 |
-| 0.8% | `SELECT settings FROM users` | 3.49 | 0.05 |
-| 0.7% | `chat_polls` | 3.48 | 0.04 |
+| 56% | `ChatRoom::list_for_user_with_state` | 2.22 | 5.7 |
+| 12% | `User::list_chat_author_metadata` | 2.29 | 1.2 |
+| 5% | `RssEntry::list_visible_for_user` | 0.02 | 56 |
+| 4% | `voice_channels` | 2.22 | 0.44 |
+| 3% | `INSERT INTO mud_world_states` | 0.07 | 10 |
+| 2.5% | `owner_ids_for_rooms` | 0.81 | 0.69 |
+| 2% | leaderboard refresh passes | 0.003 | 30-144 |
+| 1.4% | `SELECT settings FROM users` | 2.25 | 0.14 |
 
-79 of 1,002 recorded statements were active at all. Reading this table:
+**Cumulative, 13 days:**
 
-- **The four fixes are verified.** Every pre-fix shape reads 0.00 calls/s: all three `unread_counts_for_user` variants, `last_message_at_for_rooms`, and the old `list_for_user`. The merged `list_for_user_with_state` (`stats_since` 2026-07-26) is the only one running.
-- **The leaderboard gate works.** 0.01 calls/s is one pass in the window, consistent with the 300 s interval, down from 30 s.
-- **The double `settings` read is gone**, at exactly 1 call per snapshot pass rather than 2.006.
-- The chat bundle is still ~80% of the total, but the total is small enough that this is no longer a scaling item. See Pain Point 7.
-- `INSERT INTO mud_world_states` appearing at 3.4% on 0.07 calls/s is a 9.4 ms write of a whole JSONB world blob on conflict. Cheap now, same detoast-cost shape as the artboard snapshots (#4 below), and worth remembering if MUD usage grows.
+| share | query | calls | mean ms | note |
+|---|---|---|---|---|
+| 45.0% | `list_for_user_with_state` | 2.75M | 5.17 | Pain Point 7; 11% of it JIT |
+| 9.3% | `list_visible_for_user` | 24.5k | 119 | DB Hot Queries |
+| 8.3% | `list_chat_author_metadata` (two generations) | 2.8M | ~1 | Pain Point 7 |
+| 3.7% | `voice_channels` | 2.75M | 0.43 | seq scan of 645 rows, fine |
+| 2.9% | `INSERT INTO mud_world_states` | 88k | 10.3 | whole world blob every ~14 s |
+| 2.2% | `irc_history_range` | 2.0k | 364 | 126k buffers a call, 11 s max, not explained yet |
+| 2.1% | `RssFeedRead::unread_count_for_user` | 15.4k | 44 | shrinks with the RSS prune |
+| 2.0% | paper room editions read | 5.2k | 124 | 26k buffers a call |
+| 1.3% | `artboard_snapshots` read | 2.6k | 160 | detoasting the blob, not a missing index |
+| 1.3% | `list_discover_public_topic_rooms` | 893 | 449 | DB Hot Queries |
 
-### Follow-up 2026-07-27: the staleness the leaderboard cut bought
+I/O and WAL, where the ranking by time misleads:
 
-Widening the loop to 300 s was correct on cost and wrong on one consumer nobody checked. The PR cleared the change against the per-session chip balance, which is event-driven and fine. It did not check the leaderboard panels themselves, and they had a latent bug that the wider interval turned from invisible into a product complaint: `watch::Sender::subscribe` marks the current value as **seen**, so the `has_changed()` gate in `app/tick.rs` never fired for the snapshot a session was handed at bootstrap. Sessions rendered *empty* panels — not stale ones — until the next timer pass, which at 30 s nobody noticed and at 300 s reads as broken.
+- `list_visible_for_user` is the top disk reader (10.1M blocks, 1,601 s of read time, three times the next) and writes 37 of the 42 GB of temp files.
+- WAL, about 17 GB in 13 days: `mud_world_states` 4.6 GB, `UPDATE rss_entries` 3.2 GB, the RSS list's own hint bits 0.9 GB, `artboard_snapshots` 0.8 GB, online time 0.7 GB.
+- **JIT:** 1,629 s of the 31,700 s (5%), 11% of `list_for_user_with_state` and 18% of Discover, on queries that are not analytical. `jit` is on by default and reloads without a restart.
 
-Two fixes, neither of which touches the interval or the subscriber gate:
+Connections are not a constraint: pool peak 2 of 16 in use, 0 waiters, 0 failed checkouts, checkout p99 5.9 ms over 24 h.
 
-- `App::new` seeds `leaderboard` from `rx.borrow()` instead of `LeaderboardData::default()`.
-- `subscribe` wakes the loop, and `should_refresh` grants that wake a pass only when the published snapshot is already older than `REFRESH_INTERVAL`. This handles the quiet-server case, where the subscriber gate skipped every pass and the first session back seeded from whatever the last session left behind — potentially hours old. The age bound is load-bearing: unbounded, this would fire once per connect and undo the cut above.
+Lessons kept from the first ranking (2026-07-26, when the chat snapshot poll was 50-68% of all execution time and the 30 s leaderboard loop 13.1%, now 300 s and subscriber-gated):
 
-Added DB cost is at most one extra pass per 300 s window, and only on a process that was idle. **The lesson for the next timer that gets widened: check every consumer of the data, not just the one with a known latency requirement.** A cadence change is a correctness change for anything that was quietly relying on the old rate.
+- The two largest items were **timers, not user actions.** Nobody had to do anything for either to run.
+- **A cadence change is a correctness change for anything quietly relying on the old rate.** Widening the leaderboard loop turned a latent bug (`watch::Sender::subscribe` marks the current value seen, so sessions rendered empty panels until the next pass) into a product complaint. Check every consumer of the data when a timer is widened, not just the one with a known latency requirement.
 
 ### Remaining DB work, ranked by impact
 
-**Re-ranked 2026-08-18.** This list was written against the pre-fix baseline and its order no longer holds. Current order: **Discover (item 2) is now first**, because it regressed to 771 ms mean and is the only user-facing DB latency left, and its fix turns out to be autovacuum tuning (migration 244) rather than anything in the list below. The chat-poll leftovers (item 1) drop to housekeeping: verified at ~1.9% of one core total, so the percentages quoted in item 1 are shares of a baseline that no longer exists. Everything below is retained for its analysis, not its ranking.
+1. **RSS** (DB Hot Queries): 42% of the database, the top disk reader, nearly all temp spill, a quarter of WAL.
+2. **`jit = off`** in `infra/cloudnativepg.tf`: one line, reload only.
+3. **Discover** (DB Hot Queries): a 60 s process cache.
+4. **`irc_history_range`:** explain why a `LIMIT` over `idx_chat_messages_room_created` reads 126k buffers.
+5. **The sequential session loop** (Pain Point 7): no direct DB cost, a latent cliff at 4 figures.
+6. **`mud_world_states`:** a quarter of WAL on a 14 s cadence. Widening it trades world rollback on a crash for less WAL; worth it only if archive cost matters.
 
-1. **The rest of the chat snapshot poll, about 13% of baseline** (was 26% before the merge). Still the largest single item and still the only one that scales with concurrency. What is left is `list_chat_author_metadata` 9.0%, `voice_channels` 2.1%, then polls, owners, and settings under 1% each: individually cheap (0.2 ms to 0.9 ms) and expensive only because the bundle runs 5.5M times. `list_chat_author_metadata` is now the one worth looking at, and it is the odd one out because it keys off the *user* set, not the room set, so it did not merge. Remaining directions:
-   - **Merge what is left.** `voice_channels` and `owner_ids_for_rooms` still key off the room set and could fold into `list_for_user_with_state`, but neither is one row per room (voice is 0-N, owners only apply to private topic rooms), so both need lateral guards to avoid making the lounge scan its 14k members. Smaller payoff than the merge already done, and more ways to get the plan wrong. Measure first.
-   - **Run the bundle less often.** Raising `CHAT_REFRESH_INTERVAL` is a one-constant change but costs badge latency, because the poll is the only writer of unread badges. It is only free if unread is incremented locally first, which introduces dual-maintenance of the unread rule. Weigh that tradeoff deliberately; it was rejected once already on those grounds.
-2. **`list_discover_public_topic_rooms`, 5.6%.** 510 ms mean and a 969 ms variant, on demand, so this is user-facing latency rather than background load: half a second to open Discover. Options unchanged from the DB Hot Queries section: denormalized `member_count`/`message_count`/`last_message_at` on `chat_rooms`, a short-TTL cache, or pre-aggregation.
-3. **The sequential session loop, no direct DB cost.** `refresh_registered_sessions` awaits one session at a time, so cycle time is N_sessions × snapshot latency and `MissedTickBehavior::Skip` hides the overrun. Harmless at 60 sessions, and the 2026-07-26 pipelining cut per-snapshot latency further, but it is still a latent cliff at 4 figures: the loop degrades silently into a continuous back-to-back cycle rather than erroring, and unread badges just get slower. Cheap to fix now that each snapshot is fast.
-4. **Feed fan-outs, 0.5%.** Fixed in code (Pain Point 6): the O(users) loops are gone, News refreshes through `articles_changed`.
-5. **`UPDATE rss_entries`, 0.32%.** 982k writes because the poller updates every entry on every pass whether or not the content changed. A content compare before the write would remove nearly all of it. Small, but it is pure waste and the fix is local.
+## DB Hot Queries
 
-Below this, nothing measured exceeds 0.2%. Re-rank after the deploy rather than working further down this list from the pre-fix baseline.
+### `RssEntry::list_visible_for_user` and the RSS tables
 
-## DB Investigation
+Source: `late-core/src/models/rss_entry.rs`, `late-ssh/src/app/chat/feeds/svc.rs`.
 
-`pg_stat_statements` was not enabled during the first investigation; it is now preloaded and installed in prod (used during the 2026-07-22 investigation; query recipes live in `infra/RUNBOOK.md`).
+Measured 2026-11-04:
 
-The first investigation used:
+- `rss_entries` is 357,577 rows and **362 MB of an 858 MB database**, for 72 feed owners, **only 7 of them seen in the last 7 days**. There is no retention. 61 of 138 feeds hold over 1,000 rows; one holds 50,228 and grows by about 420 a day.
+- The reader shows at most 20 entries per feed and 100 per user (`PER_FEED_ENTRY_LIMIT`, `ENTRY_LIMIT`), and nothing reads deeper. The newest 100 per feed is **10,599 rows, 3% of the table**.
+- The list query windows over every row the user has. For the heaviest user (55,901 rows): parallel seq scan, external merge sort, about 25 MB of temp, **1.4 s**. Mean 119 ms over 24.5k calls.
+- `poll_once` polls feeds whoever owns them, 64 per 30 minutes, and on new entries reruns the list for an owner who may be offline.
+- `upsert_for_feed` rewrites every entry in the feed's window on every poll whether or not it changed: 656k `UPDATE`s in 13 days against 34k new rows, 3.2 GB of WAL. The table has had no autovacuum since the promotion, 30k dead rows, and 34.5% of its pages all-visible.
 
-- `pg_stat_activity`
-- `pg_stat_user_tables`
-- `pg_stat_user_indexes`
-- relation sizes
-- `EXPLAIN (ANALYZE, BUFFERS)` on representative query shapes
+Fix, cheapest first, none needing a schema change:
 
-Database-level stats:
-
-- DB size: about 161 MB during investigation
-- Cache hit ratio: effectively 100%
-- Historical temp spill: about 4 GB temp bytes, indicating some sort/hash spill history
-- `chat_messages` was the noisiest table by sequential tuple reads: about 250B seq tuples read historically
-
-Largest relation sizes observed:
-
-- `chat_room_members`: about 44 MB total
-- `chat_messages`: about 33 MB total
-- `rss_entries`: about 16 MB total
-- `notifications`: about 8.5 MB total
-
-Skew:
-
-- General chat dominates `chat_messages`: about 67k of 86k messages
-- Heavy users can be members of more than 100 rooms
-
-## DB Hot Queries Found
-
-Both rewrites below were patched in source on 2026-06-04 and are live in prod.
-
-### `ChatRoomMember::unread_counts_for_user`
-
-Source: `late-core/src/models/chat_room_member.rs`
-
-- 2026-06-04 shape: joined all memberships for a user to `chat_messages`; the planner chose a full sequential scan (about 86k messages); representative heavy user about 381 ms.
-- 2026-06-04 rewrite: per-room `LEFT JOIN LATERAL` using `idx_chat_messages_room_created`; representative heavy user about 2.5 ms. That number did not age well. It was measured against a room-and-message set less than half the current size, and the lateral it introduced is per membership row, so its cost tracks rooms-per-user, which only grows. By 2026-07-26 the same query was 43% of all database execution time and 578 ms for a user who had never opened anything.
-- 2026-07-26 rewrite (current): the lateral counts under `LIMIT ChatRoomMember::UNREAD_COUNT_CAP` and the per-message `users` join is replaced by a UUID compare against the system bot. Same never-read user: **11.8 ms, 3,534 buffers**, down from 578 ms and 483,271. Full story in Pain Point 7.
-
-### `ChatMessage::list_recent_for_rooms`
-
-Source: `late-core/src/models/chat_message.rs`
-
-- Old shape: window function over all messages in all user rooms; a representative heavy user pulled about 82k rows, spilled about 11 MB temp, about 1.4 seconds.
-- New shape: distinct room IDs, then per-room lateral index scan with `LIMIT $2`; representative heavy user about 211 ms.
+1. `RssFeed::list_active` skips feeds whose owner has not been seen for two weeks, and a returning owner's feeds refresh on their next session. This stops the growth and most of the writes.
+2. Prune per feed in `fetch_feed`: keep the newest 100 by `created`, not by `published_at`. By `created`, a row still inside the feed's first `MAX_ENTRIES_PER_FETCH` is never pruned and re-inserted as new. The first run deletes about 347k rows, so batch it; the file only shrinks with a `VACUUM FULL`. The heaviest user would keep 1,033 rows (up to 12 feeds a user today), so the window and the sort fit in memory, which should make a query rewrite unnecessary. Measure before adding the `LATERAL`-per-feed shape and its index.
+3. `UPDATE ... AND (title, summary, published_at) IS DISTINCT FROM ($3, $4, $5)`. `upsert_for_feed` reads `updated > 0` as "the row exists", so an unchanged row falls through to the `INSERT ... ON CONFLICT DO NOTHING`, which returns nothing and stays correct at the cost of one more statement. The insert keeps `DO NOTHING` without a conflict target because it also has to cover the `(user_id, url)` constraint.
 
 ### `ChatRoom::list_discover_public_topic_rooms`
 
-Source: `late-core/src/models/chat_room.rs`
+Source: `late-core/src/models/chat_room.rs`. Public topic room discovery with lateral counts for members and messages.
 
-- Current shape: public topic room discovery uses lateral counts for member count and message count; representative runtime about 300-475 ms, dominated by repeated counts over `chat_room_members`.
-- Confirmed 2026-07-26 at 5.6% of all DB execution time, 510 ms mean over 5,688 calls, plus a 969 ms variant. Now the **largest remaining single query** after the chat-poll fixes, and unlike those it is on demand, so the cost lands as user-facing latency: about half a second to open Discover.
-- Under concurrent fan-out this query can pin the CNPG primary at its CPU limit while the node still has spare CPU (observed 2026-05-14: `pg_stat_activity` showed `service-ssh` running 8 concurrent sessions of the pre-lateral shape, which joined `chat_rooms -> chat_room_members -> chat_messages` with `COUNT(DISTINCT ...)` over an estimated ~4.48M joined rows; that shape drove the rewrite to lateral aggregates). Fix query shape first; raising the CNPG CPU limit from `1` to `2` is headroom only. Triage caveat from the same check: repeated `idx_users_username_lower` duplicate-key errors from profile updates are log noise, not the CPU source, unless active queries point there.
-- **2026-08-18: regressed, and the cause is not the query shape.** The current variant (`stats_since` 2026-07-25, the one that added `r.topic`) runs at **770.8 ms mean over 4,518 calls with a 4,135 ms max**, against 509.7 ms for the shape it replaced. This is now the worst user-facing latency in the system: over three quarters of a second to open Discover, occasionally four seconds.
+The 2026-08 diagnosis was a decayed visibility map on `chat_room_members` (`relallvisible` at 11% in 2026-10, no autovacuum for two months), fixed by migration `244_chat_room_members_autovacuum.sql`. Verified 2026-11-04: the three `reloptions` are set, autovacuum has run 3 times since 2026-10-22, 79.8% of pages are all-visible, and the member lateral is now an `Index Only Scan`. **Mean fell from 843 ms to 449 ms, and it is still slow:**
 
-  `EXPLAIN (ANALYZE, BUFFERS)` on prod, 158 matching rooms, 516 ms, 98,675 buffers. The member-count lateral is 474 ms of that:
+```
+Index Only Scan using chat_room_members_pkey (loops=180, rows=2889 per loop)
+  Heap Fetches: 102638
+Execution Time: 626 ms, 74,268 buffers
+```
 
-  ```
-  Bitmap Heap Scan on chat_room_members m  (loops=158)
-    Heap Blocks: exact=89681
-    Buffers: shared hit=94407
-  ```
+Vacuum was half of it. The rest is query shape: every open counts about 520,000 index entries. Do not expect `pct_all_visible` above 90% either: at 634k rows the 1% thresholds are about 6.4k dead or 7.3k inserted rows, the last run was 2026-10-26, nine days before this reading, and the map sags between runs, leaving 20% heap fetches.
 
-  **It visits 89,681 heap blocks against a table that is only 4,631 pages.** `chat_room_members_pkey` is `(room_id, user_id)`, which fully covers a `WHERE room_id = ?` count, so this should be an index-only scan and never touch the heap. It is not, because **only 31.9% of the table's pages are marked all-visible** in the visibility map (`pg_class.relallvisible / relpages`). Last autovacuum was 2026-08-04, two weeks before the reading.
+The fix now is a cache. The result is the same for everyone (the query takes no user), so hold it for 60 s in `ChatService`; a per-process cache of a shared read is fine under the multi-replica rule. At about 69 calls a day this is latency for the person opening Discover (span p95 789 ms, 6 s max), not DB load. Denormalized counts on `chat_rooms` would be the next step and are not justified yet.
 
-  Mechanism: 1.63M cumulative updates to `last_read_at` continuously clear all-visible bits, while neither autovacuum threshold ever trips to restore them. The dead-tuple threshold is `50 + 0.2 × 492,729 ≈ 98,595` against 8,145 actual dead tuples; the insert threshold is `1000 + 0.2 × 492,729 ≈ 99,546` against 26,850 `n_ins_since_vacuum`. So the table is updated constantly, is never eligible for autovacuum, and its visibility map decays indefinitely.
+Under concurrent fan-out an older shape of this query pinned the CNPG primary at its CPU limit while the node had spare CPU (2026-05-14, 8 concurrent sessions). Fix the query shape first; raising the CNPG CPU limit from `1` to `2` is headroom only.
 
-  **Fix shipped in code, not yet deployed:** migration `late-core/migrations/244_chat_room_members_autovacuum.sql` sets per-table `autovacuum_vacuum_scale_factor = 0.01`, `autovacuum_vacuum_insert_scale_factor = 0.01`, `autovacuum_analyze_scale_factor = 0.02`, so autovacuum runs at about 1% churn (~5.8k dead or ~6.8k inserted rows) and keeps the visibility map fresh with no manual `VACUUM`. The dead tuples already present exceed the new threshold, so the first run starts on its own within a minute of the migration. Pre-deploy reading 2026-10-16: 577k rows, 25.8k dead, 114k inserted since vacuum, last autovacuum still 2026-08-04, **11.3% of pages all-visible** (649 / 5,767), Discover at 843 ms mean and 6.1 s max over 10,347 calls. **Not yet tested:** the payoff is inferred from the plan and the visibility-map figure. This should also help the Pain Point 7 snapshot bundle, which counts against the same table.
+To re-read the visibility map:
 
-  **Health-check verification (every kube check until confirmed):**
-
-  ```sql
-  SELECT reloptions, round(100.0 * relallvisible / nullif(relpages, 0), 1) AS pct_all_visible
-  FROM pg_class WHERE relname = 'chat_room_members';
-  SELECT n_dead_tup, n_ins_since_vacuum, last_autovacuum FROM pg_stat_user_tables WHERE relname = 'chat_room_members';
-  ```
-
-  Expected: `reloptions` lists the three settings, `last_autovacuum` is within the last day or so, `pct_all_visible` above 90%. Then `EXPLAIN (ANALYZE, BUFFERS)` the Discover query: the member-count lateral should be an `Index Only Scan` with `Heap Fetches` near zero. Do not judge by the `pg_stat_statements` mean, which is cumulative since 2026-07-25 and moves slowly; take two readings of `calls` and `total_exec_time` an hour apart and compare the delta mean against 843 ms. If the scan stays a bitmap heap scan with a fresh visibility map, the cause is elsewhere and the query-shape options below come back.
-
-- Options for the query shape itself, now **deprioritized**: denormalized `member_count`/`message_count`/`last_message_at` on `chat_rooms`, a short-TTL cache, or pre-aggregation with a better index. All three solve a query-shape problem. Measure after vacuuming before building any of them, because the evidence says this is a vacuum problem wearing a query-shape costume.
+```sql
+SELECT reloptions, round(100.0 * relallvisible / nullif(relpages, 0), 1) AS pct_all_visible
+FROM pg_class WHERE relname = 'chat_room_members';
+SELECT n_dead_tup, n_ins_since_vacuum, last_autovacuum FROM pg_stat_user_tables WHERE relname = 'chat_room_members';
+```
 
 ## Observability Gaps
 
-Found during the 2026-08-18 health check. None of these is a capacity problem; all of them limit the ability to diagnose one.
+None of these is a capacity problem; all of them limit the ability to diagnose one. Read 2026-11-04.
 
-- **`otel-collector` is flapping, and it is the pipeline every other number here depends on.** Every restart is a hole in metrics, logs, and traces. Two killers. Probes: `timeoutSeconds: 1` against a `200m` CPU limit with 64.7% peak throttling, so the health endpoint missed its deadline under load and liveness killed the pod (2026-08-18: 238 readiness and 103 liveness failures in 7 days). Memory: 4 `OOMKilled` restarts on `agent-1` to 2026-10-10, with every daily peak at the 256Mi limit. The memory cause is span-name cardinality, not load: `http_telemetry_middleware` (`late-core/src/telemetry.rs`) falls back to the raw path when no route matches, so scanner probes (`GET /.env`, `GET /wp1.php`, ...) each mint a span name, 2,365 distinct ones on 2026-10-16, about 2,000 of them junk server paths, and the spanmetrics connector kept every series forever. **Fix prepared, not yet applied:** `infra/monitoring.tf` raises the collector to `500m`/`512Mi` with `GOMEMLIMIT=400MiB` and 5 s probe timeouts; `monitoring/otel-collector-config.yaml` moves the `memory_limiter` to 400/100 MiB and sets spanmetrics `metrics_expiration: 15m`, which bounds the state to recently seen names. **Still open:** name unmatched server spans by method alone (or a fixed `unmatched` route) in the middleware, which removes the junk series at the source.
-- **No node-exporter anywhere in the cluster.** `node_cpu_seconds_total` and the whole `node_*` family do not exist, so every host-level figure in this document is a cadvisor container sum, which cannot see the node's NIC, socket buffers, or steal time. This directly blocks Pain Point 8 item 2: the UDP receive buffer pressure is exactly what node-exporter would show and nothing currently can. The second node landed 2026-09-13 without it, so no host-level baseline from before the move exists. Still worth adding, as a DaemonSet with the `role=support` toleration so it covers both nodes.
-- **`late_ssh_render_stall_{skips,disconnects}_total` still has no series at all.** Meanwhile `late_ssh_render_frame_drops_total` recorded 168,480 drops across 29 episodes in 7 days, peaking at 946/min, which is the documented ~909/min single-stalled-session signature. So stalls are demonstrably happening while the guard's own metrics never report. Either the 32 MB threshold is never reached before the client drops, or the metric is not wired to the code path. One pass over `late-ssh/src/ssh.rs` would settle it.
+- **`otel-collector` is calmer but still OOMs, and it is the pipeline every other number here depends on.** The infra fix is applied (`500m`/`512Mi`, `GOMEMLIMIT=400MiB`, 5 s probe timeouts, spanmetrics `metrics_expiration: 15m`), and the pod deployed 2026-10-16 has restarted once, an `OOMKilled` on 2026-11-02 at the 512Mi limit. VictoriaMetrics, also at 512Mi, was `OOMKilled` on 2026-10-27. `container_oom_events_total` missed the collector's OOM, so read `lastState.terminated.reason` on the pod instead. Two one-line causes are left:
+  - `data` (`late-ssh/src/ssh.rs`, `#[tracing::instrument]` on the input handler) mints a span per inbound packet: **62% of the 1.73M spans a day.**
+  - `http_telemetry_middleware` (`late-core/src/telemetry.rs`) falls back to the raw path when no route matches, so scanner probes (`GET /.aws/credentials`, ...) each mint a span name: 687 `METHOD /path` names out of 1,240. `traces_span_metrics_duration_milliseconds_bucket` is 21.5k of VictoriaMetrics' 102k series. Name unmatched spans by method alone or a fixed `unmatched`.
+- **A stalled client can burn full repaints for hours, past the stall guard.** The stall metrics now have series (3,926 skips, 13 disconnects in 7 d), and `late_ssh_render_frame_drops_total` read **1,231,550 in 7 days**, seven times 2026-08-18, in long flat runs: 318,662 in the 6 h from 2026-11-03 02:00, about 885/min, the signature of one session. A frame that times out at `handle.data` is never counted by `OutputBudget`, so the guard cannot see it, and the drop path (`render_once`) forces a full repaint and the hot tier with no limit. The probable client is one that stopped reading, leaving russh's session loop blocked on the socket; that part is not proven. Fix: after a few consecutive drops fall back to the idle tick, which cuts the wasted renders from 15 fps to 2 fps without changing what a client that resumes sees.
+- **WARN is 97% noise, so nobody reads it.** Of 17.9k WARN lines a day: `unknown channel request winadj@putty.projects.tartarus.org` 10,037 (russh logs it and answers `channel_failure` correctly, so a `russh::server::encrypted=error` directive in `LOG_LEVEL` silences it), `ws pair rejected: no live session for token` 5,785, `token at capacity` 1,026 (the same event logged in two places), `websocket dirty close or error` 571. Three tokens minted on 2026-10-22 account for about 4,250 of the rejections, at exactly one a minute for 13 days: `PairRetryPolicy` never gives up, and a CLI retrying a token past the 6 h drain window can never succeed. Why those clients outlived their sessions, with SSH keepalives on, is not established. At ERROR, 82% is the rename collision in Pain Point 3.
+- **No node-exporter anywhere in the cluster.** `node_cpu_seconds_total` and the whole `node_*` family do not exist, so every host-level figure in this document is a cadvisor container sum, which cannot see the node's NIC, socket buffers, or steal time. This directly blocks Pain Point 8 item 2. Worth adding as a DaemonSet with tolerations for both tainted nodes.
 - **No stream telemetry** (no `record_stream_*` family). Already recorded as Pain Point 8 item 1; repeated here because it belongs to the same gap.
 
-## Live Production Baseline (2026-08-18)
+## Live Production Baseline (2026-11-04)
 
 A 7-day read-only health check, for future comparison. Nothing here required intervention.
 
-| | 7d |
-|---|---|
-| Peak concurrent sessions, fleet-wide | **43** |
-| Average concurrent sessions | 22.3 |
-| Sessions at time of check | 38 |
-| Connections/day | 1,147 rising to **3,343** |
-| Chat messages sent | 8,141 |
-| Successful CLI pairs | 1,189 |
-| Node CPU (all containers) | 1.60 cores avg, 2.58 peak, of 8 |
-| `service-ssh` CPU | 0.62 cores avg, 1.65 peak |
-| `service-ssh` per session | **24.9 mcores**, ~18 MiB |
-| Postgres CPU | **0.086 cores avg**, 0.571 peak |
-| Live DB execution | **~1.9% of one core** |
-| OOM kills | **0** |
-| Render frame drops | 168,480 in 29 stalled-client episodes |
-| Feed events dropped (Pain Point 6) | ~9,226 |
-| SSH inputs dropped (burst floods) | 2,306 |
+| | 2026-08-18 | 2026-11-04 |
+|---|---|---|
+| Peak concurrent sessions | 43 | **39** |
+| Average concurrent sessions | 22.3 | 24.3 |
+| Connections, 7 d | 15k | 18.3k (about 1,180 rejected at admission) |
+| Chat messages sent, 7 d | 8,141 | 9,088 |
+| Successful CLI pairs, 7 d | 1,189 | 3,346 |
+| `service-ssh` CPU avg / peak | 0.62 / 1.65 cores | 0.78 / 1.64 cores |
+| `service-ssh` per session | 24.9 mcores, ~18 MiB | **32 mcores**, ~18 MiB |
+| Postgres CPU avg / peak | 0.086 / 0.571 cores | 0.098 / 0.211 cores |
+| Live DB execution | ~1.9% of one core | **~2.3% of one core** |
+| Render frame drops | 168,480 | 1,231,550 |
+| OOM kills, app | 0 | 0 (`otel-collector` 1) |
 
-Headline: **roughly 7x headroom on the binding constraint** (render/tick CPU) against the weekly peak, no capacity incident in the window, and Postgres has gone from the projected scaling threat to a rounding error. Connections roughly tripled over the week, which is the trend to keep watching, though concurrency did not follow proportionally.
+Headline: **roughly 6x headroom on the binding constraint** against the weekly peak, no capacity incident in the window, Postgres a rounding error, and backups and WAL archiving clean (`failed_count` 0). The cost is in what away screensavers send (Pain Point 1).
 
-Sustained CPU throttling worth noting, all in the monitoring stack rather than the app path: `vmagent` 28.6% of periods throttled on average, `postgres-1` 6.8%, `victoriametrics` 4.3%, `otel-collector` 3.3%.
+Sustained CPU throttling, none of it on the app path: `plugin-barman-cloud` 83% of periods (WAL archiving still keeps up), `vmagent` 17%, `otel-collector` 6%, `victoriametrics` 3%, everything else under 2%.
 
 ## Small Debts (fix as touched)
 
-Started 2026-09-02. Nitpicks found while reviewing, none of them a problem at today's load (about 40 concurrent sessions, 16k user rows), each cheap to fix in passing when the file is already open. Add to this list rather than to a Pain Point when the finding is "this will be wrong at 10x, not now". Remove the row when it lands.
+Nitpicks found while reviewing, none of them a problem at today's load (about 40 concurrent sessions, 19k user rows), each cheap to fix in passing when the file is already open. Add to this list rather than to a Pain Point when the finding is "this will be wrong at 10x, not now". Remove the row when it lands.
 
 | Where | What | Fix when touched |
 |---|---|---|
@@ -935,27 +827,31 @@ Started 2026-09-02. Nitpicks found while reviewing, none of them a problem at to
 | Any listener for a stream-shaped table (chat messages, feeds, news, notifications) built during the Pain Point 2 app-half migration | The re-read-only listeners (news, daily matches) re-read their whole table on every notify. That shape does not transfer to tables that grow. | Carry the row id in the payload as a hint, fetch rows with id greater than the last one seen (UUID v7 orders by time), and run the same query after a reconnect. The payload stays untrusted; the table stays the truth. |
 | `late-core/src/models/marketplace.rs` (9 call sites), `quest.rs` (2), `pot.rs`, `chat_message_gild.rs`, `bonsai.rs` (`Tree::notify_changed`, one call site per write in `BonsaiService`) | App-side `SELECT pg_notify(...)` after the write. Migration 128 already records why this is fragile: a new write path forgets the notify and nobody notices until a replica is stale. Chips use a trigger instead. | Move each channel's notify into an `AFTER INSERT OR UPDATE` trigger as the model is touched, delete the app-side call, keep the channel name constant in the model. |
 | `late-ssh/src/app/deadchannel/haunt/svc.rs`, splash whisper | Two devices of one user on the held door in the same window both play the whisper; only one mark lands. Already in the Pain Point 2 ledger. | Claim before play instead of after, at the cost of the door opening a round trip later. Only worth it if someone notices. |
-| `late-web/src/pages/shared/board_png.rs`, the preview-card routes (`/profiles/{slug}/poster.png`, `/gallery/{key}/image.png`) and `/paper` | Every hit decodes the canvas and rasterises a PNG about 1536px wide (a gallery snapshot is the whole board) on `service-web`'s 250m CPU limit, unauthenticated, with only a `Cache-Control` header (renders run on the blocking pool one at a time, `board_png::render_blocking`, so they no longer stall the pod's single tokio worker; a burst now waits in an unbounded queue instead): that dedupes one client's refetches, not the fetch each Mastodon or Slack server makes on its own when a link is pasted, nor the scanners that gave the landing page 535,000 views in 25 days (`AUDIENCE.md`, section 3). `/paper` and its feed run several uncached queries per hit; feed readers poll on a clock. Cost unmeasured; a few hits a day today. | Memoise the PNG in memory by route key with a short TTL (a saved snapshot and a painted poster change rarely; `main` is the live board, so the TTL is the bound), and read the paper's hit rate off the HTTP spanmetrics before caching it. |
+| `late-web/src/pages/shared/board_png.rs`, the preview-card routes (`/profiles/{slug}/poster.png`, `/gallery/{key}/image.png`) and `/paper` | Every hit decodes the canvas and rasterises a PNG about 1536px wide (a gallery snapshot is the whole board) on `service-web`'s 250m CPU limit, unauthenticated, with only a `Cache-Control` header (renders run on the blocking pool one at a time, `board_png::render_blocking`, so they no longer stall the pod's single tokio worker; a burst now waits in an unbounded queue instead): that dedupes one client's refetches, not the fetch each Mastodon or Slack server makes on its own when a link is pasted, nor scanners. `/paper` and its feed run several uncached queries per hit; feed readers poll on a clock. Cost unmeasured; a few hits a day today. | Memoise the PNG in memory by route key with a short TTL (a saved snapshot and a painted poster change rarely; `main` is the live board, so the TTL is the bound), and read the paper's hit rate off the HTTP spanmetrics before caching it. |
+| `infra/service-web.tf`, readiness probe; `late-web/src/pages/home/mod.rs` | The kubelet probes `GET /` every 5 s and `root_handler` counts a page view each time: 17,280 of about 19,200 `GET /` a day, so `late_web_page_views_total{page="home"}` is mostly the kubelet. | Give late-web a health route as late-ssh has `/api/health`, and point the probe at it. |
+| `late-web/src/pages/home/page.html`, `/status` | `hx-trigger="every 5s"` polls even from a background tab: 109k requests a day from a handful of open tabs, each one fetch to `service-ssh` and three spans (19% of all spans). | `every 30s`, and skip it while `document.hidden`. |
+| `late-ssh/src/api.rs`, `effective_client_ip` | Trusts the first `X-Forwarded-For` from nginx, which holds Cloudflare's edge address, not the client's: 6,930 pair requests a day from 4,496 distinct "client IPs", all sampled ones in Cloudflare ranges. Strong evidence, not confirmed end to end: the per-IP pair limiter and socket cap would then bound an edge, not a person, leaving the per-token cap as the only working limit. | Have nginx take the real IP from `CF-Connecting-IP` for Cloudflare's ranges (`real-ip-header`, `proxy-real-ip-cidr` in the HelmChartConfig). |
+| `infra/icecast.tf` | The generated source, relay and admin passwords are templated into the `icecast-config` ConfigMap in plaintext, so anything that can read ConfigMaps in the namespace can read them. Not a scale item; it sits here because nothing else tracks it. | Mount the config from a Secret, then rotate. |
 
-### Root-file thinning (measured 2026-09-02)
+### Root-file thinning (sizes 2026-11-04, function sizes 2026-09-02)
 
-The four root files of the TUI (`late-ssh/src/app/{input,state,render,tick}.rs`) are 11.5k lines together, and the GUIDE rule for them is "hold a domain's state, delegate to it, done". Measured against that rule they are half glue and half domain logic that drifted up. Not a scaling problem; a "every feature touches these files" problem, which is what makes them the merge-conflict and review-cost hot spot. Sizes:
+The four root files of the TUI (`late-ssh/src/app/{input,state,render,tick}.rs`) are 14.5k lines together, and the GUIDE rule for them is "hold a domain's state, delegate to it, done". Measured against that rule they are half glue and half domain logic that drifted up. Not a scaling problem; a "every feature touches these files" problem, which is what makes them the merge-conflict and review-cost hot spot. Sizes:
 
 | File | Lines | Biggest function | What the excess is |
 |---|---|---|---|
-| `app/input.rs` | 4,200 | `handle_parsed_input_inner` 512, `handle_dedicated_screen_input` 337, `dispatch_escape` 288 | 237 direct `app.chat.` touches; whole domain handlers living here |
-| `app/state.rs` | 3,545 | `App::new` 634, `App` struct 210 fields (lines 432-882) | 22 door-game enter/leave/launch fns, 12 voice fns, stream/on-air consent logic |
-| `app/render.rs` | 2,617 | `render` 916, `draw` 697, `app_frame_title` 323, `push_quit_confirm_sayonara_placement` 220 | per-screen title logic, quit-confirm placement (a domain with its own `ui.rs`) |
-| `app/tick.rs` | 1,142 | `tick` 1,015 | image-upload result handling, daily-match room join, door-game idle reaps, all inline |
+| `app/input.rs` | 4,500 | `handle_parsed_input_inner` 512, `handle_dedicated_screen_input` 337, `dispatch_escape` 288 | 237 direct `app.chat.` touches; whole domain handlers living here |
+| `app/state.rs` | 4,725 | `App::new` 634, `App` struct 210 fields (lines 432-882) | 22 door-game enter/leave/launch fns, 12 voice fns, stream/on-air consent logic |
+| `app/render.rs` | 3,534 | `render` 916, `draw` 697, `app_frame_title` 323, `push_quit_confirm_sayonara_placement` 220 | per-screen title logic, quit-confirm placement (a domain with its own `ui.rs`) |
+| `app/tick.rs` | 1,726 | `tick` 1,015 | image-upload result handling, daily-match room join, door-game idle reaps, all inline |
 
 The target shape already exists in the tree and is the thing to copy: `app/deadchannel/haunt` is one line in `tick.rs` (`haunt::svc::tick(self)`), one arm in input, one call in render, and everything else lives in the domain. Most domains already have `input.rs` / `ui.rs` / `svc.rs` (chat, artboard, clubhouse, directory, leaderboard, every modal); the drift is code that never moved into them, not missing structure. Moves, each self-contained and safe to do in passing when the feature is touched:
 
 | Move | From | To | Size |
 |---|---|---|---|
-| Door-game enter/leave, idle reaps, "return to hub on exit" (the hub's keys and launch are in `app/door/hub/input.rs` already) | `state.rs` (22 fns), `tick.rs` (lines ~540-620) | `app/door/hub/{state,svc}.rs`, one `door::svc::tick(app)` | ~350 lines |
+| Door-game enter/leave, idle reaps, "return to hub on exit" (the hub's keys and launch are in `app/door/hub/input.rs` already) | `state.rs` (22 fns), `tick.rs` | `app/door/hub/{state,svc}.rs`, one `door::svc::tick(app)` | ~350 lines |
 | Voice join/leave/mute/deafen, on-air consent, `voice_toggle_intent`, `handle_voice_join_result` | `state.rs` (12 fns) | `app/voice/{state,svc}.rs` (`voice/state.rs` is 54 lines today; the logic is at the root) | ~300 lines |
-| Image upload result, inline image polls, mod outputs, sheet save, requested-profile-open, debounced username click | `tick.rs` lines ~171-224 | `chat::svc::tick(app)` returning a `ChatTick { banner, screen_switch, open_profile, open_sheet }` | ~120 lines |
-| Daily-match room join on board load, lobby sync | `tick.rs` lines ~419-445 | `lobby::daily::svc::tick(app)` | ~30 lines |
+| Image upload result, inline image polls, mod outputs, sheet save, requested-profile-open, debounced username click | `tick.rs` | `chat::svc::tick(app)` returning a `ChatTick { banner, screen_switch, open_profile, open_sheet }` | ~120 lines |
+| Daily-match room join on board load, lobby sync | `tick.rs` | `lobby::daily::svc::tick(app)` | ~30 lines |
 | `handle_chat_scroll_click`, `handle_chat_composer_click`, `chat_room_list_view`, `start_slash_command_composer` | `input.rs` (4 fns, ~280 lines) | `app/chat/input.rs`, which already exists | ~280 lines |
 | `handle_icon_picker_input`, `apply_icon_selection` | `input.rs` (~140 lines) | `app/icon_picker/input.rs` (domain has no `input.rs` yet) | ~140 lines |
 | `handle_directory_catalog_input` | `input.rs` (66 lines) | `app/directory/input.rs`, which already exists | ~70 lines |
@@ -973,65 +869,32 @@ Rules for the moves, so they do not become a rewrite:
 
 ## Immediate Next Work
 
-**Re-ordered 2026-08-18** after the health check. The four 2026-07-26 DB fixes are verified and their follow-ups have dropped down the list; what rose to the top is a two-week-stale visibility map and a flapping telemetry collector, neither of which was on the list at all. Current order of payoff:
+Ranked by payoff against size, from the 2026-11-04 readings. The item numbers further down are stable because other files cite them; items 1, 2, 4, 5 and 6 landed and are gone.
 
-0. **Deploy and verify the `chat_room_members` autovacuum migration (244).** Cheapest real win available. Targets the only user-facing DB latency in the system (Discover at 843 ms mean, 6.1 s max on 2026-10-16) and probably helps the chat snapshot bundle too. Durable by construction, no manual `VACUUM`. Verification queries in DB Hot Queries, `list_discover_public_topic_rooms`.
-0b. **Apply the prepared `otel-collector` fix** (probes, memory, spanmetrics expiry) and then fix the unmatched-route span name in `late-core/src/telemetry.rs`. Protects every measurement this document depends on. See Observability Gaps.
-0c. **Add node-exporter** so host-level CPU/NIC/socket-buffer pressure is visible at all. The second node landed without it (2026-09-13); the DaemonSet needs the `role=support` toleration to cover `agent-1`. See Observability Gaps.
+| | Win | Evidence | Size |
+|---|---|---|---|
+| A | **Cap what away screensavers send** (Pain Point 1) | 20 users on lively pieces are 78% of all bytes; about -49% to -67% of output | A few lines around `ascii/playback.rs`; how lively is a product call |
+| B | **RSS: stop polling absent owners, prune per feed, skip no-op `UPDATE`s** (DB Hot Queries) | 42% of the DB, top disk reader, 37 of 42 GB temp, a quarter of WAL, 1.4 s for the heaviest user | Small, no schema change |
+| C | **`jit = off`** (DB Cost Ranking) | 5% of DB time, 11% of the top query | One line, `-infra` release, reload only |
+| D | **Thin ambient draws for idle sessions** (Pain Point 1) | Draws carry about 69% of CPU and 78% of session time is idle; projected -27% to -41% CPU, more session ceiling | About 20 lines in `app/tick.rs`; the rate is a product call |
+| E | **Back off the frame-drop path** (Observability Gaps) | 1.23M dropped full repaints in 7 d | A few lines in `render_once` |
+| F | **Trace volume and span names** (Observability Gaps) | `data` is 62% of spans; 687 HTTP span names; collector and VictoriaMetrics both OOMed at 512Mi | Two lines |
+| G | **Log noise** (Observability Gaps) | 97% of WARN from four sources, 82% of ERROR from one | One directive, then small fixes |
+| H | **`service-web` health route, `/status` at 30 s** (Small Debts) | 90% of `GET /` is the kubelet; `/status` is 19% of spans | Small |
+| I | **Discover cache** (DB Hot Queries) | 449 ms mean, 6 s max | Small |
+| J | **One `rke2-server` restart** (item 3, Left to do) | RKE2 certs expire 2027-02-27; etcd snapshots only on `server-1` | Ops |
 
-Then the pre-existing list below, with items 1, 2, 4, and 6 now done and item 5 unchanged and still open.
+Then re-read Wire & Latency and decide item 10.
 
-Historical note, ordered by measured payoff as of 2026-07-26: four DB fixes landed that day (see DB Cost Ranking, Fixed 2026-07-26) removing a projected 56% of the workload; items 1 and 2 below are what survived of them. That instruction to reset `pg_stat_statements` was never carried out, and the ranking was instead verified by live differential on 2026-08-18. **Resetting the window is still worth doing** so the cumulative table stops reporting retired queries at the top.
+### 3. Second node: landed 2026-09-13; what stays where and why
 
-### 1. Kill the chat snapshot poll's per-room fan-out
-
-Partly done 2026-07-26. The dominant term, `unread_counts_for_user`, is fixed: the count is capped at `ChatRoomMember::UNREAD_COUNT_CAP` (100) and the per-message `users` join is gone. Measured on prod against a never-read user: **578 ms to 11.8 ms, 483,271 buffers to 3,534**. The UI renders anything at the cap as `99+`.
-
-Also done: the duplicate `SELECT settings` read is gone (`User::friend_and_ignored_user_ids` fetches the row once for both lists, was 11.1M calls at exactly 2.006 per snapshot).
-
-Still open: the other queries in the bundle, which are individually cheap and expensive only because the bundle runs often, plus the sequential session loop. Ranked with the rest of the leftovers under DB Cost Ranking, Remaining DB work.
-
-**Verified done 2026-08-18** and largely closed as a priority: the live differential shows all pre-fix shapes idle and the whole bundle costing about 0.40 ms of DB time per session per second, roughly 0.4 cores extrapolated to 1000 sessions. Finish the leftovers for latency and tidiness if you like, but this is no longer a scaling item. See Pain Point 7.
-
-### 2. Gate the leaderboard refresh loop
-
-Done 2026-07-26 (`app/hub/svc.rs`; the service has since moved to `app/leaderboard/svc.rs`). `REFRESH_INTERVAL` went 30 s to 300 s and each pass now skips entirely when `has_subscribers()` is false, so an empty server does no leaderboard work at all. Expected to take the loop from 13.1% of DB execution time to under 1.5%. Safe because the only latency-sensitive consumer, the per-session chip balance in `app/tick.rs:881`, is already event-driven: chip writes fire `chip_user_changed` and `ShopService` pushes the balance per user (`app/hub/shop/svc.rs:832`).
-
-**Verified 2026-08-18:** the leaderboard passes run at 0.01 calls/sec in the live differential, consistent with the 300 s interval, and account for 7.0% of live DB time in aggregate. Working as designed.
-
-Follow-up 2026-08-18: Late Time adds one query over indexed all-time and
-current-month O(users) rollups to the subscriber-gated pass (fourteen queries
-total), plus one array-upsert statement updating both rollups per five minutes
-when connected time is pending. Connection and disconnection do no DB work.
-
-### 3. Add a second node; give `service-ssh` a full node to itself
-
-`late-ssh` render/tick CPU is the scaling unit; everything else on `server-1` is overhead stealing cores from sessions. Move the overhead to a new node so the full 8 cores serve sessions.
-
-**Status 2026-09-13: done.** Node joined, support workloads moved and verified in production the same day. Postgres and LiveKit deliberately stay on `server-1`. What landed, what stayed and why, what was actually run, and what is left:
-
-**The node.** `agent-1`: Hetzner CX33 (4 vCPU x86, 8 GB, 40 GB disk) in Helsinki like `server-1`, Debian 13, joined by hand as an RKE2 agent pinned to `server-1`'s version (v1.34.4+rke2r1), admin SSH on 22222. Procedure in `infra/README.md`, Nodes. Not `infra/setup_rke2.sh`: it bootstraps a whole cluster and would reinstall `server-1` and overwrite kubeconfig and the `KUBE_CONFIG` GitHub secret. x86 was picked over the spare ARM boxes because every `late-*` image is built amd64-only; all third-party images were multi-arch.
+`late-ssh` render/tick CPU is the scaling unit; everything else on `server-1` is overhead stealing cores from sessions, so the overhead moved. Procedure in `infra/README.md`, Nodes. Not `infra/setup_rke2.sh`: it bootstraps a whole cluster and would reinstall `server-1` and overwrite kubeconfig and the `KUBE_CONFIG` GitHub secret.
 
 **Agent, not a second server.** etcd needs a majority of members up. With two servers both must be up, so a second control-plane node adds a failure mode without adding safety. Control-plane HA starts at three servers, all schedulable, behind a stable join and API address (DNS or a Hetzner load balancer) instead of `server-1`'s IP. Converting `agent-1` later means uninstalling the agent and reinstalling as a server with the same token; take an etcd snapshot first.
 
-**Placement.** `agent-1` carries label and `NoSchedule` taint `role=support`. A workload lands there only with both the node selector and the toleration (`support_node_*` locals in `infra/defaults.tf`); the taint is what keeps `service-ssh` and everything else on `server-1`. CoreDNS needed its own toleration (`infra/coredns.tf`): its autoscaler wants one replica per node with required anti-affinity, so the second replica sat Pending after the join. local-path helper pods are bound by `nodeName`, which bypasses the scheduler, so the taint does not block volume creation on `agent-1`.
+**Placement.** `agent-1` carries label and `NoSchedule` taint `role=support`. A workload lands there only with both the node selector and the toleration (`support_node_*` locals in `infra/defaults.tf`); the taint is what keeps `service-ssh` and everything else on `server-1`. CoreDNS needed its own toleration (`infra/coredns.tf`): its autoscaler wants one replica per node with required anti-affinity. local-path helper pods are bound by `nodeName`, which bypasses the scheduler, so the taint does not block volume creation on `agent-1`.
 
-**Moves to `agent-1`:** `service-web`, `icecast`, `liquidsoap`, `otel-collector`, `vmagent`, `kube-state-metrics`, `victoriametrics`, `victorialogs`, `victoriatraces`, `grafana`, Minecraft on its first deploy, and the second CoreDNS replica.
-
-**Volumes are recreated empty, not migrated, by decision.** Downtime and lost history were accepted in exchange for zero migration machinery. A `local-path` PVC is pinned to the node holding it, so a selector alone would leave the pod unschedulable. Procedure: scale `liquidsoap`, `grafana`, `victoriametrics`, `victorialogs`, and `victoriatraces` to 0, delete `music-data`, `grafana-data`, and the three Victoria PVCs, confirm they are gone, run the infra apply (it recreates them on `agent-1`), then dispatch `sync_music`. Deleting a PVC while its pod still runs leaves it Terminating and breaks the apply. Applying before deleting does not work either: the new pods need `agent-1` while the old volumes pin them to `server-1`, so they sit Pending, the Recreate-strategy Victoria stores go down anyway, and the apply times out on the rollout wait. Consequences, as observed:
-
-- Radio streamed silence from the scale-down until `sync_music` finished, about 20 minutes: `radio.liq` has no fallback beyond the files on the PVC (`mksafe` plays silence rather than crashing), and R2 is the source of truth.
-- All metric, log, and trace history before the move is gone. The figures recorded in this document are the only pre-move record.
-- Grafana lost UI-made state and its admin login is the `grafana-admin` secret again (`kubectl get secret -n monitoring grafana-admin`); the old volume's password had been changed in the UI. Dashboards and datasources are provisioned from config, and the VictoriaMetrics plugins reinstall at boot (the 508 MB `plugins` directory was most of the old volume).
-- `server-1` got back about 9 GB of disk (7.5 GB free before, 16.6 GB after).
-
-**What was actually run, 2026-09-13:**
-
-1. PR #603 merged; its `terraform_plan` showed 5 to add (Minecraft deployment, PVC, secret, RCON password; CoreDNS `HelmChartConfig`), 11 to change (the 9 deployments, the vmagent and kube-state-metrics releases, plus the unrelated deadchannel dashboard ConfigMap that rode along), 0 to destroy. Every deployment diff was only the node selector and toleration.
-2. The five stateful deployments scaled to 0 and their PVCs deleted by hand; local-path removed the PVs within seconds.
-3. Applied by a manual `deploy_infra` dispatch with `release_tag=main` (run 34779327218, 2m22s green), not by an `-infra` release, so no release tag marks this change.
-4. Verified: all 11 deployments rolled out on `agent-1` with zero restarts, the five PVCs recreated there (plus `minecraft-data`), CoreDNS at two replicas one per node, `late.sh` 200, Grafana login page up, Minecraft `Done (22s)` with GriefPrevention loaded and the whitelist seeded. The only warning events were probe failures from pods mid-rollout.
-5. `sync_music` dispatched (run 34779732666, about 11 minutes): 617 MP3s, 3.9 GB, both Icecast mounts live again.
+**Moving a `local-path` volume means recreating it empty.** A selector alone leaves the pod unschedulable. Scale the workload to 0, delete the PVC, confirm it is gone, apply, restore. Deleting a PVC while its pod runs leaves it Terminating and breaks the apply; applying first leaves new pods Pending and times out the rollout wait. Radio has no fallback beyond the files on its PVC, so `music-data` needs `sync_music` afterwards. All metric, log and trace history from before 2026-09-13 is gone.
 
 **Stays on `server-1`, and why:**
 
@@ -1042,31 +905,15 @@ when connected time is pending. Connection and disconnection do no DB work.
 - **LiveKit and `livekit-ingress`, by decision.** Both run with `host_network`. On `agent-1`, signaling (`rtc.late.sh`) and WHIP (`whip.late.sh`) would still work through ingress, and direct media would work because `use_external_ip` advertises the node's own public IP. TURN would break: its domain is `rtc.late.sh`, which resolves to `server-1`, and that name cannot move because signaling and its HTTP-01 certificate renewal both depend on ingress-nginx on `server-1`. A clean move needs a dedicated TURN hostname (for example `turn.late.sh`) pointing at `agent-1`, with a DNS-01 certificate. Payoff: stream CPU and packet fan-out off `server-1`, and a fresh host for the UDP receive-buffer sysctls (Pain Point 8).
 - Cluster add-ons (cert-manager, the CNPG operator and barman plugin, local-path provisioner, metrics-server): untouched, no reason to move.
 
-**Minecraft addressing.** Its hostPort opens on `agent-1`, but `late.sh` resolves to `server-1` and the `*.late.sh` wildcard is Cloudflare-proxied, so two manual DNS records route players: an `mc.late.sh` A record for `agent-1`, and a `_minecraft._tcp.late.sh` SRV record so plain `late.sh` still works. Both DNS-only, never proxied. As of 2026-09-13 the A record exists and players connect to `mc.late.sh`; the SRV record does not yet, so plain `late.sh` still lands on `server-1`.
-
 **Left to do:**
 
-- Add the `_minecraft._tcp.late.sh` SRV record (priority 0, weight 5, port 25565, target `mc.late.sh`).
-- Offsite etcd snapshots. RKE2 takes one every 12 hours and keeps them only on `server-1`'s own disk. Configure the S3 upload, reusing the bucket Postgres backups go to; it restarts `rke2-server`, which briefly interrupts the API but not running pods.
-- Reclaim `server-1` disk: prune unused images and vacuum the journal (containerd held 13 GiB and the journal 2.6 GiB on 2026-09-12).
-- node-exporter on both nodes (item 0c).
-- Record a post-move baseline for both nodes once traffic settles; the reading in Current Infra Status was taken minutes after the rollout.
+- Rotate the RKE2 certificates before they expire on 2027-02-27 (`CertificateExpirationWarning` on `server-1`, inside the 120-day window since 2026-10-30): restarting `rke2-server` rotates them, briefly interrupting the API but not running pods. Rolled into one restart with the next item.
+- Offsite etcd snapshots. RKE2 takes one every 12 hours and keeps them only on `server-1`'s own disk (`kubectl get etcdsnapshotfile` shows `file://` locations). Configure the S3 upload, reusing the bucket Postgres backups go to.
+- Reclaim `server-1` disk: prune unused images and vacuum the journal (images take 12.8 GiB of the 37.2 GiB disk).
+- node-exporter on the nodes (Observability Gaps).
+- Add the `_minecraft._tcp.late.sh` SRV record (priority 0, weight 5, port 25565, target `mc.late.sh`); `mc.late.sh` itself resolves, the SRV record still does not exist (`door/minecraft/CONTEXT.md`).
 - Optional: taint `server-1` so nothing new schedules next to `service-ssh`. Needs tolerations on everything that stays.
 - LiveKit move, once the TURN prerequisites above exist.
-
-### 4. Verify the render-cost win in prod
-
-Done 2026-07-24 (numbers in Pain Point 1): ~26.5 mcores/session, ~20% clean-skip ratio, ~5.3 draws/session/sec, stall guard never fired. Re-derived ceiling ~260-300 sessions/node, up from 100-110. This decides the 1000-user shape needs roughly 4 SSH pods, not a large fleet. A second independent reading later the same day at 59 sessions reproduced it (26.8 mcores/session, 22% clean-skip, 6.6 draws/session/sec, 0 frame drops, node at 37% CPU and 46% memory), so the numbers are stable, not a lucky sample. Remaining watch item: re-read under a genuine 100+ concurrent surge (both readings were about 60 sessions) and after the eq-to-quarter-edge knob if it ever ships.
-
-### 5. Fix the feed fan-outs
-
-Fixed in code, pending deploy verification. See Pain Point 6 for the shape and the log query that confirms it.
-
-### 6. `pg_stat_statements` tracking
-
-Done: preloaded and installed in prod; query recipes in `infra/RUNBOOK.md`. Keep watching top total execution time, top mean, top calls, top temp bytes, and top shared/local block reads after traffic events.
-
-**Caveat learned 2026-08-18:** the window has never been reset, so cumulative shares are meaningless across a deploy that changes query shapes (see the warning at the top of DB Cost Ranking). Two workable habits: reset the window after any deploy that rewrites SQL, or rank by a **two-snapshot delta** rather than by cumulative totals. The delta method needs no reset, preserves history, and is what verified the 2026-07-26 fixes. `stats_since` also helps: it dates each entry's creation, which is enough to tell deploy generations of the same query apart.
 
 ### 7. Cap render dimensions
 
@@ -1096,17 +943,15 @@ Before increasing app replicas substantially:
 - move app pools behind PgBouncer transaction pooling
 - avoid multiplying deadpool connections by replica count
 
-### 10. Pace frames by acknowledgement, once the latency data says so
+### 10. Pace frames by acknowledgement, once screensaver bytes are cut
 
-Read the Wire & Latency row after about a week, then decide. The criteria
-and the design are in Pain Point 11. Not before: the point is to find out
-whether bytes on the wire are what users feel, before building against it.
+The week of data is in, and its trigger reads as met (User Latency, Reading): `large` backlog p95 sits 500 to 750 ms above `none`. But most of those bytes are away screensavers nobody is typing on, and at p95 the terminal costs as much as the network, so do win A first and re-read. Design in Pain Point 11.
 
 ## 1000-User Target Architecture
 
 Suggested shape:
 
-- Two nodes as the first step (Immediate Next Work 3, landed 2026-09-13): `server-1` for `service-ssh`, Postgres, LiveKit, and the doors; `agent-1` for web, audio, monitoring, and Minecraft. Node-level Postgres HA waits for three control-plane nodes
+- Today (Immediate Next Work 3): `server-1` for `service-ssh`, Postgres, LiveKit, and the doors; `agent-1` for web, audio, monitoring, and Minecraft; `agent-2` for Vintage Story. Node-level Postgres HA waits for three control-plane nodes
 - `service-web`: 3+ stateless replicas
 - `service-ssh`: multiple replicas, each owning many sessions
 - Redis: token ownership, presence, pub/sub, lightweight fanout
@@ -1151,29 +996,21 @@ Stop conditions:
 
 ## Current Go/No-Go For HN
 
-Updated 2026-07-23, after an actual HN front-page surge (2026-07-22, peak about 100 sessions) and the render-cost program landing.
+An actual HN front-page surge (2026-07-22, peak about 100 sessions) is the last real load test, and it came before the render-cost program landed.
 
-What held or is now in place:
+What is in place:
 
-- SSH cap 1000, chat query rewrites live, Postgres a non-factor (about 200 millicores at 80 TUI sessions)
-- Memory: OOM root cause found (stalled-client output buffering in russh's uncapped queue) and guarded in code; limit raised to 8 GiB; pair-WS surface capped and bounded
-- `pg_stat_statements` and traces available for live diagnosis
-- Render cost: dirty gate + adaptive tick shipped; idle sessions no longer pay the 15 FPS floor
+- SSH cap 1000, admission ahead of the handshake, `OutputBudget` guarding memory, the pair-WS surface capped by token, `pg_stat_statements` and traces for live diagnosis
+- Render cost: dirty gate and adaptive wake, about 225 sessions of ceiling, 6x the weekly peak
+- Postgres a rounding error: 0.1 cores average against a 1 CPU limit
 
-Residual risk (updated 2026-08-18, node layout 2026-09-13):
+Residual risk:
 
-- single control-plane node: `agent-1` carries support workloads, but etcd, the CNPG operator, and both Postgres instances live on `server-1`, so losing `server-1` stops the control plane and the database together (running pods on `agent-1` keep serving, nothing reschedules). etcd snapshots stay on `server-1`'s disk until the S3 upload is configured
+- single control-plane node: `agent-1` and `agent-2` carry support workloads and game servers, but etcd, the CNPG operator and both Postgres instances live on `server-1`, so losing `server-1` stops the control plane and the database together (running pods elsewhere keep serving, nothing reschedules). etcd snapshots stay on `server-1`'s disk until the S3 upload is configured
 - single `service-ssh` pod for real session ownership
-- Discover latency is a live product problem: 843 ms mean, 6.1 s max on 2026-10-16, still regressing. Stale visibility map; autovacuum migration 244 written, not yet deployed or verified
-- `otel-collector` restarts several times a week (probe timeouts and OOMs), punching holes in the telemetry that all of these judgements rest on; a fix is prepared in infra, not yet applied
+- `otel-collector` and VictoriaMetrics both still OOM at 512Mi now and then, so telemetry can have holes when it matters most
 - no node-exporter, so host-level NIC and socket-buffer pressure is invisible (blocks Pain Point 8 item 2)
 - no PgBouncer yet
 - no horizontal `service-ssh` sharding yet
 
-Retired from this list on 2026-08-18:
-
-- ~~the four 2026-07-26 DB fixes are projected, not verified~~ **verified** by live differential
-- ~~the chat snapshot poll is the binding DB constraint on the 1000-user target~~ **it is not.** Measured at ~0.4 cores extrapolated to 1000 sessions, against a Postgres instance averaging 0.086 cores
-- ~~the `service-web -> icecast` upstream drops~~ **zero occurrences in 7 days**
-
-For posts that bring about 100 active users, current state survives, proven in production. For 1000 active terminal users the remaining projects are now: the second-node follow-ups (Immediate Next Work 3), then shardable `service-ssh` (with PgBouncer before replicas multiply). **The DB is no longer on the critical path** for that target, which is the main change from the 2026-07-23 version of this assessment: both the render-cost multiplier and the DB side are now measured rather than projected, and render/tick CPU is the sole scaling unit. At the 2026-08-18 weekly peak of 43 concurrent sessions there is roughly 7x headroom before `server-1` binds, measured while it still carried every support workload.
+For posts that bring about 100 active users, current state survives. For 1000 active terminal users the remaining projects are win D, then shardable `service-ssh` (with PgBouncer before replicas multiply). Render/tick CPU is the scaling unit; the chat snapshot extrapolation (Pain Point 7) is the DB number to re-read on the way there.

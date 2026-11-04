@@ -19,8 +19,7 @@ use uuid::Uuid;
 
 use late_core::models::leaderboard::{ArcadeGame, DailyPuzzle, LeaderboardData};
 use late_core::models::profile::Profile;
-use late_core::models::user::{LandingPage, RightSidebarMode, TerminalImagesMode};
-use late_core::models::user_ssh_key::KeyLayout;
+use late_core::models::user::{LandingPage, TerminalImagesMode};
 
 use crate::{
     app::activity::event::ActivityEvent,
@@ -107,19 +106,9 @@ fn voice_toggle_intent(
     }
 }
 
-/// The Arcade sidebar mode in force: this device's stored mode when its key
-/// has one, else the account default. Free-standing so `App::new` can seed
-/// the settings draft with it before the `App` itself exists.
-fn device_rails_or_profile(device_rails: Option<KeyLayout>, profile: &Profile) -> RightSidebarMode {
-    match device_rails {
-        Some(layout) => layout.right_sidebar_mode,
-        None => profile.right_sidebar_mode,
-    }
-}
-
 /// Bounds for the aquarium simulation at launch: a band the size of the
 /// old Home tray (eleven rows inside the chat column: frame borders plus
-/// the room rail and right sidebar, 24 each). Home's reef tile re-binds
+/// Home's two rail columns, 24 each). Home's reef tile re-binds
 /// the sim to its own rect on its first draw
 /// (`sync_aquarium_bounds`); this only has to be a sane start.
 fn aquarium_area_for_terminal(cols: u16, rows: u16) -> Rect {
@@ -422,9 +411,6 @@ pub struct SessionConfig {
     /// `None` for sessions with no key of their own (ghost bots, tests), which
     /// then simply follow the account default and persist nothing.
     pub key_fingerprint: Option<String>,
-    /// This device's stored home rail layout, or `None` when the key has never
-    /// been configured and should follow the account default.
-    pub key_layout: Option<late_core::models::user_ssh_key::KeyLayout>,
     /// This device's Artboard content disclaimer, or `None` when the key has
     /// never set one and should follow the account's `artboard_disclaimer`.
     pub key_artboard_disclaimer: Option<bool>,
@@ -647,16 +633,16 @@ pub struct App {
     pub(crate) away_user_ids: HashSet<Uuid>,
     /// Human headcount and connected friends, recomputed on the same ~1s
     /// cadence; renderers read these owned values instead of locking the
-    /// shared `active_users` map every frame. The friends feed the sidebar
+    /// shared `active_users` map every frame. The friends feed the presence tile
     /// friends row and the Friends tile.
     pub(crate) online_count: usize,
     pub(crate) active_friends: Vec<crate::app::chat::state::ActiveFriend>,
     /// The unread mention count the mentions list was last requested at
     /// while Home hosts the attention guest (the list loads only on ask).
     pub(super) home_attention_listed_unread: Option<i64>,
-    /// Last rendered sidebar clock text, compared on the ~1s tick so minute
+    /// Last rendered clock text, compared on the ~1s tick so minute
     /// rollovers count as a render-visible change.
-    pub(super) last_sidebar_clock: String,
+    pub(super) last_clock: String,
     /// App-owned author-context epoch for the chat row caches: bumps when
     /// AFK, drunk levels, name styles, or the username directory change.
     /// Pairs with `ChatState::context_epoch` in `ChatRowsVersions`.
@@ -676,7 +662,7 @@ pub struct App {
     /// render ever queries for it.
     pub(super) pot_snapshot_rx: Option<watch::Receiver<Arc<crate::app::pot::svc::PotSnapshot>>>,
     pub(super) pot_events_rx: Option<broadcast::Receiver<crate::app::pot::svc::PotEvent>>,
-    /// What the sidebar's pot panel draws, projected for this viewer.
+    /// What the pot's status badge draws, projected for this viewer.
     pub(crate) pot_view: crate::app::pot::state::PotView,
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) username_directory: Option<crate::usernames::UsernameDirectory>,
@@ -780,19 +766,13 @@ pub struct App {
     pub(crate) music_prefix_armed: bool,
     pub(crate) room_section_prefix_armed: bool,
     /// `s` was pressed on Home: the next digit opens that row of the
-    /// sidebar's Live panel (`live/input.rs::open_from_prefix`).
+    /// Live panel (`live/input.rs::open_from_prefix`).
     pub(crate) live_prefix_armed: bool,
 
     /// Profile
     pub(crate) profile_state: profile::state::ProfileState,
-    /// Home rail layout for *this device*: the layout stored on the SSH key
-    /// this session authenticated with, or `None` to follow the live account
-    /// profile. `\` and the two Ctrl+O rail rows write it, so a phone and a
-    /// desktop on one linked account stop overwriting each other. Read through
-    /// [`App::rail_modes`]; render resolves `Auto` against terminal width.
-    pub(crate) device_rails: Option<late_core::models::user_ssh_key::KeyLayout>,
-    /// Artboard content disclaimer for *this device*, stored on the same key
-    /// as `device_rails`, or `None` to follow the account's
+    /// Artboard content disclaimer for *this device*, stored on the SSH key
+    /// this session authenticated with, or `None` to follow the account's
     /// `artboard_disclaimer`. Read through [`App::artboard_disclaimer_enabled`].
     pub(crate) device_artboard_disclaimer: Option<bool>,
     /// The key the device settings persist to; `None` for keyless sessions.
@@ -996,7 +976,7 @@ pub struct App {
     /// Lobby modal state spanning both game domains: cursor, claim-confirm,
     /// unseen-challenge glow.
     pub(crate) lobby: crate::app::lobby::state::LobbyState,
-    /// Daily correspondence games: sidebar panel and board state.
+    /// Daily correspondence games: lobby tile and board state.
     pub(crate) daily: crate::app::lobby::daily::state::DailyState,
     /// Realm territory-conquest games: per-session snapshot + board state.
     pub(crate) realm: crate::app::door::realm::state::RealmState,
@@ -1222,36 +1202,6 @@ impl App {
     /// up then.
     fn screensaver_due(&self) -> bool {
         self.away && !self.video.is_open()
-    }
-
-    /// The rail modes this session renders from: this device's stored layout if
-    /// its key has one, else the live account profile. The single read path for
-    /// rail visibility, so render, input, and the settings modal can never
-    /// disagree about which layout is in force.
-    pub(crate) fn rail_modes(&self) -> RightSidebarMode {
-        device_rails_or_profile(self.device_rails, self.profile_state.profile())
-    }
-
-    /// Adopt the sidebar row from the settings-modal draft as this device's
-    /// mode. A no-op when it already matches, so unrelated tweaks in the same
-    /// modal do not write to the key.
-    pub(crate) fn sync_device_rails_from_settings(&mut self) {
-        let edited = self.settings_modal_state.device_rails();
-        if edited != self.rail_modes() {
-            self.set_device_rails(edited);
-        }
-    }
-
-    fn set_device_rails(&mut self, mode: RightSidebarMode) {
-        let layout = KeyLayout {
-            right_sidebar_mode: mode,
-        };
-        self.device_rails = Some(layout);
-        // Keyless sessions (ghost bots, tests) have no device to remember: the
-        // layout still applies for the rest of the session, it just isn't saved.
-        if let Some(fingerprint) = self.key_fingerprint.clone() {
-            self.profile_state.set_device_rails(fingerprint, layout);
-        }
     }
 
     pub fn skip_splash_for_tests(&mut self) {
@@ -1639,11 +1589,9 @@ impl App {
             config.referral_service.clone(),
             config.user_id,
         );
-        let device_rails = config.key_layout;
         let device_artboard_disclaimer = config.key_artboard_disclaimer;
         settings_modal_state.open_from_profile(
             &initial_profile,
-            device_rails_or_profile(device_rails, &initial_profile),
             device_artboard_disclaimer.unwrap_or(initial_profile.artboard_disclaimer),
         );
         // Everyone lands in the clubhouse by default: the tavern is the front
@@ -1799,7 +1747,7 @@ impl App {
                 .unwrap_or(0),
             active_friends: Vec::new(),
             home_attention_listed_unread: None,
-            last_sidebar_clock: String::new(),
+            last_clock: String::new(),
             chat_ctx_epoch: 0,
             last_username_directory: None,
             flair_directory: config.flair_directory,
@@ -1904,7 +1852,6 @@ impl App {
                 config.user_id,
                 config.initial_theme_id,
             ),
-            device_rails,
             device_artboard_disclaimer,
             key_fingerprint: config.key_fingerprint,
             profile_modal_state: profile_modal::state::ProfileModalState::new(
@@ -2889,7 +2836,7 @@ impl App {
         // Every top-level move repaints from scratch. ratatui only re-emits
         // cells whose contents changed, and the two layouts rarely disagree
         // on every cell: leaving Home for the Arcade used to strand the
-        // sidebar's bonsai emoji on screen, because a wide glyph the new
+        // bonsai emoji on screen, because a wide glyph the new
         // layout writes a space over occupies two columns and only one of
         // them differs. Clearing costs one full frame per page switch, which
         // every door and the Artboard already paid for the same reason. A
@@ -3797,7 +3744,7 @@ impl App {
 
     /// The rect the aquarium simulation should fill on the current screen:
     /// the first reef-form tank tile's inner rect on Home (a
-    /// sidebar-sized tank tile draws the small tank and binds nothing),
+    /// narrow tank tile draws the small tank and binds nothing),
     /// the launch band elsewhere.
     fn aquarium_area_for_screen(&self) -> Rect {
         let (cols, rows) = self.size;

@@ -10,8 +10,8 @@ use late_core::models::statusline::{
     LabelMode, StatusComponent, StatusComponentSetting, StatusVariant,
 };
 use late_core::models::user::{
-    AsciiSelection, InteractionMode, RightSidebarComponentSetting, RightSidebarMode, Screensaver,
-    normalize_text_brightness_adjustment, sanitize_username_input,
+    AsciiSelection, InteractionMode, Screensaver, normalize_text_brightness_adjustment,
+    sanitize_username_input,
 };
 use ratatui::style::{Modifier, Style};
 use ratatui_textarea::{CursorMove, TextArea, WrapMode};
@@ -150,7 +150,6 @@ pub(crate) enum TweakRow {
     // Appearance group.
     BackgroundColor,
     TextBrightness,
-    RightSidebar,
     // Input / Display / Startup groups. There is deliberately no music-mute
     // row: mute and volume are owned by `m` and `+`/`-`, persisted per device,
     // and a second control here would be a second source of truth for them.
@@ -168,10 +167,9 @@ pub(crate) enum TweakRow {
 }
 
 impl TweakRow {
-    pub(crate) const ALL: [TweakRow; 13] = [
+    pub(crate) const ALL: [TweakRow; 12] = [
         TweakRow::BackgroundColor,
         TweakRow::TextBrightness,
-        TweakRow::RightSidebar,
         TweakRow::ComposerKeepFocused,
         TweakRow::InteractionMode,
         TweakRow::FlagFallback,
@@ -590,16 +588,10 @@ pub(crate) struct SettingsModalState {
     feed_service: FeedService,
     user_id: Uuid,
     draft: Profile,
-    /// The two rail rows, held apart from `draft` on purpose. They belong to
-    /// this device (this SSH key), and `draft` is what `save()` writes to the
-    /// account: keeping them in `draft` would republish one device's layout as
-    /// the account default on any unrelated settings edit, and every key that
-    /// never stored a layout of its own would inherit it.
-    device_rails: RightSidebarMode,
-    /// The Artboard content disclaimer row, held apart from `draft` for the
-    /// same reason as `device_rails`: it is this device's, and
-    /// `draft.artboard_disclaimer` stays the account default that keys with no
-    /// choice of their own inherit.
+    /// The Artboard content disclaimer row, held apart from `draft` on purpose.
+    /// It belongs to this device (this SSH key), and `draft` is what `save()`
+    /// writes to the account: `draft.artboard_disclaimer` stays the account
+    /// default that keys with no choice of their own inherit.
     device_artboard_disclaimer: bool,
     selected_tab: Tab,
     row_index: usize,
@@ -634,8 +626,6 @@ pub(crate) struct SettingsModalState {
     link_account: LinkAccountDialogState,
     delete_account: DeleteAccountDialogState,
     irc_token: IrcTokenDialogState,
-    right_sidebar_components_open: bool,
-    right_sidebar_components_index: usize,
     statusline_index: usize,
     statusline_pane: StatuslinePane,
     statusline_dial_index: usize,
@@ -681,7 +671,6 @@ impl SettingsModalState {
             feed_service,
             user_id,
             draft: Profile::default(),
-            device_rails: RightSidebarMode::On,
             device_artboard_disclaimer: true,
             selected_tab: Tab::Settings,
             row_index: 0,
@@ -706,8 +695,6 @@ impl SettingsModalState {
             link_account: LinkAccountDialogState::new(),
             delete_account: DeleteAccountDialogState::new(),
             irc_token: IrcTokenDialogState::new(),
-            right_sidebar_components_open: false,
-            right_sidebar_components_index: 0,
             statusline_index: 0,
             statusline_pane: StatuslinePane::List,
             statusline_dial_index: 0,
@@ -742,14 +729,6 @@ impl SettingsModalState {
         self.interaction_mode = mode;
     }
 
-    /// The Arcade sidebar mode the Appearance row is editing: this device's,
-    /// not the account's. Read by its value span and by the render/tick
-    /// preview while the modal is open; `App::sync_device_rails_from_settings`
-    /// picks it up and persists it onto the SSH key.
-    pub(crate) fn device_rails(&self) -> RightSidebarMode {
-        self.device_rails
-    }
-
     /// The Artboard content disclaimer the Tweaks row is editing: this
     /// device's, picked up by `App::set_device_artboard_disclaimer`.
     pub(crate) fn device_artboard_disclaimer(&self) -> bool {
@@ -764,21 +743,19 @@ impl SettingsModalState {
         &mut self.gem
     }
 
-    /// Load the draft from the account profile, and take the sidebar mode this
-    /// session is actually rendering with (`App::rail_modes`) separately: the
-    /// row is per device, so showing the account default would misreport what
-    /// the user is looking at, and writing it back would leak this device's
-    /// mode onto every other one. The Artboard disclaimer is per device too
-    /// (`App::artboard_disclaimer_enabled`).
+    /// Load the draft from the account profile, and take the Artboard
+    /// disclaimer this session is actually using
+    /// (`App::artboard_disclaimer_enabled`) separately: the row is per device,
+    /// so showing the account default would misreport what the user is looking
+    /// at, and writing it back would leak this device's choice onto every other
+    /// one.
     pub(crate) fn open_from_profile(
         &mut self,
         profile: &Profile,
-        device_rails: RightSidebarMode,
         device_artboard_disclaimer: bool,
     ) {
         self.mouse.reveal_selection();
         self.draft = profile.clone();
-        self.device_rails = device_rails;
         self.device_artboard_disclaimer = device_artboard_disclaimer;
         self.selected_tab = Tab::Settings;
         self.row_index = 0;
@@ -802,8 +779,6 @@ impl SettingsModalState {
         self.delete_account = DeleteAccountDialogState::new();
         self.irc_token = IrcTokenDialogState::new();
         self.invites = InvitesDialogState::new();
-        self.right_sidebar_components_open = false;
-        self.right_sidebar_components_index = 0;
         self.statusline_index = 0;
         self.statusline_pane = StatuslinePane::List;
         self.statusline_dial_index = 0;
@@ -911,33 +886,6 @@ impl SettingsModalState {
         Row::ALL[self.row_index]
     }
 
-    pub(crate) fn right_sidebar_components_open(&self) -> bool {
-        self.right_sidebar_components_open
-    }
-
-    pub(crate) fn open_right_sidebar_components(&mut self) {
-        self.right_sidebar_components_open = true;
-        self.right_sidebar_components_index = 0;
-    }
-
-    pub(crate) fn close_right_sidebar_components(&mut self) {
-        self.right_sidebar_components_open = false;
-    }
-
-    pub(crate) fn right_sidebar_components_index(&self) -> usize {
-        self.right_sidebar_components_index
-    }
-
-    pub(crate) fn right_sidebar_components(&self) -> &[RightSidebarComponentSetting] {
-        &self.draft.right_sidebar_components
-    }
-
-    pub(crate) fn move_right_sidebar_components_cursor(&mut self, delta: isize) {
-        let last = self.draft.right_sidebar_components.len().saturating_sub(1) as isize;
-        self.right_sidebar_components_index =
-            (self.right_sidebar_components_index as isize + delta).clamp(0, last) as usize;
-    }
-
     pub(crate) fn chat_badges_open(&self) -> bool {
         self.chat_badges_open
     }
@@ -983,36 +931,6 @@ impl SettingsModalState {
         if shown {
             hidden.extend(row.categories.iter().map(ToString::to_string));
         }
-        self.save();
-    }
-
-    /// Toggle the on/off state of the selected component.
-    pub(crate) fn toggle_right_sidebar_component(&mut self) {
-        if let Some(setting) = self
-            .draft
-            .right_sidebar_components
-            .get_mut(self.right_sidebar_components_index)
-        {
-            setting.enabled ^= true;
-            self.save();
-        }
-    }
-
-    /// Move the selected component up or down in the render order, keeping the
-    /// cursor on the moved row.
-    pub(crate) fn move_right_sidebar_component(&mut self, delta: isize) {
-        let len = self.draft.right_sidebar_components.len();
-        if len == 0 {
-            return;
-        }
-        let from = self.right_sidebar_components_index;
-        let to = (from as isize + delta).clamp(0, len as isize - 1) as usize;
-        if to == from {
-            return;
-        }
-        let setting = self.draft.right_sidebar_components.remove(from);
-        self.draft.right_sidebar_components.insert(to, setting);
-        self.right_sidebar_components_index = to;
         self.save();
     }
 
@@ -1163,9 +1081,6 @@ impl SettingsModalState {
                 self.cycle_text_brightness_adjustment(true);
                 return;
             }
-            TweakRow::RightSidebar => {
-                self.device_rails = self.device_rails.cycle(true);
-            }
             TweakRow::ComposerKeepFocused => {
                 self.draft.keep_composer_focused ^= true;
             }
@@ -1208,7 +1123,6 @@ impl SettingsModalState {
 
     pub(crate) fn cycle_selected_tweak(&mut self, forward: bool) {
         match self.selected_tweak_row() {
-            TweakRow::RightSidebar => self.device_rails = self.device_rails.cycle(forward),
             TweakRow::TextBrightness => self.cycle_text_brightness_adjustment(forward),
             TweakRow::LandingPage => {
                 self.draft.landing_page = self.draft.landing_page.cycle(forward);
@@ -2753,9 +2667,6 @@ impl SettingsModalState {
             ),
             enable_background_color: draft.enable_background_color,
             text_brightness_adjustment: draft.text_brightness_adjustment,
-            show_right_sidebar: draft.show_right_sidebar,
-            right_sidebar_mode: draft.right_sidebar_mode,
-            right_sidebar_components: draft.right_sidebar_components.clone(),
             statusline_components: draft.statusline_components.clone(),
             keep_composer_focused: draft.keep_composer_focused,
             start_with_music_muted: draft.start_with_music_muted,
@@ -2797,12 +2708,6 @@ impl SettingsModalState {
             Target::Tweak(row) | Target::TweakCycle(row, _) => {
                 self.tweak_row_index = TweakRow::ALL.iter().position(|r| *r == row).unwrap_or(0)
             }
-            Target::SidebarMode => {
-                self.tweak_row_index = TweakRow::ALL
-                    .iter()
-                    .position(|r| *r == TweakRow::RightSidebar)
-                    .unwrap_or(0)
-            }
             Target::Account(row) => {
                 self.account_row_index = AccountRow::ALL.iter().position(|r| *r == row).unwrap_or(0)
             }
@@ -2817,10 +2722,6 @@ impl SettingsModalState {
             Target::Dial(index) | Target::DialCycle(index, _) => {
                 self.statusline_dial_index =
                     index.min(self.statusline_dials().len().saturating_sub(1))
-            }
-            Target::Sidebar(index) | Target::SidebarMove(index, _) => {
-                self.right_sidebar_components_index =
-                    index.min(self.right_sidebar_components().len().saturating_sub(1))
             }
             Target::Badge(index) => {
                 self.chat_badges_index = index.min(chat_badge_rows().len().saturating_sub(1))

@@ -95,7 +95,7 @@ pub struct LiveState {
     /// Where the strip drew this frame and what it showed, for the click
     /// that opens it. Render-recorded, cleared before every draw.
     pub hit: Cell<Option<(Rect, LiveSource)>>,
-    /// Where the sidebar's Live panel drew this frame and what is on each
+    /// Where the Live panel drew this frame and what is on each
     /// of its rows, for the click that opens one. Render-recorded, cleared
     /// before every draw.
     pub panel_hit: super::panel::LivePanelHit,

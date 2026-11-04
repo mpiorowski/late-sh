@@ -779,7 +779,6 @@ fn make_app_with_chat_service_and_permissions(
         // No SSH key: test apps follow the account default and persist no
         // per-device layout, which is also what ghost bot sessions do.
         key_fingerprint: None,
-        key_layout: None,
         key_artboard_disclaimer: None,
         key_left_at: None,
         username_directory: None,
@@ -1085,7 +1084,6 @@ pub fn make_app_with_paired_client(
         // No SSH key: test apps follow the account default and persist no
         // per-device layout, which is also what ghost bot sessions do.
         key_fingerprint: None,
-        key_layout: None,
         key_artboard_disclaimer: None,
         key_left_at: None,
         username_directory: None,

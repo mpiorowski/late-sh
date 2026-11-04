@@ -9,7 +9,7 @@ use ratatui::{
 };
 use std::time::{Duration, Instant};
 
-/// Rows the sidebar and music-tile equalizer is drawn at; the music stage
+/// Rows the stock visualizer tile is drawn at; the music stage
 /// pins this height and a taller area centers the band vertically.
 const EQ_ROWS: usize = 3;
 /// Vertical resolution per cell: the ▁..█ ramp.
@@ -408,7 +408,7 @@ fn row_style(row: usize, rows: usize) -> Style {
     Style::default().fg(color)
 }
 
-/// Equalizer for the sidebar's music stage and Home's music tile: the
+/// Equalizer for Home's visualizer tile: the
 /// dancing band at [`EQ_ROWS`] rows, or the muted and unpaired strips.
 pub(crate) fn render_eq(frame: &mut Frame, area: Rect, wall_tick: usize, state: EqState) {
     if area.height == 0 || area.width == 0 {

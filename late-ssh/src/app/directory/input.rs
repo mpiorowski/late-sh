@@ -10,7 +10,7 @@ use crate::app::input::{MouseButton, MouseEvent, MouseEventKind};
 
 /// True when the event landed on something this page draws. Anything else
 /// (keyboard-only mode, a click on empty space, moves and releases) falls
-/// through to the global handlers: the sidebar, the status bar, the frame.
+/// through to the global handlers: the status bar, the frame.
 pub(crate) fn handle_mouse(app: &mut App, mouse: MouseEvent) -> bool {
     if !app.interaction_mode.mouse_enabled() {
         return false;

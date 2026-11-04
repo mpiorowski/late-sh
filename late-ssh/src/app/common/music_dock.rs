@@ -1,7 +1,6 @@
-use chrono::Utc;
 use ratatui::{
     Frame,
-    layout::{Constraint, Layout, Rect},
+    layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
@@ -11,31 +10,17 @@ use super::theme;
 use crate::app::audio::{
     client_state::ClientAudioState,
     svc::{QueueItemView, QueueSnapshot},
-    viz::{EqState, render_eq},
 };
-use crate::app::bonsai::state::BonsaiState;
 use crate::app::chat::state::ActiveFriend;
-use crate::app::hub::aquarium::{state::AquariumState, ui as aquarium_ui};
-use crate::app::pet::state::PetState;
-use crate::app::pet::ui::{Neighbours, PetView, WatchSide, draw_pet_box};
-use crate::app::presence::ui::{draw_core_block, friend_names_joined};
-use late_core::models::user::{
-    AudioSource, RadioSlots, RadioStation, RightSidebarComponent, RightSidebarComponentSetting,
-};
+use crate::app::presence::ui::friend_names_joined;
+use late_core::models::user::{AudioSource, RadioSlots, RadioStation};
 
-// The pinned core block above the panel list: online count + clock on the
-// first row, connected friends (an away one marked 💤) on the second. Both
-// rows are always reserved so the panels below never shift when presence
-// changes.
-const TIME_HEIGHT: u16 = 2;
-const RULE_HEIGHT: u16 = 1;
-// Ambient equalizer strip pinned above the dock: a decorative band
+// The stock `visualizer` tile's rows over the dock: a decorative band
 // (`viz::render_eq`) synthesized from the wall tick, not audio. It only
 // dances while a client is actually paired; muted flatlines it, and an
-// unpaired session gets a pointer to the guide instead. The band scales
-// to whatever height it's given; the stage pins 3.
+// unpaired session gets a pointer to the guide instead.
 pub(crate) const MUSIC_VIZ_HEIGHT: u16 = 3;
-// Dock portion of the stage: volume row (1) + the two sources as an
+// The dock: volume row (1) + the two sources as an
 // accordion (10) + keybind footer (1). Constant for BOTH active sources, so
 // the panels below never shift; `music_stage_height_is_constant` locks this
 // in tests. On radio: title + track + station heading (with its provider
@@ -43,354 +28,21 @@ pub(crate) const MUSIC_VIZ_HEIGHT: u16 = 3;
 // youtube: the radio title alone, then the youtube title + track +
 // `MUSIC_YOUTUBE_DETAIL_HEIGHT` detail rows.
 pub(crate) const MUSIC_DOCK_HEIGHT: u16 = 13;
-// Full music stage: the wave strip on top of the dock.
-const MUSIC_STAGE_HEIGHT: u16 = MUSIC_VIZ_HEIGHT + MUSIC_DOCK_HEIGHT;
 const MUSIC_QUEUE_HEIGHT: u16 = 4;
 // YouTube detail rows: progress, skip meter, `next` header, the queue rows.
 const MUSIC_YOUTUBE_DETAIL_HEIGHT: u16 = 3 + MUSIC_QUEUE_HEIGHT;
-/// The bonsai preview block plus its footer row.
-const BONSAI_HEIGHT: u16 = crate::app::bonsai::render::PREVIEW_HEIGHT as u16 + 1;
-/// The pet's three-row box, nothing else: no name or mood row.
-const PET_HEIGHT: u16 = crate::app::pet::ui::PET_BOX_MIN_ROWS;
-const TANK_HEIGHT: u16 = aquarium_ui::MINI_TANK_HEIGHT;
-// Daily games: fixed, stable chrome (see `daily/panel.rs`).
-const DAILY_HEIGHT: u16 = crate::app::lobby::daily::panel::DAILY_PANEL_HEIGHT;
-const LIVE_HEIGHT: u16 = crate::app::live::panel::LIVE_PANEL_HEIGHT;
-
-pub(crate) struct SidebarProps<'a> {
-    /// Ordered panels with their on/off state. Render order is top to bottom;
-    /// the clock is always pinned above this list.
-    pub components: &'a [RightSidebarComponentSetting],
-    pub paired_client: Option<&'a ClientAudioState>,
-    /// What the music stage's equalizer draws (`viz::eq_state`).
-    pub eq_state: EqState,
-    pub bonsai: &'a BonsaiState,
-    /// The pet panel's pet; `None` without a Pet Companion, which hides
-    /// the panel.
-    pub pet: Option<&'a PetState>,
-    /// The tank panel's reef.
-    pub tank: SidebarTank<'a>,
-    pub clock_text: &'a str,
-    /// YouTube queue snapshot — drives the music stage's active panel and
-    /// peek strip. Fed from the same watch channel as the booth modal.
-    pub queue_snapshot: &'a QueueSnapshot,
-    /// Count of users whose saved audio source is YouTube. Rendered as the
-    /// YouTube block's title-bar tag; connection shape is ignored.
-    pub youtube_source_count: usize,
-    /// Count of users whose saved audio source is radio (the default for
-    /// users who never picked one). Rendered as the radio block's title-bar
-    /// tag.
-    pub radio_source_count: usize,
-    /// Per-user paired-browser audio source preference (mirrors
-    /// `users.settings.audio_source`, cycled by v+x). Picks which source
-    /// the music stage expands.
-    pub paired_source: AudioSource,
-    /// Per-user radio station selection (`users.settings.radio_station`):
-    /// a slot key while Radio is active, or any catalogue station from the
-    /// stations modal.
-    pub selected_radio_station: RadioStation,
-    /// The user's pinned stations (`users.settings.radio_slots`), the
-    /// radio detail rows behind `v1`..`v5`.
-    pub radio_slots: RadioSlots,
-    /// Live `Artist - Title` for the selected station from its provider's
-    /// feed; the radio track row falls back to the station label while absent.
-    pub radio_now_playing: Option<&'a str>,
-    /// Daily correspondence games: my matches, lobby activity, glow.
-    pub daily: &'a crate::app::lobby::daily::state::DailyState,
-    /// The Live panel: what the house can watch, and where to record the
-    /// click targets.
-    pub live: crate::app::live::panel::LivePanelProps<'a>,
-    /// Unseen-challenge glow for the panel's status row.
-    pub lobby_glow: bool,
-    /// Humans currently connected (bots excluded), for the core presence row.
-    pub online_count: usize,
-    /// Connected friends, compacted into the core block's friends row.
-    pub active_friends: &'a [ActiveFriend],
-    /// Free-running frame counter for the music stage's marquee rows.
-    pub marquee_tick: usize,
-}
-
-/// What the tank panel draws: the session's reef (its population and
-/// colours) and whether the fish are hungry today.
-pub(crate) struct SidebarTank<'a> {
-    pub aquarium: &'a AquariumState,
-    pub hungry: bool,
-}
-
-/// Which shop-gated panels the account can show. A panel it does not own,
-/// or a pet its owner put away, is skipped on the rail and marked in the
-/// settings list (`/shop` is where either comes back).
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct SidebarOwnership {
-    pub pet: bool,
-}
-
-impl SidebarOwnership {
-    pub(crate) fn owns(self, component: RightSidebarComponent) -> bool {
-        match component {
-            RightSidebarComponent::Pet => self.pet,
-            RightSidebarComponent::Tank
-            | RightSidebarComponent::Live
-            | RightSidebarComponent::Music
-            | RightSidebarComponent::Bonsai
-            | RightSidebarComponent::Daily
-            | RightSidebarComponent::Spacer => true,
-        }
-    }
-}
-
-pub(crate) fn draw_sidebar(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
-    draw_sidebar_new_shell(frame, area, props);
-}
-
-fn draw_sidebar_new_shell(frame: &mut Frame, area: Rect, props: &SidebarProps<'_>) {
-    // Single thin separator on the LEFT edge anchors the rail; sections inside
-    // breathe without their own borders. Italic dim labels mark each block.
-    // Paint the separator column first so content rendering overdraws nothing.
-    paint_vertical_separator(frame, area.x, area.y, area.height);
-
-    // Shrink the working area to skip the separator column + 1 col padding.
-    let area = Rect {
-        x: area.x + 2,
-        y: area.y,
-        width: area.width.saturating_sub(2),
-        height: area.height,
-    };
-
-    // Responsiveness: the core block (clock + presence) is pinned at the
-    // top, then enabled panels render in the user's chosen order, each at
-    // its full fixed height or not at all. When the rail runs short, panels
-    // drop from the bottom of the list up (`visible_components`); fitting
-    // the list to the terminal is the user's call. Leftover rows go to the
-    // Free space panel wherever it sits, else to the bottom of the rail.
-    let ownership = SidebarOwnership {
-        pet: props.pet.is_some(),
-    };
-    let visible = visible_components(props.components, ownership, area.height);
-
-    // Vertical real estate, top to bottom: the core block, then each visible
-    // panel as its rule plus its body, the spacer as a Fill with no rule.
-    let mut constraints = vec![Constraint::Length(TIME_HEIGHT)];
-    for component in &visible {
-        match component {
-            RightSidebarComponent::Spacer => constraints.push(Constraint::Fill(1)),
-            RightSidebarComponent::Live
-            | RightSidebarComponent::Music
-            | RightSidebarComponent::Bonsai
-            | RightSidebarComponent::Daily
-            | RightSidebarComponent::Pet
-            | RightSidebarComponent::Tank => {
-                constraints.push(Constraint::Length(RULE_HEIGHT));
-                constraints.push(Constraint::Length(component_height(*component)));
-            }
-        }
-    }
-    if !visible.contains(&RightSidebarComponent::Spacer) {
-        constraints.push(Constraint::Fill(1));
-    }
-
-    let layout = Layout::vertical(constraints).split(area);
-
-    // Inset content one column from the right so it doesn't kiss the frame.
-    let inset = |r: Rect| -> Rect {
-        Rect {
-            x: r.x,
-            y: r.y,
-            width: r.width.saturating_sub(1),
-            height: r.height,
-        }
-    };
-
-    let mut i = 0usize;
-
-    // Core block: presence + clock, then friends.
-    draw_core_block(
-        frame,
-        inset(layout[i]),
-        props.clock_text,
-        props.online_count,
-        props.active_friends,
-        props.marquee_tick,
-    );
-    i += 1;
-
-    for (idx, component) in visible.iter().enumerate() {
-        if *component == RightSidebarComponent::Spacer {
-            i += 1;
-            continue;
-        }
-        // Each panel's separator rule doubles as its section title
-        // (`── lobby ────`), so panels don't spend a body row on a name.
-        // The lobby label glows while it's the viewer's turn in any match or
-        // a finished match's result is waiting to be acknowledged.
-        let rule_active = *component == RightSidebarComponent::Daily
-            && (props
-                .daily
-                .my_matches()
-                .iter()
-                .any(|item| props.daily.my_turn(item))
-                || !props.daily.my_finished().is_empty());
-        draw_panel_rule(
-            frame,
-            inset(layout[i]),
-            panel_rule_label(*component),
-            rule_active,
-        );
-        i += 1;
-        let body = inset(layout[i]);
-        i += 1;
-        match component {
-            RightSidebarComponent::Live => {
-                crate::app::live::panel::draw_live_inline(frame, body, &props.live);
-            }
-            RightSidebarComponent::Music => {
-                draw_music_stage(
-                    frame,
-                    body,
-                    &MusicStageProps {
-                        paired_client: props.paired_client,
-                        queue: props.queue_snapshot,
-                        source: props.paired_source,
-                        selected_station: props.selected_radio_station,
-                        radio_slots: props.radio_slots,
-                        radio_now_playing: props.radio_now_playing,
-                        youtube_source_count: props.youtube_source_count,
-                        radio_source_count: props.radio_source_count,
-                        marquee_tick: props.marquee_tick,
-                    },
-                    props.eq_state,
-                );
-            }
-            RightSidebarComponent::Bonsai => {
-                crate::app::bonsai::render::draw_bonsai_inline(
-                    frame,
-                    body,
-                    props.bonsai,
-                    props.marquee_tick,
-                );
-            }
-            RightSidebarComponent::Daily => {
-                crate::app::lobby::daily::panel::draw_daily_inline(
-                    frame,
-                    body,
-                    props.daily,
-                    props.lobby_glow,
-                );
-            }
-            RightSidebarComponent::Pet => {
-                let Some(state) = props.pet else {
-                    unreachable!("an unowned pet panel is never visible");
-                };
-                // View only, like the tank: no click target and no frame
-                // for the tick, so the pet is petted and walks after the
-                // cursor on a Home pet tile alone.
-                let view = PetView {
-                    state,
-                    pet_rect_slot: None,
-                    frame_slot: None,
-                };
-                draw_pet_box(frame, body, &view, pet_neighbours(&visible, idx));
-            }
-            RightSidebarComponent::Tank => {
-                aquarium_ui::draw_mini_tank(
-                    frame.buffer_mut(),
-                    body,
-                    props.tank.aquarium,
-                    props.tank.hungry,
-                    props.marquee_tick,
-                );
-            }
-            RightSidebarComponent::Spacer => unreachable!("the spacer is skipped above"),
-        }
-    }
-}
-
-/// The pet goes and watches a bonsai or tank panel right above or below
-/// its own, the sidebar twin of the Home pet tile's edge contact. A spacer
-/// between them breaks the contact.
-fn pet_neighbours(visible: &[RightSidebarComponent], pet_idx: usize) -> Neighbours {
-    let above = pet_idx.checked_sub(1).map(|idx| visible[idx]);
-    let below = visible.get(pet_idx + 1).copied();
-    let side_of = |target: RightSidebarComponent| {
-        if above == Some(target) {
-            Some(WatchSide::Above)
-        } else if below == Some(target) {
-            Some(WatchSide::Below)
-        } else {
-            None
-        }
-    };
-    Neighbours {
-        tank: side_of(RightSidebarComponent::Tank),
-        bonsai: side_of(RightSidebarComponent::Bonsai),
-    }
-}
-
-/// Rows a panel's body needs (excluding its rule). Every panel shows at
-/// this full height or not at all; the music stage in particular is never
-/// clipped to a partial viewport. The spacer has none: it takes what the
-/// rail has left.
-fn component_height(component: RightSidebarComponent) -> u16 {
-    match component {
-        RightSidebarComponent::Live => LIVE_HEIGHT,
-        RightSidebarComponent::Music => MUSIC_STAGE_HEIGHT,
-        RightSidebarComponent::Bonsai => BONSAI_HEIGHT,
-        RightSidebarComponent::Daily => DAILY_HEIGHT,
-        RightSidebarComponent::Pet => PET_HEIGHT,
-        RightSidebarComponent::Tank => TANK_HEIGHT,
-        RightSidebarComponent::Spacer => 0,
-    }
-}
-
-/// Rows a panel takes on the rail: its rule plus its body, nothing for the
-/// spacer.
-fn rail_rows(component: RightSidebarComponent) -> u16 {
-    match component {
-        RightSidebarComponent::Spacer => 0,
-        RightSidebarComponent::Live
-        | RightSidebarComponent::Music
-        | RightSidebarComponent::Bonsai
-        | RightSidebarComponent::Daily
-        | RightSidebarComponent::Pet
-        | RightSidebarComponent::Tank => RULE_HEIGHT + component_height(component),
-    }
-}
-
-/// The enabled, owned panels that fit, in display order: walk the list top
-/// down and stop at the first panel that does not fit, so a short rail
-/// drops panels from the bottom up.
-fn visible_components(
-    components: &[RightSidebarComponentSetting],
-    ownership: SidebarOwnership,
-    height: u16,
-) -> Vec<RightSidebarComponent> {
-    let mut remaining = height.saturating_sub(TIME_HEIGHT);
-    let mut keep = Vec::new();
-    for setting in components {
-        if !setting.enabled || !ownership.owns(setting.component) {
-            continue;
-        }
-        let need = rail_rows(setting.component);
-        if need > remaining {
-            break;
-        }
-        remaining -= need;
-        keep.push(setting.component);
-    }
-    keep
-}
-
-/// Conservative lower bound on any marquee rail width in the sidebar. Real
+/// Conservative lower bound on any marquee rail width on a Home tile. Real
 /// rails are 22-24 columns; using the smaller bound means overflow (and so
 /// "still animating") can only be over-reported, never missed.
 const MARQUEE_RAIL_MIN: usize = 20;
 /// Queue detail rows lose ~6 columns to the index and vote score.
 const MARQUEE_QUEUE_RAIL_MIN: usize = MARQUEE_RAIL_MIN - 6;
 
-/// Inputs for [`sidebar_marquee_scrolling`], mirroring what the draw path
+/// Inputs for [`home_marquee_scrolling`], mirroring what the draw path
 /// feeds its marquee rows.
-pub(crate) struct SidebarMarqueeInputs<'a> {
-    pub components: &'a [RightSidebarComponentSetting],
+pub(crate) struct HomeMarqueeInputs<'a> {
+    /// Whether a music tile is up on the current layout.
+    pub music_visible: bool,
     pub active_friends: &'a [ActiveFriend],
     pub radio_now_playing: Option<&'a str>,
     pub selected_station: RadioStation,
@@ -398,13 +50,13 @@ pub(crate) struct SidebarMarqueeInputs<'a> {
     pub queue: Option<&'a QueueSnapshot>,
 }
 
-/// True when any sidebar marquee row currently overflows its rail and is
+/// True when any Home marquee row currently overflows its rail and is
 /// therefore scrolling. The render gate treats that as continuous animation;
 /// hold phases are not modeled (tightening pass material). Must stay in sync
 /// with the rows the draw path feeds through `marquee_text`: the friends
 /// row, the youtube track row, and per source the radio track row or the
 /// youtube queue detail rows.
-pub(crate) fn sidebar_marquee_scrolling(inputs: &SidebarMarqueeInputs<'_>) -> bool {
+pub(crate) fn home_marquee_scrolling(inputs: &HomeMarqueeInputs<'_>) -> bool {
     use crate::app::common::marquee::marquee_scrolls;
 
     if marquee_scrolls(
@@ -413,11 +65,7 @@ pub(crate) fn sidebar_marquee_scrolling(inputs: &SidebarMarqueeInputs<'_>) -> bo
     ) {
         return true;
     }
-    let music_visible = inputs
-        .components
-        .iter()
-        .any(|setting| setting.component == RightSidebarComponent::Music && setting.enabled);
-    if !music_visible {
+    if !inputs.music_visible {
         return false;
     }
     // The radio track row renders only while radio is the source.
@@ -448,67 +96,7 @@ pub(crate) fn sidebar_marquee_scrolling(inputs: &SidebarMarqueeInputs<'_>) -> bo
         })
 }
 
-/// Section name rendered into each panel's separator rule. Keeps panel
-/// bodies free of title rows: the divider IS the title.
-fn panel_rule_label(component: RightSidebarComponent) -> &'static str {
-    match component {
-        RightSidebarComponent::Live => "live",
-        RightSidebarComponent::Music => "music",
-        RightSidebarComponent::Bonsai => "bonsai",
-        RightSidebarComponent::Daily => "lobby",
-        RightSidebarComponent::Pet => "pet",
-        RightSidebarComponent::Tank => "tank",
-        RightSidebarComponent::Spacer => unreachable!("the spacer draws no rule"),
-    }
-}
-
-/// `── label ────` separator-with-title above each panel. `active` swaps the
-/// label to bold amber for attention (the lobby's your-turn glow).
-pub(crate) fn draw_panel_rule(frame: &mut Frame, area: Rect, label: &str, active: bool) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    let label_style = if active {
-        Style::default()
-            .fg(theme::AMBER())
-            .add_modifier(Modifier::BOLD)
-    } else {
-        Style::default()
-            .fg(theme::AMBER_DIM())
-            .add_modifier(Modifier::ITALIC)
-    };
-    let width = area.width as usize;
-    let used = 3 + label.chars().count() + 1;
-    let trail = width.saturating_sub(used).max(1);
-    let line = Line::from(vec![
-        Span::styled("── ".to_string(), Style::default().fg(theme::BORDER_DIM())),
-        Span::styled(label.to_string(), label_style),
-        Span::raw(" "),
-        Span::styled("─".repeat(trail), Style::default().fg(theme::BORDER_DIM())),
-    ]);
-    frame.render_widget(Paragraph::new(line), area);
-}
-
-/// The title rule with no text: a tile's divider and nothing else. `active`
-/// lights it, which is all a lobby with a game waiting has left to say.
-pub(crate) fn draw_bare_rule(frame: &mut Frame, area: Rect, active: bool) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    let color = match active {
-        true => theme::AMBER(),
-        false => theme::BORDER_DIM(),
-    };
-    frame.render_widget(
-        Paragraph::new(Span::styled(
-            "─".repeat(area.width as usize),
-            Style::default().fg(color),
-        )),
-        area,
-    );
-}
-
-/// Inputs for the music stage, bundled so the pure line builder is easy to
+/// Inputs for the music dock, bundled so the pure line builder is easy to
 /// drive from tests.
 pub(crate) struct MusicStageProps<'a> {
     pub paired_client: Option<&'a ClientAudioState>,
@@ -524,12 +112,9 @@ pub(crate) struct MusicStageProps<'a> {
     pub marquee_tick: usize,
 }
 
-/// Music stage: a small equalizer strip pinned on top, then the dock.
-/// Rows 0-2 the eq band (borderless, moving only while a client is paired
-/// and unmuted: the client's live spectrum when it sends one, the ambient
-/// band otherwise), then volume, the two sources as an accordion in the
-/// fixed order radio → youtube (radio leads because it is the default
-/// source for new users), and the keybind footer.
+/// The music dock: volume, the two sources as an accordion in the fixed order
+/// radio → youtube (radio leads because it is the default source for new
+/// users), and the keybind footer.
 ///
 /// Each source's rows sit directly under its own title bar:
 /// - On radio: `radio` title, the current station's track, a rule naming
@@ -544,26 +129,12 @@ pub(crate) struct MusicStageProps<'a> {
 ///   shows only while radio is the source. No submitted YouTube track
 ///   renders "fallback stream", never "queue empty": the fallback is the
 ///   steady state, not a placeholder.
-/// - The stage is a constant `MUSIC_STAGE_HEIGHT` tall for both sources.
+/// - The dock is a constant `MUSIC_DOCK_HEIGHT` tall for both sources.
 ///
 /// The active source follows the saved preference alone, not whether a
-/// client is currently paired — the sidebar reflects it from the first
-/// frame, before the browser has finished pairing. `v+x` toggles between
-/// the two sources, so the amber `▌` accent hops between the title bars.
-fn draw_music_stage(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>, eq_state: EqState) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-
-    let [viz_area, dock_area] =
-        Layout::vertical([Constraint::Length(MUSIC_VIZ_HEIGHT), Constraint::Fill(1)]).areas(area);
-    render_eq(frame, viz_area, props.marquee_tick, eq_state);
-
-    draw_music_dock(frame, dock_area, props);
-}
-
-/// The dock alone, no equalizer: Home's `music` tile, which leaves the
-/// band to a `visualizer` tile of its own.
+/// client is currently paired: the dock reflects it from the first frame,
+/// before the browser has finished pairing. `v+x` toggles between the two
+/// sources, so the amber `▌` accent hops between the title bars.
 fn draw_music_dock(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -1097,17 +668,6 @@ fn queue_next_line(idx: usize, item: &QueueItemView, width: usize, tick: usize) 
     ])
 }
 
-/// Paint a thin vertical line (1 column wide) in BORDER_DIM. Used by the
-/// merged shell to anchor left/right rails without wrapping them in a box.
-pub fn paint_vertical_separator(frame: &mut Frame, x: u16, y: u16, height: u16) {
-    let buf = frame.buffer_mut();
-    for dy in 0..height {
-        if let Some(cell) = buf.cell_mut((x, y + dy)) {
-            cell.set_symbol("│").set_fg(theme::BORDER_DIM());
-        }
-    }
-}
-
 /// The current track for the saved source, one line: the same text the
 /// dock row shows for that source.
 pub(crate) fn current_track_text(
@@ -1122,11 +682,6 @@ pub(crate) fn current_track_text(
             .unwrap_or_else(|| station.label().to_string()),
         AudioSource::Youtube => youtube_track_text(queue),
     }
-}
-
-pub fn sidebar_clock_text(timezone: Option<&str>) -> String {
-    crate::app::common::time::timezone_current_time(Utc::now(), timezone)
-        .unwrap_or_else(|| Utc::now().format("UTC %H:%M").to_string())
 }
 
 fn truncate_chars(text: &str, max_chars: usize) -> String {
@@ -1151,9 +706,9 @@ fn truncate_chars(text: &str, max_chars: usize) -> String {
 /// their keys.
 const MUSIC_DOCK_MIN_COLS: u16 = 18;
 
-/// Home's music tile: tall enough for the dock, it is the sidebar's music
-/// panel without its band (volume, stations, the keys); shorter, the
-/// track over the station. The equalizer is the visualizer tile's.
+/// Home's music tile: tall enough, the dock (volume, stations, the keys);
+/// shorter, the track over the station. The equalizer is the visualizer
+/// tile's.
 pub(crate) fn draw_music_tile(frame: &mut Frame, area: Rect, props: &MusicStageProps<'_>) {
     if area.height >= MUSIC_DOCK_HEIGHT && area.width >= MUSIC_DOCK_MIN_COLS {
         draw_music_dock(frame, area, props);
@@ -1204,5 +759,5 @@ fn station_text(source: AudioSource, station: RadioStation) -> String {
 }
 
 #[cfg(test)]
-#[path = "sidebar_test.rs"]
-mod sidebar_test;
+#[path = "music_dock_test.rs"]
+mod music_dock_test;

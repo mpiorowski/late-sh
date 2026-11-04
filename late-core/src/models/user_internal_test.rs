@@ -124,12 +124,6 @@ fn extract_bio_missing_returns_empty() {
 }
 
 #[test]
-fn extract_show_right_sidebar_defaults_to_true() {
-    let settings = json!({});
-    assert!(extract_show_right_sidebar(&settings));
-}
-
-#[test]
 fn extract_enable_background_color_defaults_to_true() {
     let settings = json!({});
     assert!(extract_enable_background_color(&settings));
@@ -156,117 +150,6 @@ fn extract_text_brightness_adjustment_defaults_to_zero_and_clamps() {
 fn extract_enable_background_color_reads_explicit_false() {
     let settings = json!({ "enable_background_color": false });
     assert!(!extract_enable_background_color(&settings));
-}
-
-#[test]
-fn extract_show_right_sidebar_reads_explicit_false() {
-    let settings = json!({ "show_right_sidebar": false });
-    assert!(!extract_show_right_sidebar(&settings));
-}
-
-#[test]
-fn extract_show_right_sidebar_prefers_new_mode() {
-    let settings = json!({
-        "show_right_sidebar": true,
-        "right_sidebar_mode": "off",
-    });
-    assert!(!extract_show_right_sidebar(&settings));
-}
-
-#[test]
-fn extract_right_sidebar_mode_collapses_legacy_custom_to_on() {
-    let settings = json!({ "right_sidebar_mode": "custom" });
-    assert_eq!(extract_right_sidebar_mode(&settings), RightSidebarMode::On);
-}
-
-#[test]
-fn extract_right_sidebar_mode_falls_back_to_legacy_bool() {
-    let settings = json!({ "show_right_sidebar": false });
-    assert_eq!(extract_right_sidebar_mode(&settings), RightSidebarMode::Off);
-}
-
-#[test]
-fn extract_right_sidebar_components_defaults_to_all_at_default_state() {
-    let settings = json!({});
-    assert_eq!(
-        extract_right_sidebar_components(&settings),
-        default_right_sidebar_components()
-    );
-    // A new user's rail: free space above the bonsai keeps the tree at the
-    // bottom; the pet and the tank are opt-in.
-    let shipped: Vec<(RightSidebarComponent, bool)> = default_right_sidebar_components()
-        .into_iter()
-        .map(|setting| (setting.component, setting.enabled))
-        .collect();
-    assert_eq!(
-        shipped,
-        vec![
-            (RightSidebarComponent::Music, true),
-            (RightSidebarComponent::Daily, true),
-            (RightSidebarComponent::Live, true),
-            (RightSidebarComponent::Spacer, true),
-            (RightSidebarComponent::Bonsai, true),
-            (RightSidebarComponent::Pet, false),
-            (RightSidebarComponent::Tank, false),
-        ]
-    );
-}
-
-#[test]
-fn extract_right_sidebar_components_preserves_order_and_backfills() {
-    let settings = json!({
-        "right_sidebar_components": [
-            { "key": "bonsai", "enabled": false },
-            { "key": "music", "enabled": true },
-            { "key": "bogus", "enabled": true },
-            { "key": "pet", "enabled": true },
-            { "key": "activity", "enabled": true },
-            { "key": "visualizer", "enabled": true },
-            { "key": "pot", "enabled": true },
-        ]
-    });
-    let components = extract_right_sidebar_components(&settings);
-    // Stored order kept for known entries, unknown dropped (including the
-    // retired "pet", "activity", "visualizer", and "pot" keys), missing
-    // panels placed under their ALL predecessor at their default: the
-    // lobby under the music, live under the lobby, free space under live,
-    // the pet under the bonsai and the tank under the pet, the lobby, live
-    // and free space on, the pet and the tank off. The
-    // retired "pet" key must not switch on the pet panel, which lives under
-    // "pet_box".
-    assert_eq!(
-        components,
-        vec![
-            RightSidebarComponentSetting {
-                component: RightSidebarComponent::Bonsai,
-                enabled: false,
-            },
-            RightSidebarComponentSetting {
-                component: RightSidebarComponent::Pet,
-                enabled: false,
-            },
-            RightSidebarComponentSetting {
-                component: RightSidebarComponent::Tank,
-                enabled: false,
-            },
-            RightSidebarComponentSetting {
-                component: RightSidebarComponent::Music,
-                enabled: true,
-            },
-            RightSidebarComponentSetting {
-                component: RightSidebarComponent::Daily,
-                enabled: true,
-            },
-            RightSidebarComponentSetting {
-                component: RightSidebarComponent::Live,
-                enabled: true,
-            },
-            RightSidebarComponentSetting {
-                component: RightSidebarComponent::Spacer,
-                enabled: true,
-            },
-        ]
-    );
 }
 
 #[test]

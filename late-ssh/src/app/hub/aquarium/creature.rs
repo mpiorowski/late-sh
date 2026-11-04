@@ -148,7 +148,7 @@ pub(crate) const FRY_CREATURE: &str = "fry";
 /// The bud that comes up on the floor every two weeks; cut or rooted, it
 /// is never sold.
 pub(crate) const SPROUT_CREATURE: &str = "sprout";
-/// Widest a `mini` glyph may be, in cells: the sidebar tank is 21 wide.
+/// Widest a `mini` glyph may be, in cells: the small tank is 21 wide.
 pub(crate) const MINI_MAX_WIDTH: usize = 3;
 pub(crate) const IDLE_ACTION_INTERVAL: u64 = 4;
 pub(crate) const DEFAULT_IDLE_MOVE_CHANCE: f64 = 0.30;
@@ -158,7 +158,7 @@ pub(crate) const IDLE_CHANCE_STEP: f64 = 0.05;
 #[derive(Debug, Clone)]
 pub(crate) struct CreatureDef {
     pub name: String,
-    /// The one-to-three-cell stand-in the sidebar tank draws.
+    /// The one-to-three-cell stand-in the small tank draws.
     pub mini: MiniGlyph,
     pub kindom: Kindom,
     pub constraints: CreatureConstraints,
@@ -175,7 +175,7 @@ pub(crate) struct CreatureDef {
     school_rearrange_chance: Option<f64>,
 }
 
-/// A creature at sidebar size: `mini left="<'" right="'>"` in its `.kdl`,
+/// A creature at small-tank size: `mini left="<'" right="'>"` in its `.kdl`,
 /// the glyph for each way it swims. Required on every creature; a plant
 /// gives the same glyph twice.
 #[derive(Debug, Clone, PartialEq, Eq)]

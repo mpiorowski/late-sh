@@ -92,15 +92,15 @@ number of replicas spend one AI call per text.
 
 ## The four stages (behavior contract)
 
-1. **Clock glitch (deniable).** The sidebar clock (pinned core block,
-   Home/Arcade: the most stable, most-glanced-at element) renders one or
+1. **Clock glitch (deniable).** The presence clock (Home's presence tile,
+   pinned core block: the most stable, most-glanced-at element) renders one or
    two time characters from the glyph alphabet for ~200ms
-   (`GLITCH_HOLD_TICKS`, spanning the sidebar's ~132ms wake cadence),
+   (`GLITCH_HOLD_TICKS`, spanning an animated Home's ~132ms wake cadence),
    then heals. Scheduled per session with independent dice: the first
    burst 5-20 min after connect (so an hour-long evening sees one), the
    next 20-60 min later, at most `GLITCH_DAILY_CAP` (2) per UTC day,
-   deferred a few minutes whenever the clock is off screen so a burst is
-   never spent unseen. A due burst is a `GlitchTick::Due`: the service
+   deferred a few minutes whenever the clock is off screen (`svc::clock_on_screen`) so a burst
+   is never spent unseen. A due burst is a `GlitchTick::Due`: the service
    claims it on the row (`claim_first_contact_glitch_burst`, both caps
    enforced in the `UPDATE ... WHERE`), the machine holds its schedule,
    and the burst starts on the tick the claim comes back won; a capped
@@ -359,5 +359,3 @@ Drained by `haunt::svc::tick`.
 - Test apps pass `FirstContactMarks::spent_for_tests()` and
   `FirstContactGate::closed_for_tests()` so no stage can fire in a test
   unless armed on purpose (both `#[cfg(test)]`, like `test_helpers`).
-- `right_sidebar_visible` (in `tick.rs`) is `pub(crate)` for the glitch's
-  visibility gate.

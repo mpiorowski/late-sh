@@ -7435,7 +7435,7 @@ pub struct ActivityTickerEntry {
     pub at: DateTime<Utc>,
 }
 
-/// A connected friend, as the sidebar friends row and the Home Friends tile
+/// A connected friend, as the presence friends row and the Home Friends tile
 /// draw them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActiveFriend {

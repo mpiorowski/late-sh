@@ -1,5 +1,4 @@
 use late_core::models::profile::{Profile, ProfileParams};
-use late_core::models::user_ssh_key::KeyLayout;
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
@@ -7,7 +6,7 @@ use super::svc::{ProfileEvent, ProfileService, ProfileSnapshot};
 use crate::app::common::{primitives::Banner, theme};
 
 /// Outcome of one profile tick: the banner to surface plus whether a drained
-/// snapshot or event may have changed render-visible state (theme, sidebar
+/// snapshot or event may have changed render-visible state (theme, layout
 /// layout, favorites).
 pub struct ProfileTick {
     pub banner: Option<Banner>,
@@ -97,17 +96,8 @@ impl ProfileState {
         true
     }
 
-    /// Store the home rail layout for one device (one SSH key). Fire and
-    /// forget, like every other profile write; the caller already applied the
-    /// change to session state. Deliberately does *not* touch the account
-    /// profile: that is what makes the layout per device.
-    pub fn set_device_rails(&self, fingerprint: String, layout: KeyLayout) {
-        self.profile_service
-            .set_key_layout(self.user_id, fingerprint, layout);
-    }
-
     /// Store this device's named Home layouts (`zen::presets::Layouts`),
-    /// per device like the rails: a phone and a desktop on one account each
+    /// per device: a phone and a desktop on one account each
     /// keep their own Home. The account's stored layouts are only the seed
     /// for a key with none.
     pub fn set_device_home_layouts(&self, fingerprint: String, layouts: serde_json::Value) {
@@ -218,9 +208,6 @@ pub(crate) fn profile_params_from_profile(profile: &Profile) -> ProfileParams {
         ),
         enable_background_color: profile.enable_background_color,
         text_brightness_adjustment: profile.text_brightness_adjustment,
-        show_right_sidebar: profile.show_right_sidebar,
-        right_sidebar_mode: profile.right_sidebar_mode,
-        right_sidebar_components: profile.right_sidebar_components.clone(),
         statusline_components: profile.statusline_components.clone(),
         keep_composer_focused: profile.keep_composer_focused,
         start_with_music_muted: profile.start_with_music_muted,

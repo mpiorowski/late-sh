@@ -1,6 +1,12 @@
 use chrono::{DateTime, FixedOffset, Utc};
 use chrono_tz::Tz;
 
+/// The clock text for the viewer's timezone, UTC when it has none.
+pub fn clock_text(timezone: Option<&str>) -> String {
+    timezone_current_time(Utc::now(), timezone)
+        .unwrap_or_else(|| Utc::now().format("UTC %H:%M").to_string())
+}
+
 pub fn timezone_current_time(now: DateTime<Utc>, timezone: Option<&str>) -> Option<String> {
     let timezone = timezone?.trim();
     if timezone.is_empty() {

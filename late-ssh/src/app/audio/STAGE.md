@@ -1,8 +1,8 @@
-# Audio: the sidebar music stage
+# Audio: the music dock
 
-The right-rail music stage (`common/sidebar.rs`): the fixed-height accordion, the active-source rule, the title-bar tags, and the helpers behind it. Part of the audio domain; the rest is `CONTEXT.md`, the station table is `STATIONS.md`.
+The music dock (`common/music_dock.rs`, Home's music tile): the fixed-height accordion, the active-source rule, the title-bar tags, and the helpers behind it. Part of the audio domain; the rest is `CONTEXT.md`, the station table is `STATIONS.md`.
 
-Renders the audio domain into the right rail as a **fixed-height accordion**: a 3-row eq strip, then a dock that is always exactly `MUSIC_DOCK_HEIGHT = 12` rows (`MUSIC_STAGE_HEIGHT = 15` with the strip). The two sources sit in the fixed order radio → youtube (radio leads because it is the default source), and each source's rows sit directly under its own title bar. `v+x` toggles the source. Entry point: `draw_music_stage` (props bundled in `MusicStageProps`); the line builder is `music_stage_lines(width, props)`. Home's `music` tile (`draw_music_tile`) draws the dock alone through `draw_music_dock` once it is `MUSIC_DOCK_HEIGHT` rows and eighteen columns, the track over the station in a shorter tile, its band being Home's `visualizer` tile.
+Renders the audio domain into Home's music tile as a **fixed-height accordion**: a 3-row eq strip, then a dock that is always exactly `MUSIC_DOCK_HEIGHT = 13` rows (`MUSIC_STAGE_HEIGHT = 15` with the strip). The two sources sit in the fixed order radio → youtube (radio leads because it is the default source), and each source's rows sit directly under its own title bar. `v+x` toggles the source. Entry point: `draw_music_stage` (props bundled in `MusicStageProps`); the line builder is `music_stage_lines(width, props)`. Home's `music` tile (`draw_music_tile`) draws the dock alone through `draw_music_dock` once it is `MUSIC_DOCK_HEIGHT` rows and eighteen columns, the track over the station in a shorter tile, its band being Home's `visualizer` tile.
 
 **Product rules (user requirements):**
 1. **Both title bars always show their listener count.** That is the "what's everyone tuned to" board.
@@ -59,12 +59,12 @@ No copy anywhere reads "queue empty". The user has pushed back on that wording m
 ### Data sources
 
 - `queue_snapshot: &QueueSnapshot`: from the `AudioState::queue_snapshot()` watch channel.
-- Source/station selection lives in `users.settings` (`audio_source`, `radio_station`, `radio_slots`), mirrored on `App` and threaded through `DrawContext` into `SidebarProps` as `paired_source` / `selected_radio_station` / `radio_slots`.
+- Source/station selection lives in `users.settings` (`audio_source`, `radio_station`, `radio_slots`), mirrored on `App` and threaded through `DrawContext` into `MusicStageProps` as `source` / `selected_radio_station` / `radio_slots`.
 - `paired_client: Option<&ClientAudioState>`: for `volume_percent` and `muted` (vol row only).
 - `youtube_source_count` / `radio_source_count`: counts from active users' cached `audio_source`. Pair presence is ignored; offline users are excluded.
 - `radio_now_playing: Option<&str>`: preformatted track text for the selected station from the `RadioMetaService` map or the house now-playing map, looked up in `app/render.rs` via `stations::station_now_playing`.
 
-### Internal helpers (all in `sidebar.rs`)
+### Internal helpers (all in `music_dock.rs`)
 
 - `music_stage_lines(width, props)`: the whole-dock line builder; unit tests assert directly against its output.
 - `stage_title_line(area_w, label, tag, active)`: shared title-bar renderer. Label is always lowercase. Active → amber bold label + amber-dim tag; inactive → italic faint label + tag.
@@ -77,9 +77,9 @@ No copy anywhere reads "queue empty". The user has pushed back on that wording m
 - `youtube_detail_lines` / `radio_detail_lines`: the per-source detail rows.
 - `skip_meter_spans(progress)`: includes a trailing `v+s` keybind hint inline.
 - `queue_next_line(idx, item, width, tick)`: number flush at column 0 (no leading indent) to maximize title width.
-- `sidebar_marquee_scrolling`: tells the render gate whether any marquee row is animating; it must mirror which track rows the current source renders.
+- `home_marquee_scrolling`: tells the render gate whether any marquee row is animating; it must mirror which track rows the current source renders.
 
-Tests (`sidebar_test.rs`): `music_stage_height_is_constant`, `on_radio_the_stage_reads_radio_then_its_stations_then_the_youtube_peek`, `on_youtube_radio_collapses_to_its_title_bar`, `both_title_bars_keep_their_listener_counts`, `an_off_slot_station_lights_no_slot_row_and_credits_its_own_provider`, `the_radio_track_row_prefers_live_metadata`.
+Tests (`music_dock_test.rs`): `music_stage_height_is_constant`, `on_radio_the_stage_reads_radio_then_its_stations_then_the_youtube_peek`, `on_youtube_radio_collapses_to_its_title_bar`, `both_title_bars_keep_their_listener_counts`, `an_off_slot_station_lights_no_slot_row_and_credits_its_own_provider`, `the_radio_track_row_prefers_live_metadata`.
 
 ### Cross-cuts
 

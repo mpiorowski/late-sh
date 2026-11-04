@@ -391,7 +391,7 @@ fn story_rows(
     vec![title, Line::from(meta)]
 }
 
-/// `━━ label ━━━…` across the width: the sidebar's rule shape, drawn heavy
+/// `━━ label ━━━…` across the width: a tile title rule's shape, drawn heavy
 /// so a section stands out from the light rules between stories, in the
 /// News list's own colours (a bold dim amber label on `BORDER`).
 fn section_rule(label: &str, width: usize) -> ListRow {

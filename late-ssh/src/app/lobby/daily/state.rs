@@ -100,7 +100,7 @@ pub struct DailyState {
     notifier: Notifier,
     /// Match ids whose current my-turn edge already notified. Seeded from the
     /// first snapshot that arrives (see `notify_turn_edges`) so connecting
-    /// never notifies; the sidebar panel is the on-login nudge.
+    /// never notifies; the attention guest is the on-login nudge.
     turn_notified_match_ids: HashSet<Uuid>,
     /// Whether `turn_notified_match_ids` has been seeded yet. False until the
     /// first snapshot update, so a cold-start empty snapshot can't make the

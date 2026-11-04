@@ -127,7 +127,7 @@ enum WsPayload {
     /// Audio control initiated on a paired client (the CLI's desktop MPRIS
     /// surface: a widget's play/pause, media keys, a volume slider). The
     /// server fans it back out to every paired client on the token, exactly
-    /// like a TUI keypress, so the CLI, the webview helper, and the sidebar
+    /// like a TUI keypress, so the CLI, the webview helper, and the music dock
     /// all converge on the same state.
     #[serde(rename = "set_muted")]
     SetMuted { muted: bool },

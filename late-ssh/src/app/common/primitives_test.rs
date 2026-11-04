@@ -123,7 +123,7 @@ fn too_small_text_names_the_screen_the_requirement_and_the_current_size() {
     );
 }
 
-/// A note in a sidebar's width: the long row wraps at its words, centred,
+/// A note in a narrow tile's width: the long row wraps at its words, centred,
 /// and nothing is cut off. An odd spare cell goes on the left, as ratatui
 /// centres a line; a kept trailing space would pull the row left.
 #[test]

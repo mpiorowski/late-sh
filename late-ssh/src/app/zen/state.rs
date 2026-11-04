@@ -24,7 +24,7 @@ pub enum TileKind {
     Bonsai,
     /// The reef: the whole simulation, bound to the tile.
     Aquarium,
-    /// The sidebar's small tank: the fish in a six-row band, whatever
+    /// The small tank: the fish in a six-row band, whatever
     /// the tile's size. The same tank two ways.
     Tank,
     /// An animated ascii piece (`app/ascii`), the screensaver's kind in a tile.
@@ -43,7 +43,7 @@ pub enum TileKind {
     Activity,
     Friends,
     Pulse,
-    /// The Live panel's rows (`app/live/panel.rs`), as the sidebar draws
+    /// The Live panel's rows (`app/live/panel.rs`), as the Live tile draws
     /// them.
     Live,
     /// A stored `inbox` or `headlines` (kinds that are gone) reads as
@@ -52,7 +52,7 @@ pub enum TileKind {
     Blank,
     /// Home's room rail. One per page.
     Rooms,
-    /// The sidebar's pinned rows: the online count and the clock, then
+    /// The pinned presence rows: the online count and the clock, then
     /// the connected friends.
     Presence,
 }
@@ -430,7 +430,7 @@ impl Dir {
 /// How a split divides its length: the first child's share in per-mille,
 /// fine enough that one row or column of any split a terminal can hold is
 /// a distinct value (see `resize_leaf`), or a fixed cell count for one
-/// child, the way Home's rail and sidebar hold their width whatever the
+/// child, the way Home's rail and right column hold their width whatever the
 /// terminal does. Untagged, so a stored bare number reads as per-mille.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -728,7 +728,7 @@ pub const MAX_TILES: usize = 32;
 
 /// Most chat tiles a layout holds. Every chat tile is a room the session
 /// keeps drawn and its rows cached each frame, and a page of a hundred rooms
-/// would swallow every unread count on the sidebar.
+/// would swallow every unread count on the presence row.
 pub const MAX_CHAT_TILES: usize = 10;
 
 impl Node {
@@ -1311,9 +1311,9 @@ impl Default for RiceLayout {
 
 /// Home's rail width, the gutter beside it included.
 pub const HOME_RAIL_COLS: u16 = 24;
-/// Home's sidebar width, the gutter beside it included.
-pub const HOME_SIDEBAR_COLS: u16 = 24;
-/// The sidebar's pinned rows: the online count with the clock, the friends.
+/// Home's right column width, the gutter beside it included.
+pub const HOME_RIGHT_COLS: u16 = 24;
+/// The pinned presence rows: the online count with the clock, the friends.
 pub const PRESENCE_ROWS: u16 = 2;
 /// The stock Home's reef, across the top of the chat: the reef's minimum,
 /// its surface and floor around the tallest creature (`ReefState::min_height`,
@@ -1341,7 +1341,7 @@ impl RiceLayout {
 
     /// The stock Home: the room rail, then the reef across the top of the
     /// chat hosting the now strip and kept to #lounge, so the chat has its
-    /// rows in every other room, the chat under it, and a sidebar column
+    /// rows in every other room, the chat under it, and a right column
     /// of the presence row, the visualizer, the music dock, the lobby
     /// hosting attention, live and the pet (the shop's note while none is
     /// owned) at their panel rows, with the bonsai taking the rest. Fixed,
@@ -1358,16 +1358,16 @@ impl RiceLayout {
                 .only_in(REEF_ROOM),
             Node::leaf(TileKind::Chat),
         );
-        // The sidebar's panels, each at its rows plus its title rule; the
+        // The right column's panels, each at its rows plus its title rule; the
         // bonsai, last, takes the rest of the column.
         let panels: [(Node, u16); 5] = [
             (
                 Node::leaf(TileKind::Visualizer),
-                crate::app::common::sidebar::MUSIC_VIZ_HEIGHT,
+                crate::app::common::music_dock::MUSIC_VIZ_HEIGHT,
             ),
             (
                 Node::leaf(TileKind::Music),
-                crate::app::common::sidebar::MUSIC_DOCK_HEIGHT,
+                crate::app::common::music_dock::MUSIC_DOCK_HEIGHT,
             ),
             // The lobby hosts attention: what waits on you takes its tile
             // over and the latest tables come back when the list clears.
@@ -1386,7 +1386,7 @@ impl RiceLayout {
         for (tile, rows) in panels.into_iter().rev() {
             column = Node::split_first(Dir::Column, rows + 1, tile, column);
         }
-        let sidebar = Node::split_first(
+        let right_column = Node::split_first(
             Dir::Column,
             PRESENCE_ROWS,
             Node::leaf(TileKind::Presence).untitled(),
@@ -1397,7 +1397,7 @@ impl RiceLayout {
                 Dir::Row,
                 HOME_RAIL_COLS - 1,
                 Node::leaf(TileKind::Rooms).untitled(),
-                Node::split_second(Dir::Row, HOME_SIDEBAR_COLS - 1, center, sidebar),
+                Node::split_second(Dir::Row, HOME_RIGHT_COLS - 1, center, right_column),
             ),
             look: Look {
                 border: BorderKind::None,
