@@ -688,7 +688,7 @@ async fn first_contact_bio_screen_is_claimed_once_per_text_and_retried_when_stal
 }
 
 #[test]
-fn touched_settings_count_only_deliberate_keys() {
+fn touched_settings_count_only_the_listed_keys() {
     use crate::models::user::count_touched_settings;
     assert_eq!(count_touched_settings(&json!({})), 0);
     // Keys every account gets written by default do not count.

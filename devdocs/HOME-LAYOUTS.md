@@ -16,7 +16,7 @@ What is in the code now, and where it stops short of the sections below
 delta against the design):
 
 - Home renders through the tree (`App::home`), with the stock Home fixed:
-  the rail, the reef over the chat, and the sidebar column (presence,
+  the rail, the reef over the chat, and the right column (presence,
   visualizer, music, lobby, live, pet, bonsai). `Ctrl+E` is Home's one layouts chord
   (arrange mode, then a digit or `L`; `Ctrl+F` is unbound). There is no
   Zen screen and no `zen` layout: layout 2 is the stock `street`, and the
@@ -33,13 +33,13 @@ delta against the design):
   keys; a click on the reef or tank feeds it in either mode, the pet's
   way.
 - Static kinds `rooms`, `presence` and `tank` exist (the tank is the
-  aquarium's small form as its own kind, the stock sidebar's; the
+  aquarium's small form as its own kind; the
   `aquarium` kind is the reef alone); there is no `center` kind.
   Home's chat is a chat tile: the active one (the focused chat tile, else
   the first) is the page's chat, draws Home's card with the synthetic
   views, and the rail shows its room (a stored `center` reads as `chat`).
   The cut list (pulse, friends, activity, visualizer, blank) is not cut:
-  they stay tile kinds, and the stock Home's sidebar puts `visualizer`
+  they stay tile kinds, and the stock Home's right column puts `visualizer`
   over `music`, the band and the dock as two tiles.
 - Guests are the two that end, now and attention (`+` on a tile, one a
   tile), and a guest takes its host over while it is up. The live panel
@@ -162,8 +162,8 @@ Always drawn. The closed `TileKind` becomes:
 | `center` | Home's chat center: the selected rail entry, synthetic views included, the strip and the banner inserted at the top | `draw_chat_center` / `draw_dashboard_chat_card` |
 | `rooms` | The room rail with its sections, counts and nav hints | `draw_room_list_rail` |
 | `aquarium` | The reef | a tile |
-| `tank` | The sidebar's small tank, the same aquarium in a six-row band | sidebar Tank |
-| `bonsai` | The 81x26 canvas, cut to fit; narrower than half of it, the sidebar's preview fitted to the tile | a tile, sidebar Bonsai |
+| `tank` | The small tank, the same aquarium in a six-row band | sidebar Tank |
+| `bonsai` | The 81x26 canvas, cut to fit; narrower than half of it, a preview fitted to the tile | a tile, sidebar Bonsai |
 | `pet` | The box | a tile, sidebar Pet |
 | `music` | The dock alone: volume, stations, the v keys; a short tile shows the track over the station | sidebar Music |
 | `visualizer` | The equalizer at the tile's full height | sidebar Music's band |
@@ -171,11 +171,8 @@ Always drawn. The closed `TileKind` becomes:
 | `ascii` | An animated piece | a tile |
 | `pulse` | People online now over a day of them, a sparkline with the peak and a time axis | a tile |
 
-The sidebar's pinned rows (online count, clock, friends) are the top of
-the stock sidebar column and not a kind of their own: they draw at the
-top of whatever column holds the `music` tile first, as they do today.
-If that proves awkward in the build, they become a `presence` kind; the
-design does not depend on it.
+The pinned presence rows (online count, clock, friends) are their own kind,
+`presence`, at the top of the stock right column.
 
 Cut: `pulse`, `friends`, `activity`, `visualizer`, `blank`. Each is a thin
 copy of something the frame, the ticker or another kind already shows;
@@ -198,7 +195,7 @@ confused for long enough.
 A dynamic kind is placed one of two ways:
 
 - **As a tile.** Always drawn, with its idle text (`nobody playing`, the
-  lobby's `11 open`). Today's sidebar panels.
+  lobby's `11 open`). The stock Home's panels.
 - **As a guest on a static tile.** Invisible while idle; while active it
   *is* the tile: its label in the title rule, its panel where the host's
   was, nothing of the host underneath. The host keeps its rect, so the
@@ -258,8 +255,8 @@ changes:
   `Fit`, meaning the first child takes its natural height (the pet's
   three rows, the lobby panel's height, the music stage's constant
   height) and the second takes the rest. Nested fit splits reproduce the
-  sidebar stack exactly, drop-from-the-bottom included, and the resize
-  keys skip them. Without this the sidebar is five nested per-mille
+  right column's stack exactly, drop-from-the-bottom included, and the resize
+  keys skip them. Without this the column is five nested per-mille
   splits that are miserable to edit.
 - **A `hidden` flag is not added.** The rail modes (`\`, `auto`, the
   `AUTO_*_MIN_COLS` thresholds) are gone with nothing in their place: the

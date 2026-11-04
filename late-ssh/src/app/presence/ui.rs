@@ -29,7 +29,8 @@ pub(crate) struct PresenceView<'a> {
 
 /// The pinned two-row presence block, Home's presence tile: row one is the
 /// online count (left) and the clock (right); row two is connected friends, an
-/// away one carrying the away glyph. Both rows always render so the panel list below never shifts.
+/// away one carrying the away glyph. Both rows always render, so the tile
+/// never changes shape.
 pub(crate) fn draw_core_block(
     frame: &mut Frame,
     area: Rect,

@@ -527,8 +527,7 @@ pub fn default_statusline_components() -> Vec<StatusComponentSetting> {
 /// front; other additions append.
 ///
 /// Backfilled components take `StatusComponent::backfill_existing()` rather
-/// than a blanket `true`: see that method for why this diverges from the
-/// sidebar's rule.
+/// than a blanket `true`: see that method for why.
 pub fn normalize_statusline_components(
     components: &[StatusComponentSetting],
 ) -> Vec<StatusComponentSetting> {

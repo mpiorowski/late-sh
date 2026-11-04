@@ -20,10 +20,10 @@ use late_core::models::user::{AudioSource, RadioSlots, RadioStation};
 // dances while a client is actually paired; muted flatlines it, and an
 // unpaired session gets a pointer to the guide instead.
 pub(crate) const MUSIC_VIZ_HEIGHT: u16 = 3;
-// The dock: volume row (1) + the two sources as an
+// The dock: volume row and its keys (2) + the two sources as an
 // accordion (10) + keybind footer (1). Constant for BOTH active sources, so
-// the panels below never shift; `music_stage_height_is_constant` locks this
-// in tests. On radio: title + track + station heading (with its provider
+// toggling the source moves nothing; `music_stage_height_is_constant` locks
+// this in tests. On radio: title + track + station heading (with its provider
 // credit) + `RADIO_SLOTS` slot rows, then the youtube title + track. On
 // youtube: the radio title alone, then the youtube title + track +
 // `MUSIC_YOUTUBE_DETAIL_HEIGHT` detail rows.

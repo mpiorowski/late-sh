@@ -2,11 +2,12 @@ use super::clock_on_screen;
 use crate::{
     app::{
         common::primitives::Screen,
+        state::App,
         zen::state::{Dir, Look, Node, RiceLayout, TileKind, ZenState},
     },
     test_helpers::{make_app, new_test_db},
 };
-use late_core::test_utils::create_test_user;
+use late_core::test_utils::{TestDb, create_test_user};
 
 #[tokio::test]
 async fn the_glitch_runs_on_a_home_showing_the_presence_clock_and_nowhere_else() {
@@ -36,4 +37,44 @@ async fn the_glitch_runs_on_a_home_showing_the_presence_clock_and_nowhere_else()
     };
     app.home = ZenState::new(no_clock.clone(), Some(no_clock));
     assert!(!clock_on_screen(&app));
+}
+
+/// The stock Home on an ordinary terminal, where a burst would land: each
+/// case below starts from this, so its own condition is what defers the burst.
+async fn app_showing_the_clock(name: &str) -> (TestDb, App) {
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, name).await;
+    let mut app = make_app(test_db.db.clone(), user.id, name);
+    app.skip_splash_for_tests();
+    app.set_screen(Screen::Dashboard);
+    assert!(clock_on_screen(&app));
+    (test_db, app)
+}
+
+#[tokio::test]
+async fn a_burst_waits_out_the_screensaver() {
+    let (_db, mut app) = app_showing_the_clock("haunt-clock-saver").await;
+    app.sent_away = true;
+    assert!(app.sync_away());
+    assert!(app.screensaver().is_some(), "the default piece covers Home");
+    assert!(!clock_on_screen(&app));
+}
+
+#[tokio::test]
+async fn a_burst_waits_for_a_terminal_big_enough_for_home() {
+    let (_db, mut app) = app_showing_the_clock("haunt-clock-small").await;
+    app.resize(30, 10).expect("resize test terminal");
+    assert!(
+        !clock_on_screen(&app),
+        "Home draws only the too-small notice"
+    );
+}
+
+#[tokio::test]
+async fn a_burst_waits_for_a_modal_to_close() {
+    let (_db, mut app) = app_showing_the_clock("haunt-clock-modal").await;
+    app.show_settings = true;
+    assert!(!clock_on_screen(&app));
+    app.show_settings = false;
+    assert!(clock_on_screen(&app));
 }

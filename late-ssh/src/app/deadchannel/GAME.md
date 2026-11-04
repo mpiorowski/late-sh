@@ -144,8 +144,8 @@ glyphs and the Old Signal).
   Fixed reset so "tomorrow" is a concrete promise.
 - A session spends rations in 10-15 minutes and is interruptible at any
   point. Thin combat is a feature at this session length.
-- Ration status lives in the same mental slot as quests/streaks: sidebar
-  line, streak bonuses mirroring the `QuestService` daily-streak shape.
+- Ration status lives in the same mental slot as quests/streaks: a line on
+  the city's landing sheet, streak bonuses mirroring the `QuestService` daily-streak shape.
 - **The climb is two to three weeks** (decided 2026-10-06; it was three
   to four). A runner who walks every day's road and reads the hand puts
   the Old Signal down in about two weeks; one who plays it on the
@@ -214,7 +214,7 @@ runner chat between the lines. Half the messages are the game, half are
 people; that mix is the fantasy. Consequences:
 
 - **The feed budget only governs #lounge.** The wire is deliberately
-  unfiltered; people who want the firehose idle here with the sidebar
+  unfiltered; people who want the firehose idle here with the room
   open, people who don't never see it. This resolves the budget tension
   (`devdocs/FEED-BUDGET.md`) by geography instead of filtering.
 - The welcome-back paper quotes the wire instead of generating a recap:
@@ -300,7 +300,7 @@ this directory, `late-ssh/src/app/deadchannel/` (see `CONTEXT.md` beside this fi
 for several replicas (every cap and stamp a conditional claim on the
 user row). The haunting is open to everyone: stage 1 arms for every
 session (the mods met it cold first, as the playtest); stages 2-4 sit behind connected time, touched
-settings, and an AI-screened bio with placeholder thresholds (7 days of
+settings, and an AI-screened bio with placeholder thresholds (8 hours of
 online time, 2 keys, 100 characters; the length is only the floor under
 which no screen is spent, the AI screen does the judging).
 
@@ -311,10 +311,10 @@ which no screen is spent, the AI screen does the judging).
 - **The escalation ladder** (cheapest to loudest, each stage roughly an
   afternoon of render code, all pure client-side theater until the last):
   1. **Deniable.** Ambient corruption where the eyes already are, and
-     the v1 target is decided: **the sidebar clock.** A glitch is only
+     the v1 target is decided: **the presence clock.** A glitch is only
      legible against stability, and the clock is the most stable,
-     most-glanced-at element on screen (pinned core block, Home and
-     Arcade); the visualizer is the trap choice (already chaos, a burst
+     most-glanced-at element on screen (pinned core block, Home's presence
+     tile); the visualizer is the trap choice (already chaos, a burst
      of static there reads as the visualizer being a visualizer), the
      ticker is busy text, the splash too brief. Spec for the
      implementer: replace one or two characters of the rendered HH:MM
@@ -390,7 +390,7 @@ which no screen is spent, the AI screen does the judging).
      who connects daily the full ladder is one week),
      render-layer only, no DB beyond the per-user arming counter.
      Later variety (your name
-     in the sidebar, the composer placeholder) rides the same
+     on a Home tile, the composer placeholder) rides the same
      machinery. Thematic payoff: when the stage-3 whisper says the
      static knows your name, it is describing what already happened.
   3. **The whisper (the held door).** Delivered on the splash screen,

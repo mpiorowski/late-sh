@@ -172,3 +172,40 @@ fn the_chat_title_hint_counts_what_was_said_while_the_chat_was_shut() {
     );
     assert_eq!(text(None), None);
 }
+
+#[tokio::test]
+async fn the_frame_title_offers_the_hop_only_where_backtick_answers() {
+    use crate::test_helpers::{make_app, new_test_db, render_plain};
+    use late_core::{
+        models::leaderboard::{ArcadeGame, DailyPuzzle},
+        test_utils::create_test_user,
+    };
+
+    const HINT: &str = "` hop in & out";
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "hop-title-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "hop-title-token");
+    app.resize(120, 30).expect("resize test terminal");
+
+    // The Arcade's own page does nothing on backtick, so it says nothing.
+    app.set_screen(Screen::Arcade);
+    app.game_selection = ArcadeGame::Puzzle(DailyPuzzle::LeWord);
+    assert!(!render_plain(&mut app).contains(HINT));
+
+    // An open daily is a stop on the cycle, and the title says so after its name.
+    app.is_playing_game = true;
+    let playing = render_plain(&mut app);
+    assert!(
+        playing.contains(&format!("The Arcade · Le Word · {HINT}")),
+        "{playing}"
+    );
+
+    // Home is the cycle's base.
+    app.is_playing_game = false;
+    app.set_screen(Screen::Dashboard);
+    assert!(render_plain(&mut app).contains(HINT));
+
+    // Another main page does nothing on backtick either.
+    app.set_screen(Screen::Leaderboard);
+    assert!(!render_plain(&mut app).contains(HINT));
+}

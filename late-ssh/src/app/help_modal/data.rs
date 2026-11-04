@@ -1551,7 +1551,7 @@ fn architecture_lines() -> Vec<String> {
         "  the paired CLI plays audio locally; late.sh/listen plays the same sources in a browser",
         "",
         "User-facing areas",
-        "  Home/Dashboard with chat rail, The Arcade, Games (door-game hub: Lateania, the roguelikes, the BBS doors, CodeKeep, Rebels, Zork Trilogy, Minecraft, Vintage Story), Artboard, People, and the persistent bonsai sidebar",
+        "  Home/Dashboard with chat rail, The Arcade, Games (door-game hub: Lateania, the roguelikes, the BBS doors, CodeKeep, Rebels, Zork Trilogy, Minecraft, Vintage Story), Artboard, People, and the bonsai on Home",
         "  Home chat includes synthetic entries: RSS, News, Cyberspace, Voice, Mentions, Discover; People owns the projects and work-card feed",
         "  The Lobby fronts daily matches (DB rows) and fixed house tables with chat_rooms(kind='game')",
         "  House-table runtime state is process-local and can reset on SSH server restart",

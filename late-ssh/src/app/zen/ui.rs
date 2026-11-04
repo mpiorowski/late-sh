@@ -133,7 +133,7 @@ pub(crate) struct ZenView<'a> {
     /// The date under the clock tile's digits.
     pub date: &'a str,
     /// Daily correspondence games for the lobby tile, and whether the lobby
-    /// label glows (your turn somewhere, or a result waiting).
+    /// label glows (an open challenge you have not looked at).
     pub daily: &'a DailyState,
     pub lobby_glow: bool,
     /// The #lounge activity feed, newest first (`ChatState::activity_ticker`).
@@ -274,7 +274,7 @@ pub(crate) fn draw_rice(
         }
         hints.extend_from_slice(kind.hints());
         let keys = hints_shown(&hints, zen.arrange, focused);
-        // The lobby's rule glows while a game waits on you.
+        // The lobby's rule glows while an open challenge is unseen.
         let glow = *kind == TileKind::Lobby && view.lobby_glow;
         let inner = draw_tile_chrome(
             frame,
@@ -1004,7 +1004,7 @@ fn draw_attention_tile(
 }
 
 /// `── label ────` title rule above a tile. `active` swaps the label to bold
-/// amber for attention (the lobby's your-turn glow).
+/// amber for attention (the lobby's unseen-challenge glow).
 fn draw_panel_rule(frame: &mut Frame, area: Rect, label: &str, active: bool) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -1031,7 +1031,7 @@ fn draw_panel_rule(frame: &mut Frame, area: Rect, label: &str, active: bool) {
 }
 
 /// The title rule with no text: a tile's divider and nothing else. `active`
-/// lights it, which is all a lobby with a game waiting has left to say.
+/// lights it, which is all a lobby with an unseen challenge has left to say.
 fn draw_bare_rule(frame: &mut Frame, area: Rect, active: bool) {
     if area.width == 0 || area.height == 0 {
         return;

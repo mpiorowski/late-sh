@@ -2084,11 +2084,13 @@ pub fn extract_first_contact_invited_at(settings: &Value) -> Option<DateTime<Utc
     extract_rfc3339(settings, FIRST_CONTACT_INVITED_AT_KEY)
 }
 
-/// The keys a person only ever touches on purpose: the "touched settings"
-/// leg of the first-contact eligibility gate counts how many of these are
-/// present. Closed list; a key that every account gets written by default
+/// The keys the "touched settings" leg of the first-contact eligibility gate
+/// counts. Closed list; a key that every account gets written by default
 /// (audio source, tutorial done, the first-contact marks) does not belong
-/// here, since it would measure nothing.
+/// here, since it would measure nothing. The leg is a low bar: `Profile::update`
+/// writes `theme_id`, `notify_kinds`, `translate_to` and `favorite_theme_ids`
+/// on every save, so one settings save of anything clears it. What it tells
+/// apart is an account that has saved settings from one that never has.
 const TOUCHED_SETTINGS_KEYS: [&str; 9] = [
     THEME_ID_KEY,
     COUNTRY_KEY,
@@ -2101,8 +2103,7 @@ const TOUCHED_SETTINGS_KEYS: [&str; 9] = [
     FAVORITE_THEME_IDS_KEY,
 ];
 
-/// How many deliberately-set settings this account carries (see
-/// [`TOUCHED_SETTINGS_KEYS`]).
+/// How many of the [`TOUCHED_SETTINGS_KEYS`] this account carries.
 pub fn count_touched_settings(settings: &Value) -> usize {
     TOUCHED_SETTINGS_KEYS
         .iter()
