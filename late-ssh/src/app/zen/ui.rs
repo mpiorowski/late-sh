@@ -322,24 +322,24 @@ pub(crate) fn draw_rice(
             TileKind::Pet => {
                 crate::app::pet::ui::draw_tile(frame, inner, view.pet.as_ref(), neighbours)
             }
-            TileKind::Chat => match (is_page_chat, home.take()) {
-                (
-                    true,
+            // Only the page's chat takes Home's view: a watching tile drawn
+            // ahead of it in the layout must leave it there.
+            TileKind::Chat => match is_page_chat {
+                true => match home.take() {
                     Some(HomeView {
                         chat_view,
                         dashboard_view,
                         home_selected,
-                    }),
-                ) => {
-                    if home_selected {
-                        draw_dashboard_chat_card(frame, inner, dashboard_view, terminal_images);
-                    } else {
-                        draw_chat_center(frame, inner, chat_view, terminal_images);
+                    }) => {
+                        if home_selected {
+                            draw_dashboard_chat_card(frame, inner, dashboard_view, terminal_images);
+                        } else {
+                            draw_chat_center(frame, inner, chat_view, terminal_images);
+                        }
                     }
-                }
-                (true, None) | (false, _) => {
-                    draw_chat_tile(frame, inner, chat_tile, terminal_images)
-                }
+                    None => draw_chat_tile(frame, inner, chat_tile, terminal_images),
+                },
+                false => draw_chat_tile(frame, inner, chat_tile, terminal_images),
             },
             TileKind::Music => draw_music_tile(frame, inner, &view.music),
             TileKind::Clock => draw_clock_tile(frame, inner, &view),

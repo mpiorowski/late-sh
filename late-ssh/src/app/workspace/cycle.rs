@@ -65,14 +65,13 @@ fn current_stop(app: &App) -> Option<GameWorkspace> {
             Some(table) => GameWorkspace::HouseTable(table),
             None => GameWorkspace::Base,
         },
-        Screen::Arcade => match app
-            .is_playing_game
-            .then(|| active_daily_stop(app))
-            .flatten()
-        {
-            Some(stop) => GameWorkspace::Arcade(stop),
-            None => return None,
-        },
+        Screen::Arcade => {
+            let stop = app
+                .is_playing_game
+                .then(|| active_daily_stop(app))
+                .flatten()?;
+            GameWorkspace::Arcade(stop)
+        }
         // A running roguelike reaches here through the detach path in
         // `App::handle_input` (backtick is otherwise forwarded raw to the
         // game); `set_screen` keeps the running state alive on the hop out.
@@ -110,10 +109,7 @@ fn current_stop(app: &App) -> Option<GameWorkspace> {
         },
         // An open watch reaches here through its own key handler
         // (`door::spectate::input`); the hub proper and a preview never do.
-        Screen::Games => match watch_key_on_hub(app) {
-            Some(key) => GameWorkspace::Watch(key),
-            None => return None,
-        },
+        Screen::Games => GameWorkspace::Watch(watch_key_on_hub(app)?),
         _ => return None,
     };
     Some(stop)
