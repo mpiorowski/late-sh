@@ -129,14 +129,29 @@ fn vt_parser_reads_backtab_sequence() {
 }
 
 #[test]
-fn lone_escape_then_key_is_swallowed_as_alt_chord() {
+fn lone_escape_then_key_merges_into_an_alt_chord() {
     // A bare ESC leaves the parser wedged mid-escape (no event yet), so the
-    // following byte merges into an `ESC 1` = Alt+1 chord that esc_dispatch
-    // drops. This is why dismissing the splash with Escape used to eat the
-    // first `1` — the splash path must `reset()` to avoid it.
+    // following byte merges into an `ESC <key>` Alt chord: `ESC 1` is Alt+1,
+    // `ESC x` is dropped. This is why dismissing the splash with Escape used
+    // to eat the first key — the splash path must `reset()` to avoid it.
     let mut parser = VtInputParser::default();
     assert_eq!(parser.feed(b"\x1b"), vec![]);
-    assert_eq!(parser.feed(b"1"), vec![]);
+    assert_eq!(parser.feed(b"1"), vec![ParsedInput::AltDigit(1)]);
+    assert_eq!(parser.feed(b"\x1b"), vec![]);
+    assert_eq!(parser.feed(b"x"), vec![]);
+}
+
+#[test]
+fn vt_parser_reads_alt_digits_one_to_nine() {
+    let mut parser = VtInputParser::default();
+    for digit in 1..=9u8 {
+        assert_eq!(
+            parser.feed(&[0x1B, b'0' + digit]),
+            vec![ParsedInput::AltDigit(digit)]
+        );
+    }
+    // Alt+0 names no layout and stays swallowed.
+    assert_eq!(parser.feed(b"\x1b0"), vec![]);
 }
 
 #[test]

@@ -146,6 +146,10 @@ pub enum ParsedInput {
     AltC,
     /// Alt+K samples the Artboard colour under the cursor.
     AltK,
+    /// Alt+1..9 (`ESC 1`..`ESC 9`), the digit 1-9: on Home it loads that
+    /// layout in one chord, an extra to `Ctrl+E` then the digit. Ctrl+digit
+    /// is no use for this: legacy terminals send nothing distinct for it.
+    AltDigit(u8),
     Paste(Vec<u8>),
     /// F4 (SS3 `ESC O S`, CSI `ESC [ 14 ~`): show or hide the chat beside a
     /// game, Realm's board and an open watch here, and the watchable doors'
@@ -550,6 +554,7 @@ impl Perform for VtCollector {
                 b's' | b'S' => self.events.push(ParsedInput::AltS),
                 b'c' | b'C' => self.events.push(ParsedInput::AltC),
                 b'k' | b'K' => self.events.push(ParsedInput::AltK),
+                b'1'..=b'9' => self.events.push(ParsedInput::AltDigit(byte - b'0')),
                 _ => {}
             }
         }
@@ -622,8 +627,9 @@ pub fn handle(app: &mut App, data: &[u8]) {
             app.show_splash = false;
             // The dismissing ESC was just fed into the parser above, leaving it
             // wedged mid-escape. Without this reset the next key merges into an
-            // `ESC <key>` Alt chord (e.g. `1` becomes Alt+1, which is swallowed)
-            // so the first post-splash keypress is silently lost.
+            // `ESC <key>` Alt chord: a digit becomes Alt+digit and loads a Home
+            // layout, any other key is swallowed or misread, so the first
+            // post-splash keypress never lands as typed.
             app.vt_input.reset();
         }
         return;
@@ -1090,7 +1096,12 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
                 chat::input::handle_post_submit_requests(app, from_dashboard);
             }
         }
-        ParsedInput::AltA | ParsedInput::AltC | ParsedInput::AltK => {}
+        // Alt+digit is Home's (`zen::input::handle_home_event`, above);
+        // every other page, and a composer being typed in, ignores it.
+        ParsedInput::AltA
+        | ParsedInput::AltC
+        | ParsedInput::AltK
+        | ParsedInput::AltDigit(_) => {}
         // F4 shows or hides the chat beside a game. Realm's own handler
         // takes it (above); an open watch's chat column takes it here, past
         // the composer gate, so F4 closes it from the composer too.
@@ -2115,24 +2126,8 @@ fn dispatch_escape(app: &mut App) {
     // editor's own `EditOutcome::Cancel`: a lone Esc never reaches the keymap,
     // it is held as `pending_escape` and lands here via `flush_pending_escape`.
     // The keymap only sees Esc when it arrives mid-chunk with other bytes.
-    // Esc on Home in arrange mode peels a typed layout name, the layouts
-    // list, then a picker, then leaves the mode.
     if ctx.screen == Screen::Dashboard && app.home.arrange {
-        if let Some(list) = app.layout_list.as_mut() {
-            if list.editing.take().is_none() {
-                app.layout_list = None;
-            }
-            return;
-        }
-        if app.home.kind_picker.is_some() {
-            app.home.close_kind_picker();
-            return;
-        }
-        if app.home.guest_picker.is_some() {
-            app.home.close_guest_picker();
-            return;
-        }
-        crate::app::zen::input::toggle_home_arrange(app);
+        crate::app::zen::input::handle_escape(app);
         return;
     }
     if ctx.screen == Screen::Scratchpad {
@@ -2686,7 +2681,7 @@ fn handle_mouse_click(app: &mut App, screen: Screen, mouse: MouseEvent) -> bool 
     // itself, the same guard the pet click uses. Furniture is clicked for
     // its gesture and the keys stay put.
     if app.on_home() && !chat_scroll_clicks_blocked(app) {
-        focus_home_tile_at(app, x, y);
+        crate::app::zen::input::focus_home_tile_at(app, x, y);
     }
     if handle_chat_composer_click(app, screen, x, y) {
         return true;
@@ -3747,34 +3742,6 @@ fn handle_reserved_global_chord(app: &mut App, event: &ParsedInput) -> bool {
         }
         _ => false,
     }
-}
-
-/// Move Home's focus to the tile under a click. Nothing happens on the
-/// footer, on a gap, on the tile already focused, or, outside arrange
-/// mode, on furniture (`TileKind::takes_focus`).
-fn focus_home_tile_at(app: &mut App, x: u16, y: u16) {
-    let hit = app
-        .home_tile_rects()
-        .iter()
-        .position(|(_, rect, _)| rect_contains(*rect, x, y));
-    let Some(ordinal) = hit else {
-        return;
-    };
-    if ordinal == app.home.focus {
-        return;
-    }
-    if !app.home.arrange
-        && !app
-            .home
-            .rice
-            .root
-            .kind_at(ordinal)
-            .is_some_and(crate::app::zen::state::TileKind::takes_focus)
-    {
-        return;
-    }
-    app.home.focus = ordinal;
-    crate::app::zen::input::focus_moved(app);
 }
 
 /// Toggle: the daily surface is built for fast in-and-out, so the same chord
