@@ -288,6 +288,13 @@ Switching:
 
 - `Ctrl+E` then a digit `1`..`9`: enter arrange mode, load that layout,
   leave arrange mode. Two keystrokes, like a tmux prefix.
+- Alt+`1`..`9` (`ESC 1`..`ESC 9`, `ParsedInput::AltDigit`): the same
+  layout in one chord, an extra to `Ctrl+E` then the digit. Home only,
+  and not while a composer is being typed in (a layout whose chat is
+  elsewhere would drop the draft); in arrange mode it also leaves the
+  mode. Not Ctrl+digit: legacy terminals send nothing distinct for it
+  (Ctrl+2 is NUL, Ctrl+3 is ESC, Ctrl+8 is DEL). macOS terminals need
+  Option set to send Meta.
 - `Ctrl+E L`: the layouts list. `j` `k` move, Enter loads, `n` saves the
   page as a new layout, `d` deletes (not the last one), `R`
   resets one to stock Home.

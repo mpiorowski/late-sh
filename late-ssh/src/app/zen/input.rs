@@ -63,12 +63,7 @@ pub fn handle_home_event(app: &mut App, event: &ParsedInput) -> bool {
             match byte {
                 // `Ctrl+E` then a digit: that layout, and the mode is done.
                 b'1'..=b'9' => {
-                    let index = usize::from(byte - b'1');
-                    if load_layout(app, index) {
-                        toggle_home_arrange(app);
-                    } else {
-                        app.banner = Some(Banner::info(LayoutsError::NoSuchLayout.message()));
-                    }
+                    load_layout_by_digit(app, byte - b'0');
                     return true;
                 }
                 b'L' => {
@@ -177,6 +172,22 @@ pub(crate) fn load_layout(app: &mut App, index: usize) -> bool {
     app.home_layouts.switch(index);
     show_current_layout(app);
     true
+}
+
+/// The layout a digit 1-9 names, from `Ctrl+E` then the digit or from
+/// Alt+digit in one chord: loaded, and arrange mode left if it was on, or a
+/// banner when the slot is empty.
+pub(crate) fn load_layout_by_digit(app: &mut App, digit: u8) {
+    let Some(index) = usize::from(digit).checked_sub(1) else {
+        return;
+    };
+    if !load_layout(app, index) {
+        app.banner = Some(Banner::info(LayoutsError::NoSuchLayout.message()));
+        return;
+    }
+    if app.home.arrange {
+        toggle_home_arrange(app);
+    }
 }
 
 /// Draw the current slot on the page: after a switch, a delete of the

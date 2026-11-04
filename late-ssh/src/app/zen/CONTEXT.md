@@ -457,7 +457,10 @@ the pickers, the ascii piece picker included. In it:
   a border only the name draws: the border is already a rule.
 - A digit `1`..`9` loads that layout and leaves the mode
   (`zen::input::load_layout`: the page goes into its own slot first; so
-  `Ctrl+E 2` is the stock `street` in two keystrokes, like a tmux prefix),
+  `Ctrl+E 2` is the stock `street` in two keystrokes, like a tmux prefix;
+  `zen::input::load_layout_by_digit` serves it, and Alt+digit too: the
+  same layout in one chord, in or out of the mode, on Home and outside a
+  composer, `ParsedInput::AltDigit` in `app/input.rs`),
   and `L` opens the layouts list (`App::layout_list`,
   `presets::LayoutList`, drawn over the page: one row per layout with its
   digit and name, the current marked; `j` `k` and the arrows move, Enter

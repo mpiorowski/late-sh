@@ -146,6 +146,10 @@ pub enum ParsedInput {
     AltC,
     /// Alt+K samples the Artboard colour under the cursor.
     AltK,
+    /// Alt+1..9 (`ESC 1`..`ESC 9`), the digit 1-9: on Home it loads that
+    /// layout in one chord, an extra to `Ctrl+E` then the digit. Ctrl+digit
+    /// is no use for this: legacy terminals send nothing distinct for it.
+    AltDigit(u8),
     Paste(Vec<u8>),
     /// F4 (SS3 `ESC O S`, CSI `ESC [ 14 ~`): show or hide the chat beside a
     /// game, Realm's board and an open watch here, and the watchable doors'
@@ -550,6 +554,7 @@ impl Perform for VtCollector {
                 b's' | b'S' => self.events.push(ParsedInput::AltS),
                 b'c' | b'C' => self.events.push(ParsedInput::AltC),
                 b'k' | b'K' => self.events.push(ParsedInput::AltK),
+                b'1'..=b'9' => self.events.push(ParsedInput::AltDigit(byte - b'0')),
                 _ => {}
             }
         }
@@ -1091,6 +1096,18 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
             }
         }
         ParsedInput::AltA | ParsedInput::AltC | ParsedInput::AltK => {}
+        // Alt+1..9 on Home: that layout in one chord, the shortcut for
+        // `Ctrl+E` then the digit. A composer being typed in keeps it, as it
+        // keeps `Ctrl+E`, since a layout without that chat would drop the
+        // draft. Every other page ignores it.
+        ParsedInput::AltDigit(digit) => {
+            if ctx.screen == Screen::Dashboard
+                && !is_chat_composer_context(ctx)
+                && !ctx.news_composing
+            {
+                crate::app::zen::input::load_layout_by_digit(app, digit);
+            }
+        }
         // F4 shows or hides the chat beside a game. Realm's own handler
         // takes it (above); an open watch's chat column takes it here, past
         // the composer gate, so F4 closes it from the composer too.

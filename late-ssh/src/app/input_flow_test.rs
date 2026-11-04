@@ -4848,6 +4848,78 @@ async fn ctrl_e_arranges_home_and_the_layout_keys_are_arrange_modes_alone() {
     assert_eq!(app.home.leaf_count(), tiles + 1);
 }
 
+/// Alt+1..9 is the one-chord shortcut for `Ctrl+E` then the digit: on Home
+/// it loads that layout without arrange mode, a composer being typed in
+/// keeps it, and every other page ignores it.
+#[tokio::test]
+async fn alt_digit_loads_a_home_layout_in_one_chord() {
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "home-alt-digit-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    UserSshKey::ensure(&client, user.id, "SHA256:altdigit")
+        .await
+        .expect("alt digit key");
+    let mut app = with_session_key(
+        make_app(test_db.db.clone(), user.id, "home-alt-digit-flow-it"),
+        "SHA256:altdigit",
+    );
+    wait_for_render_contains(&mut app, "sort/fold").await;
+    assert_eq!(app.home_layouts.current_name(), "home");
+    // The lounge first, so the composer below has a room to open in.
+    crate::test_helpers::wait_for_app(&mut app, "the lounge selected", |app| {
+        app.chat.selected_room_id.is_some()
+    })
+    .await;
+
+    // Alt+2: street, straight away, arrange mode never on.
+    app.handle_input(b"\x1b2");
+    assert!(!app.home.arrange, "Alt+digit does not enter arrange mode");
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert_eq!(app.home_layouts.current_name(), "street");
+
+    // Alt+1 brings home back.
+    app.handle_input(b"\x1b1");
+    assert_eq!(app.home_layouts.current_name(), "home");
+
+    // An empty slot says so and moves nothing.
+    app.handle_input(b"\x1b9");
+    assert_eq!(app.home_layouts.current_name(), "home");
+    assert!(app.banner.is_some(), "an empty slot shows a banner");
+
+    // In arrange mode it loads and leaves the mode, as `Ctrl+E 2` does.
+    app.handle_input(b"\x05");
+    assert!(app.home.arrange);
+    app.handle_input(b"\x1b2");
+    assert!(!app.home.arrange, "Alt+digit leaves arrange mode");
+    assert_eq!(app.home_layouts.current_name(), "street");
+    app.handle_input(b"\x1b1");
+
+    // A composer being typed in keeps it: the draft must not go with a
+    // layout whose chat is elsewhere.
+    app.handle_input(b"i");
+    assert!(app.chat.is_composing());
+    app.handle_input(b"\x1b2");
+    assert_eq!(app.home_layouts.current_name(), "home");
+    assert!(app.chat.is_composing());
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(&mut app, |app| !app.chat.is_composing(), "composer").await;
+
+    // Off Home it does nothing: no page change, no layout switch.
+    app.handle_input(b"2");
+    assert_eq!(app.screen, Screen::Arcade);
+    app.handle_input(b"\x1b2");
+    assert_eq!(app.screen, Screen::Arcade);
+    assert_eq!(app.home_layouts.current_name(), "home");
+}
+
 /// The page's chat is the active tile wherever it sits in the layout: focus
 /// the second chat tile and it draws Home's card, the activity ticker over
 /// its composer and a synthetic entry's composer included, rather than the
