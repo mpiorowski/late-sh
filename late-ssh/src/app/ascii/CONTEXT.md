@@ -196,7 +196,8 @@ late-ssh/src/app/ascii/
   lively piece in dots, the quarter edge for one in pixels, the 1Hz edge
   for a slow one, whose frame cache hands back the same frame until its
   own edge) and a lively one asks `wake_hint` for `ANIM_HALF_TICK`
-  (`App::lively_ascii_visible`) or `ANIM_QUARTER_TICK`
+  (`App::lively_ascii_visible`; the quarter tier once the session has been
+  idle five minutes) or `ANIM_QUARTER_TICK`
   (`App::quarter_ascii_visible`); a slow piece asks for nothing, the idle
   floor carries its edge. The screensaver
   returns its tier ahead of every other check, since it covers everything

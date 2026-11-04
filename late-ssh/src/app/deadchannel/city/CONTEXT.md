@@ -290,7 +290,8 @@ the runner's words):
   root's), and `^V` pastes here instead of joining voice
   (`poster::input::holds_keys`). Free, no level gate.
 - **Animation** rides the clubhouse's `anim_half` edge (~7.5fps,
-  `tick.rs`), the wake tier is `ANIM_HALF_TICK` on this screen, and every
+  `tick.rs`), the wake tier is `ANIM_HALF_TICK` on this screen (the quarter
+  tier once the session has been idle five minutes), and every
   effect is a pure function of `marquee_tick` and the cell, so nothing
   accumulates. The ambience never paints over a prop (`put_if_floor`, and
   `ui_test` checks the signs and the board survive a frame).

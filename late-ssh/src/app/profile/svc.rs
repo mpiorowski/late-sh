@@ -129,11 +129,13 @@ pub enum ProfileEvent {
         user_id: Uuid,
         message: String,
     },
-    /// The database turned a new username down. Every save carries the whole
-    /// draft, so a draft still holding the refused name would fail every later
-    /// save too: it goes back to `kept_username`, the name the account still has.
+    /// The database turned `refused_username` down. Every save carries the
+    /// whole draft, so a draft still holding the refused name would fail every
+    /// later save too: it goes back to `kept_username`, the name the account
+    /// still has. A draft that has moved on to another name keeps it.
     UsernameRefused {
         user_id: Uuid,
+        refused_username: String,
         kept_username: String,
         message: String,
     },
@@ -516,12 +518,14 @@ impl ProfileService {
                     match service.do_edit_profile(user_id, params).await {
                         Ok(ProfileEdit::Saved) => {}
                         Ok(ProfileEdit::UsernameRefused {
+                            refused_username,
                             kept_username,
                             refusal,
                         }) => {
                             tracing::warn!(?refusal, "profile edit refused");
                             service.publish_event(ProfileEvent::UsernameRefused {
                                 user_id,
+                                refused_username,
                                 kept_username,
                                 message: refusal.message().to_string(),
                             });
@@ -563,11 +567,13 @@ impl ProfileService {
             .await?
             .map(|user| user.username)
             .ok_or_else(|| anyhow::anyhow!("user not found"))?;
+        let wanted_username = params.username.clone();
         let profile = match Profile::update(&client, user_id, params).await {
             Ok(profile) => profile,
             Err(error) => {
                 return match UsernameRefusal::of(&error) {
                     Some(refusal) => Ok(ProfileEdit::UsernameRefused {
+                        refused_username: wanted_username,
                         kept_username: old_username,
                         refusal,
                     }),
@@ -1220,6 +1226,7 @@ fn should_prune_snapshot_sender(sender: &watch::Sender<ProfileSnapshot>) -> bool
 enum ProfileEdit {
     Saved,
     UsernameRefused {
+        refused_username: String,
         kept_username: String,
         refusal: UsernameRefusal,
     },

@@ -28,8 +28,9 @@ const POLL_LIMIT: i64 = 64;
 /// Owners gone this long stop costing a fetch. Their first login puts their
 /// feeds at the front of the next poll, so at worst they wait one interval.
 const OWNER_ABSENT_AFTER_DAYS: i64 = 14;
-/// Well past the 20 per feed the list shows. An item still in a feed's XML can
-/// re-insert once when it is pruned, so this also keeps that rare.
+/// Well past the 20 per feed the list shows. An item a feed keeps listing past
+/// this many newer ones is pruned, and `upsert_for_feed` keeps it out after
+/// that.
 const KEEP_ENTRIES_PER_FEED: i64 = 100;
 /// Rows to delete per poll, so the backlog drains over days instead of a
 /// single burst of WAL against the throttled backup plugin.
@@ -434,6 +435,7 @@ impl FeedService {
                     shared_at: None,
                     dismissed_at: None,
                 },
+                KEEP_ENTRIES_PER_FEED,
             )
             .await?
             .is_some()

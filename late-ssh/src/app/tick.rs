@@ -180,7 +180,8 @@ impl App {
             // input-driven and the dog step is wall-clock. The ~7.5fps
             // heartbeat keeps the ambience moving at half the hot cost, and
             // every discrete change (input, chat bubbles, door events)
-            // still lands within 132ms of its tick.
+            // still lands within 132ms of its tick (264ms once the session
+            // has been idle for five minutes and dropped to the quarter tier).
             changed = true;
         }
         if self.screen == Screen::City && anim_half {

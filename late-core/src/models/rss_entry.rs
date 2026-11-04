@@ -33,7 +33,17 @@ impl RssEntry {
     /// improvements heal previously-stored junk on the next poll. A poll mostly
     /// re-reads the same items, so a row that would not change is left alone:
     /// rewriting them all was a fifth of the database's WAL.
-    pub async fn upsert_for_feed(client: &Client, params: RssEntryParams) -> Result<Option<Self>> {
+    ///
+    /// An unknown item published before the feed's `keep_per_feed` newest rows
+    /// is not inserted either: `prune_past_keep` took it once, and a fresh row
+    /// would only come back unread, lose its dismissal, and be pruned again.
+    /// An item with no publish date counts as published now, so it always
+    /// lands.
+    pub async fn upsert_for_feed(
+        client: &Client,
+        params: RssEntryParams,
+        keep_per_feed: i64,
+    ) -> Result<Option<Self>> {
         let known = client
             .query_one(
                 "WITH existing AS (
@@ -68,7 +78,18 @@ impl RssEntry {
             .query_opt(
                 "INSERT INTO rss_entries
                     (feed_id, user_id, guid, url, title, summary, published_at, shared_at, dismissed_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, NULL, NULL)
+                 SELECT $1, $2, $3, $4, $5, $6, $7, NULL, NULL
+                 WHERE NOT EXISTS (
+                     SELECT 1 FROM (
+                         SELECT COALESCE(published_at, created) AS seen_at
+                         FROM rss_entries
+                         WHERE feed_id = $1
+                         ORDER BY COALESCE(published_at, created) DESC, created DESC, id DESC
+                         OFFSET $8::bigint - 1
+                         LIMIT 1
+                     ) oldest_kept
+                     WHERE $7::timestamptz < oldest_kept.seen_at
+                 )
                  ON CONFLICT DO NOTHING
                  RETURNING *",
                 &[
@@ -79,6 +100,7 @@ impl RssEntry {
                     &params.title,
                     &params.summary,
                     &params.published_at,
+                    &keep_per_feed,
                 ],
             )
             .await?;
@@ -86,9 +108,10 @@ impl RssEntry {
     }
 
     /// Delete up to `batch` entries past the newest `keep_per_feed` of their
-    /// feed, returning how many went. Across every feed on purpose: the poller
-    /// skips feeds whose owner is gone, and those hold most of the rows. A
-    /// retention sweep, so it has no owner to scope to.
+    /// feed, newest by publish date (creation when the feed gave none, the
+    /// order the inbox shows), returning how many went. Across every feed on
+    /// purpose: the poller skips feeds whose owner is gone, and those hold
+    /// most of the rows. A retention sweep, so it has no owner to scope to.
     pub async fn prune_past_keep(client: &Client, keep_per_feed: i64, batch: i64) -> Result<u64> {
         let deleted = client
             .execute(
@@ -98,7 +121,9 @@ impl RssEntry {
                          SELECT id,
                                 ROW_NUMBER() OVER (
                                     PARTITION BY feed_id
-                                    ORDER BY created DESC, id DESC
+                                    ORDER BY COALESCE(published_at, created) DESC,
+                                             created DESC,
+                                             id DESC
                                 ) AS feed_rank
                          FROM rss_entries
                      ) ranked

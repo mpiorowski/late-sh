@@ -105,7 +105,9 @@ Each session spawns one render task (`ssh.rs`) with two triggers:
   Clubhouse, Home with a bonsai or eq tile, the live
   strip while it draws, the bonsai modal and a profile showing a tree, the pet
   box, ascii pieces in dots); `ANIM_QUARTER_TICK` 264 ms (aquarium surfaces,
-  ascii pieces in pixels); `IDLE_TICK` 500 ms otherwise. The away screensaver
+  ascii pieces in pixels); `IDLE_TICK` 500 ms otherwise. A session with no
+  input for `ATTENTION_ACTIVE_WINDOW` (5 min, `attention_presence`) takes
+  the quarter tier wherever it would take the half tier. The away screensaver
   returns its tier ahead of every other check. Floor ticks only drain channels.
 - **Input-driven render.** Within `MIN_RENDER_GAP` (15 ms) of a keystroke or
   resize, a render that does not advance world time. Door proxies push-wake
@@ -439,7 +441,8 @@ a no-op twin when built without `otel`.
 
 - Render: `late_ssh_renders_total{reason}`,
   `late_ssh_renders_skipped_clean_total`, `late_ssh_render_frame_drops_total`
-  (a flat ~909/min is one stalled client), `late_ssh_render_stall_*`,
+  (a flat ~909/min is one stalled client in its first three drops, ~120/min
+  one the backoff has moved to the idle tick), `late_ssh_render_stall_*`,
   `late_ssh_frame_bytes{reason}`, `late_ssh_session_output_bytes_per_second`,
   `late_ssh_output_bytes_total{screen,place,presence,kind}` (every sent byte,
   attributed in `ssh.rs::render_once`),

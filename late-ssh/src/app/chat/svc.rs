@@ -79,7 +79,6 @@ const HISTORY_LIMIT: i64 = 500;
 /// Concurrent chat reads (room tails, discover) allowed at once; the rest
 /// queue on `read_permits`.
 const READ_PERMITS: usize = 8;
-const DELTA_LIMIT: i64 = 256;
 const CHAT_REFRESH_INTERVAL: Duration = Duration::from_secs(10);
 const USERNAME_DIRECTORY_TTL: Duration = Duration::from_secs(30);
 const POLL_FINALIZER_RECOVERY_INTERVAL: Duration = Duration::from_secs(10 * 60);
@@ -1046,11 +1045,6 @@ pub enum ChatEvent {
         request_id: Uuid,
         message: String,
     },
-    DeltaSynced {
-        user_id: Uuid,
-        room_id: Uuid,
-        messages: Vec<ChatMessage>,
-    },
     DmOpened {
         user_id: Uuid,
         room_id: Uuid,
@@ -1958,66 +1952,6 @@ impl ChatService {
                 "chat.mark_room_read_task",
                 user_id = %user_id,
                 room_id = %room_id
-            )),
-        );
-    }
-
-    #[tracing::instrument(skip(self), fields(user_id = %user_id, room_id = %room_id, after_created = %after_created, after_id = %after_id))]
-    async fn sync_room_after(
-        &self,
-        user_id: Uuid,
-        room_id: Uuid,
-        after_created: DateTime<Utc>,
-        after_id: Uuid,
-    ) -> Result<()> {
-        let client = self.db.get().await?;
-        let is_member = ChatRoomMember::is_member(&client, room_id, user_id).await?;
-        if !is_member {
-            anyhow::bail!("user is not a member of room");
-        }
-
-        let messages =
-            ChatMessage::list_after(&client, room_id, after_created, after_id, DELTA_LIMIT).await?;
-        if !messages.is_empty() {
-            self.send_user_event(
-                user_id,
-                ChatEvent::DeltaSynced {
-                    user_id,
-                    room_id,
-                    messages,
-                },
-            );
-        }
-        Ok(())
-    }
-
-    pub fn sync_room_after_task(
-        &self,
-        user_id: Uuid,
-        room_id: Uuid,
-        after_created: DateTime<Utc>,
-        after_id: Uuid,
-    ) {
-        let service = self.clone();
-        tokio::spawn(
-            async move {
-                if let Err(e) = service
-                    .sync_room_after(user_id, room_id, after_created, after_id)
-                    .await
-                {
-                    late_core::error_span!(
-                        "chat_sync_failed",
-                        error = ?e,
-                        "failed to sync chat room delta"
-                    );
-                }
-            }
-            .instrument(info_span!(
-                "chat.sync_room_after_task",
-                user_id = %user_id,
-                room_id = %room_id,
-                after_created = %after_created,
-                after_id = %after_id
             )),
         );
     }

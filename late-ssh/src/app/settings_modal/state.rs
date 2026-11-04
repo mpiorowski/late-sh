@@ -2551,10 +2551,15 @@ impl SettingsModalState {
                 }
                 Ok(ProfileEvent::UsernameRefused {
                     user_id,
+                    refused_username,
                     kept_username,
                     ..
                 }) if user_id == self.user_id => {
-                    self.draft.username = kept_username;
+                    // A refusal for a name the draft has since moved past
+                    // is old news: reverting would rename the account back.
+                    if self.draft.username == refused_username {
+                        self.draft.username = kept_username;
+                    }
                 }
                 Ok(ProfileEvent::Error { user_id, message }) if user_id == self.user_id => {
                     if self.irc_token.open {

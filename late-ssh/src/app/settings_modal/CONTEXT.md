@@ -99,8 +99,11 @@ click acts. There is one save path for both inputs: saves are fire-and-forget
 and a failure surfaces as the usual banner. Each save carries the whole draft,
 so `ProfileService::edit_profile` runs one writer per user that saves drafts in
 order and collapses a burst into its newest draft. For the same reason a refused
-username goes back out of the draft (`ProfileEvent::UsernameRefused`): left there,
-it would fail every later save. An empty feed URL is dropped quietly. `[Cancel]` discards. Account confirmation inputs are not auto-saved.
+username goes back out of the draft (`ProfileEvent::UsernameRefused`, which
+names the refused name): left there, it would fail every later save. A draft
+that has already moved on to another name keeps it, since the refusal is
+old news and reverting would rename the account back. An empty feed URL is
+dropped quietly. `[Cancel]` discards. Account confirmation inputs are not auto-saved.
 Closing Settings with `[x]` during a theme search keeps the theme the search
 previewed, as Esc does. The Invites dialog's code field takes the caret on
 click and `[Add code]` submits it like Enter.

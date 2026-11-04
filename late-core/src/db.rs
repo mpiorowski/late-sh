@@ -11,15 +11,6 @@ use tokio_postgres::NoTls;
 
 use crate::telemetry::{self, DbCheckout};
 
-/// Whether a failure came from the database, anywhere in its error chain. The
-/// line between ERROR and WARN for a task whose other failures are a player's
-/// refusal or a flaky upstream: those are expected, an outage is not.
-pub fn is_db_failure(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        cause.is::<tokio_postgres::Error>() || cause.is::<deadpool_postgres::PoolError>()
-    })
-}
-
 /// Database configuration loaded from environment.
 #[derive(Debug, Clone)]
 pub struct DbConfig {

@@ -278,17 +278,17 @@ Dispatch: `late-ssh/src/app/chat/input.rs` `handle_post_submit_requests` calls `
 Music setup and user-facing controls are documented in the Pair guide tab (`?`). There is no separate `/music` help command; don't confuse the guide with staff submission commands.
 
 `/audio` flow:
-1. `YoutubeClient::validate_url(url)` extracts the ID and calls YouTube Data API. Accepted forms: `youtube.com/watch?v=…`, `youtu.be/…`, `youtube.com/embed/…`, `youtube.com/shorts/…`, `youtube.com/live/…`, subdomains via `host.ends_with(".youtube.com")`. Anything else returns an `anyhow` error (lowercase, per repo style).
-2. Validation rejects missing API key, not-found/non-public/non-embeddable videos, upcoming streams, normal videos without duration, and normal videos shorter than 30s. Live streams are accepted with `is_stream=true`.
+1. `YoutubeClient::validate_url(url)` extracts the ID and calls YouTube Data API. Accepted forms: `youtube.com/watch?v=…`, `youtu.be/…`, `youtube.com/embed/…`, `youtube.com/shorts/…`, `youtube.com/live/…`, subdomains via `host.ends_with(".youtube.com")`. Anything else is `YoutubeLookup::Refused(YoutubeRefusal::UnsupportedUrl)`.
+2. Validation refuses (`YoutubeRefusal`, the submitter's problem, with the banner text on the variant) not-found/non-public/non-embeddable videos, upcoming streams, normal videos without duration, and normal videos shorter than 30s. A missing API key or a Data API failure is an error, ours. Live streams are accepted with `is_stream=true`.
 3. `MediaQueueItem::insert_youtube` writes the row with `status='queued'`, `media_kind='youtube'`, title/channel/duration/is_stream from the server-side metadata.
 4. If nothing is currently playing, `advance_to_next_with_guard` immediately flips it to `playing` and broadcasts.
-5. On success, banner via `AudioEvent::TrustedSubmitQueued` — "Queued audio — up next" or "Queued audio — #N in line" depending on position. On failure (URL parse, API key/validation, DB), banner via `AudioEvent::TrustedSubmitFailed` carrying a classified message from `trusted_submit_error_message`.
+5. On success, banner via `AudioEvent::TrustedSubmitQueued` — "Queued audio — up next" or "Queued audio — #N in line" depending on position. Otherwise `AudioEvent::TrustedSubmitFailed` carries the text `booth_write_failed` settles on: every booth write that does not land goes through it once, a `BoothRefusal` (the listener's standing, their link, a queue that moved) logged at WARN with its own message, anything else logged at ERROR (`audio_booth_write_failed`, the write named) with the write's generic one.
 
 `/audio fallback` flow:
 1. `YoutubeClient::validate_url(url)` (same server-side validation as `/audio`).
 2. `MediaSource::upsert_youtube_fallback` — `ON CONFLICT (source_kind) DO UPDATE`, always sets `is_stream=true` because fallback playback is not a queue item with a completion timer.
 3. If the queue is empty *and* no item is playing, immediately broadcasts `SourceChanged: youtube` + `LoadVideo` for the fallback so paired clients start it without waiting.
-4. On success, banner via `AudioEvent::YoutubeFallbackSet` — "Set YouTube fallback". On failure, banner via `AudioEvent::YoutubeFallbackFailed` carrying the classified message from `trusted_submit_error_message`.
+4. On success, banner via `AudioEvent::YoutubeFallbackSet` — "Set YouTube fallback". On failure, banner via `AudioEvent::YoutubeFallbackFailed` carrying the text from `booth_write_failed`.
 
 `/audio skip` flow:
 1. Routes through `AudioService::force_skip` — unconditional, bypasses the vote threshold; staff can skip directly.

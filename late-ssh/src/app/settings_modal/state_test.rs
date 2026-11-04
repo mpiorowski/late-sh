@@ -40,6 +40,34 @@ async fn a_refused_username_does_not_block_the_settings_saved_after_it() {
     assert_eq!(saved.username, user.username);
 }
 
+/// A refusal lands after the draft has moved on to another name: that
+/// name stays, since reverting would send the old one back on the next
+/// save. A refusal for the name the draft still holds reverts it.
+#[tokio::test]
+async fn a_late_username_refusal_does_not_revert_a_newer_draft() {
+    let db = crate::test_helpers::new_test_db().await;
+    let user = late_core::test_utils::create_test_user(&db.db, "late-refusal").await;
+    let mut app = crate::test_helpers::make_app(db.db.clone(), user.id, "late-refusal");
+    let state = &mut app.settings_modal_state;
+    let (events, rx) = broadcast::channel(8);
+    state.profile_event_rx = rx;
+    let refusal = |refused: &str| ProfileEvent::UsernameRefused {
+        user_id: user.id,
+        refused_username: refused.to_string(),
+        kept_username: "late-refusal".to_string(),
+        message: "That username is taken.".to_string(),
+    };
+
+    state.draft.username = "second-pick".to_string();
+    events.send(refusal("first-pick")).unwrap();
+    state.drain_profile_events();
+    assert_eq!(state.draft.username, "second-pick");
+
+    events.send(refusal("second-pick")).unwrap();
+    state.drain_profile_events();
+    assert_eq!(state.draft.username, "late-refusal");
+}
+
 #[tokio::test]
 async fn clicked_feed_survives_an_older_empty_snapshot_before_list_replacement() {
     let db = crate::test_helpers::new_test_db().await;

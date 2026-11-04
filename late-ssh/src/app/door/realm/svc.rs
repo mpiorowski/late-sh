@@ -580,20 +580,16 @@ impl RealmService {
     ) {
         let svc = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = svc.join_game(user_id, &username, game_id, color).await {
-                tracing::error!(error = ?e, %user_id, %game_id, "failed to join realm game");
-                svc.send_error(user_id, &e);
-            }
+            let outcome = svc.join_game(user_id, &username, game_id, color).await;
+            svc.settle_write(RealmWrite::Join, user_id, game_id, outcome);
         });
     }
 
     pub fn leave_game_task(&self, user_id: Uuid, game_id: Uuid) {
         let svc = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = svc.leave_game(user_id, game_id).await {
-                tracing::error!(error = ?e, %user_id, %game_id, "failed to leave realm game");
-                svc.send_error(user_id, &e);
-            }
+            let outcome = svc.leave_game(user_id, game_id).await;
+            svc.settle_write(RealmWrite::Leave, user_id, game_id, outcome);
         });
     }
 
@@ -602,15 +598,8 @@ impl RealmService {
     pub fn act_task(&self, user_id: Uuid, game_id: Uuid, action: RealmAction) {
         let svc = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = svc.act(user_id, game_id, action).await {
-                match late_core::db::is_db_failure(&e) {
-                    true => {
-                        tracing::error!(error = ?e, %user_id, %game_id, "failed to resolve realm action")
-                    }
-                    false => tracing::warn!(error = ?e, %user_id, %game_id, "realm action refused"),
-                }
-                svc.send_error(user_id, &e);
-            }
+            let outcome = svc.act(user_id, game_id, action).await;
+            svc.settle_write(RealmWrite::Act, user_id, game_id, outcome);
         });
     }
 
@@ -619,13 +608,10 @@ impl RealmService {
     pub fn place_order_task(&self, user_id: Uuid, game_id: Uuid, order: Order) {
         let svc = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = svc
+            let outcome = svc
                 .place_order_at(user_id, game_id, order, Utc::now())
-                .await
-            {
-                tracing::error!(error = ?e, %user_id, %game_id, "failed to place realm order");
-                svc.send_error(user_id, &e);
-            }
+                .await;
+            svc.settle_write(RealmWrite::PlaceOrder, user_id, game_id, outcome);
         });
     }
 
@@ -634,14 +620,45 @@ impl RealmService {
     pub fn withdraw_order_task(&self, user_id: Uuid, game_id: Uuid, target: TerritoryId) {
         let svc = self.clone();
         tokio::spawn(async move {
-            if let Err(e) = svc
+            let outcome = svc
                 .withdraw_order_at(user_id, game_id, target, Utc::now())
-                .await
-            {
-                tracing::error!(error = ?e, %user_id, %game_id, "failed to withdraw realm order");
-                svc.send_error(user_id, &e);
-            }
+                .await;
+            svc.settle_write(RealmWrite::WithdrawOrder, user_id, game_id, outcome);
         });
+    }
+
+    /// Every fire-and-forget write ends here, once. A refusal
+    /// (`RealmRefusal`) is the player's to see and logs at WARN; anything
+    /// else is ours, logs at ERROR, and the player is told the realm could
+    /// not be reached. Either way the session gets the text as `Error`.
+    fn settle_write(&self, write: RealmWrite, user_id: Uuid, game_id: Uuid, outcome: Result<()>) {
+        let Err(error) = outcome else {
+            return;
+        };
+        let message = match error.downcast_ref::<RealmRefusal>() {
+            Some(refusal) => {
+                tracing::warn!(
+                    ?refusal,
+                    %user_id,
+                    %game_id,
+                    write = write.as_str(),
+                    "realm write refused"
+                );
+                refusal.message()
+            }
+            None => {
+                late_core::error_span!(
+                    "realm_write_failed",
+                    error = ?error,
+                    %user_id,
+                    %game_id,
+                    write = write.as_str(),
+                    "failed to write realm game"
+                );
+                "the realm could not be reached, try again".to_string()
+            }
+        };
+        let _ = self.event_tx.send(RealmEvent::Error { user_id, message });
     }
 
     // ----- reads
@@ -825,23 +842,23 @@ impl RealmService {
         for _ in 0..CAS_RETRIES {
             let game = RealmGame::get(&client, game_id)
                 .await?
-                .context("realm game not found")?;
+                .ok_or(RealmRefusal::NoSuchGame)?;
             if game.status != RealmGame::STATUS_ACTIVE && game.status != RealmGame::STATUS_OPEN {
-                bail!("this realm game is over");
+                return Err(RealmRefusal::GameOver.into());
             }
             let mut state = parse_state(&game.state)?;
             let map = self.map_for(&state)?;
             if state.players.iter().any(|p| p.user_id == user_id) {
-                bail!("you are already in this realm game");
+                return Err(RealmRefusal::AlreadyJoined.into());
             }
             if state.players.len() >= state.ruleset.max_players as usize {
-                bail!("this realm game is full");
+                return Err(RealmRefusal::GameFull.into());
             }
             if !state.joinable(&map) {
-                bail!(
-                    "this realm is {:.0}% conquered — too late to join",
-                    state.claimed_fraction(&map) * 100.0
-                );
+                return Err(RealmRefusal::TooLateToJoin {
+                    claimed: state.claimed_fraction(&map) * 100.0,
+                }
+                .into());
             }
             let expected = state.revision as i64;
             // Clocks start when play does: an arrival during the muster is
@@ -852,7 +869,7 @@ impl RealmService {
             if !admit_player(
                 &mut state, &map, game_id, user_id, username, joined_day, color,
             ) {
-                bail!("there is no free land left to spawn on");
+                return Err(RealmRefusal::NoFreeLand.into());
             }
             state.news = Some(RealmNews {
                 at: Utc::now(),
@@ -875,7 +892,7 @@ impl RealmService {
                 return Ok(());
             }
         }
-        bail!("the realm moved while you were joining, try again")
+        Err(RealmRefusal::Moved(RealmWrite::Join).into())
     }
 
     /// Withdraw from a realm — only while you are still **new**, the days
@@ -888,20 +905,20 @@ impl RealmService {
         for _ in 0..CAS_RETRIES {
             let game = RealmGame::get(&client, game_id)
                 .await?
-                .context("realm game not found")?;
+                .ok_or(RealmRefusal::NoSuchGame)?;
             if game.status == RealmGame::STATUS_FINISHED
                 || game.status == RealmGame::STATUS_CANCELLED
             {
-                bail!("this realm game is over");
+                return Err(RealmRefusal::GameOver.into());
             }
             let mut state = parse_state(&game.state)?;
             if !state.players.iter().any(|p| p.user_id == user_id) {
-                bail!("you are not in this realm game");
+                return Err(RealmRefusal::NotInGame.into());
             }
             let today = realm_day(Utc::now(), game.reset_hour_utc);
             let alone = state.players.len() == 1;
             if !alone && state.phase(user_id, today) != PlayerPhase::New {
-                bail!("you can only withdraw in your first day here");
+                return Err(RealmRefusal::PastFirstDay.into());
             }
             // The whole realm goes with the last player out.
             if alone {
@@ -937,7 +954,7 @@ impl RealmService {
                 return Ok(());
             }
         }
-        bail!("the realm moved while you were leaving, try again")
+        Err(RealmRefusal::Moved(RealmWrite::Leave).into())
     }
 
     // ----- playing
@@ -965,22 +982,22 @@ impl RealmService {
         for attempt in 0..CAS_RETRIES {
             let game = RealmGame::get(&client, game_id)
                 .await?
-                .context("realm game not found")?;
+                .ok_or(RealmRefusal::NoSuchGame)?;
             if game.status != RealmGame::STATUS_ACTIVE {
-                bail!("this realm game is not running");
+                return Err(RealmRefusal::NotRunning.into());
             }
             // Frozen while it musters: everyone who is coming gets to be
             // here before the first point is spent.
             if let Some(left) = muster_left(game.created, now) {
-                bail!(
-                    "this realm opens in {} — everyone starts together",
-                    countdown_label(left)
-                );
+                return Err(RealmRefusal::Mustering {
+                    opens_in: countdown_label(left),
+                }
+                .into());
             }
             let mut state = parse_state(&game.state)?;
             match state.ruleset.resolution {
                 Resolution::Instant => {}
-                Resolution::Orders => bail!("this realm takes orders, not actions"),
+                Resolution::Orders => return Err(RealmRefusal::TakesOrders.into()),
             }
             let map = self.map_for(&state)?;
             let expected = state.revision as i64;
@@ -1004,7 +1021,7 @@ impl RealmService {
             let outcome = match resolver::apply_action(&mut state, &map, user_id, action, day, seed)
             {
                 Ok(outcome) => outcome,
-                Err(rejected) => return Err(reject(rejected)),
+                Err(rejected) => return Err(RealmRefusal::Action(rejected).into()),
             };
             if let Some(news) = news_of_action(&state, &map, logged_before, outcome.end, now) {
                 state.news = Some(news);
@@ -1048,7 +1065,7 @@ impl RealmService {
                 if attempt + 1 < CAS_RETRIES {
                     continue;
                 }
-                bail!("the realm moved while you acted, try again");
+                return Err(RealmRefusal::Moved(RealmWrite::Act).into());
             }
 
             if let Some(finished) = rolled {
@@ -1082,7 +1099,7 @@ impl RealmService {
             self.publish(&client).await?;
             return Ok(());
         }
-        bail!("the realm moved while you acted, try again")
+        Err(RealmRefusal::Moved(RealmWrite::Act).into())
     }
 
     /// Write one order for tonight, as of `now` (the muster and the hour are
@@ -1095,7 +1112,7 @@ impl RealmService {
         now: DateTime<Utc>,
     ) -> Result<()> {
         let placed = self
-            .write_order(game_id, now, |state, map, day| {
+            .write_order(RealmWrite::PlaceOrder, game_id, now, |state, map, day| {
                 night::place_order(state, map, user_id, order, day)
             })
             .await?;
@@ -1121,9 +1138,12 @@ impl RealmService {
         now: DateTime<Utc>,
     ) -> Result<()> {
         let points_left = self
-            .write_order(game_id, now, |state, _map, day| {
-                night::withdraw_order(state, user_id, target, day)
-            })
+            .write_order(
+                RealmWrite::WithdrawOrder,
+                game_id,
+                now,
+                |state, _map, day| night::withdraw_order(state, user_id, target, day),
+            )
             .await?;
         crate::metrics::record_realm_order(RealmOrderOutcome::Withdrawn);
         let _ = self.event_tx.send(RealmEvent::OrderWithdrawn {
@@ -1139,9 +1159,11 @@ impl RealmService {
     /// muster. A day the hour has already closed is turned over first
     /// (`close_day`: the night runs, then the order lands on the day it
     /// opened), and the change persists under the row CAS, rerun from a fresh
-    /// read when another write landed first.
+    /// read when another write landed first. `write` names the order for
+    /// the refusal when the row keeps moving.
     async fn write_order<T>(
         &self,
+        write: RealmWrite,
         game_id: Uuid,
         now: DateTime<Utc>,
         mut change: impl FnMut(&mut RealmGameState, &WorldMap, i32) -> Result<T, OrderRejected>,
@@ -1150,19 +1172,19 @@ impl RealmService {
         for _ in 0..CAS_RETRIES {
             let game = RealmGame::get(&client, game_id)
                 .await?
-                .context("realm game not found")?;
+                .ok_or(RealmRefusal::NoSuchGame)?;
             if game.status != RealmGame::STATUS_ACTIVE {
-                bail!("this realm game is not running");
+                return Err(RealmRefusal::NotRunning.into());
             }
             if let Some(left) = muster_left(game.created, now) {
-                bail!(
-                    "this realm opens in {}, everyone starts together",
-                    countdown_label(left)
-                );
+                return Err(RealmRefusal::Mustering {
+                    opens_in: countdown_label(left),
+                }
+                .into());
             }
             let mut state = parse_state(&game.state)?;
             match state.ruleset.resolution {
-                Resolution::Instant => bail!("this realm takes actions, not orders"),
+                Resolution::Instant => return Err(RealmRefusal::TakesActions.into()),
                 Resolution::Orders => {}
             }
             match self
@@ -1174,9 +1196,7 @@ impl RealmService {
                 // A night ran, this replica's or another's: the order lands
                 // on the day it opened, read fresh.
                 DayTurn::Turned | DayTurn::Lost => continue,
-                DayTurn::NightFailed => {
-                    bail!("the night could not be resolved, try again in a minute")
-                }
+                DayTurn::NightFailed => return Err(RealmRefusal::NightFailed.into()),
             }
             // The order is for the night the row is open on, not for the
             // clock as it stood when the order was given: around the hour
@@ -1193,7 +1213,7 @@ impl RealmService {
                 Ok(answer) => answer,
                 Err(rejected) => {
                     crate::metrics::record_realm_order(RealmOrderOutcome::Refused);
-                    return Err(reject_order(rejected));
+                    return Err(RealmRefusal::Order(rejected).into());
                 }
             };
             let updated = RealmGame::update_state_cas(
@@ -1209,7 +1229,7 @@ impl RealmService {
             self.publish(&client).await?;
             return Ok(answer);
         }
-        bail!("the realm moved while you gave the order, try again")
+        Err(RealmRefusal::Moved(write).into())
     }
 
     // ----- sweeping
@@ -1871,13 +1891,6 @@ impl RealmService {
         map_handle(&state.ruleset.map_id, state.ruleset.map_spec.as_ref())
             .with_context(|| format!("unknown realm map: {}", state.ruleset.map_id))
     }
-
-    fn send_error(&self, user_id: Uuid, error: &anyhow::Error) {
-        let _ = self.event_tx.send(RealmEvent::Error {
-            user_id,
-            message: error.root_cause().to_string(),
-        });
-    }
 }
 
 /// The pure half of a join, after its refusals: the player goes on the
@@ -2357,15 +2370,15 @@ pub fn parse_state(value: &Value) -> Result<RealmGameState> {
 /// in the meantime is refused rather than quietly swapped: arriving as a
 /// colour you did not choose, on a map where colour is identity, is worse
 /// than being told to pick again.
-fn pick_color(taken: &[u8], wanted: Option<u8>) -> Result<u8> {
+fn pick_color(taken: &[u8], wanted: Option<u8>) -> Result<u8, RealmRefusal> {
     let free = |c: u8| c < PALETTE_SLOTS && !taken.contains(&c);
     match wanted {
         Some(c) if free(c) => Ok(c),
-        Some(c) if c >= PALETTE_SLOTS => bail!("there is no such colour"),
-        Some(_) => bail!("somebody took that colour first — pick another"),
+        Some(c) if c >= PALETTE_SLOTS => Err(RealmRefusal::NoSuchColour),
+        Some(_) => Err(RealmRefusal::ColourTaken),
         None => (0..PALETTE_SLOTS)
             .find(|c| free(*c))
-            .context("every colour is taken"),
+            .ok_or(RealmRefusal::EveryColourTaken),
     }
 }
 
@@ -2398,16 +2411,110 @@ fn new_player(
     }
 }
 
-/// A refused action is the player's problem to see, not an error to log as a
-/// failure: it means the world changed under them, or they are out of points.
-fn reject(rejected: ActionRejected) -> anyhow::Error {
-    anyhow::anyhow!(rejected.message())
+/// The writes a session fires and forgets. Names the write in its log line
+/// and in the refusal when the row kept moving under it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RealmWrite {
+    Join,
+    Leave,
+    Act,
+    PlaceOrder,
+    WithdrawOrder,
 }
 
-/// A refused order, the same way.
-fn reject_order(rejected: OrderRejected) -> anyhow::Error {
-    anyhow::anyhow!(rejected.message())
+impl RealmWrite {
+    fn as_str(self) -> &'static str {
+        match self {
+            RealmWrite::Join => "join",
+            RealmWrite::Leave => "leave",
+            RealmWrite::Act => "act",
+            RealmWrite::PlaceOrder => "place_order",
+            RealmWrite::WithdrawOrder => "withdraw_order",
+        }
+    }
 }
+
+/// Why a write was turned down: the player's problem to see, never ours to
+/// log as a failure. It means the world changed under them, they are out of
+/// points, or the door is shut. `message` is the banner. Carried through
+/// `anyhow` as the typed error the write tasks match on.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RealmRefusal {
+    /// The row is gone from under a board that still shows it.
+    NoSuchGame,
+    GameOver,
+    AlreadyJoined,
+    GameFull,
+    /// How much of the world was taken, in percent.
+    TooLateToJoin {
+        claimed: f64,
+    },
+    NoSuchColour,
+    ColourTaken,
+    EveryColourTaken,
+    NoFreeLand,
+    NotInGame,
+    PastFirstDay,
+    NotRunning,
+    /// Frozen while it musters; the countdown label.
+    Mustering {
+        opens_in: String,
+    },
+    TakesOrders,
+    TakesActions,
+    Action(ActionRejected),
+    Order(OrderRejected),
+    NightFailed,
+    /// Another write landed first, `CAS_RETRIES` times over.
+    Moved(RealmWrite),
+}
+
+impl RealmRefusal {
+    pub fn message(&self) -> String {
+        match self {
+            RealmRefusal::NoSuchGame => "realm game not found".into(),
+            RealmRefusal::GameOver => "this realm game is over".into(),
+            RealmRefusal::AlreadyJoined => "you are already in this realm game".into(),
+            RealmRefusal::GameFull => "this realm game is full".into(),
+            RealmRefusal::TooLateToJoin { claimed } => {
+                format!("this realm is {claimed:.0}% conquered, too late to join")
+            }
+            RealmRefusal::NoSuchColour => "there is no such colour".into(),
+            RealmRefusal::ColourTaken => "somebody took that colour first, pick another".into(),
+            RealmRefusal::EveryColourTaken => "every colour is taken".into(),
+            RealmRefusal::NoFreeLand => "there is no free land left to spawn on".into(),
+            RealmRefusal::NotInGame => "you are not in this realm game".into(),
+            RealmRefusal::PastFirstDay => "you can only withdraw in your first day here".into(),
+            RealmRefusal::NotRunning => "this realm game is not running".into(),
+            RealmRefusal::Mustering { opens_in } => {
+                format!("this realm opens in {opens_in}, everyone starts together")
+            }
+            RealmRefusal::TakesOrders => "this realm takes orders, not actions".into(),
+            RealmRefusal::TakesActions => "this realm takes actions, not orders".into(),
+            RealmRefusal::Action(rejected) => rejected.message(),
+            RealmRefusal::Order(rejected) => rejected.message(),
+            RealmRefusal::NightFailed => {
+                "the night could not be resolved, try again in a minute".into()
+            }
+            RealmRefusal::Moved(write) => match write {
+                RealmWrite::Join => "the realm moved while you were joining, try again".into(),
+                RealmWrite::Leave => "the realm moved while you were leaving, try again".into(),
+                RealmWrite::Act => "the realm moved while you acted, try again".into(),
+                RealmWrite::PlaceOrder | RealmWrite::WithdrawOrder => {
+                    "the realm moved while you gave the order, try again".into()
+                }
+            },
+        }
+    }
+}
+
+impl std::fmt::Display for RealmRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message())
+    }
+}
+
+impl std::error::Error for RealmRefusal {}
 
 /// What a finished game's chips did, as the dashboard counts it: one per
 /// place settled, one per game with nothing to pay, one per credit that

@@ -1643,6 +1643,7 @@ impl russh::server::Handler for ClientHandler {
             }
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
                 tracing::warn!(
+                    peer = ?self.peer_addr,
                     queue_cap = INPUT_QUEUE_CAP,
                     "session input queue full; dropping inbound ssh input"
                 );
@@ -2088,6 +2089,10 @@ async fn render_once(
 
     let frame_len = frame.len();
     let mut bytes_sent = 0;
+    // Set when the handle refused the frame or one of the commands: the pass
+    // is paced by `retry_after_frame_drop` below, and the run of such passes
+    // only resets once a whole pass lands.
+    let mut stalled = false;
     let frame_sent = match timeout(
         Duration::from_millis(50),
         ctx.handle.data(ctx.channel_id, frame),
@@ -2095,7 +2100,6 @@ async fn render_once(
     .await
     {
         Ok(Ok(())) => {
-            ctx.frame_drops_in_a_row.store(0, Ordering::Relaxed);
             ctx.budget.record_sent(frame_len);
             metrics::record_frame_bytes(reason, frame_len);
             spot.record(metrics::OutputKind::Frame, frame_len);
@@ -2128,8 +2132,7 @@ async fn render_once(
         let mut app = app.lock().await;
         app.force_full_repaint();
         ctx.signal.dirty.store(true, Ordering::Release);
-        let in_a_row = ctx.frame_drops_in_a_row.fetch_add(1, Ordering::Relaxed) + 1;
-        wake_hint = retry_after_frame_drop(in_a_row);
+        stalled = true;
     }
 
     for command in terminal_commands {
@@ -2163,15 +2166,24 @@ async fn render_once(
                 // like a dropped frame, so the next frame re-emits every
                 // raster from a clean slate, and abandon the rest of this
                 // batch rather than piling more chunks onto a busy handle.
-                // The output-budget guard in the render loop keeps a link
-                // that stays busy from turning this retry into a flood.
+                // Paced like a dropped frame too: a Kitty repaint always
+                // carries cleanup commands, so this arm is where a stalled
+                // Kitty client lands on every retry.
                 let mut app = app.lock().await;
                 app.force_full_repaint();
                 ctx.signal.dirty.store(true, Ordering::Release);
-                wake_hint = crate::app::tick::HOT_TICK;
+                stalled = true;
                 break;
             }
         }
+    }
+
+    match stalled {
+        true => {
+            let in_a_row = ctx.frame_drops_in_a_row.fetch_add(1, Ordering::Relaxed) + 1;
+            wake_hint = retry_after_frame_drop(in_a_row);
+        }
+        false => ctx.frame_drops_in_a_row.store(0, Ordering::Relaxed),
     }
 
     Ok(RenderOutcome {

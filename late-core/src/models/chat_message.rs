@@ -123,28 +123,6 @@ impl ChatMessage {
         Ok(rows.into_iter().map(Self::from).collect())
     }
 
-    pub async fn list_after(
-        client: &Client,
-        room_id: Uuid,
-        after_created: DateTime<Utc>,
-        after_id: Uuid,
-        limit: i64,
-    ) -> Result<Vec<Self>> {
-        let rows = client
-            .query(
-                "SELECT *
-                 FROM chat_messages
-                 WHERE room_id = $1
-                   AND (created, id) > ($2, $3)
-                 ORDER BY created ASC, id ASC
-                 LIMIT $4",
-                &[&room_id, &after_created, &after_id, &limit],
-            )
-            .await?;
-
-        Ok(rows.into_iter().map(Self::from).collect())
-    }
-
     /// When the user last sent a message in a room, if ever. Drives the
     /// per-room slow-mode cooldown.
     pub async fn last_sent_at_in_room(
