@@ -244,9 +244,9 @@ Mechanics:
 Skip-vote uses the persisted preference cached on active users. If an active user's `users.settings.audio_source = "youtube"`, they can cast a skip vote and count toward the threshold. Pairing shape is intentionally ignored: CLI-only, embedded-webview, and real-browser users with the same saved preference all count the same. Offline users do not count.
 
 Helpers used by the skip-vote path:
-- `User::audio_source(user_id)` — gates the caller: only users whose saved preference is `Youtube` can vote.
-- `ActiveUsers[*].audio_source` — cached from the user's settings on login and updated after `v+x`; feeds both the dock's tags and skip threshold.
-- `PairedClientRegistry::set_audio_source(user_id, source)` — only mirrors the new preference to connected clients via `SetPlaybackSource`; it does not define listener counts.
+- `User::audio_source(user_id)`: gates the caller: only users whose saved preference is `Youtube` can vote.
+- `ActiveUsers[*].audio_source`: cached from the user's settings on login and updated after `v+x`; feeds both the dock's tags and skip threshold.
+- `PairedClientRegistry::set_audio_source(user_id, source)`: only mirrors the new preference to connected clients via `SetPlaybackSource`; it does not define listener counts.
 
 Vote-strip on flip-away: when the DB value transitions from `Youtube` to `Icecast`, `AudioService::persist_audio_source` removes the user from `state.skip_votes` and runs `reevaluate_skip_threshold` (which may fire a skip if the threshold dropped to meet remaining votes).
 

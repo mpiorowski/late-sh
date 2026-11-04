@@ -102,9 +102,9 @@ number of replicas spend one AI call per text.
    burst 5-20 min after connect (so an hour-long evening sees one), the
    next 20-60 min later, at most `GLITCH_DAILY_CAP` (2) per UTC day,
    deferred a few minutes whenever the clock is off screen (`svc::clock_on_screen`:
-   not on Home, no presence tile, no animated tile to hold the wake cadence,
-   under the screensaver or an app-wide modal, or a terminal too small for
-   Home) so a burst is not spent unseen. A due burst is a `GlitchTick::Due`: the service
+   not on Home, no presence tile or one hosting a guest, no animated tile to
+   hold the wake cadence, a session away, an app-wide modal, or a terminal too
+   small for Home) so a burst is not spent unseen. A due burst is a `GlitchTick::Due`: the service
    claims it on the row (`claim_first_contact_glitch_burst`, both caps
    enforced in the `UPDATE ... WHERE`), the machine holds its schedule,
    and the burst starts on the tick the claim comes back won; a capped

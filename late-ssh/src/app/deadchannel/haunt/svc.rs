@@ -256,17 +256,20 @@ fn tick_splash_door(app: &mut App) -> bool {
     true
 }
 
-/// The presence clock is up and something repaints it: a Home drawing its
-/// tiles with nothing over them, showing the presence tile, with an animated
-/// tile holding the wake cadence the ~200ms hold relies on. Anything else
-/// defers the burst, so it is not spent unseen.
+/// The presence clock is up, someone is there, and something repaints it: a
+/// session that is not away on a Home drawing its tiles with nothing over
+/// them, a presence tile no guest can take, and an animated tile holding the
+/// wake cadence the ~200ms hold relies on. Anything else defers the burst, so
+/// it is not spent unseen.
 fn clock_on_screen(app: &App) -> bool {
     !app.show_splash
-        && app.screensaver().is_none()
+        && !app.away
         && !app.foreground_overlay_open()
         && app.on_home()
         && crate::app::zen::layout::rice_fits(app.content_area())
-        && app.home.shows(crate::app::zen::state::TileKind::Presence)
+        && app
+            .home
+            .shows_without_guests(crate::app::zen::state::TileKind::Presence)
         && app.home.paints_on_half_edge()
 }
 

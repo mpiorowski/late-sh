@@ -1753,6 +1753,20 @@ impl ZenState {
         self.kinds_up().contains(&kind)
     }
 
+    /// Whether a tile of `kind` is up hosting no guest, so it always draws
+    /// itself: a hosted guest takes the whole tile while it has something to
+    /// say, which only the frame knows.
+    pub fn shows_without_guests(&self, kind: TileKind) -> bool {
+        let root = &self.rice.root;
+        root.leaf_kinds()
+            .into_iter()
+            .zip(root.leaf_guests())
+            .enumerate()
+            .any(|(ordinal, (leaf, guests))| {
+                leaf == kind && guests.is_empty() && !self.tile_hidden(ordinal)
+            })
+    }
+
     /// Resolve all tiles when a visit begins, before the first frame.
     pub(crate) fn enter(&mut self, now: Instant, rng: &mut impl Rng) {
         if !self.visiting {

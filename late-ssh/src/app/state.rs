@@ -3054,10 +3054,12 @@ impl App {
             || self.show_mod_modal
             || self.show_hub_modal
             || self.show_profile_modal
+            || self.show_sheet_modal
             || self.show_poll_modal
             || self.show_gild_modal
             || self.chat.cyberspace.modal_active()
             || self.show_bonsai_modal
+            || self.show_lobby_modal
             || self.paper.modal.is_some()
             || self.stream_modal.is_some()
             || self.show_help
@@ -3066,7 +3068,13 @@ impl App {
             || self.video.modal().is_some()
             || self.room_search_modal_state.is_open()
             || self.chat.history_modal.is_open()
+            || self.room_info_modal_state.is_open()
+            || self.directory_editor.is_open()
+            || self.jobs.post.is_open()
+            || self.tag_picker.is_open()
+            || self.piece_picker.is_open()
             || self.booth_modal_state.is_open()
+            || self.stations_modal_state.is_open()
             || self.icon_picker_open
     }
 

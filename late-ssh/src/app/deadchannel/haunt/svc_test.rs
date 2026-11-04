@@ -3,11 +3,14 @@ use crate::{
     app::{
         common::primitives::Screen,
         state::App,
-        zen::state::{Dir, Look, Node, RiceLayout, TileKind, ZenState},
+        zen::state::{Dir, Guest, Look, Node, RiceLayout, TileKind, ZenState},
     },
     test_helpers::{make_app, new_test_db},
 };
-use late_core::test_utils::{TestDb, create_test_user};
+use late_core::{
+    models::user::Screensaver,
+    test_utils::{TestDb, create_test_user},
+};
 
 #[tokio::test]
 async fn the_glitch_runs_on_a_home_showing_the_presence_clock_and_nowhere_else() {
@@ -52,11 +55,36 @@ async fn app_showing_the_clock(name: &str) -> (TestDb, App) {
 }
 
 #[tokio::test]
-async fn a_burst_waits_out_the_screensaver() {
-    let (_db, mut app) = app_showing_the_clock("haunt-clock-saver").await;
+async fn a_burst_waits_for_an_away_session_to_come_back() {
+    let (_db, mut app) = app_showing_the_clock("haunt-clock-away").await;
     app.sent_away = true;
     assert!(app.sync_away());
     assert!(app.screensaver().is_some(), "the default piece covers Home");
+    assert!(!clock_on_screen(&app));
+
+    // With the Tweak off the clock still draws, with nobody there to see it.
+    app.profile_state.profile.screensaver = Screensaver::Off;
+    assert!(app.screensaver().is_none());
+    assert!(!clock_on_screen(&app));
+
+    app.sent_away = false;
+    assert!(app.sync_away());
+    assert!(clock_on_screen(&app));
+}
+
+/// A hosted guest takes the whole tile while it has something to say.
+#[tokio::test]
+async fn a_burst_skips_a_presence_tile_hosting_a_guest() {
+    let (_db, mut app) = app_showing_the_clock("haunt-clock-guest").await;
+    let presence = app
+        .home
+        .rice
+        .root
+        .leaf_kinds()
+        .iter()
+        .position(|kind| *kind == TileKind::Presence)
+        .expect("the stock Home has a presence tile");
+    assert!(app.home.rice.root.toggle_guest(presence, Guest::Attention));
     assert!(!clock_on_screen(&app));
 }
 
@@ -76,5 +104,14 @@ async fn a_burst_waits_for_a_modal_to_close() {
     app.show_settings = true;
     assert!(!clock_on_screen(&app));
     app.show_settings = false;
+    assert!(clock_on_screen(&app));
+
+    app.show_lobby_modal = true;
+    assert!(!clock_on_screen(&app));
+    app.show_lobby_modal = false;
+
+    app.show_sheet_modal = true;
+    assert!(!clock_on_screen(&app));
+    app.show_sheet_modal = false;
     assert!(clock_on_screen(&app));
 }

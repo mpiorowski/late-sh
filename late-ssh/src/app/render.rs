@@ -29,7 +29,7 @@ use super::{
 use crate::app::door::game::DoorGame;
 use crate::app::files::terminal_image::TerminalImageFrame;
 
-fn app_frame_inner_area(area: Rect) -> Rect {
+pub(crate) fn app_frame_inner_area(area: Rect) -> Rect {
     Block::default().borders(Borders::ALL).inner(area)
 }
 

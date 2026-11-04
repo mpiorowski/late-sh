@@ -8,13 +8,13 @@ Renders the audio domain into Home's music tile as a **fixed-height accordion**:
 1. **Both title bars always show their listener count.** That is the "what's everyone tuned to" board.
 2. **The YouTube track is always visible, the radio track only while on radio.** A radio listener wants to know whether the booth is playing something worth switching for; a YouTube listener does not care what the radio is playing, so radio collapses to its title bar there.
 3. **The dock height is constant.** Both sources fill exactly 13 rows, so toggling the source moves nothing.
-4. **The stage never claims audio the session cannot produce.** With no client paired, the `visualizer` tile shows the guide pointer rather than dancing bars, matching the volume row's `—` (`VIZ.md`).
+4. **The stage never claims audio the session cannot produce.** With no client paired, the `visualizer` tile shows the guide pointer rather than dancing bars, matching the volume row's dash (`VIZ.md`).
 
 ### Layout (dock rows 0-12)
 
 | Row | On radio | On youtube |
 |-----|----------|------------|
-| 0   | Volume bar: `vol  ▰▰▰▰▰▱▱▱▱▱  60%` (`muted` when muted, `—` when no client is paired) | same |
+| 0   | Volume bar: `vol  ▰▰▰▰▰▱▱▱▱▱  60%` (`muted` when muted, a dash when no client is paired) | same |
 | 1   | keys: `- = volume  m mute` | same |
 | 2   | `radio` title bar + count | `radio` title bar + count |
 | 3   | current station's track | `youtube` title bar + count |
@@ -40,7 +40,7 @@ Selector rows (`selector_row_line`): `●`/`○` state glyph, station label, rig
 
 The expanded source = `paired_source` (`AudioSource::{Radio, Youtube}`). Pure preference-based. Does **not** gate on whether a client is paired. The saved preference (loaded from `users.settings.audio_source` during SSH bootstrap, mirrored on `App`) is the source of truth from the first frame; pairing completing does not change the visual state. Don't add a pairing guard back: waiting for the client read as a startup glitch.
 
-The volume row stays honest about pairing (`vol  —` when nothing paired), so users aren't misled about whether their preference is currently audible.
+The volume row stays honest about pairing (`vol` and a dash when nothing paired), so users aren't misled about whether their preference is currently audible.
 
 The Stations modal's Ctrl+Y (`^y` in its footer) copies the highlighted station's track through the OSC 52 clipboard path: `Artist - Title` (or bare title), the same `App::station_now_playing` text its row shows. Radio has no per-track link, so text is all there is. A station with no metadata shows a banner and leaves the clipboard untouched.
 
