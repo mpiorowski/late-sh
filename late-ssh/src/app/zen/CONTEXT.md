@@ -373,8 +373,9 @@ the arms the build then asks for (`label`, `one_per_page`, `takes_focus`,
 `hints`, the stock `home()`, the `draw_rice` match), a `draw_tile` on
 the domain's surface, and the kind table in `devdocs/HOME-LAYOUTS.md`. `input.rs`: `handle_home_event` ahead of Home's own keys,
 `Ctrl+E` (`layout_chord_globally`, `go_home_for_layouts`) among the
-reserved chords, the Esc arm, `focus_home_tile_at`, the
-`StatusClick::HomeLayout` click and the guide's `HelpTopic::Layouts`.
+reserved chords, the Esc arm (one call, `handle_escape`), a click on the
+page (`focus_home_tile_at`), the `StatusClick::HomeLayout` click and the
+guide's `HelpTopic::Layouts`.
 `/layout` is parsed in `chat/state.rs` and handed over in
 `chat/input.rs`. `state.rs`: `App::home`, `App::home_layouts`,
 `App::layout_list`, `on_home`, `home_tiles_area` / `home_tile_rects`,
@@ -459,13 +460,16 @@ the pickers, the ascii piece picker included. In it:
 - A digit `1`..`9` loads that layout and leaves the mode
   (`zen::input::load_layout`: the page goes into its own slot first; so
   `Ctrl+E 2` is the stock `street` in two keystrokes, like a tmux prefix;
-  `zen::input::load_layout_by_digit` serves it, and Alt+digit too: the
-  same layout in one chord, in or out of the mode, on Home and outside a
-  composer, `ParsedInput::AltDigit` in `app/input.rs`),
+  `load_layout_by_digit` serves it, and Alt+digit too, `ParsedInput::AltDigit`
+  handled in `handle_home_event`: the same layout in one chord, in or out
+  of the mode, on Home and outside a composer, the chat composer's gate in
+  `app/input.rs`, the news composer and a feeds search checked here),
   and `L` opens the layouts list (`App::layout_list`,
   `presets::LayoutList`, drawn over the page: one row per layout with its
-  digit and name, the current marked; `j` `k` and the arrows move, Enter
-  loads the row and leaves the mode, `n` types a name and saves the page
+  digit and name, the current marked, and a note over the hints that
+  Alt+digit loads one from anywhere on Home; `j` `k` and the arrows move,
+  Enter loads the row and leaves the mode, Alt+digit closes the list and
+  loads that slot, `n` types a name and saves the page
   as a new layout, current from then on, `d`
   deletes the row, never the last, the page showing its neighbor when it
   was the current one, `R` puts `home` back to its stock and says in a

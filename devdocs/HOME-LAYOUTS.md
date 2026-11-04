@@ -295,9 +295,11 @@ Switching:
   mode. Not Ctrl+digit: legacy terminals send nothing distinct for it
   (Ctrl+2 is NUL, Ctrl+3 is ESC, Ctrl+8 is DEL). macOS terminals need
   Option set to send Meta.
-- `Ctrl+E L`: the layouts list. `j` `k` move, Enter loads, `n` saves the
-  page as a new layout, `d` deletes (not the last one), `R`
-  resets one to stock Home.
+- `Ctrl+E L`: the layouts list. `j` `k` move, Enter loads, Alt+digit
+  closes it and loads that slot, `n` saves the page as a new layout, `d`
+  deletes (not the last one), `R` resets one to stock Home. A note in the
+  list names Alt+digit, since the list is where a newcomer looks for the
+  keys.
 - `/layout <name>` and `/layout save <name>` from any composer.
 - A `layout` component in the status line customizer, off by default,
   shows the current name; a click cycles.

@@ -4902,6 +4902,17 @@ async fn alt_digit_loads_a_home_layout_in_one_chord() {
     assert_eq!(app.home_layouts.current_name(), "street");
     app.handle_input(b"\x1b1");
 
+    // From the layouts list, as its note says: the list closes, the
+    // layout loads, the mode is done.
+    app.handle_input(b"\x05");
+    app.handle_input(b"L");
+    assert!(app.layout_list.is_some(), "Ctrl+E L opens the layouts list");
+    app.handle_input(b"\x1b2");
+    assert!(app.layout_list.is_none(), "Alt+digit closes the list");
+    assert!(!app.home.arrange);
+    assert_eq!(app.home_layouts.current_name(), "street");
+    app.handle_input(b"\x1b1");
+
     // A composer being typed in keeps it: the draft must not go with a
     // layout whose chat is elsewhere.
     app.handle_input(b"i");

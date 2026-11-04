@@ -398,18 +398,19 @@ pub(crate) fn draw_rice(
 }
 
 /// The layouts list `L` opens in arrange mode: one row per layout with
-/// its digit and name, the current one marked, the selected row lit;
+/// its digit and name, the current one marked, the selected row lit, and
+/// over the hints a note that Alt+digit loads one from anywhere on Home;
 /// while a name is being typed (`n`) the field sits under the rows with
 /// its cursor.
 fn draw_layout_list(frame: &mut Frame, area: Rect, layouts: &Layouts, list: &LayoutList) {
     let rows = layouts.count() as u16;
-    // The rows, a blank, the hint, the two border rows; two more rows
-    // while a name is typed.
+    // The rows, a blank, the Alt+digit note, the hint, the two border
+    // rows; two more rows while a name is typed.
     let edit_rows = match list.editing {
         Some(_) => 2,
         None => 0,
     };
-    let Some(inner) = draw_popup(frame, area, " layouts ", 50, rows + 4 + edit_rows) else {
+    let Some(inner) = draw_popup(frame, area, " layouts ", 50, rows + 5 + edit_rows) else {
         return;
     };
     let mut lines: Vec<Line<'static>> = layouts
@@ -460,6 +461,10 @@ fn draw_layout_list(frame: &mut Frame, area: Rect, layouts: &Layouts, list: &Lay
         ]));
     }
     lines.push(Line::from(""));
+    lines.push(hint_line_fitting(
+        &[("alt+1-9", "that layout, from anywhere on home")],
+        inner.width as usize,
+    ));
     let hints: &[(&str, &str)] = match list.editing {
         Some(_) => &[("enter", "keep"), ("esc", "drop")],
         None => &[

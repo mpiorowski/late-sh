@@ -9,6 +9,8 @@
 
 use std::time::Instant;
 
+use ratatui::layout::Position;
+
 use uuid::Uuid;
 
 use super::attention::{Chore, Item as AttentionItem};
@@ -48,6 +50,21 @@ pub fn handle_home_event(app: &mut App, event: &ParsedInput) -> bool {
     }
     if app.home.guest_picker.is_some() {
         handle_guest_picker(app, event);
+        return true;
+    }
+    // Alt+digit: that layout in one chord, the shortcut for `Ctrl+E` then
+    // the digit, in or out of the mode. The layouts list takes it below
+    // when it is up. A composer being typed in keeps it, as it keeps
+    // `Ctrl+E`, since a layout without that chat would drop the draft: the
+    // chat composer gates this handler in `app/input.rs`, the news composer
+    // and a feeds search (both gated after this handler there) are checked
+    // here.
+    if let ParsedInput::AltDigit(digit) = event
+        && app.layout_list.is_none()
+        && !app.chat.news.composing()
+        && !app.chat.feeds.processing()
+    {
+        load_layout_by_digit(app, *digit);
         return true;
     }
     if app.home.arrange {
@@ -158,12 +175,61 @@ pub(crate) fn toggle_home_arrange(app: &mut App) {
     }
 }
 
+/// Esc in arrange mode, from `dispatch_escape` in `app/input.rs`: peels a
+/// typed layout name, the layouts list, then a picker, then leaves the
+/// mode.
+pub fn handle_escape(app: &mut App) {
+    if let Some(list) = app.layout_list.as_mut() {
+        if list.editing.take().is_none() {
+            app.layout_list = None;
+        }
+        return;
+    }
+    if app.home.kind_picker.is_some() {
+        app.home.close_kind_picker();
+        return;
+    }
+    if app.home.guest_picker.is_some() {
+        app.home.close_guest_picker();
+        return;
+    }
+    toggle_home_arrange(app);
+}
+
+/// Move Home's focus to the tile under a click. Nothing happens on the
+/// footer, on a gap, on the tile already focused, or, outside arrange
+/// mode, on furniture (`TileKind::takes_focus`).
+pub fn focus_home_tile_at(app: &mut App, x: u16, y: u16) {
+    let hit = app
+        .home_tile_rects()
+        .iter()
+        .position(|(_, rect, _)| rect.contains(Position::new(x, y)));
+    let Some(ordinal) = hit else {
+        return;
+    };
+    if ordinal == app.home.focus {
+        return;
+    }
+    if !app.home.arrange
+        && !app
+            .home
+            .rice
+            .root
+            .kind_at(ordinal)
+            .is_some_and(TileKind::takes_focus)
+    {
+        return;
+    }
+    app.home.focus = ordinal;
+    focus_moved(app);
+}
+
 /// Show the layout at `index` (`home_layouts`): the page as it is goes
 /// into its own slot first, so nothing arranged is lost (its chat tiles
 /// bound to no room pinned to the room of the moment, so the layout
 /// comes back where it was), then the slot becomes current and the page
 /// draws it. False past the end.
-pub(crate) fn load_layout(app: &mut App, index: usize) -> bool {
+fn load_layout(app: &mut App, index: usize) -> bool {
     if index >= app.home_layouts.count() {
         return false;
     }
@@ -177,10 +243,8 @@ pub(crate) fn load_layout(app: &mut App, index: usize) -> bool {
 /// The layout a digit 1-9 names, from `Ctrl+E` then the digit or from
 /// Alt+digit in one chord: loaded, and arrange mode left if it was on, or a
 /// banner when the slot is empty.
-pub(crate) fn load_layout_by_digit(app: &mut App, digit: u8) {
-    let Some(index) = usize::from(digit).checked_sub(1) else {
-        return;
-    };
+fn load_layout_by_digit(app: &mut App, digit: u8) {
+    let index = usize::from(digit - 1);
     if !load_layout(app, index) {
         app.banner = Some(Banner::info(LayoutsError::NoSuchLayout.message()));
         return;
@@ -207,7 +271,7 @@ fn show_current_layout(app: &mut App) {
 /// tiles bound to no room are pinned to the room of the moment first, in
 /// the slot left behind and in the new one, so both come back where they
 /// were.
-pub(crate) fn save_layout_as(app: &mut App, name: &str) -> Result<usize, LayoutsError> {
+fn save_layout_as(app: &mut App, name: &str) -> Result<usize, LayoutsError> {
     app.pin_unbound_chats_to_the_moment();
     app.home_layouts.store_current(app.home.rice.clone());
     let index = app.home_layouts.save_new(name, app.home.rice.clone())?;
@@ -318,6 +382,12 @@ fn handle_layout_list(app: &mut App, event: &ParsedInput) {
             if load_layout(app, selected) {
                 toggle_home_arrange(app);
             }
+        }
+        // Alt+digit, as the list's own note says: the list closes and that
+        // layout loads, the mode done with it.
+        (ParsedInput::AltDigit(digit), _) => {
+            app.layout_list = None;
+            load_layout_by_digit(app, *digit);
         }
         (_, Some(b'n')) => {
             if app.home_layouts.is_full() {
