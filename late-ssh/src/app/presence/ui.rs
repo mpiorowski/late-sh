@@ -1,6 +1,5 @@
-//! What the pages draw of presence: the view Home's tiles read, the
-//! pinned presence block (Home's presence tile),
-//! and the pulse tile.
+//! What the pages draw of presence: the view Home's tiles read, the pinned
+//! presence block (Home's presence tile), and the pulse tile.
 
 use late_core::models::presence_sample::HeadcountPoint;
 use ratatui::{
@@ -28,10 +27,9 @@ pub(crate) struct PresenceView<'a> {
     pub history: &'a [HeadcountPoint],
 }
 
-/// The pinned two-row presence block, Home's
-/// presence tile: row one is the online count (left) and the clock
-/// (right); row two is connected friends, an away one carrying the away
-/// glyph. Both rows always render so the panel list below never shifts.
+/// The pinned two-row presence block, Home's presence tile: row one is the
+/// online count (left) and the clock (right); row two is connected friends, an
+/// away one carrying the away glyph. Both rows always render so the panel list below never shifts.
 pub(crate) fn draw_core_block(
     frame: &mut Frame,
     area: Rect,

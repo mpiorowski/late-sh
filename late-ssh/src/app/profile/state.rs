@@ -6,8 +6,8 @@ use super::svc::{ProfileEvent, ProfileService, ProfileSnapshot};
 use crate::app::common::{primitives::Banner, theme};
 
 /// Outcome of one profile tick: the banner to surface plus whether a drained
-/// snapshot or event may have changed render-visible state (theme, layout
-/// layout, favorites).
+/// snapshot or event may have changed render-visible state (theme, layout,
+/// favorites).
 pub struct ProfileTick {
     pub banner: Option<Banner>,
     pub changed: bool,

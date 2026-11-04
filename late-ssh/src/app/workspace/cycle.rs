@@ -55,49 +55,49 @@ pub(crate) enum GameWorkspace {
 /// nothing on. The frame title's hop hint reads it too
 /// ([`title_offers_hop`]), so the hint and the key cannot drift.
 fn current_stop(app: &App) -> Option<GameWorkspace> {
-    match app.screen {
-        Screen::Dashboard => Some(GameWorkspace::Base),
+    let stop = match app.screen {
+        Screen::Dashboard => GameWorkspace::Base,
         Screen::DailyMatch => match app.daily.board.as_ref() {
-            Some(board) => Some(GameWorkspace::DailyBoard(board.match_id)),
-            None => Some(GameWorkspace::Base),
+            Some(board) => GameWorkspace::DailyBoard(board.match_id),
+            None => GameWorkspace::Base,
         },
         Screen::HouseTable => match app.house.open {
-            Some(table) => Some(GameWorkspace::HouseTable(table)),
-            None => Some(GameWorkspace::Base),
+            Some(table) => GameWorkspace::HouseTable(table),
+            None => GameWorkspace::Base,
         },
         Screen::Arcade => match app
             .is_playing_game
             .then(|| active_daily_stop(app))
             .flatten()
         {
-            Some(stop) => Some(GameWorkspace::Arcade(stop)),
-            None => None,
+            Some(stop) => GameWorkspace::Arcade(stop),
+            None => return None,
         },
         // A running roguelike reaches here through the detach path in
         // `App::handle_input` (backtick is otherwise forwarded raw to the
         // game); `set_screen` keeps the running state alive on the hop out.
         Screen::Nethack | Screen::Dcss | Screen::Brogue | Screen::Zork => {
-            Some(GameWorkspace::Door(app.screen))
+            GameWorkspace::Door(app.screen)
         }
         // An active Lateania world reaches here through the detach action in
         // `lateania::screen::handle_active_lateania_key`, which arms the
         // recency window first; the hop-out screen switch tears the session
         // down (autosave + world leave) rather than keeping it running.
         Screen::Lateania => match app.lateania_state.is_some() {
-            true => Some(GameWorkspace::Door(Screen::Lateania)),
-            false => None,
+            true => GameWorkspace::Door(Screen::Lateania),
+            false => return None,
         },
         // The two native remakes reach here through the backtick arm in their
         // own `screen::handle_key`. Nothing is armed first: their state
         // survives the hop (it keeps ticking off-screen), so being loaded is
         // itself the proof they are live.
         Screen::Darkroom => match app.darkroom_state.is_some() {
-            true => Some(GameWorkspace::Door(Screen::Darkroom)),
-            false => None,
+            true => GameWorkspace::Door(Screen::Darkroom),
+            false => return None,
         },
         Screen::GreenDragon => match app.greendragon_state.is_some() {
-            true => Some(GameWorkspace::Door(Screen::GreenDragon)),
-            false => None,
+            true => GameWorkspace::Door(Screen::GreenDragon),
+            false => return None,
         },
         // The realm board reaches here through the backtick arm in
         // `door::realm::input::handle_key`. Like the remakes, nothing is
@@ -105,17 +105,18 @@ fn current_stop(app: &App) -> Option<GameWorkspace> {
         // closes it), so an open board is itself the proof it is live, and
         // the hub's door list offers it back (`HubGame::Realm`).
         Screen::Realm => match app.realm.board.is_some() {
-            true => Some(GameWorkspace::Door(Screen::Realm)),
-            false => None,
+            true => GameWorkspace::Door(Screen::Realm),
+            false => return None,
         },
         // An open watch reaches here through its own key handler
         // (`door::spectate::input`); the hub proper and a preview never do.
         Screen::Games => match watch_key_on_hub(app) {
-            Some(key) => Some(GameWorkspace::Watch(key)),
-            None => None,
+            Some(key) => GameWorkspace::Watch(key),
+            None => return None,
         },
-        _ => None,
-    }
+        _ => return None,
+    };
+    Some(stop)
 }
 
 /// Whether the frame title names the hop: this screen answers backtick and

@@ -7,9 +7,9 @@
 // has, so the Home tile layouts are stored here rather than on the account: a
 // 50-column phone and a 200-column desktop on one account no longer overwrite
 // each other's pages. `settings` is empty for a key that has never been
-// configured, and an empty override means "inherit the account default". The Artboard content disclaimer lives here
-// for the same reason: the NSFW gate wants to be on at work and off at home on
-// one account.
+// configured, and an empty override means "inherit the account default". The
+// Artboard content disclaimer lives here for the same reason: the NSFW gate
+// wants to be on at work and off at home on one account.
 //
 // A key is not perfectly a device: one key copied to two machines, or a
 // forwarded agent, reads as one identity.

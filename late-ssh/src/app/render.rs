@@ -618,9 +618,9 @@ impl App {
         let quit_confirm_can_restart =
             self.show_quit_confirm && crate::app::handoff::svc::can_request_move(self);
         let banner = self.active_banner().cloned();
+        let title_offers_hop = crate::app::workspace::cycle::title_offers_hop(self);
         // First contact, stage 1 (`app/deadchannel/haunt`): a live glitch
         // burst swaps a clock character or two for the glyph alphabet.
-        let title_offers_hop = crate::app::workspace::cycle::title_offers_hop(self);
         let clock = crate::app::deadchannel::haunt::ui::apply_clock_glitch(
             &self.haunt,
             self.marquee_tick,
@@ -2130,21 +2130,18 @@ impl App {
             inner
         };
 
-        let content_area = inner;
         let foreground_overlay_open = ctx.foreground_overlay_open;
         // The tour stops that write into a real surface: the two modals take
         // the header themselves, the practice table and the dungeon fight
         // get it drawn across the top of the page.
         let tour_header = crate::app::clubhouse::ui::tour_header(
             ctx.clubhouse_state.tutorial,
-            crate::app::clubhouse::ui::table_stop(content_area, ctx.daily.practice_played()),
+            crate::app::clubhouse::ui::table_stop(inner, ctx.daily.practice_played()),
             ctx.clubhouse_state.tour_fight.won(),
         );
         let board_area = match (&tour_header, screen) {
-            (Some(header), Screen::DailyMatch | Screen::Games) => {
-                header.draw_above(frame, content_area)
-            }
-            (Some(_), _) | (None, _) => content_area,
+            (Some(header), Screen::DailyMatch | Screen::Games) => header.draw_above(frame, inner),
+            (Some(_), _) | (None, _) => inner,
         };
         match screen {
             // Home: its rail, chat and panels as tiles, inside the
@@ -2206,23 +2203,19 @@ impl App {
                     wall_tick: ctx.marquee_tick,
                     ascii_clock: ctx.ascii_clock,
                 };
-                crate::app::zen::ui::draw_rice(frame, content_area, view, home, terminal_images);
+                crate::app::zen::ui::draw_rice(frame, inner, view, home, terminal_images);
             }
             Screen::Artboard => {
                 if ctx.artboard_disclaimer_visible {
                     // The tour's own stop box offers show or skip; the
                     // page under it stays bare so no art shows.
                     if ctx.clubhouse_state.tutorial_forced_step().is_some() {
-                        frame.render_widget(ratatui::widgets::Clear, content_area);
+                        frame.render_widget(ratatui::widgets::Clear, inner);
                     } else {
-                        artboard::disclaimer::draw(
-                            frame,
-                            content_area,
-                            ctx.artboard_disclaimer_choices,
-                        );
+                        artboard::disclaimer::draw(frame, inner, ctx.artboard_disclaimer_choices);
                     }
                 } else if let Some(state) = ctx.dartboard_state {
-                    artboard::ui::draw_game(frame, content_area, state, ctx.artboard_interacting);
+                    artboard::ui::draw_game(frame, inner, state, ctx.artboard_interacting);
                 }
             }
             Screen::Calendars => crate::app::calendar::ui::draw(frame, inner, ctx.calendar),
@@ -2238,7 +2231,7 @@ impl App {
                 if let Some(state) = ctx.spectate_state {
                     crate::app::door::spectate::ui::draw(
                         frame,
-                        content_area,
+                        inner,
                         &crate::app::door::spectate::ui::SpectateView {
                             state,
                             row: state
@@ -2261,7 +2254,7 @@ impl App {
                     .and_then(|state| state.row_in(&ctx.live_rows));
                 crate::app::door::hub::ui::draw_games_hub(
                     frame,
-                    content_area,
+                    inner,
                     &crate::app::door::hub::ui::HubView {
                         roster: ctx.games_hub_roster,
                         selected: ctx.games_hub_selected,
@@ -2305,7 +2298,7 @@ impl App {
                 );
                 if let (Some(state), Some(pane)) = (
                     ctx.spectate_state,
-                    crate::app::door::hub::ui::watch_pane_area(content_area),
+                    crate::app::door::hub::ui::watch_pane_area(inner),
                 ) {
                     crate::app::door::spectate::ui::draw(
                         frame,
@@ -2323,7 +2316,7 @@ impl App {
             Screen::Lateania => {
                 crate::app::door::lateania::screen::GAME.draw(
                     frame,
-                    content_area,
+                    inner,
                     &crate::app::door::lateania::screen::LateaniaScreenView {
                         delete_confirm: ctx.door_delete_confirm,
                         state: ctx.lateania_state,
@@ -2338,7 +2331,7 @@ impl App {
             Screen::GreenDragon => {
                 crate::app::door::greendragon::screen::GAME.draw(
                     frame,
-                    content_area,
+                    inner,
                     &crate::app::door::greendragon::screen::GreenDragonScreenView {
                         delete_confirm: ctx.door_delete_confirm,
                         state: ctx.greendragon_state,
@@ -2349,7 +2342,7 @@ impl App {
             Screen::Darkroom => {
                 crate::app::door::darkroom::screen::GAME.draw(
                     frame,
-                    content_area,
+                    inner,
                     &crate::app::door::darkroom::screen::DarkroomScreenView {
                         delete_confirm: ctx.door_delete_confirm,
                         state: ctx.darkroom_state,
@@ -2361,8 +2354,8 @@ impl App {
                 if let Some(state) = ctx.rebels_state {
                     // Size the proxy PTY to the exact widget area before blitting
                     // so the vt100 grid matches what we draw.
-                    state.set_viewport(content_area);
-                    crate::app::door::rebels::render::draw_page(frame, content_area, state);
+                    state.set_viewport(inner);
+                    crate::app::door::rebels::render::draw_page(frame, inner, state);
                 }
             }
             // The watchable doors: while F4 has the watchers' chat open over
@@ -2374,7 +2367,7 @@ impl App {
                     let (game_area, own_chat) = own_chat_split(
                         crate::app::door::spectate::state::SpectateGame::Nethack,
                         ctx.own_chat_open.is_some() && state.is_running(),
-                        content_area,
+                        inner,
                     );
                     // Size the child PTY to the exact widget area before blitting.
                     state.set_viewport(game_area);
@@ -2398,7 +2391,7 @@ impl App {
                     let (game_area, own_chat) = own_chat_split(
                         crate::app::door::spectate::state::SpectateGame::Dcss,
                         ctx.own_chat_open.is_some() && state.is_running(),
-                        content_area,
+                        inner,
                     );
                     // Size the child PTY to the exact widget area before blitting.
                     state.set_viewport(game_area);
@@ -2422,7 +2415,7 @@ impl App {
                     let (game_area, own_chat) = own_chat_split(
                         crate::app::door::spectate::state::SpectateGame::Brogue,
                         ctx.own_chat_open.is_some() && state.is_running(),
-                        content_area,
+                        inner,
                     );
                     // Size the child PTY to the exact widget area before blitting.
                     state.set_viewport(game_area);
@@ -2444,22 +2437,22 @@ impl App {
             Screen::Usurper => {
                 if let Some(state) = ctx.usurper_state.as_deref_mut() {
                     // Size the child PTY to the exact widget area before blitting.
-                    state.set_viewport(content_area);
-                    crate::app::door::usurper::render::draw_page(frame, content_area, state);
+                    state.set_viewport(inner);
+                    crate::app::door::usurper::render::draw_page(frame, inner, state);
                 }
             }
             Screen::Dopewars => {
                 if let Some(state) = ctx.dopewars_state {
                     // Size the child PTY to the exact widget area before blitting.
-                    state.set_viewport(content_area);
-                    crate::app::door::dopewars::render::draw_page(frame, content_area, state);
+                    state.set_viewport(inner);
+                    crate::app::door::dopewars::render::draw_page(frame, inner, state);
                 }
             }
             Screen::Bashquest => {
                 if let Some(state) = ctx.bashquest_state.as_deref_mut() {
                     // Size the child PTY to the exact widget area before blitting.
-                    state.set_viewport(content_area);
-                    crate::app::door::bashquest::render::draw_page(frame, content_area, state);
+                    state.set_viewport(inner);
+                    crate::app::door::bashquest::render::draw_page(frame, inner, state);
                 }
             }
             Screen::Zork => {
@@ -2469,7 +2462,7 @@ impl App {
                     let (game_area, own_chat) = own_chat_split(
                         crate::app::door::spectate::state::SpectateGame::Zork,
                         ctx.own_chat_open.is_some() && state.game_visible(),
-                        content_area,
+                        inner,
                     );
                     state.set_viewport(game_area);
                     crate::app::door::zork::render::draw_page(frame, game_area, state);
@@ -2491,14 +2484,14 @@ impl App {
             }
             Screen::Codekeep => {
                 if let Some(state) = ctx.codekeep_state {
-                    state.set_viewport(content_area);
-                    crate::app::door::codekeep::render::draw_page(frame, content_area, state);
+                    state.set_viewport(inner);
+                    crate::app::door::codekeep::render::draw_page(frame, inner, state);
                 }
             }
             Screen::Profiles => {
                 crate::app::directory::ui::draw_directory_page(
                     frame,
-                    content_area,
+                    inner,
                     crate::app::directory::ui::DirectoryPageView {
                         directory: ctx.directory_state,
                         jobs: ctx.jobs_state,
@@ -2523,7 +2516,7 @@ impl App {
                     .on(chrono::Utc::now().date_naive());
                 crate::app::arcade::ui::draw_arcade_hub(
                     frame,
-                    content_area,
+                    inner,
                     &crate::app::arcade::ui::ArcadeHubView {
                         game_selection: ctx.game_selection,
                         is_playing_game: ctx.is_playing_game,
@@ -2557,7 +2550,7 @@ impl App {
             }
             Screen::Leaderboard => crate::app::leaderboard::ui::draw(
                 frame,
-                content_area,
+                inner,
                 &crate::app::leaderboard::ui::LeaderboardPageView {
                     state: ctx.leaderboard_page,
                     data: ctx.leaderboard,
@@ -2566,7 +2559,7 @@ impl App {
             ),
             Screen::Clubhouse => crate::app::clubhouse::ui::draw(
                 frame,
-                content_area,
+                inner,
                 crate::app::clubhouse::ui::ClubhouseView {
                     state: ctx.clubhouse_state,
                     own_username: ctx.clubhouse_own_username,
@@ -2581,7 +2574,7 @@ impl App {
             ),
             Screen::City => crate::app::deadchannel::city::ui::draw(
                 frame,
-                content_area,
+                inner,
                 crate::app::deadchannel::city::ui::CityView {
                     state: ctx.city_state,
                     own_username: ctx.clubhouse_own_username,
@@ -2602,7 +2595,7 @@ impl App {
             ),
             Screen::Nightcap => crate::app::clubhouse::nightcap::ui::draw(
                 frame,
-                content_area,
+                inner,
                 crate::app::clubhouse::nightcap::ui::NightcapView {
                     state: ctx.nightcap_state,
                     messages: ctx.nightcap_messages,
@@ -2622,7 +2615,7 @@ impl App {
             ),
             Screen::Realm => crate::app::door::realm::ui::draw(
                 frame,
-                content_area,
+                inner,
                 ctx.realm,
                 ctx.realm_chat
                     .take()
@@ -2631,7 +2624,7 @@ impl App {
             ),
             Screen::HouseTable => crate::app::lobby::house::ui::draw(
                 frame,
-                content_area,
+                inner,
                 ctx.house.client(),
                 ctx.usernames,
                 ctx.house_chat_view.take(),
@@ -2639,7 +2632,7 @@ impl App {
             ),
             Screen::Scratchpad => {
                 if let Some(scratchpad) = ctx.scratchpad {
-                    crate::app::scratchpad::ui::draw(frame, content_area, scratchpad);
+                    crate::app::scratchpad::ui::draw(frame, inner, scratchpad);
                 }
             }
         }

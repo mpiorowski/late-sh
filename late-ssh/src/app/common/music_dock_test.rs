@@ -215,3 +215,29 @@ fn the_player_names_the_station_for_the_streams_that_have_one() {
     // YouTube plays the queue, not a station: one word.
     assert_eq!(station_text(AudioSource::Youtube, datawave), "youtube");
 }
+
+#[test]
+fn an_overflowing_friends_row_scrolls_only_while_the_presence_tile_is_up() {
+    let friends: Vec<ActiveFriend> = (0..8)
+        .map(|index| ActiveFriend {
+            user_id: uuid::Uuid::now_v7(),
+            username: format!("friend-number-{index}"),
+            audio_source: AudioSource::Radio,
+            online_since: std::time::Instant::now(),
+            away: false,
+        })
+        .collect();
+    let queue = empty_queue();
+    let inputs = |presence_visible| HomeMarqueeInputs {
+        presence_visible,
+        music_visible: false,
+        active_friends: &friends,
+        radio_now_playing: None,
+        selected_station: station("chillsynth"),
+        source: AudioSource::Radio,
+        queue: &queue,
+    };
+
+    assert!(home_marquee_scrolling(&inputs(true)));
+    assert!(!home_marquee_scrolling(&inputs(false)));
+}

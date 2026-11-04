@@ -41,13 +41,15 @@ const MARQUEE_QUEUE_RAIL_MIN: usize = MARQUEE_RAIL_MIN - 6;
 /// Inputs for [`home_marquee_scrolling`], mirroring what the draw path
 /// feeds its marquee rows.
 pub(crate) struct HomeMarqueeInputs<'a> {
+    /// Whether a presence tile, the friends row's only surface, is up.
+    pub presence_visible: bool,
     /// Whether a music tile is up on the current layout.
     pub music_visible: bool,
     pub active_friends: &'a [ActiveFriend],
     pub radio_now_playing: Option<&'a str>,
     pub selected_station: RadioStation,
     pub source: AudioSource,
-    pub queue: Option<&'a QueueSnapshot>,
+    pub queue: &'a QueueSnapshot,
 }
 
 /// True when any Home marquee row currently overflows its rail and is
@@ -59,10 +61,12 @@ pub(crate) struct HomeMarqueeInputs<'a> {
 pub(crate) fn home_marquee_scrolling(inputs: &HomeMarqueeInputs<'_>) -> bool {
     use crate::app::common::marquee::marquee_scrolls;
 
-    if marquee_scrolls(
-        &friend_names_joined(inputs.active_friends),
-        MARQUEE_RAIL_MIN,
-    ) {
+    if inputs.presence_visible
+        && marquee_scrolls(
+            &friend_names_joined(inputs.active_friends),
+            MARQUEE_RAIL_MIN,
+        )
+    {
         return true;
     }
     if !inputs.music_visible {
@@ -79,9 +83,7 @@ pub(crate) fn home_marquee_scrolling(inputs: &HomeMarqueeInputs<'_>) -> bool {
     {
         return true;
     }
-    let Some(queue) = inputs.queue else {
-        return false;
-    };
+    let queue = inputs.queue;
     if marquee_scrolls(&youtube_track_text(queue), MARQUEE_RAIL_MIN) {
         return true;
     }

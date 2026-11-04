@@ -1385,12 +1385,13 @@ impl App {
             let radio_now_playing = self.station_now_playing(selected_radio_station);
             let queue = self.audio.queue_snapshot();
             let inputs = crate::app::common::music_dock::HomeMarqueeInputs {
+                presence_visible: self.home.shows(crate::app::zen::state::TileKind::Presence),
                 music_visible: self.home.shows(crate::app::zen::state::TileKind::Music),
                 active_friends: &self.active_friends,
                 radio_now_playing: radio_now_playing.as_deref(),
                 selected_station: selected_radio_station,
                 source: self.paired_source,
-                queue: Some(&queue),
+                queue: &queue,
             };
             changed |= crate::app::common::music_dock::home_marquee_scrolling(&inputs);
         }

@@ -14,10 +14,7 @@ use crate::app::files::terminal_image::TerminalImageProtocol;
 use crate::app::help_modal::data::HelpTopic;
 use crate::app::statusline::bar::StatusClick;
 use crate::usernames::UsernameLookup;
-use ratatui::{
-    layout::Rect,
-    widgets::{Block, Borders},
-};
+use ratatui::layout::Rect;
 use std::{mem, time::Duration};
 use uuid::Uuid;
 use vte::{Params, Parser, Perform};
@@ -3089,11 +3086,6 @@ fn handle_status_bar_click(app: &mut App, mouse: MouseEvent) -> bool {
         }
     }
     true
-}
-
-pub(crate) fn app_content_area(app: &App) -> Rect {
-    let area = Rect::new(0, 0, app.size.0, app.size.1);
-    Block::default().borders(Borders::ALL).inner(area)
 }
 
 fn mouse_scroll_delta(mouse: MouseEvent) -> Option<isize> {
