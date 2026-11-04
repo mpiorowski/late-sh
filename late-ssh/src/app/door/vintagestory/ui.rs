@@ -68,7 +68,7 @@ pub fn draw_landing(frame: &mut Frame, area: Rect, scroll: u16) -> u16 {
         ),
         landing::stat(
             "mods",
-            "Carry On, ProspectTogether, Auto Map Markers, QP's Chisel Tools, VS Roofing, BetterRuins, A Wearable Light, BetterEr Prospecting, Prosequor, Pal's Enhanced Locusts, Cartographer; the game offers them when you join",
+            "Carry On, ProspectTogether, Auto Map Markers, QP's Chisel Tools, VS Roofing, BetterRuins, A Wearable Light, BetterEr Prospecting, Prosequor, Pal's Enhanced Locusts, Cartographer, Animal Cages, Purposeful Storage; the game offers them when you join",
             10,
         ),
         Line::from(""),

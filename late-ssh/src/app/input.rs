@@ -1098,10 +1098,7 @@ fn handle_parsed_input_inner(app: &mut App, event: ParsedInput) {
         }
         // Alt+digit is Home's (`zen::input::handle_home_event`, above);
         // every other page, and a composer being typed in, ignores it.
-        ParsedInput::AltA
-        | ParsedInput::AltC
-        | ParsedInput::AltK
-        | ParsedInput::AltDigit(_) => {}
+        ParsedInput::AltA | ParsedInput::AltC | ParsedInput::AltK | ParsedInput::AltDigit(_) => {}
         // F4 shows or hides the chat beside a game. Realm's own handler
         // takes it (above); an open watch's chat column takes it here, past
         // the composer gate, so F4 closes it from the composer too.
