@@ -679,6 +679,7 @@ async fn quit_routes_open_confirm_without_persisting_exit_command() {
 #[tokio::test]
 async fn backtick_detaches_a_running_roguelike_and_hops_back_in() {
     use crate::app::common::primitives::Screen;
+    use crate::app::door::nethack::proxy::ProxyStatus;
 
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "door-detach-flow").await;
@@ -721,12 +722,22 @@ async fn backtick_detaches_a_running_roguelike_and_hops_back_in() {
     app.handle_input(b"`");
     assert_eq!(app.screen, Screen::Nethack);
 
-    // Detach again, then let the fabricated proxy die (its bridge task fails
-    // to connect once polled): the next tick reaps the dead detached state so
-    // the hub card stops advertising a live game.
+    // Detach again and wait for the fabricated proxy's bridge to fail. Do not
+    // tick the app while waiting: the first tick after closure must reap the
+    // detached state and dirty the frame so the hub stops advertising it.
     app.handle_input(b"`");
     assert_eq!(app.screen, Screen::Dashboard);
-    tokio::time::sleep(Duration::from_millis(50)).await;
+    let proxy = app
+        .nethack_state
+        .as_ref()
+        .expect("detached nethack state")
+        .proxy()
+        .expect("running proxy");
+    wait_until(
+        || async { proxy.status() == ProxyStatus::Closed },
+        "detached NetHack proxy to close",
+    )
+    .await;
     assert!(
         app.tick(),
         "expected the reaping tick to dirty the frame so the hub pip clears"
