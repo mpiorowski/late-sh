@@ -39,7 +39,9 @@ two screens, and every file in depth.
   refused (`Refusal::CardWaiting`) and the road panel shows the two
   cards in place of the node under the cursor (`ui.rs::draft_lines`),
   `1` and `2` sending `Command::Draft { card }` (refused with a glyph
-  waiting, with nothing owed, or for a card not on offer). A mark and
+  waiting, with nothing owed, or for a card not on offer). An inked draft
+  asks nothing (`ui.rs::inked_draft_lines`): `1` takes both, sending the
+  first option as the pick, and `2` is swallowed. A mark and
   the ledge clear the picks with the level. The cards' numbers are
   shares of the strike and the block (`Rules::jab_percent` and its
   neighbours, carried on `Powers`), worked out in one place

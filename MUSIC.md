@@ -20,8 +20,9 @@ How the library ships:
 - Binaries live in Cloudflare R2 (the `MUSIC_BUCKET` GitHub variable), never
   in git. The manual `sync_music` workflow wipes and re-copies every genre
   directory onto the Liquidsoap PVC; it is never a side effect of an infra
-  deploy. A ConfigMap change (playlists, `radio.liq`, `icecast.xml`) rolls the
-  pods through `config_hash` annotations.
+  deploy. A change to the Icecast or Liquidsoap Secret (`icecast.xml`,
+  `radio.liq`, the passwords) or to the playlists ConfigMap rolls the pods
+  through the `config_hash` and `playlist_hash` annotations.
 - `radio.liq` plays each playlist through `mksafe` (silence, never a crash,
   when the PVC is empty), `mode="randomize"` with `check_next` guarding
   back-to-back repeats, and formats now-playing as `Artist - Title | Duration`

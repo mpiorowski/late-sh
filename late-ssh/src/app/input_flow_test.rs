@@ -7443,11 +7443,17 @@ async fn the_needle_leaves_the_page_digits_to_the_globals() {
 #[tokio::test]
 async fn the_needle_inks_the_picked_draft() {
     use crate::app::deadchannel::city::map::Landmark;
+    use crate::app::deadchannel::fight::cards::Card;
     use late_core::models::deadchannel_runner::DeadchannelRunner;
 
     let (test_db, mut app, user_id) =
         runner_on_the_street("undercity-needle-ink-it", 100, 30, |sheet| {
-            sheet.crystals = 20
+            // The needle only inks a draft this climb has reached, and with
+            // both picks taken no draft is owed.
+            sheet.level = 6;
+            sheet.peak_level = 6;
+            sheet.cards = vec![Card::Jab, Card::Riposte];
+            sheet.crystals = 20;
         })
         .await;
 

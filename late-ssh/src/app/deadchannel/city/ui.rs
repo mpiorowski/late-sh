@@ -36,7 +36,7 @@ use ratatui::{
     widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 
-use crate::app::deadchannel::fight::cards::DRAFTS;
+use crate::app::deadchannel::fight::cards::{DRAFTS, Draft};
 use crate::app::deadchannel::fight::data::{
     CART_CRYSTALS, CART_LEAD_CRYSTALS, DRINK_CRYSTALS, DRINK_SIGNAL_PER_LEVEL, GARNISH_PERCENT,
     LOAN_FEE_PERCENT, LOCKER_FEE_PERCENT, RULES, TRADE_IN_PERCENT, drink_edge, patch_rate,
@@ -2374,11 +2374,112 @@ fn bar_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     lines
 }
 
-/// INK: the crystals on hand, the marks, and the room the needle has
-/// left; a row per draft with its level, its two cards, and whether it
-/// is inked, priced, or short, the cursor on the picked one; then the key
-/// that inks the picked draft, or the needle's refusal in its row
-/// (`Sheet::needle_refused`, the order and the words `Command::Ink` uses).
+/// What the draft row says of its cards: what this climb holds and what
+/// an ink would bring.
+fn ink_row_cards(sheet: &Sheet, draft: &Draft) -> Vec<Span<'static>> {
+    let text = ink(INK);
+    let dim_text = ink(INK_DIM);
+    let [first, second] = draft.options;
+    match (
+        sheet.pick_at(draft.level),
+        sheet.inked(draft.level),
+        sheet.reached(draft.level),
+    ) {
+        (Some(pick), false, _) => vec![
+            Span::styled("you have ", dim_text),
+            fight_ui::card_mark(pick),
+            Span::styled(", ink adds ", dim_text),
+            fight_ui::card_mark(draft.other(pick)),
+        ],
+        (Some(pick), true, _) => vec![
+            Span::styled("you have ", text),
+            fight_ui::card_mark(pick),
+            Span::styled(" and ", text),
+            fight_ui::card_mark(draft.other(pick)),
+        ],
+        (None, true, _) => vec![
+            Span::styled("you get ", dim_text),
+            fight_ui::card_mark(first),
+            Span::styled(" and ", dim_text),
+            fight_ui::card_mark(second),
+            Span::styled(format!(" at level {}", draft.level), dim_text),
+        ],
+        (None, false, true) => vec![
+            fight_ui::card_mark(first),
+            Span::styled(" or ", dim_text),
+            fight_ui::card_mark(second),
+            Span::styled(", ink gets both", dim_text),
+        ],
+        (None, false, false) => vec![
+            fight_ui::card_mark(first),
+            Span::styled(" or ", dim_text),
+            fight_ui::card_mark(second),
+        ],
+    }
+}
+
+/// The row under the picked draft's rules: what it did to this climb's
+/// deck, or what it will, and what an ink changes.
+fn ink_draft_note(sheet: &Sheet, draft: &Draft) -> Vec<Span<'static>> {
+    let muted_text = ink(INK_MUTED);
+    let [first, second] = draft.options;
+    let level = draft.level;
+    let mut spans = vec![Span::styled("  ", muted_text)];
+    spans.extend(match (
+        sheet.pick_at(level),
+        sheet.inked(level),
+        sheet.reached(level),
+    ) {
+        (Some(pick), false, _) => vec![
+            Span::styled("you took ", muted_text),
+            fight_ui::card_mark(pick),
+            Span::styled(" over a ", muted_text),
+            fight_ui::card_mark(draft.replaces),
+            Span::styled(". ink it and ", muted_text),
+            fight_ui::card_mark(draft.other(pick)),
+            Span::styled(" joins your deck next fight.", muted_text),
+        ],
+        (Some(_), true, _) => vec![
+            fight_ui::card_mark(first),
+            Span::styled(" and ", muted_text),
+            fight_ui::card_mark(second),
+            Span::styled(" are both in your deck, in place of a ", muted_text),
+            fight_ui::card_mark(draft.replaces),
+            Span::styled(".", muted_text),
+        ],
+        (None, true, _) => vec![
+            Span::styled(
+                format!("at level {level} the road gives you both, in place of a "),
+                muted_text,
+            ),
+            fight_ui::card_mark(draft.replaces),
+            Span::styled(".", muted_text),
+        ],
+        (None, false, true) => vec![
+            Span::styled(
+                format!(
+                    "your level {level} pick is waiting. ink it first and you get both, in place of a "
+                ),
+                muted_text,
+            ),
+            fight_ui::card_mark(draft.replaces),
+            Span::styled(".", muted_text),
+        ],
+        (None, false, false) => vec![
+            Span::styled(format!("at level {level} you pick one, in place of a "), muted_text),
+            fight_ui::card_mark(draft.replaces),
+            Span::styled(". the needle opens then.", muted_text),
+        ],
+    });
+    spans
+}
+
+/// INK: the crystals on hand, the marks, and how many more the needle will
+/// take; a row per draft with its level, the card this climb holds and the
+/// one an ink adds, and whether it is inked, priced, short, or not reached,
+/// the cursor on the picked one; then the key that inks the picked draft,
+/// or the needle's refusal in its row (`Sheet::needle_refused`, the order
+/// and the words `Command::Ink` uses).
 fn ink_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     let text = ink(INK);
     let dim_text = ink(INK_DIM);
@@ -2402,11 +2503,10 @@ fn ink_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
         Span::styled(sheet.crystals.to_string(), number),
         Span::styled("      marks ", dim_text),
         Span::styled(sheet.marks.to_string(), number),
-        Span::styled("      the needle holds ", dim_text),
+        Span::styled("      you can ink ", dim_text),
         Span::styled(
             match sheet.ink_room() {
                 0 => "no more".to_string(),
-                1 => "1 more".to_string(),
                 n => format!("{n} more"),
             },
             text,
@@ -2422,6 +2522,9 @@ fn ink_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
             }
             Some((Refusal::FightWaiting | Refusal::NeedleWaits, _)) => {
                 (format!("for {price} crystals"), muted_text, false)
+            }
+            Some((Refusal::DraftAhead, _)) => {
+                (format!("opens at level {}", draft.level), muted_text, false)
             }
             Some((
                 Refusal::NoDraftThere
@@ -2458,11 +2561,11 @@ fn ink_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
             true => Span::styled("▸ ", key),
             false => Span::styled("  ", text),
         };
-        let [first, second] = draft.options;
         // The cards keep their neon whatever the needle says: a card is
-        // drawn one way everywhere. The column fits the widest pair.
-        let pair = first.marked().chars().count() + 3 + second.marked().chars().count();
-        lines.push(Line::from(vec![
+        // drawn one way everywhere. The column fits the widest row.
+        let cards = ink_row_cards(sheet, draft);
+        let width: usize = cards.iter().map(|span| span.content.chars().count()).sum();
+        let mut row = vec![
             marker,
             Span::styled(
                 format!("{:<10}", format!("level {}", draft.level)),
@@ -2471,12 +2574,11 @@ fn ink_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
                     false => dim_text,
                 },
             ),
-            fight_ui::card_mark(first),
-            Span::styled(" · ", dim_text),
-            fight_ui::card_mark(second),
-            Span::styled(" ".repeat(24 - pair), text),
-            Span::styled(status, style),
-        ]));
+        ];
+        row.extend(cards);
+        row.push(Span::styled(" ".repeat(44 - width), text));
+        row.push(Span::styled(status, style));
+        lines.push(Line::from(row));
     }
     lines.push(Line::default());
     // What the picked draft's two cards do, in two rows that are always
@@ -2489,15 +2591,7 @@ fn ink_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
             Span::styled(card.rule(), dim_text),
         ]));
     }
-    lines.push(Line::from(vec![
-        Span::styled("  ", text),
-        Span::styled(
-            format!("the level {} draft takes the place of a ", picked.level),
-            muted_text,
-        ),
-        fight_ui::card_mark(picked.replaces),
-        Span::styled(". inked, the other comes in too.", muted_text),
-    ]));
+    lines.push(Line::from(ink_draft_note(sheet, picked)));
     lines.push(Line::default());
     lines.push(Line::from(vec![
         Span::styled("[↑↓] ", key),
@@ -2508,22 +2602,36 @@ fn ink_lines(view: &CityView<'_>) -> Vec<Line<'static>> {
     // keeps its rows whatever the needle says.
     lines.push(match sheet.needle_refused(&RULES, picked.level) {
         None => {
-            let [first, second] = picked.options;
-            Line::from(vec![
+            let mut row = vec![
                 Span::styled("[i] ", key),
                 Span::styled("ink", action()),
                 Span::styled(" ", text),
-                fight_ui::card_mark(first),
-                Span::styled(" and ", text),
-                fight_ui::card_mark(second),
-                Span::styled(" for ", text),
-                Span::styled(format!("{price} crystals"), number),
-            ])
+            ];
+            let [first, second] = picked.options;
+            row.extend(match sheet.pick_at(picked.level) {
+                Some(pick) => vec![
+                    fight_ui::card_mark(picked.other(pick)),
+                    Span::styled(" beside your ", text),
+                    fight_ui::card_mark(pick),
+                ],
+                None => vec![
+                    fight_ui::card_mark(first),
+                    Span::styled(" and ", text),
+                    fight_ui::card_mark(second),
+                ],
+            });
+            row.push(Span::styled(" for ", text));
+            row.push(Span::styled(format!("{price} crystals"), number));
+            Line::from(row)
         }
         Some((_, line)) => Line::from(fight_ui::card_marked(&line, text)),
     });
     lines.push(Line::from(Span::styled(
-        "a draft inked is both its cards from its level on, this climb and every one after. one draft a mark, and one more.",
+        "inked is for good. a mark takes your cards, but each climb gives you both at that level.",
+        dim_text,
+    )));
+    lines.push(Line::from(Span::styled(
+        "you can hold one ink, plus one per mark, four at most. only drafts you have reached.",
         dim_text,
     )));
     lines

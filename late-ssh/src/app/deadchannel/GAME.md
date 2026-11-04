@@ -1421,7 +1421,8 @@ fight, spent on things gold could not buy. Both answers are in:
   crystals buy that the mark does not take back, so the choice is this
   climb (a blade now, a glass tonight) against every climb after. The
   needle takes one draft for every mark held, and one more: a first
-  climb inks one, a mark opens the next, four in all. Not stats: a
+  climb inks one, a mark opens the next, four in all, and only a draft
+  the climb has reached: an ink that pays nothing yet is a trap. Not stats: a
   second system paying the number the mark already pays would be the
   mark done twice. Measured on the key, where the days a drop costs
   are the only days a wider deck can save: the second climb marks a day
@@ -1674,7 +1675,8 @@ every runner new cards to play with and keeps one deck to tune.
 
 - **Four drafts, two cards each, the same for everybody.** At levels 3,
   6, 9, and 12 a new card is waiting on the road: one of two, and the
-  road waits until it is taken (`1` or `2`). "What did you take at
+  road waits until it is taken (`1` or `2`; an inked draft asks nothing,
+  and `1` takes both). "What did you take at
   nine" is a thing the wire can ask, because everybody was asked the
   same question.
 - **The deck stays ten.** The card goes in over a strike or a block,

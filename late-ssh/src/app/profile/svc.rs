@@ -129,6 +129,16 @@ pub enum ProfileEvent {
         user_id: Uuid,
         message: String,
     },
+    /// The database turned `refused_username` down. Every save carries the
+    /// whole draft, so a draft still holding the refused name would fail every
+    /// later save too: it goes back to `kept_username`, the name the account
+    /// still has. A draft that has moved on to another name keeps it.
+    UsernameRefused {
+        user_id: Uuid,
+        refused_username: String,
+        kept_username: String,
+        message: String,
+    },
     /// Current IRC token status for the settings Account tab. `status` is
     /// `None` when no token is minted. See devdocs/FRD-IRCD.md §5.
     IrcTokenStatus {
@@ -505,16 +515,32 @@ impl ProfileService {
             async move {
                 loop {
                     let params = pending.borrow_and_update().clone();
-                    if let Err(e) = service.do_edit_profile(user_id, params).await {
-                        late_core::error_span!(
-                            "profile_edit_failed",
-                            error = ?e,
-                            "failed to edit profile"
-                        );
-                        service.publish_event(ProfileEvent::Error {
-                            user_id,
-                            message: profile_error_message(&e).to_string(),
-                        });
+                    match service.do_edit_profile(user_id, params).await {
+                        Ok(ProfileEdit::Saved) => {}
+                        Ok(ProfileEdit::UsernameRefused {
+                            refused_username,
+                            kept_username,
+                            refusal,
+                        }) => {
+                            tracing::warn!(?refusal, "profile edit refused");
+                            service.publish_event(ProfileEvent::UsernameRefused {
+                                user_id,
+                                refused_username,
+                                kept_username,
+                                message: refusal.message().to_string(),
+                            });
+                        }
+                        Err(e) => {
+                            late_core::error_span!(
+                                "profile_edit_failed",
+                                error = ?e,
+                                "failed to edit profile"
+                            );
+                            service.publish_event(ProfileEvent::Error {
+                                user_id,
+                                message: "Could not save profile. Please try again.".to_string(),
+                            });
+                        }
                     }
                     // Share the enqueue lock so a new draft cannot arrive
                     // between checking for work and retiring this writer.
@@ -530,14 +556,31 @@ impl ProfileService {
     }
 
     #[tracing::instrument(skip(self, params), fields(user_id = %user_id))]
-    async fn do_edit_profile(&self, user_id: Uuid, mut params: ProfileParams) -> Result<()> {
+    async fn do_edit_profile(
+        &self,
+        user_id: Uuid,
+        mut params: ProfileParams,
+    ) -> Result<ProfileEdit> {
         let client = self.db.get().await?;
         params.username = sanitize_username_input(&params.username);
         let old_username = User::get(&client, user_id)
             .await?
             .map(|user| user.username)
             .ok_or_else(|| anyhow::anyhow!("user not found"))?;
-        let profile = Profile::update(&client, user_id, params).await?;
+        let wanted_username = params.username.clone();
+        let profile = match Profile::update(&client, user_id, params).await {
+            Ok(profile) => profile,
+            Err(error) => {
+                return match UsernameRefusal::of(&error) {
+                    Some(refusal) => Ok(ProfileEdit::UsernameRefused {
+                        refused_username: wanted_username,
+                        kept_username: old_username,
+                        refusal,
+                    }),
+                    None => Err(error),
+                };
+            }
+        };
 
         if let Ok(mut username_map) = User::list_usernames_by_ids(&client, &[user_id]).await
             && let Some(username) = username_map.remove(&user_id)
@@ -559,7 +602,7 @@ impl ProfileService {
 
         self.find_profile(user_id);
         self.publish_event(ProfileEvent::Saved { user_id });
-        Ok(())
+        Ok(ProfileEdit::Saved)
     }
 
     pub fn set_theme_id(&self, user_id: Uuid, theme_id: String) {
@@ -1180,18 +1223,36 @@ fn should_prune_snapshot_sender(sender: &watch::Sender<ProfileSnapshot>) -> bool
     sender.is_closed() || sender.receiver_count() <= 1
 }
 
-fn profile_error_message(error: &anyhow::Error) -> &'static str {
-    let Some(db_error) = error.downcast_ref::<tokio_postgres::Error>() else {
-        return "Could not save profile. Please try again.";
-    };
-    let Some(sql_state) = db_error.code() else {
-        return "Could not save profile. Please try again.";
-    };
+enum ProfileEdit {
+    Saved,
+    UsernameRefused {
+        refused_username: String,
+        kept_username: String,
+        refusal: UsernameRefusal,
+    },
+}
 
-    match *sql_state {
-        SqlState::UNIQUE_VIOLATION => "That username is already taken.",
-        SqlState::CHECK_VIOLATION => "Username must be between 1 and 32 characters.",
-        _ => "Could not save profile. Please try again.",
+#[derive(Clone, Copy, Debug)]
+enum UsernameRefusal {
+    Taken,
+    BadLength,
+}
+
+impl UsernameRefusal {
+    fn of(error: &anyhow::Error) -> Option<Self> {
+        let sql_state = error.downcast_ref::<tokio_postgres::Error>()?.code()?;
+        match *sql_state {
+            SqlState::UNIQUE_VIOLATION => Some(Self::Taken),
+            SqlState::CHECK_VIOLATION => Some(Self::BadLength),
+            _ => None,
+        }
+    }
+
+    fn message(self) -> &'static str {
+        match self {
+            Self::Taken => "That username is already taken.",
+            Self::BadLength => "Username must be between 1 and 32 characters.",
+        }
     }
 }
 

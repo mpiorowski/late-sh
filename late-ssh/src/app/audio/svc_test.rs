@@ -1,5 +1,8 @@
 use crate::{
-    app::audio::{svc::AudioService, youtube::YoutubeVideo},
+    app::audio::{
+        svc::{AudioService, BoothRefusal},
+        youtube::YoutubeVideo,
+    },
     paired_clients::PairedClientRegistry,
 };
 use late_core::{
@@ -108,7 +111,10 @@ async fn force_skip_stale_memory_does_not_mutate_already_played_row() {
         .force_skip()
         .await
         .expect_err("stale skip should ask for retry after reconcile");
-    assert!(format!("{err:#}").contains("track changed"));
+    assert_eq!(
+        err.downcast_ref::<BoothRefusal>(),
+        Some(&BoothRefusal::TrackChanged)
+    );
 
     let client = test.db.get().await.expect("db client");
     let first_row = MediaQueueItem::find_by_id(&client, first.id)
@@ -151,13 +157,19 @@ async fn submitting_a_track_already_in_the_queue_is_rejected() {
         .submit_validated_video(user.id, test_video("eeeeeeeeeee", "now playing"))
         .await
         .expect_err("the playing track must not queue again");
-    assert!(format!("{playing_again:#}").contains("already in the queue"));
+    assert_eq!(
+        playing_again.downcast_ref::<BoothRefusal>(),
+        Some(&BoothRefusal::AlreadyQueued)
+    );
 
     let queued_again = service
         .submit_validated_video(user.id, test_video("fffffffffff", "up next"))
         .await
         .expect_err("a queued track must not queue twice");
-    assert!(format!("{queued_again:#}").contains("already in the queue"));
+    assert_eq!(
+        queued_again.downcast_ref::<BoothRefusal>(),
+        Some(&BoothRefusal::AlreadyQueued)
+    );
 
     let client = test.db.get().await.expect("db client");
     let snapshot = MediaQueueItem::list_snapshot(&client, 10)
@@ -213,7 +225,10 @@ async fn a_favorite_requeues_after_its_history_row_is_gone_for_its_owner_only() 
         .requeue_track(other.id, RequeueSource::Favorite(favorite.id))
         .await
         .expect_err("another listener's favorite");
-    assert!(format!("{foreign:#}").contains("favorite not found"));
+    assert_eq!(
+        foreign.downcast_ref::<BoothRefusal>(),
+        Some(&BoothRefusal::FavoriteGone)
+    );
 
     let response = service
         .requeue_track(owner.id, RequeueSource::Favorite(favorite.id))

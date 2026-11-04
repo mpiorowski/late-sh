@@ -2,11 +2,14 @@ pub mod config;
 pub mod error;
 #[cfg(test)]
 mod error_test;
+#[cfg(test)]
+mod lib_test;
 mod metrics;
 mod pages;
 
 use axum::{
     Router,
+    http::StatusCode,
     middleware::{self},
     response::IntoResponse,
     routing::get,
@@ -28,7 +31,14 @@ pub fn app(state: AppState) -> Router {
         .nest_service("/static", ServeDir::new("late-web/static"))
         .fallback(get(fallback_handler))
         .layer(middleware::from_fn(http_telemetry_middleware))
+        // After the layer on purpose: the kubelet probes this every 5 s, and
+        // that should cost neither a span nor a landing page view.
+        .route("/health", get(health_handler))
         .with_state(state)
+}
+
+async fn health_handler() -> StatusCode {
+    StatusCode::OK
 }
 
 async fn fallback_handler() -> impl IntoResponse {

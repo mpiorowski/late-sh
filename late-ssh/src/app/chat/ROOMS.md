@@ -85,7 +85,7 @@ Hub Shop room effects add render-time top sections in the cozy room rail. Active
 RSS:
 - RSS subscriptions are per-user and managed in `Settings -> RSS`.
 - `rss_feeds` stores connected RSS/Atom URLs; `rss_entries` stores private pending entries.
-- The background `FeedService` polls active feeds, parses a conservative RSS/Atom subset, stores unseen entries, and publishes per-user events.
+- The background `FeedService` polls the active feeds whose owner logged in within 14 days (`users.last_seen`, set at login, so a session held open longer than that is skipped too until its next login), parses a conservative RSS/Atom subset, stores unseen entries, keeps the newest 100 per feed by publish date (an item a feed keeps listing past those is pruned and not stored again), and publishes per-user events.
 - Feed URLs are user-supplied, so fetches go through the SSRF-guarded downloader (`files::image_upload::download_url_bytes_following_redirects`): private/link-local/reserved resolved IPs rejected, DNS pinned, every redirect hop re-validated (up to 5 hops; feeds legitimately redirect), 1 MB body cap. Do not swap in a plain `reqwest::Client`.
 - The visible entry list is capped per feed (`PER_FEED_ENTRY_LIMIT`, 20) inside the flat `ENTRY_LIMIT` (100) window via `RssEntry::list_visible_for_user`, so a high-volume feed (news site, ~20 posts/day) cannot evict weekly/monthly feeds from the inbox.
 - The RSS synthetic room (`RoomSlot::Feeds`) is private. Press `s` on an entry to share it through `ArticleService::process_url`; only then does it become a public News article (and post its #lounge card), and only then does it pay the share reward (see `CONTEXT.md` §11 News).

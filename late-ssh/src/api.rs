@@ -676,7 +676,7 @@ async fn ws_handler(
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     }
     if !state.session_registry.has_session(&params.token).await {
-        tracing::warn!(
+        tracing::info!(
             ip = %client_ip,
             peer_ip = %peer_addr.ip(),
             token_hint = %token_hint,
@@ -879,7 +879,7 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State, clien
                 let msg = match msg {
                     Ok(m) => m,
                     Err(e) => {
-                        tracing::warn!(token_hint = %token_hint, error = ?e, "websocket dirty close or error");
+                        tracing::info!(token_hint = %token_hint, error = ?e, "websocket dirty close or error");
                         break;
                     }
                 };

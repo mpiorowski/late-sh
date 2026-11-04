@@ -2,6 +2,7 @@ use super::*;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 
+use crate::app::deadchannel::fight::cards::Card;
 use crate::app::deadchannel::fight::state::{Lookout, Sheet};
 use crate::app::deadchannel::guide::state::State as GuideState;
 use crate::app::deadchannel::poster::session::Bench;
@@ -418,11 +419,11 @@ fn dead_air_prices_the_menu_and_says_why_it_would_not_pour() {
     );
 }
 
-/// INK lists every draft with its two cards, says which are inked, prices
-/// the rest, and offers the key for the picked draft, or spells out why
-/// the needle would not take it in the key's row.
+/// INK shows what each draft holds this climb and what an ink adds, prices
+/// what the needle would take, closes what the climb has not reached, and
+/// offers the key for the picked draft, or spells out why it would not.
 #[test]
-fn ink_lists_the_drafts_and_says_what_the_needle_will_take() {
+fn ink_shows_what_you_hold_and_what_the_needle_will_add() {
     let mut state = State::new();
     state.open_panel(Landmark::Ink);
     state.pick_draft_down();
@@ -433,61 +434,73 @@ fn ink_lists_the_drafts_and_says_what_the_needle_will_take() {
     sheet.level = 7;
     sheet.signal = 70;
     sheet.crystals = 12;
+    sheet.cards = vec![Card::Jab, Card::Riposte];
     let screen = render_with_sheet(&state, &sheet, None);
     assert!(screen.contains(" ink "), "{screen}");
-    assert!(
-        screen.contains("crystals 12      marks 0      the needle holds 1 more"),
-        "{screen}"
-    );
-    assert!(
-        screen.contains("  level 3   ‹jab› · ‹brace›         for 10 crystals"),
-        "{screen}"
-    );
-    assert!(
-        screen.contains("▸ level 6   ‹riposte› · ‹bulwark›   for 10 crystals"),
-        "the cursor on the level 6 draft\n{screen}"
-    );
-    assert!(screen.contains("[↑↓] pick a draft"), "{screen}");
-    assert!(
-        screen.contains("[i] ink ‹riposte› and ‹bulwark› for 10 crystals"),
-        "{screen}"
-    );
-    // What the picked draft's cards do, in rows that are always there.
     for text in [
+        "crystals 12      marks 0      you can ink 1 more",
+        "  level 3   you have ‹jab›, ink adds ‹brace›            for 10 crystals",
+        "▸ level 6   you have ‹riposte›, ink adds ‹bulwark›      for 10 crystals",
+        "  level 9   ‹burn› or ‹ground›                          opens at level 9",
+        "  level 12  ‹sever› or ‹mute›                           opens at level 12",
+        "[↑↓] pick a draft",
+        "[i] ink ‹bulwark› beside your ‹riposte› for 10 crystals",
         "  ‹riposte›  hits for a block and a half plus all the block you have up",
         "  ‹bulwark›  two energy. holds two blocks and a half",
-        "the level 6 draft takes the place of a ‹block›. inked, the other comes in too.",
+        "you took ‹riposte› over a ‹block›. ink it and ‹bulwark› joins your deck next fight.",
+        "inked is for good. a mark takes your cards, but each climb gives you both at that level.",
+        "you can hold one ink, plus one per mark, four at most. only drafts you have reached.",
     ] {
         assert!(screen.contains(text), "{text}\n{screen}");
     }
     // The panel's foot, the row its bottom border is on.
     let foot = |screen: &str| screen.lines().position(|row| row.contains(" Esc closes "));
+
+    // A draft the climb has not reached is closed, with the reason in the
+    // key's row, whatever the crystals.
     state.pick_draft_down();
-    let moved = render_with_sheet(&state, &sheet, None);
-    assert!(
-        moved.contains("  ‹burn›     free. +2 energy, and +1 per static card in hand, burned"),
-        "the rows follow the cursor\n{moved}"
-    );
+    let ahead = render_with_sheet(&state, &sheet, None);
+    for text in [
+        "  ‹burn›     free. +2 energy, and +1 per static card in hand, burned",
+        "at level 9 you pick one, in place of a ‹strike›. the needle opens then.",
+        "you have not reached level 9. the needle waits until you do.",
+    ] {
+        assert!(ahead.contains(text), "{text}\n{ahead}");
+    }
+    assert!(!ahead.contains("[i] ink"), "{ahead}");
     assert_eq!(
-        foot(&moved),
+        foot(&ahead),
         foot(&screen),
-        "the cursor never changes the panel's size\n{moved}"
+        "the cursor never changes the panel's size\n{ahead}"
     );
+
+    // Reached with the pick still waiting, the ink is for both.
+    sheet.level = 9;
+    let waiting = render_with_sheet(&state, &sheet, None);
+    for text in [
+        "▸ level 9   ‹burn› or ‹ground›, ink gets both           for 10 crystals",
+        "your level 9 pick is waiting. ink it first and you get both, in place of a ‹strike›.",
+        "[i] ink ‹burn› and ‹ground› for 10 crystals",
+    ] {
+        assert!(waiting.contains(text), "{text}\n{waiting}");
+    }
+    assert_eq!(foot(&waiting), foot(&screen), "{waiting}");
+    sheet.level = 7;
     state.pick_draft_up();
 
     sheet.inks = vec![6];
     sheet.crystals = 4;
     let inked = render_with_sheet(&state, &sheet, None);
-    assert!(
-        inked.contains("▸ level 6   ‹riposte› · ‹bulwark›   inked"),
-        "{inked}"
-    );
-    assert!(inked.contains("the needle holds no more"), "{inked}");
-    assert!(
-        inked.contains("the level 6 draft is already in your skin."),
-        "the refusal in the key's row\n{inked}"
-    );
+    for text in [
+        "▸ level 6   you have ‹riposte› and ‹bulwark›            inked",
+        "you can ink no more",
+        "‹riposte› and ‹bulwark› are both in your deck, in place of a ‹block›.",
+        "the level 6 draft is already in your skin.",
+    ] {
+        assert!(inked.contains(text), "{text}\n{inked}");
+    }
     assert!(!inked.contains("[i] ink"), "{inked}");
+    assert_eq!(foot(&inked), foot(&screen), "{inked}");
 
     state.pick_draft_up();
     let full = render_with_sheet(&state, &sheet, None);
@@ -499,7 +512,9 @@ fn ink_lists_the_drafts_and_says_what_the_needle_will_take() {
     sheet.marks = 1;
     let short = render_with_sheet(&state, &sheet, None);
     assert!(
-        short.contains("▸ level 3   ‹jab› · ‹brace›         for 10 crystals, 6 short"),
+        short.contains(
+            "▸ level 3   you have ‹jab›, ink adds ‹brace›            for 10 crystals, 6 short"
+        ),
         "{short}"
     );
     assert!(
@@ -507,6 +522,19 @@ fn ink_lists_the_drafts_and_says_what_the_needle_will_take() {
         "{short}"
     );
     assert!(!short.contains("bring it a mark"), "{short}");
+
+    // A new climb: the ink stands and the cards wait on the level.
+    sheet.level = 1;
+    sheet.signal = 10;
+    sheet.cards = Vec::new();
+    state.pick_draft_down();
+    let climb = render_with_sheet(&state, &sheet, None);
+    for text in [
+        "▸ level 6   you get ‹riposte› and ‹bulwark› at level 6  inked",
+        "at level 6 the road gives you both, in place of a ‹block›.",
+    ] {
+        assert!(climb.contains(text), "{text}\n{climb}");
+    }
 }
 
 /// The blade shop prices the next tier up in each slot in crystals, and

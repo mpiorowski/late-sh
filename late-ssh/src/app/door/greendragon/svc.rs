@@ -1634,7 +1634,7 @@ impl GreenDragonService {
                     left_over: left_over.max(0) as u64,
                 },
                 Err(e) => {
-                    tracing::warn!("greendragon fivesix settle failed: {e}");
+                    tracing::error!(error = ?e, "greendragon fivesix settle failed");
                     FiveSixLoad::Failed
                 }
             };

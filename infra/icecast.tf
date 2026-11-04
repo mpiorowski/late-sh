@@ -2,10 +2,13 @@
 # Icecast: Audio streaming server
 # =============================================================================
 
-resource "kubernetes_config_map_v1" "icecast_config" {
+# A Secret, not a ConfigMap: the rendered file holds all three passwords.
+resource "kubernetes_secret_v1" "icecast_config" {
   metadata {
     name = "icecast-config"
   }
+
+  type = "Opaque"
 
   data = {
     "icecast.xml" = replace(
@@ -41,7 +44,9 @@ resource "kubernetes_deployment_v1" "icecast" {
           app = "icecast"
         }
         annotations = {
-          config_hash = sha256(join("", values(kubernetes_config_map_v1.icecast_config.data)))
+          # The hash of a 32-character random password reveals nothing, and hiding
+          # it would mask the rollout diff in every plan.
+          config_hash = nonsensitive(sha256(join("", values(kubernetes_secret_v1.icecast_config.data))))
         }
       }
 
@@ -105,8 +110,8 @@ resource "kubernetes_deployment_v1" "icecast" {
         volume {
           name = "config"
 
-          config_map {
-            name = kubernetes_config_map_v1.icecast_config.metadata[0].name
+          secret {
+            secret_name = kubernetes_secret_v1.icecast_config.metadata[0].name
           }
         }
       }

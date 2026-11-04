@@ -452,6 +452,41 @@ async fn a_draft_is_taken_on_the_road_and_kept_on_the_row() {
     answered(&mut session).await;
 }
 
+/// An inked draft owed has one key: `2` sends nothing and stays off the
+/// page keys, `1` puts both cards in the deck and says so.
+#[tokio::test]
+async fn an_inked_draft_takes_both_on_one_key() {
+    let (test_db, mut session) = session_with_runner("fight-session-inked-draft").await;
+    session.step_up();
+    answered(&mut session).await;
+    let mut sheet = session.sheet.clone().expect("the mirror landed");
+    sheet.level = 3;
+    sheet.peak_level = 3;
+    sheet.signal = sheet.max_signal();
+    sheet.inks = vec![3];
+    let client = test_db.db.get().await.expect("db client");
+    DeadchannelRunner::store_sheet(&**client, sheet.to_write())
+        .await
+        .expect("the sheet stored");
+    session.reload();
+    answered(&mut session).await;
+    let draft = session.draft().expect("a draft owed");
+
+    assert!(session.take_card(1), "the key is swallowed");
+    assert_eq!(session.draft(), Some(draft), "and nothing was sent");
+
+    assert!(session.take_card(0));
+    answered(&mut session).await;
+    let sheet = session.sheet.clone().expect("the mirror");
+    assert_eq!(session.draft(), None);
+    assert_eq!(
+        session.till.as_deref(),
+        Some("‹jab› and ‹brace› are both in your deck now, in place of a ‹strike›.")
+    );
+    let deck = sheet.deck();
+    assert!(deck.contains(&draft.options[0]) && deck.contains(&draft.options[1]));
+}
+
 /// A crossing won against the session's runner, as the lookout would carry it.
 fn crossed_by_tom(id: u128) -> Ambush {
     let now = chrono::Utc::now();

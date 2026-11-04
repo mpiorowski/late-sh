@@ -5,11 +5,31 @@ use tracing_subscriber::{EnvFilter, Registry, layer::SubscriberExt, util::Subscr
 // init_telemetry
 // ---------------------------------------------------------------------------
 
+fn log_filter() -> EnvFilter {
+    let base = match EnvFilter::try_from_default_env() {
+        Ok(filter) => filter,
+        Err(_) => EnvFilter::new("info"),
+    };
+    quiet_noisy_targets(base)
+}
+
+/// russh WARNs every `winadj@putty.projects.tartarus.org` request, a PuTTY
+/// keepalive it already answers correctly, about 10,000 lines a day and more
+/// than half of all WARN. Its ERROR lines stay. This wins over `RUST_LOG` for
+/// that one target, so debugging russh means removing this line.
+fn quiet_noisy_targets(filter: EnvFilter) -> EnvFilter {
+    filter.add_directive(
+        "russh::server::encrypted=error"
+            .parse()
+            .expect("the directive is a valid literal"),
+    )
+}
+
 #[cfg(feature = "otel")]
 mod init {
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use super::{EnvFilter, Registry, SubscriberExt, SubscriberInitExt};
+    use super::{Registry, SubscriberExt, SubscriberInitExt, log_filter};
 
     use anyhow::anyhow;
     use opentelemetry::global;
@@ -70,7 +90,7 @@ mod init {
 
         if !enabled {
             Registry::default()
-                .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+                .with(log_filter())
                 .with(
                     tracing_subscriber::fmt::layer()
                         .with_file(true)
@@ -117,7 +137,7 @@ mod init {
 
         // Combine and set global subscriber
         Registry::default()
-            .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+            .with(log_filter())
             .with(
                 tracing_subscriber::fmt::layer()
                     .with_file(true)
@@ -138,14 +158,14 @@ mod init {
 
 #[cfg(not(feature = "otel"))]
 mod init {
-    use super::{EnvFilter, Registry, SubscriberExt, SubscriberInitExt};
+    use super::{Registry, SubscriberExt, SubscriberInitExt, log_filter};
 
     #[must_use]
     pub struct TelemetryGuard;
 
     pub fn init_telemetry(_service_name: &str) -> anyhow::Result<Option<TelemetryGuard>> {
         Registry::default()
-            .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
+            .with(log_filter())
             .with(
                 tracing_subscriber::fmt::layer()
                     .with_file(true)
@@ -177,7 +197,8 @@ pub async fn http_telemetry_middleware(req: Request, next: Next) -> Response {
         .extensions()
         .get::<MatchedPath>()
         .map(MatchedPath::as_str)
-        .unwrap_or(path.as_str())
+        // Never the raw path: scanner traffic would mint one span name per probe.
+        .unwrap_or("unmatched")
         .to_owned();
 
     #[cfg(feature = "otel")]

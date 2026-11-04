@@ -1,6 +1,14 @@
 use super::*;
 
 #[test]
+fn a_client_that_stops_draining_settles_to_the_idle_cadence() {
+    let retries: Vec<Duration> = (1..=5).map(retry_after_frame_drop).collect();
+    let hot = crate::app::tick::HOT_TICK;
+    let idle = crate::app::tick::IDLE_TICK;
+    assert_eq!(retries, [hot, hot, hot, idle, idle]);
+}
+
+#[test]
 fn reject_publickey_only_advertises_only_publickey() {
     match reject_publickey_only() {
         Auth::Reject {

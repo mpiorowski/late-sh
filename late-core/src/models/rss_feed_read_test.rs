@@ -34,6 +34,7 @@ async fn rss_feed_unread_uses_timestamp_cursor() {
                 shared_at: None,
                 dismissed_at: None,
             },
+            100,
         )
         .await
         .expect("create rss entry");
@@ -66,6 +67,7 @@ async fn rss_feed_unread_uses_timestamp_cursor() {
             shared_at: None,
             dismissed_at: None,
         },
+        100,
     )
     .await
     .expect("create rss entry after read");
@@ -110,6 +112,7 @@ async fn rss_visible_entries_cap_per_feed_so_quiet_feeds_survive() {
                 shared_at: None,
                 dismissed_at: None,
             },
+            100,
         )
         .await
         .expect("create loud entry");
@@ -127,6 +130,7 @@ async fn rss_visible_entries_cap_per_feed_so_quiet_feeds_survive() {
             shared_at: None,
             dismissed_at: None,
         },
+        100,
     )
     .await
     .expect("create quiet entry");
