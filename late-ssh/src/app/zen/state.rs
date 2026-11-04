@@ -1900,6 +1900,46 @@ impl ZenState {
         Some(self.active_chat_tile()?.0)
     }
 
+    /// Move the focus `delta` chat tiles along the layout, wrapping, past the
+    /// furniture. `false` when there is no other chat tile to move to.
+    pub fn focus_chat_step(&mut self, delta: isize) -> bool {
+        let tiles = self.chat_tiles();
+        let Some(active) = self.active_chat_index() else {
+            return false;
+        };
+        let next = (active as isize + delta).rem_euclid(tiles.len() as isize) as usize;
+        if next == active {
+            return false;
+        }
+        self.focus = tiles[next].0;
+        true
+    }
+
+    /// The chat tile that shows `target` (News or a room) while the active
+    /// one does not. A tile bound to no room shows wherever the rail goes, so
+    /// it never answers for a room by itself.
+    pub fn other_chat_tile_showing(
+        &self,
+        target: &ChatRoomBinding,
+        rooms: &[(ChatRoom, Vec<ChatMessage>)],
+    ) -> Option<usize> {
+        let shows = |bound: &ChatRoomBinding| match target {
+            ChatRoomBinding::News => matches!(bound, ChatRoomBinding::News),
+            ChatRoomBinding::Room(room_id) => bound
+                .joined_room(rooms)
+                .is_some_and(|room| room.id == *room_id),
+            ChatRoomBinding::Current | ChatRoomBinding::Permanent(_) => false,
+        };
+        if shows(&self.active_chat_room()?) {
+            return None;
+        }
+        let tile = self
+            .chat_tiles()
+            .into_iter()
+            .find(|(_, bound)| shows(bound))?;
+        Some(tile.0)
+    }
+
     /// Whether the keys belong to a chat tile: the focus is on one.
     pub fn chat_tile_focused(&self) -> bool {
         self.focused_kind() == Some(TileKind::Chat)

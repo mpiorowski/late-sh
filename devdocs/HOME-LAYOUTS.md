@@ -116,8 +116,8 @@ works.
 `Ctrl+E` leaves it. In arrange mode the focused tile gets a ring, the
 arrows and Tab walk every tile including furniture, and the layout keys
 edit the tree. Outside it the keys are Home's keys, unchanged, and Tab is
-the page cycle; focus between several chat tiles moves in arrange mode or
-by a click.
+the page cycle; focus between several chat tiles moves in arrange mode, by
+a click, or with `Alt+arrows`.
 
 **The frame stays.** Tabs, both status bars and the sponsor line are the
 frame, and the tiles live inside it. A boxed look is a toggle on the

@@ -508,7 +508,7 @@ fn empty_composer_placeholder(view: &ComposerBlockView<'_>, width: usize) -> Par
     match view.inert {
         ComposerInert::ZenTile => {
             return Paragraph::new(Line::from(Span::styled(
-                "A click focuses this tile · i writes",
+                "Alt+arrows or a click focus this tile · i writes",
                 dim,
             )));
         }

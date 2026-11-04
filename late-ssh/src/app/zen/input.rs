@@ -67,6 +67,20 @@ pub fn handle_home_event(app: &mut App, event: &ParsedInput) -> bool {
         load_layout_by_digit(app, *digit);
         return true;
     }
+    // Alt+arrows: the next or previous chat tile, the keyboard's click on
+    // one. Arrange mode's plain arrows already walk every tile, and a composer
+    // being typed in keeps these for its word jumps: the chat composer gates
+    // this handler in `app/input.rs`, the news composer and a feeds search
+    // are checked here. A room jump in progress is finished or cancelled
+    // first, so its labels never answer for another tile.
+    if let ParsedInput::AltArrow(key) = event
+        && !app.home.arrange
+        && !app.chat.room_jump_active
+        && !app.chat.news.composing()
+        && !app.chat.feeds.processing()
+    {
+        return hop_chat_tile(app, *key);
+    }
     if app.home.arrange {
         // The layouts list owns every key while it is up (Esc closes it
         // in `dispatch_escape`).
@@ -146,6 +160,21 @@ pub fn handle_home_key(app: &mut App, byte: u8) -> bool {
 /// Home's arrow keys outside arrange mode: the chat's.
 pub fn handle_home_arrow(app: &mut App, key: u8) -> bool {
     chat::input::handle_arrow(app, key)
+}
+
+/// Alt+arrows outside arrange mode: left and up go to the previous chat tile,
+/// right and down to the next, as arrange mode's arrows walk its tiles.
+fn hop_chat_tile(app: &mut App, key: u8) -> bool {
+    let delta = match key {
+        b'A' | b'D' => -1,
+        b'B' | b'C' => 1,
+        _ => return false,
+    };
+    if !app.home.focus_chat_step(delta) {
+        return false;
+    }
+    focus_moved(app);
+    true
 }
 
 /// Enter or leave Home's arrange mode. Either way the pickers close (the
@@ -857,11 +886,35 @@ pub(crate) fn bind_active_chat_to_room(app: &mut App, room_id: Uuid) -> bool {
     bind_active_chat(app, ChatRoomBinding::Room(room_id))
 }
 
-/// The `Ctrl+/` picker's pick, on Home: a room or News binds the active
-/// chat tile (a layout edit, saved, the rail following), as `[` `]` do;
-/// any other row (mentions, rss, browse) is a view the rail shows and the
-/// active tile draws while it is up, binding nothing. With no chat tile
-/// on the page the rail alone moves.
+/// A `Space` jump just moved the rail: when another chat tile already shows
+/// where it landed, the focus goes there and the active tile keeps its room.
+pub(crate) fn focus_chat_on_rail(app: &mut App) {
+    if let Some(target) = app.home_rail_binding() {
+        focus_chat_showing(app, &target);
+    }
+}
+
+/// Focus the chat tile already showing `target` rather than show it twice;
+/// `false` when none does, or while arranging, where a pick binds the focused
+/// tile whatever the others show.
+fn focus_chat_showing(app: &mut App, target: &ChatRoomBinding) -> bool {
+    if app.home.arrange {
+        return false;
+    }
+    let Some(ordinal) = app.home.other_chat_tile_showing(target, &app.chat.rooms) else {
+        return false;
+    };
+    app.home.focus = ordinal;
+    focus_moved(app);
+    true
+}
+
+/// The `Ctrl+/` picker's pick, on Home: a room or News another chat tile
+/// shows moves the focus there; otherwise it binds the active chat tile (a
+/// layout edit, saved, the rail following), as `[` `]` do. Any other row
+/// (mentions, rss, browse) is a view the rail shows and the active tile
+/// draws while it is up, binding nothing. With no chat tile on the page the
+/// rail alone moves.
 pub(crate) fn pick_for_active_chat(app: &mut App, slot: RoomSlot) {
     let binding = match slot {
         RoomSlot::Room(room_id) => Some(ChatRoomBinding::Room(room_id)),
@@ -877,7 +930,7 @@ pub(crate) fn pick_for_active_chat(app: &mut App, slot: RoomSlot) {
         | RoomSlot::Work => None,
     };
     let bound = match binding {
-        Some(binding) => bind_active_chat(app, binding),
+        Some(binding) => focus_chat_showing(app, &binding) || bind_active_chat(app, binding),
         None => false,
     };
     if !bound && app.chat.select_room_slot(slot) {
