@@ -746,7 +746,6 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
                 if changed {
                     app.chat.reset_composer();
                     crate::app::zen::input::focus_chat_on_rail(app);
-                    app.sync_visible_chat_room();
                     app.chat.request_list();
                 }
                 return true;

@@ -15,7 +15,7 @@ use uuid::Uuid;
 
 use super::attention::{Chore, Item as AttentionItem};
 use super::presets::{LayoutCommand, LayoutList, Layouts, LayoutsError, NameEdit};
-use super::state::ChatRoomBinding;
+use super::state::{ChatRoomBinding, ChatTileSource};
 use super::state::{
     Dir, GuestPick, KindPick, MAX_TILES, OnlyPick, TakenBy, TileHint, TileKey, TileKind,
 };
@@ -262,7 +262,7 @@ fn load_layout(app: &mut App, index: usize) -> bool {
     if index >= app.home_layouts.count() {
         return false;
     }
-    app.pin_unbound_chats_to_the_moment();
+    pin_unbound_chats_to_the_moment(app);
     app.home_layouts.store_current(app.home.rice.clone());
     app.home_layouts.switch(index);
     show_current_layout(app);
@@ -301,7 +301,7 @@ fn show_current_layout(app: &mut App) {
 /// the slot left behind and in the new one, so both come back where they
 /// were.
 fn save_layout_as(app: &mut App, name: &str) -> Result<usize, LayoutsError> {
-    app.pin_unbound_chats_to_the_moment();
+    pin_unbound_chats_to_the_moment(app);
     app.home_layouts.store_current(app.home.rice.clone());
     let index = app.home_layouts.save_new(name, app.home.rice.clone())?;
     app.home.set_stock(Layouts::stock_of(name));
@@ -725,7 +725,7 @@ fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
 /// rail row that is no room (mentions, rss) has nothing to keep it to, and the
 /// rail and the chats stay up in every room. `true` when the tile changed.
 fn toggle_only_here(app: &mut App) -> bool {
-    let Some(rail) = app.home_rail_binding() else {
+    let Some(rail) = home_rail_binding(app) else {
         app.banner = Some(Banner::info("Pick a room on the rail first"));
         return false;
     };
@@ -757,7 +757,7 @@ fn handle_kind_picker(app: &mut App, event: &ParsedInput) {
         (ParsedInput::Arrow(b'B'), _) | (_, Some(b'j')) => app.home.move_kind_picker(1),
         (_, Some(b'\r' | b'\n' | b' ')) => match app.home.pick_kind() {
             KindPick::Changed => {
-                app.pin_chat_tiles_on_pick();
+                pin_chat_tiles_on_pick(app);
                 app.sync_aquarium_bounds();
                 focus_moved(app);
                 app.mark_home_layout_dirty();
@@ -798,7 +798,7 @@ fn handle_guest_picker(app: &mut App, event: &ParsedInput) {
 /// the two must never differ.
 pub(crate) fn focus_moved(app: &mut App) {
     app.chat.clear_message_selection();
-    app.sync_rail_to_active_chat();
+    sync_rail_to_active_chat(app);
     if app.chat.composing && app.chat.composer_room_id() != app.home_chat_room_id() {
         app.chat.reset_composer();
     }
@@ -887,11 +887,14 @@ pub(crate) fn bind_active_chat_to_room(app: &mut App, room_id: Uuid) -> bool {
 }
 
 /// A `Space` jump just moved the rail: when another chat tile already shows
-/// where it landed, the focus goes there and the active tile keeps its room.
+/// where it landed, the focus goes there and the active tile keeps its room;
+/// otherwise the sync steers the active tile onto it. The focus moves first,
+/// or the steer would rebind the tile the jump began on.
 pub(crate) fn focus_chat_on_rail(app: &mut App) {
-    if let Some(target) = app.home_rail_binding() {
+    if let Some(target) = home_rail_binding(app) {
         focus_chat_showing(app, &target);
     }
+    app.sync_visible_chat_room();
 }
 
 /// Focus the chat tile already showing `target` rather than show it twice;
@@ -945,7 +948,7 @@ fn bind_active_chat(app: &mut App, binding: ChatRoomBinding) -> bool {
     }
     app.chat.reset_composer();
     app.chat.clear_message_selection();
-    app.sync_rail_to_active_chat();
+    sync_rail_to_active_chat(app);
     app.sync_visible_chat_room();
     app.mark_home_layout_dirty();
     true
@@ -957,4 +960,168 @@ fn event_byte(event: &ParsedInput) -> Option<u8> {
         ParsedInput::Char(ch) if ch.is_ascii() => Some(*ch as u8),
         _ => None,
     }
+}
+
+// Home's chat tiles and the rail, one policy: the rail follows the active
+// tile, the active tile remembers where the rail takes it, a tile that
+// would follow the rail is pinned to the room of the moment, and a tile
+// kept to a room goes down elsewhere. `App::sync_visible_chat_room` calls
+// `sync_chat_tiles_to_rail` on every input and tick; the rest runs from
+// the moves above.
+
+/// The active tile's binding and the kept tiles, brought up to the rail:
+/// the steer first, so a tile kept to the rail's room is judged against
+/// the binding it just took.
+pub(crate) fn sync_chat_tiles_to_rail(app: &mut App) {
+    steer_active_chat_from_rail(app);
+    sync_home_kept_tiles(app);
+}
+
+/// The rail follows the active chat tile: the focus landing on a
+/// chat tile bound to a room makes that room Home's selection, and on
+/// one holding News, the News row. A tile bound to no room shows the
+/// rail's room and moves nothing.
+pub(crate) fn sync_rail_to_active_chat(app: &mut App) {
+    let Some(bound) = app.home.active_chat_room() else {
+        return;
+    };
+    let slot = match &bound {
+        ChatRoomBinding::News => {
+            if app.chat.news_selected {
+                return;
+            }
+            RoomSlot::News
+        }
+        ChatRoomBinding::Current | ChatRoomBinding::Room(_) | ChatRoomBinding::Permanent(_) => {
+            let Some(room_id) = bound.joined_room(&app.chat.rooms).map(|room| room.id) else {
+                return;
+            };
+            if app.chat.selected_room_id == Some(room_id) && !app.chat.synthetic_entry_selected() {
+                return;
+            }
+            RoomSlot::Room(room_id)
+        }
+    };
+    if app.chat.select_room_slot(slot) {
+        app.chat.reset_composer();
+        app.chat.request_list();
+    }
+}
+
+/// A tile that just became a chat is pinned to the room of the moment,
+/// so it keeps it when the rail moves on; and so is every chat tile
+/// bound to no room, since a page with two chats has nothing left for
+/// a tile that follows the rail to show but the other tile's room.
+fn pin_chat_tiles_on_pick(app: &mut App) {
+    if app.home.focused_kind() != Some(TileKind::Chat) {
+        return;
+    }
+    pin_unbound_chats_to_the_moment(app);
+}
+
+/// A layout being left (another one loading, or the page saved under
+/// a new name) pins its chat tiles bound to no room to the room of the
+/// moment, so it comes back where it was instead of wherever the rail
+/// is by then. `true` when a tile changed.
+fn pin_unbound_chats_to_the_moment(app: &mut App) -> bool {
+    let Some(moment) = binding_of_the_moment(app) else {
+        return false;
+    };
+    app.home.pin_unbound_chats(moment)
+}
+
+/// The room of the moment as a binding: News while the rail shows it,
+/// else the current room (Home's selection when it is a real room,
+/// else #lounge). `None` before the rooms arrive.
+fn binding_of_the_moment(app: &App) -> Option<ChatRoomBinding> {
+    if app.chat.news_selected {
+        return Some(ChatRoomBinding::News);
+    }
+    home_current_room_id(app).map(ChatRoomBinding::Room)
+}
+
+/// The active chat tile remembers where the rail takes it: a bound
+/// tile is rebound to the room or the News row the rail moves to (a
+/// layout edit, saved), so the next focus on it, and the next load of
+/// its layout, come back there. The other synthetic rows (mentions,
+/// rss, browse) are views the tile shows while they are up, binding
+/// nothing; a tile bound to no room follows the rail as is until a
+/// pin (`pin_chat_tiles_on_pick`, `pin_unbound_chats_to_the_moment`)
+/// binds it. A slug binding whose room the rail is on is left as the
+/// slug, so the stock tree is not rewritten by looking at it.
+fn steer_active_chat_from_rail(app: &mut App) {
+    if !app.on_home() {
+        return;
+    }
+    let Some(moment) = home_rail_binding(app) else {
+        return;
+    };
+    let Some(bound) = app.home.active_chat_room() else {
+        return;
+    };
+    // `bound == moment` keeps a tile on a room the account has since
+    // left, which `shows` names for nothing.
+    if bound.is_current() || bound == moment || bound.shows(&moment, &app.chat.rooms) {
+        return;
+    }
+    if app.home.bind_active_chat_room(moment) {
+        app.mark_home_layout_dirty();
+    }
+}
+
+/// The rail's selection as a binding: News or a real room. `None` on the
+/// other synthetic rows (mentions, rss, browse) and before the rooms
+/// arrive.
+fn home_rail_binding(app: &App) -> Option<ChatRoomBinding> {
+    if app.chat.news_selected {
+        return Some(ChatRoomBinding::News);
+    }
+    app.home_chat_room_id().map(ChatRoomBinding::Room)
+}
+
+/// Note which of Home's tiles are kept to a room the page's chat is not
+/// in. Runs with the room (`sync_visible_chat_room`), so the page reflows
+/// as the messages change anyway. The reef's rect moves when it goes
+/// down or comes back, so the simulation is bound again.
+fn sync_home_kept_tiles(app: &mut App) {
+    let chat_room = app.home_chat_room_id();
+    let moved = app
+        .home
+        .sync_kept_away(app.chat.news_selected, chat_room, &app.chat.rooms);
+    if moved {
+        app.sync_aquarium_bounds();
+    }
+}
+
+/// What every chat tile draws, in layout order, resolved: a tile bound
+/// to a room the account has since left, or to a permanent room's slug
+/// the account's rooms do not hold, shows the current room instead;
+/// one holding News draws the News list. `None` is an account with no
+/// room at all.
+pub(crate) fn home_chat_rooms(app: &App) -> Vec<Option<ChatTileSource>> {
+    app.home
+        .chat_tiles()
+        .into_iter()
+        .map(|(_, bound)| match bound {
+            ChatRoomBinding::News => Some(ChatTileSource::News),
+            bound => home_room_or_current(app, &bound).map(ChatTileSource::Room),
+        })
+        .collect()
+}
+
+fn home_room_or_current(app: &App, bound: &ChatRoomBinding) -> Option<Uuid> {
+    match bound.joined_room(&app.chat.rooms) {
+        Some(room) => Some(room.id),
+        None => home_current_room_id(app),
+    }
+}
+
+/// The current room: Home's selection when it is a real room, else #lounge.
+fn home_current_room_id(app: &App) -> Option<Uuid> {
+    if !app.chat.synthetic_entry_selected()
+        && let Some(room_id) = app.chat.selected_room_id
+    {
+        return Some(room_id);
+    }
+    app.chat.lounge_room_id()
 }
