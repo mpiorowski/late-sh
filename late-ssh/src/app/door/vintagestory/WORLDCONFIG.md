@@ -79,7 +79,7 @@ terrain; any other seed is a different world:
   "saplingGrowthRate": "0.75",
   "microblockChiseling": "all",
   "deathPunishment": "keep",
-  "lightningFires": "true",
+  "lightningFires": "false",
   "temporalStorms": "off",
   "temporalRifts": "off",
   "colorAccurateWorldmap": "true",
@@ -107,17 +107,18 @@ The rest are unlocked, so `/worldconfig` can still move them on the live
 world: tools last 150%, saplings grow in 75% of the time
 (`saplingGrowthRate` is a growth time, so lower is faster), the chisel works
 on most cubic blocks instead of only stone and wood, a death keeps the
-inventory, lightning starts fires (they spread because `AllowFireSpread` is
-on in Terraform), no temporal storms or rifts for now (the stability meter
-itself stays on), the world map shows the real terrain colors, food
-spoils at a quarter of the normal rate (half the Exploration preset's), and
-months last 15 days instead of 9.
+inventory, lightning starts no fires (a fire from any other source still
+spreads, because `AllowFireSpread` is on in Terraform), no temporal storms or
+rifts for now (the stability meter itself stays on), the world map shows the
+real terrain colors, food spoils at a quarter of the normal rate (half the
+Exploration preset's), and months last 15 days instead of 9.
 Every perishable ages on the shared world clock, so food a player leaves in
 a chest or carries when logging out keeps rotting while others play; the
-slower rate softens that. `foodSpoilSpeed` and `daysPerMonth` were first set
-on the live save with `/worldconfig` and also written into the block on the
-volume by hand, so `/worldconfig <key>` on the console and the file agree on
-every key.
+slower rate softens that. `foodSpoilSpeed`, `daysPerMonth` and
+`lightningFires` were first set on the live save with `/worldconfig` and also
+written into the block on the volume by hand, so `/worldconfig <key>` on the
+console and the file agree on every key. `lightningFires` needed a restart to
+apply, which the console says when the key is set.
 
 A 15-day month is 12 real hours of the server being occupied and a year is 6
 days of it, since `PassTimeWhenEmpty` is off. 15 is not one of the

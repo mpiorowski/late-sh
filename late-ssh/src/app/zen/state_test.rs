@@ -1157,3 +1157,18 @@ fn a_tile_kept_away_is_off_the_page_until_arrange_mode() {
         (vec![false, false, false, false], true, true, true, 1)
     );
 }
+
+#[test]
+fn a_chat_step_needs_another_chat_tile_to_go_to() {
+    let mut one_chat = focused_on_first_tile(RiceLayout::home());
+    let chat = one_chat.first_tile_of(TileKind::Chat).expect("a chat");
+    one_chat.focus = chat;
+    assert!(!one_chat.focus_chat_step(1));
+    assert_eq!(one_chat.focus, chat);
+
+    let mut no_chat = focused_on_first_tile(RiceLayout {
+        root: Node::leaf(TileKind::Clock),
+        ..RiceLayout::home()
+    });
+    assert!(!no_chat.focus_chat_step(1));
+}

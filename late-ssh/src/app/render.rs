@@ -542,7 +542,7 @@ impl App {
         // tile is the one the keys, the mouse, and the read marking act on,
         // and it draws the rail's selection, so its rule names that; the
         // others watch their bindings.
-        let home_chat_rooms = self.home_chat_rooms();
+        let home_chat_rooms = crate::app::zen::input::home_chat_rooms(self);
         // A field borrow: the draw closure also holds `usermap` mutably.
         let rice = &self.home;
         let home_active_chat = rice.active_chat_index();

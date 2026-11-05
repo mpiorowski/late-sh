@@ -83,7 +83,7 @@ it.
 The active chat is `App::home_chat_room_id`: the focused chat tile's
 room, else the first chat tile's, else (no chat tile) the current room,
 which is Home's selected room when it is a real room, else #lounge
-(`ZenState::active_chat_index`, `App::home_chat_rooms`; a tile bound to no
+(`ZenState::active_chat_index`, `zen::input::home_chat_rooms`; a tile bound to no
 room shows the current room, and so does one bound to a room the account
 has left or to a permanent room's slug its rooms do not hold). A chat
 tile's binding is `ChatRoomBinding`: the current room, a room by id, a
@@ -101,23 +101,30 @@ synthetic view, its rule names that selection
 the read marking act on it (`App::home_chat_room_id`). The tile
 remembers where the rail takes it: a bound tile is rebound to the room
 or the News row the rail moves to, a layout edit
-(`App::steer_active_chat_from_rail`, inside `sync_visible_chat_room`,
-which every input and tick calls), so the next focus on it brings the
-rail back there (`App::sync_rail_to_active_chat`, from
-`zen::input::focus_moved` and on arriving at Home, never while Home is
+(`zen::input::steer_active_chat_from_rail`, from `sync_chat_tiles_to_rail`
+inside `App::sync_visible_chat_room`, which every input and tick calls), so the next focus on it brings the
+rail back there (`zen::input::sync_rail_to_active_chat`, from
+`focus_moved` and on arriving at Home, never while Home is
 already up, so a pick made on Home stands) and its layout comes back
 there when loaded. The other synthetic rows (mentions, rss, browse) are
 views the tile shows while they are up and bind nothing; a slug binding
 whose room the rail is on stays a slug. A tile bound to no room follows
 the rail as is until a pin binds it: the chat kind picked for a tile
-(`App::pin_chat_tiles_on_pick`, every unbound chat tile with it: with
+(`zen::input::pin_chat_tiles_on_pick`, every unbound chat tile with it: with
 two chats on a page, a tile that followed the rail would only ever show
 the other tile's room), or its layout being left (`zen::input::load_layout`,
-`save_layout_as`, `App::pin_unbound_chats_to_the_moment`: News while the
+`save_layout_as`, `pin_unbound_chats_to_the_moment`: News while the
 rail shows it, else the current room). `[` `]`, the `Ctrl+/` picker (or
 `/picker`, `zen::input::pick_for_active_chat`: a room or News binds, any
 other row only shows on the rail) and a `?query` message jump (which
 lands on the first chat tile and selects the message) bind in one step.
+Outside arrange mode a room or News that another chat tile already shows
+is not shown twice: the picker and a `Space` jump move the focus to that
+tile and every binding stays (`zen::input::focus_chat_showing`,
+`ZenState::other_chat_tile_showing`). Whether a binding shows a room or
+News is one question, `ChatRoomBinding::shows`, asked there, by the
+steer and by `O`. `h` `l` and `Ctrl+N` `Ctrl+P` walk
+the rail and rebind as they go, or a walk would throw the focus between tiles.
 The other chat tiles are read-only views of
 their rooms: messages stream in and nothing is marked read until the tile
 is focused, but every tile draws its own composer strip,
@@ -214,8 +221,8 @@ arrange mode) is boxed in its look with its gap (`ZenState::chrome`,
 `gaps`).
 
 Furniture and focus: outside arrange mode only chat tiles take the focus
-(`TileKind::takes_focus`), by click or the arrows of arrange mode; a
-click on a panel is its gesture (the pet is petted, the tank is fed, a
+(`TileKind::takes_focus`), by click, `Alt+arrows` or the arrows of arrange
+mode; a click on a panel is its gesture (the pet is petted, the tank is fed, a
 live row opens, the Live strip on the reef opens what it shows rather than
 feeding) and the keys stay with the chat (`focus_home_tile_at`). A page opens with
 the focus on its first chat tile (`ZenState::new`, `ZenState::load`). Home's chat is its
@@ -224,7 +231,7 @@ else the first): it draws Home's card (the rail's selection, synthetic
 entries included, `HomeView`) with the card's own chrome, its keys are
 Home's (`input::handle_home_key`), and `App::home_chat_room_id` is `None` while
 a synthetic entry is up. Every other chat tile watches its room under a
-`chat · #room` rule, a click away from being the page's chat, so a stream
+`chat · #room` rule, a click or `Alt+arrows` from being the page's chat, so a stream
 night is two chats: the stream room and #lounge.
 
 Guests (`Guest`: now, attention) are the two widgets that come and go:
@@ -310,8 +317,8 @@ page only reflows on a room change, when the messages change anyway.
 - Arrange mode brings every tile up so it can be reached, and each names its
   room in the rule (`reef +now · only #lounge`, `ZenState::only_labels`). Away
   from the room, entering the mode moves the page.
-- The mask is session-only: `App::sync_home_kept_tiles`, inside
-  `sync_visible_chat_room`, hands `ZenState::sync_kept_away` where the chat is
+- The mask is session-only: `zen::input::sync_home_kept_tiles`, from
+  `sync_chat_tiles_to_rail` inside `App::sync_visible_chat_room`, hands `ZenState::sync_kept_away` where the chat is
   and the account's rooms, that writes `ZenState::kept_away`, and everything reads
   it through `tile_hidden`, which arrange mode overrides. A tile that is down
   keeps its ordinal and has an empty rect at the origin, so focus, the chats'
@@ -379,9 +386,10 @@ guide's `HelpTopic::Layouts`.
 `/layout` is parsed in `chat/state.rs` and handed over in
 `chat/input.rs`. `state.rs`: `App::home`, `App::home_layouts`,
 `App::layout_list`, `on_home`, `home_tiles_area` / `home_tile_rects`,
-`home_chat_room_id` / `home_chat_rooms`, `home_rail_binding`,
-`sync_home_kept_tiles`, `sync_aquarium_bounds`, and
-`mark_home_layout_dirty` / `flush_home_layout`. `tick.rs`: the aquarium
+`home_chat_room_id`, `sync_aquarium_bounds`, and
+`mark_home_layout_dirty` / `flush_home_layout`; the rail and the chat
+tiles' policy (`sync_chat_tiles_to_rail`, `sync_rail_to_active_chat`,
+`home_chat_rooms` and the pins) is zen's own, at the end of `zen/input.rs`. `tick.rs`: the aquarium
 stepping, the ascii tile's cadence edge (`ascii_edge`), the anim edge
 and the debounced flush. `late-core`: `extract_key_home_layouts` /
 `UserSshKey::set_home_layouts` and the seed `extract_key_home_layout` in
@@ -409,7 +417,11 @@ trimmed a key at a time on a narrow tile.
 Outside arrange mode Home's keys are Home's (`input::handle_home_key`): the
 active chat tile is Home's chat, the rail its room, `i` / Enter compose
 in it, `j` `k` select in it and the message actions act on its
-selection; the furniture takes no keys. With a Live tile on the page,
+selection; the furniture takes no keys. `Alt+arrows` move the focus to the
+next chat tile (right, down) or the previous one (left, up), wrapping past the
+furniture (`hop_chat_tile`, `ZenState::focus_chat_step`), the same move as a
+click (`focus_moved`); nothing moves with one chat tile, in a composer (the
+word jumps keep them) or during a room jump. With a Live tile on the page,
 `s` then a row's number opens that row (`live::input::open_from_prefix`,
 Home's own prefix; any other key after
 `s` is swallowed), and a click on a row opens it without focusing the
@@ -610,7 +622,8 @@ update.
   picker owning the keys and the clicks under it, the chat keys staying
   off a tile that is not a chat, the Live tile's `s` prefix,
   `[` `]` in rail order, a second chat tile keeping its room with the
-  rail following the active one, a draft staying in its room, the pet
+  rail following the active one, `Alt+arrows` hopping the chat tiles, a
+  room picked on another tile moving the focus there, a draft staying in its room, the pet
   click leaving Home's focus alone, and `?` opening the Layouts topic.
   The Live tile's rows are the panel's (`live/panel_test.rs`), the care
   bar and the tank tiles the aquarium's (`hub/aquarium/ui_test.rs`), the

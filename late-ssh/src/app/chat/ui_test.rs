@@ -1721,18 +1721,7 @@ fn room_list_hit_test_follows_the_rail_scroll_nudge() {
 }
 
 #[test]
-fn room_jump_prefix_shows_jump_key_when_active() {
-    assert_eq!(room_jump_prefix(Some(b'a'), true, false), "[a] ");
-}
-
-#[test]
-fn room_jump_prefix_shows_selected_marker_when_inactive() {
-    assert_eq!(room_jump_prefix(None, false, true), "> ");
-    assert_eq!(room_jump_prefix(None, false, false), "  ");
-}
-
-#[test]
-fn room_list_rows_display_lounge() {
+fn cozy_room_rail_displays_lounge() {
     let lounge = ChatRoom {
         id: Uuid::now_v7(),
         created: Utc::now(),
@@ -1777,7 +1766,7 @@ fn room_list_rows_display_lounge() {
     );
 
     let room_list_view = room_list_view_from_render_input(&view);
-    let room_rows = build_room_list_rows(&room_list_view, Rect::new(0, 0, 40, 20));
+    let room_rows = build_cozy_room_rail_rows(&room_list_view, 40);
     let rendered = room_rows
         .lines
         .iter()
@@ -1796,7 +1785,7 @@ fn room_list_rows_display_lounge() {
 }
 
 #[test]
-fn room_list_rows_keep_directory_surfaces_out_of_home() {
+fn cozy_room_rail_keeps_directory_surfaces_out_of_home() {
     let rooms = Vec::new();
     let mut rows_cache = ChatRowsCache::default();
     let usernames = HashMap::new();
@@ -1825,7 +1814,7 @@ fn room_list_rows_keep_directory_surfaces_out_of_home() {
     );
 
     let room_list_view = room_list_view_from_render_input(&view);
-    let room_rows = build_room_list_rows(&room_list_view, Rect::new(0, 0, 40, 20));
+    let room_rows = build_cozy_room_rail_rows(&room_list_view, 40);
     let hit_slots: Vec<_> = room_rows.hit_slots.into_iter().flatten().collect();
 
     assert_eq!(
@@ -2257,7 +2246,7 @@ fn room_section_header_parser_ignores_fold_key_hints() {
 }
 
 #[test]
-fn room_list_rows_skip_game_rooms() {
+fn cozy_room_rail_skips_game_rooms() {
     let lounge = ChatRoom {
         id: Uuid::now_v7(),
         created: Utc::now(),
@@ -2318,7 +2307,7 @@ fn room_list_rows_skip_game_rooms() {
     );
 
     let room_list_view = room_list_view_from_render_input(&view);
-    let room_rows = build_room_list_rows(&room_list_view, Rect::new(0, 0, 40, 20));
+    let room_rows = build_cozy_room_rail_rows(&room_list_view, 40);
 
     assert!(!room_rows.hit_slots.contains(&Some(RoomSlot::Room(game.id))));
 }

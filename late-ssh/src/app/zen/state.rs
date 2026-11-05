@@ -574,7 +574,7 @@ pub enum ChatRoomBinding {
     #[default]
     Current,
     /// A room by id; one the account has since left shows the current
-    /// room instead (`App::home_chat_rooms`).
+    /// room instead (`zen::input::home_chat_rooms`).
     Room(Uuid),
     /// A permanent room by slug, resolved from the joined rooms at render
     /// time; unknown, the current room.
@@ -609,6 +609,20 @@ impl ChatRoomBinding {
             }
         });
         found.map(|(room, _)| room)
+    }
+
+    /// Whether a tile bound to this shows `target` (News or a joined room).
+    /// A tile bound to no room shows wherever the rail goes, so it never
+    /// answers for a room by itself; a room missing from `rooms` is shown by
+    /// nothing.
+    pub fn shows(&self, target: &ChatRoomBinding, rooms: &[(ChatRoom, Vec<ChatMessage>)]) -> bool {
+        match target {
+            ChatRoomBinding::News => matches!(self, ChatRoomBinding::News),
+            ChatRoomBinding::Room(room_id) => self
+                .joined_room(rooms)
+                .is_some_and(|room| room.id == *room_id),
+            ChatRoomBinding::Current | ChatRoomBinding::Permanent(_) => false,
+        }
     }
 
     /// Whether a tile kept to this is up with the page's chat where it is. A
@@ -653,7 +667,7 @@ impl ChatRoomBinding {
 }
 
 /// What a chat tile draws once its binding is resolved against the
-/// account's rooms (`App::home_chat_rooms`).
+/// account's rooms (`zen::input::home_chat_rooms`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChatTileSource {
     Room(Uuid),
@@ -1520,7 +1534,7 @@ pub struct ZenState {
     /// with their leaves; serialization only ever sees `rice`.
     playback: Vec<Option<Playback>>,
     /// Session-only, in leaf order: the tiles kept to a room the page's chat
-    /// is not in (`App::sync_home_kept_tiles`). Read through `tile_hidden`,
+    /// is not in (`zen::input::sync_home_kept_tiles`). Read through `tile_hidden`,
     /// since arrange mode draws them all.
     kept_away: Vec<bool>,
     visiting: bool,
@@ -1609,9 +1623,10 @@ impl ZenState {
         rooms: &[(ChatRoom, Vec<ChatMessage>)],
     ) -> ChatRoomBinding {
         let focused = self.rice.root.only_at(self.focus);
-        match (focused.joined_room(rooms), &rail) {
-            (Some(kept), ChatRoomBinding::Room(room_id)) if kept.id == *room_id => focused,
-            _ => rail,
+        if focused.shows(&rail, rooms) {
+            focused
+        } else {
+            rail
         }
     }
 
@@ -1898,6 +1913,39 @@ impl ZenState {
     /// The active chat tile's ordinal in the layout.
     pub fn active_chat_ordinal(&self) -> Option<usize> {
         Some(self.active_chat_tile()?.0)
+    }
+
+    /// Move the focus `delta` chat tiles along the layout, wrapping, past the
+    /// furniture. `false` when there is no other chat tile to move to.
+    pub fn focus_chat_step(&mut self, delta: isize) -> bool {
+        let tiles = self.chat_tiles();
+        let Some(active) = self.active_chat_index() else {
+            return false;
+        };
+        let next = (active as isize + delta).rem_euclid(tiles.len() as isize) as usize;
+        if next == active {
+            return false;
+        }
+        self.focus = tiles[next].0;
+        true
+    }
+
+    /// The chat tile that shows `target` (News or a room) while the active
+    /// one does not. A tile bound to no room shows wherever the rail goes, so
+    /// it never answers for a room by itself.
+    pub fn other_chat_tile_showing(
+        &self,
+        target: &ChatRoomBinding,
+        rooms: &[(ChatRoom, Vec<ChatMessage>)],
+    ) -> Option<usize> {
+        if self.active_chat_room()?.shows(target, rooms) {
+            return None;
+        }
+        let tile = self
+            .chat_tiles()
+            .into_iter()
+            .find(|(_, bound)| bound.shows(target, rooms))?;
+        Some(tile.0)
     }
 
     /// Whether the keys belong to a chat tile: the focus is on one.

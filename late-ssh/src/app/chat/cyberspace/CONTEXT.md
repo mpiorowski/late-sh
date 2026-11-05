@@ -43,7 +43,7 @@ Cross-crate/cross-module touchpoints:
 - `late-ssh/src/main.rs`: constructs `CyberspaceService::new(db, api::BASE_URL)` once (the base URL is a const, not config) and attaches the `ActivityPublisher` via `with_activity`.
 - `late-ssh/src/state.rs`, `session_bootstrap.rs`, `app/state.rs`: thread the service through root `State` → `SessionConfig` → `ChatState`, which owns the pane `State`.
 - `chat/state.rs` / `chat/input.rs`: `cyberspace_selected`, `cyberspace_room_selected`, `clear_synthetic_selection` (which is where leaving a room happens), `/cs` command dispatch, and routing arrows/bytes into `cyberspace::input` for the pane, the room, and the room composer.
-- `chat/ui.rs`: the `cyberspace` rail section (`RoomSlot::Cyberspace` + `RoomSlot::CyberspaceRoom`) in both rail builders, and pane/room render dispatch.
+- `chat/ui.rs`: the `cyberspace` rail section (`RoomSlot::Cyberspace` + `RoomSlot::CyberspaceRoom`) in the rail builder (`build_cozy_room_rail_rows`), and pane/room render dispatch.
 - `app/render.rs`: modal draw arm + `modal_active()` in the input-capture gates.
 - `chat/commands.rs`: `/cs` and `/cyberspace` autocomplete entries.
 - `app/activity/event.rs` / `publisher.rs`: `ActivityKind::CyberspacePosted` and `cyberspace_posted_task`.
@@ -129,7 +129,7 @@ Unused so far: their `?type=` filter on the notifications list (comma-separated,
 
 1. **The terms contract in section 3.** Per-user token on human action, no server-side content cache, no cross-user rendering, no AI on their content. Treat an erosion of any of these as a correctness bug.
 2. **Only the refresh token and our own read cursor are persisted.** Never the password, never id tokens, never any of their content. A timestamp of when this user looked is ours, not theirs, which is what keeps the cursor clear of the caching their terms forbid. Error strings never carry credentials.
-3. **The rail entry is gated on `cyberspace_linked` in both `visual_order_for_rooms` (navigation) and the rail builders (rendering).** Gating one and not the other leaves a slot the user can arrow onto but never see. `/cs` and `/cs post` for an unlinked user open the link modal over the current room instead of switching to a pane the rail does not list; `State::is_unlinked` (known-unlinked, not `Unknown`) is what lets the shell drop a pane the rail stopped listing without firing on "not sure".
+3. **The rail entry is gated on `cyberspace_linked` in both `visual_order_for_rooms` (navigation) and the rail builder (rendering).** Gating one and not the other leaves a slot the user can arrow onto but never see. `/cs` and `/cs post` for an unlinked user open the link modal over the current room instead of switching to a pane the rail does not list; `State::is_unlinked` (known-unlinked, not `Unknown`) is what lets the shell drop a pane the rail stopped listing without firing on "not sure".
 4. **No shared snapshot.** Events carry their data; sessions filter on `user_id`.
 5. **Poll clocks stamp at request time, not response time** (`poll_unread_if_due`, `load_feed`), so a hung fetch cannot queue a fresh request every tick.
 6. **Migrations 133, 136, 137, and 139 are history.** Any schema change ships as a new forward migration.

@@ -137,9 +137,9 @@ fn close_into_room(app: &mut App, slot: RoomSlot) {
     app.chat.news.stop_composing();
     crate::app::input::close_reader_and_player(app);
     app.room_search_modal_state.close();
-    // The pick lands on Home, where it binds the active chat tile (a room
-    // or News) or shows on the rail (any other row): Home first, so the
-    // arrival's own sync cannot undo it.
+    // The pick lands on Home, where a room or News another chat tile shows
+    // moves the focus there, else binds the active chat tile; any other row
+    // shows on the rail. Home first, so the arrival's own sync cannot undo it.
     app.set_screen(Screen::Dashboard);
     crate::app::zen::input::pick_for_active_chat(app, slot);
     app.sync_visible_chat_room();

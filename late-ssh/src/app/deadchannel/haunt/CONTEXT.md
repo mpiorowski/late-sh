@@ -237,7 +237,7 @@ number of replicas spend one AI call per text.
    inheriting the game-room join path. Once joined it does show on the
    rail: the last room in Core, under `#voice`, above Discover, never in
    Channels (`chat/state.rs::is_deadchannel_room`, read by
-   `visual_order_for_rooms` and both rail builders in `chat/ui.rs`).
+   `visual_order_for_rooms` and the rail builder in `chat/ui.rs`).
 
 ## `/haunt` (admin composer command)
 
