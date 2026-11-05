@@ -268,7 +268,7 @@ Inline module tests:
 - Active artboard bans block editing through `App::activate_artboard_interaction` and show an error banner while the ban is active; viewing and archive browsing remain available.
 - One archive fetch is in flight per session; `wanted` is the only thing the cursor writes, and `request_wanted_archive` is the only reader.
 - Swatch slot `0` is the primary clipboard slot and is not pinnable.
-- Swatches and copied or lifted floating selections preserve per-cell foreground colours alongside glyphs (`dartboard_editor::Clipboard` + `State::swatch_colors`/`floating_colors`), while sampled single-glyph brushes and terminal pastes stamp in the current paint colour. The eyedropper reads colour from the canvas, never from a swatch.
+- Swatches and copied or lifted floating selections preserve per-cell foreground colours alongside glyphs (`dartboard_editor::Clipboard` + `State::swatch_colors`/`floating_colors`), while sampled single-glyph brushes and terminal pastes stamp in the current paint colour; picking a paint colour (`Ctrl+U`/`Ctrl+Y`, `Ctrl+K`, `Alt+K`, or palette click) clears `floating_colors` on the active floating brush so it previews and stamps uniformly in that colour while `swatch_colors` keeps the original copied colours in the swatch strip. The eyedropper reads colour from the canvas, never from a swatch.
 - Local paint palette is separate from the server-assigned peer color.
 - Connection rejection lives on `DartboardSnapshot.connect_rejected`, not only on events.
 

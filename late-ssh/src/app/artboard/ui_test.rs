@@ -439,12 +439,12 @@ fn floating_and_swatch_previews_render_copied_cell_colors() {
         .canvas
         .put_glyph_colored(Pos { x: 1, y: 0 }, 'B', blue);
 
+    state.select_palette_color(3);
     state.editor.cursor = Pos { x: 0, y: 0 };
     state.begin_selection_from_cursor();
     state.editor.cursor = Pos { x: 1, y: 0 };
     let _ = state.handle_editor_action(EditorAction::CopySelection);
 
-    state.select_palette_color(3);
     state.editor.cursor = Pos { x: 2, y: 2 };
 
     let screen_size = (80, 26);
@@ -475,6 +475,28 @@ fn floating_and_swatch_previews_render_copied_cell_colors() {
         Color::Rgb(255, 40, 40)
     );
     assert_eq!(buffer[(swatch_rect.x + 2, swatch_rect.y + 1)].symbol(), "B");
+    assert_eq!(
+        buffer[(swatch_rect.x + 2, swatch_rect.y + 1)].fg,
+        Color::Rgb(40, 120, 255)
+    );
+
+    // Picking a paint color while the floating swatch is active recolors the floating preview
+    // uniformly while leaving the swatch strip preview in its original per-cell colors.
+    state.select_palette_color(3);
+    terminal
+        .draw(|frame| draw_game(frame, game_area, &state, true))
+        .expect("draw after paint color override");
+
+    let buffer = terminal.backend().buffer();
+    let green = rgb(PAINT_PALETTE[3]);
+    assert_eq!(buffer[(canvas_area.x + 2, canvas_area.y + 2)].symbol(), "A");
+    assert_eq!(buffer[(canvas_area.x + 2, canvas_area.y + 2)].fg, green);
+    assert_eq!(buffer[(canvas_area.x + 3, canvas_area.y + 2)].symbol(), "B");
+    assert_eq!(buffer[(canvas_area.x + 3, canvas_area.y + 2)].fg, green);
+    assert_eq!(
+        buffer[(swatch_rect.x + 1, swatch_rect.y + 1)].fg,
+        Color::Rgb(255, 40, 40)
+    );
     assert_eq!(
         buffer[(swatch_rect.x + 2, swatch_rect.y + 1)].fg,
         Color::Rgb(40, 120, 255)
