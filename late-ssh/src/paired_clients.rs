@@ -245,11 +245,6 @@ impl PairedClientRegistry {
         let mut clients = self.clients.lock_recover();
         let entries = clients.entry(token.clone()).or_default();
         if entries.len() >= MAX_PAIRED_CLIENTS_PER_TOKEN {
-            tracing::warn!(
-                token_hint = %token_hint(&token),
-                entries = entries.len(),
-                "rejecting paired client: token at capacity"
-            );
             return None;
         }
         tracing::info!(
@@ -445,7 +440,7 @@ impl PairedClientRegistry {
     /// Snapshot the state of the most recently registered entry, preferring
     /// the webview helper when one is present. The helper only runs while the
     /// user is on YouTube, and it is then the audible surface, so its
-    /// mute/volume is what the sidebar should report.
+    /// mute/volume is what the music dock should report.
     pub fn snapshot(&self, token: &str) -> Option<ClientAudioState> {
         let clients = self.clients.lock_recover();
         let entries = clients.get(token)?;

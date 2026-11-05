@@ -1258,7 +1258,7 @@ fn log_and_settle_video_update(update: &VideoUpdate) {
 
 /// Hold the house audio silent while a video plays and bring it back after.
 /// Local and temporary: nothing goes to the server, so the user's stored
-/// mute and the sidebar stay as they were.
+/// mute and the music dock stay as they were.
 fn silence_for_video(
     video_active: bool,
     playback: &PlaybackState<'_>,

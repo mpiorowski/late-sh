@@ -76,7 +76,7 @@ Keep `mod.rs` declaration-only; no `pub use` re-export layer.
 
 `ChatService` channels:
 - Per-session `watch<ChatSnapshot>` for low-frequency room summary data.
-- `broadcast<ChatEvent>` for live message, reaction, room-command, and error events shared by every session. Single-recipient payload events (`RoomTailLoaded`, `DeltaSynced`, `MessageSearchLoaded`, `MessageContextLoaded`, `DiscoverRoomsLoaded`, and their `*Failed` twins) do NOT ride the broadcast: `ChatService::send_user_event` delivers them point-to-point over a per-session `mpsc<ChatEvent>` registered in `refresh_sessions` (returned by `start_user_refresh_task`), so a 500-message tail is never cloned into every connected session. `ChatState::drain_events` drains the targeted channel ahead of the broadcast; both feed the same event match.
+- `broadcast<ChatEvent>` for live message, reaction, room-command, and error events shared by every session. Single-recipient payload events (`RoomTailLoaded`, `MessageSearchLoaded`, `MessageContextLoaded`, `DiscoverRoomsLoaded`, and their `*Failed` twins) do NOT ride the broadcast: `ChatService::send_user_event` delivers them point-to-point over a per-session `mpsc<ChatEvent>` registered in `refresh_sessions` (returned by `start_user_refresh_task`), so a 500-message tail is never cloned into every connected session. `ChatState::drain_events` drains the targeted channel ahead of the broadcast; both feed the same event match.
 - Shared `watch<Arc<Vec<String>>>` username list for mention autocomplete, rebuilt every 30s from the in-memory `UsernameDirectory`, not the DB. Re-scanning `users` on that timer measures 1.9% of all DB execution time; the directory is written through on login/profile save/rename/delete, so the watch is both free and fresher. Do not point it back at `User::list_all_usernames` (that arm is the no-directory fallback for tests).
 - Plain username display is centralized outside Chat in `State.username_directory` (`Uuid -> username`), loaded at startup, refreshed every 30 minutes, and updated on login/profile save/mod rename/account delete. Chat still owns richer author metadata such as bonsai glyphs, countries, badges, reactions, and unread state.
 - A service-owned refresh scheduler that refreshes registered sessions every 10s and on explicit signals.
@@ -85,7 +85,6 @@ Keep `mod.rs` declaration-only; no `pub use` re-export layer.
 
 Important constants in `svc.rs`:
 - `HISTORY_LIMIT = 500`
-- `DELTA_LIMIT = 256`
 - `CHAT_REFRESH_INTERVAL = 10s`
 - `USERNAME_DIRECTORY_TTL = 30s`
 - `SEARCH_RESULTS_LIMIT = 50`, `SEARCH_MIN_CHARS = 3`, `SEARCH_CONTEXT_EACH_SIDE = 4` (message search)
@@ -133,14 +132,14 @@ There is no top-level `Screen::Chat`. `Screen::Dashboard` renders as Home and ow
 - `chat::ui::draw_room_list_rail` renders the borderless room rail in Home's `rooms` tile (`app/zen/CONTEXT.md`); the page is laid out as arranged at every width.
 
 Room favorites:
-- Press `f` on a selected real room, or on Mentions, News, RSS or `+ browse rooms`, to toggle it in `ProfileState::toggle_favorite_room`. The four synthetic entries are stored under fixed sentinel ids (`state.rs` `synthetic_favorite_id` / `synthetic_slot_for_favorite_id`, the only code that interprets them; version nibble 0, so no v7 room id can collide). A favorited entry moves from Core into Favorites in both rail builders through the same pushed-id exclusion the rooms use; RSS stays hidden everywhere while feeds are unavailable.
+- Press `f` on a selected real room, or on Mentions, News, RSS or `+ browse rooms`, to toggle it in `ProfileState::toggle_favorite_room`. The four synthetic entries are stored under fixed sentinel ids (`state.rs` `synthetic_favorite_id` / `synthetic_slot_for_favorite_id`, the only code that interprets them; version nibble 0, so no v7 room id can collide). A favorited entry moves from Core into Favorites in the rail builder through the same pushed-id exclusion the rooms use; RSS stays hidden everywhere while feeds are unavailable.
 - Press `[` / `]` on a selected favorite to move it up/down via `ProfileState::move_favorite_room`. No-op when the selection isn't a favorite or is already at the edge.
 - Favorites are stored in `users.settings.favorite_room_ids` and the vec order drives both the Home room rail and the global picker.
 - The rail is the only editor for favorites (`f`, `[`, `]`); there is no Settings tab for them.
 - Active Shop room highlights are not favorites; they temporarily render above favorites and expire from `shop_consumable_effects`.
 
 Home presence:
-- There is no top activity strip; presence (online count + connected friends) lives in the right sidebar's pinned core block, and the public activity feed ships into #lounge as system messages (`app/activity/lounge.rs`) surfaced in the TUI as the one-row activity ticker above the composer, never as chat rows. The `b1`-`b4` recent-room jump keys died with the Rooms demolition.
+- There is no top activity strip; presence (online count + connected friends) lives in Home's presence tile, and the public activity feed ships into #lounge as system messages (`app/activity/lounge.rs`) surfaced in the TUI as the one-row activity ticker above the composer, never as chat rows. The `b1`-`b4` recent-room jump keys died with the Rooms demolition.
 
 `App::sync_visible_chat_room()` is the read/tail-load bridge. It computes the visible chat room from the current screen (Home/Dashboard, house table, daily board, Clubhouse, the Games hub while it has a door-game watch open, a player's own running DCSS, NetHack or Brogue game), stores it in `ChatState`, marks it read, and requests a tail on change. Call it after screen, selected room/synthetic entry, room favorite, or open-surface changes.
 
@@ -250,7 +249,7 @@ Shared links, their #lounge cards, the News room and the reader: `news/CONTEXT.m
 ### Cyberspace
 
 - late.sh as a personal client for cyberspace.online. The slice (`chat/cyberspace/`), its API-terms contract, token model, views/modals, their chat (cIRC), and tests live in `cyberspace/CONTEXT.md`: read that before touching anything in the directory.
-- What stays in this file: `/cs` (alias `/cyberspace`) parsing/dispatch on `ChatState` (see Commands), and the rail contract. A linked account gets its **own** `RoomSection::Cyberspace` (shortcut `y`, folds like any other section) holding the pane (`feeds`), a `notifications` row, one row per pinned cIRC chat room, and one per pinned C-Mail conversation; `cyberspace_linked` gates the section in **both** `visual_order_for_rooms` and the two rail builders, since gating one and not the other leaves a slot the user can arrow onto but never see.
+- What stays in this file: `/cs` (alias `/cyberspace`) parsing/dispatch on `ChatState` (see Commands), and the rail contract. A linked account gets its **own** `RoomSection::Cyberspace` (shortcut `y`, folds like any other section) holding the pane (`feeds`), a `notifications` row, one row per pinned cIRC chat room, and one per pinned C-Mail conversation; `cyberspace_linked` gates the section in **both** `visual_order_for_rooms` and the rail builder (`build_cozy_room_rail_rows`), since gating one and not the other leaves a slot the user can arrow onto but never see.
 - `RoomSlot::CyberspaceRoom(index)` and `RoomSlot::CyberspaceMail(index)` are the **dynamic** slots: they index `ChatState::cyberspace.pinned_rooms()` / `pinned_cmail()`, with `cyberspace_room_selected` / `cyberspace_mail_selected` as the matching selections. Because a room or conversation streams only while it is open, **every** selection change must close it: that is why `clear_synthetic_selection` (the one place the synthetic-entry bools are reset) calls `cyberspace.leave_room()`. A future entry that clears selection by hand instead of through that helper would leave a room streaming behind the user's back.
 - The one rule that crosses domains: **their API terms are load-bearing** (no bots, no scraping/caching for redistribution, no feeding their content to AI). Fetched content renders only for the user who fetched it, and `news/svc.rs::is_ai_blocklisted_url` hard-stops cyberspace.online URLs at the summarizer.
 

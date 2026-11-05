@@ -29,7 +29,7 @@ late-ssh/src/app/bonsai/
 |-- mod.rs              # Module declarations only
 |-- state.rs            # Pure state machine: branch graph, growth simulation, care actions, badge scoring
 |-- session.rs          # A session's render mirror, its cursor, and the requests it sends the service
-|-- render.rs           # The graph renderer (modal canvas, profile section), the fitted preview (sidebar), the sway, Home's bonsai tile (draw_tile)
+|-- render.rs           # The graph renderer (modal canvas, profile section), the fitted preview, the sway, Home's bonsai tile (draw_tile)
 |-- modal_ui.rs         # Care workbench modal
 |-- modal_input.rs      # Modal key handling
 |-- svc.rs              # The one writer: locked actions, the daily chip payout, the change listener, activity events
@@ -44,7 +44,6 @@ late-core/migrations/177_one_bonsai_for_everyone.sql
 late-core/src/models/bonsai.rs                    # `Tree` on `bonsai_trees`: `ensure`, `lock`, `store`, `notify_changed`
 late-core/src/models/bonsai_decay_protection.rs   # the Bonsai Decay Shield window
 late-core/src/models/user.rs                      # the chat badge join
-late-ssh/src/app/common/sidebar.rs
 late-ssh/src/app/profile_modal/
 late-ssh/src/app/render.rs
 late-ssh/src/app/input.rs
@@ -81,8 +80,8 @@ Session state:
 Rendering:
 - One plotter, `plot_tree`, puts the graph's cells (branches, then leaf pads, a pad drawn whether or not a shoot has budded out of it) into a grid with the trunk base above the last row at the center column. `render_ascii` adds the pot and is the true render; `canvas_lines` is that at `CANVAS_WIDTH` x `CANVAS_HEIGHT`, which the Home bonsai tile at half the canvas width or more (cut evenly around the trunk when the tile is smaller), the care modal (with selection highlighting, `center_lines` leading it inside the wider frame) and the share snippet draw 1:1. The growth rules keep every tip (and its leaf pad reach) inside the canvas, so the modal never cuts anything off.
 - The profile's bonsai section draws the true canvas, never the preview: `canvas_lines_in` renders it at its one size, centered in a wider space and cut evenly on both sides around the trunk in a narrower one. Never scaled.
-- The sidebar panel and a Home bonsai tile narrower than half the canvas (`draw_bonsai_inline`) draw `render_preview_lines`: the true canvas fitted by `render_fitted_ascii` into a block the size of the area, less the footer row, kept to an odd width so the trunk stays over the middle of the pot. `PREVIEW_WIDTH` 21 by `PREVIEW_HEIGHT` 13 is the smallest block, below which nothing draws, and the only one the sidebar ever gets. It never invents anything. When the tree fits, it is the modal's own glyphs, trimmed around the trunk. When it does not, one integer scale factor is applied to both axes so the block keeps the modal's proportions (a wide tree comes out squat, never tall and thin); bare rows (structure only, no foliage, nothing mid-pinch) are dropped from the pot upward, the trunk base always kept, only as far as needed to stop the height forcing a larger factor than the width already does. A preview cell that gathered one sample keeps that sample's glyph; several samples resolve to the dominant kind, foliage as density glyphs (`@` / `*` / `#` by count), structure as its commonest glyph. The preview pot is `[=====]`. `BONSAI_HEIGHT` in the sidebar is the block plus the footer row, and the panel is exactly that tall; leftover rail rows go to the Free space panel, not the tree.
-- The modal, the sidebar, and the profile's bonsai section all apply `apply_sway` off the wall tick and ride the `ANIM_HALF_TICK` tier. The profile modal takes `wall_tick` in `draw`, and `tick.rs` marks it changed on the `anim_half` edge while it shows a tree (`ProfileModalState::bonsai()`).
+- A Home bonsai tile narrower than half the canvas (`draw_bonsai_inline`) draws `render_preview_lines`: the true canvas fitted by `render_fitted_ascii` into a block the size of the area, less the footer row, kept to an odd width so the trunk stays over the middle of the pot. `PREVIEW_WIDTH` 21 by `PREVIEW_HEIGHT` 13 is the smallest block, below which nothing draws. It never invents anything. When the tree fits, it is the modal's own glyphs, trimmed around the trunk. When it does not, one integer scale factor is applied to both axes so the block keeps the modal's proportions (a wide tree comes out squat, never tall and thin); bare rows (structure only, no foliage, nothing mid-pinch) are dropped from the pot upward, the trunk base always kept, only as far as needed to stop the height forcing a larger factor than the width already does. A preview cell that gathered one sample keeps that sample's glyph; several samples resolve to the dominant kind, foliage as density glyphs (`@` / `*` / `#` by count), structure as its commonest glyph. The preview pot is `[=====]`.
+- The modal, Home's bonsai tile, and the profile's bonsai section all apply `apply_sway` off the wall tick and ride the `ANIM_HALF_TICK` tier (the quarter tier once the session has been idle five minutes). The profile modal takes `wall_tick` in `draw`, and `tick.rs` marks it changed on the `anim_half` edge while it shows a tree (`ProfileModalState::bonsai()`).
 - The care modal is sized to the canvas (`CANVAS_WIDTH + 12` by `CANVAS_HEIGHT + 7`): the tree, a blank row, two status rows, a two-row key footer. The status row appends "full: cut to make room" at the branch cap.
 - Profile views and session mirrors are both `BonsaiState::view_only`: the row settled to today in memory, for drawing. `BonsaiState` has no way to write.
 - Child branches do not redraw their parent joint cell; only root segments draw their starting cell. This keeps one-cell graph segments from visually collapsing into uneven long ASCII runs.
@@ -235,7 +234,7 @@ Important invariant: a huge neglected mess should not automatically be prestigio
 - The stored row is the truth. Every write goes through `BonsaiService` under `Tree::lock`; a session never decides an action from its mirror and never writes. Do not add a save-from-memory path.
 - The daily chips are paid in exactly one place, `BonsaiService::act` on `Applied::Watered`, in the transaction that stamps `last_watered`. No other path credits `ChipMove::BonsaiWatered`.
 - Badge metadata must stay cheap for chat; use the persisted `badge_glyph`, not per-message graph rendering.
-- The renderer must tolerate narrow/sidebar areas without panics: out-of-grid cells are dropped, never indexed.
+- The renderer must tolerate narrow areas without panics: out-of-grid cells are dropped, never indexed.
 - The care modal shows the whole canvas 1:1, always; the growth rules guarantee it fits. Small surfaces show the preview, which reads the true canvas and never invents cells: when it must shrink, drop bare rows first, then scale both axes by one integer factor. No crop, no camera.
 - Unit tests for `state.rs` and `render.rs` stay pure logic/rendering tests; `svc_test.rs` is the DB-backed slice (planting, settling, the once-a-day watering under concurrency), `session_test.rs` drives two mirrors of one account, and `late-core/src/models/bonsai_test.rs` pins the lock against lost updates.
 

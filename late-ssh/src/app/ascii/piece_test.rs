@@ -1,9 +1,11 @@
 use late_core::models::user::{AsciiPiece, Scene, SceneStyle};
 
 use super::{
-    AURORA_RATE, Cadence, EARTH_FRAME_MS, EARTH_RATE, FRAME_MS, QUARTER_FRAME_MS, SLOW_FRAME_MS,
-    SLOW_RATE, cadence, frame_index, js_i32, js_round, picture, seconds,
+    AURORA_RATE, AURORA_SWEEP_FRAMES, AURORA_SWEEP_RATE, Cadence, EARTH_FRAME_MS, EARTH_RATE,
+    FRAME_MS, QUARTER_FRAME_MS, SLOW_FRAME_MS, SLOW_RATE, SWEEP_STEP, cadence, frame_index, js_i32,
+    js_round, picture, seconds,
 };
+use crate::app::ascii::aurora_fjord;
 
 #[test]
 fn js_round_rounds_halves_up_like_javascript() {
@@ -24,8 +26,9 @@ fn js_i32_truncates_toward_zero_and_wraps() {
 /// quarter-tier edge in pixels, at the wall clock's pace; a 1Hz piece
 /// plays one every so many 1Hz edges at a fraction of it: a hundred
 /// seconds of wall time are one second of the forest's fog, the Earth
-/// takes a notch every fourth second, and the aurora drifts a fifth of a
-/// second every second.
+/// takes a notch every fourth second, the aurora in pixels drifts a fifth
+/// of a second every second, and in dots its front takes a hundred seconds
+/// to carry it one `SWEEP_STEP`.
 #[test]
 fn a_frame_edge_is_the_tier_its_bytes_earn() {
     let alpine = AsciiPiece {
@@ -39,6 +42,10 @@ fn a_frame_edge_is_the_tier_its_bytes_earn() {
     let aurora = AsciiPiece {
         scene: Scene::AuroraFjord,
         style: SceneStyle::Dots,
+    };
+    let aurora_pixels = AsciiPiece {
+        scene: Scene::AuroraFjord,
+        style: SceneStyle::Pixels,
     };
     let forest = AsciiPiece {
         scene: Scene::MistyForest,
@@ -58,6 +65,13 @@ fn a_frame_edge_is_the_tier_its_bytes_earn() {
         cadence(aurora),
         Cadence::Slow {
             frame_ms: SLOW_FRAME_MS,
+            rate: AURORA_SWEEP_RATE
+        }
+    );
+    assert_eq!(
+        cadence(aurora_pixels),
+        Cadence::Slow {
+            frame_ms: SLOW_FRAME_MS,
             rate: AURORA_RATE
         }
     );
@@ -75,7 +89,7 @@ fn a_frame_edge_is_the_tier_its_bytes_earn() {
             rate: EARTH_RATE
         }
     );
-    for scene in [Scene::MistyForest, Scene::AuroraFjord] {
+    for scene in [Scene::Earthrise, Scene::MistyForest] {
         assert_eq!(
             cadence(AsciiPiece {
                 scene,
@@ -85,7 +99,7 @@ fn a_frame_edge_is_the_tier_its_bytes_earn() {
                 scene,
                 style: SceneStyle::Dots
             }),
-            "a 1Hz scene's cadence is the scene's in either style"
+            "a crawling scene's cadence is the scene's in either style"
         );
     }
     assert_eq!(frame_index(alpine, 131), 0);
@@ -99,13 +113,31 @@ fn a_frame_edge_is_the_tier_its_bytes_earn() {
     assert_eq!(seconds(alpine, 0), 0.0);
     assert_eq!(seconds(alpine, 1000), 132.0);
     assert_eq!(seconds(alpine_pixels, 500), 132.0);
-    assert_eq!(seconds(aurora, 5), 1.0);
+    assert_eq!(seconds(aurora, AURORA_SWEEP_FRAMES), SWEEP_STEP);
+    assert_eq!(seconds(aurora_pixels, 5), 1.0);
     assert_eq!(seconds(forest, 100), 1.0);
     assert_eq!(seconds(earth, 1), 4.0 * EARTH_RATE);
 }
 
 #[test]
 fn sessions_asking_for_one_frame_share_it_in_either_style() {
+    let dots = AsciiPiece {
+        scene: Scene::MistyForest,
+        style: SceneStyle::Dots,
+    };
+    let pixels = AsciiPiece {
+        scene: Scene::MistyForest,
+        style: SceneStyle::Pixels,
+    };
+    let first = picture(dots, 7);
+    assert!(std::sync::Arc::ptr_eq(&first, &picture(dots, 7)));
+    assert!(std::sync::Arc::ptr_eq(&first, &picture(pixels, 7)));
+}
+
+/// The aurora's styles play different pictures, so at one play time the
+/// cache hands each its own, and neither pushes the other out.
+#[test]
+fn the_aurora_keeps_its_own_picture_in_each_style_at_one_play_time() {
     let dots = AsciiPiece {
         scene: Scene::AuroraFjord,
         style: SceneStyle::Dots,
@@ -114,9 +146,14 @@ fn sessions_asking_for_one_frame_share_it_in_either_style() {
         scene: Scene::AuroraFjord,
         style: SceneStyle::Pixels,
     };
-    let first = picture(dots, 7);
-    assert!(std::sync::Arc::ptr_eq(&first, &picture(dots, 7)));
-    assert!(std::sync::Arc::ptr_eq(&first, &picture(pixels, 7)));
+    // Frame 50 in dots and frame 5 in pixels are both one second of play.
+    assert_eq!(seconds(dots, 50), seconds(pixels, 5));
+    let swept = picture(dots, 50);
+    let drifted = picture(pixels, 5);
+    assert_eq!(swept.cells, aurora_fjord::sweep(1.0).cells);
+    assert_eq!(drifted.cells, aurora_fjord::frame(1.0).cells);
+    assert!(std::sync::Arc::ptr_eq(&swept, &picture(dots, 50)));
+    assert!(std::sync::Arc::ptr_eq(&drifted, &picture(pixels, 5)));
 }
 
 #[test]

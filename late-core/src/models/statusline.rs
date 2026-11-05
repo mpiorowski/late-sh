@@ -6,10 +6,8 @@
 //! `late-ssh/src/app/statusline/`, which is where the terminal and the frame
 //! data are.
 //!
-//! Shape deliberately mirrors `RightSidebarComponent` (closed enum, string
-//! keys, `normalize_*` backfill) so the two editors read the same way, with
-//! one divergence called out at its definition: `backfill_existing` is a
-//! per-component decision rather than a blanket rule.
+//! A closed enum with string keys and a `normalize_*` backfill, where
+//! `backfill_existing` is a per-component decision rather than a blanket rule.
 //!
 //! There is no priority dial. The list order is the only priority: the bar
 //! keeps the segments that fit, in order, and drops the rest whole.
@@ -280,11 +278,8 @@ impl StatusComponent {
     /// forces it on, and is reserved for what the frame shows nowhere else:
     /// the keyboard hint, the voice badge, the unread counter, the live
     /// strip's reading (drawn only on the Home #lounge card and a Home tile hosting it),
-    /// and the date. Diverges on
-    /// purpose from `normalize_right_sidebar_components`, which backfills
-    /// everything enabled: a sidebar panel that appears costs a user rows in a
-    /// rail built to hold panels, while a bar segment that appears costs
-    /// horizontal frame space.
+    /// and the date. A bar segment that appears costs horizontal frame space,
+    /// which is why this is not a blanket rule.
     pub fn backfill_existing(self) -> bool {
         match self {
             Self::Shortcuts | Self::Voice | Self::Mentions | Self::Live | Self::Date => true,
@@ -532,8 +527,7 @@ pub fn default_statusline_components() -> Vec<StatusComponentSetting> {
 /// front; other additions append.
 ///
 /// Backfilled components take `StatusComponent::backfill_existing()` rather
-/// than a blanket `true`: see that method for why this diverges from the
-/// sidebar's rule.
+/// than a blanket `true`: see that method for why.
 pub fn normalize_statusline_components(
     components: &[StatusComponentSetting],
 ) -> Vec<StatusComponentSetting> {

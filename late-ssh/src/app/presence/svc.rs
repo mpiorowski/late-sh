@@ -20,7 +20,7 @@
 //! record goes out on a `watch` that sessions copy on their tick.
 //!
 //! The pulse rides alongside: a second task samples this replica's human
-//! headcount (`crate::state::online_human_count`, the sidebar's count, so
+//! headcount (`crate::state::online_human_count`, the presence tile's count, so
 //! IRC sessions count too) once a five-minute bucket into
 //! `presence_samples` and reads the last day back, every replica's rows
 //! summed per bucket, onto a second `watch` (`History`) for Home's pulse

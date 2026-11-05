@@ -887,7 +887,7 @@ fn ink_takes_a_draft_for_crystals_one_a_mark_and_one_more() {
         inked.lines,
         vec![
             "the needle goes in. 10 crystals. it does not hurt the way you expected.",
-            "‹jab› and ‹brace› are both yours from here, this climb and every one after."
+            "‹jab› and ‹brace› are both yours now, and again at level 3 on every climb after."
         ]
     );
     assert_eq!((sheet.crystals, sheet.inks.clone()), (15, vec![3]));
@@ -907,20 +907,27 @@ fn ink_takes_a_draft_for_crystals_one_a_mark_and_one_more() {
     let again = sheet.apply(Command::Ink { level: 3 }, &mut rng);
     assert_eq!(again.applied, Applied::Refused(Refusal::AlreadyInked));
 
-    // A mark opens the needle again, and a draft not yet reached waits
-    // on its pick.
+    // A mark opens the needle again, but never for a draft this climb has
+    // not reached: that would buy nothing yet.
     sheet.marks = 1;
     let ahead = sheet.apply(Command::Ink { level: 9 }, &mut rng);
+    assert_eq!(ahead.applied, Applied::Refused(Refusal::DraftAhead));
     assert_eq!(
-        ahead.applied,
+        ahead.lines,
+        vec!["you have not reached level 9. the needle waits until you do."]
+    );
+    assert_eq!((sheet.crystals, sheet.inks.clone()), (15, vec![3]));
+
+    // Reached with the pick still waiting, the ink is taken and both come
+    // with the pick.
+    sheet.level = 9;
+    let reached = sheet.apply(Command::Ink { level: 9 }, &mut rng);
+    assert_eq!(
+        reached.applied,
         Applied::Inked {
             level: 9,
             crystals: 10
         }
-    );
-    assert_eq!(
-        ahead.lines[1],
-        "‹burn› and ‹ground› are both yours from level 9 on, this climb and every one after."
     );
     assert_eq!(sheet.deck().len(), DECK.len() + 1, "no pick at 9 yet");
     sheet.cards.push(Card::Ground);

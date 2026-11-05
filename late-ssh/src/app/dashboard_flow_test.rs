@@ -1224,7 +1224,7 @@ async fn f4_hides_and_shows_an_open_watchs_chat() {
     );
 }
 
-/// The sidebar's Live panel lists the live door games under its rule, who
+/// The Live panel lists the live door games under its rule, who
 /// and where, and a click on a row opens that game's watch, as the strip's
 /// click does. A click on a blank slot opens nothing.
 #[tokio::test]

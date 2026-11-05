@@ -770,6 +770,9 @@ pub enum Refusal {
     NoDraftThere,
     /// An ink of a draft already inked.
     AlreadyInked,
+    /// An ink of a draft this climb has not reached: nothing would come of
+    /// it until the level does.
+    DraftAhead,
     /// An ink past what the marks allow: one draft a mark, and one more.
     NeedleWaits,
     /// A step onto the crossing with nobody left to meet there: every
@@ -1142,6 +1145,19 @@ impl Sheet {
         self.inks.contains(&level)
     }
 
+    /// Whether this climb has reached the draft at `level`.
+    pub fn reached(&self, level: i32) -> bool {
+        self.level >= level
+    }
+
+    /// The card taken at the draft at `level` this climb, once it has been.
+    pub fn pick_at(&self, level: i32) -> Option<Card> {
+        let slot = cards::DRAFTS
+            .iter()
+            .position(|draft| draft.level == level)?;
+        self.cards.get(slot).copied()
+    }
+
     /// The draft this runner is owed, if any: the road waits on it.
     pub fn draft(&self) -> Option<&'static Draft> {
         cards::draft_owed(self.level, self.cards.len())
@@ -1382,6 +1398,12 @@ impl Sheet {
             return Some((
                 Refusal::AlreadyInked,
                 format!("the level {level} draft is already in your skin."),
+            ));
+        }
+        if !self.reached(level) {
+            return Some((
+                Refusal::DraftAhead,
+                format!("you have not reached level {level}. the needle waits until you do."),
             ));
         }
         if self.ink_room() == 0 {
@@ -2178,8 +2200,9 @@ impl Sheet {
     /// cards are in the deck from that level on, in this climb and every
     /// one after; a mark and the ledge leave it. One draft for every mark,
     /// and one more: the needle is a climb's crystals spent on the climbs
-    /// after it. Not with a glyph waiting: the deck on the table is the
-    /// deck that was dealt.
+    /// after it. Only a draft this climb has reached, so nothing is bought
+    /// that pays nothing yet. Not with a glyph waiting: the deck on the
+    /// table is the deck that was dealt.
     fn ink(&mut self, rules: &Rules, level: i32) -> Outcome {
         if let Some((refusal, line)) = self.needle_refused(rules, level) {
             return Outcome {
@@ -2196,14 +2219,9 @@ impl Sheet {
             format!(
                 "the needle goes in. {crystals} crystals. it does not hurt the way you expected."
             ),
-            match self.level >= level {
-                true => format!(
-                    "{first} and {second} are both yours from here, this climb and every one after."
-                ),
-                false => format!(
-                    "{first} and {second} are both yours from level {level} on, this climb and every one after."
-                ),
-            },
+            format!(
+                "{first} and {second} are both yours now, and again at level {level} on every climb after."
+            ),
         ];
         Outcome {
             applied: Applied::Inked { level, crystals },
@@ -2376,11 +2394,19 @@ impl Sheet {
             return refused(Refusal::NotOffered);
         }
         self.cards.push(card);
-        let mut lines = vec![format!(
-            "{} is in your deck now, in place of a {}.",
-            card.marked(),
-            draft.replaces.marked()
-        )];
+        let mut lines = vec![match self.inked(draft.level) {
+            true => format!(
+                "{} and {} are both in your deck now, in place of a {}.",
+                draft.options[0].marked(),
+                draft.options[1].marked(),
+                draft.replaces.marked()
+            ),
+            false => format!(
+                "{} is in your deck now, in place of a {}.",
+                card.marked(),
+                draft.replaces.marked()
+            ),
+        }];
         if self.draft().is_some() {
             lines.push(DRAFT_LINE.to_string());
         }
@@ -2859,6 +2885,7 @@ fn refused(refusal: Refusal) -> Outcome {
         | Refusal::PastTheWall
         | Refusal::NoDraftThere
         | Refusal::AlreadyInked
+        | Refusal::DraftAhead
         | Refusal::NeedleWaits => {
             unreachable!("till refusals are lined where they are refused")
         }

@@ -256,14 +256,31 @@ fn tick_splash_door(app: &mut App) -> bool {
     true
 }
 
+/// The presence clock is up, someone is there, and something repaints it: a
+/// session that is not away on a Home drawing its tiles with nothing over
+/// them, a presence tile no guest can take, and an animated tile holding the
+/// wake cadence the ~200ms hold relies on. Anything else defers the burst, so
+/// it is not spent unseen.
+fn clock_on_screen(app: &App) -> bool {
+    !app.show_splash
+        && !app.away
+        && !app.foreground_overlay_open()
+        && app.on_home()
+        && crate::app::zen::layout::rice_fits(app.content_area())
+        && app
+            .home
+            .shows_without_guests(crate::app::zen::state::TileKind::Presence)
+        && app.home.paints_on_half_edge()
+}
+
 /// The stage-1 scheduler, one world tick. A burst only spends itself
-/// while the sidebar clock is actually on screen, and the row decides
+/// while the presence clock is actually on screen, and the row decides
 /// the caps: `Due` sends a claim, and the burst starts on the tick the
 /// claim comes back won (`tick_claims`). Only its start and end frames
 /// cost a repaint: render reads `corruption(marquee_tick)` in between,
-/// and the ~200ms hold spans the sidebar's ~132ms wake cadence on its own.
+/// and the ~200ms hold spans the ~132ms wake cadence of an animated Home.
 fn tick_clock_glitch(app: &mut App) -> bool {
-    let clock_visible = !app.show_splash && app.right_sidebar_visible();
+    let clock_visible = clock_on_screen(app);
     let glitch = &mut app.haunt.clock_glitch;
     match glitch.tick(app.marquee_tick, clock_visible) {
         GlitchTick::Due => {
@@ -759,3 +776,7 @@ fn tick_commands(app: &mut App) -> bool {
     }
     true
 }
+
+#[cfg(test)]
+#[path = "svc_test.rs"]
+mod svc_test;

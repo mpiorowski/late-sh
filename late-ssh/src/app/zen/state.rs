@@ -24,7 +24,7 @@ pub enum TileKind {
     Bonsai,
     /// The reef: the whole simulation, bound to the tile.
     Aquarium,
-    /// The sidebar's small tank: the fish in a six-row band, whatever
+    /// The small tank: the fish in a six-row band, whatever
     /// the tile's size. The same tank two ways.
     Tank,
     /// An animated ascii piece (`app/ascii`), the screensaver's kind in a tile.
@@ -43,7 +43,7 @@ pub enum TileKind {
     Activity,
     Friends,
     Pulse,
-    /// The Live panel's rows (`app/live/panel.rs`), as the sidebar draws
+    /// The Live panel's rows (`app/live/panel.rs`), as the Live tile draws
     /// them.
     Live,
     /// A stored `inbox` or `headlines` (kinds that are gone) reads as
@@ -52,7 +52,7 @@ pub enum TileKind {
     Blank,
     /// Home's room rail. One per page.
     Rooms,
-    /// The sidebar's pinned rows: the online count and the clock, then
+    /// The pinned presence rows: the online count and the clock, then
     /// the connected friends.
     Presence,
 }
@@ -430,7 +430,7 @@ impl Dir {
 /// How a split divides its length: the first child's share in per-mille,
 /// fine enough that one row or column of any split a terminal can hold is
 /// a distinct value (see `resize_leaf`), or a fixed cell count for one
-/// child, the way Home's rail and sidebar hold their width whatever the
+/// child, the way Home's rail and right column hold their width whatever the
 /// terminal does. Untagged, so a stored bare number reads as per-mille.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -574,7 +574,7 @@ pub enum ChatRoomBinding {
     #[default]
     Current,
     /// A room by id; one the account has since left shows the current
-    /// room instead (`App::home_chat_rooms`).
+    /// room instead (`zen::input::home_chat_rooms`).
     Room(Uuid),
     /// A permanent room by slug, resolved from the joined rooms at render
     /// time; unknown, the current room.
@@ -609,6 +609,20 @@ impl ChatRoomBinding {
             }
         });
         found.map(|(room, _)| room)
+    }
+
+    /// Whether a tile bound to this shows `target` (News or a joined room).
+    /// A tile bound to no room shows wherever the rail goes, so it never
+    /// answers for a room by itself; a room missing from `rooms` is shown by
+    /// nothing.
+    pub fn shows(&self, target: &ChatRoomBinding, rooms: &[(ChatRoom, Vec<ChatMessage>)]) -> bool {
+        match target {
+            ChatRoomBinding::News => matches!(self, ChatRoomBinding::News),
+            ChatRoomBinding::Room(room_id) => self
+                .joined_room(rooms)
+                .is_some_and(|room| room.id == *room_id),
+            ChatRoomBinding::Current | ChatRoomBinding::Permanent(_) => false,
+        }
     }
 
     /// Whether a tile kept to this is up with the page's chat where it is. A
@@ -653,7 +667,7 @@ impl ChatRoomBinding {
 }
 
 /// What a chat tile draws once its binding is resolved against the
-/// account's rooms (`App::home_chat_rooms`).
+/// account's rooms (`zen::input::home_chat_rooms`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChatTileSource {
     Room(Uuid),
@@ -728,7 +742,7 @@ pub const MAX_TILES: usize = 32;
 
 /// Most chat tiles a layout holds. Every chat tile is a room the session
 /// keeps drawn and its rows cached each frame, and a page of a hundred rooms
-/// would swallow every unread count on the sidebar.
+/// would swallow every unread count on the presence row.
 pub const MAX_CHAT_TILES: usize = 10;
 
 impl Node {
@@ -1311,9 +1325,9 @@ impl Default for RiceLayout {
 
 /// Home's rail width, the gutter beside it included.
 pub const HOME_RAIL_COLS: u16 = 24;
-/// Home's sidebar width, the gutter beside it included.
-pub const HOME_SIDEBAR_COLS: u16 = 24;
-/// The sidebar's pinned rows: the online count with the clock, the friends.
+/// Home's right column width, the gutter beside it included.
+pub const HOME_RIGHT_COLS: u16 = 24;
+/// The pinned presence rows: the online count with the clock, the friends.
 pub const PRESENCE_ROWS: u16 = 2;
 /// The stock Home's reef, across the top of the chat: the reef's minimum,
 /// its surface and floor around the tallest creature (`ReefState::min_height`,
@@ -1341,7 +1355,7 @@ impl RiceLayout {
 
     /// The stock Home: the room rail, then the reef across the top of the
     /// chat hosting the now strip and kept to #lounge, so the chat has its
-    /// rows in every other room, the chat under it, and a sidebar column
+    /// rows in every other room, the chat under it, and a right column
     /// of the presence row, the visualizer, the music dock, the lobby
     /// hosting attention, live and the pet (the shop's note while none is
     /// owned) at their panel rows, with the bonsai taking the rest. Fixed,
@@ -1358,16 +1372,16 @@ impl RiceLayout {
                 .only_in(REEF_ROOM),
             Node::leaf(TileKind::Chat),
         );
-        // The sidebar's panels, each at its rows plus its title rule; the
+        // The right column's panels, each at its rows plus its title rule; the
         // bonsai, last, takes the rest of the column.
         let panels: [(Node, u16); 5] = [
             (
                 Node::leaf(TileKind::Visualizer),
-                crate::app::common::sidebar::MUSIC_VIZ_HEIGHT,
+                crate::app::common::music_dock::MUSIC_VIZ_HEIGHT,
             ),
             (
                 Node::leaf(TileKind::Music),
-                crate::app::common::sidebar::MUSIC_DOCK_HEIGHT,
+                crate::app::common::music_dock::MUSIC_DOCK_HEIGHT,
             ),
             // The lobby hosts attention: what waits on you takes its tile
             // over and the latest tables come back when the list clears.
@@ -1386,7 +1400,7 @@ impl RiceLayout {
         for (tile, rows) in panels.into_iter().rev() {
             column = Node::split_first(Dir::Column, rows + 1, tile, column);
         }
-        let sidebar = Node::split_first(
+        let right_column = Node::split_first(
             Dir::Column,
             PRESENCE_ROWS,
             Node::leaf(TileKind::Presence).untitled(),
@@ -1397,7 +1411,7 @@ impl RiceLayout {
                 Dir::Row,
                 HOME_RAIL_COLS - 1,
                 Node::leaf(TileKind::Rooms).untitled(),
-                Node::split_second(Dir::Row, HOME_SIDEBAR_COLS - 1, center, sidebar),
+                Node::split_second(Dir::Row, HOME_RIGHT_COLS - 1, center, right_column),
             ),
             look: Look {
                 border: BorderKind::None,
@@ -1520,7 +1534,7 @@ pub struct ZenState {
     /// with their leaves; serialization only ever sees `rice`.
     playback: Vec<Option<Playback>>,
     /// Session-only, in leaf order: the tiles kept to a room the page's chat
-    /// is not in (`App::sync_home_kept_tiles`). Read through `tile_hidden`,
+    /// is not in (`zen::input::sync_home_kept_tiles`). Read through `tile_hidden`,
     /// since arrange mode draws them all.
     kept_away: Vec<bool>,
     visiting: bool,
@@ -1609,9 +1623,10 @@ impl ZenState {
         rooms: &[(ChatRoom, Vec<ChatMessage>)],
     ) -> ChatRoomBinding {
         let focused = self.rice.root.only_at(self.focus);
-        match (focused.joined_room(rooms), &rail) {
-            (Some(kept), ChatRoomBinding::Room(room_id)) if kept.id == *room_id => focused,
-            _ => rail,
+        if focused.shows(&rail, rooms) {
+            focused
+        } else {
+            rail
         }
     }
 
@@ -1753,6 +1768,20 @@ impl ZenState {
         self.kinds_up().contains(&kind)
     }
 
+    /// Whether a tile of `kind` is up hosting no guest, so it always draws
+    /// itself: a hosted guest takes the whole tile while it has something to
+    /// say, which only the frame knows.
+    pub fn shows_without_guests(&self, kind: TileKind) -> bool {
+        let root = &self.rice.root;
+        root.leaf_kinds()
+            .into_iter()
+            .zip(root.leaf_guests())
+            .enumerate()
+            .any(|(ordinal, (leaf, guests))| {
+                leaf == kind && guests.is_empty() && !self.tile_hidden(ordinal)
+            })
+    }
+
     /// Resolve all tiles when a visit begins, before the first frame.
     pub(crate) fn enter(&mut self, now: Instant, rng: &mut impl Rng) {
         if !self.visiting {
@@ -1884,6 +1913,39 @@ impl ZenState {
     /// The active chat tile's ordinal in the layout.
     pub fn active_chat_ordinal(&self) -> Option<usize> {
         Some(self.active_chat_tile()?.0)
+    }
+
+    /// Move the focus `delta` chat tiles along the layout, wrapping, past the
+    /// furniture. `false` when there is no other chat tile to move to.
+    pub fn focus_chat_step(&mut self, delta: isize) -> bool {
+        let tiles = self.chat_tiles();
+        let Some(active) = self.active_chat_index() else {
+            return false;
+        };
+        let next = (active as isize + delta).rem_euclid(tiles.len() as isize) as usize;
+        if next == active {
+            return false;
+        }
+        self.focus = tiles[next].0;
+        true
+    }
+
+    /// The chat tile that shows `target` (News or a room) while the active
+    /// one does not. A tile bound to no room shows wherever the rail goes, so
+    /// it never answers for a room by itself.
+    pub fn other_chat_tile_showing(
+        &self,
+        target: &ChatRoomBinding,
+        rooms: &[(ChatRoom, Vec<ChatMessage>)],
+    ) -> Option<usize> {
+        if self.active_chat_room()?.shows(target, rooms) {
+            return None;
+        }
+        let tile = self
+            .chat_tiles()
+            .into_iter()
+            .find(|(_, bound)| bound.shows(target, rooms))?;
+        Some(tile.0)
     }
 
     /// Whether the keys belong to a chat tile: the focus is on one.

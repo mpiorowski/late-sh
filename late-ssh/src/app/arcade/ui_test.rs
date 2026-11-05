@@ -35,18 +35,12 @@ async fn sliding_puzzle_card_renders_rewards_and_launches() {
         app::common::primitives::Screen,
         test_helpers::{make_app, new_test_db, render_plain, strip_ansi},
     };
-    use late_core::{
-        models::{user::RightSidebarMode, user_ssh_key::KeyLayout},
-        test_utils::create_test_user,
-    };
+    use late_core::test_utils::create_test_user;
 
     let test_db = new_test_db().await;
     let user = create_test_user(&test_db.db, "sliding-puzzle-ui-it").await;
     let mut app = make_app(test_db.db.clone(), user.id, "sliding-puzzle-ui-token");
     app.resize(80, 24).expect("resize test terminal");
-    app.device_rails = Some(KeyLayout {
-        right_sidebar_mode: RightSidebarMode::On,
-    });
     app.set_screen(Screen::Arcade);
     app.game_selection = late_core::models::leaderboard::ArcadeGame::Puzzle(
         late_core::models::leaderboard::DailyPuzzle::SlidingPuzzle,
@@ -187,10 +181,7 @@ async fn a_daily_win_turns_the_lobby_mark_green_before_the_leaderboard_refresh()
         test_helpers::{make_app, new_test_db, render_plain},
     };
     use chrono::{Duration, Utc};
-    use late_core::{
-        models::{user::RightSidebarMode, user_ssh_key::KeyLayout},
-        test_utils::create_test_user,
-    };
+    use late_core::test_utils::create_test_user;
     use tokio::sync::broadcast;
 
     let test_db = new_test_db().await;
@@ -198,9 +189,6 @@ async fn a_daily_win_turns_the_lobby_mark_green_before_the_leaderboard_refresh()
     let rival = create_test_user(&test_db.db, "sliding-puzzle-instant-rival").await;
     let mut app = make_app(test_db.db.clone(), user.id, "sliding-puzzle-instant-token");
     app.resize(80, 24).expect("resize test terminal");
-    app.device_rails = Some(KeyLayout {
-        right_sidebar_mode: RightSidebarMode::On,
-    });
     app.set_screen(Screen::Arcade);
     app.game_selection = late_core::models::leaderboard::ArcadeGame::Puzzle(
         late_core::models::leaderboard::DailyPuzzle::SlidingPuzzle,
@@ -265,12 +253,8 @@ async fn the_lobby_counts_todays_solvers_and_o_opens_the_roster() {
         test_helpers::{make_app, new_test_db, render_plain},
     };
     use late_core::{
-        models::{
-            leaderboard::{
-                ArcadeGame, DailyCompletionStatus, DailyPuzzle, DailyStatuses, LeaderboardData,
-            },
-            user::RightSidebarMode,
-            user_ssh_key::KeyLayout,
+        models::leaderboard::{
+            ArcadeGame, DailyCompletionStatus, DailyPuzzle, DailyStatuses, LeaderboardData,
         },
         test_utils::create_test_user,
     };
@@ -280,9 +264,6 @@ async fn the_lobby_counts_todays_solvers_and_o_opens_the_roster() {
     let user = create_test_user(&test_db.db, "solvers-roster-viewer").await;
     let mut app = make_app(test_db.db.clone(), user.id, "solvers-roster-token");
     app.resize(120, 30).expect("resize test terminal");
-    app.device_rails = Some(KeyLayout {
-        right_sidebar_mode: RightSidebarMode::On,
-    });
     app.set_screen(Screen::Arcade);
     app.game_selection = ArcadeGame::Puzzle(DailyPuzzle::Sudoku);
 

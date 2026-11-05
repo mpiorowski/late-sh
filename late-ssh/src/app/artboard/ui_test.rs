@@ -10,16 +10,15 @@ use super::super::svc::{ArtboardSnapshotService, DartboardService, DartboardSnap
 
 #[test]
 fn canvas_area_matches_artboard_frame_layout() {
-    assert_eq!(canvas_area_for_screen((80, 24)), Rect::new(1, 1, 54, 22));
+    // The whole page inside the app frame.
+    assert_eq!(
+        canvas_area_for_state((80, 24), false),
+        Rect::new(1, 1, 78, 22)
+    );
     // The rail takes 20 columns plus a gap off the left in view mode.
     assert_eq!(
         canvas_area_for_state((80, 24), true),
-        Rect::new(22, 1, 33, 22)
-    );
-    // Rail hidden (edit mode, or a narrow terminal) is the old layout.
-    assert_eq!(
-        canvas_area_for_state((80, 24), false),
-        canvas_area_for_screen((80, 24))
+        Rect::new(22, 1, 57, 22)
     );
 }
 
@@ -28,7 +27,7 @@ fn info_box_overlays_top_right_of_full_canvas_width() {
     let state = test_state();
     assert_eq!(
         artboard_info_area_for_screen((80, 24), &state),
-        Some(Rect::new(34, 1, 21, 12))
+        Some(Rect::new(58, 1, 21, 12))
     );
 }
 
@@ -81,6 +80,12 @@ fn help_tab_hit_uses_overlay_tab_rects() {
         .expect("drawing tab hit rect");
     let rect = drawing.1;
 
+    assert_eq!(
+        help_tab_hit((80, 24), &state, rect.x + 1, rect.y + 1),
+        Some(HelpTab::Drawing)
+    );
+    // Help is drawn over the whole page, so the rail moves nothing.
+    state.gallery().set_rail_visible(true);
     assert_eq!(
         help_tab_hit((80, 24), &state, rect.x + 1, rect.y + 1),
         Some(HelpTab::Drawing)
@@ -267,11 +272,11 @@ fn native_canvas_cursor_is_hidden_in_view_mode() {
 fn swatch_boxes_use_full_artboard_width_below_short_info_block() {
     let state = test_state();
     let rects = swatch_box_rects((80, 26), &state);
-    assert_eq!(rects[0], Some(Rect::new(19, 20, 8, 4)));
-    assert_eq!(rects[1], Some(Rect::new(26, 20, 8, 4)));
-    assert_eq!(rects[2], Some(Rect::new(33, 20, 8, 4)));
-    assert_eq!(rects[3], Some(Rect::new(40, 20, 8, 4)));
-    assert_eq!(rects[4], Some(Rect::new(47, 20, 8, 4)));
+    assert_eq!(rects[0], Some(Rect::new(43, 20, 8, 4)));
+    assert_eq!(rects[1], Some(Rect::new(50, 20, 8, 4)));
+    assert_eq!(rects[2], Some(Rect::new(57, 20, 8, 4)));
+    assert_eq!(rects[3], Some(Rect::new(64, 20, 8, 4)));
+    assert_eq!(rects[4], Some(Rect::new(71, 20, 8, 4)));
 }
 
 #[test]
@@ -285,9 +290,9 @@ fn swatch_boxes_fall_back_to_canvas_edge_when_info_block_reaches_them() {
         })
         .collect();
     let rects = swatch_box_rects((80, 24), &state);
-    assert_eq!(rects[0], Some(Rect::new(5, 18, 8, 4)));
-    assert_eq!(rects[1], Some(Rect::new(12, 18, 8, 4)));
-    assert_eq!(rects[2], Some(Rect::new(19, 18, 8, 4)));
+    assert_eq!(rects[0], Some(Rect::new(22, 18, 8, 4)));
+    assert_eq!(rects[1], Some(Rect::new(29, 18, 8, 4)));
+    assert_eq!(rects[2], Some(Rect::new(36, 18, 8, 4)));
 }
 
 #[test]
@@ -295,20 +300,20 @@ fn swatch_boxes_raise_above_notice_row() {
     let mut state = test_state();
     state.private_notice = Some("Heads up".to_string());
     let rects = swatch_box_rects((80, 24), &state);
-    assert_eq!(rects[0], Some(Rect::new(19, 17, 8, 4)));
+    assert_eq!(rects[0], Some(Rect::new(43, 17, 8, 4)));
 }
 
 #[test]
 fn swatch_boxes_leave_bottom_canvas_row_visible() {
     let state = test_state();
     let rects = swatch_box_rects((80, 24), &state);
-    let canvas = canvas_area_for_screen((80, 24));
+    let canvas = canvas_area_for_state((80, 24), false);
 
     assert!(
         !rects
             .iter()
             .flatten()
-            .any(|rect| rect_contains(*rect, 10, canvas.bottom() - 1))
+            .any(|rect| rect_contains(*rect, rect.x, canvas.bottom() - 1))
     );
 }
 
@@ -346,6 +351,49 @@ fn swatch_hit_uses_sgr_coordinates_and_prefers_pin() {
     assert_eq!(
         swatch_hit(screen_size, &state, second_pin.x + 1, second_pin.y + 1),
         Some(SwatchHit::Pin(1))
+    );
+}
+
+/// Input reads the rect the render hands `draw_game`, the whole page inside
+/// the app frame, so a click lands on what the board drew under it.
+#[test]
+fn clicks_land_on_what_the_board_draws() {
+    let mut state = test_state();
+    state.snapshot.canvas = dartboard_core::Canvas::with_size(200, 100);
+    state.editor.swatches[0] = Some(dartboard_editor::Swatch {
+        clipboard: Clipboard::new(1, 1, vec![Some(CellValue::Narrow('Ω'))]),
+        pinned: false,
+    });
+    let screen_size = (80, 26);
+    let page =
+        crate::app::render::app_frame_inner_area(Rect::new(0, 0, screen_size.0, screen_size.1));
+    let backend = ratatui::backend::TestBackend::new(screen_size.0, screen_size.1);
+    let mut terminal = ratatui::Terminal::new(backend).expect("terminal");
+    terminal
+        .draw(|frame| draw_game(frame, page, &state, true))
+        .expect("draw");
+    let buffer = terminal.backend().buffer();
+
+    // SGR mouse reports are 1-based.
+    let (x, y) = (0..screen_size.1)
+        .flat_map(|y| (0..screen_size.0).map(move |x| (x, y)))
+        .find(|&(x, y)| buffer[(x, y)].symbol() == "Ω")
+        .expect("the swatch drew its preview");
+    assert_eq!(
+        swatch_hit(screen_size, &state, x + 1, y + 1),
+        Some(SwatchHit::Body(0))
+    );
+
+    // The info block's corner is drawn at the page's top right.
+    let (corner_x, corner_y) = (page.right() - 1, page.y);
+    assert_eq!(buffer[(corner_x, corner_y)].symbol(), "┐");
+    assert!(info_hit(screen_size, &state, corner_x + 1, corner_y + 1));
+
+    // The board's bottom right cell takes a click.
+    assert!(
+        state
+            .canvas_pos_for_screen_point(screen_size, page.right(), page.bottom())
+            .is_some()
     );
 }
 
@@ -456,7 +504,7 @@ fn floating_and_swatch_previews_render_copied_cell_colors() {
         .expect("draw");
 
     let buffer = terminal.backend().buffer();
-    let canvas_area = canvas_area_for_screen(screen_size);
+    let canvas_area = canvas_area_for_state(screen_size, false);
     assert_eq!(buffer[(canvas_area.x + 2, canvas_area.y + 2)].symbol(), "A");
     assert_eq!(
         buffer[(canvas_area.x + 2, canvas_area.y + 2)].fg,

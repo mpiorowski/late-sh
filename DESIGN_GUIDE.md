@@ -52,12 +52,10 @@ behavior, rather than universal breakpoints or verified guarantees.
 | **180×60** | A roomy desktop reference: spacing, competing emphasis, and multi-pane readability. |
 | **500×200** | An optional extreme-size check: excessive text width, awkward centering, and unhelpful expansion. |
 
-**Observed:** the shell's Auto room-list threshold is 96 terminal columns and its
-Auto right-sidebar threshold is 72. Explicit On settings bypass those Auto
-thresholds. The right sidebar is drawn on Home and Arcade; its contents also
-depend on configuration and available space.
+**Observed:** a page takes the whole frame. Home's columns are tiles, drawn as
+arranged at every width.
 See [shell layout](late-ssh/src/app/render.rs) and
-[sidebar](late-ssh/src/app/common/sidebar.rs).
+[tiles](late-ssh/src/app/zen/ui.rs).
 
 Distinguish terminal size from the size of a supplied content or pane `Rect`.
 The outer frame consumes two columns and two rows, and inner chrome can consume
@@ -104,9 +102,9 @@ dense layouts, and a breathing row between sections. These are useful starting
 points, not app-wide invariants. Lists often have no blank row between items;
 individual tables and panels use different gutters.
 
-**Observed:** the right sidebar leaves a one-column gap after its divider, and
+**Observed:** a Home tile leaves a column of air beside a split's rule, and
 the chat composer uses a one-column horizontal inset.
-See [sidebar](late-ssh/src/app/common/sidebar.rs) and
+See [tiles](late-ssh/src/app/zen/ui.rs) and
 [chat layout](late-ssh/src/app/chat/ui.rs).
 
 **Suggested:** judge spacing with the actual content and supplied area. Reducing

@@ -125,7 +125,7 @@ fn normalize_drops_duplicates_and_keeps_stored_order() {
     assert!(!normalized[2].enabled);
 }
 
-/// Backfill diverges from the sidebar's blanket enable. Only what the frame
+/// Backfill is no blanket enable. Only what the frame
 /// shows nowhere else is forced on (the keyboard hint, voice, mentions, the
 /// live strip's reading, the date); optional status components stay off in
 /// an existing custom roster.

@@ -102,11 +102,6 @@ pub fn draw_game(frame: &mut Frame, area: Rect, state: &State, interacting: bool
     }
 }
 
-/// The board's area with the rail hidden: edit mode, or a narrow terminal.
-pub fn canvas_area_for_screen(screen_size: (u16, u16)) -> Rect {
-    artboard_game_area_for_screen(screen_size, false)
-}
-
 /// The board's area as the last draw laid it out: the rail, when visible,
 /// takes its columns off the left.
 pub fn canvas_area_for_state(screen_size: (u16, u16), rail_visible: bool) -> Rect {
@@ -973,22 +968,18 @@ fn swatch_strip_rect(rects: &[Option<Rect>; SWATCH_CAPACITY]) -> Option<Rect> {
 }
 
 fn artboard_game_area_for_screen(screen_size: (u16, u16), rail_visible: bool) -> Rect {
-    let screen = Rect::new(0, 0, screen_size.0, screen_size.1);
-    let app_inner = Block::default().borders(Borders::ALL).inner(screen);
-    let content =
-        Layout::horizontal([Constraint::Fill(1), Constraint::Length(24)]).split(app_inner)[0];
-    // `rail_visible` is what the last draw decided (it applied the width
-    // gate against the real content area, sidebar or not), so it is taken
-    // as read here rather than re-derived from an assumed sidebar.
+    let page =
+        crate::app::render::app_frame_inner_area(Rect::new(0, 0, screen_size.0, screen_size.1));
+    // `rail_visible` is what the last draw decided, so it is taken as read.
     if rail_visible {
         Layout::horizontal([
             Constraint::Length(RAIL_WIDTH),
             Constraint::Length(1),
             Constraint::Min(0),
         ])
-        .split(content)[2]
+        .split(page)[2]
     } else {
-        content
+        page
     }
 }
 
@@ -1067,7 +1058,8 @@ pub(crate) fn help_tab_hit(
     }
     let col = sgr_x.checked_sub(1)?;
     let row = sgr_y.checked_sub(1)?;
-    let area = artboard_game_area_for_screen(screen_size, state.gallery().rail_visible());
+    // Help is drawn over the whole page area, rail included.
+    let area = artboard_game_area_for_screen(screen_size, false);
     let popup = help_popup_area(area);
     let layout = help_layout(popup)?;
     tab_rects(layout[1])

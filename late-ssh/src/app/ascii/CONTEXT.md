@@ -15,8 +15,8 @@ file names the commit): **earthrise** (the Earth turning over a cratered
 lunar horizon in long low sunlight; a slow piece, see Cadence, and the
 default), **misty forest** (pine ridges fading into morning fog, sunbeams
 slanting through; the other slow piece), **aurora fjord** (aurora over a
-fjord, a lit cabin; a frame a second at a fifth of the clock, see
-Cadence) and **alpine dawn** (first light on snow peaks over a misty
+fjord, a lit cabin; a slow sweep in dots, a frame a second at a fifth of
+the clock in pixels, see Cadence) and **alpine dawn** (first light on snow peaks over a misty
 lake; the lively one), each drawn in one of two styles (`SceneStyle`: **dots**, the
 original's halftone as braille, or **pixels**, solid half-blocks in true
 colour). `late_core::models::user::AsciiPiece` (a `scene` and a `style`)
@@ -28,9 +28,13 @@ pieces ascii.rest also has, plasma, lava lamp and donut, were ported once
 and dropped) plays the default, `AsciiPiece::DEFAULT`, earthrise in dots,
 on a Home tile (the rest of the layout kept) and as the screensaver alike.
 
-`random` chooses uniformly from all eight pieces at activation and holds it.
+`random` chooses uniformly from the pool at activation and holds it.
 `randomer` also chooses at activation, then every five minutes chooses uniformly
-among pieces from other scenes (neither style of the current landscape can repeat).
+among the pool's pieces from other scenes (neither style of the current landscape
+can repeat). The pool is what costs about what an idle session does
+(`playback::in_random_pool`, Cost): earthrise and the misty forest in either style
+and the aurora in dots. The aurora in pixels and alpine dawn play only for someone
+who picked them.
 A screensaver activation and each visit to Home start fresh; every tile has its
 own choice and clock. Leaving Home, removing a tile or changing its selection
 ends that instance. Focus, resizing, layout splits and overlays preserve it;
@@ -84,10 +88,10 @@ late-ssh/src/app/ascii/
 |-- piece.rs            # ShadedFrame, the cadences (a lively scene's tier by style, each slow piece's frame period and rate) and frame clock, the pixel colour step, the shared frame cache, the startup warm-up, JS helpers
 |-- earthrise.rs        # scene: cratered ground with marched shadows, sky and the Earth's maps built once (OnceLock); the disc and four stars per frame; a slow piece, the default
 |-- misty_forest.rs     # scene: forest, fog banks, cloud and beams built once (OnceLock), drifted per frame; a slow piece, its beams on a faster clock in the crawl
-|-- aurora_fjord.rs     # scene: land built once (OnceLock), sky + water per frame
+|-- aurora_fjord.rs     # scene: land built once (OnceLock), sky + water per frame; the dots style's sweep between two whole frames
 |-- alpine_dawn.rs      # scene: the range raymarched once (OnceLock), tinted + mirrored per frame
 |-- ui.rs               # draw_piece: a scene as pixels or braille dots by its style
-|-- playback.rs         # per-view selection, resolved piece and five-minute rotation clock
+|-- playback.rs         # per-view selection, resolved piece, the random pool and five-minute rotation clock
 |-- picker/             # the piece picker a Home ascii tile opens: state.rs, input.rs, ui.rs
 |-- fixtures/           # golden frames recorded from the TS originals: <slug>_t1.txt (glyphs) and <slug>_t1.colors (palette bytes), see Porting a piece
 |-- LICENSE-ascii-rest  # the MIT notice the port carries
@@ -113,17 +117,17 @@ late-ssh/src/app/ascii/
   aurora): a frame every `frame_ms`, a whole number of the 1Hz edges the
   idle floor already takes, with play time at `rate` of the wall clock;
   `piece::cadence` is the one place each piece's pair lives. The aurora
-  is there because its whole sky and water move every frame, so a frame
-  flips most of the screen at any rate, and only one frame a second at
-  `AURORA_RATE` (0.2) of the clock fits the budget in pixels: it reads as
-  a slow aurora, a visible step every second. The two slow pieces proper
-  are a crawl, held to a far smaller budget of their own: What a
+  in pixels is there because its whole sky and water move every frame, so
+  a frame flips most of the screen at any rate, and only one frame a
+  second at `AURORA_RATE` (0.2) of the clock fits the budget: it reads as
+  a slow aurora, a visible step every second. The other three are held to
+  a far smaller budget of their own: What a
   session pays for a piece is the cells that change per frame times the
   frames per second, and `ui_test.rs`,
   `a_slow_piece_moves_a_few_cells_a_second`, holds every slow piece to a
   hundred cells a second on a 200x50 terminal in dots: about a kilobyte a
   second per away session, against tens of kilobytes a frame for a lively
-  scene (every piece's numbers are in Cost). That is what lets the screensaver default to on. The two pay it
+  scene (every piece's numbers are in Cost). That is what lets the screensaver default to on. The three pay it
   differently. The forest plays a frame every `SLOW_FRAME_MS` (1s) at
   `SLOW_RATE` (0.01): its fog is all but still at that crawl, so it plays
   its beams seven times faster than its air (`misty_forest::crawl`,
@@ -136,11 +140,24 @@ late-ssh/src/app/ascii/
   `EARTH_RATE` (0.08), a visible notch of the globe each frame and a turn
   in about half an hour. The dots style's rounded ink is part of that
   arithmetic: without it, most of a frame's changed cells are colours that
-  wobbled by one.
+  wobbled by one. The aurora in dots cannot crawl: a thousandth of a second
+  of play flips about 50 cells, half of them in the water, so a drift that
+  fits takes about forty minutes over a ripple and reads as frozen. But what
+  a step flips levels off as the step grows (half a second of play flips
+  4,447 cells, two seconds 5,891), so it sweeps (`aurora_fjord::sweep`): two
+  whole frames `SWEEP_STEP` (2s) of play apart, the later one left of a
+  front that crosses the screen in `AURORA_SWEEP_FRAMES` (100 1Hz edges,
+  two columns a second). That is `AURORA_SWEEP_RATE` (0.02) of the clock, a
+  ripple in about four minutes, ten times the motion at the same bytes, and
+  the seam reads as a fold in the curtain. A second costs what its front
+  crosses, so `the_aurora_in_dots_holds_the_slow_budget_across_a_sweep`
+  holds the mean of a whole crossing to the budget and the worst second to
+  three times it.
 - **One frame per edge for the process.** `piece::picture` serves a
-  scene's frame from a process-wide cache keyed by scene and play time
-  (both styles share an entry when they want the same picture; alpine
-  dawn's pixels frame `n` is its dots frame `2n`); it computes outside
+  frame from a process-wide cache keyed by picture (`piece::Slot`) and play
+  time (both styles share an entry when they want the same picture; alpine
+  dawn's pixels frame `n` is its dots frame `2n`; the aurora's styles play
+  different pictures, so it has a slot for each); it computes outside
   the lock, and two sessions racing
   on one edge both compute it (a frame of CPU, nothing else).
 - **Drawing.** A scene is shaded per square cell (`ShadedFrame`, on its
@@ -179,7 +196,8 @@ late-ssh/src/app/ascii/
   lively piece in dots, the quarter edge for one in pixels, the 1Hz edge
   for a slow one, whose frame cache hands back the same frame until its
   own edge) and a lively one asks `wake_hint` for `ANIM_HALF_TICK`
-  (`App::lively_ascii_visible`) or `ANIM_QUARTER_TICK`
+  (`App::lively_ascii_visible`; the quarter tier once the session has been
+  idle five minutes) or `ANIM_QUARTER_TICK`
   (`App::quarter_ascii_visible`); a slow piece asks for nothing, the idle
   floor carries its edge. The screensaver
   returns its tier ahead of every other check, since it covers everything
@@ -203,7 +221,9 @@ the same diff costs through the real terminal backend
 true-colour foreground and background and the column re-anchor every
 non-ASCII glyph takes, about 39 bytes; a dots cell about 35), plus one
 frame's compute in the unoptimised test profile (read it against the
-other rows, not the clock).
+other rows, not the clock). A row is the mean of eight frame edges, except
+the aurora in dots, whose seconds differ by what its front crosses: that row
+is a whole crossing.
 
 | piece                  | frame ms | cells/frame | worst | cells/s | bytes/frame | KB/s | frame us (debug) |
 |------------------------|---------:|------------:|------:|--------:|------------:|-----:|-----------------:|
@@ -211,7 +231,7 @@ other rows, not the clock).
 | earthrise · pixels     |     4000 |         448 |   464 |     112 |       18854 |    4 |             3022 |
 | misty forest · dots    |     1000 |          55 |    62 |      55 |        2248 |    2 |             3367 |
 | misty forest · pixels  |     1000 |         141 |   161 |     141 |        5921 |    5 |             3319 |
-| aurora fjord · dots    |     1000 |        3226 |  3281 |    3226 |      109939 |  107 |             4586 |
+| aurora fjord · dots    |     1000 |          96 |   213 |      96 |        3253 |    3 |             7723 |
 | aurora fjord · pixels  |     1000 |        4943 |  5026 |    4943 |      192652 |  188 |             4561 |
 | alpine dawn · dots     |      132 |         501 |   622 |    3795 |       17622 |  130 |             5727 |
 | alpine dawn · pixels   |      264 |        1450 |  1657 |    5492 |       52596 |  194 |             5595 |
@@ -221,7 +241,12 @@ What the numbers decide:
 - **The screensaver's default holds the budget**: a hundred cells a
   second in dots (`a_slow_piece_moves_a_few_cells_a_second`), so a
   session that is away costs about what one that idles did. Any piece
-  offered as a slow one must pass that test at its cadence.
+  offered as a slow one must pass that test at its cadence (the aurora in
+  dots passes its own, across a whole crossing, see Cadence).
+- **A random draw costs a few KB/s**: a draw plays unattended, often for
+  hours to an empty room, so every piece in the pool stays at or under
+  `RANDOM_POOL_KB_PER_S` (6,
+  `every_piece_a_random_draw_can_land_on_costs_a_few_kilobytes_a_second`).
 - **The rule: no piece puts more than 200 KB/s on the wire** at its
   cadence on a 200x50 terminal (`WIRE_BUDGET_KB_PER_S`,
   `every_piece_stays_under_the_wire_budget`, a contract that runs with
@@ -235,7 +260,8 @@ What the numbers decide:
   plays at the quarter tier, which lands it beside the dots (before
   either, 870 KB/s). The aurora moves its whole sky every frame, so at
   the half tier it was 651 KB/s in dots and 2 MB/s in pixels, and no rate
-  above a frame a second at a fifth of the clock fits; it plays at that.
+  above a frame a second at a fifth of the clock fits pixels; they play at
+  that. The dots sweep instead (Cadence).
   Changing a piece's rate is a cadence: a `frame_ms` on the piece
   (`piece::cadence`), the tick tier it rides (`App::ascii_edge`,
   `App::wake_hint`, `App::lively_ascii_visible`,
@@ -243,7 +269,8 @@ What the numbers decide:
   row in this table. Alpine dawn in pixels sits at 194: a change to its
   drawing re-runs the budget test before anything else.
 - **Compute is not the limit** at these sizes (a frame is a few
-  milliseconds in debug, shared by every session through the cache); the
+  milliseconds in debug, shared by every session through the cache, and
+  twice that for the aurora's sweep, which computes both its stills); the
   wire is. A piece that needs the frame cache to miss (a per-session
   parameter) would change that, and does not exist yet.
 - **The wire is the limit, and it is the client's.** A lively piece is
@@ -252,8 +279,14 @@ What the numbers decide:
   client's terminal has to parse and paint it at its rate, and a terminal
   that cannot (tmux in the path, a non-GPU emulator) falls behind and
   every key feels late. The bytes column is the number the rule holds.
-- Measured in prod (`late_ssh_render*`, the output-budget metrics): not
-  yet, for any piece; the bytes column is the proxy until then.
+- Measured in prod, indirectly: `late_ssh_screensavers_total` counts
+  activations per piece but not their bytes, so the reading is 7 days of
+  `session wire summary` joined to each user's selected piece, and the
+  ranking above holds. `earthrise` and `misty_forest` sessions cost what
+  `off` does, about 5 KB/s. Before the pool and the sweep, `random`,
+  `randomer`, the aurora and alpine dawn cost 27 to 70 KB/s and those 20
+  users were 78% of all output (`SCALE.md`, Pain Point 1): the budget bounds
+  a piece's rate, and nothing bounds how long it plays to an empty room.
 
 ## 5. Porting a piece
 
@@ -323,9 +356,8 @@ What the numbers decide:
   under the app lock; a test binary pays it on the first scene test.
 - ascii.rest's `paper` (a light page flipping the ramp) is not ported:
   every piece draws its dark-ground ramp.
-- A lively scene as the screensaver (a full-screen picture per away
-  session at up to the wire budget, Cost) has not had its bandwidth
-  measured in prod; `late_ssh_render*` and the
-  output-budget metrics are where it would show. The default is a slow
-  piece for that reason: its cost is pinned by the cell budget test, not
-  estimated.
+- A lively scene as the screensaver is a full-screen picture per away
+  session at up to the wire budget (Cost), and it plays only for someone
+  who picked it, since a random draw never lands on one. The default is a
+  slow piece for that reason: its cost is pinned by the cell budget test,
+  not estimated.

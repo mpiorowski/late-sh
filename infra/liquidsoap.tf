@@ -3,10 +3,13 @@
 # Streams the local CC0/CC-BY playlists to Icecast (chill + classical mounts)
 # =============================================================================
 
-resource "kubernetes_config_map_v1" "liquidsoap_config" {
+# A Secret, not a ConfigMap: the rendered script holds the Icecast source password.
+resource "kubernetes_secret_v1" "liquidsoap_config" {
   metadata {
     name = "liquidsoap-config"
   }
+
+  type = "Opaque"
 
   data = {
     "radio.liq" = replace(
@@ -80,7 +83,7 @@ resource "kubernetes_deployment_v1" "liquidsoap" {
           app = "liquidsoap"
         }
         annotations = {
-          config_hash   = sha256(join("", values(kubernetes_config_map_v1.liquidsoap_config.data)))
+          config_hash   = nonsensitive(sha256(join("", values(kubernetes_secret_v1.liquidsoap_config.data))))
           playlist_hash = sha256(join("", values(kubernetes_config_map_v1.liquidsoap_playlists.data)))
         }
       }
@@ -151,8 +154,8 @@ resource "kubernetes_deployment_v1" "liquidsoap" {
         volume {
           name = "config"
 
-          config_map {
-            name = kubernetes_config_map_v1.liquidsoap_config.metadata[0].name
+          secret {
+            secret_name = kubernetes_secret_v1.liquidsoap_config.metadata[0].name
           }
         }
 

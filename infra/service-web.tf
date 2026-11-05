@@ -75,7 +75,7 @@ resource "kubernetes_deployment_v1" "service_web" {
 
           readiness_probe {
             http_get {
-              path = "/"
+              path = "/health"
               port = "http"
             }
             initial_delay_seconds = 3

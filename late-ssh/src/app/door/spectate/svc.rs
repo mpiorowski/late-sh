@@ -187,7 +187,7 @@ impl LiveGamesService {
     }
 
     /// The open-watch count itself, for a reader that lists many games at
-    /// once (the sidebar's Live panel) and its tests, which need no roster.
+    /// once (the Live panel) and its tests, which need no roster.
     pub fn open_watches(&self) -> &OpenWatches {
         &self.open_watches
     }

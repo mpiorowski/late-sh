@@ -19,8 +19,7 @@ use uuid::Uuid;
 
 use late_core::models::leaderboard::{ArcadeGame, DailyPuzzle, LeaderboardData};
 use late_core::models::profile::Profile;
-use late_core::models::user::{LandingPage, RightSidebarMode, TerminalImagesMode};
-use late_core::models::user_ssh_key::KeyLayout;
+use late_core::models::user::{LandingPage, TerminalImagesMode};
 
 use crate::{
     app::activity::event::ActivityEvent,
@@ -107,19 +106,9 @@ fn voice_toggle_intent(
     }
 }
 
-/// The Arcade sidebar mode in force: this device's stored mode when its key
-/// has one, else the account default. Free-standing so `App::new` can seed
-/// the settings draft with it before the `App` itself exists.
-fn device_rails_or_profile(device_rails: Option<KeyLayout>, profile: &Profile) -> RightSidebarMode {
-    match device_rails {
-        Some(layout) => layout.right_sidebar_mode,
-        None => profile.right_sidebar_mode,
-    }
-}
-
 /// Bounds for the aquarium simulation at launch: a band the size of the
 /// old Home tray (eleven rows inside the chat column: frame borders plus
-/// the room rail and right sidebar, 24 each). Home's reef tile re-binds
+/// Home's two rail columns, 24 each). Home's reef tile re-binds
 /// the sim to its own rect on its first draw
 /// (`sync_aquarium_bounds`); this only has to be a sane start.
 fn aquarium_area_for_terminal(cols: u16, rows: u16) -> Rect {
@@ -422,9 +411,6 @@ pub struct SessionConfig {
     /// `None` for sessions with no key of their own (ghost bots, tests), which
     /// then simply follow the account default and persist nothing.
     pub key_fingerprint: Option<String>,
-    /// This device's stored home rail layout, or `None` when the key has never
-    /// been configured and should follow the account default.
-    pub key_layout: Option<late_core::models::user_ssh_key::KeyLayout>,
     /// This device's Artboard content disclaimer, or `None` when the key has
     /// never set one and should follow the account's `artboard_disclaimer`.
     pub key_artboard_disclaimer: Option<bool>,
@@ -647,16 +633,16 @@ pub struct App {
     pub(crate) away_user_ids: HashSet<Uuid>,
     /// Human headcount and connected friends, recomputed on the same ~1s
     /// cadence; renderers read these owned values instead of locking the
-    /// shared `active_users` map every frame. The friends feed the sidebar
+    /// shared `active_users` map every frame. The friends feed the presence tile
     /// friends row and the Friends tile.
     pub(crate) online_count: usize,
     pub(crate) active_friends: Vec<crate::app::chat::state::ActiveFriend>,
     /// The unread mention count the mentions list was last requested at
     /// while Home hosts the attention guest (the list loads only on ask).
     pub(super) home_attention_listed_unread: Option<i64>,
-    /// Last rendered sidebar clock text, compared on the ~1s tick so minute
+    /// Last rendered clock text, compared on the ~1s tick so minute
     /// rollovers count as a render-visible change.
-    pub(super) last_sidebar_clock: String,
+    pub(super) last_clock: String,
     /// App-owned author-context epoch for the chat row caches: bumps when
     /// AFK, drunk levels, name styles, or the username directory change.
     /// Pairs with `ChatState::context_epoch` in `ChatRowsVersions`.
@@ -676,7 +662,7 @@ pub struct App {
     /// render ever queries for it.
     pub(super) pot_snapshot_rx: Option<watch::Receiver<Arc<crate::app::pot::svc::PotSnapshot>>>,
     pub(super) pot_events_rx: Option<broadcast::Receiver<crate::app::pot::svc::PotEvent>>,
-    /// What the sidebar's pot panel draws, projected for this viewer.
+    /// What the pot's status badge draws, projected for this viewer.
     pub(crate) pot_view: crate::app::pot::state::PotView,
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) username_directory: Option<crate::usernames::UsernameDirectory>,
@@ -780,19 +766,13 @@ pub struct App {
     pub(crate) music_prefix_armed: bool,
     pub(crate) room_section_prefix_armed: bool,
     /// `s` was pressed on Home: the next digit opens that row of the
-    /// sidebar's Live panel (`live/input.rs::open_from_prefix`).
+    /// Live panel (`live/input.rs::open_from_prefix`).
     pub(crate) live_prefix_armed: bool,
 
     /// Profile
     pub(crate) profile_state: profile::state::ProfileState,
-    /// Home rail layout for *this device*: the layout stored on the SSH key
-    /// this session authenticated with, or `None` to follow the live account
-    /// profile. `\` and the two Ctrl+O rail rows write it, so a phone and a
-    /// desktop on one linked account stop overwriting each other. Read through
-    /// [`App::rail_modes`]; render resolves `Auto` against terminal width.
-    pub(crate) device_rails: Option<late_core::models::user_ssh_key::KeyLayout>,
-    /// Artboard content disclaimer for *this device*, stored on the same key
-    /// as `device_rails`, or `None` to follow the account's
+    /// Artboard content disclaimer for *this device*, stored on the SSH key
+    /// this session authenticated with, or `None` to follow the account's
     /// `artboard_disclaimer`. Read through [`App::artboard_disclaimer_enabled`].
     pub(crate) device_artboard_disclaimer: Option<bool>,
     /// The key the device settings persist to; `None` for keyless sessions.
@@ -996,7 +976,7 @@ pub struct App {
     /// Lobby modal state spanning both game domains: cursor, claim-confirm,
     /// unseen-challenge glow.
     pub(crate) lobby: crate::app::lobby::state::LobbyState,
-    /// Daily correspondence games: sidebar panel and board state.
+    /// Daily correspondence games: lobby tile and board state.
     pub(crate) daily: crate::app::lobby::daily::state::DailyState,
     /// Realm territory-conquest games: per-session snapshot + board state.
     pub(crate) realm: crate::app::door::realm::state::RealmState,
@@ -1224,36 +1204,6 @@ impl App {
         self.away && !self.video.is_open()
     }
 
-    /// The rail modes this session renders from: this device's stored layout if
-    /// its key has one, else the live account profile. The single read path for
-    /// rail visibility, so render, input, and the settings modal can never
-    /// disagree about which layout is in force.
-    pub(crate) fn rail_modes(&self) -> RightSidebarMode {
-        device_rails_or_profile(self.device_rails, self.profile_state.profile())
-    }
-
-    /// Adopt the sidebar row from the settings-modal draft as this device's
-    /// mode. A no-op when it already matches, so unrelated tweaks in the same
-    /// modal do not write to the key.
-    pub(crate) fn sync_device_rails_from_settings(&mut self) {
-        let edited = self.settings_modal_state.device_rails();
-        if edited != self.rail_modes() {
-            self.set_device_rails(edited);
-        }
-    }
-
-    fn set_device_rails(&mut self, mode: RightSidebarMode) {
-        let layout = KeyLayout {
-            right_sidebar_mode: mode,
-        };
-        self.device_rails = Some(layout);
-        // Keyless sessions (ghost bots, tests) have no device to remember: the
-        // layout still applies for the rest of the session, it just isn't saved.
-        if let Some(fingerprint) = self.key_fingerprint.clone() {
-            self.profile_state.set_device_rails(fingerprint, layout);
-        }
-    }
-
     pub fn skip_splash_for_tests(&mut self) {
         self.show_splash = false;
         self.haunt.clear_whisper();
@@ -1305,8 +1255,7 @@ impl App {
     }
 
     pub(crate) fn sync_visible_chat_room(&mut self) {
-        self.steer_active_chat_from_rail();
-        self.sync_home_kept_tiles();
+        crate::app::zen::input::sync_chat_tiles_to_rail(self);
         let visible_room_id = self.current_visible_chat_room_id();
         let changed = self.chat.visible_room_id() != visible_room_id;
         self.chat.set_visible_room_id(visible_room_id);
@@ -1639,11 +1588,9 @@ impl App {
             config.referral_service.clone(),
             config.user_id,
         );
-        let device_rails = config.key_layout;
         let device_artboard_disclaimer = config.key_artboard_disclaimer;
         settings_modal_state.open_from_profile(
             &initial_profile,
-            device_rails_or_profile(device_rails, &initial_profile),
             device_artboard_disclaimer.unwrap_or(initial_profile.artboard_disclaimer),
         );
         // Everyone lands in the clubhouse by default: the tavern is the front
@@ -1799,7 +1746,7 @@ impl App {
                 .unwrap_or(0),
             active_friends: Vec::new(),
             home_attention_listed_unread: None,
-            last_sidebar_clock: String::new(),
+            last_clock: String::new(),
             chat_ctx_epoch: 0,
             last_username_directory: None,
             flair_directory: config.flair_directory,
@@ -1904,7 +1851,6 @@ impl App {
                 config.user_id,
                 config.initial_theme_id,
             ),
-            device_rails,
             device_artboard_disclaimer,
             key_fingerprint: config.key_fingerprint,
             profile_modal_state: profile_modal::state::ProfileModalState::new(
@@ -2881,7 +2827,7 @@ impl App {
         // page on arrival, and only then; a pick made while Home is up
         // stands.
         if screen_changed && self.on_home() {
-            self.sync_rail_to_active_chat();
+            crate::app::zen::input::sync_rail_to_active_chat(self);
         }
         // The aquarium sim is sized for whichever surface shows it next.
         self.sync_aquarium_bounds();
@@ -2889,7 +2835,7 @@ impl App {
         // Every top-level move repaints from scratch. ratatui only re-emits
         // cells whose contents changed, and the two layouts rarely disagree
         // on every cell: leaving Home for the Arcade used to strand the
-        // sidebar's bonsai emoji on screen, because a wide glyph the new
+        // bonsai emoji on screen, because a wide glyph the new
         // layout writes a space over occupies two columns and only one of
         // them differs. Clearing costs one full frame per page switch, which
         // every door and the Artboard already paid for the same reason. A
@@ -3107,10 +3053,12 @@ impl App {
             || self.show_mod_modal
             || self.show_hub_modal
             || self.show_profile_modal
+            || self.show_sheet_modal
             || self.show_poll_modal
             || self.show_gild_modal
             || self.chat.cyberspace.modal_active()
             || self.show_bonsai_modal
+            || self.show_lobby_modal
             || self.paper.modal.is_some()
             || self.stream_modal.is_some()
             || self.show_help
@@ -3119,7 +3067,13 @@ impl App {
             || self.video.modal().is_some()
             || self.room_search_modal_state.is_open()
             || self.chat.history_modal.is_open()
+            || self.room_info_modal_state.is_open()
+            || self.directory_editor.is_open()
+            || self.jobs.post.is_open()
+            || self.tag_picker.is_open()
+            || self.piece_picker.is_open()
             || self.booth_modal_state.is_open()
+            || self.stations_modal_state.is_open()
             || self.icon_picker_open
     }
 
@@ -3538,8 +3492,8 @@ impl App {
     /// on. While the rail shows a synthetic entry (Mentions, News, feeds)
     /// the active tile shows that view: no room then, as Home has always
     /// read it. The tile's binding follows the rail onto rooms and News
-    /// (`steer_active_chat_from_rail`) and brings the rail back when the
-    /// tile takes the focus (`sync_rail_to_active_chat`).
+    /// (`zen::input::steer_active_chat_from_rail`) and brings the rail back
+    /// when the tile takes the focus (`zen::input::sync_rail_to_active_chat`).
     pub(crate) fn home_chat_room_id(&self) -> Option<Uuid> {
         if self.chat.synthetic_entry_selected() {
             return None;
@@ -3618,171 +3572,6 @@ impl App {
             && (!self.home.active_chat_hosts(Guest::Now) || self.lounge_card_shown())
     }
 
-    /// The rail follows the active chat tile: the focus landing on a
-    /// chat tile bound to a room makes that room Home's selection, and on
-    /// one holding News, the News row. A tile bound to no room shows the
-    /// rail's room and moves nothing.
-    pub(crate) fn sync_rail_to_active_chat(&mut self) {
-        use crate::app::chat::state::RoomSlot;
-        use crate::app::zen::state::ChatRoomBinding;
-        let Some(bound) = self.home.active_chat_room() else {
-            return;
-        };
-        let slot = match &bound {
-            ChatRoomBinding::News => {
-                if self.chat.news_selected {
-                    return;
-                }
-                RoomSlot::News
-            }
-            ChatRoomBinding::Current | ChatRoomBinding::Room(_) | ChatRoomBinding::Permanent(_) => {
-                let Some(room_id) = bound.joined_room(&self.chat.rooms).map(|room| room.id) else {
-                    return;
-                };
-                if self.chat.selected_room_id == Some(room_id)
-                    && !self.chat.synthetic_entry_selected()
-                {
-                    return;
-                }
-                RoomSlot::Room(room_id)
-            }
-        };
-        if self.chat.select_room_slot(slot) {
-            self.chat.reset_composer();
-            self.chat.request_list();
-        }
-    }
-
-    /// A tile that just became a chat is pinned to the room of the moment,
-    /// so it keeps it when the rail moves on; and so is every chat tile
-    /// bound to no room, since a page with two chats has nothing left for
-    /// a tile that follows the rail to show but the other tile's room.
-    pub(crate) fn pin_chat_tiles_on_pick(&mut self) {
-        if self.home.focused_kind() != Some(crate::app::zen::state::TileKind::Chat) {
-            return;
-        }
-        self.pin_unbound_chats_to_the_moment();
-    }
-
-    /// A layout being left (another one loading, or the page saved under
-    /// a new name) pins its chat tiles bound to no room to the room of the
-    /// moment, so it comes back where it was instead of wherever the rail
-    /// is by then. `true` when a tile changed.
-    pub(crate) fn pin_unbound_chats_to_the_moment(&mut self) -> bool {
-        let Some(moment) = self.binding_of_the_moment() else {
-            return false;
-        };
-        self.home.pin_unbound_chats(moment)
-    }
-
-    /// The room of the moment as a binding: News while the rail shows it,
-    /// else the current room (Home's selection when it is a real room,
-    /// else #lounge). `None` before the rooms arrive.
-    fn binding_of_the_moment(&self) -> Option<crate::app::zen::state::ChatRoomBinding> {
-        use crate::app::zen::state::ChatRoomBinding;
-        if self.chat.news_selected {
-            return Some(ChatRoomBinding::News);
-        }
-        self.home_current_room_id().map(ChatRoomBinding::Room)
-    }
-
-    /// The active chat tile remembers where the rail takes it: a bound
-    /// tile is rebound to the room or the News row the rail moves to (a
-    /// layout edit, saved), so the next focus on it, and the next load of
-    /// its layout, come back there. The other synthetic rows (mentions,
-    /// rss, browse) are views the tile shows while they are up, binding
-    /// nothing; a tile bound to no room follows the rail as is until a
-    /// pin (`pin_chat_tiles_on_pick`, `pin_unbound_chats_to_the_moment`)
-    /// binds it. A slug binding whose room the rail is on is left as the
-    /// slug, so the stock tree is not rewritten by looking at it.
-    fn steer_active_chat_from_rail(&mut self) {
-        use crate::app::zen::state::ChatRoomBinding;
-        if !self.on_home() {
-            return;
-        }
-        let Some(moment) = self.home_rail_binding() else {
-            return;
-        };
-        let Some(bound) = self.home.active_chat_room() else {
-            return;
-        };
-        let same = match (&bound, &moment) {
-            (ChatRoomBinding::Current, _) => true,
-            (ChatRoomBinding::Permanent(_), ChatRoomBinding::Room(room_id)) => {
-                bound.joined_room(&self.chat.rooms).map(|room| room.id) == Some(*room_id)
-            }
-            (bound, moment) => bound == moment,
-        };
-        if same {
-            return;
-        }
-        if self.home.bind_active_chat_room(moment) {
-            self.mark_home_layout_dirty();
-        }
-    }
-
-    /// The rail's selection as a binding: News or a real room. `None` on the
-    /// other synthetic rows (mentions, rss, browse) and before the rooms
-    /// arrive.
-    pub(crate) fn home_rail_binding(&self) -> Option<crate::app::zen::state::ChatRoomBinding> {
-        use crate::app::zen::state::ChatRoomBinding;
-        if self.chat.news_selected {
-            return Some(ChatRoomBinding::News);
-        }
-        self.home_chat_room_id().map(ChatRoomBinding::Room)
-    }
-
-    /// Note which of Home's tiles are kept to a room the page's chat is not
-    /// in. Runs with the room (`sync_visible_chat_room`), so the page reflows
-    /// as the messages change anyway. The reef's rect moves when it goes
-    /// down or comes back, so the simulation is bound again.
-    pub(crate) fn sync_home_kept_tiles(&mut self) {
-        let chat_room = self.home_chat_room_id();
-        let moved = self
-            .home
-            .sync_kept_away(self.chat.news_selected, chat_room, &self.chat.rooms);
-        if moved {
-            self.sync_aquarium_bounds();
-        }
-    }
-
-    /// What every chat tile draws, in layout order, resolved: a tile bound
-    /// to a room the account has since left, or to a permanent room's slug
-    /// the account's rooms do not hold, shows the current room instead;
-    /// one holding News draws the News list. `None` is an account with no
-    /// room at all.
-    pub(crate) fn home_chat_rooms(&self) -> Vec<Option<crate::app::zen::state::ChatTileSource>> {
-        use crate::app::zen::state::{ChatRoomBinding, ChatTileSource};
-        self.home
-            .chat_tiles()
-            .into_iter()
-            .map(|(_, bound)| match bound {
-                ChatRoomBinding::News => Some(ChatTileSource::News),
-                bound => self.home_room_or_current(&bound).map(ChatTileSource::Room),
-            })
-            .collect()
-    }
-
-    fn home_room_or_current(
-        &self,
-        bound: &crate::app::zen::state::ChatRoomBinding,
-    ) -> Option<Uuid> {
-        match bound.joined_room(&self.chat.rooms) {
-            Some(room) => Some(room.id),
-            None => self.home_current_room_id(),
-        }
-    }
-
-    /// The current room: Home's selection when it is a real room, else #lounge.
-    fn home_current_room_id(&self) -> Option<Uuid> {
-        if !self.chat.synthetic_entry_selected()
-            && let Some(room_id) = self.chat.selected_room_id
-        {
-            return Some(room_id);
-        }
-        self.chat.lounge_room_id()
-    }
-
     /// The user's ordered status bar: the draft while the settings modal is
     /// open, so the frame previews it, else the saved profile.
     pub(crate) fn statusline_components(
@@ -3797,7 +3586,7 @@ impl App {
 
     /// The rect the aquarium simulation should fill on the current screen:
     /// the first reef-form tank tile's inner rect on Home (a
-    /// sidebar-sized tank tile draws the small tank and binds nothing),
+    /// narrow tank tile draws the small tank and binds nothing),
     /// the launch band elsewhere.
     fn aquarium_area_for_screen(&self) -> Rect {
         let (cols, rows) = self.size;

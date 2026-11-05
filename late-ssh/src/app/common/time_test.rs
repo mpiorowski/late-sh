@@ -3,6 +3,11 @@ use chrono::TimeZone;
 use chrono::Utc;
 
 #[test]
+fn clock_text_falls_back_to_utc_when_timezone_missing() {
+    assert!(clock_text(None).starts_with("UTC "));
+}
+
+#[test]
 fn formats_valid_timezone() {
     let now = Utc
         .with_ymd_and_hms(2026, 4, 19, 12, 30, 0)

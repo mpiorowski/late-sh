@@ -11,7 +11,7 @@
 use late_core::models::door_rc::DoorRcGame;
 
 use crate::app::common::primitives::{Banner, Screen};
-use crate::app::input::{MouseButton, MouseEventKind, ParsedInput, app_content_area};
+use crate::app::input::{MouseButton, MouseEventKind, ParsedInput};
 use crate::app::state::App;
 
 /// Games hub keys. Up/down (or j/k, h/l) move the selection along the rail
@@ -68,7 +68,7 @@ pub(crate) fn handle_event(app: &mut App, event: &ParsedInput) -> bool {
         && matches!(mouse.kind, MouseEventKind::Down)
         && matches!(mouse.button, Some(MouseButton::Left))
     {
-        let body = app_content_area(app);
+        let body = app.content_area();
         let live = app.live_games.live_rows();
         if let Some(entry) = crate::app::door::hub::ui::sidebar_hit_test(
             body,

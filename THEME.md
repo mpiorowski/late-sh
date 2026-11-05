@@ -211,7 +211,7 @@ cargo check -p late-ssh
 If possible, also verify the theme manually in:
 
 - profile/settings
-- dashboard/sidebar
+- Home and its tiles
 - chat
 - games
 

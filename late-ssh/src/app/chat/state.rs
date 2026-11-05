@@ -736,8 +736,8 @@ pub(crate) fn home_room_kind(room: &ChatRoom) -> HomeRoom {
 
 /// The haunted channel (`app/deadchannel`, GAME.md): joined by invitation
 /// only, and once joined it sits at the bottom of Core, above Discover,
-/// never in Channels. The rail builders in `ui.rs` and
-/// `visual_order_for_rooms` all key off this.
+/// never in Channels. The rail builder in `ui.rs` and
+/// `visual_order_for_rooms` both key off this.
 pub(crate) fn is_deadchannel_room(room: &ChatRoom) -> bool {
     room.kind == late_core::models::chat_room::DEADCHANNEL_KIND
 }
@@ -6353,17 +6353,6 @@ impl ChatState {
                         banner = Some(Banner::success(&format!("Posted to #{}", kind.slug())));
                     }
                 }
-                ChatEvent::DeltaSynced {
-                    user_id,
-                    room_id,
-                    messages,
-                } if self.user_id == user_id => {
-                    for message in messages {
-                        if message.room_id == room_id {
-                            self.push_message(message);
-                        }
-                    }
-                }
                 ChatEvent::RoomTailLoaded {
                     user_id,
                     room_id,
@@ -7435,7 +7424,7 @@ pub struct ActivityTickerEntry {
     pub at: DateTime<Utc>,
 }
 
-/// A connected friend, as the sidebar friends row and the Home Friends tile
+/// A connected friend, as the presence friends row and the Home Friends tile
 /// draw them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActiveFriend {
@@ -7737,7 +7726,7 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
 
     // Core: permanent rooms, hardcoded order. Lounge first, then what is new
     // in the house (News, RSS when available), then the other permanent
-    // rooms and Mentions. Mirrored by both rail builders in `ui.rs`.
+    // rooms and Mentions. Mirrored by the rail builder in `ui.rs`.
     let core_collapsed = collapsed_sections.contains(&RoomSection::Core);
     let core_order = ["lounge", "announcements", "suggestions", "bugs"];
     let [lounge, core_rest @ ..] = core_order;
@@ -7783,7 +7772,7 @@ pub(crate) fn visual_order_for_rooms<U: UsernameResolver + ?Sized>(
         order.push(RoomSlot::Room(room.id));
     }
     // The haunted channel, for whoever was invited in: the last room in
-    // Core, under voice, above Discover. Mirrored by both rail builders.
+    // Core, under voice, above Discover. Mirrored by the rail builder.
     if let Some((room, _)) = rooms.iter().find(|(r, _)| is_deadchannel_room(r))
         && pushed_rooms.insert(room.id)
         && !core_collapsed

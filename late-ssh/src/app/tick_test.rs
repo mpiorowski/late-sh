@@ -1,7 +1,5 @@
 use std::time::{Duration, Instant};
 
-use late_core::models::user::RightSidebarMode;
-use late_core::models::user_ssh_key::KeyLayout;
 use tokio::time::{sleep, timeout};
 
 use crate::app::chat::svc::ChatEvent;
@@ -21,30 +19,12 @@ const CLEAN_SETTLE_WINDOW: Duration = Duration::from_millis(250);
 /// nextest's 5-minute terminate-after.
 const CLEAN_SETTLE_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// The sidebar's animated panels (eq strip + bonsai sway) paint on anim_half
-/// edges whenever the right sidebar is visible, so a session showing it never
-/// settles by design. Settle-based tests turn the sidebar off to exercise the
-/// gate beneath; the tail of `idle_ticks_settle_clean_and_wake_for_relevant_events`
-/// turns it back on to cover the visible-sidebar path.
-///
-/// This writes the per-device rails rather than the profile. `ProfileState::
-/// drain_snapshot` replaces the whole profile every time a `ProfileService`
-/// snapshot lands, so a profile-level edit here survives only until the
-/// session's first profile prefetch arrives. That prefetch is async: on an
-/// unloaded machine it lands before the settle loop starts, but under load it
-/// lands mid-settle, silently restores the account's `On`, and switches the
-/// sidebar back on -- at which point the app dirties every anim_half edge
-/// (~132ms) and can never hold the 250ms window, at any timeout. `device_rails`
-/// takes precedence over the profile in `device_rails_or_profile` and nothing
-/// async overwrites it, so the sidebar stays off for the whole test.
-///
-/// Home's panels are tiles of its own layout now, not the sidebar, so the
-/// same quiet needs a Home without an animated tile: the rail and the chat
-/// alone.
-fn hide_sidebar(app: &mut App) {
-    app.device_rails = Some(KeyLayout {
-        right_sidebar_mode: RightSidebarMode::Off,
-    });
+/// An animated tile (eq strip, bonsai sway) paints on anim_half edges, so a
+/// Home showing one never settles by design. Settle-based tests use a Home
+/// without one, the rail and the chat alone, to exercise the gate beneath; the
+/// tail of `idle_ticks_settle_clean_and_wake_for_relevant_events` swaps a music
+/// tile in to cover the animated path.
+fn quiet_home(app: &mut App) {
     let quiet = RiceLayout {
         root: Node::split_first(
             Dir::Row,
@@ -57,13 +37,10 @@ fn hide_sidebar(app: &mut App) {
     app.home = ZenState::new(quiet.clone(), Some(quiet));
 }
 
-/// Undo [`hide_sidebar`] for the animated case, which shares the settled
+/// Undo [`quiet_home`] for the animated case, which shares the settled
 /// app: a Home with a music tile, which paints its equalizer on the
 /// anim_half edge.
-fn show_sidebar(app: &mut App) {
-    app.device_rails = Some(KeyLayout {
-        right_sidebar_mode: RightSidebarMode::On,
-    });
+fn home_with_music(app: &mut App) {
     let with_music = RiceLayout {
         root: Node::split_first(
             Dir::Row,
@@ -154,7 +131,7 @@ async fn settle_clean(app: &mut App) {
 #[tokio::test]
 async fn idle_ticks_settle_clean_and_wake_for_relevant_events() {
     let (_test_db, mut app) = chat_compose_app("tick-gate").await;
-    hide_sidebar(&mut app);
+    quiet_home(&mut app);
 
     settle_clean(&mut app).await;
 
@@ -239,7 +216,7 @@ async fn idle_ticks_settle_clean_and_wake_for_relevant_events() {
     // through several real animation periods: ticks inside a half-rate
     // period stay clean, and the boundary itself paints.
     app.show_settings = false;
-    show_sidebar(&mut app);
+    home_with_music(&mut app);
     app.last_input_at = Instant::now() - Duration::from_secs(10);
     assert_eq!(
         app.wake_hint(),
@@ -314,6 +291,28 @@ async fn home_equalizer_tiles_hold_the_half_rate_tier() {
         ANIM_QUARTER_TICK,
         "a layout without an eq tile stays on the aquarium tier"
     );
+}
+
+#[tokio::test]
+async fn an_idle_terminal_takes_the_quarter_tier_until_a_key_lands() {
+    let (_test_db, mut app) = chat_compose_app("tick-idle-thin").await;
+    app.set_screen(Screen::Dashboard);
+    app.show_splash = false;
+    home_with_music(&mut app);
+    app.last_input_at = Instant::now() - Duration::from_secs(10);
+
+    app.last_active_at = Instant::now() - Duration::from_secs(4 * 60);
+    assert_eq!(app.wake_hint(), ANIM_HALF_TICK, "still at the keys");
+
+    app.last_active_at = Instant::now() - Duration::from_secs(6 * 60);
+    assert_eq!(
+        app.wake_hint(),
+        ANIM_QUARTER_TICK,
+        "left open, no screensaver"
+    );
+
+    app.last_active_at = Instant::now();
+    assert_eq!(app.wake_hint(), ANIM_HALF_TICK, "a key brings it back");
 }
 
 /// The default screensaver is the slow piece: it rides the idle floor and
@@ -397,7 +396,7 @@ async fn going_away_and_coming_back_ride_the_one_hz_edge() {
     use crate::state::{ActiveSession, ActiveUser, ActiveUsers};
 
     let (_test_db, mut app) = chat_compose_app("tick-away").await;
-    hide_sidebar(&mut app);
+    quiet_home(&mut app);
     let roster: ActiveUsers = std::sync::Arc::new(std::sync::Mutex::new(
         [(
             app.user_id,

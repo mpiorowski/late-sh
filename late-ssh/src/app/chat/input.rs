@@ -119,13 +119,9 @@ fn open_settings_modal(app: &mut App) {
     app.show_hub_modal = false;
     app.show_poll_modal = false;
     app.poll_modal_state.close();
-    let device_rails = app.rail_modes();
     let device_artboard_disclaimer = app.artboard_disclaimer_enabled();
-    app.settings_modal_state.open_from_profile(
-        app.profile_state.profile(),
-        device_rails,
-        device_artboard_disclaimer,
-    );
+    app.settings_modal_state
+        .open_from_profile(app.profile_state.profile(), device_artboard_disclaimer);
     app.show_settings = true;
 }
 
@@ -749,7 +745,7 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
                 let changed = app.chat.handle_room_jump_key(byte);
                 if changed {
                     app.chat.reset_composer();
-                    app.sync_visible_chat_room();
+                    crate::app::zen::input::focus_chat_on_rail(app);
                     app.chat.request_list();
                 }
                 return true;

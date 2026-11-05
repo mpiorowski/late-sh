@@ -530,8 +530,7 @@ use crate::test_helpers::{
     with_session_key,
 };
 use late_core::models::cyberspace_account::CyberspaceAccount;
-use late_core::models::user::RightSidebarMode;
-use late_core::models::user_ssh_key::{KeyLayout, UserSshKey, extract_key_layout};
+use late_core::models::user_ssh_key::UserSshKey;
 use late_core::models::{
     chat_message::{ChatMessage, ChatMessageParams},
     chat_message_gild::{ChatMessageGild, GildPlacement, GildTier},
@@ -2707,7 +2706,7 @@ async fn chat_room_list_is_mouse_clickable() {
     let mut app = make_app(test_db.db.clone(), user.id, "chat-room-mouse-flow-it");
     wait_for_render_contains(&mut app, "rust").await;
 
-    // Click the #rust row in the sidebar. It sits below the Core section
+    // Click the #rust row in the rail. It sits below the Core section
     // (lounge, mentions, news, "+ browse rooms") and the Channels header, at
     // rail row 10 (SGR mouse rows are 1-based).
     app.handle_input(b"\x1b[<0;5;10M");
@@ -3297,10 +3296,10 @@ async fn sheet_command_opens_character_sheet_modal_in_dnd_room() {
     let mut app = make_app(test_db.db.clone(), user.id, "sheet-modal-flow-it");
 
     wait_for_render_contains(&mut app, "lounge").await;
-    // Wait for the dnd room to appear in the sidebar.
+    // Wait for the dnd room to appear in the rail.
     wait_for_render_contains(&mut app, "dnd").await;
 
-    // Navigate to the dnd room. The sidebar order is lounge, mentions, news,
+    // Navigate to the dnd room. The rail order is lounge, mentions, news,
     // "+ browse rooms" (Discover, last in Core), then dnd (channels section).
     // Press l four times to reach dnd from lounge.
     app.handle_input(b"llll");
@@ -3314,140 +3313,6 @@ async fn sheet_command_opens_character_sheet_modal_in_dnd_room() {
     app.handle_input(b"/sheet \r");
     wait_for_render_contains(&mut app, "character sheet").await;
     wait_for_render_contains(&mut app, "sheet-modal-it").await;
-}
-
-#[tokio::test]
-async fn cycling_rails_persists_only_to_authenticating_key_and_survives_unrelated_settings() {
-    // End-to-end for both sides of the device-layout boundary: cycling the rails
-    // writes only the authenticating key, and a later account-settings save does
-    // not leak that device layout onto the account or its other keys.
-    let test_db = new_test_db().await;
-    let user = create_test_user(&test_db.db, "rails-key-it").await;
-    let client = test_db.db.get().await.expect("db client");
-    let lounge = ChatRoom::ensure_lounge(&client)
-        .await
-        .expect("ensure lounge room");
-    ChatRoomMember::join(&client, lounge.id, user.id)
-        .await
-        .expect("join lounge room");
-    // Two devices on one account, as `auth_publickey` would have recorded them.
-    UserSshKey::ensure(&client, user.id, "SHA256:phone")
-        .await
-        .expect("phone key");
-    UserSshKey::ensure(&client, user.id, "SHA256:desktop")
-        .await
-        .expect("desktop key");
-
-    let mut app = with_session_key(
-        make_app(test_db.db.clone(), user.id, "rails-key-flow-it"),
-        "SHA256:phone",
-    );
-    wait_for_render_contains(&mut app, "sort/fold").await;
-
-    // Hide the Arcade's sidebar on this device only: the Tweaks row, as
-    // the modal's arrows would, then the modal hands the rows to the app.
-    app.settings_modal_state
-        .select_tab(crate::app::settings_modal::state::Tab::Tweaks);
-    app.settings_modal_state
-        .select_mouse_target(crate::app::settings_modal::mouse::Target::Tweak(
-            crate::app::settings_modal::state::TweakRow::RightSidebar,
-        ));
-    app.settings_modal_state.cycle_selected_tweak(true);
-    app.sync_device_rails_from_settings();
-    assert_eq!(
-        app.rail_modes(),
-        RightSidebarMode::Off,
-        "expected the sidebar hidden for this device"
-    );
-
-    let db = test_db.db.clone();
-    wait_until(
-        || {
-            let db = db.clone();
-            async move {
-                let client = db.get().await.expect("db client");
-                stored_layout(&client, user.id, "SHA256:phone")
-                    .await
-                    .expect("phone layout")
-                    == Some(KeyLayout {
-                        right_sidebar_mode: RightSidebarMode::Off,
-                    })
-            }
-        },
-        "the device layout to reach this device's key",
-    )
-    .await;
-    assert_eq!(
-        stored_layout(&client, user.id, "SHA256:desktop")
-            .await
-            .expect("desktop layout"),
-        None,
-        "the account's other device must keep following the account default"
-    );
-
-    // Now touch something unrelated: Ctrl+O, Tab to the Tweaks tab, and flip
-    // the first row (Sync terminal background). The save banner marks the
-    // write landing.
-    app.handle_input(b"\x0f");
-    // Wait for the draft to hydrate from the profile snapshot before moving:
-    // that hydration resets the modal to its first tab (`open_from_profile`).
-    wait_for_render_contains(&mut app, "rails-key-it").await;
-    app.handle_input(b"\t\t\t");
-    wait_for_render_contains(&mut app, "Sync terminal background").await;
-    // Enter toggles the selected row (Sync terminal background, the first
-    // one), which runs the same `save()` every other settings edit runs.
-    app.handle_input(b"\r");
-    wait_until(
-        || {
-            let db = db.clone();
-            async move {
-                let client = db.get().await.expect("db client");
-                let stored = User::get(&client, user.id)
-                    .await
-                    .expect("load user")
-                    .expect("user exists");
-                !late_core::models::user::extract_enable_background_color(&stored.settings)
-            }
-        },
-        "background color tweak to persist",
-    )
-    .await;
-
-    // That write landed, so if the device rails were riding along they would be
-    // in it. The account default still has both rails on: only this device changed.
-    let stored = User::get(&client, user.id)
-        .await
-        .expect("load user")
-        .expect("user exists");
-    assert_eq!(
-        late_core::models::user::extract_right_sidebar_mode(&stored.settings),
-        RightSidebarMode::On,
-        "an unrelated tweak must not republish this device's sidebar mode"
-    );
-    assert_eq!(
-        stored_layout(&client, user.id, "SHA256:phone")
-            .await
-            .expect("phone layout after settings save"),
-        Some(KeyLayout {
-            right_sidebar_mode: RightSidebarMode::Off,
-        }),
-        "the unrelated account save must preserve this device's layout"
-    );
-    assert_eq!(
-        stored_layout(&client, user.id, "SHA256:desktop")
-            .await
-            .expect("desktop layout after settings save"),
-        None,
-        "the unrelated account save must not publish a layout to another device"
-    );
-
-    // And the device's own choice survived the settings round trip.
-    app.handle_input(b"\x1b");
-    assert_eq!(
-        app.rail_modes(),
-        RightSidebarMode::Off,
-        "expected the device's sidebar to stay hidden"
-    );
 }
 
 #[tokio::test]
@@ -4512,16 +4377,6 @@ async fn mention_rendered_in_its_room_clears_the_rail_badge() {
     wait_for_render_not_contains(&mut app, "mentions (").await;
 }
 
-/// The stored rail layout, read the way bootstrap reads it.
-async fn stored_layout(
-    client: &tokio_postgres::Client,
-    user_id: Uuid,
-    fingerprint: &str,
-) -> anyhow::Result<Option<KeyLayout>> {
-    let key = UserSshKey::find_by_fingerprint(client, user_id, fingerprint).await?;
-    Ok(key.and_then(|key| extract_key_layout(&key.settings)))
-}
-
 #[tokio::test]
 async fn whisper_holds_the_splash_door_then_releases_and_marks_delivery() {
     let test_db = new_test_db().await;
@@ -4993,6 +4848,194 @@ async fn ctrl_e_arranges_home_and_the_layout_keys_are_arrange_modes_alone() {
     assert_eq!(app.home.leaf_count(), tiles + 1);
 }
 
+/// Alt+1..9 is the one-chord shortcut for `Ctrl+E` then the digit: on Home
+/// it loads that layout without arrange mode, a composer being typed in
+/// keeps it, and every other page ignores it.
+#[tokio::test]
+async fn alt_digit_loads_a_home_layout_in_one_chord() {
+    use crate::app::common::primitives::Screen;
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "home-alt-digit-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    UserSshKey::ensure(&client, user.id, "SHA256:altdigit")
+        .await
+        .expect("alt digit key");
+    let mut app = with_session_key(
+        make_app(test_db.db.clone(), user.id, "home-alt-digit-flow-it"),
+        "SHA256:altdigit",
+    );
+    wait_for_render_contains(&mut app, "sort/fold").await;
+    assert_eq!(app.home_layouts.current_name(), "home");
+    // The lounge first, so the composer below has a room to open in.
+    crate::test_helpers::wait_for_app(&mut app, "the lounge selected", |app| {
+        app.chat.selected_room_id.is_some()
+    })
+    .await;
+
+    // Alt+2: street, straight away, arrange mode never on.
+    app.handle_input(b"\x1b2");
+    assert!(!app.home.arrange, "Alt+digit does not enter arrange mode");
+    assert_eq!(app.screen, Screen::Dashboard);
+    assert_eq!(app.home_layouts.current_name(), "street");
+
+    // Alt+1 brings home back.
+    app.handle_input(b"\x1b1");
+    assert_eq!(app.home_layouts.current_name(), "home");
+
+    // An empty slot says so and moves nothing.
+    app.handle_input(b"\x1b9");
+    assert_eq!(app.home_layouts.current_name(), "home");
+    assert!(app.banner.is_some(), "an empty slot shows a banner");
+
+    // In arrange mode it loads and leaves the mode, as `Ctrl+E 2` does.
+    app.handle_input(b"\x05");
+    assert!(app.home.arrange);
+    app.handle_input(b"\x1b2");
+    assert!(!app.home.arrange, "Alt+digit leaves arrange mode");
+    assert_eq!(app.home_layouts.current_name(), "street");
+    app.handle_input(b"\x1b1");
+
+    // From the layouts list, as its note says: the list closes, the
+    // layout loads, the mode is done.
+    app.handle_input(b"\x05");
+    app.handle_input(b"L");
+    assert!(app.layout_list.is_some(), "Ctrl+E L opens the layouts list");
+    app.handle_input(b"\x1b2");
+    assert!(app.layout_list.is_none(), "Alt+digit closes the list");
+    assert!(!app.home.arrange);
+    assert_eq!(app.home_layouts.current_name(), "street");
+    app.handle_input(b"\x1b1");
+
+    // A composer being typed in keeps it: the draft must not go with a
+    // layout whose chat is elsewhere.
+    app.handle_input(b"i");
+    assert!(app.chat.is_composing());
+    app.handle_input(b"\x1b2");
+    assert_eq!(app.home_layouts.current_name(), "home");
+    assert!(app.chat.is_composing());
+    app.handle_input(b"\x1b");
+    wait_for_esc_effect(&mut app, |app| !app.chat.is_composing(), "composer").await;
+
+    // Off Home it does nothing: no page change, no layout switch.
+    app.handle_input(b"2");
+    assert_eq!(app.screen, Screen::Arcade);
+    app.handle_input(b"\x1b2");
+    assert_eq!(app.screen, Screen::Arcade);
+    assert_eq!(app.home_layouts.current_name(), "home");
+}
+
+/// The page's chat is the active tile wherever it sits in the layout: focus
+/// the second chat tile and it draws Home's card, the activity ticker over
+/// its composer and a synthetic entry's composer included, rather than the
+/// watching view every other tile draws.
+#[tokio::test]
+async fn the_second_chat_tile_draws_the_pages_card_when_it_is_active() {
+    use crate::app::activity::lounge::{SYSTEM_FINGERPRINT, SYSTEM_USERNAME};
+    use late_core::models::user::UserParams;
+
+    const FEED_LINE: &str = "ticker-probe cleared Minesweeper";
+
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "page-card-it").await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, user.id)
+        .await
+        .expect("join lounge room");
+    let announcements = ChatRoom::ensure_permanent(&client, "announcements")
+        .await
+        .expect("announcements");
+    ChatRoomMember::join(&client, announcements.id, user.id)
+        .await
+        .expect("join announcements");
+    let system = User::create(
+        &client,
+        UserParams {
+            fingerprint: SYSTEM_FINGERPRINT.to_string(),
+            username: SYSTEM_USERNAME.to_string(),
+            settings: serde_json::json!({ "bot": true, "system": true }),
+        },
+    )
+    .await
+    .expect("create system user");
+    ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: system.id,
+            body: format!("· {FEED_LINE}"),
+        },
+    )
+    .await
+    .expect("create feed line");
+
+    let mut app = make_app(test_db.db.clone(), user.id, "page-card-flow-it");
+    app.resize(200, 50).expect("resize test terminal");
+    wait_for_render_contains(&mut app, FEED_LINE).await;
+    assert_eq!(
+        app.chat.activity_ticker().len(),
+        1,
+        "the line feeds the ticker, not the chat"
+    );
+
+    app.handle_input(b"i/layout 2\r");
+    assert_eq!(app.home_layouts.current_name(), "street");
+    let tiles = app.home.chat_tiles();
+    let [(left, _), (right, _)] = tiles.as_slice() else {
+        panic!("street holds two chats: {tiles:?}");
+    };
+    let (left, right) = (*left, *right);
+    assert_eq!(app.home.focus, left);
+    wait_for_render_contains(&mut app, FEED_LINE).await;
+
+    let (_, rect, _) = app.home_tile_rects()[right];
+    let click = format!("\x1b[<0;{};{}M", rect.x + 2, rect.y + 2);
+    app.handle_input(click.as_bytes());
+    assert_eq!(app.home.focus, right);
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains(FEED_LINE),
+        "the ticker follows the focus to the second tile; frame={frame:?}"
+    );
+
+    // News on the second tile is the page's News, composer and all. The
+    // first tile has News on `street`, so a pick there would only move the
+    // focus back: #lounge frees it first.
+    let (_, rect, _) = app.home_tile_rects()[left];
+    let click = format!("\x1b[<0;{};{}M", rect.x + 2, rect.y + 2);
+    app.handle_input(click.as_bytes());
+    assert_eq!(app.home.focus, left);
+    app.handle_input(b"\x1f");
+    app.handle_input(b"lounge\r");
+    assert_eq!(
+        app.home.active_chat_room(),
+        Some(ChatRoomBinding::Room(lounge.id))
+    );
+    let (_, rect, _) = app.home_tile_rects()[right];
+    let click = format!("\x1b[<0;{};{}M", rect.x + 2, rect.y + 2);
+    app.handle_input(click.as_bytes());
+    assert_eq!(app.home.focus, right);
+    app.handle_input(b"\x1f");
+    app.handle_input(b"news\r");
+    assert!(app.chat.news_selected);
+    assert_eq!(app.home.focus, right);
+    assert_eq!(app.home.active_chat_room(), Some(ChatRoomBinding::News));
+    let frame = render_plain(&mut app);
+    assert!(
+        frame.contains("Share URL"),
+        "the active News tile draws the page's composer; frame={frame:?}"
+    );
+}
+
 #[tokio::test]
 async fn a_second_chat_tile_on_home_keeps_its_room_and_the_rail_follows_the_active_one() {
     use crate::app::zen::state::TileKind;
@@ -5163,10 +5206,12 @@ async fn a_second_chat_tile_on_home_keeps_its_room_and_the_rail_follows_the_acti
 
 /// The stock `street` holds News on the left and #announcements on the
 /// right. Focusing the right tile moves the rail to #announcements; a
-/// News pick in the picker then binds that tile to News and the rail
+/// #lounge pick in the picker then binds that tile to #lounge and the rail
 /// shows it, the arrival sync notwithstanding: a pick made on Home stands.
+/// A News pick next finds News on the left tile and moves the focus there,
+/// binding nothing: the page shows no room twice.
 #[tokio::test]
-async fn home_street_picks_news_into_the_active_tile() {
+async fn home_street_pick_binds_the_active_tile_or_focuses_the_tile_showing_it() {
     use crate::app::zen::state::TileKind;
 
     let test_db = new_test_db().await;
@@ -5216,22 +5261,46 @@ async fn home_street_picks_news_into_the_active_tile() {
     assert!(!app.chat.news_selected);
 
     app.handle_input(b"\x1f");
-    app.handle_input(b"news\r");
-    assert!(app.chat.news_selected, "the pick stands on Home");
-    assert_eq!(app.home_chat_room_id(), None, "no room to act on");
+    app.handle_input(b"lounge\r");
+    assert_eq!(
+        app.chat.selected_room_id,
+        Some(lounge.id),
+        "the pick stands on Home"
+    );
+    assert_eq!(app.home.focus, right);
     assert_eq!(
         app.home.chat_tiles(),
         vec![
             (left, ChatRoomBinding::News),
-            (right, ChatRoomBinding::News)
+            (right, ChatRoomBinding::Room(lounge.id))
         ],
         "the pick binds the active tile"
+    );
+
+    app.handle_input(b"\x1f");
+    app.handle_input(b"news\r");
+    assert!(
+        app.chat.news_selected,
+        "the rail follows the focus onto News"
+    );
+    assert_eq!(app.home_chat_room_id(), None, "no room to act on");
+    assert_eq!(
+        app.home.focus, left,
+        "the pick goes to the tile showing News"
+    );
+    assert_eq!(
+        app.home.chat_tiles(),
+        vec![
+            (left, ChatRoomBinding::News),
+            (right, ChatRoomBinding::Room(lounge.id))
+        ],
+        "the pick binds nothing"
     );
     let frame = render_plain(&mut app);
     assert_eq!(
         frame.matches("chat · news").count(),
-        2,
-        "both rules say News; frame={frame:?}"
+        1,
+        "one rule says News; frame={frame:?}"
     );
 
     // Leaving `home` pinned its one chat, bound to no room, to #lounge, the
@@ -6196,6 +6265,131 @@ async fn home_a_draft_stays_in_its_room_when_the_focus_moves() {
     app.chat.reset_composer();
 }
 
+/// The zen fixture's chat bound to #lounge and a second chat tile split from
+/// it bound to another room, the focus on the second: the page's furniture
+/// sits after both, so walking off the end of them has to skip it.
+async fn two_chat_tiles(
+    test_db: &late_core::test_utils::TestDb,
+    name: &str,
+) -> (crate::app::state::App, Uuid, Uuid, usize, usize) {
+    use crate::app::zen::state::TileKind;
+
+    let viewer = create_test_user(&test_db.db, name).await;
+    let client = test_db.db.get().await.expect("db client");
+    let lounge = ChatRoom::ensure_lounge(&client)
+        .await
+        .expect("ensure lounge room");
+    ChatRoomMember::join(&client, lounge.id, viewer.id)
+        .await
+        .expect("join lounge");
+    let quiet = ChatRoom::get_or_create_public_room(&client, "zen-hop-quiet")
+        .await
+        .expect("second room");
+    ChatRoomMember::join(&client, quiet.id, viewer.id)
+        .await
+        .expect("join second room");
+    let mut app = make_app(test_db.db.clone(), viewer.id, name);
+    app.resize(160, 40).expect("resize test terminal");
+    wait_for_render_contains(&mut app, "zen-hop-quiet").await;
+    load_zen_fixture(&mut app);
+    wait_for_render_contains(&mut app, "bonsai").await;
+    let first = app
+        .home
+        .first_tile_of(TileKind::Chat)
+        .expect("the fixture has a chat");
+    assert!(crate::app::zen::input::bind_active_chat_to_room(
+        &mut app, lounge.id
+    ));
+    assert!(app.home.split_focused(true));
+    let second = app.home.focus;
+    assert!(app.home.rice.root.set_kind(second, TileKind::Chat));
+    assert!(crate::app::zen::input::bind_active_chat_to_room(
+        &mut app, quiet.id
+    ));
+    (app, lounge.id, quiet.id, first, second)
+}
+
+#[tokio::test]
+async fn alt_arrows_hop_the_chat_tiles_and_a_composer_keeps_them() {
+    let test_db = new_test_db().await;
+    let (mut app, lounge, quiet, first, second) = two_chat_tiles(&test_db, "zen-hop-it").await;
+
+    // Right off the last chat wraps past the furniture to the first, and
+    // left comes back. The rail goes with the focus; the bindings stay.
+    app.handle_input(b"\x1b[1;3C");
+    assert_eq!(app.home.focus, first);
+    assert_eq!(app.chat.selected_room_id, Some(lounge));
+    app.handle_input(b"\x1b[1;3D");
+    assert_eq!(app.home.focus, second);
+    assert_eq!(app.chat.selected_room_id, Some(quiet));
+    assert_eq!(
+        app.home.chat_tiles(),
+        vec![
+            (first, ChatRoomBinding::Room(lounge)),
+            (second, ChatRoomBinding::Room(quiet))
+        ]
+    );
+
+    // In a draft they are the word jumps: the focus and the draft stay.
+    app.handle_input(b"i");
+    app.handle_input(b"one two");
+    app.handle_input(b"\x1b[1;3D");
+    assert_eq!(app.home.focus, second);
+    assert!(app.chat.composing);
+    app.handle_input(b"X");
+    assert_eq!(app.chat.composer().lines(), ["one Xtwo"]);
+    app.chat.reset_composer();
+
+    // Mid room jump they leave the jump's labels on the tile it began on.
+    app.handle_input(b" ");
+    app.handle_input(b"\x1b[1;3C");
+    assert_eq!(app.home.focus, second);
+    assert!(app.chat.room_jump_active);
+}
+
+#[tokio::test]
+async fn a_room_named_on_another_tile_moves_the_focus_there_instead_of_showing_it_twice() {
+    use crate::app::chat::state::RoomSlot;
+
+    let test_db = new_test_db().await;
+    let (mut app, lounge, quiet, first, second) = two_chat_tiles(&test_db, "zen-pick-it").await;
+    let both = vec![
+        (first, ChatRoomBinding::Room(lounge)),
+        (second, ChatRoomBinding::Room(quiet)),
+    ];
+
+    // `Space` and the room's letter.
+    let key = app
+        .chat
+        .room_jump_targets()
+        .into_iter()
+        .find_map(|(key, slot)| (slot == RoomSlot::Room(lounge)).then_some(key))
+        .expect("#lounge has a jump key");
+    app.handle_input(b" ");
+    app.handle_input(&[key]);
+    assert_eq!(app.home.focus, first);
+    assert_eq!(app.chat.selected_room_id, Some(lounge));
+    assert_eq!(app.home.chat_tiles(), both);
+
+    // The `Ctrl+/` picker's pick.
+    crate::app::zen::input::pick_for_active_chat(&mut app, RoomSlot::Room(quiet));
+    assert_eq!(app.home.focus, second);
+    assert_eq!(app.chat.selected_room_id, Some(quiet));
+    assert_eq!(app.home.chat_tiles(), both);
+
+    // Arranging, a pick is a layout edit: the focused tile takes the room.
+    app.handle_input(b"\x05");
+    crate::app::zen::input::pick_for_active_chat(&mut app, RoomSlot::Room(lounge));
+    assert_eq!(app.home.focus, second);
+    assert_eq!(
+        app.home.chat_tiles(),
+        vec![
+            (first, ChatRoomBinding::Room(lounge)),
+            (second, ChatRoomBinding::Room(lounge))
+        ]
+    );
+}
+
 /// The first frame comes before the rooms do: a chat tile with no room to
 /// name says so rather than claiming #lounge, and keys sent on the strength
 /// of that name would land nowhere.
@@ -6836,9 +7030,9 @@ async fn chat_badges_picker_hides_a_whole_game_ladder() {
     app.handle_input(b"\t\t\t");
     wait_for_render_contains(&mut app, "Chat badges").await;
     wait_for_render_contains(&mut app, "all shown").await;
-    // Tweaks rows: background, brightness, right sidebar, composer,
-    // interaction mode, plain glyphs, terminal images, then Chat badges.
-    app.handle_input(b"jjjjjjj\r");
+    // Tweaks rows: background, brightness, composer, interaction mode, plain
+    // glyphs, terminal images, then Chat badges.
+    app.handle_input(b"jjjjjj\r");
     // The heading fits the dialog whole, not cut at its border.
     wait_for_render_contains(&mut app, "Earn it, hide it. Games show their top badge.").await;
     wait_for_render_contains(&mut app, "LMG LKN LYS LKA").await;
@@ -7501,11 +7695,17 @@ async fn the_needle_leaves_the_page_digits_to_the_globals() {
 #[tokio::test]
 async fn the_needle_inks_the_picked_draft() {
     use crate::app::deadchannel::city::map::Landmark;
+    use crate::app::deadchannel::fight::cards::Card;
     use late_core::models::deadchannel_runner::DeadchannelRunner;
 
     let (test_db, mut app, user_id) =
         runner_on_the_street("undercity-needle-ink-it", 100, 30, |sheet| {
-            sheet.crystals = 20
+            // The needle only inks a draft this climb has reached, and with
+            // both picks taken no draft is owed.
+            sheet.level = 6;
+            sheet.peak_level = 6;
+            sheet.cards = vec![Card::Jab, Card::Riposte];
+            sheet.crystals = 20;
         })
         .await;
 

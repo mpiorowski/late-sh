@@ -101,8 +101,7 @@ beside the model (`models/user.rs` / `models/user_test.rs`).
 
 `telemetry::init_telemetry()` wires OTLP traces, logs and metrics and installs
 the W3C trace-context propagator. `http_telemetry_middleware` emits server
-spans (`http.route` when a route matched; an unmatched path still falls back
-to the raw path, which mints junk span names under scanner traffic,
-`SCALE.md`, Observability Gaps). `TracedExt::send_traced` names client spans
+spans (`http.route` when a route matched, a fixed `unmatched` otherwise, so
+scanner traffic cannot mint span names; the raw path stays in `url.path`). `TracedExt::send_traced` names client spans
 `{method} {scheme://host/path}`; query strings never reach a span
 (`span_url`), so send API keys in headers.

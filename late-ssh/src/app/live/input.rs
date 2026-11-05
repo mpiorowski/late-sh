@@ -43,7 +43,7 @@ pub fn open_from_click(app: &mut App, x: u16, y: u16) -> bool {
     }
 }
 
-/// A left-click on a row of the sidebar's Live panel opens what the row
+/// A left-click on a row of a Live tile opens what the row
 /// lists, as the strip's click does. A blank slot or the `+N more` row
 /// opens nothing.
 pub fn open_from_panel_click(app: &mut App, x: u16, y: u16) -> bool {
@@ -60,7 +60,7 @@ pub fn open_from_panel_click(app: &mut App, x: u16, y: u16) -> bool {
 }
 
 /// `s` then `1`-`4` on Home with a Live panel or tile on the page, opens
-/// that row of the Live panel (the sidebar's, or the tile's, which draws
+/// that row of the Live panel (the tile's, which draws
 /// the same rows), by the number the row shows: the targets are the ones
 /// the last frame drew, so the key and the eye agree. Nothing opens for a
 /// blank slot, the `+N more` row, a panel that is not drawn, or any other
