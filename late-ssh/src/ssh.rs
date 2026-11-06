@@ -1318,7 +1318,7 @@ async fn run_session_with_context<S: FrameSink>(
                     "disconnecting session, ssh output stalled past budget"
                 );
                 metrics::record_render_stall_disconnect();
-                ctx.sink.eof_close(TUNNEL_CLOSE_SESSION_ENDED, None).await;
+                ctx.sink.eof_close(TUNNEL_CLOSE_SESSION_ENDED).await;
                 break SessionEnd::Stalled;
             }
             // Re-poll the budget at the hot cadence; leaving the
@@ -1384,21 +1384,8 @@ async fn run_session_with_context<S: FrameSink>(
                     if let Some(probe) = ctx.probe.as_ref() {
                         settle_terminal_probe(probe).await;
                     }
-                    let (close_code, resume) = {
-                        let app = app.lock().await;
-                        let code = app.close_code();
-                        let resume = (code
-                            == late_core::tunnel_protocol::TUNNEL_CLOSE_RECONNECT_REQUESTED)
-                            .then(|| {
-                                crate::app::handoff::state::ResumePoint {
-                                    page: app.screen.page(),
-                                    room_id: app.chat.selected_room_id,
-                                }
-                                .encode()
-                            });
-                        (code, resume)
-                    };
-                    clean_disconnect(&ctx.sink, close_code, resume).await;
+                    let close_code = app.lock().await.close_code();
+                    clean_disconnect(&ctx.sink, close_code).await;
                     break SessionEnd::Closed;
                 }
                 drive_terminal_probe(&ctx, outcome.bytes_sent).await;
@@ -1414,7 +1401,7 @@ async fn run_session_with_context<S: FrameSink>(
             Err(err) => {
                 tracing::debug!(error = ?err, "error rendering frame, stopping render loop");
                 let _ = ctx.sink.send_frame(App::leave_alt_screen()).await;
-                ctx.sink.eof_close(TUNNEL_CLOSE_SESSION_ENDED, None).await;
+                ctx.sink.eof_close(TUNNEL_CLOSE_SESSION_ENDED).await;
                 break SessionEnd::Failed;
             }
         }
@@ -1951,12 +1938,12 @@ pub(crate) fn session_client(cli_mode: bool, cli_token_served: bool) -> metrics:
     }
 }
 
-async fn clean_disconnect<S: FrameSink>(sink: &S, close_code: u16, resume: Option<String>) {
+async fn clean_disconnect<S: FrameSink>(sink: &S, close_code: u16) {
     let _ = sink.send_frame(App::leave_alt_screen()).await;
     if close_code == TUNNEL_CLOSE_SESSION_ENDED {
         let _ = sink.send_frame(EXIT_MESSAGE.as_bytes().to_vec()).await;
     }
-    sink.eof_close(close_code, resume).await;
+    sink.eof_close(close_code).await;
 }
 
 // Updated helper to take State

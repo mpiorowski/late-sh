@@ -24,11 +24,7 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b'r' | b'R') | ParsedInput::Char('r' | 'R') => {
             if app.can_reconnect_on_drain() {
                 app.request_close(TUNNEL_CLOSE_RECONNECT_REQUESTED);
-            }
-        }
-        // Shown only to a session whose CLI can move it; elsewhere a no-op.
-        ParsedInput::Byte(b'r' | b'R') | ParsedInput::Char('r' | 'R') => {
-            if crate::app::handoff::svc::request_move(app) {
+            } else if crate::app::handoff::svc::request_move(app) {
                 app.show_quit_confirm = false;
             }
         }

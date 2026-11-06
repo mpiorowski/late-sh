@@ -357,6 +357,7 @@ async fn render_pass_bounds_mixed_input_and_rearms_until_drained() {
     let ctx = RenderContext {
         sink: WsFrameSink::new(output_tx),
         frame_drop_log_every: 1,
+        frame_drops_in_a_row: AtomicU32::new(0),
         signal: Arc::new(RenderSignal::new()),
         budget: None,
         client: metrics::SessionClient::Ssh,
