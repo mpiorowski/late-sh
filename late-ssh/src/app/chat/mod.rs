@@ -19,6 +19,9 @@ mod sheet_test;
 pub mod showcase;
 pub(crate) mod slur;
 pub(crate) mod special_badges;
+pub(crate) mod spoiler;
+#[cfg(test)]
+mod spoiler_test;
 pub mod state;
 #[cfg(test)]
 mod state_test;

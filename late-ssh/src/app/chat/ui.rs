@@ -40,6 +40,7 @@ use crate::app::files::{
 use crate::app::hub::shop::svc::ActiveChatRoomEffect;
 use crate::usernames::UsernameLookup;
 
+use super::spoiler::{has_spoiler, mask_spoilers, unwrap_spoilers};
 use super::state::{
     InlinePreview, MatchPresence, MentionMatch, ROOM_JUMP_KEYS, RoomSection, RoomSlot,
     RoomVisualOrderInput, SelectedRoomSlotState, SelectionScroll, TranslationDisplay,
@@ -168,6 +169,7 @@ pub struct DashboardChatView<'a> {
     pub name_flicker: Option<(Uuid, u64)>,
     pub translations: &'a HashMap<Uuid, TranslationDisplay>,
     pub translation_hidden: &'a HashSet<Uuid>,
+    pub spoilers_revealed: &'a HashSet<Uuid>,
     pub active_poll: Option<&'a ActiveChatPoll>,
     /// The #lounge live strip (`app/live/`): one thing that just happened
     /// in the house, drawn above the poll strip. `None` when nothing is
@@ -1223,6 +1225,7 @@ pub fn draw_dashboard_chat_card(
                 name_flicker: view.name_flicker,
                 translations: view.translations,
                 translation_hidden: view.translation_hidden,
+                spoilers_revealed: view.spoilers_revealed,
                 runner_looks: view
                     .room
                     .filter(|room| super::state::room_shows_portraits(room))
@@ -1322,6 +1325,7 @@ struct ChatRowsContext<'a> {
     name_flicker: Option<(Uuid, u64)>,
     translations: &'a HashMap<Uuid, TranslationDisplay>,
     translation_hidden: &'a HashSet<Uuid>,
+    spoilers_revealed: &'a HashSet<Uuid>,
     /// `Some` only while `state::room_shows_portraits` says so for the
     /// rendered room: the list keeps a portrait gutter on the right of
     /// every entry and paints each author's face beside their block
@@ -1854,6 +1858,13 @@ fn ensure_chat_rows_cache(
         } else {
             Cow::Borrowed(msg.body.as_str())
         };
+        let has_spoilers = has_spoiler(&body);
+        let spoilers_hidden = has_spoilers && !ctx.spoilers_revealed.contains(&msg.id);
+        let body = match (has_spoilers, spoilers_hidden) {
+            (false, _) => body,
+            (true, true) => Cow::Owned(mask_spoilers(&body).into_owned()),
+            (true, false) => Cow::Owned(unwrap_spoilers(&body).into_owned()),
+        };
         let gild = ctx.message_gilds.get(&msg.id).copied();
 
         // A reply is checked before a mention because the composer prepends a
@@ -1936,7 +1947,9 @@ fn ensure_chat_rows_cache(
         let translation = ctx
             .translations
             .get(&msg.id)
-            .filter(|_| !ctx.translation_hidden.contains(&msg.id));
+            .filter(|_| !ctx.translation_hidden.contains(&msg.id))
+            // The translation would carry the hidden words in clear.
+            .filter(|_| !spoilers_hidden);
         // The #deadchannel portrait gutter (`app/deadchannel/runner`): in
         // the wire every author is a runner, and the message list keeps
         // `PORTRAIT_GUTTER` cells on the right where the author's face sits
@@ -3105,6 +3118,7 @@ pub struct ChatRenderInput<'a> {
     pub name_flicker: Option<(Uuid, u64)>,
     pub translations: &'a HashMap<Uuid, TranslationDisplay>,
     pub translation_hidden: &'a HashSet<Uuid>,
+    pub spoilers_revealed: &'a HashSet<Uuid>,
     pub news_composer: &'a TextArea<'static>,
     pub news_composing: bool,
     pub news_processing: bool,
@@ -3278,6 +3292,7 @@ pub struct EmbeddedRoomChatView<'a> {
     pub name_flicker: Option<(Uuid, u64)>,
     pub translations: &'a HashMap<Uuid, TranslationDisplay>,
     pub translation_hidden: &'a HashSet<Uuid>,
+    pub spoilers_revealed: &'a HashSet<Uuid>,
     pub keep_composer_focused: bool,
     /// Cell that, when present, receives the composer block rect so mouse
     /// hit-testing in `app::input` can detect double-clicks into the bar.
@@ -3472,6 +3487,7 @@ fn draw_embedded_messages(
             name_flicker: view.name_flicker,
             translations: view.translations,
             translation_hidden: view.translation_hidden,
+            spoilers_revealed: view.spoilers_revealed,
             // Embedded game chats are house tables and daily boards, never
             // the wire.
             runner_looks: None,
@@ -4987,6 +5003,7 @@ fn draw_selected_content(
                     name_flicker: view.name_flicker,
                     translations: view.translations,
                     translation_hidden: view.translation_hidden,
+                    spoilers_revealed: view.spoilers_revealed,
                     runner_looks: super::state::room_shows_portraits(room)
                         .then_some(view.runner_looks),
                 },

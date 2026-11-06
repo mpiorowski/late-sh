@@ -571,6 +571,11 @@ pub fn handle_message_action_in_room(app: &mut App, room_id: Uuid, byte: u8) -> 
         b'G' if app.chat.try_jump_to_selected_reply_target_in_room(room_id) => {
             return true;
         }
+        // Enter reveals a message's `||spoilers||` before anything else, so
+        // a spoiled link is read before it is opened.
+        b'\r' | b'\n' if app.chat.reveal_selected_spoilers_in_room(room_id) => {
+            return true;
+        }
         // A News share's #lounge card opens the reader on its story, ahead
         // of the preview its link would otherwise get.
         b'\r' | b'\n' if app.chat.open_selected_card_in_room(room_id) => {
