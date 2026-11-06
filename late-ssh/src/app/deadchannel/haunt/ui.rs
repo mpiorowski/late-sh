@@ -1,7 +1,7 @@
 //! Render helpers for the splash whisper, the breakthrough, and the
 //! corrupted clock and name. Everything here is a pure
 //! function of (state, tick, seed): the corruption is deterministic
-//! theater, stateless like the sidebar equalizer, so the same tick paints
+//! theater, stateless like the equalizer, so the same tick paints
 //! the same frame at any loop cadence.
 //!
 //! Hard rule (GAME.md, First contact): aesthetic, never system. The
@@ -53,7 +53,7 @@ pub(crate) fn whisper_frame_for(
         .map(|whisper| whisper_frame(whisper, splash_ticks, hint))
 }
 
-/// The sidebar clock as it should draw this frame: glitched while a
+/// The presence clock as it should draw this frame: glitched while a
 /// stage-1 burst is live, untouched otherwise. Draw-time transform only;
 /// the clock text itself is never wrong.
 pub(crate) fn apply_clock_glitch(haunt: &HauntState, marquee_tick: usize, clock: String) -> String {
@@ -192,7 +192,7 @@ pub(crate) fn breakthrough_frame_for(
     })
 }
 
-/// The breakthrough over the whole frame, sidebar and chrome included,
+/// The breakthrough over the whole frame, chrome included,
 /// painted after every modal: the held door's static, heavier, and the
 /// voiced line in a gap torn out of the middle of it. No border, no box:
 /// a frame around it would read as the system talking.
@@ -325,7 +325,7 @@ fn static_glyph(unit: f32) -> char {
     }
 }
 
-/// Stage 1: the sidebar clock with one or two characters swapped for
+/// Stage 1: the presence clock with one or two characters swapped for
 /// glyph-alphabet characters. Deterministic per burst seed, so the same
 /// burst paints the same corruption on every frame of its ~200ms hold.
 /// Only the time itself (digits and the colon) is touched: the timezone

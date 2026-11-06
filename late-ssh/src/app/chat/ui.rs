@@ -653,8 +653,8 @@ pub(crate) fn composer_placeholder_lines(view: &ComposerBlockView<'_>, width: us
     )
 }
 
-/// Vertical layout for an embedded chat (Home tiles, house tables, daily
-/// boards): messages fill, one blank breather, then the composer. These
+/// Vertical layout for an embedded chat (Home's watching tiles, house tables,
+/// daily boards): messages fill, one blank breather, then the composer. These
 /// surfaces draw no activity ticker, so its row goes to the messages.
 fn split_chat_and_composer(area: Rect, composer_height: u16) -> (Rect, Rect) {
     let layout = Layout::vertical([

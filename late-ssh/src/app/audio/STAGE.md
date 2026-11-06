@@ -1,28 +1,29 @@
-# Audio: the sidebar music stage
+# Audio: the music dock
 
-The right-rail music stage (`common/sidebar.rs`): the fixed-height accordion, the active-source rule, the title-bar tags, and the helpers behind it. Part of the audio domain; the rest is `CONTEXT.md`, the station table is `STATIONS.md`.
+The music dock (`common/music_dock.rs`, Home's music tile): the fixed-height accordion, the active-source rule, the title-bar tags, and the helpers behind it. Part of the audio domain; the rest is `CONTEXT.md`, the station table is `STATIONS.md`.
 
-Renders the audio domain into the right rail as a **fixed-height accordion**: a 3-row eq strip, then a dock that is always exactly `MUSIC_DOCK_HEIGHT = 12` rows (`MUSIC_STAGE_HEIGHT = 15` with the strip). The two sources sit in the fixed order radio → youtube (radio leads because it is the default source), and each source's rows sit directly under its own title bar. `v+x` toggles the source. Entry point: `draw_music_stage` (props bundled in `MusicStageProps`); the line builder is `music_stage_lines(width, props)`. Home's `music` tile (`draw_music_tile`) draws the dock alone through `draw_music_dock` once it is `MUSIC_DOCK_HEIGHT` rows and eighteen columns, the track over the station in a shorter tile, its band being Home's `visualizer` tile.
+Renders the audio domain into Home's music tile as a **fixed-height accordion**: a dock that is always exactly `MUSIC_DOCK_HEIGHT = 13` rows. The two sources sit in the fixed order radio → youtube (radio leads because it is the default source), and each source's rows sit directly under its own title bar. `v+x` toggles the source. Entry point: `draw_music_tile` (props bundled in `MusicStageProps`), which draws the dock through `draw_music_dock` once the tile is `MUSIC_DOCK_HEIGHT` rows and eighteen columns, and the track over the station in a shorter tile. The line builder is `music_stage_lines(width, props)`. The equalizer band is Home's separate `visualizer` tile, `MUSIC_VIZ_HEIGHT = 3` rows in the stock Home.
 
 **Product rules (user requirements):**
 1. **Both title bars always show their listener count.** That is the "what's everyone tuned to" board.
 2. **The YouTube track is always visible, the radio track only while on radio.** A radio listener wants to know whether the booth is playing something worth switching for; a YouTube listener does not care what the radio is playing, so radio collapses to its title bar there.
-3. **The stage height is constant.** Both sources fill exactly 12 dock rows, so the panels below never shift.
-4. **The stage never claims audio the session cannot produce.** With no client paired, the eq strip shows the guide pointer rather than dancing bars, matching the volume row's `—` (`VIZ.md`).
+3. **The dock height is constant.** Both sources fill exactly 13 rows, so toggling the source moves nothing.
+4. **The stage never claims audio the session cannot produce.** With no client paired, the `visualizer` tile shows the guide pointer rather than dancing bars, matching the volume row's dash (`VIZ.md`).
 
-### Layout (dock rows 0-11)
+### Layout (dock rows 0-12)
 
 | Row | On radio | On youtube |
 |-----|----------|------------|
-| 0   | Volume bar: `vol  ▰▰▰▰▰▱▱▱▱▱  60%` (`muted` when muted, `—` when no client is paired) | same |
-| 1   | `radio` title bar + count | `radio` title bar + count |
-| 2   | current station's track | `youtube` title bar + count |
-| 3   | heading: `darksynth · nightride` | youtube track |
-| 4-6 | pinned slot rows `v1`..`v3` | progress, skip meter, `next ⌄` |
-| 7-8 | pinned slot rows `v4`..`v5` | queue rows 1-2 |
-| 9   | `youtube` title bar + count | queue row 3 |
-| 10  | youtube track (dim) | queue row 4 |
-| 11  | footer `v+r tune  v+x source` | footer `v+v queue  v+x source` |
+| 0   | Volume bar: `vol  ▰▰▰▰▰▱▱▱▱▱  60%` (`muted` when muted, a dash when no client is paired) | same |
+| 1   | keys: `- = volume  m mute` | same |
+| 2   | `radio` title bar + count | `radio` title bar + count |
+| 3   | current station's track | `youtube` title bar + count |
+| 4   | heading: `darksynth · nightride` | youtube track |
+| 5-7 | pinned slot rows `v1`..`v3` | progress, skip meter, `next ⌄` |
+| 8-9 | pinned slot rows `v4`..`v5` | queue rows 1-2 |
+| 10  | `youtube` title bar + count | queue row 3 |
+| 11  | youtube track (dim) | queue row 4 |
+| 12  | footer `v+r tune  v+x source` | footer `v+v queue  v+x source` |
 
 Track rows (`dock_track_line`): the active source's track renders `TEXT_BRIGHT` bold, the youtube peek on radio `TEXT_DIM`. Track text per source:
 - **youtube**: `youtube_track_text(queue)`: `Channel - Title` for the current item (falls back to `by <submitter> - Title`, then bare title); `fallback stream` when nothing is submitted (the fallback is the steady state, never "queue empty").
@@ -39,7 +40,7 @@ Selector rows (`selector_row_line`): `●`/`○` state glyph, station label, rig
 
 The expanded source = `paired_source` (`AudioSource::{Radio, Youtube}`). Pure preference-based. Does **not** gate on whether a client is paired. The saved preference (loaded from `users.settings.audio_source` during SSH bootstrap, mirrored on `App`) is the source of truth from the first frame; pairing completing does not change the visual state. Don't add a pairing guard back: waiting for the client read as a startup glitch.
 
-The volume row stays honest about pairing (`vol  —` when nothing paired), so users aren't misled about whether their preference is currently audible.
+The volume row stays honest about pairing (`vol` and a dash when nothing paired), so users aren't misled about whether their preference is currently audible.
 
 The Stations modal's Ctrl+Y (`^y` in its footer) copies the highlighted station's track through the OSC 52 clipboard path: `Artist - Title` (or bare title), the same `App::station_now_playing` text its row shows. Radio has no per-track link, so text is all there is. A station with no metadata shows a banner and leaves the clipboard untouched.
 
@@ -59,17 +60,17 @@ No copy anywhere reads "queue empty". The user has pushed back on that wording m
 ### Data sources
 
 - `queue_snapshot: &QueueSnapshot`: from the `AudioState::queue_snapshot()` watch channel.
-- Source/station selection lives in `users.settings` (`audio_source`, `radio_station`, `radio_slots`), mirrored on `App` and threaded through `DrawContext` into `SidebarProps` as `paired_source` / `selected_radio_station` / `radio_slots`.
+- Source/station selection lives in `users.settings` (`audio_source`, `radio_station`, `radio_slots`), mirrored on `App` and threaded through `DrawContext` into `MusicStageProps` as `source` / `selected_radio_station` / `radio_slots`.
 - `paired_client: Option<&ClientAudioState>`: for `volume_percent` and `muted` (vol row only).
 - `youtube_source_count` / `radio_source_count`: counts from active users' cached `audio_source`. Pair presence is ignored; offline users are excluded.
 - `radio_now_playing: Option<&str>`: preformatted track text for the selected station from the `RadioMetaService` map or the house now-playing map, looked up in `app/render.rs` via `stations::station_now_playing`.
 
-### Internal helpers (all in `sidebar.rs`)
+### Internal helpers (all in `music_dock.rs`)
 
 - `music_stage_lines(width, props)`: the whole-dock line builder; unit tests assert directly against its output.
 - `stage_title_line(area_w, label, tag, active)`: shared title-bar renderer. Label is always lowercase. Active → amber bold label + amber-dim tag; inactive → italic faint label + tag.
 - `dock_track_line(width, track, active, tick)`: a track row (bright bold when active, dim when not), marquee-scrolled when longer than the rail.
-- `labeled_rule_line(width, label)`: the rule naming the current station.
+- `station_heading_line(width, station)`: the heading naming the current station and crediting its provider.
 - `selector_row_line(width, name, key, selected)`: slot row with right-aligned key hint.
 - `youtube_track_text(queue)`: track-row text for youtube.
 - `volume_row_line`: the vol bar.
@@ -77,9 +78,9 @@ No copy anywhere reads "queue empty". The user has pushed back on that wording m
 - `youtube_detail_lines` / `radio_detail_lines`: the per-source detail rows.
 - `skip_meter_spans(progress)`: includes a trailing `v+s` keybind hint inline.
 - `queue_next_line(idx, item, width, tick)`: number flush at column 0 (no leading indent) to maximize title width.
-- `sidebar_marquee_scrolling`: tells the render gate whether any marquee row is animating; it must mirror which track rows the current source renders.
+- `home_marquee_scrolling`: tells the render gate whether any marquee row is animating; it must mirror which track rows the current source renders while a music tile is up, and the friends row while a presence tile is up.
 
-Tests (`sidebar_test.rs`): `music_stage_height_is_constant`, `on_radio_the_stage_reads_radio_then_its_stations_then_the_youtube_peek`, `on_youtube_radio_collapses_to_its_title_bar`, `both_title_bars_keep_their_listener_counts`, `an_off_slot_station_lights_no_slot_row_and_credits_its_own_provider`, `the_radio_track_row_prefers_live_metadata`.
+Tests (`music_dock_test.rs`): `music_stage_height_is_constant`, `on_radio_the_stage_reads_radio_then_its_stations_then_the_youtube_peek`, `on_youtube_radio_collapses_to_its_title_bar`, `both_title_bars_keep_their_listener_counts`, `an_off_slot_station_lights_no_slot_row_and_credits_its_own_provider`, `the_radio_track_row_prefers_live_metadata`.
 
 ### Cross-cuts
 

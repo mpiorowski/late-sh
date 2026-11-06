@@ -1041,6 +1041,8 @@ pub struct ChatState {
     requested_shop_modal: bool,
     requested_onboard: bool,
     requested_lobby_toggle: bool,
+    /// Set by `/edit`; `App` runs the Ctrl+E chord.
+    requested_home_arrange: bool,
     requested_guide: bool,
     requested_redraw: bool,
     requested_mod_modal: bool,
@@ -1414,6 +1416,7 @@ impl ChatState {
             requested_shop_modal: false,
             requested_onboard: false,
             requested_lobby_toggle: false,
+            requested_home_arrange: false,
             requested_guide: false,
             requested_redraw: false,
             requested_mod_modal: false,
@@ -2143,6 +2146,10 @@ impl ChatState {
 
     pub fn take_requested_lobby_toggle(&mut self) -> bool {
         std::mem::take(&mut self.requested_lobby_toggle)
+    }
+
+    pub fn take_requested_home_arrange(&mut self) -> bool {
+        std::mem::take(&mut self.requested_home_arrange)
     }
 
     pub fn take_requested_guide(&mut self) -> bool {
@@ -3814,12 +3821,18 @@ impl ChatState {
             return None;
         }
 
-        // Typed fallbacks for the global chords (Ctrl+G, Ctrl+R, ?), for
-        // terminals and multiplexers that swallow those keys. Each one runs
-        // exactly what its key runs; `/layout` below stands in for Ctrl+E.
+        // Typed fallbacks for the global chords (Ctrl+G, Ctrl+E, Ctrl+R, ?),
+        // for terminals and multiplexers that swallow those keys. Each one
+        // runs exactly what its key runs.
         if body.trim() == "/lobby" {
             self.clear_composer_after_submit();
             self.requested_lobby_toggle = true;
+            return None;
+        }
+
+        if body.trim() == "/edit" {
+            self.clear_composer_after_submit();
+            self.requested_home_arrange = true;
             return None;
         }
 
@@ -5725,8 +5738,7 @@ impl ChatState {
     pub fn select_notifications(&mut self) {
         self.clear_synthetic_selection();
         self.notifications_selected = true;
-        self.notifications.list();
-        self.notifications.mark_read();
+        self.notifications.open_feed();
     }
 
     pub fn select_discover(&mut self) {
@@ -6339,17 +6351,6 @@ impl ChatState {
                     {
                         let (_, kind) = self.pending_report_notices.swap_remove(index);
                         banner = Some(Banner::success(&format!("Posted to #{}", kind.slug())));
-                    }
-                }
-                ChatEvent::DeltaSynced {
-                    user_id,
-                    room_id,
-                    messages,
-                } if self.user_id == user_id => {
-                    for message in messages {
-                        if message.room_id == room_id {
-                            self.push_message(message);
-                        }
                     }
                 }
                 ChatEvent::RoomTailLoaded {
@@ -7423,7 +7424,7 @@ pub struct ActivityTickerEntry {
     pub at: DateTime<Utc>,
 }
 
-/// A connected friend, as the sidebar friends row and the Home Friends tile
+/// A connected friend, as the presence friends row and the Home Friends tile
 /// draw them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ActiveFriend {

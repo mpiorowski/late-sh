@@ -16,7 +16,7 @@
 //! The flag lives on each [`ActiveSession`] in the active-users roster, the
 //! one map every surface already reads for "online". Readers resolve the
 //! whole roster into one set of away user ids on the 1Hz presence edge
-//! (`tick.rs`), so the chat author line, the sidebar friends row, the Home
+//! (`tick.rs`), so the chat author line, the presence friends row, the Home
 //! friends tile, the DM list, `/active`, and @-completion all agree.
 //!
 //! The per-session AFK line (`chat/state.rs`, `AFK_LINE_IDLE`) is a different

@@ -44,7 +44,7 @@ fn mini_tank_lays_swimmers_on_their_rows_and_plants_on_the_floor() {
     );
 }
 
-/// A tank tile taller than the sidebar's band fills its height: the
+/// A tank tile taller than the small band fills its height: the
 /// surface on the top row, the floor on the bottom one, and the four
 /// lanes spread over the water between, so a ten-row tank swims on rows
 /// one, three, five and seven.

@@ -23,7 +23,7 @@ use crate::app::{common::primitives::Banner, live::pick::LiveCandidate};
 pub struct AudioTick {
     pub banner: Option<Banner>,
     /// True when the shared queue snapshot or the listener's favorites moved
-    /// this tick: the booth modal and the sidebar music stage draw straight
+    /// this tick: the booth modal and the music dock draw straight
     /// from them.
     pub changed: bool,
 }

@@ -118,12 +118,10 @@ their own id: the field breakdown never leaves the service. `/pot` reads
 refused buy; today's part is stamped at query time, so across UTC midnight
 it is stale until the next refresh (the sweeper's minute at most).
 
-## 7. There is no sidebar panel
+## 7. There is no panel
 
 The size and countdown live in the status HUD badge below, and `/pot`
-answers in full. A stored `"pot"` key in a user's panel list is dropped on
-read by `RightSidebarComponent::from_key`, like `"activity"` and
-`"visualizer"`.
+answers in full.
 
 ## 7b. The status HUD badge
 

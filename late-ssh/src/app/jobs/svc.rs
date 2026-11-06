@@ -1019,11 +1019,12 @@ fn note_read(tally: &mut PressTally, posting: &JobPosting, read: &anyhow::Result
             tally.dead += 1;
             metrics::record_jobs_read(JobsReadResult::Dead);
         }
+        // A read fails on the page or the AI, never the database: the
+        // posting's own attempt cap retires one that keeps failing.
         Err(error) => {
             tally.read_failed += 1;
             metrics::record_jobs_read(JobsReadResult::Failed);
-            late_core::error_span!(
-                "jobs_read_failed",
+            tracing::warn!(
                 error = ?error,
                 source = posting.source.as_str(),
                 external_id = %posting.external_id,

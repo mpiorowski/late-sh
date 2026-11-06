@@ -41,14 +41,14 @@ bar's ghost, a faint amber (`theme::EQ_GHOST`) that stays up where the bar
 struck and sinks back onto it; the bar's head cell carries the ghost behind
 its glyph only when the peak reaches past that cell (one cell holds one
 background, so a peak ending inside it would read a whole cell high, a third
-of the 3-row sidebar strip), and gap columns never do. Band values are clamped into 0..=1 at the boundary, since they come
+of the 3-row stock strip), and gap columns never do. Band values are clamped into 0..=1 at the boundary, since they come
 off the network. A spectrum not refreshed for 750ms is dropped
 (`expire_spectrum`, every tick), which is how every "no audio data" case falls
 back: the client muted, switched to YouTube, lost its socket, or is a CLI
 without the analyzer. The CLI sends nothing while silent, so no case needs an
 explicit off message.
 
-`viz::eq_state` is the single reading every eq surface (sidebar music stage,
+`viz::eq_state` is the single reading every eq surface (stock visualizer tile,
 Home's visualizer tile) draws. The bars and caps are one renderer,
 `viz::dance_lines`, at any height: the music stage at three rows, the
 visualizer tile (`viz::draw_visualizer_tile`) at its full height:

@@ -12,6 +12,8 @@ use std::time::Instant;
 use late_core::MutexRecover;
 use late_core::models::user::{AsciiPiece, Scene, SceneStyle};
 
+use super::aurora_fjord::SWEEP_STEP;
+
 /// How a piece plays: how often it draws a new frame, and how fast its play
 /// time runs. What a session pays for a piece on screen is the cells that
 /// change per frame times the frames per second, so the cadence is the
@@ -35,8 +37,10 @@ pub(crate) enum Cadence {
     /// cells a second, so an away session under it costs about what an
     /// idle one did. The default screensaver, earthrise, and the misty
     /// forest; each pays its budget its own way (`cadence`). The aurora
-    /// plays this way too, at a fifth of the wall clock: its whole sky
-    /// moves every frame, so no faster rate fits the wire budget.
+    /// plays this way too. In dots it sweeps (`aurora_fjord::sweep`), which
+    /// puts it beside those two. In pixels it plays at a fifth of the wall
+    /// clock: its whole sky moves every frame, so no faster rate fits the
+    /// wire budget.
     Slow { frame_ms: u64, rate: f64 },
 }
 
@@ -60,11 +64,12 @@ impl Cadence {
 
 /// The pace a piece plays at: the fastest its bytes a second allow under
 /// the wire budget (`ui_test.rs`, `every_piece_stays_under_the_wire_budget`,
-/// `WIRE_BUDGET_KB_PER_S`). A 1Hz scene's cadence is the scene's, whatever
-/// style draws it (the forest drifts a hair every second, the Earth turns
-/// a visible notch every few seconds, `ui_test.rs` holds both to one cell
-/// budget; the aurora drifts a fifth of a second of play every second).
-/// Alpine dawn's is its style's: dots at the half tier, pixels at the
+/// `WIRE_BUDGET_KB_PER_S`). The two crawling scenes' cadence is the scene's,
+/// whatever style draws it (the forest drifts a hair every second, the Earth
+/// turns a visible notch every few seconds, `ui_test.rs` holds both to one
+/// cell budget). The aurora's is its style's: dots sweep a few columns a
+/// second under that same budget, pixels drift a fifth of a second of play
+/// every second. So is alpine dawn's: dots at the half tier, pixels at the
 /// quarter, since a pixel frame is several times the bytes of a dots frame.
 pub(crate) fn cadence(piece: AsciiPiece) -> Cadence {
     match (piece.scene, piece.style) {
@@ -76,7 +81,11 @@ pub(crate) fn cadence(piece: AsciiPiece) -> Cadence {
             frame_ms: SLOW_FRAME_MS,
             rate: SLOW_RATE,
         },
-        (Scene::AuroraFjord, _) => Cadence::Slow {
+        (Scene::AuroraFjord, SceneStyle::Dots) => Cadence::Slow {
+            frame_ms: SLOW_FRAME_MS,
+            rate: AURORA_SWEEP_RATE,
+        },
+        (Scene::AuroraFjord, SceneStyle::Pixels) => Cadence::Slow {
             frame_ms: SLOW_FRAME_MS,
             rate: AURORA_RATE,
         },
@@ -110,11 +119,16 @@ pub(crate) const SLOW_RATE: f64 = 0.01;
 /// a second as the forest.
 pub(crate) const EARTH_FRAME_MS: u64 = 4 * SLOW_FRAME_MS;
 pub(crate) const EARTH_RATE: f64 = 0.08;
-/// How fast the aurora's play time runs against the wall clock, a frame a
-/// second: its sky and water move as a whole, so a frame flips most of
-/// the screen at any rate, and only one frame a second at this fraction
-/// of the clock fits the wire budget in pixels (Cost in `CONTEXT.md`).
+/// How fast the aurora's play time runs in pixels, a frame a second: its sky
+/// and water move as a whole, so a frame flips most of the screen at any
+/// rate, and only one frame a second at this fraction of the clock fits the
+/// wire budget (Cost in `CONTEXT.md`).
 pub(crate) const AURORA_RATE: f64 = 0.2;
+/// How many 1Hz edges the aurora's front takes to cross the screen in dots,
+/// and the play rate that is: one `SWEEP_STEP` per crossing. The cells a
+/// second grow as this shrinks; `ui_test.rs` holds them to the slow budget.
+pub(crate) const AURORA_SWEEP_FRAMES: u64 = 100;
+pub(crate) const AURORA_SWEEP_RATE: f64 = SWEEP_STEP / AURORA_SWEEP_FRAMES as f64;
 
 /// One cell of a shaded scene: the brightness the original's halftone turns
 /// into dot size, the colour it shades the cell with before any of that,
@@ -190,22 +204,32 @@ pub(crate) fn seconds(piece: AsciiPiece, frame: u64) -> f64 {
     frame as f64 * cadence.frame_ms() as f64 / 1000.0 * cadence.rate()
 }
 
+/// One picture the cache holds the latest frame of: a scene's, whichever
+/// style draws it, except the aurora, whose styles play different pictures.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Slot {
+    Earthrise,
+    MistyForest,
+    AuroraSweep,
+    Aurora,
+    AlpineDawn,
+}
+
 /// The piece's frame at `frame` (one of its own edges, `frame_index`), from
-/// the shared cache, keyed by the scene and its play time: a scene's
-/// picture is the same in either style at the same play time, so the two
-/// styles share an entry exactly when they want the same picture, and a
+/// the shared cache, keyed by the picture and its play time: two styles of a
+/// scene share an entry exactly when they want the same picture, and a
 /// style on a slower cadence (alpine dawn in pixels, whose frame `n` is the
 /// dots' frame `2n`) never gets the other's picture for its frame number.
 pub(crate) fn picture(piece: AsciiPiece, frame: u64) -> Arc<ShadedFrame> {
+    let (slot, paint): (Slot, fn(f64) -> ShadedFrame) = match (piece.scene, piece.style) {
+        (Scene::Earthrise, _) => (Slot::Earthrise, super::earthrise::frame),
+        (Scene::MistyForest, _) => (Slot::MistyForest, super::misty_forest::crawl),
+        (Scene::AuroraFjord, SceneStyle::Dots) => (Slot::AuroraSweep, super::aurora_fjord::sweep),
+        (Scene::AuroraFjord, SceneStyle::Pixels) => (Slot::Aurora, super::aurora_fjord::frame),
+        (Scene::AlpineDawn, _) => (Slot::AlpineDawn, super::alpine_dawn::frame),
+    };
     let t = seconds(piece, frame);
-    cached(piece.scene, play_ms(t), || {
-        Arc::new(match piece.scene {
-            Scene::Earthrise => super::earthrise::frame(t),
-            Scene::MistyForest => super::misty_forest::crawl(t),
-            Scene::AuroraFjord => super::aurora_fjord::frame(t),
-            Scene::AlpineDawn => super::alpine_dawn::frame(t),
-        })
-    })
+    cached(slot, play_ms(t), || Arc::new(paint(t)))
 }
 
 /// A play time as the cache's key: whole milliseconds, which every cadence's
@@ -215,33 +239,33 @@ fn play_ms(seconds: f64) -> u64 {
 }
 
 struct Cached {
-    scene: Scene,
+    slot: Slot,
     play_ms: u64,
     picture: Arc<ShadedFrame>,
 }
 
-/// The latest frame of each scene. Computed outside the lock, so a session
+/// The latest frame of each picture. Computed outside the lock, so a session
 /// drawing the aurora never holds up another drawing the forest; two
 /// sessions racing on one edge both compute it and the second write wins,
 /// which costs a frame of CPU and nothing else.
-fn cached(scene: Scene, play_ms: u64, make: impl FnOnce() -> Arc<ShadedFrame>) -> Arc<ShadedFrame> {
+fn cached(slot: Slot, play_ms: u64, make: impl FnOnce() -> Arc<ShadedFrame>) -> Arc<ShadedFrame> {
     static CACHE: Mutex<Vec<Cached>> = Mutex::new(Vec::new());
     if let Some(hit) = CACHE
         .lock_recover()
         .iter()
-        .find(|entry| entry.scene == scene && entry.play_ms == play_ms)
+        .find(|entry| entry.slot == slot && entry.play_ms == play_ms)
     {
         return hit.picture.clone();
     }
     let picture = make();
     let mut cache = CACHE.lock_recover();
-    match cache.iter_mut().find(|entry| entry.scene == scene) {
+    match cache.iter_mut().find(|entry| entry.slot == slot) {
         Some(entry) => {
             entry.play_ms = play_ms;
             entry.picture = picture.clone();
         }
         None => cache.push(Cached {
-            scene,
+            slot,
             play_ms,
             picture: picture.clone(),
         }),

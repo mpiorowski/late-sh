@@ -40,7 +40,7 @@ room is the chat surface, and the full history lives in #lounge on Home.
   from the records presence already has. Bots have no session, so no
   presence; they are found in `active_users` for the online flags only.
   The frame title shows no headcount: the crowd counts terminal sessions
-  only, so it read lower than the sidebar's online count (which takes IRC
+  only, so it read lower than Home's online count (which takes IRC
   too), and two "online" numbers that disagree confuse more than they say.
 - **Nobody hands out seats.** A session picks its own spot
   (`crowd::pick_spot`: a random free seat, drawn per session, else the first

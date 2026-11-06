@@ -76,7 +76,7 @@ Keep `mod.rs` declaration-only; no `pub use` re-export layer.
 
 `ChatService` channels:
 - Per-session `watch<ChatSnapshot>` for low-frequency room summary data.
-- `broadcast<ChatEvent>` for live message, reaction, room-command, and error events shared by every session. Single-recipient payload events (`RoomTailLoaded`, `DeltaSynced`, `MessageSearchLoaded`, `MessageContextLoaded`, `DiscoverRoomsLoaded`, and their `*Failed` twins) do NOT ride the broadcast: `ChatService::send_user_event` delivers them point-to-point over a per-session `mpsc<ChatEvent>` registered in `refresh_sessions` (returned by `start_user_refresh_task`), so a 500-message tail is never cloned into every connected session. `ChatState::drain_events` drains the targeted channel ahead of the broadcast; both feed the same event match.
+- `broadcast<ChatEvent>` for live message, reaction, room-command, and error events shared by every session. Single-recipient payload events (`RoomTailLoaded`, `MessageSearchLoaded`, `MessageContextLoaded`, `DiscoverRoomsLoaded`, and their `*Failed` twins) do NOT ride the broadcast: `ChatService::send_user_event` delivers them point-to-point over a per-session `mpsc<ChatEvent>` registered in `refresh_sessions` (returned by `start_user_refresh_task`), so a 500-message tail is never cloned into every connected session. `ChatState::drain_events` drains the targeted channel ahead of the broadcast; both feed the same event match.
 - Shared `watch<Arc<Vec<String>>>` username list for mention autocomplete, rebuilt every 30s from the in-memory `UsernameDirectory`, not the DB. Re-scanning `users` on that timer measures 1.9% of all DB execution time; the directory is written through on login/profile save/rename/delete, so the watch is both free and fresher. Do not point it back at `User::list_all_usernames` (that arm is the no-directory fallback for tests).
 - Plain username display is centralized outside Chat in `State.username_directory` (`Uuid -> username`), loaded at startup, refreshed every 30 minutes, and updated on login/profile save/mod rename/account delete. Chat still owns richer author metadata such as bonsai glyphs, countries, badges, reactions, and unread state.
 - A service-owned refresh scheduler that refreshes registered sessions every 10s and on explicit signals.
@@ -85,7 +85,6 @@ Keep `mod.rs` declaration-only; no `pub use` re-export layer.
 
 Important constants in `svc.rs`:
 - `HISTORY_LIMIT = 500`
-- `DELTA_LIMIT = 256`
 - `CHAT_REFRESH_INTERVAL = 10s`
 - `USERNAME_DIRECTORY_TTL = 30s`
 - `SEARCH_RESULTS_LIMIT = 50`, `SEARCH_MIN_CHARS = 3`, `SEARCH_CONTEXT_EACH_SIDE = 4` (message search)
@@ -140,7 +139,7 @@ Room favorites:
 - Active Shop room highlights are not favorites; they temporarily render above favorites and expire from `shop_consumable_effects`.
 
 Home presence:
-- There is no top activity strip; presence (online count + connected friends) lives in the right sidebar's pinned core block, and the public activity feed ships into #lounge as system messages (`app/activity/lounge.rs`) surfaced in the TUI as the one-row activity ticker above the composer, never as chat rows. The `b1`-`b4` recent-room jump keys died with the Rooms demolition.
+- There is no top activity strip; presence (online count + connected friends) lives in Home's presence tile, and the public activity feed ships into #lounge as system messages (`app/activity/lounge.rs`) surfaced in the TUI as the one-row activity ticker above the composer, never as chat rows. The `b1`-`b4` recent-room jump keys died with the Rooms demolition.
 
 `App::sync_visible_chat_room()` is the read/tail-load bridge. It computes the visible chat room from the current screen (Home/Dashboard, house table, daily board, Clubhouse, the Games hub while it has a door-game watch open, a player's own running DCSS, NetHack or Brogue game), stores it in `ChatState`, marks it read, and requests a tail on change. Call it after screen, selected room/synthetic entry, room favorite, or open-surface changes.
 

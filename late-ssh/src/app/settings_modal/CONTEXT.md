@@ -45,17 +45,16 @@ scroll focus all walk that list. To add a row: add the variant, put it in `ALL`,
 and the compiler asks for its group and its label/value arm; nothing else holds
 a row position.
 
-Settings/Tweaks clicks reuse keyboard actions, including per-device rail and
-interaction-mode updates. Cooldown, notification format, both sidebar modes,
+Settings/Tweaks clicks reuse keyboard actions, including per-device
+interaction-mode updates. Cooldown, notification format,
 Terminal images, Land on, Screensaver, and Text Brightness share bold
 amber arrows. Only the arrows choose direction; other row/value clicks cycle
 forward. Every cycle reserves its longest option width. Ratatui measures both
 rendered spans and clipped hitboxes, and labels shorten at grapheme boundaries
-before complete controls. Right sidebar's label and always-visible `[Panels]`
-button open its panel editor, including when Off.
+before complete controls.
 
 The Artboard group contains the default-on Artboard content disclaimer toggle.
-It is per device like the rail rows: it edits `device_artboard_disclaimer`
+It is per device: it edits `device_artboard_disclaimer`
 (outside `draft`, so `save()` never republishes it) and persists onto this
 session's SSH key, with the account's `artboard_disclaimer` only the default a
 new device inherits; re-enabling it closes
@@ -75,7 +74,7 @@ Keyboard, Mouse, and Hybrid, explains that Keyboard disables clicks/wheel, and
 uses App's setter for terminal reporting and persistence.
 Screensaver offers Off, the eight fixed scene/style choices, Random, then Randomer.
 Random holds one choice per activation; Randomer changes landscape every five
-minutes. Both store the mode, with transient playback owned by the session.
+minutes. Both draw only from the cheap pieces (`../ascii/CONTEXT.md`) and store the mode, with transient playback owned by the session.
 Interaction-mode persistence coalesces rapid choices through one writer per
 account, so an older asynchronous write cannot overwrite the final choice.
 Chooser values show `…` two spaces after the current label. Width padding follows
@@ -84,7 +83,7 @@ the hint so their hitboxes stay consistent across choices.
 Statusline is a split layout. Its compact list column fits the
 widest `>[ ] Name [↑↓]` entry, with reorder controls aligned after the widest name
 and no gap between cursor and checkbox. Each half of `[↑↓]` independently moves
-the row in its arrow's direction, including in Sidebar panels. Option titles sit
+the row in its arrow's direction. Option titles sit
 two cells from their controls; Label and component-specific options have
 directional arrows, while Brief/Auto-hide are
 simple toggles. Labels open options; checkboxes toggle. Pane offsets and wheel
@@ -99,8 +98,12 @@ submits it exactly as its keyboard submit does (`submit_text_edit`), then the
 click acts. There is one save path for both inputs: saves are fire-and-forget
 and a failure surfaces as the usual banner. Each save carries the whole draft,
 so `ProfileService::edit_profile` runs one writer per user that saves drafts in
-order and collapses a burst into its newest draft. An empty feed URL is dropped
-quietly. `[Cancel]` discards. Account confirmation inputs are not auto-saved.
+order and collapses a burst into its newest draft. For the same reason a refused
+username goes back out of the draft (`ProfileEvent::UsernameRefused`, which
+names the refused name): left there, it would fail every later save. A draft
+that has already moved on to another name keeps it, since the refusal is
+old news and reverting would rename the account back. An empty feed URL is
+dropped quietly. `[Cancel]` discards. Account confirmation inputs are not auto-saved.
 Closing Settings with `[x]` during a theme search keeps the theme the search
 previewed, as Esc does. The Invites dialog's code field takes the caret on
 click and `[Add code]` submits it like Enter.

@@ -162,7 +162,7 @@ round, the pot, invites).
 | Key | Page | Lives in |
 |-----|------|----------|
 | `0` | Clubhouse, the walkable tavern; the default landing page. `0` again goes down to the undercity (runners only) | `app/clubhouse`, `app/deadchannel` |
-| `1` | Home: room rail, chat (rooms plus News, Mentions, RSS, Voice, Discover; more chat tiles for more rooms), the live strip on #lounge, the sidebar panels; all tiles of one tree, arranged with `Ctrl+E` | `app/chat`, `app/live`, `app/zen` (the tree) |
+| `1` | Home: room rail, chat (rooms plus News, Mentions, RSS, Voice, Discover; more chat tiles for more rooms), the live strip on #lounge, music, the lobby and the things you keep alive; all tiles of one tree, arranged with `Ctrl+E` | `app/chat`, `app/live`, `app/zen` (the tree) |
 | `2` | The Arcade: solo games, daily puzzles, the quest strip | `app/arcade`, `app/hub` |
 | `3` | Games hub: door games, servers, live games to watch | `app/door` |
 | `4` | Artboard: the shared ASCII canvas and its gallery | `app/artboard` |
@@ -189,7 +189,7 @@ otherwise.
 
 | Context | Covers |
 |---------|--------|
-| `late-ssh/CONTEXT.md` | Session shell: SSH lifecycle, render loop, terminal output, pair WS, per-device settings, config, activity feed, notifications, presence, sidebar, global keys |
+| `late-ssh/CONTEXT.md` | Session shell: SSH lifecycle, render loop, terminal output, pair WS, per-device settings, config, activity feed, notifications, presence, global keys |
 | `late-core/CONTEXT.md` | Model rules, migrations, users and keys, the chip ledger, test DB helpers |
 | `late-web/CONTEXT.md` | Web routes, templates, `/listen`, stream proxy, gallery and profile pages |
 | `late-cli/CONTEXT.md` | The `late` binary: SSH modes, token handshake, audio pipeline, voice (the pair protocol in `PAIRING.md`, installers in `DISTRIBUTION.md`, terminal video in `VIDEO.md`) |
@@ -202,7 +202,7 @@ otherwise.
 | `chat/news` | Shared links, the News room, the reader, where a story's watch position is kept |
 | `chat/cyberspace` | The cyberspace.online client and its rail entry |
 | `video` | The watch player: a News story or a chat YouTube link played in the terminal by the paired CLI's mpv, the setup box, the session's one play on the CLI |
-| `audio` | Radio, YouTube queue and booth, source selection, `/listen` snapshot; the queue service in `QUEUE.md`, the equalizer in `VIZ.md`, the sidebar stage in `STAGE.md`, the stations in `STATIONS.md` |
+| `audio` | Radio, YouTube queue and booth, source selection, `/listen` snapshot; the queue service in `QUEUE.md`, the equalizer in `VIZ.md`, the music dock in `STAGE.md`, the stations in `STATIONS.md` |
 | `voice` | LiveKit voice rooms, TUI voice controls, pair-WS voice messages |
 | `stream` | `/golive` and `/watch` streams, the stream registry, the late-web live pages (staff and streamer tools in `MODERATION.md`) |
 | `live` | The live strip (`now`) on #lounge and the Live panel (rows and keys in `PANEL.md`) |
@@ -216,7 +216,7 @@ otherwise.
 | `settings_modal` | Settings (`Ctrl+O`): tabs, pickers, mouse, save rules |
 | `handoff` | Drain handoff: a quiet native-CLI session moved off an updating pod onto its page, the "Auto restart on update" tweak |
 | `statusline` | The frame status bars and their customizer |
-| `zen` | The tile tree behind Home (`Ctrl+E` arranges it and switches its nine named layouts) and its stock layouts, `home` and `street` (layout 2), the pet and tank tiles |
+| `zen` | The tile tree behind Home (`Ctrl+E` or `/edit` arranges it, `O` keeps a tile to one room, and it switches its nine named layouts) and its stock layouts, `home` and `street` (layout 2), the pet and tank tiles |
 | `ascii` | The animated ascii pieces, the Home ascii tile, the away screensaver |
 | `bonsai` | The bonsai: branch graph, care modal, daily chips; the per-user state reference |
 | `hub` | The Shop (`Ctrl+S`), quests, pet unlock (the marketplace, rentals and flair in `shop/CONTEXT.md`, the reef in `aquarium/CONTEXT.md`) |

@@ -156,20 +156,39 @@ resource "kubernetes_secret_v1" "rebels_identity_secret" {
 # =============================================================================
 # Icecast Passwords
 # =============================================================================
+# Rendered into the icecast-config and liquidsoap-config Secrets. To rotate all
+# three, change this value: one apply makes new passwords and restarts Icecast
+# and Liquidsoap together, which drops the radio for a moment.
+
+locals {
+  icecast_password_rotation = "2026-11-04"
+}
 
 resource "random_password" "icecast_admin" {
   length  = 32
   special = false
+
+  keepers = {
+    rotation = local.icecast_password_rotation
+  }
 }
 
 resource "random_password" "icecast_source" {
   length  = 32
   special = false
+
+  keepers = {
+    rotation = local.icecast_password_rotation
+  }
 }
 
 resource "random_password" "icecast_relay" {
   length  = 32
   special = false
+
+  keepers = {
+    rotation = local.icecast_password_rotation
+  }
 }
 
 # =============================================================================

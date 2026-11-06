@@ -25,8 +25,7 @@ use uuid::Uuid;
 
 use late_core::models::leaderboard::{ArcadeGame, DailyPuzzle, LeaderboardData};
 use late_core::models::profile::Profile;
-use late_core::models::user::{LandingPage, RightSidebarMode, TerminalImagesMode};
-use late_core::models::user_ssh_key::KeyLayout;
+use late_core::models::user::{LandingPage, TerminalImagesMode};
 
 use crate::{
     app::activity::event::ActivityEvent,
@@ -157,19 +156,9 @@ impl ReconnectNotice {
     }
 }
 
-/// The Arcade sidebar mode in force: this device's stored mode when its key
-/// has one, else the account default. Free-standing so `App::new` can seed
-/// the settings draft with it before the `App` itself exists.
-fn device_rails_or_profile(device_rails: Option<KeyLayout>, profile: &Profile) -> RightSidebarMode {
-    match device_rails {
-        Some(layout) => layout.right_sidebar_mode,
-        None => profile.right_sidebar_mode,
-    }
-}
-
 /// Bounds for the aquarium simulation at launch: a band the size of the
 /// old Home tray (eleven rows inside the chat column: frame borders plus
-/// the room rail and right sidebar, 24 each). Home's reef tile re-binds
+/// Home's two rail columns, 24 each). Home's reef tile re-binds
 /// the sim to its own rect on its first draw
 /// (`sync_aquarium_bounds`); this only has to be a sane start.
 fn aquarium_area_for_terminal(cols: u16, rows: u16) -> Rect {
@@ -472,9 +461,6 @@ pub struct SessionConfig {
     /// `None` for sessions with no key of their own (ghost bots, tests), which
     /// then simply follow the account default and persist nothing.
     pub key_fingerprint: Option<String>,
-    /// This device's stored home rail layout, or `None` when the key has never
-    /// been configured and should follow the account default.
-    pub key_layout: Option<late_core::models::user_ssh_key::KeyLayout>,
     /// This device's Artboard content disclaimer, or `None` when the key has
     /// never set one and should follow the account's `artboard_disclaimer`.
     pub key_artboard_disclaimer: Option<bool>,
@@ -699,16 +685,16 @@ pub struct App {
     pub(crate) away_user_ids: HashSet<Uuid>,
     /// Human headcount and connected friends, recomputed on the same ~1s
     /// cadence; renderers read these owned values instead of locking the
-    /// shared `active_users` map every frame. The friends feed the sidebar
+    /// shared `active_users` map every frame. The friends feed the presence tile
     /// friends row and the Friends tile.
     pub(crate) online_count: usize,
     pub(crate) active_friends: Vec<crate::app::chat::state::ActiveFriend>,
     /// The unread mention count the mentions list was last requested at
     /// while Home hosts the attention guest (the list loads only on ask).
     pub(super) home_attention_listed_unread: Option<i64>,
-    /// Last rendered sidebar clock text, compared on the ~1s tick so minute
+    /// Last rendered clock text, compared on the ~1s tick so minute
     /// rollovers count as a render-visible change.
-    pub(super) last_sidebar_clock: String,
+    pub(super) last_clock: String,
     /// App-owned author-context epoch for the chat row caches: bumps when
     /// AFK, drunk levels, name styles, or the username directory change.
     /// Pairs with `ChatState::context_epoch` in `ChatRowsVersions`.
@@ -728,7 +714,7 @@ pub struct App {
     /// render ever queries for it.
     pub(super) pot_snapshot_rx: Option<watch::Receiver<Arc<crate::app::pot::svc::PotSnapshot>>>,
     pub(super) pot_events_rx: Option<broadcast::Receiver<crate::app::pot::svc::PotEvent>>,
-    /// What the sidebar's pot panel draws, projected for this viewer.
+    /// What the pot's status badge draws, projected for this viewer.
     pub(crate) pot_view: crate::app::pot::state::PotView,
     pub(super) active_users: Option<ActiveUsers>,
     pub(super) username_directory: Option<crate::usernames::UsernameDirectory>,
@@ -832,19 +818,13 @@ pub struct App {
     pub(crate) music_prefix_armed: bool,
     pub(crate) room_section_prefix_armed: bool,
     /// `s` was pressed on Home: the next digit opens that row of the
-    /// sidebar's Live panel (`live/input.rs::open_from_prefix`).
+    /// Live panel (`live/input.rs::open_from_prefix`).
     pub(crate) live_prefix_armed: bool,
 
     /// Profile
     pub(crate) profile_state: profile::state::ProfileState,
-    /// Home rail layout for *this device*: the layout stored on the SSH key
-    /// this session authenticated with, or `None` to follow the live account
-    /// profile. `\` and the two Ctrl+O rail rows write it, so a phone and a
-    /// desktop on one linked account stop overwriting each other. Read through
-    /// [`App::rail_modes`]; render resolves `Auto` against terminal width.
-    pub(crate) device_rails: Option<late_core::models::user_ssh_key::KeyLayout>,
-    /// Artboard content disclaimer for *this device*, stored on the same key
-    /// as `device_rails`, or `None` to follow the account's
+    /// Artboard content disclaimer for *this device*, stored on the SSH key
+    /// this session authenticated with, or `None` to follow the account's
     /// `artboard_disclaimer`. Read through [`App::artboard_disclaimer_enabled`].
     pub(crate) device_artboard_disclaimer: Option<bool>,
     /// The key the device settings persist to; `None` for keyless sessions.
@@ -968,6 +948,9 @@ pub struct App {
     /// with F4, also closed by Esc and by the game ending. `None`, the game
     /// has the keys and the whole screen.
     pub(crate) own_watch_chat_open: Option<crate::app::door::spectate::state::SpectateGame>,
+    /// The watcher counts as the last tick read them
+    /// (`door::spectate::chat::watchers_moved`).
+    pub(crate) watcher_counts_seen: crate::app::door::spectate::chat::WatcherCounts,
     /// The chat column over this player's own running game, as the last
     /// frame drew it (`None` while it is closed): only a drawn column takes
     /// the keys (`door::spectate::input::own_chat_takes_keys`).
@@ -1045,7 +1028,7 @@ pub struct App {
     /// Lobby modal state spanning both game domains: cursor, claim-confirm,
     /// unseen-challenge glow.
     pub(crate) lobby: crate::app::lobby::state::LobbyState,
-    /// Daily correspondence games: sidebar panel and board state.
+    /// Daily correspondence games: lobby tile and board state.
     pub(crate) daily: crate::app::lobby::daily::state::DailyState,
     /// Realm territory-conquest games: per-session snapshot + board state.
     pub(crate) realm: crate::app::door::realm::state::RealmState,
@@ -1293,36 +1276,6 @@ impl App {
         self.away && !self.video.is_open()
     }
 
-    /// The rail modes this session renders from: this device's stored layout if
-    /// its key has one, else the live account profile. The single read path for
-    /// rail visibility, so render, input, and the settings modal can never
-    /// disagree about which layout is in force.
-    pub(crate) fn rail_modes(&self) -> RightSidebarMode {
-        device_rails_or_profile(self.device_rails, self.profile_state.profile())
-    }
-
-    /// Adopt the sidebar row from the settings-modal draft as this device's
-    /// mode. A no-op when it already matches, so unrelated tweaks in the same
-    /// modal do not write to the key.
-    pub(crate) fn sync_device_rails_from_settings(&mut self) {
-        let edited = self.settings_modal_state.device_rails();
-        if edited != self.rail_modes() {
-            self.set_device_rails(edited);
-        }
-    }
-
-    fn set_device_rails(&mut self, mode: RightSidebarMode) {
-        let layout = KeyLayout {
-            right_sidebar_mode: mode,
-        };
-        self.device_rails = Some(layout);
-        // Keyless sessions (ghost bots, tests) have no device to remember: the
-        // layout still applies for the rest of the session, it just isn't saved.
-        if let Some(fingerprint) = self.key_fingerprint.clone() {
-            self.profile_state.set_device_rails(fingerprint, layout);
-        }
-    }
-
     pub fn skip_splash_for_tests(&mut self) {
         self.show_splash = false;
         self.haunt.clear_whisper();
@@ -1388,6 +1341,7 @@ impl App {
 
     pub(crate) fn sync_visible_chat_room(&mut self) {
         self.steer_active_chat_from_rail();
+        self.sync_home_kept_tiles();
         let visible_room_id = self.current_visible_chat_room_id();
         let changed = self.chat.visible_room_id() != visible_room_id;
         self.chat.set_visible_room_id(visible_room_id);
@@ -1651,6 +1605,7 @@ impl App {
                     mood: late_core::models::pet::PetMood::Asleep.as_str().to_string(),
                     mood_since: chrono::Utc::now(),
                     last_petted: None,
+                    enabled: true,
                 },
             )
         };
@@ -1728,11 +1683,9 @@ impl App {
             config.referral_service.clone(),
             config.user_id,
         );
-        let device_rails = config.key_layout;
         let device_artboard_disclaimer = config.key_artboard_disclaimer;
         settings_modal_state.open_from_profile(
             &initial_profile,
-            device_rails_or_profile(device_rails, &initial_profile),
             device_artboard_disclaimer.unwrap_or(initial_profile.artboard_disclaimer),
         );
         // Everyone lands in the clubhouse by default: the tavern is the front
@@ -1889,7 +1842,7 @@ impl App {
                 .unwrap_or(0),
             active_friends: Vec::new(),
             home_attention_listed_unread: None,
-            last_sidebar_clock: String::new(),
+            last_clock: String::new(),
             chat_ctx_epoch: 0,
             last_username_directory: None,
             flair_directory: config.flair_directory,
@@ -1994,7 +1947,6 @@ impl App {
                 config.user_id,
                 config.initial_theme_id,
             ),
-            device_rails,
             device_artboard_disclaimer,
             key_fingerprint: config.key_fingerprint,
             profile_modal_state: profile_modal::state::ProfileModalState::new(
@@ -2064,6 +2016,7 @@ impl App {
             live_games: config.live_games,
             own_watch_chats: Vec::new(),
             own_watch_chat_open: None,
+            watcher_counts_seen: Default::default(),
             own_chat_hit: std::cell::Cell::new(None),
             own_chat_undrawn: std::cell::Cell::new(false),
             brogue_state: None,
@@ -2980,7 +2933,7 @@ impl App {
         // Every top-level move repaints from scratch. ratatui only re-emits
         // cells whose contents changed, and the two layouts rarely disagree
         // on every cell: leaving Home for the Arcade used to strand the
-        // sidebar's bonsai emoji on screen, because a wide glyph the new
+        // bonsai emoji on screen, because a wide glyph the new
         // layout writes a space over occupies two columns and only one of
         // them differs. Clearing costs one full frame per page switch, which
         // every door and the Artboard already paid for the same reason. A
@@ -3198,10 +3151,12 @@ impl App {
             || self.show_mod_modal
             || self.show_hub_modal
             || self.show_profile_modal
+            || self.show_sheet_modal
             || self.show_poll_modal
             || self.show_gild_modal
             || self.chat.cyberspace.modal_active()
             || self.show_bonsai_modal
+            || self.show_lobby_modal
             || self.paper.modal.is_some()
             || self.stream_modal.is_some()
             || self.show_help
@@ -3210,7 +3165,13 @@ impl App {
             || self.video.modal().is_some()
             || self.room_search_modal_state.is_open()
             || self.chat.history_modal.is_open()
+            || self.room_info_modal_state.is_open()
+            || self.directory_editor.is_open()
+            || self.jobs.post.is_open()
+            || self.tag_picker.is_open()
+            || self.piece_picker.is_open()
             || self.booth_modal_state.is_open()
+            || self.stations_modal_state.is_open()
             || self.icon_picker_open
     }
 
@@ -3682,7 +3643,7 @@ impl App {
         let area = self.home_tiles_area();
         let chrome = rice.chrome();
         let page_chat = rice.active_chat_ordinal();
-        zen_layout::tile_rects(&rice.rice.root, area, rice.gaps())
+        zen_layout::tile_rects(&rice.rice.root, area, rice.gaps(), &rice.hidden_tiles())
             .into_iter()
             .enumerate()
             .map(|(idx, (kind, rect))| {
@@ -3727,7 +3688,7 @@ impl App {
                 RoomSlot::News
             }
             ChatRoomBinding::Current | ChatRoomBinding::Room(_) | ChatRoomBinding::Permanent(_) => {
-                let Some(room_id) = self.home_bound_room(&bound) else {
+                let Some(room_id) = bound.joined_room(&self.chat.rooms).map(|room| room.id) else {
                     return;
                 };
                 if self.chat.selected_room_id == Some(room_id)
@@ -3791,16 +3752,8 @@ impl App {
         if !self.on_home() {
             return;
         }
-        let moment = match (
-            self.chat.news_selected,
-            self.chat.synthetic_entry_selected(),
-        ) {
-            (true, _) => ChatRoomBinding::News,
-            (false, true) => return,
-            (false, false) => match self.chat.selected_room_id {
-                Some(room_id) => ChatRoomBinding::Room(room_id),
-                None => return,
-            },
+        let Some(moment) = self.home_rail_binding() else {
+            return;
         };
         let Some(bound) = self.home.active_chat_room() else {
             return;
@@ -3808,7 +3761,7 @@ impl App {
         let same = match (&bound, &moment) {
             (ChatRoomBinding::Current, _) => true,
             (ChatRoomBinding::Permanent(_), ChatRoomBinding::Room(room_id)) => {
-                self.home_bound_room(&bound) == Some(*room_id)
+                bound.joined_room(&self.chat.rooms).map(|room| room.id) == Some(*room_id)
             }
             (bound, moment) => bound == moment,
         };
@@ -3817,6 +3770,31 @@ impl App {
         }
         if self.home.bind_active_chat_room(moment) {
             self.mark_home_layout_dirty();
+        }
+    }
+
+    /// The rail's selection as a binding: News or a real room. `None` on the
+    /// other synthetic rows (mentions, rss, browse) and before the rooms
+    /// arrive.
+    pub(crate) fn home_rail_binding(&self) -> Option<crate::app::zen::state::ChatRoomBinding> {
+        use crate::app::zen::state::ChatRoomBinding;
+        if self.chat.news_selected {
+            return Some(ChatRoomBinding::News);
+        }
+        self.home_chat_room_id().map(ChatRoomBinding::Room)
+    }
+
+    /// Note which of Home's tiles are kept to a room the page's chat is not
+    /// in. Runs with the room (`sync_visible_chat_room`), so the page reflows
+    /// as the messages change anyway. The reef's rect moves when it goes
+    /// down or comes back, so the simulation is bound again.
+    pub(crate) fn sync_home_kept_tiles(&mut self) {
+        let chat_room = self.home_chat_room_id();
+        let moved = self
+            .home
+            .sync_kept_away(self.chat.news_selected, chat_room, &self.chat.rooms);
+        if moved {
+            self.sync_aquarium_bounds();
         }
     }
 
@@ -3841,31 +3819,9 @@ impl App {
         &self,
         bound: &crate::app::zen::state::ChatRoomBinding,
     ) -> Option<Uuid> {
-        match self.home_bound_room(bound) {
-            Some(room_id) => Some(room_id),
+        match bound.joined_room(&self.chat.rooms) {
+            Some(room) => Some(room.id),
             None => self.home_current_room_id(),
-        }
-    }
-
-    /// The joined room a binding names: a room id the account still holds,
-    /// or the permanent room with that slug. `None` for the current room,
-    /// for News, and for a binding the account's rooms do not hold.
-    fn home_bound_room(&self, bound: &crate::app::zen::state::ChatRoomBinding) -> Option<Uuid> {
-        use crate::app::zen::state::ChatRoomBinding;
-        match bound {
-            ChatRoomBinding::Current | ChatRoomBinding::News => None,
-            ChatRoomBinding::Room(room_id) => self
-                .chat
-                .rooms
-                .iter()
-                .find(|(room, _)| room.id == *room_id)
-                .map(|(room, _)| room.id),
-            ChatRoomBinding::Permanent(slug) => self
-                .chat
-                .rooms
-                .iter()
-                .find(|(room, _)| room.permanent && room.slug.as_deref() == Some(slug.as_str()))
-                .map(|(room, _)| room.id),
         }
     }
 
@@ -3893,7 +3849,7 @@ impl App {
 
     /// The rect the aquarium simulation should fill on the current screen:
     /// the first reef-form tank tile's inner rect on Home (a
-    /// sidebar-sized tank tile draws the small tank and binds nothing),
+    /// narrow tank tile draws the small tank and binds nothing),
     /// the launch band elsewhere.
     fn aquarium_area_for_screen(&self) -> Rect {
         let (cols, rows) = self.size;
@@ -3939,7 +3895,13 @@ impl App {
         self.home_layout_dirty = true;
     }
 
-    /// Today's care, the pet gated on ownership: what the attention guest
+    /// Whether the pet shows: bought, and not put away with its Shop switch.
+    /// Every surface that draws it, pets it or asks for it reads this.
+    pub(crate) fn pet_out(&self) -> bool {
+        self.shop_state.entitlements().has_pet_companion() && self.pet_state.enabled
+    }
+
+    /// Today's care, the pet gated on `pet_out`: what the attention guest
     /// and the status line's Care count read.
     pub(crate) fn care_today(&self) -> crate::app::zen::attention::Care {
         use crate::app::zen::attention::{Care, Chore};
@@ -3947,10 +3909,7 @@ impl App {
         Care {
             bonsai: Chore::of(true, self.bonsai.tree.last_watered == Some(today)),
             tank: Chore::of(true, self.aquarium_care.fed_on_day(today)),
-            pet: Chore::of(
-                self.shop_state.entitlements().has_pet_companion(),
-                self.pet_state.petted_on(today),
-            ),
+            pet: Chore::of(self.pet_out(), self.pet_state.petted_on(today)),
         }
     }
 

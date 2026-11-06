@@ -127,7 +127,7 @@ enum WsPayload {
     /// Audio control initiated on a paired client (the CLI's desktop MPRIS
     /// surface: a widget's play/pause, media keys, a volume slider). The
     /// server fans it back out to every paired client on the token, exactly
-    /// like a TUI keypress, so the CLI, the webview helper, and the sidebar
+    /// like a TUI keypress, so the CLI, the webview helper, and the music dock
     /// all converge on the same state.
     #[serde(rename = "set_muted")]
     SetMuted { muted: bool },
@@ -676,7 +676,7 @@ async fn ws_handler(
         return StatusCode::TOO_MANY_REQUESTS.into_response();
     }
     if !state.session_registry.has_session(&params.token).await {
-        tracing::warn!(
+        tracing::info!(
             ip = %client_ip,
             peer_ip = %peer_addr.ip(),
             token_hint = %token_hint,
@@ -879,7 +879,7 @@ async fn handle_socket(mut socket: WebSocket, token: String, state: State, clien
                 let msg = match msg {
                     Ok(m) => m,
                     Err(e) => {
-                        tracing::warn!(token_hint = %token_hint, error = ?e, "websocket dirty close or error");
+                        tracing::info!(token_hint = %token_hint, error = ?e, "websocket dirty close or error");
                         break;
                     }
                 };

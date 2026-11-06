@@ -20,11 +20,15 @@ capacity findings and the scaling plan are in `SCALE.md`.
   grace period; a `FailedPreStopHook` event when it exits is expected. Its
   `tcp-tuning` init container sets `net.ipv4.tcp_slow_start_after_idle=0` in the
   node's host network namespace.
+- **Client IPs on HTTP(S).** `api.` and `audio.` sit behind Cloudflare, the apex
+  does not. nginx takes the client from `CF-Connecting-IP` only when the peer is
+  in Cloudflare's ranges (`infra/ingress.tf`), and hands it on as
+  `X-Forwarded-For`, which late-ssh's per-IP pair limits key on. Direct requests
+  use the observed socket address and cannot forge it with forwarding headers.
 - **IPv6 HTTP(S).** After the maintenance cutover, ingress-nginx uses
-  `hostNetwork` and binds 80/443 directly on IPv4 and IPv6. It ignores
-  client-supplied forwarding headers and sends its observed socket address to
-  `late-ssh` for pairing limits. The former `kube-system/ipv6-proxy` lost the
-  IPv6 client address; its removal and rollback are below. `Network is
+  `hostNetwork` and binds 80/443 directly on IPv4 and IPv6. The former
+  `kube-system/ipv6-proxy` lost the IPv6 client address; its removal and rollback
+  are below. `Network is
   unreachable` on `ssh -6 late.sh` means the client lacks IPv6.
 - **SSH pod drain.** `service-ssh` has `termination_grace_period_seconds =
   21600` (6 h): a rollout stops new connections and lets sessions drain before
@@ -169,6 +173,48 @@ The repo owner approved an out-of-service window for this first switch. The
 ordered preflight, port handoff, public-edge checks and rollback are in the
 [bastion deployment guide](../devdocs/BASTION-DEPLOY-GUIDE.md).
 
+## RKE2 certificates and etcd snapshots
+
+RKE2 renews any certificate inside 120 days of expiry each time it starts, so
+one restart of `rke2-server` renews them. Running pods and SSH sessions stay up
+(the unit is `KillMode=process`); the API is down for about a minute. Offsite
+etcd snapshots are a config change that takes the same restart, so do both at
+once. On `server-1`, as root, with the values from GitHub variables
+`S3_ENDPOINT` and `DB_BACKUPS_BUCKET` and the `s3-credentials` Secret:
+
+```bash
+rke2 etcd-snapshot save --name pre-restart
+cat >> /etc/rancher/rke2/config.yaml <<'CONFIG'
+etcd-s3: true
+etcd-s3-endpoint: <S3_ENDPOINT without https://>
+etcd-s3-region: auto
+etcd-s3-bucket: <DB_BACKUPS_BUCKET>
+etcd-s3-folder: etcd
+etcd-s3-access-key: <ACCESS_KEY_ID>
+etcd-s3-secret-key: <SECRET_ACCESS_KEY>
+CONFIG
+chmod 600 /etc/rancher/rke2/config.yaml
+systemctl restart rke2-server
+
+# Verify: the new expiry, and an s3:// location for a fresh snapshot.
+rke2 certificate check --output table
+rke2 etcd-snapshot save --name offsite-check
+kubectl get etcdsnapshotfile
+```
+
+Barman keeps Postgres under its own prefix in the same bucket, so `etcd/` does
+not touch it. `setup_rke2.sh` does not write these lines: a rebuilt `server-1`
+needs them added by hand.
+
+While on the node, reclaim disk (images take most of it, and kubelet image GC
+starts around 5.6 GiB free):
+
+```bash
+CRI_CONFIG_FILE=/var/lib/rancher/rke2/agent/etc/crictl.yaml \
+  /var/lib/rancher/rke2/bin/crictl rmi --prune
+journalctl --vacuum-size=500M
+```
+
 ## Monitoring gotchas
 
 - Provisioned Grafana dashboards reference the metrics datasource by its stable
@@ -236,7 +282,7 @@ Entry template: symptom → evidence → verdict → fixes shipped → what to c
 - **Evidence:** active sessions were 61 immediately before the kill (64 peak in the preceding minutes), so this was not connection-limit exhaustion. Working set was ~1.51 GiB at 06:36:00, jumped to ~2.32 GiB at the 06:36:05 scrape, then crossed 4 GiB and died before the next scrape. Two earlier transient spikes recovered without a restart: ~3.80 GiB at 05:27 and ~2.77 GiB at 06:25. Previous-container logs contain no `clamped oversized` resize, unsolicited clipboard, panic, input-queue saturation, or DB-pool timeout marker; terminal dimensions near the kill were normal and within the 500×200 clamp. The repeated `idx_users_username_lower` profile-edit error from one session was noisy (103 failures in a sampled ten minutes) but ended well before the kill; Postgres remained lightly loaded with no blocked or long-running query at investigation time.
 - **Root cause (follow-up investigation, same day):** stalled-SSH-client output buffering in russh. Every rendered frame goes through `handle.data()` with a 50 ms timeout (`late-ssh/src/ssh.rs:1364`), but that timeout only measures getting a slot in russh's 128-entry per-session event queue. When a client stops reading (phone lock, flaky network, half-dead TCP), its SSH channel window hits zero and russh appends every subsequent frame to the per-channel `pending_data` VecDeque (russh 0.61.2 `lib_inner.rs`), which is **uncapped, non-blocking, and invisible** to the send timeout: no frame drop is counted, nothing is logged, and the session keeps rendering at 15-66 fps into the queue. `force_full_repaint()` after any dropped frame upgrades subsequent frames to full repaints (up to MBs each on large terminals), multiplying the rate. Memory frees all at once when keepalive (30 s x 3) or TCP reset reaps the connection.
 - **Supporting evidence:** 5-second-resolution working set shows every spike is a step-up / hold 20-70 s / free-as-one-unit shape (05:27: +2.6 GiB freed in two ~1.45 GiB steps; 06:25: +1.41 GiB; 07:00 next morning: +1.52 GiB), matching per-connection buffers reaped by keepalive; the recurring ~1.4-1.5 GiB quantum = frame rate x frame size x fixed keepalive reap window, and OOM #2's +1.43 GB step was the same signature. `late_ssh_render_frame_drops_total` ran at exactly 909/min (one session, every world tick) 06:00-06:34 and 1818/min (two sessions) 06:22-06:30 overlapping the 06:25 spike: those are the *visibly* stalled sessions; the window-exhausted ones queue silently. Traces disproved the chat theories: `load_room_tail` ran at background rate (1-7/s) through both spikes, and prod room snapshots are KiB-sized, so the 06:35:58 `build_chat_snapshot` latency wave (20-50 ms to 388-705 ms) was starvation downstream of the memory pressure, not the allocator.
-- **Fixes shipped:** ops first: memory limit raised 4Gi to 8Gi (+request 512Mi to 2Gi) via in-place pod resize (no restart; Kubernetes 1.34 `--subresource resize`) and persisted in `infra/service-ssh.tf`; headroom only, not the root-cause fix. Code, same day: output-budget guard in `late-ssh/src/ssh.rs`: an `OutputBudget` per session counts bytes handed to russh and resets when `Handler::window_adjusted` reports a positive window (russh flushes pending before the callback, so a positive window proves the backlog drained); over 32 MB outstanding the render loop pauses entirely (ratatui diff state untouched, so resume needs no repaint), and 30 s of sustained stall disconnects the session instead of waiting for keepalive. New metrics `late_ssh_render_stall_{skips,disconnects}_total`. The mpsc-timeout frame-drop path keeps its `force_full_repaint` (still correct there) but no longer re-arms the input-cadence retry: the repaint rides the next world tick, capping the drop-retry loop at 15 fps instead of 66. Pair-WS hardening in the same pass: per-token registration cap (8), per-IP concurrent pair-socket cap (reuses `max_conns_per_ip`, separate counter from SSH), and the per-connection control channel is now bounded (64) with try_send drop-on-full, mirroring the web tunnel.
+- **Fixes shipped:** ops first: memory limit raised 4Gi to 8Gi (+request 512Mi to 2Gi) via in-place pod resize (no restart; Kubernetes 1.34 `--subresource resize`) and persisted in `infra/service-ssh.tf`; headroom only, not the root-cause fix. Code, same day: output-budget guard in `late-ssh/src/ssh.rs`: an `OutputBudget` per session counts bytes handed to russh and resets when `Handler::window_adjusted` reports a positive window (russh flushes pending before the callback, so a positive window proves the backlog drained); over 32 MB outstanding the render loop pauses entirely (ratatui diff state untouched, so resume needs no repaint), and 30 s of sustained stall disconnects the session instead of waiting for keepalive. New metrics `late_ssh_render_stall_{skips,disconnects}_total`. The mpsc-timeout frame-drop path keeps its `force_full_repaint` (still correct there) but no longer re-arms the input-cadence retry: the repaint rides the next world tick, at the hot tick for three refused passes in a row and at the idle tick (2 fps) after that, whether the handle refused the frame or one of its terminal commands (a Kitty repaint always carries cleanup commands). Pair-WS hardening in the same pass: per-token registration cap (8), per-IP concurrent pair-socket cap (reuses `max_conns_per_ip`, separate counter from SSH), and the per-connection control channel is now bounded (64) with try_send drop-on-full, mirroring the web tunnel.
 - **Still open from the audit** (real, not this incident's cause): `ChatEvent::RoomTailLoaded` broadcasts ~500-message payloads to all sessions with a lag-triggered reload loop; Clubhouse `draw_tavern` heap-allocates one `String` per visible cell per frame; session bootstrap fan-out is unthrottled and deep-clones the nonogram library per session.
 - **If it repeats:** the giveaway is the step / hold / free-as-unit shape at 5 s resolution with the ~1.4 GiB quantum. Correlate with `late_ssh_render_frame_drops_total` (a flat 909/min-per-session run = a visibly stalled client; silent window-exhausted clients show nothing), then identify the stalled session via keepalive disconnect logs at the free moment. VictoriaTraces (Jaeger API on `monitoring/victoriatraces:10428`) has per-operation spans for ruling out DB/chat paths quickly.
 

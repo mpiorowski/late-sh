@@ -103,7 +103,7 @@ Local state:
 - `late-ssh/src/app/artboard/ui.rs`
   - Rendering for canvas, info sidebar, swatch strip, help overlay, glyph picker, the colour picker modal (`common::color_picker::draw` over the page area; `color_picker_hit` reads a click through `common::color_picker::hit`), `palette_hit` for the info block's palette rows, owner overlay, floating preview, and selection; `draw_game` lays the rail and the gallery pane around them in view mode.
   - Uses `ratatui`, `dartboard_tui`, and app theme helpers.
-  - `canvas_area_for_state(size, rail_visible)` must match the frame layout; hit tests and the editor viewport depend on it. The rail's visibility is published by the draw path (`GalleryState::set_rail_visible`), so input math follows the last frame.
+  - `canvas_area_for_state(size, rail_visible)` is the page inside the app frame (`render::app_frame_inner_area`) less the rail, and must match the draw; hit tests and the editor viewport depend on it. Help and the colour picker are drawn over the whole page, so their hits ignore the rail. The rail's visibility is published by the draw path (`GalleryState::set_rail_visible`), so input math follows the last frame.
   - `render_piece_canvas` draws any piece canvas in the board's style; every gallery surface goes through it.
   - Custom canvas rendering preserves wide glyph behavior and avoids cursor/overlay collisions.
 
@@ -284,4 +284,4 @@ Inline module tests:
 - UI hit testing depends on exact layout math shared by `ui.rs`, `input.rs`, and `page.rs`.
 - SGR mouse coordinates are 1-based at the parser boundary; Artboard hit tests assume normalized coordinates from app input.
 - Global input integration can regress if `artboard_blocks_global_page_switch` stops considering active/help/glyph/colour picker states, or the gallery's `captures_typing` (a title being typed, a frame being drawn). `handle_global_key` runs before `dispatch_screen_key`, so any new single-key global is stolen from the board and from a piece title unless it is gated the same way.
-- The rail shifts the board 21 columns right while it is up; anything that computes a board cell from a screen point must go through `canvas_area_for_state` with the last draw's rail visibility, never `canvas_area_for_screen`.
+- The rail shifts the board 21 columns right while it is up; anything that computes a board cell from a screen point must go through `canvas_area_for_state` with the last draw's rail visibility.

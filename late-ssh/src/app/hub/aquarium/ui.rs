@@ -464,10 +464,10 @@ fn centered_rect(area: Rect, width: u16, height: u16) -> Rect {
     )
 }
 
-/// Rows of the sidebar tank, and the least a tank tile draws: the
+/// Rows of the small tank, the least a tank tile draws: the
 /// surface, four rows of water, the floor.
 pub(crate) const MINI_TANK_HEIGHT: u16 = 6;
-/// The swimmers' lanes: the sidebar's four water rows, spread over the
+/// The swimmers' lanes: the small tank's four water rows, spread over the
 /// water of a taller tank.
 const MINI_LANES: usize = MINI_TANK_HEIGHT as usize - 2;
 /// A 21-cell band holds this many glyphs before it reads as noise.
@@ -482,12 +482,12 @@ const MINI_STEP_TICKS: usize = 4;
 const MINI_HUNGRY_SLOWDOWN: usize = 4;
 const MINI_FLOOR: &str = "._.-^-.__-._";
 
-/// The sidebar tank: the owned population as one-to-three-cell glyphs
+/// The small tank: the owned population as one-to-three-cell glyphs
 /// (`CreatureDef::mini`) filling `area`, the surface on its top row and
 /// the floor on its bottom one, at least `MINI_TANK_HEIGHT` rows tall.
 /// Stateless like the bonsai sway: where each creature is comes from the
 /// wall tick alone, so there is no simulation to step and the panel rides
-/// the sidebar's anim_half frames. It reads the reef's population and
+/// the tile's anim_half frames. It reads the reef's population and
 /// colours (the fry in its parent's, the sprout on the floor) and nothing
 /// else of the simulation. Swimmers take the four lanes in turn, spread
 /// over the water (a taller tank has the same lanes, further apart) and
@@ -594,7 +594,7 @@ pub(crate) fn draw_reef_tile(frame: &mut Frame, area: Rect, view: &TankView<'_>)
     draw_care_bar(frame, area, view.care.bar());
 }
 
-/// Home's tank tile, the sidebar's small tank the tile's whole size: the
+/// Home's tank tile, the small tank the tile's whole size: the
 /// surface on the tile's top row, the floor on its bottom one, the fish
 /// in the water between, the care bar on the surface.
 pub(crate) fn draw_tank_tile(frame: &mut Frame, area: Rect, view: &TankView<'_>, wall_tick: usize) {
@@ -615,7 +615,7 @@ pub(crate) fn reef_form(inner: Rect) -> bool {
     inner.width > REEF_MIN_COLS && inner.height > MINI_TANK_HEIGHT
 }
 
-/// The sidebar's content width: a tile this narrow is a sidebar panel.
+/// The narrow tile's content width: a tile this narrow draws the small form.
 const REEF_MIN_COLS: u16 = 30;
 
 /// The care bar on the water's surface: the tile's top row, right end,

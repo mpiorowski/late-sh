@@ -32,7 +32,8 @@ impl GreenDragonSetting {
         max_pot: i64,
         sixes: u32,
     ) -> Result<(i64, i64)> {
-        let sixes = sixes as i64;
+        // Postgres infers `$3` as int4 from its comparisons with integer literals.
+        let sixes = sixes as i32;
         let row = client
             .query_one(
                 "WITH bumped AS (

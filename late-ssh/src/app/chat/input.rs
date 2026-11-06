@@ -119,13 +119,9 @@ fn open_settings_modal(app: &mut App) {
     app.show_hub_modal = false;
     app.show_poll_modal = false;
     app.poll_modal_state.close();
-    let device_rails = app.rail_modes();
     let device_artboard_disclaimer = app.artboard_disclaimer_enabled();
-    app.settings_modal_state.open_from_profile(
-        app.profile_state.profile(),
-        device_rails,
-        device_artboard_disclaimer,
-    );
+    app.settings_modal_state
+        .open_from_profile(app.profile_state.profile(), device_artboard_disclaimer);
     app.show_settings = true;
 }
 
@@ -217,6 +213,9 @@ pub(crate) fn handle_post_submit_requests(app: &mut App, allow_poll_modal: bool)
     }
     if app.chat.take_requested_lobby_toggle() {
         crate::app::input::toggle_lobby_globally(app);
+    }
+    if app.chat.take_requested_home_arrange() {
+        crate::app::input::layout_chord_globally(app);
     }
     if let Some(command) = app.chat.take_requested_layout_command() {
         crate::app::zen::input::run_layout_command(app, command);

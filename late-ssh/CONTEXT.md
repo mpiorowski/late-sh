@@ -4,7 +4,7 @@ Everything in `late-ssh/src` that is not a domain with its own `CONTEXT.md`:
 the SSH server and its render loop, the HTTP API and pair WebSocket, the
 compiled config, the root glue (`app/{state,input,tick,render}.rs`), terminal
 output, and the small shared pieces with no context of their own (activity,
-notify, presence, the help modal, the ghost bots, the sidebar). Root
+notify, presence, the help modal, the ghost bots). Root
 `CONTEXT.md` routes to every domain.
 
 ## 1. File map
@@ -109,10 +109,12 @@ Each session spawns one render task (`ssh.rs`) with two triggers:
   sleeps that long unless input or a `RenderSignal` wake lands first. Tiers
   (`app/tick.rs`): `HOT_TICK` 66 ms (splash, 2 s after any input, an active
   ultimate, house tables, an open arcade game); `ANIM_HALF_TICK` 132 ms (the
-  Clubhouse, a visible right sidebar, Home with a bonsai or eq tile, the live
+  Clubhouse, Home with a bonsai or eq tile, the live
   strip while it draws, the bonsai modal and a profile showing a tree, the pet
   box, ascii pieces in dots); `ANIM_QUARTER_TICK` 264 ms (aquarium surfaces,
-  ascii pieces in pixels); `IDLE_TICK` 500 ms otherwise. The away screensaver
+  ascii pieces in pixels); `IDLE_TICK` 500 ms otherwise. A session with no
+  input for `ATTENTION_ACTIVE_WINDOW` (5 min, `attention_presence`) takes
+  the quarter tier wherever it would take the half tier. The away screensaver
   returns its tier ahead of every other check. Floor ticks only drain channels.
 - **Input-driven render.** Within `MIN_RENDER_GAP` (15 ms) of a keystroke or
   resize, a render that does not advance world time. Door proxies push-wake
@@ -310,15 +312,6 @@ Some settings belong to the SSH key a session authenticated with
 (`ClientHandler::auth_fingerprint`, not `users.fingerprint`), stored in
 `user_ssh_keys.settings` and scoped by `user_id` as well:
 
-- **The Arcade's right sidebar.** `App::rail_modes()` is the only resolver:
-  this key's mode, else the account's. The Settings Appearance row writes
-  the key, never the account (the account value is only the seed for a key
-  with none). The settings modal keeps it in `device_rails`, outside the
-  draft `save()` writes, pinned by
-  `cycling_rails_persists_only_to_authenticating_key_and_survives_unrelated_settings`.
-  `auto` resolves against the live width each frame
-  (`AUTO_RIGHT_SIDEBAR_MIN_COLS` 72). `show_right_sidebar` is still written
-  next to the mode for rollback safety.
 - **Home's tile layouts** (`app/zen/CONTEXT.md`): `home_layouts` (Home's
   named layouts, up to nine, and the current one) on the key, written by
   `App::flush_home_layout` through `ProfileState::set_device_home_layouts`.
@@ -381,14 +374,14 @@ removes a required secret follows the deploy skew rule in `infra/RUNBOOK.md`.
   day back, summed per bucket, onto a second watch the sessions copy on
   their tick (`PresenceSession::history`) for Home's pulse tile; the
   sparkline maths is `presence/pulse.rs`; `presence/ui.rs` draws the tile
-  and the pinned presence block (the sidebar's top rows, Home's presence
+  and the pinned presence block (Home's presence
   tile). `late_ssh_pulse_samples_total{outcome}`.
 - **Username directory.** `State.username_directory` is the app-wide
   `Uuid -> username` map: loaded at startup, refreshed every 30 minutes, updated
   on login, profile save, mod rename and account delete. Plain name labels read
   it; do not add per-feature username caches.
 - **Online counts.** `State.active_users` (authenticated SSH and IRC sessions,
-  ghost bots included) backs the sidebar's online count and
+  ghost bots included) backs the online count and
   `/api/now-playing.listeners_count`; it is app presence, not Icecast listener
   analytics. `State.conn_counts` is the per-IP connection count. Both are
   per-process by design (`SCALE.md`, Pain Point 2).
@@ -400,19 +393,10 @@ removes a required secret follows the deploy skew rule in `infra/RUNBOOK.md`.
   of the Clubhouse seat pool). AI lives in `app/ai`: `bot_app_context()` feeds
   @bot the full guide, `bartender_app_context()` feeds @bartender navigation
   only, @graybeard gets neither.
-- **Sidebar** (`app/common/sidebar.rs`), the Arcade's. Pinned core rows
-  (online count, clock, connected friends) then the user's panels
-  (`RightSidebarComponent`) in their order, each a fixed height;
-  `visible_components` stops at the first panel that does not fit, so panels
-  drop from the bottom. Free space takes leftover rows. Pet is
-  shop-gated, and Pet and Tank are view only here. A panel missing from a stored list is
-  backfilled at its default under its default predecessor
-  (`normalize_right_sidebar_components`). Stored `"activity"` and `"pot"` keys
-  are dropped on read. The Live panel is `app/live`. Home draws the same
-  rows and panels as tiles of its own tree (`app/zen/CONTEXT.md`): its stock
-  layout is fixed (the Settings checklist shapes the Arcade's sidebar alone),
-  and the panel widgets (`draw_music_stage`, `draw_panel_rule`, presence's
-  `draw_core_block`) are shared with the tiles.
+- **Music dock** (`app/common/music_dock.rs`): the music tile's drawing and
+  the render gate for Home's marquee rows. There is no page sidebar: pages take
+  the whole frame, and panels are tiles of Home's tree (`app/zen/CONTEXT.md`).
+  Stored `right_sidebar_*` settings keys are read nowhere.
 - **Frame.** Status bars on both borders through `app/statusline`; the toast is
   a 3-row block top-center of the content area, under the settings overlay.
   The sponsor link `late.sh/thanks` redirects through late-web.
@@ -443,7 +427,7 @@ interaction mode ignores mouse reports.
 | `m`, `+`/`=`, `-`/`_` | Paired client mute and volume |
 | `w` | Bonsai care modal |
 | `` ` `` | Workspace cycle (`app/workspace/CONTEXT.md`) |
-| `/settings` `/lobby` `/redraw` `/guide` `/picker` `/shop` | Composer fallbacks for chords a terminal swallows; each runs the key's function |
+| `/settings` `/lobby` `/edit` `/redraw` `/guide` `/picker` `/shop` | Composer fallbacks for chords a terminal swallows; each runs the key's function |
 | `/layout` | Home's layouts from any composer, Home first: `/layout` lists them, `/layout <name or 1-9>` loads one, `/layout save <name>` saves the page as one |
 | `Esc` | Close the top modal |
 
@@ -458,7 +442,7 @@ Keybinding change checklist, every item:
    terminal and economy topics in `terminal_faq.rs` / `hub_guide.rs`; the
    Keyhints copy in `app/statusline/bar.rs::shortcut_spans()`.
 3. `app/settings_modal/ui.rs` footer and help callout.
-4. Sidebar hints in `app/common/sidebar.rs`.
+4. Music dock hints in `app/common/music_dock.rs`.
 5. Per-game info panels that list controls.
 6. The domain's `CONTEXT.md` key table (and this table for a global key).
 
@@ -470,7 +454,8 @@ a no-op twin when built without `otel`.
 
 - Render: `late_ssh_renders_total{reason}`,
   `late_ssh_renders_skipped_clean_total`, `late_ssh_render_frame_drops_total`
-  (a flat ~909/min is one stalled client), `late_ssh_render_stall_*`,
+  (a flat ~909/min is one stalled client in its first three drops, ~120/min
+  one the backoff has moved to the idle tick), `late_ssh_render_stall_*`,
   `late_ssh_frame_bytes{reason}`, `late_ssh_session_output_bytes_per_second`,
   `late_ssh_output_bytes_total{screen,place,presence,kind}` (every sent byte,
   attributed in `ssh.rs::render_once`),

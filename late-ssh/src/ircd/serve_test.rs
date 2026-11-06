@@ -14,7 +14,7 @@ use late_core::models::{
     profile::ProfileParams,
     server_ban::{ServerBan, ServerBanActivation},
     statusline::default_statusline_components,
-    user::{RightSidebarMode, User, default_right_sidebar_components},
+    user::User,
 };
 use late_core::shutdown::CancellationToken;
 use late_core::test_utils::{TestDb, create_test_user};
@@ -1215,9 +1215,6 @@ async fn profile_username_change_projects_to_live_irc_session() {
             theme_id: None,
             enable_background_color: false,
             text_brightness_adjustment: 0,
-            show_right_sidebar: true,
-            right_sidebar_mode: RightSidebarMode::On,
-            right_sidebar_components: default_right_sidebar_components(),
             statusline_components: default_statusline_components(),
             keep_composer_focused: false,
             start_with_music_muted: false,

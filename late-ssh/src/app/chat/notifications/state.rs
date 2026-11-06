@@ -1,4 +1,5 @@
-use chrono::{DateTime, Utc};
+use std::collections::HashSet;
+
 use tokio::sync::{broadcast, watch};
 use uuid::Uuid;
 
@@ -22,14 +23,14 @@ pub struct State {
     snapshot_rx: watch::Receiver<NotificationSnapshot>,
     event_rx: broadcast::Receiver<NotificationEvent>,
     unread_count: i64,
-    last_read_at: Option<DateTime<Utc>>,
-    marker_read_at: Option<DateTime<Utc>>,
-    preserve_marker_read_at: bool,
+    /// What the last visit to the Mentions entry stamped read: their dots stay
+    /// up for that visit, and the next visit replaces the set.
+    read_on_open: HashSet<Uuid>,
 }
 
 impl State {
     pub fn new(service: NotificationService, user_id: Uuid) -> Self {
-        let snapshot_rx = service.subscribe_snapshot();
+        let snapshot_rx = service.subscribe_snapshot(user_id);
         let event_rx = service.subscribe_events();
         service.refresh_unread_count_task(user_id);
         Self {
@@ -40,9 +41,7 @@ impl State {
             snapshot_rx,
             event_rx,
             unread_count: 0,
-            last_read_at: None,
-            marker_read_at: None,
-            preserve_marker_read_at: false,
+            read_on_open: HashSet::new(),
         }
     }
 
@@ -81,15 +80,15 @@ impl State {
         self.unread_count
     }
 
-    pub fn marker_read_at(&self) -> Option<DateTime<Utc>> {
-        self.marker_read_at
+    pub fn read_on_open(&self) -> &HashSet<Uuid> {
+        &self.read_on_open
     }
 
-    pub fn mark_read(&mut self) {
-        self.marker_read_at = self.last_read_at;
-        self.preserve_marker_read_at = true;
-        self.unread_count = 0;
-        self.service.mark_all_read_task(self.user_id);
+    /// The Mentions entry was opened: stamps its unread mentions and loads the
+    /// list. The badge moves when the stamp has committed, not before: a count
+    /// moved here would have the attention guest list the rows still unread.
+    pub fn open_feed(&self) {
+        self.service.open_feed_task(self.user_id);
     }
 
     pub fn tick(&mut self) -> NotificationsTick {
@@ -105,11 +104,8 @@ impl State {
 
     fn drain_snapshot(&mut self) {
         if let Ok(true) = self.snapshot_rx.has_changed() {
-            let snapshot = self.snapshot_rx.borrow_and_update().clone();
-            if snapshot.user_id == Some(self.user_id) {
-                self.items = snapshot.items;
-                self.selected = clamp_index(self.selected, self.items.len());
-            }
+            self.items = self.snapshot_rx.borrow_and_update().items.clone();
+            self.selected = clamp_index(self.selected, self.items.len());
         }
     }
 
@@ -121,13 +117,11 @@ impl State {
                     NotificationEvent::UnreadCountUpdated {
                         user_id,
                         unread_count,
-                        last_read_at,
                     } if user_id == self.user_id => {
                         self.unread_count = unread_count;
-                        self.last_read_at = last_read_at;
-                        if unread_count == 0 && !self.preserve_marker_read_at {
-                            self.marker_read_at = last_read_at;
-                        }
+                    }
+                    NotificationEvent::FeedOpened { user_id, read } if user_id == self.user_id => {
+                        self.read_on_open = read.into_iter().collect();
                     }
                     NotificationEvent::NewMention {
                         user_id,
@@ -155,6 +149,12 @@ impl State {
             }
         }
         banner
+    }
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        self.service.prune_snapshot_channel(self.user_id);
     }
 }
 

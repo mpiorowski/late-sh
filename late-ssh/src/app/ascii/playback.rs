@@ -3,7 +3,7 @@
 
 use std::time::{Duration, Instant};
 
-use late_core::models::user::{AsciiPiece, AsciiSelection, Scene};
+use late_core::models::user::{AsciiPiece, AsciiSelection, Scene, SceneStyle};
 use rand::{Rng, seq::IteratorRandom};
 
 const ROTATION: Duration = Duration::from_secs(5 * 60);
@@ -81,9 +81,22 @@ impl Playback {
 fn choose(exclude: Option<Scene>, rng: &mut impl Rng) -> AsciiPiece {
     AsciiPiece::ALL
         .into_iter()
-        .filter(|piece| Some(piece.scene) != exclude)
+        .filter(|piece| in_random_pool(*piece) && Some(piece.scene) != exclude)
         .choose(rng)
-        .expect("the catalogue contains multiple scenes")
+        .expect("the random pool holds more than one scene")
+}
+
+/// Whether a draw may land on `piece`. A draw plays unattended, often for
+/// hours to an empty room, so only a piece that costs what an idle session
+/// does is in the pool (`ui_test.rs` holds them to it, Cost in `CONTEXT.md`);
+/// a lively one plays only for someone who picked it.
+pub(super) fn in_random_pool(piece: AsciiPiece) -> bool {
+    match (piece.scene, piece.style) {
+        (Scene::Earthrise | Scene::MistyForest, _) => true,
+        (Scene::AuroraFjord, SceneStyle::Dots) => true,
+        (Scene::AuroraFjord, SceneStyle::Pixels) => false,
+        (Scene::AlpineDawn, _) => false,
+    }
 }
 
 #[cfg(test)]

@@ -31,8 +31,8 @@ use crate::app::{
         draw_dashboard_chat_card, draw_embedded_room_chat, draw_room_list_rail,
     },
     common::{
+        music_dock::{MusicStageProps, draw_music_tile},
         primitives::{center_lines, draw_centered_note, hint_line},
-        sidebar::{MusicStageProps, draw_music_tile, draw_panel_rule},
         theme,
     },
     files::terminal_image::TerminalImageFrame,
@@ -106,7 +106,7 @@ pub(crate) struct ZenView<'a> {
     /// up (arrange mode only).
     pub home_layouts: &'a Layouts,
     pub layout_list: Option<&'a LayoutList>,
-    /// The music dock's inputs (`sidebar::draw_music_tile`): a tall music
+    /// The music dock's inputs (`music_dock::draw_music_tile`): a tall music
     /// tile draws the dock, a short one the track over the station.
     pub music: MusicStageProps<'a>,
     /// The now strip for the tile hosting it as a guest, while something
@@ -116,6 +116,9 @@ pub(crate) struct ZenView<'a> {
     /// What waits on you (`App::attention_items`): the attention guest
     /// takes its host while the list has rows.
     pub attention: &'a [AttentionItem],
+    /// The room each tile keeps to, in layout order, for its rule in arrange
+    /// mode (`ZenState::only_labels`); empty outside it.
+    pub only_labels: &'a [Option<String>],
     pub bonsai: &'a BonsaiState,
     /// The tank and its care, for the reef and the tank tiles.
     pub tank: TankView<'a>,
@@ -130,7 +133,7 @@ pub(crate) struct ZenView<'a> {
     /// The date under the clock tile's digits.
     pub date: &'a str,
     /// Daily correspondence games for the lobby tile, and whether the lobby
-    /// label glows (your turn somewhere, or a result waiting).
+    /// label glows (an open challenge you have not looked at).
     pub daily: &'a DailyState,
     pub lobby_glow: bool,
     /// The #lounge activity feed, newest first (`ChatState::activity_ticker`).
@@ -138,7 +141,7 @@ pub(crate) struct ZenView<'a> {
     /// Today's all-day board posts (`calendar::live::day_text`), the banner
     /// across the top of every tile; `None` on any other day.
     pub board_day: Option<&'a str>,
-    /// The Live panel's rows, the sidebar's, for the Live tile: it draws
+    /// The Live panel's rows, for the Live tile: it draws
     /// them the same way and records the same click and key targets.
     pub live_panel: LivePanelProps<'a>,
     pub wall_tick: usize,
@@ -176,17 +179,13 @@ pub(crate) fn draw_rice(
     let zen = view.zen;
     let gaps = zen.gaps();
     let chrome = zen.chrome();
-    let rects = layout::tile_rects(&zen.rice.root, tiles_area, gaps);
+    let hidden = zen.hidden_tiles();
+    let rects = layout::tile_rects(&zen.rice.root, tiles_area, gaps, &hidden);
     // Under the rules chrome the gutter between two columns is one line,
     // owned by the split, so neither tile draws its own.
     if matches!(chrome, Chrome::Rules { .. }) {
-        for gutter in layout::row_gutters(&zen.rice.root, tiles_area, gaps) {
-            crate::app::common::sidebar::paint_vertical_separator(
-                frame,
-                gutter.x,
-                gutter.y,
-                gutter.height,
-            );
+        for gutter in layout::row_gutters(&zen.rice.root, tiles_area, gaps, &hidden) {
+            paint_vertical_separator(frame, gutter.x, gutter.y, gutter.height);
         }
     }
     let guests = zen.rice.root.leaf_guests();
@@ -242,15 +241,20 @@ pub(crate) fn draw_rice(
         };
         let title_override = zen.rice.root.title_at(ordinal);
         // Arranging, the tile names the guests it hosts (`+name`, as the
-        // key that gives it one), so a quiet guest is never a surprise,
-        // and a tile that goes bare outside the mode says so in the rule
-        // it wears for the mode.
+        // key that gives it one), so a quiet guest is never a surprise, the
+        // one room it keeps to, since every tile is up in the mode whatever
+        // the room, and a tile that goes bare outside the mode says so in
+        // the rule it wears for the mode.
         let title = match zen.arrange {
             true => {
                 let mut title = title;
                 for guest in hosted {
                     title.push_str(" +");
                     title.push_str(guest.label());
+                }
+                if let Some(Some(room)) = view.only_labels.get(ordinal) {
+                    title.push_str(" · only ");
+                    title.push_str(room);
                 }
                 match title_override {
                     TileTitle::Named => {}
@@ -270,8 +274,7 @@ pub(crate) fn draw_rice(
         }
         hints.extend_from_slice(kind.hints());
         let keys = hints_shown(&hints, zen.arrange, focused);
-        // The lobby's rule glows while a game waits on you, as the
-        // sidebar's does.
+        // The lobby's rule glows while an open challenge is unseen.
         let glow = *kind == TileKind::Lobby && view.lobby_glow;
         let inner = draw_tile_chrome(
             frame,
@@ -319,24 +322,24 @@ pub(crate) fn draw_rice(
             TileKind::Pet => {
                 crate::app::pet::ui::draw_tile(frame, inner, view.pet.as_ref(), neighbours)
             }
-            TileKind::Chat => match (is_page_chat, home.take()) {
-                (
-                    true,
+            // Only the page's chat takes Home's view: a watching tile drawn
+            // ahead of it in the layout must leave it there.
+            TileKind::Chat => match is_page_chat {
+                true => match home.take() {
                     Some(HomeView {
                         chat_view,
                         dashboard_view,
                         home_selected,
-                    }),
-                ) => {
-                    if home_selected {
-                        draw_dashboard_chat_card(frame, inner, dashboard_view, terminal_images);
-                    } else {
-                        draw_chat_center(frame, inner, chat_view, terminal_images);
+                    }) => {
+                        if home_selected {
+                            draw_dashboard_chat_card(frame, inner, dashboard_view, terminal_images);
+                        } else {
+                            draw_chat_center(frame, inner, chat_view, terminal_images);
+                        }
                     }
-                }
-                (true, None) | (false, _) => {
-                    draw_chat_tile(frame, inner, chat_tile, terminal_images)
-                }
+                    None => draw_chat_tile(frame, inner, chat_tile, terminal_images),
+                },
+                false => draw_chat_tile(frame, inner, chat_tile, terminal_images),
             },
             TileKind::Music => draw_music_tile(frame, inner, &view.music),
             TileKind::Clock => draw_clock_tile(frame, inner, &view),
@@ -395,18 +398,19 @@ pub(crate) fn draw_rice(
 }
 
 /// The layouts list `L` opens in arrange mode: one row per layout with
-/// its digit and name, the current one marked, the selected row lit;
+/// its digit and name, the current one marked, the selected row lit, and
+/// over the hints a note that Alt+digit loads one from anywhere on Home;
 /// while a name is being typed (`n`) the field sits under the rows with
 /// its cursor.
 fn draw_layout_list(frame: &mut Frame, area: Rect, layouts: &Layouts, list: &LayoutList) {
     let rows = layouts.count() as u16;
-    // The rows, a blank, the hint, the two border rows; two more rows
-    // while a name is typed.
+    // The rows, a blank, the Alt+digit note, the hint, the two border
+    // rows; two more rows while a name is typed.
     let edit_rows = match list.editing {
         Some(_) => 2,
         None => 0,
     };
-    let Some(inner) = draw_popup(frame, area, " layouts ", 50, rows + 4 + edit_rows) else {
+    let Some(inner) = draw_popup(frame, area, " layouts ", 50, rows + 5 + edit_rows) else {
         return;
     };
     let mut lines: Vec<Line<'static>> = layouts
@@ -457,6 +461,10 @@ fn draw_layout_list(frame: &mut Frame, area: Rect, layouts: &Layouts, list: &Lay
         ]));
     }
     lines.push(Line::from(""));
+    lines.push(hint_line_fitting(
+        &[("alt+1-9", "that layout, from anywhere on home")],
+        inner.width as usize,
+    ));
     let hints: &[(&str, &str)] = match list.editing {
         Some(_) => &[("enter", "keep"), ("esc", "drop")],
         None => &[
@@ -749,12 +757,12 @@ fn draw_tile_chrome(
             match chrome.wears(title_override) {
                 TileTitle::Hidden => return inner,
                 TileTitle::Rule => {
-                    crate::app::common::sidebar::draw_bare_rule(frame, row, glow);
+                    draw_bare_rule(frame, row, glow);
                     return inner;
                 }
                 TileTitle::Named => {}
             }
-            // The sidebar's rule, the title italic and dim, lit amber while
+            // The title rule, the title italic and dim, lit amber while
             // the focus is on it in arrange mode or the lobby glows, with
             // the tile's keys on its right end.
             draw_panel_rule(frame, row, title, glow || (*arrange && focused));
@@ -998,6 +1006,63 @@ fn draw_attention_tile(
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), area);
+}
+
+/// `── label ────` title rule above a tile. `active` swaps the label to bold
+/// amber for attention (the lobby's unseen-challenge glow).
+fn draw_panel_rule(frame: &mut Frame, area: Rect, label: &str, active: bool) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let label_style = if active {
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default()
+            .fg(theme::AMBER_DIM())
+            .add_modifier(Modifier::ITALIC)
+    };
+    let width = area.width as usize;
+    let used = 3 + label.chars().count() + 1;
+    let trail = width.saturating_sub(used).max(1);
+    let line = Line::from(vec![
+        Span::styled("── ".to_string(), Style::default().fg(theme::BORDER_DIM())),
+        Span::styled(label.to_string(), label_style),
+        Span::raw(" "),
+        Span::styled("─".repeat(trail), Style::default().fg(theme::BORDER_DIM())),
+    ]);
+    frame.render_widget(Paragraph::new(line), area);
+}
+
+/// The title rule with no text: a tile's divider and nothing else. `active`
+/// lights it, which is all a lobby with an unseen challenge has left to say.
+fn draw_bare_rule(frame: &mut Frame, area: Rect, active: bool) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    let color = match active {
+        true => theme::AMBER(),
+        false => theme::BORDER_DIM(),
+    };
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            "─".repeat(area.width as usize),
+            Style::default().fg(color),
+        )),
+        area,
+    );
+}
+
+/// Paint a thin vertical line (1 column wide) in BORDER_DIM: a split's rule
+/// without a box around its tiles.
+fn paint_vertical_separator(frame: &mut Frame, x: u16, y: u16, height: u16) {
+    let buf = frame.buffer_mut();
+    for dy in 0..height {
+        if let Some(cell) = buf.cell_mut((x, y + dy)) {
+            cell.set_symbol("│").set_fg(theme::BORDER_DIM());
+        }
+    }
 }
 
 #[cfg(test)]

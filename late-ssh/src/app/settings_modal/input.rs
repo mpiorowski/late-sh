@@ -39,11 +39,6 @@ pub(crate) fn handle_input(app: &mut App, event: ParsedInput) {
         return;
     }
 
-    if app.settings_modal_state.right_sidebar_components_open() {
-        handle_right_sidebar_components_input(app, event);
-        return;
-    }
-
     if app.settings_modal_state.chat_badges_open() {
         handle_chat_badges_input(app, event);
         return;
@@ -237,13 +232,8 @@ fn handle_tweaks_tab_input(app: &mut App, event: ParsedInput) {
         ParsedInput::Byte(b'k' | b'K')
         | ParsedInput::Char('k' | 'K')
         | ParsedInput::Arrow(b'A') => app.settings_modal_state.move_tweak_row(-1),
-        // Enter opens Right sidebar's panel editor. Interaction mode opens its
-        // chooser on Enter/Space; Left/Right always retain keyboard cycling.
-        ParsedInput::Byte(b'\r') | ParsedInput::Char('e' | 'E')
-            if app.settings_modal_state.selected_tweak_row() == TweakRow::RightSidebar =>
-        {
-            app.settings_modal_state.open_right_sidebar_components();
-        }
+        // Interaction mode opens its chooser on Enter/Space; Left/Right always
+        // retain keyboard cycling.
         ParsedInput::Byte(b'\r') | ParsedInput::Byte(b' ') | ParsedInput::Char(' ') => {
             toggle_tweak(app)
         }
@@ -358,8 +348,6 @@ fn activate_mouse_target(app: &mut App, target: Target) {
                 state.close_delete_account_dialog();
             } else if state.irc_token_dialog().open() {
                 state.close_irc_token_dialog();
-            } else if state.right_sidebar_components_open() {
-                state.close_right_sidebar_components();
             } else if state.chat_badges_open() {
                 state.close_chat_badges();
             } else if state.picker_open() {
@@ -375,11 +363,8 @@ fn activate_mouse_target(app: &mut App, target: Target) {
         Target::Tab(tab) => state.select_tab(tab),
         Target::Row(_) => activate_selected_row(app),
         Target::RowCycle(_, forward) => state.cycle_setting(forward),
-        Target::Tweak(TweakRow::RightSidebar) => state.open_right_sidebar_components(),
         Target::Tweak(_) => toggle_tweak(app),
         Target::TweakCycle(_, forward) => cycle_tweak(app, forward),
-        Target::SidebarMode => cycle_tweak(app, true),
-        Target::SidebarPanels => state.open_right_sidebar_components(),
         Target::Account(row) => match row {
             AccountRow::Invites => state.open_invites_dialog(),
             AccountRow::LinkAccounts => state.open_link_account_dialog(),
@@ -408,8 +393,6 @@ fn activate_mouse_target(app: &mut App, target: Target) {
             state.focus_statusline_pane(StatuslinePane::Detail);
             state.cycle_statusline_dial(forward);
         }
-        Target::Sidebar(_) => state.toggle_right_sidebar_component(),
-        Target::SidebarMove(_, delta) => state.move_right_sidebar_component(delta),
         Target::Badge(_) => state.toggle_chat_badge(),
         Target::Pick(_) => apply_picker_selection(app),
         Target::Bio => {
@@ -490,42 +473,12 @@ fn activate_selected_row(app: &mut App) {
     }
 }
 
-fn handle_right_sidebar_components_input(app: &mut App, event: ParsedInput) {
-    match event {
-        ParsedInput::Byte(0x1B | b'q' | b'Q') | ParsedInput::Char('q' | 'Q') => {
-            app.settings_modal_state.close_right_sidebar_components();
-        }
-        ParsedInput::Byte(b'j' | b'J')
-        | ParsedInput::Char('j' | 'J')
-        | ParsedInput::Arrow(b'B') => app
-            .settings_modal_state
-            .move_right_sidebar_components_cursor(1),
-        ParsedInput::Byte(b'k' | b'K')
-        | ParsedInput::Char('k' | 'K')
-        | ParsedInput::Arrow(b'A') => app
-            .settings_modal_state
-            .move_right_sidebar_components_cursor(-1),
-        // [ / ] reorder the selected panel up / down.
-        ParsedInput::Byte(b'[') | ParsedInput::Char('[') => {
-            app.settings_modal_state.move_right_sidebar_component(-1)
-        }
-        ParsedInput::Byte(b']') | ParsedInput::Char(']') => {
-            app.settings_modal_state.move_right_sidebar_component(1)
-        }
-        ParsedInput::Byte(b' ' | b'\r') | ParsedInput::Char('e' | 'E') => {
-            app.settings_modal_state.toggle_right_sidebar_component()
-        }
-        _ => {}
-    }
-}
-
 /// Statusline tab. Two panes: the ordered segment list on the
 /// left and the selected segment's dials on the right. `Enter` opens the
 /// dials and `Esc` returns to the list; `←`/`→` change the focused dial.
 ///
 /// Reordering is `⇧↑`/`⇧↓`, with `[`/`]` as the fallback for terminals that
-/// swallow Shift+Arrow (and as the idiom the sibling sidebar-panel dialog
-/// already trains).
+/// swallow Shift+Arrow.
 fn handle_statusline_input(app: &mut App, event: ParsedInput) {
     let state = &mut app.settings_modal_state;
     let detail = state.statusline_pane() == StatuslinePane::Detail;
@@ -869,7 +822,6 @@ fn toggle_tweak(app: &mut App) {
     }
     app.settings_modal_state.toggle_selected_tweak();
     app.sync_artboard_disclaimer_from_settings();
-    app.sync_device_rails_from_settings();
 }
 
 fn apply_picker_selection(app: &mut App) {
@@ -886,7 +838,6 @@ fn cycle_tweak(app: &mut App, forward: bool) {
     }
     app.settings_modal_state.cycle_selected_tweak(forward);
     app.sync_artboard_disclaimer_from_settings();
-    app.sync_device_rails_from_settings();
 }
 
 /// If the Input row is selected, cycle the interaction mode on the app (which

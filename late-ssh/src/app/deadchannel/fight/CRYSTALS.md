@@ -134,21 +134,28 @@ only the nuke clears it (GAME.md, "INK: the needle").
 
 - The needle takes one draft for every mark the runner holds, and one
   more (`Sheet::ink_room`): a first climb inks one draft, and every
-  mark opens one more. A draft not yet reached can be inked ahead; its
-  cards come when its pick does.
+  mark opens one more.
+- Only a draft this climb has reached (`Sheet::reached`): an ink that
+  pays nothing yet is not sold. With the level reached and the pick still
+  waiting, the ink is taken and both cards come with the pick. A stored
+  ink over the runner's level is normal, every ink is one after a mark,
+  and it pays when the climb gets there.
 - Refusals, in the order the row checks (`Sheet::needle_refused`): a
   glyph waiting (`FightWaiting`: the deck on the table is the one that
   was dealt), no draft at that level (`NoDraftThere`), already inked
-  (`AlreadyInked`), the needle done until the next mark (`NeedleWaits`),
-  short (`ShortCrystals`).
+  (`AlreadyInked`), not reached (`DraftAhead`), the needle done until the
+  next mark (`NeedleWaits`), short (`ShortCrystals`).
+- The road asks nothing at an inked draft: `1` takes both cards
+  (`MACHINE.md`), and its word and the frame's `drafted:` list name both.
 - A stored level no draft is owed at, or one stored twice, is
   `SheetError::Inks`, never a blank.
-- The panel (`city/ui.rs::ink_lines`) lists every draft with its two
-  cards, says which are inked, and prices the rest; under the list, in
-  rows that are always there, the picked draft's two cards with their
-  rules and the card the pick replaces; up/down walk the cursor over the
-  drafts and `i` inks the picked one, its refusal in the
-  key's row when the needle would not. Never a digit or `q`: those stay
+- The panel (`city/ui.rs::ink_lines`) lists every draft with the card
+  this climb holds and the one an ink adds (`Sheet::pick_at`), says which
+  are inked, prices what the needle would take, and closes what the climb
+  has not reached; under the list, in rows that are always there, the
+  picked draft's two cards with their rules and what it did or will do to
+  this climb's deck; up/down walk the cursor over the drafts and `i` inks
+  the picked one, its refusal in the key's row when the needle would not. Never a digit or `q`: those stay
   the globals' over every panel, and a misfired page switch must not buy
   something a mark cannot take back. The answer is the `till` line; no
   news.

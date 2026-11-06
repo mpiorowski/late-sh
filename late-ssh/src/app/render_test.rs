@@ -1,15 +1,9 @@
 use super::{
-    AUTO_RIGHT_SIDEBAR_MIN_COLS, FRAME_TABS, app_frame_bottom_titles, app_frame_sponsor_title,
-    chat_title_hint, dashboard_home_selected, line_width, resolve_right_sidebar_enabled,
-    sidebar_enabled, sponsor_line, tab_is_lit,
+    FRAME_TABS, app_frame_bottom_titles, app_frame_sponsor_title, chat_title_hint,
+    dashboard_home_selected, line_width, sponsor_line, tab_is_lit,
 };
 use crate::app::common::primitives::Screen;
-use late_core::models::user::RightSidebarMode;
 use uuid::Uuid;
-
-/// A terminal wide enough that `Auto` keeps every rail, so the `On`/`Off` cases
-/// below are unaffected by width.
-const WIDE_TERMINAL: u16 = 200;
 
 fn line_text(line: &ratatui::text::Line<'_>) -> String {
     line.iter().map(|s| s.content.as_ref()).collect()
@@ -50,106 +44,6 @@ fn toast_banners_are_centered_within_the_content_area() {
             left_margin.abs_diff(right_margin) <= 1,
             "toast must leave equal margins: {message:?}, {left_margin} vs {right_margin}"
         );
-    }
-}
-
-#[test]
-fn sidebar_enabled_prefers_settings_draft_while_modal_is_open() {
-    assert!(!sidebar_enabled(true, false, true));
-    assert!(sidebar_enabled(true, true, false));
-}
-
-#[test]
-fn sidebar_enabled_uses_saved_profile_when_modal_is_closed() {
-    assert!(sidebar_enabled(false, false, true));
-    assert!(!sidebar_enabled(false, true, false));
-}
-
-#[test]
-fn right_sidebar_is_the_arcades_alone() {
-    // Home's sidebar is its tiles (`app/zen`, the Home page).
-    assert!(!resolve_right_sidebar_enabled(
-        RightSidebarMode::On,
-        Screen::Dashboard,
-        WIDE_TERMINAL,
-    ));
-    assert!(resolve_right_sidebar_enabled(
-        RightSidebarMode::On,
-        Screen::Arcade,
-        WIDE_TERMINAL,
-    ));
-    assert!(!resolve_right_sidebar_enabled(
-        RightSidebarMode::On,
-        Screen::Lateania,
-        WIDE_TERMINAL,
-    ));
-    assert!(!resolve_right_sidebar_enabled(
-        RightSidebarMode::On,
-        Screen::Artboard,
-        WIDE_TERMINAL,
-    ));
-    assert!(!resolve_right_sidebar_enabled(
-        RightSidebarMode::On,
-        Screen::Profiles,
-        WIDE_TERMINAL,
-    ));
-}
-
-#[test]
-fn right_sidebar_off_hides_on_allowed_pages() {
-    assert!(!resolve_right_sidebar_enabled(
-        RightSidebarMode::Off,
-        Screen::Dashboard,
-        WIDE_TERMINAL,
-    ));
-    assert!(!resolve_right_sidebar_enabled(
-        RightSidebarMode::Off,
-        Screen::Arcade,
-        WIDE_TERMINAL,
-    ));
-}
-
-#[test]
-fn auto_sidebar_folds_away_as_the_terminal_narrows() {
-    // The Arcade keeps its sidebar on a desktop and a landscape phone; a
-    // portrait phone gets the page's full width.
-    for cols in [200, AUTO_RIGHT_SIDEBAR_MIN_COLS] {
-        assert!(
-            resolve_right_sidebar_enabled(RightSidebarMode::Auto, Screen::Arcade, cols),
-            "{cols}"
-        );
-    }
-    for cols in [AUTO_RIGHT_SIDEBAR_MIN_COLS - 1, 50, 0] {
-        assert!(
-            !resolve_right_sidebar_enabled(RightSidebarMode::Auto, Screen::Arcade, cols),
-            "{cols}"
-        );
-    }
-}
-
-#[test]
-fn explicit_sidebar_modes_ignore_terminal_width() {
-    // Only `Auto` consults the width: someone who asked for the sidebar on
-    // a narrow terminal keeps it, and `Off` stays off however wide the
-    // window gets.
-    for cols in [0, 40, 200] {
-        assert!(
-            resolve_right_sidebar_enabled(RightSidebarMode::On, Screen::Arcade, cols),
-            "{cols}"
-        );
-        assert!(
-            !resolve_right_sidebar_enabled(RightSidebarMode::Off, Screen::Arcade, cols),
-            "{cols}"
-        );
-    }
-    // Auto still never puts the sidebar on a page that has no sidebar:
-    // Home's sidebar is its tiles now.
-    for screen in [Screen::Artboard, Screen::Dashboard] {
-        assert!(!resolve_right_sidebar_enabled(
-            RightSidebarMode::Auto,
-            screen,
-            200,
-        ));
     }
 }
 
@@ -315,4 +209,41 @@ fn the_chat_title_hint_counts_what_was_said_while_the_chat_was_shut() {
         Some(("\u{b7} F4 chat (3 new) ".to_string(), Some(theme::AMBER())))
     );
     assert_eq!(text(None), None);
+}
+
+#[tokio::test]
+async fn the_frame_title_offers_the_hop_only_where_backtick_answers() {
+    use crate::test_helpers::{make_app, new_test_db, render_plain};
+    use late_core::{
+        models::leaderboard::{ArcadeGame, DailyPuzzle},
+        test_utils::create_test_user,
+    };
+
+    const HINT: &str = "` hop in & out";
+    let test_db = new_test_db().await;
+    let user = create_test_user(&test_db.db, "hop-title-it").await;
+    let mut app = make_app(test_db.db.clone(), user.id, "hop-title-token");
+    app.resize(120, 30).expect("resize test terminal");
+
+    // The Arcade's own page does nothing on backtick, so it says nothing.
+    app.set_screen(Screen::Arcade);
+    app.game_selection = ArcadeGame::Puzzle(DailyPuzzle::LeWord);
+    assert!(!render_plain(&mut app).contains(HINT));
+
+    // An open daily is a stop on the cycle, and the title says so after its name.
+    app.is_playing_game = true;
+    let playing = render_plain(&mut app);
+    assert!(
+        playing.contains(&format!("The Arcade · Le Word · {HINT}")),
+        "{playing}"
+    );
+
+    // Home is the cycle's base.
+    app.is_playing_game = false;
+    app.set_screen(Screen::Dashboard);
+    assert!(render_plain(&mut app).contains(HINT));
+
+    // Another main page does nothing on backtick either.
+    app.set_screen(Screen::Leaderboard);
+    assert!(!render_plain(&mut app).contains(HINT));
 }

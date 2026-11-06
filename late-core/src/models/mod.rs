@@ -101,6 +101,8 @@ pub mod greendragon_clan;
 pub mod greendragon_commentary;
 pub mod greendragon_news;
 pub mod greendragon_setting;
+#[cfg(test)]
+mod greendragon_setting_test;
 pub mod herald;
 #[cfg(test)]
 mod herald_test;
@@ -131,9 +133,6 @@ pub mod media_queue_item;
 mod media_queue_item_test;
 pub mod media_queue_vote;
 pub mod media_source;
-pub mod mention_feed_read;
-#[cfg(test)]
-mod mention_feed_read_test;
 pub mod message_translation;
 #[cfg(test)]
 mod message_translation_test;
@@ -186,10 +185,14 @@ pub mod reward;
 mod reward_test;
 pub mod room_ban;
 pub mod rss_entry;
+#[cfg(test)]
+mod rss_entry_test;
 pub mod rss_feed;
 pub mod rss_feed_read;
 #[cfg(test)]
 mod rss_feed_read_test;
+#[cfg(test)]
+mod rss_feed_test;
 pub mod rubiks_cube;
 pub mod server_ban;
 pub mod shop_consumable_effect;

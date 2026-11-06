@@ -959,6 +959,7 @@ fn chat_view<'a>(
     static FRIEND_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
     static LIVE_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
     static IGNORED_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
+    static READ_ON_OPEN: OnceLock<std::collections::HashSet<Uuid>> = OnceLock::new();
     static VOICE_SNAPSHOT: OnceLock<crate::app::voice::svc::VoiceSnapshot> = OnceLock::new();
     static VOICE_CHANNELS: OnceLock<HashMap<Uuid, late_core::models::voice_channel::VoiceChannel>> =
         OnceLock::new();
@@ -1088,7 +1089,7 @@ fn chat_view<'a>(
         notifications_view: crate::app::chat::notifications::ui::NotificationListView {
             items: &[],
             selected_index: 0,
-            marker_read_at: None,
+            read_on_open: READ_ON_OPEN.get_or_init(std::collections::HashSet::new),
         },
         voice_channels_by_room_id: VOICE_CHANNELS.get_or_init(HashMap::new),
         voice_snapshot: VOICE_SNAPSHOT.get_or_init(Default::default),

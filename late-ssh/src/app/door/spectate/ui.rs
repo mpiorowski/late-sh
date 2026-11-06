@@ -404,10 +404,24 @@ fn suggestion_hint(game: SpectateGame, side: ChatSide<'_>) -> &'static str {
     }
 }
 
-/// The watch chat's header row, the one place a watch view or a player's
-/// own game says how many are watching: everyone with the watch open, even
-/// when that is nobody. Fits the column's 34-column minimum (Zork's wants
-/// the widest column).
+/// The frame title's word for who is watching a player's own game while its
+/// chat is shut, so the game can keep the whole screen. Open, the chat's
+/// header row says it; nobody watching is no word, which leaves the title's
+/// room to the game's keys.
+pub fn watchers_title_hint(watchers: usize, chat_open: bool) -> Option<Span<'static>> {
+    match (watchers, chat_open) {
+        (0, _) | (_, true) => None,
+        (watchers, false) => Some(Span::styled(
+            format!("\u{b7} {watchers} watching "),
+            Style::default().fg(theme::TEXT_MUTED()),
+        )),
+    }
+}
+
+/// The watch chat's header row, where a watch view or a player's open chat
+/// says how many are watching: everyone with the watch open, even when that
+/// is nobody. Fits the column's 34-column minimum (Zork's wants the widest
+/// column).
 fn draw_chat_header(
     frame: &mut Frame,
     area: Rect,

@@ -1657,7 +1657,11 @@ pub fn draw_tour_overlay(
                     Span::styled("[Ctrl+E] ", key),
                     Span::styled("arranges the page. ", text),
                     Span::styled("[Ctrl+E] [1-9] ", key),
-                    Span::styled("switches layouts", text),
+                    Span::styled("switches layouts,", text),
+                ]),
+                Line::from(vec![
+                    Span::styled("[Alt+1-9] ", key),
+                    Span::styled("does that in one chord, from anywhere on home", text),
                 ]),
                 Line::from(vec![
                     Span::styled("[Ctrl+E] [L] ", key),

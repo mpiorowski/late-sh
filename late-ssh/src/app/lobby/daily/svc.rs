@@ -46,10 +46,7 @@ use super::{
     reversi::DailyReversiState,
 };
 
-// The cap exceeds the sidebar panel's 4 match slots on purpose: with up to 10
-// entries not all fit, so the panel shows the 4 most actionable (your-turn
-// rows first, nearest deadline within — see `panel::draw_daily_inline`). The
-// full set is always visible in the Lobby modal.
+// The full set of entries is always visible in the Lobby modal.
 pub const DAILY_MAX_ACTIVE_ENTRIES: i64 = 10;
 pub const DAILY_MOVE_HOURS: i64 = 24;
 const DAILY_STATE_VERSION: u8 = 1;

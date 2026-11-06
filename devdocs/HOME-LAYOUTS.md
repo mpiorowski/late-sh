@@ -6,8 +6,8 @@ Home stays exactly as it is for anyone who never touches it; underneath,
 it is a tile tree, and a chord
 switches the keys into arrange mode on the page you are already on. The
 code it talks about is `late-ssh/src/app/zen` (the tree, `state.rs`,
-`layout.rs`), the Home arm of `late-ssh/src/app/render.rs`, the sidebar in
-`app/common/sidebar.rs`, and the strip in `app/live`.
+`layout.rs`), the Home arm of `late-ssh/src/app/render.rs`, the music dock in
+`app/common/music_dock.rs`, and the strip in `app/live`.
 
 ## Built: v1
 
@@ -16,7 +16,7 @@ What is in the code now, and where it stops short of the sections below
 delta against the design):
 
 - Home renders through the tree (`App::home`), with the stock Home fixed:
-  the rail, the reef over the chat, and the sidebar column (presence,
+  the rail, the reef over the chat, and the right column (presence,
   visualizer, music, lobby, live, pet, bonsai). `Ctrl+E` is Home's one layouts chord
   (arrange mode, then a digit or `L`; `Ctrl+F` is unbound). There is no
   Zen screen and no `zen` layout: layout 2 is the stock `street`, and the
@@ -33,13 +33,13 @@ delta against the design):
   keys; a click on the reef or tank feeds it in either mode, the pet's
   way.
 - Static kinds `rooms`, `presence` and `tank` exist (the tank is the
-  aquarium's small form as its own kind, the stock sidebar's; the
+  aquarium's small form as its own kind; the
   `aquarium` kind is the reef alone); there is no `center` kind.
   Home's chat is a chat tile: the active one (the focused chat tile, else
   the first) is the page's chat, draws Home's card with the synthetic
   views, and the rail shows its room (a stored `center` reads as `chat`).
   The cut list (pulse, friends, activity, visualizer, blank) is not cut:
-  they stay tile kinds, and the stock Home's sidebar puts `visualizer`
+  they stay tile kinds, and the stock Home's right column puts `visualizer`
   over `music`, the band and the dock as two tiles.
 - Guests are the two that end, now and attention (`+` on a tile, one a
   tile), and a guest takes its host over while it is up. The live panel
@@ -68,11 +68,13 @@ delta against the design):
   other boxes the page in its look (`b` cycles them in arrange mode; the
   stock `street` is boxed). There is no separate `f` frame key.
 - No chat-only key and no narrow fold: a page is drawn as arranged at
-  every width, and a phone arranges its own Home. The room-list setting is
-  gone, row and storage; the sidebar row is the Arcade's. The stock Home
-  is fixed (the sidebar's panel order with the pet in the tank's slot,
-  owned or not), not read from the Settings panel list, which the Arcade
-  alone uses.
+  every width, and a phone arranges its own Home. The room-list and
+  sidebar settings are gone, rows and code: no other page has a sidebar, so
+  page 1 is the only place panels live. The stock Home is fixed, with the pet
+  in the tank's slot, owned or not.
+- A tile keeps to one room (`O`, `only` on the leaf): anywhere else it goes
+  down and its sibling takes its cells. The rail and the chats stay up. The
+  rules are in `late-ssh/src/app/zen/CONTEXT.md`.
 
 ## Why
 
@@ -93,7 +95,7 @@ complaints from #suggestions say why Zen never replaces Home:
 - "I click a widget, see a message, type a reply, and the keys go
   somewhere else." In `zen/input.rs` every tile is a focus target and the
   key router switches on the focused kind. Home has one focus, the chat;
-  the sidebar panels are view only. That one difference is why Home feels
+  the panels around it are view only. That one difference is why Home feels
   safe.
 
 So the merge is not "Zen replaces Home". It is "Home becomes a layout, the
@@ -160,8 +162,8 @@ Always drawn. The closed `TileKind` becomes:
 | `center` | Home's chat center: the selected rail entry, synthetic views included, the strip and the banner inserted at the top | `draw_chat_center` / `draw_dashboard_chat_card` |
 | `rooms` | The room rail with its sections, counts and nav hints | `draw_room_list_rail` |
 | `aquarium` | The reef | a tile |
-| `tank` | The sidebar's small tank, the same aquarium in a six-row band | sidebar Tank |
-| `bonsai` | The 81x26 canvas, cut to fit | a tile, sidebar Bonsai |
+| `tank` | The small tank, the same aquarium in a six-row band | sidebar Tank |
+| `bonsai` | The 81x26 canvas, cut to fit; narrower than half of it, a preview fitted to the tile | a tile, sidebar Bonsai |
 | `pet` | The box | a tile, sidebar Pet |
 | `music` | The dock alone: volume, stations, the v keys; a short tile shows the track over the station | sidebar Music |
 | `visualizer` | The equalizer at the tile's full height | sidebar Music's band |
@@ -169,11 +171,8 @@ Always drawn. The closed `TileKind` becomes:
 | `ascii` | An animated piece | a tile |
 | `pulse` | People online now over a day of them, a sparkline with the peak and a time axis | a tile |
 
-The sidebar's pinned rows (online count, clock, friends) are the top of
-the stock sidebar column and not a kind of their own: they draw at the
-top of whatever column holds the `music` tile first, as they do today.
-If that proves awkward in the build, they become a `presence` kind; the
-design does not depend on it.
+The pinned presence rows (online count, clock, friends) are their own kind,
+`presence`, at the top of the stock right column.
 
 Cut: `pulse`, `friends`, `activity`, `visualizer`, `blank`. Each is a thin
 copy of something the frame, the ticker or another kind already shows;
@@ -196,7 +195,7 @@ confused for long enough.
 A dynamic kind is placed one of two ways:
 
 - **As a tile.** Always drawn, with its idle text (`nobody playing`, the
-  lobby's `11 open`). Today's sidebar panels.
+  lobby's `11 open`). The stock Home's panels.
 - **As a guest on a static tile.** Invisible while idle; while active it
   *is* the tile: its label in the title rule, its panel where the host's
   was, nothing of the host underneath. The host keeps its rect, so the
@@ -222,8 +221,9 @@ behavior on the #lounge card, "wait while a message is selected" rule
 included. The board's all-day line is the banner over the tree
 (`layout::rice_areas`), not a guest.
 
-The stock Home puts the strip on the reef across the top of the chat, so
-it lands on the fish and the chat never loses a row, and attention on the
+The stock Home puts the strip on the reef across the top of the chat, kept
+to #lounge, so it lands on the fish and the chat never loses a row, and
+every other room gives the chat the reef's rows; attention goes on the
 lobby: what waits on you takes the tables' tile and the feed comes back
 when the list clears. The stock lobby is four rows and the pet three under
 their titles, the bonsai takes the rest of the column, and the rail, the
@@ -255,8 +255,8 @@ changes:
   `Fit`, meaning the first child takes its natural height (the pet's
   three rows, the lobby panel's height, the music stage's constant
   height) and the second takes the rest. Nested fit splits reproduce the
-  sidebar stack exactly, drop-from-the-bottom included, and the resize
-  keys skip them. Without this the sidebar is five nested per-mille
+  right column's stack exactly, drop-from-the-bottom included, and the resize
+  keys skip them. Without this the column is five nested per-mille
   splits that are miserable to edit.
 - **A `hidden` flag is not added.** The rail modes (`\`, `auto`, the
   `AUTO_*_MIN_COLS` thresholds) are gone with nothing in their place: the
@@ -288,9 +288,18 @@ Switching:
 
 - `Ctrl+E` then a digit `1`..`9`: enter arrange mode, load that layout,
   leave arrange mode. Two keystrokes, like a tmux prefix.
-- `Ctrl+E L`: the layouts list. `j` `k` move, Enter loads, `n` saves the
-  page as a new layout, `d` deletes (not the last one), `R`
-  resets one to stock Home.
+- Alt+`1`..`9` (`ESC 1`..`ESC 9`, `ParsedInput::AltDigit`): the same
+  layout in one chord, an extra to `Ctrl+E` then the digit. Home only,
+  and not while a composer is being typed in (a layout whose chat is
+  elsewhere would drop the draft); in arrange mode it also leaves the
+  mode. Not Ctrl+digit: legacy terminals send nothing distinct for it
+  (Ctrl+2 is NUL, Ctrl+3 is ESC, Ctrl+8 is DEL). macOS terminals need
+  Option set to send Meta.
+- `Ctrl+E L`: the layouts list. `j` `k` move, Enter loads, Alt+digit
+  closes it and loads that slot, `n` saves the page as a new layout, `d`
+  deletes (not the last one), `R` resets one to stock Home. A note in the
+  list names Alt+digit, since the list is where a newcomer looks for the
+  keys.
 - `/layout <name>` and `/layout save <name>` from any composer.
 - A `layout` component in the status line customizer, off by default,
   shows the current name; a click cycles.
@@ -307,7 +316,7 @@ in the Clubhouse, and login never switches a layout.
 
 ## Keys
 
-Outside arrange mode: Home's keys, exactly. `Ctrl+E` enters arrange mode.
+Outside arrange mode: Home's keys, exactly. `Ctrl+E` or `/edit` enters arrange mode.
 
 Arrange mode:
 
@@ -319,6 +328,7 @@ Arrange mode:
 | `space` | the kind picker over the focused tile |
 | `+` | the guest list over the focused tile: the four dynamic kinds, a check beside the placed ones, toggled in place |
 | `t` | the focused tile's title: named, the rule alone, or no row, its own say from then on (a new tile starts named) |
+| `O` | keep the focused tile to the room the rail is on, or free it |
 | `[` `]` | a chat tile walks the rail's rooms, an ascii tile its pieces |
 | `b` | the border: none is Home's rules, the rest box the page in its look |
 | `1`..`9` | load that layout and leave arrange mode |
@@ -345,10 +355,9 @@ Zen ever earned.
   seeded on first login after the change. A chat tile's `room` reads as
   `Room(id)` for a uuid, `News` for `news`, and `Permanent(slug)` for any
   other string.
-- A stored `right_sidebar_components` list becomes the stock `home`
-  tree's sidebar column in that order; a panel the account turned off is
-  left out. The list and the rail modes are then dead keys, dropped on
-  read the way `activity` and `pot` are today.
+- The stored `right_sidebar_components`, `right_sidebar_mode` and
+  `show_right_sidebar` keys are read nowhere and written nowhere; they stay
+  in the settings blobs, and the stock `home` does not read them.
 - `Screen::Zen`, `zen_return_screen`, the workspace base dance in
   `input.rs::zen_return_screen` and the tour's `VisitZen` stop are gone
   (built). The tour stop became `VisitLayouts`, a `Ctrl+E` stop on Home

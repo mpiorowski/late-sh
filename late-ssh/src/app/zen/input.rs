@@ -9,12 +9,16 @@
 
 use std::time::Instant;
 
+use ratatui::layout::Position;
+
 use uuid::Uuid;
 
-use super::attention::Item as AttentionItem;
+use super::attention::{Chore, Item as AttentionItem};
 use super::presets::{LayoutCommand, LayoutList, Layouts, LayoutsError, NameEdit};
 use super::state::ChatRoomBinding;
-use super::state::{Dir, GuestPick, KindPick, MAX_TILES, TakenBy, TileHint, TileKey, TileKind};
+use super::state::{
+    Dir, GuestPick, KindPick, MAX_TILES, OnlyPick, TakenBy, TileHint, TileKey, TileKind,
+};
 use crate::app::{
     chat::{self, state::RoomSlot},
     common::primitives::Banner,
@@ -48,6 +52,21 @@ pub fn handle_home_event(app: &mut App, event: &ParsedInput) -> bool {
         handle_guest_picker(app, event);
         return true;
     }
+    // Alt+digit: that layout in one chord, the shortcut for `Ctrl+E` then
+    // the digit, in or out of the mode. The layouts list takes it below
+    // when it is up. A composer being typed in keeps it, as it keeps
+    // `Ctrl+E`, since a layout without that chat would drop the draft: the
+    // chat composer gates this handler in `app/input.rs`, the news composer
+    // and a feeds search (both gated after this handler there) are checked
+    // here.
+    if let ParsedInput::AltDigit(digit) = event
+        && app.layout_list.is_none()
+        && !app.chat.news.composing()
+        && !app.chat.feeds.processing()
+    {
+        load_layout_by_digit(app, *digit);
+        return true;
+    }
     if app.home.arrange {
         // The layouts list owns every key while it is up (Esc closes it
         // in `dispatch_escape`).
@@ -61,12 +80,7 @@ pub fn handle_home_event(app: &mut App, event: &ParsedInput) -> bool {
             match byte {
                 // `Ctrl+E` then a digit: that layout, and the mode is done.
                 b'1'..=b'9' => {
-                    let index = usize::from(byte - b'1');
-                    if load_layout(app, index) {
-                        toggle_home_arrange(app);
-                    } else {
-                        app.banner = Some(Banner::info(LayoutsError::NoSuchLayout.message()));
-                    }
+                    load_layout_by_digit(app, byte - b'0');
                     return true;
                 }
                 b'L' => {
@@ -145,6 +159,9 @@ pub(crate) fn toggle_home_arrange(app: &mut App) {
     app.home.arrange = arrange;
     app.home.close_kind_picker();
     app.home.close_guest_picker();
+    // The mode brings every tile up and takes the footer's row, so the
+    // reef's rect moves with it.
+    app.sync_aquarium_bounds();
     if !arrange {
         // Leaving puts the focus back on a chat, the only tiles that keep
         // it outside arrange mode.
@@ -158,12 +175,61 @@ pub(crate) fn toggle_home_arrange(app: &mut App) {
     }
 }
 
+/// Esc in arrange mode, from `dispatch_escape` in `app/input.rs`: peels a
+/// typed layout name, the layouts list, then a picker, then leaves the
+/// mode.
+pub fn handle_escape(app: &mut App) {
+    if let Some(list) = app.layout_list.as_mut() {
+        if list.editing.take().is_none() {
+            app.layout_list = None;
+        }
+        return;
+    }
+    if app.home.kind_picker.is_some() {
+        app.home.close_kind_picker();
+        return;
+    }
+    if app.home.guest_picker.is_some() {
+        app.home.close_guest_picker();
+        return;
+    }
+    toggle_home_arrange(app);
+}
+
+/// Move Home's focus to the tile under a click. Nothing happens on the
+/// footer, on a gap, on the tile already focused, or, outside arrange
+/// mode, on furniture (`TileKind::takes_focus`).
+pub fn focus_home_tile_at(app: &mut App, x: u16, y: u16) {
+    let hit = app
+        .home_tile_rects()
+        .iter()
+        .position(|(_, rect, _)| rect.contains(Position::new(x, y)));
+    let Some(ordinal) = hit else {
+        return;
+    };
+    if ordinal == app.home.focus {
+        return;
+    }
+    if !app.home.arrange
+        && !app
+            .home
+            .rice
+            .root
+            .kind_at(ordinal)
+            .is_some_and(TileKind::takes_focus)
+    {
+        return;
+    }
+    app.home.focus = ordinal;
+    focus_moved(app);
+}
+
 /// Show the layout at `index` (`home_layouts`): the page as it is goes
 /// into its own slot first, so nothing arranged is lost (its chat tiles
 /// bound to no room pinned to the room of the moment, so the layout
 /// comes back where it was), then the slot becomes current and the page
 /// draws it. False past the end.
-pub(crate) fn load_layout(app: &mut App, index: usize) -> bool {
+fn load_layout(app: &mut App, index: usize) -> bool {
     if index >= app.home_layouts.count() {
         return false;
     }
@@ -172,6 +238,20 @@ pub(crate) fn load_layout(app: &mut App, index: usize) -> bool {
     app.home_layouts.switch(index);
     show_current_layout(app);
     true
+}
+
+/// The layout a digit 1-9 names, from `Ctrl+E` then the digit or from
+/// Alt+digit in one chord: loaded, and arrange mode left if it was on, or a
+/// banner when the slot is empty.
+fn load_layout_by_digit(app: &mut App, digit: u8) {
+    let index = usize::from(digit - 1);
+    if !load_layout(app, index) {
+        app.banner = Some(Banner::info(LayoutsError::NoSuchLayout.message()));
+        return;
+    }
+    if app.home.arrange {
+        toggle_home_arrange(app);
+    }
 }
 
 /// Draw the current slot on the page: after a switch, a delete of the
@@ -191,7 +271,7 @@ fn show_current_layout(app: &mut App) {
 /// tiles bound to no room are pinned to the room of the moment first, in
 /// the slot left behind and in the new one, so both come back where they
 /// were.
-pub(crate) fn save_layout_as(app: &mut App, name: &str) -> Result<usize, LayoutsError> {
+fn save_layout_as(app: &mut App, name: &str) -> Result<usize, LayoutsError> {
     app.pin_unbound_chats_to_the_moment();
     app.home_layouts.store_current(app.home.rice.clone());
     let index = app.home_layouts.save_new(name, app.home.rice.clone())?;
@@ -242,15 +322,34 @@ pub(crate) fn run_layout_command(app: &mut App, command: LayoutCommand) {
     }
 }
 
-/// The status line's care click: Home's layout named `home`, where the
-/// tank and the tree are, loaded the way `/layout home` loads it. A
-/// device that deleted its `home` layout gets the banner a missing name
-/// gets.
+/// Home's layout named `home`, where the tank and the tree are, loaded the
+/// way `/layout home` loads it. A device that deleted its `home` layout gets
+/// the banner a missing name gets.
 pub(crate) fn load_home_layout(app: &mut App) {
     run_layout_command(
         app,
         LayoutCommand::Load(super::presets::STOCK_HOME_NAME.to_string()),
     );
+}
+
+/// The status line's care click: the `home` layout and, with the tank due,
+/// the chat in the room the reef keeps to, so the click lands on a reef that
+/// can take the meal.
+pub(crate) fn open_care(app: &mut App) {
+    load_home_layout(app);
+    if app.care_today().tank != Chore::Due {
+        return;
+    }
+    let Some(reef) = app.home.first_tile_of(TileKind::Aquarium) else {
+        return;
+    };
+    let only = app.home.rice.root.only_at(reef);
+    match only.joined_room(&app.chat.rooms).map(|room| room.id) {
+        Some(room_id) if app.home_chat_room_id() != Some(room_id) => {
+            pick_for_active_chat(app, RoomSlot::Room(room_id));
+        }
+        Some(_) | None => {}
+    }
 }
 
 /// The layouts list: `j` `k` and the arrows move, Enter loads the row and
@@ -283,6 +382,12 @@ fn handle_layout_list(app: &mut App, event: &ParsedInput) {
             if load_layout(app, selected) {
                 toggle_home_arrange(app);
             }
+        }
+        // Alt+digit, as the list's own note says: the list closes and that
+        // layout loads, the mode done with it.
+        (ParsedInput::AltDigit(digit), _) => {
+            app.layout_list = None;
+            load_layout_by_digit(app, *digit);
         }
         (_, Some(b'n')) => {
             if app.home_layouts.is_full() {
@@ -454,7 +559,14 @@ fn act_on_attention(app: &mut App, item: AttentionItem) {
             room_id,
             message_id,
             ..
-        } => open_message_target(app, room_id, Some(message_id)),
+        } => {
+            // Answering the row reads it, wherever the message opens: history
+            // opens it when no chat tile can, and stamps nothing itself.
+            app.chat
+                .notifications
+                .mark_read_for_messages(vec![message_id]);
+            open_message_target(app, room_id, Some(message_id));
+        }
         AttentionItem::FeedTank => crate::app::input::feed_aquarium_globally(app),
         AttentionItem::WaterTree => {
             let _ = app
@@ -467,16 +579,18 @@ fn act_on_attention(app: &mut App, item: AttentionItem) {
 
 /// Land in `room_id` in the page's first chat tile, on `message_id` when
 /// there is one, the way a `Ctrl+/` message jump does. A mention in a
-/// room the account never joined has no tile to land in and reads in the
-/// history modal instead.
+/// room the account never joined, or on a page with no chat tile, has no
+/// tile to land in and reads in the history modal instead.
 fn open_message_target(app: &mut App, room_id: Uuid, message_id: Option<Uuid>) {
+    let chat_tile = app.home.first_tile_of(TileKind::Chat);
+    let joined = app.chat.rooms.iter().any(|(room, _)| room.id == room_id);
     if let Some(message_id) = message_id
-        && !app.chat.rooms.iter().any(|(room, _)| room.id == room_id)
+        && (chat_tile.is_none() || !joined)
     {
         app.chat.open_history_at_message(room_id, message_id);
         return;
     }
-    let Some(chat_tile) = app.home.first_tile_of(TileKind::Chat) else {
+    let Some(chat_tile) = chat_tile else {
         app.banner = Some(Banner::info("Add a chat tile to open it here"));
         return;
     };
@@ -558,6 +672,7 @@ fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
         }
         // The focused tile's own title rule.
         b't' => app.home.cycle_focused_title(),
+        b'O' => toggle_only_here(app),
         b'R' => match app.home.reset() {
             true => true,
             false => {
@@ -574,6 +689,33 @@ fn handle_rice(app: &mut App, event: &ParsedInput) -> bool {
         app.mark_home_layout_dirty();
     }
     true
+}
+
+/// `O`: the focused tile is up only in the room the rail is on, or, kept to
+/// it already, in every room again. A banner says which, or why neither: a
+/// rail row that is no room (mentions, rss) has nothing to keep it to, and the
+/// rail and the chats stay up in every room. `true` when the tile changed.
+fn toggle_only_here(app: &mut App) -> bool {
+    let Some(rail) = app.home_rail_binding() else {
+        app.banner = Some(Banner::info("Pick a room on the rail first"));
+        return false;
+    };
+    let here = app.home.only_here(rail, &app.chat.rooms);
+    let label = here.only_label(&app.chat.rooms).unwrap_or_default();
+    match app.home.toggle_focused_only(here) {
+        OnlyPick::Kept => {
+            app.banner = Some(Banner::info(&format!("Only in {label}")));
+            true
+        }
+        OnlyPick::Everywhere => {
+            app.banner = Some(Banner::info("In every room"));
+            true
+        }
+        OnlyPick::Refused => {
+            app.banner = Some(Banner::info("The rail and the chats stay up in every room"));
+            false
+        }
+    }
 }
 
 /// The tile picker: `j` `k` and the arrows move, Enter or `space` picks,
@@ -656,7 +798,12 @@ fn resize_or_explain(app: &mut App, dir: Dir, delta_cells: i16) -> bool {
 /// twice as tall as wide, so width is halved before comparing).
 fn focused_tile_is_wide(app: &App) -> bool {
     let tiles_area = app.home_tiles_area();
-    let rects = super::layout::tile_rects(&app.home.rice.root, tiles_area, app.home.gaps());
+    let rects = super::layout::tile_rects(
+        &app.home.rice.root,
+        tiles_area,
+        app.home.gaps(),
+        &app.home.hidden_tiles(),
+    );
     rects
         .get(app.home.focus)
         .map(|(_, rect)| rect.width / 2 >= rect.height)

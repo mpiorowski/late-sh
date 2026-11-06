@@ -269,6 +269,11 @@ impl State {
         }
     }
 
+    #[cfg(test)]
+    pub fn force_claimed_handle_for_test(&mut self, handle: &str) {
+        self.handle.force_claimed_for_test(handle);
+    }
+
     /// Test-only: fabricate a Running state around a proxy pointed at a dead
     /// address, so detach/idle paths can be exercised without a live host.
     /// Needs a Tokio runtime (the proxy spawns its bridge task).

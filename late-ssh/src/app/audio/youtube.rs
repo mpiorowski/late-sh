@@ -26,6 +26,44 @@ pub struct YoutubeVideo {
     pub is_stream: bool,
 }
 
+/// Why a link is turned down: the link itself, or what YouTube says about
+/// the video behind it. The submitter's problem to see; `message` is the
+/// banner. Anything else that stops a lookup (no API key, the Data API
+/// down) is an error, and ours.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum YoutubeRefusal {
+    UnsupportedUrl,
+    InvalidVideoId,
+    NotFound,
+    NotPublic,
+    NotEmbeddable,
+    UpcomingStream,
+    DurationUnavailable,
+    TooShort,
+}
+
+impl YoutubeRefusal {
+    pub fn message(self) -> &'static str {
+        match self {
+            YoutubeRefusal::UnsupportedUrl
+            | YoutubeRefusal::InvalidVideoId
+            | YoutubeRefusal::NotFound => "Invalid YouTube URL",
+            YoutubeRefusal::NotPublic => "Video is not public",
+            YoutubeRefusal::NotEmbeddable => "Video is not embeddable",
+            YoutubeRefusal::UpcomingStream => "Upcoming streams are not supported",
+            YoutubeRefusal::DurationUnavailable => "Video duration is unavailable",
+            YoutubeRefusal::TooShort => "Video must be at least 30 seconds",
+        }
+    }
+}
+
+/// What `validate_url` found behind a link.
+#[derive(Debug, Clone)]
+pub enum YoutubeLookup {
+    Video(YoutubeVideo),
+    Refused(YoutubeRefusal),
+}
+
 impl YoutubeClient {
     pub fn new(api_key: Option<String>) -> Self {
         Self {
@@ -67,12 +105,17 @@ impl YoutubeClient {
         shrink(&bytes)
     }
 
-    pub async fn validate_url(&self, url: &str) -> Result<YoutubeVideo> {
-        let video_id = extract_video_id(url)?;
+    /// The video behind a booth link, validated through the Data API, or
+    /// why it is turned down.
+    pub async fn validate_url(&self, url: &str) -> Result<YoutubeLookup> {
+        let video_id = match extract_video_id(url) {
+            Ok(video_id) => video_id,
+            Err(refusal) => return Ok(YoutubeLookup::Refused(refusal)),
+        };
         self.validate_video_id(video_id).await
     }
 
-    async fn validate_video_id(&self, video_id: String) -> Result<YoutubeVideo> {
+    async fn validate_video_id(&self, video_id: String) -> Result<YoutubeLookup> {
         let api_key = self
             .api_key
             .as_deref()
@@ -102,17 +145,15 @@ impl YoutubeClient {
             .map_err(reqwest::Error::without_url)
             .context("failed to decode YouTube Data API response")?;
 
-        let item = response
-            .items
-            .into_iter()
-            .next()
-            .context("YouTube video was not found")?;
+        let Some(item) = response.items.into_iter().next() else {
+            return Ok(YoutubeLookup::Refused(YoutubeRefusal::NotFound));
+        };
 
         if item.status.privacy_status.as_deref() != Some("public") {
-            anyhow::bail!("YouTube video is not public");
+            return Ok(YoutubeLookup::Refused(YoutubeRefusal::NotPublic));
         }
         if item.status.embeddable != Some(true) {
-            anyhow::bail!("YouTube video is not embeddable");
+            return Ok(YoutubeLookup::Refused(YoutubeRefusal::NotEmbeddable));
         }
 
         let live_state = item
@@ -122,7 +163,7 @@ impl YoutubeClient {
             .unwrap_or("none");
         let is_stream = live_state == "live";
         if live_state == "upcoming" {
-            anyhow::bail!("YouTube video is an upcoming stream");
+            return Ok(YoutubeLookup::Refused(YoutubeRefusal::UpcomingStream));
         }
 
         let duration_ms = item
@@ -132,13 +173,15 @@ impl YoutubeClient {
             .and_then(parse_youtube_duration_ms);
 
         if !is_stream {
-            let duration_ms = duration_ms.context("YouTube video duration is unavailable")?;
+            let Some(duration_ms) = duration_ms else {
+                return Ok(YoutubeLookup::Refused(YoutubeRefusal::DurationUnavailable));
+            };
             if duration_ms < MIN_DURATION_MS {
-                anyhow::bail!("YouTube video must be at least 30 seconds long");
+                return Ok(YoutubeLookup::Refused(YoutubeRefusal::TooShort));
             }
         }
 
-        Ok(YoutubeVideo {
+        Ok(YoutubeLookup::Video(YoutubeVideo {
             video_id,
             title: item.snippet.title.filter(|title| !title.trim().is_empty()),
             channel: item
@@ -147,7 +190,7 @@ impl YoutubeClient {
                 .filter(|channel| !channel.trim().is_empty()),
             duration_ms,
             is_stream,
-        })
+        }))
     }
 }
 
@@ -198,8 +241,10 @@ pub fn video_id(raw: &str) -> Option<String> {
     extract_video_id(raw).ok()
 }
 
-fn extract_video_id(raw: &str) -> Result<String> {
-    let url = Url::parse(raw.trim()).context("invalid URL")?;
+fn extract_video_id(raw: &str) -> Result<String, YoutubeRefusal> {
+    let Ok(url) = Url::parse(raw.trim()) else {
+        return Err(YoutubeRefusal::UnsupportedUrl);
+    };
     let host = url.host_str().unwrap_or_default().to_ascii_lowercase();
     let id = if host == "youtu.be" {
         url.path_segments()
@@ -226,7 +271,7 @@ fn extract_video_id(raw: &str) -> Result<String> {
     };
 
     let Some(id) = id else {
-        anyhow::bail!("unsupported YouTube URL");
+        return Err(YoutubeRefusal::UnsupportedUrl);
     };
     let id = id.trim();
     if id.len() != 11
@@ -234,7 +279,7 @@ fn extract_video_id(raw: &str) -> Result<String> {
             .chars()
             .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
     {
-        anyhow::bail!("invalid YouTube video id");
+        return Err(YoutubeRefusal::InvalidVideoId);
     }
     Ok(id.to_string())
 }

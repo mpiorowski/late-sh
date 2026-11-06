@@ -16,7 +16,9 @@ use crate::session::SessionMessage;
 pub(crate) const HOT_TICK: Duration = Duration::from_millis(66);
 /// Half-rate cadence (~7.5fps): Clubhouse ambience and the ascii pieces
 /// (a drawn ascii tile on Home, the away screensaver), riding the shared
-/// `anim_half` /2 edge in tick().
+/// `anim_half` /2 edge in tick(). The surfaces on it drop to the quarter tier
+/// once nobody has pressed a key for [`ATTENTION_ACTIVE_WINDOW`]; a screensaver
+/// keeps its own tier.
 pub(crate) const ANIM_HALF_TICK: Duration = Duration::from_millis(132);
 /// Quarter-rate cadence (~3.8fps): the aquarium surfaces (Home's reef
 /// tile + profile-modal reef) and the lively ascii pieces in pixels,
@@ -178,7 +180,8 @@ impl App {
             // input-driven and the dog step is wall-clock. The ~7.5fps
             // heartbeat keeps the ambience moving at half the hot cost, and
             // every discrete change (input, chat bubbles, door events)
-            // still lands within 132ms of its tick.
+            // still lands within 132ms of its tick (264ms once the session
+            // has been idle for five minutes and dropped to the quarter tier).
             changed = true;
         }
         if self.screen == Screen::City && anim_half {
@@ -367,13 +370,9 @@ impl App {
             && self.settings_modal_state.draft().username.is_empty()
             && !self.profile_state.profile().username.is_empty()
         {
-            let device_rails = self.rail_modes();
             let device_artboard_disclaimer = self.artboard_disclaimer_enabled();
-            self.settings_modal_state.open_from_profile(
-                self.profile_state.profile(),
-                device_rails,
-                device_artboard_disclaimer,
-            );
+            self.settings_modal_state
+                .open_from_profile(self.profile_state.profile(), device_artboard_disclaimer);
         }
 
         for msg in messages {
@@ -682,9 +681,8 @@ impl App {
         if let Some(state) = self.brogue_state.as_mut() {
             state.tick();
         }
-        // The live-game rosters feed the hub rail's live rows and the watcher
-        // count in a running watchable game's chrome: drain always, pay a
-        // frame only where one of them is drawn.
+        // The live-game rosters feed the hub rail's live rows: drain always,
+        // pay a frame only on the hub and the watchable doors.
         let rosters_changed = self.live_games.tick();
         changed |= rosters_changed
             && (self.screen == Screen::Games
@@ -693,6 +691,8 @@ impl App {
         // The watch chat: the watchers' pane and the player's own pane each
         // hang on a room that resolves and joins in the background.
         changed |= crate::app::door::spectate::chat::tick(self);
+        // Who is watching, in the frame title and the chat's header.
+        changed |= crate::app::door::spectate::chat::watchers_moved(self);
         // A preview lives only on the Games hub, so leaving the hub ends it.
         // An open watch is only ever on the hub: leaving steps away from it
         // (`App::away_watches`, below). The watched game ending (or its
@@ -1052,8 +1052,8 @@ impl App {
                     changed = true;
                 }
             }
-            // Mentions load only when asked for. A page hosting the
-            // attention guest asks whenever the unread count moves, so a
+            // Mentions load when asked for and after a stamp. A page hosting
+            // the attention guest asks whenever the unread count moves, so a
             // new mention lands in its list.
             if self.on_home() && self.home.hosts(crate::app::zen::state::Guest::Attention) {
                 let unread = self.chat.notifications.unread_count();
@@ -1080,12 +1080,12 @@ impl App {
                 self.last_username_directory = username_directory_snapshot;
                 self.chat_ctx_epoch += 1;
             }
-            // Sidebar clock shows minutes; repaint on rollover.
-            let sidebar_clock = crate::app::common::sidebar::sidebar_clock_text(
+            // The clock shows minutes; repaint on rollover.
+            let clock = crate::app::common::time::clock_text(
                 self.profile_state.profile().timezone.as_deref(),
             );
-            if sidebar_clock != self.last_sidebar_clock {
-                self.last_sidebar_clock = sidebar_clock;
+            if clock != self.last_clock {
+                self.last_clock = clock;
                 changed = true;
             }
         }
@@ -1216,7 +1216,7 @@ impl App {
             }
         }
         changed |= self.ascii_edge(anim_half, anim_quarter, one_hz);
-        // The activity feed subscription survives the retired sidebar panel
+        // The activity feed subscription survives the retired activity panel
         // for one job: edge-detecting a friend's arrivals — logging in, and
         // going live — for the banner + desktop notification. The public
         // feed itself ships to #lounge (activity/lounge).
@@ -1361,45 +1361,42 @@ impl App {
             changed = true;
         }
 
-        let sidebar_visible = self.right_sidebar_visible();
         // Ambient equalizer + bonsai sway: both are stateless, derived from
         // the wall clock at draw time (viz::render_eq, the bonsai sway sines),
         // so there is nothing to advance here: the anim_half edge itself is
         // the change, paid only while a surface showing them is visible (the
-        // sidebar carries the eq strip and both bonsai panels; the modals
-        // sway; a rice page pays it while it draws a music, visualizer or
+        // modals sway; a rice page pays it while it draws a music, visualizer or
         // bonsai tile, so a rail and a chat alone settle). Deliberately NOT
         // narrowed to sessions whose eq is actually animating: the bonsai
         // sway holds this edge on its own. An unpaired session repaints a
         // static eq strip, which the frame diff then drops.
         changed |= anim_half
-            && (sidebar_visible
-                || self.show_bonsai_modal
-                || (self.on_home() && self.home.paints_on_half_edge()));
+            && (self.show_bonsai_modal || (self.on_home() && self.home.paints_on_half_edge()));
         // The live strip draws a shooter's cue: the aim is stored, the
         // half-tick edge paints it.
         changed |= anim_half && self.home_strip_hosted() && self.live.aiming();
 
-        // Sidebar marquees: track rows and the friends row scroll while their
+        // Home's marquees: track rows and the friends row scroll while their
         // text overflows. The marquee moves at most once per
         // MARQUEE_STEP_TICKS and every transition lands on a multiple of it,
         // so only those boundary ticks need a frame.
         if self.marquee_tick / crate::app::common::marquee::MARQUEE_STEP_TICKS
             != prev_marquee_tick / crate::app::common::marquee::MARQUEE_STEP_TICKS
-            && (sidebar_visible || self.on_home())
+            && self.on_home()
         {
             let selected_radio_station = self.selected_radio_station;
             let radio_now_playing = self.station_now_playing(selected_radio_station);
             let queue = self.audio.queue_snapshot();
-            let inputs = crate::app::common::sidebar::SidebarMarqueeInputs {
-                components: &self.profile_state.profile().right_sidebar_components,
+            let inputs = crate::app::common::music_dock::HomeMarqueeInputs {
+                presence_visible: self.home.shows(crate::app::zen::state::TileKind::Presence),
+                music_visible: self.home.shows(crate::app::zen::state::TileKind::Music),
                 active_friends: &self.active_friends,
                 radio_now_playing: radio_now_playing.as_deref(),
                 selected_station: selected_radio_station,
                 source: self.paired_source,
-                queue: Some(&queue),
+                queue: &queue,
             };
-            changed |= crate::app::common::sidebar::sidebar_marquee_scrolling(&inputs);
+            changed |= crate::app::common::music_dock::home_marquee_scrolling(&inputs);
         }
         // Now-playing metadata changes repaint even between marquee steps.
         changed |= self
@@ -1447,7 +1444,7 @@ impl App {
         if self.show_profile_modal && anim_quarter {
             changed |= self.profile_modal_state.step_reef();
         }
-        // The profile's bonsai sways like the sidebar's.
+        // The profile's bonsai sways like Home's.
         changed |=
             self.show_profile_modal && anim_half && self.profile_modal_state.bonsai().is_some();
 
@@ -1503,17 +1500,18 @@ impl App {
         // Slower tiers match the frame edges their surfaces paint on. The
         // pet's clocks are wall-synced (PetState::tick takes marquee_tick),
         // so the pet box rides the half tier it paints on. The
-        // bonsai care modal and the profile's bonsai sway on the same edge as
-        // the sidebar, which always carries the eq strip and that sway. A
+        // bonsai care modal and the profile's bonsai sway on this edge. A
         // music or visualizer tile paints its eq on that edge too; left
         // to the aquarium's quarter tier it drops to ~3.8fps. A drawn ascii
         // tile in dots plays its frames on this edge too; one in pixels
-        // rides the quarter tier below.
+        // rides the quarter tier below. Nobody at the keys means nobody
+        // watching closely, so an idle terminal takes the quarter tier here:
+        // these draws are most of the CPU and most sessions are idle. Only
+        // the frame rate moves: everything here is timed by the wall clock.
         if self.screen == Screen::Clubhouse
             || self.screen == Screen::City
             || crate::app::door::hub::state::animates(self)
             || crate::app::deadchannel::lounge::svc::animates(self)
-            || self.right_sidebar_visible()
             || (self.home_strip_hosted() && self.live.aiming())
             || (self.on_home() && self.home.paints_on_half_edge())
             || self.lively_ascii_visible()
@@ -1521,7 +1519,10 @@ impl App {
             || self.show_bonsai_modal
             || (self.show_profile_modal && self.profile_modal_state.bonsai().is_some())
         {
-            return ANIM_HALF_TICK;
+            return match self.attention_presence() {
+                crate::metrics::Presence::Active => ANIM_HALF_TICK,
+                crate::metrics::Presence::Idle => ANIM_QUARTER_TICK,
+            };
         }
         if self.aquarium_visible()
             || (self.show_profile_modal && self.profile_modal_state.aquarium_animating())
@@ -1603,18 +1604,6 @@ impl App {
                 self.chat.selected_room_id,
                 self.chat.synthetic_entry_selected(),
             )
-    }
-
-    /// Whether the right sidebar draws this frame (the settings draft
-    /// previews the toggle live). Shared by the viz gate in tick() and the
-    /// wake cadence.
-    pub(crate) fn right_sidebar_visible(&self) -> bool {
-        let mode = if self.show_settings {
-            self.settings_modal_state.device_rails()
-        } else {
-            self.rail_modes()
-        };
-        crate::app::render::resolve_right_sidebar_enabled(mode, self.screen, self.size.0)
     }
 
     fn inline_image_render_settings(&self) -> InlineImageRenderSettings {

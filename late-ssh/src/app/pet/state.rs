@@ -144,6 +144,9 @@ pub struct PetState {
     /// this session's clicks: the care row reads it, and a second click the
     /// same day does not ask the service again.
     pub last_petted: Option<NaiveDate>,
+    /// The owner's switch, from the row and then from this session's Shop
+    /// key. Off, the pet stays bought but is put away (`App::pet_out`).
+    pub enabled: bool,
 
     pub signals: MoodSignals,
     mood: PetMood,
@@ -163,6 +166,7 @@ impl PetState {
             created: companion.created,
             adopted_at: companion.adopted_at,
             last_petted: companion.last_petted,
+            enabled: companion.enabled,
             signals: MoodSignals::default(),
             // The mood the row holds (`asleep` after the last session left):
             // the first tick reads the real thing and, since it differs,
@@ -198,6 +202,12 @@ impl PetState {
     pub fn set_species(&mut self, species: PetSpecies) {
         self.species = species;
         self.svc.set_species_task(self.user_id, species);
+    }
+
+    /// Bring the pet out or put it away, and persist it.
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+        self.svc.set_enabled_task(self.user_id, enabled);
     }
 
     pub fn mood(&self) -> PetMood {

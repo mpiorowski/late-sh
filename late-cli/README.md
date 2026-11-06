@@ -126,7 +126,7 @@ verbose = false
 
 Supported file keys are `ssh-target`, `ssh-port`, `ssh-user`, `ssh-mode`, `key`,
 `audio-base-url`, `api-base-url`, `audio-output-device`, `mpris`, and `verbose`.
-TUI keybinds, themes, sidebar settings, and other in-app preferences are saved
+TUI keybinds, themes, layouts, and other in-app preferences are saved
 server-side, not in the CLI config file.
 
 ## Requirements

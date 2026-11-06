@@ -17,7 +17,7 @@ use std::net::{IpAddr, SocketAddr};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{Mutex as TokioMutex, OwnedSemaphorePermit};
@@ -81,6 +81,10 @@ const INPUT_DRAIN_MAX_TIME: Duration = Duration::from_millis(4);
 /// A pass that holds the app lock longer than the hot tick is one the user
 /// can feel; it is warned about, once per [`SLOW_PASS_WARN_EVERY`].
 const SLOW_PASS: Duration = crate::app::tick::HOT_TICK;
+/// Dropped frames in a row retried at the hot cadence, which covers a brief
+/// congested moment. Past them the client is not draining, and every retry is
+/// a full repaint nobody receives, so it settles to the idle cadence.
+const FRAME_DROP_HOT_RETRIES: u32 = 3;
 const SLOW_PASS_WARN_EVERY: Duration = Duration::from_secs(60);
 
 /// Tracks bytes handed to russh for the app channel versus window credit the
@@ -1038,6 +1042,7 @@ impl russh::server::Handler for ClientHandler {
                 RenderContext {
                     sink: RusshFrameSink::new(handle, channel_id),
                     frame_drop_log_every: self.state.config.frame_drop_log_every,
+                    frame_drops_in_a_row: AtomicU32::new(0),
                     signal,
                     budget: Some(Arc::clone(&self.output_budget)),
                     client,
@@ -1062,7 +1067,6 @@ impl russh::server::Handler for ClientHandler {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self, data, _session), fields(peer = ?self.peer_addr, len = data.len()))]
     async fn data(
         &mut self,
         channel: ChannelId,
@@ -1100,6 +1104,7 @@ impl russh::server::Handler for ClientHandler {
             }
             Err(tokio::sync::mpsc::error::TrySendError::Full(_)) => {
                 tracing::warn!(
+                    peer = ?self.peer_addr,
                     queue_cap = INPUT_QUEUE_CAP,
                     "session input queue full; dropping inbound ssh input"
                 );
@@ -1224,6 +1229,7 @@ pub(crate) async fn run_session<S: FrameSink>(
         RenderContext {
             sink,
             frame_drop_log_every,
+            frame_drops_in_a_row: AtomicU32::new(0),
             signal,
             budget: None,
             client: metrics::SessionClient::Ssh,
@@ -1581,10 +1587,18 @@ async fn next_render_action(
 struct RenderContext<S> {
     sink: S,
     frame_drop_log_every: u64,
+    frame_drops_in_a_row: AtomicU32,
     signal: Arc<RenderSignal>,
     budget: Option<Arc<OutputBudget>>,
     client: metrics::SessionClient,
     probe: Option<Arc<TerminalProbe>>,
+}
+
+fn retry_after_frame_drop(drops_in_a_row: u32) -> Duration {
+    match drops_in_a_row <= FRAME_DROP_HOT_RETRIES {
+        true => crate::app::tick::HOT_TICK,
+        false => crate::app::tick::IDLE_TICK,
+    }
 }
 
 /// What one render pass produced: whether the app asked to quit, how soon
@@ -1792,6 +1806,10 @@ async fn render_once<S: FrameSink>(
 
     let frame_len = frame.len();
     let mut bytes_sent = 0;
+    // Set when the handle refused the frame or one of the commands: the pass
+    // is paced by `retry_after_frame_drop` below, and the run of such passes
+    // only resets once a whole pass lands.
+    let mut stalled = false;
     let frame_sent = match ctx.sink.send_frame(frame).await {
         Ok(true) => {
             if let Some(budget) = &ctx.budget {
@@ -1818,12 +1836,12 @@ async fn render_once<S: FrameSink>(
         // write is dropped, force the next successful frame to repaint from a
         // blank previous buffer so old terminal cells cannot leak through.
         // Deliberately no notify: the repaint rides the next world tick,
-        // pinned to the hot cadence (15fps retry) instead of re-arming the
-        // input path against a handle that is already busy.
+        // paced by `retry_after_frame_drop`, instead of re-arming the input
+        // path against a handle that is already busy.
         let mut app = app.lock().await;
         app.force_full_repaint();
         ctx.signal.dirty.store(true, Ordering::Release);
-        wake_hint = crate::app::tick::HOT_TICK;
+        stalled = true;
     }
 
     for command in terminal_commands {
@@ -1848,16 +1866,25 @@ async fn render_once<S: FrameSink>(
                 // like a dropped frame, so the next frame re-emits every
                 // raster from a clean slate, and abandon the rest of this
                 // batch rather than piling more chunks onto a busy handle.
-                // The output-budget guard in the render loop keeps a link
-                // that stays busy from turning this retry into a flood.
+                // Paced like a dropped frame too: a Kitty repaint always
+                // carries cleanup commands, so this arm is where a stalled
+                // Kitty client lands on every retry.
                 let mut app = app.lock().await;
                 app.force_full_repaint();
                 ctx.signal.dirty.store(true, Ordering::Release);
-                wake_hint = crate::app::tick::HOT_TICK;
+                stalled = true;
                 break;
             }
             Err(err) => return Err(err.context("render_once: terminal command send failed")),
         }
+    }
+
+    match stalled {
+        true => {
+            let in_a_row = ctx.frame_drops_in_a_row.fetch_add(1, Ordering::Relaxed) + 1;
+            wake_hint = retry_after_frame_drop(in_a_row);
+        }
+        false => ctx.frame_drops_in_a_row.store(0, Ordering::Relaxed),
     }
 
     Ok(RenderOutcome {
