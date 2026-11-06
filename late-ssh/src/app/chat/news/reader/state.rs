@@ -1,4 +1,4 @@
-//! The News reader: one story, opened from a News card, the live strip, or
+//! The News reader: one story, opened from a News card, a #lounge card, or
 //! the Live panel. Holds the story, its body as far as it has loaded, the
 //! links the body numbers, and the scroll. The layout is pure and laid out
 //! at draw time against the drawn width, then kept until the width, the

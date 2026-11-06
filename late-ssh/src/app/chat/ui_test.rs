@@ -258,6 +258,7 @@ fn a_rented_title_renders_after_the_author_name_in_chat() {
         message_reactions: &message_reactions,
         message_gilds: &message_gilds,
         inline_images: &inline_images,
+        news_cards: &HashMap::new(),
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
@@ -360,6 +361,7 @@ fn plain_glyphs_drops_nerd_font_icons_from_the_body_and_the_reaction_chips() {
             message_reactions: &message_reactions,
             message_gilds: &message_gilds,
             inline_images: &inline_images,
+            news_cards: &HashMap::new(),
             dividers: ChatDividers::default(),
             drunk_levels: &drunk_levels,
             name_flair: &name_flair,
@@ -462,6 +464,7 @@ fn the_crown_glyphs_frame_the_author_name() {
         message_reactions: &message_reactions,
         message_gilds: &message_gilds,
         inline_images: &inline_images,
+        news_cards: &HashMap::new(),
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
@@ -528,6 +531,7 @@ fn chat_rows_cache_key_changes_when_theme_changes() {
         message_reactions: &message_reactions,
         message_gilds: &message_gilds,
         inline_images: &inline_images,
+        news_cards: &HashMap::new(),
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
@@ -567,6 +571,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
     let away_user_ids = HashSet::new();
     let translations = HashMap::new();
     let translation_hidden = HashSet::new();
+    let news_cards = HashMap::new();
     let username_lookup = UsernameLookup::new(&usernames, None);
 
     let base_versions = ChatRowsVersions {
@@ -589,6 +594,7 @@ fn chat_rows_cache_key_changes_with_any_version_counter() {
         message_reactions: &message_reactions,
         message_gilds: &message_gilds,
         inline_images: &inline_images,
+        news_cards: &news_cards,
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
@@ -682,6 +688,7 @@ fn editing_a_grouped_message_gives_it_its_own_header() {
         message_reactions: &message_reactions,
         message_gilds: &message_gilds,
         inline_images: &inline_images,
+        news_cards: &HashMap::new(),
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
@@ -893,6 +900,7 @@ fn mentions_and_replies_paint_a_background_wash() {
         message_reactions: &message_reactions,
         message_gilds: &message_gilds,
         inline_images: &inline_images,
+        news_cards: &HashMap::new(),
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
@@ -976,6 +984,7 @@ fn background_wash_fills_the_whole_row_width() {
         message_reactions: &message_reactions,
         message_gilds: &message_gilds,
         inline_images: &inline_images,
+        news_cards: &HashMap::new(),
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
@@ -1042,7 +1051,9 @@ fn chat_view<'a>(
     composer: &'a TextArea<'static>,
     news_composer: &'a TextArea<'static>,
 ) -> ChatRenderInput<'a> {
-    static INLINE_IMAGES: OnceLock<HashMap<Uuid, InlineImagePreview>> = OnceLock::new();
+    static INLINE_IMAGES: OnceLock<HashMap<Uuid, InlinePreview>> = OnceLock::new();
+    static NEWS_CARDS: OnceLock<HashMap<Uuid, late_core::models::article::ArticleFeedItem>> =
+        OnceLock::new();
     static FRIEND_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
     static LIVE_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
     static IGNORED_USER_IDS: OnceLock<HashSet<Uuid>> = OnceLock::new();
@@ -1126,6 +1137,7 @@ fn chat_view<'a>(
         message_reactions,
         message_gilds: MESSAGE_GILDS.get_or_init(HashMap::new),
         inline_images: INLINE_IMAGES.get_or_init(HashMap::new),
+        news_cards: NEWS_CARDS.get_or_init(HashMap::new),
         afk_lines: AFK_LINES.get_or_init(HashMap::new),
         device_left_at: None,
         unread_counts,
@@ -3397,6 +3409,7 @@ fn the_you_left_rule_draws_above_the_first_message_past_the_left_app_mark() {
             message_reactions: &message_reactions,
             message_gilds: &message_gilds,
             inline_images: &inline_images,
+            news_cards: &HashMap::new(),
             dividers,
             drunk_levels: &drunk_levels,
             name_flair: &name_flair,
@@ -3600,6 +3613,7 @@ fn the_wire_seats_a_runners_portrait_beside_their_message() {
         message_reactions: &message_reactions,
         message_gilds: &message_gilds,
         inline_images: &inline_images,
+        news_cards: &HashMap::new(),
         dividers: ChatDividers::default(),
         drunk_levels: &drunk_levels,
         name_flair: &name_flair,
@@ -3742,5 +3756,42 @@ fn embedded_chat_voice_strip_is_padded_like_its_messages() {
             voice_strip: None,
             messages: Rect::new(11, 5, 38, 12),
         }
+    );
+}
+
+/// A YouTube thumbnail gets the video's title on a row above it, cut to
+/// the picture's width, and the watch hint under it; without a title only
+/// the hint is added.
+#[test]
+fn video_preview_puts_the_title_above_the_picture() {
+    let picture: InlineImagePreview = vec![Line::from("x".repeat(48)); 2];
+    let texts = |lines: InlineImagePreview| -> Vec<String> {
+        lines.iter().map(|line| line.to_string()).collect()
+    };
+    let picture_row = "x".repeat(48);
+
+    assert_eq!(
+        texts(with_watch_hint(&picture, Some("Never Gonna Give You Up"))),
+        vec![
+            "Never Gonna Give You Up".to_string(),
+            picture_row.clone(),
+            picture_row.clone(),
+            "▶ YouTube · Enter to watch".to_string(),
+        ]
+    );
+    let cut = texts(with_watch_hint(
+        &picture,
+        Some("Keynote: After the AI Hype - What's Real, and What's Next - Richard Campbell - 2026"),
+    ))
+    .remove(0);
+    assert_eq!(cut, "Keynote: After the AI Hype - What's Real, and W…");
+    assert_eq!(UnicodeWidthStr::width(cut.as_str()), 48);
+    assert_eq!(
+        texts(with_watch_hint(&picture, None)),
+        vec![
+            picture_row.clone(),
+            picture_row,
+            "▶ YouTube · Enter to watch".to_string(),
+        ]
     );
 }

@@ -9,35 +9,19 @@ thesis instead of re-deriving it.
 This is an **experiment**. It can fail, and the success metrics below define
 what failing looks like. Theme and name are decided: **deadchannel**.
 
-## Why (the diagnosis, carried over and sharpened)
+## Why
 
-- ~30 concurrent users. Chat + music are healthy; the door games hold maybe 5%
-  of players. Anything needing synchronous coordination starves (~3 people
-  want a game at any moment, spread across many game types: a liquidity
-  problem, not a UX problem). What works is ambient, zero-coordination,
-  interruptible.
-- **People don't want to own things in late.sh, they want to be seen in it.**
-  This is now confirmed by revenue data, not just theory: the shop's only hit
-  is username colors/gradients (permanent, visible in every message, pure
-  status). Chat effects don't sell because they're a moment: fire once, half
-  the room misses it, nothing accumulates. Same category on paper, opposite
-  outcomes, and the only variable is persistence + audience.
-- **Ambient care loops decay.** Bonsai/pet/aquarium engagement is visibly
-  fading. They share two missing axes: no audience (nobody sees your bonsai
-  unless they go looking) and no variance (day 40 is identical to day 4).
-  Lesson for everything below: a feature that can't be seen from chat, the
-  profile, or the feed follows the aquarium's curve no matter how charming.
-- **The chip economy is deflated.** People amassed fortunes with nothing
-  meaningful to want. The game must be the sink, not another faucet.
-- **Doors as destinations have a ceiling.** A door you travel to competes
-  with chat for attention and loses. The 5% number does not move by making
-  any door better; it moves when the game happens in the room you're already
-  in.
-- **LORD's real retention engine was never its mechanics.** Solo, the game is
-  a skeleton (grind forest, buy armor, kill dragon, reset). It survived for
-  years on: other players as content (ambushes, the daily news screen,
-  rivalries), sysop-driven seasonal resets, and IGM bolt-on content cadence.
-  We rebuild those three engines and skip faithful-mechanics parity entirely.
+The diagnosis this game rests on lives in the root `AUDIENCE.md` (what
+people do on late.sh, where their time goes, and what the numbers say):
+chat is the center, anything needing coordination starves, people want to
+be seen rather than to own things, care loops without an audience decay,
+doors as destinations have a ceiling, and the chip economy is deflated.
+What this game takes from it: LORD's real retention engine was never its
+mechanics. Solo, the game is a skeleton (grind forest, buy armor, kill
+dragon, reset). It survived for years on other players as content
+(ambushes, the daily news screen, rivalries), sysop-driven seasonal resets,
+and IGM bolt-on content cadence. We rebuild those three engines and skip
+faithful-mechanics parity entirely.
 
 North-star check for any idea: **does it ship a story into #lounge?**
 
@@ -230,7 +214,7 @@ people; that mix is the fantasy. Consequences:
 - **The feed budget only governs #lounge.** The wire is deliberately
   unfiltered; people who want the firehose idle here with the sidebar
   open, people who don't never see it. This resolves the budget tension
-  from DIGEST.md by geography instead of filtering.
+  (`devdocs/FEED-BUDGET.md`) by geography instead of filtering.
 - The welcome-back paper quotes the wire instead of generating a recap:
   the morning read is genuine news about you, not a summary.
 - The wire is also the doorway: you reach the city through #deadchannel,
@@ -1955,16 +1939,15 @@ Success metrics, named now so the experiment can fail honestly:
   40 people is total success at this population.
 
 Sequencing, each phase testing something before paying for the next:
-1. **Feed budget + daily digest.** Still the hard prerequisite (global
-   lines/hour budget and morning digest remain unbuilt; only the per-user
-   30-min repeat window exists). Everything above multiplies feed volume.
-   Now specced separately in **DIGEST.md** (2026-08-31): the same engine
-   is the welcome-back paper, and the login news screen ships as a
-   section of that paper rather than its own surface. *Amended
-   2026-09-02:* no longer a gate for phase 2. The three-surfaces
-   decision put every phase 2 output on the wire, which is unfiltered by
-   design, so phase 2 ships zero lines to #lounge; the budget becomes
-   the gate for the lounge theater in phase 3 instead.
+1. **Feed budget.** The global lines/hour valve on #lounge's system
+   feed (`devdocs/FEED-BUDGET.md`; only the per-user 30-min repeat
+   window exists). Everything above multiplies feed volume. Not a gate
+   for phase 2: the three-surfaces decision put every phase 2 output on
+   the wire, which is unfiltered by design, so phase 2 ships zero lines
+   to #lounge; the budget is the gate for the lounge theater in phase 3.
+   The "while you were gone" news lives on the wire; The Late Edition
+   (`app/paper`) is a daily newspaper, not a per-reader digest, and
+   carries no game section.
 2. **Character layer + rations + login news.** Tests: do people do the
    daily loop.
 3. **Chat spawns.** Tests: does the room engage. Spawns start on the
@@ -2047,15 +2030,11 @@ Sequencing, each phase testing something before paying for the next:
   file; "extend Green Dragon" died because the salvage (content, not
   curves) was too thin to justify the constraint. The Green Dragon door
   itself remains in the Games hub, untouched.
-- **Space trade/fight MMO:** parked, not wrong. The most liquidity-hungry
-  genre there is; coordination machinery for a population we don't have
-  (the SOCIAL.md mistake in a spacesuit). A fine idea for a late.sh with
-  500 concurrents.
 - **Card/pet collection game as a separate thing:** folded into the generic
   spawn mechanism. If chat encounters work, pet-style spawn families ride
   the same pipeline and the same identity system later; never a parallel
   progression/wallet.
-- **SOCIAL.md events/tournaments pillar:** still parked (see prior
-  reasoning: coordination machinery for liquidity we don't have). The
-  seeded score window remains the first thing to un-park once the
-  character layer gives people a reason to show up daily.
+- **Space trade/fight MMO** and the **SOCIAL.md events/tournaments
+  pillar**: parked, not wrong; both are coordination machinery for a
+  population we don't have. They sit on the shelf in the root
+  `AUDIENCE.md`, Ideas.

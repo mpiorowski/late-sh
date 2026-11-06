@@ -4,6 +4,8 @@ use super::{
 };
 use crate::app::ai::svc::AiService;
 use crate::app::chat::news::svc::{ArticleService, NewsSaveOutcome};
+use crate::app::chat::notifications::svc::NotificationService;
+use crate::app::chat::svc::ChatService;
 use crate::test_helpers::{new_test_db, wait_until};
 use chrono::{DateTime, Duration, Utc};
 use late_core::models::article::{
@@ -17,6 +19,11 @@ use uuid::Uuid;
 
 const READER: Uuid = Uuid::from_u128(100);
 const OTHER: Uuid = Uuid::from_u128(200);
+
+fn article_service(db: late_core::db::Db) -> ArticleService {
+    let chat = ChatService::new(db.clone(), NotificationService::new(db.clone()));
+    ArticleService::new(db, AiService::new(false, None), chat)
+}
 
 fn at(minutes: i64) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339("2026-09-23T12:00:00Z")
@@ -44,6 +51,7 @@ fn article(id: u128, author: Uuid, created_minutes: i64) -> ArticleFeedItem {
             id: Uuid::from_u128(id),
             created,
             updated: created,
+            lounge_message_id: None,
             user_id: author,
             url: format!("https://example.com/{id}"),
             title: format!("Article {id}"),
@@ -105,7 +113,7 @@ async fn a_load_landing_out_of_order_never_takes_a_read_back() {
     let second = Article::create_by_user_id(&client, sharer.id, share("https://example.com/m2"))
         .await
         .expect("create second");
-    let service = ArticleService::new(test_db.db.clone(), AiService::new(false, None));
+    let service = article_service(test_db.db.clone());
     let mut state = State::new(service.clone(), reader.id, false);
     wait_until(
         || {
@@ -292,7 +300,7 @@ async fn a_save_moves_the_cursor_on_and_a_refused_one_leaves_it() {
             .await
             .expect("save");
     }
-    let service = ArticleService::new(test_db.db.clone(), AiService::new(false, None));
+    let service = article_service(test_db.db.clone());
     let mut state = State::new(service, reader.id, false);
     wait_until(
         || {
@@ -358,7 +366,7 @@ async fn the_reader_can_save_again_a_story_it_unsaved_past_the_snapshot() {
     ArticleSave::save(&mut client, reader.id, oldest)
         .await
         .expect("save");
-    let service = ArticleService::new(test_db.db.clone(), AiService::new(false, None));
+    let service = article_service(test_db.db.clone());
     let mut state = State::new(service, reader.id, false);
     wait_until(
         || {
@@ -410,7 +418,7 @@ async fn an_unsave_pressed_while_its_save_is_out_lands_after_it() {
     )
     .await
     .expect("create story");
-    let service = ArticleService::new(test_db.db.clone(), AiService::new(false, None));
+    let service = article_service(test_db.db.clone());
     // Subscribed ahead of the session, so the count holds its first load.
     let mut events = service.subscribe_events();
     let mut state = State::new(service, reader.id, false);
@@ -558,7 +566,7 @@ async fn a_body_answer_reaches_only_the_session_that_asked() {
     ArticleBody::store_ready(&client, story.id, 1, &lines)
         .await
         .expect("store ready");
-    let service = ArticleService::new(test_db.db.clone(), AiService::new(false, None));
+    let service = article_service(test_db.db.clone());
     let mut laptop = State::new(service.clone(), reader.id, false);
     let mut phone = State::new(service.clone(), reader.id, false);
     wait_until(

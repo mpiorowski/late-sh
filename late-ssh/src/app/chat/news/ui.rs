@@ -1,7 +1,7 @@
-//! The News room's list: the reader's shelf above the feed, two rows a
-//! story, the selected one opened out with its link, its summary and its
-//! art. Every row is laid out first (`lay_out`, pure) and the draw paints
-//! the window of rows that keeps the selected story in view.
+//! The News room's list: the reader's shelf above the feed, every story
+//! with its link, its summary and its art, a rule between stories. Every
+//! row is laid out first (`lay_out`, pure) and the draw paints the window
+//! of rows that keeps the selected story in view.
 
 use crate::app::chat::list_ui::{draw_mine_only_status, filtered_list_areas};
 use crate::app::chat::news::reader::state::domain_label;
@@ -21,7 +21,7 @@ use ratatui::{
 };
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
-use unicode_width::UnicodeWidthStr;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use uuid::Uuid;
 
 use late_core::models::article::{Article, ArticleFeedItem, NEWS_SHARE_REWARD_CHIPS};
@@ -45,11 +45,11 @@ pub struct ArticleListView<'a> {
 
 /// The unread dot's column and the space after it.
 const GUTTER: usize = 2;
-/// The art beside the selected story, the width the service draws it at.
+/// The art beside each story, the width the service draws it at.
 const ART_WIDTH: u16 = 12;
-/// Narrower than this the selected story keeps its whole width for text.
+/// Narrower than this a story keeps its whole width for text.
 const ART_MIN_LIST_WIDTH: u16 = 90;
-/// The summary's bullets on the selected story, and the rows each may take.
+/// The summary's bullets on a story, and the rows each may take.
 const SUMMARY_BULLETS: usize = 3;
 const BULLET_ROWS: usize = 2;
 /// The bullet and its space: a point's later rows hang this far in.
@@ -111,11 +111,10 @@ pub(crate) fn scroll_offset(selected: &Range<usize>, height: usize) -> usize {
 }
 
 /// Every row of the list for `width` columns: a rule over the shelf and
-/// one over the feed when there is a shelf, two rows a story (its title,
-/// then who shared it, when, where, and what reading it takes) with a
-/// blank row between stories, and the selected story opened out with its
-/// link and up to three bullets of its summary, its art beside them when
-/// the list is wide enough.
+/// one over the feed when there is a shelf, and every story whole (its
+/// title, then who shared it, when, where, and what reading it takes, then
+/// its link and up to three bullets of its summary, its art beside them
+/// when the list is wide enough) with a plain rule between stories.
 pub(crate) fn lay_out(view: &ArticleListView<'_>, width: u16) -> ListLayout {
     let mut rows: Vec<ListRow> = Vec::new();
     let mut selected = 0..0;
@@ -124,36 +123,29 @@ pub(crate) fn lay_out(view: &ArticleListView<'_>, width: u16) -> ListLayout {
         .min(view.articles.len().saturating_sub(1));
     let sectioned = view.saved_len > 0;
     let full_width = usize::from(width);
+    let with_art = width >= ART_MIN_LIST_WIDTH;
+    let art_columns = if with_art {
+        usize::from(ART_WIDTH) + 1
+    } else {
+        0
+    };
+    let text_width = full_width.saturating_sub(GUTTER + art_columns);
 
     for (index, item) in view.articles.iter().enumerate() {
-        // A blank row between stories, and above the feed's rule.
-        if index > 0 {
-            rows.push(ListRow {
-                line: Line::default(),
-                art: None,
-            });
-        }
+        // A section's rule heads its first story; any other story is
+        // parted from the one above by a plain rule.
         if sectioned && index == 0 {
             rows.push(section_rule(
                 &format!("saved · {} of {NEWS_SAVED_LIMIT}", view.saved_count),
                 full_width,
             ));
-        }
-        if sectioned && index == view.saved_len {
+        } else if sectioned && index == view.saved_len {
             rows.push(section_rule("latest", full_width));
+        } else if index > 0 {
+            rows.push(story_rule(full_width));
         }
-        let is_selected = index == selected_index;
-        let with_art = is_selected && width >= ART_MIN_LIST_WIDTH;
-        let art_columns = if with_art {
-            usize::from(ART_WIDTH) + 1
-        } else {
-            0
-        };
-        let text_width = full_width.saturating_sub(GUTTER + art_columns);
         let mut lines = story_rows(item, view, index < view.saved_len, text_width);
-        if is_selected {
-            lines.extend(detail_rows(&item.article, text_width));
-        }
+        lines.extend(detail_rows(&item.article, text_width));
         let art = if with_art {
             ascii_preview_if_fit(&item.article.ascii_art, usize::from(ART_WIDTH), lines.len())
         } else {
@@ -167,14 +159,14 @@ pub(crate) fn lay_out(view: &ArticleListView<'_>, width: u16) -> ListLayout {
                 art: art.next(),
             });
         }
-        if is_selected {
+        if index == selected_index {
             selected = start..rows.len();
         }
     }
     ListLayout { rows, selected }
 }
 
-/// What the selected story opens out with: its link, then up to
+/// What follows a story's title and meta: its link, then up to
 /// `SUMMARY_BULLETS` bullets of its summary.
 fn detail_rows(article: &Article, text_width: usize) -> Vec<Line<'static>> {
     let mut lines = vec![Line::from(vec![
@@ -267,12 +259,13 @@ fn story_rows(
     vec![title, Line::from(meta)]
 }
 
-/// `── label ───…` across the width: the sidebar's rule shape, in the News
-/// list's own colours (a bold dim amber label on `BORDER`).
+/// `━━ label ━━━…` across the width: the sidebar's rule shape, drawn heavy
+/// so a section stands out from the light rules between stories, in the
+/// News list's own colours (a bold dim amber label on `BORDER`).
 fn section_rule(label: &str, width: usize) -> ListRow {
-    let lead = "── ";
+    let lead = "━━ ";
     let used = UnicodeWidthStr::width(lead) + UnicodeWidthStr::width(label) + 1;
-    let tail = "─".repeat(width.saturating_sub(used));
+    let tail = "━".repeat(width.saturating_sub(used));
     ListRow {
         line: Line::from(vec![
             Span::styled(lead, Style::default().fg(theme::BORDER())),
@@ -284,6 +277,17 @@ fn section_rule(label: &str, width: usize) -> ListRow {
             ),
             Span::styled(format!(" {tail}"), Style::default().fg(theme::BORDER())),
         ]),
+        art: None,
+    }
+}
+
+/// The `───…` that parts one story from the next, in `BORDER`.
+fn story_rule(width: usize) -> ListRow {
+    ListRow {
+        line: Line::from(Span::styled(
+            "─".repeat(width),
+            Style::default().fg(theme::BORDER()),
+        )),
         art: None,
     }
 }
@@ -307,6 +311,120 @@ fn bullet_rows(point: &str, width: usize) -> Vec<String> {
         rows.push(format!("{lead}{text}"));
     }
     rows
+}
+
+/// The #lounge card is this wide at least before its art goes beside it.
+const LOUNGE_ART_MIN_WIDTH: usize = 40;
+
+/// A News share's card in #lounge, drawn in place of its message's line
+/// (`📰 Title url`), in `width` columns: the title, up to three bullets of
+/// the summary one row each, where it is from and what it takes, and the
+/// line that sends the room to News; the story's art at the right when the
+/// card is wide enough. Chat lays the rows under the author's header.
+pub(crate) fn lounge_card_lines(item: &ArticleFeedItem, width: usize) -> Vec<Line<'static>> {
+    let article = &item.article;
+    let with_art = width >= LOUNGE_ART_MIN_WIDTH;
+    let text_width = match with_art {
+        true => width.saturating_sub(usize::from(ART_WIDTH) + 1),
+        false => width,
+    };
+    let faint = Style::default().fg(theme::TEXT_FAINT());
+
+    let mut rows: Vec<Vec<Span<'static>>> = vec![vec![Span::styled(
+        truncate_cells(&format!("📰 {}", article.title.trim()), text_width),
+        Style::default()
+            .fg(theme::AMBER())
+            .add_modifier(Modifier::BOLD),
+    )]];
+    for point in summary_points(&article.summary)
+        .iter()
+        .take(SUMMARY_BULLETS)
+    {
+        rows.push(vec![Span::styled(
+            truncate_cells(&format!("• {point}"), text_width),
+            Style::default().fg(theme::CHAT_BODY()),
+        )]);
+    }
+
+    let mut meta = vec![Span::styled(domain_label(&article.url), faint)];
+    if let Some(label) = reading_label(item, &HashMap::new()) {
+        meta.push(Span::styled(" · ", faint));
+        meta.push(Span::styled(
+            label.text(),
+            match label {
+                ReadingLabel::Watch | ReadingLabel::Resume(_) => {
+                    Style::default().fg(theme::AMBER())
+                }
+                ReadingLabel::Minutes(_) | ReadingLabel::Link => {
+                    Style::default().fg(theme::TEXT_DIM())
+                }
+            },
+        ));
+    }
+    meta.push(Span::styled(" · Enter to open", faint));
+    rows.push(meta);
+    rows.push(vec![
+        Span::styled("share a link in News · ", faint),
+        Span::styled(
+            format!("+{NEWS_SHARE_REWARD_CHIPS} chips"),
+            Style::default().fg(theme::AMBER_DIM()),
+        ),
+    ]);
+
+    let art = match with_art {
+        true => ascii_preview_if_fit(&article.ascii_art, usize::from(ART_WIDTH), rows.len()),
+        false => Vec::new(),
+    };
+    let mut art = art.into_iter();
+    rows.into_iter()
+        .map(|spans| {
+            let spans = clip_spans(spans, text_width);
+            match art.next() {
+                Some(piece) => {
+                    let used: usize = spans.iter().map(Span::width).sum();
+                    let mut spans = spans;
+                    spans.push(Span::raw(" ".repeat(text_width - used + 1)));
+                    spans.push(Span::styled(piece, Style::default().fg(theme::AMBER_DIM())));
+                    Line::from(spans)
+                }
+                None => Line::from(spans),
+            }
+        })
+        .collect()
+}
+
+/// `spans` cut to `width` columns: a card's meta row on a narrow chat. A
+/// row that runs over keeps `width - 1` columns and ends with an ellipsis in
+/// the style of the span it cuts into, even when the cut falls between two
+/// spans, so a cut row always reads as cut.
+fn clip_spans(spans: Vec<Span<'static>>, width: usize) -> Vec<Span<'static>> {
+    let total: usize = spans.iter().map(Span::width).sum();
+    if total <= width {
+        return spans;
+    }
+    let mut room = width.saturating_sub(1);
+    let mut clipped = Vec::new();
+    for span in spans {
+        let span_width = span.width();
+        if span_width <= room {
+            room -= span_width;
+            clipped.push(span);
+            continue;
+        }
+        let mut kept = String::new();
+        for ch in span.content.chars() {
+            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+            if ch_width > room {
+                break;
+            }
+            room -= ch_width;
+            kept.push(ch);
+        }
+        kept.push('…');
+        clipped.push(Span::styled(kept, span.style));
+        break;
+    }
+    clipped
 }
 
 /// The card meta's last segment.

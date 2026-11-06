@@ -393,9 +393,11 @@ impl ChatMessage {
     /// One public room's human messages inside `[floor, ceiling)`, for the
     /// daily paper (`paper_room_editions`). No viewer: the page is printed
     /// once for everyone, so there is no membership check and no ignore
-    /// list, only the public-room line (`room.visibility = 'public'`) and
-    /// the system-feed exclusion. Newest-first under `limit`, returned
-    /// oldest-first, same as [`Self::list_public_room_since`].
+    /// list, only the public-room line (`room.visibility = 'public'`), the
+    /// system-feed exclusion, and News shares' #lounge cards left out (the
+    /// paper prints shares on its own reading page). Newest-first under
+    /// `limit`, returned oldest-first, same as
+    /// [`Self::list_public_room_since`].
     pub async fn list_public_room_between(
         client: &Client,
         room_id: Uuid,
@@ -414,6 +416,9 @@ impl ChatMessage {
                    AND msg.created >= $2
                    AND msg.created < $3
                    AND COALESCE((author.settings->>'system')::boolean, false) = false
+                   AND NOT EXISTS (
+                        SELECT 1 FROM articles card WHERE card.lounge_message_id = msg.id
+                   )
                  ORDER BY msg.created DESC, msg.id DESC
                  LIMIT $4",
                 &[&room_id, &floor, &ceiling, &limit],

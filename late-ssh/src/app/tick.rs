@@ -522,7 +522,6 @@ impl App {
         changed |= self.live.tick(
             &self.daily,
             &self.audio,
-            self.chat.news.all_articles(),
             &self.chat.live_streams,
             &self.live_games.live_rows(),
             &self.calendar,

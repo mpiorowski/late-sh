@@ -58,8 +58,8 @@ pub(crate) fn handle_input(app: &mut App, event: &ParsedInput) {
             app.chat.jump_to_reader_article();
             app.set_screen(Screen::Dashboard);
         }
-        // Reply in #lounge quoting the story, as `r` on the live strip or
-        // in the News room does, and take the user there to write it.
+        // Reply in #lounge quoting the story, as `r` in the News room does,
+        // and take the user there to write it.
         ParsedInput::Byte(b'r') | ParsedInput::Char('r') => {
             let article_id = modal.article_id();
             let replying = chat::news::input::reply_in_lounge(app, article_id);

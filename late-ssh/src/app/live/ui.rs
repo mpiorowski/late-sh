@@ -8,8 +8,7 @@
 //!
 //! What goes in the frame is the source's own: a daily match paints its
 //! board (`lobby/daily/live_strip.rs`), a booth track its thumbnail
-//! (`audio/booth/live.rs`), a News article its ASCII art
-//! (`chat/news/live.rs`), a stream a drawn screen (`stream/live.rs`), a
+//! (`audio/booth/live.rs`), a stream a drawn screen (`stream/live.rs`), a
 //! door game its own door's dungeon in ASCII (`door/spectate/live.rs`).
 
 use std::cell::Cell;
@@ -25,7 +24,6 @@ use ratatui::{
 use crate::app::{
     audio::booth::live as booth_live,
     calendar::live as event_live,
-    chat::news::live as news_live,
     common::theme,
     door::{realm::live as realm_live, spectate::live as door_live},
     games::pool_core::canvas::Rgb,
@@ -133,7 +131,6 @@ pub(crate) fn live_strip_lines(
     let body = match strip {
         LiveStripView::Match(strip) => match_strip::body(budget, strip, background),
         LiveStripView::Track(track) => booth_live::body(budget, track),
-        LiveStripView::Article(article) => news_live::body(budget, article),
         LiveStripView::Stream(stream) => stream_live::body(budget, stream),
         LiveStripView::DoorGame(game) => door_live::body(budget, game),
         LiveStripView::Event(event) => event_live::body(budget, event),
@@ -230,8 +227,6 @@ pub(crate) fn live_strip_compact_line(width: u16, strip: &LiveStripView<'_>) -> 
     let glow = match strip {
         LiveStripView::Match(strip) => match_strip::glow(strip),
         LiveStripView::Track(track) => booth_live::glow(track),
-        // A shared link is never happening right now (`news_live::body`).
-        LiveStripView::Article(_) => false,
         LiveStripView::Stream(_) => stream_live::glow(),
         LiveStripView::DoorGame(_) => door_live::glow(),
         LiveStripView::Event(event) => event_live::glow(event),
@@ -251,7 +246,6 @@ fn compact_body_spans(rest: u16, strip: &LiveStripView<'_>) -> Vec<Span<'static>
     match strip {
         LiveStripView::Match(strip) => match_strip::compact_spans(rest, strip),
         LiveStripView::Track(track) => booth_live::compact_spans(rest, track),
-        LiveStripView::Article(article) => news_live::compact_spans(rest, article),
         LiveStripView::Stream(stream) => stream_live::compact_spans(rest, stream),
         LiveStripView::DoorGame(game) => door_live::compact_spans(rest, game),
         LiveStripView::Event(event) => event_live::compact_spans(rest, event),

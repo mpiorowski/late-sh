@@ -90,8 +90,8 @@ pub fn handle_byte(app: &mut App, byte: u8) -> bool {
             }
             true
         }
-        // The live strip's `r`, from the feed: reply in #lounge quoting the
-        // selected story, and take the user there to write it.
+        // Reply in #lounge quoting the selected story, and take the user
+        // there to write it.
         b'r' | b'R' => {
             let Some(article_id) = app.chat.news.selected_item().map(|item| item.article.id) else {
                 return true;
@@ -146,9 +146,9 @@ pub(crate) fn watch_article(app: &mut App, article_id: Uuid) -> bool {
     true
 }
 
-/// `o` on the live strip or a Live row: a video this session can play goes
-/// straight to the player; anything else opens the reader. `o` is "open",
-/// not "watch", so it never lands on the setup box.
+/// A Live panel row (a click, or `s` then its number): a video this session
+/// can play goes straight to the player; anything else opens the reader.
+/// Opening is "open", not "watch", so it never lands on the setup box.
 pub(crate) fn open_article(app: &mut App, article_id: Uuid) -> bool {
     let request = match crate::app::video::svc::can_play(app) {
         true => app.chat.news.watch_request(article_id),

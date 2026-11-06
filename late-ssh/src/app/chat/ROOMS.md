@@ -61,7 +61,7 @@ Reactions:
 Notifications:
 - Mentions are stored in `notifications`.
 - Mention unread state clears two ways, and **either** is enough: the global `mention_feed_reads` watermark (opening the Mentions entry) or the mention row's own `read_at`, stamped when the message it rides on is rendered in its room. `ChatState::flush_rendered_mention_reads` collects mentions of the current user among the *loaded* messages of each room being marked read (on the same debounced flush as the read cursors) and sends them through `NotificationService::mark_read_for_messages_task`, which stamps `notifications.read_at` and republishes the unread count in the same task after the update commits, so the rail badge clears live. The room's coarse `chat_room_members.last_read_at` cursor deliberately plays no part: it moves whenever a room is merely opened (including the auto-selected room at connect), which would clear mentions above the loaded tail that were never on screen; those stay unread. `list_for_user` returns `read_at` so the list's unread dot applies the same rule (still against the marker frozen on entry, so the dots survive the visit that read them). (`MentionFeedRead::unread_count_for_user` is an older single-cursor copy of the count with no production callers.)
-- Mention resolution excludes the actor and recipients who ignore the actor; DMs only notify DM participants, private rooms only members, and non-game public rooms may mention any user. Game-room chat does not create Mentions feed notifications.
+- Mention resolution excludes the actor and recipients who ignore the actor; DMs only notify DM participants, private rooms only members, and non-game public rooms may mention any user. Game-room chat does not create Mentions feed notifications, and neither does a line sent as `Wording::Quoted` (a News card: the `@name` in a page title is not the sharer's).
 
 
 ## Rooms and selection
@@ -88,7 +88,7 @@ RSS:
 - The background `FeedService` polls active feeds, parses a conservative RSS/Atom subset, stores unseen entries, and publishes per-user events.
 - Feed URLs are user-supplied, so fetches go through the SSRF-guarded downloader (`files::image_upload::download_url_bytes_following_redirects`): private/link-local/reserved resolved IPs rejected, DNS pinned, every redirect hop re-validated (up to 5 hops; feeds legitimately redirect), 1 MB body cap. Do not swap in a plain `reqwest::Client`.
 - The visible entry list is capped per feed (`PER_FEED_ENTRY_LIMIT`, 20) inside the flat `ENTRY_LIMIT` (100) window via `RssEntry::list_visible_for_user`, so a high-volume feed (news site, ~20 posts/day) cannot evict weekly/monthly feeds from the inbox.
-- The RSS synthetic room (`RoomSlot::Feeds`) is private. Press `s` on an entry to share it through `ArticleService::process_url`; only then does it become a public News article (and go up on the #lounge live strip), and only then does it pay the share reward (see `CONTEXT.md` §11 News).
+- The RSS synthetic room (`RoomSlot::Feeds`) is private. Press `s` on an entry to share it through `ArticleService::process_url`; only then does it become a public News article (and post its #lounge card), and only then does it pay the share reward (see `CONTEXT.md` §11 News).
 - Enter copies the selected RSS entry URL, `d` dismisses it, and `r` asks the RSS poller to refresh.
 
 Game rooms stay in `ChatState.rooms` for the embedded game-chat panes, but `is_chat_list_room` hides them from the Home room rail/navigation and favorite-room picker.

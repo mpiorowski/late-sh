@@ -14,8 +14,8 @@ changing a domain.
   entries, no "used to", "no longer", "since <date>": git log says when. The
   one running log is the incident log in `infra/RUNBOOK.md`.
 - Ideas, roadmaps and parked designs go to a design doc (`SCALE.md`,
-  `devdocs/`, a domain's own design file such as `deadchannel/GAME.md`), never
-  to a context file. An open gap is a fact ("X does not do Y").
+  `AUDIENCE.md`, `devdocs/`, a domain's own design file such as
+  `deadchannel/GAME.md`), never to a context file. An open gap is a fact ("X does not do Y").
 - A change that makes a doc wrong updates it in the same change. Update the
   local context for behavior inside a domain; update this file when a page,
   a domain, a cross-domain rule or a command changes. If code and a doc
@@ -221,7 +221,7 @@ otherwise.
 | `clubhouse` | The tavern: crowd, seating, bubbles, the tour, the floor plan |
 | `clubhouse/nightcap` | The Nightcap bar out back |
 | `scratchpad` | `/pair` shared scratchpad |
-| `deadchannel` | The character game: the map of its slices, persistence; design in `GAME.md`, `DIGEST.md` |
+| `deadchannel` | The character game: the map of its slices, persistence; design in `GAME.md`; the diagnosis it rests on in the root `AUDIENCE.md`, the #lounge valve it waits on in `devdocs/FEED-BUDGET.md` |
 | `deadchannel/runner` | The runner: the look, the directory, the face in #deadchannel, the runner row |
 | `deadchannel/haunt` | First contact: the haunting ladder that brings staff in, `/haunt` |
 | `deadchannel/city` | The night city under `0`: map, shops, panels, art |
@@ -245,14 +245,16 @@ small modals.
 
 - `SCALE.md`: capacity, measured costs, the multi-replica ledger and the
   scaling plan, small debts.
+- `AUDIENCE.md`: who comes and what they do, measured: where attention goes,
+  what the numbers say, the ideas that follow, and how to query it.
 - `infra/README.md`: cluster setup, nodes, game servers, Terraform variables.
   `infra/RUNBOOK.md`: prod DB access, triage, deploys, the incident log.
 - `MUSIC.md`: the house music library and its licenses (linked from `/listen`).
 - `THEME.md`: adding a theme. `CONTRIBUTING.md`, `LICENSING.md`: for
   contributors.
-- `devdocs/`: research and design notes (door candidates, the IRC design and
-  IRCv3 ideas, the parked audio leader, the CLI YouTube backend plan, the
-  permissions matrix).
+- `devdocs/`: research and design notes (door candidates, the parked feed
+  budget, the IRC design and IRCv3 ideas, the parked audio leader, the CLI
+  YouTube backend plan, the permissions matrix).
 
 ## 7. Telemetry
 
