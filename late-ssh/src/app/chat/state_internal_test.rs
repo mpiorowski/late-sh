@@ -384,6 +384,22 @@ fn reply_preview_text_uses_message_body_for_nested_replies() {
 }
 
 #[test]
+fn reply_preview_text_keeps_spoilers_hidden() {
+    assert_eq!(
+        reply_preview_text("it is ||CRANE|| today"),
+        "it is ▒▒▒▒▒ today"
+    );
+}
+
+#[test]
+fn inline_preview_source_ignores_a_link_inside_a_spoiler() {
+    assert_eq!(
+        inline_preview_source_in_body("||https://h.uguu.se/cat.png||"),
+        None
+    );
+}
+
+#[test]
 fn reply_preview_text_strips_markdown_markers() {
     let preview = reply_preview_text("**bold** `@graybeard` [docs](https://late.sh)");
     assert_eq!(preview, "bold @graybeard docs");
@@ -4879,4 +4895,61 @@ fn buy_posts_the_order_the_bar_rings_up() {
         BarOrder::Gift("mossy"),
         "{gift}"
     );
+}
+
+#[tokio::test]
+async fn enter_reveals_a_messages_spoilers_once() {
+    use late_core::models::chat_message::{ChatMessage, ChatMessageParams};
+    use late_core::models::chat_room::ChatRoom;
+    use late_core::models::chat_room_member::ChatRoomMember;
+
+    let test_db = crate::test_helpers::new_test_db().await;
+    let client = test_db.db.get().await.expect("db client");
+    let viewer = late_core::test_utils::create_test_user(&test_db.db, "spoiler_viewer").await;
+    let author = late_core::test_utils::create_test_user(&test_db.db, "spoiler_author").await;
+    let lounge = ChatRoom::ensure_lounge(&client).await.expect("lounge");
+    for user in [&viewer, &author] {
+        ChatRoomMember::join(&client, lounge.id, user.id)
+            .await
+            .expect("join");
+    }
+    let plain = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: author.id,
+            body: "no secrets here".to_string(),
+        },
+    )
+    .await
+    .expect("plain message");
+    let spoiled = ChatMessage::create(
+        &client,
+        ChatMessageParams {
+            room_id: lounge.id,
+            user_id: author.id,
+            body: "today is ||CRANE||".to_string(),
+        },
+    )
+    .await
+    .expect("spoiled message");
+
+    let mut state = counter_test_state(&test_db, viewer.id);
+    load_room_tail(&mut state, lounge.id, spoiled.id).await;
+
+    // Nothing to reveal: Enter falls through to its other actions.
+    state.selected_message_id = Some(plain.id);
+    assert!(!state.reveal_selected_spoilers_in_room(lounge.id));
+
+    state.selected_message_id = Some(spoiled.id);
+    let version_before = state.room_version(lounge.id);
+    assert!(state.reveal_selected_spoilers_in_room(lounge.id));
+    assert!(state.spoilers_revealed.contains(&spoiled.id));
+    assert!(
+        state.room_version(lounge.id) > version_before,
+        "revealing changes the painted rows, so the cache must rebuild"
+    );
+
+    // Already revealed: a second Enter goes on to the message's other actions.
+    assert!(!state.reveal_selected_spoilers_in_room(lounge.id));
 }

@@ -961,6 +961,8 @@ pub struct ChatState {
     /// Messages whose shown translation was collapsed with `t`. Session-local
     /// override; wins over auto mode and the cache at render time.
     pub(crate) translation_hidden: HashSet<Uuid>,
+    /// Messages whose `||spoilers||` this session revealed with Enter.
+    pub(crate) spoilers_revealed: HashSet<Uuid>,
     /// Message ids this session requested via `t`, so a failure banners only
     /// for the requester, never for auto-mode bystanders.
     translation_manual: HashSet<Uuid>,
@@ -1368,6 +1370,7 @@ impl ChatState {
             summary_requests: HashSet::new(),
             translations: HashMap::new(),
             translation_hidden: HashSet::new(),
+            spoilers_revealed: HashSet::new(),
             translation_manual: HashSet::new(),
             translation_cache_checked: HashSet::new(),
             translate_to: TranslateLang::En,
@@ -1714,6 +1717,22 @@ impl ChatState {
             self.request_cached_translations_for_visible_room();
         }
         changed
+    }
+
+    /// Enter on a selected message that still hides `||spoilers||` reveals
+    /// them for this session. Returns false when there is nothing to reveal,
+    /// so Enter falls through to its other actions.
+    pub fn reveal_selected_spoilers_in_room(&mut self, room_id: Uuid) -> bool {
+        let Some(message) = self.selected_message_in_room(room_id) else {
+            return false;
+        };
+        let (message_id, message_room_id) = (message.id, message.room_id);
+        if !super::spoiler::has_spoiler(&message.body) || !self.spoilers_revealed.insert(message_id)
+        {
+            return false;
+        }
+        self.bump_room_version(message_room_id);
+        true
     }
 
     /// `t` on the selected message: show a translation (cache or API), or
@@ -6274,8 +6293,11 @@ impl ChatState {
                             .get(&message.user_id)
                             .cloned()
                             .unwrap_or_else(|| "someone".to_string());
-                        let preview: String =
-                            message.body.replace('\n', " ").chars().take(80).collect();
+                        let preview: String = super::spoiler::mask_spoilers(&message.body)
+                            .replace('\n', " ")
+                            .chars()
+                            .take(80)
+                            .collect();
 
                         if is_targeted {
                             self.notifier.push(Notification::dm(&nickname, preview));
@@ -7558,6 +7580,8 @@ impl InlinePreviewSource {
 /// a YouTube video link's thumbnail. A reply's quote line is its parent's
 /// text, so a link there previews nothing (Enter jumps to the parent).
 pub(crate) fn inline_preview_source_in_body(body: &str) -> Option<InlinePreviewSource> {
+    // A link inside a spoiler would give the secret away as a picture.
+    let body = &*super::spoiler::mask_spoilers(body);
     match inline_image_url_in_body(body) {
         Some(url) => Some(InlinePreviewSource::Image(url)),
         None => body_links(body_without_reply_quote(body))
@@ -9082,6 +9106,7 @@ fn loaded_reply_target_id(msgs: &[ChatMessage], selected_id: Uuid) -> Option<Opt
 }
 
 fn reply_preview_text(body: &str) -> String {
+    let body = &*super::spoiler::mask_spoilers(body);
     if let Some((kind, text)) = parse_report_payload(body) {
         let first_line = text.lines().find_map(|line| {
             let trimmed = line.trim();
