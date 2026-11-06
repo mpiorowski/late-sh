@@ -647,17 +647,13 @@ async fn closing_token_exec_channel_does_not_close_interactive_shell() {
     expect_shell_data_contains(&mut shell_channel, b"all the chat is here").await;
 
     // A further post-close interaction proves the first frame was not merely
-    // the render loop's final draw while shutting down: one more Enter opens
-    // today's board on The Arcade under the tour's pitch.
+    // the render loop's final draw while shutting down: one more Enter racks
+    // the practice table under the tour's pitch.
     shell_channel
         .data(&b"\r"[..])
         .await
         .expect("send tour input after token close");
-    expect_shell_data_contains(
-        &mut shell_channel,
-        b"everyone here gets this same board today",
-    )
-    .await;
+    expect_shell_data_contains(&mut shell_channel, b"one shot of pool").await;
 
     client
         .disconnect(russh::Disconnect::ByApplication, "", "en")

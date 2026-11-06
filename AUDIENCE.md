@@ -212,11 +212,11 @@ most active minutes on, ahead of Home (metrics, `tenure="first_week"`,
 
 **The first session is the tour.** Every first visit lands in the
 Clubhouse and runs the forced tour (`late-ssh/src/app/clubhouse/CONTEXT.md`
-§5). The route these numbers measure was the 18-stop one over every
-page: Enter the only key that worked, a pool break and a scripted
-dungeon fight that had to be played, the daily board a stop that was
-looked at and not played, and nothing in the route that named tomorrow.
-Stops reached on it, 14 days to 2026-11-06:
+§5). The route these numbers measure is the `House` one, 18 stops over
+every page: Enter the only key that works, a pool break and a scripted
+dungeon fight that must be played, the daily board a stop that is looked
+at and not played, and nothing in the route that names tomorrow. Stops
+reached on it, 14 days to 2026-11-06:
 
 | Stop | Reached |
 |---|---|
@@ -228,14 +228,15 @@ Stops reached on it, 14 days to 2026-11-06:
 | games | 288 |
 | done | 265 |
 
-46% finished. The biggest single drop was the Stations modal into the
+46% finish. The biggest single drop is the Stations modal into the
 Arcade page, on sessions that are 84% plain ssh with nothing to hear.
 40% of day-one sessions end with the Clubhouse on screen
-(`late_ssh_session_ends_total{tenure="day_one"}`). The route now is
-three stops (welcome, chat, today's board), the board played for real
-and won before the last Enter; its funnel is `welcome`, `chat`,
-`board`, `done`, read against the targets in section 5 on the first
-cohort that meets it.
+(`late_ssh_session_ends_total{tenure="day_one"}`). The route in force
+now is the `Board` one (`TOUR_ROUTE`, one line to go back): four stops,
+welcome, chat, one shot of pool, today's board, the board played for
+real and won before the last Enter; its funnel is `welcome`, `chat`,
+`table`, `board`, `done`, read against the targets in section 5 on the
+first cohort that meets it.
 
 **deadchannel**, switched on 2026-10-21, read 16 days later (2026-11-06):
 16 runners, 13 of them touched the game that day and 15 in the week,
@@ -385,19 +386,19 @@ Live, in order of evidence behind them:
   the daily board.** The funnel says the next ritual, surface or launch
   post lands on people who are gone by day two, and the day-one reads
   (section 3) say what holds them: a finished daily, a quest ticked, a
-  reason named for tomorrow. Built, in the tour's own terms
-  (`late-ssh/src/app/clubhouse/CONTEXT.md` §5): three stops instead of
-  18 (what this is, the chat, today's board); today's Netwalk daily as
-  the one play the route requires, played for real and won before the
-  tour lets go, in place of the pool break and the scripted fight; no
-  Stations stop on plain ssh, where there is nothing to hear; the solved
-  board's header as the send-off, naming tomorrow (a new board at 00:00
-  UTC with the hours left, the paper at the door). Measure it on the
-  next cohort with the queries in section 6. Targets: newcomers who win
-  a daily on day one from 7% to 25% or more, two-day return from 5% to
-  9%, tour completion from 46% to 80%. One cohort to read. The steps,
-  the ladder that follows and the post after that:
-  `devdocs/PLAN-FIRST-HOUR.md`.
+  reason named for tomorrow. Built as the tour's `Board` route, beside
+  the old `House` one and one line to revert
+  (`late-ssh/src/app/clubhouse/CONTEXT.md` §5): four stops instead of
+  18 (what this is, the chat, the pool break, today's board); today's
+  Netwalk daily as the play the route ends on, played for real and won
+  before the tour lets go, in place of the scripted fight; no Stations
+  stop on plain ssh, where there is nothing to hear; the solved board's
+  header as the send-off, naming tomorrow (a new board at 00:00 UTC with
+  the hours left), and the chat as where the tour lands. Measure it on the next cohort
+  with the queries in section 6. Targets: newcomers who win a daily on
+  day one from 7% to 25% or more, two-day return from 5% to 9%, tour
+  completion from 46% to 80%. One cohort to read. The steps, the ladder
+  that follows and the post after that: `devdocs/PLAN-FIRST-HOUR.md`.
   - **A ladder on the dailies (the Duolingo shape).** Half of it is
     built: daily and weekly quests, a streak with a chip bonus, a strip
     at the top of the Arcade (`late-ssh/src/app/hub/CONTEXT.md`). What

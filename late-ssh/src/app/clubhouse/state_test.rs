@@ -204,12 +204,84 @@ fn a_second_device_joins_the_first_and_follows_its_moves() {
     assert_eq!((phone.player_x, phone.player_y), (30, 12));
 }
 
-/// The route is a pure state machine: Enter from the door walks four
-/// stops and ends on the board. The whole tour state is asserted at each
-/// step, since nothing but `tutorial_advance` moves it.
 #[test]
-fn the_tour_is_four_stops_and_ends_on_the_board() {
+fn tutorial_tours_every_page_then_comes_home() {
     let mut state = state_with_lobby(true);
+    state.tour_route = TourRoute::House;
+    assert_eq!(state.tutorial, Tutorial::Pending);
+    assert_eq!(state.tutorial_forced_step(), None);
+    state.enter_screen(NOW);
+    assert_eq!(state.tutorial, Tutorial::Welcome);
+    assert_eq!((state.player_x, state.player_y), map::SPAWN);
+
+    // Enter moves every stop on, and says where the next one lives.
+    for (went, next_stage, modal) in [
+        (
+            TourMove::Page(Screen::Dashboard),
+            Tutorial::VisitChat,
+            TourModal::None,
+        ),
+        (TourMove::Stay, Tutorial::VisitMusic, TourModal::Stations),
+        (
+            TourMove::Page(Screen::Arcade),
+            Tutorial::VisitArcade,
+            TourModal::None,
+        ),
+        (TourMove::Stay, Tutorial::VisitLobby, TourModal::Lobby),
+        (TourMove::Table, Tutorial::VisitTable, TourModal::None),
+        (
+            TourMove::Page(Screen::Games),
+            Tutorial::VisitGames,
+            TourModal::None,
+        ),
+        (TourMove::Stay, Tutorial::VisitDungeon, TourModal::None),
+        (
+            TourMove::Page(Screen::Artboard),
+            Tutorial::VisitArtboard,
+            TourModal::None,
+        ),
+        (TourMove::Map, Tutorial::VisitMap, TourModal::None),
+        (
+            TourMove::NextSection,
+            Tutorial::VisitProfiles,
+            TourModal::None,
+        ),
+        (TourMove::NextSection, Tutorial::VisitJobs, TourModal::None),
+        (
+            TourMove::Page(Screen::Leaderboard),
+            Tutorial::VisitLeaderboard,
+            TourModal::None,
+        ),
+        (
+            TourMove::Page(Screen::Calendars),
+            Tutorial::VisitCalendar,
+            TourModal::None,
+        ),
+        (TourMove::Layouts, Tutorial::VisitLayouts, TourModal::None),
+        (TourMove::Homecoming, Tutorial::Homecoming, TourModal::None),
+    ] {
+        assert!(state.tutorial_forced_step().is_some());
+        assert_eq!(state.tutorial_advance(), went);
+        assert_eq!(state.tutorial, next_stage);
+        assert_eq!(state.tour_modal(), modal);
+    }
+
+    // The homecoming Enter finishes the tour.
+    assert_eq!(state.tutorial_advance(), TourMove::Finished);
+    assert_eq!(state.tutorial, Tutorial::Done);
+    assert_eq!(state.tutorial_forced_step(), None);
+    assert_eq!(state.tutorial_advance(), TourMove::Stay);
+}
+
+/// The `Board` route, the one every session walks (`TOUR_ROUTE`): Enter
+/// from the door walks the chat, the practice table and today's board,
+/// and ends there. The whole tour state is asserted at each step, since
+/// nothing but `tutorial_advance` moves it.
+#[test]
+fn the_board_route_is_four_stops_and_ends_on_the_board() {
+    let mut state = state_with_lobby(true);
+    assert_eq!(state.tour_route, TOUR_ROUTE);
+    assert_eq!(state.tour_route, TourRoute::Board);
     assert_eq!(state.tutorial, Tutorial::Pending);
     assert_eq!(state.tutorial_forced_step(), None);
     assert!(!state.tutorial_settled());
@@ -218,7 +290,6 @@ fn the_tour_is_four_stops_and_ends_on_the_board() {
     assert_eq!((state.player_x, state.player_y), map::SPAWN);
     assert_eq!(state.tutorial_forced_step(), Some(TourStep::Enter));
 
-    // Enter moves each stop on and says where the next one lives.
     for (went, next_stage, step) in [
         (
             TourMove::Page(Screen::Dashboard),
@@ -227,32 +298,59 @@ fn the_tour_is_four_stops_and_ends_on_the_board() {
         ),
         (TourMove::Table, Tutorial::VisitTable, Some(TourStep::Table)),
         (TourMove::Board, Tutorial::VisitBoard, Some(TourStep::Board)),
-        (TourMove::Finished, Tutorial::Done, None),
+        (TourMove::FinishedAtChat, Tutorial::Done, None),
     ] {
         assert_eq!(state.tutorial_advance(), went);
         assert_eq!(state.tutorial, next_stage);
         assert_eq!(state.tutorial_forced_step(), step);
+        assert_eq!(state.tour_modal(), TourModal::None);
         assert_eq!(state.tutorial_settled(), next_stage == Tutorial::Done);
     }
 
-    // Done is the end: nothing moves past it.
+    // Done is the end: nothing moves past it, and the bar glows for the
+    // pour the route never pointed at.
     assert_eq!(state.tutorial_advance(), TourMove::Stay);
     assert_eq!(state.tutorial, Tutorial::Done);
+    assert!(state.bar_glow());
+}
+
+/// The practice table and the fight are the stops Enter alone does not
+/// pass: the gate reads these steps to make the shot and the win come first.
+#[test]
+fn the_table_and_the_fight_are_their_own_steps() {
+    let mut state = state_with_lobby(true);
+    state.tour_route = TourRoute::House;
+    state.enter_screen(NOW);
+    let mut steps = Vec::new();
+    while let Some(step) = state.tutorial_forced_step() {
+        if step != TourStep::Enter {
+            steps.push((state.tutorial, step));
+        }
+        state.tutorial_advance();
+    }
+    assert_eq!(
+        steps,
+        [
+            (Tutorial::VisitTable, TourStep::Table),
+            (Tutorial::VisitDungeon, TourStep::Fight),
+        ]
+    );
 }
 
 #[test]
-fn bar_glows_after_the_tour_until_the_pour_is_claimed() {
+fn bar_glows_after_homecoming_until_the_pour_is_claimed() {
     let mut state = state_with_lobby(true);
+    state.tour_route = TourRoute::House;
     state.enter_screen(NOW);
     // Mid-tour: nothing pours at a distance, and the bar does not glow yet.
     assert!(!state.welcome_pour_due());
     assert!(!state.bar_glow());
-    while state.tutorial != Tutorial::VisitBoard {
+    while state.tutorial != Tutorial::Homecoming {
         state.tutorial_advance();
     }
-    assert!(!state.bar_glow());
+    assert!(state.bar_glow());
     assert_eq!(state.tutorial_advance(), TourMove::Finished);
-    // Done, pour unclaimed: the glow points at the treasure.
+    // Done, pour unclaimed: the glow keeps pointing at the treasure.
     assert!(state.bar_glow());
 
     // Teleport to the edge of the bar's approach apron (test-only

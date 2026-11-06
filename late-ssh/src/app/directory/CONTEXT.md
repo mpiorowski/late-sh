@@ -41,6 +41,8 @@ cleared on visiting this page; nothing moves them live.
   (`l`/`Enter` opens it over the list, `h`/`Esc` returns). Sections: header
   (`@user · status · type · location`), CARD, ABOUT (bio), PROJECTS, then
   late.fetch as a dim block.
+- The first-visit tour walks the three sections as three short stops
+  (`app/clubhouse/CONTEXT.md`, tutorial).
 
 | Key | Action |
 |-----|--------|

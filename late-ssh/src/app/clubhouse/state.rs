@@ -86,19 +86,46 @@ struct BannerEntry {
     shown_tick: u64,
 }
 
+/// Which route the first-visit tour walks. Two live side by side so the
+/// switch is one line, [`TOUR_ROUTE`]: `House` is the original walk,
+/// `Board` the first hour built around today's board (the second version,
+/// `devdocs/PLAN-FIRST-HOUR.md`). Both share the stops, the gate and the
+/// headers; the route only decides where Enter goes from the chat stop and
+/// from the practice table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TourRoute {
+    /// The house walk: welcome, every page's stop in number order, the
+    /// practice table and the dungeon fight on the way, the layouts, the
+    /// homecoming box back in the tavern.
+    House,
+    /// The first hour: welcome, the chat, the practice table, today's
+    /// board (the Netwalk daily the Arcade lends), which has to be won.
+    /// Ends on Home, in the chat, no homecoming.
+    Board,
+}
+
+/// The route every session's tour walks. Flip to `House` to revert.
+pub const TOUR_ROUTE: TourRoute = TourRoute::Board;
+
 /// The first-visit tour. `Pending` arms it until the screen is first opened;
 /// then the tour is FORCED: while it runs, the input gate in `app/input.rs`
-/// (`handle_tour_gate`) swallows everything except Enter, which moves a
-/// stop on (`State::tutorial_advance`), the quit keys, Space at the
-/// practice table, and at the board stop the board's own keys. Four stops:
-/// the welcome box at the door, the chat on Home, one break at a practice
-/// pool table that has to be played, and today's board in The Arcade (the
-/// Netwalk daily the Arcade lends, `arcade/input.rs::open_lent_board`),
-/// which has to be solved to move on. The Enter after the win persists `Done` and leaves
-/// the session where it is, on the Arcade with the board it just won. The
-/// bartender is deliberately absent from the route: his comped welcome pour
-/// stays a hidden treasure for whoever walks up to the glowing bar after
-/// the tour (see [`State::welcome_pour_due`]).
+/// (`handle_tour_gate`) swallows everything except Enter, which moves every
+/// stop on (`State::tutorial_advance`), the quit keys, and at the board
+/// stop the board's own keys. The `House` route walks
+/// that have no page of their own (the Stations modal on Home, the Lobby
+/// modal on The Arcade, each held open for real), has the newcomer play one
+/// break at a practice pool table and win one scripted dungeon fight on the
+/// Games page (the two stops where Enter is gated on playing first), shows
+/// Home's second layout last, ends back in the tavern with Home's first
+/// layout put back, and `Done` is persisted once on the homecoming Enter.
+/// The `Board` route forks at the chat stop: the practice table next, then
+/// today's board in The Arcade (`arcade/input.rs::open_lent_board`), which
+/// has to be solved to move on; the Enter after the win persists `Done`
+/// and lands the session on Home, in the chat the route pitched first.
+/// The bartender is
+/// deliberately absent from both routes: his comped welcome pour stays a
+/// hidden treasure for whoever walks up to the glowing bar after the
+/// send-off (see [`State::welcome_pour_due`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tutorial {
     /// Nothing to run (returning user).
@@ -109,23 +136,55 @@ pub enum Tutorial {
     Welcome,
     /// On Home: the chat pitch.
     VisitChat,
+    /// Still on Home: the real Stations modal, held open under the music
+    /// pitch.
+    VisitMusic,
+    /// On The Arcade: solo games and chips.
+    VisitArcade,
+    /// Still on The Arcade: the real Lobby modal, held open under the
+    /// multiplayer pitch.
+    VisitLobby,
     /// At the practice pool table: one break, in this session's memory only,
     /// which has to be played to move on.
     VisitTable,
-    /// On The Arcade: today's board, open and played for real, which has to
-    /// be solved to move on.
+    /// On The Arcade, the `Board` route only: today's board, open and
+    /// played for real, which has to be solved to move on.
     VisitBoard,
+    /// On the Games hub: the heavy-door pitch.
+    VisitGames,
+    /// Still on the Games hub: one scripted fight (`fight::Fight`), which has
+    /// to be won to move on.
+    VisitDungeon,
+    /// On the Artboard: the shared canvas.
+    VisitArtboard,
+    /// On the People page, its Map section: where everyone is.
+    VisitMap,
+    /// Still on the People page, stepped on to Profiles: people and their
+    /// projects.
+    VisitProfiles,
+    /// Still on the People page, stepped on to Jobs: the job feed.
+    VisitJobs,
+    /// On the Leaderboards.
+    VisitLeaderboard,
+    /// On the Calendars: the events board, the last page.
+    VisitCalendar,
+    /// Back on Home with its second layout, `street`, up: the tiles, the
+    /// arrange chord and the layouts.
+    VisitLayouts,
+    /// Back in the tavern: the send-off box.
+    Homecoming,
     Done,
 }
 
-/// What the forced tour accepts right now. Enter moves a stop on; at the
-/// practice table it (or Space) first has to play the break, and at the
-/// board it is the board's keys first, and Enter moves on once the board
-/// is solved.
+/// What the forced tour accepts right now. Enter moves every stop on; at
+/// the practice table it (or Space) first has to play the break, at the
+/// dungeon stop it first has to win the fight, and at the board it is the
+/// board's keys first, Enter moving on once the board is solved.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TourStep {
     Enter,
     Table,
+    Fight,
     Board,
 }
 
@@ -176,15 +235,35 @@ enum WelcomePour {
 /// Where an Enter took the tour, for the input gate to act on.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TourMove {
-    /// Nothing moved: no tour is running.
+    /// The next stop is on the page already open.
     Stay,
     Page(Screen),
+    /// To the People page, opened on its Map section.
+    Map,
+    /// One section on along the People page (`]`).
+    NextSection,
     /// To the practice pool table.
     Table,
     /// To The Arcade with today's board opened on it.
     Board,
-    /// The tour just ended and should be persisted.
+    /// To Home with its stock second layout up (`/layout street`).
+    Layouts,
+    /// Back to the tavern with Home's first layout put back, so the tour
+    /// leaves the newcomer's page as it found it.
+    Homecoming,
+    /// The tour just ended and should be persisted, where it stands.
     Finished,
+    /// The tour just ended and should be persisted, and the session goes
+    /// to Home, the chat: the `Board` route's send-off, off the won board.
+    FinishedAtChat,
+}
+
+/// The real modal a stop holds open under its pitch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TourModal {
+    None,
+    Stations,
+    Lobby,
 }
 
 #[derive(Debug)]
@@ -216,6 +295,9 @@ pub struct State {
     seen_primed: bool,
     pub door_events: VecDeque<DoorEvent>,
     pub tutorial: Tutorial,
+    /// The route this session's tour walks, [`TOUR_ROUTE`] (a test picks
+    /// the other).
+    pub tour_route: TourRoute,
     /// How the tour in progress began (before one has: how a pending
     /// first visit's will). Only a first visit's stops count toward the
     /// newcomer tour funnel; a `/onboard` rerun is a regular walking it again.
@@ -225,6 +307,8 @@ pub struct State {
     /// scripted welcome. The once-ever guarantee lives in the DB
     /// (`UserDrinks::record_welcome_pour`).
     welcome_pour: WelcomePour,
+    /// The dungeon stop's scripted fight.
+    pub tour_fight: super::fight::Fight,
     /// The bartender banner plays his lines one at a time: the pinned line,
     /// the ids waiting their turn, and the newest `created` already taken
     /// from the tail (so each line enqueues exactly once).
@@ -277,11 +361,13 @@ impl State {
             banner_watermark: None,
             hit_layout: RefCell::new(Vec::new()),
             welcome_pour: WelcomePour::NotOffered,
+            tour_fight: super::fight::Fight::new(),
             tutorial: if tutorial_pending {
                 Tutorial::Pending
             } else {
                 Tutorial::Off
             },
+            tour_route: TOUR_ROUTE,
             tour_start: if tutorial_pending {
                 TourStart::FirstVisit
             } else {
@@ -329,6 +415,7 @@ impl State {
         }
         self.tour_start = start;
         self.tutorial = Tutorial::Welcome;
+        self.tour_fight = super::fight::Fight::new();
         self.place(map::SPAWN, now_ms);
     }
 
@@ -660,18 +747,58 @@ impl State {
     pub fn tutorial_forced_step(&self) -> Option<TourStep> {
         match self.tutorial {
             Tutorial::Off | Tutorial::Pending | Tutorial::Done => None,
-            Tutorial::Welcome | Tutorial::VisitChat => Some(TourStep::Enter),
             Tutorial::VisitTable => Some(TourStep::Table),
+            Tutorial::VisitDungeon => Some(TourStep::Fight),
             Tutorial::VisitBoard => Some(TourStep::Board),
+            Tutorial::Welcome
+            | Tutorial::VisitChat
+            | Tutorial::VisitMusic
+            | Tutorial::VisitArcade
+            | Tutorial::VisitLobby
+            | Tutorial::VisitGames
+            | Tutorial::VisitArtboard
+            | Tutorial::VisitMap
+            | Tutorial::VisitProfiles
+            | Tutorial::VisitJobs
+            | Tutorial::VisitLeaderboard
+            | Tutorial::VisitCalendar
+            | Tutorial::VisitLayouts
+            | Tutorial::Homecoming => Some(TourStep::Enter),
+        }
+    }
+
+    /// The modal the current stop holds open, which the input gate keeps in
+    /// step after every key.
+    pub fn tour_modal(&self) -> TourModal {
+        match self.tutorial {
+            Tutorial::VisitMusic => TourModal::Stations,
+            Tutorial::VisitLobby => TourModal::Lobby,
+            Tutorial::Off
+            | Tutorial::Pending
+            | Tutorial::Welcome
+            | Tutorial::VisitChat
+            | Tutorial::VisitArcade
+            | Tutorial::VisitTable
+            | Tutorial::VisitBoard
+            | Tutorial::VisitGames
+            | Tutorial::VisitDungeon
+            | Tutorial::VisitArtboard
+            | Tutorial::VisitMap
+            | Tutorial::VisitProfiles
+            | Tutorial::VisitJobs
+            | Tutorial::VisitLeaderboard
+            | Tutorial::VisitCalendar
+            | Tutorial::VisitLayouts
+            | Tutorial::Homecoming
+            | Tutorial::Done => TourModal::None,
         }
     }
 
     /// The hidden treasure: the bartender comps a welcome pour the first
     /// time the newcomer walks up to the counter. Walking only unlocks
-    /// after the tour's last Enter (the gate swallows movement mid-tour),
-    /// so in practice this fires on the first walk back to the tavern.
-    /// Returns true exactly once per session; the once-ever guarantee is
-    /// the DB insert behind the comp.
+    /// after the homecoming Enter (the gate swallows movement mid-tour), so
+    /// in practice this fires after the send-off. Returns true exactly once
+    /// per session; the once-ever guarantee is the DB insert behind the comp.
     pub fn welcome_pour_due(&mut self) -> bool {
         if self.welcome_pour == WelcomePour::Unclaimed
             && self.nearby() == Some(map::Interactive::Bartender)
@@ -682,21 +809,48 @@ impl State {
         false
     }
 
-    /// The bar sign pulses once the tour is done and the welcome pour is
-    /// still unclaimed: the only pointer at the hidden treasure.
+    /// The bar sign pulses once the tour has come home and the welcome pour
+    /// is still unclaimed: the only pointer at the hidden treasure.
     pub fn bar_glow(&self) -> bool {
-        self.tutorial == Tutorial::Done && self.welcome_pour == WelcomePour::Unclaimed
+        matches!(self.tutorial, Tutorial::Homecoming | Tutorial::Done)
+            && self.welcome_pour == WelcomePour::Unclaimed
     }
 
     /// Enter at a tour stop: move to the next one and say where it lives.
     /// The tour never reads the screen back, so nothing but this can move it.
+    /// The route forks twice, at the chat stop and at the practice table;
+    /// every other stop has one next.
     pub fn tutorial_advance(&mut self) -> TourMove {
         let (next, went) = match self.tutorial {
             Tutorial::Off | Tutorial::Pending | Tutorial::Done => return TourMove::Stay,
             Tutorial::Welcome => (Tutorial::VisitChat, TourMove::Page(Screen::Dashboard)),
-            Tutorial::VisitChat => (Tutorial::VisitTable, TourMove::Table),
-            Tutorial::VisitTable => (Tutorial::VisitBoard, TourMove::Board),
-            Tutorial::VisitBoard => (Tutorial::Done, TourMove::Finished),
+            Tutorial::VisitChat => match self.tour_route {
+                TourRoute::House => (Tutorial::VisitMusic, TourMove::Stay),
+                TourRoute::Board => (Tutorial::VisitTable, TourMove::Table),
+            },
+            Tutorial::VisitMusic => (Tutorial::VisitArcade, TourMove::Page(Screen::Arcade)),
+            Tutorial::VisitArcade => (Tutorial::VisitLobby, TourMove::Stay),
+            Tutorial::VisitLobby => (Tutorial::VisitTable, TourMove::Table),
+            Tutorial::VisitTable => match self.tour_route {
+                TourRoute::House => (Tutorial::VisitGames, TourMove::Page(Screen::Games)),
+                TourRoute::Board => (Tutorial::VisitBoard, TourMove::Board),
+            },
+            Tutorial::VisitBoard => (Tutorial::Done, TourMove::FinishedAtChat),
+            Tutorial::VisitGames => (Tutorial::VisitDungeon, TourMove::Stay),
+            Tutorial::VisitDungeon => (Tutorial::VisitArtboard, TourMove::Page(Screen::Artboard)),
+            Tutorial::VisitArtboard => (Tutorial::VisitMap, TourMove::Map),
+            Tutorial::VisitMap => (Tutorial::VisitProfiles, TourMove::NextSection),
+            Tutorial::VisitProfiles => (Tutorial::VisitJobs, TourMove::NextSection),
+            Tutorial::VisitJobs => (
+                Tutorial::VisitLeaderboard,
+                TourMove::Page(Screen::Leaderboard),
+            ),
+            Tutorial::VisitLeaderboard => {
+                (Tutorial::VisitCalendar, TourMove::Page(Screen::Calendars))
+            }
+            Tutorial::VisitCalendar => (Tutorial::VisitLayouts, TourMove::Layouts),
+            Tutorial::VisitLayouts => (Tutorial::Homecoming, TourMove::Homecoming),
+            Tutorial::Homecoming => (Tutorial::Done, TourMove::Finished),
         };
         self.tutorial = next;
         went

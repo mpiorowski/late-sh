@@ -28,10 +28,12 @@ and settled back to 40 within days.
 
 ## Step 1: the first session, built around the daily board
 
-Built. What it is lives in `late-ssh/src/app/clubhouse/CONTEXT.md` §5
-(the three stops, the gate, the board stop) and
-`late-ssh/src/app/arcade/CONTEXT.md` (the lent board). What is left of
-the step:
+Built as the tour's `Board` route, beside the old `House` route;
+`clubhouse::state::TOUR_ROUTE` picks the one in force and flipping it is
+the whole revert. What it is lives in
+`late-ssh/src/app/clubhouse/CONTEXT.md` §5 (the routes, the gate, the
+board stop) and `late-ssh/src/app/arcade/CONTEXT.md` (the lent board).
+What is left of the step:
 
 - **The streak.** The first session's win is day one of a streak only
   when Netwalk is a drawn quest. "Any daily win advances the streak"
@@ -42,9 +44,12 @@ the step:
 - **Measure, then gate.** Deploy, wait seven days for a full weekly
   cohort, wait seven more for its first week, then run the funnel
   queries in `AUDIENCE.md` section 6 and read the Newcomers row
-  (`welcome`, `chat`, `board`, `done`; `board` against `done` is the
-  board's cost). Step 2 can start while that cohort runs. Step 3 waits
-  for two-day return at 9% or more on one cohort, or two cohorts at 8%.
+  (`welcome`, `chat`, `table`, `board`, `done`; `board` against `done`
+  is the board's cost). Step 2 can start while that cohort runs. Step 3
+  waits for two-day return at 9% or more on one cohort, or two cohorts
+  at 8%. If the cohort says the board loses more than it holds, the
+  revert is the one line above, and the `House` route's old numbers are
+  in `AUDIENCE.md` section 3 to compare against.
 
 ## Step 2: the ladder on the dailies
 

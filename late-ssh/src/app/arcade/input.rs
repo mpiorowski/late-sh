@@ -273,6 +273,12 @@ pub(crate) fn open_lent_board(app: &mut App) {
     app.is_playing_game = true;
 }
 
+/// Put the lent board away: back to the Arcade lobby, the board kept as it
+/// stands.
+pub(crate) fn close_lent_board(app: &mut App) {
+    app.is_playing_game = false;
+}
+
 /// A key on the lent board, the board's own moves only.
 pub(crate) fn lent_board_key(app: &mut App, byte: u8) -> bool {
     super::netwalk::input::handle_lent_key(&mut app.netwalk_state, byte)

@@ -2131,12 +2131,14 @@ impl App {
         };
 
         let foreground_overlay_open = ctx.foreground_overlay_open;
-        // The tour stops that write into a real surface: the practice table
-        // and today's board get the header drawn across the top of their
-        // page, and the page gets the rest.
+        // The tour stops that write into a real surface: the two modals take
+        // the header themselves, the practice table, the dungeon fight and
+        // today's board get it drawn across the top of the page.
         let tour_header = crate::app::clubhouse::ui::tour_header(
             ctx.clubhouse_state.tutorial,
+            ctx.clubhouse_state.tour_route,
             crate::app::clubhouse::ui::table_stop(inner, ctx.daily.practice_played()),
+            ctx.clubhouse_state.tour_fight.won(),
             crate::app::clubhouse::ui::board_stop(
                 inner,
                 ctx.netwalk_state.is_solved(),
@@ -2144,7 +2146,9 @@ impl App {
             ),
         );
         let board_area = match (&tour_header, screen) {
-            (Some(header), Screen::DailyMatch | Screen::Arcade) => header.draw_above(frame, inner),
+            (Some(header), Screen::DailyMatch | Screen::Games | Screen::Arcade) => {
+                header.draw_above(frame, inner)
+            }
             (Some(_), _) | (None, _) => inner,
         };
         match screen {
@@ -2211,12 +2215,25 @@ impl App {
             }
             Screen::Artboard => {
                 if ctx.artboard_disclaimer_visible {
-                    artboard::disclaimer::draw(frame, inner, ctx.artboard_disclaimer_choices);
+                    // The tour's own stop box offers show or skip; the
+                    // page under it stays bare so no art shows.
+                    if ctx.clubhouse_state.tutorial_forced_step().is_some() {
+                        frame.render_widget(ratatui::widgets::Clear, inner);
+                    } else {
+                        artboard::disclaimer::draw(frame, inner, ctx.artboard_disclaimer_choices);
+                    }
                 } else if let Some(state) = ctx.dartboard_state {
                     artboard::ui::draw_game(frame, inner, state, ctx.artboard_interacting);
                 }
             }
             Screen::Calendars => crate::app::calendar::ui::draw(frame, inner, ctx.calendar),
+            // The tour's dungeon stop plays its fight where the hub would be.
+            Screen::Games if tour_header.is_some() => crate::app::clubhouse::fight::draw(
+                frame,
+                board_area,
+                &ctx.clubhouse_state.tour_fight,
+                ctx.clubhouse_state.username(),
+            ),
             // An open watch takes the whole page, the hub's rail included.
             Screen::Games if ctx.spectate_state.is_some_and(|state| state.is_open()) => {
                 if let Some(state) = ctx.spectate_state {
@@ -2632,15 +2649,17 @@ impl App {
             terminal_images.clear();
         }
 
-        // The first-visit tour's chat stop, boxed over Home. The clubhouse
-        // draws its own welcome box; toasts draw after, so they win the
-        // corner while they last.
+        // The first-visit tour's page-stop box (top-right). The clubhouse
+        // draws its own tutorial overlays; toasts draw after, so they win
+        // the corner while they last.
         if screen != Screen::Clubhouse {
             crate::app::clubhouse::ui::draw_tour_overlay(
                 frame,
                 inner,
                 ctx.clubhouse_state.tutorial,
+                ctx.clubhouse_state.tour_route,
                 screen,
+                ctx.artboard_disclaimer_visible,
             );
         }
 
@@ -2741,7 +2760,14 @@ impl App {
         }
 
         if ctx.show_lobby_modal {
-            crate::app::lobby::modal_ui::draw(frame, inner, ctx.lobby, ctx.daily, ctx.house);
+            crate::app::lobby::modal_ui::draw(
+                frame,
+                inner,
+                ctx.lobby,
+                ctx.daily,
+                ctx.house,
+                tour_header.as_ref(),
+            );
         }
 
         // One-time arcade-name claim modal, over the door landings that need a
@@ -2901,8 +2927,8 @@ impl App {
             );
         }
 
-        // The quit confirm draws before this modal, which would cover the
-        // prompt.
+        // The tour holds this modal open through a quit confirm, and it would
+        // draw over the prompt.
         if ctx.stations_modal_open && !ctx.show_quit_confirm {
             crate::app::audio::stations_modal::ui::draw(
                 frame,
@@ -2914,6 +2940,7 @@ impl App {
                     slots: ctx.radio_slots,
                     source: ctx.paired_source,
                 },
+                tour_header.as_ref(),
             );
         }
 
@@ -3307,7 +3334,11 @@ fn app_frame_title(screen: Screen, ctx: &DrawContext<'_>) -> Line<'static> {
             .dartboard_state
             .map(|state| (state.gallery().focus(), state.gallery().is_framing()));
         let hints: &[(&str, &str)] = if ctx.artboard_disclaimer_visible {
-            &[("V", "view"), ("A", "always view"), ("B", "back to chat")]
+            if ctx.clubhouse_state.tutorial_forced_step().is_some() {
+                &[("S", "show"), ("Enter", "skip")]
+            } else {
+                &[("V", "view"), ("A", "always view"), ("B", "back to chat")]
+            }
         } else if ctx.artboard_interacting {
             &[
                 ("active", "draw"),

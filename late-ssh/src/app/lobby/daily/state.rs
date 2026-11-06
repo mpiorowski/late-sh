@@ -1422,50 +1422,6 @@ impl DailyState {
         self.request_board_reload();
     }
 
-    pub fn close_board(&mut self) {
-        self.ack_finished_result();
-        self.board = None;
-    }
-
-    /// The open board's match chat room, for the embedded chat pane and
-    /// every room-addressed gate. `None` for matches claimed before chat
-    /// existed, until the row has loaded, and for a spectator who is not in
-    /// the room (see `DailyBoardState::shows_chat`).
-    pub fn board_chat_room_id(&self) -> Option<Uuid> {
-        let board = self.board.as_ref()?;
-        let detail = board.detail.as_ref()?;
-        if !board.shows_chat(detail) {
-            return None;
-        }
-        detail.row.chat_room_id
-    }
-
-    /// The room the open match carries, whether or not this session is in it
-    /// yet: what the lazy join aims at. Separate from `board_chat_room_id`
-    /// because gating the join on membership would never let a spectator in.
-    pub fn board_match_chat_room_id(&self) -> Option<Uuid> {
-        self.board.as_ref()?.detail.as_ref()?.row.chat_room_id
-    }
-
-    /// Leaving a finished match's board acknowledges its result: the row
-    /// stops lingering in the lobby and the panel. Deliberately conservative:
-    /// if the final reload never landed (detail missing or still showing
-    /// active), the result was never actually seen, so the row stays.
-    fn ack_finished_result(&self) {
-        let Some(board) = &self.board else {
-            return;
-        };
-        if board.spectating {
-            return;
-        }
-        match board.detail.as_ref().map(|detail| detail.standing) {
-            Some(MatchStanding::Finished(_)) => {
-                self.svc.mark_result_seen_task(self.user_id, board.match_id);
-            }
-            Some(MatchStanding::Active) | Some(MatchStanding::Cancelled) | None => {}
-        }
-    }
-
     /// Open the practice pool table: an eight-ball rack with this player on
     /// the break against nobody. The row is built here and handed to the
     /// board down its own load channel, so everything past this point is the
@@ -1577,6 +1533,50 @@ impl DailyState {
             .and_then(|board| board.detail.as_ref())
             .and_then(DailyMatchDetail::pool)
             .is_some_and(|pool| pool.state.move_count() > 0)
+    }
+
+    pub fn close_board(&mut self) {
+        self.ack_finished_result();
+        self.board = None;
+    }
+
+    /// The open board's match chat room, for the embedded chat pane and
+    /// every room-addressed gate. `None` for matches claimed before chat
+    /// existed, until the row has loaded, and for a spectator who is not in
+    /// the room (see `DailyBoardState::shows_chat`).
+    pub fn board_chat_room_id(&self) -> Option<Uuid> {
+        let board = self.board.as_ref()?;
+        let detail = board.detail.as_ref()?;
+        if !board.shows_chat(detail) {
+            return None;
+        }
+        detail.row.chat_room_id
+    }
+
+    /// The room the open match carries, whether or not this session is in it
+    /// yet: what the lazy join aims at. Separate from `board_chat_room_id`
+    /// because gating the join on membership would never let a spectator in.
+    pub fn board_match_chat_room_id(&self) -> Option<Uuid> {
+        self.board.as_ref()?.detail.as_ref()?.row.chat_room_id
+    }
+
+    /// Leaving a finished match's board acknowledges its result: the row
+    /// stops lingering in the lobby and the panel. Deliberately conservative:
+    /// if the final reload never landed (detail missing or still showing
+    /// active), the result was never actually seen, so the row stays.
+    fn ack_finished_result(&self) {
+        let Some(board) = &self.board else {
+            return;
+        };
+        if board.spectating {
+            return;
+        }
+        match board.detail.as_ref().map(|detail| detail.standing) {
+            Some(MatchStanding::Finished(_)) => {
+                self.svc.mark_result_seen_task(self.user_id, board.match_id);
+            }
+            Some(MatchStanding::Active) | Some(MatchStanding::Cancelled) | None => {}
+        }
     }
 
     /// `x` on a result row: acknowledge without opening the board.
