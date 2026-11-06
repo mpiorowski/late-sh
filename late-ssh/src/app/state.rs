@@ -497,6 +497,9 @@ pub struct SessionConfig {
     /// Turns this session's input into active minutes while the account is
     /// young. Built from the account's creation time; inert in test apps.
     pub newcomer_clock: crate::app::referral::state::NewcomerClock,
+    /// When the account was created: `App::tenure` reads it on every
+    /// attention edge and at the session's end.
+    pub(crate) account_created: chrono::DateTime<chrono::Utc>,
     pub activity_feed_rx: Option<broadcast::Receiver<ActivityEvent>>,
     pub user_id: Uuid,
     pub permissions: Permissions,
@@ -715,6 +718,9 @@ pub struct App {
     pub(super) pot_service: Option<crate::app::pot::svc::PotService>,
     pub(super) referral_service: crate::app::referral::svc::ReferralService,
     pub(super) newcomer_clock: crate::app::referral::state::NewcomerClock,
+    /// When the account was created, for `App::tenure` (the newcomer
+    /// split on the attention and session counters).
+    pub(super) account_created: chrono::DateTime<chrono::Utc>,
     /// The process-shared pot, read on the ~1s edge into `pot_view` so no
     /// render ever queries for it.
     pub(super) pot_snapshot_rx: Option<watch::Receiver<Arc<crate::app::pot::svc::PotSnapshot>>>,
@@ -1875,6 +1881,7 @@ impl App {
             pot_service: config.pot_service,
             referral_service: config.referral_service.clone(),
             newcomer_clock: config.newcomer_clock,
+            account_created: config.account_created,
             pot_view: crate::app::pot::state::PotView::default(),
             active_users: active_users.clone(),
             username_directory: config.username_directory,
@@ -2144,9 +2151,7 @@ impl App {
         // below for all three). Zen: focus the first chat tile and size the
         // reef to its tile, as `Ctrl+F` would.
         match landing {
-            LandingPage::Clubhouse => app
-                .clubhouse
-                .enter_screen(crate::app::presence::svc::now_ms()),
+            LandingPage::Clubhouse => app.enter_clubhouse(),
             LandingPage::Home => app.chat.request_list(),
             LandingPage::Zen => {
                 app.zen.note_opened();
@@ -2677,6 +2682,17 @@ impl App {
         }
     }
 
+    /// The clubhouse's entry hook. An entry that begins a first visit's
+    /// tour counts its welcome box, the newcomer tour funnel's first stop.
+    fn enter_clubhouse(&mut self) {
+        if self
+            .clubhouse
+            .enter_screen(crate::app::presence::svc::now_ms())
+        {
+            crate::metrics::record_tour_stop(crate::app::clubhouse::state::Tutorial::Welcome);
+        }
+    }
+
     pub(crate) fn enter_directory(&mut self) {
         self.chat.work.list();
         self.chat.showcase.list();
@@ -2997,8 +3013,7 @@ impl App {
             self.enter_directory();
         }
         if self.screen == Screen::Clubhouse {
-            self.clubhouse
-                .enter_screen(crate::app::presence::svc::now_ms());
+            self.enter_clubhouse();
         }
         self.sync_visible_chat_room();
     }

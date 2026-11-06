@@ -84,7 +84,7 @@ pub(crate) fn person_row(
         unread: entry.is_unread(work_marker, showcase_marker),
         status: entry.work.map(|item| item.profile.status),
         project_count: entry.projects.len(),
-        age: format_relative_time_short(entry.latest_activity()),
+        age: format_relative_time_short(entry.last_seen()),
         second,
         tags: tags.into_iter().take(ROW_TAGS).collect(),
     }
@@ -112,15 +112,11 @@ pub(crate) enum PersonFocus<'a> {
 }
 
 impl<'a> PersonEntry<'a> {
-    /// The freshest thing this person did; the feed sorts by it.
-    pub(crate) fn latest_activity(&self) -> DateTime<Utc> {
-        let work = self.work.map(|item| item.profile.updated);
-        let project = self.projects.first().map(|item| item.showcase.created);
-        match (work, project) {
-            (Some(work), Some(project)) => work.max(project),
-            (Some(work), None) => work,
-            (None, Some(project)) => project,
-            (None, None) => DateTime::<Utc>::MIN_UTC,
+    /// When this person last logged in; the feed sorts by it.
+    pub(crate) fn last_seen(&self) -> DateTime<Utc> {
+        match self.author_profile().and_then(|profile| profile.last_seen) {
+            Some(last_seen) => last_seen,
+            None => DateTime::<Utc>::MIN_UTC,
         }
     }
 
@@ -399,7 +395,7 @@ impl DirectoryState {
 
 /// Build the people list: one entry per user who has a work card or at least
 /// one project. The connected come first, then everyone else, each group by
-/// latest activity, newest first. Each person's projects keep the showcase
+/// last login, newest first. Each person's projects keep the showcase
 /// feed's newest-first order.
 pub(crate) fn person_entries<'a>(
     projects: &'a [ShowcaseFeedItem],
@@ -455,7 +451,7 @@ pub(crate) fn person_entries<'a>(
     entries.sort_by_key(|b| {
         (
             std::cmp::Reverse(b.online),
-            std::cmp::Reverse(b.latest_activity()),
+            std::cmp::Reverse(b.last_seen()),
         )
     });
     entries

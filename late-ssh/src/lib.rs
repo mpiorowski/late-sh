@@ -12,6 +12,8 @@ pub mod dartboard;
 pub mod exec;
 pub mod ircd;
 pub mod metrics;
+#[cfg(test)]
+mod metrics_test;
 pub mod moderation;
 pub mod paired_clients;
 pub mod pg_listener;

@@ -704,3 +704,74 @@ async fn the_nearest_printed_edition_skips_quiet_days_and_rooms_gone_private() {
     assert_eq!(nearest(day(-2), EditionStep::Earlier).await, Some(day(-4)));
     assert_eq!(nearest(day(-2), EditionStep::Later).await, Some(day(0)));
 }
+
+/// The public web leafs by printed sections only: a day with just a room
+/// column, or a quiet section, is stepped over; and an edition's window is
+/// the whole UTC day before it.
+#[tokio::test]
+async fn the_nearest_ready_section_skips_room_only_and_quiet_days() {
+    let test_db = test_db().await;
+    let db = test_db.db.clone();
+    let client = db.get().await.expect("db client");
+    let stale_before = Utc::now() - Duration::minutes(15);
+    let day = |offset: i64| EDITION + Duration::days(offset);
+
+    let busy = ChatRoom::get_or_create_public_room(&client, "busy")
+        .await
+        .expect("room");
+    assert!(
+        PaperRoomEdition::claim_printing(
+            &client,
+            busy.id,
+            day(-3),
+            12,
+            3,
+            stale_before,
+            MAX_ATTEMPTS
+        )
+        .await
+        .expect("claim")
+    );
+    PaperRoomEdition::finish(&client, busy.id, day(-3), Some("- room only"))
+        .await
+        .expect("finish");
+    for (offset, section, text) in [
+        (-5, PaperSectionKind::Outside, Some("- five days back")),
+        (-2, PaperSectionKind::Reading, None),
+        (0, PaperSectionKind::Reading, Some("- today")),
+    ] {
+        assert!(
+            PaperSectionRow::claim_printing(
+                &client,
+                day(offset),
+                section,
+                stale_before,
+                MAX_ATTEMPTS
+            )
+            .await
+            .expect("claim")
+        );
+        PaperSectionRow::finish(&client, day(offset), section, text)
+            .await
+            .expect("finish");
+    }
+
+    let nearest = |from: NaiveDate, step: EditionStep| {
+        let client = &client;
+        async move {
+            PaperSectionRow::nearest_ready(client, from, step)
+                .await
+                .expect("nearest")
+        }
+    };
+    assert_eq!(nearest(day(0), EditionStep::Earlier).await, Some(day(-5)));
+    assert_eq!(nearest(day(-5), EditionStep::Later).await, Some(day(0)));
+    assert_eq!(nearest(day(-5), EditionStep::Earlier).await, None);
+    assert_eq!(nearest(day(0), EditionStep::Later).await, None);
+    assert_eq!(nearest(day(1), EditionStep::Earlier).await, Some(day(0)));
+
+    let (floor, ceiling) = PaperEdition::window(EDITION);
+    assert_eq!(ceiling, EDITION.and_hms_opt(0, 0, 0).unwrap().and_utc());
+    assert_eq!(floor, ceiling - Duration::days(1));
+    assert_eq!((floor, ceiling), window());
+}

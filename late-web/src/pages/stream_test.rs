@@ -10,6 +10,7 @@ fn test_state(audio_base_url: String) -> AppState {
         port: 0,
         ssh_internal_url: "http://127.0.0.1:9".to_string(),
         audio_base_url,
+        public_base_url: "http://late.test".to_string(),
         db: DbConfig::default(),
     };
     AppState {

@@ -18,6 +18,8 @@ use uuid::Uuid;
 
 /// The room the paper prints verbatim at the top instead of as a column.
 pub const ANNOUNCEMENTS_SLUG: &str = "announcements";
+/// The most `#announcements` posts one edition carries, newest kept.
+pub const ANNOUNCEMENTS_LIMIT: i64 = 50;
 
 /// Where a page is in its life. Stored as text, parsed on read, and never
 /// defaulted: an unknown status in the table is a bug worth a crash.
@@ -162,6 +164,17 @@ pub struct PaperEdition {
 }
 
 impl PaperEdition {
+    /// The half-open window an edition covers: the whole UTC day before
+    /// it. Edition dated D reads the day D-1, on every surface that reads
+    /// one.
+    pub fn window(edition: NaiveDate) -> (DateTime<Utc>, DateTime<Utc>) {
+        let ceiling = edition
+            .and_hms_opt(0, 0, 0)
+            .expect("midnight exists on every date")
+            .and_utc();
+        (ceiling - chrono::Duration::days(1), ceiling)
+    }
+
     /// Both tables for `edition`. Rooms come back only while still public:
     /// a room made private after its page was printed keeps the row and
     /// loses the reader, the same line `/summary` draws.
@@ -571,6 +584,29 @@ impl PaperSectionRow {
             );
         }
         Ok(())
+    }
+
+    /// The closest edition strictly before or after `from` with a printed
+    /// section of any kind: how the public web leafs, since it prints the
+    /// sections and never a room's column. Swept days with only quiet
+    /// sections, or only room pages, are stepped over.
+    pub async fn nearest_ready(
+        client: &Client,
+        from: NaiveDate,
+        step: EditionStep,
+    ) -> Result<Option<NaiveDate>> {
+        let query = match step {
+            EditionStep::Earlier => {
+                "SELECT MAX(edition) AS edition FROM paper_sections
+                 WHERE status = 'ready' AND edition < $1"
+            }
+            EditionStep::Later => {
+                "SELECT MIN(edition) AS edition FROM paper_sections
+                 WHERE status = 'ready' AND edition > $1"
+            }
+        };
+        let row = client.query_one(query, &[&from]).await?;
+        Ok(row.get("edition"))
     }
 
     /// The newest `limit` printed pages of `section` from editions before

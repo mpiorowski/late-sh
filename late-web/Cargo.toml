@@ -34,6 +34,10 @@ askama.workspace = true
 async-stream.workspace = true
 pulldown-cmark.workspace = true
 
+# The preview-card renderer (pages/shared/board_png.rs)
+ab_glyph.workspace = true
+png.workspace = true
+
 # Web / HTTP
 axum = { workspace = true }
 futures-util.workspace = true

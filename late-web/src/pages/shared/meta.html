@@ -1,0 +1,20 @@
+{#-
+The preview card a page unfurls into when its link is pasted somewhere
+that reads Open Graph tags (Mastodon, Slack, a chat). `pages/app.html`
+calls it with the site's own card; a page with a card of its own overrides
+the `meta` block and calls it with that.
+-#}
+{% macro card(title, description, url, image, image_alt) %}
+    <meta property="og:type" content="website">
+    <meta property="og:url" content="{{ url }}">
+    <meta property="og:title" content="{{ title }}">
+    <meta property="og:description" content="{{ description }}">
+    <meta property="og:image" content="{{ image }}">
+    <meta property="og:image:alt" content="{{ image_alt }}">
+    <meta property="twitter:card" content="summary_large_image">
+    <meta property="twitter:url" content="{{ url }}">
+    <meta property="twitter:title" content="{{ title }}">
+    <meta property="twitter:description" content="{{ description }}">
+    <meta property="twitter:image" content="{{ image }}">
+    <meta property="twitter:image:alt" content="{{ image_alt }}">
+{% endmacro %}

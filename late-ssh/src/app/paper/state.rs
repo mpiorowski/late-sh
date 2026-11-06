@@ -22,7 +22,7 @@ use crate::app::jobs::state::{PAPER_MATCHES, match_tail, posting_count_label};
 pub(crate) const PAPER_ELSEWHERE_LIMIT: usize = 3;
 /// How many of yesterday's `#announcements` posts the paper prints, the
 /// newest ones. A day with more than this is not a day anyone has had.
-pub(crate) const PAPER_ANNOUNCEMENTS_LIMIT: i64 = 50;
+pub(crate) const PAPER_ANNOUNCEMENTS_LIMIT: i64 = late_core::models::paper::ANNOUNCEMENTS_LIMIT;
 
 /// The paper's per-session state, owned by `App`.
 pub(crate) struct PaperState {

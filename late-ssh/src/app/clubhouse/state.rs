@@ -242,6 +242,10 @@ pub struct State {
     seen_primed: bool,
     pub door_events: VecDeque<DoorEvent>,
     pub tutorial: Tutorial,
+    /// How the tour in progress began (before one has: how a pending
+    /// first visit's will). Only a first visit's stops count toward the
+    /// newcomer tour funnel; a `/onboard` rerun is a regular walking it again.
+    tour_start: TourStart,
     /// The hidden welcome pour: offered by a first visit, claimed once per
     /// session so walking back to the bar doesn't repeat the bartender's
     /// scripted welcome. The once-ever guarantee lives in the DB
@@ -307,6 +311,11 @@ impl State {
             } else {
                 Tutorial::Off
             },
+            tour_start: if tutorial_pending {
+                TourStart::FirstVisit
+            } else {
+                TourStart::Rerun
+            },
         };
         state.refresh_crowd(now_ms);
         state
@@ -326,13 +335,16 @@ impl State {
 
     /// Screen entry hook: redraw the room from what arrived while the
     /// screen was away, look for the bots now and, on the very first visit
-    /// ever, start the tutorial at the door.
-    pub fn enter_screen(&mut self, now_ms: i64) {
+    /// ever, start the tutorial at the door. True when this entry began
+    /// that first-visit tour, so the caller counts its welcome stop.
+    pub fn enter_screen(&mut self, now_ms: i64) -> bool {
         self.force_roster_refresh = true;
         self.refresh_crowd(now_ms);
-        if self.tutorial == Tutorial::Pending {
-            self.begin_tutorial(now_ms, TourStart::FirstVisit);
+        if self.tutorial != Tutorial::Pending {
+            return false;
         }
+        self.begin_tutorial(now_ms, TourStart::FirstVisit);
+        true
     }
 
     /// Start the tour at the door, whatever came before: the first visit
@@ -344,6 +356,7 @@ impl State {
             TourStart::FirstVisit => self.welcome_pour = WelcomePour::Unclaimed,
             TourStart::Rerun => {}
         }
+        self.tour_start = start;
         self.tutorial = Tutorial::Welcome;
         self.tour_fight = super::fight::Fight::new();
         self.place(map::SPAWN, now_ms);
@@ -664,6 +677,11 @@ impl State {
     /// daily paper waits on this so it never opens over the walkthrough.
     pub fn tutorial_settled(&self) -> bool {
         matches!(self.tutorial, Tutorial::Off | Tutorial::Done)
+    }
+
+    /// How the tour in progress began, for the newcomer tour funnel.
+    pub fn tour_start(&self) -> TourStart {
+        self.tour_start
     }
 
     /// The single input the forced tour accepts right now, or `None` when

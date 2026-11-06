@@ -42,6 +42,9 @@ pub struct Config {
     pub port: u16,
     pub ssh_internal_url: String,
     pub audio_base_url: String,
+    /// Where the outside world reaches these pages, with no trailing
+    /// slash: the absolute links a preview card and the paper's feed carry.
+    pub public_base_url: String,
     pub db: DbConfig,
 }
 
@@ -73,6 +76,7 @@ impl Config {
                 port: 3000,
                 ssh_internal_url: "http://service-ssh:4001".to_string(),
                 audio_base_url: "http://icecast:8000".to_string(),
+                public_base_url: "http://localhost:3000".to_string(),
                 db: db("postgres")?,
             }),
             Env::Dev2 => Ok(Self {
@@ -80,6 +84,7 @@ impl Config {
                 port: 3001,
                 ssh_internal_url: "http://service-ssh:4001".to_string(),
                 audio_base_url: "http://icecast:8000".to_string(),
+                public_base_url: "http://localhost:3001".to_string(),
                 db: db("postgres")?,
             }),
             Env::Prod => Ok(Self {
@@ -87,6 +92,7 @@ impl Config {
                 port: 3000,
                 ssh_internal_url: "http://service-ssh-sv:4000".to_string(),
                 audio_base_url: "http://icecast-sv:8000".to_string(),
+                public_base_url: "https://late.sh".to_string(),
                 db: db("postgres-rw")?,
             }),
         }
@@ -106,6 +112,10 @@ impl Config {
         tracing::info!(
             audio_url = %self.audio_base_url,
             "audio: upstream Icecast URL proxied via /stream with silent-frame keepalive"
+        );
+        tracing::info!(
+            public_base_url = %self.public_base_url,
+            "web: the absolute base preview cards and the paper's feed link to"
         );
         tracing::info!(
             db_host = %self.db.host,

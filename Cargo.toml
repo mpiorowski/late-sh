@@ -96,6 +96,8 @@ livekit = { version = "0.7.42", features = ["rustls-tls-native-roots"] }
 nix = "0.29.0"
 pkcs5 = "0.8"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
+ab_glyph = "0.2"
+png = "0.18"
 qrcodegen = "1.8.0"
 rand = "0.8"
 rand_core = "0.6"

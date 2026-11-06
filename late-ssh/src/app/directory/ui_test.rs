@@ -3,7 +3,7 @@
 //! the list beside the detail pane; the narrow one stacks them, and `l`
 //! brings the detail over the list.
 
-use chrono::{Duration, Utc};
+use chrono::{DateTime, Duration, Utc};
 use late_core::models::{
     profile::Profile,
     showcase::Showcase,
@@ -18,9 +18,11 @@ use crate::app::chat::{showcase::svc::ShowcaseFeedItem, work::svc::WorkFeedItem}
 use crate::app::directory::state::{DirectoryState, Shelf};
 use crate::app::usermap::state::UserMapState;
 
-fn author(username: &str) -> Profile {
+/// An author who last logged in at `last_seen`.
+fn author(username: &str, last_seen: DateTime<Utc>) -> Profile {
     Profile {
         username: username.to_string(),
+        last_seen: Some(last_seen),
         bio: "Builds terminals for a living.".to_string(),
         country: Some("PL".to_string()),
         ide: Some("nvim".to_string()),
@@ -52,7 +54,7 @@ fn card(user_id: Uuid, username: &str, age_minutes: i64) -> WorkFeedItem {
             updated: at,
         },
         author_username: username.to_string(),
-        author_profile: Some(author(username)),
+        author_profile: Some(author(username, at)),
     }
 }
 
@@ -70,7 +72,7 @@ fn project(user_id: Uuid, username: &str, title: &str, age_minutes: i64) -> Show
             updated: at,
         },
         author_username: username.to_string(),
-        author_profile: Some(author(username)),
+        author_profile: Some(author(username, at)),
     }
 }
 

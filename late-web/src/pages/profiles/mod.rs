@@ -15,16 +15,21 @@ use late_core::models::{
     deadchannel_runner::DeadchannelRunner,
     profile::Profile,
     showcase::Showcase,
-    user::User,
     work_profile::{WorkProfile, WorkStatus},
 };
 
-use crate::{AppState, error::AppError, metrics};
+use crate::{
+    AppState,
+    error::AppError,
+    metrics,
+    pages::shared::{board_png, meta, text::split_paragraphs},
+};
 
 pub(crate) fn router() -> Router<AppState> {
     Router::new()
         .route("/profiles", get(index_handler))
         .route("/profiles/{slug}", get(handler))
+        .route("/profiles/{slug}/poster.png", get(poster_handler))
 }
 
 #[derive(Template)]
@@ -33,6 +38,13 @@ struct Page {
     /// The runner's poster, its cells drawn by `/static/board.js` like a
     /// gallery snapshot. `None` without a standing runner or a poster.
     poster_json: Option<String>,
+    /// The preview card a pasted link unfurls into (`shared/meta.html`):
+    /// the poster as its picture when there is one, the site's otherwise.
+    page_url: String,
+    og_title: String,
+    og_description: String,
+    og_image: String,
+    og_image_alt: String,
     headline: String,
     username: String,
     status_id: &'static str,
@@ -98,7 +110,8 @@ struct IndexItem {
     work_type: String,
     location: String,
     skills: Vec<String>,
-    updated: String,
+    /// The author's last login, the index's sort key.
+    last_seen: String,
 }
 
 const PROFILE_LIST_LIMIT: i64 = 100;
@@ -162,8 +175,25 @@ async fn handler(
         },
         None => None,
     };
+    let base = state.config.public_base_url.as_str();
+    let page_url = format!("{base}/profiles/{}", work.slug);
+    let (og_image, og_image_alt) = match poster_json {
+        Some(_) => (
+            format!("{page_url}/poster.png"),
+            format!(
+                "@{}'s poster, painted at PRINTS in the late.sh undercity",
+                user_profile.username
+            ),
+        ),
+        None => meta::site_image(base),
+    };
     let page = Page {
         poster_json,
+        og_title: format!("@{} on late.sh", user_profile.username),
+        og_description: format!("{} · {}", work.headline, status_label(work.status)),
+        page_url,
+        og_image,
+        og_image_alt,
         headline: work.headline,
         username: user_profile.username.clone(),
         status_id: work.status.as_str(),
@@ -201,6 +231,47 @@ async fn handler(
     Ok(Html(page.render()?).into_response())
 }
 
+/// The runner's poster as the picture a profile link's preview card
+/// shows. No profile, no standing runner, no poster, or one that fails to
+/// decode: 404, and the card falls back to the site's own picture.
+#[tracing::instrument(skip(state))]
+async fn poster_handler(
+    State(state): State<AppState>,
+    Path(slug): Path<String>,
+) -> Result<Response, AppError> {
+    metrics::record_page_view("profile_poster", false);
+
+    let client = state
+        .db
+        .get()
+        .await
+        .context("failed to get db client for profile poster")?;
+
+    let Some(work) = WorkProfile::find_by_slug(&client, &slug)
+        .await
+        .context("failed to load work profile by slug")?
+    else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    let Some(value) = DeadchannelRunner::poster(&client, work.user_id)
+        .await
+        .context("failed to load runner poster")?
+    else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    let canvas = match serde_json::from_value::<Canvas>(value) {
+        Ok(canvas) => canvas,
+        Err(error) => {
+            tracing::error!(error = %error, user_id = %work.user_id, "runner poster failed to decode; no poster image");
+            return Ok(StatusCode::NOT_FOUND.into_response());
+        }
+    };
+    let png = board_png::render_blocking(canvas)
+        .await
+        .context("failed to render runner poster")?;
+    Ok(board_png::response(png))
+}
+
 #[tracing::instrument(skip(state))]
 async fn index_handler(State(state): State<AppState>) -> Result<Response, AppError> {
     metrics::record_page_view("profiles_index", false);
@@ -211,8 +282,7 @@ async fn index_handler(State(state): State<AppState>) -> Result<Response, AppErr
         .await
         .context("failed to get db client for profiles index")?;
 
-    // Open first, then casual, then not looking, freshest first inside each:
-    // the model sorts by the status enum's rank.
+    // Whoever logged in last, first: the model sorts by `users.last_seen`.
     let profiles = WorkProfile::list_index(&client, PROFILE_LIST_LIMIT)
         .await
         .context("failed to list work profiles")?;
@@ -223,9 +293,9 @@ async fn index_handler(State(state): State<AppState>) -> Result<Response, AppErr
         .collect::<HashSet<_>>()
         .into_iter()
         .collect();
-    let usernames = User::list_usernames_by_ids(&client, &user_ids)
+    let authors = Profile::list_by_user_ids(&client, &user_ids)
         .await
-        .context("failed to load author usernames")?;
+        .context("failed to load author profiles")?;
 
     let mut open_count = 0;
     let mut casual_count = 0;
@@ -238,17 +308,21 @@ async fn index_handler(State(state): State<AppState>) -> Result<Response, AppErr
                 WorkStatus::Casual => casual_count += 1,
                 WorkStatus::NotLooking => closed_count += 1,
             }
+            let author = authors.get(&p.user_id);
             IndexItem {
-                username: usernames
-                    .get(&p.user_id)
-                    .cloned()
-                    .unwrap_or_else(|| p.user_id.to_string()[..8].to_string()),
+                username: match author {
+                    Some(author) if !author.username.is_empty() => author.username.clone(),
+                    _ => p.user_id.to_string()[..8].to_string(),
+                },
                 status_id: p.status.as_str(),
                 status_label: status_label(p.status),
                 work_type: p.work_type.label().to_string(),
                 location: p.location,
                 skills: p.skills.into_iter().take(INDEX_ROW_TAGS).collect(),
-                updated: format_date(p.updated),
+                last_seen: match author.and_then(|author| author.last_seen) {
+                    Some(last_seen) => format_date(last_seen),
+                    None => "—".to_string(),
+                },
                 headline: p.headline,
                 slug: p.slug,
             }
@@ -271,14 +345,6 @@ fn status_label(status: WorkStatus) -> &'static str {
         WorkStatus::Casual => "casually listening",
         WorkStatus::NotLooking => "not looking",
     }
-}
-
-fn split_paragraphs(text: &str) -> Vec<String> {
-    text.split('\n')
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(ToString::to_string)
-        .collect()
 }
 
 /// Render a user-supplied markdown bio as HTML. Raw HTML in the source is

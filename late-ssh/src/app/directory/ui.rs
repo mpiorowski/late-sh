@@ -731,7 +731,7 @@ fn draw_person_detail(
         ));
     }
     let age = vec![Span::styled(
-        format!("active {}", format_relative_time(entry.latest_activity())),
+        format!("seen {}", format_relative_time(entry.last_seen())),
         faint,
     )];
     targets.push((

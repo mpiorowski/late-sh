@@ -41,3 +41,81 @@ fn canvas_json_keeps_cells_colours_and_cannot_close_its_script_element() {
             .contains(&serde_json::json!([0, 2, "界", 2, null, null]))
     );
 }
+
+/// A snapshot's link unfurls into the board itself: the gallery page names
+/// the snapshot's picture at `/gallery/{key}/image.png`, which serves it as
+/// a PNG at preview-card size, and 404 for a key nobody saved.
+#[tokio::test]
+async fn a_gallery_link_unfurls_into_its_snapshot() {
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode},
+    };
+    use dartboard_core::{Canvas, Pos, RgbColor};
+    use late_core::{db::DbConfig, models::artboard::Snapshot, test_utils::test_db};
+    use tower::ServiceExt;
+
+    let test = test_db().await;
+    let client = test.db.get().await.unwrap();
+    let mut canvas = Canvas::with_size(8, 4);
+    canvas.put_glyph_colored(Pos { x: 0, y: 0 }, '█', RgbColor::new(0, 255, 0));
+    Snapshot::upsert(
+        &client,
+        "daily:2026-09-03",
+        serde_json::to_value(&canvas).unwrap(),
+        serde_json::json!({ "cells": [] }),
+    )
+    .await
+    .unwrap();
+
+    let router = crate::app(crate::AppState {
+        config: crate::config::Config {
+            env: crate::config::Env::Dev,
+            port: 0,
+            ssh_internal_url: "http://127.0.0.1:9".into(),
+            audio_base_url: "http://127.0.0.1:9".into(),
+            public_base_url: "http://late.test".into(),
+            db: DbConfig::default(),
+        },
+        db: test.db.clone(),
+        http_client: reqwest::Client::new(),
+    });
+    let fetch = |uri: &'static str| {
+        let router = router.clone();
+        async move {
+            let response = router
+                .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            let status = response.status();
+            let content_type = response
+                .headers()
+                .get("content-type")
+                .map(|value| value.to_str().unwrap().to_string());
+            let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+            (status, content_type, body.to_vec())
+        }
+    };
+
+    let (status, _, html) = fetch("/gallery?key=daily:2026-09-03").await;
+    assert_eq!(status, StatusCode::OK);
+    let html = String::from_utf8(html).unwrap();
+    for needle in [
+        r#"<meta property="og:url" content="http://late.test/gallery?key=daily:2026-09-03">"#,
+        r#"<meta property="og:title" content="Artboard: Daily 2026-09-03">"#,
+        r#"<meta property="og:image" content="http://late.test/gallery/daily:2026-09-03/image.png">"#,
+    ] {
+        assert!(html.contains(needle), "{needle}");
+    }
+
+    let (status, content_type, png) = fetch("/gallery/daily:2026-09-03/image.png").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(content_type.as_deref(), Some("image/png"));
+    let reader = png::Decoder::new(std::io::Cursor::new(png))
+        .read_info()
+        .unwrap();
+    assert_eq!((reader.info().width, reader.info().height), (384, 384));
+
+    let (status, _, _) = fetch("/gallery/daily:2099-01-01/image.png").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

@@ -188,6 +188,7 @@ struct SessionStart {
     authed_at: Instant,
     app_ready_at: Instant,
     user: metrics::SessionUser,
+    tenure: metrics::Tenure,
 }
 
 impl SessionStart {
@@ -212,7 +213,7 @@ impl SessionStart {
             ),
         ];
         for (stage, took) in stages {
-            metrics::record_session_start(stage, self.user, took.as_secs_f64());
+            metrics::record_session_start(stage, self.user, self.tenure, took.as_secs_f64());
         }
     }
 }
@@ -826,6 +827,7 @@ impl russh::server::Handler for ClientHandler {
         for (name, value) in &self.terminal_env_hints {
             app.apply_terminal_env_hint(name, value);
         }
+        let tenure = app.tenure();
         self.app = Some(Arc::new(TokioMutex::new(app)));
         self.session_start = Some(SessionStart {
             connected_at: self.connected_at,
@@ -837,6 +839,7 @@ impl russh::server::Handler for ClientHandler {
                 true => metrics::SessionUser::New,
                 false => metrics::SessionUser::Returning,
             },
+            tenure,
         });
         self.input_tx = Some(input_tx);
         self.input_rx = Some(input_rx);
@@ -1362,8 +1365,16 @@ async fn run_session_with_context<S: FrameSink>(
             }
         }
     };
+    let (terminal, screen, tenure) = {
+        let app = app.lock().await;
+        (
+            app.terminal_version().map(str::to_owned),
+            app.screen,
+            app.tenure(),
+        )
+    };
+    metrics::record_session_end(tenure, screen);
     if let (Some(who), Some(probe)) = (who.as_ref(), ctx.probe.as_ref()) {
-        let terminal = app.lock().await.terminal_version().map(str::to_owned);
         log_wire_summary(
             who,
             ended,
