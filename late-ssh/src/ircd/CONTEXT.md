@@ -292,3 +292,17 @@ Agents run targeted tests through the capped runner, `make test-llm ARGS="-p lat
 - Keep shutdown behavior fast-disconnect; IRC clients are expected to reconnect.
 - Never pass a trusted proxy's transport address into IRC auth or active-session
   state when the client address is unavailable.
+
+---
+
+## 12. Not built
+
+IRCv3 left on the table, best fit first:
+
+- Deletes as `message-redaction`: deletes are not projected today. Needs permission-aware redaction and a rule for clients that never saw the original.
+- `account-tag` and `extended-join`: the nick is already the username, so these only make identity explicit for bots and bridges.
+- `MONITOR` / `extended-monitor`: online/offline watch for DM-heavy clients; JOIN/QUIT already covers shared channels.
+- `+typing`: needs a transient typing event the TUI does not have. Opt-in, never persisted.
+- Vendor tags (`late.sh/...`) for late.sh-only flair (badges, bonsai, flags) and polls. Polls stay plain text until then; `batch` groups lines, it does not carry poll semantics.
+- Edits stay `[edit]` until one edit mechanism settles across clients. Pins stay off IRC: they are global, not room state.
+- `read-marker` (syncing `last_read_at`) and `SASL PLAIN` (the token through `AUTHENTICATE`) are possible but low value next to PASS.

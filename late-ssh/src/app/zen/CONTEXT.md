@@ -2,7 +2,7 @@
 
 ## Metadata
 - Scope: `late-ssh/src/app/zen`
-- Purpose: the tile tree behind Home (`Screen::Dashboard`): its room rail, chats, panels and the things you keep alive are tiles of one tree, `App::home`, arranged in place and kept as up to nine named layouts per device. The second stock layout is `street` (the tiles Home does not draw: an ascii piece and the tank over two chats, with the clock, pulse, friends and activity, boxed), seeded once per device; the status line's care click loads `home`. The design and what v1 left out: `devdocs/HOME-LAYOUTS.md`.
+- Purpose: the tile tree behind Home (`Screen::Dashboard`): its room rail, chats, panels and the things you keep alive are tiles of one tree, `App::home`, arranged in place and kept as up to nine named layouts per device. The second stock layout is `street` (the tiles Home does not draw: an ascii piece and the tank over two chats, with the clock, pulse, friends and activity, boxed), seeded once per device; the status line's care click loads `home`. What is not built: §1, Not built.
 - Status: Experimental.
 - Parent context: `../../../../CONTEXT.md`
 
@@ -347,6 +347,12 @@ Every row is a fact the session already holds, and every row clears on the act t
 
 Order: moves, results, DMs, mentions, tank, tree, pet (`attention::items`). The care rows are keyed on the UTC day, so they come back each morning; ownership is gated by the glue (`App::care_today`, a `Care` of three `Chore`s), an unowned or put-away pet is never due; everyone has a tank and a tree. The guest is up exactly when the list is non-empty; the page asks nothing else (`guest_up`). Enter does the row's act through the page's global functions (`open_daily_modal_globally`, the Inbox row opener, `feed_aquarium_globally`, `BonsaiSession::request(Water)`, `pet_the_pet_globally`); the list never switches a layout, opens a modal or moves the focus on its own.
 
+### Not built
+
+- Fit shares: a split sized to its content. Splits are fixed (`Share::First`, `Share::Second`); a Fit share would touch every tree walker in `layout.rs` and `state.rs`.
+- A `MyStream` chat binding, and a `layout` component on the status line.
+- A layout shared as an ASCII picture, like CSS grid areas (`/layout share`): each letter a kind, each letter's cells a solid rectangle. A picture whose rectangles form a guillotine partition converts to the tree; a pinwheel is refused with a message.
+
 ## 2. File map
 
 ```text
@@ -378,7 +384,7 @@ domain (`bonsai/render::draw_tile`, `hub/aquarium/ui::draw_reef_tile` /
 row in `TileKind::ALL` (the one list the compiler does not check), and
 the arms the build then asks for (`label`, `one_per_page`, `takes_focus`,
 `hints`, the stock `home()`, the `draw_rice` match), a `draw_tile` on
-the domain's surface, and the kind table in `devdocs/HOME-LAYOUTS.md`. `input.rs`: `handle_home_event` ahead of Home's own keys,
+the domain's surface. `input.rs`: `handle_home_event` ahead of Home's own keys,
 `Ctrl+E` (`layout_chord_globally`, `go_home_for_layouts`) among the
 reserved chords, the Esc arm (one call, `handle_escape`), a click on the
 page (`focus_home_tile_at`), the `StatusClick::HomeLayout` click and the

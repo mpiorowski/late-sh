@@ -45,7 +45,9 @@ the file under MPL instead, and update `NOTICE` + `LICENSING.md`.
 MPL §2.3 grants **no trademark rights**. The door currently ships under
 upstream's title via `data::TITLE`, which is deliberately a single constant:
 renaming is a one-line change if the author would rather we did not use it.
-Michael Townsend has been told by email that the port uses the name.
+Michael Townsend has been told by email that the port uses the name. The
+standing rule: credit upstream prominently, and never put the door behind
+chips or donations.
 
 ## The pacing model (`pace.rs`): the one real design change
 

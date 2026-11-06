@@ -252,96 +252,8 @@ thing, log out. It is also single-player, which sidesteps exactly the problem
 that parked twclone: no player density required, so it works at 30 concurrent
 users just as well as at 3,000.
 
-**The one design call, and it is not optional:** A Dark Room has **no offline
-progress**. Every timer is wall-clock while the tab is open, and `collectIncome`
-runs on a 1-second tick; close the tab and the village stops. Ported faithfully,
-that means you only advance while your SSH session is attached, which turns
-"check in daily" into "idle in a session", the opposite of the pitch above. Two
-honest options:
-
-1. **Faithful.** Accept it. ADR is a 2-4 hour narrative arc with a real ending,
-   not an endless idler, so a player realistically does it across a handful of
-   sittings anyway. Cheapest and truest.
-2. **Offline accrual.** Compute elapsed time on reconnect and settle the
-   production tick forward. We are writing the port, so this is ours to add, but
-   it rebalances the whole game (the fire, the wanderers, the population curve)
-   and needs caps or the wasteland is trivial after one night away.
-
-**Decided, and it is neither of the two:** the port credits time while the
-SSH session is connected, slows the village half, and caps village time per
-day. The design and its numbers are in
-`late-ssh/src/app/door/darkroom/CONTEXT.md`.
-
-### A Dark Room: license (the short version)
-
-- **MPL-2.0**, stated in both `LICENSE.md` and `package.json`, with the Exhibit B
-  "Incompatible With Secondary Licenses" notice attached. That notice only blocks
-  relicensing under GPL/LGPL/AGPL, which we do not want to do anyway.
-- **MPL is file-level copyleft with no network clause** (unlike Brogue's AGPL).
-  Section 3.3 explicitly lets us ship a Larger Work under our own terms as long
-  as the covered files stay MPL. So the practical rule is: everything derived
-  from ADR (the game text, the data tables, the balance constants, anything
-  transliterated rather than reinvented) lives in its own module carrying
-  MPL-2.0 headers, and the rest of late-ssh stays FSL-1.1-MIT. Our repo is
-  already public, so the source-availability obligation is satisfied by
-  existing. Record it in `LICENSING.md` and NOTICE the way we did for Brogue.
-- **Only the web version is MPL.** The iOS/Android port (Amir Rajan, RubyMotion),
-  the Steam release, and the prequel *The Ensign* are separate closed products.
-  Port from `doublespeakgames/adarkroom` and nothing else.
-- **MPL grants no trademark rights** (§2.3, explicit).
-
-### A Dark Room: the etiquette gate (the actual blocker)
-
-This is the part that matters more than the license. Michael Townsend
-open-sourced ADR so people could learn from it, and has said publicly he was
-disheartened watching people use the brand he built to make a quick buck (the
-App Store clone wave). He is not a dead author of abandonware: the game is
-**still a live commercial product**, on iOS, Android and Steam.
-
-late.sh has a chip economy. Shipping a door called "A Dark Room" next to it,
-without asking, is a good way to become the thing he complained about, even
-though the MPL permits it.
-
-**Done:** he was emailed about the name before the door opened
-(`michael@doublespeakgames.com`, from `package.json`). The standing rule
-either way: credit prominently, and never put it behind chips or donations.
-
-### A Dark Room: code audit (shallow clone of `main`)
-
-The verdict is that this is the cheapest pattern-1 target we have looked at, by
-a wide margin. LotGD was a PHP + MySQL web application. ADR is a single-player
-state machine with no backend at all.
-
-- **8,481 lines** of plain, dependency-free jQuery-era JS across 19 files in
-  `script/`. No build step, no framework, no database, no server. The single
-  npm dependency is `express`, used only by `dev-server.js`.
-- Biggest files: `events.js` 1,487 (encounter and combat scenes, overwhelmingly
-  data), `room.js` 1,259, `world.js` 1,109 (wasteland generation and travel),
-  `engine.js` 942, `outside.js` 665, `space.js` 631, `state_manager.js` 440,
-  `path.js` 341, `fabricator.js` 244, `ship.js` 177.
-- **Roughly 1,100 lines we delete outright**: `dropbox.js` (361, cloud saves),
-  `audio.js` + `audioLibrary.js` (376), `notifications.js`, `Button.js` (131, a
-  DOM widget). A further large slice of every remaining module is jQuery DOM
-  construction that ratatui replaces rather than translates.
-- **State is one nested JSON blob** behind a single `StateManager` (`$SM`) with
-  fixed top-level categories: features, stores, character, income, timers, game,
-  playStats, previous, outfit, config, wait, cooldown. That maps almost 1:1 onto
-  a serde struct persisted per user, which is the Green Dragon shape we already
-  run.
-- **The timer model is already centralized.** Everything goes through
-  `Engine.setTimeout` / `Engine.setInterval` wrappers rather than raw calls, so
-  the fire cooling, temperature drift, population growth, income tick and enemy
-  attack cadence all funnel through one indirection point. A ratatui tick loop
-  covers the lot.
-- **The text is already externalized for i18n**: `_()` calls throughout (108 in
-  `room.js` alone), with `lang/*.po` files for 23 languages and a `.pot`
-  template. The strings extract cleanly instead of having to be dug out of
-  logic, and we would inherit the translations for free.
-- Lightly maintained upstream (last commit May 2025), which is fine: we pin a
-  commit and own the port.
-
-**Effort:** comparable to Green Dragon or less, and with none of the design work,
-because every balance number is sitting right there in the source.
+A Dark Room shipped from this shelf; its license split, upstream and pacing
+design are in `late-ssh/src/app/door/darkroom/CONTEXT.md` and `LICENSING.md`.
 
 ### The rest of the genre, at a glance
 
@@ -377,15 +289,12 @@ lands harder on an SSH server than it ever did on the web.
 
 ## Open questions before building anything
 
-- For LotGD: native Rust port vs. running the PHP app behind a TUI shim? Port is
-  more work but matches how we own Lateania; shim is faster but drags in
-  PHP/MySQL infra.
 - Commercial/non-commercial: late.sh has a chip economy and may take donations -
   the non-commercial MUD licenses (Circle/Merc/ROM) need a real read before use.
   The green-list games (GPL/BSD/MIT/LGPL) are safe on this axis.
-- Multiplayer state: dopewars/Wolfpack have their own servers - decide whether
-  each player gets an isolated instance (NetHack-style) or shares one persistent
-  world (Lateania-style).
+- Multiplayer state: Wolfpack has its own server - decide whether each player
+  gets an isolated instance (NetHack-style) or shares one persistent world
+  (Lateania-style).
 - General rule this research surfaced: **any pattern-1 native port has to be
   license-compatible with our FSL**, which rules out GPL sources (Candy Box 2,
   Swarm Simulator) that pattern 2 would have been fine with. MPL/MIT/BSD are the
