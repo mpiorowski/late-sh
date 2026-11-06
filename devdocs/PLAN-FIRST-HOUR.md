@@ -33,7 +33,9 @@ Built as the tour's `Board` route, beside the old `House` route;
 the whole revert. What it is lives in
 `late-ssh/src/app/clubhouse/CONTEXT.md` §5 (the routes, the gate, the
 board stop) and `late-ssh/src/app/arcade/CONTEXT.md` (the lent board).
-What is left of the step:
+The design reasoning behind it, every decision and the ones turned
+down, is in Claude Code session `2fc40c39-0365-400e-b8c0-dd75cbf98223`
+(`claude --resume` in this repo). What is left of the step:
 
 - **The streak.** The first session's win is day one of a streak only
   when Netwalk is a drawn quest. "Any daily win advances the streak"
