@@ -154,147 +154,192 @@ fn header_rows(header: &TourHeader, width: u16) -> Vec<String> {
         .collect()
 }
 
-/// The stops that live inside a real surface: the music stop counts the
-/// catalogue live, the lobby stop leads to the practice table, and each one's
-/// breaker names its keys at the width a default terminal leaves a modal.
+/// The board stop writes its pitch across the top of the Arcade: it asks
+/// for the board's keys while the board is open, says so and moves on
+/// where the board does not fit, and once the board is solved names
+/// tomorrow and the way out.
 #[test]
-fn the_surface_stops_pitch_in_a_header_that_names_their_keys() {
-    let music = header_rows(
-        &tour_header(Tutorial::VisitMusic, TableStop::Racked, false).unwrap(),
-        72,
+fn the_board_stop_pitches_in_a_header_that_names_its_keys() {
+    let open = header_rows(
+        &tour_header(Tutorial::VisitBoard, TableStop::Racked, BoardStop::Open).unwrap(),
+        100,
     );
-    let total = RadioStation::enabled().count();
+    assert!(open[0].contains("the tour · today's board"), "{open:#?}");
     assert!(
-        music[1].contains(&format!("{total} stations")),
-        "{music:#?}"
+        open[1].contains("everyone here gets this same board today"),
+        "{open:#?}"
     );
     assert!(
-        music
-            .last()
+        open.last()
             .unwrap()
-            .contains("[Enter] next: the arcade ──"),
-        "{music:#?}"
+            .contains("[hjkl/arrows] move · [Space] turn · [f] lock ──"),
+        "{open:#?}"
     );
 
-    let lobby = header_rows(
-        &tour_header(Tutorial::VisitLobby, TableStop::Racked, false).unwrap(),
-        72,
+    let small = header_rows(
+        &tour_header(Tutorial::VisitBoard, TableStop::Racked, BoardStop::TooSmall).unwrap(),
+        100,
     );
+    assert!(small[1].contains("needs a bigger window"), "{small:#?}");
     assert!(
-        lobby
-            .last()
-            .unwrap()
-            .contains("[Enter] next: one shot of pool ──"),
-        "{lobby:#?}"
+        small.last().unwrap().contains("[Enter] settle in ──"),
+        "{small:#?}"
     );
 
-    // The table asks for the break, then for Enter onward once it is struck.
-    let table = header_rows(
-        &tour_header(Tutorial::VisitTable, TableStop::Racked, false).unwrap(),
-        72,
+    let solved = header_rows(
+        &tour_header(
+            Tutorial::VisitBoard,
+            TableStop::Racked,
+            BoardStop::Solved { hours_left: 7 },
+        )
+        .unwrap(),
+        100,
     );
     assert!(
-        table.last().unwrap().contains("[Enter] break ──"),
-        "{table:#?}"
+        solved[1].contains("connected. that was day one."),
+        "{solved:#?}"
     );
-    let struck = header_rows(
-        &tour_header(Tutorial::VisitTable, TableStop::Played, false).unwrap(),
-        72,
+    assert!(
+        solved[2].contains("the next board is up at 00:00 UTC, in 7 h. the paper is at the door."),
+        "{solved:#?}"
     );
+    assert!(
+        solved[4].contains("[q] the lobby · [o] who else solved it · [?] the guide"),
+        "{solved:#?}"
+    );
+    assert!(
+        solved.last().unwrap().contains("[Enter] settle in ──"),
+        "{solved:#?}"
+    );
+
+    for stage in [
+        Tutorial::Off,
+        Tutorial::Pending,
+        Tutorial::Welcome,
+        Tutorial::VisitChat,
+        Tutorial::Done,
+    ] {
+        assert!(
+            tour_header(stage, TableStop::Racked, BoardStop::Open).is_none(),
+            "{stage:?}"
+        );
+    }
+}
+
+/// The table stop asks for the break, then for Enter onward once it is
+/// struck; a terminal the table does not fit is told so and moves on.
+#[test]
+fn the_table_stop_pitches_in_a_header_that_names_its_keys() {
+    let header = |table: TableStop| {
+        header_rows(
+            &tour_header(Tutorial::VisitTable, table, BoardStop::Open).unwrap(),
+            72,
+        )
+    };
+    let racked = header(TableStop::Racked);
+    assert!(
+        racked[0].contains("the tour · one shot of pool"),
+        "{racked:#?}"
+    );
+    assert!(racked[1].contains("take the break"), "{racked:#?}");
+    assert!(
+        racked.last().unwrap().contains("[Enter] break ──"),
+        "{racked:#?}"
+    );
+    let struck = header(TableStop::Played);
     assert!(
         struck
             .last()
             .unwrap()
-            .contains("[Enter] next: the games ──"),
+            .contains("[Enter] next: today's board ──"),
         "{struck:#?}"
     );
-
-    // A terminal the table does not fit: the stop says so and moves on.
-    let small = header_rows(
-        &tour_header(Tutorial::VisitTable, TableStop::TooSmall, false).unwrap(),
-        72,
-    );
+    let small = header(TableStop::TooSmall);
     assert!(small[1].contains("needs a bigger window"), "{small:#?}");
     assert!(
-        small.last().unwrap().contains("[Enter] next: the games ──"),
+        small
+            .last()
+            .unwrap()
+            .contains("[Enter] next: today's board ──"),
         "{small:#?}"
     );
-
-    assert!(tour_header(Tutorial::VisitGames, TableStop::Racked, false).is_none());
 }
 
-/// Every page stop moves on with Enter and says so on a default terminal.
+/// The board stop stands on what the frame can show: solved is solved
+/// whatever the terminal, an unsolved board has to fit under the header,
+/// and the send-off counts whole hours up to the next 00:00 UTC.
 #[test]
-fn a_page_stop_names_its_page_key_and_moves_on_with_enter() {
-    let backend = ratatui::backend::TestBackend::new(80, 24);
-    let mut terminal = ratatui::Terminal::new(backend).unwrap();
-    terminal
-        .draw(|frame| {
-            draw_tour_overlay(
-                frame,
-                Rect::new(1, 1, 78, 22),
-                Tutorial::VisitGames,
-                Screen::Games,
-                false,
-            )
-        })
-        .unwrap();
-    let buffer = terminal.backend().buffer();
-    let rows: Vec<String> = (0..24)
-        .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect())
-        .collect();
-    assert!(
-        rows.iter()
-            .any(|row| row.contains("the tour · [3] the games")),
-        "{rows:#?}"
+fn the_board_stop_follows_the_board_and_the_terminal() {
+    let noon = chrono::DateTime::parse_from_rfc3339("2026-11-06T12:10:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let default_terminal = Rect::new(1, 1, 78, 22);
+    assert_eq!(board_stop(default_terminal, false, noon), BoardStop::Open);
+    assert_eq!(
+        board_stop(default_terminal, true, noon),
+        BoardStop::Solved { hours_left: 12 }
     );
-    assert!(
-        rows.iter()
-            .any(|row| row.contains("[Enter] next: a taste of the dungeon")),
-        "{rows:#?}"
+    // Too short for the header and a five-tile board under it.
+    let tiny = Rect::new(1, 1, 78, 9);
+    assert_eq!(board_stop(tiny, false, noon), BoardStop::TooSmall);
+    assert_eq!(
+        board_stop(tiny, true, noon),
+        BoardStop::Solved { hours_left: 12 }
+    );
+
+    let late = chrono::DateTime::parse_from_rfc3339("2026-11-06T23:30:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    assert_eq!(
+        board_stop(default_terminal, true, late),
+        BoardStop::Solved { hours_left: 1 }
+    );
+    let midnight = chrono::DateTime::parse_from_rfc3339("2026-11-06T00:00:00Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    assert_eq!(
+        board_stop(default_terminal, true, midnight),
+        BoardStop::Solved { hours_left: 24 }
     );
 }
 
-/// The Artboard stop lands behind the content disclaimer: it offers to show
-/// the art or skip ahead, and only reads as a normal stop once shown.
+/// The chat stop names its page key, moves on with Enter and says so on a
+/// default terminal, and draws only over its own page.
 #[test]
-fn the_artboard_stop_offers_show_or_skip_until_the_art_is_shown() {
-    for (hidden, breaker) in [
-        (true, "[S] show · [Enter] skip: the people"),
-        (false, "[Enter] next: the people"),
-    ] {
+fn the_chat_stop_names_its_page_key_and_moves_on_with_enter() {
+    let draw = |screen: Screen| {
         let backend = ratatui::backend::TestBackend::new(80, 24);
         let mut terminal = ratatui::Terminal::new(backend).unwrap();
         terminal
             .draw(|frame| {
-                draw_tour_overlay(
-                    frame,
-                    Rect::new(1, 1, 78, 22),
-                    Tutorial::VisitArtboard,
-                    Screen::Artboard,
-                    hidden,
-                )
+                draw_tour_overlay(frame, Rect::new(1, 1, 78, 22), Tutorial::VisitChat, screen)
             })
             .unwrap();
         let buffer = terminal.backend().buffer();
-        let rows: Vec<String> = (0..24)
+        (0..24)
             .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect())
-            .collect();
-        assert!(
-            rows.iter()
-                .any(|row| row.contains("the tour · [4] the artboard")),
-            "hidden={hidden} {rows:#?}"
-        );
-        assert!(
-            rows.iter().any(|row| row.contains(breaker)),
-            "hidden={hidden} {rows:#?}"
-        );
-        assert_eq!(
-            rows.iter().any(|row| row.contains("NSFW")),
-            hidden,
-            "hidden={hidden} {rows:#?}"
-        );
-    }
+            .collect::<Vec<String>>()
+    };
+    let rows = draw(Screen::Dashboard);
+    assert!(
+        rows.iter().any(|row| row.contains("the tour · [1] home")),
+        "{rows:#?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("every name in it is a real person")),
+        "{rows:#?}"
+    );
+    assert!(
+        rows.iter()
+            .any(|row| row.contains("[Enter] next: one shot of pool")),
+        "{rows:#?}"
+    );
+    let elsewhere = draw(Screen::Arcade);
+    assert!(
+        elsewhere.iter().all(|row| row.trim().is_empty()),
+        "{elsewhere:#?}"
+    );
 }
 
 /// Boxed or hosted, a stop reads the same: the keys close the breaker flush
@@ -308,9 +353,8 @@ fn a_boxed_stop_ends_on_the_same_breaker_as_a_hosted_one() {
             draw_tour_overlay(
                 frame,
                 Rect::new(1, 1, 78, 22),
-                Tutorial::VisitGames,
-                Screen::Games,
-                false,
+                Tutorial::VisitChat,
+                Screen::Dashboard,
             )
         })
         .unwrap();
@@ -325,60 +369,8 @@ fn a_boxed_stop_ends_on_the_same_breaker_as_a_hosted_one() {
     assert!(
         breaker
             .trim_end()
-            .ends_with("[Enter] next: a taste of the dungeon ──  │"),
+            .ends_with("[Enter] next: one shot of pool ──  │"),
         "{rows:#?}"
     );
     assert!(breaker.trim_start().starts_with("│  ──"), "{rows:#?}");
-}
-
-/// The dungeon stop takes the page over the way the practice table does:
-/// the header across the top, the crawl screen filling the rest, whole on a
-/// default terminal. Its breaker asks for blows until the win.
-#[test]
-fn the_dungeon_stop_fills_the_page_under_its_header() {
-    use crate::app::clubhouse::fight::{self, Fight};
-    let draw = |fight: &Fight| {
-        let backend = ratatui::backend::TestBackend::new(80, 24);
-        let mut terminal = ratatui::Terminal::new(backend).unwrap();
-        terminal
-            .draw(|frame| {
-                let header =
-                    tour_header(Tutorial::VisitDungeon, TableStop::Racked, fight.won()).unwrap();
-                let page = header.draw_above(frame, Rect::new(1, 1, 78, 22));
-                fight::draw(frame, page, fight, "mat");
-            })
-            .unwrap();
-        let buffer = terminal.backend().buffer();
-        (0..24)
-            .map(|y| (0..80).map(|x| buffer[(x, y)].symbol()).collect())
-            .collect::<Vec<String>>()
-    };
-    let at = |rows: &[String], needle: &str| rows.iter().position(|row| row.contains(needle));
-
-    let mut fight = Fight::new();
-    let rows = draw(&fight);
-    let breaker = at(&rows, "[Enter] fight ──").expect("the breaker asks for the fight");
-    let hero = at(&rows, "mat the Slayer").expect("the panel is drawn");
-    let monster = at(&rows, " fire dragon   ").expect("the monster list is drawn");
-    let log = at(&rows, "A fire dragon comes into view.").expect("the log is drawn");
-    assert!(
-        breaker < hero && hero < monster && monster < log,
-        "{rows:#?}"
-    );
-    // The panel takes the right of the page, the view of the level the left.
-    assert_eq!(rows[hero].find("mat the Slayer"), Some(41), "{rows:#?}");
-    assert!(rows[log].starts_with(" A fire dragon"), "{rows:#?}");
-
-    while !fight.won() {
-        fight.strike();
-    }
-    let rows = draw(&fight);
-    assert!(
-        at(&rows, "[Enter] next: the artboard ──").is_some(),
-        "{rows:#?}"
-    );
-    assert!(
-        at(&rows, "You kill the fire dragon!").is_some(),
-        "{rows:#?}"
-    );
 }

@@ -1,10 +1,10 @@
 # Plan: the first hour, then the ladder, then the post
 
-Status: nothing built. The diagnosis and every number behind this plan
-live in `AUDIENCE.md` (sections 3 to 5); this file holds the steps, in
-order, and the gate between them. As each step lands, move its behavior
-into the domain's `CONTEXT.md` and delete it here; delete the file when
-nothing is left.
+Status: step 1 built, not yet deployed or measured. The diagnosis and
+every number behind this plan live in `AUDIENCE.md` (sections 3 to 5);
+this file holds the steps, in order, and the gate between them. As each
+step lands, move its behavior into the domain's `CONTEXT.md` and delete
+it here; delete the file when nothing is left.
 
 ## Goal
 
@@ -28,85 +28,23 @@ and settled back to 40 within days.
 
 ## Step 1: the first session, built around the daily board
 
-Two domains, so two tasks: the Arcade first, then the tour.
+Built. What it is lives in `late-ssh/src/app/clubhouse/CONTEXT.md` §5
+(the three stops, the gate, the board stop) and
+`late-ssh/src/app/arcade/CONTEXT.md` (the lent board). What is left of
+the step:
 
-**1a. The Arcade lends the tour today's board.** Where:
-`late-ssh/src/app/arcade/` (`netwalk/state.rs` already has `open_daily`,
-`is_solved`, `ensure_current_daily`; the lobby's own open path is the
-reference).
-
-- One public function on the Arcade surface that opens today's Netwalk
-  daily at its easiest difficulty for this session and reports solved,
-  used by the tour and nothing else. The win it produces is a real one:
-  `record_win_task` runs, the chips land, the quest ticks when Netwalk is
-  drawn, the solvers roster gains the name. No practice mode, no fake
-  board.
-- Netwalk because it has no loss state, takes two to three minutes, and
-  was the second most-won daily within a week of shipping. Le Word is the
-  board people talk about, but a newcomer can lose it in six guesses and
-  a lost first board is a worse send-off than none.
-- Tests: `netwalk/state_test.rs`, the lent board is today's, the easiest
-  difficulty, and `is_solved` flips on the last rotation.
-
-**1b. The tour.** Where: `late-ssh/src/app/clubhouse/` (`state.rs`:
-`Tutorial`, `TourStep`, `TourMove`; `ui.rs`: the stop copy; `fight.rs`
-goes), `late-ssh/src/app/input.rs` (`handle_tour_gate`, `tour_advance`,
-`start_tour`), `late-ssh/src/app/render.rs` (the held surface),
-`late-ssh/src/metrics.rs` (`tour_stop_label`).
-
-- Four stops: `Welcome`, `VisitChat`, `VisitBoard`, `Homecoming`. Every
-  other variant goes, and the exhaustive matches on `Tutorial` find each
-  site that drew, gated, counted or moved them. The Stations stop goes
-  outright rather than behind a client check: 84% of newcomers are on
-  plain ssh with nothing to hear, and the radio keeps its place in the
-  `?` guide.
-- `VisitBoard` holds the lent board under the tour header the way
-  `VisitTable` held the practice table: the gate hands the board's keys
-  to the Arcade, keeps every other key, and Enter moves on only once
-  `is_solved`. A terminal the board does not fit gets the table's answer:
-  the header says so and Enter walks on. Nobody is held hostage by a
-  board; nobody skips it on a terminal that can show it.
-- The copy, kept plain. Welcome: a late-night clubhouse in a terminal,
-  real people, one board a day. Chat: three lines, `i` to write, where
-  Mentions live, that everyone here is a person. Board: everyone gets
-  this same board today; solve it, then we go. Homecoming names
-  tomorrow and nothing else: a new board at 00:00 UTC with the hours
-  left, the streak at day one, the paper at the door, three keys.
-- The practice table (`lobby/daily/state.rs`: `open_practice_table`,
-  `practice_break`, `practice_played`, `clubhouse::ui::table_stop`,
-  `TableStop`) and `fight.rs` have no caller outside the tour. They go in
-  the same change, which touches `lobby/daily` for the deletion only.
-- `/onboard` reruns the same four stops.
-- Telemetry: `tour_stop_label` shrinks to the four stops plus `done`;
-  the Newcomers panel reads `sum by (stop)` and needs no change. The
-  drop into `board` against `done` is the board's cost.
-- Tests: `clubhouse/state_test.rs` drives Enter from `Welcome` to `Done`
-  and asserts the whole state after each step (the route is a pure
-  state machine). The gate: a board key reaches the Arcade at
-  `VisitBoard`, Enter before `is_solved` stays, Enter after moves on.
-- Docs: `clubhouse/CONTEXT.md` §5 rewritten; `arcade/CONTEXT.md` gains
-  the lent board; `lobby/daily/CONTEXT.md` loses the practice table;
-  `late-ssh/CONTEXT.md` Telemetry lists the stops; `AUDIENCE.md` turns
-  the targets above into measurements.
-
-**Open decisions**, recommendation first:
-
-- Where it ends. The tour ends in the tavern today and 40% of day-one
-  sessions end on that screen; the people are in #lounge. End on Home.
-- Chat as a required step. Keep it a stop, not a requirement: forced
-  hellos spam #lounge, and chatting on day one predicts return at half
-  the board's rate.
-- The streak. The first session's win should be day one of a streak even
-  when Netwalk is not a drawn quest, which means "any daily win advances
-  the streak" (step 2) ships here, in late-core `quest.rs` beside
-  `record_daily_quest_streak_if_complete`, called from the Arcade's daily
-  win path. Do it here.
-
-**Measure, then gate.** Deploy, wait seven days for a full weekly cohort,
-wait seven more for its first week, then run the funnel queries in
-`AUDIENCE.md` section 6 and read the Newcomers row. Step 2 can start
-while that cohort runs. Step 3 waits for two-day return at 9% or more on
-one cohort, or two cohorts at 8%.
+- **The streak.** The first session's win is day one of a streak only
+  when Netwalk is a drawn quest. "Any daily win advances the streak"
+  (step 2) was not shipped with the tour: it is a late-core change in
+  `quest.rs` beside `record_daily_quest_streak_if_complete`, called from
+  the Arcade's daily win path, with its own tests. Do it first in step 2
+  so the next cohort's day-one win starts a streak it can see.
+- **Measure, then gate.** Deploy, wait seven days for a full weekly
+  cohort, wait seven more for its first week, then run the funnel
+  queries in `AUDIENCE.md` section 6 and read the Newcomers row
+  (`welcome`, `chat`, `board`, `done`; `board` against `done` is the
+  board's cost). Step 2 can start while that cohort runs. Step 3 waits
+  for two-day return at 9% or more on one cohort, or two cohorts at 8%.
 
 ## Step 2: the ladder on the dailies
 
@@ -116,8 +54,8 @@ with a chip bonus at the top of the Arcade lobby. It holds 52 to 64
 completers a week, flat since September, and 35 live streaks. The gap is
 visibility and the day-one handshake, not more quest kinds.
 
-- **Any daily win advances the streak**, if step 1 did not already do
-  it. The quest slots stay as the chip-paying layer on top.
+- **Any daily win advances the streak.** Step 1 did not do it; it goes
+  first here. The quest slots stay as the chip-paying layer on top.
 - **The streak is visible.** On the profile; beside the name in the
   Arcade solvers roster (`arcade/solvers.rs`); on the share card, where
   "day 12" is the Wordle line and travels outside the house for free.

@@ -1865,8 +1865,8 @@ fn dispatch_escape(app: &mut App) {
         quit_confirm::input::handle_escape(app);
         return;
     }
-    // A lone Esc skips the tour gate the same way, and would close the modal
-    // or the practice table a stop is holding open.
+    // A lone Esc skips the tour gate the same way, and would close the
+    // practice table or the board a stop is holding open.
     if app.clubhouse.tutorial_forced_step().is_some() {
         return;
     }
@@ -3514,11 +3514,13 @@ pub(crate) fn trigger_global_quit(app: &mut App) {
 
 /// The forced first-visit tour: while a stop is up
 /// (`clubhouse::state::State::tutorial_forced_step`), Enter moves it on and
-/// quitting is the way out. Everything else, mouse, arrows, and chords
-/// included, dies here so no modal, composer, or game can hijack a newcomer
-/// mid-route. Returns true when the event was consumed.
+/// quitting is the way out. Space at the practice table plays the break,
+/// and at the board stop the board's own keys reach the Arcade;
+/// everything else, mouse, chords and pastes included, dies
+/// here so no modal, composer, or game can hijack a newcomer mid-route.
+/// Returns true when the event was consumed.
 fn handle_tour_gate(app: &mut App, event: &ParsedInput) -> bool {
-    use crate::app::clubhouse::state::{TableStop, TourStep};
+    use crate::app::clubhouse::state::{BoardStop, TableStop, TourStep};
 
     let Some(step) = app.clubhouse.tutorial_forced_step() else {
         return false;
@@ -3526,17 +3528,20 @@ fn handle_tour_gate(app: &mut App, event: &ParsedInput) -> bool {
     let byte = match event {
         ParsedInput::Byte(byte) => *byte,
         ParsedInput::Char(ch) if ch.is_ascii() => *ch as u8,
-        // Arrows, mouse, pastes: swallowed while the tour runs.
+        // The board takes the arrows; nowhere else does.
+        ParsedInput::Arrow(key) => {
+            match step {
+                TourStep::Board => {
+                    crate::app::arcade::input::lent_board_arrow(app, *key);
+                }
+                TourStep::Enter | TourStep::Table => {}
+            }
+            return true;
+        }
+        // Mouse, pastes, chords: swallowed while the tour runs.
         _ => return true,
     };
     match (step, byte) {
-        // The Artboard stop lands behind its content disclaimer: `s` shows
-        // the art for this visit only, Enter skips ahead without it. Neither
-        // touches the account tweak; the standalone dialog never runs here.
-        (TourStep::Enter, b's' | b'S') if app.artboard_disclaimer_visible() => {
-            app.artboard_content_accepted = true;
-            app.sync_dartboard_connection();
-        }
         (TourStep::Enter, b'\r' | b'\n') => tour_advance(app),
         // The table's one shot has to be played: Enter or Space strikes the
         // break, and only then does Enter move on. A terminal the table does
@@ -3552,16 +3557,32 @@ fn handle_tour_gate(app: &mut App, event: &ParsedInput) -> bool {
                 (TableStop::TooSmall | TableStop::Played, _) => tour_advance(app),
             }
         }
-        // The fight is the same: every press is the next blow until it is won.
-        (TourStep::Fight, b'\r' | b'\n') if app.clubhouse.tour_fight.won() => tour_advance(app),
-        (TourStep::Fight, b'\r' | b'\n' | b' ') => app.clubhouse.tour_fight.strike(),
+        // The board has to be solved: until then Enter is one of its keys
+        // (it turns the tile), and only a solved board lets it move on. A
+        // terminal the board does not fit has nothing to solve, so Enter
+        // walks on from there.
+        (TourStep::Board, b'\r' | b'\n') => {
+            let board = crate::app::clubhouse::ui::board_stop(
+                app.content_area(),
+                app.netwalk_state.is_solved(),
+                chrono::Utc::now(),
+            );
+            match board {
+                BoardStop::Open => {
+                    crate::app::arcade::input::lent_board_key(app, byte);
+                }
+                BoardStop::TooSmall | BoardStop::Solved { .. } => tour_advance(app),
+            }
+        }
         // The way out is always open.
-        (TourStep::Enter | TourStep::Table | TourStep::Fight, b'q' | b'Q') => {
+        (TourStep::Enter | TourStep::Table | TourStep::Board, b'q' | b'Q') => {
             trigger_global_quit(app)
         }
-        (TourStep::Enter | TourStep::Table | TourStep::Fight, _) => {}
+        (TourStep::Board, _) => {
+            crate::app::arcade::input::lent_board_key(app, byte);
+        }
+        (TourStep::Enter | TourStep::Table, _) => {}
     }
-    sync_tour_modal(app);
     true
 }
 
@@ -3581,44 +3602,23 @@ fn tour_advance(app: &mut App) {
 
     match app.clubhouse.tutorial_advance() {
         TourMove::Stay => {}
-        // Through `leave_board` so a practice table left behind is dropped.
+        // Through `leave_board` so a daily board a rerun left open is
+        // closed properly.
         TourMove::Page(screen) => crate::app::lobby::daily::board_input::leave_board(app, screen),
-        // The People page, on its map whatever section a rerun left it on.
-        TourMove::Map => {
-            crate::app::lobby::daily::board_input::leave_board(app, Screen::Profiles);
-            crate::app::directory::input::switch_shelf(
-                app,
-                crate::app::directory::state::Shelf::Map,
-            );
-        }
-        // `]`: the next section of the People page.
-        TourMove::NextSection => {
-            let next = app.directory_state.shelf().next();
-            crate::app::directory::input::switch_shelf(app, next);
-        }
         // A pool table nobody else sees, for one break.
         TourMove::Table => {
             let username = app.username.clone();
             app.daily.open_practice_table(Screen::Arcade, &username);
             app.set_screen(Screen::DailyMatch);
         }
-        // Home with its stock second layout up, the street: a device that
-        // deleted it gets the missing-name banner under the stop.
-        TourMove::Layouts => {
-            crate::app::lobby::daily::board_input::leave_board(app, Screen::Dashboard);
-            crate::app::zen::input::run_layout_command(
-                app,
-                crate::app::zen::presets::LayoutCommand::Load(
-                    crate::app::zen::presets::STOCK_STREET_NAME.to_string(),
-                ),
-            );
+        // Today's board, opened on the Arcade the way its lobby card opens
+        // it (the practice table left behind is dropped on the way): a real
+        // daily, a real win.
+        TourMove::Board => {
+            crate::app::lobby::daily::board_input::leave_board(app, Screen::Arcade);
+            crate::app::arcade::input::open_lent_board(app);
         }
-        // Home's first layout back before the tavern, so the newcomer's
-        // page is as the tour found it.
-        TourMove::Homecoming => {
-            crate::app::zen::input::load_home_layout(app);
-            crate::app::lobby::daily::board_input::leave_board(app, Screen::Clubhouse);
-        }
+        // The tour ends where it is, on the Arcade with the board just won.
         TourMove::Finished => app.persist_clubhouse_tutorial_done(),
     }
     // The stop just reached, on a first visit's tour only (its welcome box
@@ -3628,23 +3628,6 @@ fn tour_advance(app: &mut App) {
         TourStart::FirstVisit => crate::metrics::record_tour_stop(app.clubhouse.tutorial),
         TourStart::Rerun => {}
     }
-}
-
-/// Hold open the real modal the current stop pitches, and close it once the
-/// tour has moved past.
-fn sync_tour_modal(app: &mut App) {
-    use crate::app::clubhouse::state::TourModal;
-
-    let modal = app.clubhouse.tour_modal();
-    match (
-        modal == TourModal::Stations,
-        app.stations_modal_state.is_open(),
-    ) {
-        (true, false) => app.stations_modal_state.open(app.selected_radio_station),
-        (false, true) => app.stations_modal_state.close(),
-        (true, true) | (false, false) => {}
-    }
-    app.show_lobby_modal = modal == TourModal::Lobby;
 }
 
 /// Live games own Ctrl+S even when they currently leave it unbound. Running

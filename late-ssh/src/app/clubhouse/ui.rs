@@ -25,13 +25,12 @@ use crate::app::common::username_effect::{NameStyle, ResolvedName, char_color};
 use late_core::api_types::NowPlaying;
 use late_core::models::chat_message::ChatMessage;
 use late_core::models::drinks::{DRUNK_LABEL_MIN_LEVEL, DRUNK_MAX_LEVEL};
-use late_core::models::user::{RADIO_SLOTS, RadioStation};
 
 use late_core::models::presence::Emote;
 
 use super::crowd::Placement;
 use super::map;
-use super::state::{BannerLine, ClubhouseHit, State, TableStop, Tutorial};
+use super::state::{BannerLine, BoardStop, ClubhouseHit, State, TableStop, Tutorial};
 use crate::app::lobby::daily::pool_ui;
 
 const LABEL_MAX: usize = 10;
@@ -551,7 +550,7 @@ fn animate(cells: &mut Cells, view: &ClubhouseView<'_>) {
         }
     }
 
-    // Once the tour has come home, the bar sign pulses until the newcomer
+    // Once the tour is done, the bar sign pulses until the newcomer
     // claims the hidden welcome pour: the only pointer at the treasure.
     if view.state.bar_glow() {
         let pulse = if (t / 8).is_multiple_of(2) {
@@ -1233,516 +1232,132 @@ fn draw_bartender_banner(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_
     );
 }
 
-/// The first-visit tour's tavern boxes: the welcome mat, the wander nudge,
-/// and the homecoming send-off. The page stops between them live in
-/// [`draw_tour_overlay`], which also renders a reminder here when a mid-tour
-/// player wanders home early. Returns true when a tutorial overlay owned the
-/// frame (prop popovers wait their turn).
+/// The first-visit tour's tavern box: the welcome mat at the door. The
+/// stops after it live on their pages ([`draw_tour_overlay`] for the chat
+/// stop, [`tour_header`] for the table and the board). Returns true when a tutorial
+/// overlay owned the frame (prop popovers wait their turn).
 fn draw_tutorial(frame: &mut Frame, inner: Rect, view: &ClubhouseView<'_>) -> bool {
     let key = Style::default()
         .fg(theme::AMBER_GLOW())
         .add_modifier(Modifier::BOLD);
     let text = Style::default().fg(theme::TEXT());
-    let dim = Style::default().fg(theme::TEXT_DIM());
 
-    let (title, lines, next_label): (&str, Vec<Line>, &str) = match view.state.tutorial {
-        Tutorial::Welcome => (
-            " ☾ welcome to the late lounge ☽ ",
-            vec![
-                Line::from(vec![
-                    Span::styled(
-                        "late.sh",
-                        Style::default()
-                            .fg(theme::TEXT_BRIGHT())
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(" is a late-night clubhouse in a terminal.", text),
-                ]),
-                Line::from(Span::styled(
-                    "this tavern, plus seven pages: chat, games, a canvas,",
-                    text,
-                )),
-                Line::from(Span::styled(
-                    "people, scores, events. everyone here is a real person.",
-                    text,
-                )),
-                Line::default(),
-                Line::from(Span::styled(
-                    "this is the welcome mat. let's walk through the house.",
-                    text,
-                )),
-            ],
-            "first stop: the chat",
-        ),
-        Tutorial::Homecoming => (
-            " ☾ make yourself at home ☽ ",
-            vec![
-                Line::from(Span::styled(
-                    "that was the house. this room is the hub.",
-                    text,
-                )),
-                Line::from(Span::styled(
-                    "walk up to anything and press Enter to step through.",
-                    text,
-                )),
-                Line::default(),
-                Line::from(vec![
-                    Span::styled("[arrows/hjkl] ", key),
-                    Span::styled("walk around", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("[i] ", key),
-                    Span::styled("say something, it floats over your head", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("[w] ", key),
-                    Span::styled("wave · ", text),
-                    Span::styled("[x] ", key),
-                    Span::styled("dance · ", text),
-                    Span::styled("[Ctrl+G] ", key),
-                    Span::styled("the lobby", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("[Ctrl+O] ", key),
-                    Span::styled("settings and your profile · ", text),
-                    Span::styled("[?] ", key),
-                    Span::styled("the full guide", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("[5] ", key),
-                    Span::styled("the people: the map, the profiles, the jobs", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("[n] ", key),
-                    Span::styled("Nightcap, the small bar out back", text),
-                ]),
-                Line::default(),
-                Line::from(Span::styled(
-                    "the bar is glowing, up and to the left. walk over.",
-                    dim,
-                )),
-                Line::from(Span::styled(
-                    "the bartender pours new faces their first drink.",
-                    dim,
-                )),
-            ],
-            "settle in",
-        ),
-        // Mid-loop stages never render in the tavern: the forced gate only
-        // lets the route's keys through, and the last stop's Enter lands
-        // straight on Homecoming.
+    match view.state.tutorial {
+        Tutorial::Welcome => {}
+        // The page stops never render in the tavern: the forced gate only
+        // lets the route's keys through, and the last Enter ends the tour
+        // on the Arcade.
         Tutorial::VisitChat
-        | Tutorial::VisitMusic
-        | Tutorial::VisitArcade
-        | Tutorial::VisitLobby
         | Tutorial::VisitTable
-        | Tutorial::VisitGames
-        | Tutorial::VisitDungeon
-        | Tutorial::VisitArtboard
-        | Tutorial::VisitMap
-        | Tutorial::VisitProfiles
-        | Tutorial::VisitJobs
-        | Tutorial::VisitLeaderboard
-        | Tutorial::VisitCalendar
-        | Tutorial::VisitLayouts
+        | Tutorial::VisitBoard
         | Tutorial::Off
         | Tutorial::Pending
         | Tutorial::Done => return false,
-    };
+    }
 
     TourHeader {
-        title: title.trim(),
-        lines,
+        title: "☾ welcome to the late lounge ☽",
+        lines: vec![
+            Line::from(vec![
+                Span::styled(
+                    "late.sh",
+                    Style::default()
+                        .fg(theme::TEXT_BRIGHT())
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(" is a late-night clubhouse in a terminal.", text),
+            ]),
+            Line::from(Span::styled(
+                "this tavern, a chat, and a new board every day.",
+                text,
+            )),
+            Line::from(Span::styled("everyone here is a real person.", text)),
+            Line::default(),
+            Line::from(Span::styled(
+                "this is the welcome mat. three stops, then the board is yours.",
+                text,
+            )),
+        ],
         keys: vec![
             Span::styled("[Enter] ", key),
-            Span::styled(next_label, text),
+            Span::styled("first stop: the chat", text),
         ],
     }
     .draw_box(frame, inner);
     true
 }
 
-/// The page stops of the first-visit tour, drawn centered over the page
-/// they pitch (`render.rs` calls this on every non-clubhouse screen). The
-/// forced gate guarantees the current screen is the stop's own page, so a
-/// mismatch, like off-tour stages, draws nothing. The Artboard stop lands
-/// behind the content disclaimer (`artboard_hidden`): it offers to show the
-/// art or skip ahead, and reads as a normal stop once shown.
-pub fn draw_tour_overlay(
-    frame: &mut Frame,
-    area: Rect,
-    stage: Tutorial,
-    screen: Screen,
-    artboard_hidden: bool,
-) {
+/// The chat stop of the first-visit tour, drawn centered over Home
+/// (`render.rs` calls this on every non-clubhouse screen). The forced gate
+/// guarantees the current screen is the stop's own page, so a mismatch,
+/// like off-tour stages, draws nothing.
+pub fn draw_tour_overlay(frame: &mut Frame, area: Rect, stage: Tutorial, screen: Screen) {
     let key = Style::default()
         .fg(theme::AMBER_GLOW())
         .add_modifier(Modifier::BOLD);
     let text = Style::default().fg(theme::TEXT());
-    // Proper nouns (game names, late.sh, Late Chips) pop out of the prose so
-    // a skimming eye still catches the roster.
     let name = Style::default()
         .fg(theme::TEXT_BRIGHT())
         .add_modifier(Modifier::BOLD);
 
-    let (home, title, pitch, next_label): (Screen, &str, Vec<Line>, &str) = match stage {
-        Tutorial::VisitChat => (
-            Screen::Dashboard,
-            " ✦ the tour · [1] home ",
-            vec![
-                Line::from(vec![Span::styled(
-                    "all the chat is here. rooms, threads and DMs.",
-                    text,
-                )]),
-                Line::default(),
-                Line::from(vec![
-                    Span::styled("[i] ", key),
-                    Span::styled("write · ", text),
-                    Span::styled("[Ctrl+/] ", key),
-                    Span::styled("jump anywhere, type ?query to search", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("[Ctrl+]] ", key),
-                    Span::styled("pick an icon to sign your messages", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("[/dm @user] ", key),
-                    Span::styled("direct message · ", text),
-                    Span::styled("[/public #room] ", key),
-                    Span::styled("open a room", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("[/private #room] ", key),
-                    Span::styled("invite only · ", text),
-                    Span::styled("Mentions", name),
-                    Span::styled(" is in the rail on the left", text),
-                ]),
-            ],
-            "the music",
-        ),
-        Tutorial::VisitArcade => (
-            Screen::Arcade,
-            " ✦ the tour · [2] the arcade ",
-            vec![
-                Line::from(vec![
-                    Span::styled("single-player games. ", text),
-                    Span::styled("Lateris, Snake, 2048, Sudoku, Solitaire", name),
-                    Span::styled(" and more.", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("daily puzzles pay ", text),
-                    Span::styled("Late Chips", name),
-                    Span::styled(". quests and streaks sit at the top.", text),
-                ]),
-                Line::default(),
-                Line::from(vec![
-                    Span::styled("chips buy things in ", text),
-                    Span::styled("[/shop]", key),
-                    Span::styled(": badges, flags, titles, name effects,", text),
-                ]),
-                Line::from(Span::styled("a pet to look after, a fish tank.", text)),
-            ],
-            "the lobby",
-        ),
-        Tutorial::VisitGames => (
-            Screen::Games,
-            " ✦ the tour · [3] the games ",
-            vec![
-                Line::from(Span::styled("the big games are behind this door.", text)),
-                Line::default(),
-                Line::from(vec![
-                    Span::styled("Lateania", name),
-                    Span::styled(", our own MMO. one shared world, bosses, mounts.", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("DCSS", name),
-                    Span::styled(", the most played roguelike there is.", text),
-                ]),
-                Line::from(Span::styled(
-                    "easy to start, hard to master, no two runs the same.",
-                    text,
-                )),
-                Line::from(vec![
-                    Span::styled("NetHack", name),
-                    Span::styled(", the classic.", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("Brogue", name),
-                    Span::styled(", the prettiest dungeon drawn in ASCII.", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("Green Dragon", name),
-                    Span::styled(", the old BBS door game, rebuilt here.", text),
-                ]),
-                Line::default(),
-                Line::from(Span::styled("and more. your wins stay on your name.", text)),
-            ],
-            "a taste of the dungeon",
-        ),
-        Tutorial::VisitArtboard if artboard_hidden => (
-            Screen::Artboard,
-            " ✦ the tour · [4] the artboard ",
-            vec![
-                Line::from(Span::styled(
-                    "one canvas, and everyone draws on it at the same time.",
-                    text,
-                )),
-                Line::from(vec![
-                    Span::styled("it may have ", text),
-                    Span::styled("NSFW", name),
-                    Span::styled(" content on it, so it stays hidden until you say so.", text),
-                ]),
-                Line::default(),
-                Line::from(Span::styled(
-                    "show it for this visit, or skip ahead. nothing is saved",
-                    text,
-                )),
-                Line::from(Span::styled(
-                    "either way. the artboard asks again next time you open it.",
-                    text,
-                )),
-            ],
-            "the people",
-        ),
-        Tutorial::VisitArtboard => (
-            Screen::Artboard,
-            " ✦ the tour · [4] the artboard ",
-            vec![
-                Line::from(Span::styled(
-                    "one canvas, and everyone draws on it at the same time.",
-                    text,
-                )),
-                Line::from(Span::styled(
-                    "nothing is erased, and every glyph remembers who drew it.",
-                    text,
-                )),
-                Line::from(vec![
-                    Span::styled("the whole board is public at ", text),
-                    Span::styled("late.sh/gallery", name),
-                    Span::styled(".", text),
-                ]),
-                Line::default(),
-                Line::from(vec![
-                    Span::styled("[i] ", key),
-                    Span::styled("or a click starts drawing · ", text),
-                    Span::styled("[Ctrl+]] ", key),
-                    Span::styled("the glyph picker", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("[Esc] ", key),
-                    Span::styled("gallery and archives · ", text),
-                    Span::styled("[?] ", key),
-                    Span::styled("the guide for this page, on every page", text),
-                ]),
-            ],
-            "the people",
-        ),
-        // The People page is three short stops on one page: the box stays
-        // small and Enter steps `]` through the sections itself.
-        Tutorial::VisitMap => (
-            Screen::Profiles,
-            " ✦ the tour · [5] the people · map ",
-            vec![
-                Line::from(Span::styled(
-                    "where everyone is. the Earth, shaded by who is online where.",
-                    text,
-                )),
-                Line::default(),
-                Line::from(vec![
-                    Span::styled("[Ctrl+O] ", key),
-                    Span::styled("set your country and you show up on it.", text),
-                ]),
-            ],
-            "the profiles",
-        ),
-        Tutorial::VisitProfiles => (
-            Screen::Profiles,
-            " ✦ the tour · [5] the people · profiles ",
-            vec![
-                Line::from(Span::styled(
-                    "everyone who shared a project or posted a work card.",
-                    text,
-                )),
-                Line::from(vec![
-                    Span::styled("yours gets a public page at ", text),
-                    Span::styled("late.sh/profiles", name),
-                    Span::styled(".", text),
-                ]),
-                Line::default(),
-                Line::from(vec![
-                    Span::styled("[w] ", key),
-                    Span::styled("fill yours in · ", text),
-                    Span::styled("[s] ", key),
-                    Span::styled("search people", text),
-                ]),
-            ],
-            "the jobs",
-        ),
-        Tutorial::VisitJobs => (
-            Screen::Profiles,
-            " ✦ the tour · [5] the people · jobs ",
-            vec![
-                Line::from(Span::styled(
-                    "remote job postings, pulled every night from the big feeds.",
-                    text,
-                )),
-                Line::from(Span::styled(
-                    "put tags on your card and the shelf shows what fits you.",
-                    text,
-                )),
-                Line::default(),
-                Line::from(vec![
-                    Span::styled("[s] ", key),
-                    Span::styled("search · ", text),
-                    Span::styled("[/] ", key),
-                    Span::styled("for me · ", text),
-                    Span::styled("[/jobs] ", key),
-                    Span::styled("from any composer", text),
-                ]),
-            ],
-            "the leaderboards",
-        ),
-        Tutorial::VisitLeaderboard => (
-            Screen::Leaderboard,
-            " ✦ the tour · [6] the leaderboards ",
-            vec![
-                Line::from(Span::styled(
-                    "every game keeps score. chips, wins, streaks, high scores,",
-                    text,
-                )),
-                Line::from(Span::styled(
-                    "monthly and all time. the top three each month get a badge",
-                    text,
-                )),
-                Line::from(Span::styled("next to their name in chat.", text)),
-            ],
-            "the events",
-        ),
-        Tutorial::VisitCalendar => (
-            Screen::Calendars,
-            " ✦ the tour · [7] the events ",
-            vec![
-                Line::from(Span::styled(
-                    "the events board. anyone can post an event, everyone sees it,",
-                    text,
-                )),
-                Line::from(vec![
-                    Span::styled("[i] ", key),
-                    Span::styled("says I'm in. your own private events sit beside it,", text),
-                ]),
-                Line::from(Span::styled("in green, and only you see them.", text)),
-            ],
-            "the layouts",
-        ),
-        Tutorial::VisitLayouts => (
-            Screen::Dashboard,
-            " ✦ the tour · [Ctrl+E] layouts ",
-            vec![
-                Line::from(Span::styled(
-                    "home is tiles you arrange yourself. this is its second",
-                    text,
-                )),
-                Line::from(vec![
-                    Span::styled("layout, ", text),
-                    Span::styled("street", name),
-                    Span::styled(": an ascii stage, the tank, the news and the", text),
-                ]),
-                Line::from(Span::styled(
-                    "announcements, the clock and the pulse. up to nine layouts",
-                    text,
-                )),
-                Line::from(Span::styled("are saved on this key.", text)),
-                Line::default(),
-                Line::from(vec![
-                    Span::styled("[Ctrl+E] ", key),
-                    Span::styled("arranges the page. ", text),
-                    Span::styled("[Ctrl+E] [1-9] ", key),
-                    Span::styled("switches layouts,", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("[Alt+1-9] ", key),
-                    Span::styled("does that in one chord, from anywhere on home", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("[Ctrl+E] [L] ", key),
-                    Span::styled("lists them · ", text),
-                    Span::styled("[n] ", key),
-                    Span::styled("there saves the page as a new one", text),
-                ]),
-                Line::default(),
-                Line::from(vec![
-                    Span::styled("[Tab] ", key),
-                    Span::styled("focus a tile · ", text),
-                    Span::styled("[space] ", key),
-                    Span::styled("pick what it shows", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("[S] ", key),
-                    Span::styled("split · ", text),
-                    Span::styled("[X] ", key),
-                    Span::styled("close · ", text),
-                    Span::styled("[F] ", key),
-                    Span::styled("flip · ", text),
-                    Span::styled("[R] ", key),
-                    Span::styled("reset home", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("[i] ", key),
-                    Span::styled("write in the focused chat · ", text),
-                    Span::styled("[?] ", key),
-                    Span::styled("the full guide", text),
-                ]),
-            ],
-            "home to the lounge",
-        ),
-        // The music, lobby, practice-table and dungeon stops write their
-        // pitch into the real surface they hold open: see `tour_header`.
+    match stage {
+        Tutorial::VisitChat => {}
+        // The welcome box is the tavern's (`draw_tutorial`); the table and
+        // board stops write their pitch across the top of the page they
+        // take over (`tour_header`).
         Tutorial::Off
         | Tutorial::Pending
         | Tutorial::Welcome
-        | Tutorial::VisitMusic
-        | Tutorial::VisitLobby
         | Tutorial::VisitTable
-        | Tutorial::VisitDungeon
-        | Tutorial::Homecoming
+        | Tutorial::VisitBoard
         | Tutorial::Done => return,
-    };
-
-    if screen != home {
+    }
+    if screen != Screen::Dashboard {
         return;
     }
-    let mut keys = Vec::new();
-    let enter_verb = if stage == Tutorial::VisitArtboard && artboard_hidden {
-        keys.push(Span::styled("[S] ", key));
-        keys.push(Span::styled("show · ", text));
-        "skip"
-    } else {
-        "next"
-    };
-    keys.push(Span::styled("[Enter] ", key));
-    keys.push(Span::styled(format!("{enter_verb}: {next_label}"), text));
     TourHeader {
-        title: title.trim(),
-        lines: pitch,
-        keys,
+        title: "✦ the tour · [1] home",
+        lines: vec![
+            Line::from(Span::styled(
+                "all the chat is here. rooms, threads and DMs.",
+                text,
+            )),
+            Line::from(Span::styled(
+                "every name in it is a real person. say hi whenever you like.",
+                text,
+            )),
+            Line::default(),
+            Line::from(vec![
+                Span::styled("[i] ", key),
+                Span::styled("write · ", text),
+                Span::styled("[Ctrl+/] ", key),
+                Span::styled("jump anywhere, type ?query to search", text),
+            ]),
+            Line::from(vec![
+                Span::styled("Mentions", name),
+                Span::styled(" is in the rail on the left.", text),
+            ]),
+        ],
+        keys: vec![
+            Span::styled("[Enter] ", key),
+            Span::styled("next: one shot of pool", text),
+        ],
     }
     .draw_box(frame, area);
 }
 
 /// One tour stop, drawn the same way wherever it lands: a title, the pitch,
 /// then a breaker carrying the only keys the stop takes, flush right. The
-/// surface stops write it into the top of the real surface they hold open
-/// (the Stations modal, the Lobby modal) or across the top of the page
-/// they take over (the practice table, the dungeon fight: `draw_above`);
-/// every other stop gets it in a box of its own (`draw_box`).
+/// table and board stops write it across the top of the page they take
+/// over (`draw_above`); the other stops get it in a box of their own
+/// (`draw_box`).
 pub(crate) struct TourHeader {
     title: &'static str,
     lines: Vec<Line<'static>>,
     keys: Vec<Span<'static>>,
 }
 
-/// Blank columns between a frame and a tour stop's text, the same in a box
-/// as in the modals that host one.
+/// Blank columns between a frame and a tour stop's text.
 pub(crate) const TOUR_SIDE_PADDING: u16 = 2;
 
 impl TourHeader {
@@ -1783,9 +1398,10 @@ impl TourHeader {
         self.draw(frame, inner);
     }
 
-    /// The stop across the top of a page it takes over (the practice table,
-    /// the dungeon fight), with a breathing row either side like the modals
-    /// give it. Returns the room left under it for the page.
+    /// The stop across the top of a page it takes over (the practice
+    /// table, today's board), with a breathing row either side like the
+    /// modals give it. Returns
+    /// the room left under it for the page.
     pub(crate) fn draw_above(&self, frame: &mut Frame, area: Rect) -> Rect {
         let [above, below] = self.split_above(area);
         self.draw(frame, above.inner(Margin::new(TOUR_SIDE_PADDING, 1)));
@@ -1846,12 +1462,12 @@ fn table_header(table: TableStop) -> TourHeader {
     let (line, keys) = match table {
         TableStop::TooSmall => (
             "this table needs a bigger window. the lobby has one waiting.",
-            next("next: the games"),
+            next("next: today's board"),
         ),
         TableStop::Racked => ("a table just for you. take the break.", next("break")),
         TableStop::Played => (
             "that was real physics. the lobby has real tables waiting.",
-            next("next: the games"),
+            next("next: today's board"),
         ),
     };
     TourHeader {
@@ -1861,105 +1477,112 @@ fn table_header(table: TableStop) -> TourHeader {
     }
 }
 
-/// The header for the stops that live inside a real surface, `None` for
-/// every other stage. `table` is where the practice table stop stands,
-/// `fight_won` whether the dungeon's dragon is down.
-pub(crate) fn tour_header(
-    stage: Tutorial,
-    table: TableStop,
-    fight_won: bool,
-) -> Option<TourHeader> {
+/// Where the board stop stands on a page whose content area is
+/// `content_area`. A solved board stays solved whatever the terminal does
+/// afterwards; until then the board has to fit under its header (measured
+/// with the open stop's, the one it is played under) to be played.
+pub(crate) fn board_stop(
+    content_area: Rect,
+    solved: bool,
+    now: chrono::DateTime<chrono::Utc>,
+) -> BoardStop {
+    let [_, page] = board_header(BoardStop::Open).split_above(content_area);
+    match (
+        solved,
+        crate::app::arcade::netwalk::ui::lent_board_fits(page),
+    ) {
+        (true, true | false) => BoardStop::Solved {
+            hours_left: hours_to_rollover(now),
+        },
+        (false, true) => BoardStop::Open,
+        (false, false) => BoardStop::TooSmall,
+    }
+}
+
+/// Whole hours until the next 00:00 UTC, rounded up, so the send-off never
+/// promises a board sooner than it comes.
+fn hours_to_rollover(now: chrono::DateTime<chrono::Utc>) -> u32 {
+    use chrono::Timelike;
+    let minutes_into_day = now.hour() * 60 + now.minute();
+    (24 * 60 - minutes_into_day).div_ceil(60)
+}
+
+fn board_header(board: BoardStop) -> TourHeader {
     let key = Style::default()
         .fg(theme::AMBER_GLOW())
         .add_modifier(Modifier::BOLD);
     let text = Style::default().fg(theme::TEXT());
-    let name = Style::default()
-        .fg(theme::TEXT_BRIGHT())
-        .add_modifier(Modifier::BOLD);
-    let next = |label: &'static str| vec![Span::styled("[Enter] ", key), Span::styled(label, text)];
-
-    match stage {
-        Tutorial::VisitMusic => Some(TourHeader {
-            title: "✦ the tour · the radio",
-            lines: vec![
-                Line::from(vec![
-                    Span::styled(
-                        format!("{} stations", RadioStation::enabled().count()),
-                        name,
-                    ),
-                    Span::styled(", always on, plus a ", text),
-                    Span::styled("YouTube", name),
-                    Span::styled(" jukebox.", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("SSH has no sound. install the ", text),
-                    Span::styled("late", name),
-                    Span::styled(" CLI and run it instead of ssh:", text),
-                ]),
+    let next = |label: String| vec![Span::styled("[Enter] ", key), Span::styled(label, text)];
+    let (lines, keys) = match board {
+        BoardStop::TooSmall => (
+            vec![Line::from(Span::styled(
+                "this board needs a bigger window. it waits for you in the Arcade, under [2].",
+                text,
+            ))],
+            next("settle in".to_string()),
+        ),
+        BoardStop::Open => (
+            vec![
                 Line::from(Span::styled(
-                    "curl -fsSL https://cli.late.sh/install.sh | bash",
-                    name,
+                    "everyone here gets this same board today. turn the tiles until one network lights every one.",
+                    text,
                 )),
-                Line::from(vec![
-                    Span::styled("[v r] ", key),
-                    Span::styled("opens this list · ", text),
-                    Span::styled(format!("[v 1-{RADIO_SLOTS}] "), key),
-                    Span::styled("your pinned ones", text),
-                ]),
+                Line::from(Span::styled("solve it, then we go.", text)),
             ],
-            keys: next("next: the arcade"),
-        }),
-        Tutorial::VisitLobby => Some(TourHeader {
-            title: "✦ the tour · the lobby",
-            lines: vec![
-                Line::from(vec![
-                    Span::styled("[Ctrl+G] ", key),
-                    Span::styled(
-                        "opens this from anywhere. all the multiplayer is here.",
-                        text,
+            vec![
+                Span::styled("[hjkl/arrows] ", key),
+                Span::styled("move · ", text),
+                Span::styled("[Space] ", key),
+                Span::styled("turn · ", text),
+                Span::styled("[f] ", key),
+                Span::styled("lock", text),
+            ],
+        ),
+        BoardStop::Solved { hours_left } => (
+            vec![
+                Line::from(Span::styled("connected. that was day one.", text)),
+                Line::from(Span::styled(
+                    format!(
+                        "the next board is up at 00:00 UTC, in {hours_left} h. the paper is at the door."
                     ),
-                ]),
+                    text,
+                )),
+                Line::default(),
                 Line::from(vec![
-                    Span::styled("chess, pool, backgammon, cards", name),
-                    Span::styled(". challenge anyone, move when you like.", text),
-                ]),
-                Line::from(vec![
-                    Span::styled("Poker, Blackjack", name),
-                    Span::styled(" and other live tables are always open.", text),
+                    Span::styled("[q] ", key),
+                    Span::styled("the lobby · ", text),
+                    Span::styled("[o] ", key),
+                    Span::styled("who else solved it · ", text),
+                    Span::styled("[?] ", key),
+                    Span::styled("the guide", text),
                 ]),
             ],
-            keys: next("next: one shot of pool"),
-        }),
+            next("settle in".to_string()),
+        ),
+    };
+    TourHeader {
+        title: "✦ the tour · today's board",
+        lines,
+        keys,
+    }
+}
+
+/// The header for the stops that live inside a real surface, the table
+/// stop across the top of the board page and the board stop across the
+/// top of the Arcade; `None` for every other stage. `table` and `board`
+/// are where each stands.
+pub(crate) fn tour_header(
+    stage: Tutorial,
+    table: TableStop,
+    board: BoardStop,
+) -> Option<TourHeader> {
+    match stage {
         Tutorial::VisitTable => Some(table_header(table)),
-        Tutorial::VisitDungeon => Some(TourHeader {
-            title: "✦ the tour · a taste of the dungeon",
-            lines: vec![Line::from(vec![
-                Span::styled("a quick fight to try it. ", text),
-                Span::styled("Dungeon Crawl", name),
-                Span::styled(" and ", text),
-                Span::styled("NetHack", name),
-                Span::styled(" are the real thing.", text),
-            ])],
-            keys: if fight_won {
-                next("next: the artboard")
-            } else {
-                next("fight")
-            },
-        }),
+        Tutorial::VisitBoard => Some(board_header(board)),
         Tutorial::Off
         | Tutorial::Pending
         | Tutorial::Welcome
         | Tutorial::VisitChat
-        | Tutorial::VisitArcade
-        | Tutorial::VisitGames
-        | Tutorial::VisitArtboard
-        | Tutorial::VisitMap
-        | Tutorial::VisitProfiles
-        | Tutorial::VisitJobs
-        | Tutorial::VisitLeaderboard
-        | Tutorial::VisitCalendar
-        | Tutorial::VisitLayouts
-        | Tutorial::Homecoming
         | Tutorial::Done => None,
     }
 }
